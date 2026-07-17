@@ -362,13 +362,30 @@ export function useKeybinds(
         return
       }
 
-      // Monaco owns native editing chords once focus is inside the Global
-      // Editor. This capture listener otherwise steals Cmd+W, Cmd+[ / ], and
-      // Option+Arrow before Monaco can close a tab, indent, or move the caret.
-      // Global editor commands above remain intentionally global; everything
-      // below this boundary is workspace navigation and must stand down.
+      // Editor chrome owns only the chords that collide with text/tab editing.
+      // A blanket early return here also disabled true application commands
+      // such as Cmd+T, Cmd+Shift+T, Cmd+R, and numbered tab activation whenever
+      // focus happened to be in the Explorer. Keep those commands global while
+      // preventing workspace navigation from stealing editor-native turns.
       const eventElement = e.target instanceof Element ? e.target : null
-      if (eventElement?.closest('[data-global-editor-input-owner]')) return
+      const editorOwnsTarget = Boolean(
+        eventElement?.closest('[data-global-editor-input-owner]'),
+      )
+      if (editorOwnsTarget) {
+        const monacoOwnsTarget = Boolean(eventElement?.closest('[data-global-editor-monaco]'))
+        const plainEditorCommand = cmd && !shift && !alt && ['s', 'w', '[', ']'].includes(k)
+        const caretNavigation = alt && !cmd && (k === 'ArrowLeft' || k === 'ArrowRight')
+        if (plainEditorCommand || caretNavigation) {
+          // Monaco and EditorWorkbench handle save/close in bubble phase. The
+          // remaining chords have no useful native meaning in editor chrome;
+          // suppress browser history/navigation there while still allowing
+          // Monaco's own keybinding service to consume them.
+          if (!monacoOwnsTarget && (k === '[' || k === ']' || caretNavigation)) {
+            e.preventDefault()
+          }
+          return
+        }
+      }
 
       // --- Copy Assistant picker (Up/Down/Enter/Esc) ---
       //

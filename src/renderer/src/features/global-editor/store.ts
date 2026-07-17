@@ -3,6 +3,7 @@ import { create } from 'zustand'
 import { normalizeCodeLanguage } from '@shared/code/language'
 import type { EditorFileBuffer } from '@renderer/features/editor/types'
 import {
+  hasRecoverableBufferChanges,
   makeBuffer,
   withDiskObserved,
   withDiskSnapshot,
@@ -57,6 +58,11 @@ type GlobalEditorStore = {
   /** All cwd states keyed by absolute path. Empty when the
    *  overlay has never been opened for a given cwd. */
   byCwd: Record<string, GlobalEditorCwdState>
+  /** Oldest → newest workspace activation. This remains authoritative in
+   * memory even when persistence retains only its last bounded slice; deriving
+   * recency from object keys causes an evicted-but-live cwd to re-enter on every
+   * projection. */
+  cwdRecency: string[]
   /** Splitter ratio in [0.2, 0.8]. Global (not per-cwd) — feels
    *  like an IDE setting, not project-specific data. */
   splitterRatio: number
@@ -233,6 +239,7 @@ const persisted = loadPersistedGlobalEditorState()
 
 export const useGlobalEditorStore = create<GlobalEditorStore>()((set, get) => ({
   byCwd: {},
+  cwdRecency: persisted?.cwdRecency ?? [],
   splitterRatio: clampSplitter(persisted?.splitterRatio ?? 0.5),
   fileTreeWidthPx: clampFileTreeWidth(persisted?.fileTreeWidthPx ?? 260),
   fileTreeVisible: persisted?.fileTreeVisible ?? true,
@@ -243,7 +250,13 @@ export const useGlobalEditorStore = create<GlobalEditorStore>()((set, get) => ({
   contentSearchOpen: false,
   editorFullscreen: false,
 
-  setActiveCwd: cwd => set({ activeCwd: cwd }),
+  setActiveCwd: cwd =>
+    set(state => ({
+      activeCwd: cwd,
+      cwdRecency: cwd
+        ? [...state.cwdRecency.filter(candidate => candidate !== cwd), cwd]
+        : state.cwdRecency,
+    })),
   setSplitterRatio: ratio => set({ splitterRatio: clampSplitter(ratio) }),
   setFileTreeWidthPx: px => set({ fileTreeWidthPx: clampFileTreeWidth(px) }),
   toggleFileTreeVisible: () => set(state => ({ fileTreeVisible: !state.fileTreeVisible })),
@@ -515,7 +528,7 @@ export const useGlobalEditorStore = create<GlobalEditorStore>()((set, get) => ({
     // chooses Discard. Before the dialog existed this false return was
     // silently dropped by every caller, which made dirty tabs
     // permanently uncloseable — #513 bug 1.
-    if (current?.dirty && !opts?.force) return false
+    if (current && hasRecoverableBufferChanges(current) && !opts?.force) return false
     set(state => {
       const cwdState = state.byCwd[cwd]
       if (!cwdState) return state

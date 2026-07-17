@@ -8,7 +8,7 @@ type Props = {
   fileOrder: string[]
   openFiles: Record<string, EditorFileBuffer>
   activeFilePath: string | null
-  onActivate: (path: string) => void
+  onActivate: (path: string, options: { focusEditor: boolean }) => void
   onClose: (path: string) => void
 }
 
@@ -72,8 +72,13 @@ export function EditorTabs({ fileOrder, openFiles, activeFilePath, onActivate, o
               role="tab"
               aria-selected={active}
               tabIndex={active ? 0 : -1}
-              onClick={() => onActivate(path)}
+              onClick={() => onActivate(path, { focusEditor: true })}
               onKeyDown={event => {
+                if (event.key === 'Delete') {
+                  event.preventDefault()
+                  onClose(path)
+                  return
+                }
                 let nextIndex: number | null = null
                 if (event.key === 'ArrowLeft') nextIndex = Math.max(0, index - 1)
                 if (event.key === 'ArrowRight') {
@@ -87,7 +92,11 @@ export function EditorTabs({ fileOrder, openFiles, activeFilePath, onActivate, o
                   .closest('[role="tablist"]')
                   ?.querySelectorAll<HTMLButtonElement>('[role="tab"]')
                 const nextPath = fileOrder[nextIndex]
-                if (nextPath) onActivate(nextPath)
+                // A tablist is a composite widget: arrows move selection while
+                // focus remains in the strip. Requesting Monaco focus here made
+                // exactly one arrow press work before the keyboard was pulled
+                // into the editor.
+                if (nextPath) onActivate(nextPath, { focusEditor: false })
                 tabs?.[nextIndex]?.focus()
               }}
               className="flex min-w-0 flex-1 items-center gap-2 px-3 text-left"
@@ -106,6 +115,7 @@ export function EditorTabs({ fileOrder, openFiles, activeFilePath, onActivate, o
             </button>
             <button
               type="button"
+              tabIndex={-1}
               onClick={event => {
                 event.stopPropagation()
                 onClose(path)

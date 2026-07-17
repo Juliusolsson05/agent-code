@@ -18,7 +18,7 @@ type EditorWorkbenchProps = {
   activeFilePath: string | null
   activeFile: EditorFileBuffer | null
   lspContext: { workspaceRoot: string; filePath: string } | null
-  onActivateFile: (path: string) => void
+  onActivateFile: (path: string, options: { focusEditor: boolean }) => void
   /** Close a tab. Returns false when the buffer is dirty and the close
    *  was refused — the workbench then owns showing ConfirmCloseDialog and
    *  re-calling with `{ force: true }` on Discard. Hosts implement force
@@ -84,7 +84,7 @@ export function EditorWorkbench({
         // Save failures are rendered for the active buffer. Activate the
         // requested tab before prompting so any subsequent error cannot end up
         // hidden behind a different tab.
-        onActivateFile(path)
+        onActivateFile(path, { focusEditor: false })
         setCloseError(null)
         setPendingClosePath(path)
       }
@@ -93,7 +93,27 @@ export function EditorWorkbench({
   )
 
   return (
-    <div className="flex h-full min-h-0 min-w-0 overflow-hidden">
+    <div
+      data-global-editor-input-owner="true"
+      className="flex h-full min-h-0 min-w-0 overflow-hidden"
+      onKeyDown={event => {
+        if (event.defaultPrevented || event.nativeEvent.isComposing) return
+        if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return
+        // Monaco owns the same chords through disposable editor actions. This
+        // workbench handler exists for the rest of the editor chrome (tabs,
+        // Explorer, and splitters), where allowing the workspace's window-level
+        // Cmd+W handler through would terminate the underlying agent pane.
+        if ((event.target as Element | null)?.closest('[data-global-editor-monaco]')) return
+        const key = event.key.toLowerCase()
+        if (key === 's') {
+          event.preventDefault()
+          onSave()
+        } else if (key === 'w' && activeFilePath) {
+          event.preventDefault()
+          requestClose(activeFilePath)
+        }
+      }}
+    >
       <ResizableSidebar
         visible={sidebarVisible}
         widthPx={sidebarWidthPx}
@@ -136,6 +156,7 @@ export function EditorWorkbench({
         {pendingClosePath && (
           <ConfirmCloseDialog
             fileName={basename(pendingClosePath)}
+            deleted={openFiles[pendingClosePath]?.externalChange === 'deleted'}
             saving={savingClose}
             error={closeError}
             onCancel={() => {

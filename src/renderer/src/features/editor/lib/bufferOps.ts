@@ -14,6 +14,18 @@ import type { EditorFileBuffer } from '@renderer/features/editor/types'
 
 let bufferGenerationSequence = 0
 
+/**
+ * A deleted clean buffer is not "saved" in the only sense that matters to a
+ * close decision: its in-memory text is now the last recoverable copy. Treating
+ * recoverability as `dirty` alone made the tab dot look truthful while Close,
+ * Explorer delete, and window teardown could still discard that copy without a
+ * decision. Keep this predicate beside the buffer transitions so every surface
+ * shares the same lifecycle invariant.
+ */
+export function hasRecoverableBufferChanges(buffer: EditorFileBuffer): boolean {
+  return buffer.dirty || buffer.externalChange === 'deleted'
+}
+
 export function makeBuffer(params: {
   /** Surface-local identity: cwd-relative path (Global Editor) or
    *  entryId (AI Workspace). */

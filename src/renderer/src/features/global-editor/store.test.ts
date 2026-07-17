@@ -12,7 +12,7 @@ beforeEach(() => {
   // Zustand's singleton is intentional in production, but each transition
   // test needs a blank project graph so ordering assertions do not depend on
   // whichever test Vitest happened to execute first.
-  useGlobalEditorStore.setState({ byCwd: {}, activeCwd: cwd })
+  useGlobalEditorStore.setState({ byCwd: {}, cwdRecency: [cwd], activeCwd: cwd })
 })
 
 describe('global editor store transitions', () => {
@@ -69,5 +69,17 @@ describe('global editor store transitions', () => {
       savedText: 'second lifetime',
       mtimeMs: 10,
     })
+  })
+
+  it('refuses to discard a clean buffer after its disk file was deleted', () => {
+    open('deleted.ts', 'last recoverable copy')
+    useGlobalEditorStore.getState().setFileError(cwd, 'deleted.ts', 'file was deleted on disk', {
+      conflict: true,
+      externalChange: 'deleted',
+    })
+
+    expect(useGlobalEditorStore.getState().closeFile(cwd, 'deleted.ts')).toBe(false)
+    expect(useGlobalEditorStore.getState().byCwd[cwd]?.openFiles['deleted.ts']).toBeDefined()
+    expect(useGlobalEditorStore.getState().closeFile(cwd, 'deleted.ts', { force: true })).toBe(true)
   })
 })

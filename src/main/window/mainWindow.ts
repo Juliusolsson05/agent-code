@@ -1,4 +1,4 @@
-import { BrowserWindow } from 'electron'
+import { BrowserWindow, dialog } from 'electron'
 import { dirname, join } from 'path'
 import { fileURLToPath } from 'url'
 
@@ -397,6 +397,28 @@ export function createMainWindow(): void {
     // the fallback behavior must be "stay in Agent Code" instead of navigating
     // the privileged BrowserWindow to arbitrary model-controlled content.
     event.preventDefault()
+  })
+
+  mainWindow.webContents.on('will-prevent-unload', event => {
+    if (!mainWindow || mainWindow.isDestroyed()) return
+    // The renderer can only veto an unload; Chromium intentionally ignores its
+    // custom message and Electron does not show browser confirmation UI for us.
+    // Resolve that veto here with an explicit native decision. In Electron's
+    // counterintuitive contract, preventDefault on *this* event means "ignore
+    // the renderer veto and continue unloading", so only the destructive
+    // button takes that branch.
+    const discard = dialog.showMessageBoxSync(mainWindow, {
+      type: 'warning',
+      title: 'Unsaved editor changes',
+      message: 'Leave Agent Code and discard unsaved editor changes?',
+      detail:
+        'One or more project or AI Workspace files contain edits that have not been saved. Deleted files with an in-memory recovery copy are included.',
+      buttons: ['Keep Editing', 'Discard Changes and Leave'],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true,
+    })
+    if (discard === 1) event.preventDefault()
   })
 
   if (process.env['ELECTRON_RENDERER_URL']) {

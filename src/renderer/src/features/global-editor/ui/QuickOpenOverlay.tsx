@@ -54,6 +54,7 @@ export function QuickOpenOverlay({ root, onClose }: Props) {
   const [selectedIndex, setSelectedIndex] = useState(0)
   const [loading, setLoading] = useState(true)
   const listRef = useRef<HTMLDivElement | null>(null)
+  const inputRef = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => {
     let stale = false
@@ -131,7 +132,10 @@ export function QuickOpenOverlay({ root, onClose }: Props) {
     if (!path || loading) return
     const result = await openFileInGlobalEditor({ root, path })
     if (result.ok) onClose()
-    else setLoadError(result.error)
+    else {
+      setLoadError(result.error)
+      inputRef.current?.focus()
+    }
   }
 
   return (
@@ -147,6 +151,7 @@ export function QuickOpenOverlay({ root, onClose }: Props) {
           Type part of a file name or path, then use the arrow keys and Enter to open it.
         </DialogDescription>
         <input
+          ref={inputRef}
           autoFocus
           role="combobox"
           aria-expanded="true"
@@ -184,9 +189,11 @@ export function QuickOpenOverlay({ root, onClose }: Props) {
           className="max-h-[50vh] overflow-y-auto py-1"
         >
           {loadError ? (
-            <div className="px-3 py-2 text-[11px] text-danger">{loadError}</div>
+            <div role="alert" className="px-3 py-2 text-[11px] text-danger">{loadError}</div>
           ) : loading ? (
-            <div className="px-3 py-2 text-[11px] text-muted">Indexing project files…</div>
+            <div role="status" aria-live="polite" className="px-3 py-2 text-[11px] text-muted">
+              Indexing project files…
+            </div>
           ) : (
             matches.map((path, index) => {
               const name = basename(path)
@@ -196,10 +203,12 @@ export function QuickOpenOverlay({ root, onClose }: Props) {
                   key={path}
                   id={`quick-open-option-${index}`}
                   type="button"
+                  tabIndex={-1}
                   role="option"
                   aria-selected={selected}
                   data-quick-open-index={index}
                   onClick={() => void openSelected(path)}
+                  onMouseDown={event => event.preventDefault()}
                   onMouseEnter={() => setSelectedIndex(index)}
                   className={`flex w-full items-center gap-2 px-3 py-1 text-left text-[12px] ${
                     selected ? 'bg-accent-soft text-ink' : 'text-ink-dim hover:bg-surface-hi'

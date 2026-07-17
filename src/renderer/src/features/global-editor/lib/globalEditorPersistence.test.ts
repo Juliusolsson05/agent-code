@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
-import { buildPersistedGlobalEditorState } from './globalEditorPersistence'
+import {
+  buildPersistedGlobalEditorState,
+  mergePersistedCwdRecency,
+} from './globalEditorPersistence'
 
 const previous = {
   version: 2 as const,
@@ -15,6 +18,12 @@ const previous = {
 }
 
 describe('global editor persistence projection', () => {
+  it('keeps saved cwd recency instead of falling back to object insertion order', () => {
+    expect(mergePersistedCwdRecency(['/repo-a', '/repo-b'], ['/repo-b', '/repo-a'])).toEqual([
+      '/repo-b',
+      '/repo-a',
+    ])
+  })
   it('preserves projects not lazily visited in this process', () => {
     const result = buildPersistedGlobalEditorState(
       {
@@ -25,6 +34,7 @@ describe('global editor persistence projection', () => {
             openFiles: {},
           },
         },
+        cwdRecency: ['/repo-b', '/repo-a'],
         activeCwd: '/repo-a',
         splitterRatio: 0.6,
         fileTreeWidthPx: 300,
@@ -44,6 +54,7 @@ describe('global editor persistence projection', () => {
         byCwd: {
           '/repo-a': { fileOrder: [], activeFilePath: null, openFiles: {} },
         },
+        cwdRecency: ['/repo-b', '/repo-a'],
         activeCwd: '/repo-a',
         splitterRatio: 0.5,
         fileTreeWidthPx: 260,

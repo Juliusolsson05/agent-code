@@ -10,6 +10,7 @@ import {
 
 type Props = {
   fileName: string
+  deleted?: boolean
   saving?: boolean
   error?: string | null
   onSaveAndClose: () => void
@@ -26,6 +27,7 @@ type Props = {
 // local but leaked Cmd+W/Escape into the hidden workspace behind it.
 export function ConfirmCloseDialog({
   fileName,
+  deleted = false,
   saving = false,
   error,
   onSaveAndClose,
@@ -41,9 +43,11 @@ export function ConfirmCloseDialog({
     >
       <DialogContent className="w-[min(420px,92vw)]">
         <DialogHeader>
-          <DialogTitle>Unsaved changes</DialogTitle>
+          <DialogTitle>{deleted ? 'File deleted on disk' : 'Unsaved changes'}</DialogTitle>
           <DialogDescription>
-            “{fileName}” has unsaved changes. Save before closing?
+            {deleted
+              ? `“${fileName}” no longer exists on disk. Its in-memory copy is still safe here. Recreate it before closing?`
+              : `“${fileName}” has unsaved changes. Save before closing?`}
           </DialogDescription>
           {error ? (
             <p role="alert" className="mt-2 text-[11px] text-danger">
@@ -59,7 +63,7 @@ export function ConfirmCloseDialog({
             Discard
           </Button>
           <Button type="button" onClick={onSaveAndClose} autoFocus disabled={saving}>
-            {saving ? 'Saving…' : 'Save & Close'}
+            {saving ? 'Saving…' : deleted ? 'Recreate & Close' : 'Save & Close'}
           </Button>
         </DialogFooter>
       </DialogContent>

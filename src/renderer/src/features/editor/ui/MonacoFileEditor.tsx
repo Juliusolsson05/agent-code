@@ -340,6 +340,7 @@ export function MonacoFileEditor({
     <div
       ref={containerRef}
       data-global-editor-input-owner="true"
+      data-global-editor-monaco="true"
       className="h-full min-h-0 min-w-0 bg-canvas"
     />
   )

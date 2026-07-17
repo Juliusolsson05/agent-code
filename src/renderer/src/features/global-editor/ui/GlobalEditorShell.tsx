@@ -10,6 +10,7 @@ import { ExplorerPane } from '@renderer/features/editor/ui/ExplorerPane'
 import { EditorWorkbench } from '@renderer/features/editor/ui/EditorWorkbench'
 import { ConfirmDeleteDialog } from '@renderer/features/editor/ui/ConfirmDeleteDialog'
 import { releaseEditorModelOwner } from '@renderer/features/editor/lib/editorModelRegistry'
+import { hasRecoverableBufferChanges } from '@renderer/features/editor/lib/bufferOps'
 import { AiWorkspaceEditor } from '@renderer/features/ai-workspace/ui/AiWorkspaceEditor'
 
 import {
@@ -232,7 +233,10 @@ export function GlobalEditorShell({ children, workspace }: Props) {
     if (rehydratedCwdsRef.current.has(activeCwd)) return
     rehydratedCwdsRef.current.add(activeCwd)
     const live = useGlobalEditorStore.getState().byCwd[activeCwd]
-    if ((live?.fileOrder.length ?? 0) > 0) return // live state wins
+    // Presence, not tab count, means live state wins. An empty cwd is a
+    // tombstone created by closing its final tab (or by a failed restore); using
+    // `fileOrder.length > 0` resurrected deliberately closed tabs.
+    if (live) return
     const persistedTabs = loadPersistedGlobalEditorState()?.tabsByCwd[activeCwd]
     if (!persistedTabs) return
     void (async () => {
@@ -246,11 +250,24 @@ export function GlobalEditorShell({ children, workspace }: Props) {
         })
         if (result.ok) restored.push(path)
       }
+      const current = useGlobalEditorStore.getState()
+      if (!current.byCwd[activeCwd] && restored.length === 0) {
+        // Persist the empty result into live state so an all-missing restore is
+        // pruned by the next persistence flush instead of retried forever.
+        useGlobalEditorStore.setState(state => ({
+          byCwd: { ...state.byCwd, [activeCwd]: EMPTY_CWD_STATE },
+        }))
+        return
+      }
       const activePath =
         (persistedTabs.activeFilePath && restored.includes(persistedTabs.activeFilePath)
           ? persistedTabs.activeFilePath
           : null) ?? restored[restored.length - 1]
-      if (activePath) {
+      if (
+        activePath &&
+        current.activeCwd === activeCwd &&
+        current.byCwd[activeCwd]?.activeFilePath == null
+      ) {
         useGlobalEditorStore.getState().setActiveFile(activeCwd, activePath)
       }
     })()
@@ -454,19 +471,20 @@ export function GlobalEditorShell({ children, workspace }: Props) {
   // `conflict` flag routes that failure to the banner's Reload/Overwrite
   // actions rather than a dead-end error string.
   const saveFile = useCallback(
-    async (path: string): Promise<boolean> => {
+    async (path: string, options?: { recreateDeleted?: boolean }): Promise<boolean> => {
       if (!activeCwd) return false
       const root = activeCwd
       return serializeFileWrite(`${root}\0${path}`, async () => {
         const buf = useGlobalEditorStore.getState().byCwd[root]?.openFiles[path]
-        if (!buf || !buf.dirty) return true
+        if (!buf || !hasRecoverableBufferChanges(buf)) return true
+        if (buf.externalChange === 'deleted' && !options?.recreateDeleted) return false
         const writtenText = buf.currentText
         const result = await window.api
           .editorWriteTextFile({
             root,
             path,
             text: writtenText,
-            expectedMtimeMs: buf.mtimeMs,
+            expectedMtimeMs: options?.recreateDeleted ? null : buf.mtimeMs,
           })
           .catch(err => ({
             ok: false as const,
@@ -510,7 +528,13 @@ export function GlobalEditorShell({ children, workspace }: Props) {
   const saveThenClose = useCallback(
     async (path: string): Promise<boolean> => {
       if (!activeCwd) return false
-      const ok = await saveFile(path)
+      const buffer = useGlobalEditorStore.getState().byCwd[activeCwd]?.openFiles[path]
+      const ok = await saveFile(path, {
+        // The dialog labels this branch "Recreate & Close". Passing null is
+        // therefore an explicit user-authorized recreation, never a side
+        // effect of ordinary Cmd+S after another actor deleted the file.
+        recreateDeleted: buffer?.externalChange === 'deleted',
+      })
       if (!ok) return false
       return closeFileAndDisposeModel(path)
     },
@@ -622,9 +646,10 @@ export function GlobalEditorShell({ children, workspace }: Props) {
       if (!activeCwd) return false
       const state = useGlobalEditorStore.getState().byCwd[activeCwd]
       if (!state) return true
-      const dirtyPaths = openPathsUnder(state, path).filter(
-        openPath => state.openFiles[openPath]?.dirty,
-      )
+      const dirtyPaths = openPathsUnder(state, path).filter(openPath => {
+        const buffer = state.openFiles[openPath]
+        return buffer ? hasRecoverableBufferChanges(buffer) : false
+      })
       if (dirtyPaths.length === 0) return true
       return await new Promise<boolean>(resolve => {
         setPendingExplorerDelete({ path, dirtyPaths, resolve })
@@ -703,6 +728,7 @@ export function GlobalEditorShell({ children, workspace }: Props) {
               <EditorWorkbench
                 sidebar={
                   <ExplorerPane
+                    key={activeCwd}
                     root={activeCwd}
                     activeFilePath={cwdState.activeFilePath}
                     onOpenFile={openFileFromTree}
@@ -744,7 +770,9 @@ export function GlobalEditorShell({ children, workspace }: Props) {
                 activeFilePath={cwdState.activeFilePath}
                 activeFile={active}
                 lspContext={active ? { workspaceRoot: activeCwd, filePath: active.path } : null}
-                onActivateFile={path => setActiveFile(activeCwd, path, { focus: true })}
+                onActivateFile={(path, options) =>
+                  setActiveFile(activeCwd, path, { focus: options.focusEditor })
+                }
                 onCloseFile={closeFileAndDisposeModel}
                 onChangeFile={(path, text) => updateFileText(activeCwd, path, text)}
                 onSave={() => void saveActive()}

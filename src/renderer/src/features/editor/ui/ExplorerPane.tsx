@@ -4,7 +4,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type MouseEvent as ReactMouseEvent,
 } from 'react'
 
 import { basename, dirname } from '@renderer/features/editor/lib/path'
@@ -58,6 +57,21 @@ function clampedMenu(x: number, y: number, entry: EditorFsEntry | null): Exclude
   }
 }
 
+function visibleTreePaths(
+  entries: readonly EditorFsEntry[],
+  nodes: Readonly<Record<string, TreeNode>>,
+  expanded: ReadonlySet<string>,
+  out: string[] = [],
+): string[] {
+  for (const entry of entries) {
+    out.push(entry.path)
+    if (entry.isDirectory && expanded.has(entry.path)) {
+      visibleTreePaths(nodes[entry.path]?.children ?? [], nodes, expanded, out)
+    }
+  }
+  return out
+}
+
 type Props = {
   root: string
   activeFilePath: string | null
@@ -95,21 +109,30 @@ export function ExplorerPane({
   const [showHidden, setShowHidden] = useState(false)
   const [menu, setMenu] = useState<MenuState>(null)
   const [edit, setEdit] = useState<EditState>(null)
+  const [focusedTreePath, setFocusedTreePath] = useState<string | null>(null)
   // Two-step in-menu delete confirm (first click arms, second executes)
   // instead of a modal: deletion from a context menu is already a
   // deliberate two-gesture act, and the workbench modal slot is owned by
   // the dirty-close dialog.
   const [armedDelete, setArmedDelete] = useState<string | null>(null)
   const inFlightLoadsRef = useRef<Map<string, number>>(new Map())
+  const queuedLoadsRef = useRef<Set<string>>(new Set())
   const loadGenerationRef = useRef(0)
   const expandedRef = useRef(expanded)
   expandedRef.current = expanded
   const menuRef = useRef<HTMLDivElement | null>(null)
+  const menuInvokerRef = useRef<HTMLElement | null>(null)
 
   const loadDirectory = useCallback(
     async (path: string) => {
       const generation = loadGenerationRef.current
-      if (inFlightLoadsRef.current.has(path)) return
+      if (inFlightLoadsRef.current.has(path)) {
+        // A mutation can finish while the same directory is already loading.
+        // Dropping that second request leaves the tree showing the pre-mutation
+        // snapshot indefinitely, so coalesce it into exactly one trailing read.
+        queuedLoadsRef.current.add(path)
+        return
+      }
       inFlightLoadsRef.current.set(path, generation)
       setNodes(prev => {
         const current = prev[path]
@@ -167,6 +190,9 @@ export function ExplorerPane({
       } finally {
         if (inFlightLoadsRef.current.get(path) === generation) {
           inFlightLoadsRef.current.delete(path)
+          if (queuedLoadsRef.current.delete(path)) {
+            queueMicrotask(() => void loadDirectory(path))
+          }
         }
       }
     },
@@ -176,6 +202,7 @@ export function ExplorerPane({
   useEffect(() => {
     loadGenerationRef.current += 1
     inFlightLoadsRef.current.clear()
+    queuedLoadsRef.current.clear()
     setNodes({
       '': {
         entry: {
@@ -201,14 +228,16 @@ export function ExplorerPane({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [root])
 
-  const firstHiddenRefreshRef = useRef(true)
+  const previousShowHiddenRef = useRef(showHidden)
   useEffect(() => {
-    if (firstHiddenRefreshRef.current) {
-      firstHiddenRefreshRef.current = false
-      return
-    }
+    // loadDirectory also changes identity when root changes. Only the hidden-
+    // file preference should run this expanded-branch refresh; the root effect
+    // owns root transitions and resets their navigation graph atomically.
+    if (previousShowHiddenRef.current === showHidden) return
+    previousShowHiddenRef.current = showHidden
     loadGenerationRef.current += 1
-    inFlightLoadsRef.current.clear()
+      inFlightLoadsRef.current.clear()
+      queuedLoadsRef.current.clear()
     for (const path of expandedRef.current) void loadDirectory(path)
   }, [loadDirectory, showHidden])
 
@@ -362,8 +391,12 @@ export function ExplorerPane({
       setEdit(null)
       setEditError(null)
       setMutationError(null)
-      await loadDirectory(parent)
+      // Remap buffers immediately after disk success, before any awaited tree
+      // refresh. Chokidar can report the old path as unlinked during that wait;
+      // delaying this callback let a synthetic deletion conflict hitchhike onto
+      // the newly renamed buffer.
       onFileRenamed?.(entry.path, result.path)
+      await loadDirectory(parent)
     } catch (err) {
       setMutationError(err instanceof Error ? err.message : 'Failed to validate rename.')
     } finally {
@@ -401,6 +434,19 @@ export function ExplorerPane({
 
   const rootNode = nodes['']
   const entries = rootNode?.children ?? rootEntries
+  const visiblePaths = useMemo(
+    () => visibleTreePaths(entries, nodes, expanded),
+    [entries, expanded, nodes],
+  )
+  const visiblePathSet = useMemo(() => new Set(visiblePaths), [visiblePaths])
+  // Focus state can name a row that was renamed, deleted, hidden, or collapsed.
+  // Derive the actual tab stop from the rendered tree every time so one stale
+  // string can never make all treeitems tabIndex=-1.
+  const treeTabStopPath =
+    (focusedTreePath && visiblePathSet.has(focusedTreePath) ? focusedTreePath : null) ??
+    (activeFilePath && visiblePathSet.has(activeFilePath) ? activeFilePath : null) ??
+    visiblePaths[0] ??
+    null
 
   const activeParents = useMemo(() => {
     const out = new Set<string>()
@@ -454,6 +500,7 @@ export function ExplorerPane({
         title={root}
         onContextMenu={event => {
           event.preventDefault()
+          menuInvokerRef.current = null
           setMenu(clampedMenu(event.clientX, event.clientY, null))
         }}
       >
@@ -464,8 +511,9 @@ export function ExplorerPane({
             title="Refresh explorer"
             aria-label="Refresh explorer"
             onClick={() => {
-              loadGenerationRef.current += 1
-              inFlightLoadsRef.current.clear()
+      loadGenerationRef.current += 1
+      inFlightLoadsRef.current.clear()
+      queuedLoadsRef.current.clear()
               for (const path of expandedRef.current) void loadDirectory(path)
             }}
             className="flex h-5 w-5 items-center justify-center rounded text-muted hover:bg-surface-hi hover:text-ink"
@@ -489,6 +537,7 @@ export function ExplorerPane({
             aria-label="New file or folder"
             onClick={event => {
               event.stopPropagation()
+              menuInvokerRef.current = event.currentTarget
               setMenu(clampedMenu(event.clientX, event.clientY, null))
             }}
             className="flex h-5 w-5 items-center justify-center rounded text-muted hover:bg-surface-hi hover:text-ink"
@@ -513,7 +562,12 @@ export function ExplorerPane({
           </button>
         </div>
       )}
-      <div role="tree" aria-label="Project files" className="min-h-0 flex-1 overflow-auto py-1">
+      <div
+        role="tree"
+        aria-label="Project files"
+        aria-busy={rootNode?.loading || undefined}
+        className="min-h-0 flex-1 overflow-auto py-1"
+      >
         {error ? (
           <div className="px-2 py-1 text-danger">{error}</div>
         ) : (
@@ -536,17 +590,18 @@ export function ExplorerPane({
               expanded={expanded}
               activeFilePath={activeFilePath}
               activeParents={activeParents}
+              tabStopPath={treeTabStopPath}
               depth={0}
               edit={edit}
               editError={editError}
               editDisabled={mutationPending}
               onOpenFile={onOpenFile}
               onToggleDirectory={toggleDirectory}
-              onContextMenu={(event, entry) => {
-                event.preventDefault()
-                event.stopPropagation()
+              onTreeFocus={setFocusedTreePath}
+              onContextMenu={(entry, x, y, invoker) => {
+                menuInvokerRef.current = invoker
                 setArmedDelete(null)
-                setMenu(clampedMenu(event.clientX, event.clientY, entry))
+                setMenu(clampedMenu(x, y, entry))
               }}
               onEditChange={draft => setEdit(prev => (prev ? { ...prev, draft } : prev))}
               onEditCommit={() => {
@@ -558,6 +613,16 @@ export function ExplorerPane({
             />
           </>
         )}
+        {!error && !rootNode?.loading && entries.length === 0 && !edit ? (
+          <p role="status" className="px-2 py-2 text-[10px] text-muted">
+            This folder is empty.
+          </p>
+        ) : null}
+        {!error && rootNode?.loading ? (
+          <p role="status" aria-live="polite" className="px-2 py-2 text-[10px] text-muted">
+            Loading project files…
+          </p>
+        ) : null}
       </div>
       {menu && (
         // mousedown on the menu itself must not bubble to the window
@@ -573,6 +638,7 @@ export function ExplorerPane({
             if (event.key === 'Escape') {
               event.preventDefault()
               setMenu(null)
+              requestAnimationFrame(() => menuInvokerRef.current?.focus())
               return
             }
             if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
@@ -704,12 +770,14 @@ function TreeEntries({
   expanded,
   activeFilePath,
   activeParents,
+  tabStopPath,
   depth,
   edit,
   editError,
   editDisabled,
   onOpenFile,
   onToggleDirectory,
+  onTreeFocus,
   onContextMenu,
   onEditChange,
   onEditCommit,
@@ -720,13 +788,20 @@ function TreeEntries({
   expanded: Set<string>
   activeFilePath: string | null
   activeParents: Set<string>
+  tabStopPath: string | null
   depth: number
   edit: EditState
   editError: string | null
   editDisabled: boolean
   onOpenFile: (path: string) => void
   onToggleDirectory: (entry: EditorFsEntry) => void
-  onContextMenu: (event: ReactMouseEvent, entry: EditorFsEntry) => void
+  onTreeFocus: (path: string) => void
+  onContextMenu: (
+    entry: EditorFsEntry,
+    x: number,
+    y: number,
+    invoker: HTMLButtonElement,
+  ) => void
   onEditChange: (draft: string) => void
   onEditCommit: () => void
   onEditCancel: () => void
@@ -760,13 +835,26 @@ function TreeEntries({
               <button
                 type="button"
                 role="treeitem"
+                tabIndex={tabStopPath === entry.path ? 0 : -1}
                 aria-level={depth + 1}
                 aria-selected={isActive}
                 aria-expanded={entry.isDirectory ? isExpanded : undefined}
                 onClick={() =>
                   entry.isDirectory ? onToggleDirectory(entry) : onOpenFile(entry.path)
                 }
+                onFocus={() => onTreeFocus(entry.path)}
                 onKeyDown={event => {
+                  if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
+                    event.preventDefault()
+                    const rect = event.currentTarget.getBoundingClientRect()
+                    onContextMenu(
+                      entry,
+                      rect.left + Math.min(rect.width, 24),
+                      rect.top + Math.min(rect.height, 20),
+                      event.currentTarget,
+                    )
+                    return
+                  }
                   const items = [
                     ...(event.currentTarget
                       .closest('[role="tree"]')
@@ -794,7 +882,11 @@ function TreeEntries({
                   event.preventDefault()
                   items[Math.max(0, Math.min(focusIndex, items.length - 1))]?.focus()
                 }}
-                onContextMenu={event => onContextMenu(event, entry)}
+                onContextMenu={event => {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  onContextMenu(entry, event.clientX, event.clientY, event.currentTarget)
+                }}
                 data-tree-path={entry.path}
                 className={`group flex h-[22px] w-full items-center gap-1.5 pr-2 text-left transition-colors ${
                   isActive
@@ -820,7 +912,7 @@ function TreeEntries({
               </button>
             )}
             {entry.isDirectory && isExpanded && (
-              <div>
+              <div role="group">
                 {edit && edit.kind !== 'rename' && edit.parentPath === entry.path && (
                   <InlineEditRow
                     depth={depth + 1}
@@ -854,12 +946,14 @@ function TreeEntries({
                     expanded={expanded}
                     activeFilePath={activeFilePath}
                     activeParents={activeParents}
+                    tabStopPath={tabStopPath}
                     depth={depth + 1}
                     edit={edit}
                     editError={editError}
                     editDisabled={editDisabled}
                     onOpenFile={onOpenFile}
                     onToggleDirectory={onToggleDirectory}
+                    onTreeFocus={onTreeFocus}
                     onContextMenu={onContextMenu}
                     onEditChange={onEditChange}
                     onEditCommit={onEditCommit}

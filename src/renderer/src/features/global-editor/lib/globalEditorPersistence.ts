@@ -5,8 +5,11 @@ import { useGlobalEditorStore } from '@renderer/features/global-editor/store'
 // WHY localStorage and not a main-process persistence channel: the
 // store's original header documented the risk ("every persistence path
 // is a potential leak") specifically about UNSAVED FILE CONTENTS. This
-// module never touches contents — it stores relative paths and three
-// numbers. localStorage keeps it renderer-local, synchronous at boot (no
+// module never touches contents — it stores absolute workspace roots,
+// relative file names, and three numbers. Those paths are still private
+// project metadata, so the bounded retention below matters even though source
+// text is deliberately excluded. localStorage keeps it renderer-local,
+// synchronous at boot (no
 // IPC race with first paint), and trivially inspectable from devtools.
 //
 // WHY paths-only survives correctness review: on rehydrate the shell
@@ -44,7 +47,12 @@ const MAX_CWDS = 20
 // keystroke is pure waste — nothing here changes faster than a human
 // opens/closes tabs.
 const WRITE_DEBOUNCE_MS = 500
-const MAX_TABS_PER_CWD = 100
+// Restoring every remembered tab necessarily reads and retains its source text.
+// The editor's per-file limit is 8 MiB, so 100 tabs admitted an ~800 MiB cold
+// start. Twenty-four still preserves a generous working set while putting a
+// defensible ceiling on automatic recovery; additional live tabs remain open
+// for the current session and simply are not promised across restart.
+const MAX_TABS_PER_CWD = 24
 const MAX_PATH_LENGTH = 4_096
 
 function validRelativePath(value: unknown): value is string {
@@ -79,6 +87,19 @@ function sanitizedTabsByCwd(value: unknown): PersistedGlobalEditorState['tabsByC
   return out
 }
 
+export function mergePersistedCwdRecency(
+  knownCwds: readonly string[],
+  persistedRecency: readonly string[],
+): string[] {
+  const known = new Set(knownCwds)
+  return [
+    ...new Set([
+      ...persistedRecency.filter(cwd => known.has(cwd)),
+      ...knownCwds,
+    ]),
+  ]
+}
+
 export function loadPersistedGlobalEditorState(): PersistedGlobalEditorState | null {
   try {
     const raw = localStorage.getItem(KEY)
@@ -100,7 +121,10 @@ export function loadPersistedGlobalEditorState(): PersistedGlobalEditorState | n
             (cwd): cwd is string => typeof cwd === 'string' && known.has(cwd),
           )
         : []
-    const cwdRecency = [...new Set([...Object.keys(tabsByCwd), ...persistedRecency])]
+    // Saved recency is authoritative. Prepending object keys made every known
+    // cwd appear before its saved position in Set order, silently reducing the
+    // persisted LRU to JSON insertion order.
+    const cwdRecency = mergePersistedCwdRecency(Object.keys(tabsByCwd), persistedRecency)
     return {
       version: 2,
       splitterRatio:
@@ -124,7 +148,12 @@ export function loadPersistedGlobalEditorState(): PersistedGlobalEditorState | n
 
 type PersistableStoreState = Pick<
   ReturnType<typeof useGlobalEditorStore.getState>,
-  'byCwd' | 'activeCwd' | 'splitterRatio' | 'fileTreeWidthPx' | 'fileTreeVisible'
+  | 'byCwd'
+  | 'cwdRecency'
+  | 'activeCwd'
+  | 'splitterRatio'
+  | 'fileTreeWidthPx'
+  | 'fileTreeVisible'
 >
 
 /** Merge live state into the previous snapshot instead of rebuilding from the
@@ -158,7 +187,7 @@ export function buildPersistedGlobalEditorState(
   }
 
   const known = new Set(Object.keys(tabsByCwd))
-  const prior = (previous?.cwdRecency ?? []).filter(cwd => known.has(cwd))
+  const prior = state.cwdRecency.filter(cwd => known.has(cwd))
   const discovered = Object.keys(tabsByCwd).filter(cwd => !prior.includes(cwd))
   const active = state.activeCwd && known.has(state.activeCwd) ? state.activeCwd : null
   const cwdRecency = [...prior, ...discovered].filter(cwd => cwd !== active)
@@ -183,24 +212,39 @@ export function buildPersistedGlobalEditorState(
  *  from the shell (an app has exactly one Global Editor). */
 export function startGlobalEditorPersistence(): () => void {
   let timer: number | null = null
+  let pending = false
   let previous = loadPersistedGlobalEditorState()
-  const unsub = useGlobalEditorStore.subscribe(() => {
-    if (timer !== null) return
-    timer = window.setTimeout(() => {
+  const flush = () => {
+    if (timer !== null) {
+      window.clearTimeout(timer)
       timer = null
-      const s = useGlobalEditorStore.getState()
-      const next = buildPersistedGlobalEditorState(s, previous)
-      try {
-        localStorage.setItem(KEY, JSON.stringify(next))
-        previous = next
-      } catch {
-        // Quota exceeded — drop silently; persistence is best-effort and
-        // the live session is unaffected.
-      }
-    }, WRITE_DEBOUNCE_MS)
-  })
+    }
+    if (!pending) return
+    pending = false
+    const next = buildPersistedGlobalEditorState(useGlobalEditorStore.getState(), previous)
+    try {
+      localStorage.setItem(KEY, JSON.stringify(next))
+      previous = next
+    } catch {
+      // Quota exceeded — drop silently; persistence is best-effort and the
+      // live session is unaffected. Do not retry on every teardown tick.
+    }
+  }
+  const schedule = () => {
+    pending = true
+    if (timer !== null) return
+    timer = window.setTimeout(flush, WRITE_DEBOUNCE_MS)
+  }
+  const unsub = useGlobalEditorStore.subscribe(schedule)
+  // Settings/Reader/Spotlight unmount this shell, while app quit tears down the
+  // whole document. Both paths must commit the trailing debounce or a just-
+  // closed tab can be resurrected on restart.
+  window.addEventListener('beforeunload', flush)
+  window.addEventListener('pagehide', flush)
   return () => {
     unsub()
-    if (timer !== null) window.clearTimeout(timer)
+    window.removeEventListener('beforeunload', flush)
+    window.removeEventListener('pagehide', flush)
+    flush()
   }
 }

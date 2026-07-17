@@ -58,6 +58,7 @@ export function ContentSearchOverlay({ root, onClose }: Props) {
   const [selectedIndex, setSelectedIndex] = useState(0)
   const generationRef = useRef(0)
   const listRef = useRef<HTMLDivElement | null>(null)
+  const inputRef = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => {
     const generation = ++generationRef.current
@@ -133,7 +134,10 @@ export function ContentSearchOverlay({ root, onClose }: Props) {
       column: match.column,
     })
     if (result.ok) onClose()
-    else setState(current => ({ ...current, error: result.error }))
+    else {
+      setState(current => ({ ...current, error: result.error }))
+      inputRef.current?.focus()
+    }
   }
 
   // Highlight the hit inside the preview line. Index found client-side
@@ -169,6 +173,7 @@ export function ContentSearchOverlay({ root, onClose }: Props) {
         </DialogDescription>
         <div className="flex items-center gap-2 border-b border-border bg-canvas px-3">
           <input
+            ref={inputRef}
             autoFocus
             role="combobox"
             aria-expanded="true"
@@ -218,7 +223,7 @@ export function ContentSearchOverlay({ root, onClose }: Props) {
           className="max-h-[55vh] overflow-y-auto py-1"
         >
           {state.error ? (
-            <div className="px-3 py-2 text-[11px] text-danger">{state.error}</div>
+            <div role="alert" className="px-3 py-2 text-[11px] text-danger">{state.error}</div>
           ) : (
             grouped.map(([path, matches]) => (
               <div key={path}>
@@ -238,10 +243,12 @@ export function ContentSearchOverlay({ root, onClose }: Props) {
                       key={`${match.path}:${match.line}:${match.column}`}
                       id={`content-search-option-${index}`}
                       type="button"
+                      tabIndex={-1}
                       role="option"
                       aria-selected={selected}
                       data-content-search-index={index}
                       onClick={() => void openMatch(match)}
+                      onMouseDown={event => event.preventDefault()}
                       onMouseEnter={() => setSelectedIndex(index)}
                       className={`flex w-full items-center gap-2 py-0.5 pl-9 pr-3 text-left text-[11px] ${
                         selected ? 'bg-accent-soft text-ink' : 'text-ink-dim hover:bg-surface-hi'

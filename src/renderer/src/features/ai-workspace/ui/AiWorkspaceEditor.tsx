@@ -9,6 +9,7 @@ import { AiWorkspaceFileList } from '@renderer/features/ai-workspace/ui/AiWorksp
 import { basename } from '@renderer/features/editor/lib/path'
 import {
   makeBuffer,
+  hasRecoverableBufferChanges,
   withDiskObserved,
   withDiskSnapshot,
   withError,
@@ -235,18 +236,24 @@ export function AiWorkspaceEditor({ workspaceId, visible, onClose }: Props) {
   // Save & Close can target the tab being closed, which is not
   // necessarily the active one.
   const saveFile = useCallback(
-    async (entryId: string): Promise<{ generation: number; text: string } | null> => {
+    async (
+      entryId: string,
+      options?: { recreateDeleted?: boolean },
+    ): Promise<{ generation: number; text: string } | null> => {
       return serializeFileWrite(entryId, async () => {
         const buffer = currentOpenFiles()[entryId]
         const entry = entriesById.get(entryId)
         if (!buffer || !entry) return null
-        if (!buffer.dirty) return { generation: buffer.generation, text: buffer.currentText }
+        if (!hasRecoverableBufferChanges(buffer)) {
+          return { generation: buffer.generation, text: buffer.currentText }
+        }
+        if (buffer.externalChange === 'deleted' && !options?.recreateDeleted) return null
         const writtenText = buffer.currentText
         const result = await window.api
           .aiWorkspaceWriteFile({
             path: entry.path,
             text: writtenText,
-            expectedMtimeMs: buffer.mtimeMs,
+            expectedMtimeMs: options?.recreateDeleted ? null : buffer.mtimeMs,
           })
           .catch(err => ({
             ok: false as const,
@@ -295,7 +302,7 @@ export function AiWorkspaceEditor({ workspaceId, visible, onClose }: Props) {
       // the state owner.
       const files = currentOpenFiles()
       const buffer = files[entryId]
-      if (buffer?.dirty && !opts?.force) return false
+      if (buffer && hasRecoverableBufferChanges(buffer) && !opts?.force) return false
       const previousOrder = mountedRef.current
         ? fileOrderRef.current
         : (aiWorkspaceSurfaceCache.get(workspaceId)?.fileOrder ?? fileOrderRef.current)
@@ -335,7 +342,10 @@ export function AiWorkspaceEditor({ workspaceId, visible, onClose }: Props) {
 
   const saveThenClose = useCallback(
     async (entryId: string): Promise<boolean> => {
-      const written = await saveFile(entryId)
+      const before = currentOpenFiles()[entryId]
+      const written = await saveFile(entryId, {
+        recreateDeleted: before?.externalChange === 'deleted',
+      })
       if (!written) return false
       // A successful write only acknowledges the submitted snapshot. If the
       // user typed while it was in flight, the buffer is still dirty and the
@@ -457,8 +467,9 @@ export function AiWorkspaceEditor({ workspaceId, visible, onClose }: Props) {
       activeFilePath={activeFilePath}
       activeFile={activeFile}
       lspContext={lspContextForEntry(activeFilePath ? entriesById.get(activeFilePath) : undefined)}
-      onActivateFile={entryId => {
+      onActivateFile={(entryId, options) => {
         setActiveFilePath(entryId)
+        if (!options.focusEditor) return
         setOpenFiles(prev => {
           const current = prev[entryId]
           return current ? { ...prev, [entryId]: withFocusRequested(current) } : prev

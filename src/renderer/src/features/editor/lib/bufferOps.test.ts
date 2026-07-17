@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest'
 
-import { makeBuffer, withDiskObserved, withTextUpdate, withWriteAcknowledged } from './bufferOps'
+import {
+  hasRecoverableBufferChanges,
+  makeBuffer,
+  withDiskObserved,
+  withError,
+  withTextUpdate,
+  withWriteAcknowledged,
+} from './bufferOps'
 
 function buffer(text = 'base') {
   return makeBuffer({
@@ -77,5 +84,12 @@ describe('editor buffer transitions', () => {
     expect(result.conflict).toBe(true)
     expect(result.externalChange).toBe('changed')
     expect(result.error).toContain('changed on disk')
+  })
+
+  it('treats a clean externally deleted buffer as the last recoverable copy', () => {
+    const deleted = withError(buffer(), 'file was deleted on disk', true, 'deleted')
+
+    expect(deleted.dirty).toBe(false)
+    expect(hasRecoverableBufferChanges(deleted)).toBe(true)
   })
 })

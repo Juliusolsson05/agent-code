@@ -1,6 +1,7 @@
 import type { AiWorkspaceFileEntry, AiWorkspaceRecord } from '@mcp/shared/aiWorkspaceTypes'
 
 import { releaseEditorModelOwner } from '@renderer/features/editor/lib/editorModelRegistry'
+import { hasRecoverableBufferChanges } from '@renderer/features/editor/lib/bufferOps'
 import type { EditorFileBuffer } from '@renderer/features/editor/types'
 
 export type CachedAiWorkspaceSurface = {
@@ -37,7 +38,7 @@ export function cacheAiWorkspaceSurface(
     // Dirty buffers are promises to the user, not cache entries. The clean
     // cap may temporarily be exceeded when many workspaces contain unsaved
     // edits; preserving text is categorically more important than the bound.
-    if (Object.values(candidate.openFiles).some(buffer => buffer.dirty)) continue
+    if (Object.values(candidate.openFiles).some(hasRecoverableBufferChanges)) continue
     for (const buffer of Object.values(candidate.openFiles)) {
       releaseEditorModelOwner(buffer.generation)
     }
@@ -48,7 +49,7 @@ export function cacheAiWorkspaceSurface(
 
 export function hasDirtyAiWorkspaceBuffers(): boolean {
   for (const surface of aiWorkspaceSurfaceCache.values()) {
-    if (Object.values(surface.openFiles).some(buffer => buffer.dirty)) return true
+    if (Object.values(surface.openFiles).some(hasRecoverableBufferChanges)) return true
   }
   return false
 }
@@ -57,6 +58,6 @@ export function dirtyAiWorkspacePaths(workspaceId: string): string[] {
   const surface = aiWorkspaceSurfaceCache.get(workspaceId)
   if (!surface) return []
   return Object.values(surface.openFiles)
-    .filter(buffer => buffer.dirty)
+    .filter(hasRecoverableBufferChanges)
     .map(buffer => buffer.absolutePath)
 }
