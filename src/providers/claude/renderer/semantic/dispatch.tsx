@@ -3,20 +3,21 @@ import type { ReactNode } from 'react'
 import { EditRow } from '@providers/claude/renderer/components/edit'
 import { MultiEditRow } from '@providers/claude/renderer/components/multi-edit'
 import { ClaudeLiveBashRow } from '@providers/claude/renderer/components/bash'
-import {
-  renderClaudeToolResult,
-  renderClaudeToolUse,
-} from '@providers/claude/renderer/rows/dispatch'
+import { renderClaudeOperation } from '@providers/claude/renderer/rows/dispatch'
 import { renderLiveProviderTool } from '@providers/shared/renderer/rows/LiveProviderToolRow'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import { extractStreamingWriteInput } from '@renderer/features/feed/lib/streamingWriteInput'
 import { StreamingCodeText } from '@renderer/lib/code/StreamingCodeText'
 import { normalizeCodeLanguage } from '@shared/code/language'
 import { parseJsonRecord } from '@shared/lib/asRecord'
-import { extractJsonStringField } from '@providers/claude/renderer/adapters/codeEdit'
+import {
+  extractJsonStringField,
+  fromClaudeEditBlock,
+} from '@providers/claude/renderer/adapters/codeEdit'
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 import { TEXT_PAGE_MAX_CHARS } from '@renderer/lib/text/boundedText'
 import type { SemanticLiveBlock } from '@renderer/session-runtime/state'
+import type { ProviderSemanticDecision } from '@shared/types/providerConfig'
 
 function semanticId(block: SemanticLiveBlock): string {
   return block.toolUseId ?? block.callId ?? block.itemId ?? `live:${block.blockIndex}`
@@ -77,8 +78,10 @@ function renderClaudeStreamingWrite(block: SemanticLiveBlock): ReactNode | undef
  * never imports Claude components or decodes Claude tool input itself. */
 export function renderClaudeSemanticBlock(
   block: SemanticLiveBlock,
-  context: { committedToolResults: ReadonlyMap<string, ToolResultBlock> },
-): ReactNode | undefined {
+  context: {
+    committedToolResults: ReadonlyMap<string, ToolResultBlock>
+  },
+): ProviderSemanticDecision | undefined {
   if (
     block.kind !== 'tool_use' &&
     block.kind !== 'server_tool_use' &&
@@ -92,28 +95,31 @@ export function renderClaudeSemanticBlock(
       name: block.toolName,
       input: block.parsedInput,
     }
-    const rendered = renderLiveProviderTool({
+    const decision = renderLiveProviderTool({
       tool,
       finalized: block.finalized === true,
       resultPresent: block.resultAt != null || block.resultContent != null,
       resultContent: block.resultContent ?? '',
       resultIsError: block.resultIsError === true,
       committedResults: context.committedToolResults,
-      renderToolUse: renderClaudeToolUse,
-      renderToolResult: renderClaudeToolResult,
+      renderOperation: renderClaudeOperation,
     })
-    if (rendered !== undefined) return rendered
+    if (decision.action !== 'fallback') return decision
   }
 
   if (block.toolName === 'Bash') {
-    return (
-      <ClaudeLiveBashRow
-        parsedInput={block.parsedInput ?? null}
-        inputJson={block.inputJson ?? ''}
-        finalized={block.finalized === true}
-        blockIndex={block.blockIndex}
-      />
-    )
+    return {
+      action: 'render',
+      receipt: { rendererId: 'claude.rows.dispatch' },
+      node: (
+        <ClaudeLiveBashRow
+          parsedInput={block.parsedInput ?? null}
+          inputJson={block.inputJson ?? ''}
+          finalized={block.finalized === true}
+          blockIndex={block.blockIndex}
+        />
+      ),
+    }
   }
   if (block.toolName === 'Edit' || block.toolName === 'MultiEdit') {
     const input = claudePartialEditInput(block)
@@ -124,11 +130,32 @@ export function renderClaudeSemanticBlock(
       name: block.toolName,
       input,
     }
-    return block.toolName === 'Edit'
-      ? <EditRow block={tool} streaming />
-      : <MultiEditRow block={tool} />
+    if (block.toolName === 'MultiEdit') {
+      return {
+        action: 'render',
+        node: <MultiEditRow block={tool} />,
+        receipt: { rendererId: 'claude.rows.dispatch' },
+      }
+    }
+    const model = fromClaudeEditBlock(tool, { streaming: true })
+    return model
+      ? {
+          action: 'render',
+          node: <EditRow model={model} />,
+          receipt: { rendererId: 'claude.rows.dispatch' },
+        }
+      : undefined
   }
-  if (block.toolName === 'Write') return renderClaudeStreamingWrite(block)
+  if (block.toolName === 'Write') {
+    const node = renderClaudeStreamingWrite(block)
+    return node === undefined
+      ? undefined
+      : {
+          action: 'render',
+          node,
+          receipt: { rendererId: 'claude.rows.dispatch' },
+        }
+  }
 
   return undefined
 }

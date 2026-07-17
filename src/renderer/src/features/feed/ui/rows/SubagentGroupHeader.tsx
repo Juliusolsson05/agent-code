@@ -5,7 +5,7 @@ import { SubAgentsContext } from '@renderer/features/feed/context'
 // The "Spawned N agents · ◐ R running · ✓ D done" line that sits above a run
 // of sibling `Agent` tool_use blocks (the main agent fired several subagents in
 // one turn). Answers "how many are running right now" at a glance. The
-// per-agent rows render below it (TaskSubagentRow), so this is just the live
+// per-agent provider spawn rows render below it, so this is just the live
 // tally — derived from SubAgentsContext for the given parent tool_use ids.
 export function SubagentGroupHeader({ toolUseIds }: { toolUseIds: string[] }) {
   const subAgents = useContext(SubAgentsContext)

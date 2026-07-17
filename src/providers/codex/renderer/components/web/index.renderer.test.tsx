@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 
-import { renderCodexToolUse } from '@providers/codex/renderer/rows/dispatch'
+import { renderCodexOperation } from '@providers/codex/renderer/rows/dispatch'
 import { ProviderContext } from '@renderer/features/feed/context'
 import { SemanticLiveBlockRow } from '@renderer/features/feed/ui/semantic/BlockRow'
 import type { SemanticLiveTurn } from '@renderer/session-runtime/state'
@@ -23,10 +23,16 @@ describe('Codex provider-owned web component', () => {
       status: 'completed',
       finalized: true,
     } as SemanticLiveTurn['blocks'][number]
+    const operation = renderCodexOperation({
+      toolUse: committed,
+      result: null,
+      live: false,
+      streaming: false,
+    })
 
     render(
       <ProviderContext.Provider value="codex">
-        {renderCodexToolUse(committed)}
+        {operation.toolUse.action === 'render' ? operation.toolUse.node : null}
         <SemanticLiveBlockRow block={semantic} toolState={null} />
       </ProviderContext.Provider>,
     )
@@ -40,12 +46,18 @@ describe('Codex provider-owned web component', () => {
   })
 
   it('keeps open-page URLs as safe links without manufacturing page content', () => {
-    render(renderCodexToolUse({
+    const operation = renderCodexOperation({
+      toolUse: {
       type: 'tool_use',
       id: 'web-open',
       name: 'web_search',
       input: { kind: 'open_page', url: 'https://example.com/docs' },
-    }))
+      },
+      result: null,
+      live: false,
+      streaming: false,
+    })
+    render(operation.toolUse.action === 'render' ? operation.toolUse.node : null)
     expect(screen.getByRole('link', { name: 'https://example.com/docs' })).toHaveAttribute(
       'href',
       'https://example.com/docs',

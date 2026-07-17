@@ -79,13 +79,34 @@ describe('committed collector: visibility (#338, meta, non-conversation)', () =>
   it('compact boundary/summary rows are visible', () => {
     const { candidates } = collectCommittedCandidates(
       [
-        { uuid: 'b', type: 'compact-boundary', timestamp: TS },
-        { uuid: 's', type: 'compact-summary', timestamp: TS },
+        { uuid: 'b', type: 'system', subtype: 'compact_boundary', timestamp: TS },
+        {
+          ...user({ uuid: 's' }),
+          isCompactSummary: true,
+        },
       ],
       'claude',
       's1',
     )
     expect(candidates.map(c => c.contentKind)).toEqual(['compact-boundary', 'compact-summary'])
+  })
+
+  it('provider-scopes durable admission instead of treating lookalike keys as global syntax', () => {
+    const boundary = {
+      uuid: 'b',
+      type: 'system',
+      subtype: 'compact_boundary',
+      timestamp: TS,
+    }
+    const { candidates, decisions } = collectCommittedCandidates(
+      [boundary],
+      'opencode',
+      's1',
+    )
+    expect(candidates).toEqual([])
+    expect(decisions).toEqual([
+      expect.objectContaining({ selected: false, reason: 'not-conversation' }),
+    ])
   })
 
   it('assistant rows carry exact + normalized text keys; user rows carry neither', () => {

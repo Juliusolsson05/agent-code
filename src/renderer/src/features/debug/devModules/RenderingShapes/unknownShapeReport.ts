@@ -74,7 +74,10 @@ export type UnknownShapeReport = {
 function asSighting(value: unknown): (RenderShapeSighting & { sourceRecordingId?: string }) | null {
   if (typeof value !== 'object' || value === null) return null
   const s = value as Partial<RenderShapeSighting>
-  if (s.schemaVersion !== 1) return null
+  // v1 was the prerelease painter-era contract where shapeId was absent or a
+  // renderer id. Accepting it would manufacture thousands of false misroutes
+  // beside v2 receipts, so the cutover is intentionally strict: recapture.
+  if (s.schemaVersion !== 2) return null
   if (typeof s.structuralFingerprint !== 'string') return null
   if (typeof s.provider !== 'string') return null
   if (typeof s.sourcePlane !== 'string') return null

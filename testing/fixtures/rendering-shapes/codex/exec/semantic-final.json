@@ -1,0 +1,39 @@
+{
+  "evidence": "Curated from the 2026-07-17 developer recording. The structural keys are copied from fp2-9b9a69b3; scalar scripts are reduced while retaining both observed content-dependent routes.",
+  "cases": [
+    {
+      "expectedRoute": "specialized",
+      "semanticBlock": {
+        "argumentsJson": "const r = await tools.exec_command({cmd:\"git status --short\"}); text(r.output);",
+        "blockIndex": 0,
+        "callId": "exec-final-command",
+        "finalized": true,
+        "inputJson": "",
+        "itemId": "exec-final-command",
+        "kind": "custom_tool_call",
+        "status": "completed",
+        "text": "",
+        "thinking": "",
+        "toolName": "exec",
+        "toolUseId": "exec-final-command"
+      }
+    },
+    {
+      "expectedRoute": "generic",
+      "semanticBlock": {
+        "argumentsJson": "const answer = 42; text(answer);",
+        "blockIndex": 1,
+        "callId": "exec-final-generic",
+        "finalized": true,
+        "inputJson": "",
+        "itemId": "exec-final-generic",
+        "kind": "custom_tool_call",
+        "status": "completed",
+        "text": "",
+        "thinking": "",
+        "toolName": "exec",
+        "toolUseId": "exec-final-generic"
+      }
+    }
+  ]
+}

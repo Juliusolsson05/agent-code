@@ -29,7 +29,7 @@ import { makeDispatchFromOnSend } from '@shared/conditions-core/dispatch'
 import type { ConditionCustomAction } from '@shared/conditions-core/contract'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { observeRenderShape } from '@renderer/features/feed/evidence/observer'
-import type { RenderOutcome } from '@shared/types/renderShapes'
+import type { RenderOutcomeRoute } from '@shared/types/renderShapes'
 import type { ConditionDestination } from '@providers/registry.renderer.capabilities'
 
 type Props = {
@@ -43,17 +43,16 @@ type Props = {
 export function conditionOutcomeForDestination(
   kind: string,
   destination: ConditionDestination | undefined,
-): RenderOutcome {
-  const shapeId = `condition:${kind}`
+): RenderOutcomeRoute {
   switch (destination) {
     case 'condition-outlet':
-      return { kind: 'condition-surface', shapeId, surface: 'outlet' }
+      return { kind: 'condition-surface', surface: 'outlet' }
     case 'feed-inline':
-      return { kind: 'condition-surface', shapeId, surface: 'feed-inline' }
+      return { kind: 'condition-surface', surface: 'feed-inline' }
     case 'composer':
-      return { kind: 'condition-surface', shapeId, surface: 'composer' }
+      return { kind: 'condition-surface', surface: 'composer' }
     case 'attention-only':
-      return { kind: 'condition-surface', shapeId, surface: 'attention-only' }
+      return { kind: 'condition-surface', surface: 'attention-only' }
     case 'intentional-hidden':
       // A deliberately non-visual condition still needs a receipt. Encoding it
       // as an absorption names the reviewed owner instead of manufacturing a

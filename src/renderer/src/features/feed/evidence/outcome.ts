@@ -1,28 +1,28 @@
-import type { RenderOutcome } from '@shared/types/renderShapes'
+import type { RenderOutcomeRoute } from '@shared/types/renderShapes'
 
-// Paint-outcome helpers — Phase 2. One-liners so the observation call sites
-// in the legacy painter stay single-line and uniform.
-//
-// PRE-RECEIPT ERA HONESTY: until Phase 5's ProviderOperationBoundary emits
-// catalog-backed receipts, the legacy painter cannot name a catalogued
-// shapeId at paint time. `specialized` outcomes therefore carry the
-// RENDERER id in both slots — classifySighting only matches dispositions on
-// rendererId, so the placeholder shapeId is inert for coverage, and the
-// Phase 5 receipt system replaces these helpers' call sites wholesale.
+// Small route constructors keep paint call sites readable without smuggling
+// catalog identity into them. The observer resolves shapeId independently
+// from structural evidence; renderers may only report the owner/protocol they
+// actually selected. That separation prevents a renderer from blessing its
+// own payload as a reviewed catalog shape.
 
-export function specializedOutcome(rendererId: string): RenderOutcome {
-  return { kind: 'specialized', shapeId: rendererId, rendererId }
+export function specializedOutcome(rendererId: string, protocolId?: string): RenderOutcomeRoute {
+  return { kind: 'specialized', rendererId, ...(protocolId ? { protocolId } : {}) }
 }
 
-export const GENERIC_OUTCOME: RenderOutcome = {
+export const GENERIC_OUTCOME: RenderOutcomeRoute = {
   kind: 'generic',
   rendererId: 'shared.generic-tool',
 }
 
-export function absorbedOutcome(ownerRenderId: string, reason: string): RenderOutcome {
-  return { kind: 'absorbed', ownerRenderId, reason }
+export function absorbedOutcome(
+  ownerRenderId: string,
+  reason: string,
+  protocolId?: string,
+): RenderOutcomeRoute {
+  return { kind: 'absorbed', ownerRenderId, reason, ...(protocolId ? { protocolId } : {}) }
 }
 
-export function unknownOutcome(fallbackRenderId: string): RenderOutcome {
+export function unknownOutcome(fallbackRenderId: string): RenderOutcomeRoute {
   return { kind: 'unknown', fallbackRenderId }
 }

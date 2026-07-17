@@ -80,6 +80,12 @@ export type RenderShapeDefinition<
    * correct routes as a misroute. Omitted milestones inherit `disposition`.
    */
   dispositionByLifecycle?: Partial<Record<RenderShapeLifecycle, RenderShapeDisposition>>
+  /** Finite content-dependent routes for one structural fingerprint. Git vs
+   * ordinary shell commands is the canonical case; an open wildcard is not. */
+  alternateDispositions?: readonly RenderShapeDisposition[]
+  alternateDispositionsByLifecycle?: Partial<
+    Record<RenderShapeLifecycle, readonly RenderShapeDisposition[]>
+  >
   why: string
 }
 

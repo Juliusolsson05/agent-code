@@ -4,10 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 import agentFixture from '../../../../testing/fixtures/rendering-shapes/claude/agent/final.json'
 import { fromClaudeAgentUse } from '@providers/claude/renderer/adapters/collaboration'
 import { ClaudeAgentRow } from '@providers/claude/renderer/components/agent'
-import {
-  renderClaudeToolResult,
-  renderClaudeToolUse,
-} from '@providers/claude/renderer/rows/dispatch'
+import { renderClaudeOperation } from '@providers/claude/renderer/rows/dispatch'
 import {
   ProviderContext,
   SubAgentsContext,
@@ -17,7 +14,7 @@ import {
 } from '@renderer/features/feed/context'
 import { Block } from '@renderer/features/feed/ui/rows/Block'
 import type { SubAgentState } from '@renderer/session-runtime/state'
-import type { TaskNotification } from '@renderer/session-runtime/taskNotification'
+import type { TaskNotification } from '@providers/claude/renderer/adapters/taskNotification'
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 
 vi.mock('@providers/shared/renderer/components/lazy-prose', () => ({
@@ -126,8 +123,14 @@ describe('Claude provider-owned Agent collaboration card', () => {
   })
 
   it('routes Claude Agent through provider dispatch and records a valid result as absorbed', () => {
-    expect(renderClaudeToolUse(agentUse)).toBeTruthy()
-    expect(renderClaudeToolResult(agentResult, { sourceTool: agentUse })).toBeNull()
+    const decision = renderClaudeOperation({
+      toolUse: agentUse,
+      result: agentResult,
+      live: false,
+      streaming: false,
+    })
+    expect(decision.toolUse.action).toBe('render')
+    expect(decision.toolResult?.action).toBe('absorb')
   })
 
   it('cuts both proven Claude and Codex spawn grammars over to provider cards', () => {

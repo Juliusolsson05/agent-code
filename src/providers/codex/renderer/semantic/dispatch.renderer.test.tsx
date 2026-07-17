@@ -49,6 +49,6 @@ describe('Codex semantic provider boundary', () => {
       toolName: 'exec',
       callId: 'exec',
       argumentsJson: 'const value = 1;',
-    }), context)).toBeUndefined()
+    }), context)).toEqual({ action: 'fallback' })
   })
 })

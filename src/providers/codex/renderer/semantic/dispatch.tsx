@@ -1,16 +1,13 @@
-import type { ReactNode } from 'react'
-
 import { fromCodexSemanticImageGeneration } from '@providers/codex/renderer/adapters/imageGeneration'
 import { CodexImageGenerationRow } from '@providers/codex/renderer/components/image-generation'
-import {
-  renderCodexToolResult,
-  renderCodexToolUse,
-} from '@providers/codex/renderer/rows/dispatch'
+import { renderCodexOperation } from '@providers/codex/renderer/rows/dispatch'
 import { renderLiveProviderTool } from '@providers/shared/renderer/rows/LiveProviderToolRow'
 import { boundedTextPage, TEXT_PAGE_MAX_CHARS } from '@renderer/lib/text/boundedText'
 import { parseJsonRecord } from '@shared/lib/asRecord'
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 import type { SemanticLiveBlock } from '@renderer/session-runtime/state'
+import type { ProviderSemanticDecision } from '@shared/types/providerConfig'
+import { CompactionView } from '@providers/shared/renderer/protocols/compaction/CompactionView'
 
 function semanticId(block: SemanticLiveBlock, prefix = 'live'): string {
   return block.callId ?? block.toolUseId ?? block.itemId ?? `${prefix}:${block.blockIndex}`
@@ -77,10 +74,37 @@ function codexSemanticShellTool(block: SemanticLiveBlock): ToolUseBlock | null {
  * provider-neutral prose/reasoning fallback. */
 export function renderCodexSemanticBlock(
   block: SemanticLiveBlock,
-  context: { committedToolResults: ReadonlyMap<string, ToolResultBlock> },
-): ReactNode | undefined {
+  context: {
+    committedToolResults: ReadonlyMap<string, ToolResultBlock>
+  },
+): ProviderSemanticDecision | undefined {
+  if (block.kind === 'compaction') {
+    // Codex emits a structured semantic item for compaction; treating the
+    // mostly-empty normalized object as a generic JSON marker was both noisy
+    // and misleading. The item lifecycle itself is sufficient for the live
+    // progress surface, while the later durable `compacted` rollout remains
+    // the replay source of truth for boundary + summary.
+    const done = block.finalized === true
+    return {
+      action: 'render',
+      node: (
+        <CompactionView model={{
+          kind: 'progress',
+          phase: done ? 'done' : 'running',
+          label: done ? 'Conversation compacted' : 'Compacting conversation…',
+        }} />
+      ),
+      receipt: { rendererId: 'shared.compaction', protocolId: 'compaction.live' },
+    }
+  }
   const imageGeneration = fromCodexSemanticImageGeneration(block)
-  if (imageGeneration) return <CodexImageGenerationRow model={imageGeneration} />
+  if (imageGeneration) {
+    return {
+      action: 'render',
+      node: <CodexImageGenerationRow model={imageGeneration} />,
+      receipt: { rendererId: 'codex.rows.dispatch' },
+    }
+  }
 
   const tool = codexSemanticTool(block)
     ?? codexSemanticWebTool(block)
@@ -94,7 +118,6 @@ export function renderCodexSemanticBlock(
     resultContent: block.resultContent ?? '',
     resultIsError: block.resultIsError === true,
     committedResults: context.committedToolResults,
-    renderToolUse: renderCodexToolUse,
-    renderToolResult: renderCodexToolResult,
+    renderOperation: renderCodexOperation,
   })
 }

@@ -1,31 +1,20 @@
-// Custom renderers for git invocations in the feed.
+// Rich Git operation rendering owned by the shared command protocol.
 //
-// These replace the generic Bash/exec_command tool_use + tool_result
-// rows with purpose-built widgets when the "Toggle Custom Rendering"
-// palette command is on. Gated by CustomRenderingContext; when off,
-// the feed falls back to its usual generic rendering.
+// Provider adapters prove their own Bash/exec envelopes before reaching this
+// view. The operation boundary then supplies the exact paired result, so the
+// view and result absorption cannot drift into two separate name checks.
 //
-// Design choices:
+// The provider-owned operation route renders this surface on the tool-use row
+// and explicitly absorbs the paired result row. That absorption is safe only
+// because this component owns BOTH the structured summary and a lazy view of
+// the exact raw result. Provider adapters prove their Bash/exec envelope;
+// detect.ts proves the command is conservatively classifiable; the parsers here
+// are presentation enrichment and never become the sole surviving evidence.
 //
-//   - We render the widget on the RESULT row (by reading the command
-//     back out of ToolUseIndexContext). The feed's main dispatcher
-//     suppresses the paired tool_use row so we don't show a "command
-//     card" above a "widget card" — the widget already carries the
-//     command in its header. This mirrors how Claude's Edit tool
-//     collapses: tool_use renders the diff, tool_result suppresses.
-//
-//   - Each widget parses the raw stdout with the pure parsers in
-//     shared/git/gitParse.ts. Parsing never throws — on an
-//     unexpected format the result is a partial/empty shape and we
-//     fall back to showing the raw stdout. Principle: custom
-//     rendering must never lose information the user could have
-//     seen from the generic renderer.
-//
-//   - Reuses the DiffSlab look from ClaudeRows (red/green per-line
-//     tinting, monospace). I didn't import DiffSlab directly because
-//     GitDiffHunks have a slightly richer shape (per-hunk headers,
-//     per-file grouping) and re-implementing the slab inline keeps
-//     the dependency direction one-way (renderer → shared git).
+// Git diff hunks use a dedicated slab instead of the generic code-edit slab:
+// they need per-hunk headers and per-file disclosure state. The visual grammar
+// is shared, but forcing the richer Git topology into the code-edit model would
+// make that supposedly neutral protocol understand Git wire structure.
 
 import { memo, useMemo, useState } from 'react'
 import hljs from 'highlight.js'
@@ -35,7 +24,9 @@ import { PagedTextViewer } from '@renderer/lib/text/PagedTextViewer'
 import { boundedTextPage } from '@renderer/lib/text/boundedText'
 import { escapeHtml, toHighlightLanguage } from '@shared/code/htmlHighlight'
 import { normalizeCodeLanguage } from '@shared/code/language'
-import type { GitIntent } from '@shared/git/gitDetect'
+import { CommandView } from '@providers/shared/renderer/protocols/command/CommandView'
+import type { GitIntent } from './detect'
+import type { GitOperationModel } from './model'
 import {
   parseGitCommit,
   parseGitLog,
@@ -43,8 +34,8 @@ import {
   parseGitStatus,
   parseUnifiedDiff,
   stripAnsi,
-} from '@shared/git/gitParse'
-import type { GitDiffFile, GitDiffLine } from '@shared/git/gitParse'
+} from './parse'
+import type { GitDiffFile, GitDiffLine } from './parse'
 
 // ---------------------------------------------------------------------------
 // Shared chrome
@@ -594,10 +585,17 @@ export function renderGitCard(intent: GitIntent, output: string): React.ReactNod
       default: return null
     }
   })()
-  if (!page.hasNext) return card
   return (
     <>
       {card}
+      {/* WHY this disclosure is unconditional, even when the parser consumed
+          every familiar line: Git writes warnings, advice, hook output, and
+          remote messages beside otherwise valid status/diff/push output. The
+          specialized parser intentionally ignores those open-world lines.
+          Since the paired result row is absorbed, omitting this lazy exact
+          source would make the rich card less truthful than the generic
+          fallback. PagedTextViewer mounts only on open, so the collapsed cost
+          remains constant for both short and enormous results. */}
       <GitOutputDisclosure output={output} />
     </>
   )
@@ -611,7 +609,7 @@ function GitOutputDisclosure({ output }: { output: string }) {
       onToggle={event => setOpen(event.currentTarget.open)}
     >
       <summary className="cursor-pointer hover:text-ink">
-        view paged raw output · {output.length.toLocaleString()} characters
+        view raw output · {output.length.toLocaleString()} characters
       </summary>
       {open ? <div className="mt-1"><PagedTextViewer source={output} /></div> : null}
     </details>
@@ -630,4 +628,35 @@ export function GitCardRow({ intent, output }: { intent: GitIntent; output: stri
       {renderGitCard(intent, output)}
     </MarkerRow>
   )
+}
+
+/**
+ * One paired Git operation surface.
+ *
+ * Failed commands deliberately stay in the ordinary command grammar. Git's
+ * success parsers are intentionally best-effort and could otherwise turn an
+ * authentication error into an empty/clean-looking card. The raw bounded
+ * output is the evidence the user needs, and result absorption is safe only
+ * because this exact surface carries it.
+ */
+export function GitOperationView({ model }: { model: GitOperationModel }) {
+  if (model.status !== 'success') {
+    const firstLine = model.output?.split('\n', 1)[0]?.slice(0, 200)
+    return (
+      <CommandView
+        model={{
+          label: 'Git',
+          command: model.command,
+          status: model.status,
+          exitCode: null,
+          output: model.output,
+          outputIsError: model.status === 'failure',
+          errorSummary: model.status === 'failure'
+            ? firstLine || 'Git command failed'
+            : undefined,
+        }}
+      />
+    )
+  }
+  return <GitCardRow intent={model.intent} output={model.output ?? ''} />
 }

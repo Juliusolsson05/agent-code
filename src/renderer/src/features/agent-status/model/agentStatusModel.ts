@@ -14,6 +14,9 @@ import type {
   WorkspaceState,
 } from '@renderer/workspace/types'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
+import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
+import { conditionStateByKind } from '@shared/types/providerConditions'
+import type { ClaudeCompactionState } from '@shared/types/providerConditions'
 
 export type AgentStatusKind = AgentProviderKind
 
@@ -71,6 +74,18 @@ export function buildAgentStatusModel(
   const placement = derivePlacement(state, sessionId)
   const providerSessionId = normalizeOptionalString(meta.providerSessionId)
   const domains = normalizeSessionBuiltInMcpDomains(meta.builtInMcpDomains) ?? []
+  const normalizeConditions = getRendererProviderCapabilities(kind).normalizeConditions
+  const conditions = normalizeConditions
+    ? normalizeConditions({
+        snapshot: runtime.conditions,
+        currentTurn: runtime.semantic.currentTurn,
+        entries: runtime.entries,
+      })
+    : runtime.conditions
+  const compaction = conditionStateByKind<ClaudeCompactionState>(
+    conditions,
+    'claude.compaction',
+  )
 
   return {
     sessionId,
@@ -86,8 +101,8 @@ export function buildAgentStatusModel(
       transcriptStatus: runtime.transcriptStatus,
       activityStatus: normalizeOptionalString(runtime.activityStatus),
       streamPhase: runtime.streamPhase,
-      pendingCompaction: runtime.pendingCompaction
-        ? runtime.pendingCompaction.statusText ?? runtime.pendingCompaction.phase
+      pendingCompaction: compaction?.visible && compaction.phase !== 'done'
+        ? compaction.statusText ?? compaction.phase ?? null
         : null,
       processError: normalizeOptionalString(runtime.processError),
       transcriptError: normalizeOptionalString(runtime.transcriptError),

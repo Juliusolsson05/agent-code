@@ -13,10 +13,7 @@ import { ClaudeWebFetchRow } from '@providers/claude/renderer/components/web-fet
 import { ClaudeWebFetchResultRow } from '@providers/claude/renderer/components/web-fetch-result'
 import { ClaudeWebSearchRow } from '@providers/claude/renderer/components/web-search'
 import { ClaudeWebSearchResultRow } from '@providers/claude/renderer/components/web-search-result'
-import {
-  renderClaudeToolResult,
-  renderClaudeToolUse,
-} from '@providers/claude/renderer/rows/dispatch'
+import { renderClaudeOperation } from '@providers/claude/renderer/rows/dispatch'
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 
 // The provider component contract is lazy admission into the shared prose
@@ -79,12 +76,14 @@ describe('Claude provider-owned web components', () => {
   })
 
   it('wires both operations and paired results through Claude dispatch', () => {
+    const fetch = renderClaudeOperation({ toolUse: fetchUse, result: fetchResult, live: false, streaming: false })
+    const search = renderClaudeOperation({ toolUse: searchUse, result: searchResult, live: false, streaming: false })
     render(
       <>
-        {renderClaudeToolUse(fetchUse)}
-        {renderClaudeToolResult(fetchResult, { sourceTool: fetchUse })}
-        {renderClaudeToolUse(searchUse)}
-        {renderClaudeToolResult(searchResult, { sourceTool: searchUse })}
+        {fetch.toolUse.action === 'render' ? fetch.toolUse.node : null}
+        {fetch.toolResult?.action === 'render' ? fetch.toolResult.node : null}
+        {search.toolUse.action === 'render' ? search.toolUse.node : null}
+        {search.toolResult?.action === 'render' ? search.toolResult.node : null}
       </>,
     )
     expect(screen.getAllByText('example.com/docs/rendering')).toHaveLength(2)

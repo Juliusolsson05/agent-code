@@ -1,41 +1,28 @@
 // Codex `apply_patch` component (dir-per-component convention, PR #555 —
 // see providers/claude/renderer/components/edit/index.tsx for the rule).
 
-import { memo, useMemo } from 'react'
+import { memo } from 'react'
 
-import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
-import { applyPatchText, fromCodexApplyPatch } from '@providers/codex/renderer/adapters/codeEdit'
+import type { CodeEditRenderModel } from '@providers/shared/renderer/protocols/code-edit/model'
 import { CodeEditView } from '@providers/shared/renderer/protocols/code-edit/CodeEditView'
 import { boundedTextPage } from '@renderer/lib/text/boundedText'
 import { PagedTextViewer } from '@renderer/lib/text/PagedTextViewer'
-import { CodexToolRow } from '@providers/codex/renderer/components/tool'
 
 export const CodexApplyPatchRow = memo(function CodexApplyPatchRow({
-  block,
-  streaming = false,
-  running = false,
-  result = null,
+  model,
+  rawPatch,
 }: {
-  block: ToolUseBlock
-  streaming?: boolean
-  running?: boolean
-  result?: ToolResultBlock | null
+  model: CodeEditRenderModel
+  rawPatch: string
 }) {
   // CUT OVER to the code-edit protocol (PR #555 Phase 5): Codex adapter →
   // shared CodeEditView. The provider component WRAPS the shared view (the
   // plan's chrome rule) to keep two codex-specific affordances: the
-  // fallback to CodexToolRow before the patch sentinel is recognizable,
-  // and the "rich preview is partial" exact-paged-patch disclosure.
-  const model = useMemo(
-    () => fromCodexApplyPatch(block, { streaming, running, result }),
-    [block, result, running, streaming],
-  )
-  const rawPatch = applyPatchText(block.input)
+  // and the "rich preview is partial" exact-paged-patch disclosure. Admission
+  // happens before this component is created, so an invalid patch can fall
+  // back visibly instead of becoming a specialized React element that later
+  // returns null.
   const previewIncomplete = boundedTextPage(rawPatch).hasNext
-
-  if (!model) {
-    return <CodexToolRow block={block} />
-  }
 
   return (
     <div className="flex flex-col gap-1">

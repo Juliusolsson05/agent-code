@@ -138,7 +138,6 @@ export type CommandContext = {
      *  transient flag — the draft selection state is owned by the
      *  modal itself, not the store. */
     openPinAgents: () => void
-    toggleCustomRendering: () => void
     toggleStatusMode: () => void
     toggleWorktreeBadges: () => void
     toggleUsageHeader: () => void
@@ -156,7 +155,6 @@ export type CommandContext = {
     closePalette: () => void
   }
   flags: {
-    customRenderingEnabled: boolean
     statusModeEnabled: boolean
     worktreeBadgesEnabled: boolean
     usageHeaderEnabled: boolean

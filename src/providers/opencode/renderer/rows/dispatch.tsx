@@ -4,6 +4,63 @@ import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 import { renderOpencodeReadResult } from '@providers/opencode/renderer/components/read-result'
 import { fromOpencodeTodoUse } from '@providers/opencode/renderer/adapters/todo'
 import { OpencodeTodoRow } from '@providers/opencode/renderer/components/todo'
+import type {
+  ProviderOperationDecision,
+  ProviderOperationInput,
+} from '@shared/types/providerConfig'
+import { fromOpencodeGitOperation } from '@providers/opencode/renderer/adapters/git'
+import { GitOperationView } from '@providers/shared/renderer/protocols/command/formatters/git'
+
+export function renderOpencodeOperation(
+  input: ProviderOperationInput,
+): ProviderOperationDecision {
+  const git = fromOpencodeGitOperation(input)
+  if (git) {
+    return {
+      toolUse: {
+        action: 'render',
+        node: <GitOperationView model={git} />,
+        receipt: { rendererId: 'shared.command', protocolId: 'command.git' },
+      },
+      toolResult: input.result
+        ? {
+            action: 'absorb',
+            ownerRenderId: 'shared.command',
+            protocolId: 'command.git',
+            reason: 'paired Git operation view preserves the bounded result evidence',
+          }
+        : null,
+    }
+  }
+  const toolUse = renderOpencodeToolUse(input.toolUse)
+  const toolResult = input.result
+    ? renderOpencodeToolResult(input.result, { sourceTool: input.toolUse })
+    : undefined
+  return {
+    toolUse: toolUse === undefined
+      ? { action: 'fallback' }
+      : {
+          action: 'render',
+          node: toolUse,
+          receipt: { rendererId: 'opencode.rows.dispatch' },
+        },
+    toolResult: !input.result
+      ? null
+      : toolResult === undefined
+        ? { action: 'fallback' }
+        : toolResult === null
+          ? {
+              action: 'absorb',
+              ownerRenderId: 'opencode.rows.dispatch',
+              reason: 'provider operation card validated and consumed its paired result',
+            }
+          : {
+              action: 'render',
+              node: toolResult,
+              receipt: { rendererId: 'opencode.rows.dispatch' },
+            },
+  }
+}
 
 // OpenCode committed/live tool rows.
 //
@@ -12,12 +69,12 @@ import { OpencodeTodoRow } from '@providers/opencode/renderer/components/todo'
 // are plain path/pattern/command payloads the generic rows present fine.
 // Specialized rows (diff-style edit rendering etc.) should be added here one
 // evidence-backed tool at a time, not speculatively.
-export function renderOpencodeToolUse(block: ToolUseBlock): ReactNode | undefined {
+function renderOpencodeToolUse(block: ToolUseBlock): ReactNode | undefined {
   const todo = fromOpencodeTodoUse(block)
   return todo ? <OpencodeTodoRow model={todo} /> : undefined
 }
 
-export function renderOpencodeToolResult(
+function renderOpencodeToolResult(
   block: ToolResultBlock,
   context: { sourceTool?: ToolUseBlock | null },
 ): ReactNode | undefined {

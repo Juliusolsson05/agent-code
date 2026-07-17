@@ -22,13 +22,11 @@
 //
 // Run: npx tsx --tsconfig tsconfig.web.json scripts/audit-rendering-shapes.mts [--seed] [--recordings [dir]]
 //
-// Exit codes: 0 = clean; 1 = unknown-structure, misrouted, or
-// unknown-outcome shapes exist. known-unsupported-lifecycle is REPORTED but
-// non-fatal by design: while the catalog is all-`planned`, every genuinely
-// new streaming prefix would otherwise flip CI red — the inbox is where
-// those get worked, not the exit code. The authoritative CI gate is the
-// in-repo coverage test (shapes.coverage.test.ts); this script exists for
-// local triage and recording sweeps, which CI does not have.
+// Exit codes: 0 = clean; 1 = unknown-structure, unsupported-lifecycle,
+// misrouted, or unknown-outcome shapes exist. Prefixes are first-class catalog
+// promises now that Phase 10 has no planned entries: treating an observed but
+// undeclared lifecycle as advisory would let the exact streaming regressions
+// this audit exists to catch ship behind a green command.
 
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -110,6 +108,7 @@ if (RECORDINGS_DIR) {
   // cumulative seenCount — MAX per writer key, never sum (review finding:
   // summing double-counted every repeated key by one).
   const maxByWriterKey = new Map<string, Observation>()
+  let obsoleteReceiptSightings = 0
   // Recording directory names begin with an ISO timestamp. Readdir order is
   // filesystem-dependent; slicing it directly made two identical audits scan
   // different sessions and even let an old 200-directory window hide the
@@ -135,6 +134,15 @@ if (RECORDINGS_DIR) {
         const parsed = JSON.parse(line)
         if (parsed.ch !== '__render_shape' || !Array.isArray(parsed.sightings)) continue
         for (const s of parsed.sightings) {
+          // v1 was an unreleased pre-receipt experiment: shapeId was either
+          // missing or held a renderer id. Mixing it with v2 would make old
+          // local recordings look like current routing failures. Report and
+          // ignore it; no runtime compatibility is warranted for PR-local
+          // evidence that can be recaptured.
+          if (s.schemaVersion !== 2) {
+            obsoleteReceiptSightings += 1
+            continue
+          }
           if (!s.outcome) continue
           const key = renderShapeWriterKey(s as RenderShapeSighting, dir)
           if (typeof s.seenCount !== 'number' || !Number.isFinite(s.seenCount) || s.seenCount < 1) continue
@@ -159,6 +167,9 @@ if (RECORDINGS_DIR) {
     }
   }
   observations.push(...maxByWriterKey.values())
+  if (obsoleteReceiptSightings > 0) {
+    console.error(`ignored ${obsoleteReceiptSightings} obsolete v1 receipt sightings; capture a fresh v2 soak`)
+  }
 }
 
 // ---- Classify ---------------------------------------------------------------
@@ -212,7 +223,12 @@ console.log(`observations: ${observations.length}\n${summary}\n`)
 // archaeology this script exists to remove. Paths stay bounded because the
 // observer already caps them, and outcomes contain route ids rather than raw
 // provider content.
-for (const kind of ['unknown-structure', 'known-misrouted', 'unknown-outcome'] as const) {
+for (const kind of [
+  'unknown-structure',
+  'known-unsupported-lifecycle',
+  'known-misrouted',
+  'unknown-outcome',
+] as const) {
   const groups = byStatus.get(kind)
   if (!groups || groups.size === 0) continue
   console.log(`${kind} details:`)
@@ -314,6 +330,7 @@ if (SEED) {
 
 const fatal =
   (byStatus.get('unknown-structure')?.size ?? 0) +
+  (byStatus.get('known-unsupported-lifecycle')?.size ?? 0) +
   (byStatus.get('known-misrouted')?.size ?? 0) +
   (byStatus.get('unknown-outcome')?.size ?? 0)
 process.exit(fatal > 0 ? 1 : 0)

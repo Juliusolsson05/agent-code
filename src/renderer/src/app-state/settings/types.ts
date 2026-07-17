@@ -225,7 +225,6 @@ export type Settings = {
    *  keystroke. Persistence still validates/coerces the string on boot, and
    *  the modal validates before saving. */
   customAppearanceJson: string
-  customRendering: boolean
   showStatusMode: boolean
   showWorktreeBadges: boolean
   dangerousAgentsEnabled: boolean
@@ -351,7 +350,6 @@ export const DEFAULT_SETTINGS: Settings = {
   contrast: false,
   accent: 'lime',
   customAppearanceJson: DEFAULT_CUSTOM_APPEARANCE_JSON,
-  customRendering: false,
   showStatusMode: true,
   showWorktreeBadges: true,
   dangerousAgentsEnabled: false,

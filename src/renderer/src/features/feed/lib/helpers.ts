@@ -1,6 +1,5 @@
 import { isConversationEntry } from '@shared/types/transcript'
 import type {
-  CompactSummaryEntry,
   ContentBlock,
   ConversationEntry,
   Entry,
@@ -9,8 +8,6 @@ import type {
 } from '@shared/types/transcript'
 import type { SemanticLiveTurn } from '@renderer/session-runtime/state'
 import { asRecord } from '@shared/lib/asRecord'
-import { boundedTextPage } from '@renderer/lib/text/boundedText'
-import { toolResultContentText } from '@providers/shared/renderer/rows/toolResultContent'
 
 function isToolUseBlock(block: ContentBlock): block is ToolUseBlock {
   return (
@@ -68,61 +65,6 @@ export function buildToolResultIndex(entries: Entry[]): Map<string, ToolResultBl
     }
   }
   return map
-}
-
-/** Extract the command string from a Bash / exec_command tool_use
- *  block, normalizing across providers. Claude passes the command
- *  as `input.command: string`. Codex passes `input.cmd` which may
- *  be a string OR a pre-split array (for the actual argv form). */
-export function extractToolCommand(block: ToolUseBlock): string | null {
-  const input = asRecord(block.input)
-  if (!input) return null
-  if (typeof input.command === 'string') return input.command
-  if (typeof input.cmd === 'string') return input.cmd
-  if (Array.isArray(input.cmd)) return input.cmd.filter(s => typeof s === 'string').join(' ')
-  return null
-}
-
-/** Flatten a tool_result's content to a plain string — both providers
- *  use either a string or an array of `{type:'text',text:string}`. */
-export function toolResultText(block: ToolResultBlock): string {
-  return toolResultContentText(block.content)
-}
-
-// Max lines + chars for the inline bash command display. The two
-// caps cut different failure modes: very long single-line pipelines
-// (the char cap) and multi-line heredocs (the line cap). Matches
-// Claude Code's own TUI truncation so the hover preview feels
-// consistent across surfaces.
-const MAX_COMMAND_DISPLAY_LINES = 2
-const MAX_COMMAND_DISPLAY_CHARS = 160
-
-/** Truncate a bash command string for the tool-band header. Applies
- *  the LINES cap first, then the CHARS cap against whatever's left,
- *  and suffixes `…` if anything was dropped. Keeping both caps means
- *  a heredoc collapses to its first two lines AND a one-liner hex
- *  dump is truncated mid-line — both happen often enough in practice
- *  that one cap alone isn't enough. */
-export function truncateBashCommand(cmd: string): string {
-  // WHY the bounded scanner is used for a two-line label: tool arguments are
-  // untrusted in size. Splitting a megabyte heredoc merely to retain two lines
-  // made the visually collapsed tool row allocate the complete command again.
-  const page = boundedTextPage(
-    cmd,
-    0,
-    MAX_COMMAND_DISPLAY_CHARS,
-    MAX_COMMAND_DISPLAY_LINES,
-  )
-  return page.hasNext ? `${page.text.trimEnd()}…` : page.text
-}
-
-/** Strip the "<digits>\t" prefix from every line so the user sees
- *  the raw source. If a line doesn't match the pattern we keep it
- *  verbatim — defensive against future format tweaks. Used before
- *  we hand Read-tool content to a code renderer that does its own
- *  line numbering; otherwise the markers would double up. */
-export function stripLineNumberPrefix(text: string): string {
-  return text.replace(/(^|\n)\s*\d+\t/g, '$1')
 }
 
 /** Build a stable React key for an Entry + its index. Prefers the
@@ -193,46 +135,6 @@ export function splitStreamingCodeFence(text: string): {
     code,
     language,
   }
-}
-
-/** Extract the human text of a compact-summary entry. Both `text`
- *  and `thinking` blocks contribute — summaries often start with a
- *  thinking block that captures the planning step before the final
- *  text. We join with a blank line between blocks so the two
- *  render as separate paragraphs. */
-export function compactSummaryText(entry: CompactSummaryEntry): string {
-  const content = entry.message.content
-  if (typeof content === 'string') return content
-  if (!Array.isArray(content)) return ''
-  return content
-    .map(block => {
-      const item = block as ContentBlock & { text?: string; thinking?: string }
-      if (item.type === 'text' && typeof item.text === 'string') return item.text
-      if (item.type === 'thinking' && typeof item.thinking === 'string') return item.thinking
-      return ''
-    })
-    .filter(Boolean)
-    .join('\n\n')
-}
-
-/** Truncate the compact-summary body for the inline preview. Two
- *  caps run in order:
- *
- *    1. Line cap (>24): collapse to the first 24 lines. Summaries
- *       can legitimately be long with a tight line budget — a wall
- *       of 200 one-word lines is still >2400 chars but reads as
- *       "too long" long before the char cap fires.
- *    2. Char cap (>2400): truncate the already-line-capped text at
- *       2400 chars, trimming trailing whitespace.
- *
- *  Either truncation appends `\n\n[summary truncated]` as an inline
- *  signal. The full summary is always available on the expanded
- *  compact boundary. */
-export function truncateCompactSummary(text: string): string {
-  const page = boundedTextPage(text, 0, 2_400, 24)
-  return page.hasNext
-    ? `${page.text.trimEnd()}\n\n[summary truncated]`
-    : page.text
 }
 
 /** Label attachment-type entries for the system row. Handles three

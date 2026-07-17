@@ -9,7 +9,6 @@ import { useEffect } from 'react'
 import type { Entry } from '@shared/types/transcript'
 import type { SessionFeed } from '@shared/sessionFeed/SessionFeed'
 import type { SessionSemanticEvent } from '@shared/sessionFeed/types'
-import { isCompactSummaryEntry } from '@shared/types/transcript'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import type { TranscriptEntryMapper } from '@shared/types/providerConfig'
 import { emptyRuntime } from '@renderer/session-runtime/state'
@@ -64,13 +63,7 @@ import { shouldClearIdleQueuedMessages } from '@renderer/session-runtime/queueIn
 import type { StreamPhase } from '@renderer/session-runtime/state'
 import { conditionStateByKind } from '@shared/types/providerConditions'
 import type {
-  ClaudeCompactionState,
-  ClaudePermissionPromptState,
-  ClaudeResumePromptState,
   ClaudeSlashPickerState,
-  ClaudeTrustDialogState,
-  CodexApprovalState,
-  CodexTrustDialogState,
   ProviderConditionSnapshot,
 } from '@shared/types/providerConditions'
 import {
@@ -241,31 +234,12 @@ function applyConditionSnapshot(
   runtime: SessionRuntime,
   snapshot: ProviderConditionSnapshot,
 ): SessionRuntime {
-  // Kind-keyed derivation (#394 phase 3) — no provider fork. Condition
-  // kinds are globally namespaced, so `claude.trust-dialog` can only
-  // exist on a claude snapshot; reading every kind unconditionally is
-  // provider-safe and lets a third provider's snapshot flow through
-  // without touching this function. The `pending*` fields remain the
-  // documented COMPATIBILITY/CACHE mirrors (workspaceState.ts) —
-  // pendingCompaction (agent-status) and picker (composer dropdown)
-  // are the only live product consumers; the rest are debug-only and
-  // slated for deletion.
-  const trust =
-    conditionStateByKind<ClaudeTrustDialogState>(snapshot, 'claude.trust-dialog') ??
-    conditionStateByKind<CodexTrustDialogState>(snapshot, 'codex.trust-dialog')
-  const resume = conditionStateByKind<ClaudeResumePromptState>(
-    snapshot,
-    'claude.resume-prompt',
-  )
-  const permission = conditionStateByKind<ClaudePermissionPromptState>(
-    snapshot,
-    'claude.permission-prompt',
-  )
-  const compaction = conditionStateByKind<ClaudeCompactionState>(
-    snapshot,
-    'claude.compaction',
-  )
-  const approval = conditionStateByKind<CodexApprovalState>(snapshot, 'codex.approval')
+  // WHY only the composer picker is projected out of the normalized snapshot:
+  // it is a distinct renderer-owned UI model consumed by the input composer.
+  // Prompt mirrors used to copy trust/permission/resume/approval into four
+  // additional runtime fields, but every real consumer now reads `conditions`
+  // through provider policy. Retaining those copies would recreate split
+  // authority whenever a new condition or field is added.
   // The composer picker kind is provider policy (claude.slash-picker
   // today; codex has none). Absence from the map means "not live" and
   // must clear the composer picker — the legacy sticky fallback was
@@ -279,42 +253,6 @@ function applyConditionSnapshot(
   return {
     ...runtime,
     conditions: snapshot,
-    pendingTrustDialog: trust?.visible ? { workspace: trust.workspace } : null,
-    pendingResumePrompt: resume?.visible
-      ? {
-          sessionAgeText: resume.sessionAgeText,
-          tokenCountText: resume.tokenCountText,
-          selectedIndex: resume.selectedIndex,
-        }
-      : null,
-    pendingPermissionPrompt: permission?.visible
-      ? {
-          title: permission.title,
-          toolName: permission.toolName,
-          command: permission.command,
-          options: permission.options,
-          selectedIndex: permission.selectedIndex,
-        }
-      : null,
-    pendingCompaction: compaction?.visible && compaction.phase
-      ? {
-          phase: compaction.phase,
-          statusText: compaction.statusText,
-          errorText: compaction.errorText,
-        }
-      : null,
-    pendingApproval: approval
-      ? {
-          callId: approval.callId ?? null,
-          command:
-            approval.commandParts ??
-            (approval.command ? approval.command.split(/\s+/) : []),
-          workdir: approval.workdir ?? null,
-          reason: approval.reason,
-          options: approval.options,
-          selectedIndex: approval.selectedIndex,
-        }
-      : null,
     picker: slashPicker ?? { visible: false, items: [] },
   }
 }
@@ -731,7 +669,7 @@ export function useIpcSubscriptions(
     // here. It owned: codex providerSessionId capture, codex
     // approval request/resolve, claude queue-operation
     // bookkeeping, claude providerSessionId capture,
-    // pendingCompaction clearing, and the entry append itself.
+    // condition snapshot updates and the entry append itself.
     //
     // It caused the bootstrap-replay cascade. On a resume Claude /
     // Codex emits ~200 jsonl-entry events synchronously; main used
@@ -1242,7 +1180,7 @@ export function useIpcSubscriptions(
     //      conditions; this handler only consumes entries/feed effects.
     //   3. Claude queue-operation bookkeeping (per entry).
     //   4. Claude providerSessionId capture (from any entry's sessionId).
-    //   5. pendingCompaction clearing on compact summary entries.
+    //   5. provider-owned durable compaction entries.
     //   6. Optimistic-Codex-user reconciliation against the head row.
     const offEntries = feed.onSessionJsonlEntries(({ sessionId, entries }) => {
       if (!entries || entries.length === 0) return
@@ -1406,7 +1344,6 @@ export function useIpcSubscriptions(
         const seen = (refs.seenUuidsRef.current[sessionId] ??= new Set())
         const appended: Entry[] = []
         let oldestMarker: string | null = current.historyOldestMarker
-        let pendingCompaction = current.pendingCompaction
         let queuedMessages = current.queuedMessages
         let awaitingAssistant = current.awaitingAssistant
         let workActivity = current.workActivity
@@ -1664,11 +1601,6 @@ export function useIpcSubscriptions(
           // filtered lines never reach dedupe — inconsequential,
           // because a re-arriving filtered line is filtered again.
           //
-          // pendingCompaction clearing now applies to BOTH providers'
-          // mapped compact summaries (the old codex branch never
-          // cleared it — latent gap; for codex the flag is normally
-          // null so this is a no-op today, correct if codex ever
-          // grows a compaction condition).
           for (const e of mapped) {
             const u = entryUuid(e)
             if (u) {
@@ -1688,7 +1620,6 @@ export function useIpcSubscriptions(
             // oldest RETAINED entry's marker so pagination can re-fetch the
             // trimmed region.
             stampHistoryMarker(e, marker)
-            if (isCompactSummaryEntry(e)) pendingCompaction = null
             appended.push(e)
             if (indexEntryIntoMaps(e, toolUseIndex, toolResultIndex)) {
               toolIndexChanged = true
@@ -1788,7 +1719,6 @@ export function useIpcSubscriptions(
         const noChange =
           appended.length === 0 &&
           reconciledOptimisticText === null &&
-          pendingCompaction === current.pendingCompaction &&
           queuedMessages === current.queuedMessages &&
           awaitingAssistant === current.awaitingAssistant &&
           workContext === current.workContext &&
@@ -1921,7 +1851,6 @@ export function useIpcSubscriptions(
                 : oldestMarker,
               ...(entriesTrimmed > 0 ? { hasOlderHistory: true } : {}),
               bootstrapping: true,
-              pendingCompaction,
               queuedMessages,
               awaitingAssistant,
               transcriptStatus: 'ready',

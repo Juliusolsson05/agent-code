@@ -90,7 +90,7 @@ export const ConversationRow = memo(function ConversationRow({
 // Walk the block list, coalescing a run of ≥2 adjacent `Agent` spawns (same
 // assistant turn) under one SubagentGroupHeader so the user sees a single
 // "Spawned N agents" tally instead of N anonymous cards. A lone `Agent` block
-// renders as a plain TaskSubagentRow (no header — there's nothing to count).
+// renders as a plain provider spawn row (no header — there's nothing to count).
 // Every other block renders exactly as before, so this is invisible to
 // non-Agent content. Grouping is gated to assistant turns: an `Agent` tool_use
 // only ever appears in an assistant message, but being explicit keeps the

@@ -11,8 +11,6 @@ export { EAGER_TAIL, LazyEntry } from '@renderer/features/feed/ui/rows/LazyEntry
 export { EntryRow } from '@renderer/features/feed/ui/rows/EntryRow'
 export { ConversationRow } from '@renderer/features/feed/ui/rows/ConversationRow'
 export { Block } from '@renderer/features/feed/ui/rows/Block'
-export { CompactBoundaryRow } from '@renderer/features/feed/ui/rows/CompactBoundaryRow'
-export { CompactSummaryRow } from '@renderer/features/feed/ui/rows/CompactSummaryRow'
 export { SystemRow } from '@renderer/features/feed/ui/rows/SystemRow'
 export { ImageBlockRow } from '@renderer/features/feed/ui/rows/ImageBlockRow'
 export { ToolResultRow } from '@renderer/features/feed/ui/rows/ToolResultRow'

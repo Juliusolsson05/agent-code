@@ -16,7 +16,86 @@
 import type { ComponentType, ReactNode } from 'react'
 import type { SessionOptions, SessionInfo, AgentSession } from '@shared/types/session.js'
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
-import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript.js'
+import type { Entry, ToolResultBlock, ToolUseBlock } from '@shared/types/transcript.js'
+
+/**
+ * Provider operation routing is deliberately explicit about all three
+ * outcomes. `undefined` and React's `null` used to double as an unwritten
+ * protocol between separate tool-use and tool-result dispatch calls; that
+ * made an innocent refactor capable of deleting a result row. Providers now
+ * decide the correlated pair together and every hidden result names the card
+ * that preserves its evidence.
+ */
+export type ProviderSpecializedReceipt = {
+  rendererId: string
+  protocolId?: string
+}
+
+export type ProviderVisibleDecision =
+  | { action: 'render'; node: ReactNode; receipt: ProviderSpecializedReceipt }
+  | { action: 'fallback' }
+
+export type ProviderResultDecision =
+  | ProviderVisibleDecision
+  | {
+      action: 'absorb'
+      ownerRenderId: string
+      protocolId?: string
+      reason: string
+    }
+
+export type ProviderOperationInput = {
+  toolUse: ToolUseBlock
+  result: ToolResultBlock | null
+  live: boolean
+  streaming: boolean
+}
+
+export type ProviderOperationDecision = {
+  /** Invocation absorption is rare (for example an empty continuation poll)
+   * but must still be named rather than hidden inside a React component. */
+  toolUse: ProviderResultDecision
+  /** Null is legal only while the correlated result does not exist yet. */
+  toolResult: ProviderResultDecision | null
+}
+
+/**
+ * A live semantic block uses the same explicit ownership vocabulary as a
+ * durable operation. Keeping one decision algebra is important: semantic
+ * rendering used to return ReactNode, where both "declined" and "claimed but
+ * intentionally hidden" could collapse to nullish values and the evidence
+ * observer then invented a provider-wide receipt. The decision now carries
+ * the exact renderer/protocol that actually admitted the block.
+ */
+export type ProviderSemanticDecision = ProviderResultDecision
+
+export type ProviderDurableEntryInput = { entry: Entry }
+/**
+ * Admission result for provider-authored entries that are not ordinary
+ * conversation rows. This is deliberately a tiny semantic model instead of
+ * the provider's raw discriminator: the ownership ledger needs to know that a
+ * durable row exists and how it orders, but it must not learn that Claude uses
+ * `system.subtype` while another provider may use a different carrier.
+ */
+export type ProviderDurableEntryKind = 'compact-boundary' | 'compact-summary'
+export type ProviderDurableEntryDecision = Extract<
+  ProviderVisibleDecision,
+  { action: 'render' }
+>
+
+/** Provider-decoded completion carrier made available to correlated operation
+ * rows. The shell transports this closed presentation model but never parses
+ * a provider's source envelope. Claude currently fills it from durable
+ * <task-notification> entries; providers without that protocol return no map. */
+export type ProviderTaskNotification = {
+  taskId: string | null
+  toolUseId: string | null
+  status: string | null
+  summary: string | null
+  result: string | null
+  outputFile: string | null
+  usage: string | null
+}
 
 export type TileLeafRelatedAgentTab = {
   sessionId: string
@@ -211,30 +290,12 @@ export type RendererProviderConfig = {
    * one real renderer capability instead of another ad hoc binary fallback.
    */
   conditionViews: RendererConditionViewRegistry
-  /**
-   * Provider-owned committed transcript row dispatch.
-   *
-   * WHY `undefined` means "no provider opinion" but `null` means "render
-   * nothing": generic rows are still the shared fallback for unknown Claude
-   * tools, while Codex has a few result rows (notably spawn_agent join payloads)
-   * whose correct UI is suppression. Collapsing both cases to `null` would make
-   * it impossible for Block.tsx to distinguish "fall back" from "intentionally
-   * consumed".
-   */
-  renderToolUse?: (
-    block: ToolUseBlock,
-    context?: {
-      /** Present only on the semantic live plane. Committed transcript calls
-       * omit it so adapters preserve their durable historical semantics. */
-      live?: boolean
-      streaming?: boolean
-      result?: ToolResultBlock | null
-    },
-  ) => ReactNode | undefined
-  renderToolResult?: (
-    block: ToolResultBlock,
-    context: { sourceTool?: ToolUseBlock | null },
-  ) => ReactNode | undefined
+  /** Provider-owned interpretation of one correlated tool operation. */
+  renderOperation: (input: ProviderOperationInput) => ProviderOperationDecision
+  /** Provider-only durable rows such as Claude/Codex compaction artifacts. */
+  renderDurableEntry?: (
+    input: ProviderDurableEntryInput,
+  ) => ProviderDurableEntryDecision | undefined
   /** The pane component the shell mounts inside TileTree. */
   TileLeaf: ComponentType<TileLeafProps>
 }

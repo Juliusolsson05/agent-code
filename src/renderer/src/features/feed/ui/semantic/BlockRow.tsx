@@ -119,21 +119,16 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
   const currentProvider = useContext(ProviderContext)
   const committedToolResults = useContext(ToolResultIndexContext)
   const providerCapabilities = getRendererProviderCapabilities(currentProvider)
-  const providerSemanticRow = providerCapabilities.renderSemanticBlock?.(block, {
+  const providerSemanticDecision = providerCapabilities.renderSemanticBlock?.(block, {
     committedToolResults,
   })
 
-  // Shape sighting for the LIVE plane (Phase 2, PR #555). One observation
-  // per block per lifecycle stage, at the top of the dispatch. Outcome is
-  // COARSE by design before Phase 5 receipts, but coarse must not mean
-  // WRONG (review finding: recording a specialized Codex apply-patch row —
-  // or a suppressed empty-thinking block — as "generic" is precisely the
-  // misreporting the receipts exist to catch), so the cheap top-level facts
-  // are classified honestly: empty thinking/reasoning is an absorbed
-  // suppression; the three specialized Codex tool names are specialized;
-  // everything else stays generic until its family migrates. Lifecycle: a
-  // non-finalized live block is a meaningful streaming PREFIX — exactly the
-  // shapes the old renderer kept forgetting.
+  // Observe the provider's actual admission decision, not merely whether a
+  // React node happened to be returned. Git-in-exec, ordinary exec, and an
+  // empty continuation poll can share the same semantic wire kind while
+  // having three different owners. Collapsing those into a provider-wide
+  // receipt would make the evidence catalog look healthy while the wrong
+  // renderer was painting (or suppressing) the operation.
   const capture = useRenderShapeCapture()
   if (capture) {
     const isThinking = block.kind === 'thinking' || block.kind === 'reasoning'
@@ -147,9 +142,18 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
       payload: block,
       outcome: thinkingEmpty
         ? absorbedOutcome('semantic.blockrow', 'empty thinking/reasoning suppressed')
-        : providerSemanticRow !== undefined
-          ? specializedOutcome(`${currentProvider}.rows.dispatch`)
-          : GENERIC_OUTCOME,
+        : providerSemanticDecision?.action === 'render'
+          ? specializedOutcome(
+              providerSemanticDecision.receipt.rendererId,
+              providerSemanticDecision.receipt.protocolId,
+            )
+          : providerSemanticDecision?.action === 'absorb'
+            ? absorbedOutcome(
+                providerSemanticDecision.ownerRenderId,
+                providerSemanticDecision.reason,
+                providerSemanticDecision.protocolId,
+              )
+            : GENERIC_OUTCOME,
     })
   }
   if (block.kind === 'thinking' || block.kind === 'reasoning') {
@@ -183,7 +187,8 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
     )
   }
 
-  if (providerSemanticRow !== undefined) return providerSemanticRow
+  if (providerSemanticDecision?.action === 'render') return providerSemanticDecision.node
+  if (providerSemanticDecision?.action === 'absorb') return null
 
   if (
     block.kind === 'function_call_output' ||

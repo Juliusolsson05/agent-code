@@ -14,17 +14,22 @@ import {
 // rule. Split an entry only when the VISUAL interpretation or lifecycle
 // genuinely differs.
 //
-// All dispositions start `planned`: the legacy painter routes by CONTENT
-// (git Bash → widget, other Bash → generic), which a structural catalog
-// must tolerate until Phase 5+ receipts land — see
-// catalogCoverage.outcomeSatisfiesDisposition for the exact contract.
-// Graduating an entry to specialized/absorbed is a per-family migration
-// step, never a bulk edit.
+// Every disposition is now an enforceable Phase 10 promise. Where a stable
+// structural envelope legitimately routes by bounded content (Git vs an
+// ordinary Bash command, or an empty vs non-empty continuation), the catalog
+// lists that finite alternate explicitly. `planned` remains an authoring
+// vocabulary in the type system, but shipping catalog entries may not use it.
 //
 // fixtures.final reference the bundle corpus (`rendering-bundles/<file>`)
 // as seed evidence; dedicated shape fixtures under
 // testing/fixtures/rendering-shapes/ join them as capture soaks + the
 // extract script produce redacted minimal cases.
+//
+// TODO(condition-shape-soak): the provider can emit six normalized live
+// condition kinds, but the retained corpus predates condition-plane capture.
+// Do not fingerprint TypeScript examples and call them evidence. The first
+// real developer recording of each kind must arrive through the Unknown Shape
+// Inbox, then land here with its exact destination disposition and fixture.
 export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.entry.attachment.v1': defineRenderShape({
     id: 'claude.entry.attachment.v1',
@@ -91,8 +96,8 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
       lastSeen: '2026-07-16',
     },
     fixtures: { final: ["rendering-bundles/2026-06-22T12-46-15-717-c973322e.json"], prefixes: [] },
-    disposition: { kind: 'planned', targetGrammar: 'system' },
-    why: 'Phase 9 deliberately preserves the durable compact-boundary exception in central EntryRow. TODO(phase-10-compaction): move selection to Claude provider compaction only after structured/screen source precedence, deduplication, and restart/replay fixtures prove that history is independent of transient condition state.',
+    disposition: { kind: 'specialized', rendererId: 'shared.compaction', protocolId: 'compaction.boundary' },
+    why: 'GRADUATED Phase 10: Claude durable-entry dispatch now owns boundary recognition and delegates only the provider-neutral visual grammar to shared.compaction. The durable transcript entry, not a transient screen condition, is the replay source of truth.',
   }),
   'claude.entry.system-turn-duration.v1': defineRenderShape({
     id: 'claude.entry.system-turn-duration.v1',
@@ -111,10 +116,10 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     disposition: { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'Turn-duration records are diagnostic metadata excluded by the ownership ledger; if surfaced in diagnostics they use the bounded muted system fallback.' },
     why: 'Phase 8 explicitly classifies turn_duration as non-conversational telemetry. A dedicated feed component would add one noisy row per turn without providing an action or durable semantic artifact.',
   }),
-  'claude.entry.user.v1': defineRenderShape({
-    id: 'claude.entry.user.v1',
+  'claude.entry.compact-summary.v1': defineRenderShape({
+    id: 'claude.entry.compact-summary.v1',
     provider: 'claude',
-    fingerprints: ["fp2-688dff42","fp2-92c29c6f"],
+    fingerprints: ["fp2-92c29c6f"],
     eventTypes: ["user"],
     planes: ["transcript-entry"] as const,
     lifecycles: ["durable"] as const,
@@ -124,9 +129,26 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
       firstSeen: '2026-07-16',
       lastSeen: '2026-07-16',
     },
-    fixtures: { final: ["rendering-bundles/2026-06-21T19-19-55-972-62432945.json","rendering-bundles/2026-06-21T20-14-23-131-62432945.json","rendering-bundles/2026-06-22T12-34-16-431-2db014bc.json"], prefixes: [] },
-    disposition: { kind: 'planned', targetGrammar: 'system' },
-    why: 'Phase 9 leaves the conversation-entry container planned because runtime receipts are intentionally block-grained: EntryRow does not double-observe a user container whose text/tool blocks are observed at the actual paint decision. Inventing a container renderer receipt would corrupt counts rather than strengthen ownership.',
+    fixtures: { final: ["rendering-bundles/2026-06-21T19-19-55-972-62432945.json"], prefixes: [] },
+    disposition: { kind: 'specialized', rendererId: 'shared.compaction', protocolId: 'compaction.summary' },
+    why: 'Claude marks the synthetic user entry with isCompactSummary. Provider durable-entry dispatch owns that admission and delegates only the provider-neutral summary grammar to shared.compaction, so replay survives without screen state.',
+  }),
+  'claude.entry.task-notification.v1': defineRenderShape({
+    id: 'claude.entry.task-notification.v1',
+    provider: 'claude',
+    fingerprints: ["fp2-688dff42"],
+    eventTypes: ["user"],
+    planes: ["transcript-entry"] as const,
+    lifecycles: ["durable"] as const,
+    observed: {
+      providerVersions: [],
+      models: [],
+      firstSeen: '2026-07-16',
+      lastSeen: '2026-07-17',
+    },
+    fixtures: { final: ["rendering-bundles/2026-06-21T20-14-23-131-62432945.json","rendering-bundles/2026-06-22T12-34-16-431-2db014bc.json"], prefixes: [] },
+    disposition: { kind: 'specialized', rendererId: 'claude.task-notification' },
+    why: 'The XML carrier is a Claude protocol artifact, not user conversation and not a generic subagent result. Claude admission prevents the shell or Codex from inheriting this provider-specific completion contract.',
   }),
   'claude.semantic.agent.v1': defineRenderShape({
     id: 'claude.semantic.agent.v1',
@@ -178,8 +200,10 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     },
     fixtures: { final: ["rendering-bundles/2026-06-04T09-09-57-625-4177cefb.json","rendering-bundles/2026-06-04T09-14-29-649-4177cefb.json","rendering-bundles/2026-06-14T13-59-16-931-4757ae44.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch' },
-    dispositionByLifecycle: { prefix: { kind: 'planned', targetGrammar: 'command' } },
-    why: 'GRADUATED Phase 9 for complete live Bash input, which is wholly provider-owned through Claude semantic dispatch. A prefix remains planned because the same structural fingerprint exists before and after the command string closes: the early form is the bounded generic card and the later form is the command/code-edit card. Durable Bash remains separately planned because the central Git interception can still claim it by command content until Phase 10.',
+    alternateDispositions: [
+      { kind: 'specialized', rendererId: 'shared.command', protocolId: 'command.git' },
+    ],
+    why: 'GRADUATED Phase 10: Claude semantic dispatch owns every Bash prefix and complete input. Ordinary/partial commands use the Claude row; evidence-backed Git commands use the shared command formatter through the provider adapter, with the exact protocol carried by the receipt.',
   }),
   'claude.semantic.edit.v1': defineRenderShape({
     id: 'claude.semantic.edit.v1',
@@ -196,8 +220,9 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     },
     fixtures: { final: ["rendering-bundles/2026-06-14T14-02-05-796-a8ad1ebb.json","rendering-bundles/2026-06-21T17-32-48-749-5e75540c.json","rendering-bundles/2026-06-29T11-38-28-652-42071335.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch' },
-    dispositionByLifecycle: { prefix: { kind: 'planned', targetGrammar: 'code-edit' } },
-    why: 'GRADUATED Phase 9 for complete semantic Edit input, which deterministically reuses the provider code-edit row. A prefix is intentionally still planned because the same structural fingerprint can occur before or after file_path closes: the former stays generic and the latter earns the partial edit card, a content-dependent distinction the structural fingerprint must not pretend to resolve.',
+    dispositionByLifecycle: { prefix: { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'A prefix without a closed file path remains visible through the bounded structured fallback.' } },
+    alternateDispositionsByLifecycle: { prefix: [{ kind: 'specialized', rendererId: 'claude.rows.dispatch' }] },
+    why: 'GRADUATED Phase 10: complete Edit input is provider-owned; a prefix earns that card only after file_path closes. The finite prefix routes describe that content threshold without pretending the structural fingerprint alone resolves it.',
   }),
   'claude.semantic.enterworktree.v1': defineRenderShape({
     id: 'claude.semantic.enterworktree.v1',
@@ -459,8 +484,11 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
       lastSeen: '2026-07-16',
     },
     fixtures: { final: ["rendering-bundles/2026-06-04T09-09-57-625-4177cefb.json","rendering-bundles/2026-06-04T09-14-29-649-4177cefb.json","rendering-bundles/2026-06-14T13-59-16-931-4757ae44.json"], prefixes: [] },
-    disposition: { kind: 'planned', targetGrammar: 'reasoning' },
-    why: 'Phase 9 records the irreducible content split: empty/encrypted thinking is absorbed by the WorkIndicator owner while non-empty thinking paints the shared disclosure. Both share a structural fingerprint, so one strict disposition would manufacture misroutes.',
+    disposition: { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'Non-empty thinking is painted by the provider-neutral semantic disclosure.' },
+    alternateDispositions: [
+      { kind: 'absorbed', ownerRendererId: 'semantic.blockrow', reason: 'Empty or encrypted thinking is represented by the work indicator instead of a blank row.' },
+    ],
+    why: 'GRADUATED Phase 10 with a finite content split: visible thinking uses the shared disclosure; empty/encrypted thinking is explicitly absorbed by semantic.blockrow. The observer records which route actually occurred.',
   }),
   'claude.semantic.toolsearch.v1': defineRenderShape({
     id: 'claude.semantic.toolsearch.v1',
@@ -531,8 +559,9 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     },
     fixtures: { final: ["rendering-bundles/2026-06-14T14-25-07-012-a8ad1ebb.json","rendering-bundles/2026-06-14T14-32-42-750-a8ad1ebb.json","rendering-bundles/2026-06-14T14-32-54-340-a8ad1ebb.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch' },
-    dispositionByLifecycle: { prefix: { kind: 'planned', targetGrammar: 'code-edit' } },
-    why: 'GRADUATED Phase 9 for complete semantic Write input, which deterministically reuses the provider file-write row. Prefixes remain planned because specialization begins only after the streaming scanner closes a file path; earlier prefixes truthfully use the generic row under the same structural fingerprint.',
+    dispositionByLifecycle: { prefix: { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'A prefix without a closed file path remains visible through the bounded structured fallback.' } },
+    alternateDispositionsByLifecycle: { prefix: [{ kind: 'specialized', rendererId: 'claude.rows.dispatch' }] },
+    why: 'GRADUATED Phase 10: complete Write input is provider-owned; streaming input earns the partial file card only after the bounded scanner closes file_path. Both legal prefix routes are declared rather than hidden behind a planned wildcard.',
   }),
   'claude.tool-result.tool-result.v1': defineRenderShape({
     id: 'claude.tool-result.tool-result.v1',
@@ -548,8 +577,15 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
       lastSeen: '2026-07-16',
     },
     fixtures: { final: ["rendering-bundles/2026-06-04T09-09-57-625-4177cefb.json","rendering-bundles/2026-06-04T09-14-29-649-4177cefb.json","rendering-bundles/2026-06-14T13-59-16-931-4757ae44.json"], prefixes: [] },
-    disposition: { kind: 'planned', targetGrammar: 'tool-result' },
-    why: 'Phase 9 keeps the structurally uniform result envelope planned because its honest owner is the paired invocation: validated task/question/Agent Code results are absorbed, Bash/read/web results are specialized, and unknown or drifted pairs stay generic. A future paired operation receipt can make the correlation—not the result fingerprint—the strict promise.',
+    disposition: { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'Unknown, uncorrelated, or drifted result envelopes remain visibly formatted by the shared result fallback.' },
+    alternateDispositions: [
+      { kind: 'specialized', rendererId: 'claude.rows.dispatch' },
+      { kind: 'absorbed', ownerRendererId: 'claude.rows.dispatch', reason: 'A validated paired provider card preserves the useful result evidence.' },
+      { kind: 'absorbed', ownerRendererId: 'claude.rows.dispatch', protocolId: 'agent-code.orchestration', reason: 'The source-controlled Agent Code orchestration card preserves its validated result protocol.' },
+      { kind: 'absorbed', ownerRendererId: 'claude.rows.dispatch', protocolId: 'agent-code.workspace', reason: 'The source-controlled Agent Code workspace card preserves its validated result protocol.' },
+      { kind: 'absorbed', ownerRendererId: 'shared.command', protocolId: 'command.git', reason: 'The paired Git operation view preserves the bounded result evidence.' },
+    ],
+    why: 'GRADUATED Phase 10: the paired operation boundary, not the uniform result envelope, decides ownership. The catalog enumerates the only legal visible/absorbed routes and every absorption names its evidence owner.',
   }),
   'claude.tool-use.agent.v1': defineRenderShape({
     id: 'claude.tool-use.agent.v1',
@@ -599,8 +635,11 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
       lastSeen: '2026-07-16',
     },
     fixtures: { final: ["rendering-bundles/2026-06-04T09-09-57-625-4177cefb.json","rendering-bundles/2026-06-04T09-14-29-649-4177cefb.json","rendering-bundles/2026-06-14T13-59-16-931-4757ae44.json"], prefixes: [] },
-    disposition: { kind: 'planned', targetGrammar: 'command' },
-    why: 'Phase 9 preserves this content-dependent durable route for Phase 10: non-Git Bash uses Claude command/code-edit rendering, while a recognized Git command is intercepted by the central shared.git-widget and its result is absorbed. The paired operation boundary must replace both branches atomically.',
+    disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch' },
+    alternateDispositions: [
+      { kind: 'specialized', rendererId: 'shared.command', protocolId: 'command.git' },
+    ],
+    why: 'GRADUATED Phase 10: Claude operation dispatch owns Bash and chooses either its normal command row or the evidence-backed Git formatter. No central feed interception remains, and both routes carry exact receipts.',
   }),
   'claude.tool-use.edit.v1': defineRenderShape({
     id: 'claude.tool-use.edit.v1',
@@ -736,7 +775,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     },
     fixtures: { final: ["rendering-bundles/2026-06-14T15-52-20-411-b728adb8.json","rendering-bundles/2026-06-21T17-32-48-749-5e75540c.json","rendering-bundles/2026-06-21T19-19-55-972-62432945.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch', protocolId: 'agent-code.orchestration' },
-    why: 'GRADUATED Phase 7: committed create-agent now bypasses the legacy name-only TaskSubagentRow and renders the owned Agent Code lifecycle/result protocol.',
+    why: 'GRADUATED Phase 7: committed create-agent bypasses the deleted central name-only spawn route and renders the owned Agent Code lifecycle/result protocol.',
   }),
   'claude.tool-use.mcp-orchestration-list-agents.v1': defineRenderShape({
     id: 'claude.tool-use.mcp-orchestration-list-agents.v1',

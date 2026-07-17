@@ -192,7 +192,6 @@ function OpenCommandPalette({
   const openDispatchAttach = useAppStore(state => state.openDispatchAttach)
   const openLinkedAgent = useAppStore(state => state.openLinkedAgent)
   const openPinAgents = useAppStore(state => state.openPinAgents)
-  const toggleCustomRendering = useAppStore(state => state.toggleCustomRendering)
   const toggleStatusMode = useAppStore(state => state.toggleStatusMode)
   const toggleWorktreeBadges = useAppStore(state => state.toggleWorktreeBadges)
   const toggleUsageHeader = useAppStore(state => state.toggleUsageHeader)
@@ -225,7 +224,6 @@ function OpenCommandPalette({
     [setSettings],
   )
 
-  const customRenderingEnabled = settings.customRendering
   const agentViewMode = settings.agentViewMode
   const commandVisibilityOverrides = settings.commandVisibilityOverrides
   const showHiddenCommands = SHOW_HIDDEN_COMMANDS
@@ -449,7 +447,6 @@ function OpenCommandPalette({
         openDispatchAttach,
         openLinkedAgent,
         openPinAgents,
-        toggleCustomRendering,
         toggleStatusMode,
         toggleWorktreeBadges,
         toggleUsageHeader,
@@ -467,7 +464,6 @@ function OpenCommandPalette({
         closePalette: onClose,
       },
       flags: {
-        customRenderingEnabled,
         statusModeEnabled,
         worktreeBadgesEnabled,
         usageHeaderEnabled,
@@ -533,7 +529,6 @@ function OpenCommandPalette({
       openDispatchAttach,
       openLinkedAgent,
       openPinAgents,
-      toggleCustomRendering,
       toggleStatusMode,
       toggleWorktreeBadges,
       toggleUsageHeader,
@@ -549,7 +544,6 @@ function OpenCommandPalette({
       enterAiWorkspaceCreateMode,
       enterAiWorkspaceClearMode,
       onClose,
-      customRenderingEnabled,
       statusModeEnabled,
       worktreeBadgesEnabled,
       usageHeaderEnabled,

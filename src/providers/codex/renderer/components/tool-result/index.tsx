@@ -167,8 +167,6 @@ export const CodexToolResultRow = memo(function CodexToolResultRow({
     const parsedType = typeof parsed?.type === 'string' ? parsed.type : null
     const path = parsedPath(parsed)
 
-    if (!text && !isError) return null
-
     if (
       (parsedType === 'read' || parsedType === 'search') &&
       path &&
@@ -208,8 +206,6 @@ export const CodexToolResultRow = memo(function CodexToolResultRow({
   }
 
   if (kind === 'patch_apply_end') {
-    if (!isError) return null
-
     const changes = asRecord(meta?.changes)
     const items = changes ? Object.entries(changes) : []
     if (items.length > 0) {
@@ -254,8 +250,6 @@ export const CodexToolResultRow = memo(function CodexToolResultRow({
       )
     }
   }
-
-  if (!text && !isError) return null
 
   // JSON-shaped fallthrough (wall-time wrapper / MCP envelope / plain
   // JSON) gets the shared collapsed pretty rendering; anything else keeps

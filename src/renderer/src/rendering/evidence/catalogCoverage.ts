@@ -93,31 +93,29 @@ export function outcomeSatisfiesDisposition(
 ): boolean {
   switch (disposition.kind) {
     case 'specialized':
-      return outcome.kind === 'specialized' && outcome.rendererId === disposition.rendererId
+      return outcome.kind === 'specialized' &&
+        outcome.rendererId === disposition.rendererId &&
+        (outcome.protocolId ?? null) === (disposition.protocolId ?? null)
     case 'generic':
       return outcome.kind === 'generic'
     case 'absorbed':
       // The absorbing owner must be the DECLARED owner. An absorption by
       // anyone else is exactly the undeclared-hiding case (§Step 6 calls
       // hiding the most dangerous operation in the renderer).
-      return outcome.kind === 'absorbed' && outcome.ownerRenderId === disposition.ownerRendererId
+      return outcome.kind === 'absorbed' &&
+        outcome.ownerRenderId === disposition.ownerRendererId &&
+        (outcome.protocolId ?? null) === (disposition.protocolId ?? null)
     case 'condition-surface':
       return outcome.kind === 'condition-surface' && outcome.surface === disposition.surface
     case 'planned':
+      // Planned is outstanding implementation work, never permission for any
+      // current route to masquerade as correct. Phase 10's exit gate is zero
+      // planned catalog entries.
+      return false
     case 'unsupported':
-      // No promise made yet — EVERY outcome satisfies these dispositions.
-      // This breadth is deliberate and load-bearing for the Phase 4 seed:
-      // the legacy painter routes one structure differently by CONTENT
-      // (a Bash tool_use is a git widget for git commands and a generic row
-      // otherwise; one tool_result structure is absorbed under the git
-      // widget or painted generic depending on its source tool), and the
-      // structural fingerprint cannot — must not — see that difference. A
-      // `planned` entry flagging those legitimate legacy routes as
-      // "misrouted" would drown the inbox in false positives. The strict
-      // matching above starts to bite per family exactly when Phase 5+
-      // migrates it and its entries graduate to specialized/absorbed
-      // dispositions with receipt-backed outcomes.
-      return true
+      // Unsupported means "visible through the total fallback", not "may be
+      // hidden or claimed by any renderer".
+      return outcome.kind === 'generic'
   }
 }
 
@@ -137,7 +135,14 @@ export function classifySighting(
   if (sighting.outcome.kind === 'unknown') {
     return { kind: 'unknown-outcome', shapeId: def.id, actual: sighting.outcome }
   }
-  if (!outcomeSatisfiesDisposition(expectedDisposition, sighting.outcome)) {
+  const alternates = def.alternateDispositionsByLifecycle?.[sighting.lifecycle]
+    ?? def.alternateDispositions
+    ?? []
+  const shapeMatches = sighting.outcome.shapeId === def.id
+  const routeMatches = [expectedDisposition, ...alternates].some(disposition =>
+    outcomeSatisfiesDisposition(disposition, sighting.outcome),
+  )
+  if (!shapeMatches || !routeMatches) {
     return {
       kind: 'known-misrouted',
       shapeId: def.id,
@@ -177,6 +182,7 @@ export function classifySightingStructure(
 export type CatalogAuditFinding =
   | { kind: 'specialized-without-fixture'; shapeId: string }
   | { kind: 'absorbed-without-fixture'; shapeId: string }
+  | { kind: 'planned-shape'; shapeId: string }
   | { kind: 'empty-fingerprints'; shapeId: string }
   | { kind: 'malformed-fingerprint'; shapeId: string; fingerprint: string }
   | { kind: 'duplicate-fingerprint'; fingerprint: string; shapeIds: readonly string[] }
@@ -187,12 +193,11 @@ export type CatalogAuditFinding =
  * scripts/audit-rendering-shapes.mjs (Phase 3) so CI and the CLI report
  * cannot disagree about what a healthy catalog is.
  *
- * WHY fixtures gate `specialized` AND `absorbed` but not `planned`: a
- * specialized claim without a fixture is an untestable renderer promise, and
- * an absorption without a fixture proving the surviving evidence is
- * unverifiable hiding — both plan-mandated. `planned` is explicitly a
- * pre-fixture state; blocking it would forbid cataloguing a shape before
- * extraction, inverting the intended workflow.
+ * Every declared route is audited, including lifecycle overrides and finite
+ * alternates. Auditing only the primary disposition let an unfixture-backed
+ * absorption hide in an alternate while CI still called the shape healthy.
+ * `planned` remains valid while drafting a catalog edit, but it is always a
+ * finding: the shipping Phase 10 gate requires zero unfinished promises.
  */
 export function auditRenderShapeCatalog(
   catalogs: readonly Readonly<Record<string, RenderShapeDefinition>>[],
@@ -208,10 +213,20 @@ export function auditRenderShapeCatalog(
           findings.push({ kind: 'malformed-fingerprint', shapeId: def.id, fingerprint: fp })
         }
       }
-      if (def.disposition.kind === 'specialized' && def.fixtures.final.length === 0) {
+      const routes = [
+        def.disposition,
+        ...Object.values(def.dispositionByLifecycle ?? {}).filter((route): route is RenderShapeDisposition => Boolean(route)),
+        ...(def.alternateDispositions ?? []),
+        ...Object.values(def.alternateDispositionsByLifecycle ?? {}).flatMap(routes => routes ?? []),
+      ]
+      const hasFixture = def.fixtures.final.length > 0 || def.fixtures.prefixes.length > 0
+      if (routes.some(route => route.kind === 'planned')) {
+        findings.push({ kind: 'planned-shape', shapeId: def.id })
+      }
+      if (routes.some(route => route.kind === 'specialized') && !hasFixture) {
         findings.push({ kind: 'specialized-without-fixture', shapeId: def.id })
       }
-      if (def.disposition.kind === 'absorbed' && def.fixtures.final.length === 0) {
+      if (routes.some(route => route.kind === 'absorbed') && !hasFixture) {
         findings.push({ kind: 'absorbed-without-fixture', shapeId: def.id })
       }
     }

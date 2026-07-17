@@ -54,7 +54,7 @@ describe('classifySighting — the five plan §Step 4 states', () => {
       {
         structuralFingerprint: FP,
         lifecycle: 'input-complete',
-        outcome: { kind: 'generic', rendererId: 'shared.generic-tool' },
+        outcome: { kind: 'generic', shapeId: 'claude.edit.v1', rendererId: 'shared.generic-tool' },
       },
       index,
     )
@@ -75,7 +75,7 @@ describe('classifySighting — the five plan §Step 4 states', () => {
     expect(classifySighting({
       structuralFingerprint: FP,
       lifecycle: 'prefix',
-      outcome: { kind: 'generic', rendererId: 'shared.generic-tool' },
+      outcome: { kind: 'generic', shapeId: 'claude.edit.v1', rendererId: 'shared.generic-tool' },
     }, lifecycleIndex)).toEqual({ kind: 'known-claimed', shapeId: 'claude.edit.v1' })
     expect(classifySighting({
       structuralFingerprint: FP,
@@ -156,6 +156,7 @@ describe('outcomeSatisfiesDisposition — conservative matching', () => {
     expect(
       outcomeSatisfiesDisposition(disposition, {
         kind: 'absorbed',
+        shapeId: 'claude.edit.v1',
         ownerRenderId: 'claude.command',
         reason: 'echo',
       }),
@@ -163,30 +164,31 @@ describe('outcomeSatisfiesDisposition — conservative matching', () => {
     expect(
       outcomeSatisfiesDisposition(disposition, {
         kind: 'absorbed',
+        shapeId: 'claude.edit.v1',
         ownerRenderId: 'claude.spawn',
         reason: 'echo',
       }),
     ).toBe(false)
   })
 
-  it('planned/unsupported accept every outcome — no promise, no misroute (pre-receipt seed contract)', () => {
+  it('planned is outstanding and unsupported permits only the visible generic fallback', () => {
     const planned = { kind: 'planned', targetGrammar: 'code-edit' } as const
     expect(
-      outcomeSatisfiesDisposition(planned, { kind: 'generic', rendererId: 'shared.generic-tool' }),
-    ).toBe(true)
+      outcomeSatisfiesDisposition(planned, { kind: 'generic', shapeId: 'claude.edit.v1', rendererId: 'shared.generic-tool' }),
+    ).toBe(false)
     expect(
       outcomeSatisfiesDisposition(planned, { kind: 'unknown', fallbackRenderId: 'x' }),
-    ).toBe(true)
-    // Legacy content-dependent routes (git widget for git Bash, absorbed
-    // result echoes) must not read as misrouted while the entry is planned.
-    expect(outcomeSatisfiesDisposition(planned, specialized)).toBe(true)
+    ).toBe(false)
+    expect(outcomeSatisfiesDisposition(planned, specialized)).toBe(false)
+    const unsupported = { kind: 'unsupported', reason: 'fallback only' } as const
     expect(
-      outcomeSatisfiesDisposition(planned, {
-        kind: 'absorbed',
-        ownerRenderId: 'shared.git-widget',
-        reason: 'x',
+      outcomeSatisfiesDisposition(unsupported, {
+        kind: 'generic',
+        shapeId: 'claude.edit.v1',
+        rendererId: 'shared.generic-tool',
       }),
     ).toBe(true)
+    expect(outcomeSatisfiesDisposition(unsupported, specialized)).toBe(false)
   })
 })
 
@@ -207,7 +209,7 @@ describe('auditRenderShapeCatalog — invariants the type system cannot see', ()
     expect(findings).toContainEqual({ kind: 'absorbed-without-fixture', shapeId: 'claude.echo.v1' })
   })
 
-  it('planned entries need no fixture (pre-extraction state is legal)', () => {
+  it('flags planned entries as unfinished shipping promises', () => {
     const findings = auditRenderShapeCatalog([
       {
         'claude.new.v1': shape({
@@ -217,7 +219,25 @@ describe('auditRenderShapeCatalog — invariants the type system cannot see', ()
         }),
       },
     ])
-    expect(findings).toHaveLength(0)
+    expect(findings).toContainEqual({ kind: 'planned-shape', shapeId: 'claude.new.v1' })
+  })
+
+  it('audits lifecycle and alternate routes instead of only the primary route', () => {
+    const findings = auditRenderShapeCatalog([
+      {
+        'claude.new.v1': shape({
+          id: 'claude.new.v1',
+          fixtures: { final: [], prefixes: [] },
+          disposition: { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'base' },
+          dispositionByLifecycle: { prefix: { kind: 'planned', targetGrammar: 'command' } },
+          alternateDispositions: [
+            { kind: 'absorbed', ownerRendererId: 'claude.command', reason: 'paired' },
+          ],
+        }),
+      },
+    ])
+    expect(findings).toContainEqual({ kind: 'planned-shape', shapeId: 'claude.new.v1' })
+    expect(findings).toContainEqual({ kind: 'absorbed-without-fixture', shapeId: 'claude.new.v1' })
   })
 
   it('flags empty and malformed fingerprints', () => {

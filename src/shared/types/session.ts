@@ -117,13 +117,6 @@ export type AgentPermissionPromptState = {
   options?: Array<{ key: string; label: string }>
   selectedIndex?: number
 }
-export type AgentCompactionState = {
-  visible: boolean
-  phase?: 'running' | 'error' | 'done'
-  statusText?: string
-  errorText?: string
-}
-
 /**
  * The event map every AgentSession implementation must satisfy. Keys
  * are event names as emitted; array values are the argument tuple the
@@ -155,7 +148,7 @@ export type AgentCompactionState = {
  * Claude and Codex today; an API-only provider will have optional
  * variants in phase 7).
  *
- * `resume-prompt`, `permission-prompt`, and `compaction-state` are
+ * `resume-prompt` and `permission-prompt` are
  * **legacy per-condition events emitted only by Claude** and slated
  * for removal (see ClaudeSession.ts's own deprecation comment). They
  * are NOT part of the required contract — they live on
@@ -182,7 +175,7 @@ export type AgentSessionEvents = {
 
 /**
  * Legacy per-condition events. Historically Claude fired individual
- * `resume-prompt` / `permission-prompt` / `compaction-state` events
+ * `resume-prompt` / `permission-prompt` events
  * alongside the unified `conditions` snapshot; Codex never emitted
  * them. Keeping them here (rather than dropping them outright) lets
  * sessionManager keep its current forwarding without touching the
@@ -198,7 +191,6 @@ export type AgentSessionEvents = {
 export type AgentLegacyClaudeConditionEvents = {
   'resume-prompt': [AgentResumePromptState]
   'permission-prompt': [AgentPermissionPromptState]
-  'compaction-state': [AgentCompactionState]
 }
 
 /**

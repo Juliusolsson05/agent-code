@@ -92,7 +92,7 @@ export function wireSessionForwarder(
   )
   manager.on('process-state', payload => processStates.enqueue(payload))
   // Legacy per-condition channels (session:trust-dialog / :resume-prompt /
-  // :permission-prompt / :compaction-state) are no longer forwarded to the
+  // :permission-prompt) are no longer forwarded to the
   // renderer. The renderer consumes only the unified `session:conditions`
   // snapshot and derives every pending-prompt field from it; no renderer or
   // harness ever subscribed to the granular channels (confirmed by rg before

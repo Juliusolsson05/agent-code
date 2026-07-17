@@ -12,7 +12,7 @@ import {
 } from '@renderer/features/feed/context'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import { SubagentMiniFeed } from '@renderer/features/feed/ui/rows/SubagentMiniFeed'
-import { taskNotificationStatusKind } from '@renderer/session-runtime/taskNotification'
+import { taskNotificationStatusKind } from '@providers/claude/renderer/adapters/taskNotification'
 
 function elapsedLabel(startedAt: number | null, lastAt: number | null): string | null {
   if (startedAt === null || lastAt === null) return null

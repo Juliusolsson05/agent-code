@@ -2,6 +2,7 @@ import type { AgentProviderKind } from '@shared/types/providerKind'
 import type {
   RenderShapeAppendResult,
   RenderOutcome,
+  RenderOutcomeRoute,
   RenderShapeLifecycle,
   RenderShapePlane,
   RenderShapeSighting,
@@ -9,6 +10,7 @@ import type {
 import { renderShapeWriterKey } from '@shared/types/renderShapes'
 import { fingerprintRenderShape } from '@renderer/rendering/evidence/shapeFingerprint'
 import { hashPayload } from '@renderer/rendering/model/unknowns'
+import { resolveRenderShapeDefinition } from '@providers/registry.renderShapes'
 
 // ---------------------------------------------------------------------------
 // Render-shape observer — Phase 2 of the evidence-first rendering plan
@@ -76,7 +78,7 @@ export type ObserveRenderShapeInput = {
   lifecycle: RenderShapeLifecycle
   eventType: string
   payload: unknown
-  outcome: RenderOutcome
+  outcome: RenderOutcomeRoute
 }
 
 type TrackedSighting = {
@@ -210,6 +212,16 @@ export function observeRenderShape(input: ObserveRenderShapeInput): void {
       eventType: input.eventType,
       payload: input.payload,
     })
+    const definition = resolveRenderShapeDefinition({
+      provider: input.provider,
+      fingerprint,
+      plane: input.plane,
+      eventType: input.eventType,
+      lifecycle: input.lifecycle,
+    })
+    const outcome: RenderOutcome = input.outcome.kind === 'unknown'
+      ? input.outcome
+      : { ...input.outcome, shapeId: definition?.id ?? null }
     // Outcome kind AND the route identity (rendererId/owner/surface) are
     // part of the key: the same structure legitimately routes differently
     // by CONTENT (git Bash → widget, plain Bash → generic), and merging
@@ -222,7 +234,7 @@ export function observeRenderShape(input: ObserveRenderShapeInput): void {
       lifecycle: input.lifecycle,
       eventType: input.eventType,
       structuralFingerprint: fingerprint,
-      outcome: input.outcome,
+      outcome,
     })
     const existing = state.keys.get(key)
     if (existing) {
@@ -236,7 +248,7 @@ export function observeRenderShape(input: ObserveRenderShapeInput): void {
       return
     }
     const sighting: RenderShapeSighting = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       sessionId: input.sessionId,
       provider: input.provider,
       // Provenance audit is plan open-decision #2; until it lands these are
@@ -255,7 +267,7 @@ export function observeRenderShape(input: ObserveRenderShapeInput): void {
       // index would only drift from the writer's truth.
       sourceRecordingCursor: null,
       observedAt: Date.now(),
-      outcome: input.outcome,
+      outcome,
       // Every writer in this PR emits an explicit cumulative count. Keeping
       // the field required avoids inventing a compatibility path for a wire
       // shape that never shipped outside this branch.

@@ -10,19 +10,6 @@ export const settingsCommands: CommandDef[] = [
     run: ({ ui }) => ui.openSettings(),
   },
   {
-    id: 'toggle-custom-rendering',
-    // `debug`: this exists to compare the custom feed renderer against
-    // the fallback path — a diagnostic, not an everyday preference.
-    surface: 'debug',
-    title: 'Custom Rendering',
-    description: '**What it does:** Toggles the custom **feed renderer**.\n\n**Use when:** You want to compare custom rendering with the fallback path.\n\n**Notes:** Rendering preference only.',
-    getState: ({ flags }) => ({
-      label: flags.customRenderingEnabled ? 'On' : 'Off',
-      tone: flags.customRenderingEnabled ? 'accent' : 'neutral',
-    }),
-    run: ({ ui }) => ui.toggleCustomRendering(),
-  },
-  {
     // Persistent Aggressive Debug Logs — developer-mode switch for
     // interval snapshots. This intentionally reuses the Save Debug
     // Logs bundle path instead of streaming extra render logs all

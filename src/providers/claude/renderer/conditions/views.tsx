@@ -13,7 +13,6 @@
 // and resolver policy stays in claude-code-headless so the renderer does not
 // grow a second source of truth for terminal state.
 
-import { CompactionStrip } from '@renderer/workspace/tile-tree/TileLeaf/CompactionStrip'
 import { PermissionPromptModal } from '@providers/claude/renderer/PermissionPromptModal'
 import { ResumePromptModal } from '@providers/claude/renderer/ResumePromptModal'
 import { TrustDialogModal } from '@providers/claude/renderer/TrustDialogModal'
@@ -25,6 +24,7 @@ import type {
   ClaudeResumePromptState,
   ClaudeCompactionState,
 } from '@shared/types/providerConditions'
+import { compactionView } from '@providers/claude/renderer/conditions/compaction/view'
 
 // ClaudeStateByKind — per-provider SOURCE OF TRUTH binding each Claude condition
 // kind to its concrete `state` type. The registry literal below is validated
@@ -112,25 +112,6 @@ export const resumeView = defineView<'claude.resume-prompt', ClaudeResumePromptS
 // before passing {phase, statusText, errorText}; we preserve that exact guard.
 // attention is 'ERROR' only when phase === 'error', matching selectors.ts
 // (claude.compaction with phase 'error' → 'ERROR', otherwise no attention).
-export const compactionView = defineView<'claude.compaction', ClaudeCompactionState>({
-  kind: 'claude.compaction',
-  layout: 'strip',
-  attention: (state) => (state?.phase === 'error' ? 'ERROR' : null),
-  Component: ({ state }) => (
-    <CompactionStrip
-      pendingCompaction={
-        state?.visible && state.phase
-          ? {
-              phase: state.phase,
-              statusText: state.statusText,
-              errorText: state.errorText,
-            }
-          : null
-      }
-    />
-  ),
-})
-
 // `as const` source-of-truth list (see Codex views WHY) — retained for future
 // `typeof CLAUDE_VIEW_LIST[number]['kind']` union derivation.
 export const CLAUDE_VIEW_LIST = [

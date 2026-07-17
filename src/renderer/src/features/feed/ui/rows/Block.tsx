@@ -6,12 +6,6 @@ import type {
   ToolResultBlock,
   ToolUseBlock,
 } from '@shared/types/transcript'
-import { detectGitIntent } from '@shared/git/gitDetect'
-
-import { useAppStore } from '@renderer/app-state/hooks'
-import { GitCardRow } from '@renderer/features/git/ui/GitRows'
-
-import { extractToolCommand, toolResultText } from '@renderer/features/feed/lib/helpers'
 import {
   ProviderContext,
   ToolResultIndexContext,
@@ -23,11 +17,10 @@ import { TextProse } from '@renderer/features/feed/ui/markdown'
 import { ImageBlockRow } from '@renderer/features/feed/ui/rows/ImageBlockRow'
 import { UserBand } from '@renderer/features/feed/ui/rows/primitives'
 import { ToolResultRow } from '@renderer/features/feed/ui/rows/ToolResultRow'
-import { isAgentSpawnTool } from '@providers/registry.renderer.capabilities'
 import { JsonToolRow } from '@providers/shared/renderer/rows/JsonToolRow'
 import { CodeBlock } from '@renderer/lib/code/CodeBlock'
 import { boundedJsonPreview } from '@renderer/lib/text/boundedJson'
-import type { RenderOutcome, RenderShapePlane } from '@shared/types/renderShapes'
+import type { RenderOutcomeRoute, RenderShapePlane } from '@shared/types/renderShapes'
 import { observeRenderShape } from '@renderer/features/feed/evidence/observer'
 import { useRenderShapeCapture } from '@renderer/features/feed/evidence/RenderShapeCaptureContext'
 import {
@@ -50,19 +43,10 @@ import {
 //   - image → ImageBlockRow
 //   - tool_use → provider-specific renderer (Claude: evidence-backed rich
 //     rows; Codex: evidence-backed rich rows; everything else:
-//     bounded JsonToolRow fallback). Plus the git-widget interception.
-//   - tool_result → provider-specific result renderer, with the git
-//     widget suppression mirrored here.
-// #442 finding-21: the git-widget card renders for a shell tool_use, and the
-// paired tool_result must be suppressed so the raw output doesn't duplicate
-// below the card. The two checks drifted — the tool_use branch recognized
-// opencode's lowercase 'bash' twin but the tool_result suppression did not, so
-// an opencode git command painted BOTH the card and the raw result. Hoisting
-// the name set into one predicate used by both branches makes that drift
-// impossible: whatever the widget renders for, the result suppresses for.
-function isGitWidgetShellTool(name: string | undefined): boolean {
-  return name === 'Bash' || name === 'exec_command' || name === 'bash'
-}
+//     bounded JsonToolRow fallback).
+//   - tool_result → the RESULT decision from the exact same correlated
+//     provider operation. Central feed code never recognizes a provider tool
+//     name and never mirrors an absorption condition.
 
 function UnknownBlockRow({ block }: { block: ContentBlock }) {
   const [open, setOpen] = useState(false)
@@ -103,7 +87,6 @@ export const Block = memo(function Block({
   const currentProvider = useContext(ProviderContext)
   const toolUseIndex = useContext(ToolUseIndexContext)
   const toolResultIndex = useContext(ToolResultIndexContext)
-  const customRendering = useAppStore(state => state.settings.customRendering)
   const capture = useRenderShapeCapture()
   // Shape sighting at the exact paint-decision point (Phase 2, PR #555).
   // A module-state side effect during render, on purpose: it never touches
@@ -111,7 +94,7 @@ export const Block = memo(function Block({
   // Map.get), and StrictMode double-renders only bump a dedup counter — the
   // documented approximate-count contract in observer.ts. Committed blocks
   // are durable transcript evidence, hence lifecycle 'durable'.
-  const sight = (plane: RenderShapePlane, payload: unknown, outcome: RenderOutcome): void => {
+  const sight = (plane: RenderShapePlane, payload: unknown, outcome: RenderOutcomeRoute): void => {
     if (!capture) return
     observeRenderShape({
       sessionId: capture.sessionId,
@@ -178,112 +161,62 @@ export const Block = memo(function Block({
       // evidence deliberately fall through to the bounded generic card.
       const tu = block as ToolUseBlock
 
-      // Custom rendering: intercept shell/bash invocations that are
-      // recognized git commands and render them as a purpose-built
-      // widget. Claude's tool name is 'Bash'; Codex's is
-      // 'exec_command' (the function-call name). Both carry the
-      // command string via extractToolCommand.
-      //
-      // We render on the tool_use row. The paired result block is
-      // looked up from the reverse index; if not yet present (result
-      // hasn't arrived), the widget shows a "running…" placeholder
-      // sourced purely from the command. The companion tool_result
-      // block is suppressed below so the widget is the single
-      // surface for this command.
-      if (
-        customRendering
-        // 'bash' = opencode's lowercase twin (P3): same commands, same
-        // git-widget value; the case difference is provider naming, not
-        // semantics. Shared predicate keeps this in lockstep with the
-        // tool_result suppression below.
-        && isGitWidgetShellTool(tu.name)
-      ) {
-        const cmd = extractToolCommand(tu)
-        const intent = detectGitIntent(cmd)
-        if (intent && cmd) {
-          const paired = toolResultIndex.get(tu.id)
-          const output = paired ? toolResultText(paired) : ''
-          sight('committed-tool-use', tu, specializedOutcome('shared.git-widget'))
-          return <GitCardRow intent={intent} output={output} />
-        }
-      }
-
-      if (isAgentSpawnTool(tu, currentProvider)) {
-        // Claude records subagent fanout as an `Agent` tool_use; Codex as a
-        // `spawn_agent` function_call; Agent Code's owned MCP sessions as its
-        // namespaced/bare `orchestration_create_agent` spellings (the 2026-06-21
-        // blind spot — 73 tracked subAgents, zero cards). One shared
-        // predicate routes them all through the fleet row before provider
-        // dispatch, so the main process's SubAgentState (and P2b's
-        // notification join) always has a card to land on.
-        //
-        // Phase 7 cutover: ask the current provider first. Claude's built-in
-        // Agent and both provider spellings of Agent Code's orchestration MCP
-        // now own their wire adapters and shared protocol view. A provider
-        // decline must remain visible without inventing a legacy task shape:
-        // future spawn vocabularies may not carry Claude's fields at all.
-        const providerSpawnRow = getRendererProviderCapabilities(currentProvider).renderToolUse?.(tu)
-        if (providerSpawnRow !== undefined) {
-          sight('committed-tool-use', tu, specializedOutcome(`${currentProvider}.rows.dispatch`))
-          return providerSpawnRow
-        }
-        sight('committed-tool-use', tu, GENERIC_OUTCOME)
-        return <JsonToolRow block={tu} />
-      }
-
-      const providerRow = getRendererProviderCapabilities(currentProvider).renderToolUse?.(tu, {
+      const decision = getRendererProviderCapabilities(currentProvider).renderOperation({
+        toolUse: tu,
         result: toolResultIndex.get(tu.id) ?? null,
+        live: false,
+        streaming: false,
       })
+      const route = decision.toolUse
       sight(
         'committed-tool-use',
         tu,
-        providerRow !== undefined
-          ? specializedOutcome(`${currentProvider}.rows.dispatch`)
+        route.action === 'render'
+          ? specializedOutcome(route.receipt.rendererId, route.receipt.protocolId)
+          : route.action === 'absorb'
+            ? absorbedOutcome(route.ownerRenderId, route.reason, route.protocolId)
           : GENERIC_OUTCOME,
       )
       // Shared fallback is the generic JSON tool row (residue plan P1):
       // it stays concise for headline-only inputs
       // (Bash keeps its 2-line cap) and gives MCP/orchestration payloads
       // a real rendering instead of a bare name over raw JSON.
-      return providerRow !== undefined ? providerRow : <JsonToolRow block={tu} />
+      return route.action === 'render'
+        ? route.node
+        : route.action === 'absorb'
+          ? null
+          : <JsonToolRow block={tu} />
     }
     case 'tool_result': {
       const tr = block as ToolResultBlock
-      // When custom rendering captured this result's source tool as
-      // a git command, the tool_use row already rendered the widget
-      // and consumed the output. Render nothing here so the output
-      // doesn't duplicate below the card.
-      if (customRendering) {
-        const sourceTu = toolUseIndex.get(tr.tool_use_id)
-        if (
-          sourceTu
-          && isGitWidgetShellTool(sourceTu.name)
-          && detectGitIntent(extractToolCommand(sourceTu))
-        ) {
-          sight('committed-tool-result', tr, absorbedOutcome('shared.git-widget', 'output consumed by git widget on the tool_use row'))
-          return null
-        }
-      }
       const sourceTool = toolUseIndex.get(tr.tool_use_id)
-      const providerRow = getRendererProviderCapabilities(currentProvider).renderToolResult?.(tr, {
-        sourceTool,
+      // Orphan results are valid provider drift and stay visible. Without the
+      // invocation there is no operation grammar that can justify either a
+      // specialized parse or absorption.
+      if (!sourceTool) {
+        sight('committed-tool-result', tr, GENERIC_OUTCOME)
+        return <ToolResultRow block={tr} sourceTool={sourceTool} />
+      }
+      const decision = getRendererProviderCapabilities(currentProvider).renderOperation({
+        toolUse: sourceTool,
+        result: tr,
+        live: false,
+        streaming: false,
       })
-      // Three-way outcome honesty (review finding: `null !== undefined`
-      // recorded opencode's deliberate todowrite-echo suppression as
-      // "specialized"): undefined = provider declined → generic fallback;
-      // null = provider INTENTIONALLY suppressed → absorbed with the
-      // dispatch named as owner; a node = specialized.
+      const route = decision.toolResult
       sight(
         'committed-tool-result',
         tr,
-        providerRow === undefined
+        !route || route.action === 'fallback'
           ? GENERIC_OUTCOME
-          : providerRow === null
-            ? absorbedOutcome(`${currentProvider}.rows.dispatch`, 'provider dispatch suppressed the result row')
-            : specializedOutcome(`${currentProvider}.rows.dispatch`),
+          : route.action === 'absorb'
+            ? absorbedOutcome(route.ownerRenderId, route.reason, route.protocolId)
+            : specializedOutcome(route.receipt.rendererId, route.receipt.protocolId),
       )
-      return providerRow !== undefined
-        ? providerRow
+      return route?.action === 'render'
+        ? route.node
+        : route?.action === 'absorb'
+          ? null
         : <ToolResultRow block={tr} sourceTool={sourceTool} />
     }
     default:

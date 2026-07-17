@@ -1,7 +1,3 @@
-import {
-  taskNotificationFromEntry,
-  type TaskNotification,
-} from '@renderer/session-runtime/taskNotification'
 import { TaskNotificationsContext } from '@renderer/features/feed/context'
 import { RenderShapeCaptureProvider } from '@renderer/features/feed/evidence/RenderShapeCaptureContext'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
@@ -770,19 +766,15 @@ function FeedImpl({
     [toolResultIndexProp, toolIndexVersion, fallbackToolResultIndex],
   )
 
-  // P2b: toolUseId → parsed task-notification. Entries-only memo (same
-  // cadence as the committed projection): notifications are committed
-  // rows, so live semantic ticks never rebuild this. TaskSubagentRow
-  // treats a notification as its top status/result evidence; renderModel
-  // uses the same parse to skip joined notification entries pre-LazyEntry.
-  const taskNotifications = useMemo(() => {
-    const out = new Map<string, TaskNotification>()
-    for (const entry of entries) {
-      const n = taskNotificationFromEntry(entry)
-      if (n?.toolUseId) out.set(n.toolUseId, n)
-    }
-    return out
-  }, [entries])
+  // The shared feed transports a join map but never recognizes the provider's
+  // transcript envelope. This registry call is the cutover boundary that keeps
+  // Claude XML out of Codex/OpenCode while preserving cross-entry correlation.
+  const taskNotifications = useMemo(
+    () =>
+      getRendererProviderCapabilities(provider).collectTaskNotifications?.(entries) ??
+      new Map(),
+    [entries, provider],
+  )
 
   // #491: `committedProjection` (deriveFeedCommittedProjection) is deleted — it
   // existed ONLY to feed SemanticStreamingTurn's committedAssistantText for its
@@ -1058,16 +1050,9 @@ function FeedImpl({
 // Row components moved to ./rows/
 // ---------------------------------------------------------------------------
 //
-// The entire row surface (LazyEntry, EntryRow, ConversationRow, Block,
-// ImageBlockRow, CompactBoundaryRow, CompactSummaryRow, SystemRow,
-// JsonToolRow, ToolResultRow, TruncatedOutputRow, UserBand,
-// plus the EAGER_TAIL constant) moved to ./rows/. Each component lives
-// in its own file, and the long WHY comments (lazy mount rationale,
-// the "CRITICAL: don't wrap tool_results in UserBand" gotcha, the
-// Read/Grep/Edit result-rendering taxonomy, the bash headline cap,
-// etc.) travelled with the code. Feed.tsx now imports EAGER_TAIL +
-// EntryRow + LazyEntry through ./rows/index.ts — the rest are internal
-// to the rows tree. The "Streaming row REMOVED" + "Activity indicator
-// REMOVED" rationale blocks that used to live at the tail of this
-// file are folded into ./semantic/StreamingTurn.tsx + ./WorkIndicator.tsx
-// where those replacements actually live.
+// Neutral row infrastructure (LazyEntry, EntryRow, ConversationRow, Block,
+// image/prose/system fallbacks, and EAGER_TAIL) lives under ./rows/. Provider
+// interpretation does not: paired operations and durable provider artifacts
+// enter through registry capabilities and are painted under providers/. This
+// division keeps scrolling/lazy-mount mechanics reusable without rebuilding a
+// second central rendering engine inside Feed.

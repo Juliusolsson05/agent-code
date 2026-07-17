@@ -37,7 +37,7 @@ export function createClaudeTranscriptEntryMapper(): TranscriptEntryMapper {
       // The conversation/compact filter lives HERE (not at call sites)
       // so all four ingestion paths inherit identical semantics — the
       // old duplication had already drifted (live ingest cleared
-      // pendingCompaction on compact summaries, bootstrap didn't; the
+      // old live-only path cleared a second compaction cache here while bootstrap didn't; the
       // caller keeps that decision, but what COUNTS as a feed entry is
       // provider truth and belongs to the provider).
       if (

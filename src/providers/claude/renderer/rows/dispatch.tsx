@@ -65,9 +65,91 @@ import { fromClaudeAgentCodeWorkflowUse } from '@providers/claude/renderer/adapt
 import { AgentCodeWorkflowView } from '@providers/shared/renderer/protocols/agent-code-workflow/AgentCodeWorkflowView'
 import { fromAgentCodeWorkflowResult } from '@providers/shared/renderer/protocols/agent-code-workflow/model'
 import { GenericLiveResult } from '@providers/shared/renderer/rows/GenericLiveResult'
-import { isClaudeCodeEditSuccessResult } from '@providers/claude/renderer/adapters/codeEdit'
+import {
+  fromClaudeEditBlock,
+  isClaudeCodeEditSuccessResult,
+} from '@providers/claude/renderer/adapters/codeEdit'
+import type {
+  ProviderOperationDecision,
+  ProviderOperationInput,
+  ProviderSpecializedReceipt,
+} from '@shared/types/providerConfig'
+import { fromClaudeGitOperation } from '@providers/claude/renderer/adapters/git'
+import { GitOperationView } from '@providers/shared/renderer/protocols/command/formatters/git'
 
-export function renderClaudeToolUse(
+function claudeOperationReceipt(toolUse: ToolUseBlock): ProviderSpecializedReceipt {
+  // Owned Agent Code protocols are narrower than "Claude specialized". The
+  // adapter must prove the exact namespace/schema before the receipt may name
+  // one; otherwise the catalog cannot distinguish our MCP from an arbitrary
+  // third-party server whose verb happens to look similar.
+  if (fromClaudeAgentCodeOrchestrationUse(toolUse)) {
+    return { rendererId: 'claude.rows.dispatch', protocolId: 'agent-code.orchestration' }
+  }
+  if (fromClaudeAgentCodeWorkspaceUse(toolUse)) {
+    return { rendererId: 'claude.rows.dispatch', protocolId: 'agent-code.workspace' }
+  }
+  return { rendererId: 'claude.rows.dispatch' }
+}
+
+export function renderClaudeOperation(
+  input: ProviderOperationInput,
+): ProviderOperationDecision {
+  const git = fromClaudeGitOperation(input)
+  if (git) {
+    return {
+      toolUse: {
+        action: 'render',
+        node: <GitOperationView model={git} />,
+        receipt: { rendererId: 'shared.command', protocolId: 'command.git' },
+      },
+      toolResult: input.result
+        ? {
+            action: 'absorb',
+            ownerRenderId: 'shared.command',
+            protocolId: 'command.git',
+            reason: 'paired Git operation view preserves the bounded result evidence',
+          }
+        : null,
+    }
+  }
+
+  const toolUse = renderClaudeToolUse(input.toolUse, {
+    live: input.live,
+    streaming: input.streaming,
+    result: input.result,
+  })
+  const toolResult = input.result
+    ? renderClaudeToolResult(input.result, { sourceTool: input.toolUse })
+    : undefined
+  const receipt = claudeOperationReceipt(input.toolUse)
+  return {
+    toolUse: toolUse === undefined
+      ? { action: 'fallback' }
+      : {
+          action: 'render',
+          node: toolUse,
+          receipt,
+        },
+    toolResult: !input.result
+      ? null
+      : toolResult === undefined
+        ? { action: 'fallback' }
+        : toolResult === null
+          ? {
+              action: 'absorb',
+              ownerRenderId: receipt.rendererId,
+              ...(receipt.protocolId ? { protocolId: receipt.protocolId } : {}),
+              reason: 'provider operation card validated and consumed its paired result',
+            }
+          : {
+              action: 'render',
+              node: toolResult,
+              receipt,
+            },
+  }
+}
+
+function renderClaudeToolUse(
   block: ToolUseBlock,
   context: { live?: boolean; streaming?: boolean; result?: ToolResultBlock | null } = {},
 ): ReactNode | undefined {
@@ -106,11 +188,10 @@ export function renderClaudeToolUse(
       return model ? <ClaudeAgentRow model={model} /> : undefined
     }
     case 'Bash': {
-      // Phase 6 cutover: non-git Bash renders through the command protocol
-      // (the git-intent subset is intercepted BEFORE dispatch by Block.tsx's
-      // widget, so this case only ever sees plain commands or
-      // customRendering-off sessions). Whitespace-only input falls through
-      // to the generic row, preserved behavior.
+      // Phase 10 cutover: the paired provider operation admits Git before
+      // this provider-local command path. Reaching this branch therefore
+      // proves the command is non-Git; whitespace-only input still declines
+      // to the generic row.
       //
       // A quoted-delimiter cat-heredoc is a FILE WRITE wearing a command's
       // clothes — route it into the code-edit card so the written content is
@@ -132,8 +213,17 @@ export function renderClaudeToolUse(
       })
       return model ? <CommandView model={model} /> : undefined
     }
-    case 'Edit':
-      return <EditRow block={block} streaming={context.streaming} running={running} failed={failed} errorSummary={errorSummary} />
+    case 'Edit': {
+      const adapted = fromClaudeEditBlock(block, {
+        streaming: context.streaming,
+        failed,
+        errorSummary,
+      })
+      const model = adapted && running && !context.streaming && !failed
+        ? { ...adapted, status: 'running' as const }
+        : adapted
+      return model ? <EditRow model={model} /> : undefined
+    }
     case 'MultiEdit':
       return <MultiEditRow block={block} />
     case 'Read': {
@@ -152,8 +242,17 @@ export function renderClaudeToolUse(
       const model = fromClaudeWebSearchUse(block)
       return model ? <ClaudeWebSearchRow model={model} /> : undefined
     }
-    case 'Write':
-      return <WriteRow block={block} streaming={context.streaming} running={running} failed={failed} errorSummary={errorSummary} />
+    case 'Write': {
+      const adapted = fromClaudeEditBlock(block, {
+        streaming: context.streaming,
+        failed,
+        errorSummary,
+      })
+      const model = adapted && running && !context.streaming && !failed
+        ? { ...adapted, status: 'running' as const }
+        : adapted
+      return model ? <WriteRow model={model} /> : undefined
+    }
     default:
       return undefined
   }
@@ -171,7 +270,7 @@ function firstResultLine(result: ToolResultBlock | null | undefined): string | u
   return (newline === -1 ? text : text.slice(0, newline)).slice(0, 200) || 'tool failed'
 }
 
-export function renderClaudeToolResult(
+function renderClaudeToolResult(
   block: ToolResultBlock,
   context: { sourceTool?: ToolUseBlock | null },
 ): ReactNode | undefined {

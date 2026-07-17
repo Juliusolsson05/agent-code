@@ -3,24 +3,27 @@ import { useContext, useState } from 'react'
 import type { CodexNativeSpawnModel } from '@providers/codex/renderer/adapters/collaboration'
 import {
   SubAgentsContext,
-  TaskNotificationsContext,
   ToolResultIndexContext,
 } from '@renderer/features/feed/context'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import { SubagentMiniFeed } from '@renderer/features/feed/ui/rows/SubagentMiniFeed'
 import { PagedTextViewer } from '@renderer/lib/text/PagedTextViewer'
-import { taskNotificationStatusKind } from '@renderer/session-runtime/taskNotification'
 
 export function CodexNativeSpawnRow({ model }: { model: CodexNativeSpawnModel }) {
   const [open, setOpen] = useState(false)
   const subagent = useContext(SubAgentsContext)[model.operationId]
-  const notification = useContext(TaskNotificationsContext).get(model.operationId) ?? null
   const committed = useContext(ToolResultIndexContext).get(model.operationId) ?? null
-  const notificationKind = notification ? taskNotificationStatusKind(notification) : null
-  const state = notificationKind ?? subagent?.status ?? (committed
+  // WHY Codex deliberately does not consult TaskNotificationsContext:
+  // `<task-notification>` is a Claude transcript grammar. Codex completion
+  // arrives through function_call_output / committed tool_result evidence,
+  // with the subagent watcher providing richer state while the child is live.
+  // The former cross-provider fallback could let an impossible Claude-shaped
+  // side channel override real Codex evidence and kept the central XML parser
+  // coupled to every provider card merely for speculative compatibility.
+  const state = subagent?.status ?? (committed
     ? committed.is_error === true ? 'error' : 'reported'
     : 'running')
-  const unverifiedReport = !notificationKind && !subagent && committed?.is_error !== true && Boolean(committed)
+  const unverifiedReport = !subagent && committed?.is_error !== true && Boolean(committed)
   const marker = state === 'done'
     ? '✓'
     : state === 'error'
@@ -29,13 +32,11 @@ export function CodexNativeSpawnRow({ model }: { model: CodexNativeSpawnModel })
         ? '◌'
         : '◐'
   const toolCount = subagent ? subagent.toolCalls.length + subagent.droppedToolCalls : 0
-  const status = notification
-    ? `${notification.status ?? 'reported'}${notification.usage ? ` · ${notification.usage}` : ''}`
-    : subagent
-      ? subagent.status === 'running'
-        ? `${toolCount} tool${toolCount === 1 ? '' : 's'}`
-        : subagent.status === 'error' ? 'failed' : subagent.status
-      : committed ? committed.is_error === true ? 'failed' : 'response received' : 'starting…'
+  const status = subagent
+    ? subagent.status === 'running'
+      ? `${toolCount} tool${toolCount === 1 ? '' : 's'}`
+      : subagent.status === 'error' ? 'failed' : subagent.status
+    : committed ? committed.is_error === true ? 'failed' : 'response received' : 'starting…'
 
   // WHY a result without transport-level is_error is only "reported", not
   // "spawned": Codex function_call_output has no universal success bit and

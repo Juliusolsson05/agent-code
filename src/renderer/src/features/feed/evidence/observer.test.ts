@@ -89,7 +89,7 @@ describe('render-shape observer (Phase 2 gates)', () => {
     observeRenderShape(
       input({
         lifecycle: 'input-complete',
-        outcome: { kind: 'specialized', shapeId: 'x', rendererId: 'x' },
+        outcome: { kind: 'specialized', rendererId: 'x' },
       }),
     )
     // Same kind, DIFFERENT route — the git-widget-vs-dispatch case the
@@ -97,7 +97,7 @@ describe('render-shape observer (Phase 2 gates)', () => {
     observeRenderShape(
       input({
         lifecycle: 'input-complete',
-        outcome: { kind: 'specialized', shapeId: 'y', rendererId: 'shared.git-widget' },
+        outcome: { kind: 'specialized', rendererId: 'shared.git-widget' },
       }),
     )
     await vi.runAllTimersAsync()

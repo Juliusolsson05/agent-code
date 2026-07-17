@@ -1,13 +1,13 @@
-// Parsers for raw git stdout → structured data the widgets can render.
+// Parsers for raw Git stdout → structured data the command formatter renders.
 //
 // Each function is pure, takes the raw text of a git command's output,
 // and returns a typed shape. None of them throw — on an unexpected
-// format they return a best-effort partial result, and the widget
-// falls back to showing the raw text where the structured data is
-// missing. That way the custom-rendering toggle can't regress us
-// below the generic renderer's baseline.
+// format they return a best-effort partial result. The paired operation
+// surface ALWAYS retains a lazy paged view of the exact source beside this
+// enrichment, so ignored warnings and future Git output cannot fall below the
+// generic renderer's evidence baseline.
 //
-// Kept separate from gitDetect.ts because detection is cheap/always
+// Kept separate from detect.ts because detection is cheap/always
 // runs and parsing is opt-in per widget.
 
 // --- Unified diff parser ---------------------------------------------------

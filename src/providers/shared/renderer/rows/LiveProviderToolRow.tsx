@@ -1,19 +1,15 @@
-import type { ReactNode } from 'react'
-
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
+import type {
+  ProviderOperationInput,
+  ProviderSemanticDecision,
+} from '@shared/types/providerConfig'
 import { ToolResultIndexContext } from '@renderer/features/feed/context'
 
 import { GenericLiveResult } from './GenericLiveResult'
 
-type ToolUseRenderer = (
-  block: ToolUseBlock,
-  context?: { live?: boolean; streaming?: boolean; result?: ToolResultBlock | null },
-) => ReactNode | undefined
-
-type ToolResultRenderer = (
-  block: ToolResultBlock,
-  context: { sourceTool?: ToolUseBlock | null },
-) => ReactNode | undefined
+type OperationRenderer = (
+  input: ProviderOperationInput,
+) => import('@shared/types/providerConfig').ProviderOperationDecision
 
 /** Compose one provider-owned live invocation with its optional live result.
  *
@@ -30,8 +26,7 @@ export function renderLiveProviderTool({
   resultContent,
   resultIsError,
   committedResults,
-  renderToolUse,
-  renderToolResult,
+  renderOperation,
 }: {
   tool: ToolUseBlock
   finalized: boolean
@@ -39,9 +34,8 @@ export function renderLiveProviderTool({
   resultContent: string
   resultIsError: boolean
   committedResults: ReadonlyMap<string, ToolResultBlock>
-  renderToolUse: ToolUseRenderer
-  renderToolResult: ToolResultRenderer
-}): ReactNode | undefined {
+  renderOperation: OperationRenderer
+}): ProviderSemanticDecision {
   const result: ToolResultBlock | null = resultPresent
     ? {
         type: 'tool_result',
@@ -50,22 +44,29 @@ export function renderLiveProviderTool({
         ...(resultIsError ? { is_error: true } : {}),
       }
     : null
-  const toolRow = renderToolUse(tool, {
+  const decision = renderOperation({
+    toolUse: tool,
+    result,
     live: true,
     streaming: result === null && !finalized,
-    result,
   })
-  if (toolRow === undefined) return undefined
-  if (!result) return toolRow
+  if (decision.toolUse.action === 'fallback') return { action: 'fallback' }
+  if (decision.toolUse.action === 'absorb') return decision.toolUse
+  const toolRow = decision.toolUse.node
+  if (!result) return decision.toolUse
 
-  const renderedResult = renderToolResult(result, { sourceTool: tool })
-  const resultRow = renderedResult === undefined ? (
-    <GenericLiveResult
-      source={resultContent || '(empty result)'}
-      isError={resultIsError}
-      allowDirectMcpArray={tool.name.startsWith('mcp__')}
-    />
-  ) : renderedResult
+  const resultDecision = decision.toolResult
+  const resultRow = resultDecision?.action === 'render'
+    ? resultDecision.node
+    : resultDecision?.action === 'absorb'
+      ? null
+      : (
+          <GenericLiveResult
+            source={resultContent || '(empty result)'}
+            isError={resultIsError}
+            allowDirectMcpArray={tool.name.startsWith('mcp__')}
+          />
+        )
 
   // Owned cards such as tasks/workspaces read their paired result from feed
   // context and may deliberately absorb the separate result row. Clone the
@@ -73,12 +74,19 @@ export function renderLiveProviderTool({
   // before durable transcript catch-up.
   const liveResults = new Map(committedResults)
   liveResults.set(tool.id, result)
-  return (
-    <ToolResultIndexContext.Provider value={liveResults}>
-      <div className="flex flex-col gap-2">
-        {toolRow}
-        {resultRow}
-      </div>
-    </ToolResultIndexContext.Provider>
-  )
+  return {
+    action: 'render',
+    // The receipt remains the invocation renderer's receipt. The composed
+    // node may append a generic result slab, but that does not transfer
+    // ownership of the observed semantic invocation shape.
+    receipt: decision.toolUse.receipt,
+    node: (
+      <ToolResultIndexContext.Provider value={liveResults}>
+        <div className="flex flex-col gap-2">
+          {toolRow}
+          {resultRow}
+        </div>
+      </ToolResultIndexContext.Provider>
+    ),
+  }
 }

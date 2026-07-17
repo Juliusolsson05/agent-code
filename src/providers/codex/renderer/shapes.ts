@@ -18,6 +18,10 @@ import {
 //     Codex CLI emits them they will land in the Unknown Shape Inbox —
 //     that is the system working, not a gap in this file. Catalog them
 //     from real sightings, never from PR #524's draft classifier.
+// TODO(condition-shape-soak): trust-dialog and approval have source-controlled
+// destinations but no retained condition-plane sightings yet. Their first real
+// developer captures must remain unknown until reviewed fixtures pin the exact
+// structures; do not synthesize fingerprints from the app mirror types.
 export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
   'codex.semantic.ai-workspace-attach-file.v1': defineRenderShape({
     id: 'codex.semantic.ai-workspace-attach-file.v1',
@@ -100,9 +104,9 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
       firstSeen: '2026-07-17',
       lastSeen: '2026-07-17',
     },
-    fixtures: { final: [], prefixes: [] },
-    disposition: { kind: 'planned', targetGrammar: 'compaction' },
-    why: 'Phase 9 classifies the two current live compaction structures without stealing Phase 10 ownership. TODO(phase-10-compaction): correlate structured semantic/proxy and screen fallback signals, add both-source/dedup/error/replay fixtures, then replace this planned disposition with the provider-owned compaction component.',
+    fixtures: { final: ["rendering-shapes/codex/compaction/semantic-final.json"], prefixes: ["rendering-shapes/codex/compaction/semantic-prefix.json"] },
+    disposition: { kind: 'specialized', rendererId: 'shared.compaction', protocolId: 'compaction.live' },
+    why: 'GRADUATED Phase 10 from the captured structured Codex semantic item: prefix/final lifecycle paints compaction progress without screen parsing, and the later durable compacted rollout remains the replay source of truth for boundary + summary.',
   }),
   'codex.semantic.exec.v1': defineRenderShape({
     id: 'codex.semantic.exec.v1',
@@ -117,9 +121,15 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
       firstSeen: '2026-07-16',
       lastSeen: '2026-07-16',
     },
-    fixtures: { final: [], prefixes: [] },
-    disposition: { kind: 'planned', targetGrammar: 'command' },
-    why: 'Phase 9 keeps unified exec planned because one script envelope can contain apply_patch, one or many exec_command calls, write_stdin/wait, another generated tool, or no admitted intent. Provider adapters conservatively choose among code-edit, command, and generic rows by content; a structural fingerprint cannot promise one of them.',
+    fixtures: {
+      final: ["rendering-shapes/codex/exec/semantic-final.json"],
+      prefixes: ["rendering-shapes/codex/exec/semantic-prefix.json"],
+    },
+    disposition: { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'An unrecognized unified-exec script remains visible through the bounded structured fallback.' },
+    alternateDispositions: [
+      { kind: 'specialized', rendererId: 'codex.rows.dispatch' },
+    ],
+    why: 'GRADUATED Phase 10: unified exec is admitted only after provider parsing proves patch, command, or Git intent. Arbitrary generated scripts stay generic; the finite specialized routes carry exact operation receipts instead of a planned wildcard.',
   }),
   'codex.semantic.exec-command.v1': defineRenderShape({
     id: 'codex.semantic.exec-command.v1',
@@ -305,8 +315,11 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
       lastSeen: '2026-07-16',
     },
     fixtures: { final: ["rendering-bundles/2026-05-20T12-20-39-440-fd4bbb27.json","rendering-bundles/2026-05-20T14-00-04-079-b53fc4fe.json","rendering-bundles/2026-05-20T15-09-04-906-7b859c43.json"], prefixes: [] },
-    disposition: { kind: 'planned', targetGrammar: 'reasoning' },
-    why: 'Phase 9 records the irreducible content split: encrypted/empty reasoning is absorbed by the WorkIndicator owner while visible summary/text paints the shared disclosure. One structural fingerprint therefore cannot carry a strict single-route promise.',
+    disposition: { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'Visible reasoning text is painted by the provider-neutral semantic disclosure.' },
+    alternateDispositions: [
+      { kind: 'absorbed', ownerRendererId: 'semantic.blockrow', reason: 'Empty or encrypted reasoning is represented by the work indicator instead of a blank row.' },
+    ],
+    why: 'GRADUATED Phase 10 with a finite content split: visible reasoning uses the shared disclosure while empty/encrypted reasoning is explicitly absorbed by semantic.blockrow.',
   }),
   'codex.semantic.spawn-agent.v1': defineRenderShape({
     id: 'codex.semantic.spawn-agent.v1',
@@ -357,8 +370,8 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
       lastSeen: '2026-07-17',
     },
     fixtures: { final: [], prefixes: [] },
-    disposition: { kind: 'planned', targetGrammar: 'command-continuation' },
-    why: 'TODO(command-continuation-evidence): current Codex `wait` resumes a yielded unified-exec cell; it is not the native wait_agent lifecycle and not Agent Code orchestration. These real complete/prefix fingerprints are catalogued now so Phase 7 does not accidentally claim them as collaboration, but a dedicated renderer must wait for paired continuation/result fixtures.',
+    disposition: { kind: 'unsupported', reason: 'Codex wait continuation lacks stable paired cell/result evidence and therefore stays visibly structured by the generic tool row.' },
+    why: 'Phase 10 intentionally does not guess that wait is collaboration or silently attach it to a command. TODO(command-continuation-evidence): promote only after paired yielded-cell fixtures prove correlation and terminal states.',
   }),
   'codex.semantic.web-search-call.v1': defineRenderShape({
     id: 'codex.semantic.web-search-call.v1',
@@ -391,8 +404,11 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
       lastSeen: '2026-07-16',
     },
     fixtures: { final: ["rendering-bundles/2026-05-20T14-00-04-079-b53fc4fe.json","rendering-bundles/2026-05-20T15-15-32-562-7b859c43.json","rendering-bundles/2026-05-20T19-11-51-193-d4a44a16.json"], prefixes: [] },
-    disposition: { kind: 'planned', targetGrammar: 'command' },
-    why: 'Phase 9 keeps this structurally known shape planned because complete write_stdin calls are still content-dependent: non-empty input paints the Codex continuation component while an empty poll intentionally paints null. A paired command-operation grammar in Phase 10 or later must record the empty poll as an explicit absorption instead of making one structural fingerprint promise two incompatible outcomes.',
+    disposition: { kind: 'specialized', rendererId: 'codex.rows.dispatch' },
+    alternateDispositions: [
+      { kind: 'absorbed', ownerRendererId: 'codex.command-continuation', protocolId: 'command.continuation', reason: 'An empty transport poll is represented by the already-running command surface.' },
+    ],
+    why: 'GRADUATED Phase 10: non-empty input renders the Codex continuation row; an empty poll is an explicit operation-boundary absorption with a named command owner. React null is no longer an implicit routing protocol.',
   }),
   'codex.tool-result.custom-tool-call-output.v1': defineRenderShape({
     id: 'codex.tool-result.custom-tool-call-output.v1',
@@ -408,8 +424,16 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
       lastSeen: '2026-07-16',
     },
     fixtures: { final: ["rendering-bundles/2026-05-20T15-15-32-562-7b859c43.json","rendering-bundles/2026-05-20T18-43-47-377-f6d733f8.json","rendering-bundles/2026-05-21T09-12-59-519-e4f30416.json"], prefixes: [] },
-    disposition: { kind: 'planned', targetGrammar: 'tool-result' },
-    why: 'Phase 9 keeps custom_tool_call_output planned because the result envelope alone does not encode its visual owner. A validated Agent Code/task operation may absorb it into the invocation card, while arbitrary MCP, unified-exec, and drifted pairs remain specialized or generic visible evidence.',
+    disposition: { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'Unknown, uncorrelated, or arbitrary custom outputs remain visible through the shared structured result formatter.' },
+    alternateDispositions: [
+      { kind: 'specialized', rendererId: 'codex.rows.dispatch' },
+      { kind: 'absorbed', ownerRendererId: 'codex.rows.dispatch', reason: 'A validated paired provider card preserves the useful result evidence.' },
+      { kind: 'absorbed', ownerRendererId: 'codex.rows.dispatch', protocolId: 'agent-code.orchestration', reason: 'The source-controlled Agent Code orchestration card preserves its validated result protocol.' },
+      { kind: 'absorbed', ownerRendererId: 'codex.rows.dispatch', protocolId: 'agent-code.workspace', reason: 'The source-controlled Agent Code workspace card preserves its validated result protocol.' },
+      { kind: 'absorbed', ownerRendererId: 'codex.command-continuation', protocolId: 'command.continuation', reason: 'An empty continuation acknowledgement belongs to the already-running command surface.' },
+      { kind: 'absorbed', ownerRendererId: 'shared.command', protocolId: 'command.git', reason: 'The paired Git operation view preserves the bounded result evidence.' },
+    ],
+    why: 'GRADUATED Phase 10: correlation at the paired operation boundary determines the legal route. The open-world output envelope itself never grants a specialized or hidden claim.',
   }),
   'codex.tool-result.patch-apply-end.v1': defineRenderShape({
     id: 'codex.tool-result.patch-apply-end.v1',
@@ -425,8 +449,12 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
       lastSeen: '2026-07-16',
     },
     fixtures: { final: ["rendering-bundles/2026-05-20T15-15-32-562-7b859c43.json","rendering-bundles/2026-05-20T18-43-47-377-f6d733f8.json","rendering-bundles/2026-05-21T09-12-59-519-e4f30416.json"], prefixes: [] },
-    disposition: { kind: 'planned', targetGrammar: 'code-edit' },
-    why: 'Phase 9 adds the newly observed new-file fingerprint but keeps the family planned because result content changes ownership: successful standalone patch_apply_end is intentionally absorbed, while failures with per-file diffs paint the Codex result component. The structural catalog cannot honestly promise one receipt until the operation boundary records that success/error distinction.',
+    disposition: { kind: 'absorbed', ownerRendererId: 'codex.rows.dispatch', reason: 'A successful patch receipt is already represented by the paired code-edit card.' },
+    alternateDispositions: [
+      { kind: 'specialized', rendererId: 'codex.rows.dispatch' },
+      { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'An uncorrelated or drifted patch result remains visible through the shared formatter.' },
+    ],
+    why: 'GRADUATED Phase 10: provider dispatch decides success absorption versus visible failure details before React. Missing correlation declines to the generic result instead of disappearing.',
   }),
   'codex.tool-result.tool-result.v1': defineRenderShape({
     id: 'codex.tool-result.tool-result.v1',
@@ -442,8 +470,16 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
       lastSeen: '2026-07-16',
     },
     fixtures: { final: ["rendering-bundles/2026-05-20T14-00-04-079-b53fc4fe.json","rendering-bundles/2026-05-20T15-09-04-906-7b859c43.json","rendering-bundles/2026-05-20T15-15-32-562-7b859c43.json"], prefixes: [] },
-    disposition: { kind: 'planned', targetGrammar: 'tool-result' },
-    why: 'Phase 9 keeps the generic Codex result envelope planned because source correlation determines whether provider dispatch specializes, absorbs, or shows the shared fallback. Tightening this by result structure alone would hide exactly the paired-operation distinction Phase 10 must make explicit.',
+    disposition: { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'Unknown or uncorrelated results remain visibly formatted by the shared result fallback.' },
+    alternateDispositions: [
+      { kind: 'specialized', rendererId: 'codex.rows.dispatch' },
+      { kind: 'absorbed', ownerRendererId: 'codex.rows.dispatch', reason: 'A validated paired provider card preserves the useful result evidence.' },
+      { kind: 'absorbed', ownerRendererId: 'codex.rows.dispatch', protocolId: 'agent-code.orchestration', reason: 'The source-controlled Agent Code orchestration card preserves its validated result protocol.' },
+      { kind: 'absorbed', ownerRendererId: 'codex.rows.dispatch', protocolId: 'agent-code.workspace', reason: 'The source-controlled Agent Code workspace card preserves its validated result protocol.' },
+      { kind: 'absorbed', ownerRendererId: 'codex.command-continuation', protocolId: 'command.continuation', reason: 'An empty continuation acknowledgement belongs to the already-running command surface.' },
+      { kind: 'absorbed', ownerRendererId: 'shared.command', protocolId: 'command.git', reason: 'The paired Git operation view preserves the bounded result evidence.' },
+    ],
+    why: 'GRADUATED Phase 10: result ownership is derived from the correlated invocation. Every allowed specialized, absorbed, and generic route is finite and receipt-checked.',
   }),
   'codex.tool-use.ai-workspace-attach-file.v1': defineRenderShape({
     id: 'codex.tool-use.ai-workspace-attach-file.v1',
@@ -543,9 +579,12 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
       firstSeen: '2026-07-16',
       lastSeen: '2026-07-16',
     },
-    fixtures: { final: [], prefixes: [] },
-    disposition: { kind: 'planned', targetGrammar: 'command' },
-    why: 'Phase 9 keeps committed unified exec planned for the same evidence-backed content split as its semantic form: patch, command, continuation, arbitrary generated tool, and unrecognized scripts share one envelope. The adapter remains conservative and the total fallback remains visible.',
+    fixtures: { final: ["rendering-shapes/codex/exec/committed.json"], prefixes: [] },
+    disposition: { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'An unrecognized unified-exec script remains visible through the bounded structured fallback.' },
+    alternateDispositions: [
+      { kind: 'specialized', rendererId: 'codex.rows.dispatch' },
+    ],
+    why: 'GRADUATED Phase 10: committed unified exec uses the same conservative provider admission as the semantic plane. Patches and commands are provider-owned, Git uses the shared protocol, and every unrecognized script remains visible.',
   }),
   'codex.tool-use.exec-command.v1': defineRenderShape({
     id: 'codex.tool-use.exec-command.v1',
@@ -816,8 +855,8 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
       lastSeen: '2026-07-16',
     },
     fixtures: { final: [], prefixes: [] },
-    disposition: { kind: 'planned', targetGrammar: 'command-continuation' },
-    why: 'TODO(command-continuation-evidence): `wait` resumes a yielded unified-exec cell and must not be rendered as agent collaboration. Keep it planned for the command protocol until paired cell/result fixtures prove correlation and terminal states.',
+    disposition: { kind: 'unsupported', reason: 'Codex wait continuation lacks stable paired cell/result evidence and therefore stays visibly structured by the generic tool row.' },
+    why: 'Phase 10 explicitly keeps wait outside collaboration and outside silent command ownership. TODO(command-continuation-evidence): promote only when paired yielded-cell fixtures prove correlation and terminal states.',
   }),
   'codex.tool-use.wait-agent.v1': defineRenderShape({
     id: 'codex.tool-use.wait-agent.v1',

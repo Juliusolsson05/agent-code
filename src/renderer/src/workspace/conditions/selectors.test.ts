@@ -200,11 +200,6 @@ describe('clearConditionRuntimeState', () => {
     expect(clearConditionRuntimeState()).toEqual({
       conditions: null,
       picker: { visible: false, items: [] },
-      pendingApproval: null,
-      pendingTrustDialog: null,
-      pendingResumePrompt: null,
-      pendingPermissionPrompt: null,
-      pendingCompaction: null,
     })
   })
 })

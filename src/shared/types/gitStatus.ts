@@ -4,9 +4,9 @@
 // multi-part shape — branch, numstat file rows, recent commits, and submodule
 // rows with non-trivial state semantics. It was declared inline in three
 // places (main `ipc/git.ts` return, preload `api/git.ts`, renderer `GitBar.tsx`
-// GitData). The name `GitStatusResult` is ALREADY taken in
-// `src/shared/git/gitParse.ts` for a porcelain-status parser result — a
-// different concept — so reusing it would be confusing. Hence `GitBarStatusResult`.
+// GitData). The `GitBar` prefix keeps this workspace-state contract distinct
+// from feed command formatter models, which deliberately live below
+// `providers/shared/renderer/protocols/command/formatters/git/`.
 //
 // INVARIANTS the renderer depends on:
 //   - `submodules` is `undefined` (not `[]`) when there are no changed

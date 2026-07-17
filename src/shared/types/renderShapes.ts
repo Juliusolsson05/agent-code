@@ -68,33 +68,38 @@ export type RenderShapeLifecycle =
  * hiding is the most dangerous operation in the renderer, and an absorption
  * without a named owner is indistinguishable from a vanish bug (#469 class).
  */
-export type RenderOutcome =
+export type RenderOutcomeRoute =
   | {
       kind: 'specialized'
-      shapeId: string
       rendererId: string
       protocolId?: string
     }
   | {
       kind: 'generic'
-      shapeId?: string
       rendererId: 'shared.generic-tool'
     }
   | {
       kind: 'absorbed'
-      shapeId?: string
       ownerRenderId: string
+      protocolId?: string
       reason: string
     }
   | {
       kind: 'condition-surface'
-      shapeId: string
       surface: 'outlet' | 'feed-inline' | 'composer' | 'attention-only'
     }
   | {
       kind: 'unknown'
       fallbackRenderId: string
     }
+
+/** Persisted paint receipt after the observer resolves structural identity. */
+export type RenderOutcome =
+  | (Extract<RenderOutcomeRoute, { kind: 'specialized' }> & { shapeId: string | null })
+  | (Extract<RenderOutcomeRoute, { kind: 'generic' }> & { shapeId: string | null })
+  | (Extract<RenderOutcomeRoute, { kind: 'absorbed' }> & { shapeId: string | null })
+  | (Extract<RenderOutcomeRoute, { kind: 'condition-surface' }> & { shapeId: string | null })
+  | Extract<RenderOutcomeRoute, { kind: 'unknown' }>
 
 /**
  * One metadata-only observation of a renderer-facing structure.
@@ -118,7 +123,11 @@ export type RenderOutcome =
  * inferred from content (plan open decision #2).
  */
 export type RenderShapeSighting = {
-  schemaVersion: 1
+  /** Version 2 is the first receipt-bearing contract: shapeId is a catalog
+   * id resolved by the observer, never a renderer id invented by paint code.
+   * Version 1 existed only during this unreleased PR and is intentionally not
+   * reinterpreted; old local captures must be recaptured. */
+  schemaVersion: 2
   sessionId: string
   provider: AgentProviderKind | 'unknown'
   providerVersion: string | null
@@ -173,9 +182,9 @@ export function renderOutcomeRouteIdentity(outcome: RenderOutcome): string {
   switch (outcome.kind) {
     case 'specialized':
     case 'generic':
-      return `${outcome.kind}:${outcome.rendererId}`
+      return `${outcome.kind}:${outcome.rendererId}:${outcome.kind === 'specialized' ? outcome.protocolId ?? '' : ''}`
     case 'absorbed':
-      return `${outcome.kind}:${outcome.ownerRenderId}`
+      return `${outcome.kind}:${outcome.ownerRenderId}:${outcome.protocolId ?? ''}`
     case 'condition-surface':
       return `${outcome.kind}:${outcome.surface}`
     case 'unknown':
@@ -232,6 +241,7 @@ export type RenderShapeDisposition =
   | {
       kind: 'absorbed'
       ownerRendererId: string
+      protocolId?: string
       reason: string
     }
   | {

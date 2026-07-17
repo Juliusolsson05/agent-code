@@ -13,10 +13,7 @@ import { ClaudeReadRow } from '@providers/claude/renderer/components/read'
 import { ClaudeReadResultRow } from '@providers/claude/renderer/components/read-result'
 import { ClaudeToolSearchRow } from '@providers/claude/renderer/components/tool-search'
 import { ClaudeToolSearchResultRow } from '@providers/claude/renderer/components/tool-search-result'
-import {
-  renderClaudeToolResult,
-  renderClaudeToolUse,
-} from '@providers/claude/renderer/rows/dispatch'
+import { renderClaudeOperation } from '@providers/claude/renderer/rows/dispatch'
 import { CodeRenderContext, ProviderContext } from '@renderer/features/feed/context'
 import { SemanticLiveBlockRow } from '@renderer/features/feed/ui/semantic/BlockRow'
 import type { SemanticLiveTurn } from '@renderer/session-runtime/state'
@@ -93,13 +90,15 @@ describe('Claude provider-owned read/search components', () => {
   })
 
   it('wires both invocation and paired result through Claude provider dispatch', () => {
+    const read = renderClaudeOperation({ toolUse: readUse, result: readResult, live: false, streaming: false })
+    const search = renderClaudeOperation({ toolUse: searchUse, result: searchResult, live: false, streaming: false })
     render(
       withWorkspace(
         <>
-          {renderClaudeToolUse(readUse)}
-          {renderClaudeToolResult(readResult, { sourceTool: readUse })}
-          {renderClaudeToolUse(searchUse)}
-          {renderClaudeToolResult(searchResult, { sourceTool: searchUse })}
+          {read.toolUse.action === 'render' ? read.toolUse.node : null}
+          {read.toolResult?.action === 'render' ? read.toolResult.node : null}
+          {search.toolUse.action === 'render' ? search.toolUse.node : null}
+          {search.toolResult?.action === 'render' ? search.toolResult.node : null}
         </>,
       ),
     )

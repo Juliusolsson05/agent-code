@@ -1,25 +1,21 @@
-// Compaction progress strip. Renders the live status of a /compact
-// run — either the running status text (CC's own progress message
-// reflected from the TUI) or an error message. 'done' is the
+import type { ClaudeCompactionState } from '@shared/types/providerConditions'
+
+// Compaction progress strip. Renders the provider-normalized live status of a
+// /compact run — structured proxy lifecycle first, documented screen fallback
+// second. 'done' is the
 // terminal state the store clears on the next event; if we ever see
-// `pendingCompaction.phase === 'done'` we render nothing, same as
+// `compaction.phase === 'done'` we render nothing, same as
 // the null case.
 export function CompactionStrip({
-  pendingCompaction,
+  compaction,
 }: {
-  pendingCompaction:
-    | {
-        phase: 'running' | 'error' | 'done'
-        statusText?: string
-        errorText?: string
-      }
-    | null
+  compaction: ClaudeCompactionState | null
 }) {
-  if (!pendingCompaction || pendingCompaction.phase === 'done') return null
-  const isError = pendingCompaction.phase === 'error'
+  if (!compaction || compaction.phase === 'done') return null
+  const isError = compaction.phase === 'error'
   const message = isError
-    ? pendingCompaction.errorText
-    : pendingCompaction.statusText
+    ? compaction.errorText
+    : compaction.statusText
   return (
     <div
       className={`flex-shrink-0 border-t px-5 py-2 font-code text-[12px] leading-[1.6] ${

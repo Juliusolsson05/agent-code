@@ -1,6 +1,13 @@
 import type { ReactNode } from 'react'
-import { isCodexApplyPatchUse } from '@providers/codex/renderer/adapters/codeEdit'
-import { fromCodexExecScript } from '@providers/codex/renderer/adapters/command'
+import {
+  applyPatchText,
+  fromCodexApplyPatch,
+  isCodexApplyPatchUse,
+} from '@providers/codex/renderer/adapters/codeEdit'
+import {
+  fromCodexExecCommand,
+  fromCodexExecScript,
+} from '@providers/codex/renderer/adapters/command'
 import { CommandView } from '@providers/shared/renderer/protocols/command/CommandView'
 
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
@@ -9,9 +16,7 @@ import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 // behind the registry capability; provider vocabulary must not leak back into
 // the shared feed.
 import { CodexApplyPatchRow } from '@providers/codex/renderer/components/apply-patch'
-import { CodexExecCommandRow } from '@providers/codex/renderer/components/exec-command'
 import { CodexToolResultRow } from '@providers/codex/renderer/components/tool-result'
-import { CodexToolRow } from '@providers/codex/renderer/components/tool'
 import { CodexWriteStdinRow } from '@providers/codex/renderer/components/write-stdin'
 import { AgentCodeOrchestrationView } from '@providers/shared/renderer/protocols/agent-code-orchestration/AgentCodeOrchestrationView'
 import { fromAgentCodeOrchestrationResult } from '@providers/shared/renderer/protocols/agent-code-orchestration/model'
@@ -31,8 +36,104 @@ import { fromAgentCodeWorkflowResult } from '@providers/shared/renderer/protocol
 import { fromCodexImageGenerationUse } from '@providers/codex/renderer/adapters/imageGeneration'
 import { CodexImageGenerationRow } from '@providers/codex/renderer/components/image-generation'
 import { asRecord } from '@shared/lib/asRecord'
+import type {
+  ProviderOperationDecision,
+  ProviderOperationInput,
+  ProviderSpecializedReceipt,
+} from '@shared/types/providerConfig'
+import { fromCodexGitOperation } from '@providers/codex/renderer/adapters/git'
+import { GitOperationView } from '@providers/shared/renderer/protocols/command/formatters/git'
+import { toolResultContentText } from '@providers/shared/renderer/rows/toolResultContent'
 
-export function renderCodexToolUse(
+function codexOperationReceipt(toolUse: ToolUseBlock): ProviderSpecializedReceipt {
+  // Receipt protocol ids are proof-bearing claims. Only our source-controlled
+  // Agent Code adapters may mint them; open-world MCP and generated exec
+  // shapes remain ordinary Codex specialization or the shared fallback.
+  if (fromCodexAgentCodeOrchestrationUse(toolUse)) {
+    return { rendererId: 'codex.rows.dispatch', protocolId: 'agent-code.orchestration' }
+  }
+  if (fromCodexAgentCodeWorkspaceUse(toolUse)) {
+    return { rendererId: 'codex.rows.dispatch', protocolId: 'agent-code.workspace' }
+  }
+  return { rendererId: 'codex.rows.dispatch' }
+}
+
+export function renderCodexOperation(
+  input: ProviderOperationInput,
+): ProviderOperationDecision {
+  const git = fromCodexGitOperation(input)
+  if (git) {
+    return {
+      toolUse: {
+        action: 'render',
+        node: <GitOperationView model={git} />,
+        receipt: { rendererId: 'shared.command', protocolId: 'command.git' },
+      },
+      toolResult: input.result
+        ? {
+            action: 'absorb',
+            ownerRenderId: 'shared.command',
+            protocolId: 'command.git',
+            reason: 'paired Git operation view preserves the bounded result evidence',
+          }
+        : null,
+    }
+  }
+
+  const toolUse = renderCodexToolUse(input.toolUse, {
+    live: input.live,
+    streaming: input.streaming,
+    result: input.result,
+  })
+  const toolResult = input.result
+    ? renderCodexToolResult(input.result, { sourceTool: input.toolUse })
+    : undefined
+  const toolInput = asRecord(input.toolUse.input)
+  const emptyContinuationPoll = input.toolUse.name === 'write_stdin' &&
+    (typeof toolInput?.chars !== 'string' || toolInput.chars.length === 0)
+  const receipt = codexOperationReceipt(input.toolUse)
+  return {
+    toolUse: emptyContinuationPoll
+      ? {
+          action: 'absorb',
+          ownerRenderId: 'codex.command-continuation',
+          protocolId: 'command.continuation',
+          reason: 'empty write_stdin is a transport poll owned by the running command surface',
+        }
+      : toolUse === undefined
+      ? { action: 'fallback' }
+      : {
+          action: 'render',
+          node: toolUse,
+          receipt,
+        },
+    toolResult: !input.result
+      ? null
+      : toolResult === undefined
+        ? { action: 'fallback' }
+        : toolResult === null
+          ? emptyContinuationPoll
+            ? {
+                action: 'absorb',
+                ownerRenderId: 'codex.command-continuation',
+                protocolId: 'command.continuation',
+                reason: 'empty poll acknowledgement belongs to the already-running command surface',
+              }
+            : {
+                action: 'absorb',
+                ownerRenderId: receipt.rendererId,
+                ...(receipt.protocolId ? { protocolId: receipt.protocolId } : {}),
+                reason: 'provider operation card validated and consumed its paired result',
+              }
+          : {
+              action: 'render',
+              node: toolResult,
+              receipt,
+            },
+  }
+}
+
+function renderCodexToolUse(
   block: ToolUseBlock,
   context: { live?: boolean; streaming?: boolean; result?: ToolResultBlock | null } = {},
 ): ReactNode | undefined {
@@ -59,27 +160,32 @@ export function renderCodexToolUse(
   // Provider-specific components below claim only grammars with evidence.
   // Every other Codex function call returns undefined at the end and reaches
   // the same bounded JsonToolRow used by other providers.
-  if (block.name === 'apply_patch') return (
-    <CodexApplyPatchRow
-      block={block}
-      streaming={context.streaming}
-      running={context.live === true && !context.streaming && context.result == null}
-      result={context.result}
-    />
-  )
-  // Modern unified-exec wrapper: a patch may hide inside the exec script
-  // (tools.apply_patch("*** Begin Patch…")). CodexApplyPatchRow decodes the
-  // embedded literal and falls back to the generic CodexToolRow when the
-  // script is a plain command — so routing exec here is strictly additive.
-  if (block.name === 'exec' && isCodexApplyPatchUse(block, { streamingPrefix: context.streaming === true }))
-    return (
-      <CodexApplyPatchRow
-        block={block}
-        streaming={context.streaming}
-        running={context.live === true && !context.streaming && context.result == null}
-        result={context.result}
-      />
-    )
+  if (block.name === 'apply_patch') {
+    const model = fromCodexApplyPatch(block, {
+      streaming: context.streaming,
+      running: context.live === true && !context.streaming && context.result == null,
+      result: context.result,
+    })
+    return model
+      ? <CodexApplyPatchRow model={model} rawPatch={applyPatchText(block.input)} />
+      : undefined
+  }
+  // Modern unified-exec wrappers may hide a patch inside the script
+  // (tools.apply_patch("*** Begin Patch…")). Admission has to happen here,
+  // before React is involved: a component returning null after dispatch has
+  // already claimed the row would make the evidence receipt lie about which
+  // renderer actually owned it. Plain scripts therefore continue past this
+  // block to command admission or the shared structured fallback.
+  if (block.name === 'exec' && isCodexApplyPatchUse(block, { streamingPrefix: context.streaming === true })) {
+    const model = fromCodexApplyPatch(block, {
+      streaming: context.streaming,
+      running: context.live === true && !context.streaming && context.result == null,
+      result: context.result,
+    })
+    return model
+      ? <CodexApplyPatchRow model={model} rawPatch={applyPatchText(block.input)} />
+      : undefined
+  }
   // …and its plain-command case (Phase 6): extract every embedded
   // tools.exec_command call and render a real command card. Scripts with
   // neither patch nor command intent still fall to the generic row.
@@ -87,7 +193,10 @@ export function renderCodexToolUse(
     const model = fromCodexExecScript(block)
     if (model) return <CommandView model={model} />
   }
-  if (block.name === 'exec_command') return <CodexExecCommandRow block={block} />
+  if (block.name === 'exec_command') {
+    const model = fromCodexExecCommand(block, { streaming: context.streaming })
+    return model ? <CommandView model={model} /> : undefined
+  }
   if (block.name === 'write_stdin') return <CodexWriteStdinRow block={block} />
   // Unknown names deliberately fall through to the SHARED fallback
   // (JsonToolRow via Block.tsx) — the residue-plan P1 convergence. Codex
@@ -98,7 +207,7 @@ export function renderCodexToolUse(
   return undefined
 }
 
-export function renderCodexToolResult(
+function renderCodexToolResult(
   block: ToolResultBlock,
   context: { sourceTool?: ToolUseBlock | null },
 ): ReactNode | undefined {
@@ -138,6 +247,17 @@ export function renderCodexToolResult(
   if (!source || source.id !== block.tool_use_id) return undefined
   const codex = asRecord(asRecord(block)?.codex)
   const kind = typeof codex?.kind === 'string' ? codex.kind : null
+  const resultText = toolResultContentText(block.content).trim()
+  // These previously returned null from inside CodexToolResultRow, after the
+  // operation boundary had already recorded a specialized paint. Decide here
+  // so every vanished row has a named absorption receipt.
+  if (block.is_error !== true && kind === 'patch_apply_end') return null
+  if (block.is_error !== true && kind === 'exec_command_end' && resultText === '') return null
+  if (
+    block.is_error !== true &&
+    source.name === 'write_stdin' &&
+    resultText === ''
+  ) return null
   const providerOperation =
     source.name === 'exec' ||
     source.name === 'exec_command' ||

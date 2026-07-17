@@ -1,25 +1,34 @@
-import type { ReactNode } from 'react'
 import type { ConditionView } from '@shared/conditions-core/view'
-import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
-import type { SemanticLiveBlock } from '@renderer/session-runtime/state'
+import type { Entry, ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
+import type { ProviderConditionSnapshot } from '@shared/types/providerConditions'
+import type { SemanticLiveBlock, SemanticLiveTurn } from '@renderer/session-runtime/state'
 import { type AgentProviderKind, isAgentProviderKind } from '@shared/types/providerKind'
 import { CLAUDE_VIEWS } from '@providers/claude/renderer/conditions/views'
 import { CODEX_VIEWS } from '@providers/codex/renderer/conditions/views'
+import { renderClaudeOperation } from '@providers/claude/renderer/rows/dispatch'
+import { renderClaudeDurableEntry } from '@providers/claude/renderer/entries/dispatch'
+import { classifyClaudeDurableEntry } from '@providers/claude/renderer/entries/classify'
 import {
-  renderClaudeToolResult,
-  renderClaudeToolUse,
-} from '@providers/claude/renderer/rows/dispatch'
+  collectClaudeTaskNotifications,
+  taskNotificationFromEntry,
+} from '@providers/claude/renderer/adapters/taskNotification'
 import { fromClaudeAgentUse } from '@providers/claude/renderer/adapters/collaboration'
 import { fromClaudeAgentCodeOrchestrationUse } from '@providers/claude/renderer/adapters/agentCodeOrchestration'
 import { renderClaudeSemanticBlock } from '@providers/claude/renderer/semantic/dispatch'
-import {
-  renderCodexToolResult,
-  renderCodexToolUse,
-} from '@providers/codex/renderer/rows/dispatch'
+import { renderCodexOperation } from '@providers/codex/renderer/rows/dispatch'
+import { renderCodexDurableEntry } from '@providers/codex/renderer/entries/dispatch'
+import { classifyCodexDurableEntry } from '@providers/codex/renderer/entries/classify'
 import { fromCodexNativeSpawnUse } from '@providers/codex/renderer/adapters/collaboration'
 import { fromCodexAgentCodeOrchestrationUse } from '@providers/codex/renderer/adapters/agentCodeOrchestration'
 import { renderCodexSemanticBlock } from '@providers/codex/renderer/semantic/dispatch'
 import type {
+  ProviderOperationDecision,
+  ProviderOperationInput,
+  ProviderSemanticDecision,
+  ProviderDurableEntryDecision,
+  ProviderDurableEntryKind,
+  ProviderDurableEntryInput,
+  ProviderTaskNotification,
   PromptDeliveryResult,
   SemanticFoldPolicy,
   TranscriptEntryMapper,
@@ -30,6 +39,7 @@ import { OPENCODE_SEMANTIC_FOLD_POLICY } from '@providers/opencode/renderer/sema
 import { CLAUDE_IDENTITY } from '@providers/claude/renderer/identity'
 import { claudeComposerSubmit } from '@providers/claude/renderer/composerSubmit'
 import { CLAUDE_CONDITION_POLICY } from '@providers/claude/renderer/conditions/policy'
+import { normalizeClaudeCompactionConditions } from '@providers/claude/renderer/conditions/compaction/model'
 import { CODEX_CONDITION_POLICY } from '@providers/codex/renderer/conditions/policy'
 import { OPENCODE_IDENTITY } from '@providers/opencode/renderer/identity'
 import { OPENCODE_CONDITION_POLICY } from '@providers/opencode/renderer/conditions/policy'
@@ -39,10 +49,7 @@ import {
   extractOpencodeProviderSessionId,
 } from '@providers/opencode/renderer/transcript/mapper'
 import { opencodeComposerSubmit } from '@providers/opencode/renderer/composerSubmit'
-import {
-  renderOpencodeToolUse,
-  renderOpencodeToolResult,
-} from '@providers/opencode/renderer/rows/dispatch'
+import { renderOpencodeOperation } from '@providers/opencode/renderer/rows/dispatch'
 import { codexComposerSubmit } from '@providers/codex/renderer/composerSubmit'
 import { CODEX_IDENTITY } from '@providers/codex/renderer/identity'
 import {
@@ -77,21 +84,42 @@ export type RendererProviderCapabilities = {
    */
   splitShortcutKey?: string
   conditionViews: Record<string, ConditionView>
-  renderToolUse?: (
-    block: ToolUseBlock,
-    context?: { live?: boolean; streaming?: boolean; result?: ToolResultBlock | null },
-  ) => ReactNode | undefined
-  renderToolResult?: (
-    block: ToolResultBlock,
-    context: { sourceTool?: ToolUseBlock | null },
-  ) => ReactNode | undefined
+  normalizeConditions?: (input: {
+    snapshot: ProviderConditionSnapshot | null
+    currentTurn: SemanticLiveTurn | null
+    entries: readonly Entry[]
+  }) => ProviderConditionSnapshot | null
+  renderOperation: (input: ProviderOperationInput) => ProviderOperationDecision
+  renderDurableEntry?: (
+    input: ProviderDurableEntryInput,
+  ) => ProviderDurableEntryDecision | undefined
+  /**
+   * Admit provider-authored durable rows before the ownership ledger. This is
+   * intentionally separate from `renderDurableEntry`: observations are pure
+   * data and must not instantiate React nodes merely to ask whether an entry
+   * exists. Both capabilities delegate to the same provider-local classifier,
+   * which prevents central raw-discriminator compatibility branches.
+   */
+  classifyDurableEntry: (entry: Entry) => ProviderDurableEntryKind | null
+  /** Provider-owned durable carrier decoding used by correlated rows. The
+   * shared feed may transport this map but must never recognize a provider's
+   * raw transcript envelope itself. */
+  collectTaskNotifications?: (
+    entries: readonly Entry[],
+  ) => ReadonlyMap<string, ProviderTaskNotification>
+  /** Decode only provider-authored completion carriers. Ownership collection
+   * uses presence plus the optional parent id to keep parentless carriers
+   * visible without learning the provider's envelope syntax. */
+  classifyTaskNotificationEntry?: (entry: Entry) => ProviderTaskNotification | null
   /** Provider-only semantic variants that cannot be represented as a generic
    * tool_use without dropping typed evidence. Shared live prose/reasoning and
    * ordinary function calls continue through the provider-neutral paths. */
   renderSemanticBlock?: (
     block: SemanticLiveBlock,
-    context: { committedToolResults: ReadonlyMap<string, ToolResultBlock> },
-  ) => ReactNode | undefined
+    context: {
+      committedToolResults: ReadonlyMap<string, ToolResultBlock>
+    },
+  ) => ProviderSemanticDecision | undefined
   /**
    * Does this complete tool_use prove a subagent spawn operation the fleet row
    * can own? Provider-owned and schema-aware: a name is routing vocabulary,
@@ -226,8 +254,12 @@ const claudeCapabilities: RendererProviderCapabilities = {
   name: 'Claude Code',
   ...CLAUDE_IDENTITY,
   conditionViews: CLAUDE_VIEWS,
-  renderToolUse: renderClaudeToolUse,
-  renderToolResult: renderClaudeToolResult,
+  normalizeConditions: normalizeClaudeCompactionConditions,
+  renderOperation: renderClaudeOperation,
+  renderDurableEntry: renderClaudeDurableEntry,
+  classifyDurableEntry: classifyClaudeDurableEntry,
+  collectTaskNotifications: collectClaudeTaskNotifications,
+  classifyTaskNotificationEntry: taskNotificationFromEntry,
   renderSemanticBlock: renderClaudeSemanticBlock,
   isSpawnTool: block => Boolean(
     fromClaudeAgentUse(block) ||
@@ -247,8 +279,9 @@ const codexCapabilities: RendererProviderCapabilities = {
   name: 'Codex',
   ...CODEX_IDENTITY,
   conditionViews: CODEX_VIEWS,
-  renderToolUse: renderCodexToolUse,
-  renderToolResult: renderCodexToolResult,
+  renderOperation: renderCodexOperation,
+  renderDurableEntry: renderCodexDurableEntry,
+  classifyDurableEntry: classifyCodexDurableEntry,
   renderSemanticBlock: renderCodexSemanticBlock,
   isSpawnTool: block => Boolean(
     fromCodexNativeSpawnUse(block) ||
@@ -271,8 +304,8 @@ const opencodeCapabilities: RendererProviderCapabilities = {
   conditionViews: OPENCODE_VIEWS,
   // Evidence-backed rows only (live probe 2026-07-06): todowrite renders as
   // a real todo list; everything else falls through to the generic rows.
-  renderToolUse: renderOpencodeToolUse,
-  renderToolResult: renderOpencodeToolResult,
+  renderOperation: renderOpencodeOperation,
+  classifyDurableEntry: () => null,
   // opencode has no subagent-spawn tool yet (no fleet fanout on this backend).
   isSpawnTool: () => false,
   createTranscriptEntryMapper: () => createOpencodeTranscriptEntryMapper(),
@@ -305,4 +338,18 @@ export function getRendererProviderCapabilities(id: string): RendererProviderCap
 
 export function isAgentSpawnTool(block: ToolUseBlock, provider: AgentProviderKind): boolean {
   return getRendererProviderCapabilities(provider).isSpawnTool(block)
+}
+
+export function providerTaskNotificationFromEntry(
+  entry: Entry,
+  provider: AgentProviderKind,
+): ProviderTaskNotification | null {
+  return getRendererProviderCapabilities(provider).classifyTaskNotificationEntry?.(entry) ?? null
+}
+
+export function providerDurableEntryKind(
+  entry: Entry,
+  provider: AgentProviderKind,
+): ProviderDurableEntryKind | null {
+  return getRendererProviderCapabilities(provider).classifyDurableEntry(entry)
 }

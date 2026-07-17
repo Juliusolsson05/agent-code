@@ -1,13 +1,14 @@
 import type { Entry } from '@shared/types/transcript'
+import type { ProviderTaskNotification } from '@shared/types/providerConfig'
 
-// <task-notification> parsing — the background-task result carrier
+// Claude <task-notification> parsing — the background-task result carrier
 // (subagents AND background Bash; residue plan P2b).
 //
 // The XML arrives as a synthetic USER entry (no permissionMode, text
 // starts '<') that legacy painted as a raw user bubble — the 2026-06-29
 // "rendered like a retard" / "agent output buried" bundles. One parser
-// serves every consumer: the EntryRow standalone row, the Feed join map
-// feeding TaskSubagentRow, the QueueStrip chip, and (post-cutover) the
+// serves every Claude-aware consumer: durable-entry dispatch, the Feed join
+// map feeding ClaudeAgentRow, the QueueStrip chip, and the
 // ledger collector's carve-out.
 //
 // Parsing is tag-scoped regex, NOT an XML parser, on purpose: the payload
@@ -17,16 +18,7 @@ import type { Entry } from '@shared/types/transcript'
 // <result> via greedy scan so nested closing-tag lookalikes inside the
 // body don't truncate it.
 
-export type TaskNotification = {
-  taskId: string | null
-  toolUseId: string | null
-  status: string | null
-  summary: string | null
-  result: string | null
-  outputFile: string | null
-  /** Raw <usage> body, e.g. "27.5k tokens · 13 tools · 98s". */
-  usage: string | null
-}
+export type TaskNotification = ProviderTaskNotification
 
 const OPEN_TAG = '<task-notification>'
 
@@ -74,6 +66,17 @@ export function parseTaskNotification(text: string): TaskNotification | null {
 export function taskNotificationFromEntry(entry: Entry): TaskNotification | null {
   const text = taskNotificationTextOf(entry)
   return text ? parseTaskNotification(text) : null
+}
+
+export function collectClaudeTaskNotifications(
+  entries: readonly Entry[],
+): ReadonlyMap<string, ProviderTaskNotification> {
+  const notifications = new Map<string, ProviderTaskNotification>()
+  for (const entry of entries) {
+    const notification = taskNotificationFromEntry(entry)
+    if (notification?.toolUseId) notifications.set(notification.toolUseId, notification)
+  }
+  return notifications
 }
 
 export function taskNotificationStatusKind(

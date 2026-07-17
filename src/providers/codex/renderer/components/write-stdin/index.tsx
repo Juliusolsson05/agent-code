@@ -16,16 +16,6 @@ export const CodexWriteStdinRow = memo(function CodexWriteStdinRow({
   const input = asRecord(block.input)
   const chars = typeof input?.chars === 'string' ? input.chars : ''
 
-  // WHY empty write_stdin renders nothing:
-  // Codex uses write_stdin for two very different things: real input
-  // into an ongoing command, and empty/poll continuation calls while
-  // a long-running PTY command is still draining output. The latter
-  // created the ugly one-line `write_stdin` rows visible in the
-  // 2026-05-16T18:54 bundle: no path, no command, no payload, just a
-  // provider implementation detail. Empty stdin has no user-visible
-  // content, so the command/result row remains the owner of the UI.
-  if (!chars) return null
-
   return (
     <MarkerRow marker="⏺">
       <div>

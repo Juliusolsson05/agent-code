@@ -1,6 +1,6 @@
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import { PagedTextViewer } from '@renderer/lib/text/PagedTextViewer'
-import { AskUserQuestionRow } from '@renderer/features/feed/ui/semantic/AskUserQuestionRow'
+import { AskUserQuestionRow } from './AskUserQuestionRow'
 import type { ToolResultBlock } from '@shared/types/transcript'
 
 import {
@@ -9,9 +9,11 @@ import {
 } from '@providers/claude/renderer/adapters/questions'
 
 export function ClaudeLiveQuestionRow({ model }: { model: ClaudeQuestionModel }) {
-  // The interaction driver remains renderer infrastructure because it needs
-  // SessionFeed and condition contexts. Claude owns admission and supplies the
-  // exact provider input; the shared feed no longer knows the tool name.
+  // WHY the interaction driver lives beside Claude admission even though it
+  // consumes shared SessionFeed infrastructure: question payload semantics,
+  // action names, and terminal navigation all belong to Claude's protocol.
+  // Leaving the painter in the shared feed made a provider-specific component
+  // look reusable and invited the shell to grow Claude vocabulary again.
   return <AskUserQuestionRow input={model.input} />
 }
 

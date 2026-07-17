@@ -2,7 +2,7 @@ import { DEFAULT_SETTINGS } from '@renderer/app-state/settings/types'
 
 // Phone substitute for @renderer/app-state/hooks (aliased in
 // vite.config.ts). The feed subtree touches the app store in exactly ONE
-// place — Block.tsx reads `settings.customRendering` — so the phone
+// place so renderer modules can consume settings without importing desktop
 // serves a frozen default-settings snapshot through the same selector
 // call shape instead of dragging the zustand store (and its persistence,
 // keybinds, panel state…) into the bundle.

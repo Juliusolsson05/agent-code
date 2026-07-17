@@ -124,7 +124,7 @@ function parseJsonObject(text: string | null): Record<string, unknown> | null {
 // `[{ type: 'text', text: '…' }, …]`. `extractCodexSpawnOutput` used to read only
 // the first two, so when `spawn_agent` returned ARRAY output the join key
 // (`agent_id`) could not be parsed, the parent↔child correlation silently failed,
-// and the committed TaskSubagentRow showed no live child state even though the
+// and the committed Codex spawn row showed no live child state even though the
 // spawn succeeded. ATP already normalizes array output elsewhere; this is the
 // main-process twin so the subagent path makes the same decision.
 //

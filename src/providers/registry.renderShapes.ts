@@ -13,3 +13,28 @@ import { OPENCODE_RENDER_SHAPES } from '@providers/opencode/renderer/shapes'
 export const ALL_RENDER_SHAPE_CATALOGS: readonly Readonly<
   Record<string, RenderShapeDefinition>
 >[] = [CLAUDE_RENDER_SHAPES, CODEX_RENDER_SHAPES, OPENCODE_RENDER_SHAPES]
+
+export function resolveRenderShapeDefinition(input: {
+  provider: string
+  fingerprint: string
+  plane: string
+  eventType: string
+  lifecycle: string
+}): RenderShapeDefinition | null {
+  // Catalog sizes are deliberately small and this path runs only while dev
+  // capture is armed. A direct reviewed scan keeps the lookup tied to all
+  // identity dimensions; a fingerprint-only global map would let malformed
+  // metadata borrow a valid shape id from the wrong provider/plane.
+  for (const catalog of ALL_RENDER_SHAPE_CATALOGS) {
+    for (const definition of Object.values(catalog)) {
+      if (
+        definition.provider === input.provider &&
+        definition.fingerprints.includes(input.fingerprint) &&
+        definition.planes.includes(input.plane as never) &&
+        definition.eventTypes.includes(input.eventType) &&
+        definition.lifecycles.includes(input.lifecycle as never)
+      ) return definition
+    }
+  }
+  return null
+}

@@ -22,7 +22,6 @@ import type {
   AgentTrustDialogState,
   AgentResumePromptState,
   AgentPermissionPromptState,
-  AgentCompactionState,
   AgentProcessState,
 } from '@shared/types/session.js'
 import { TmuxRegistry } from '@main/tmux/TmuxRegistry.js'
@@ -115,13 +114,6 @@ type ManagerEvents = {
     command?: string
     options?: Array<{ key: string; label: string }>
     selectedIndex?: number
-  }]
-  'compaction-state': [{
-    sessionId: string
-    visible: boolean
-    phase?: 'running' | 'error' | 'done'
-    statusText?: string
-    errorText?: string
   }]
   conditions: [{ sessionId: string; snapshot: ProviderConditionSnapshot }]
   /** Emitted only by terminal sessions — raw PTY output for xterm.js. */
@@ -597,10 +589,6 @@ export class SessionManager extends EventEmitter {
       session.on('permission-prompt', (state: AgentPermissionPromptState) => {
         this.markActivity(sessionId)
         this.emit('permission-prompt', { sessionId, ...state })
-      })
-      session.on('compaction-state', (state: AgentCompactionState) => {
-        this.markActivity(sessionId)
-        this.emit('compaction-state', { sessionId, ...state })
       })
       session.on('conditions', (snapshot: ProviderConditionSnapshot) => {
         this.markActivity(sessionId)

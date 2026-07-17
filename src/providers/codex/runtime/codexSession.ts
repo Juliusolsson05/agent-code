@@ -137,7 +137,6 @@ export type CodexSessionEvents = {
   // the legacy channel entirely and this block goes with it.
   'resume-prompt': [import('@shared/types/session.js').AgentResumePromptState]
   'permission-prompt': [import('@shared/types/session.js').AgentPermissionPromptState]
-  'compaction-state': [import('@shared/types/session.js').AgentCompactionState]
   exit: [{ exitCode: number; signal?: number }]
 }
 

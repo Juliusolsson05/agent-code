@@ -13,7 +13,6 @@ export type SettingsSlice = {
   settings: Settings
   setSettings: (patch: Partial<Settings>) => void
   resetSettings: () => void
-  toggleCustomRendering: () => void
   toggleStatusMode: () => void
   toggleWorktreeBadges: () => void
   toggleUsageHeader: () => void

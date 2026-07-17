@@ -8,29 +8,15 @@
 // shared header/±counts/status grammar. Both the committed dispatch AND
 // BlockRow's live path converge here, so streaming upgrades for free.
 
-import { memo, useMemo } from 'react'
+import { memo } from 'react'
 
-import type { ToolUseBlock } from '@shared/types/transcript'
-import { fromClaudeEditBlock } from '@providers/claude/renderer/adapters/codeEdit'
+import type { CodeEditRenderModel } from '@providers/shared/renderer/protocols/code-edit/model'
 import { CodeEditView } from '@providers/shared/renderer/protocols/code-edit/CodeEditView'
 
 export const WriteRow = memo(function WriteRow({
-  block,
-  streaming = false,
-  failed = false,
-  running = false,
-  errorSummary,
+  model,
 }: {
-  block: ToolUseBlock
-  streaming?: boolean
-  failed?: boolean
-  running?: boolean
-  errorSummary?: string
+  model: CodeEditRenderModel
 }) {
-  const model = useMemo(() => {
-    const adapted = fromClaudeEditBlock(block, { streaming, failed, errorSummary })
-    return adapted && running && !streaming && !failed ? { ...adapted, status: 'running' as const } : adapted
-  }, [block, errorSummary, failed, running, streaming])
-  if (!model) return null // name !== Write — dispatch never sends that
   return <CodeEditView model={model} />
 })

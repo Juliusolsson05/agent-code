@@ -20,6 +20,19 @@ type ExecCommandInput = {
   maxOutputTokens: number | null
 }
 
+/** Full command for semantic formatters; display adapters use the bounded
+ * sibling below. Never feed this unbounded string directly to a headline. */
+export function rawCodexExecCommand(input: unknown): string | null {
+  const rec = asRecord(input)
+  const raw = rec?.cmd ?? rec?.command
+  if (typeof raw === 'string') return /\S/.test(raw) ? raw : null
+  if (Array.isArray(raw) && raw.every(part => typeof part === 'string')) {
+    const command = raw.join(' ')
+    return /\S/.test(command) ? command : null
+  }
+  return null
+}
+
 export function execCommandInput(input: unknown): ExecCommandInput | null {
   const rec = asRecord(input)
   if (!rec) return null

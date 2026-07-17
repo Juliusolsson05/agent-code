@@ -4,7 +4,7 @@ import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import {
   taskNotificationStatusKind,
   type TaskNotification,
-} from '@renderer/session-runtime/taskNotification'
+} from '@providers/claude/renderer/adapters/taskNotification'
 import { TextProse } from '@renderer/features/feed/ui/markdown'
 
 /* ---------- Standalone task-notification row ---------- */

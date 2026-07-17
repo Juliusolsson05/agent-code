@@ -10,6 +10,10 @@ import { defineRenderShapeCatalog } from '@renderer/rendering/evidence/defineRen
 // unobserved tool list ("no renderer invented from an unobserved tool
 // list", Phase 4 gate). First real opencode capture soak → first entries
 // land here through the Unknown Shape Inbox loop.
+// TODO(condition-shape-soak): the same rule applies to OpenCode permission and
+// question conditions. Policy proves where known kinds render; it does not
+// prove the exact payload shape. Keep first live sightings unknown until a real
+// SSE capture is extracted and reviewed.
 export const OPENCODE_RENDER_SHAPES = defineRenderShapeCatalog('opencode', {})
 
 export type OpencodeRenderShapeId = keyof typeof OPENCODE_RENDER_SHAPES

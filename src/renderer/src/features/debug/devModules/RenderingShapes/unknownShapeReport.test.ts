@@ -18,7 +18,7 @@ const index = buildFingerprintIndex([
       lifecycles: ['durable'],
       observed: { providerVersions: [], models: [], firstSeen: '2026-07-16', lastSeen: '2026-07-16' },
       fixtures: { final: ['rendering-bundles/x.json'], prefixes: [] },
-      disposition: { kind: 'planned', targetGrammar: 'command' },
+      disposition: { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'test fallback' },
       why: 'test',
     }),
   },
@@ -26,7 +26,7 @@ const index = buildFingerprintIndex([
 
 function sighting(over: Partial<RenderShapeSighting>): RenderShapeSighting {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     sessionId: 's',
     provider: 'claude',
     providerVersion: null,
@@ -40,7 +40,7 @@ function sighting(over: Partial<RenderShapeSighting>): RenderShapeSighting {
     payloadHash: 'ab',
     sourceRecordingCursor: null,
     observedAt: 1_700_000_000_000,
-    outcome: { kind: 'generic', rendererId: 'shared.generic-tool' },
+    outcome: { kind: 'generic', shapeId: 'claude.tool-use.bash.v1', rendererId: 'shared.generic-tool' },
     seenCount: 1,
     ...over,
   }
@@ -82,7 +82,7 @@ describe('unknown-shape report derivation (Phase 3)', () => {
     const report = buildUnknownShapeReport([
       sighting({
         seenCount: 3,
-        outcome: { kind: 'specialized', shapeId: 'a', rendererId: 'renderer.a' },
+        outcome: { kind: 'specialized', shapeId: 'a', rendererId: 'renderer.a', protocolId: 'protocol.a' },
       }),
       sighting({
         seenCount: 5,
@@ -91,14 +91,14 @@ describe('unknown-shape report derivation (Phase 3)', () => {
     ], index)
     expect(report.totalSightings).toBe(8)
     expect(report.rows[0].routes).toEqual({
-      'specialized:renderer.a': 3,
-      'specialized:renderer.b': 5,
+      'specialized:renderer.a:protocol.a': 3,
+      'specialized:renderer.b:': 5,
     })
   })
 
   it('malformed sidecar lines are counted, never thrown, never rows', () => {
     const report = buildUnknownShapeReport(
-      [null, 42, { schemaVersion: 2 }, { schemaVersion: 1 }, sighting({})],
+      [null, 42, { schemaVersion: 3 }, { schemaVersion: 1 }, sighting({})],
       index,
     )
     expect(report.invalidSightings).toBe(4)

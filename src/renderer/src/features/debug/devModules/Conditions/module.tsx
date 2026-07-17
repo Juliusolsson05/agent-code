@@ -3,7 +3,7 @@
 // WHY this module exists:
 // The conditions pipeline crosses too many layers to debug from one ordinary
 // UI symptom: headless screen parsers emit a snapshot, renderer state derives
-// legacy pending fields, feed rendering uses semantic tool blocks, composer
+// normalized conditions, feed rendering uses semantic tool blocks, composer
 // keybinds use selector decisions, and dispatch mode uses attention labels.
 // When AskUserQuestion falls back to a plain "RUNNING" tool row, the useful
 // question is not "did React render wrong?" but which link in that chain is
@@ -47,29 +47,29 @@ const CONDITION_CATALOG = [
     provider: 'claude',
     kind: 'claude.trust-dialog',
     signal: 'snapshot.conditions["claude.trust-dialog"] exists and state.visible is true',
-    derived: 'runtime.pendingTrustDialog',
+    derived: 'runtime.conditions',
     consumer: 'modal outlet + dispatch attention TRUST',
   },
   {
     provider: 'claude',
     kind: 'claude.permission-prompt',
     signal: 'snapshot.conditions["claude.permission-prompt"] exists and state.visible is true',
-    derived: 'runtime.pendingPermissionPrompt',
+    derived: 'runtime.conditions',
     consumer: 'modal outlet + action key routing + dispatch attention ACTION',
   },
   {
     provider: 'claude',
     kind: 'claude.resume-prompt',
     signal: 'snapshot.conditions["claude.resume-prompt"] exists and state.visible is true',
-    derived: 'runtime.pendingResumePrompt',
+    derived: 'runtime.conditions',
     consumer: 'modal outlet + action key routing + dispatch attention RESUME',
   },
   {
     provider: 'claude',
     kind: 'claude.compaction',
-    signal: 'snapshot.conditions["claude.compaction"] exists and state.visible/phase are set',
-    derived: 'runtime.pendingCompaction',
-    consumer: 'inline compaction strip; ERROR attention when phase=error',
+    signal: 'structured synthesis lifecycle, with screen-only fallback/error provenance',
+    derived: 'normalized snapshot.conditions["claude.compaction"]',
+    consumer: 'provider compaction strip; ERROR attention when phase=error',
   },
   {
     provider: 'claude',
@@ -89,14 +89,14 @@ const CONDITION_CATALOG = [
     provider: 'codex',
     kind: 'codex.trust-dialog',
     signal: 'snapshot.conditions["codex.trust-dialog"] exists and state.visible is true',
-    derived: 'runtime.pendingTrustDialog',
+    derived: 'runtime.conditions',
     consumer: 'modal outlet + dispatch attention TRUST',
   },
   {
     provider: 'codex',
     kind: 'codex.approval',
     signal: 'snapshot.conditions["codex.approval"] exists',
-    derived: 'runtime.pendingApproval',
+    derived: 'runtime.conditions',
     consumer: 'approval strip + action key routing + dispatch attention ACTION',
   },
 ] as const
@@ -209,11 +209,7 @@ function ConditionsDebug({ sessionId, runtime, kind }: DevDebugModuleProps) {
 
       <Section title="derived renderer state">
         <div className="grid grid-cols-2 gap-2">
-          <Metric label="pending trust" value={runtime.pendingTrustDialog ? 'present' : 'null'} tone={runtime.pendingTrustDialog ? 'warn' : 'neutral'} />
-          <Metric label="pending permission" value={runtime.pendingPermissionPrompt ? 'present' : 'null'} tone={runtime.pendingPermissionPrompt ? 'warn' : 'neutral'} />
-          <Metric label="pending resume" value={runtime.pendingResumePrompt ? 'present' : 'null'} tone={runtime.pendingResumePrompt ? 'warn' : 'neutral'} />
-          <Metric label="pending compaction" value={runtime.pendingCompaction ? runtime.pendingCompaction.phase : 'null'} tone={runtime.pendingCompaction ? 'warn' : 'neutral'} />
-          <Metric label="pending approval" value={runtime.pendingApproval ? 'present' : 'null'} tone={runtime.pendingApproval ? 'warn' : 'neutral'} />
+          <Metric label="condition records" value={String(conditionKeys.length)} tone={conditionKeys.length ? 'warn' : 'neutral'} />
           <Metric label="runtime.picker" value={`${runtime.picker.visible ? 'visible' : 'hidden'} / ${runtime.picker.items.length} items`} tone={runtime.picker.visible ? 'good' : 'neutral'} />
           <Metric label="slash from conditions" value={slashFromConditions ? `${slashFromConditions.visible ? 'visible' : 'hidden'} / ${slashFromConditions.items.length} items` : 'null'} />
           <Metric label="slash parity" value={jsonEqual(runtime.picker, slashFromConditions ?? { visible: false, items: [] }) ? 'same' : 'different'} tone={jsonEqual(runtime.picker, slashFromConditions ?? { visible: false, items: [] }) ? 'good' : 'bad'} />
@@ -330,11 +326,7 @@ function buildConditionsCopyText(
       present: conditionPresent(snapshot, row.kind),
     })),
     derivedRendererState: {
-      pendingTrustDialog: runtime.pendingTrustDialog,
-      pendingPermissionPrompt: runtime.pendingPermissionPrompt,
-      pendingResumePrompt: runtime.pendingResumePrompt,
-      pendingCompaction: runtime.pendingCompaction,
-      pendingApproval: runtime.pendingApproval,
+      normalizedConditions: runtime.conditions,
       runtimePicker: runtime.picker,
       slashFromConditions,
       slashParity: jsonEqual(runtime.picker, slashFromConditions ?? { visible: false, items: [] }),

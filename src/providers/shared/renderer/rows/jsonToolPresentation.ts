@@ -3,6 +3,30 @@
 // testable without rendering (the corpus bundles are the test inputs:
 // docs/rendering/research-2026-07/plan-json-tool-rows.md).
 
+import { boundedTextPage } from '@renderer/lib/text/boundedText'
+
+const COMMAND_HEADLINE_MAX_LINES = 2
+const COMMAND_HEADLINE_MAX_CHARS = 160
+
+/** Bound a generic `command` headline without knowing the provider or tool.
+ *
+ * WHY the field key owns this rule instead of names such as Bash, bash, or
+ * exec_command: JsonToolRow is the open-world fallback reached precisely when
+ * a provider did not claim the tool. A new provider can still use the common
+ * `{command:string}` grammar, and rendering its megabyte heredoc eagerly just
+ * because its tool name is unfamiliar would make the safety budget depend on
+ * provider vocabulary. The exact input remains in the expandable parameters /
+ * transcript; this is only the compact two-line headline. */
+export function boundedCommandHeadline(command: string): string {
+  const page = boundedTextPage(
+    command,
+    0,
+    COMMAND_HEADLINE_MAX_CHARS,
+    COMMAND_HEADLINE_MAX_LINES,
+  )
+  return page.hasNext ? `${page.text.trimEnd()}…` : page.text
+}
+
 /** `mcp__<server>__<tool>` → tool display name + MCP badge. Claude names
  *  MCP tools with the double-underscore convention; codex strips the
  *  prefix upstream so bare names pass through untouched. */
@@ -20,7 +44,7 @@ export function prettifyToolName(name: string): {
  * drifted apart (shared ToolUseRow.pickString and codex headlineForTool).
  *
  * ORDER MATTERS and is evidence-driven:
- * - `command` first (Bash-shaped tools; the identifier IS the action)
+ * - `command` first (shell-shaped tools; the identifier IS the action)
  * - path-shaped keys BEFORE `title`/`description` — the corpus caught
  *   `ai_workspace_attach_file` showing its `description` gloss while
  *   hiding the actual `path` (plan §1b); a path is an identifier, a

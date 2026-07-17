@@ -1,7 +1,7 @@
-// Detect git intent from a raw shell command string.
+// Detect Git intent from a provider-normalized command string.
 //
-// Both Claude (Bash tool) and Codex (exec_command) hand us a single
-// command string as the user typed it. We need to decide:
+// Provider adapters hand the command protocol one command string. This
+// formatter decides:
 //   - Is this a git invocation we have a custom widget for?
 //   - Which subcommand + flags did they use?
 //   - What paths did they pass?
@@ -94,23 +94,23 @@ export function detectGitIntent(cmd: string | undefined | null): GitIntent | nul
   const trimmed = cmd.trim()
   if (!trimmed) return null
 
-  // Heredoc-commits (`git commit -m "$(cat <<'EOF' ... EOF)"`) are the
-  // canonical multi-line commit shape agents emit. Match commit at the
-  // top before any chain-splitting / bail logic so the heredoc body
-  // can't trip the heuristics below.
-  if (/^git\s+commit\b/.test(trimmed)) {
-    return parseCommit(trimmed)
-  }
-
   // Chained commands (`git status && git add -A && git commit -m ...`)
   // are the workflow agents actually use — fetch state, stage, commit
-  // in one shot. We split the chain on top-level `&&` / `;` (ignoring
-  // anything inside quoted runs so heredocs don't get torn apart) and
-  // pick the highest-priority git intent we find. The widget then
-  // receives the combined stdout; each parser is anchored on its own
-  // unmistakable shape (commit on `[branch sha]`, push on `To `,
-  // status on section headers, diff on `diff --git`) so prefix noise
-  // from earlier commands in the chain is harmless.
+  // in one shot. Every segment MUST independently be a supported Git
+  // operation before the combined command can enter this formatter.
+  //
+  // WHY an unsupported segment rejects the whole chain instead of being
+  // ignored: the provider gives us one combined stdout/stderr result. If
+  // `git status && npm test` were admitted as `status`, the status card would
+  // absorb the result row and silently discard the test output. A false
+  // negative merely uses the total generic command/result UI; a false positive
+  // loses evidence. This conservative asymmetry is the formatter boundary.
+  //
+  // Split before the commit fast-path below. Otherwise a command beginning
+  // `git commit ... && <anything>` matches the leading commit regex and never
+  // exposes the mixed tail for validation. `splitTopLevel` ignores separators
+  // inside quoted runs, so the canonical `"$(cat <<'EOF' ... EOF)"` commit
+  // message remains one segment.
   //
   // Priority order encodes "what is the user actually trying to see":
   // commit > push > log > diff > status > add. A commit chained after
@@ -122,14 +122,22 @@ export function detectGitIntent(cmd: string | undefined | null): GitIntent | nul
     const intents: GitIntent[] = []
     for (const seg of segments) {
       const sub = detectGitIntent(seg.trim())
-      if (sub) intents.push(sub)
+      if (!sub) return null
+      intents.push(sub)
     }
-    if (intents.length === 0) return null
     const priority: Record<GitIntent['kind'], number> = {
       commit: 6, push: 5, log: 4, diff: 3, status: 2, add: 1,
     }
     intents.sort((a, b) => priority[b.kind] - priority[a.kind])
     return intents[0]
+  }
+
+  // Heredoc-commits (`git commit -m "$(cat <<'EOF' ... EOF)"`) are the
+  // canonical multi-line commit shape agents emit. Match commit before the
+  // single-command redirect guard because the heredoc's `<<` is message
+  // construction, not redirection of Git's result stream.
+  if (/^git\s+commit\b/.test(trimmed)) {
+    return parseCommit(trimmed)
   }
 
   // Single-command: still bail on pipes / redirects. Those almost
@@ -287,7 +295,11 @@ function splitTopLevel(s: string): string[] {
     buf += c
     i++
   }
-  if (buf) out.push(buf)
+  // Preserve an empty trailing/leading segment once a separator was seen.
+  // `git status &&` and `; git status` are incomplete shell programs, not a
+  // trustworthy single Git operation. The caller recursively rejects the
+  // empty segment instead of accidentally reparsing the unsplit original.
+  if (buf || out.length > 0) out.push(buf)
   return out
 }
 

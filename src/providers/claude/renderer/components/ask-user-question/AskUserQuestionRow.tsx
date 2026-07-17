@@ -8,12 +8,10 @@ import {
 import { useSessionFeed } from '@renderer/features/sessionFeed/SessionFeedContext'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import type { ConditionCustomAction } from '@shared/types/providerConditions'
-import { asRecord } from '@shared/lib/asRecord'
 import {
   readAskQuestions,
   type AskOption,
-  type AskQuestion,
-} from '@renderer/features/feed/lib/askUserQuestion'
+} from '@providers/claude/renderer/adapters/questions'
 
 // Native in-feed renderer for Claude Code's `AskUserQuestion` tool.
 //
@@ -51,13 +49,13 @@ import {
 //   terminal paint would reintroduce exactly the brittle heuristics the
 //   semantic path was built to kill.
 //
-// WHY the screen condition gates CLICKABILITY, not rendering:
-//   The row renders while the semantic tool block is unresolved. That is
-//   transcript-backed and flicker-immune. The screen-derived
-//   `claude.ask-user-question` condition is only an answerability signal: when
-//   the latest snapshot positively lacks the picker, controls disable so a late
-//   click cannot send a stray digit to the next prompt. Unknown/transient state
-//   stays clickable to avoid turning parser flicker into UI flicker.
+// WHY the screen condition does not gate rendering or submission:
+//   The transcript block is durable evidence that Claude asked a question,
+//   while screen parsing is a racing observation that may arrive before or
+//   after this component. The provider's structured resolver reparses the live
+//   terminal immediately before writing and refuses ambiguous input. We retain
+//   the condition only for forwarding terminal-navigation keys; using it as a
+//   second liveness authority made valid questions intermittently unclickable.
 //
 // WHY the row disappears on its own after answering:
 //   An UNRESOLVED block (`!block.resultAt`) means the picker is LIVE and
@@ -122,7 +120,6 @@ export function AskUserQuestionRow({
   const submittedRef = useRef(false)
 
   const questions = readAskQuestions(input)
-  const pickerKnownGone = liveAskUserQuestion === null
 
   if (questions.length === 0) {
     // Input hasn't finished streaming (or arrived malformed). Show a
@@ -162,7 +159,7 @@ export function AskUserQuestionRow({
     if (submittedRef.current) return
     if (answering) return
     if (!sessionId) return
-    // WHY this does NOT gate on `pickerKnownGone` anymore:
+    // WHY this does NOT gate on the screen condition anymore:
     // transcript rows and screen conditions are two independent streams. The
     // semantic AUQ block can mount before the parser has detected the terminal
     // picker, which made a real live question intermittently unclickable. The
@@ -432,11 +429,6 @@ export function AskUserQuestionRow({
         {resolveError ? (
           <div className="border border-danger-border bg-danger-soft px-2 py-1 text-[11px] text-danger">
             Answer failed: {resolveError}
-          </div>
-        ) : null}
-        {pickerKnownGone ? (
-          <div className="text-[11px] text-muted italic">
-            Terminal picker not detected; retry will fail safely if it is gone.
           </div>
         ) : null}
       </div>
