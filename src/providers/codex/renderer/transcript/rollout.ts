@@ -428,6 +428,12 @@ export function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): En
   // so a reload sees the same row.
 
   if (payload.type === 'web_search_call') {
+    // WHY semantic and committed web rows intentionally remain independently
+    // visible: live Codex identifiers (`ws_*`) and our synthesized fallback id
+    // do not form a proven join key. Visual convergence is safe; absorption is
+    // not, because a guessed match could hide a distinct search. TODO(web-identity):
+    // fold the pair only when the provider emits one durable identity across
+    // both planes or ATP records an explicit provenance edge.
     const callId =
       typeof payload.id === 'string' ? payload.id : `web_search:${uuid}`
     const action = asRecord(payload.action)
@@ -435,6 +441,8 @@ export function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): En
       stringField(action, 'query')
     const url =
       stringField(action, 'url')
+    const pattern =
+      stringField(action, 'pattern')
     const kind =
       stringField(action, 'type') ?? 'search'
     // `description` is the field headlineForTool falls back to when
@@ -453,6 +461,7 @@ export function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): En
         description,
         query,
         url,
+        pattern,
         kind,
         status: typeof payload.status === 'string' ? payload.status : null,
       }),

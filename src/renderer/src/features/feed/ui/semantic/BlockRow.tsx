@@ -1,20 +1,18 @@
 import { JsonResultSlab } from '@providers/shared/renderer/rows/JsonResultSlab'
 import { JsonToolRow } from '@providers/shared/renderer/rows/JsonToolRow'
 import { tryExtractJson } from '@providers/shared/renderer/rows/jsonToolPresentation'
-import { memo, useState } from 'react'
+import { memo, useContext, useState, type ReactNode } from 'react'
 
 import {
-  CodexApplyPatchRow,
-  CodexExecCommandRow,
   CodexToolRow,
-  CodexWriteStdinRow,
 } from '@providers/codex/renderer/rows/CodexRows'
 import {
   ClaudeLiveBashRow,
   EditRow,
   MultiEditRow,
 } from '@providers/claude/renderer/rows/ClaudeRows'
-import type { ToolUseBlock } from '@shared/types/transcript'
+import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
+import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { parseJsonRecord } from '@shared/lib/asRecord'
 import { CodeBlock } from '@renderer/lib/code/CodeBlock'
 import { boundedJsonPreview } from '@renderer/lib/text/boundedJson'
@@ -43,6 +41,10 @@ import {
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import { StreamingProse } from '@renderer/features/feed/ui/markdown'
 import { TruncatedOutputRow } from '@renderer/features/feed/ui/rows/TruncatedOutputRow'
+import {
+  ProviderContext,
+  ToolResultIndexContext,
+} from '@renderer/features/feed/context'
 
 import { AskUserQuestionRow } from '@renderer/features/feed/ui/semantic/AskUserQuestionRow'
 import { SemanticTodoList } from '@renderer/features/feed/ui/semantic/TodoList'
@@ -310,6 +312,26 @@ function codexLiveToolUseBlock(block: SemanticLiveTurn['blocks'][number]): ToolU
   }
 }
 
+function codexLiveWebUseBlock(block: SemanticLiveTurn['blocks'][number]): ToolUseBlock {
+  const action = block.webSearchAction
+  const kind = action?.kind ?? 'search'
+  const query = action?.query ?? (action?.queries
+    ? boundedJoinedLabel(action.queries, ', ')
+    : null)
+  return {
+    type: 'tool_use',
+    id: block.callId ?? block.itemId ?? `live-web:${block.blockIndex}`,
+    name: 'web_search',
+    input: {
+      kind,
+      query,
+      url: action?.url ?? null,
+      pattern: action?.pattern ?? null,
+      status: block.status ?? null,
+    },
+  }
+}
+
 // Single live-block renderer — this is the big dispatch for the
 // semantic streaming path. Each SemanticLiveTurn block is one of a
 // dozen kinds (thinking, function_call, tool_use, web_search_call,
@@ -329,6 +351,84 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
   block: SemanticLiveTurn['blocks'][number]
   toolState: SemanticLiveTurn['lookups']['toolCallsById'][string] | null
 }) {
+  const currentProvider = useContext(ProviderContext)
+  const committedToolResults = useContext(ToolResultIndexContext)
+  const providerCapabilities = getRendererProviderCapabilities(currentProvider)
+
+  // Convert a complete semantic tool input into the same provider-owned block
+  // used by committed transcript dispatch. Codex already has a bounded
+  // partial-input adapter because its custom tools stream useful patch/command
+  // grammar before JSON closes. Claude adapters are intentionally admitted
+  // only once the reducer has an authoritative parsed object; provider models
+  // such as Agent/MCP require complete fields and visibly fall back while a
+  // prefix is still incomplete.
+  const providerToolBlock: ToolUseBlock | null = (() => {
+    if (block.kind === 'function_call' || block.kind === 'custom_tool_call') {
+      return codexLiveToolUseBlock(block)
+    }
+    if (block.kind === 'web_search_call' && currentProvider === 'codex') {
+      return codexLiveWebUseBlock(block)
+    }
+    if (
+      (block.kind === 'tool_use' || block.kind === 'server_tool_use' || block.kind === 'mcp_tool_use') &&
+      block.toolName &&
+      block.parsedInput &&
+      block.inputJsonValid !== false
+    ) {
+      return {
+        type: 'tool_use',
+        id: block.toolUseId ?? block.callId ?? block.itemId ?? `live:${block.blockIndex}`,
+        name: block.toolName,
+        input: block.parsedInput,
+      }
+    }
+    return null
+  })()
+  const providerToolRow = providerToolBlock
+    ? providerCapabilities.renderToolUse?.(providerToolBlock)
+    : undefined
+
+  const providerToolNode = (() => {
+    if (providerToolRow === undefined || !providerToolBlock) return null
+    const hasResult = block.resultAt != null || block.resultContent != null
+    if (!hasResult) return providerToolRow
+
+    const liveResult: ToolResultBlock = {
+      type: 'tool_result',
+      tool_use_id: providerToolBlock.id,
+      content: block.resultContent ?? '',
+      ...(block.resultIsError === true ? { is_error: true } : {}),
+    }
+    const resultRow = providerCapabilities.renderToolResult?.(liveResult, {
+      sourceTool: providerToolBlock,
+    })
+    const fallbackResult: ReactNode = (() => {
+      if (resultRow !== undefined) return resultRow
+      const parsed = block.resultContent ? tryExtractJson(block.resultContent) : null
+      return parsed !== null && typeof parsed === 'object'
+        ? <JsonResultSlab value={parsed} isError={block.resultIsError === true} source={block.resultContent} />
+        : <TruncatedOutputRow
+            content={block.resultContent || '(empty result)'}
+            isError={block.resultIsError === true}
+          />
+    })()
+
+    // Agent and Agent Code MCP cards absorb a validated paired result through
+    // ToolResultIndexContext. Supplying the live result here gives them the
+    // same single-card behavior before durable transcript catch-up. Other
+    // provider rows paint their result directly below the invocation.
+    const liveResults = new Map(committedToolResults)
+    liveResults.set(providerToolBlock.id, liveResult)
+    return (
+      <ToolResultIndexContext.Provider value={liveResults}>
+        <div className="flex flex-col gap-2">
+          {providerToolRow}
+          {fallbackResult}
+        </div>
+      </ToolResultIndexContext.Provider>
+    )
+  })()
+
   // Shape sighting for the LIVE plane (Phase 2, PR #555). One observation
   // per block per lifecycle stage, at the top of the dispatch. Outcome is
   // COARSE by design before Phase 5 receipts, but coarse must not mean
@@ -344,11 +444,6 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
   if (capture) {
     const isThinking = block.kind === 'thinking' || block.kind === 'reasoning'
     const thinkingEmpty = isThinking && !(block.thinking ?? block.text ?? '').trim()
-    const codexSpecialized =
-      (block.kind === 'function_call' || block.kind === 'custom_tool_call') &&
-      (block.toolName === 'apply_patch' ||
-        block.toolName === 'exec_command' ||
-        block.toolName === 'write_stdin')
     observeRenderShape({
       sessionId: capture.sessionId,
       provider: capture.provider,
@@ -358,8 +453,8 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
       payload: block,
       outcome: thinkingEmpty
         ? absorbedOutcome('semantic.blockrow', 'empty thinking/reasoning suppressed')
-        : codexSpecialized
-          ? specializedOutcome('codex.rows.dispatch')
+        : providerToolRow !== undefined
+          ? specializedOutcome(`${currentProvider}.rows.dispatch`)
           : GENERIC_OUTCOME,
     })
   }
@@ -415,23 +510,7 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
     // ToolUseBlock shape the committed transcript uses, then delegate
     // to the committed Codex card. Streaming now means "same card
     // with partial input" instead of a separate raw-JSON UI.
-    if (liveTool.name === 'apply_patch') {
-      return <CodexApplyPatchRow block={liveTool} />
-    }
-    // Modern unified-exec wrapper (caught live 2026-07-16): the patch hides
-    // inside the exec SCRIPT as an escaped string literal. The patch row's
-    // adapter decodes it prefix-tolerantly, so a wrapped patch streams as a
-    // growing diff instead of raw wrapper JavaScript; a plain exec script
-    // falls back to CodexToolRow inside the row.
-    if (liveTool.name === 'exec') {
-      return <CodexApplyPatchRow block={liveTool} />
-    }
-    if (liveTool.name === 'exec_command') {
-      return <CodexExecCommandRow block={liveTool} />
-    }
-    if (liveTool.name === 'write_stdin') {
-      return <CodexWriteStdinRow block={liveTool} />
-    }
+    if (providerToolNode) return providerToolNode
     // Parse-gated convergence with the committed fallback (residue plan
     // P1): a fully-parsed live payload renders through the same shared
     // JsonToolRow the committed row will use; raw/partial payloads keep
@@ -458,10 +537,15 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
     if (raw !== undefined && typeof raw !== 'string') {
       return <JsonResultSlab value={raw} isError={false} />
     }
+    const parsed = typeof raw === 'string' ? tryExtractJson(raw) : null
+    if (parsed !== null && typeof parsed === 'object') {
+      return <JsonResultSlab value={parsed} isError={false} source={raw} />
+    }
     return <TruncatedOutputRow content={raw ?? '(no output)'} isError={false} />
   }
 
   if (block.kind === 'web_search_call') {
+    if (providerToolNode) return providerToolNode
     const action = block.webSearchAction
     // WHY live metadata is treated as a headline rather than trusted display content: provider
     // events can carry generated queries/URLs measured in megabytes. React text nodes still pay
@@ -626,6 +710,12 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
         )
       }
     }
+
+    // Complete Claude Read/ToolSearch/Web/Agent and Agent Code MCP inputs now
+    // converge through provider dispatch just like Codex function calls. The
+    // hand-written streaming previews above remain only for grammars that can
+    // make honest progress before JSON is complete.
+    if (providerToolNode) return providerToolNode
 
     const todos =
       block.toolName === 'TodoWrite'

@@ -12,6 +12,9 @@ describe('isAgentSpawnToolName (P2c dispatch-name blind spot)', () => {
   it('rejects fleet QUERIES and everything else', () => {
     expect(isAgentSpawnToolName('wait_agent')).toBe(false)
     expect(isAgentSpawnToolName('mcp__agent_code__orchestration_wait_agents')).toBe(false)
+    // MCP is open-world. A coincidentally named tool from another server must
+    // reach structured JSON instead of inheriting Agent Code lifecycle state.
+    expect(isAgentSpawnToolName('mcp__external_fleet__orchestration_create_agent')).toBe(false)
     expect(isAgentSpawnToolName('orchestration_read_agent')).toBe(false)
     expect(isAgentSpawnToolName('Bash')).toBe(false)
   })

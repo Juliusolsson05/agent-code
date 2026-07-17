@@ -130,7 +130,7 @@ describe('Claude provider-owned Agent collaboration card', () => {
     expect(renderClaudeToolResult(agentResult, { sourceTool: agentUse })).toBeNull()
   })
 
-  it('cuts the committed Claude block over while retaining the legacy Codex spawn fallback', () => {
+  it('cuts both proven Claude and Codex spawn grammars over to provider cards', () => {
     const { rerender } = render(
       contexts(
         <>
@@ -151,8 +151,37 @@ describe('Claude provider-owned Agent collaboration card', () => {
       input: { agent_type: 'worker', message: 'Inspect another subsystem' },
     }
     rerender(contexts(<Block block={codexSpawn} role="assistant" />, { provider: 'codex' }))
-    expect(
-      screen.getByRole('button', { name: /worker.*Inspect another subsystem.*starting/ }),
-    ).toBeInTheDocument()
+    expect(screen.getByRole('button', {
+      name: /Codex agent.*worker.*Inspect another subsystem.*starting/,
+    })).toBeInTheDocument()
+  })
+
+  it('keeps a native Codex spawn acknowledgement visible without claiming success', () => {
+    const codexSpawn: ToolUseBlock = {
+      type: 'tool_use',
+      id: 'codex-current-spawn',
+      name: 'spawn_agent',
+      input: { task_name: 'phase7_review', message: 'Review current collaboration' },
+    }
+    const codexResult: ToolResultBlock = {
+      type: 'tool_result',
+      tool_use_id: codexSpawn.id,
+      content: JSON.stringify({ task_name: 'phase7_review' }),
+    }
+    render(
+      <ProviderContext.Provider value="codex">
+        <ToolUseIndexContext.Provider value={new Map([[codexSpawn.id, codexSpawn]])}>
+          <ToolResultIndexContext.Provider value={new Map([[codexSpawn.id, codexResult]])}>
+            <Block block={codexSpawn} role="assistant" />
+            <Block block={codexResult} role="user" />
+          </ToolResultIndexContext.Provider>
+        </ToolUseIndexContext.Provider>
+      </ProviderContext.Provider>,
+    )
+    expect(screen.getByRole('button', {
+      name: /Codex agent.*phase7_review.*response received/,
+    })).toBeInTheDocument()
+    expect(screen.getByText('1 key')).toBeInTheDocument()
+    expect(screen.queryByText('spawned')).not.toBeInTheDocument()
   })
 })

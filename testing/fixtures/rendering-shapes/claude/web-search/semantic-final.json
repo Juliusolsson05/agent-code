@@ -1,0 +1,15 @@
+{
+  "evidence": "Curated from the 2026-07-16 Claude semantic capture soak; values are synthetic, structure is preserved.",
+  "semanticBlock": {
+    "kind": "tool_use",
+    "blockIndex": 0,
+    "toolName": "WebSearch",
+    "toolUseId": "web-search-semantic-fixture",
+    "inputJson": "{\"query\":\"provider-owned rendering\"}",
+    "inputJsonValid": true,
+    "parsedInput": {
+      "query": "provider-owned rendering"
+    },
+    "finalized": true
+  }
+}

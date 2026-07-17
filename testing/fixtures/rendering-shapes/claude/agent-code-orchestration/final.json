@@ -1,0 +1,33 @@
+{
+  "evidence": "Curated from the 2026-07-16/17 Claude semantic capture soak and the source-controlled Agent Code orchestration MCP schemas; values are synthetic, structure is preserved.",
+  "semanticBlock": {
+    "kind": "tool_use",
+    "blockIndex": 0,
+    "toolName": "mcp__agent_code__orchestration_close_run",
+    "toolUseId": "orchestration-close-run-fixture",
+    "inputJson": "{\"runId\":\"phase-7\"}",
+    "inputJsonValid": true,
+    "parsedInput": {
+      "runId": "phase-7"
+    },
+    "finalized": true
+  },
+  "toolUse": {
+    "type": "tool_use",
+    "id": "orchestration-close-run-fixture",
+    "name": "mcp__agent_code__orchestration_close_run",
+    "input": {
+      "runId": "phase-7"
+    }
+  },
+  "toolResult": {
+    "type": "tool_result",
+    "tool_use_id": "orchestration-close-run-fixture",
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"ok\":true,\"closedSessionIds\":[\"child-fixture\"]}"
+      }
+    ]
+  }
+}

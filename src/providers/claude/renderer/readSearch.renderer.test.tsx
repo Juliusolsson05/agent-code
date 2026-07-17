@@ -17,7 +17,9 @@ import {
   renderClaudeToolResult,
   renderClaudeToolUse,
 } from '@providers/claude/renderer/rows/dispatch'
-import { CodeRenderContext } from '@renderer/features/feed/context'
+import { CodeRenderContext, ProviderContext } from '@renderer/features/feed/context'
+import { SemanticLiveBlockRow } from '@renderer/features/feed/ui/semantic/BlockRow'
+import type { SemanticLiveTurn } from '@renderer/session-runtime/state'
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 
 // The component contract under test is disclosure ownership, labels, and the
@@ -107,5 +109,33 @@ describe('Claude provider-owned read/search components', () => {
         (_, element) => element?.tagName === 'SUMMARY' && element.textContent === 'Found 2 tools',
       ),
     ).toBeInTheDocument()
+  })
+
+  it('routes a parsed live Read through the same provider invocation and result components', () => {
+    const live = {
+      kind: 'tool_use',
+      blockIndex: 0,
+      toolName: 'Read',
+      toolUseId: readUse.id,
+      parsedInput: readUse.input,
+      inputJson: JSON.stringify(readUse.input),
+      inputJsonValid: true,
+      finalized: true,
+      resultAt: 1,
+      resultContent: readResult.content,
+      resultIsError: false,
+    } as SemanticLiveTurn['blocks'][number]
+    render(
+      withWorkspace(
+        <ProviderContext.Provider value="claude">
+          <SemanticLiveBlockRow block={live} toolState={null} />
+        </ProviderContext.Provider>,
+      ),
+    )
+    expect(screen.getAllByText('src/example.ts')).toHaveLength(2)
+    expect(screen.getByText((_, element) => (
+      element?.tagName === 'SUMMARY' &&
+      element.textContent === 'Read 2 lines from src/example.ts'
+    ))).toBeInTheDocument()
   })
 })

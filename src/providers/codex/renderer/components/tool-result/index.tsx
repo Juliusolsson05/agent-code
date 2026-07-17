@@ -251,7 +251,16 @@ export const CodexToolResultRow = memo(function CodexToolResultRow({
   // JSON) gets the shared collapsed pretty rendering; anything else keeps
   // the truncated text path (residue plan P1 — one result behavior across
   // providers).
-  const parsedJson = tryExtractJson(text)
+  // Current unified `exec` calls often contain an MCP call rather than a
+  // shell command. Their result is still wrapped in Codex's human transport
+  // header (`Script completed / Wall time / Output`) before the serialized
+  // CallToolResult. Strip only that verified provider envelope, then give the
+  // payload to the same bounded JSON/MCP parser as direct results. This does
+  // NOT merge the exec with an orchestration operation—cell correlation is
+  // not proven—but it makes the nested structured evidence readable instead
+  // of displaying two levels of escaped JSON.
+  const payloadText = stripCodexTransportEnvelope(text)
+  const parsedJson = tryExtractJson(payloadText)
   if (parsedJson !== null && typeof parsedJson === 'object') {
     return <JsonResultSlab value={parsedJson} isError={isError} source={text} />
   }
@@ -262,5 +271,5 @@ export const CodexToolResultRow = memo(function CodexToolResultRow({
   // Codex's unified-exec transport envelope is stripped first (#524 history
   // 661253a8: "Script completed / Wall time / Output:" boilerplate consumed
   // the whole preview — visible in the 2026-07-16 live screenshot too).
-  return <OutputWell text={stripCodexTransportEnvelope(text)} isError={isError} />
+  return <OutputWell text={payloadText} isError={isError} />
 })

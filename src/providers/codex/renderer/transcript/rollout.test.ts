@@ -58,4 +58,30 @@ describe('mapCodexRolloutToFeedEntries', () => {
 
     expect(entries).toEqual([])
   })
+
+  it('preserves find-in-page pattern for live/committed web convergence', () => {
+    const entries = mapCodexRolloutToFeedEntries({
+      type: 'response_item',
+      timestamp: '2026-06-18T11:12:00.000Z',
+      payload: {
+        type: 'web_search_call',
+        id: 'web-find-1',
+        status: 'completed',
+        action: {
+          type: 'find_in_page',
+          url: 'https://example.com/docs',
+          pattern: 'provider-owned',
+        },
+      },
+    })
+
+    expect(entries).toHaveLength(1)
+    const entry = entries[0] as { message?: { content?: Array<{ input?: unknown }> } }
+    expect(entry.message?.content?.[0]?.input).toMatchObject({
+      kind: 'find_in_page',
+      url: 'https://example.com/docs',
+      pattern: 'provider-owned',
+      status: 'completed',
+    })
+  })
 })

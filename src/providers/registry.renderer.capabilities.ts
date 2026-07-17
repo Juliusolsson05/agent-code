@@ -186,13 +186,15 @@ export type ComposerSubmitIo = {
   getScreen: () => string | undefined
 }
 
-// Does a tool name reduce to the MCP orchestration spawn verb? The built-in
-// orchestration MCP server names its spawn tool `orchestration_create_agent`;
-// claude keeps the `mcp__<server>__` prefix on the wire, so only the prefixed
-// form is claude's. `[^]*` (not `.*`) so an embedded newline in a server name
-// still matches — the same tolerance the old shared predicate used.
+// Does a tool name identify Agent Code's OWN orchestration spawn verb? The
+// server namespace is part of the contract, not decorative text. The former
+// `mcp__<anything>__orchestration_create_agent` regex claimed arbitrary MCP
+// servers and routed them into our subagent state model even though their
+// inputs/results could be unrelated. Phase 7's explicit hierarchy requires
+// those open-world tools to reach the bounded generic structured fallback;
+// only `agent_code` is eligible for an Agent Code lifecycle card.
 const isMcpOrchestrationCreateAgent = (name: string): boolean =>
-  /^mcp__[^]*__orchestration_create_agent$/.test(name)
+  name === 'mcp__agent_code__orchestration_create_agent'
 
 const claudeCapabilities: RendererProviderCapabilities = {
   id: 'claude',
@@ -201,9 +203,10 @@ const claudeCapabilities: RendererProviderCapabilities = {
   conditionViews: CLAUDE_VIEWS,
   renderToolUse: renderClaudeToolUse,
   renderToolResult: renderClaudeToolResult,
-  // Claude fanout: `Agent` tool_use, plus MCP-orchestrated spawns that arrive
-  // prefixed. The bare `orchestration_create_agent` is codex's (see below), so
-  // the fleet-row union still covers it.
+  // This capability is a broad spawn-name signal used by the feed's ownership
+  // gate; it is not proof that a tracker or legacy fleet row can parse every
+  // generation. Provider dispatch gets first refusal and the Agent Code adapter
+  // validates its owned protocol before any shared fallback is considered.
   isSpawnTool: (name) => name === 'Agent' || isMcpOrchestrationCreateAgent(name),
   createTranscriptEntryMapper: () => createClaudeTranscriptEntryMapper(),
   extractProviderSessionId: extractClaudeProviderSessionId,
@@ -221,8 +224,10 @@ const codexCapabilities: RendererProviderCapabilities = {
   conditionViews: CODEX_VIEWS,
   renderToolUse: renderCodexToolUse,
   renderToolResult: renderCodexToolResult,
-  // Codex fanout: `spawn_agent` function_call, plus the MCP orchestration spawn
-  // whose `mcp__` prefix codex strips on the wire (so it arrives bare).
+  // Historical Codex rollouts committed Agent Code MCP spawns as a bare name.
+  // Current MCP-inside-exec calls are not classified by executable source text,
+  // and native `spawn_agent` still has generation-aware provider parsing before
+  // the legacy tracker is allowed to participate.
   isSpawnTool: (name) => name === 'spawn_agent' || name === 'orchestration_create_agent',
   createTranscriptEntryMapper: (initialTurnCursor) =>
     createCodexTranscriptEntryMapper(initialTurnCursor ?? null),

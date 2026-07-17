@@ -182,6 +182,13 @@ export function extractCodexSpawnCall(entry: JsonlEntry): SpawnCall | null {
     ? parseJsonObject(payload.arguments)
     : asRecord(payload.arguments)
   const input = asRecord(args)
+  // WHY this main-process tracker still reads only the historical `agent_type`
+  // generation: the current renderer can truthfully present `task_name`, but
+  // subagent-state correlation additionally needs a durable child identifier.
+  // Current spawn results expose a task name rather than the old agent UUID, so
+  // pretending the tracker supports them would attach unrelated live state.
+  // TODO(native-collaboration-identity): add the task_name generation only when
+  // the provider exposes a stable parent-call -> child-session join key.
   return {
     callId: payload.call_id,
     agentType: stringField(input, 'agent_type') ?? 'agent',

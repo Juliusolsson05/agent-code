@@ -185,21 +185,25 @@ export const Block = memo(function Block({
         }
       }
 
-      const isProviderOwnedClaudeAgent = currentProvider === 'claude' && tu.name === 'Agent'
-      if (isAgentSpawnToolName(tu.name) && !isProviderOwnedClaudeAgent) {
+      if (isAgentSpawnToolName(tu.name)) {
         // Claude records subagent fanout as an `Agent` tool_use; Codex as a
-        // `spawn_agent` function_call; MCP-orchestrated sessions as
-        // `[mcp__<server>__]orchestration_create_agent` (the 2026-06-21
+        // `spawn_agent` function_call; Agent Code's owned MCP sessions as its
+        // namespaced/bare `orchestration_create_agent` spellings (the 2026-06-21
         // blind spot — 73 tracked subAgents, zero cards). One shared
         // predicate routes them all through the fleet row before provider
         // dispatch, so the main process's SubAgentState (and P2b's
         // notification join) always has a card to land on.
         //
-        // Phase 7 cutover: the validated built-in Claude Agent grammar now
-        // owns those same state channels inside its provider component and
-        // must reach provider dispatch below. Codex/MCP stay here until their
-        // distinct payload/result contracts receive the same evidence-backed
-        // migration; deleting this interceptor wholesale would regress them.
+        // Phase 7 cutover: ask the current provider first. Claude's built-in
+        // Agent and both provider spellings of Agent Code's orchestration MCP
+        // now own their wire adapters and shared protocol view. A provider
+        // decline keeps the proven native Codex legacy row alive until that
+        // separate vocabulary has enough evidence for migration.
+        const providerSpawnRow = getRendererProviderCapabilities(currentProvider).renderToolUse?.(tu)
+        if (providerSpawnRow !== undefined) {
+          sight('committed-tool-use', tu, specializedOutcome(`${currentProvider}.rows.dispatch`))
+          return providerSpawnRow
+        }
         sight('committed-tool-use', tu, specializedOutcome('shared.task-subagent'))
         return <TaskSubagentRow block={tu} />
       }

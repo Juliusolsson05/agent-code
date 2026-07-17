@@ -676,7 +676,16 @@ usable.
   spawn/message/wait/list/read/interrupt/close; task notifications + child
   drill-in). Each adds adapters, protocols only when proven, fixtures,
   accessibility/DOM tests, receipts. Low-signal grouping names every absorbed
-  owner and keeps failures/active work individually visible.
+  owner and keeps failures/active work individually visible. **Completed
+  2026-07-17 at the evidence boundary:** Claude read/tool discovery/web/Agent,
+  Codex web plus two proven native-spawn inputs, and Agent Code's exact eight-op
+  orchestration protocol now have provider-owned paths across semantic and
+  committed rendering. Current Codex MCP-inside-exec results use nested
+  pretty-JSON without a false orchestration join. Arbitrary MCP and unstable/
+  unpaired native collaboration remain explicitly generic; Codex unified-exec
+  `wait`, LSP, and compaction are classified into their actual later phases.
+  The frozen corpus is structurally clean and all unsupported observed Phase 7
+  shapes have a named fallback/TODO rather than an invented component.
 - **Phase 8 — tasks/questions/workflows/MCP + rich media.** Migrate todo/task/
   plan/schedule/skill/workflow, condition-gated questions, generic MCP typed
   content, images/generation, notebook/LSP/workspace/config/system. Workflow UI +

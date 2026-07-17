@@ -2259,6 +2259,35 @@ Each PR adds provider adapters, shared protocols only when proven, shape
 fixtures, accessibility/DOM tests, and receipts. Completed low-signal grouping
 must name every absorbed owner and retain failures/active work individually.
 
+Completion boundary (2026-07-17):
+
+- Claude Read, ToolSearch, WebFetch, WebSearch, and Agent now converge from
+  complete semantic input onto their committed provider adapters/components;
+- Codex search/open/find and the two observed native spawn input generations
+  have provider-owned rows, while acknowledgements remain separately visible
+  unless a result contract proves safe absorption;
+- Agent Code's eight source-controlled orchestration operations have one shared
+  owned-protocol view behind exact provider name adapters. Claude requires the
+  `mcp__agent_code__` namespace; Codex admits only the historical direct bare
+  names observed in its rollout corpus;
+- current Codex MCP-inside-unified-exec calls remain command operations because
+  executable source is not a trustworthy orchestration join key. Their nested
+  CallToolResult/JSON evidence is still unwrapped and pretty-formatted;
+- arbitrary MCP and native collaboration operations without stable paired
+  schemas intentionally use the bounded structured fallback. This is a Phase 7
+  disposition, not an implied promise to custom-render every enabled server;
+- no Glob/Grep/LS catalog evidence exists, native wait/list/message generations
+  conflict or lack paired results, and semantic/committed Codex web ids do not
+  share a proven absorption key. The catalog/TODO comments preserve each gap
+  for a future evidence-backed graduation;
+- Codex `wait` is classified as unified-command continuation rather than agent
+  collaboration, LSP remains Phase 8, and the remaining local unknown-shape
+  sightings are compaction/system-summary records owned by Phase 10.
+
+Exit gate: the frozen corpus has no unknown structural shape, specialized paths
+have semantic/committed DOM tests, and every unsupported observed Phase 7 shape
+has an explicit generic or later-grammar disposition instead of a guessed row.
+
 ### Phase 8 — tasks/questions/workflows/MCP and rich media
 
 Migrate:

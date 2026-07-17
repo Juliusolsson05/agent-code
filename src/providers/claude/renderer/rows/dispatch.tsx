@@ -42,8 +42,15 @@ import {
 import { CommandView } from '@providers/shared/renderer/protocols/command/CommandView'
 import { CodeEditView } from '@providers/shared/renderer/protocols/code-edit/CodeEditView'
 import { OutputWell } from '@renderer/lib/text/OutputWell'
+import { AgentCodeOrchestrationView } from '@providers/shared/renderer/protocols/agent-code-orchestration/AgentCodeOrchestrationView'
+import { fromAgentCodeOrchestrationResult } from '@providers/shared/renderer/protocols/agent-code-orchestration/model'
+import { fromClaudeAgentCodeOrchestrationUse } from '@providers/claude/renderer/adapters/agentCodeOrchestration'
 
 export function renderClaudeToolUse(block: ToolUseBlock): ReactNode | undefined {
+  const agentCodeOrchestration = fromClaudeAgentCodeOrchestrationUse(block)
+  if (agentCodeOrchestration) {
+    return <AgentCodeOrchestrationView model={agentCodeOrchestration} />
+  }
   // WHY this dispatch lives with the provider rows: these names are Claude Code
   // transcript vocabulary, not feed vocabulary. Keeping the table beside the
   // row components makes adding/removing a Claude tool a provider-local change
@@ -109,6 +116,19 @@ export function renderClaudeToolResult(
   // ABOVE the raw evidence, terminal-only by construction on the committed
   // plane. Everything else keeps the generic result row.
   const source = context.sourceTool
+  const agentCodeOrchestration = source
+    ? fromClaudeAgentCodeOrchestrationUse(source)
+    : null
+  if (agentCodeOrchestration) {
+    // The provider-owned invocation card reads its paired result through the
+    // feed index and paints both the lifecycle summary and raw protocol
+    // disclosure. Suppress only after the owned result parser proves the
+    // operation contract; drift/malformed typed content remains visible via
+    // the generic result row.
+    return fromAgentCodeOrchestrationResult(block, agentCodeOrchestration)
+      ? null
+      : undefined
+  }
   if (source?.name === 'Agent') {
     // A validated Agent result is rendered inside the provider-owned spawn
     // card, which already has the paired result through ToolResultIndexContext.
