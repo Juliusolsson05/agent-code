@@ -66,6 +66,10 @@ export function ContentSearchOverlay({ root, onClose }: Props) {
     // not trim before IPC: that silently changes the user's search language.
     if (query.length === 0) {
       setState(INITIAL_STATE)
+      // An empty query is also the cancellation signal for main's
+      // per-renderer generation. Without it, clearing the input hides stale
+      // results but the previous repository walk keeps consuming I/O.
+      void window.api.editorSearchContent({ root, query: '', caseSensitive })
       return
     }
     // Old results belong to a different query/root and must stop being
@@ -101,7 +105,10 @@ export function ContentSearchOverlay({ root, onClose }: Props) {
           })
         })
     }, 300)
-    return () => window.clearTimeout(timer)
+    return () => {
+      window.clearTimeout(timer)
+      void window.api.editorSearchContent({ root, query: '', caseSensitive })
+    }
   }, [caseSensitive, query, root])
 
   useEffect(() => {
@@ -143,16 +150,18 @@ export function ContentSearchOverlay({ root, onClose }: Props) {
   // Highlight the hit inside the preview line. Index found client-side
   // (case-folded like the search) because previews are trimmed server-side
   // and the original column may fall outside the trimmed window.
-  const renderPreview = (preview: string) => {
-    const haystack = caseSensitive ? preview : preview.toLowerCase()
-    const needle = caseSensitive ? query : query.toLowerCase()
-    const at = haystack.indexOf(needle)
-    if (at === -1) return <span className="truncate">{preview}</span>
+  const renderPreview = (match: EditorFsSearchMatch) => {
+    const at = match.previewMatchOffset
+    if (at < 0 || at >= match.preview.length) {
+      return <span className="truncate">{match.preview}</span>
+    }
     return (
       <span className="truncate">
-        {preview.slice(0, at)}
-        <span className="bg-accent-soft text-ink">{preview.slice(at, at + needle.length)}</span>
-        {preview.slice(at + needle.length)}
+        {match.preview.slice(0, at)}
+        <span className="bg-accent-soft text-ink">
+          {match.preview.slice(at, at + match.previewMatchLength)}
+        </span>
+        {match.preview.slice(at + match.previewMatchLength)}
       </span>
     )
   }
@@ -176,6 +185,8 @@ export function ContentSearchOverlay({ root, onClose }: Props) {
             ref={inputRef}
             autoFocus
             role="combobox"
+            aria-label="Search in files"
+            aria-autocomplete="list"
             aria-expanded="true"
             aria-controls="content-search-results"
             aria-activedescendant={
@@ -206,8 +217,12 @@ export function ContentSearchOverlay({ root, onClose }: Props) {
           <button
             type="button"
             title="Match case"
+            aria-label="Match case"
             aria-pressed={caseSensitive}
-            onClick={() => setCaseSensitive(prev => !prev)}
+            onClick={() => {
+              setCaseSensitive(prev => !prev)
+              inputRef.current?.focus()
+            }}
             className={`flex-shrink-0 rounded border px-1.5 py-0.5 text-[10px] ${
               caseSensitive ? 'border-accent text-ink' : 'border-border text-muted hover:text-ink'
             }`}
@@ -223,7 +238,9 @@ export function ContentSearchOverlay({ root, onClose }: Props) {
           className="max-h-[55vh] overflow-y-auto py-1"
         >
           {state.error ? (
-            <div role="alert" className="px-3 py-2 text-[11px] text-danger">{state.error}</div>
+            <div role="alert" className="px-3 py-2 text-[11px] text-danger">
+              {state.error}
+            </div>
           ) : (
             grouped.map(([path, matches]) => (
               <div key={path}>
@@ -257,7 +274,7 @@ export function ContentSearchOverlay({ root, onClose }: Props) {
                       <span className="w-8 flex-shrink-0 text-right text-[10px] text-muted">
                         {match.line}
                       </span>
-                      {renderPreview(match.preview)}
+                      {renderPreview(match)}
                     </button>
                   )
                 })}
@@ -280,7 +297,8 @@ export function ContentSearchOverlay({ root, onClose }: Props) {
           {state.truncated && <span>results truncated</span>}
           {state.errorCount > 0 && (
             <span>
-              {state.errorCount} unreadable path{state.errorCount === 1 ? '' : 's'}
+              {state.errorCount} unreadable path
+              {state.errorCount === 1 ? '' : 's'}
             </span>
           )}
           {state.stopReason === 'bytes' && <span>64 MB scan budget reached</span>}

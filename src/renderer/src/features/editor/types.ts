@@ -26,6 +26,9 @@ export type EditorFileBuffer = {
    * inferring behavior from user-facing error text. */
   externalChange: 'changed' | 'deleted' | null
   mtimeMs: number | null
+  /** Opaque main-process version used for optimistic writes. mtime remains UI
+   * metadata only because filesystems can preserve or coarsen timestamps. */
+  diskVersion: string | null
   selection: { line: number; column: number } | null
   /** One-shot request to move keyboard focus into this model. Tab/cwd
    * restoration must not steal focus from a terminal, while explicit tree,

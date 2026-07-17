@@ -62,6 +62,7 @@ export async function openFileInGlobalEditor({
     path: result.path,
     text: result.text,
     mtimeMs: result.mtimeMs,
+    diskVersion: result.version,
     selection,
     activate: shouldActivate,
     focus: shouldActivate && focus,

@@ -32,6 +32,7 @@ function bufferFromEntry(
   entry: AiWorkspaceFileEntry,
   text: string,
   mtimeMs: number,
+  diskVersion: string,
 ): EditorFileBuffer {
   return makeBuffer({
     path: entry.entryId,
@@ -39,6 +40,7 @@ function bufferFromEntry(
     fileName: basename(entry.path),
     text,
     mtimeMs,
+    diskVersion,
   })
 }
 
@@ -174,7 +176,12 @@ export function AiWorkspaceEditor({ workspaceId, visible, onClose }: Props) {
   }, [workspace])
 
   const openEntry = useCallback(async (entry: AiWorkspaceFileEntry) => {
-    if (!entry.status.exists || !entry.status.readable) return
+    if (!entry.status.exists || !entry.status.readable) {
+      setError(
+        `Could not open ${basename(entry.path)}: ${entry.status.staleReason ?? 'unavailable'}`,
+      )
+      return
+    }
     const readGeneration = (entryReadGenerationRef.current.get(entry.entryId) ?? 0) + 1
     entryReadGenerationRef.current.set(entry.entryId, readGeneration)
     const intentGeneration = ++openIntentGenerationRef.current
@@ -187,36 +194,27 @@ export function AiWorkspaceEditor({ workspaceId, visible, onClose }: Props) {
       return
     }
     if (!result.ok) {
-      setFileOrder(prev => (prev.includes(entry.entryId) ? prev : [...prev, entry.entryId]))
       setOpenFiles(prev => {
         const current = prev[entry.entryId]
-        const fallback =
-          current ??
-          makeBuffer({
-            path: entry.entryId,
-            absolutePath: entry.path,
-            fileName: basename(entry.path),
-            text: '',
-            mtimeMs: null,
-          })
+        if (!current) return prev
         return {
           ...prev,
-          [entry.entryId]: withFocusRequested(withError(fallback, result.error)),
+          [entry.entryId]: withFocusRequested(withError(current, result.error)),
         }
       })
-      if (intentGeneration === openIntentGenerationRef.current) {
-        setActiveFilePath(entry.entryId)
-      }
+      if (!openFilesRef.current[entry.entryId])
+        setError(`Could not open ${basename(entry.path)}: ${result.error}`)
       return
     }
     setOpenFiles(prev => {
       const existing = prev[entry.entryId]
       const observed = existing
-        ? withDiskObserved(existing, result.text, result.mtimeMs)
-        : bufferFromEntry(entry, result.text, result.mtimeMs)
+        ? withDiskObserved(existing, result.text, result.mtimeMs, result.version)
+        : bufferFromEntry(entry, result.text, result.mtimeMs, result.version)
       return { ...prev, [entry.entryId]: withFocusRequested(observed) }
     })
     setFileOrder(prev => (prev.includes(entry.entryId) ? prev : [...prev, entry.entryId]))
+    setError(null)
     if (intentGeneration === openIntentGenerationRef.current) {
       setActiveFilePath(entry.entryId)
     }
@@ -253,12 +251,13 @@ export function AiWorkspaceEditor({ workspaceId, visible, onClose }: Props) {
           .aiWorkspaceWriteFile({
             path: entry.path,
             text: writtenText,
-            expectedMtimeMs: options?.recreateDeleted ? null : buffer.mtimeMs,
+            expectedVersion: options?.recreateDeleted ? null : buffer.diskVersion,
           })
           .catch(err => ({
             ok: false as const,
             error: err instanceof Error ? err.message : 'failed to save file',
             conflict: false,
+            conflictKind: undefined,
           }))
         if (!result.ok) {
           applyOpenFiles(prev => {
@@ -268,7 +267,12 @@ export function AiWorkspaceEditor({ workspaceId, visible, onClose }: Props) {
             }
             return {
               ...prev,
-              [entryId]: withError(current, result.error, result.conflict === true),
+              [entryId]: withError(
+                current,
+                result.error,
+                result.conflict === true,
+                result.conflictKind,
+              ),
             }
           })
           return null
@@ -278,7 +282,7 @@ export function AiWorkspaceEditor({ workspaceId, visible, onClose }: Props) {
           if (!current || current.generation !== buffer.generation) return prev
           return {
             ...prev,
-            [entryId]: withWriteAcknowledged(current, writtenText, result.mtimeMs),
+            [entryId]: withWriteAcknowledged(current, writtenText, result.mtimeMs, result.version),
           }
         })
         if (mountedRef.current) void loadWorkspace()
@@ -387,12 +391,12 @@ export function AiWorkspaceEditor({ workspaceId, visible, onClose }: Props) {
         if (current.currentText !== before.currentText) {
           return {
             ...prev,
-            [entryId]: withDiskObserved(current, result.text, result.mtimeMs),
+            [entryId]: withDiskObserved(current, result.text, result.mtimeMs, result.version),
           }
         }
         return {
           ...prev,
-          [entryId]: withDiskSnapshot(current, result.text, result.mtimeMs),
+          [entryId]: withDiskSnapshot(current, result.text, result.mtimeMs, result.version),
         }
       })
     },
@@ -410,12 +414,13 @@ export function AiWorkspaceEditor({ workspaceId, visible, onClose }: Props) {
           .aiWorkspaceWriteFile({
             path: entry.path,
             text: writtenText,
-            expectedMtimeMs: null,
+            expectedVersion: null,
           })
           .catch(err => ({
             ok: false as const,
             error: err instanceof Error ? err.message : 'failed to overwrite file',
             conflict: false,
+            conflictKind: undefined,
           }))
         applyOpenFiles(prev => {
           const current = prev[entryId]
@@ -423,12 +428,17 @@ export function AiWorkspaceEditor({ workspaceId, visible, onClose }: Props) {
           if (!result.ok) {
             return {
               ...prev,
-              [entryId]: withError(current, result.error, result.conflict === true),
+              [entryId]: withError(
+                current,
+                result.error,
+                result.conflict === true,
+                result.conflictKind,
+              ),
             }
           }
           return {
             ...prev,
-            [entryId]: withWriteAcknowledged(current, writtenText, result.mtimeMs),
+            [entryId]: withWriteAcknowledged(current, writtenText, result.mtimeMs, result.version),
           }
         })
         return result.ok

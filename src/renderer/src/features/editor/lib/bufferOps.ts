@@ -36,6 +36,7 @@ export function makeBuffer(params: {
   fileName: string
   text: string
   mtimeMs: number | null
+  diskVersion: string | null
   selection?: { line: number; column: number } | null
 }): EditorFileBuffer {
   return {
@@ -51,6 +52,7 @@ export function makeBuffer(params: {
     conflict: false,
     externalChange: null,
     mtimeMs: params.mtimeMs,
+    diskVersion: params.diskVersion,
     selection: params.selection ?? null,
     focusRequest: null,
   }
@@ -77,12 +79,14 @@ export function withWriteAcknowledged(
   buffer: EditorFileBuffer,
   writtenText: string,
   mtimeMs: number,
+  diskVersion: string,
 ): EditorFileBuffer {
   return {
     ...buffer,
     savedText: writtenText,
     dirty: buffer.currentText !== writtenText,
     mtimeMs,
+    diskVersion,
     error: null,
     conflict: false,
     externalChange: null,
@@ -97,6 +101,7 @@ export function withDiskSnapshot(
   buffer: EditorFileBuffer,
   text: string,
   mtimeMs: number,
+  diskVersion: string,
 ): EditorFileBuffer {
   return {
     ...buffer,
@@ -104,6 +109,7 @@ export function withDiskSnapshot(
     currentText: text,
     dirty: false,
     mtimeMs,
+    diskVersion,
     error: null,
     conflict: false,
     externalChange: null,
@@ -118,8 +124,9 @@ export function withDiskObserved(
   buffer: EditorFileBuffer,
   text: string,
   mtimeMs: number,
+  diskVersion: string,
 ): EditorFileBuffer {
-  if (!buffer.dirty) return withDiskSnapshot(buffer, text, mtimeMs)
+  if (!buffer.dirty) return withDiskSnapshot(buffer, text, mtimeMs, diskVersion)
   if (text === buffer.savedText) {
     // Disk can diverge and then return to the saved baseline. The user's edits
     // remain dirty, but the new mtime is the correct optimistic-save baseline
@@ -127,6 +134,7 @@ export function withDiskObserved(
     return {
       ...buffer,
       mtimeMs,
+      diskVersion,
       error: null,
       conflict: false,
       externalChange: null,

@@ -79,6 +79,11 @@ export function GlobalEditorShell({ children, workspace }: Props) {
     dirtyPaths: string[]
     resolve: (confirmed: boolean) => void
   } | null>(null)
+  const explorerDeleteSnapshotsRef = useRef<{
+    root: string
+    requestedPath: string
+    buffers: Map<string, { generation: number; currentText: string }>
+  } | null>(null)
   const { open } = useAppStore(useShallow(state => ({ open: state.globalEditorOpen })))
 
   // Active tab id + the cwd of whatever command-target the user is
@@ -353,7 +358,14 @@ export function GlobalEditorShell({ children, workspace }: Props) {
         if (result.ok) {
           useGlobalEditorStore
             .getState()
-            .observeFileOnDisk(activeCwd, path, result.text, result.mtimeMs, generation)
+            .observeFileOnDisk(
+              activeCwd,
+              path,
+              result.text,
+              result.mtimeMs,
+              result.version,
+              generation,
+            )
           return
         }
         const deleted = result.error === 'does not exist'
@@ -406,7 +418,14 @@ export function GlobalEditorShell({ children, workspace }: Props) {
         }))
         .then(result => {
           if (result.ok) {
-            observeFileOnDisk(event.root, event.path, result.text, result.mtimeMs, buf.generation)
+            observeFileOnDisk(
+              event.root,
+              event.path,
+              result.text,
+              result.mtimeMs,
+              result.version,
+              buf.generation,
+            )
             return
           }
           const deleted = result.error === 'does not exist'
@@ -484,19 +503,28 @@ export function GlobalEditorShell({ children, workspace }: Props) {
             root,
             path,
             text: writtenText,
-            expectedMtimeMs: options?.recreateDeleted ? null : buf.mtimeMs,
+            expectedVersion: options?.recreateDeleted ? null : buf.diskVersion,
           })
           .catch(err => ({
             ok: false as const,
             error: err instanceof Error ? err.message : 'failed to save file',
             conflict: false,
+            conflictKind: undefined,
           }))
         if (result.ok) {
-          acknowledgeFileWrite(root, path, writtenText, result.mtimeMs, buf.generation)
+          acknowledgeFileWrite(
+            root,
+            path,
+            writtenText,
+            result.mtimeMs,
+            result.version,
+            buf.generation,
+          )
           return true
         }
         setFileError(root, path, result.error, {
           conflict: result.conflict === true,
+          externalChange: result.conflictKind,
           generation: buf.generation,
         })
         return false
@@ -569,9 +597,23 @@ export function GlobalEditorShell({ children, workspace }: Props) {
       const current = useGlobalEditorStore.getState().byCwd[activeCwd]?.openFiles[path]
       if (!current || current.generation !== before.generation) return
       if (current.currentText === before.currentText) {
-        replaceFileFromDisk(activeCwd, path, result.text, result.mtimeMs, before.generation)
+        replaceFileFromDisk(
+          activeCwd,
+          path,
+          result.text,
+          result.mtimeMs,
+          result.version,
+          before.generation,
+        )
       } else {
-        observeFileOnDisk(activeCwd, path, result.text, result.mtimeMs, before.generation)
+        observeFileOnDisk(
+          activeCwd,
+          path,
+          result.text,
+          result.mtimeMs,
+          result.version,
+          before.generation,
+        )
       }
     },
     [activeCwd, observeFileOnDisk, replaceFileFromDisk, setFileError],
@@ -590,19 +632,28 @@ export function GlobalEditorShell({ children, workspace }: Props) {
             root,
             path,
             text: writtenText,
-            expectedMtimeMs: null,
+            expectedVersion: null,
           })
           .catch(err => ({
             ok: false as const,
             error: err instanceof Error ? err.message : 'failed to overwrite file',
             conflict: false,
+            conflictKind: undefined,
           }))
         if (result.ok) {
-          acknowledgeFileWrite(root, path, writtenText, result.mtimeMs, buf.generation)
+          acknowledgeFileWrite(
+            root,
+            path,
+            writtenText,
+            result.mtimeMs,
+            result.version,
+            buf.generation,
+          )
           return true
         }
         setFileError(root, path, result.error, {
           conflict: result.conflict === true,
+          externalChange: result.conflictKind,
           generation: buf.generation,
         })
         return false
@@ -615,9 +666,9 @@ export function GlobalEditorShell({ children, workspace }: Props) {
   // the store as a fresh buffer (or refreshes savedText on an
   // already-open dirty file — store.openFile handles both).
   const openFileFromTree = useCallback(
-    async (relativePath: string) => {
-      if (!activeCwd) return
-      await openFileInGlobalEditor({
+    async (relativePath: string): Promise<{ ok: true } | { ok: false; error: string }> => {
+      if (!activeCwd) return { ok: false, error: 'No project is active.' }
+      return await openFileInGlobalEditor({
         root: activeCwd,
         path: relativePath,
       })
@@ -645,8 +696,33 @@ export function GlobalEditorShell({ children, workspace }: Props) {
     async (path: string): Promise<boolean> => {
       if (!activeCwd) return false
       const state = useGlobalEditorStore.getState().byCwd[activeCwd]
+      const affectedPaths = state ? openPathsUnder(state, path) : []
+      // Snapshot every affected buffer, including clean ones. Disk deletion
+      // happens after an optional dialog and an IPC round trip; a buffer that
+      // changes anywhere in that window must survive as recoverable content
+      // instead of being force-closed by the deletion callback.
+      explorerDeleteSnapshotsRef.current = {
+        root: activeCwd,
+        requestedPath: path,
+        buffers: new Map(
+          affectedPaths.flatMap(openPath => {
+            const buffer = state?.openFiles[openPath]
+            return buffer
+              ? [
+                  [
+                    openPath,
+                    {
+                      generation: buffer.generation,
+                      currentText: buffer.currentText,
+                    },
+                  ],
+                ]
+              : []
+          }),
+        ),
+      }
       if (!state) return true
-      const dirtyPaths = openPathsUnder(state, path).filter(openPath => {
+      const dirtyPaths = affectedPaths.filter(openPath => {
         const buffer = state.openFiles[openPath]
         return buffer ? hasRecoverableBufferChanges(buffer) : false
       })
@@ -752,11 +828,36 @@ export function GlobalEditorShell({ children, workspace }: Props) {
                     }}
                     onFileDeleted={path => {
                       const state = useGlobalEditorStore.getState().byCwd[activeCwd]
-                      const affected = state ? openPathsUnder(state, path) : []
+                      const snapshot = explorerDeleteSnapshotsRef.current
+                      explorerDeleteSnapshotsRef.current = null
+                      const affected = new Set(state ? openPathsUnder(state, path) : [])
+                      const matchingSnapshot =
+                        snapshot?.root === activeCwd && snapshot.requestedPath === path
+                          ? snapshot
+                          : null
+                      if (matchingSnapshot) {
+                        for (const openPath of matchingSnapshot.buffers.keys()) {
+                          affected.add(openPath)
+                        }
+                      }
                       for (const openPath of affected) {
-                        const buffer = state?.openFiles[openPath]
-                        closeFileAction(activeCwd, openPath, { force: true })
-                        if (buffer) releaseEditorModelOwner(buffer.generation)
+                        const current =
+                          useGlobalEditorStore.getState().byCwd[activeCwd]?.openFiles[openPath]
+                        if (!current) continue
+                        const before = matchingSnapshot?.buffers.get(openPath)
+                        const unchanged =
+                          before?.generation === current.generation &&
+                          before.currentText === current.currentText
+                        if (unchanged) {
+                          closeFileAction(activeCwd, openPath, { force: true })
+                          releaseEditorModelOwner(current.generation)
+                          continue
+                        }
+                        setFileError(activeCwd, openPath, 'file was deleted on disk', {
+                          conflict: true,
+                          externalChange: 'deleted',
+                          generation: current.generation,
+                        })
                       }
                     }}
                     onBeforeDelete={confirmExplorerDelete}
@@ -835,6 +936,7 @@ export function GlobalEditorShell({ children, workspace }: Props) {
           path={pendingExplorerDelete.path}
           dirtyPaths={pendingExplorerDelete.dirtyPaths}
           onCancel={() => {
+            explorerDeleteSnapshotsRef.current = null
             pendingExplorerDelete.resolve(false)
             setPendingExplorerDelete(null)
           }}

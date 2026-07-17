@@ -85,6 +85,10 @@ export function QuickOpenOverlay({ root, onClose }: Props) {
       })
     return () => {
       stale = true
+      // Superseding the promise locally only protects React state. Tell main
+      // to stop walking now so closing Quick Open does not leave thousands of
+      // directory reads competing with the editor the user returned to.
+      void window.api.editorCancelListFilesRecursive()
     }
   }, [root])
 
@@ -154,6 +158,8 @@ export function QuickOpenOverlay({ root, onClose }: Props) {
           ref={inputRef}
           autoFocus
           role="combobox"
+          aria-label="Go to file"
+          aria-autocomplete="list"
           aria-expanded="true"
           aria-controls="quick-open-results"
           aria-activedescendant={
@@ -189,7 +195,9 @@ export function QuickOpenOverlay({ root, onClose }: Props) {
           className="max-h-[50vh] overflow-y-auto py-1"
         >
           {loadError ? (
-            <div role="alert" className="px-3 py-2 text-[11px] text-danger">{loadError}</div>
+            <div role="alert" className="px-3 py-2 text-[11px] text-danger">
+              {loadError}
+            </div>
           ) : loading ? (
             <div role="status" aria-live="polite" className="px-3 py-2 text-[11px] text-muted">
               Indexing project files…
@@ -224,18 +232,28 @@ export function QuickOpenOverlay({ root, onClose }: Props) {
             })
           )}
           {!loading && !loadError && query.trim() && matches.length === 0 && (
-            <div className="px-3 py-2 text-[11px] text-muted">No files match.</div>
+            <div role="status" aria-live="polite" className="px-3 py-2 text-[11px] text-muted">
+              No files match.
+            </div>
           )}
         </div>
         {truncated && (
-          <div className="border-t border-border px-3 py-1 text-[10px] text-muted">
+          <div
+            role="status"
+            aria-live="polite"
+            className="border-t border-border px-3 py-1 text-[10px] text-muted"
+          >
             Index truncated at 20k files — results may be incomplete.
           </div>
         )}
         {partialErrorCount > 0 && (
-          <div className="border-t border-border px-3 py-1 text-[10px] text-warning">
-            {partialErrorCount} director{partialErrorCount === 1 ? 'y was' : 'ies were'} unreadable;
-            results are partial.
+          <div
+            role="status"
+            aria-live="polite"
+            className="border-t border-border px-3 py-1 text-[10px] text-warning"
+          >
+            {partialErrorCount} director
+            {partialErrorCount === 1 ? 'y was' : 'ies were'} unreadable; results are partial.
           </div>
         )}
       </DialogContent>

@@ -1,10 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { basename, dirname } from '@renderer/features/editor/lib/path'
 import { FileIcon, FolderIcon } from '@renderer/features/editor/lib/fileIcon'
@@ -17,6 +11,7 @@ type TreeNode = {
   children: EditorFsEntry[] | null
   loading: boolean
   error: string | null
+  truncated: boolean
 }
 
 // Context menu state. `entry: null` = the root-header menu (New File /
@@ -75,7 +70,7 @@ function visibleTreePaths(
 type Props = {
   root: string
   activeFilePath: string | null
-  onOpenFile: (path: string) => void
+  onOpenFile: (path: string) => Promise<{ ok: true } | { ok: false; error: string }>
   /** Buffer fix-ups for the host: a renamed/deleted file may be open as a
    *  tab; the host owns that state (and the Monaco model registry). */
   onFileRenamed?: (fromPath: string, toPath: string) => void
@@ -122,6 +117,42 @@ export function ExplorerPane({
   expandedRef.current = expanded
   const menuRef = useRef<HTMLDivElement | null>(null)
   const menuInvokerRef = useRef<HTMLElement | null>(null)
+  const treeRef = useRef<HTMLDivElement | null>(null)
+
+  const focusTreePath = useCallback((path?: string) => {
+    requestAnimationFrame(() => {
+      const items = [
+        ...(treeRef.current?.querySelectorAll<HTMLButtonElement>('[role="treeitem"]') ?? []),
+      ]
+      const target = path ? items.find(item => item.dataset.treePath === path) : undefined
+      const fallback = target ?? items[0]
+      fallback?.focus()
+    })
+  }, [])
+
+  const cancelEdit = useCallback(() => {
+    setEdit(null)
+    requestAnimationFrame(() => {
+      if (menuInvokerRef.current?.isConnected) menuInvokerRef.current.focus()
+      else focusTreePath()
+    })
+  }, [focusTreePath])
+
+  const openFile = useCallback(
+    async (path: string): Promise<boolean> => {
+      const result = await onOpenFile(path).catch(err => ({
+        ok: false as const,
+        error: err instanceof Error ? err.message : 'Failed to open file.',
+      }))
+      if (!result.ok) {
+        setMutationError(result.error)
+        return false
+      }
+      setMutationError(null)
+      return true
+    },
+    [onOpenFile],
+  )
 
   const loadDirectory = useCallback(
     async (path: string) => {
@@ -172,6 +203,7 @@ export function ExplorerPane({
               children: result.entries,
               loading: false,
               error: null,
+              truncated: result.truncated,
             },
           }
         })
@@ -215,6 +247,7 @@ export function ExplorerPane({
         children: null,
         loading: true,
         error: null,
+        truncated: false,
       },
     })
     setRootEntries([])
@@ -236,8 +269,8 @@ export function ExplorerPane({
     if (previousShowHiddenRef.current === showHidden) return
     previousShowHiddenRef.current = showHidden
     loadGenerationRef.current += 1
-      inFlightLoadsRef.current.clear()
-      queuedLoadsRef.current.clear()
+    inFlightLoadsRef.current.clear()
+    queuedLoadsRef.current.clear()
     for (const path of expandedRef.current) void loadDirectory(path)
   }, [loadDirectory, showHidden])
 
@@ -272,6 +305,7 @@ export function ExplorerPane({
           children: null,
           loading: false,
           error: null,
+          truncated: false,
         },
       }
     })
@@ -346,11 +380,12 @@ export function ExplorerPane({
       setEditError(null)
       setMutationError(null)
       await loadDirectory(edit.parentPath)
-      if (edit.kind === 'create-file') onOpenFile(result.path)
+      if (edit.kind === 'create-file') await openFile(result.path)
+      else focusTreePath(result.path)
     } finally {
       setMutationPending(false)
     }
-  }, [edit, loadDirectory, mutationPending, onOpenFile, root])
+  }, [edit, focusTreePath, loadDirectory, mutationPending, openFile, root])
 
   const commitRename = useCallback(async () => {
     if (!edit || edit.kind !== 'rename' || mutationPending) return
@@ -397,12 +432,13 @@ export function ExplorerPane({
       // the newly renamed buffer.
       onFileRenamed?.(entry.path, result.path)
       await loadDirectory(parent)
+      focusTreePath(result.path)
     } catch (err) {
       setMutationError(err instanceof Error ? err.message : 'Failed to validate rename.')
     } finally {
       setMutationPending(false)
     }
-  }, [edit, loadDirectory, mutationPending, onBeforeRename, onFileRenamed, root])
+  }, [edit, focusTreePath, loadDirectory, mutationPending, onBeforeRename, onFileRenamed, root])
 
   const commitDelete = useCallback(
     async (entry: EditorFsEntry) => {
@@ -411,25 +447,30 @@ export function ExplorerPane({
       setArmedDelete(null)
       setMutationPending(true)
       try {
-        if (onBeforeDelete && !(await onBeforeDelete(entry.path))) return
+        if (onBeforeDelete && !(await onBeforeDelete(entry.path))) {
+          focusTreePath(entry.path)
+          return
+        }
         const result = await window.api.editorDelete({ root, path: entry.path }).catch(err => ({
           ok: false as const,
           error: err instanceof Error ? err.message : 'Failed to delete item.',
         }))
         if (!result.ok) {
           setMutationError(result.error)
+          focusTreePath(entry.path)
           return
         }
         setMutationError(null)
         await loadDirectory(dirname(entry.path))
         onFileDeleted?.(entry.path)
+        focusTreePath(dirname(entry.path))
       } catch (err) {
         setMutationError(err instanceof Error ? err.message : 'Failed to confirm deletion.')
       } finally {
         setMutationPending(false)
       }
     },
-    [loadDirectory, mutationPending, onBeforeDelete, onFileDeleted, root],
+    [focusTreePath, loadDirectory, mutationPending, onBeforeDelete, onFileDeleted, root],
   )
 
   const rootNode = nodes['']
@@ -483,6 +524,7 @@ export function ExplorerPane({
           children: null,
           loading: false,
           error: null,
+          truncated: false,
         }
       }
       return next
@@ -511,9 +553,9 @@ export function ExplorerPane({
             title="Refresh explorer"
             aria-label="Refresh explorer"
             onClick={() => {
-      loadGenerationRef.current += 1
-      inFlightLoadsRef.current.clear()
-      queuedLoadsRef.current.clear()
+              loadGenerationRef.current += 1
+              inFlightLoadsRef.current.clear()
+              queuedLoadsRef.current.clear()
               for (const path of expandedRef.current) void loadDirectory(path)
             }}
             className="flex h-5 w-5 items-center justify-center rounded text-muted hover:bg-surface-hi hover:text-ink"
@@ -563,6 +605,7 @@ export function ExplorerPane({
         </div>
       )}
       <div
+        ref={treeRef}
         role="tree"
         aria-label="Project files"
         aria-busy={rootNode?.loading || undefined}
@@ -581,7 +624,7 @@ export function ExplorerPane({
                 disabled={mutationPending}
                 onChange={draft => setEdit(prev => (prev ? { ...prev, draft } : prev))}
                 onCommit={() => void commitCreate()}
-                onCancel={() => setEdit(null)}
+                onCancel={cancelEdit}
               />
             )}
             <TreeEntries
@@ -595,7 +638,7 @@ export function ExplorerPane({
               edit={edit}
               editError={editError}
               editDisabled={mutationPending}
-              onOpenFile={onOpenFile}
+              onOpenFile={path => void openFile(path)}
               onToggleDirectory={toggleDirectory}
               onTreeFocus={setFocusedTreePath}
               onContextMenu={(entry, x, y, invoker) => {
@@ -609,7 +652,7 @@ export function ExplorerPane({
                 if (edit.kind === 'rename') void commitRename()
                 else void commitCreate()
               }}
-              onEditCancel={() => setEdit(null)}
+              onEditCancel={cancelEdit}
             />
           </>
         )}
@@ -621,6 +664,11 @@ export function ExplorerPane({
         {!error && rootNode?.loading ? (
           <p role="status" aria-live="polite" className="px-2 py-2 text-[10px] text-muted">
             Loading project files…
+          </p>
+        ) : null}
+        {!error && rootNode?.truncated ? (
+          <p role="status" className="px-2 py-1 text-[10px] text-warning">
+            Showing the first 2,000 entries in this folder.
           </p>
         ) : null}
       </div>
@@ -641,11 +689,16 @@ export function ExplorerPane({
               requestAnimationFrame(() => menuInvokerRef.current?.focus())
               return
             }
-            if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
-            event.preventDefault()
             const items = [
               ...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
             ]
+            if (event.key === 'Home' || event.key === 'End') {
+              event.preventDefault()
+              items[event.key === 'Home' ? 0 : items.length - 1]?.focus()
+              return
+            }
+            if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
+            event.preventDefault()
             const current = items.indexOf(document.activeElement as HTMLButtonElement)
             const direction = event.key === 'ArrowDown' ? 1 : -1
             items[(current + direction + items.length) % items.length]?.focus()
@@ -796,12 +849,7 @@ function TreeEntries({
   onOpenFile: (path: string) => void
   onToggleDirectory: (entry: EditorFsEntry) => void
   onTreeFocus: (path: string) => void
-  onContextMenu: (
-    entry: EditorFsEntry,
-    x: number,
-    y: number,
-    invoker: HTMLButtonElement,
-  ) => void
+  onContextMenu: (entry: EditorFsEntry, x: number, y: number, invoker: HTMLButtonElement) => void
   onEditChange: (draft: string) => void
   onEditCommit: () => void
   onEditCancel: () => void
@@ -868,14 +916,28 @@ function TreeEntries({
                   if (event.key === 'End') focusIndex = items.length - 1
                   if (event.key === 'ArrowRight' && entry.isDirectory) {
                     if (!isExpanded) onToggleDirectory(entry)
-                    else focusIndex = currentIndex + 1
+                    else {
+                      const next = items[currentIndex + 1]
+                      const currentLevel = Number(event.currentTarget.getAttribute('aria-level'))
+                      const nextLevel = Number(next?.getAttribute('aria-level'))
+                      // An expanded-but-empty directory has no child row. Do
+                      // not jump sideways to its next sibling and pretend that
+                      // was tree descent.
+                      if (next && nextLevel > currentLevel) focusIndex = currentIndex + 1
+                    }
                   }
                   if (event.key === 'ArrowLeft') {
                     if (entry.isDirectory && isExpanded) {
                       onToggleDirectory(entry)
                     } else {
                       const parentPath = dirname(entry.path)
-                      focusIndex = items.findIndex(item => item.dataset.treePath === parentPath)
+                      const parentIndex = items.findIndex(
+                        item => item.dataset.treePath === parentPath,
+                      )
+                      // Top-level rows have no rendered root treeitem. A -1
+                      // index used to clamp to row zero, unexpectedly moving
+                      // focus to a different file on ArrowLeft.
+                      if (parentIndex >= 0) focusIndex = parentIndex
                     }
                   }
                   if (focusIndex === null) return
@@ -940,25 +1002,36 @@ function TreeEntries({
                     {node.error}
                   </div>
                 ) : (
-                  <TreeEntries
-                    entries={node?.children ?? []}
-                    nodes={nodes}
-                    expanded={expanded}
-                    activeFilePath={activeFilePath}
-                    activeParents={activeParents}
-                    tabStopPath={tabStopPath}
-                    depth={depth + 1}
-                    edit={edit}
-                    editError={editError}
-                    editDisabled={editDisabled}
-                    onOpenFile={onOpenFile}
-                    onToggleDirectory={onToggleDirectory}
-                    onTreeFocus={onTreeFocus}
-                    onContextMenu={onContextMenu}
-                    onEditChange={onEditChange}
-                    onEditCommit={onEditCommit}
-                    onEditCancel={onEditCancel}
-                  />
+                  <>
+                    <TreeEntries
+                      entries={node?.children ?? []}
+                      nodes={nodes}
+                      expanded={expanded}
+                      activeFilePath={activeFilePath}
+                      activeParents={activeParents}
+                      tabStopPath={tabStopPath}
+                      depth={depth + 1}
+                      edit={edit}
+                      editError={editError}
+                      editDisabled={editDisabled}
+                      onOpenFile={onOpenFile}
+                      onToggleDirectory={onToggleDirectory}
+                      onTreeFocus={onTreeFocus}
+                      onContextMenu={onContextMenu}
+                      onEditChange={onEditChange}
+                      onEditCommit={onEditCommit}
+                      onEditCancel={onEditCancel}
+                    />
+                    {node?.truncated ? (
+                      <div
+                        role="status"
+                        className="py-0.5 text-[10px] text-warning"
+                        style={{ paddingLeft: 28 + depth * 12 }}
+                      >
+                        Showing the first 2,000 entries.
+                      </div>
+                    ) : null}
+                  </>
                 )}
               </div>
             )}

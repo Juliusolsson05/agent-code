@@ -368,19 +368,21 @@ export function useKeybinds(
       // focus happened to be in the Explorer. Keep those commands global while
       // preventing workspace navigation from stealing editor-native turns.
       const eventElement = e.target instanceof Element ? e.target : null
-      const editorOwnsTarget = Boolean(
-        eventElement?.closest('[data-global-editor-input-owner]'),
-      )
+      const editorOwnsTarget = Boolean(eventElement?.closest('[data-global-editor-input-owner]'))
       if (editorOwnsTarget) {
         const monacoOwnsTarget = Boolean(eventElement?.closest('[data-global-editor-monaco]'))
+        // On macOS Option is a text-composition modifier (⌥D → ∂, etc.). Every
+        // unclaimed Option chord must remain in the editor surface; falling
+        // through can split/close/navigate the hidden workspace while the user
+        // is simply typing into Monaco.
+        if (alt && !cmd) return
         const plainEditorCommand = cmd && !shift && !alt && ['s', 'w', '[', ']'].includes(k)
-        const caretNavigation = alt && !cmd && (k === 'ArrowLeft' || k === 'ArrowRight')
-        if (plainEditorCommand || caretNavigation) {
+        if (plainEditorCommand) {
           // Monaco and EditorWorkbench handle save/close in bubble phase. The
           // remaining chords have no useful native meaning in editor chrome;
           // suppress browser history/navigation there while still allowing
           // Monaco's own keybinding service to consume them.
-          if (!monacoOwnsTarget && (k === '[' || k === ']' || caretNavigation)) {
+          if (!monacoOwnsTarget && (k === '[' || k === ']')) {
             e.preventDefault()
           }
           return

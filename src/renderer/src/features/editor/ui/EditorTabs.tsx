@@ -70,6 +70,9 @@ export function EditorTabs({ fileOrder, openFiles, activeFilePath, onActivate, o
               ref={active ? activeTabRef : undefined}
               type="button"
               role="tab"
+              id={`editor-tab-${file.generation}`}
+              aria-controls={`editor-panel-${file.generation}`}
+              data-editor-path={path}
               aria-selected={active}
               tabIndex={active ? 0 : -1}
               onClick={() => onActivate(path, { focusEditor: true })}

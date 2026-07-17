@@ -1,6 +1,6 @@
 import { ipcMain, type WebContents } from 'electron'
 import { watch, type FSWatcher } from 'chokidar'
-import { stat } from 'fs/promises'
+import { lstat } from 'fs/promises'
 
 import { invalidateEditorFsCache, resolveInsideRoot, validateExistingTarget } from './editorFs.js'
 import type { EditorFsRootRegistry } from './editorFsRootRegistry.js'
@@ -15,7 +15,9 @@ type Owner = {
 
 type WatchEntry = {
   watcher: FSWatcher
-  owners: Map<number, Owner>
+  owners: Map<string, Owner>
+  ready: Promise<void>
+  finishReady: (error?: Error) => void
 }
 
 const watchers = new Map<string, WatchEntry>()
@@ -37,12 +39,19 @@ function sendToOwners(entry: WatchEntry, event: Omit<EditorFsChangeEvent, 'root'
   // window's project identity.
 }
 
+function subscriptionKey(ownerId: number, canonicalRoot: string, path: string): string {
+  return `${ownerId}\0${canonicalRoot}\0${path.replace(/\\/g, '/')}`
+}
+
 async function removeOwner(ownerId: number): Promise<void> {
   const closes: Promise<void>[] = []
   for (const [key, entry] of watchers) {
-    entry.owners.delete(ownerId)
+    for (const [subscription, owner] of entry.owners) {
+      if (owner.sender.id === ownerId) entry.owners.delete(subscription)
+    }
     if (entry.owners.size === 0) {
       watchers.delete(key)
+      entry.finishReady(new Error('file watch was cancelled before it became ready'))
       closes.push(entry.watcher.close())
     }
   }
@@ -65,22 +74,26 @@ function trackOwner(sender: WebContents): void {
 export function registerEditorFsWatchIpc(roots: EditorFsRootRegistry): void {
   ipcMain.handle('editor-fs:watch', async (evt, params: { root: string; path: string }) => {
     const canonicalRoot = await roots.authorize(evt.sender, params.root)
-    const key = resolveInsideRoot(canonicalRoot, params.path)
-    await validateExistingTarget(canonicalRoot, key)
+    const requested = resolveInsideRoot(canonicalRoot, params.path)
+    const key = await validateExistingTarget(canonicalRoot, requested)
     trackOwner(evt.sender)
+
+    const normalizedPath = params.path.replace(/\\/g, '/')
 
     const owner: Owner = {
       sender: evt.sender,
       root: params.root,
       canonicalRoot,
-      path: params.path,
+      path: normalizedPath,
     }
+    const ownerKey = subscriptionKey(evt.sender.id, canonicalRoot, normalizedPath)
     const existing = watchers.get(key)
     if (existing) {
       // Idempotent per owner: React retries/reconciliation must not create a
       // refcount that requires the renderer to remember how many times it
       // happened to invoke watch.
-      existing.owners.set(evt.sender.id, owner)
+      existing.owners.set(ownerKey, owner)
+      await existing.ready
       return
     }
 
@@ -89,18 +102,38 @@ export function registerEditorFsWatchIpc(roots: EditorFsRootRegistry): void {
       followSymlinks: false,
       awaitWriteFinish: { stabilityThreshold: 250, pollInterval: 50 },
     })
+    let resolveReady!: () => void
+    let rejectReady!: (error: Error) => void
+    let readySettled = false
+    const ready = new Promise<void>((resolve, reject) => {
+      resolveReady = resolve
+      rejectReady = reject
+    })
+    const finishReady = (error?: Error): void => {
+      if (readySettled) return
+      readySettled = true
+      if (error) rejectReady(error)
+      else resolveReady()
+    }
     const entry: WatchEntry = {
       watcher,
-      owners: new Map([[evt.sender.id, owner]]),
+      owners: new Map([[ownerKey, owner]]),
+      ready,
+      finishReady,
     }
     const emitChanged = (): void => {
-      void stat(key)
-        .then(value =>
-          sendToOwners(entry, {
-            kind: 'change',
-            mtimeMs: value.mtimeMs,
-          }),
-        )
+      void lstat(key)
+        .then(value => {
+          if (value.isSymbolicLink() || !value.isFile()) {
+            sendToOwners(entry, {
+              kind: 'error',
+              mtimeMs: null,
+              error: 'watched path is no longer a regular file',
+            })
+            return
+          }
+          sendToOwners(entry, { kind: 'change', mtimeMs: value.mtimeMs })
+        })
         .catch(() => sendToOwners(entry, { kind: 'change', mtimeMs: null }))
     }
     watcher.on('change', emitChanged)
@@ -109,24 +142,36 @@ export function registerEditorFsWatchIpc(roots: EditorFsRootRegistry): void {
       sendToOwners(entry, { kind: 'unlink', mtimeMs: null })
     })
     watcher.on('error', error => {
+      finishReady(error instanceof Error ? error : new Error('file watcher failed'))
       sendToOwners(entry, {
         kind: 'error',
         mtimeMs: null,
         error: error instanceof Error ? error.message : 'file watcher failed',
       })
     })
+    watcher.once('ready', () => finishReady())
     watchers.set(key, entry)
+    // Renderer registration is not complete until Chokidar has installed its
+    // native subscriptions. A resolved watch followed by an immediate save used
+    // to create a blind initial-read→watch-ready window.
+    await ready
   })
 
   ipcMain.handle('editor-fs:unwatch', async (evt, params: { root: string; path: string }) => {
     const canonicalRoot = await roots.authorize(evt.sender, params.root)
-    const key = resolveInsideRoot(canonicalRoot, params.path)
-    const entry = watchers.get(key)
-    if (!entry) return
-    entry.owners.delete(evt.sender.id)
-    if (entry.owners.size === 0) {
-      watchers.delete(key)
-      await entry.watcher.close()
+    // Unwatch is a capability revocation, not a fresh filesystem access. Find
+    // the exact subscription identity we registered instead of re-resolving a
+    // path that may now be deleted, replaced by a symlink, or reachable through
+    // an alias whose physical spelling no longer exists.
+    const ownerKey = subscriptionKey(evt.sender.id, canonicalRoot, params.path)
+    for (const [key, entry] of watchers) {
+      if (!entry.owners.delete(ownerKey)) continue
+      if (entry.owners.size === 0) {
+        watchers.delete(key)
+        entry.finishReady(new Error('file watch was cancelled before it became ready'))
+        await entry.watcher.close()
+      }
+      return
     }
   })
 }

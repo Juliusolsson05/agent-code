@@ -1,9 +1,25 @@
 import { ipcMain } from 'electron'
-import { constants, type Dirent } from 'fs'
-import { lstat, mkdir, open, readdir, realpath, rename, rm, stat, writeFile } from 'fs/promises'
+import {
+  lstat,
+  link,
+  mkdir,
+  opendir,
+  realpath,
+  rename,
+  rm,
+  stat,
+  unlink,
+  writeFile,
+} from 'fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'path'
 
 import { EditorFsCache } from './editorFsCache.js'
+import {
+  atomicWriteTextFile,
+  editorFileVersion,
+  readBoundedTextFile,
+  serializeEditorFileMutation,
+} from '@main/editorFileIO.js'
 import type { EditorFsRootRegistry } from './editorFsRootRegistry.js'
 // Result shapes are the shared renderer↔main contract. Importing them
 // (instead of redeclaring) makes a field change here a compile error in
@@ -143,11 +159,10 @@ function toProjectPath(root: string, abs: string): string {
 
 const editorFsCache = new EditorFsCache()
 const searchGenerationByOwner = new WeakMap<object, number>()
+const recursiveListGenerationByOwner = new WeakMap<object, number>()
 const pendingRootMutations = new Map<string, Promise<void>>()
 
 const MAX_TEXT_FILE_BYTES = 8 * 1_048_576
-const NO_FOLLOW = process.platform === 'win32' ? 0 : constants.O_NOFOLLOW
-
 async function serializeRootMutation<T>(root: string, task: () => Promise<T>): Promise<T> {
   const previous = pendingRootMutations.get(root) ?? Promise.resolve()
   let release!: () => void
@@ -174,23 +189,96 @@ function isContained(root: string, target: string): boolean {
   )
 }
 
-export async function validateExistingTarget(root: string, target: string): Promise<void> {
+export async function validateExistingTarget(root: string, target: string): Promise<string> {
   const leaf = await lstat(target)
   if (leaf.isSymbolicLink()) throw new Error('symbolic links are not supported')
   const canonical = await realpath(target)
   if (!isContained(root, canonical))
     throw new Error('path escapes project root through a symbolic link')
+  return canonical
 }
 
 export function invalidateEditorFsCache(root: string, path: string): void {
   editorFsCache.invalidatePath(root, path)
 }
 
-async function validateExistingParent(root: string, target: string): Promise<void> {
+async function resolveThroughExistingParent(root: string, target: string): Promise<string> {
   const canonicalParent = await realpath(dirname(target))
   if (!isContained(root, canonicalParent)) {
     throw new Error('path escapes project root through a symbolic link')
   }
+  // Return a path through the canonical parent and make callers perform the
+  // actual syscall against it. Merely validating then using `target` again
+  // allows an intermediate directory symlink to be swapped after validation.
+  return join(canonicalParent, basename(target))
+}
+
+function sameFile(
+  left: Awaited<ReturnType<typeof lstat>>,
+  right: Awaited<ReturnType<typeof lstat>>,
+): boolean {
+  return left.dev === right.dev && left.ino === right.ino
+}
+
+export async function renameWithoutClobber(from: string, to: string): Promise<void> {
+  const source = await lstat(from)
+  const destination = await lstat(to).catch(err => {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw err
+  })
+
+  if (destination) {
+    if (!sameFile(source, destination)) throw new Error('already exists')
+    if (from === to) return
+
+    // Case-insensitive filesystems report a case-only destination as already
+    // existing because both spellings address one inode. A two-step rename is
+    // required to make the requested casing observable. The sibling is
+    // deliberately unique and the rollback preserves the original spelling
+    // if the publish step fails.
+    const temporary = join(
+      dirname(from),
+      `.${basename(from)}.agent-code-rename-${process.pid}-${Date.now()}-${Math.random()
+        .toString(36)
+        .slice(2)}.tmp`,
+    )
+    await rename(from, temporary)
+    try {
+      await rename(temporary, to)
+    } catch (err) {
+      await rename(temporary, from).catch(() => undefined)
+      throw err
+    }
+    return
+  }
+
+  if (source.isFile()) {
+    // link() is the portable atomic no-clobber primitive for regular files.
+    // rename() would silently replace a destination created after our lstat.
+    // If unlinking the old name fails, remove the new link only while both
+    // names still resolve to this inode; never clean up an external writer's
+    // replacement by path alone.
+    await link(from, to)
+    try {
+      await unlink(from)
+    } catch (err) {
+      const [oldStat, newStat] = await Promise.all([
+        lstat(from).catch(() => null),
+        lstat(to).catch(() => null),
+      ])
+      if (oldStat && newStat && sameFile(oldStat, newStat)) {
+        await unlink(to).catch(() => undefined)
+      }
+      throw err
+    }
+    return
+  }
+
+  // Node does not expose renameat2(RENAME_NOREPLACE), and hard links cannot
+  // publish directories. Keep the explicit preflight above and serialize all
+  // Agent Code mutations, while acknowledging that an unrelated process can
+  // still create an empty destination in the final syscall window on POSIX.
+  await rename(from, to)
 }
 
 export function registerEditorFsIpc(roots: EditorFsRootRegistry): void {
@@ -203,9 +291,9 @@ export function registerEditorFsIpc(roots: EditorFsRootRegistry): void {
       try {
         const root = await roots.authorize(evt.sender, params.root)
         const target = resolveInsideRoot(root, params.path ?? '')
-        await validateExistingTarget(root, target)
+        const physicalTarget = await validateExistingTarget(root, target)
         const targetPath = toProjectPath(root, target)
-        const itemStat = await stat(target)
+        const itemStat = await stat(physicalTarget)
         if (!itemStat.isDirectory()) return { ok: false, error: 'not a directory' }
         const showHidden = params.showHidden === true
         const cached = editorFsCache.getDirectory({
@@ -215,10 +303,31 @@ export function registerEditorFsIpc(roots: EditorFsRootRegistry): void {
           mtimeMs: itemStat.mtimeMs,
           size: itemStat.size,
         })
-        if (cached) return { ok: true, root, path: targetPath, entries: cached }
+        if (cached) {
+          return {
+            ok: true,
+            root,
+            path: targetPath,
+            entries: cached,
+            truncated: false,
+          }
+        }
         const entries: EditorFsEntry[] = []
-        const dirents = await readdir(target, { withFileTypes: true })
-        for (const dirent of dirents) {
+        let truncated = false
+        const directory = await opendir(physicalTarget)
+        // Explorer rows are intentionally not virtualized: keyboard tree
+        // semantics depend on the rendered visible order. Cap a single
+        // directory before IPC/DOM growth becomes unbounded and disclose the
+        // incomplete listing beside that branch.
+        const MAX_DIRECTORY_ENTRIES = 2_000
+        const MAX_DIRECTORY_ITEMS_VISITED = 20_000
+        let itemsVisited = 0
+        for await (const dirent of directory) {
+          itemsVisited += 1
+          if (itemsVisited > MAX_DIRECTORY_ITEMS_VISITED) {
+            truncated = true
+            break
+          }
           // The hidden gate covers both dotfiles AND the junk ignore list so
           // a single toggle in the UI gives the user the full unfiltered tree
           // rather than two confusingly partial reveals.
@@ -231,6 +340,10 @@ export function registerEditorFsIpc(roots: EditorFsRootRegistry): void {
             }
           }
           if (!dirent.isDirectory() && !dirent.isFile()) continue
+          if (entries.length >= MAX_DIRECTORY_ENTRIES) {
+            truncated = true
+            break
+          }
           const abs = join(target, dirent.name)
           entries.push({
             name: dirent.name,
@@ -253,15 +366,20 @@ export function registerEditorFsIpc(roots: EditorFsRootRegistry): void {
             sensitivity: 'base',
           })
         })
-        editorFsCache.setDirectory({
-          root,
-          path: targetPath,
-          showHidden,
-          mtimeMs: itemStat.mtimeMs,
-          size: itemStat.size,
-          entries,
-        })
-        return { ok: true, root, path: targetPath, entries }
+        // A truncated directory is not cached because a later refresh should
+        // get a fresh chance to observe filesystem iteration order and newly
+        // added entries rather than freezing one arbitrary prefix for 30s.
+        if (!truncated) {
+          editorFsCache.setDirectory({
+            root,
+            path: targetPath,
+            showHidden,
+            mtimeMs: itemStat.mtimeMs,
+            size: itemStat.size,
+            entries,
+          })
+        }
+        return { ok: true, root, path: targetPath, entries, truncated }
       } catch (err) {
         return { ok: false, error: errorMessage(err) }
       }
@@ -274,41 +392,34 @@ export function registerEditorFsIpc(roots: EditorFsRootRegistry): void {
       try {
         const root = await roots.authorize(evt.sender, params.root)
         const target = resolveInsideRoot(root, params.path)
-        await validateExistingTarget(root, target)
-        const handle = await open(target, constants.O_RDONLY | NO_FOLLOW)
-        try {
-          const itemStat = await handle.stat()
-          if (!itemStat.isFile()) return { ok: false, error: 'not a file' }
-          if (itemStat.size > MAX_TEXT_FILE_BYTES) {
-            return {
-              ok: false,
-              error: 'file is too large to open in the editor',
+        const physicalTarget = await validateExistingTarget(root, target)
+        const targetPath = toProjectPath(root, target)
+        const observed = await lstat(physicalTarget)
+        if (!observed.isFile()) return { ok: false, error: 'not a file' }
+        const observedVersion = editorFileVersion(observed)
+        const cached = editorFsCache.getTextFile({
+          root,
+          path: targetPath,
+          version: observedVersion,
+        })
+        if (cached) return { ok: true, ...cached }
+        const bounded = await readBoundedTextFile(physicalTarget, MAX_TEXT_FILE_BYTES).catch(
+          err => {
+            if ((err as Error).message === 'file is too large') {
+              throw new Error('file is too large to open in the editor')
             }
-          }
-          const targetPath = toProjectPath(root, target)
-          const cached = editorFsCache.getTextFile({
-            root,
-            path: targetPath,
-            mtimeMs: itemStat.mtimeMs,
-            size: itemStat.size,
-          })
-          if (cached) return { ok: true, ...cached }
-          const text = await handle.readFile({ encoding: 'utf8' })
-          const after = await handle.stat()
-          if (after.size !== itemStat.size || Math.abs(after.mtimeMs - itemStat.mtimeMs) > 1) {
-            return { ok: false, error: 'file changed while it was being read' }
-          }
-          const read = {
-            path: targetPath,
-            text,
-            mtimeMs: after.mtimeMs,
-            size: after.size,
-          }
-          editorFsCache.setTextFile({ root, path: targetPath, read })
-          return { ok: true, ...read }
-        } finally {
-          await handle.close()
+            throw err
+          },
+        )
+        const read = {
+          path: targetPath,
+          text: bounded.text,
+          mtimeMs: bounded.stat.mtimeMs,
+          size: bounded.stat.size,
+          version: bounded.version,
         }
+        editorFsCache.setTextFile({ root, path: targetPath, read })
+        return { ok: true, ...read }
       } catch (err) {
         return { ok: false, error: errorMessage(err) }
       }
@@ -323,7 +434,7 @@ export function registerEditorFsIpc(roots: EditorFsRootRegistry): void {
         root: string
         path: string
         text: string
-        expectedMtimeMs?: number | null
+        expectedVersion?: string | null
       },
     ): Promise<EditorFsWriteResult> => {
       try {
@@ -336,58 +447,43 @@ export function registerEditorFsIpc(roots: EditorFsRootRegistry): void {
               error: 'file is too large to save from the editor',
             }
           }
-          const exists = await lstat(target).then(
+          const physicalTarget = await resolveThroughExistingParent(root, target)
+          const exists = await lstat(physicalTarget).then(
             () => true,
             err => {
               if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false
               throw err
             },
           )
-          if (!exists) {
-            if (typeof params.expectedMtimeMs === 'number') {
+          if (exists) await validateExistingTarget(root, physicalTarget)
+          return await serializeEditorFileMutation(physicalTarget, async () => {
+            const result = await atomicWriteTextFile({
+              absolutePath: physicalTarget,
+              text: params.text,
+              expectedVersion: params.expectedVersion,
+              maxBytes: MAX_TEXT_FILE_BYTES,
+            })
+            if (!result.ok) {
               return {
                 ok: false,
-                error: 'file was deleted on disk',
+                error:
+                  result.conflictKind === 'deleted'
+                    ? 'file was deleted on disk'
+                    : 'file changed on disk',
                 conflict: true,
+                conflictKind: result.conflictKind,
               }
             }
-            await validateExistingParent(root, target)
-            await writeFile(target, params.text, {
-              encoding: 'utf8',
-              flag: 'wx',
-            })
-          } else {
-            await validateExistingTarget(root, target)
-            const handle = await open(target, constants.O_WRONLY | NO_FOLLOW)
-            try {
-              const before = await handle.stat()
-              if (!before.isFile()) return { ok: false, error: 'not a file' }
-              if (
-                typeof params.expectedMtimeMs === 'number' &&
-                Math.abs(before.mtimeMs - params.expectedMtimeMs) > 1
-              ) {
-                return {
-                  ok: false,
-                  error: 'file changed on disk',
-                  conflict: true,
-                }
-              }
-              await handle.truncate(0)
-              await handle.writeFile(params.text, 'utf8')
-              await handle.sync()
-            } finally {
-              await handle.close()
+            const targetPath = toProjectPath(root, target)
+            editorFsCache.invalidatePath(root, targetPath)
+            return {
+              ok: true,
+              path: targetPath,
+              mtimeMs: result.stat.mtimeMs,
+              size: result.stat.size,
+              version: result.version,
             }
-          }
-          const after = await stat(target)
-          const targetPath = toProjectPath(root, target)
-          editorFsCache.invalidatePath(root, targetPath)
-          return {
-            ok: true,
-            path: targetPath,
-            mtimeMs: after.mtimeMs,
-            size: after.size,
-          }
+          })
         })
       } catch (err) {
         return { ok: false, error: errorMessage(err) }
@@ -402,8 +498,8 @@ export function registerEditorFsIpc(roots: EditorFsRootRegistry): void {
         const root = await roots.authorize(evt.sender, params.root)
         return await serializeRootMutation(root, async () => {
           const target = resolveInsideRoot(root, params.path)
-          await validateExistingParent(root, target)
-          await writeFile(target, '', { encoding: 'utf8', flag: 'wx' })
+          const physicalTarget = await resolveThroughExistingParent(root, target)
+          await writeFile(physicalTarget, '', { encoding: 'utf8', flag: 'wx' })
           const targetPath = toProjectPath(root, target)
           editorFsCache.invalidatePath(root, targetPath)
           return { ok: true, path: targetPath }
@@ -421,8 +517,8 @@ export function registerEditorFsIpc(roots: EditorFsRootRegistry): void {
         const root = await roots.authorize(evt.sender, params.root)
         return await serializeRootMutation(root, async () => {
           const target = resolveInsideRoot(root, params.path)
-          await validateExistingParent(root, target)
-          await mkdir(target)
+          const physicalTarget = await resolveThroughExistingParent(root, target)
+          await mkdir(physicalTarget)
           const targetPath = toProjectPath(root, target)
           editorFsCache.invalidatePath(root, targetPath)
           return { ok: true, path: targetPath }
@@ -444,17 +540,9 @@ export function registerEditorFsIpc(roots: EditorFsRootRegistry): void {
         return await serializeRootMutation(root, async () => {
           const from = resolveInsideRoot(root, params.fromPath)
           const to = resolveInsideRoot(root, params.toPath)
-          await validateExistingTarget(root, from)
-          await validateExistingParent(root, to)
-          const destinationExists = await lstat(to).then(
-            () => true,
-            err => {
-              if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false
-              throw err
-            },
-          )
-          if (destinationExists) return { ok: false, error: 'already exists' }
-          await rename(from, to)
+          const physicalFrom = await validateExistingTarget(root, from)
+          const physicalTo = await resolveThroughExistingParent(root, to)
+          await renameWithoutClobber(physicalFrom, physicalTo)
           const fromPath = toProjectPath(root, from)
           const toPath = toProjectPath(root, to)
           editorFsCache.invalidatePath(root, fromPath)
@@ -477,30 +565,53 @@ export function registerEditorFsIpc(roots: EditorFsRootRegistry): void {
         const files: string[] = []
         let errorCount = 0
         let truncated = false
+        const generation = (recursiveListGenerationByOwner.get(evt.sender) ?? 0) + 1
+        recursiveListGenerationByOwner.set(evt.sender, generation)
+        const deadline = Date.now() + 5_000
+        let directoriesVisited = 0
         // Hard cap. Quick-open ranks client-side over the whole list; 20k
         // relative paths ≈ a few MB of IPC — fine once, not fine
         // unbounded (a rogue root near / would otherwise walk the disk).
         // `truncated` lets the UI say "index incomplete" instead of
         // silently lying about coverage.
         const LIMIT = 20_000
+        const stopped = (): boolean => {
+          if (
+            truncated ||
+            recursiveListGenerationByOwner.get(evt.sender) !== generation ||
+            Date.now() > deadline
+          ) {
+            truncated = true
+            return true
+          }
+          return false
+        }
         const walk = async (dirAbs: string): Promise<void> => {
-          let dirents: Dirent[]
+          if (stopped()) return
+          directoriesVisited += 1
+          if (directoriesVisited > 20_000) {
+            truncated = true
+            return
+          }
+          let directory
           try {
-            dirents = await readdir(dirAbs, { withFileTypes: true })
+            const canonicalDirectory = await validateExistingTarget(root, dirAbs)
+            directory = await opendir(canonicalDirectory)
           } catch (err) {
             if (dirAbs === root) throw err
             errorCount += 1
             return
           }
-          for (const dirent of dirents) {
-            // Same hygiene as list-directory: dotfiles and the junk list
-            // are invisible to quick-open. No showHidden variant on
-            // purpose — quick-open is for project sources, and a hidden
-            // file is one tree-toggle away in the explorer.
-            if (dirent.name.startsWith('.')) continue
+          for await (const dirent of directory) {
+            if (stopped()) return
+            // Quick Open is the only practical way to jump directly to files
+            // such as .env.example, so dotfiles stay discoverable here. The
+            // heavyweight generated/vendor directory denylist remains the
+            // performance boundary for recursive indexing.
             if (dirent.isDirectory()) {
               if (EDITOR_IGNORED_DIR_NAMES.has(dirent.name)) continue
               await walk(join(dirAbs, dirent.name))
+              if (truncated) return
             } else if (dirent.isFile()) {
               if (EDITOR_IGNORED_FILE_NAMES.has(dirent.name)) continue
               if (files.length >= LIMIT) {
@@ -525,6 +636,13 @@ export function registerEditorFsIpc(roots: EditorFsRootRegistry): void {
     },
   )
 
+  ipcMain.handle('editor-fs:cancel-list-files-recursive', evt => {
+    recursiveListGenerationByOwner.set(
+      evt.sender,
+      (recursiveListGenerationByOwner.get(evt.sender) ?? 0) + 1,
+    )
+  })
+
   ipcMain.handle(
     'editor-fs:search-content',
     async (
@@ -537,6 +655,11 @@ export function registerEditorFsIpc(roots: EditorFsRootRegistry): void {
         if (typeof query !== 'string' || query.length > 4_096) {
           return { ok: false, error: 'search query is too long' }
         }
+        if (query.includes('\n') || query.includes('\r')) {
+          return { ok: false, error: 'multi-line search is not supported' }
+        }
+        const generation = (searchGenerationByOwner.get(evt.sender) ?? 0) + 1
+        searchGenerationByOwner.set(evt.sender, generation)
         if (query.length === 0) {
           return {
             ok: true,
@@ -548,11 +671,11 @@ export function registerEditorFsIpc(roots: EditorFsRootRegistry): void {
             stopReason: 'complete',
           }
         }
-        const generation = (searchGenerationByOwner.get(evt.sender) ?? 0) + 1
-        searchGenerationByOwner.set(evt.sender, generation)
         const cancelled = (): boolean => searchGenerationByOwner.get(evt.sender) !== generation
         const caseSensitive = params.caseSensitive === true
-        const needle = caseSensitive ? query : query.toLowerCase()
+        const insensitiveMatcher = caseSensitive
+          ? null
+          : new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'giu')
         const matches: EditorFsSearchMatch[] = []
         let filesScanned = 0
         let truncated = false
@@ -564,7 +687,11 @@ export function registerEditorFsIpc(roots: EditorFsRootRegistry): void {
         // fuse for pathological roots. If real projects hit these limits
         // routinely, the follow-up is a ripgrep binary via the
         // third_party manifest pattern (#119/#120), NOT raising the caps.
-        const MAX_MATCHES = 2_000
+        // Every match becomes an interactive row. Without virtualization, 2k
+        // rows can make the overlay itself the bottleneck after the bounded
+        // scan completes; 500 remains useful while keeping keyboard/render
+        // latency predictable.
+        const MAX_MATCHES = 500
         const MAX_FILE_BYTES = 1_048_576 // >1MB = generated bundles, lockfiles
         const MAX_FILES = 20_000
         const MAX_TOTAL_BYTES = 64 * 1_048_576
@@ -584,74 +711,80 @@ export function registerEditorFsIpc(roots: EditorFsRootRegistry): void {
           return truncated
         }
         const scanFile = async (abs: string): Promise<void> => {
-          const handle = await open(abs, constants.O_RDONLY | NO_FOLLOW).catch(() => {
-            errorCount += 1
-            return null
-          })
-          if (!handle) return
           try {
-            // WHY search reads through the same no-follow handle it stats:
-            // using stat(path) followed by readFile(path) left a race where a
-            // project entry could become a symlink between those calls and
-            // make content search read outside the authorized root. The
-            // directory walker already skips visible symlinks; this closes
-            // the leaf swap without adding a stat syscall per result.
-            const itemStat = await handle.stat()
-            if (!itemStat.isFile() || itemStat.size > MAX_FILE_BYTES) return
-            if (totalBytes + itemStat.size > MAX_TOTAL_BYTES) {
+            // Resolve containment first, then read from a no-follow descriptor
+            // with a fixed max+1 allocation. A size check followed by
+            // readFile(path) is neither a memory bound nor a symlink defense:
+            // an external process can grow or replace the leaf between calls.
+            const physical = await validateExistingTarget(root, abs)
+            const bounded = await readBoundedTextFile(physical, MAX_FILE_BYTES)
+            const bytesRead = Buffer.byteLength(bounded.text, 'utf8')
+            if (totalBytes + bytesRead > MAX_TOTAL_BYTES) {
               truncated = true
               stopReason = 'bytes'
               return
             }
-            totalBytes += itemStat.size
-            const text = await handle.readFile({ encoding: 'utf8' }).catch(() => {
-              errorCount += 1
-              return null
-            })
+            totalBytes += bytesRead
+            const text = bounded.text
             // NUL byte = binary; utf8-decoding it would produce garbage
             // matches and garbage previews.
-            if (text === null || text.includes('\u0000')) return
-            const haystackFull = caseSensitive ? text : text.toLowerCase()
-            if (!haystackFull.includes(needle)) return
+            if (text.includes('\u0000')) return
             const lines = text.split('\n')
             for (let i = 0; i < lines.length; i++) {
-              const hay = caseSensitive ? lines[i] : lines[i].toLowerCase()
-              let col = hay.indexOf(needle)
-              while (col !== -1) {
+              const columns: Array<{ offset: number; length: number }> = []
+              if (insensitiveMatcher) {
+                insensitiveMatcher.lastIndex = 0
+                for (
+                  let match = insensitiveMatcher.exec(lines[i]);
+                  match;
+                  match = insensitiveMatcher.exec(lines[i])
+                ) {
+                  columns.push({ offset: match.index, length: match[0].length })
+                }
+              } else {
+                let offset = lines[i].indexOf(query)
+                while (offset !== -1) {
+                  columns.push({ offset, length: query.length })
+                  offset = lines[i].indexOf(query, offset + Math.max(1, query.length))
+                }
+              }
+              for (const { offset: col, length } of columns) {
+                const previewStart = lines[i].length > 200 ? Math.max(0, col - 80) : 0
                 matches.push({
                   path: toProjectPath(root, abs),
                   line: i + 1,
                   column: col + 1,
-                  preview:
-                    lines[i].length > 200
-                      ? lines[i].slice(Math.max(0, col - 80), col + 120)
-                      : lines[i],
+                  preview: lines[i].slice(previewStart, previewStart + 200),
+                  previewMatchOffset: col - previewStart,
+                  previewMatchLength: length,
                 })
                 if (matches.length >= MAX_MATCHES) {
                   truncated = true
                   stopReason = 'matches'
                   return
                 }
-                col = hay.indexOf(needle, col + Math.max(1, needle.length))
               }
             }
-          } finally {
-            await handle.close()
+          } catch (err) {
+            // Oversized regular files are an expected search exclusion, not a
+            // partial-index error. Other failures matter because the footer
+            // must disclose that some authorized paths could not be scanned.
+            if ((err as Error).message !== 'file is too large') errorCount += 1
           }
         }
         const walk = async (dirAbs: string): Promise<void> => {
           if (shouldStop()) return
-          let dirents: Dirent[]
+          let directory
           try {
-            dirents = await readdir(dirAbs, { withFileTypes: true })
+            const physical = await validateExistingTarget(root, dirAbs)
+            directory = await opendir(physical)
           } catch (err) {
             if (dirAbs === root) throw err
             errorCount += 1
             return
           }
-          for (const dirent of dirents) {
+          for await (const dirent of directory) {
             if (shouldStop()) return
-            if (dirent.name.startsWith('.')) continue
             const abs = join(dirAbs, dirent.name)
             if (dirent.isDirectory()) {
               if (EDITOR_IGNORED_DIR_NAMES.has(dirent.name)) continue
@@ -694,8 +827,8 @@ export function registerEditorFsIpc(roots: EditorFsRootRegistry): void {
           const target = resolveInsideRoot(root, params.path)
           if (toProjectPath(root, target) === '')
             return { ok: false, error: 'cannot delete project root' }
-          await validateExistingTarget(root, target)
-          await rm(target, { recursive: true, force: false })
+          const physicalTarget = await validateExistingTarget(root, target)
+          await rm(physicalTarget, { recursive: true, force: false })
           const targetPath = toProjectPath(root, target)
           editorFsCache.invalidatePath(root, targetPath)
           return { ok: true, path: targetPath || basename(target) }

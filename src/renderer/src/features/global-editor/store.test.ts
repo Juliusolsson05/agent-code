@@ -5,14 +5,20 @@ import { useGlobalEditorStore } from './store'
 const cwd = '/repo'
 
 function open(path: string, text = path): void {
-  useGlobalEditorStore.getState().openFile({ cwd, path, text, mtimeMs: 10 })
+  useGlobalEditorStore
+    .getState()
+    .openFile({ cwd, path, text, mtimeMs: 10, diskVersion: `${path}:v1` })
 }
 
 beforeEach(() => {
   // Zustand's singleton is intentional in production, but each transition
   // test needs a blank project graph so ordering assertions do not depend on
   // whichever test Vitest happened to execute first.
-  useGlobalEditorStore.setState({ byCwd: {}, cwdRecency: [cwd], activeCwd: cwd })
+  useGlobalEditorStore.setState({
+    byCwd: {},
+    cwdRecency: [cwd],
+    activeCwd: cwd,
+  })
 })
 
 describe('global editor store transitions', () => {
@@ -62,7 +68,7 @@ describe('global editor store transitions', () => {
 
     useGlobalEditorStore
       .getState()
-      .acknowledgeFileWrite(cwd, 'late.ts', 'submitted', 20, oldGeneration)
+      .acknowledgeFileWrite(cwd, 'late.ts', 'submitted', 20, 'late-version', oldGeneration)
 
     expect(useGlobalEditorStore.getState().byCwd[cwd]?.openFiles['late.ts']).toMatchObject({
       currentText: 'second lifetime',

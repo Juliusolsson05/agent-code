@@ -1,11 +1,11 @@
-import { mkdtemp, mkdir, rm, symlink, writeFile } from 'fs/promises'
+import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join, resolve } from 'path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('electron', () => ({ ipcMain: { handle: vi.fn() } }))
 
-import { resolveInsideRoot, validateExistingTarget } from './editorFs.js'
+import { renameWithoutClobber, resolveInsideRoot, validateExistingTarget } from './editorFs.js'
 
 const tempRoots: string[] = []
 
@@ -51,4 +51,33 @@ describe('editor filesystem containment', () => {
       ).rejects.toThrow('escapes project root')
     },
   )
+})
+
+describe('editor filesystem rename', () => {
+  it('never replaces an existing regular-file destination', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agent-code-editor-rename-'))
+    tempRoots.push(root)
+    const source = join(root, 'source.txt')
+    const destination = join(root, 'destination.txt')
+    await writeFile(source, 'source')
+    await writeFile(destination, 'destination')
+
+    await expect(renameWithoutClobber(source, destination)).rejects.toThrow('already exists')
+    await expect(readFile(source, 'utf8')).resolves.toBe('source')
+    await expect(readFile(destination, 'utf8')).resolves.toBe('destination')
+  })
+
+  it('supports case-only regular-file renames without clobbering another inode', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agent-code-editor-rename-'))
+    tempRoots.push(root)
+    const source = join(root, 'Example.txt')
+    const destination = join(root, 'example.txt')
+    await writeFile(source, 'content')
+
+    await renameWithoutClobber(source, destination)
+
+    await expect(readFile(destination, 'utf8')).resolves.toBe('content')
+    expect(await readdir(root)).toContain('example.txt')
+    expect(await readdir(root)).not.toContain('Example.txt')
+  })
 })

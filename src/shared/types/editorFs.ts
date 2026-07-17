@@ -22,19 +22,48 @@ export type EditorFsEntry = {
   mtimeMs: number
 }
 
+/** Opaque main-process file identity. Consumers may persist it only for the
+ * lifetime of an open buffer and must compare it for equality, never parse it. */
+export type EditorFsFileVersion = string
+
 export type EditorFsListResult =
-  { ok: true; root: string; path: string; entries: EditorFsEntry[] } | { ok: false; error: string }
+  | {
+      ok: true
+      root: string
+      path: string
+      entries: EditorFsEntry[]
+      truncated: boolean
+    }
+  | { ok: false; error: string }
 
 export type EditorFsReadResult =
-  | { ok: true; path: string; text: string; mtimeMs: number; size: number }
+  | {
+      ok: true
+      path: string
+      text: string
+      mtimeMs: number
+      size: number
+      version: EditorFsFileVersion
+    }
   | { ok: false; error: string }
 
 export type EditorFsWriteResult =
-  // `conflict` flags an optimistic-concurrency failure (expectedMtimeMs
-  // mismatch). Renderer distinguishes it from a hard error to offer
+  // `conflict` flags an optimistic-concurrency failure. Renderer distinguishes
+  // it from a hard error to offer
   // overwrite/reload. Keep it optional — non-conflict failures omit it.
-  | { ok: true; path: string; mtimeMs: number; size: number }
-  | { ok: false; error: string; conflict?: boolean }
+  | {
+      ok: true
+      path: string
+      mtimeMs: number
+      size: number
+      version: EditorFsFileVersion
+    }
+  | {
+      ok: false
+      error: string
+      conflict?: boolean
+      conflictKind?: 'changed' | 'deleted'
+    }
 
 export type EditorFsMutationResult = { ok: true; path: string } | { ok: false; error: string }
 
@@ -67,6 +96,12 @@ export type EditorFsSearchMatch = {
   column: number
   /** The matched line, trimmed to ≤200 chars around the hit. */
   preview: string
+  /** Zero-based match offset inside preview. `column` is relative to the full
+   * line and cannot identify repeated matches after the preview is clipped. */
+  previewMatchOffset: number
+  /** UTF-16 length of the exact matched text in `preview`. Unicode
+   * case-insensitive matching is not guaranteed to have query.length. */
+  previewMatchLength: number
 }
 
 export type EditorFsSearchStopReason =

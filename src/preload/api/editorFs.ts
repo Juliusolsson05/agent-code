@@ -75,7 +75,7 @@ export const editorFsApi = {
     root: string
     path: string
     text: string
-    expectedMtimeMs?: number | null
+    expectedVersion?: string | null
   }): Promise<EditorFsWriteResult> =>
     ipcRenderer.invoke('editor-fs:write-text-file', params),
 
@@ -108,6 +108,9 @@ export const editorFsApi = {
     root: string
   }): Promise<EditorFsRecursiveListResult> =>
     ipcRenderer.invoke('editor-fs:list-files-recursive', params),
+
+  editorCancelListFilesRecursive: (): Promise<void> =>
+    ipcRenderer.invoke('editor-fs:cancel-list-files-recursive'),
 
   editorSearchContent: (params: {
     root: string

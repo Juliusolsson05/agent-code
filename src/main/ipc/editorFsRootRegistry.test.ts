@@ -63,6 +63,22 @@ describe('EditorFsRootRegistry', () => {
     await expect(registry.authorize(owner as never, root)).rejects.toThrow('not authorized')
   })
 
+  it('lets the first renderer claim a main-observed cwd after its session exits', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agent-code-editor-roots-'))
+    tempRoots.push(root)
+    const manager = Object.assign(new EventEmitter(), {
+      list: () => [] as string[],
+      getSpawnCwd: (sessionId: string) => (sessionId === 'finished-session' ? root : null),
+    })
+    const registry = new EditorFsRootRegistry(manager as never)
+    manager.emit('started', { sessionId: 'finished-session' })
+    const owner = new FakeWebContents(5)
+    const otherOwner = new FakeWebContents(6)
+
+    await expect(registry.authorize(owner as never, root)).resolves.toBe(await realpath(root))
+    await expect(registry.authorize(otherOwner as never, root)).rejects.toThrow('not authorized')
+  })
+
   it('admits project roots derived from explicitly attached AI Workspace files', async () => {
     const base = await mkdtemp(join(tmpdir(), 'agent-code-editor-roots-'))
     tempRoots.push(base)

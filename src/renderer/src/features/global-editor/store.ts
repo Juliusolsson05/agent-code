@@ -116,6 +116,7 @@ type GlobalEditorStore = {
     path: string
     text: string
     mtimeMs: number
+    diskVersion: string
     selection?: { line: number; column: number } | null
     /** Restoration populates tabs without cycling the active model N times. */
     activate?: boolean
@@ -141,6 +142,7 @@ type GlobalEditorStore = {
     path: string,
     writtenText: string,
     mtimeMs: number,
+    diskVersion: string,
     generation?: number,
   ) => void
   replaceFileFromDisk: (
@@ -148,6 +150,7 @@ type GlobalEditorStore = {
     path: string,
     text: string,
     mtimeMs: number,
+    diskVersion: string,
     generation?: number,
   ) => void
   observeFileOnDisk: (
@@ -155,6 +158,7 @@ type GlobalEditorStore = {
     path: string,
     text: string,
     mtimeMs: number,
+    diskVersion: string,
     generation?: number,
   ) => void
   closeFile: (cwd: string, path: string, opts?: { force?: boolean }) => boolean
@@ -190,6 +194,7 @@ function createBuffer(params: {
   path: string
   text: string
   mtimeMs: number
+  diskVersion: string
   selection?: { line: number; column: number } | null
 }): EditorFileBuffer {
   return makeBuffer({
@@ -198,6 +203,7 @@ function createBuffer(params: {
     fileName: basename(params.path),
     text: params.text,
     mtimeMs: params.mtimeMs,
+    diskVersion: params.diskVersion,
     selection: params.selection,
   })
 }
@@ -268,7 +274,7 @@ export const useGlobalEditorStore = create<GlobalEditorStore>()((set, get) => ({
   closeAiWorkspace: () => set({ aiWorkspaceVisible: false }),
   showProjectEditor: () => set({ aiWorkspaceVisible: false }),
 
-  openFile: ({ cwd, path, text, mtimeMs, selection, activate = true, focus = true }) =>
+  openFile: ({ cwd, path, text, mtimeMs, diskVersion, selection, activate = true, focus = true }) =>
     set(state => {
       const prev = state.byCwd[cwd] ?? EMPTY_CWD_STATE
       const existing = prev.openFiles[path]
@@ -278,8 +284,15 @@ export const useGlobalEditorStore = create<GlobalEditorStore>()((set, get) => ({
       // the next save silently overwrite it. withDiskObserved preserves the
       // original baseline and raises a conflict instead.
       let buffer: EditorFileBuffer = existing
-        ? withDiskObserved(existing, text, mtimeMs)
-        : createBuffer({ root: cwd, path, text, mtimeMs, selection })
+        ? withDiskObserved(existing, text, mtimeMs, diskVersion)
+        : createBuffer({
+            root: cwd,
+            path,
+            text,
+            mtimeMs,
+            diskVersion,
+            selection,
+          })
       if (selection) buffer = { ...buffer, selection }
       if (focus) buffer = withFocusRequested(buffer)
       const inOrder = prev.fileOrder.includes(path)
@@ -419,7 +432,7 @@ export const useGlobalEditorStore = create<GlobalEditorStore>()((set, get) => ({
       }
     }),
 
-  acknowledgeFileWrite: (cwd, path, writtenText, mtimeMs, generation) =>
+  acknowledgeFileWrite: (cwd, path, writtenText, mtimeMs, diskVersion, generation) =>
     set(state => {
       const prev = state.byCwd[cwd]
       if (!prev) return state
@@ -433,14 +446,14 @@ export const useGlobalEditorStore = create<GlobalEditorStore>()((set, get) => ({
             ...prev,
             openFiles: {
               ...prev.openFiles,
-              [path]: withWriteAcknowledged(current, writtenText, mtimeMs),
+              [path]: withWriteAcknowledged(current, writtenText, mtimeMs, diskVersion),
             },
           },
         },
       }
     }),
 
-  replaceFileFromDisk: (cwd, path, text, mtimeMs, generation) =>
+  replaceFileFromDisk: (cwd, path, text, mtimeMs, diskVersion, generation) =>
     set(state => {
       const prev = state.byCwd[cwd]
       const current = prev?.openFiles[path]
@@ -453,20 +466,20 @@ export const useGlobalEditorStore = create<GlobalEditorStore>()((set, get) => ({
             ...prev,
             openFiles: {
               ...prev.openFiles,
-              [path]: withDiskSnapshot(current, text, mtimeMs),
+              [path]: withDiskSnapshot(current, text, mtimeMs, diskVersion),
             },
           },
         },
       }
     }),
 
-  observeFileOnDisk: (cwd, path, text, mtimeMs, generation) =>
+  observeFileOnDisk: (cwd, path, text, mtimeMs, diskVersion, generation) =>
     set(state => {
       const prev = state.byCwd[cwd]
       const current = prev?.openFiles[path]
       if (!prev || !current) return state
       if (generation != null && current.generation !== generation) return state
-      const next = withDiskObserved(current, text, mtimeMs)
+      const next = withDiskObserved(current, text, mtimeMs, diskVersion)
       if (next === current) return state
       return {
         byCwd: {

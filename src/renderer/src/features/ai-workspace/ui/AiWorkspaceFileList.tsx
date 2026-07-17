@@ -48,6 +48,8 @@ export function AiWorkspaceFileList({
         <div className="flex flex-shrink-0 items-center gap-2">
           <button
             type="button"
+            aria-label="Refresh AI Workspace files"
+            title="Refresh AI Workspace files"
             onClick={onRefresh}
             className="text-muted hover:text-ink"
           >
@@ -55,6 +57,8 @@ export function AiWorkspaceFileList({
           </button>
           <button
             type="button"
+            aria-label="Close AI Workspace"
+            title="Close AI Workspace"
             onClick={onClose}
             className="border border-border bg-surface-hi px-1.5 py-0.5 text-muted hover:border-accent hover:text-ink"
           >
@@ -63,10 +67,18 @@ export function AiWorkspaceFileList({
         </div>
       </div>
       <div className="min-h-0 flex-1 overflow-auto py-1">
+        {error ? (
+          <div
+            role="alert"
+            className="mx-2 mb-1 border border-danger/40 bg-danger/10 px-2 py-1 text-danger"
+          >
+            {error}
+          </div>
+        ) : null}
         {loading ? (
-          <div className="px-2 py-1 text-muted">loading...</div>
-        ) : error ? (
-          <div className="px-2 py-1 text-danger">{error}</div>
+          <div role="status" aria-live="polite" className="px-2 py-1 text-muted">
+            Loading AI Workspace…
+          </div>
         ) : entries.length === 0 ? (
           <div className="px-2 py-1 text-muted">No files attached.</div>
         ) : (
@@ -76,7 +88,8 @@ export function AiWorkspaceFileList({
               <button
                 key={entry.entryId}
                 type="button"
-                disabled={stale}
+                aria-current={activeEntryId === entry.entryId ? 'page' : undefined}
+                aria-disabled={stale || undefined}
                 onClick={() => onOpenEntry(entry)}
                 className={`flex w-full items-start gap-2 px-2 py-1.5 text-left transition-colors ${
                   activeEntryId === entry.entryId
@@ -93,7 +106,7 @@ export function AiWorkspaceFileList({
                 <span className="min-w-0 flex-1">
                   <span className="block truncate">{fileTitle(entry)}</span>
                   <span className="block truncate text-[10px] text-muted">
-                    {stale ? entry.status.staleReason ?? 'stale' : workspaceLabel(entry)}
+                    {stale ? (entry.status.staleReason ?? 'stale') : workspaceLabel(entry)}
                   </span>
                 </span>
               </button>
