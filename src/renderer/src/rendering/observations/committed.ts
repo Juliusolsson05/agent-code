@@ -9,7 +9,8 @@ import type {
 // the join-suppression set (below) tied to the exact blocks that CONSUME a
 // notification — if the two ever diverged, we'd either suppress a standalone
 // row nobody re-renders (lost background result) or double-paint one.
-import { isAgentSpawnToolName } from '@providers/registry.renderer.capabilities'
+import { isAgentSpawnTool } from '@providers/registry.renderer.capabilities'
+import type { ToolUseBlock } from '@shared/types/transcript'
 
 // ---------------------------------------------------------------------------
 // Committed candidate collector — the anti-corruption boundary between raw
@@ -178,7 +179,8 @@ function isTaskNotificationRow(e: RawCommittedEntry): boolean {
 /**
  * Pre-scan for the P2b join-suppression: the committed tool_use ids of
  * subagent-SPAWN blocks (claude `Agent`, codex `spawn_agent`, the MCP
- * orchestration forms — whatever `isAgentSpawnToolName` recognizes).
+ * orchestration forms — but only when the active provider's adapter validates
+ * the complete spawn input).
  *
  * WHY this set exists — the row-double-render this closes: a
  * `<task-notification>` is the spawn's OWN completion report, and
@@ -202,6 +204,7 @@ function isTaskNotificationRow(e: RawCommittedEntry): boolean {
  */
 function collectSpawnToolUseIds(
   entries: readonly RawCommittedEntry[],
+  provider: AgentProviderKind,
 ): Set<string> {
   const ids = new Set<string>()
   for (const e of entries) {
@@ -216,7 +219,7 @@ function collectSpawnToolUseIds(
         block?.type === 'tool_use' &&
         typeof block.id === 'string' &&
         typeof block.name === 'string' &&
-        isAgentSpawnToolName(block.name)
+        isAgentSpawnTool(block as ToolUseBlock, provider)
       ) {
         ids.add(block.id)
       }
@@ -251,7 +254,7 @@ export function collectCommittedCandidates(
   // rather than an O(N²) rescan, and so a notification that appears BEFORE
   // its spawn entry in iteration order still suppresses correctly (the whole
   // committed slice is scanned before any decision is emitted).
-  const spawnToolUseIds = collectSpawnToolUseIds(entries)
+  const spawnToolUseIds = collectSpawnToolUseIds(entries, provider)
 
   entries.forEach((e, index) => {
     // Ingest-time stable id (plan migration hazard: keys must never fall

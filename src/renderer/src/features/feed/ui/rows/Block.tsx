@@ -23,7 +23,7 @@ import { TextProse } from '@renderer/features/feed/ui/markdown'
 import { ImageBlockRow } from '@renderer/features/feed/ui/rows/ImageBlockRow'
 import { UserBand } from '@renderer/features/feed/ui/rows/primitives'
 import { ToolResultRow } from '@renderer/features/feed/ui/rows/ToolResultRow'
-import { isAgentSpawnToolName } from '@providers/registry.renderer.capabilities'
+import { isAgentSpawnTool } from '@providers/registry.renderer.capabilities'
 import { JsonToolRow } from '@providers/shared/renderer/rows/JsonToolRow'
 import { CodeBlock } from '@renderer/lib/code/CodeBlock'
 import { boundedJsonPreview } from '@renderer/lib/text/boundedJson'
@@ -208,7 +208,7 @@ export const Block = memo(function Block({
         }
       }
 
-      if (isAgentSpawnToolName(tu.name)) {
+      if (isAgentSpawnTool(tu, currentProvider)) {
         // Claude records subagent fanout as an `Agent` tool_use; Codex as a
         // `spawn_agent` function_call; Agent Code's owned MCP sessions as its
         // namespaced/bare `orchestration_create_agent` spellings (the 2026-06-21
