@@ -1,3 +1,5 @@
+import { useEffect, useRef } from 'react'
+
 import type { EditorFileBuffer } from '@renderer/features/editor/types'
 import { basename } from '@renderer/features/editor/lib/path'
 import { FileIcon } from '@renderer/features/editor/lib/fileIcon'
@@ -10,13 +12,15 @@ type Props = {
   onClose: (path: string) => void
 }
 
-export function EditorTabs({
-  fileOrder,
-  openFiles,
-  activeFilePath,
-  onActivate,
-  onClose,
-}: Props) {
+export function EditorTabs({ fileOrder, openFiles, activeFilePath, onActivate, onClose }: Props) {
+  const activeTabRef = useRef<HTMLButtonElement | null>(null)
+  useEffect(() => {
+    activeTabRef.current?.scrollIntoView({
+      block: 'nearest',
+      inline: 'nearest',
+    })
+  }, [activeFilePath])
+
   if (fileOrder.length === 0) {
     return (
       <div className="flex h-9 flex-shrink-0 items-center border-b border-panel-border bg-tab-bg px-3 font-code text-[11px] text-muted">
@@ -25,8 +29,12 @@ export function EditorTabs({
     )
   }
   return (
-    <div className="flex h-9 flex-shrink-0 items-stretch overflow-x-auto border-b border-panel-border bg-tab-bg font-code text-[11px]">
-      {fileOrder.map(path => {
+    <div
+      role="tablist"
+      aria-label="Open files"
+      className="flex h-9 flex-shrink-0 items-stretch overflow-x-auto border-b border-panel-border bg-tab-bg font-code text-[11px]"
+    >
+      {fileOrder.map((path, index) => {
         const file = openFiles[path]
         if (!file) return null
         const active = path === activeFilePath
@@ -40,16 +48,48 @@ export function EditorTabs({
           //   selected state without recoloring the whole tab.
           <div
             key={path}
+            role="presentation"
+            onMouseDown={event => {
+              if (event.button !== 1) return
+              event.preventDefault()
+              onClose(path)
+            }}
             className={`group relative flex min-w-[140px] max-w-[240px] items-stretch border-r border-panel-border ${
-              active ? 'bg-tab-active-bg text-ink' : 'bg-tab-bg text-ink-dim hover:bg-tab-hover-bg hover:text-ink'
+              active
+                ? 'bg-tab-active-bg text-ink'
+                : 'bg-tab-bg text-ink-dim hover:bg-tab-hover-bg hover:text-ink'
             }`}
           >
             {active && (
-              <span className="pointer-events-none absolute inset-x-0 top-0 h-[2px] bg-tab-accent" aria-hidden="true" />
+              <span
+                className="pointer-events-none absolute inset-x-0 top-0 h-[2px] bg-tab-accent"
+                aria-hidden="true"
+              />
             )}
             <button
+              ref={active ? activeTabRef : undefined}
               type="button"
+              role="tab"
+              aria-selected={active}
+              tabIndex={active ? 0 : -1}
               onClick={() => onActivate(path)}
+              onKeyDown={event => {
+                let nextIndex: number | null = null
+                if (event.key === 'ArrowLeft') nextIndex = Math.max(0, index - 1)
+                if (event.key === 'ArrowRight') {
+                  nextIndex = Math.min(fileOrder.length - 1, index + 1)
+                }
+                if (event.key === 'Home') nextIndex = 0
+                if (event.key === 'End') nextIndex = fileOrder.length - 1
+                if (nextIndex === null || nextIndex === index) return
+                event.preventDefault()
+                const tabs = event.currentTarget
+                  .closest('[role="tablist"]')
+                  ?.querySelectorAll<HTMLButtonElement>('[role="tab"]')
+                const nextPath = fileOrder[nextIndex]
+                if (nextPath) onActivate(nextPath)
+                tabs?.[nextIndex]?.focus()
+              }}
               className="flex min-w-0 flex-1 items-center gap-2 px-3 text-left"
               title={path}
             >
@@ -58,7 +98,10 @@ export function EditorTabs({
               </span>
               <span className="truncate">{name}</span>
               {file.dirty && (
-                <span className="ml-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-tab-accent" aria-label="modified" />
+                <span
+                  className="ml-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-tab-accent"
+                  aria-label="modified"
+                />
               )}
             </button>
             <button

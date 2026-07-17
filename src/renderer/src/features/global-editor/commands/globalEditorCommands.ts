@@ -25,19 +25,14 @@ export const globalEditorCommands: CommandDef[] = [
     // toggling it is meaningful in every mode.
     surface: 'app',
     title: 'Global Editor',
-    description: '**What it does:** Splits the screen in half — file tree + code editor on the left, the normal workspace UI (dispatch / tile / spotlight / whatever) on the right.\n\n**Use when:** You want to read or edit project files alongside the focused agent without leaving the current mode.\n\n**Notes:** The editor\'s workspace tracks the *active tab*\'s project — switching tabs to a different project flips the file tree. Switching panes within the same tab does NOT change the editor (the editor was deliberately decoupled from per-pane focus so reading code doesn\'t blow up when you move between agents in the same project). Open tabs are remembered per project and restored across app restarts (file contents are re-read from disk; unsaved edits are not persisted).\n\n**Shortcut:** ⌘⇧E.',
+    description:
+      "**What it does:** Splits the screen in half — file tree + code editor on the left, the normal workspace UI (dispatch / tile / spotlight / whatever) on the right.\n\n**Use when:** You want to read or edit project files alongside the focused agent without leaving the current mode.\n\n**Notes:** The editor's workspace tracks the *active tab*'s project — switching tabs to a different project flips the file tree. Switching panes within the same tab does NOT change the editor (the editor was deliberately decoupled from per-pane focus so reading code doesn't blow up when you move between agents in the same project). Open tabs are remembered per project and restored across app restarts (file contents are re-read from disk; unsaved edits are not persisted).\n\n**Shortcut:** ⌘⇧E.",
     keywords: ['editor', 'code', 'files', 'global', 'workspace', 'monaco'],
     getState: ({ flags }) => ({
       label: flags.globalEditorOpen ? 'On' : 'Off',
       tone: flags.globalEditorOpen ? 'accent' : 'neutral',
     }),
     run: ({ ui, flags }) => {
-      const editor = useGlobalEditorStore.getState()
-      if (editor.aiWorkspaceId && flags.globalEditorOpen) {
-        editor.closeAiWorkspace()
-        return
-      }
-      editor.closeAiWorkspace()
       ui.toggleGlobalEditor()
     },
   },
@@ -45,31 +40,48 @@ export const globalEditorCommands: CommandDef[] = [
     id: 'quick-open-file',
     surface: 'editor',
     title: 'Quick Open File',
-    description: "**What it does:** Fuzzy-finds a file by name in the focused agent's project and opens it in the **Global Editor**.\n\n**Use when:** You know (roughly) the file name and don't want to click through the tree.\n\n**Notes:** Opens the editor overlay if it isn't already open. The index skips junk directories (node_modules, build output, VCS internals) and caps at 20k files.\n\n**Shortcut:** ⌘P.",
+    description:
+      "**What it does:** Fuzzy-finds a file by name in the focused agent's project and opens it in the **Global Editor**.\n\n**Use when:** You know (roughly) the file name and don't want to click through the tree.\n\n**Notes:** Opens the editor overlay if it isn't already open. The index skips junk directories (node_modules, build output, VCS internals) and caps at 20k files.\n\n**Shortcut:** ⌘P.",
     keywords: ['quick open', 'go to file', 'find file', 'fuzzy', 'open file'],
     shortcut: '⌘P',
     run: ({ ui, flags }) => {
+      const editor = useGlobalEditorStore.getState()
+      const targetCwd = flags.globalEditorOpen
+        ? (editor.activeCwd ?? flags.focusedCwd)
+        : (flags.focusedCwd ?? editor.activeCwd)
+      if (!targetCwd) return
+      editor.setActiveCwd(targetCwd)
+      editor.showProjectEditor()
       if (!flags.globalEditorOpen) ui.toggleGlobalEditor()
-      useGlobalEditorStore.getState().setQuickOpenOpen(true)
+      editor.setQuickOpenOpen(true)
     },
   },
   {
     id: 'search-in-files',
     surface: 'editor',
     title: 'Search in Files',
-    description: "**What it does:** Searches file contents across the focused agent's project and opens matches in the **Global Editor** at the matched line.\n\n**Use when:** You're hunting a string or identifier across the project.\n\n**Notes:** Bounded scan (skips >1MB files and junk dirs; caps at 2k matches / 20k files). Case-sensitivity toggle lives in the overlay.\n\n**Shortcut:** ⌘⇧F.",
+    description:
+      "**What it does:** Searches file contents across the focused agent's project and opens matches in the **Global Editor** at the matched line.\n\n**Use when:** You're hunting a string or identifier across the project.\n\n**Notes:** Bounded scan (skips >1MB files and junk dirs; caps at 2k matches / 20k files). Case-sensitivity toggle lives in the overlay.\n\n**Shortcut:** ⌘⇧F.",
     keywords: ['search', 'grep', 'find in files', 'content search', 'ripgrep'],
     shortcut: '⌘⇧F',
     run: ({ ui, flags }) => {
+      const editor = useGlobalEditorStore.getState()
+      const targetCwd = flags.globalEditorOpen
+        ? (editor.activeCwd ?? flags.focusedCwd)
+        : (flags.focusedCwd ?? editor.activeCwd)
+      if (!targetCwd) return
+      editor.setActiveCwd(targetCwd)
+      editor.showProjectEditor()
       if (!flags.globalEditorOpen) ui.toggleGlobalEditor()
-      useGlobalEditorStore.getState().setContentSearchOpen(true)
+      editor.setContentSearchOpen(true)
     },
   },
   {
     id: 'toggle-editor-fullscreen',
     surface: 'editor',
     title: 'Editor Fullscreen',
-    description: '**What it does:** Expands the **Global Editor** to fill the whole workspace area. The normal workspace stays alive underneath (hidden, not unmounted — terminals and feeds keep running).\n\n**Use when:** You want maximum reading/editing room for a while.\n\n**Notes:** Esc exits fullscreen; the previous split ratio is restored.\n\n**Shortcut:** ⌥⌘E.',
+    description:
+      '**What it does:** Expands the **Global Editor** to fill the whole workspace area. The normal workspace stays alive underneath (hidden, not unmounted — terminals and feeds keep running).\n\n**Use when:** You want maximum reading/editing room for a while.\n\n**Notes:** Esc exits fullscreen; the previous split ratio is restored.\n\n**Shortcut:** ⌥⌘E.',
     keywords: ['fullscreen', 'maximize', 'editor', 'zen', 'focus'],
     shortcut: '⌥⌘E',
     when: ({ flags }) => flags.globalEditorOpen,
@@ -83,7 +95,8 @@ export const globalEditorCommands: CommandDef[] = [
     id: 'open-ai-workspace',
     surface: 'editor',
     title: 'Open AI Workspace',
-    description: '**What it does:** Opens a curated **AI Workspace** file set in the Global Editor surface.\n\n**Use when:** An agent has attached plans, notes, or review artifacts from multiple worktrees and you want one focused review view.\n\n**Notes:** If more than one AI Workspace exists, you choose which one to open.',
+    description:
+      '**What it does:** Opens a curated **AI Workspace** file set in the Global Editor surface.\n\n**Use when:** An agent has attached plans, notes, or review artifacts from multiple worktrees and you want one focused review view.\n\n**Notes:** If more than one AI Workspace exists, you choose which one to open.',
     keywords: ['ai workspace', 'mcp', 'workspace', 'files', 'review', 'worktree', 'global editor'],
     keepPaletteOpen: true,
     run: ({ ui }) => ui.enterAiWorkspaceOpenMode(),
@@ -92,7 +105,8 @@ export const globalEditorCommands: CommandDef[] = [
     id: 'create-ai-workspace',
     surface: 'editor',
     title: 'Create AI Workspace',
-    description: '**What it does:** Creates an empty named **AI Workspace** and opens it in the Global Editor surface.\n\n**Use when:** You want a curated file set ready before an agent starts attaching files.\n\n**Notes:** Agents can also create AI Workspaces through MCP.',
+    description:
+      '**What it does:** Creates an empty named **AI Workspace** and opens it in the Global Editor surface.\n\n**Use when:** You want a curated file set ready before an agent starts attaching files.\n\n**Notes:** Agents can also create AI Workspaces through MCP.',
     keywords: ['ai workspace', 'mcp', 'create', 'workspace', 'review'],
     keepPaletteOpen: true,
     run: ({ ui }) => ui.enterAiWorkspaceCreateMode(),
@@ -101,7 +115,8 @@ export const globalEditorCommands: CommandDef[] = [
     id: 'clear-ai-workspace',
     surface: 'editor',
     title: 'Clear AI Workspace',
-    description: '**What it does:** Removes every file reference from an **AI Workspace** without deleting files from disk.\n\n**Use when:** A curated review set is stale but you want to keep the workspace itself.\n\n**Notes:** This only clears Agent Code metadata.',
+    description:
+      '**What it does:** Removes every file reference from an **AI Workspace** without deleting files from disk.\n\n**Use when:** A curated review set is stale but you want to keep the workspace itself.\n\n**Notes:** This only clears Agent Code metadata.',
     keywords: ['ai workspace', 'mcp', 'clear', 'delete', 'files'],
     keepPaletteOpen: true,
     run: ({ ui }) => ui.enterAiWorkspaceClearMode(),
@@ -127,7 +142,8 @@ export const globalEditorCommands: CommandDef[] = [
     // hides it until the overlay is actually mounted.
     surface: 'editor',
     title: 'File Tree',
-    description: '**What it does:** Shows or hides the file tree inside the **Global Editor** overlay.\n\n**Use when:** You want more horizontal room for the code area, or you prefer to open files via tabs / search rather than browsing.\n\n**Notes:** Only available while **Global Editor** is on. The choice is global (not per-project) — once hidden, the tree stays hidden across every project until you turn it back on.',
+    description:
+      '**What it does:** Shows or hides the file tree inside the **Global Editor** overlay.\n\n**Use when:** You want more horizontal room for the code area, or you prefer to open files via tabs / search rather than browsing.\n\n**Notes:** Only available while **Global Editor** is on. The choice is global (not per-project) — once hidden, the tree stays hidden across every project until you turn it back on.',
     keywords: ['file tree', 'explorer', 'sidebar', 'editor', 'tree'],
     when: ({ flags }) => flags.globalEditorOpen,
     getState: ({ flags }) => ({

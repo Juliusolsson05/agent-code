@@ -59,6 +59,13 @@ export type LspCompletionItem = {
    *  DIFFERENT integer space. */
   kind: number
   insertText: string
+  textEdit?: {
+    newText: string
+    startLine: number
+    startCharacter: number
+    endLine: number
+    endCharacter: number
+  }
   detail?: string
   documentation?: string
   sortText?: string

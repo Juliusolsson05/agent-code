@@ -1,7 +1,7 @@
 import { EventEmitter } from 'events'
 import { spawn } from 'child_process'
 import type { ChildProcessWithoutNullStreams } from 'child_process'
-import { resolve } from 'path'
+import { isAbsolute, relative, resolve } from 'path'
 import { fileURLToPath, pathToFileURL } from 'url'
 
 import {
@@ -27,14 +27,8 @@ import type {
   SymbolInformation,
 } from 'vscode-languageserver-protocol'
 
-import {
-  languageFileExtension,
-  supportsLsp,
-} from '@shared/code/language.js'
-import {
-  lspServerForLanguage,
-  type LspServerSpec,
-} from '@main/lsp/serverRegistry.js'
+import { languageFileExtension, supportsLsp } from '@shared/code/language.js'
+import { lspServerForLanguage, type LspServerSpec } from '@main/lsp/serverRegistry.js'
 // Diagnostics event shape is the shared renderer↔main contract. Re-export so
 // existing importers of `LspDiagnostic`/`LspDiagnosticsEvent` from
 // `@main/lspManager` keep working, but the source of truth is shared.
@@ -63,6 +57,7 @@ type OpenDocumentRecord = {
   serverUri: string
   version: number
   language: string
+  refs: number
 }
 
 type ServerRecord = {
@@ -91,11 +86,7 @@ function hashText(input: string): string {
   return Math.abs(hash).toString(16)
 }
 
-function makeVirtualServerUri(
-  workspaceRoot: string,
-  clientUri: string,
-  language: string,
-): string {
+function makeVirtualServerUri(workspaceRoot: string, clientUri: string, language: string): string {
   const ext = languageFileExtension(language)
   const filePath = resolve(
     workspaceRoot,
@@ -103,6 +94,28 @@ function makeVirtualServerUri(
     `virtual-${hashText(clientUri)}.${ext}`,
   )
   return pathToFileURL(filePath).href
+}
+
+function resolveLspFileInsideRoot(workspaceRoot: string, filePath: string): string {
+  if (
+    filePath.includes('\0') ||
+    isAbsolute(filePath) ||
+    /^[A-Za-z]:[\\/]/.test(filePath) ||
+    /^[/\\]{2}/.test(filePath)
+  ) {
+    throw new Error('LSP file path must be relative')
+  }
+  const root = resolve(workspaceRoot)
+  const target = resolve(root, filePath)
+  const rel = relative(root, target)
+  if (
+    rel === '..' ||
+    rel.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) ||
+    isAbsolute(rel)
+  ) {
+    throw new Error('LSP file path escapes workspace root')
+  }
+  return target
 }
 
 // ── Raw-LSP → shared-shape normalizers ────────────────────────────────────
@@ -170,15 +183,25 @@ function normalizeCompletionResult(
   // and Monaco re-filters client-side as the user types more.
   return items.slice(0, 200).map(item => {
     const label = item.label
+    const rawEdit = item.textEdit
+    const editRange = rawEdit ? ('range' in rawEdit ? rawEdit.range : rawEdit.replace) : null
     return {
       label,
       kind: item.kind ?? 1,
       insertText: item.insertText ?? label,
+      textEdit:
+        rawEdit && editRange
+          ? {
+              newText: rawEdit.newText,
+              startLine: editRange.start.line,
+              startCharacter: editRange.start.character,
+              endLine: editRange.end.line,
+              endCharacter: editRange.end.character,
+            }
+          : undefined,
       detail: item.detail ?? undefined,
       documentation:
-        typeof item.documentation === 'string'
-          ? item.documentation
-          : item.documentation?.value,
+        typeof item.documentation === 'string' ? item.documentation : item.documentation?.value,
       sortText: item.sortText ?? undefined,
       isSnippet: item.insertTextFormat === 2, // InsertTextFormat.Snippet
     }
@@ -226,10 +249,7 @@ export interface LspManager {
     event: K,
     listener: (...args: LspManagerEvents[K]) => void,
   ): this
-  emit<K extends keyof LspManagerEvents>(
-    event: K,
-    ...args: LspManagerEvents[K]
-  ): boolean
+  emit<K extends keyof LspManagerEvents>(event: K, ...args: LspManagerEvents[K]): boolean
 }
 
 export class LspManager extends EventEmitter {
@@ -263,18 +283,30 @@ export class LspManager extends EventEmitter {
     const workspaceRoot = params.workspaceRoot || process.cwd()
     const server = await this.getOrCreateServer(workspaceRoot, spec)
     if (!server) return
-    await server.initialized
+    try {
+      await server.initialized
+    } catch {
+      this.discardServer(server)
+      return
+    }
 
     const serverUri = params.filePath
-      ? pathToFileURL(resolve(workspaceRoot, params.filePath)).href
+      ? pathToFileURL(resolveLspFileInsideRoot(workspaceRoot, params.filePath)).href
       : makeVirtualServerUri(workspaceRoot, params.clientUri, language)
     const existing = this.docs.get(params.clientUri)
     if (existing) {
+      if (existing.serverKey !== server.key || existing.serverUri !== serverUri) {
+        // One Monaco URI cannot safely represent two simultaneous server
+        // documents. The visible editor will retry on its next mount; mutating
+        // the old record here would let its late close tear down the new one.
+        return
+      }
+      existing.refs += 1
       await this.changeDocument(params.clientUri, params.content)
       return
     }
 
-    void this.sendNotificationIfOpen(server, 'textDocument/didOpen', {
+    await this.sendNotificationIfOpen(server, 'textDocument/didOpen', {
       textDocument: {
         uri: serverUri,
         languageId: language,
@@ -282,6 +314,7 @@ export class LspManager extends EventEmitter {
         text: params.content,
       },
     })
+    if (server.closed) return
 
     this.docs.set(params.clientUri, {
       clientUri: params.clientUri,
@@ -289,6 +322,7 @@ export class LspManager extends EventEmitter {
       serverUri,
       version: 1,
       language,
+      refs: 1,
     })
   }
 
@@ -298,7 +332,7 @@ export class LspManager extends EventEmitter {
     const server = this.servers.get(doc.serverKey)
     if (!server) return
     doc.version += 1
-    void this.sendNotificationIfOpen(server, 'textDocument/didChange', {
+    await this.sendNotificationIfOpen(server, 'textDocument/didChange', {
       textDocument: {
         uri: doc.serverUri,
         version: doc.version,
@@ -310,9 +344,16 @@ export class LspManager extends EventEmitter {
   async closeDocument(clientUri: string): Promise<void> {
     const doc = this.docs.get(clientUri)
     if (!doc) return
+    // Multiple editor surfaces can temporarily mount the same Monaco URI
+    // during React transitions. didClose is a lifetime operation, not a
+    // content change: only the last owner may tear down the server document.
+    // Keeping the decrement here (and never in changeDocument) preserves both
+    // live diagnostics and later changes from whichever owner survives.
+    doc.refs -= 1
+    if (doc.refs > 0) return
     const server = this.servers.get(doc.serverKey)
     if (server) {
-      void this.sendNotificationIfOpen(server, 'textDocument/didClose', {
+      await this.sendNotificationIfOpen(server, 'textDocument/didClose', {
         textDocument: { uri: doc.serverUri },
       })
     }
@@ -373,11 +414,9 @@ export class LspManager extends EventEmitter {
   }
 
   async getHover(clientUri: string, position: LspPosition): Promise<LspHoverResult> {
-    const hover = await this.sendDocRequest<Hover | null>(
-      clientUri,
-      'textDocument/hover',
-      { position },
-    )
+    const hover = await this.sendDocRequest<Hover | null>(clientUri, 'textDocument/hover', {
+      position,
+    })
     if (!hover) return null
     const markdown = hoverContentsToMarkdown(hover.contents)
     return markdown ? { markdown } : null
@@ -392,10 +431,7 @@ export class LspManager extends EventEmitter {
     return normalizeDefinitionResult(result)
   }
 
-  async getCompletions(
-    clientUri: string,
-    position: LspPosition,
-  ): Promise<LspCompletionItem[]> {
+  async getCompletions(clientUri: string, position: LspPosition): Promise<LspCompletionItem[]> {
     const result = await this.sendDocRequest<CompletionItem[] | CompletionList | null>(
       clientUri,
       'textDocument/completion',
@@ -432,6 +468,10 @@ export class LspManager extends EventEmitter {
   }
 
   async dispose(): Promise<void> {
+    // dispose is terminal, so collapse refcounts before routing through the
+    // normal close path. Calling close once per URI while refs > 1 would leave
+    // records pointing at servers that are about to be killed.
+    for (const doc of this.docs.values()) doc.refs = 1
     for (const clientUri of this.docs.keys()) {
       await this.closeDocument(clientUri)
     }
@@ -452,7 +492,8 @@ export class LspManager extends EventEmitter {
     // each seeing the same rootUri.
     const key = `${resolve(workspaceRoot)}::${spec.id}`
     const existing = this.servers.get(key)
-    if (existing) return Promise.resolve(existing)
+    if (existing && !existing.closed) return Promise.resolve(existing)
+    if (existing?.closed) this.servers.delete(key)
     const pending = this.serverPromises.get(key)
     if (pending) return pending
 
@@ -492,20 +533,20 @@ export class LspManager extends EventEmitter {
     connection.onNotification(
       'textDocument/publishDiagnostics',
       (params: PublishDiagnosticsParams) => {
-      for (const doc of this.docs.values()) {
-        if (doc.serverKey !== key || doc.serverUri !== params.uri) continue
-        this.emit('diagnostics', {
-          clientUri: doc.clientUri,
-          diagnostics: params.diagnostics.map(diagnostic => ({
-            message: diagnostic.message,
-            severity: toSeverity(diagnostic.severity),
-            startLine: diagnostic.range.start.line,
-            startCharacter: diagnostic.range.start.character,
-            endLine: diagnostic.range.end.line,
-            endCharacter: diagnostic.range.end.character,
-          })),
-        })
-      }
+        for (const doc of this.docs.values()) {
+          if (doc.serverKey !== key || doc.serverUri !== params.uri) continue
+          this.emit('diagnostics', {
+            clientUri: doc.clientUri,
+            diagnostics: params.diagnostics.map(diagnostic => ({
+              message: diagnostic.message,
+              severity: toSeverity(diagnostic.severity),
+              startLine: diagnostic.range.start.line,
+              startCharacter: diagnostic.range.start.character,
+              endLine: diagnostic.range.end.line,
+              endCharacter: diagnostic.range.end.character,
+            })),
+          })
+        }
       },
     )
 
@@ -566,9 +607,9 @@ export class LspManager extends EventEmitter {
       })
       .catch(() => {})
 
-    const legendPromise = initialized.then(result => {
-      return result.capabilities.semanticTokensProvider?.legend ?? null
-    })
+    const legendPromise = initialized
+      .then(result => result.capabilities.semanticTokensProvider?.legend ?? null)
+      .catch(() => null)
 
     const record: ServerRecord = {
       key,
@@ -582,21 +623,34 @@ export class LspManager extends EventEmitter {
     }
 
     child.on('error', () => {
-      record.closed = true
+      this.discardServer(record)
     })
 
     child.on('exit', () => {
-      record.closed = true
-      this.servers.delete(key)
-      for (const doc of [...this.docs.values()]) {
-        if (doc.serverKey !== key) continue
-        this.docs.delete(doc.clientUri)
-        this.emit('diagnostics', { clientUri: doc.clientUri, diagnostics: [] })
-      }
+      this.discardServer(record, false)
     })
 
     this.servers.set(key, record)
+    void initialized.catch(() => this.discardServer(record))
     return record
+  }
+
+  private discardServer(server: ServerRecord, kill = true): void {
+    if (this.servers.get(server.key) === server) this.servers.delete(server.key)
+    if (!server.closed) {
+      server.closed = true
+      try {
+        server.connection.dispose()
+      } catch {
+        // A spawn/initialize failure can tear streams down first.
+      }
+      if (kill && !server.process.killed) server.process.kill()
+    }
+    for (const doc of [...this.docs.values()]) {
+      if (doc.serverKey !== server.key) continue
+      this.docs.delete(doc.clientUri)
+      this.emit('diagnostics', { clientUri: doc.clientUri, diagnostics: [] })
+    }
   }
 
   private async sendNotificationIfOpen(
@@ -610,7 +664,7 @@ export class LspManager extends EventEmitter {
       await server.connection.sendNotification(method, params)
     } catch (err) {
       if (isDestroyedStreamError(err)) {
-        server.closed = true
+        this.discardServer(server, false)
         return
       }
       throw err

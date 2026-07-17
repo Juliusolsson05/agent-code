@@ -2,8 +2,10 @@ import { useEffect, useRef } from 'react'
 import type * as Monaco from 'monaco-editor'
 
 import { monacoLanguageId, supportsLsp } from '@shared/code/language'
-import { ensureSemanticProvider, getMonaco } from '@renderer/lib/code/monacoRuntime'
-import { ensureEditorLanguageFeatures } from '@renderer/lib/code/editorLanguageFeatures'
+import {
+  ensureEditorLanguageFeatures,
+  registerEditorLspContext,
+} from '@renderer/lib/code/editorLanguageFeatures'
 import {
   acquireEditorModel,
   releaseEditorModel,
@@ -16,25 +18,44 @@ import type { EditorFileBuffer } from '@renderer/features/editor/types'
 
 type Props = {
   file: EditorFileBuffer | null
-  projectRoot: string | null
+  /** Explicit filesystem identity for LSP. UI/model identity is `file`;
+   * multi-root AI Workspaces cannot use an opaque workspace id here. */
+  lspContext: { workspaceRoot: string; filePath: string } | null
   onChange: (path: string, text: string) => void
   onSave: () => void
+  onClose: () => void
   onSelectionRevealed?: (path: string) => void
+  onFocusRequestHandled?: (path: string) => void
 }
 
 export function MonacoFileEditor({
   file,
-  projectRoot,
+  lspContext,
   onChange,
   onSave,
+  onClose,
   onSelectionRevealed,
+  onFocusRequestHandled,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null)
+  const fileRef = useRef(file)
+  const onChangeRef = useRef(onChange)
+  const onSaveRef = useRef(onSave)
+  const onCloseRef = useRef(onClose)
+  const onSelectionRevealedRef = useRef(onSelectionRevealed)
+  const onFocusRequestHandledRef = useRef(onFocusRequestHandled)
+  fileRef.current = file
+  onChangeRef.current = onChange
+  onSaveRef.current = onSave
+  onCloseRef.current = onClose
+  onSelectionRevealedRef.current = onSelectionRevealed
+  onFocusRequestHandledRef.current = onFocusRequestHandled
 
   useEffect(() => {
     const container = containerRef.current
-    if (!container || !file || !projectRoot) return
+    if (!container || !file) return
+    const mountedPath = file.absolutePath
     let disposed = false
     let editor: Monaco.editor.IStandaloneCodeEditor | null = null
     let model: Monaco.editor.ITextModel | null = null
@@ -47,8 +68,14 @@ export function MonacoFileEditor({
     const cleanups: Array<() => void> = []
 
     void (async () => {
+      // WHY this import must stay inside the mount path: CodeBlock is already
+      // lazy, and a static import here pulled Monaco plus all workers into the
+      // initial renderer chunk even when the Global Editor was never opened.
+      const { ensureSemanticProvider, getMonaco } = await import('@renderer/lib/code/monacoRuntime')
       const monaco = await getMonaco()
       if (disposed) return
+      const currentFile = fileRef.current
+      if (!currentFile || currentFile.absolutePath !== mountedPath) return
       // Register and switch to the editor-mode theme before creating the
       // instance so the first paint already uses the canvas background
       // instead of flashing the darker code-slab theme. See
@@ -61,15 +88,16 @@ export function MonacoFileEditor({
       // survives tab switches; see editorModelRegistry's ownership
       // contract.
       model = acquireEditorModel(monaco, {
-        absolutePath: file.absolutePath,
-        text: file.currentText,
-        monacoLangId: monacoLanguageId(file.language),
+        absolutePath: currentFile.absolutePath,
+        text: currentFile.currentText,
+        monacoLangId: monacoLanguageId(currentFile.language),
+        ownerId: currentFile.generation,
       })
       // Viewer role only: release the refcount on unmount, never dispose.
       // The model must outlive this component so the undo stack survives
       // tab switches; disposal happens on actual tab close via
-      // disposeEditorModel — see editorModelRegistry's ownership contract.
-      const acquiredModelPath = file.absolutePath
+      // releaseEditorModelOwner — see the registry's ownership contract.
+      const acquiredModelPath = currentFile.absolutePath
       cleanups.push(() => releaseEditorModel(acquiredModelPath))
       editor = monaco.editor.create(container, {
         model,
@@ -104,11 +132,28 @@ export function MonacoFileEditor({
       })
       editorRef.current = editor
       const changeDisposable = model.onDidChangeContent(() => {
-        if (!file) return
-        onChange(file.path, model?.getValue() ?? '')
+        const latest = fileRef.current
+        if (!latest || latest.absolutePath !== mountedPath) return
+        onChangeRef.current(latest.path, model?.getValue() ?? '')
       })
       cleanups.push(() => changeDisposable.dispose())
-      editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => onSave())
+      // addCommand installs an undisposable global keybinding in standalone
+      // Monaco. addAction scopes the precondition to this editor id and gives
+      // us a real disposable, so tab switches cannot accumulate stale saves.
+      const saveAction = editor.addAction({
+        id: `agent-code.save.${encodeURIComponent(mountedPath)}`,
+        label: 'Save File',
+        keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS],
+        run: () => onSaveRef.current(),
+      })
+      cleanups.push(() => saveAction.dispose())
+      const closeAction = editor.addAction({
+        id: `agent-code.close.${encodeURIComponent(mountedPath)}`,
+        label: 'Close File',
+        keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyW],
+        run: () => onCloseRef.current(),
+      })
+      cleanups.push(() => closeAction.dispose())
 
       // ── LSP wiring (#513) ──────────────────────────────────────────
       // The transcript CodeBlock had all of this from day one; the actual
@@ -116,81 +161,112 @@ export function MonacoFileEditor({
       // model.uri.toString(): the semantic-token provider and every
       // request in editorLanguageFeatures key their main-process doc
       // lookup on it.
-      ensureEditorLanguageFeatures(monaco, file.language)
-      if (supportsLsp(file.language)) {
+      ensureEditorLanguageFeatures(monaco, currentFile.language)
+      if (lspContext && supportsLsp(currentFile.language)) {
         const clientUri = model.uri.toString()
-        await ensureSemanticProvider(monaco, projectRoot, file.language).catch(() => {
-          // fail open — same rationale as CodeBlock: a broken language
-          // server must never mean a broken editor.
-        })
+        cleanups.push(registerEditorLspContext(clientUri, lspContext.workspaceRoot))
+        const openedContent = model.getValue()
+        await ensureSemanticProvider(monaco, lspContext.workspaceRoot, currentFile.language).catch(
+          () => {
+            // fail open — same rationale as CodeBlock: a broken language
+            // server must never mean a broken editor.
+          },
+        )
         if (disposed) return
-        await window.api.openLspDocument({
-          clientUri,
-          content: file.currentText,
-          language: file.language,
-          workspaceRoot: projectRoot,
-          filePath: file.path,
-        })
-        if (disposed) return
-        // NOTE: the LSP doc closes on COMPONENT unmount (tab switch),
-        // not on tab close like the Monaco model. That's deliberate churn
-        // for now — reopen re-syncs cheaply; aligning LSP doc lifetime
-        // with the model registry is a follow-up once something actually
-        // needs background-document diagnostics.
-        cleanups.push(() => void window.api.closeLspDocument(clientUri))
-
-        const unsubDiag = window.api.onLspDiagnostics(event => {
-          if (event.clientUri !== clientUri) return
-          if (!model || model.isDisposed()) return
-          monaco.editor.setModelMarkers(
-            model,
-            'agent-code-lsp',
-            event.diagnostics.map(d => ({
-              message: d.message,
-              startLineNumber: d.startLine + 1,
-              startColumn: d.startCharacter + 1,
-              endLineNumber: d.endLine + 1,
-              endColumn: d.endCharacter + 1,
-              severity:
-                d.severity === 'error'
-                  ? monaco.MarkerSeverity.Error
-                  : d.severity === 'warning'
-                    ? monaco.MarkerSeverity.Warning
-                    : d.severity === 'info'
-                      ? monaco.MarkerSeverity.Info
-                      : monaco.MarkerSeverity.Hint,
-            })),
-          )
-        })
-        cleanups.push(unsubDiag)
-
-        // Debounced change sync. 200ms: fast enough that diagnostics
-        // feel live, slow enough that a keystroke burst is one didChange,
-        // not thirty IPC round trips.
-        let changeTimer: number | null = null
-        const lspChangeSub = model.onDidChangeContent(() => {
-          if (changeTimer !== null) window.clearTimeout(changeTimer)
-          changeTimer = window.setTimeout(() => {
-            changeTimer = null
+        const opened = await window.api
+          .openLspDocument({
+            clientUri,
+            content: openedContent,
+            language: currentFile.language,
+            workspaceRoot: lspContext.workspaceRoot,
+            filePath: lspContext.filePath,
+          })
+          .then(() => true)
+          .catch(() => false)
+        // A language server is an enhancement. Startup/spawn failure must not
+        // abort selection reveal, focus, or the rest of editor initialization.
+        if (opened && disposed) {
+          void window.api.closeLspDocument(clientUri)
+          return
+        }
+        if (!opened || disposed) {
+          // Continue editor initialization without LSP when open failed.
+        } else {
+          // NOTE: the LSP doc closes on COMPONENT unmount (tab switch),
+          // not on tab close like the Monaco model. That's deliberate churn
+          // for now — reopen re-syncs cheaply; aligning LSP doc lifetime
+          // with the model registry is a follow-up once something actually
+          // needs background-document diagnostics.
+          cleanups.push(() => void window.api.closeLspDocument(clientUri))
+          cleanups.push(() => {
             if (!model || model.isDisposed()) return
+            monaco.editor.setModelMarkers(model, 'agent-code-lsp', [])
+          })
+
+          const unsubDiag = window.api.onLspDiagnostics(event => {
+            if (event.clientUri !== clientUri) return
+            if (!model || model.isDisposed()) return
+            monaco.editor.setModelMarkers(
+              model,
+              'agent-code-lsp',
+              event.diagnostics.map(d => ({
+                message: d.message,
+                startLineNumber: d.startLine + 1,
+                startColumn: d.startCharacter + 1,
+                endLineNumber: d.endLine + 1,
+                endColumn: d.endCharacter + 1,
+                severity:
+                  d.severity === 'error'
+                    ? monaco.MarkerSeverity.Error
+                    : d.severity === 'warning'
+                      ? monaco.MarkerSeverity.Warning
+                      : d.severity === 'info'
+                        ? monaco.MarkerSeverity.Info
+                        : monaco.MarkerSeverity.Hint,
+              })),
+            )
+          })
+          cleanups.push(unsubDiag)
+
+          // Debounced change sync. 200ms: fast enough that diagnostics
+          // feel live, slow enough that a keystroke burst is one didChange,
+          // not thirty IPC round trips.
+          let changeTimer: number | null = null
+          const lspChangeSub = model.onDidChangeContent(() => {
+            if (changeTimer !== null) window.clearTimeout(changeTimer)
+            changeTimer = window.setTimeout(() => {
+              changeTimer = null
+              if (!model || model.isDisposed()) return
+              void window.api.changeLspDocument(clientUri, model.getValue())
+            }, 200)
+          })
+          cleanups.push(() => {
+            lspChangeSub.dispose()
+            if (changeTimer !== null) window.clearTimeout(changeTimer)
+          })
+          // Edits can land while server startup/open IPC is pending, before
+          // the change subscription exists. Reconcile once after subscribing
+          // so LSP never remains one edit behind until the next keystroke.
+          if (model.getValue() !== openedContent) {
             void window.api.changeLspDocument(clientUri, model.getValue())
-          }, 200)
-        })
-        cleanups.push(() => {
-          lspChangeSub.dispose()
-          if (changeTimer !== null) window.clearTimeout(changeTimer)
-        })
+          }
+        }
       }
 
-      if (file.selection) {
+      const latestFile = fileRef.current
+      if (!latestFile || latestFile.absolutePath !== mountedPath) return
+      if (latestFile.selection) {
         editor.setPosition({
-          lineNumber: file.selection.line,
-          column: file.selection.column,
+          lineNumber: latestFile.selection.line,
+          column: latestFile.selection.column,
         })
-        editor.revealLineInCenter(file.selection.line)
-        onSelectionRevealed?.(file.path)
+        editor.revealLineInCenter(latestFile.selection.line)
+        editor.focus()
+        onSelectionRevealedRef.current?.(latestFile.path)
+      } else if (latestFile.focusRequest !== null) {
+        editor.focus()
+        onFocusRequestHandledRef.current?.(latestFile.path)
       }
-      editor.focus()
     })()
 
     return () => {
@@ -205,7 +281,7 @@ export function MonacoFileEditor({
         }
       }
     }
-  }, [file?.path, projectRoot, onSelectionRevealed])
+  }, [file?.absolutePath, lspContext?.workspaceRoot, lspContext?.filePath])
 
   useEffect(() => {
     const editor = editorRef.current
@@ -213,7 +289,11 @@ export function MonacoFileEditor({
     if (!editor || !model || !file) return
     if (model.getValue() === file.currentText) return
     const selection = editor.getSelection()
-    model.setValue(file.currentText)
+    const fullRange = model.getFullModelRange()
+    // An external clean-buffer refresh should remain undoable. setValue()
+    // clears the entire undo stack, erasing unrelated local navigation/edit
+    // history whenever an agent saves the file.
+    model.pushEditOperations([], [{ range: fullRange, text: file.currentText }], () => null)
     if (selection) editor.setSelection(selection)
   }, [file?.currentText, file?.path])
 
@@ -234,8 +314,15 @@ export function MonacoFileEditor({
     })
     editor.revealLineInCenter(file.selection.line)
     editor.focus()
-    onSelectionRevealed?.(file.path)
+    onSelectionRevealedRef.current?.(file.path)
   }, [file?.path, file?.selection?.line, file?.selection?.column, onSelectionRevealed])
+
+  useEffect(() => {
+    const editor = editorRef.current
+    if (!editor || !file || file.focusRequest === null) return
+    editor.focus()
+    onFocusRequestHandledRef.current?.(file.path)
+  }, [file?.path, file?.focusRequest])
 
   if (!file) {
     return (
@@ -249,5 +336,11 @@ export function MonacoFileEditor({
   // used to replace this whole pane, which hid the user's unsaved text at
   // the exact moment a save failed. EditorWorkbench renders
   // EditorStatusBanner above the editor instead (#513).
-  return <div ref={containerRef} className="h-full min-h-0 min-w-0 bg-canvas" />
+  return (
+    <div
+      ref={containerRef}
+      data-global-editor-input-owner="true"
+      className="h-full min-h-0 min-w-0 bg-canvas"
+    />
+  )
 }

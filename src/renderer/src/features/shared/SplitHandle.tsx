@@ -1,4 +1,4 @@
-import type { CSSProperties, MouseEvent } from 'react'
+import type { CSSProperties, KeyboardEvent, MouseEvent } from 'react'
 
 type SplitHandleProps = {
   dragging: boolean
@@ -8,6 +8,11 @@ type SplitHandleProps = {
   exposeSeparatorRole?: boolean
   className?: string
   style?: CSSProperties
+  label?: string
+  valueNow?: number
+  valueMin?: number
+  valueMax?: number
+  onKeyboardDelta?: (delta: number) => void
 }
 
 // Shared vertical splitter handle.
@@ -28,13 +33,30 @@ export function SplitHandle({
   exposeSeparatorRole = true,
   className = '',
   style,
+  label,
+  valueNow,
+  valueMin,
+  valueMax,
+  onKeyboardDelta,
 }: SplitHandleProps) {
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (!onKeyboardDelta) return
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+    event.preventDefault()
+    onKeyboardDelta(event.key === 'ArrowLeft' ? -1 : 1)
+  }
   return (
     <div
       role={exposeSeparatorRole ? 'separator' : undefined}
       aria-orientation={exposeSeparatorRole ? 'vertical' : undefined}
+      aria-label={exposeSeparatorRole ? label : undefined}
+      aria-valuenow={exposeSeparatorRole ? valueNow : undefined}
+      aria-valuemin={exposeSeparatorRole ? valueMin : undefined}
+      aria-valuemax={exposeSeparatorRole ? valueMax : undefined}
+      tabIndex={exposeSeparatorRole && onKeyboardDelta ? 0 : undefined}
+      onKeyDown={onKeyDown}
       onMouseDown={onMouseDown}
-      className={`relative flex-shrink-0 cursor-col-resize select-none ${className}`}
+      className={`relative flex-shrink-0 cursor-col-resize select-none outline-none focus-visible:ring-1 focus-visible:ring-focus-ring ${className}`}
       style={{ width: `${hitSizePx}px`, ...style }}
     >
       <div

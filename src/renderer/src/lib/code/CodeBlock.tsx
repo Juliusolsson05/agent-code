@@ -5,13 +5,10 @@ import {
   languageFileExtension,
   monacoLanguageId,
   normalizeCodeLanguage,
-  supportsLsp,
+  supportsTranscriptLsp,
 } from '@shared/code/language'
 import { APP_PROTOCOL_SCHEME } from '@shared/appIdentity'
-import {
-  THEME_CHANGED_EVENT,
-  getActiveAppFontFamily,
-} from '@renderer/app-state/settings/theme'
+import { THEME_CHANGED_EVENT, getActiveAppFontFamily } from '@renderer/app-state/settings/theme'
 import {
   registerCodeBlock,
   unregisterCodeBlock,
@@ -50,11 +47,7 @@ type Props = {
   transformPage?: (page: string) => string
 }
 
-function inferClientUri(
-  codeId: string,
-  language: string,
-  path?: string | null,
-): string {
+function inferClientUri(codeId: string, language: string, path?: string | null): string {
   if (path) {
     return `${APP_PROTOCOL_SCHEME}://file/${encodeURIComponent(path)}#${encodeURIComponent(codeId)}`
   }
@@ -73,10 +66,7 @@ export const CodeBlock = memo(function CodeBlock({
   highlight = true,
   transformPage,
 }: Props) {
-  const normalizedLanguage = useMemo(
-    () => normalizeCodeLanguage(language, path),
-    [language, path],
-  )
+  const normalizedLanguage = useMemo(() => normalizeCodeLanguage(language, path), [language, path])
   const oversized = useMemo(() => exceedsInlineTextBudget(code), [code])
   const [largeContentOpen, setLargeContentOpen] = useState(false)
   const [fullCopyState, setFullCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
@@ -92,12 +82,10 @@ export const CodeBlock = memo(function CodeBlock({
         hasNext: false,
       }
     }
-    return largeContentOpen
-      ? boundedTextPage(code, requestedPageStart)
-      : collapsedTextPreview(code)
+    return largeContentOpen ? boundedTextPage(code, requestedPageStart) : collapsedTextPreview(code)
   }, [code, largeContentOpen, oversized, requestedPageStart])
   const visibleCode = useMemo(
-    () => transformPage ? transformPage(visiblePage.text) : visiblePage.text,
+    () => (transformPage ? transformPage(visiblePage.text) : visiblePage.text),
     [transformPage, visiblePage.text],
   )
   const shouldUseStaticFallback =
@@ -144,9 +132,7 @@ export const CodeBlock = memo(function CodeBlock({
   // visually collapsed row computationally open. After explicit expansion we
   // create Monaco for one bounded page only.
   const useMonaco =
-    engine !== 'static' &&
-    !shouldUseStaticFallback &&
-    (!oversized || largeContentOpen)
+    engine !== 'static' && !shouldUseStaticFallback && (!oversized || largeContentOpen)
   useEffect(() => {
     if (!useMonaco) return
     let disposed = false
@@ -267,13 +253,16 @@ export const CodeBlock = memo(function CodeBlock({
       window.addEventListener(THEME_CHANGED_EVENT, onThemeChanged)
       cleanups.push(() => window.removeEventListener(THEME_CHANGED_EVENT, onThemeChanged))
 
-      if (workspaceRoot && supportsLsp(normalizedLanguage)) {
+      if (workspaceRoot && supportsTranscriptLsp(normalizedLanguage)) {
         await window.api.openLspDocument({
           clientUri,
           content: visibleCode,
           language: normalizedLanguage,
           workspaceRoot,
-          filePath: path ?? null,
+          // A rendered transcript block is never the actual file, even when
+          // the message labels it with a path. Sending that path would make a
+          // partial/truncated snippet replace the real document in tsserver.
+          filePath: null,
         })
         if (disposed) {
           // WHY close after a late open: unmount can happen while the main-process LSP handshake is
@@ -319,7 +308,11 @@ export const CodeBlock = memo(function CodeBlock({
       // Run all cleanups in reverse order (LIFO) so resources that
       // depend on earlier ones are released first.
       for (let i = cleanups.length - 1; i >= 0; i--) {
-        try { cleanups[i]() } catch { /* best-effort */ }
+        try {
+          cleanups[i]()
+        } catch {
+          /* best-effort */
+        }
       }
     }
   }, [useMonaco, clientUri, visibleCode, engine, normalizedLanguage, path, workspaceRoot])
@@ -370,7 +363,9 @@ export const CodeBlock = memo(function CodeBlock({
             <button
               type="button"
               className="hover:text-ink cursor-pointer"
-              onClick={() => setPageStarts(current => current.length > 1 ? current.slice(0, -1) : current)}
+              onClick={() =>
+                setPageStarts(current => (current.length > 1 ? current.slice(0, -1) : current))
+              }
             >
               previous
             </button>

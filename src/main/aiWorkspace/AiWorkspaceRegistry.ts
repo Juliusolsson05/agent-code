@@ -95,13 +95,16 @@ export class AiWorkspaceRegistry {
   private readonly workspaces = new Map<string, AiWorkspaceRecord>()
   private loadPromise: Promise<void> | null = null
   private saveQueue: Promise<void> = Promise.resolve()
-  private readonly gitContextCache = new Map<string, {
-    expiresAt: number
-    promise: Promise<{
-      projectRoot?: string
-      gitBranch?: string
-    }>
-  }>()
+  private readonly gitContextCache = new Map<
+    string,
+    {
+      expiresAt: number
+      promise: Promise<{
+        projectRoot?: string
+        gitBranch?: string
+      }>
+    }
+  >()
 
   constructor(private readonly stateFile = AI_WORKSPACE_FILE) {}
 
@@ -146,8 +149,26 @@ export class AiWorkspaceRegistry {
         createdAt: workspace.createdAt,
         updatedAt: workspace.updatedAt,
         fileCount: workspace.entries.length,
-        staleCount: workspace.entries.filter(entry => !entry.status.exists || !entry.status.readable).length,
+        staleCount: workspace.entries.filter(
+          entry => !entry.status.exists || !entry.status.readable,
+        ).length,
       }))
+  }
+
+  /** Project roots derived by main from files the user/agent explicitly
+   * attached. LSP inherently indexes the project containing an attached source
+   * file, so these roots are legitimate capabilities even when that worktree
+   * no longer has a live terminal session. The renderer never supplies or
+   * persists this authority itself. */
+  async listAttachedProjectRoots(): Promise<string[]> {
+    await this.ensureLoaded()
+    return [
+      ...new Set(
+        [...this.workspaces.values()].flatMap(workspace =>
+          workspace.entries.flatMap(entry => (entry.projectRoot ? [entry.projectRoot] : [])),
+        ),
+      ),
+    ]
   }
 
   async get(workspaceId: string): Promise<AiWorkspaceRecord | null> {
@@ -199,7 +220,9 @@ export class AiWorkspaceRegistry {
     return entry
   }
 
-  async detachFile(params: AiWorkspaceDetachFileParams): Promise<{ removed: boolean; remaining: number }> {
+  async detachFile(
+    params: AiWorkspaceDetachFileParams,
+  ): Promise<{ removed: boolean; remaining: number }> {
     await this.ensureLoaded()
     const workspace = this.requiredWorkspace(params.workspaceId)
     const normalized = params.path ? normalizePath(params.path) : null
@@ -321,7 +344,7 @@ export class AiWorkspaceRegistry {
 
   private async statusForPath(path: string, knownStats?: Stats): Promise<AiWorkspaceFileStatus> {
     try {
-      const fileStat = knownStats ?? await stat(path)
+      const fileStat = knownStats ?? (await stat(path))
       if (!fileStat.isFile()) {
         return {
           exists: true,

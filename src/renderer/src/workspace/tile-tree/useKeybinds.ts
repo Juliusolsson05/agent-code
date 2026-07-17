@@ -1,7 +1,4 @@
-import {
-  AGENT_PROVIDER_KINDS,
-  DEFAULT_PROVIDER,
-} from '@shared/types/providerKind'
+import { AGENT_PROVIDER_KINDS, DEFAULT_PROVIDER } from '@shared/types/providerKind'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { useEffect } from 'react'
 
@@ -143,14 +140,20 @@ export function shouldPreventOwnedApplicationShortcut(event: KeyboardEvent): boo
   return BLOCKED_ALT_CODES.has(event.code)
 }
 
-function renderedAgentSurfaceIsVisible(workspace: Workspace, agentViewMode: string, sessionId: string): boolean {
+function renderedAgentSurfaceIsVisible(
+  workspace: Workspace,
+  agentViewMode: string,
+  sessionId: string,
+): boolean {
   const kind = workspace.state.sessions[sessionId]?.kind
   if (!isAgentKind(kind)) return false
-  return getEffectiveAgentSurface({
-    kind,
-    mode: agentViewMode === 'terminal' || agentViewMode === 'hybrid' ? agentViewMode : 'agent',
-    runtime: workspace.getRuntime(sessionId),
-  }) === 'rendered'
+  return (
+    getEffectiveAgentSurface({
+      kind,
+      mode: agentViewMode === 'terminal' || agentViewMode === 'hybrid' ? agentViewMode : 'agent',
+      runtime: workspace.getRuntime(sessionId),
+    }) === 'rendered'
+  )
 }
 
 export function useKeybinds(
@@ -238,9 +241,7 @@ export function useKeybinds(
       // `placementOverlayOpen` so create, attach, and linked-agent
       // modes share one keyboard bailout.
       const placementOverlayOpen =
-        newAgentPlacementOpen ||
-        dispatchAttachIntent !== null ||
-        linkedAgentParentId !== null
+        newAgentPlacementOpen || dispatchAttachIntent !== null || linkedAgentParentId !== null
 
       // Placement overlay (create-new, attach-detached, or linked
       // agent) and the two draft modals (reorder / pin) all share
@@ -324,8 +325,18 @@ export function useKeybinds(
       // VS Code muscle memory quick-open trained into everyone.
       if (cmd && !shift && !alt && k.toLowerCase() === 'p') {
         e.preventDefault()
-        if (!useAppStore.getState().globalEditorOpen) toggleGlobalEditor()
-        useGlobalEditorStore.getState().setQuickOpenOpen(true)
+        const editorStore = useGlobalEditorStore.getState()
+        const editorOpen = useAppStore.getState().globalEditorOpen
+        const targetSessionId = commandTargetSessionId(workspace)
+        const focusedCwd = targetSessionId ? workspace.state.sessions[targetSessionId]?.cwd : null
+        const targetCwd = editorOpen
+          ? (editorStore.activeCwd ?? focusedCwd)
+          : (focusedCwd ?? editorStore.activeCwd)
+        if (!targetCwd) return
+        editorStore.setActiveCwd(targetCwd)
+        editorStore.showProjectEditor()
+        if (!editorOpen) toggleGlobalEditor()
+        editorStore.setQuickOpenOpen(true)
         return
       }
 
@@ -336,10 +347,28 @@ export function useKeybinds(
       // shared the cmd+shift namespace here).
       if (cmd && shift && !alt && k.toLowerCase() === 'f') {
         e.preventDefault()
-        if (!useAppStore.getState().globalEditorOpen) toggleGlobalEditor()
-        useGlobalEditorStore.getState().setContentSearchOpen(true)
+        const editorStore = useGlobalEditorStore.getState()
+        const editorOpen = useAppStore.getState().globalEditorOpen
+        const targetSessionId = commandTargetSessionId(workspace)
+        const focusedCwd = targetSessionId ? workspace.state.sessions[targetSessionId]?.cwd : null
+        const targetCwd = editorOpen
+          ? (editorStore.activeCwd ?? focusedCwd)
+          : (focusedCwd ?? editorStore.activeCwd)
+        if (!targetCwd) return
+        editorStore.setActiveCwd(targetCwd)
+        editorStore.showProjectEditor()
+        if (!editorOpen) toggleGlobalEditor()
+        editorStore.setContentSearchOpen(true)
         return
       }
+
+      // Monaco owns native editing chords once focus is inside the Global
+      // Editor. This capture listener otherwise steals Cmd+W, Cmd+[ / ], and
+      // Option+Arrow before Monaco can close a tab, indent, or move the caret.
+      // Global editor commands above remain intentionally global; everything
+      // below this boundary is workspace navigation and must stand down.
+      const eventElement = e.target instanceof Element ? e.target : null
+      if (eventElement?.closest('[data-global-editor-input-owner]')) return
 
       // --- Copy Assistant picker (Up/Down/Enter/Esc) ---
       //
@@ -357,9 +386,7 @@ export function useKeybinds(
           workspace.readerMode === null &&
           !settingsPageOpen
         : false
-      const picker = focusedSessionId
-        ? workspace.runtimes[focusedSessionId]?.assistantPicker
-        : null
+      const picker = focusedSessionId ? workspace.runtimes[focusedSessionId]?.assistantPicker : null
       if (picker && focusedSessionId && renderedPickerSurfaceVisible) {
         if (k === 'ArrowUp') {
           e.preventDefault()
@@ -416,9 +443,7 @@ export function useKeybinds(
           // same recovery the assistant picker does for a stale uuid.
           const dir = k === 'ArrowDown' ? 1 : -1
           const nextIdx =
-            cur === -1
-              ? ids.length - 1
-              : Math.max(0, Math.min(ids.length - 1, cur + dir))
+            cur === -1 ? ids.length - 1 : Math.max(0, Math.min(ids.length - 1, cur + dir))
           workspace.setCodeBlockPicker(focusedSessionId, {
             selectedId: ids[nextIdx],
           })
@@ -582,9 +607,7 @@ export function useKeybinds(
                 ? (index: number) => focusTiledRowByIndex(workspace, index)
                 : (index: number) => focusDispatchRowByIndex(workspace, index)
               const combined =
-                pendingDispatchDigit !== null
-                  ? pendingDispatchDigit * 10 + digit
-                  : null
+                pendingDispatchDigit !== null ? pendingDispatchDigit * 10 + digit : null
               if (combined !== null && combined >= 10 && combined <= 99) {
                 selectRow(combined - 1)
                 clearPendingDispatchDigit()
@@ -920,9 +943,7 @@ function moveTiledLaneSelection(workspace: Workspace, delta: number) {
   if (rows.length === 0) return
   const laneIndex = tiled.focusedLane
   const currentId = tiled.lanes[laneIndex]?.selectedSessionId
-  const currentIndex = currentId
-    ? rows.findIndex(row => row.sessionId === currentId)
-    : -1
+  const currentIndex = currentId ? rows.findIndex(row => row.sessionId === currentId) : -1
   // Step one row in `delta` direction, wrapping. Duplicates are allowed, so
   // we do NOT skip rows shown in other lanes — landing on one just mirrors
   // that agent into this lane too.

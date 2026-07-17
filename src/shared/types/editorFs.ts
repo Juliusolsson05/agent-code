@@ -23,8 +23,7 @@ export type EditorFsEntry = {
 }
 
 export type EditorFsListResult =
-  | { ok: true; root: string; path: string; entries: EditorFsEntry[] }
-  | { ok: false; error: string }
+  { ok: true; root: string; path: string; entries: EditorFsEntry[] } | { ok: false; error: string }
 
 export type EditorFsReadResult =
   | { ok: true; path: string; text: string; mtimeMs: number; size: number }
@@ -37,9 +36,7 @@ export type EditorFsWriteResult =
   | { ok: true; path: string; mtimeMs: number; size: number }
   | { ok: false; error: string; conflict?: boolean }
 
-export type EditorFsMutationResult =
-  | { ok: true; path: string }
-  | { ok: false; error: string }
+export type EditorFsMutationResult = { ok: true; path: string } | { ok: false; error: string }
 
 /** Pushed on `editor-fs:file-changed` for files registered via
  *  `editor-fs:watch`. `mtimeMs` is null when the post-change stat failed
@@ -48,12 +45,19 @@ export type EditorFsMutationResult =
 export type EditorFsChangeEvent = {
   root: string
   path: string
-  kind: 'change' | 'unlink'
+  kind: 'change' | 'unlink' | 'error'
   mtimeMs: number | null
+  error?: string
 }
 
 export type EditorFsRecursiveListResult =
-  | { ok: true; files: string[]; truncated: boolean }
+  | {
+      ok: true
+      files: string[]
+      truncated: boolean
+      partial: boolean
+      errorCount: number
+    }
   | { ok: false; error: string }
 
 export type EditorFsSearchMatch = {
@@ -65,6 +69,17 @@ export type EditorFsSearchMatch = {
   preview: string
 }
 
+export type EditorFsSearchStopReason =
+  'complete' | 'matches' | 'files' | 'bytes' | 'deadline' | 'cancelled'
+
 export type EditorFsSearchResult =
-  | { ok: true; matches: EditorFsSearchMatch[]; truncated: boolean; filesScanned: number }
+  | {
+      ok: true
+      matches: EditorFsSearchMatch[]
+      truncated: boolean
+      filesScanned: number
+      partial: boolean
+      errorCount: number
+      stopReason: EditorFsSearchStopReason
+    }
   | { ok: false; error: string }

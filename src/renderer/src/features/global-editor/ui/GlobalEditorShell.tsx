@@ -1,19 +1,22 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 
 import { useAppStore } from '@renderer/app-state/store'
+import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 
 import { ExplorerPane } from '@renderer/features/editor/ui/ExplorerPane'
 import { EditorWorkbench } from '@renderer/features/editor/ui/EditorWorkbench'
-import {
-  disposeEditorModel,
-  editorModelKey,
-} from '@renderer/features/editor/lib/editorModelRegistry'
+import { ConfirmDeleteDialog } from '@renderer/features/editor/ui/ConfirmDeleteDialog'
+import { releaseEditorModelOwner } from '@renderer/features/editor/lib/editorModelRegistry'
 import { AiWorkspaceEditor } from '@renderer/features/ai-workspace/ui/AiWorkspaceEditor'
 
-import { EMPTY_CWD_STATE, useGlobalEditorStore } from '@renderer/features/global-editor/store'
+import {
+  EMPTY_CWD_STATE,
+  openPathsUnder,
+  useGlobalEditorStore,
+} from '@renderer/features/global-editor/store'
 import { openFileInGlobalEditor } from '@renderer/features/global-editor/openFileInGlobalEditor'
 import { QuickOpenOverlay } from '@renderer/features/global-editor/ui/QuickOpenOverlay'
 import { ContentSearchOverlay } from '@renderer/features/global-editor/ui/ContentSearchOverlay'
@@ -58,12 +61,10 @@ type Props = {
 //   the overlay independently. That's both more code and more
 //   ways for the overlay to break per-mode.
 //
-// WHY the splitter ratio is renderer-only state (no IPC, no
-// persistence): the splitter is purely visual chrome. Like
-// CodeMirror's gutter width or VS Code's activity-bar position,
-// it's a per-session preference at most. In-memory only (lost on
-// app reload) is acceptable until we have a reason to add a
-// persistence channel for it.
+// WHY splitter geometry persists only in renderer localStorage: it is visual
+// chrome, not project data or unsaved source content. Persisting it alongside
+// tab paths makes the editor feel stable across restarts without adding a
+// main-process preference channel or a second source-content persistence path.
 //
 // WHY we drop a global mouse listener while dragging (instead of
 // putting onMouseMove on the splitter itself): if the user
@@ -72,9 +73,12 @@ type Props = {
 // guarantees we keep receiving move events until mouseup.
 // `useResizableSplitter` encapsulates that mechanic; see its docs.
 export function GlobalEditorShell({ children, workspace }: Props) {
-  const { open } = useAppStore(
-    useShallow(state => ({ open: state.globalEditorOpen })),
-  )
+  const [pendingExplorerDelete, setPendingExplorerDelete] = useState<{
+    path: string
+    dirtyPaths: string[]
+    resolve: (confirmed: boolean) => void
+  } | null>(null)
+  const { open } = useAppStore(useShallow(state => ({ open: state.globalEditorOpen })))
 
   // Active tab id + the cwd of whatever command-target the user is
   // pointing at right now. WHY both:
@@ -112,6 +116,7 @@ export function GlobalEditorShell({ children, workspace }: Props) {
     setFileTreeWidthPx,
     fileTreeVisible,
     aiWorkspaceId,
+    aiWorkspaceVisible,
     closeAiWorkspace,
     quickOpenOpen,
     setQuickOpenOpen,
@@ -127,6 +132,7 @@ export function GlobalEditorShell({ children, workspace }: Props) {
       setFileTreeWidthPx: state.setFileTreeWidthPx,
       fileTreeVisible: state.fileTreeVisible,
       aiWorkspaceId: state.aiWorkspaceId,
+      aiWorkspaceVisible: state.aiWorkspaceVisible,
       closeAiWorkspace: state.closeAiWorkspace,
       quickOpenOpen: state.quickOpenOpen,
       setQuickOpenOpen: state.setQuickOpenOpen,
@@ -143,9 +149,12 @@ export function GlobalEditorShell({ children, workspace }: Props) {
     updateFileText,
     setFileError,
     clearFileSelection,
-    markFileSaved,
+    clearFileFocusRequest,
+    acknowledgeFileWrite,
+    replaceFileFromDisk,
+    observeFileOnDisk,
     closeFileAction,
-    renameOpenFile,
+    renameOpenPath,
     cwdState,
   } = useGlobalEditorStore(
     useShallow(state => {
@@ -164,9 +173,12 @@ export function GlobalEditorShell({ children, workspace }: Props) {
         updateFileText: state.updateFileText,
         setFileError: state.setFileError,
         clearFileSelection: state.clearFileSelection,
-        markFileSaved: state.markFileSaved,
+        clearFileFocusRequest: state.clearFileFocusRequest,
+        acknowledgeFileWrite: state.acknowledgeFileWrite,
+        replaceFileFromDisk: state.replaceFileFromDisk,
+        observeFileOnDisk: state.observeFileOnDisk,
         closeFileAction: state.closeFile,
-        renameOpenFile: state.renameOpenFile,
+        renameOpenPath: state.renameOpenPath,
         cwdState: (aCwd && byCwd[aCwd]) || EMPTY_CWD_STATE,
       }
     }),
@@ -183,7 +195,13 @@ export function GlobalEditorShell({ children, workspace }: Props) {
   // some other slice changed) never reaches setActiveCwd either.
   const lastSyncedTabIdRef = useRef<string | null>(null)
   useEffect(() => {
-    if (!open) return
+    if (!open) {
+      // Reopening the editor is an explicit request to follow the currently
+      // focused agent even when the app tab id itself did not change while the
+      // editor was hidden.
+      lastSyncedTabIdRef.current = null
+      return
+    }
     if (lastSyncedTabIdRef.current === activeTabId) return
     lastSyncedTabIdRef.current = activeTabId ?? null
     if (focusedCwd === activeCwd) return
@@ -218,13 +236,22 @@ export function GlobalEditorShell({ children, workspace }: Props) {
     const persistedTabs = loadPersistedGlobalEditorState()?.tabsByCwd[activeCwd]
     if (!persistedTabs) return
     void (async () => {
+      const restored: string[] = []
       for (const path of persistedTabs.fileOrder) {
-        await openFileInGlobalEditor({ root: activeCwd, path })
+        const result = await openFileInGlobalEditor({
+          root: activeCwd,
+          path,
+          activate: false,
+          focus: false,
+        })
+        if (result.ok) restored.push(path)
       }
-      if (persistedTabs.activeFilePath) {
-        useGlobalEditorStore
-          .getState()
-          .setActiveFile(activeCwd, persistedTabs.activeFilePath)
+      const activePath =
+        (persistedTabs.activeFilePath && restored.includes(persistedTabs.activeFilePath)
+          ? persistedTabs.activeFilePath
+          : null) ?? restored[restored.length - 1]
+      if (activePath) {
+        useGlobalEditorStore.getState().setActiveFile(activeCwd, activePath)
       }
     })()
   }, [open, activeCwd])
@@ -235,18 +262,95 @@ export function GlobalEditorShell({ children, workspace }: Props) {
   // against disk on reactivation via openFileInGlobalEditor's
   // read-on-open, so watching them would spend fs watchers on files
   // nobody is looking at.
+  const watchedFilesRef = useRef<{ root: string | null; paths: Set<string> }>({
+    root: null,
+    paths: new Set(),
+  })
   useEffect(() => {
-    if (!open || !activeCwd) return
-    const paths = cwdState.fileOrder
-    for (const path of paths) {
-      void window.api.editorWatchFile({ root: activeCwd, path })
-    }
-    return () => {
-      for (const path of paths) {
-        void window.api.editorUnwatchFile({ root: activeCwd, path })
+    const previous = watchedFilesRef.current
+    const nextRoot = open ? activeCwd : null
+    const nextPaths = new Set(nextRoot ? cwdState.fileOrder : [])
+
+    // WHY diff instead of effect-cleanup/re-register: opening one new tab used
+    // to unwatch and rewatch every existing tab, turning N opens into O(N²)
+    // IPC and racing short gaps where external changes could be missed.
+    for (const path of previous.paths) {
+      if (previous.root !== nextRoot || !nextPaths.has(path)) {
+        if (previous.root) {
+          void window.api.editorUnwatchFile({ root: previous.root, path }).catch(() => undefined)
+        }
       }
     }
-  }, [open, activeCwd, cwdState.fileOrder])
+    for (const path of nextPaths) {
+      if (previous.root !== nextRoot || !previous.paths.has(path)) {
+        if (nextRoot) {
+          void window.api.editorWatchFile({ root: nextRoot, path }).catch(err => {
+            const buffer = useGlobalEditorStore.getState().byCwd[nextRoot]?.openFiles[path]
+            if (!buffer) return
+            setFileError(
+              nextRoot,
+              path,
+              err instanceof Error ? err.message : 'failed to watch file for changes',
+              { generation: buffer.generation },
+            )
+          })
+        }
+      }
+    }
+    watchedFilesRef.current = { root: nextRoot, paths: nextPaths }
+  }, [open, activeCwd, cwdState.fileOrder, setFileError])
+
+  useEffect(
+    () => () => {
+      const watched = watchedFilesRef.current
+      if (!watched.root) return
+      for (const path of watched.paths) {
+        void window.api.editorUnwatchFile({ root: watched.root, path }).catch(() => undefined)
+      }
+    },
+    [],
+  )
+
+  // Background cwd buffers are deliberately not watched. Re-observe every
+  // open path when that cwd becomes visible again so a clean buffer catches up
+  // and a dirty one gains an explicit conflict without losing its baseline.
+  useEffect(() => {
+    if (!open || !activeCwd) return
+    let stale = false
+    const paths = useGlobalEditorStore.getState().byCwd[activeCwd]?.fileOrder ?? []
+    void Promise.all(
+      paths.map(async path => {
+        const generation =
+          useGlobalEditorStore.getState().byCwd[activeCwd]?.openFiles[path]?.generation
+        if (generation == null) return
+        const result = await window.api
+          .editorReadTextFile({
+            root: activeCwd,
+            path,
+          })
+          .catch(err => ({
+            ok: false as const,
+            error: err instanceof Error ? err.message : 'failed to revalidate file',
+          }))
+        if (stale) return
+        if (result.ok) {
+          useGlobalEditorStore
+            .getState()
+            .observeFileOnDisk(activeCwd, path, result.text, result.mtimeMs, generation)
+          return
+        }
+        const deleted = result.error === 'does not exist'
+        useGlobalEditorStore.getState().setFileError(activeCwd, path, result.error, {
+          generation,
+          conflict: deleted,
+          externalChange: deleted ? 'deleted' : undefined,
+        })
+      }),
+    )
+    return () => {
+      stale = true
+    }
+  }, [open, activeCwd])
 
   // React to external writes pushed by the watcher. Clean buffers follow
   // disk silently — this is what makes agent writes show up live in an
@@ -258,30 +362,45 @@ export function GlobalEditorShell({ children, workspace }: Props) {
       if (event.root !== activeCwd) return
       const buf = useGlobalEditorStore.getState().byCwd[event.root]?.openFiles[event.path]
       if (!buf) return
+      if (event.kind === 'error') {
+        setFileError(event.root, event.path, event.error ?? 'file watcher failed', {
+          generation: buf.generation,
+        })
+        return
+      }
       if (event.kind === 'unlink') {
         setFileError(event.root, event.path, 'file was deleted on disk', {
           conflict: true,
+          externalChange: 'deleted',
+          generation: buf.generation,
         })
         return
       }
-      if (buf.dirty) {
-        setFileError(
-          event.root,
-          event.path,
-          'file changed on disk while you have unsaved edits',
-          { conflict: true },
-        )
-        return
-      }
+      // Chokidar also reports our own successful write. Matching mtimes are an
+      // acknowledgement already reflected in state; skipping the read avoids
+      // a redundant round trip and, more importantly, avoids racing a second
+      // save that has already started from a newer baseline.
+      if (event.mtimeMs != null && event.mtimeMs === buf.mtimeMs) return
       void window.api
         .editorReadTextFile({ root: event.root, path: event.path })
+        .catch(err => ({
+          ok: false as const,
+          error: err instanceof Error ? err.message : 'failed to refresh changed file',
+        }))
         .then(result => {
           if (result.ok) {
-            markFileSaved(event.root, event.path, result.text, result.mtimeMs)
+            observeFileOnDisk(event.root, event.path, result.text, result.mtimeMs, buf.generation)
+            return
           }
+          const deleted = result.error === 'does not exist'
+          setFileError(event.root, event.path, result.error, {
+            generation: buf.generation,
+            conflict: deleted,
+            externalChange: deleted ? 'deleted' : undefined,
+          })
         })
     })
-  }, [open, activeCwd, markFileSaved, setFileError])
+  }, [open, activeCwd, observeFileOnDisk, setFileError])
 
   // Outer splitter (editor pane ↔ workspace pane). Ratio-based.
   // We measure against the OUTER container's bounding rect so the
@@ -301,9 +420,32 @@ export function GlobalEditorShell({ children, workspace }: Props) {
     ),
   })
 
+  const pendingFileWritesRef = useRef(new Map<string, Promise<void>>())
+  const serializeFileWrite = useCallback(
+    async (key: string, task: () => Promise<boolean>): Promise<boolean> => {
+      const previous = pendingFileWritesRef.current.get(key) ?? Promise.resolve()
+      let release!: () => void
+      const current = new Promise<void>(resolve => {
+        release = resolve
+      })
+      pendingFileWritesRef.current.set(key, current)
+      await previous.catch(() => undefined)
+      try {
+        return await task()
+      } finally {
+        release()
+        if (pendingFileWritesRef.current.get(key) === current) {
+          pendingFileWritesRef.current.delete(key)
+        }
+      }
+    },
+    [],
+  )
+
   // Save handler — wired into MonacoFileEditor's Cmd+S (via saveActive)
   // and the confirm dialog's Save & Close (via saveThenClose). Reads the
-  // buffer, writes to disk via the editorFs IPC, then calls markFileSaved
+  // buffer, writes to disk via the editorFs IPC, then acknowledges exactly
+  // the submitted snapshot
   // on success. The mtime guard matters more once main caches reads:
   // cache invalidation keeps this process fresh, but it cannot see
   // every external editor/agent write before save. Passing the last
@@ -314,22 +456,35 @@ export function GlobalEditorShell({ children, workspace }: Props) {
   const saveFile = useCallback(
     async (path: string): Promise<boolean> => {
       if (!activeCwd) return false
-      const buf = useGlobalEditorStore.getState().byCwd[activeCwd]?.openFiles[path]
-      if (!buf || !buf.dirty) return true
-      const result = await window.api.editorWriteTextFile({
-        root: activeCwd,
-        path,
-        text: buf.currentText,
-        expectedMtimeMs: buf.mtimeMs,
+      const root = activeCwd
+      return serializeFileWrite(`${root}\0${path}`, async () => {
+        const buf = useGlobalEditorStore.getState().byCwd[root]?.openFiles[path]
+        if (!buf || !buf.dirty) return true
+        const writtenText = buf.currentText
+        const result = await window.api
+          .editorWriteTextFile({
+            root,
+            path,
+            text: writtenText,
+            expectedMtimeMs: buf.mtimeMs,
+          })
+          .catch(err => ({
+            ok: false as const,
+            error: err instanceof Error ? err.message : 'failed to save file',
+            conflict: false,
+          }))
+        if (result.ok) {
+          acknowledgeFileWrite(root, path, writtenText, result.mtimeMs, buf.generation)
+          return true
+        }
+        setFileError(root, path, result.error, {
+          conflict: result.conflict === true,
+          generation: buf.generation,
+        })
+        return false
       })
-      if (result.ok) {
-        markFileSaved(activeCwd, path, buf.currentText, result.mtimeMs)
-        return true
-      }
-      setFileError(activeCwd, path, result.error, { conflict: result.conflict === true })
-      return false
     },
-    [activeCwd, markFileSaved, setFileError],
+    [activeCwd, acknowledgeFileWrite, serializeFileWrite, setFileError],
   )
 
   const saveActive = useCallback(async () => {
@@ -344,8 +499,9 @@ export function GlobalEditorShell({ children, workspace }: Props) {
   const closeFileAndDisposeModel = useCallback(
     (path: string, opts?: { force?: boolean }): boolean => {
       if (!activeCwd) return false
+      const buffer = useGlobalEditorStore.getState().byCwd[activeCwd]?.openFiles[path]
       const closed = closeFileAction(activeCwd, path, opts)
-      if (closed) disposeEditorModel(editorModelKey(activeCwd, path))
+      if (closed && buffer) releaseEditorModelOwner(buffer.generation)
       return closed
     },
     [activeCwd, closeFileAction],
@@ -355,48 +511,80 @@ export function GlobalEditorShell({ children, workspace }: Props) {
     async (path: string): Promise<boolean> => {
       if (!activeCwd) return false
       const ok = await saveFile(path)
-      if (ok) closeFileAndDisposeModel(path)
-      return ok
+      if (!ok) return false
+      return closeFileAndDisposeModel(path)
     },
     [activeCwd, saveFile, closeFileAndDisposeModel],
   )
 
   // Banner recovery actions for the conflict state. Reload = disk wins
-  // (markFileSaved replaces the buffer with disk content and clears
+  // (replaceFileFromDisk replaces the buffer with disk content and clears
   // dirty/conflict — exactly "discard my edits"). Overwrite = buffer
   // wins: expectedMtimeMs null skips the optimistic check ONCE, as an
   // explicit user decision rather than a default.
   const reloadFromDisk = useCallback(
     async (path: string) => {
       if (!activeCwd) return
-      const result = await window.api.editorReadTextFile({ root: activeCwd, path })
+      const before = useGlobalEditorStore.getState().byCwd[activeCwd]?.openFiles[path]
+      if (!before) return
+      const result = await window.api
+        .editorReadTextFile({
+          root: activeCwd,
+          path,
+        })
+        .catch(err => ({
+          ok: false as const,
+          error: err instanceof Error ? err.message : 'failed to reload file',
+        }))
       if (!result.ok) {
-        setFileError(activeCwd, path, result.error)
+        setFileError(activeCwd, path, result.error, {
+          generation: before.generation,
+        })
         return
       }
-      markFileSaved(activeCwd, path, result.text, result.mtimeMs)
+      const current = useGlobalEditorStore.getState().byCwd[activeCwd]?.openFiles[path]
+      if (!current || current.generation !== before.generation) return
+      if (current.currentText === before.currentText) {
+        replaceFileFromDisk(activeCwd, path, result.text, result.mtimeMs, before.generation)
+      } else {
+        observeFileOnDisk(activeCwd, path, result.text, result.mtimeMs, before.generation)
+      }
     },
-    [activeCwd, markFileSaved, setFileError],
+    [activeCwd, observeFileOnDisk, replaceFileFromDisk, setFileError],
   )
 
   const overwriteDisk = useCallback(
     async (path: string) => {
       if (!activeCwd) return
-      const buf = useGlobalEditorStore.getState().byCwd[activeCwd]?.openFiles[path]
-      if (!buf) return
-      const result = await window.api.editorWriteTextFile({
-        root: activeCwd,
-        path,
-        text: buf.currentText,
-        expectedMtimeMs: null,
+      const root = activeCwd
+      await serializeFileWrite(`${root}\0${path}`, async () => {
+        const buf = useGlobalEditorStore.getState().byCwd[root]?.openFiles[path]
+        if (!buf) return false
+        const writtenText = buf.currentText
+        const result = await window.api
+          .editorWriteTextFile({
+            root,
+            path,
+            text: writtenText,
+            expectedMtimeMs: null,
+          })
+          .catch(err => ({
+            ok: false as const,
+            error: err instanceof Error ? err.message : 'failed to overwrite file',
+            conflict: false,
+          }))
+        if (result.ok) {
+          acknowledgeFileWrite(root, path, writtenText, result.mtimeMs, buf.generation)
+          return true
+        }
+        setFileError(root, path, result.error, {
+          conflict: result.conflict === true,
+          generation: buf.generation,
+        })
+        return false
       })
-      if (result.ok) {
-        markFileSaved(activeCwd, path, buf.currentText, result.mtimeMs)
-      } else {
-        setFileError(activeCwd, path, result.error, { conflict: result.conflict === true })
-      }
     },
-    [activeCwd, markFileSaved, setFileError],
+    [activeCwd, acknowledgeFileWrite, serializeFileWrite, setFileError],
   )
 
   // Open a file from the explorer. Reads via IPC, then commits to
@@ -421,6 +609,30 @@ export function GlobalEditorShell({ children, workspace }: Props) {
     [activeCwd, clearFileSelection],
   )
 
+  const clearRequestedFocus = useCallback(
+    (path: string) => {
+      if (!activeCwd) return
+      clearFileFocusRequest(activeCwd, path)
+    },
+    [activeCwd, clearFileFocusRequest],
+  )
+
+  const confirmExplorerDelete = useCallback(
+    async (path: string): Promise<boolean> => {
+      if (!activeCwd) return false
+      const state = useGlobalEditorStore.getState().byCwd[activeCwd]
+      if (!state) return true
+      const dirtyPaths = openPathsUnder(state, path).filter(
+        openPath => state.openFiles[openPath]?.dirty,
+      )
+      if (dirtyPaths.length === 0) return true
+      return await new Promise<boolean>(resolve => {
+        setPendingExplorerDelete({ path, dirtyPaths, resolve })
+      })
+    },
+    [activeCwd],
+  )
+
   // Escape exits fullscreen — but only when no editor overlay owns the
   // key (Quick Open / content search close themselves on Escape and must
   // not ALSO drop the user out of fullscreen with the same press).
@@ -428,19 +640,15 @@ export function GlobalEditorShell({ children, workspace }: Props) {
     if (!open || !editorFullscreen) return
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return
-      const { quickOpenOpen: qo, contentSearchOpen: cs } =
-        useGlobalEditorStore.getState()
+      if (event.defaultPrevented) return
+      if (hasAppInteractionOwner()) return
+      const { quickOpenOpen: qo, contentSearchOpen: cs } = useGlobalEditorStore.getState()
       if (qo || cs) return
       setEditorFullscreen(false)
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [open, editorFullscreen, setEditorFullscreen])
-
-  // When the overlay is closed, render the workspace area
-  // full-bleed. This is the "off" state — zero overhead, no extra
-  // DOM, no event listeners.
-  if (!open) return <>{children}</>
 
   // When open without a focused cwd (rare boot edge), still show
   // the split so the user sees the overlay engaged — but the
@@ -449,7 +657,7 @@ export function GlobalEditorShell({ children, workspace }: Props) {
   const leftPercent = (splitterRatio * 100).toFixed(2)
   const rightPercent = ((1 - splitterRatio) * 100).toFixed(2)
   const active = cwdState.activeFilePath
-    ? cwdState.openFiles[cwdState.activeFilePath] ?? null
+    ? (cwdState.openFiles[cwdState.activeFilePath] ?? null)
     : null
 
   return (
@@ -477,55 +685,80 @@ export function GlobalEditorShell({ children, workspace }: Props) {
           // Unmounting would tear down every terminal/feed in the tab
           // (xterm buffers, scroll positions, in-flight renders) just
           // because the user wanted a big editor for a minute.
-          width: editorFullscreen
-            ? '100%'
-            : `calc(${leftPercent}% - ${SPLITTER_PX / 2}px)`,
+          display: open ? undefined : 'none',
+          width: editorFullscreen ? '100%' : `calc(${leftPercent}% - ${SPLITTER_PX / 2}px)`,
         }}
       >
-        {aiWorkspaceId ? (
-          <AiWorkspaceEditor workspaceId={aiWorkspaceId} onClose={closeAiWorkspace} />
-        ) : activeCwd ? (
-          <EditorWorkbench
-            sidebar={
-              <ExplorerPane
-                root={activeCwd}
-                activeFilePath={cwdState.activeFilePath}
-                onOpenFile={openFileFromTree}
-                onFileRenamed={(fromPath, toPath) => {
-                  renameOpenFile(activeCwd, fromPath, toPath)
-                  // The model URI embeds the old path — dispose it; the
-                  // next mount recreates under the new URI. Undo history
-                  // is lost on rename; acceptable for an explicit act.
-                  disposeEditorModel(editorModelKey(activeCwd, fromPath))
-                }}
-                onFileDeleted={path => {
-                  // Deleted on disk → force-close the buffer. A zombie
-                  // tab that can only fail to save is worse than closing.
-                  closeFileAction(activeCwd, path, { force: true })
-                  disposeEditorModel(editorModelKey(activeCwd, path))
-                }}
-              />
-            }
-            sidebarVisible={fileTreeVisible}
-            sidebarWidthPx={fileTreeWidthPx}
-            onSidebarWidthChange={setFileTreeWidthPx}
-            fileOrder={cwdState.fileOrder}
-            openFiles={cwdState.openFiles}
-            activeFilePath={cwdState.activeFilePath}
-            activeFile={active}
-            projectRoot={activeCwd}
-            onActivateFile={path => setActiveFile(activeCwd, path)}
-            onCloseFile={closeFileAndDisposeModel}
-            onChangeFile={(path, text) => updateFileText(activeCwd, path, text)}
-            onSave={() => void saveActive()}
-            onSaveThenClose={saveThenClose}
-            onReloadFromDisk={path => void reloadFromDisk(path)}
-            onOverwriteDisk={path => void overwriteDisk(path)}
-            onSelectionRevealed={clearRevealedSelection}
+        {aiWorkspaceId && (
+          <AiWorkspaceEditor
+            key={aiWorkspaceId}
+            workspaceId={aiWorkspaceId}
+            visible={open && aiWorkspaceVisible}
+            onClose={closeAiWorkspace}
           />
-        ) : (
-          <div className="flex flex-1 items-center justify-center px-8 text-center text-[11px] text-muted">
-            Focus an agent to open its workspace in the editor.
+        )}
+        {open && !aiWorkspaceVisible && (
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+            {activeCwd ? (
+              <EditorWorkbench
+                sidebar={
+                  <ExplorerPane
+                    root={activeCwd}
+                    activeFilePath={cwdState.activeFilePath}
+                    onOpenFile={openFileFromTree}
+                    onFileRenamed={(fromPath, toPath) => {
+                      renameOpenPath(activeCwd, fromPath, toPath)
+                      // The buffer generation remains its logical model owner.
+                      // The next Monaco mount moves that owner to the new URI;
+                      // the old viewer cleanup then disposes only if no other
+                      // surface owns the same absolute file.
+                    }}
+                    onBeforeRename={(fromPath, toPath) => {
+                      const state = useGlobalEditorStore.getState().byCwd[activeCwd]
+                      if (!state) return true
+                      const affected = openPathsUnder(state, fromPath)
+                      const affectedSet = new Set(affected)
+                      return affected.every(path => {
+                        const suffix = path === fromPath ? '' : path.slice(fromPath.length)
+                        const destination = `${toPath}${suffix}`
+                        return !state.openFiles[destination] || affectedSet.has(destination)
+                      })
+                    }}
+                    onFileDeleted={path => {
+                      const state = useGlobalEditorStore.getState().byCwd[activeCwd]
+                      const affected = state ? openPathsUnder(state, path) : []
+                      for (const openPath of affected) {
+                        const buffer = state?.openFiles[openPath]
+                        closeFileAction(activeCwd, openPath, { force: true })
+                        if (buffer) releaseEditorModelOwner(buffer.generation)
+                      }
+                    }}
+                    onBeforeDelete={confirmExplorerDelete}
+                  />
+                }
+                sidebarVisible={fileTreeVisible}
+                sidebarWidthPx={fileTreeWidthPx}
+                onSidebarWidthChange={setFileTreeWidthPx}
+                fileOrder={cwdState.fileOrder}
+                openFiles={cwdState.openFiles}
+                activeFilePath={cwdState.activeFilePath}
+                activeFile={active}
+                lspContext={active ? { workspaceRoot: activeCwd, filePath: active.path } : null}
+                onActivateFile={path => setActiveFile(activeCwd, path, { focus: true })}
+                onCloseFile={closeFileAndDisposeModel}
+                onChangeFile={(path, text) => updateFileText(activeCwd, path, text)}
+                onSave={() => void saveActive()}
+                onSaveThenClose={saveThenClose}
+                onReloadFromDisk={path => void reloadFromDisk(path)}
+                onOverwriteDisk={path => void overwriteDisk(path)}
+                onSelectionRevealed={clearRevealedSelection}
+                onFocusRequestHandled={clearRequestedFocus}
+              />
+            ) : (
+              <div className="flex flex-1 items-center justify-center px-8 text-center text-[11px] text-muted">
+                Focus an agent to open its workspace in the editor.
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -537,32 +770,50 @@ export function GlobalEditorShell({ children, workspace }: Props) {
         the hook) so the cursor doesn't flicker as the splitter
         moves under it.
       */}
-      {!editorFullscreen && (
+      {open && !editorFullscreen && (
         <SplitHandle
           dragging={outerSplitter.dragging}
           onMouseDown={outerSplitter.onMouseDown}
           hitSizePx={SPLITTER_HIT_PX}
           barSizePx={SPLITTER_PX}
+          label="Resize editor and workspace panes"
+          valueNow={Math.round(splitterRatio * 100)}
+          valueMin={20}
+          valueMax={80}
+          onKeyboardDelta={direction => setSplitterRatio(splitterRatio + direction * 0.02)}
         />
       )}
-      {!editorFullscreen && outerSplitter.cursorLock}
+      {open && !editorFullscreen && outerSplitter.cursorLock}
       <div
         className="flex flex-col min-h-0 overflow-hidden"
         style={
-          editorFullscreen
-            ? { display: 'none' }
-            : { width: `calc(${rightPercent}% - ${SPLITTER_PX / 2}px)` }
+          !open
+            ? { width: '100%' }
+            : editorFullscreen
+              ? { display: 'none' }
+              : { width: `calc(${rightPercent}% - ${SPLITTER_PX / 2}px)` }
         }
       >
         {children}
       </div>
-      {quickOpenOpen && activeCwd && (
+      {open && quickOpenOpen && activeCwd && (
         <QuickOpenOverlay root={activeCwd} onClose={() => setQuickOpenOpen(false)} />
       )}
-      {contentSearchOpen && activeCwd && (
-        <ContentSearchOverlay
-          root={activeCwd}
-          onClose={() => setContentSearchOpen(false)}
+      {open && contentSearchOpen && activeCwd && (
+        <ContentSearchOverlay root={activeCwd} onClose={() => setContentSearchOpen(false)} />
+      )}
+      {pendingExplorerDelete && (
+        <ConfirmDeleteDialog
+          path={pendingExplorerDelete.path}
+          dirtyPaths={pendingExplorerDelete.dirtyPaths}
+          onCancel={() => {
+            pendingExplorerDelete.resolve(false)
+            setPendingExplorerDelete(null)
+          }}
+          onConfirm={() => {
+            pendingExplorerDelete.resolve(true)
+            setPendingExplorerDelete(null)
+          }}
         />
       )}
     </div>

@@ -1,6 +1,7 @@
 type Props = {
   message: string
   conflict: boolean
+  externalChange: 'changed' | 'deleted' | null
   onReload?: () => void
   onOverwrite?: () => void
 }
@@ -17,13 +18,22 @@ type Props = {
 // conflict is not resolvable by retrying; parking the actions anywhere
 // less proximate (a toast, the command palette) leaves the user stuck
 // staring at an error they can't act on.
-export function EditorStatusBanner({ message, conflict, onReload, onOverwrite }: Props) {
+export function EditorStatusBanner({
+  message,
+  conflict,
+  externalChange,
+  onReload,
+  onOverwrite,
+}: Props) {
   return (
-    <div className="flex flex-shrink-0 items-center gap-3 border-b border-border bg-danger/10 px-3 py-1.5 font-code text-[11px] text-danger">
+    <div
+      aria-live="polite"
+      className="flex flex-shrink-0 items-center gap-3 border-b border-border bg-danger/10 px-3 py-1.5 font-code text-[11px] text-danger"
+    >
       <span className="min-w-0 flex-1 truncate" title={message}>
         {message}
       </span>
-      {conflict && onReload && (
+      {conflict && externalChange !== 'deleted' && onReload && (
         <button
           type="button"
           onClick={onReload}
@@ -38,7 +48,7 @@ export function EditorStatusBanner({ message, conflict, onReload, onOverwrite }:
           onClick={onOverwrite}
           className="flex-shrink-0 rounded border border-border px-2 py-0.5 text-ink-dim hover:text-ink"
         >
-          Overwrite
+          {externalChange === 'deleted' ? 'Recreate file' : 'Overwrite'}
         </button>
       )}
     </div>

@@ -25,11 +25,14 @@ import { useGlobalEditorStore } from '@renderer/features/global-editor/store'
 // file would silence the cycle but hide the coupling this note explains.
 
 export type PersistedGlobalEditorState = {
-  version: 1
+  version: 2
   splitterRatio: number
   fileTreeWidthPx: number
   fileTreeVisible: boolean
   tabsByCwd: Record<string, { fileOrder: string[]; activeFilePath: string | null }>
+  /** Oldest → newest. Object insertion order is not usage order once a cwd
+   * survives across process launches, so it cannot implement the promised cap. */
+  cwdRecency: string[]
 }
 
 const KEY = 'agent-code:global-editor:v1'
@@ -41,15 +44,77 @@ const MAX_CWDS = 20
 // keystroke is pure waste — nothing here changes faster than a human
 // opens/closes tabs.
 const WRITE_DEBOUNCE_MS = 500
+const MAX_TABS_PER_CWD = 100
+const MAX_PATH_LENGTH = 4_096
+
+function validRelativePath(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > MAX_PATH_LENGTH) {
+    return false
+  }
+  if (value.startsWith('/') || value.startsWith('\\')) return false
+  const parts = value.replace(/\\/g, '/').split('/')
+  return !parts.some(part => part === '..' || part === '')
+}
+
+function sanitizedTabsByCwd(value: unknown): PersistedGlobalEditorState['tabsByCwd'] | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
+  const out: PersistedGlobalEditorState['tabsByCwd'] = {}
+  for (const [cwd, raw] of Object.entries(value)) {
+    if (!cwd || cwd.length > MAX_PATH_LENGTH || typeof raw !== 'object' || raw === null) {
+      continue
+    }
+    const record = raw as { fileOrder?: unknown; activeFilePath?: unknown }
+    if (!Array.isArray(record.fileOrder)) continue
+    const fileOrder = [...new Set(record.fileOrder.filter(validRelativePath))].slice(
+      0,
+      MAX_TABS_PER_CWD,
+    )
+    if (fileOrder.length === 0) continue
+    const activeFilePath =
+      validRelativePath(record.activeFilePath) && fileOrder.includes(record.activeFilePath)
+        ? record.activeFilePath
+        : (fileOrder[fileOrder.length - 1] ?? null)
+    out[cwd] = { fileOrder, activeFilePath }
+  }
+  return out
+}
 
 export function loadPersistedGlobalEditorState(): PersistedGlobalEditorState | null {
   try {
     const raw = localStorage.getItem(KEY)
     if (!raw) return null
-    const parsed = JSON.parse(raw) as PersistedGlobalEditorState
-    if (parsed?.version !== 1) return null
-    if (typeof parsed.tabsByCwd !== 'object' || parsed.tabsByCwd === null) return null
-    return parsed
+    // Omit the v2 literal before adding the migration union. Intersecting
+    // `{version?: 2}` with `{version?: 1 | 2}` silently narrows back to 2 and
+    // makes the v1 migration branch unreachable to TypeScript even though
+    // localStorage can absolutely still contain that legacy payload.
+    const parsed = JSON.parse(raw) as Partial<Omit<PersistedGlobalEditorState, 'version'>> & {
+      version?: 1 | 2
+    }
+    if (parsed?.version !== 1 && parsed?.version !== 2) return null
+    const tabsByCwd = sanitizedTabsByCwd(parsed.tabsByCwd)
+    if (!tabsByCwd) return null
+    const known = new Set(Object.keys(tabsByCwd))
+    const persistedRecency =
+      parsed.version === 2 && Array.isArray(parsed.cwdRecency)
+        ? parsed.cwdRecency.filter(
+            (cwd): cwd is string => typeof cwd === 'string' && known.has(cwd),
+          )
+        : []
+    const cwdRecency = [...new Set([...Object.keys(tabsByCwd), ...persistedRecency])]
+    return {
+      version: 2,
+      splitterRatio:
+        typeof parsed.splitterRatio === 'number' && Number.isFinite(parsed.splitterRatio)
+          ? parsed.splitterRatio
+          : 0.5,
+      fileTreeWidthPx:
+        typeof parsed.fileTreeWidthPx === 'number' && Number.isFinite(parsed.fileTreeWidthPx)
+          ? parsed.fileTreeWidthPx
+          : 260,
+      fileTreeVisible: typeof parsed.fileTreeVisible === 'boolean' ? parsed.fileTreeVisible : true,
+      tabsByCwd,
+      cwdRecency,
+    }
   } catch {
     // Corrupt JSON / disabled storage — start fresh rather than crash the
     // store module at import time.
@@ -57,40 +122,77 @@ export function loadPersistedGlobalEditorState(): PersistedGlobalEditorState | n
   }
 }
 
+type PersistableStoreState = Pick<
+  ReturnType<typeof useGlobalEditorStore.getState>,
+  'byCwd' | 'activeCwd' | 'splitterRatio' | 'fileTreeWidthPx' | 'fileTreeVisible'
+>
+
+/** Merge live state into the previous snapshot instead of rebuilding from the
+ * lazily hydrated store. Projects never visited during this process must keep
+ * their remembered tabs; a live empty cwd is an intentional tombstone. */
+export function buildPersistedGlobalEditorState(
+  state: PersistableStoreState,
+  previous: PersistedGlobalEditorState | null,
+): PersistedGlobalEditorState {
+  const tabsByCwd = { ...(previous?.tabsByCwd ?? {}) }
+  for (const [cwd, cwdState] of Object.entries(state.byCwd)) {
+    if (cwdState.fileOrder.length === 0) {
+      delete tabsByCwd[cwd]
+      continue
+    }
+    const fileOrder = [...new Set(cwdState.fileOrder.filter(validRelativePath))].slice(
+      0,
+      MAX_TABS_PER_CWD,
+    )
+    if (fileOrder.length === 0) {
+      delete tabsByCwd[cwd]
+      continue
+    }
+    tabsByCwd[cwd] = {
+      fileOrder,
+      activeFilePath:
+        cwdState.activeFilePath && fileOrder.includes(cwdState.activeFilePath)
+          ? cwdState.activeFilePath
+          : (fileOrder[fileOrder.length - 1] ?? null),
+    }
+  }
+
+  const known = new Set(Object.keys(tabsByCwd))
+  const prior = (previous?.cwdRecency ?? []).filter(cwd => known.has(cwd))
+  const discovered = Object.keys(tabsByCwd).filter(cwd => !prior.includes(cwd))
+  const active = state.activeCwd && known.has(state.activeCwd) ? state.activeCwd : null
+  const cwdRecency = [...prior, ...discovered].filter(cwd => cwd !== active)
+  if (active) cwdRecency.push(active)
+  const retained = cwdRecency.slice(-MAX_CWDS)
+  const retainedSet = new Set(retained)
+  for (const cwd of Object.keys(tabsByCwd)) {
+    if (!retainedSet.has(cwd)) delete tabsByCwd[cwd]
+  }
+
+  return {
+    version: 2,
+    splitterRatio: state.splitterRatio,
+    fileTreeWidthPx: state.fileTreeWidthPx,
+    fileTreeVisible: state.fileTreeVisible,
+    tabsByCwd,
+    cwdRecency: retained,
+  }
+}
+
 /** Subscribe the persistence writer. Returns a stop function; call once
  *  from the shell (an app has exactly one Global Editor). */
 export function startGlobalEditorPersistence(): () => void {
   let timer: number | null = null
+  let previous = loadPersistedGlobalEditorState()
   const unsub = useGlobalEditorStore.subscribe(() => {
     if (timer !== null) return
     timer = window.setTimeout(() => {
       timer = null
       const s = useGlobalEditorStore.getState()
-      // Object key order IS insertion order for string keys, and byCwd
-      // only ever gains keys — slice(-MAX_CWDS) keeps the most recently
-      // first-visited cwds. Not strictly LRU, but the failure mode is
-      // just "a very old project forgets its tabs".
-      const cwds = Object.keys(s.byCwd).slice(-MAX_CWDS)
-      const tabsByCwd: PersistedGlobalEditorState['tabsByCwd'] = {}
-      for (const cwd of cwds) {
-        const cwdState = s.byCwd[cwd]
-        if (!cwdState || cwdState.fileOrder.length === 0) continue
-        tabsByCwd[cwd] = {
-          fileOrder: cwdState.fileOrder,
-          activeFilePath: cwdState.activeFilePath,
-        }
-      }
+      const next = buildPersistedGlobalEditorState(s, previous)
       try {
-        localStorage.setItem(
-          KEY,
-          JSON.stringify({
-            version: 1,
-            splitterRatio: s.splitterRatio,
-            fileTreeWidthPx: s.fileTreeWidthPx,
-            fileTreeVisible: s.fileTreeVisible,
-            tabsByCwd,
-          } satisfies PersistedGlobalEditorState),
-        )
+        localStorage.setItem(KEY, JSON.stringify(next))
+        previous = next
       } catch {
         // Quota exceeded — drop silently; persistence is best-effort and
         // the live session is unaffected.

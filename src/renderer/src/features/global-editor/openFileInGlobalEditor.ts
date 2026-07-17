@@ -6,15 +6,24 @@ export type OpenFileInGlobalEditorParams = {
   path: string
   line?: number | null
   column?: number | null
+  /** Restore/revalidation may populate a buffer without changing the visible tab. */
+  activate?: boolean
+  /** Only explicit navigation should steal keyboard focus from the workspace. */
+  focus?: boolean
 }
+
+let navigationSequence = 0
 
 export async function openFileInGlobalEditor({
   root,
   path,
   line,
   column,
+  activate = true,
+  focus = true,
 }: OpenFileInGlobalEditorParams): Promise<{ ok: true } | { ok: false; error: string }> {
   const editor = useGlobalEditorStore.getState()
+  const navigationId = activate ? ++navigationSequence : null
   const selection = line
     ? {
         line,
@@ -23,12 +32,13 @@ export async function openFileInGlobalEditor({
     : null
 
   // WHY we still read when the tab is already open and clean: agent writes
-  // commonly happen outside the editor store, and there is no file watcher on
-  // these buffers yet. A click on the tree or rendered path is the user's
-  // explicit "show me this file now" intent, so it must revalidate against
-  // disk instead of assuming the in-memory clean buffer is current. Dirty
-  // buffers remain protected by store.openFile, which refreshes savedText and
-  // mtime while preserving the user's edits.
+  // commonly happen outside the editor store. The visible cwd has watchers,
+  // but background/restoring buffers do not, and watcher delivery itself is
+  // best-effort. A click on the tree or rendered path is the user's explicit
+  // "show me this file now" intent, so it must revalidate against disk instead
+  // of assuming the in-memory clean buffer is current. Dirty buffers remain
+  // protected by store.openFile, which observes divergence without advancing
+  // their optimistic-save baseline or replacing their edits.
   const result = await window.api.editorReadTextFile({ root, path }).catch(err => ({
     ok: false as const,
     error: err instanceof Error ? err.message : 'read failed',
@@ -43,12 +53,18 @@ export async function openFileInGlobalEditor({
   // buffer preservation, tab ordering, and language detection. Reusing that
   // path means a clicked markdown path behaves like a file-tree click rather
   // than becoming a second filesystem policy surface.
+  // A slow earlier click may resolve after a later one. It is still useful to
+  // populate the earlier tab in the background, but only the latest explicit
+  // navigation may activate/focus it or switch the visible project root.
+  const shouldActivate = activate && navigationId !== null && navigationId === navigationSequence
   editor.openFile({
     cwd: root,
     path: result.path,
     text: result.text,
     mtimeMs: result.mtimeMs,
     selection,
+    activate: shouldActivate,
+    focus: shouldActivate && focus,
   })
   // A rendered link can come from a non-active pane, a previewed session, or a
   // workspace different from the editor's current `activeCwd`. Opening the
@@ -56,7 +72,14 @@ export async function openFileInGlobalEditor({
   // succeed while leaving the user staring at the previous project. File
   // activation is a navigation intent, so make the opened file's root the
   // visible editor root before showing the editor.
-  editor.setActiveCwd(root)
-  useAppStore.getState().openGlobalEditor()
+  if (shouldActivate) {
+    editor.setActiveCwd(root)
+    // A project-file navigation must reveal the project editor even when a
+    // curated AI Workspace currently owns the surface. The AI Workspace is
+    // only hidden here (its component remains mounted), so unsaved review
+    // edits survive the round-trip.
+    editor.showProjectEditor()
+    useAppStore.getState().openGlobalEditor()
+  }
   return { ok: true }
 }

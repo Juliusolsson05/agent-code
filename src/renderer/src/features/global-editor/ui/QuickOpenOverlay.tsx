@@ -4,6 +4,13 @@ import { fuzzyMatch } from '@renderer/features/command-palette/lib/rankCommands'
 import { basename } from '@renderer/features/editor/lib/path'
 import { FileIcon } from '@renderer/features/editor/lib/fileIcon'
 import { openFileInGlobalEditor } from '@renderer/features/global-editor/openFileInGlobalEditor'
+import { useGlobalEditorStore } from '@renderer/features/global-editor/store'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from '@renderer/components/ui/dialog'
 
 // Quick Open (⌘P) — fuzzy file-name jump for the Global Editor (#513).
 //
@@ -41,22 +48,40 @@ function scorePath(path: string, query: string): number {
 export function QuickOpenOverlay({ root, onClose }: Props) {
   const [files, setFiles] = useState<string[]>([])
   const [truncated, setTruncated] = useState(false)
+  const [partialErrorCount, setPartialErrorCount] = useState(0)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [selectedIndex, setSelectedIndex] = useState(0)
+  const [loading, setLoading] = useState(true)
   const listRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     let stale = false
-    void window.api.editorListFilesRecursive({ root }).then(result => {
-      if (stale) return
-      if (!result.ok) {
-        setLoadError(result.error)
-        return
-      }
-      setFiles(result.files)
-      setTruncated(result.truncated)
-    })
+    setFiles([])
+    setTruncated(false)
+    setPartialErrorCount(0)
+    setLoadError(null)
+    setQuery('')
+    setSelectedIndex(0)
+    setLoading(true)
+    void window.api
+      .editorListFilesRecursive({ root })
+      .then(result => {
+        if (stale) return
+        setLoading(false)
+        if (!result.ok) {
+          setLoadError(result.error)
+          return
+        }
+        setFiles(result.files)
+        setTruncated(result.truncated)
+        setPartialErrorCount(result.errorCount)
+      })
+      .catch(err => {
+        if (stale) return
+        setLoading(false)
+        setLoadError(err instanceof Error ? err.message : 'Failed to index project files.')
+      })
     return () => {
       stale = true
     }
@@ -64,9 +89,13 @@ export function QuickOpenOverlay({ root, onClose }: Props) {
 
   const matches = useMemo(() => {
     const q = query.trim()
-    // Empty query renders nothing rather than 20k rows — quick-open is a
-    // typing surface, not a browser; the tree is one ⌘⇧E away.
-    if (!q) return []
+    if (!q) {
+      // A blank command palette should not look broken while the user decides
+      // what to type. Open tabs are the best recency signal we already own;
+      // fill the remainder with the bounded index in deterministic order.
+      const recent = useGlobalEditorStore.getState().byCwd[root]?.fileOrder ?? []
+      return [...new Set([...recent.slice().reverse(), ...files])].slice(0, MAX_VISIBLE)
+    }
     const scored: Array<{ path: string; score: number }> = []
     for (const path of files) {
       const score = scorePath(path, q)
@@ -87,23 +116,44 @@ export function QuickOpenOverlay({ root, onClose }: Props) {
     setSelectedIndex(0)
   }, [query])
 
-  const openSelected = (path: string | undefined) => {
-    if (!path) return
-    void openFileInGlobalEditor({ root, path })
-    onClose()
+  useEffect(() => {
+    setSelectedIndex(index => Math.max(0, Math.min(index, matches.length - 1)))
+  }, [matches.length])
+
+  useEffect(() => {
+    const selected = listRef.current?.querySelector<HTMLElement>(
+      `[data-quick-open-index="${selectedIndex}"]`,
+    )
+    selected?.scrollIntoView({ block: 'nearest' })
+  }, [selectedIndex])
+
+  const openSelected = async (path: string | undefined) => {
+    if (!path || loading) return
+    const result = await openFileInGlobalEditor({ root, path })
+    if (result.ok) onClose()
+    else setLoadError(result.error)
   }
 
   return (
-    <div
-      className="fixed inset-0 z-40 flex items-start justify-center bg-black/30 pt-[12vh]"
-      onMouseDown={onClose}
+    <Dialog
+      open
+      onOpenChange={nextOpen => {
+        if (!nextOpen) onClose()
+      }}
     >
-      <div
-        className="flex w-[520px] max-w-[90vw] flex-col overflow-hidden rounded border border-border bg-surface font-code shadow-xl"
-        onMouseDown={event => event.stopPropagation()}
-      >
+      <DialogContent className="left-1/2 top-[12vh] flex w-[520px] max-w-[90vw] -translate-x-1/2 translate-y-0 flex-col overflow-hidden p-0 font-code">
+        <DialogTitle className="sr-only">Quick Open File</DialogTitle>
+        <DialogDescription className="sr-only">
+          Type part of a file name or path, then use the arrow keys and Enter to open it.
+        </DialogDescription>
         <input
           autoFocus
+          role="combobox"
+          aria-expanded="true"
+          aria-controls="quick-open-results"
+          aria-activedescendant={
+            matches[selectedIndex] ? `quick-open-option-${selectedIndex}` : undefined
+          }
           value={query}
           onChange={event => setQuery(event.target.value)}
           onKeyDown={event => {
@@ -112,21 +162,31 @@ export function QuickOpenOverlay({ root, onClose }: Props) {
               onClose()
             } else if (event.key === 'ArrowDown') {
               event.preventDefault()
-              setSelectedIndex(prev => Math.min(prev + 1, matches.length - 1))
+              if (matches.length > 0) {
+                setSelectedIndex(prev => Math.min(prev + 1, matches.length - 1))
+              }
             } else if (event.key === 'ArrowUp') {
               event.preventDefault()
               setSelectedIndex(prev => Math.max(prev - 1, 0))
             } else if (event.key === 'Enter') {
               event.preventDefault()
-              openSelected(matches[selectedIndex])
+              void openSelected(matches[selectedIndex])
             }
           }}
           placeholder="Go to file…"
           className="border-b border-border bg-canvas px-3 py-2 text-[13px] text-ink outline-none placeholder:text-muted"
         />
-        <div ref={listRef} className="max-h-[50vh] overflow-y-auto py-1">
+        <div
+          ref={listRef}
+          id="quick-open-results"
+          role="listbox"
+          aria-label="Matching project files"
+          className="max-h-[50vh] overflow-y-auto py-1"
+        >
           {loadError ? (
             <div className="px-3 py-2 text-[11px] text-danger">{loadError}</div>
+          ) : loading ? (
+            <div className="px-3 py-2 text-[11px] text-muted">Indexing project files…</div>
           ) : (
             matches.map((path, index) => {
               const name = basename(path)
@@ -134,8 +194,12 @@ export function QuickOpenOverlay({ root, onClose }: Props) {
               return (
                 <button
                   key={path}
+                  id={`quick-open-option-${index}`}
                   type="button"
-                  onClick={() => openSelected(path)}
+                  role="option"
+                  aria-selected={selected}
+                  data-quick-open-index={index}
+                  onClick={() => void openSelected(path)}
                   onMouseEnter={() => setSelectedIndex(index)}
                   className={`flex w-full items-center gap-2 px-3 py-1 text-left text-[12px] ${
                     selected ? 'bg-accent-soft text-ink' : 'text-ink-dim hover:bg-surface-hi'
@@ -150,7 +214,7 @@ export function QuickOpenOverlay({ root, onClose }: Props) {
               )
             })
           )}
-          {!loadError && query.trim() && matches.length === 0 && (
+          {!loading && !loadError && query.trim() && matches.length === 0 && (
             <div className="px-3 py-2 text-[11px] text-muted">No files match.</div>
           )}
         </div>
@@ -159,7 +223,13 @@ export function QuickOpenOverlay({ root, onClose }: Props) {
             Index truncated at 20k files — results may be incomplete.
           </div>
         )}
-      </div>
-    </div>
+        {partialErrorCount > 0 && (
+          <div className="border-t border-border px-3 py-1 text-[10px] text-warning">
+            {partialErrorCount} director{partialErrorCount === 1 ? 'y was' : 'ies were'} unreadable;
+            results are partial.
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
   )
 }

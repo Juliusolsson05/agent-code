@@ -4,9 +4,12 @@ import { normalizeCodeLanguage } from '@shared/code/language'
 import type { EditorFileBuffer } from '@renderer/features/editor/types'
 import {
   makeBuffer,
+  withDiskObserved,
+  withDiskSnapshot,
   withError,
-  withSaved,
+  withFocusRequested,
   withTextUpdate,
+  withWriteAcknowledged,
 } from '@renderer/features/editor/lib/bufferOps'
 // Benign module cycle — see the MODULE-CYCLE NOTE in
 // globalEditorPersistence.ts before "fixing" this import.
@@ -73,6 +76,9 @@ type GlobalEditorStore = {
    *  they want it hidden across all projects. */
   fileTreeVisible: boolean
   aiWorkspaceId: string | null
+  /** Visibility is separate from identity so hiding the curated surface does
+   * not unmount it and throw away unsaved buffers. */
+  aiWorkspaceVisible: boolean
   /** Drives the cwd→cwd transition. Most actions are keyed by
    *  cwd; this also fronts the "active cwd" so callers don't
    *  need to thread it through. */
@@ -97,6 +103,7 @@ type GlobalEditorStore = {
   toggleEditorFullscreen: () => void
   openAiWorkspace: (workspaceId: string) => void
   closeAiWorkspace: () => void
+  showProjectEditor: () => void
 
   openFile: (params: {
     cwd: string
@@ -104,21 +111,50 @@ type GlobalEditorStore = {
     text: string
     mtimeMs: number
     selection?: { line: number; column: number } | null
+    /** Restoration populates tabs without cycling the active model N times. */
+    activate?: boolean
+    /** Explicit navigation focuses Monaco; background restoration/revalidation does not. */
+    focus?: boolean
   }) => void
-  setActiveFile: (cwd: string, path: string | null) => void
+  setActiveFile: (cwd: string, path: string | null, opts?: { focus?: boolean }) => void
   updateFileText: (cwd: string, path: string, text: string) => void
   setFileError: (
     cwd: string,
     path: string,
     error: string | null,
-    opts?: { conflict?: boolean },
+    opts?: {
+      conflict?: boolean
+      externalChange?: EditorFileBuffer['externalChange']
+      generation?: number
+    },
   ) => void
   clearFileSelection: (cwd: string, path: string) => void
-  markFileSaved: (cwd: string, path: string, text: string, mtimeMs: number) => void
+  clearFileFocusRequest: (cwd: string, path: string) => void
+  acknowledgeFileWrite: (
+    cwd: string,
+    path: string,
+    writtenText: string,
+    mtimeMs: number,
+    generation?: number,
+  ) => void
+  replaceFileFromDisk: (
+    cwd: string,
+    path: string,
+    text: string,
+    mtimeMs: number,
+    generation?: number,
+  ) => void
+  observeFileOnDisk: (
+    cwd: string,
+    path: string,
+    text: string,
+    mtimeMs: number,
+    generation?: number,
+  ) => void
   closeFile: (cwd: string, path: string, opts?: { force?: boolean }) => boolean
   /** Explorer rename support: move an open buffer to its new path,
    *  preserving dirty text. No-op when the file isn't open. */
-  renameOpenFile: (cwd: string, fromPath: string, toPath: string) => void
+  renameOpenPath: (cwd: string, fromPath: string, toPath: string) => void
 }
 
 // Exported because consumers (notably GlobalEditorShell's
@@ -201,6 +237,7 @@ export const useGlobalEditorStore = create<GlobalEditorStore>()((set, get) => ({
   fileTreeWidthPx: clampFileTreeWidth(persisted?.fileTreeWidthPx ?? 260),
   fileTreeVisible: persisted?.fileTreeVisible ?? true,
   aiWorkspaceId: null,
+  aiWorkspaceVisible: false,
   activeCwd: null,
   quickOpenOpen: false,
   contentSearchOpen: false,
@@ -209,37 +246,29 @@ export const useGlobalEditorStore = create<GlobalEditorStore>()((set, get) => ({
   setActiveCwd: cwd => set({ activeCwd: cwd }),
   setSplitterRatio: ratio => set({ splitterRatio: clampSplitter(ratio) }),
   setFileTreeWidthPx: px => set({ fileTreeWidthPx: clampFileTreeWidth(px) }),
-  toggleFileTreeVisible: () =>
-    set(state => ({ fileTreeVisible: !state.fileTreeVisible })),
+  toggleFileTreeVisible: () => set(state => ({ fileTreeVisible: !state.fileTreeVisible })),
   setQuickOpenOpen: open => set({ quickOpenOpen: open }),
   setContentSearchOpen: open => set({ contentSearchOpen: open }),
   setEditorFullscreen: on => set({ editorFullscreen: on }),
-  toggleEditorFullscreen: () =>
-    set(state => ({ editorFullscreen: !state.editorFullscreen })),
-  openAiWorkspace: workspaceId => set({ aiWorkspaceId: workspaceId }),
-  closeAiWorkspace: () => set({ aiWorkspaceId: null }),
+  toggleEditorFullscreen: () => set(state => ({ editorFullscreen: !state.editorFullscreen })),
+  openAiWorkspace: workspaceId => set({ aiWorkspaceId: workspaceId, aiWorkspaceVisible: true }),
+  closeAiWorkspace: () => set({ aiWorkspaceVisible: false }),
+  showProjectEditor: () => set({ aiWorkspaceVisible: false }),
 
-  openFile: ({ cwd, path, text, mtimeMs, selection }) =>
+  openFile: ({ cwd, path, text, mtimeMs, selection, activate = true, focus = true }) =>
     set(state => {
       const prev = state.byCwd[cwd] ?? EMPTY_CWD_STATE
       const existing = prev.openFiles[path]
-      // If the file is already open AND dirty, preserve the dirty
-      // buffer (savedText becomes the new on-disk content but the
-      // user-typed text stays). Otherwise replace with a fresh
-      // buffer at on-disk content. Dirty preservation is what makes a
-      // re-click on an already-open file (tree, rendered path,
-      // quick-open) safe — it revalidates against disk without ever
-      // discarding the user's unsaved edits.
-      const buffer: EditorFileBuffer = existing?.dirty
-        ? {
-            ...existing,
-            savedText: text,
-            mtimeMs,
-            error: null,
-            conflict: false,
-            selection: selection ?? existing.selection,
-          }
+      // WHY reopen is an observation, not a reload: the tree, quick-open,
+      // and rendered links all reread an already-open file. Advancing a dirty
+      // buffer's saved baseline here would bless an external version and let
+      // the next save silently overwrite it. withDiskObserved preserves the
+      // original baseline and raises a conflict instead.
+      let buffer: EditorFileBuffer = existing
+        ? withDiskObserved(existing, text, mtimeMs)
         : createBuffer({ root: cwd, path, text, mtimeMs, selection })
+      if (selection) buffer = { ...buffer, selection }
+      if (focus) buffer = withFocusRequested(buffer)
       const inOrder = prev.fileOrder.includes(path)
       return {
         byCwd: {
@@ -247,21 +276,31 @@ export const useGlobalEditorStore = create<GlobalEditorStore>()((set, get) => ({
           [cwd]: {
             fileOrder: inOrder ? prev.fileOrder : [...prev.fileOrder, path],
             openFiles: { ...prev.openFiles, [path]: buffer },
-            activeFilePath: path,
+            activeFilePath: activate ? path : prev.activeFilePath,
           },
         },
       }
     }),
 
-  setActiveFile: (cwd, path) =>
+  setActiveFile: (cwd, path, opts) =>
     set(state => {
       const prev = state.byCwd[cwd]
       if (!prev) return state
-      if (prev.activeFilePath === path) return state
+      if (path !== null && !prev.openFiles[path]) return state
+      const current = path ? prev.openFiles[path] : null
+      const nextCurrent = current && opts?.focus ? withFocusRequested(current) : current
+      if (prev.activeFilePath === path && nextCurrent === current) return state
       return {
         byCwd: {
           ...state.byCwd,
-          [cwd]: { ...prev, activeFilePath: path },
+          [cwd]: {
+            ...prev,
+            activeFilePath: path,
+            openFiles:
+              path && nextCurrent && nextCurrent !== current
+                ? { ...prev.openFiles, [path]: nextCurrent }
+                : prev.openFiles,
+          },
         },
       }
     }),
@@ -294,8 +333,17 @@ export const useGlobalEditorStore = create<GlobalEditorStore>()((set, get) => ({
       if (!prev) return state
       const current = prev.openFiles[path]
       if (!current) return state
-      const conflict = opts?.conflict === true
-      if (current.error === error && current.conflict === conflict) return state
+      if (opts?.generation != null && current.generation !== opts.generation) {
+        return state
+      }
+      const next = withError(current, error, opts?.conflict === true, opts?.externalChange)
+      if (
+        current.error === next.error &&
+        current.conflict === next.conflict &&
+        current.externalChange === next.externalChange
+      ) {
+        return state
+      }
       return {
         byCwd: {
           ...state.byCwd,
@@ -303,7 +351,7 @@ export const useGlobalEditorStore = create<GlobalEditorStore>()((set, get) => ({
             ...prev,
             openFiles: {
               ...prev.openFiles,
-              [path]: withError(current, error, conflict),
+              [path]: next,
             },
           },
         },
@@ -339,12 +387,11 @@ export const useGlobalEditorStore = create<GlobalEditorStore>()((set, get) => ({
       }
     }),
 
-  markFileSaved: (cwd, path, text, mtimeMs) =>
+  clearFileFocusRequest: (cwd, path) =>
     set(state => {
       const prev = state.byCwd[cwd]
-      if (!prev) return state
-      const current = prev.openFiles[path]
-      if (!current) return state
+      const current = prev?.openFiles[path]
+      if (!prev || !current || current.focusRequest === null) return state
       return {
         byCwd: {
           ...state.byCwd,
@@ -352,39 +399,108 @@ export const useGlobalEditorStore = create<GlobalEditorStore>()((set, get) => ({
             ...prev,
             openFiles: {
               ...prev.openFiles,
-              [path]: withSaved(current, text, mtimeMs),
+              [path]: { ...current, focusRequest: null },
             },
           },
         },
       }
     }),
 
-  renameOpenFile: (cwd, fromPath, toPath) =>
+  acknowledgeFileWrite: (cwd, path, writtenText, mtimeMs, generation) =>
     set(state => {
       const prev = state.byCwd[cwd]
-      const buf = prev?.openFiles[fromPath]
-      if (!prev || !buf) return state
-      const nextFiles = { ...prev.openFiles }
-      delete nextFiles[fromPath]
-      nextFiles[toPath] = {
-        ...buf,
-        path: toPath,
-        absolutePath: absolutePath(cwd, toPath),
-        language: normalizeCodeLanguage(null, basename(toPath)),
-        // Rename does not touch content — dirty text rides along. mtime
-        // stays valid (rename preserves it on POSIX) so the next save's
-        // conflict check remains meaningful. The Monaco model is disposed
-        // by the caller (its URI embeds the old path), which costs the
-        // undo stack — acceptable for an explicit rename.
-      }
+      if (!prev) return state
+      const current = prev.openFiles[path]
+      if (!current) return state
+      if (generation != null && current.generation !== generation) return state
       return {
         byCwd: {
           ...state.byCwd,
           [cwd]: {
-            fileOrder: prev.fileOrder.map(p => (p === fromPath ? toPath : p)),
+            ...prev,
+            openFiles: {
+              ...prev.openFiles,
+              [path]: withWriteAcknowledged(current, writtenText, mtimeMs),
+            },
+          },
+        },
+      }
+    }),
+
+  replaceFileFromDisk: (cwd, path, text, mtimeMs, generation) =>
+    set(state => {
+      const prev = state.byCwd[cwd]
+      const current = prev?.openFiles[path]
+      if (!prev || !current) return state
+      if (generation != null && current.generation !== generation) return state
+      return {
+        byCwd: {
+          ...state.byCwd,
+          [cwd]: {
+            ...prev,
+            openFiles: {
+              ...prev.openFiles,
+              [path]: withDiskSnapshot(current, text, mtimeMs),
+            },
+          },
+        },
+      }
+    }),
+
+  observeFileOnDisk: (cwd, path, text, mtimeMs, generation) =>
+    set(state => {
+      const prev = state.byCwd[cwd]
+      const current = prev?.openFiles[path]
+      if (!prev || !current) return state
+      if (generation != null && current.generation !== generation) return state
+      const next = withDiskObserved(current, text, mtimeMs)
+      if (next === current) return state
+      return {
+        byCwd: {
+          ...state.byCwd,
+          [cwd]: {
+            ...prev,
+            openFiles: { ...prev.openFiles, [path]: next },
+          },
+        },
+      }
+    }),
+
+  renameOpenPath: (cwd, fromPath, toPath) =>
+    set(state => {
+      const prev = state.byCwd[cwd]
+      if (!prev) return state
+      const affected = openPathsUnder(prev, fromPath)
+      if (affected.length === 0) return state
+      const affectedSet = new Set(affected)
+      const nextFiles: Record<string, EditorFileBuffer> = {}
+      for (const [path, buffer] of Object.entries(prev.openFiles)) {
+        if (!affectedSet.has(path)) {
+          nextFiles[path] = buffer
+          continue
+        }
+        const suffix = path === fromPath ? '' : path.slice(fromPath.length)
+        const nextPath = `${toPath}${suffix}`
+        nextFiles[nextPath] = {
+          ...buffer,
+          path: nextPath,
+          absolutePath: absolutePath(cwd, nextPath),
+          language: normalizeCodeLanguage(null, basename(nextPath)),
+        }
+      }
+      const remap = (path: string): string =>
+        affectedSet.has(path)
+          ? `${toPath}${path === fromPath ? '' : path.slice(fromPath.length)}`
+          : path
+      return {
+        byCwd: {
+          ...state.byCwd,
+          [cwd]: {
+            // A main-process no-clobber rename makes collisions impossible,
+            // but Set keeps stale duplicate state from surviving forever.
+            fileOrder: [...new Set(prev.fileOrder.map(remap))],
             openFiles: nextFiles,
-            activeFilePath:
-              prev.activeFilePath === fromPath ? toPath : prev.activeFilePath,
+            activeFilePath: prev.activeFilePath ? remap(prev.activeFilePath) : null,
           },
         },
       }
@@ -405,10 +521,11 @@ export const useGlobalEditorStore = create<GlobalEditorStore>()((set, get) => ({
       if (!cwdState) return state
       const nextFiles = { ...cwdState.openFiles }
       delete nextFiles[path]
+      const closedIndex = cwdState.fileOrder.indexOf(path)
       const nextOrder = cwdState.fileOrder.filter(p => p !== path)
       const activeFilePath =
         cwdState.activeFilePath === path
-          ? nextOrder[nextOrder.length - 1] ?? null
+          ? (nextOrder[Math.min(closedIndex, nextOrder.length - 1)] ?? null)
           : cwdState.activeFilePath
       return {
         byCwd: {
@@ -424,6 +541,17 @@ export const useGlobalEditorStore = create<GlobalEditorStore>()((set, get) => ({
     return true
   },
 }))
+
+/** Exact file or every open descendant of a directory-like path. This pure
+ * helper is shared by preflight (dirty confirmation/model disposal) and the
+ * atomic store transition so those two layers cannot disagree on scope. */
+export function openPathsUnder(
+  state: Pick<GlobalEditorCwdState, 'fileOrder'>,
+  path: string,
+): string[] {
+  const prefix = path.endsWith('/') ? path : `${path}/`
+  return state.fileOrder.filter(candidate => candidate === path || candidate.startsWith(prefix))
+}
 
 // Selector helper — pulls the state for the active cwd, or an
 // empty placeholder when no cwd is active. Components consume this

@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import type { EditorFsSearchMatch } from '@shared/types/editorFs'
+import type { EditorFsSearchStopReason } from '@shared/types/editorFs'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from '@renderer/components/ui/dialog'
 import { basename } from '@renderer/features/editor/lib/path'
 import { FileIcon } from '@renderer/features/editor/lib/fileIcon'
 import { openFileInGlobalEditor } from '@renderer/features/global-editor/openFileInGlobalEditor'
@@ -30,6 +37,8 @@ type SearchState = {
   filesScanned: number
   error: string | null
   searching: boolean
+  errorCount: number
+  stopReason: EditorFsSearchStopReason
 }
 
 const INITIAL_STATE: SearchState = {
@@ -38,6 +47,8 @@ const INITIAL_STATE: SearchState = {
   filesScanned: 0,
   error: null,
   searching: false,
+  errorCount: 0,
+  stopReason: 'complete',
 }
 
 export function ContentSearchOverlay({ root, onClose }: Props) {
@@ -46,18 +57,24 @@ export function ContentSearchOverlay({ root, onClose }: Props) {
   const [state, setState] = useState<SearchState>(INITIAL_STATE)
   const [selectedIndex, setSelectedIndex] = useState(0)
   const generationRef = useRef(0)
+  const listRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     const generation = ++generationRef.current
-    const trimmed = query.trim()
-    if (trimmed.length < 2) {
+    // Searching whitespace is valid (and useful for formatting audits). Do
+    // not trim before IPC: that silently changes the user's search language.
+    if (query.length === 0) {
       setState(INITIAL_STATE)
       return
     }
-    setState(prev => ({ ...prev, searching: true }))
+    // Old results belong to a different query/root and must stop being
+    // actionable immediately; generation checks alone only protect the final
+    // state write, not Enter pressed while the replacement scan is running.
+    setState({ ...INITIAL_STATE, searching: true })
+    setSelectedIndex(0)
     const timer = window.setTimeout(() => {
       void window.api
-        .editorSearchContent({ root, query: trimmed, caseSensitive })
+        .editorSearchContent({ root, query, caseSensitive })
         .then(result => {
           if (generation !== generationRef.current) return
           if (!result.ok) {
@@ -70,12 +87,31 @@ export function ContentSearchOverlay({ root, onClose }: Props) {
             filesScanned: result.filesScanned,
             error: null,
             searching: false,
+            errorCount: result.errorCount,
+            stopReason: result.stopReason,
           })
           setSelectedIndex(0)
+        })
+        .catch(err => {
+          if (generation !== generationRef.current) return
+          setState({
+            ...INITIAL_STATE,
+            error: err instanceof Error ? err.message : 'Project search failed.',
+          })
         })
     }, 300)
     return () => window.clearTimeout(timer)
   }, [caseSensitive, query, root])
+
+  useEffect(() => {
+    setSelectedIndex(index => Math.max(0, Math.min(index, state.matches.length - 1)))
+  }, [state.matches.length])
+
+  useEffect(() => {
+    listRef.current
+      ?.querySelector<HTMLElement>(`[data-content-search-index="${selectedIndex}"]`)
+      ?.scrollIntoView({ block: 'nearest' })
+  }, [selectedIndex])
 
   // Group by file for display; keep a flat list for keyboard navigation.
   const grouped = useMemo(() => {
@@ -88,15 +124,16 @@ export function ContentSearchOverlay({ root, onClose }: Props) {
     return [...byFile.entries()]
   }, [state.matches])
 
-  const openMatch = (match: EditorFsSearchMatch | undefined) => {
-    if (!match) return
-    void openFileInGlobalEditor({
+  const openMatch = async (match: EditorFsSearchMatch | undefined) => {
+    if (!match || state.searching) return
+    const result = await openFileInGlobalEditor({
       root,
       path: match.path,
       line: match.line,
       column: match.column,
     })
-    onClose()
+    if (result.ok) onClose()
+    else setState(current => ({ ...current, error: result.error }))
   }
 
   // Highlight the hit inside the preview line. Index found client-side
@@ -104,15 +141,13 @@ export function ContentSearchOverlay({ root, onClose }: Props) {
   // and the original column may fall outside the trimmed window.
   const renderPreview = (preview: string) => {
     const haystack = caseSensitive ? preview : preview.toLowerCase()
-    const needle = caseSensitive ? query.trim() : query.trim().toLowerCase()
+    const needle = caseSensitive ? query : query.toLowerCase()
     const at = haystack.indexOf(needle)
     if (at === -1) return <span className="truncate">{preview}</span>
     return (
       <span className="truncate">
         {preview.slice(0, at)}
-        <span className="bg-accent-soft text-ink">
-          {preview.slice(at, at + needle.length)}
-        </span>
+        <span className="bg-accent-soft text-ink">{preview.slice(at, at + needle.length)}</span>
         {preview.slice(at + needle.length)}
       </span>
     )
@@ -121,17 +156,26 @@ export function ContentSearchOverlay({ root, onClose }: Props) {
   let flatIndex = -1
 
   return (
-    <div
-      className="fixed inset-0 z-40 flex items-start justify-center bg-black/30 pt-[10vh]"
-      onMouseDown={onClose}
+    <Dialog
+      open
+      onOpenChange={nextOpen => {
+        if (!nextOpen) onClose()
+      }}
     >
-      <div
-        className="flex w-[640px] max-w-[92vw] flex-col overflow-hidden rounded border border-border bg-surface font-code shadow-xl"
-        onMouseDown={event => event.stopPropagation()}
-      >
+      <DialogContent className="top-[10vh] flex w-[640px] max-w-[92vw] -translate-y-0 flex-col overflow-hidden p-0 font-code">
+        <DialogTitle className="sr-only">Search in project files</DialogTitle>
+        <DialogDescription className="sr-only">
+          Enter text to search, then use the arrow keys and Enter to open a result.
+        </DialogDescription>
         <div className="flex items-center gap-2 border-b border-border bg-canvas px-3">
           <input
             autoFocus
+            role="combobox"
+            aria-expanded="true"
+            aria-controls="content-search-results"
+            aria-activedescendant={
+              state.matches[selectedIndex] ? `content-search-option-${selectedIndex}` : undefined
+            }
             value={query}
             onChange={event => setQuery(event.target.value)}
             onKeyDown={event => {
@@ -140,13 +184,15 @@ export function ContentSearchOverlay({ root, onClose }: Props) {
                 onClose()
               } else if (event.key === 'ArrowDown') {
                 event.preventDefault()
-                setSelectedIndex(prev => Math.min(prev + 1, state.matches.length - 1))
+                if (state.matches.length > 0) {
+                  setSelectedIndex(prev => Math.min(prev + 1, state.matches.length - 1))
+                }
               } else if (event.key === 'ArrowUp') {
                 event.preventDefault()
                 setSelectedIndex(prev => Math.max(prev - 1, 0))
               } else if (event.key === 'Enter') {
                 event.preventDefault()
-                openMatch(state.matches[selectedIndex])
+                void openMatch(state.matches[selectedIndex])
               }
             }}
             placeholder="Search in files…"
@@ -158,15 +204,19 @@ export function ContentSearchOverlay({ root, onClose }: Props) {
             aria-pressed={caseSensitive}
             onClick={() => setCaseSensitive(prev => !prev)}
             className={`flex-shrink-0 rounded border px-1.5 py-0.5 text-[10px] ${
-              caseSensitive
-                ? 'border-accent text-ink'
-                : 'border-border text-muted hover:text-ink'
+              caseSensitive ? 'border-accent text-ink' : 'border-border text-muted hover:text-ink'
             }`}
           >
             Aa
           </button>
         </div>
-        <div className="max-h-[55vh] overflow-y-auto py-1">
+        <div
+          ref={listRef}
+          id="content-search-results"
+          role="listbox"
+          aria-label="Project search results"
+          className="max-h-[55vh] overflow-y-auto py-1"
+        >
           {state.error ? (
             <div className="px-3 py-2 text-[11px] text-danger">{state.error}</div>
           ) : (
@@ -186,8 +236,12 @@ export function ContentSearchOverlay({ root, onClose }: Props) {
                   return (
                     <button
                       key={`${match.path}:${match.line}:${match.column}`}
+                      id={`content-search-option-${index}`}
                       type="button"
-                      onClick={() => openMatch(match)}
+                      role="option"
+                      aria-selected={selected}
+                      data-content-search-index={index}
+                      onClick={() => void openMatch(match)}
                       onMouseEnter={() => setSelectedIndex(index)}
                       className={`flex w-full items-center gap-2 py-0.5 pl-9 pr-3 text-left text-[11px] ${
                         selected ? 'bg-accent-soft text-ink' : 'text-ink-dim hover:bg-surface-hi'
@@ -203,22 +257,29 @@ export function ContentSearchOverlay({ root, onClose }: Props) {
               </div>
             ))
           )}
-          {!state.error &&
-            !state.searching &&
-            query.trim().length >= 2 &&
-            state.matches.length === 0 && (
-              <div className="px-3 py-2 text-[11px] text-muted">No matches.</div>
-            )}
+          {!state.error && !state.searching && query.length > 0 && state.matches.length === 0 && (
+            <div className="px-3 py-2 text-[11px] text-muted">No matches.</div>
+          )}
         </div>
-        <div className="flex items-center justify-between border-t border-border px-3 py-1 text-[10px] text-muted">
+        <div
+          aria-live="polite"
+          className="flex items-center justify-between border-t border-border px-3 py-1 text-[10px] text-muted"
+        >
           <span>
             {state.searching
               ? 'Searching…'
               : `${state.matches.length} match${state.matches.length === 1 ? '' : 'es'} · ${state.filesScanned} files scanned`}
           </span>
           {state.truncated && <span>results truncated</span>}
+          {state.errorCount > 0 && (
+            <span>
+              {state.errorCount} unreadable path{state.errorCount === 1 ? '' : 's'}
+            </span>
+          )}
+          {state.stopReason === 'bytes' && <span>64 MB scan budget reached</span>}
+          {state.stopReason === 'deadline' && <span>5 second scan budget reached</span>}
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }

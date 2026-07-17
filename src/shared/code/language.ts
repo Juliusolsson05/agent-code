@@ -68,10 +68,7 @@ export function inferLanguageFromPath(filePath?: string | null): string | null {
   return EXTENSION_TO_LANGUAGE[ext] ?? null
 }
 
-export function normalizeCodeLanguage(
-  language?: string | null,
-  filePath?: string | null,
-): string {
+export function normalizeCodeLanguage(language?: string | null, filePath?: string | null): string {
   const direct = language?.toLowerCase().trim()
   if (direct) {
     if (direct === 'js') return 'javascript'
@@ -107,6 +104,19 @@ export const LSP_LANGUAGES = new Set([
 
 export function supportsLsp(language: string): boolean {
   return LSP_LANGUAGES.has(language)
+}
+
+// Transcript blocks are snippets, not real project documents. Starting
+// pyright/rust-analyzer/gopls for every rendered answer can index an entire
+// repository just to color a read-only excerpt; only the bundled TS server is
+// predictable and lightweight enough for this enhancement surface.
+export function supportsTranscriptLsp(language: string): boolean {
+  return (
+    language === 'javascript' ||
+    language === 'javascriptreact' ||
+    language === 'typescript' ||
+    language === 'typescriptreact'
+  )
 }
 
 // Monaco does not ship `typescriptreact` / `javascriptreact` languages —

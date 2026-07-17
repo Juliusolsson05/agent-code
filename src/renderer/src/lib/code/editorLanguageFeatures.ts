@@ -1,10 +1,6 @@
 import type * as Monaco from 'monaco-editor'
 
-import {
-  monacoLanguageId,
-  normalizeCodeLanguage,
-  supportsLsp,
-} from '@shared/code/language'
+import { monacoLanguageId, normalizeCodeLanguage, supportsLsp } from '@shared/code/language'
 import type { LspCompletionItem } from '@shared/types/lsp'
 import { openFileInGlobalEditor } from '@renderer/features/global-editor/openFileInGlobalEditor'
 import { useGlobalEditorStore } from '@renderer/features/global-editor/store'
@@ -30,6 +26,22 @@ import { useGlobalEditorStore } from '@renderer/features/global-editor/store'
 
 const registeredMonacoLanguages = new Set<string>()
 let openerInstalled = false
+const modelContexts = new Map<string, { workspaceRoot: string; refs: number }>()
+
+/** Bind a Monaco model to the filesystem root that authorized its LSP doc.
+ * Global providers cannot infer this from the currently focused agent: AI
+ * Workspaces deliberately edit files from other worktrees. */
+export function registerEditorLspContext(clientUri: string, workspaceRoot: string): () => void {
+  const existing = modelContexts.get(clientUri)
+  if (existing && existing.workspaceRoot === workspaceRoot) existing.refs += 1
+  else modelContexts.set(clientUri, { workspaceRoot, refs: 1 })
+  return () => {
+    const current = modelContexts.get(clientUri)
+    if (!current || current.workspaceRoot !== workspaceRoot) return
+    current.refs -= 1
+    if (current.refs <= 0) modelContexts.delete(clientUri)
+  }
+}
 
 // LSP CompletionItemKind (1-based) → Monaco CompletionItemKind. The two
 // enums are DIFFERENT integer spaces — passing LSP kinds straight through
@@ -69,7 +81,10 @@ function completionKindToMonaco(
   return map[kind] ?? K.Text
 }
 
-function toLspPosition(position: Monaco.Position): { line: number; character: number } {
+function toLspPosition(position: Monaco.Position): {
+  line: number
+  character: number
+} {
   // Monaco is 1-based, LSP is 0-based. An off-by-one here silently
   // degrades every feature (hover misses, definitions land one line off),
   // so the conversion lives in exactly one function.
@@ -78,7 +93,12 @@ function toLspPosition(position: Monaco.Position): { line: number; character: nu
 
 function toMonacoRange(
   monaco: typeof Monaco,
-  loc: { startLine: number; startCharacter: number; endLine: number; endCharacter: number },
+  loc: {
+    startLine: number
+    startCharacter: number
+    endLine: number
+    endCharacter: number
+  },
 ): Monaco.Range {
   return new monaco.Range(
     loc.startLine + 1,
@@ -98,10 +118,7 @@ export function ensureEditorLanguageFeatures(monaco: typeof Monaco, language: st
 
   monaco.languages.registerHoverProvider(monacoId, {
     async provideHover(model, position) {
-      const result = await window.api.getLspHover(
-        model.uri.toString(),
-        toLspPosition(position),
-      )
+      const result = await window.api.getLspHover(model.uri.toString(), toLspPosition(position))
       if (!result) return null
       return { contents: [{ value: result.markdown }] }
     },
@@ -153,18 +170,28 @@ export function ensureEditorLanguageFeatures(monaco: typeof Monaco, language: st
         word.endColumn,
       )
       return {
-        suggestions: items.map((item: LspCompletionItem) => ({
-          label: item.label,
-          kind: completionKindToMonaco(monaco, item.kind),
-          insertText: item.insertText,
-          insertTextRules: item.isSnippet
-            ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet
-            : undefined,
-          detail: item.detail,
-          documentation: item.documentation ? { value: item.documentation } : undefined,
-          sortText: item.sortText,
-          range,
-        })),
+        suggestions: items.map((item: LspCompletionItem) => {
+          const itemRange = item.textEdit
+            ? new monaco.Range(
+                item.textEdit.startLine + 1,
+                item.textEdit.startCharacter + 1,
+                item.textEdit.endLine + 1,
+                item.textEdit.endCharacter + 1,
+              )
+            : range
+          return {
+            label: item.label,
+            kind: completionKindToMonaco(monaco, item.kind),
+            insertText: item.textEdit?.newText ?? item.insertText,
+            insertTextRules: item.isSnippet
+              ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet
+              : undefined,
+            detail: item.detail,
+            documentation: item.documentation ? { value: item.documentation } : undefined,
+            sortText: item.sortText,
+            range: itemRange,
+          }
+        }),
       }
     },
   })
@@ -182,13 +209,16 @@ function installEditorOpener(monaco: typeof Monaco): void {
   if (openerInstalled) return
   openerInstalled = true
   monaco.editor.registerEditorOpener({
-    openCodeEditor(_source, resource, selectionOrPosition) {
+    async openCodeEditor(source, resource, selectionOrPosition) {
       if (resource.scheme !== 'file') return false
-      const { activeCwd } = useGlobalEditorStore.getState()
-      if (!activeCwd) return false
-      const rootAbs = activeCwd.replace(/\/+$/, '')
-      if (!resource.path.startsWith(`${rootAbs}/`)) return false
-      const relative = resource.path.slice(rootAbs.length + 1)
+      const sourceUri = source?.getModel()?.uri.toString()
+      const sourceRoot = sourceUri ? modelContexts.get(sourceUri)?.workspaceRoot : null
+      const root = sourceRoot ?? useGlobalEditorStore.getState().activeCwd
+      if (!root) return false
+      const rootAbs = root.replace(/\\/g, '/').replace(/\/+$/, '')
+      const targetAbs = resource.fsPath.replace(/\\/g, '/')
+      if (!targetAbs.startsWith(`${rootAbs}/`)) return false
+      const relative = targetAbs.slice(rootAbs.length + 1)
       let line = 1
       let column = 1
       if (selectionOrPosition) {
@@ -200,8 +230,12 @@ function installEditorOpener(monaco: typeof Monaco): void {
           column = selectionOrPosition.column
         }
       }
-      void openFileInGlobalEditor({ root: activeCwd, path: relative, line, column })
-      return true
+      const result = await openFileInGlobalEditor({ root, path: relative, line, column })
+      // Returning true before the contained IPC read completed made Monaco
+      // suppress its fallback while the UI stayed on the source file. Report
+      // actual navigation success so stale/deleted/unauthorized definitions
+      // fail honestly instead of looking like a dead click.
+      return result.ok
     },
   })
 }

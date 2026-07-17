@@ -6,6 +6,7 @@ import { TabBar } from '@renderer/workspace/tile-tree/TabBar'
 import { useRenderedLeaseHygiene } from '@renderer/workspace/hook/effects/useRenderedLeaseHygiene'
 import { useThemeSync } from '@renderer/features/settings/hooks/useThemeSync'
 import { useAiWorkspaceOpenRequests } from '@renderer/features/global-editor/hooks/useAiWorkspaceOpenRequests'
+import { useEditorBeforeUnloadGuard } from '@renderer/features/global-editor/hooks/useEditorBeforeUnloadGuard'
 import { useDevDebugConfigSync } from '@renderer/features/debug/devDebugConfig'
 import { useDebugAutosave } from '@renderer/features/debug/useDebugAutosave'
 import { useCaffeinateSync } from '@renderer/features/caffeinate/useCaffeinateSync'
@@ -54,6 +55,7 @@ export default function App() {
 
   useThemeSync()
   useAiWorkspaceOpenRequests()
+  useEditorBeforeUnloadGuard()
   useDevDebugConfigSync()
   useCaffeinateSync()
   useDictationHotkeySync()
