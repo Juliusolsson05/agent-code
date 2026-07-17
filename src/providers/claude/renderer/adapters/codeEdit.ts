@@ -1,5 +1,5 @@
 import { canDiffLinesInline, diffLines, type DiffLine } from '@shared/parsers/lineDiff'
-import type { ToolUseBlock } from '@shared/types/transcript'
+import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 import type {
   CodeEditFile,
   CodeEditRenderModel,
@@ -129,6 +129,28 @@ export function fromClaudeEditBlock(
     }
   }
   return null // not an edit-family tool — caller falls through to its route
+}
+
+/**
+ * The invocation card already contains the complete intended Edit/Write. Only
+ * the two success acknowledgements actually captured in the frozen corpus are
+ * safe to absorb under that card. Name-only suppression used to delete errors,
+ * MultiEdit variants with no result fixture, and any future provider payload
+ * that happened to reuse these tool names.
+ */
+export function isClaudeCodeEditSuccessResult(
+  result: ToolResultBlock,
+  source: ToolUseBlock,
+): boolean {
+  if (result.tool_use_id !== source.id || result.is_error === true) return false
+  if (typeof result.content !== 'string') return false
+  if (source.name === 'Edit') {
+    return /^The file [^\n]+ has been updated successfully\./.test(result.content)
+  }
+  if (source.name === 'Write') {
+    return /^File created successfully at: [^\n]+/.test(result.content)
+  }
+  return false
 }
 
 /**

@@ -1,12 +1,6 @@
-import { memo, useContext, useMemo, useState, type ReactNode } from 'react'
+import { memo, useMemo } from 'react'
 
-import type { ToolResultBlock } from '@shared/types/transcript'
-
-import { CodeBlock } from '@renderer/lib/code/CodeBlock'
-
-import { stripLineNumberPrefix } from '@renderer/features/feed/lib/helpers'
-import { CodeRenderContext, ToolUseIndexContext } from '@renderer/features/feed/context'
-import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
+import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 
 import { JsonResultSlab } from '@providers/shared/renderer/rows/JsonResultSlab'
 import { tryExtractJson } from '@providers/shared/renderer/rows/jsonToolPresentation'
@@ -18,37 +12,10 @@ import {
   parseMcpContentResult,
 } from '@providers/shared/renderer/protocols/mcp-content/model'
 import { TruncatedOutputRow } from '@renderer/features/feed/ui/rows/TruncatedOutputRow'
-import { boundedTextLineCount, TEXT_PAGE_MAX_CHARS } from '@renderer/lib/text/boundedText'
+import { TEXT_PAGE_MAX_CHARS } from '@renderer/lib/text/boundedText'
 import { toolResultContentText } from '@providers/shared/renderer/rows/toolResultContent'
 
 /* ---------- Tool result: "⎿  (lines of output)" ---------- */
-
-function LazyDetails({
-  summary,
-  children,
-}: {
-  summary: ReactNode
-  children: ReactNode
-}) {
-  const [open, setOpen] = useState(false)
-  return (
-    // WHY close unmounts rather than latching after first-open: an old session
-    // can contain hundreds of once-inspected reads. A latch turns interaction
-    // history into permanent Monaco/model/listener ownership, whereas a closed
-    // disclosure promises it is no longer consuming heavy renderer resources.
-    <details
-      className="text-[12px] leading-[1.55] text-ink-dim"
-      onToggle={event => {
-        setOpen(event.currentTarget.open)
-      }}
-    >
-      <summary className="cursor-pointer select-none">
-        {summary}
-      </summary>
-      {open ? <div className="mt-2">{children}</div> : null}
-    </details>
-  )
-}
 
 const GenericToolResultPresentation = memo(function GenericToolResultPresentation({
   content,
@@ -110,35 +77,18 @@ const GenericToolResultPresentation = memo(function GenericToolResultPresentatio
 })
 
 /**
- * Look at the tool_use this result came from (via the feed-level
- * index in context) and decide how to render the result:
- *
- *   Read → strip the "N→" line-number prefix CC's Read tool emits,
- *          and render the contents as a preformatted code slab. We
- *          deliberately skip markdown parsing here because source
- *          code frequently contains triple-backticks and unbalanced
- *          emphasis that would wreck the markdown AST. For full
- *          syntax highlighting later we can feed the stripped text
- *          through highlight.js directly.
- *
- *   Edit / MultiEdit / Write → the diff/content already rendered on
- *          the preceding tool_use row tells the story. The terse
- *          "has been updated successfully" message is pure noise
- *          next to it; suppress for non-errors.
- *
- *   everything else (Bash, Glob, Grep, …) → keep the existing
- *          plain-pre rendering. The content IS the interesting part
- *          for those tools.
+ * Canonical provider-neutral result fallback. Provider dispatch gets first
+ * refusal in Block; reaching this component means no provider adapter proved
+ * a more specific grammar. It may format JSON, MCP content, structured text,
+ * or bounded plain output, but it must never branch on provider tool names.
  */
 export const ToolResultRow = memo(function ToolResultRow({
   block,
+  sourceTool,
 }: {
   block: ToolResultBlock
+  sourceTool?: ToolUseBlock | null
 }) {
-  const toolUseIndex = useContext(ToolUseIndexContext)
-  const codeContext = useContext(CodeRenderContext)
-  const sourceTool = toolUseIndex.get(block.tool_use_id)?.name
-
   const text = toolResultContentText(block.content)
 
   const isError = block.is_error === true
@@ -150,101 +100,10 @@ export const ToolResultRow = memo(function ToolResultRow({
     ? text.replace(/\s+$/, '')
     : text
 
-  // File-write tools: the rendered diff/content on the preceding tool_use row
-  // already tells the story. The result in all three cases is a stub success
-  // string that would just clutter
-  // the feed. Errors still fall through to the normal result renderer
-  // so failures remain visible.
-  if (
-    !isError &&
-    (sourceTool === 'Edit' ||
-      sourceTool === 'MultiEdit' ||
-      sourceTool === 'Write')
-  ) {
-    return null
-  }
-
-  // Read tool result — show a one-line summary only, not the file
-  // contents. Mirrors claude-code-src/full/tools/FileReadTool/UI.tsx
-  // `renderToolResultMessage` which renders "Read <N> lines" at
-  // height={1} and never echoes the file bytes into the feed. The
-  // user already knows which file was read (it's on the tool-use
-  // row); dumping its contents below pushes the next assistant
-  // message off-screen for no gain.
-  //
-  // A click-to-expand <details> keeps the raw content one
-  // interaction away for when you actually need it (debugging,
-  // code review). Syntax highlighting happens inside CodeBlock
-  // only when expanded.
-  if (sourceTool === 'Read' && !isError) {
-    // WHY count with an index scan instead of split: this summary is rendered
-    // before the disclosure opens. Allocating one array element per source line
-    // would make the collapsed row pay proportional heap churn for hidden data.
-    const lineCount = boundedTextLineCount(trimmed)
-    const sourceInput = toolUseIndex.get(block.tool_use_id)?.input as
-      | Record<string, unknown>
-      | undefined
-    const filePath =
-      typeof sourceInput?.file_path === 'string'
-        ? sourceInput.file_path
-        : typeof sourceInput?.path === 'string'
-          ? sourceInput.path
-          : null
-    return (
-      <MarkerRow marker="⎿" tone="muted">
-        <LazyDetails
-          summary={(
-            <>
-            Read <span className="text-ink font-semibold">
-              {lineCount.truncated ? `≥${lineCount.count}` : lineCount.count}
-            </span>{' '}
-            {lineCount.count === 1 && !lineCount.truncated ? 'line' : 'lines'}
-            </>
-          )}
-        >
-          <CodeBlock
-            code={trimmed}
-            path={filePath}
-            workspaceRoot={codeContext.workspaceRoot}
-            codeId={`read:${block.tool_use_id}`}
-            engine="monaco"
-            allowAutoDetect
-            transformPage={stripLineNumberPrefix}
-          />
-        </LazyDetails>
-      </MarkerRow>
-    )
-  }
-
-  // Grep tool result: render with CodeBlock so results get syntax
-  // highlighting based on the file pattern / path. Grep output is
-  // already formatted text but benefits from language-aware coloring.
-  if (sourceTool === 'Grep' && !isError) {
-    const sourceInput = toolUseIndex.get(block.tool_use_id)?.input as
-      | Record<string, unknown>
-      | undefined
-    const filePath =
-      typeof sourceInput?.path === 'string'
-        ? sourceInput.path
-        : null
-    return (
-      <MarkerRow marker="⎿" tone="muted">
-        <CodeBlock
-          code={trimmed}
-          path={filePath}
-          workspaceRoot={codeContext.workspaceRoot}
-          codeId={`grep:${block.tool_use_id}`}
-          engine="monaco"
-          allowAutoDetect
-        />
-      </MarkerRow>
-    )
-  }
-
   return (
     <GenericToolResultPresentation
       content={block.content}
-      sourceTool={sourceTool}
+      sourceTool={sourceTool?.name}
       text={trimmed}
       isError={isError}
     />

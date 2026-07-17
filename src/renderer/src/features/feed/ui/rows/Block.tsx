@@ -282,7 +282,9 @@ export const Block = memo(function Block({
             ? absorbedOutcome(`${currentProvider}.rows.dispatch`, 'provider dispatch suppressed the result row')
             : specializedOutcome(`${currentProvider}.rows.dispatch`),
       )
-      return providerRow !== undefined ? providerRow : <ToolResultRow block={tr} />
+      return providerRow !== undefined
+        ? providerRow
+        : <ToolResultRow block={tr} sourceTool={sourceTool} />
     }
     default:
       // An unknown committed block kind is exactly the class of shape the

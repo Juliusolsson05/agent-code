@@ -4,6 +4,7 @@ import {
   extractJsonStringField,
   fromClaudeEditBlock,
   fromClaudePartialEditJson,
+  isClaudeCodeEditSuccessResult,
 } from '@providers/claude/renderer/adapters/codeEdit'
 import {
   decodeEmbeddedPatchLiteral,
@@ -87,6 +88,19 @@ describe('claude code-edit adapter — streaming first', () => {
     expect(multi.files).toHaveLength(24)
     expect(multi.totalFiles).toBe(100)
     expect(multi.filesTruncated).toBe(true)
+  })
+
+  it('absorbs only the two captured success acknowledgements', () => {
+    const edit = { type: 'tool_use', id: 'e1', name: 'Edit', input: {} } as never
+    expect(isClaudeCodeEditSuccessResult({
+      type: 'tool_result', tool_use_id: 'e1', content: 'The file /repo/a.ts has been updated successfully. (file state is current in your context — no need to Read it back)',
+    } as never, edit)).toBe(true)
+    expect(isClaudeCodeEditSuccessResult({
+      type: 'tool_result', tool_use_id: 'e1', content: '<tool_use_error>failed</tool_use_error>', is_error: true,
+    } as never, edit)).toBe(false)
+    expect(isClaudeCodeEditSuccessResult({
+      type: 'tool_result', tool_use_id: 'e1', content: 'a future structured success payload',
+    } as never, edit)).toBe(false)
   })
 })
 

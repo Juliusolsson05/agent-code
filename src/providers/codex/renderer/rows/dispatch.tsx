@@ -30,6 +30,7 @@ import { AgentCodeWorkflowView } from '@providers/shared/renderer/protocols/agen
 import { fromAgentCodeWorkflowResult } from '@providers/shared/renderer/protocols/agent-code-workflow/model'
 import { fromCodexImageGenerationUse } from '@providers/codex/renderer/adapters/imageGeneration'
 import { CodexImageGenerationRow } from '@providers/codex/renderer/components/image-generation'
+import { asRecord } from '@shared/lib/asRecord'
 
 export function renderCodexToolUse(
   block: ToolUseBlock,
@@ -133,5 +134,24 @@ export function renderCodexToolResult(
   // fallback preserve the actual handle. Agent Code MCP results are the only
   // absorbed branch above because that same card includes a raw protocol
   // disclosure backed by the schema we own.
-  return <CodexToolResultRow block={block} sourceTool={context.sourceTool} />
+  const source = context.sourceTool
+  if (!source || source.id !== block.tool_use_id) return undefined
+  const codex = asRecord(asRecord(block)?.codex)
+  const kind = typeof codex?.kind === 'string' ? codex.kind : null
+  const providerOperation =
+    source.name === 'exec' ||
+    source.name === 'exec_command' ||
+    source.name === 'write_stdin' ||
+    source.name === 'apply_patch'
+  const providerEnvelope =
+    kind === 'exec_command_end' ||
+    kind === 'patch_apply_end' ||
+    kind === 'custom_tool_call_output'
+  // A result is Codex-owned because its correlated invocation or explicit
+  // metadata proves the Codex transport grammar—not merely because the pane
+  // happens to run Codex. Native collaboration, open-world MCP, image, and
+  // future results deliberately decline to the one shared JSON/MCP fallback.
+  return providerOperation || providerEnvelope
+    ? <CodexToolResultRow block={block} sourceTool={source} />
+    : undefined
 }

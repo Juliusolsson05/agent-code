@@ -65,6 +65,7 @@ import { fromClaudeAgentCodeWorkflowUse } from '@providers/claude/renderer/adapt
 import { AgentCodeWorkflowView } from '@providers/shared/renderer/protocols/agent-code-workflow/AgentCodeWorkflowView'
 import { fromAgentCodeWorkflowResult } from '@providers/shared/renderer/protocols/agent-code-workflow/model'
 import { GenericLiveResult } from '@providers/shared/renderer/rows/GenericLiveResult'
+import { isClaudeCodeEditSuccessResult } from '@providers/claude/renderer/adapters/codeEdit'
 
 export function renderClaudeToolUse(
   block: ToolUseBlock,
@@ -227,6 +228,9 @@ export function renderClaudeToolResult(
     // Returning null records an explicit absorption receipt; malformed/error
     // variants decline to the visible generic result instead.
     return fromClaudeAgentResult(block, source) ? null : undefined
+  }
+  if (source && isClaudeCodeEditSuccessResult(block, source)) {
+    return null
   }
   if (source?.name === 'Bash') {
     const text = claudeBashResultText(block)
