@@ -516,7 +516,7 @@ export function getSettingsRegistry(): SettingDefinition[] {
       category: 'dictation',
       title: 'Dictation Shortcut',
       description:
-        'Default is Cmd+Shift+D — no OS permission needed. Choosing Fn requires macOS Accessibility permission, which you will be prompted for on next enable.',
+        'Cmd+Shift+D is a no-permission toggle: press once to record and again to finish. Choosing Fn enables hold-to-talk and requires macOS Accessibility permission.',
       keywords: ['voice', 'dictation', 'shortcut', 'binding', 'hotkey', 'keyboard'],
       control: {
         type: 'hotkey',

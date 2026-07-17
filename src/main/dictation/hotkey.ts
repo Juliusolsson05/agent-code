@@ -5,6 +5,26 @@ import { startMacDictationHotkeyHelper, stopMacDictationHotkeyHelper } from '@ma
 
 let currentBinding = ''
 let registeredElectronHotkey = ''
+let electronHotkeyRecording = false
+
+/**
+ * Electron exposes an accelerator activation callback, not a physical key-up
+ * callback. Pretending one activation was both down and up made every quiet
+ * accelerator look like a zero-millisecond hold, which the renderer correctly
+ * discards as an accidental tap. The quiet path is therefore intentionally a
+ * toggle: first activation starts, second activation stops. The CGEventTap path
+ * below still has real edges and remains hold-to-talk.
+ *
+ * This helper also gives reconfiguration one drain point. If the user changes
+ * or disables the binding while a toggle recording is live, emitting the old
+ * binding's up edge before unregistering prevents an orphan recording from
+ * listening forever.
+ */
+function releaseElectronHotkeyRecording(binding: string): void {
+  if (!electronHotkeyRecording) return
+  electronHotkeyRecording = false
+  sendToMainWindow('dictation:hotkey-up', { binding })
+}
 
 // WHY a binding-classifier lives here (packaged-app fix):
 //
@@ -108,6 +128,8 @@ export async function configureDictationHotkey(binding: string): Promise<{
    *  DictationHotkeyConfigureResult ok:false arm; absent on success. */
   message?: string
 }> {
+  const previousBinding = currentBinding
+  releaseElectronHotkeyRecording(previousBinding)
   currentBinding = binding.trim()
   if (registeredElectronHotkey) {
     globalShortcut.unregister(registeredElectronHotkey)
@@ -121,15 +143,18 @@ export async function configureDictationHotkey(binding: string): Promise<{
 
   if (classification.kind === 'electron') {
     // Electron-quiet path — works on every platform, needs no Accessibility
-    // prompt. Same press/release model as the CGEventTap helper: fire both
-    // down and up synchronously on each accelerator hit because
-    // globalShortcut is edge-triggered, not level-triggered. Composer code
-    // in the renderer already tolerates receiving down+up back-to-back for
-    // non-modifier bindings (see useComposerDictation.ts).
+    // prompt. globalShortcut has no release callback, so this path is a toggle
+    // rather than fake hold-to-talk: first activation starts and the next one
+    // stops. Synthesizing down+up in one callback is not a harmless shortcut —
+    // useComposerDictation deliberately discards sub-180 ms taps.
     try {
       const ok = globalShortcut.register(classification.accelerator, () => {
+        if (electronHotkeyRecording) {
+          releaseElectronHotkeyRecording(currentBinding)
+          return
+        }
+        electronHotkeyRecording = true
         sendToMainWindow('dictation:hotkey-down', { binding: currentBinding })
-        sendToMainWindow('dictation:hotkey-up', { binding: currentBinding })
       })
       if (ok) registeredElectronHotkey = classification.accelerator
       return { ok, binding: currentBinding, native: false }
@@ -188,6 +213,7 @@ export async function configureDictationHotkey(binding: string): Promise<{
 }
 
 export function unregisterDictationHotkey(): void {
+  releaseElectronHotkeyRecording(currentBinding)
   currentBinding = ''
   if (registeredElectronHotkey) {
     globalShortcut.unregister(registeredElectronHotkey)

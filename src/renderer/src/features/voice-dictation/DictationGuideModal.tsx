@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 // Modal walking the user through Deepgram signup + key configuration.
 //
@@ -18,6 +18,7 @@ import { useCallback, useEffect, useState } from 'react'
 //   keep the layout obviously incomplete instead of "silently missing".
 export function DictationGuideModal() {
   const [open, setOpen] = useState(false)
+  const dialogRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     const onOpen = () => setOpen(true)
@@ -28,19 +29,66 @@ export function DictationGuideModal() {
   const close = useCallback(() => setOpen(false), [])
   useEffect(() => {
     if (!open) return
+    const previouslyFocused = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null
+    const focusFrame = requestAnimationFrame(() => dialogRef.current?.focus())
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') close()
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        event.stopPropagation()
+        close()
+        return
+      }
+      if (event.key === 'Tab') {
+        const dialog = dialogRef.current
+        if (!dialog) return
+        const focusable = Array.from(
+          dialog.querySelectorAll<HTMLElement>(
+            'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+          ),
+        )
+        if (focusable.length === 0) {
+          event.preventDefault()
+          dialog.focus()
+          return
+        }
+        const current = focusable.indexOf(document.activeElement as HTMLElement)
+        const next = event.shiftKey
+          ? current <= 0 ? focusable.length - 1 : current - 1
+          : current === -1 || current === focusable.length - 1 ? 0 : current + 1
+        event.preventDefault()
+        event.stopPropagation()
+        focusable[next]?.focus()
+        return
+      }
+      // The workspace shortcut router listens on document capture. Capturing
+      // app-owned Cmd/Option chords one level earlier (window) prevents a guide
+      // opened above the workspace from splitting/closing panes underneath it.
+      // Ordinary keys continue to the dialog; type/paste ingress is blocked by
+      // the explicit ownership marker on the dialog root below.
+      if (event.metaKey || event.altKey) {
+        event.preventDefault()
+        event.stopPropagation()
+      }
     }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    window.addEventListener('keydown', onKey, { capture: true })
+    return () => {
+      cancelAnimationFrame(focusFrame)
+      window.removeEventListener('keydown', onKey, { capture: true })
+      previouslyFocused?.focus()
+    }
   }, [open, close])
 
   if (!open) return null
   return (
     <div
+      ref={dialogRef}
+      tabIndex={-1}
       role="dialog"
       aria-modal="true"
       aria-labelledby="dictation-guide-title"
+      data-agent-code-interaction-owner="app"
       className="
         fixed inset-0 z-[60] flex items-center justify-center
         bg-canvas/80 backdrop-blur-sm p-6
@@ -128,8 +176,9 @@ export function DictationGuideModal() {
             <p className="mb-1 font-semibold text-ink">A note on the hotkey.</p>
             <p>
               Dictation is triggered with{' '}
-              <span className="font-mono">Cmd+Shift+D</span> by default — no OS
-              permissions required. If you prefer holding <span className="font-mono">Fn</span>{' '}
+              <span className="font-mono">Cmd+Shift+D</span> by default: press once
+              to record and again to finish, with no OS permission required. If
+              you prefer holding <span className="font-mono">Fn</span>{' '}
               like macOS system dictation, switch the shortcut in Settings; macOS
               will then prompt for Accessibility permission the first time you
               enable dictation.
