@@ -653,7 +653,12 @@ export function registerEditorFsIpc(roots: EditorFsRootRegistry): void {
     'editor-fs:search-content',
     async (
       evt,
-      params: { root: string; query: string; caseSensitive?: boolean },
+      params: {
+        root: string
+        query: string
+        caseSensitive?: boolean
+        excludePaths?: string[]
+      },
     ): Promise<EditorFsSearchResult> => {
       try {
         const root = await roots.authorize(evt.sender, params.root)
@@ -663,6 +668,22 @@ export function registerEditorFsIpc(roots: EditorFsRootRegistry): void {
         }
         if (query.includes('\n') || query.includes('\r')) {
           return { ok: false, error: 'multi-line search is not supported' }
+        }
+        if (params.excludePaths && !Array.isArray(params.excludePaths)) {
+          return { ok: false, error: 'excluded search paths must be an array' }
+        }
+        if ((params.excludePaths?.length ?? 0) > 10_000) {
+          return { ok: false, error: 'too many excluded search paths' }
+        }
+        const excludedPaths = new Set<string>()
+        for (const excludedPath of params.excludePaths ?? []) {
+          if (typeof excludedPath !== 'string' || excludedPath.length > 4_096) {
+            return { ok: false, error: 'invalid excluded search path' }
+          }
+          // Exclusions cannot grant filesystem authority, but validating them
+          // through the same containment path avoids two spellings referring
+          // to one file and keeps the renderer/main path contract literal.
+          excludedPaths.add(toProjectPath(root, resolveInsideRoot(root, excludedPath)))
         }
         const generation = (searchGenerationByOwner.get(evt.sender) ?? 0) + 1
         searchGenerationByOwner.set(evt.sender, generation)
@@ -735,7 +756,11 @@ export function registerEditorFsIpc(roots: EditorFsRootRegistry): void {
             // NUL byte = binary; utf8-decoding it would produce garbage
             // matches and garbage previews.
             if (text.includes('\u0000')) return
-            const lines = text.split('\n')
+            // Monaco preserves a UTF-8 BOM as hidden file metadata rather than
+            // an editable column. Search positions are UI coordinates, so the
+            // first visible character must remain column 1; counting U+FEFF
+            // here would reveal every first-line result one character late.
+            const lines = (text.startsWith('\ufeff') ? text.slice(1) : text).split('\n')
             for (let i = 0; i < lines.length; i++) {
               const columns: Array<{ offset: number; length: number }> = []
               if (insensitiveMatcher) {
@@ -745,7 +770,10 @@ export function registerEditorFsIpc(roots: EditorFsRootRegistry): void {
                   match;
                   match = insensitiveMatcher.exec(lines[i])
                 ) {
-                  columns.push({ offset: match.index, length: match[0].length })
+                  columns.push({
+                    offset: match.index,
+                    length: match[0].length,
+                  })
                 }
               } else {
                 let offset = lines[i].indexOf(query)
@@ -772,10 +800,20 @@ export function registerEditorFsIpc(roots: EditorFsRootRegistry): void {
               }
             }
           } catch (err) {
-            // Oversized regular files are an expected search exclusion, not a
-            // partial-index error. Other failures matter because the footer
-            // must disclose that some authorized paths could not be scanned.
-            if ((err as Error).message !== 'file is too large') errorCount += 1
+            // Oversized and non-text regular files are expected search
+            // exclusions, not partial-index errors. Counting every image/font
+            // as "unreadable" made healthy repositories look broken after the
+            // editor's strict UTF-8 reader correctly rejected binary payloads.
+            // Permission and genuine IO failures still matter because the
+            // footer must disclose that authorized text paths were skipped.
+            const message = (err as Error).message
+            if (
+              message !== 'file is too large' &&
+              message !== 'binary files are not supported' &&
+              message !== 'file is not valid UTF-8 text'
+            ) {
+              errorCount += 1
+            }
           }
         }
         const walk = async (dirAbs: string): Promise<void> => {
@@ -799,6 +837,11 @@ export function registerEditorFsIpc(roots: EditorFsRootRegistry): void {
             }
             if (!dirent.isFile()) continue
             if (EDITOR_IGNORED_FILE_NAMES.has(dirent.name)) continue
+            // Recoverable buffers are searched from their current renderer
+            // text and merged into the result cap. Scanning their older disk
+            // copy can consume all 500 slots before later files are visited,
+            // making those later hits unrecoverable after replacement.
+            if (excludedPaths.has(toProjectPath(root, abs))) continue
             if (filesScanned >= MAX_FILES) {
               truncated = true
               stopReason = 'files'

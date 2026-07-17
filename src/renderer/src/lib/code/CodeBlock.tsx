@@ -66,7 +66,10 @@ export const CodeBlock = memo(function CodeBlock({
   highlight = true,
   transformPage,
 }: Props) {
-  const normalizedLanguage = useMemo(() => normalizeCodeLanguage(language, path), [language, path])
+  const normalizedLanguage = useMemo(
+    () => normalizeCodeLanguage(language, path, code),
+    [code, language, path],
+  )
   const oversized = useMemo(() => exceedsInlineTextBudget(code), [code])
   const [largeContentOpen, setLargeContentOpen] = useState(false)
   const [fullCopyState, setFullCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
@@ -119,7 +122,11 @@ export const CodeBlock = memo(function CodeBlock({
   const containerRef = useRef<HTMLDivElement>(null)
   const reactId = useId().replace(/:/g, '_')
   const clientUri = useMemo(
-    () => inferClientUri(codeId ?? reactId, normalizedLanguage, path),
+    // `codeId` is semantic identity for picker stability, not guaranteed DOM
+    // uniqueness (two messages can start with the same 24 code characters).
+    // Monaco rejects duplicate model URIs and LSP lifetime is keyed by that
+    // URI, so every mounted instance must contribute React's unique id too.
+    () => inferClientUri(`${codeId ?? 'anonymous'}:${reactId}`, normalizedLanguage, path),
     [codeId, normalizedLanguage, path, reactId],
   )
 

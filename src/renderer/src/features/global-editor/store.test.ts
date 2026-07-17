@@ -105,4 +105,26 @@ describe('global editor store transitions', () => {
     expect(useGlobalEditorStore.getState().byCwd[cwd]?.openFiles['deleted.ts']).toBeDefined()
     expect(useGlobalEditorStore.getState().closeFile(cwd, 'deleted.ts', { force: true })).toBe(true)
   })
+
+  it('reveals a selection without changing a recoverable buffer disk state', () => {
+    open('deleted.ts', 'last recoverable copy')
+    useGlobalEditorStore.getState().setFileError(cwd, 'deleted.ts', 'file was deleted on disk', {
+      conflict: true,
+      externalChange: 'deleted',
+    })
+
+    useGlobalEditorStore.getState().setActiveFile(cwd, 'deleted.ts', {
+      focus: true,
+      selection: { line: 4, column: 7 },
+    })
+
+    expect(useGlobalEditorStore.getState().byCwd[cwd]?.openFiles['deleted.ts']).toMatchObject({
+      currentText: 'last recoverable copy',
+      savedText: 'last recoverable copy',
+      dirty: false,
+      conflict: true,
+      externalChange: 'deleted',
+      selection: { line: 4, column: 7 },
+    })
+  })
 })

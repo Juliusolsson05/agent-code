@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { EventEmitter } from 'node:events'
 import { constants } from 'node:fs'
 import type { Stats } from 'node:fs'
 import { access, mkdir, readFile, realpath, rename, stat, writeFile } from 'node:fs/promises'
@@ -24,6 +25,7 @@ import type {
   AiWorkspaceSummary,
   AiWorkspaceWriteFileParams,
   AiWorkspaceWriteFileResult,
+  AiWorkspaceChangeEvent,
 } from '@mcp/shared/aiWorkspaceTypes.js'
 
 const execFileAsync = promisify(execFile)
@@ -97,7 +99,13 @@ async function detectGitContext(path: string): Promise<{
   return { projectRoot, gitBranch }
 }
 
-export class AiWorkspaceRegistry {
+export interface AiWorkspaceRegistry {
+  on(event: 'changed', listener: (event: AiWorkspaceChangeEvent) => void): this
+  off(event: 'changed', listener: (event: AiWorkspaceChangeEvent) => void): this
+  emit(event: 'changed', payload: AiWorkspaceChangeEvent): boolean
+}
+
+export class AiWorkspaceRegistry extends EventEmitter {
   private readonly workspaces = new Map<string, AiWorkspaceRecord>()
   private loadPromise: Promise<void> | null = null
   private saveQueue: Promise<void> = Promise.resolve()
@@ -113,7 +121,9 @@ export class AiWorkspaceRegistry {
     }
   >()
 
-  constructor(private readonly stateFile = AI_WORKSPACE_FILE) {}
+  constructor(private readonly stateFile = AI_WORKSPACE_FILE) {
+    super()
+  }
 
   async create(params: AiWorkspaceCreateParams): Promise<AiWorkspaceRecord> {
     await this.ensureLoaded()
@@ -137,6 +147,10 @@ export class AiWorkspaceRegistry {
     }
     this.workspaces.set(workspace.workspaceId, workspace)
     await this.save()
+    this.emit('changed', {
+      workspaceId: workspace.workspaceId,
+      kind: 'created',
+    })
     return workspace
   }
 
@@ -240,6 +254,10 @@ export class AiWorkspaceRegistry {
     else workspace.entries.push(entry)
     workspace.updatedAt = timestamp
     await this.save()
+    this.emit('changed', {
+      workspaceId: workspace.workspaceId,
+      kind: 'entries',
+    })
     return entry
   }
 
@@ -261,6 +279,10 @@ export class AiWorkspaceRegistry {
     if (removed) {
       workspace.updatedAt = nowIso()
       await this.save()
+      this.emit('changed', {
+        workspaceId: workspace.workspaceId,
+        kind: 'entries',
+      })
     }
     return { removed, remaining: workspace.entries.length }
   }
@@ -272,13 +294,17 @@ export class AiWorkspaceRegistry {
     workspace.entries = []
     workspace.updatedAt = nowIso()
     await this.save()
+    if (removed > 0) this.emit('changed', { workspaceId, kind: 'entries' })
     return { removed }
   }
 
   async delete(workspaceId: string): Promise<{ deleted: boolean }> {
     await this.ensureLoaded()
     const deleted = this.workspaces.delete(workspaceId)
-    if (deleted) await this.save()
+    if (deleted) {
+      await this.save()
+      this.emit('changed', { workspaceId, kind: 'deleted' })
+    }
     return { deleted }
   }
 
@@ -330,6 +356,17 @@ export class AiWorkspaceRegistry {
           }
         }
         await this.refreshEntriesForPath(target)
+        // One physical file can be curated into several workspaces. Every
+        // visible consumer needs the write signal; choosing an arbitrary first
+        // workspace would leave the others showing stale buffer metadata.
+        for (const workspace of this.workspaces.values()) {
+          if (workspace.entries.some(entry => entry.path === target)) {
+            this.emit('changed', {
+              workspaceId: workspace.workspaceId,
+              kind: 'file-written',
+            })
+          }
+        }
         return {
           ok: true,
           path: target,

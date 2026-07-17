@@ -125,6 +125,10 @@ const worktreeActivityIndex = new WorktreeActivityIndex()
 const builtInMcpHost = new BuiltInMcpHttpHost()
 const orchestrationBridge = new OrchestrationBridge()
 const aiWorkspaceRegistry = new AiWorkspaceRegistry()
+// Registry mutations can originate from renderer IPC or any built-in MCP
+// session. Forward one source-of-truth event so an already-open curated editor
+// does not require a manual close/reopen to see agent attachments or clears.
+aiWorkspaceRegistry.on('changed', event => sendToMainWindow('ai-workspace:changed', event))
 const caffeinateController = new CaffeinateController()
 
 // SessionManager is constructed inside whenReady so we can await

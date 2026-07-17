@@ -84,6 +84,16 @@ export type EditorFsChangeEvent = {
   error?: string
 }
 
+/** An expanded Explorer directory changed membership. The child name is
+ * intentionally omitted: renderer reloads the bounded authoritative listing
+ * rather than trying to reproduce rename/filter/sort semantics from events. */
+export type EditorFsDirectoryChangeEvent = {
+  root: string
+  path: string
+  /** Present when the native subscription stopped being trustworthy. */
+  error?: string
+}
+
 export type EditorFsRecursiveListResult =
   | {
       ok: true

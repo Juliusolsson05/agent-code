@@ -4,7 +4,7 @@ import { lstat } from 'fs/promises'
 
 import { invalidateEditorFsCache, resolveInsideRoot, validateExistingTarget } from './editorFs.js'
 import type { EditorFsRootRegistry } from './editorFsRootRegistry.js'
-import type { EditorFsChangeEvent } from '@shared/types/editorFs.js'
+import type { EditorFsChangeEvent, EditorFsDirectoryChangeEvent } from '@shared/types/editorFs.js'
 
 type Owner = {
   sender: WebContents
@@ -21,6 +21,7 @@ type WatchEntry = {
 }
 
 const watchers = new Map<string, WatchEntry>()
+const directoryWatchers = new Map<string, WatchEntry>()
 const trackedOwners = new WeakSet<WebContents>()
 
 function sendToOwners(entry: WatchEntry, event: Omit<EditorFsChangeEvent, 'root' | 'path'>): void {
@@ -39,6 +40,18 @@ function sendToOwners(entry: WatchEntry, event: Omit<EditorFsChangeEvent, 'root'
   // window's project identity.
 }
 
+function sendToDirectoryOwners(entry: WatchEntry, error?: string): void {
+  for (const owner of entry.owners.values()) {
+    if (owner.sender.isDestroyed()) continue
+    invalidateEditorFsCache(owner.canonicalRoot, owner.path)
+    owner.sender.send('editor-fs:directory-changed', {
+      root: owner.root,
+      path: owner.path,
+      ...(error ? { error } : {}),
+    } satisfies EditorFsDirectoryChangeEvent)
+  }
+}
+
 function subscriptionKey(ownerId: number, canonicalRoot: string, path: string): string {
   return `${ownerId}\0${canonicalRoot}\0${path.replace(/\\/g, '/')}`
 }
@@ -52,6 +65,16 @@ async function removeOwner(ownerId: number): Promise<void> {
     if (entry.owners.size === 0) {
       watchers.delete(key)
       entry.finishReady(new Error('file watch was cancelled before it became ready'))
+      closes.push(entry.watcher.close())
+    }
+  }
+  for (const [key, entry] of directoryWatchers) {
+    for (const [subscription, owner] of entry.owners) {
+      if (owner.sender.id === ownerId) entry.owners.delete(subscription)
+    }
+    if (entry.owners.size === 0) {
+      directoryWatchers.delete(key)
+      entry.finishReady(new Error('directory watch was cancelled before it became ready'))
       closes.push(entry.watcher.close())
     }
   }
@@ -174,4 +197,97 @@ export function registerEditorFsWatchIpc(roots: EditorFsRootRegistry): void {
       return
     }
   })
+
+  ipcMain.handle(
+    'editor-fs:watch-directory',
+    async (evt, params: { root: string; path: string }) => {
+      const canonicalRoot = await roots.authorize(evt.sender, params.root)
+      const requested = resolveInsideRoot(canonicalRoot, params.path)
+      const key = await validateExistingTarget(canonicalRoot, requested)
+      const value = await lstat(key)
+      if (!value.isDirectory()) throw new Error('not a directory')
+      trackOwner(evt.sender)
+
+      const normalizedPath = params.path.replace(/\\/g, '/')
+      const owner: Owner = {
+        sender: evt.sender,
+        root: params.root,
+        canonicalRoot,
+        path: normalizedPath,
+      }
+      const ownerKey = subscriptionKey(evt.sender.id, canonicalRoot, normalizedPath)
+      const existing = directoryWatchers.get(key)
+      if (existing) {
+        existing.owners.set(ownerKey, owner)
+        await existing.ready
+        return
+      }
+
+      // Watch only immediate membership of EXPANDED directories. A recursive
+      // root watcher would crawl node_modules/build trees the Explorer itself
+      // deliberately keeps closed; depth zero scales with what the user can
+      // actually see and expanded children register their own subscriptions.
+      const watcher = watch(key, {
+        ignoreInitial: true,
+        followSymlinks: false,
+        depth: 0,
+        awaitWriteFinish: { stabilityThreshold: 150, pollInterval: 50 },
+      })
+      let resolveReady!: () => void
+      let rejectReady!: (error: Error) => void
+      let readySettled = false
+      const ready = new Promise<void>((resolve, reject) => {
+        resolveReady = resolve
+        rejectReady = reject
+      })
+      const finishReady = (error?: Error): void => {
+        if (readySettled) return
+        readySettled = true
+        if (error) rejectReady(error)
+        else resolveReady()
+      }
+      const entry: WatchEntry = {
+        watcher,
+        owners: new Map([[ownerKey, owner]]),
+        ready,
+        finishReady,
+      }
+      const changed = () => sendToDirectoryOwners(entry)
+      watcher.on('add', changed)
+      watcher.on('unlink', changed)
+      watcher.on('addDir', changed)
+      watcher.on('unlinkDir', changed)
+      watcher.on('error', error => {
+        const failure = error instanceof Error ? error : new Error('directory watch failed')
+        finishReady(failure)
+        // A post-ready native watcher error is terminal for freshness. Leaving
+        // the dead entry cached makes future registrations appear successful
+        // while Explorer remains silently stale, so notify every owner and
+        // remove it before allowing a later collapse/re-expand to retry.
+        sendToDirectoryOwners(entry, failure.message)
+        if (directoryWatchers.get(key) === entry) directoryWatchers.delete(key)
+        void watcher.close()
+      })
+      watcher.once('ready', () => finishReady())
+      directoryWatchers.set(key, entry)
+      await ready
+    },
+  )
+
+  ipcMain.handle(
+    'editor-fs:unwatch-directory',
+    async (evt, params: { root: string; path: string }) => {
+      const canonicalRoot = await roots.authorize(evt.sender, params.root)
+      const ownerKey = subscriptionKey(evt.sender.id, canonicalRoot, params.path)
+      for (const [key, entry] of directoryWatchers) {
+        if (!entry.owners.delete(ownerKey)) continue
+        if (entry.owners.size === 0) {
+          directoryWatchers.delete(key)
+          entry.finishReady(new Error('directory watch was cancelled before it became ready'))
+          await entry.watcher.close()
+        }
+        return
+      }
+    },
+  )
 }

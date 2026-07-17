@@ -2,11 +2,13 @@ import { describe, expect, it } from 'vitest'
 
 import {
   hasRecoverableBufferChanges,
+  isMissingRegularFileError,
   makeBuffer,
   withDiskObserved,
   withError,
   withTextUpdate,
   withWriteAcknowledged,
+  withEditorReadError,
 } from './bufferOps'
 
 function buffer(text = 'base') {
@@ -42,6 +44,12 @@ describe('editor buffer transitions', () => {
     expect(result.mtimeMs).toBe(20)
   })
 
+  it('does not regress a clean buffer when an older disk read finishes late', () => {
+    const newer = withDiskObserved(buffer(), 'newer', 30, 'v3')
+
+    expect(withDiskObserved(newer, 'older', 20, 'v2')).toBe(newer)
+  })
+
   it('preserves a dirty baseline when disk diverges', () => {
     const dirty = withTextUpdate(buffer(), 'my edit')
 
@@ -62,6 +70,19 @@ describe('editor buffer transitions', () => {
       dirty: true,
       mtimeMs: 20,
       conflict: false,
+    })
+  })
+
+  it('becomes clean when another writer persists the exact in-memory edits', () => {
+    const dirty = withTextUpdate(buffer(), 'shared edit')
+
+    expect(withDiskObserved(dirty, 'shared edit', 20, 'v2')).toMatchObject({
+      currentText: 'shared edit',
+      savedText: 'shared edit',
+      dirty: false,
+      mtimeMs: 20,
+      conflict: false,
+      externalChange: null,
     })
   })
 
@@ -92,5 +113,27 @@ describe('editor buffer transitions', () => {
 
     expect(deleted.dirty).toBe(false)
     expect(hasRecoverableBufferChanges(deleted)).toBe(true)
+  })
+
+  it('classifies every missing regular-file observation as recoverable', () => {
+    for (const error of [
+      'does not exist',
+      'not a file',
+      'is a directory',
+      'not a directory',
+      'watched path is no longer a regular file',
+    ]) {
+      expect(isMissingRegularFileError(error)).toBe(true)
+      expect(withEditorReadError(buffer(), error)).toMatchObject({
+        dirty: false,
+        conflict: true,
+        externalChange: 'deleted',
+      })
+    }
+    expect(isMissingRegularFileError('permission denied')).toBe(false)
+    expect(withEditorReadError(buffer(), 'permission denied')).toMatchObject({
+      conflict: false,
+      externalChange: null,
+    })
   })
 })

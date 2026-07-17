@@ -14,6 +14,11 @@ export type EditorFileBuffer = {
   dirty: boolean
   loading: boolean
   error: string | null
+  /** A non-IO warning owned by the host surface. AI Workspace uses this when
+   * metadata is detached while an unsaved buffer must remain recoverable.
+   * Keeping it separate from `error` means typing/retrying IO cannot erase the
+   * capability-boundary warning by accident. */
+  surfaceWarning?: string | null
   /** True when the last save failed the optimistic mtime check ("file
    *  changed on disk") or the watcher flagged an external change under a
    *  dirty buffer. Distinct from `error` (which also covers hard IO

@@ -255,6 +255,9 @@ function OpenCommandPalette({
   const [sessionsLoading, setSessionsLoading] = useState(false)
   const [aiWorkspaces, setAiWorkspaces] = useState<AiWorkspaceSummary[]>([])
   const [aiWorkspacesLoading, setAiWorkspacesLoading] = useState(false)
+  const [aiWorkspaceError, setAiWorkspaceError] = useState<string | null>(null)
+  const [aiWorkspacePending, setAiWorkspacePending] = useState<string | null>(null)
+  const [armedAiWorkspaceClearId, setArmedAiWorkspaceClearId] = useState<string | null>(null)
   const [customPromptTemplates, setCustomPromptTemplates] = useState<PromptTemplate[]>([])
   const [promptTemplateForm, setPromptTemplateForm] = useState<PromptTemplateForm>({
     id: null,
@@ -373,10 +376,14 @@ function OpenCommandPalette({
 
   const loadAiWorkspaces = useCallback(async () => {
     setAiWorkspacesLoading(true)
+    setAiWorkspaceError(null)
     try {
       setAiWorkspaces(await window.api.aiWorkspaceList())
-    } catch {
+    } catch (error) {
       setAiWorkspaces([])
+      setAiWorkspaceError(
+        `Could not load AI Workspaces: ${error instanceof Error ? error.message : String(error)}`,
+      )
     } finally {
       setAiWorkspacesLoading(false)
     }
@@ -386,6 +393,7 @@ function OpenCommandPalette({
     setMode('ai-workspace-open')
     setQuery('')
     setSelectedIndex(0)
+    setArmedAiWorkspaceClearId(null)
     void loadAiWorkspaces()
   }, [loadAiWorkspaces])
 
@@ -393,12 +401,15 @@ function OpenCommandPalette({
     setMode('ai-workspace-create')
     setQuery('')
     setSelectedIndex(0)
+    setAiWorkspaceError(null)
+    setArmedAiWorkspaceClearId(null)
   }, [])
 
   const enterAiWorkspaceClearMode = useCallback(() => {
     setMode('ai-workspace-clear')
     setQuery('')
     setSelectedIndex(0)
+    setArmedAiWorkspaceClearId(null)
     void loadAiWorkspaces()
   }, [loadAiWorkspaces])
 
@@ -690,6 +701,9 @@ function OpenCommandPalette({
     setSessionsLoading(false)
     setAiWorkspaces([])
     setAiWorkspacesLoading(false)
+    setAiWorkspaceError(null)
+    setAiWorkspacePending(null)
+    setArmedAiWorkspaceClearId(null)
     setPromptTemplateForm({ id: null, title: '', body: '' })
     requestAnimationFrame(() => inputRef.current?.focus())
   }, [])
@@ -697,6 +711,13 @@ function OpenCommandPalette({
   useEffect(() => {
     setSelectedIndex(prev => Math.min(prev, Math.max(0, filteredLength - 1)))
   }, [filteredLength])
+
+  useEffect(() => {
+    // WHY confirmation is tied to the current row/query: a destructive second
+    // Enter should never apply to a workspace that became selected only because
+    // the user kept navigating or filtered the list after arming another row.
+    setArmedAiWorkspaceClearId(null)
+  }, [mode, query, selectedIndex])
 
   useEffect(() => {
     if (!listRef.current) return
@@ -843,29 +864,55 @@ function OpenCommandPalette({
 
   const createAiWorkspace = useCallback(async () => {
     const name = query.trim()
-    if (!name) return
-    const workspace = await window.api.aiWorkspaceCreate({ name })
-    openAiWorkspace(workspace.workspaceId)
-  }, [openAiWorkspace, query])
+    if (!name || aiWorkspacePending) return
+    setAiWorkspacePending('create')
+    setAiWorkspaceError(null)
+    try {
+      const workspace = await window.api.aiWorkspaceCreate({ name })
+      openAiWorkspace(workspace.workspaceId)
+    } catch (error) {
+      setAiWorkspaceError(
+        `Could not create AI Workspace: ${error instanceof Error ? error.message : String(error)}`,
+      )
+    } finally {
+      setAiWorkspacePending(null)
+    }
+  }, [aiWorkspacePending, openAiWorkspace, query])
 
   const clearAiWorkspace = useCallback(
     async (summary: AiWorkspaceSummary) => {
-      const dirtyPaths = dirtyAiWorkspacePaths(summary.workspaceId)
-      if (dirtyPaths.length > 0) {
-        const sessionId = commandTargetSessionId(workspace)
-        if (sessionId) {
-          workspace.showPaneToast(
-            sessionId,
-            `Save or close ${dirtyPaths.length} unsaved AI Workspace ${dirtyPaths.length === 1 ? 'file' : 'files'} before clearing it.`,
-          )
-        }
+      if (aiWorkspacePending) return
+      if (armedAiWorkspaceClearId !== summary.workspaceId) {
+        setArmedAiWorkspaceClearId(summary.workspaceId)
         return
       }
-      await window.api.aiWorkspaceClear(summary.workspaceId)
-      await loadAiWorkspaces()
-      setSelectedIndex(0)
+      const dirtyPaths = dirtyAiWorkspacePaths(summary.workspaceId)
+      if (dirtyPaths.length > 0) {
+        const message = `Save or close ${dirtyPaths.length} unsaved AI Workspace ${dirtyPaths.length === 1 ? 'file' : 'files'} before clearing it.`
+        setAiWorkspaceError(message)
+        const sessionId = commandTargetSessionId(workspace)
+        if (sessionId) {
+          workspace.showPaneToast(sessionId, message)
+        }
+        setArmedAiWorkspaceClearId(null)
+        return
+      }
+      setAiWorkspacePending(summary.workspaceId)
+      setAiWorkspaceError(null)
+      try {
+        await window.api.aiWorkspaceClear(summary.workspaceId)
+        await loadAiWorkspaces()
+        setSelectedIndex(0)
+        setArmedAiWorkspaceClearId(null)
+      } catch (error) {
+        setAiWorkspaceError(
+          `Could not clear AI Workspace: ${error instanceof Error ? error.message : String(error)}`,
+        )
+      } finally {
+        setAiWorkspacePending(null)
+      }
     },
-    [loadAiWorkspaces, workspace],
+    [aiWorkspacePending, armedAiWorkspaceClearId, loadAiWorkspaces, workspace],
   )
 
   const deletePromptTemplate = useCallback(
@@ -892,6 +939,7 @@ function OpenCommandPalette({
       }
       if (e.key === 'Enter') {
         e.preventDefault()
+        if (aiWorkspacePending) return
         if (mode === 'save-prompt-template' || mode === 'edit-prompt-template') {
           savePromptTemplateForm()
         } else if (mode === 'ai-workspace-create') {
@@ -922,6 +970,7 @@ function OpenCommandPalette({
     },
     [
       mode,
+      aiWorkspacePending,
       filteredLength,
       filteredBuried,
       paletteCommands,
@@ -1246,49 +1295,81 @@ function OpenCommandPalette({
                 ))
               ))}
 
-            {(mode === 'ai-workspace-open' || mode === 'ai-workspace-clear') &&
-              (aiWorkspacesLoading ? (
-                <div className="px-3 py-4 text-muted text-[12px] text-center">
-                  Loading AI Workspaces…
-                </div>
-              ) : filteredAiWorkspaces.length === 0 ? (
-                <div className="px-3 py-4 text-muted text-[12px] text-center">No AI Workspaces</div>
-              ) : (
-                filteredAiWorkspaces.map((workspace, i) => (
+            {(mode === 'ai-workspace-open' || mode === 'ai-workspace-clear') && (
+              <>
+                {aiWorkspaceError ? (
                   <div
-                    key={workspace.workspaceId}
-                    className={`
-                    px-3 py-2
-                    cursor-pointer
-                    border-b border-border last:border-b-0
-                    ${
-                      i === selectedIndex
-                        ? mode === 'ai-workspace-clear'
-                          ? 'bg-row-danger-selected-bg text-row-selected-fg'
-                          : 'bg-row-selected-bg text-row-selected-fg'
-                        : 'text-ink-dim hover:bg-row-hover-bg'
-                    }
-                  `}
-                    onMouseEnter={() => setSelectedIndex(i)}
-                    onClick={() => {
-                      if (mode === 'ai-workspace-clear') void clearAiWorkspace(workspace)
-                      else openAiWorkspace(workspace.workspaceId)
-                    }}
+                    role="alert"
+                    className="mx-2 my-1 border border-danger/40 bg-danger/10 px-2 py-2 text-[11px] text-danger"
                   >
-                    <div className="text-[12px] truncate">{workspace.name}</div>
-                    <div className="text-[10px] text-muted mt-0.5 truncate">
-                      {workspace.fileCount} files
-                      {workspace.staleCount > 0 ? ` · ${workspace.staleCount} stale` : ''}
-                      {workspace.description ? ` · ${workspace.description}` : ''}
-                    </div>
+                    {aiWorkspaceError}
                   </div>
-                ))
-              ))}
+                ) : null}
+                {aiWorkspacesLoading ? (
+                  <div className="px-3 py-4 text-muted text-[12px] text-center">
+                    Loading AI Workspaces…
+                  </div>
+                ) : filteredAiWorkspaces.length === 0 ? (
+                  <div className="px-3 py-4 text-muted text-[12px] text-center">
+                    {aiWorkspaceError ? 'Try opening this command again.' : 'No AI Workspaces'}
+                  </div>
+                ) : (
+                  filteredAiWorkspaces.map((workspace, i) => {
+                    const clearArmed = armedAiWorkspaceClearId === workspace.workspaceId
+                    const pending = aiWorkspacePending === workspace.workspaceId
+                    return (
+                      <button
+                        type="button"
+                        key={workspace.workspaceId}
+                        disabled={aiWorkspacePending !== null}
+                        className={`
+                          block w-full border-b border-border px-3 py-2 text-left last:border-b-0
+                          disabled:cursor-wait disabled:opacity-60
+                          ${
+                            i === selectedIndex
+                              ? mode === 'ai-workspace-clear'
+                                ? 'bg-row-danger-selected-bg text-row-selected-fg'
+                                : 'bg-row-selected-bg text-row-selected-fg'
+                              : 'text-ink-dim hover:bg-row-hover-bg'
+                          }
+                        `}
+                        onMouseEnter={() => setSelectedIndex(i)}
+                        onClick={() => {
+                          if (mode === 'ai-workspace-clear') void clearAiWorkspace(workspace)
+                          else openAiWorkspace(workspace.workspaceId)
+                        }}
+                      >
+                        <div className="text-[12px] truncate">{workspace.name}</div>
+                        <div className="text-[10px] text-muted mt-0.5 truncate">
+                          {pending
+                            ? 'Clearing…'
+                            : clearArmed
+                              ? 'Press Enter or click again to confirm metadata deletion'
+                              : `${workspace.fileCount} files${
+                                  workspace.staleCount > 0 ? ` · ${workspace.staleCount} stale` : ''
+                                }${workspace.description ? ` · ${workspace.description}` : ''}`}
+                        </div>
+                      </button>
+                    )
+                  })
+                )}
+              </>
+            )}
 
             {mode === 'ai-workspace-create' && (
               <div className="px-3 py-3">
+                {aiWorkspaceError ? (
+                  <div
+                    role="alert"
+                    className="mb-3 border border-danger/40 bg-danger/10 px-2 py-2 text-[11px] text-danger"
+                  >
+                    {aiWorkspaceError}
+                  </div>
+                ) : null}
                 <div className="mb-3 text-[12px] text-muted">
-                  Press Enter to create and open the named AI Workspace.
+                  {aiWorkspacePending === 'create'
+                    ? 'Creating AI Workspace…'
+                    : 'Press Enter to create and open the named AI Workspace.'}
                 </div>
                 <div className="flex justify-end gap-2">
                   <button
@@ -1305,10 +1386,10 @@ function OpenCommandPalette({
                   <button
                     type="button"
                     className="border border-accent bg-accent px-2 py-1 text-[11px] text-accent-fg disabled:opacity-40"
-                    disabled={!query.trim()}
+                    disabled={!query.trim() || aiWorkspacePending !== null}
                     onClick={() => void createAiWorkspace()}
                   >
-                    Create
+                    {aiWorkspacePending === 'create' ? 'Creating…' : 'Create'}
                   </button>
                 </div>
               </div>

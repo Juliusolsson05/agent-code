@@ -2,6 +2,10 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 
 import type { EditorFileBuffer } from '@renderer/features/editor/types'
 import { basename } from '@renderer/features/editor/lib/path'
+import {
+  SAVE_ACTIVE_EDITOR_FILE_EVENT,
+  SAVE_ALL_EDITOR_FILES_EVENT,
+} from '@renderer/features/editor/lib/editorCommandEvents'
 import { ConfirmCloseDialog } from '@renderer/features/editor/ui/ConfirmCloseDialog'
 import { EditorStatusBanner } from '@renderer/features/editor/ui/EditorStatusBanner'
 import { EditorTabs } from '@renderer/features/editor/ui/EditorTabs'
@@ -30,6 +34,8 @@ type EditorWorkbenchProps = {
   onCloseFile: (path: string, opts?: { force?: boolean }) => boolean
   onChangeFile: (path: string, text: string) => void
   onSave: () => void
+  onSaveAll: () => void
+  saveAllPending?: boolean
   /** Save the given file, then close it on success. Returns whether the
    *  save succeeded. Used by the dialog's "Save & Close"; when the host
    *  doesn't provide it the dialog falls back to a plain (refusable)
@@ -41,6 +47,9 @@ type EditorWorkbenchProps = {
   onOverwriteDisk?: (path: string) => void
   onSelectionRevealed?: (path: string) => void
   onFocusRequestHandled?: (path: string) => void
+  displayNameForPath?: (path: string) => string
+  titleForPath?: (path: string) => string
+  toolbarActions?: ReactNode
 }
 
 // Shared editor workbench shell.
@@ -70,14 +79,20 @@ export function EditorWorkbench({
   onCloseFile,
   onChangeFile,
   onSave,
+  onSaveAll,
+  saveAllPending = false,
   onSaveThenClose,
   onReloadFromDisk,
   onOverwriteDisk,
   onSelectionRevealed,
   onFocusRequestHandled,
+  displayNameForPath = basename,
+  titleForPath,
+  toolbarActions,
 }: EditorWorkbenchProps) {
   const [pendingClose, setPendingClose] = useState<{
     path: string
+    generation: number
     focusTarget: 'editor' | 'tabs'
   } | null>(null)
   const [savingClose, setSavingClose] = useState(false)
@@ -88,6 +103,45 @@ export function EditorWorkbench({
     activePath: string | null
   } | null>(null)
   const workbenchRef = useRef<HTMLDivElement | null>(null)
+  const onSaveRef = useRef(onSave)
+  const onSaveAllRef = useRef(onSaveAll)
+  onSaveRef.current = onSave
+  onSaveAllRef.current = onSaveAll
+  const openFilesRef = useRef(openFiles)
+  const pendingCloseRef = useRef(pendingClose)
+  openFilesRef.current = openFiles
+  pendingCloseRef.current = pendingClose
+
+  const closeRequestIsCurrent = useCallback(
+    (request: NonNullable<typeof pendingClose>) =>
+      pendingCloseRef.current === request &&
+      openFilesRef.current[request.path]?.generation === request.generation,
+    [],
+  )
+
+  useEffect(() => {
+    if (!pendingClose) return
+    if (openFiles[pendingClose.path]?.generation === pendingClose.generation) return
+    // A workbench can stay mounted while its host switches cwd/workspace. A
+    // relative path alone is therefore not enough identity for a destructive
+    // dialog: "Discard src/index.ts" must never land on a new buffer that
+    // happens to have the same path. Buffer generations are lifetime tokens.
+    pendingCloseRef.current = null
+    setPendingClose(null)
+    setSavingClose(false)
+    setCloseError(null)
+  }, [openFiles, pendingClose])
+
+  useEffect(() => {
+    const save = () => onSaveRef.current()
+    const saveAll = () => onSaveAllRef.current()
+    window.addEventListener(SAVE_ACTIVE_EDITOR_FILE_EVENT, save)
+    window.addEventListener(SAVE_ALL_EDITOR_FILES_EVENT, saveAll)
+    return () => {
+      window.removeEventListener(SAVE_ACTIVE_EDITOR_FILE_EVENT, save)
+      window.removeEventListener(SAVE_ALL_EDITOR_FILES_EVENT, saveAll)
+    }
+  }, [])
 
   const activePathAfterClose = useCallback(
     (path: string): string | null => {
@@ -158,11 +212,13 @@ export function EditorWorkbench({
       // Save failures are rendered for the active buffer. Activate the
       // requested tab before prompting so any subsequent error cannot end up
       // hidden behind a different tab.
+      const generation = openFiles[path]?.generation
+      if (generation == null) return
       onActivateFile(path, { focusEditor: false })
       setCloseError(null)
-      setPendingClose({ path, focusTarget })
+      setPendingClose({ path, generation, focusTarget })
     },
-    [activePathAfterClose, onActivateFile, onCloseFile, scheduleFocusAfterClose],
+    [activePathAfterClose, onActivateFile, onCloseFile, openFiles, scheduleFocusAfterClose],
   )
 
   return (
@@ -182,12 +238,17 @@ export function EditorWorkbench({
         if (key === 's') {
           event.preventDefault()
           onSave()
-        } else if (key === 'w' && activeFilePath) {
+        } else if (key === 'w') {
+          // Agent Code owns Cmd+W while focus is anywhere in editor chrome.
+          // Even an empty workbench must consume it; otherwise Electron's
+          // native menu receives the unhandled chord and closes the window.
           event.preventDefault()
-          requestClose(
-            activeFilePath,
-            (event.target as Element | null)?.closest('[role="tablist"]') ? 'tabs' : 'editor',
-          )
+          if (activeFilePath) {
+            requestClose(
+              activeFilePath,
+              (event.target as Element | null)?.closest('[role="tablist"]') ? 'tabs' : 'editor',
+            )
+          }
         }
       }}
     >
@@ -207,10 +268,20 @@ export function EditorWorkbench({
           activeFilePath={activeFilePath}
           onActivate={onActivateFile}
           onClose={path => requestClose(path, 'tabs')}
+          onSave={onSave}
+          onSaveAll={onSaveAll}
+          saveDisabled={!activeFile?.dirty}
+          saveAllDisabled={
+            saveAllPending || !Object.values(openFiles).some(file => file.dirty)
+          }
+          saveAllPending={saveAllPending}
+          displayNameForPath={displayNameForPath}
+          titleForPath={titleForPath}
+          actions={toolbarActions}
         />
-        {activeFile?.error && activeFilePath && (
+        {(activeFile?.error || activeFile?.surfaceWarning) && activeFilePath && (
           <EditorStatusBanner
-            message={activeFile.error}
+            message={activeFile.error ?? activeFile.surfaceWarning ?? 'Editor warning'}
             conflict={activeFile.conflict}
             externalChange={activeFile.externalChange}
             onReload={onReloadFromDisk ? () => onReloadFromDisk(activeFilePath) : undefined}
@@ -240,36 +311,59 @@ export function EditorWorkbench({
         </div>
         {pendingClose && (
           <ConfirmCloseDialog
-            fileName={basename(pendingClose.path)}
+            fileName={displayNameForPath(pendingClose.path)}
             deleted={openFiles[pendingClose.path]?.externalChange === 'deleted'}
             saving={savingClose}
             error={closeError}
             onCancel={() => {
+              const request = pendingClose
+              pendingCloseRef.current = null
               setCloseError(null)
               setPendingClose(null)
-              restorePromptOrigin(pendingClose.path, pendingClose.focusTarget)
+              if (openFilesRef.current[request.path]?.generation === request.generation) {
+                restorePromptOrigin(request.path, request.focusTarget)
+              }
             }}
             onDiscard={() => {
-              const nextActivePath = activePathAfterClose(pendingClose.path)
-              onCloseFile(pendingClose.path, { force: true })
+              const request = pendingClose
+              if (!closeRequestIsCurrent(request)) {
+                pendingCloseRef.current = null
+                setPendingClose(null)
+                return
+              }
+              const nextActivePath = activePathAfterClose(request.path)
+              const closed = onCloseFile(request.path, { force: true })
+              if (!closed) return
+              pendingCloseRef.current = null
               setPendingClose(null)
-              scheduleFocusAfterClose(pendingClose.focusTarget, nextActivePath)
+              scheduleFocusAfterClose(request.focusTarget, nextActivePath)
             }}
             onSaveAndClose={() => {
               void (async () => {
                 if (savingClose) return
+                const request = pendingClose
+                if (!closeRequestIsCurrent(request)) {
+                  pendingCloseRef.current = null
+                  setPendingClose(null)
+                  return
+                }
                 setSavingClose(true)
                 try {
-                  const nextActivePath = activePathAfterClose(pendingClose.path)
-                  const saved = onSaveThenClose ? await onSaveThenClose(pendingClose.path) : false
+                  const nextActivePath = activePathAfterClose(request.path)
+                  const saved = onSaveThenClose ? await onSaveThenClose(request.path) : false
+                  // Saving crosses IPC and can outlive a cwd switch, tab close,
+                  // or close-dialog replacement. Never let that late result
+                  // dismiss/focus a newer dialog merely because paths match.
+                  if (!closeRequestIsCurrent(request)) return
                   if (saved) {
+                    pendingCloseRef.current = null
                     setCloseError(null)
                     setPendingClose(null)
-                    scheduleFocusAfterClose(pendingClose.focusTarget, nextActivePath)
+                    scheduleFocusAfterClose(request.focusTarget, nextActivePath)
                     return
                   }
                   setCloseError(
-                    openFiles[pendingClose.path]?.error ??
+                    openFilesRef.current[request.path]?.error ??
                       'The file changed while it was saving. Your newer edits are still open.',
                   )
                 } catch (err) {

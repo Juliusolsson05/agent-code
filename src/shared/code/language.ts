@@ -58,17 +58,51 @@ const EXTENSION_TO_LANGUAGE: Record<string, string> = {
   zsh: 'shell',
 }
 
-export function inferLanguageFromPath(filePath?: string | null): string | null {
-  if (!filePath) return null
-  const normalized = filePath.split(/[?#]/, 1)[0] ?? filePath
-  const parts = normalized.split('.')
-  if (parts.length < 2) return null
-  const ext = parts[parts.length - 1]?.toLowerCase()
-  if (!ext) return null
-  return EXTENSION_TO_LANGUAGE[ext] ?? null
+function inferLanguageFromShebang(content?: string | null): string | null {
+  // UTF-8 BOM is file metadata preserved for round-trip fidelity. It is not
+  // part of the executable shebang and must not make an otherwise ordinary
+  // extensionless script fall back to plaintext.
+  const source = content?.startsWith('\ufeff') ? content.slice(1) : content
+  if (!source?.startsWith('#!')) return null
+  const shebang = source.slice(0, source.indexOf('\n') === -1 ? 256 : source.indexOf('\n'))
+  // WHY match executable tokens instead of the whole line: portable scripts
+  // commonly use `/usr/bin/env`, sometimes with `-S` and extra flags. The
+  // interpreter is still authoritative, but its position is not. Word
+  // boundaries also keep `node` from accidentally matching an unrelated path.
+  if (/\b(?:python|python\d+(?:\.\d+)?)\b/i.test(shebang)) return 'python'
+  if (/\b(?:node|deno|bun)\b/i.test(shebang)) return 'javascript'
+  if (/\b(?:bash|zsh|dash|ksh|sh)\b/i.test(shebang)) return 'shell'
+  if (/\bruby\b/i.test(shebang)) return 'ruby'
+  if (/\bperl\b/i.test(shebang)) return 'perl'
+  if (/\bphp\b/i.test(shebang)) return 'php'
+  return null
 }
 
-export function normalizeCodeLanguage(language?: string | null, filePath?: string | null): string {
+export function inferLanguageFromPath(
+  filePath?: string | null,
+  content?: string | null,
+): string | null {
+  if (!filePath) return inferLanguageFromShebang(content)
+  const normalized = filePath.split(/[?#]/, 1)[0] ?? filePath
+  const basename = normalized.split(/[\\/]/).pop()?.toLowerCase() ?? ''
+  // WHY basenames precede extension parsing: these conventional files have
+  // language semantics despite having no suffix. Treating them as plaintext
+  // disabled both Monaco behavior and the LSP without any visible explanation.
+  if (basename === 'makefile' || basename === 'gnumakefile') return 'makefile'
+  if (basename === 'dockerfile' || basename === 'containerfile') return 'dockerfile'
+  if (basename === '.bashrc' || basename === '.zshrc' || basename === '.profile') return 'shell'
+  const parts = normalized.split('.')
+  if (parts.length < 2) return inferLanguageFromShebang(content)
+  const ext = parts[parts.length - 1]?.toLowerCase()
+  if (!ext) return inferLanguageFromShebang(content)
+  return EXTENSION_TO_LANGUAGE[ext] ?? inferLanguageFromShebang(content)
+}
+
+export function normalizeCodeLanguage(
+  language?: string | null,
+  filePath?: string | null,
+  content?: string | null,
+): string {
   const direct = language?.toLowerCase().trim()
   if (direct) {
     if (direct === 'js') return 'javascript'
@@ -81,7 +115,7 @@ export function normalizeCodeLanguage(language?: string | null, filePath?: strin
     if (direct === 'text') return 'plaintext'
     return direct
   }
-  return inferLanguageFromPath(filePath) ?? 'plaintext'
+  return inferLanguageFromPath(filePath, content) ?? 'plaintext'
 }
 
 // Languages the LSP layer will ATTEMPT to serve. This is the renderer-

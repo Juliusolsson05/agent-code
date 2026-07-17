@@ -34,6 +34,31 @@ describe('editor file IO', () => {
     })
   })
 
+  it('rejects binary and malformed UTF-8 instead of creating corruptible text', async () => {
+    const { path } = await tempFile()
+    await writeFile(path, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff]))
+    await expect(readBoundedTextFile(path, 100)).rejects.toThrow('binary files are not supported')
+
+    await writeFile(path, Buffer.from([0xc3, 0x28]))
+    await expect(readBoundedTextFile(path, 100)).rejects.toThrow('not valid UTF-8')
+  })
+
+  it('preserves a UTF-8 BOM through the text read/write round trip', async () => {
+    const { path } = await tempFile()
+    const original = Buffer.from([0xef, 0xbb, 0xbf, ...Buffer.from('const value = 1\n')])
+    await writeFile(path, original)
+    const read = await readBoundedTextFile(path, 100)
+    expect(read.text.startsWith('\ufeff')).toBe(true)
+
+    await atomicWriteTextFile({
+      absolutePath: path,
+      text: read.text,
+      expectedVersion: read.version,
+      maxBytes: 100,
+    })
+    await expect(readFile(path)).resolves.toEqual(original)
+  })
+
   it.skipIf(process.platform === 'win32')('does not follow a symbolic-link leaf', async () => {
     const { root, path } = await tempFile('outside')
     const linked = join(root, 'linked.txt')

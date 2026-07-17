@@ -9,8 +9,12 @@ import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { ExplorerPane } from '@renderer/features/editor/ui/ExplorerPane'
 import { EditorWorkbench } from '@renderer/features/editor/ui/EditorWorkbench'
 import { ConfirmDeleteDialog } from '@renderer/features/editor/ui/ConfirmDeleteDialog'
+import { mapWithConcurrency } from '@renderer/features/editor/lib/boundedAsyncPool'
 import { releaseEditorModelOwner } from '@renderer/features/editor/lib/editorModelRegistry'
-import { hasRecoverableBufferChanges } from '@renderer/features/editor/lib/bufferOps'
+import {
+  hasRecoverableBufferChanges,
+  isMissingRegularFileError,
+} from '@renderer/features/editor/lib/bufferOps'
 import { AiWorkspaceEditor } from '@renderer/features/ai-workspace/ui/AiWorkspaceEditor'
 
 import {
@@ -18,7 +22,11 @@ import {
   openPathsUnder,
   useGlobalEditorStore,
 } from '@renderer/features/global-editor/store'
-import { openFileInGlobalEditor } from '@renderer/features/global-editor/openFileInGlobalEditor'
+import {
+  cancelAllPendingGlobalEditorFileOpens,
+  cancelPendingGlobalEditorFileOpen,
+  openFileInGlobalEditor,
+} from '@renderer/features/global-editor/openFileInGlobalEditor'
 import { QuickOpenOverlay } from '@renderer/features/global-editor/ui/QuickOpenOverlay'
 import { ContentSearchOverlay } from '@renderer/features/global-editor/ui/ContentSearchOverlay'
 import {
@@ -35,6 +43,10 @@ import { useResizableSplitter } from '@renderer/features/shared/useResizableSpli
 // reliably grabbable regardless of viewport width.
 const SPLITTER_PX = 6
 const SPLITTER_HIT_PX = 12 // wider hit-area than visible bar
+
+function isDefinitelyMissingRestoredPath(error: string): boolean {
+  return ['does not exist', 'not a file', 'is a directory', 'not a directory'].includes(error)
+}
 
 type Props = {
   /** Render slot for the existing workspace UI (dispatch / tile /
@@ -74,6 +86,7 @@ type Props = {
 // guarantees we keep receiving move events until mouseup.
 // `useResizableSplitter` encapsulates that mechanic; see its docs.
 export function GlobalEditorShell({ children, workspace }: Props) {
+  const [saveAllPending, setSaveAllPending] = useState(false)
   const [pendingExplorerDelete, setPendingExplorerDelete] = useState<{
     path: string
     dirtyPaths: string[]
@@ -84,7 +97,16 @@ export function GlobalEditorShell({ children, workspace }: Props) {
     requestedPath: string
     buffers: Map<string, { generation: number; currentText: string }>
   } | null>(null)
-  const { open } = useAppStore(useShallow(state => ({ open: state.globalEditorOpen })))
+  // One epoch space covers revalidation, watcher reads, explicit reloads, and
+  // writes. Buffer generation alone protects close/reopen; it cannot order two
+  // operations within the same open lifetime when filesystem mtimes tie.
+  const fileObservationEpochRef = useRef(new Map<string, number>())
+  const { open, closeGlobalEditor } = useAppStore(
+    useShallow(state => ({
+      open: state.globalEditorOpen,
+      closeGlobalEditor: state.closeGlobalEditor,
+    })),
+  )
 
   // Active tab id + the cwd of whatever command-target the user is
   // pointing at right now. WHY both:
@@ -130,6 +152,8 @@ export function GlobalEditorShell({ children, workspace }: Props) {
     setContentSearchOpen,
     editorFullscreen,
     setEditorFullscreen,
+    toggleEditorFullscreen,
+    toggleFileTreeVisible,
   } = useGlobalEditorStore(
     useShallow(state => ({
       splitterRatio: state.splitterRatio,
@@ -146,6 +170,8 @@ export function GlobalEditorShell({ children, workspace }: Props) {
       setContentSearchOpen: state.setContentSearchOpen,
       editorFullscreen: state.editorFullscreen,
       setEditorFullscreen: state.setEditorFullscreen,
+      toggleEditorFullscreen: state.toggleEditorFullscreen,
+      toggleFileTreeVisible: state.toggleFileTreeVisible,
     })),
   )
   const {
@@ -193,6 +219,16 @@ export function GlobalEditorShell({ children, workspace }: Props) {
     ? (cwdState.openFiles[cwdState.activeFilePath] ?? null)
     : null
 
+  useEffect(() => {
+    if (open) return
+    // Fullscreen is a presentation mode of an OPEN editor, not a sticky user
+    // preference. Reset it on every close route (keybind, command palette, or
+    // app action) so a later Quick Open/Search does not unexpectedly hide the
+    // entire workspace. The same boundary invalidates slow file reads.
+    cancelAllPendingGlobalEditorFileOpens()
+    if (editorFullscreen) setEditorFullscreen(false)
+  }, [open, editorFullscreen, setEditorFullscreen])
+
   // Sync the editor's active cwd ONLY when the user navigates between
   // tabs. The dep list is intentionally `activeTabId` — not the
   // focused-cwd we'd derive globally — so pane-focus changes within
@@ -214,6 +250,10 @@ export function GlobalEditorShell({ children, workspace }: Props) {
     if (lastSyncedTabIdRef.current === activeTabId) return
     lastSyncedTabIdRef.current = activeTabId ?? null
     if (focusedCwd === activeCwd) return
+    // A read started from the previous app tab is no longer a navigation
+    // intent once the user changes project context. Without cancellation its
+    // late completion can set activeCwd back and visually undo the tab switch.
+    cancelAllPendingGlobalEditorFileOpens()
     setActiveCwd(focusedCwd)
     // focusedCwd is intentionally read here rather than listed as a
     // dep — it changes on every within-tab focus shift, which is
@@ -247,8 +287,11 @@ export function GlobalEditorShell({ children, workspace }: Props) {
     if (live) return
     const persistedTabs = loadPersistedGlobalEditorState()?.tabsByCwd[activeCwd]
     if (!persistedTabs) return
+    let disposed = false
     void (async () => {
       const restored: string[] = []
+      const restoredGenerations = new Map<string, number>()
+      let retryableFailure = false
       for (const path of persistedTabs.fileOrder) {
         const result = await openFileInGlobalEditor({
           root: activeCwd,
@@ -256,7 +299,53 @@ export function GlobalEditorShell({ children, workspace }: Props) {
           activate: false,
           focus: false,
         })
-        if (result.ok) restored.push(path)
+        const restoredBuffer = result.ok && result.opened
+          ? useGlobalEditorStore.getState().byCwd[activeCwd]?.openFiles[path]
+          : null
+        if (restoredBuffer) {
+          restored.push(path)
+          restoredGenerations.set(path, restoredBuffer.generation)
+        }
+        if (disposed) {
+          retryableFailure = true
+          break
+        }
+        if (result.ok && result.opened) {
+          if (!restoredBuffer) {
+            // Pending opens intentionally report cancellation as a successful
+            // no-op so ordinary navigation does not show an error after the
+            // user switches roots. Restore has a stronger contract: `ok` only
+            // counts when this cwd actually owns the resulting lifetime.
+            retryableFailure = true
+            break
+          }
+        } else if (result.ok) {
+          retryableFailure = true
+          break
+        } else if (!isDefinitelyMissingRestoredPath(result.error)) retryableFailure = true
+      }
+      if (retryableFailure) {
+        // Permission/transient IO failures are not evidence that the user's
+        // remembered tabs ceased to exist. Remove any partial restore from the
+        // live projection so the persistence merge keeps the previous paths,
+        // then permit another attempt after a real cwd/editor reactivation.
+        useGlobalEditorStore.setState(state => {
+          const current = state.byCwd[activeCwd]
+          const hasUserOwnedLifetime = current?.fileOrder.some(path => {
+            const buffer = current.openFiles[path]
+            return (
+              !buffer ||
+              restoredGenerations.get(path) !== buffer.generation ||
+              hasRecoverableBufferChanges(buffer)
+            )
+          })
+          if (hasUserOwnedLifetime) return state
+          const byCwd = { ...state.byCwd }
+          delete byCwd[activeCwd]
+          return { byCwd }
+        })
+        rehydratedCwdsRef.current.delete(activeCwd)
+        return
       }
       const current = useGlobalEditorStore.getState()
       if (!current.byCwd[activeCwd] && restored.length === 0) {
@@ -279,6 +368,9 @@ export function GlobalEditorShell({ children, workspace }: Props) {
         useGlobalEditorStore.getState().setActiveFile(activeCwd, activePath)
       }
     })()
+    return () => {
+      disposed = true
+    }
   }, [open, activeCwd])
 
   // Keep main-process file watchers aligned with the open buffer set.
@@ -309,16 +401,28 @@ export function GlobalEditorShell({ children, workspace }: Props) {
     for (const path of nextPaths) {
       if (previous.root !== nextRoot || !previous.paths.has(path)) {
         if (nextRoot) {
-          void window.api.editorWatchFile({ root: nextRoot, path }).catch(err => {
-            const buffer = useGlobalEditorStore.getState().byCwd[nextRoot]?.openFiles[path]
-            if (!buffer) return
-            setFileError(
-              nextRoot,
-              path,
-              err instanceof Error ? err.message : 'failed to watch file for changes',
-              { generation: buffer.generation },
-            )
-          })
+          void window.api
+            .editorWatchFile({ root: nextRoot, path })
+            .then(() => {
+              const current = watchedFilesRef.current
+              if (current.root === nextRoot && current.paths.has(path)) return
+              // Main resolves only after Chokidar is ready. A tab close/root
+              // switch can send its first unwatch before registration exists;
+              // revoke again after the late success to close that race.
+              void window.api.editorUnwatchFile({ root: nextRoot, path }).catch(() => undefined)
+            })
+            .catch(err => {
+              const current = watchedFilesRef.current
+              if (current.root !== nextRoot || !current.paths.has(path)) return
+              const buffer = useGlobalEditorStore.getState().byCwd[nextRoot]?.openFiles[path]
+              if (!buffer) return
+              setFileError(
+                nextRoot,
+                path,
+                err instanceof Error ? err.message : 'failed to watch file for changes',
+                { generation: buffer.generation },
+              )
+            })
         }
       }
     }
@@ -343,8 +447,14 @@ export function GlobalEditorShell({ children, workspace }: Props) {
     if (!open || !activeCwd) return
     let stale = false
     const paths = useGlobalEditorStore.getState().byCwd[activeCwd]?.fileOrder ?? []
-    void Promise.all(
-      paths.map(async path => {
+    // Reactivating a cwd can touch every remembered tab, each carrying up to
+    // an 8 MB IPC response. Bound the refresh for the same reason Save All and
+    // AI Workspace refresh are bounded: useful disk parallelism without a
+    // project-sized burst of strings in both processes.
+    void mapWithConcurrency(paths, 6, async path => {
+        const observationKey = `${activeCwd}\0${path}`
+        const observationEpoch = (fileObservationEpochRef.current.get(observationKey) ?? 0) + 1
+        fileObservationEpochRef.current.set(observationKey, observationEpoch)
         const generation =
           useGlobalEditorStore.getState().byCwd[activeCwd]?.openFiles[path]?.generation
         if (generation == null) return
@@ -357,7 +467,8 @@ export function GlobalEditorShell({ children, workspace }: Props) {
             ok: false as const,
             error: err instanceof Error ? err.message : 'failed to revalidate file',
           }))
-        if (stale) return
+        if (stale || fileObservationEpochRef.current.get(observationKey) !== observationEpoch)
+          return
         if (result.ok) {
           useGlobalEditorStore
             .getState()
@@ -371,14 +482,13 @@ export function GlobalEditorShell({ children, workspace }: Props) {
             )
           return
         }
-        const deleted = result.error === 'does not exist'
+        const deleted = isMissingRegularFileError(result.error)
         useGlobalEditorStore.getState().setFileError(activeCwd, path, result.error, {
           generation,
           conflict: deleted,
           externalChange: deleted ? 'deleted' : undefined,
         })
-      }),
-    )
+      })
     return () => {
       stale = true
     }
@@ -390,12 +500,20 @@ export function GlobalEditorShell({ children, workspace }: Props) {
   // has divergent edits and must pick a side (Reload / Overwrite).
   useEffect(() => {
     if (!open) return
-    return window.api.onEditorFileChanged(event => {
+    let disposed = false
+    const unsubscribe = window.api.onEditorFileChanged(event => {
       if (event.root !== activeCwd) return
       const buf = useGlobalEditorStore.getState().byCwd[event.root]?.openFiles[event.path]
       if (!buf) return
+      const observationKey = `${event.root}\0${event.path}`
+      const sequence = (fileObservationEpochRef.current.get(observationKey) ?? 0) + 1
+      fileObservationEpochRef.current.set(observationKey, sequence)
       if (event.kind === 'error') {
+        const error = event.error ?? 'file watcher failed'
+        const deleted = isMissingRegularFileError(error)
         setFileError(event.root, event.path, event.error ?? 'file watcher failed', {
+          conflict: deleted,
+          externalChange: deleted ? 'deleted' : undefined,
           generation: buf.generation,
         })
         return
@@ -408,11 +526,11 @@ export function GlobalEditorShell({ children, workspace }: Props) {
         })
         return
       }
-      // Chokidar also reports our own successful write. Matching mtimes are an
-      // acknowledgement already reflected in state; skipping the read avoids
-      // a redundant round trip and, more importantly, avoids racing a second
-      // save that has already started from a newer baseline.
-      if (event.mtimeMs != null && event.mtimeMs === buf.mtimeMs) return
+      // A watcher mtime is a hint, not a content/version identity. Filesystems
+      // can reuse coarse mtimes for distinct writes, so equality must still be
+      // re-read. The sequence closes the remaining ambiguity: two reads can
+      // resolve out of order with equal mtimes, so only the newest event may
+      // publish either content or an error for this buffer lifetime.
       void window.api
         .editorReadTextFile({ root: event.root, path: event.path })
         .catch(err => ({
@@ -420,6 +538,7 @@ export function GlobalEditorShell({ children, workspace }: Props) {
           error: err instanceof Error ? err.message : 'failed to refresh changed file',
         }))
         .then(result => {
+          if (disposed || fileObservationEpochRef.current.get(observationKey) !== sequence) return
           if (result.ok) {
             observeFileOnDisk(
               event.root,
@@ -431,7 +550,7 @@ export function GlobalEditorShell({ children, workspace }: Props) {
             )
             return
           }
-          const deleted = result.error === 'does not exist'
+          const deleted = isMissingRegularFileError(result.error)
           setFileError(event.root, event.path, result.error, {
             generation: buf.generation,
             conflict: deleted,
@@ -439,6 +558,10 @@ export function GlobalEditorShell({ children, workspace }: Props) {
           })
         })
     })
+    return () => {
+      disposed = true
+      unsubscribe()
+    }
   }, [open, activeCwd, observeFileOnDisk, setFileError])
 
   // Outer splitter (editor pane ↔ workspace pane). Ratio-based.
@@ -460,6 +583,7 @@ export function GlobalEditorShell({ children, workspace }: Props) {
   })
 
   const pendingFileWritesRef = useRef(new Map<string, Promise<void>>())
+  const saveAllPendingRef = useRef(false)
   const serializeFileWrite = useCallback(
     async (key: string, task: () => Promise<boolean>): Promise<boolean> => {
       const previous = pendingFileWritesRef.current.get(key) ?? Promise.resolve()
@@ -492,6 +616,30 @@ export function GlobalEditorShell({ children, workspace }: Props) {
   // fail closed instead of overwriting a newer disk version — and the
   // `conflict` flag routes that failure to the banner's Reload/Overwrite
   // actions rather than a dead-end error string.
+  const revalidateAfterWrite = useCallback(
+    async (root: string, path: string, generation: number): Promise<void> => {
+      const observationKey = `${root}\0${path}`
+      const observationEpoch = (fileObservationEpochRef.current.get(observationKey) ?? 0) + 1
+      fileObservationEpochRef.current.set(observationKey, observationEpoch)
+      const result = await window.api.editorReadTextFile({ root, path }).catch(err => ({
+        ok: false as const,
+        error: err instanceof Error ? err.message : 'failed to verify saved file',
+      }))
+      if (fileObservationEpochRef.current.get(observationKey) !== observationEpoch) return
+      if (result.ok) {
+        observeFileOnDisk(root, path, result.text, result.mtimeMs, result.version, generation)
+        return
+      }
+      const deleted = isMissingRegularFileError(result.error)
+      setFileError(root, path, result.error, {
+        generation,
+        conflict: deleted,
+        externalChange: deleted ? 'deleted' : undefined,
+      })
+    },
+    [observeFileOnDisk, setFileError],
+  )
+
   const saveFile = useCallback(
     async (path: string, options?: { recreateDeleted?: boolean }): Promise<boolean> => {
       if (!activeCwd) return false
@@ -500,6 +648,11 @@ export function GlobalEditorShell({ children, workspace }: Props) {
         const buf = useGlobalEditorStore.getState().byCwd[root]?.openFiles[path]
         if (!buf || !hasRecoverableBufferChanges(buf)) return true
         if (buf.externalChange === 'deleted' && !options?.recreateDeleted) return false
+        const observationKey = `${root}\0${path}`
+        fileObservationEpochRef.current.set(
+          observationKey,
+          (fileObservationEpochRef.current.get(observationKey) ?? 0) + 1,
+        )
         const writtenText = buf.currentText
         const result = await window.api
           .editorWriteTextFile({
@@ -523,8 +676,18 @@ export function GlobalEditorShell({ children, workspace }: Props) {
             result.version,
             buf.generation,
           )
+          // A watcher read can begin after our atomic rename but before the
+          // write IPC resolves. Invalidating that read is necessary to stop a
+          // pre-write snapshot from overwriting the acknowledgement, but it
+          // can also hide a newer agent write in the same window. One bounded
+          // post-ack read closes both sides of the race.
+          await revalidateAfterWrite(root, path, buf.generation)
           return true
         }
+        fileObservationEpochRef.current.set(
+          observationKey,
+          (fileObservationEpochRef.current.get(observationKey) ?? 0) + 1,
+        )
         setFileError(root, path, result.error, {
           conflict: result.conflict === true,
           externalChange: result.conflictKind,
@@ -533,7 +696,7 @@ export function GlobalEditorShell({ children, workspace }: Props) {
         return false
       })
     },
-    [activeCwd, acknowledgeFileWrite, serializeFileWrite, setFileError],
+    [activeCwd, acknowledgeFileWrite, revalidateAfterWrite, serializeFileWrite, setFileError],
   )
 
   const saveActive = useCallback(async () => {
@@ -541,6 +704,36 @@ export function GlobalEditorShell({ children, workspace }: Props) {
     if (!activePath) return
     await saveFile(activePath)
   }, [cwdState.activeFilePath, saveFile])
+
+  const saveAll = useCallback(async () => {
+    if (!activeCwd || saveAllPendingRef.current) return
+    const root = activeCwd
+    const state = useGlobalEditorStore.getState().byCwd[root]
+    const dirtyPaths = state?.fileOrder.filter(path => state.openFiles[path]?.dirty) ?? []
+    if (dirtyPaths.length === 0) return
+    saveAllPendingRef.current = true
+    setSaveAllPending(true)
+    try {
+      // WHY four writes: each payload can contain a multi-megabyte source
+      // buffer. Unbounded Promise.all creates a burst of IPC copies and disk
+      // writes exactly when the user is trying to make editor state safe.
+      // Four retains useful parallelism while bounding peak memory and I/O.
+      const results = await mapWithConcurrency(dirtyPaths, 4, async path => ({
+        path,
+        saved: await saveFile(path),
+      }))
+      const firstFailure = results.find(result => !result.saved)
+      if (firstFailure) {
+        // Save errors already live on their own buffer. Selecting the first
+        // failure makes that banner immediately actionable instead of leaving
+        // a red tab somewhere off-screen after a bulk action.
+        setActiveFile(root, firstFailure.path, { focus: false })
+      }
+    } finally {
+      saveAllPendingRef.current = false
+      setSaveAllPending(false)
+    }
+  }, [activeCwd, saveFile, setActiveFile])
 
   // Close + model disposal. The store owns the buffer's life; the model
   // registry owns the Monaco model keyed by absolute path — a successful
@@ -550,7 +743,11 @@ export function GlobalEditorShell({ children, workspace }: Props) {
       if (!activeCwd) return false
       const buffer = useGlobalEditorStore.getState().byCwd[activeCwd]?.openFiles[path]
       const closed = closeFileAction(activeCwd, path, opts)
-      if (closed && buffer) releaseEditorModelOwner(buffer.generation)
+      if (closed) {
+        cancelPendingGlobalEditorFileOpen(activeCwd, path)
+        fileObservationEpochRef.current.delete(`${activeCwd}\0${path}`)
+        if (buffer) releaseEditorModelOwner(buffer.generation)
+      }
       return closed
     },
     [activeCwd, closeFileAction],
@@ -582,6 +779,9 @@ export function GlobalEditorShell({ children, workspace }: Props) {
       if (!activeCwd) return
       const before = useGlobalEditorStore.getState().byCwd[activeCwd]?.openFiles[path]
       if (!before) return
+      const observationKey = `${activeCwd}\0${path}`
+      const observationEpoch = (fileObservationEpochRef.current.get(observationKey) ?? 0) + 1
+      fileObservationEpochRef.current.set(observationKey, observationEpoch)
       const result = await window.api
         .editorReadTextFile({
           root: activeCwd,
@@ -591,8 +791,12 @@ export function GlobalEditorShell({ children, workspace }: Props) {
           ok: false as const,
           error: err instanceof Error ? err.message : 'failed to reload file',
         }))
+      if (fileObservationEpochRef.current.get(observationKey) !== observationEpoch) return
       if (!result.ok) {
+        const deleted = isMissingRegularFileError(result.error)
         setFileError(activeCwd, path, result.error, {
+          conflict: deleted,
+          externalChange: deleted ? 'deleted' : undefined,
           generation: before.generation,
         })
         return
@@ -629,6 +833,11 @@ export function GlobalEditorShell({ children, workspace }: Props) {
       await serializeFileWrite(`${root}\0${path}`, async () => {
         const buf = useGlobalEditorStore.getState().byCwd[root]?.openFiles[path]
         if (!buf) return false
+        const observationKey = `${root}\0${path}`
+        fileObservationEpochRef.current.set(
+          observationKey,
+          (fileObservationEpochRef.current.get(observationKey) ?? 0) + 1,
+        )
         const writtenText = buf.currentText
         const result = await window.api
           .editorWriteTextFile({
@@ -652,8 +861,13 @@ export function GlobalEditorShell({ children, workspace }: Props) {
             result.version,
             buf.generation,
           )
+          await revalidateAfterWrite(root, path, buf.generation)
           return true
         }
+        fileObservationEpochRef.current.set(
+          observationKey,
+          (fileObservationEpochRef.current.get(observationKey) ?? 0) + 1,
+        )
         setFileError(root, path, result.error, {
           conflict: result.conflict === true,
           externalChange: result.conflictKind,
@@ -662,7 +876,7 @@ export function GlobalEditorShell({ children, workspace }: Props) {
         return false
       })
     },
-    [activeCwd, acknowledgeFileWrite, serializeFileWrite, setFileError],
+    [activeCwd, acknowledgeFileWrite, revalidateAfterWrite, serializeFileWrite, setFileError],
   )
 
   // Open a file from the explorer. Reads via IPC, then commits to
@@ -684,9 +898,7 @@ export function GlobalEditorShell({ children, workspace }: Props) {
       if (!activeCwd) return false
       const activeAbsolute = active?.absolutePath.replace(/\\/g, '/')
       const activeRelative = active?.path.replace(/\\/g, '/').replace(/^\/+/, '')
-      const caseInsensitiveActive = activeAbsolute
-        ? /^[A-Za-z]:\//.test(activeAbsolute)
-        : false
+      const caseInsensitiveActive = activeAbsolute ? /^[A-Za-z]:\//.test(activeAbsolute) : false
       const comparableActiveAbsolute = caseInsensitiveActive
         ? activeAbsolute?.toLowerCase()
         : activeAbsolute
@@ -718,7 +930,7 @@ export function GlobalEditorShell({ children, workspace }: Props) {
         line,
         column,
       })
-      return result.ok
+      return result.ok && result.opened
     },
     [active?.absolutePath, active?.path, activeCwd],
   )
@@ -804,6 +1016,38 @@ export function GlobalEditorShell({ children, workspace }: Props) {
   // explorer pointed at nowhere.
   const leftPercent = (splitterRatio * 100).toFixed(2)
   const rightPercent = ((1 - splitterRatio) * 100).toFixed(2)
+  const toolbarButtonClass = 'rounded px-1.5 py-0.5 text-muted hover:bg-surface-hi hover:text-ink'
+  const editorToolbarActions = (
+    <>
+      <button
+        type="button"
+        onClick={toggleFileTreeVisible}
+        title={fileTreeVisible ? 'Hide file list' : 'Show file list'}
+        aria-label={fileTreeVisible ? 'Hide file list' : 'Show file list'}
+        className={toolbarButtonClass}
+      >
+        Files
+      </button>
+      <button
+        type="button"
+        onClick={toggleEditorFullscreen}
+        title={editorFullscreen ? 'Restore split editor' : 'Make editor fullscreen'}
+        aria-label={editorFullscreen ? 'Restore split editor' : 'Make editor fullscreen'}
+        className={toolbarButtonClass}
+      >
+        {editorFullscreen ? 'Split' : 'Full'}
+      </button>
+      <button
+        type="button"
+        onClick={closeGlobalEditor}
+        title="Close Global Editor"
+        aria-label="Close Global Editor"
+        className={toolbarButtonClass}
+      >
+        Close
+      </button>
+    </>
+  )
   return (
     // WHY h-full w-full instead of `flex-1`:
     //   The parent here is App.tsx's `<main>`, which has
@@ -839,6 +1083,7 @@ export function GlobalEditorShell({ children, workspace }: Props) {
             workspaceId={aiWorkspaceId}
             visible={open && aiWorkspaceVisible}
             onClose={closeAiWorkspace}
+            toolbarActions={editorToolbarActions}
           />
         )}
         {open && !aiWorkspaceVisible && (
@@ -853,10 +1098,10 @@ export function GlobalEditorShell({ children, workspace }: Props) {
                     onOpenFile={openFileFromTree}
                     onFileRenamed={(fromPath, toPath) => {
                       renameOpenPath(activeCwd, fromPath, toPath)
-                      // The buffer generation remains its logical model owner.
-                      // The next Monaco mount moves that owner to the new URI;
-                      // the old viewer cleanup then disposes only if no other
-                      // surface owns the same absolute file.
+                      // The buffer generation remains its logical owner. The
+                      // registry recreates its immutable Monaco URI on the next
+                      // mount; text/view state survive, while undo necessarily
+                      // resets because Monaco cannot retarget a model URI.
                     }}
                     onBeforeRename={(fromPath, toPath) => {
                       const state = useGlobalEditorStore.getState().byCwd[activeCwd]
@@ -893,6 +1138,8 @@ export function GlobalEditorShell({ children, workspace }: Props) {
                           before.currentText === current.currentText
                         if (unchanged) {
                           closeFileAction(activeCwd, openPath, { force: true })
+                          cancelPendingGlobalEditorFileOpen(activeCwd, openPath)
+                          fileObservationEpochRef.current.delete(`${activeCwd}\0${openPath}`)
                           releaseEditorModelOwner(current.generation)
                           continue
                         }
@@ -929,11 +1176,14 @@ export function GlobalEditorShell({ children, workspace }: Props) {
                 onCloseFile={closeFileAndDisposeModel}
                 onChangeFile={(path, text) => updateFileText(activeCwd, path, text)}
                 onSave={() => void saveActive()}
+                onSaveAll={() => void saveAll()}
+                saveAllPending={saveAllPending}
                 onSaveThenClose={saveThenClose}
                 onReloadFromDisk={path => void reloadFromDisk(path)}
                 onOverwriteDisk={path => void overwriteDisk(path)}
                 onSelectionRevealed={clearRevealedSelection}
                 onFocusRequestHandled={clearRequestedFocus}
+                toolbarActions={editorToolbarActions}
               />
             ) : (
               <div className="flex flex-1 items-center justify-center px-8 text-center text-[11px] text-muted">

@@ -111,3 +111,8 @@ export type AiWorkspaceWriteFileResult =
 export type AiWorkspaceOpenRequest = {
   workspaceId: string
 }
+
+export type AiWorkspaceChangeEvent = {
+  workspaceId: string
+  kind: 'created' | 'entries' | 'file-written' | 'deleted'
+}

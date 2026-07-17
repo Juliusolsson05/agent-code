@@ -12,7 +12,38 @@ export type OpenFileInGlobalEditorParams = {
   focus?: boolean
 }
 
+export type OpenFileInGlobalEditorResult =
+  | { ok: true; opened: boolean }
+  | { ok: false; error: string }
+
 let navigationSequence = 0
+let requestSequence = 0
+let requestEpoch = 0
+const latestRequestByFile = new Map<string, number>()
+
+function requestKey(root: string, path: string): string {
+  return `${root}\0${path}`
+}
+
+/** Invalidate an in-flight read after the corresponding tab was closed. The
+ * read IPC cannot be aborted, so the completion must lose the right to create
+ * a new buffer lifetime when it eventually resolves. */
+export function cancelPendingGlobalEditorFileOpen(root: string, path: string): void {
+  const key = requestKey(root, path)
+  // Ordinary tab closes call this even when no read is pending. Recording a
+  // tombstone for that common path grows the module-lifetime map forever; an
+  // absent key already means there is no completion left to invalidate.
+  if (latestRequestByFile.has(key)) latestRequestByFile.set(key, ++requestSequence)
+}
+
+/** Closing the whole surface cancels navigation as well as activation. A late
+ * disk read may still finish, but it must not reopen the editor behind the
+ * user's explicit close gesture. */
+export function cancelAllPendingGlobalEditorFileOpens(): void {
+  requestEpoch += 1
+  navigationSequence += 1
+  latestRequestByFile.clear()
+}
 
 export async function openFileInGlobalEditor({
   root,
@@ -21,8 +52,14 @@ export async function openFileInGlobalEditor({
   column,
   activate = true,
   focus = true,
-}: OpenFileInGlobalEditorParams): Promise<{ ok: true } | { ok: false; error: string }> {
-  const editor = useGlobalEditorStore.getState()
+}: OpenFileInGlobalEditorParams): Promise<OpenFileInGlobalEditorResult> {
+  const editorAtStart = useGlobalEditorStore.getState()
+  const appWasOpen = useAppStore.getState().globalEditorOpen
+  const existingGeneration = editorAtStart.byCwd[root]?.openFiles[path]?.generation ?? null
+  const key = requestKey(root, path)
+  const requestId = ++requestSequence
+  const epoch = requestEpoch
+  latestRequestByFile.set(key, requestId)
   const navigationId = activate ? ++navigationSequence : null
   const selection = line
     ? {
@@ -43,7 +80,24 @@ export async function openFileInGlobalEditor({
     ok: false as const,
     error: err instanceof Error ? err.message : 'read failed',
   }))
-  if (!result.ok) return { ok: false, error: result.error }
+  const editor = useGlobalEditorStore.getState()
+  const currentBuffer = editor.byCwd[root]?.openFiles[path]
+  if (
+    epoch !== requestEpoch ||
+    latestRequestByFile.get(key) !== requestId ||
+    (appWasOpen && !useAppStore.getState().globalEditorOpen) ||
+    (existingGeneration !== null && currentBuffer?.generation !== existingGeneration)
+  ) {
+    // Cancellation is a successful no-op to callers. Surfacing a scary "read
+    // failed" toast after the user deliberately closed/superseded the request
+    // would turn correct race handling into a visible error.
+    if (latestRequestByFile.get(key) === requestId) latestRequestByFile.delete(key)
+    return { ok: true, opened: false }
+  }
+  if (!result.ok) {
+    if (latestRequestByFile.get(key) === requestId) latestRequestByFile.delete(key)
+    return { ok: false, error: result.error }
+  }
 
   // WHY rendered-content file activation reuses the Global Editor store
   // instead of opening file: URLs or delegating to the OS: assistant/provider
@@ -83,5 +137,6 @@ export async function openFileInGlobalEditor({
     editor.showProjectEditor()
     useAppStore.getState().openGlobalEditor()
   }
-  return { ok: true }
+  if (latestRequestByFile.get(key) === requestId) latestRequestByFile.delete(key)
+  return { ok: true, opened: true }
 }

@@ -10,6 +10,7 @@ export type {
   EditorFsWriteResult,
   EditorFsMutationResult,
   EditorFsChangeEvent,
+  EditorFsDirectoryChangeEvent,
   EditorFsRecursiveListResult,
   EditorFsSearchMatch,
   EditorFsSearchResult,
@@ -20,6 +21,7 @@ import type {
   EditorFsWriteResult,
   EditorFsMutationResult,
   EditorFsChangeEvent,
+  EditorFsDirectoryChangeEvent,
   EditorFsRecursiveListResult,
   EditorFsSearchResult,
 } from '@shared/types/editorFs.js'
@@ -47,6 +49,25 @@ function subscribeFileChanges(cb: (event: EditorFsChangeEvent) => void): Unsub {
   }
   return () => {
     fileChangeSubscribers.delete(cb)
+  }
+}
+
+const directoryChangeSubscribers = new Set<(event: EditorFsDirectoryChangeEvent) => void>()
+let directoryChangeListenerInstalled = false
+
+function subscribeDirectoryChanges(cb: (event: EditorFsDirectoryChangeEvent) => void): Unsub {
+  directoryChangeSubscribers.add(cb)
+  if (!directoryChangeListenerInstalled) {
+    directoryChangeListenerInstalled = true
+    ipcRenderer.on(
+      'editor-fs:directory-changed',
+      (_evt: unknown, payload: EditorFsDirectoryChangeEvent) => {
+        for (const subscriber of directoryChangeSubscribers) subscriber(payload)
+      },
+    )
+  }
+  return () => {
+    directoryChangeSubscribers.delete(cb)
   }
 }
 
@@ -116,6 +137,7 @@ export const editorFsApi = {
     root: string
     query: string
     caseSensitive?: boolean
+    excludePaths?: string[]
   }): Promise<EditorFsSearchResult> =>
     ipcRenderer.invoke('editor-fs:search-content', params),
 
@@ -127,4 +149,13 @@ export const editorFsApi = {
 
   onEditorFileChanged: (cb: (event: EditorFsChangeEvent) => void): Unsub =>
     subscribeFileChanges(cb),
+
+  editorWatchDirectory: (params: { root: string; path: string }): Promise<void> =>
+    ipcRenderer.invoke('editor-fs:watch-directory', params),
+
+  editorUnwatchDirectory: (params: { root: string; path: string }): Promise<void> =>
+    ipcRenderer.invoke('editor-fs:unwatch-directory', params),
+
+  onEditorDirectoryChanged: (cb: (event: EditorFsDirectoryChangeEvent) => void): Unsub =>
+    subscribeDirectoryChanges(cb),
 }

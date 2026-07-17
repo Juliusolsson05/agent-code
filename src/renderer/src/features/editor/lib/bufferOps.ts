@@ -14,6 +14,22 @@ import type { EditorFileBuffer } from '@renderer/features/editor/types'
 
 let bufferGenerationSequence = 0
 
+const MISSING_REGULAR_FILE_ERRORS = new Set([
+  'does not exist',
+  'not a file',
+  'is a directory',
+  'not a directory',
+  'watched path is no longer a regular file',
+])
+
+/** Classify only errors that prove the saved regular-file source is gone.
+ * Permission and transient IO failures must remain retryable plain errors;
+ * these exact main-process messages instead mean a clean in-memory buffer has
+ * become the last copy and must participate in dirty-close/recreate guards. */
+export function isMissingRegularFileError(error: string): boolean {
+  return MISSING_REGULAR_FILE_ERRORS.has(error)
+}
+
 /**
  * A deleted clean buffer is not "saved" in the only sense that matters to a
  * close decision: its in-memory text is now the last recoverable copy. Treating
@@ -43,7 +59,10 @@ export function makeBuffer(params: {
     generation: ++bufferGenerationSequence,
     path: params.path,
     absolutePath: params.absolutePath,
-    language: normalizeCodeLanguage(null, params.fileName),
+    // File contents matter for extensionless executable scripts. The read has
+    // already paid the IO cost, so throwing away the shebang here would make
+    // an opened script permanently plaintext until it was renamed.
+    language: normalizeCodeLanguage(null, params.fileName, params.text),
     savedText: params.text,
     currentText: params.text,
     dirty: false,
@@ -126,7 +145,20 @@ export function withDiskObserved(
   mtimeMs: number,
   diskVersion: string,
 ): EditorFileBuffer {
+  if (buffer.mtimeMs !== null && mtimeMs < buffer.mtimeMs) {
+    // Watcher reads and explicit revalidation are independent async lanes. A
+    // slower read of an older snapshot must not roll a clean buffer backward
+    // after a newer observation has already won. Disk versions are opaque, so
+    // mtime is only used for this safe strict-older rejection—not ordering ties.
+    return buffer
+  }
   if (!buffer.dirty) return withDiskSnapshot(buffer, text, mtimeMs, diskVersion)
+  if (text === buffer.currentText) {
+    // Another actor wrote exactly the edits currently in memory. Treat that as
+    // convergence, not a conflict with no meaningful Reload/Overwrite choice:
+    // disk is now the saved baseline and the tab can truthfully become clean.
+    return withDiskSnapshot(buffer, text, mtimeMs, diskVersion)
+  }
   if (text === buffer.savedText) {
     // Disk can diverge and then return to the saved baseline. The user's edits
     // remain dirty, but the new mtime is the correct optimistic-save baseline
@@ -175,4 +207,12 @@ export function withError(
     conflict: nextConflict,
     externalChange: nextExternalChange,
   }
+}
+
+export function withEditorReadError(
+  buffer: EditorFileBuffer,
+  error: string,
+): EditorFileBuffer {
+  const missing = isMissingRegularFileError(error)
+  return withError(buffer, error, missing, missing ? 'deleted' : undefined)
 }

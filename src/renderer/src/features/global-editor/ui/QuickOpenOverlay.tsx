@@ -50,9 +50,11 @@ export function QuickOpenOverlay({ root, onClose }: Props) {
   const [truncated, setTruncated] = useState(false)
   const [partialErrorCount, setPartialErrorCount] = useState(0)
   const [loadError, setLoadError] = useState<string | null>(null)
+  const [openError, setOpenError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [selectedIndex, setSelectedIndex] = useState(0)
   const [loading, setLoading] = useState(true)
+  const [openingPath, setOpeningPath] = useState<string | null>(null)
   const listRef = useRef<HTMLDivElement | null>(null)
   const inputRef = useRef<HTMLInputElement | null>(null)
 
@@ -62,6 +64,7 @@ export function QuickOpenOverlay({ root, onClose }: Props) {
     setTruncated(false)
     setPartialErrorCount(0)
     setLoadError(null)
+    setOpenError(null)
     setQuery('')
     setSelectedIndex(0)
     setLoading(true)
@@ -133,11 +136,19 @@ export function QuickOpenOverlay({ root, onClose }: Props) {
   }, [selectedIndex])
 
   const openSelected = async (path: string | undefined) => {
-    if (!path || loading) return
+    if (!path || loading || openingPath) return
+    setOpeningPath(path)
+    setOpenError(null)
     const result = await openFileInGlobalEditor({ root, path })
-    if (result.ok) onClose()
-    else {
-      setLoadError(result.error)
+    if (result.ok && result.opened) onClose()
+    else if (result.ok) {
+      setOpeningPath(null)
+      inputRef.current?.focus()
+    } else {
+      // One stale/unreadable result must not replace the whole index. Keep the
+      // list interactive so the user can immediately choose another match.
+      setOpenError(`Could not open ${path}: ${result.error}`)
+      setOpeningPath(null)
       inputRef.current?.focus()
     }
   }
@@ -166,7 +177,10 @@ export function QuickOpenOverlay({ root, onClose }: Props) {
             matches[selectedIndex] ? `quick-open-option-${selectedIndex}` : undefined
           }
           value={query}
-          onChange={event => setQuery(event.target.value)}
+          onChange={event => {
+            setQuery(event.target.value)
+            setOpenError(null)
+          }}
           onKeyDown={event => {
             if (event.key === 'Escape') {
               event.preventDefault()
@@ -187,6 +201,11 @@ export function QuickOpenOverlay({ root, onClose }: Props) {
           placeholder="Go to file…"
           className="border-b border-border bg-canvas px-3 py-2 text-[13px] text-ink outline-none placeholder:text-muted"
         />
+        {openError ? (
+          <div role="alert" className="border-b border-border px-3 py-1.5 text-[11px] text-danger">
+            {openError}
+          </div>
+        ) : null}
         <div
           ref={listRef}
           id="quick-open-results"
@@ -214,13 +233,14 @@ export function QuickOpenOverlay({ root, onClose }: Props) {
                   tabIndex={-1}
                   role="option"
                   aria-selected={selected}
+                  aria-busy={openingPath === path || undefined}
                   data-quick-open-index={index}
                   onClick={() => void openSelected(path)}
                   onMouseDown={event => event.preventDefault()}
                   onMouseEnter={() => setSelectedIndex(index)}
                   className={`flex w-full items-center gap-2 px-3 py-1 text-left text-[12px] ${
                     selected ? 'bg-accent-soft text-ink' : 'text-ink-dim hover:bg-surface-hi'
-                  }`}
+                  } ${openingPath && openingPath !== path ? 'opacity-50' : ''}`}
                 >
                   <span className="flex h-4 w-4 flex-shrink-0 items-center justify-center">
                     <FileIcon name={name} />

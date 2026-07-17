@@ -1,5 +1,10 @@
 import type { CommandDef } from '@renderer/features/command-palette/types'
 import { useGlobalEditorStore } from '@renderer/features/global-editor/store'
+import {
+  requestSaveActiveEditorFile,
+  requestSaveAllEditorFiles,
+} from '@renderer/features/editor/lib/editorCommandEvents'
+import { cancelAllPendingGlobalEditorFileOpens } from '@renderer/features/global-editor/openFileInGlobalEditor'
 
 // Global Editor command module.
 //
@@ -37,6 +42,27 @@ export const globalEditorCommands: CommandDef[] = [
     },
   },
   {
+    id: 'save-editor-file',
+    surface: 'editor',
+    title: 'Save Editor File',
+    description:
+      '**What it does:** Saves the active file in the visible Global Editor or AI Workspace.\n\n**Use when:** You edited a file and want to persist it without leaving the command palette.\n\n**Notes:** Conflict checks and recovery are owned by the active editor surface.\n\n**Shortcut:** ⌘S.',
+    keywords: ['save', 'write', 'editor', 'file'],
+    shortcut: '⌘S',
+    when: ({ flags }) => flags.globalEditorOpen,
+    run: requestSaveActiveEditorFile,
+  },
+  {
+    id: 'save-all-editor-files',
+    surface: 'editor',
+    title: 'Save All Editor Files',
+    description:
+      '**What it does:** Saves every modified file in the visible project editor or AI Workspace.\n\n**Use when:** A review or refactor changed several open tabs and you want one explicit persistence action.\n\n**Notes:** Each file keeps its own optimistic conflict check. Failed/conflicted files remain modified and surface a warning in their tab; deleted files are never recreated implicitly.',
+    keywords: ['save all', 'write', 'editor', 'files', 'modified'],
+    when: ({ flags }) => flags.globalEditorOpen,
+    run: requestSaveAllEditorFiles,
+  },
+  {
     id: 'quick-open-file',
     surface: 'editor',
     title: 'Quick Open File',
@@ -44,12 +70,14 @@ export const globalEditorCommands: CommandDef[] = [
       "**What it does:** Fuzzy-finds a file by name in the focused agent's project and opens it in the **Global Editor**.\n\n**Use when:** You know (roughly) the file name and don't want to click through the tree.\n\n**Notes:** Opens the editor overlay if it isn't already open. The index skips junk directories (node_modules, build output, VCS internals) and caps at 20k files.\n\n**Shortcut:** ⌘P.",
     keywords: ['quick open', 'go to file', 'find file', 'fuzzy', 'open file'],
     shortcut: '⌘P',
+    when: ({ flags }) => Boolean(useGlobalEditorStore.getState().activeCwd ?? flags.focusedCwd),
     run: ({ ui, flags }) => {
       const editor = useGlobalEditorStore.getState()
       const targetCwd = flags.globalEditorOpen
         ? (editor.activeCwd ?? flags.focusedCwd)
         : (flags.focusedCwd ?? editor.activeCwd)
       if (!targetCwd) return
+      if (editor.activeCwd !== targetCwd) cancelAllPendingGlobalEditorFileOpens()
       editor.setActiveCwd(targetCwd)
       editor.showProjectEditor()
       if (!flags.globalEditorOpen) ui.toggleGlobalEditor()
@@ -61,15 +89,17 @@ export const globalEditorCommands: CommandDef[] = [
     surface: 'editor',
     title: 'Search in Files',
     description:
-      "**What it does:** Searches file contents across the focused agent's project and opens matches in the **Global Editor** at the matched line.\n\n**Use when:** You're hunting a string or identifier across the project.\n\n**Notes:** Bounded scan (skips >1MB files and junk dirs; caps at 2k matches / 20k files). Case-sensitivity toggle lives in the overlay.\n\n**Shortcut:** ⌘⇧F.",
+      "**What it does:** Searches file contents across the focused agent's project and opens matches in the **Global Editor** at the matched line.\n\n**Use when:** You're hunting a string or identifier across the project.\n\n**Notes:** Bounded scan (skips >1MB files and junk dirs; caps at 500 matches / 20k files). Case-sensitivity toggle lives in the overlay.\n\n**Shortcut:** ⌘⇧F.",
     keywords: ['search', 'grep', 'find in files', 'content search', 'ripgrep'],
     shortcut: '⌘⇧F',
+    when: ({ flags }) => Boolean(useGlobalEditorStore.getState().activeCwd ?? flags.focusedCwd),
     run: ({ ui, flags }) => {
       const editor = useGlobalEditorStore.getState()
       const targetCwd = flags.globalEditorOpen
         ? (editor.activeCwd ?? flags.focusedCwd)
         : (flags.focusedCwd ?? editor.activeCwd)
       if (!targetCwd) return
+      if (editor.activeCwd !== targetCwd) cancelAllPendingGlobalEditorFileOpens()
       editor.setActiveCwd(targetCwd)
       editor.showProjectEditor()
       if (!flags.globalEditorOpen) ui.toggleGlobalEditor()

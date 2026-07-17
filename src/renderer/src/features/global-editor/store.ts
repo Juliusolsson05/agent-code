@@ -124,7 +124,11 @@ type GlobalEditorStore = {
     /** Explicit navigation focuses Monaco; background restoration/revalidation does not. */
     focus?: boolean
   }) => void
-  setActiveFile: (cwd: string, path: string | null, opts?: { focus?: boolean }) => void
+  setActiveFile: (
+    cwd: string,
+    path: string | null,
+    opts?: { focus?: boolean; selection?: { line: number; column: number } },
+  ) => void
   updateFileText: (cwd: string, path: string, text: string) => void
   setFileError: (
     cwd: string,
@@ -330,7 +334,17 @@ export const useGlobalEditorStore = create<GlobalEditorStore>()((set, get) => ({
       if (!prev) return state
       if (path !== null && !prev.openFiles[path]) return state
       const current = path ? prev.openFiles[path] : null
-      const nextCurrent = current && opts?.focus ? withFocusRequested(current) : current
+      // Search may target text that exists only in a dirty/deleted buffer. It
+      // cannot reuse openFile because that API deliberately performs a disk
+      // observation, and fabricating one would clear a deletion conflict or
+      // move the optimistic-save baseline. Selection therefore belongs on the
+      // activation operation itself: navigate the existing lifetime without
+      // claiming anything new about disk.
+      let nextCurrent = current
+      if (nextCurrent && opts?.selection) {
+        nextCurrent = { ...nextCurrent, selection: opts.selection }
+      }
+      if (nextCurrent && opts?.focus) nextCurrent = withFocusRequested(nextCurrent)
       if (prev.activeFilePath === path && nextCurrent === current) return state
       return {
         byCwd: {
@@ -541,7 +555,9 @@ export const useGlobalEditorStore = create<GlobalEditorStore>()((set, get) => ({
           // physical-path field; using cwd unconditionally reintroduced the
           // symlink alias immediately after an Explorer rename.
           absolutePath: absolutePath(physicalRoot, nextPath),
-          language: normalizeCodeLanguage(null, basename(nextPath)),
+          // Renaming an extensionless script must retain its shebang-derived
+          // language; looking at the new basename alone silently downgraded it.
+          language: normalizeCodeLanguage(null, basename(nextPath), buffer.currentText),
         }
       }
       const remap = (path: string): string =>

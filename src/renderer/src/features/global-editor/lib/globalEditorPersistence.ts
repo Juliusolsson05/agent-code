@@ -92,12 +92,7 @@ export function mergePersistedCwdRecency(
   persistedRecency: readonly string[],
 ): string[] {
   const known = new Set(knownCwds)
-  return [
-    ...new Set([
-      ...persistedRecency.filter(cwd => known.has(cwd)),
-      ...knownCwds,
-    ]),
-  ]
+  return [...new Set([...persistedRecency.filter(cwd => known.has(cwd)), ...knownCwds])]
 }
 
 export function loadPersistedGlobalEditorState(): PersistedGlobalEditorState | null {
@@ -148,12 +143,7 @@ export function loadPersistedGlobalEditorState(): PersistedGlobalEditorState | n
 
 type PersistableStoreState = Pick<
   ReturnType<typeof useGlobalEditorStore.getState>,
-  | 'byCwd'
-  | 'cwdRecency'
-  | 'activeCwd'
-  | 'splitterRatio'
-  | 'fileTreeWidthPx'
-  | 'fileTreeVisible'
+  'byCwd' | 'cwdRecency' | 'activeCwd' | 'splitterRatio' | 'fileTreeWidthPx' | 'fileTreeVisible'
 >
 
 /** Merge live state into the previous snapshot instead of rebuilding from the
@@ -169,10 +159,14 @@ export function buildPersistedGlobalEditorState(
       delete tabsByCwd[cwd]
       continue
     }
-    const fileOrder = [...new Set(cwdState.fileOrder.filter(validRelativePath))].slice(
-      0,
-      MAX_TABS_PER_CWD,
-    )
+    const uniqueOrder = [...new Set(cwdState.fileOrder.filter(validRelativePath))]
+    const active = cwdState.activeFilePath
+    const fileOrder =
+      uniqueOrder.length <= MAX_TABS_PER_CWD
+        ? uniqueOrder
+        : active && uniqueOrder.includes(active)
+          ? [...uniqueOrder.filter(path => path !== active).slice(-(MAX_TABS_PER_CWD - 1)), active]
+          : uniqueOrder.slice(-MAX_TABS_PER_CWD)
     if (fileOrder.length === 0) {
       delete tabsByCwd[cwd]
       continue
@@ -180,9 +174,7 @@ export function buildPersistedGlobalEditorState(
     tabsByCwd[cwd] = {
       fileOrder,
       activeFilePath:
-        cwdState.activeFilePath && fileOrder.includes(cwdState.activeFilePath)
-          ? cwdState.activeFilePath
-          : (fileOrder[fileOrder.length - 1] ?? null),
+        active && fileOrder.includes(active) ? active : (fileOrder[fileOrder.length - 1] ?? null),
     }
   }
 

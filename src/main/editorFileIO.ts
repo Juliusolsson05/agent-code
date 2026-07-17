@@ -6,6 +6,20 @@ import type { EditorFsFileVersion } from '@shared/types/editorFs.js'
 
 const NO_FOLLOW = process.platform === 'win32' ? 0 : constants.O_NOFOLLOW
 const pendingFileMutations = new Map<string, Promise<void>>()
+const utf8Decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
+
+function decodeEditorText(buffer: Buffer): string {
+  // Buffer.toString silently replaces malformed byte sequences with U+FFFD;
+  // saving that model then permanently rewrites arbitrary binary bytes as
+  // UTF-8. A code editor must fail before presenting a corruptible illusion of
+  // text. NUL additionally catches UTF-16 and many valid-UTF-8 binary formats.
+  if (buffer.includes(0)) throw new Error('binary files are not supported')
+  try {
+    return utf8Decoder.decode(buffer)
+  } catch {
+    throw new Error('file is not valid UTF-8 text')
+  }
+}
 
 export function editorFileVersion(stat: Stats): EditorFsFileVersion {
   // mtime alone is not a version: tools can restore timestamps, and some
@@ -64,7 +78,7 @@ export async function readBoundedTextFile(
     const afterVersion = editorFileVersion(after)
     if (beforeVersion !== afterVersion) throw new Error('file changed while it was being read')
     return {
-      text: buffer.subarray(0, offset).toString('utf8'),
+      text: decodeEditorText(buffer.subarray(0, offset)),
       stat: after,
       version: afterVersion,
     }

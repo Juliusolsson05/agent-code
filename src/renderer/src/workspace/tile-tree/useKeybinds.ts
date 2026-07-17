@@ -305,7 +305,7 @@ export function useKeybinds(
       // this opens it straight into fullscreen — "give me a big
       // editor" is one gesture, not two. Esc exits (handled in
       // GlobalEditorShell so it can defer to open overlays).
-      if (cmd && alt && !shift && k.toLowerCase() === 'e') {
+      if (cmd && alt && !shift && e.code === 'KeyE') {
         e.preventDefault()
         const editorStore = useGlobalEditorStore.getState()
         if (!useAppStore.getState().globalEditorOpen) {
@@ -387,6 +387,26 @@ export function useKeybinds(
           }
           return
         }
+      }
+      const fullscreenEditorOwnsWorkspace =
+        useAppStore.getState().globalEditorOpen && useGlobalEditorStore.getState().editorFullscreen
+      const hiddenWorkspaceShortcut =
+        (cmd && !alt && e.code === 'KeyW') ||
+        (alt && !cmd && shouldPreventOwnedApplicationShortcut(e))
+      if (
+        fullscreenEditorOwnsWorkspace &&
+        !editorOwnsTarget &&
+        hiddenWorkspaceShortcut
+      ) {
+        // Fullscreen deliberately hides the workspace, but the workspace's
+        // global capture router remains mounted. Swallow its destructive pane
+        // grammar when focus sits in app chrome outside the workbench. This
+        // MUST use the same finite allow-list as the router: blanket-swallowing
+        // Alt also captures OS chords such as Alt+F4/Alt+Tab on Windows/Linux,
+        // even though Agent Code has no action to protect for those keys.
+        e.preventDefault()
+        e.stopPropagation()
+        return
       }
 
       // --- Copy Assistant picker (Up/Down/Enter/Esc) ---
@@ -492,7 +512,7 @@ export function useKeybinds(
         // Other keys fall through, same as the assistant picker.
       }
 
-      if (k === 'Escape' && workspace.spotlight) {
+      if (k === 'Escape' && workspace.spotlight && !fullscreenEditorOwnsWorkspace) {
         e.preventDefault()
         workspace.toggleSpotlight()
         return
@@ -501,7 +521,7 @@ export function useKeybinds(
       // Esc also exits Reader Mode. Same one-key dismiss pattern as
       // Spotlight — both are read-only "fullscreen" overlays the user
       // expects to bail out of with Escape.
-      if (k === 'Escape' && workspace.readerMode) {
+      if (k === 'Escape' && workspace.readerMode && !fullscreenEditorOwnsWorkspace) {
         e.preventDefault()
         workspace.toggleReaderMode()
         return

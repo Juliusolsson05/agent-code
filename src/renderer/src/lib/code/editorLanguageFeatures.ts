@@ -1,7 +1,7 @@
 import type * as Monaco from 'monaco-editor'
 
 import { monacoLanguageId, normalizeCodeLanguage, supportsLsp } from '@shared/code/language'
-import type { LspCompletionItem, LspCompletionTextEdit } from '@shared/types/lsp'
+import type { LspCompletionItem, LspCompletionTextEdit, LspDocumentSymbol } from '@shared/types/lsp'
 
 // Monaco↔LSP feature providers for the FILE EDITOR surface (#513).
 //
@@ -27,6 +27,8 @@ type ModelContext = {
   workspaceRoot: string
   openDefinition: (absolutePath: string, line: number, column: number) => Promise<boolean>
   refs: number
+  syncedVersion: number | null
+  pendingSync: { version: number; promise: Promise<boolean> } | null
 }
 const modelContexts = new Map<string, ModelContext>()
 
@@ -35,13 +37,20 @@ const modelContexts = new Map<string, ModelContext>()
  * Workspaces deliberately edit files from other worktrees. */
 export function registerEditorLspContext(
   clientUri: string,
-  context: Omit<ModelContext, 'refs'>,
+  context: Pick<ModelContext, 'workspaceRoot' | 'openDefinition'>,
 ): () => void {
   const existing = modelContexts.get(clientUri)
   if (existing && existing.workspaceRoot === context.workspaceRoot) {
     existing.refs += 1
     existing.openDefinition = context.openDefinition
-  } else modelContexts.set(clientUri, { ...context, refs: 1 })
+  } else {
+    modelContexts.set(clientUri, {
+      ...context,
+      refs: 1,
+      syncedVersion: null,
+      pendingSync: null,
+    })
+  }
   return () => {
     const current = modelContexts.get(clientUri)
     if (!current || current.workspaceRoot !== context.workspaceRoot) return
@@ -50,18 +59,50 @@ export function registerEditorLspContext(
   }
 }
 
-async function syncLspModel(model: Monaco.editor.ITextModel): Promise<boolean> {
+/** Record the exact Monaco version used for didOpen. Registration happens only
+ * after main acknowledges open, so providers cannot "successfully" sync an
+ * unowned URI during a slow server startup. */
+export function markEditorLspModelSynced(clientUri: string, version: number): void {
+  const context = modelContexts.get(clientUri)
+  if (context) context.syncedVersion = version
+}
+
+export async function syncEditorLspModel(model: Monaco.editor.ITextModel): Promise<boolean> {
   const clientUri = model.uri.toString()
-  if (!modelContexts.has(clientUri)) return false
-  try {
-    // The ordinary didChange path is debounced for typing throughput. Feature
-    // requests are explicit user actions and must observe the exact current
-    // buffer, so flush one ordered full-text change before asking for an answer.
-    await window.api.changeLspDocument(clientUri, model.getValue())
-    return true
-  } catch {
-    return false
-  }
+  const context = modelContexts.get(clientUri)
+  if (!context) return false
+  const version = model.getVersionId()
+  if (context.syncedVersion === version) return true
+  if (context.pendingSync?.version === version) return await context.pendingSync.promise
+
+  // LSP positions describe Monaco's editable text, which excludes its hidden
+  // BOM. Sending preserveBOM=true would shift every first-line server position
+  // by one even though source-save fidelity correctly retains the marker.
+  const content = model.getValue()
+  const prior = context.pendingSync?.promise ?? Promise.resolve(true)
+  const promise = prior
+    .catch(() => false)
+    .then(async () => {
+      const current = modelContexts.get(clientUri)
+      if (current !== context) return false
+      if (current.syncedVersion === version) return true
+      try {
+        // The typing path and hover/definition/completion providers all call
+        // this one coalescing gate. A Monaco version crosses IPC at most once,
+        // while an explicit feature still waits for the exact current text.
+        await window.api.changeLspDocument(clientUri, content)
+        if (modelContexts.get(clientUri) !== context) return false
+        context.syncedVersion = version
+        return true
+      } catch {
+        return false
+      }
+    })
+  context.pendingSync = { version, promise }
+  void promise.finally(() => {
+    if (context.pendingSync?.promise === promise) context.pendingSync = null
+  })
+  return await promise
 }
 
 // LSP CompletionItemKind (1-based) → Monaco CompletionItemKind. The two
@@ -139,6 +180,35 @@ function completionEditToMonaco(
   }
 }
 
+function documentSymbolToMonaco(
+  monaco: typeof Monaco,
+  symbol: LspDocumentSymbol,
+): Monaco.languages.DocumentSymbol {
+  const minimumKind = monaco.languages.SymbolKind.File
+  const maximumKind = monaco.languages.SymbolKind.TypeParameter
+  // LSP SymbolKind and Monaco SymbolKind intentionally have the same ordering,
+  // but LSP starts at 1 while Monaco starts at 0. Passing the wire number
+  // directly makes every outline icon one category off and turns TypeParameter
+  // into an out-of-range enum value.
+  const kind = Math.min(maximumKind, Math.max(minimumKind, symbol.kind - 1))
+  const range = toMonacoRange(monaco, symbol)
+  const selectionRange = toMonacoRange(monaco, {
+    startLine: symbol.selectionStartLine,
+    startCharacter: symbol.selectionStartCharacter,
+    endLine: symbol.selectionEndLine,
+    endCharacter: symbol.selectionEndCharacter,
+  })
+  return {
+    name: symbol.name,
+    detail: '',
+    kind,
+    tags: [],
+    range,
+    selectionRange,
+    children: symbol.children.map(child => documentSymbolToMonaco(monaco, child)),
+  }
+}
+
 type ResolvableCompletionItem = Monaco.languages.CompletionItem & {
   lspClientUri?: string
   lspResolveId?: number
@@ -154,7 +224,7 @@ export function ensureEditorLanguageFeatures(monaco: typeof Monaco, language: st
 
   monaco.languages.registerHoverProvider(monacoId, {
     async provideHover(model, position, token) {
-      if (!(await syncLspModel(model)) || token.isCancellationRequested) return null
+      if (!(await syncEditorLspModel(model)) || token.isCancellationRequested) return null
       const result = await window.api
         .getLspHover(model.uri.toString(), toLspPosition(position))
         .catch(() => null)
@@ -165,7 +235,7 @@ export function ensureEditorLanguageFeatures(monaco: typeof Monaco, language: st
 
   monaco.languages.registerDefinitionProvider(monacoId, {
     async provideDefinition(model, position, token) {
-      if (!(await syncLspModel(model)) || token.isCancellationRequested) return []
+      if (!(await syncEditorLspModel(model)) || token.isCancellationRequested) return []
       const locations = await window.api
         .getLspDefinition(model.uri.toString(), toLspPosition(position))
         .catch(() => [])
@@ -179,7 +249,7 @@ export function ensureEditorLanguageFeatures(monaco: typeof Monaco, language: st
 
   monaco.languages.registerReferenceProvider(monacoId, {
     async provideReferences(model, position, _context, token) {
-      if (!(await syncLspModel(model)) || token.isCancellationRequested) return []
+      if (!(await syncEditorLspModel(model)) || token.isCancellationRequested) return []
       const locations = await window.api
         .getLspReferences(model.uri.toString(), toLspPosition(position))
         .catch(() => [])
@@ -191,10 +261,20 @@ export function ensureEditorLanguageFeatures(monaco: typeof Monaco, language: st
     },
   })
 
+  monaco.languages.registerDocumentSymbolProvider(monacoId, {
+    displayName: 'Language Server',
+    async provideDocumentSymbols(model, token) {
+      if (!(await syncEditorLspModel(model)) || token.isCancellationRequested) return []
+      const symbols = await window.api.getLspDocumentSymbols(model.uri.toString()).catch(() => [])
+      if (token.isCancellationRequested) return []
+      return symbols.map(symbol => documentSymbolToMonaco(monaco, symbol))
+    },
+  })
+
   monaco.languages.registerCompletionItemProvider(monacoId, {
     triggerCharacters: ['.', '"', "'", '/', '@', '<'],
     async provideCompletionItems(model, position, context, token) {
-      if (!(await syncLspModel(model)) || token.isCancellationRequested) {
+      if (!(await syncEditorLspModel(model)) || token.isCancellationRequested) {
         return { suggestions: [] }
       }
       const result = await window.api

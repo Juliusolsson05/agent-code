@@ -1,3 +1,5 @@
+import { useState } from 'react'
+
 import type { AiWorkspaceFileEntry } from '@mcp/shared/aiWorkspaceTypes'
 import { FileIcon } from '@renderer/features/editor/lib/fileIcon'
 import { basename } from '@renderer/features/editor/lib/path'
@@ -11,6 +13,8 @@ type AiWorkspaceFileListProps = {
   onOpenEntry: (entry: AiWorkspaceFileEntry) => void
   onRefresh: () => void
   onClose: () => void
+  onDetachEntry: (entry: AiWorkspaceFileEntry) => void
+  onDeleteWorkspace: () => void
 }
 
 function fileTitle(entry: AiWorkspaceFileEntry): string {
@@ -40,7 +44,10 @@ export function AiWorkspaceFileList({
   onOpenEntry,
   onRefresh,
   onClose,
+  onDetachEntry,
+  onDeleteWorkspace,
 }: AiWorkspaceFileListProps) {
+  const [deleteArmed, setDeleteArmed] = useState(false)
   return (
     <aside className="flex h-full min-h-0 w-full flex-col border-r border-border bg-surface font-code text-[12px]">
       <div className="flex h-8 flex-shrink-0 items-center justify-between gap-2 border-b border-border px-2 text-[10px] uppercase tracking-wider text-muted">
@@ -54,6 +61,19 @@ export function AiWorkspaceFileList({
             className="text-muted hover:text-ink"
           >
             refresh
+          </button>
+          <button
+            type="button"
+            aria-label={deleteArmed ? 'Confirm delete AI Workspace' : 'Delete AI Workspace'}
+            title="Delete AI Workspace metadata (files stay on disk)"
+            onClick={() => {
+              if (deleteArmed) onDeleteWorkspace()
+              else setDeleteArmed(true)
+            }}
+            onBlur={() => setDeleteArmed(false)}
+            className={deleteArmed ? 'text-danger' : 'text-muted hover:text-danger'}
+          >
+            {deleteArmed ? 'confirm' : 'delete'}
           </button>
           <button
             type="button"
@@ -84,32 +104,58 @@ export function AiWorkspaceFileList({
         ) : (
           entries.map(entry => {
             const stale = !entry.status.exists || !entry.status.readable
+            const provenance = [
+              entry.sourceAgentLabel,
+              entry.taskId ? `task ${entry.taskId}` : null,
+            ]
+              .filter(Boolean)
+              .join(' · ')
+            const details = [entry.description, provenance].filter(Boolean).join(' · ')
+            const staleReason = entry.status.staleReason ?? 'File is unavailable'
             return (
-              <button
+              <div
                 key={entry.entryId}
-                type="button"
-                aria-current={activeEntryId === entry.entryId ? 'page' : undefined}
-                aria-disabled={stale || undefined}
-                onClick={() => onOpenEntry(entry)}
-                className={`flex w-full items-start gap-2 px-2 py-1.5 text-left transition-colors ${
+                className={`group flex items-stretch ${
                   activeEntryId === entry.entryId
                     ? 'bg-accent-soft text-ink'
                     : stale
                       ? 'text-muted opacity-70'
                       : 'text-ink-dim hover:bg-surface-hi hover:text-ink'
                 }`}
-                title={entry.path}
               >
-                <span className="mt-0.5 flex h-4 w-4 flex-shrink-0 items-center justify-center">
-                  <FileIcon name={entry.path} />
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate">{fileTitle(entry)}</span>
-                  <span className="block truncate text-[10px] text-muted">
-                    {stale ? (entry.status.staleReason ?? 'stale') : workspaceLabel(entry)}
+                <button
+                  type="button"
+                  aria-current={activeEntryId === entry.entryId ? 'page' : undefined}
+                  disabled={stale}
+                  onClick={() => onOpenEntry(entry)}
+                  className="flex min-w-0 flex-1 items-start gap-2 px-2 py-1.5 text-left transition-colors disabled:cursor-not-allowed"
+                  title={[entry.path, stale ? staleReason : null, details || null]
+                    .filter(Boolean)
+                    .join('\n')}
+                >
+                  <span className="mt-0.5 flex h-4 w-4 flex-shrink-0 items-center justify-center">
+                    <FileIcon name={entry.path} />
                   </span>
-                </span>
-              </button>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate">{fileTitle(entry)}</span>
+                    <span className="block truncate text-[10px] text-muted">
+                      {stale ? staleReason : workspaceLabel(entry)}
+                    </span>
+                    {details ? (
+                      <span className="block truncate text-[10px] text-muted/80">{details}</span>
+                    ) : null}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onDetachEntry(entry)}
+                  aria-label={`Remove ${fileTitle(entry)} from AI Workspace`}
+                  title="Remove from AI Workspace (file stays on disk)"
+                  className="w-7 flex-shrink-0 text-muted opacity-0 hover:text-danger focus:opacity-100 group-hover:opacity-100"
+                >
+                  ×
+                </button>
+              </div>
             )
           })
         )}

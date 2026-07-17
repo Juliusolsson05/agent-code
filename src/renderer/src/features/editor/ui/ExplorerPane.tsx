@@ -115,6 +115,13 @@ export function ExplorerPane({
   const loadGenerationRef = useRef(0)
   const expandedRef = useRef(expanded)
   expandedRef.current = expanded
+  const watchedDirectoriesRef = useRef<{
+    root: string | null
+    paths: Set<string>
+  }>({
+    root: null,
+    paths: new Set(),
+  })
   const menuRef = useRef<HTMLDivElement | null>(null)
   const menuInvokerRef = useRef<HTMLElement | null>(null)
   const treeRef = useRef<HTMLDivElement | null>(null)
@@ -273,6 +280,79 @@ export function ExplorerPane({
     queuedLoadsRef.current.clear()
     for (const path of expandedRef.current) void loadDirectory(path)
   }, [loadDirectory, showHidden])
+
+  useEffect(() => {
+    const previous = watchedDirectoriesRef.current
+    const nextPaths = new Set(expanded)
+    for (const path of previous.paths) {
+      if (previous.root !== root || !nextPaths.has(path)) {
+        if (previous.root) {
+          void window.api
+            .editorUnwatchDirectory({ root: previous.root, path })
+            .catch(() => undefined)
+        }
+      }
+    }
+    for (const path of nextPaths) {
+      if (previous.root !== root || !previous.paths.has(path)) {
+        void window.api
+          .editorWatchDirectory({ root, path })
+          .then(() => {
+            const current = watchedDirectoriesRef.current
+            if (current.root !== root || !current.paths.has(path)) {
+              // Unwatch may have raced ahead of main's async authorize/watch-
+              // ready path and found no subscription yet. Revoke again after
+              // successful registration so a collapsed/old-root watcher
+              // cannot survive invisibly for the rest of the renderer life.
+              void window.api.editorUnwatchDirectory({ root, path }).catch(() => undefined)
+              return
+            }
+            // WHY read once after watcher readiness: chokidar intentionally
+            // ignores initial entries. A file created after the first readdir
+            // but before the watcher becomes ready would otherwise be treated
+            // as initial and never emit, leaving the expanded tree stale until
+            // an unrelated later change.
+            void loadDirectory(path)
+          })
+          .catch(() => {
+            // A directory can disappear between the listing and watch setup. Its
+            // parent subscription will reload the tree; the watch itself is a
+            // freshness enhancement and must not replace Explorer contents with
+            // a transient setup error.
+          })
+      }
+    }
+    watchedDirectoriesRef.current = { root, paths: nextPaths }
+  }, [expanded, loadDirectory, root])
+
+  useEffect(
+    () => () => {
+      const current = watchedDirectoriesRef.current
+      if (!current.root) return
+      for (const path of current.paths) {
+        void window.api.editorUnwatchDirectory({ root: current.root, path }).catch(() => undefined)
+      }
+      watchedDirectoriesRef.current = { root: null, paths: new Set() }
+    },
+    [],
+  )
+
+  useEffect(
+    () =>
+      window.api.onEditorDirectoryChanged(event => {
+        if (event.root !== root || !expandedRef.current.has(event.path)) return
+        if (event.error) {
+          setMutationError(
+            `Explorer watch stopped${event.path ? ` for ${event.path}` : ''}: ${event.error}. Refresh, or collapse and re-expand the folder, to retry.`,
+          )
+        }
+        // Membership events are deliberately coarse. Reloading the bounded
+        // authoritative list keeps hidden/junk filters, sort order, truncation,
+        // and rename pairs identical to a manual Refresh.
+        void loadDirectory(event.path)
+      }),
+    [loadDirectory, root],
+  )
 
   // Dismiss the context menu on any outside interaction. Capture-phase so
   // a click that lands on another menu trigger still closes this menu
@@ -564,8 +644,10 @@ export function ExplorerPane({
           </button>
           <button
             type="button"
-            title={showHidden ? 'Hide hidden files' : 'Show hidden files'}
-            aria-label={showHidden ? 'Hide hidden files' : 'Show hidden files'}
+            title={showHidden ? 'Hide hidden and ignored files' : 'Show hidden and ignored files'}
+            aria-label={
+              showHidden ? 'Hide hidden and ignored files' : 'Show hidden and ignored files'
+            }
             onClick={() => setShowHidden(prev => !prev)}
             className={`flex h-5 w-5 items-center justify-center rounded hover:bg-surface-hi ${
               showHidden ? 'text-ink' : 'text-muted hover:text-ink'
@@ -682,6 +764,14 @@ export function ExplorerPane({
           className="fixed z-30 min-w-[160px] rounded border border-border bg-surface py-1 shadow-lg"
           style={{ left: menu.x, top: menu.y }}
           onMouseDown={event => event.stopPropagation()}
+          onBlur={event => {
+            if (event.currentTarget.contains(event.relatedTarget as Node | null)) return
+            // A pointer has an outside-click listener, but keyboard users leave
+            // a menu with Tab. Closing on focus departure prevents an inert
+            // floating menu from lingering over the tree after that move.
+            setMenu(null)
+            setArmedDelete(null)
+          }}
           onKeyDown={event => {
             if (event.key === 'Escape') {
               event.preventDefault()
@@ -800,8 +890,19 @@ function InlineEditRow({
         placeholder={placeholder}
         onChange={event => onChange(event.target.value)}
         onKeyDown={event => {
-          if (event.key === 'Enter') onCommit()
-          if (event.key === 'Escape') onCancel()
+          if (event.key === 'Enter') {
+            event.preventDefault()
+            event.stopPropagation()
+            onCommit()
+          }
+          if (event.key === 'Escape') {
+            // Inline editing is the nearest Escape owner. Consuming the key
+            // keeps the same press from also leaving editor fullscreen in the
+            // window-level bubble listener.
+            event.preventDefault()
+            event.stopPropagation()
+            onCancel()
+          }
         }}
         onBlur={() => {
           if (!disabled) onCancel()

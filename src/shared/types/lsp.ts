@@ -105,9 +105,16 @@ export type LspDocumentSymbol = {
   name: string
   /** Raw LSP SymbolKind. */
   kind: number
+  /** Complete declaration/body range. Nested symbols must remain inside this
+   * range or Monaco rejects/flattens the hierarchy. */
   startLine: number
   startCharacter: number
   endLine: number
   endCharacter: number
+  /** Narrower name/token range used when Outline selects the symbol. */
+  selectionStartLine: number
+  selectionStartCharacter: number
+  selectionEndLine: number
+  selectionEndCharacter: number
   children: LspDocumentSymbol[]
 }

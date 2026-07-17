@@ -30,6 +30,7 @@ type Entry = {
   refs: number
   absolutePath: string
   ownerActive: boolean
+  viewState: Monaco.editor.ICodeEditorViewState | null
 }
 const entries = new Map<number, Entry>()
 
@@ -39,20 +40,70 @@ function disposeIfUnowned(ownerId: number, entry: Entry): void {
   if (!entry.model.isDisposed()) entry.model.dispose()
 }
 
-function replaceModelTextPreservingUndo(model: Monaco.editor.ITextModel, text: string): void {
-  if (model.getValue() === text) return
+export function replaceModelTextPreservingUndo(
+  model: Monaco.editor.ITextModel,
+  text: string,
+): void {
+  const current = model.getValue(undefined, true)
+  if (current === text) return
+  const currentHasBom = current.startsWith('\ufeff')
+  const nextHasBom = text.startsWith('\ufeff')
+  if (currentHasBom !== nextHasBom) {
+    // Monaco stores BOM outside the editable range, so pushEditOperations
+    // cannot add/remove it. setValue intentionally pays the undo-stack reset
+    // only for this rare encoding-boundary transition; trying to preserve undo
+    // would insert a visible second BOM or silently retain the old one.
+    model.setValue(text)
+    return
+  }
   // setValue wipes the complete undo stack. A disk reload/external update is
   // itself an edit boundary that users reasonably expect Cmd+Z to recover
   // from, so replace the full range through Monaco's edit machinery instead.
-  model.pushEditOperations([], [{ range: model.getFullModelRange(), text }], () => null)
+  model.pushEditOperations(
+    [],
+    [
+      {
+        range: model.getFullModelRange(),
+        text: nextHasBom ? text.slice(1) : text,
+      },
+    ],
+    () => null,
+  )
 }
 
 export function acquireEditorModel(
   monaco: typeof Monaco,
-  params: { absolutePath: string; text: string; monacoLangId: string; ownerId: number },
+  params: {
+    absolutePath: string
+    text: string
+    monacoLangId: string
+    ownerId: number
+  },
 ): Monaco.editor.ITextModel {
   const existing = entries.get(params.ownerId)
   if (existing && !existing.model.isDisposed()) {
+    if (existing.absolutePath !== params.absolutePath) {
+      // A Monaco model URI is immutable. Updating our bookkeeping (or only the
+      // language) after Explorer rename leaves workers, providers, and LSP
+      // identity on the old filename forever. The effect is keyed by absolute
+      // path, so its old viewer releases before this acquire; recreate the model
+      // under the correct physical URI. Text and view state survive through the
+      // buffer/entry, but Monaco cannot transfer an undo stack between models.
+      const uri = monaco.Uri.file(params.absolutePath).with({
+        query: `agent-code-buffer=${params.ownerId}`,
+      })
+      const modelAtDestination = monaco.editor.getModel(uri)
+      const migratedModel =
+        modelAtDestination && !modelAtDestination.isDisposed()
+          ? modelAtDestination
+          : monaco.editor.createModel(params.text, params.monacoLangId, uri)
+      if (migratedModel.getLanguageId() !== params.monacoLangId) {
+        monaco.editor.setModelLanguage(migratedModel, params.monacoLangId)
+      }
+      replaceModelTextPreservingUndo(migratedModel, params.text)
+      existing.model.dispose()
+      existing.model = migratedModel
+    }
     existing.refs += 1
     existing.ownerActive = true
     existing.absolutePath = params.absolutePath
@@ -90,9 +141,22 @@ export function acquireEditorModel(
     refs: 1,
     absolutePath: params.absolutePath,
     ownerActive: true,
+    viewState: null,
   }
   entries.set(params.ownerId, entry)
   return model
+}
+
+export function saveEditorViewState(
+  ownerId: number,
+  viewState: Monaco.editor.ICodeEditorViewState | null,
+): void {
+  const entry = entries.get(ownerId)
+  if (entry) entry.viewState = viewState
+}
+
+export function editorViewState(ownerId: number): Monaco.editor.ICodeEditorViewState | null {
+  return entries.get(ownerId)?.viewState ?? null
 }
 
 export function releaseEditorModel(ownerId: number): void {
@@ -121,11 +185,4 @@ export function disposeAllEditorModelsUnder(rootAbs: string): void {
     entry.ownerActive = false
     disposeIfUnowned(ownerId, entry)
   }
-}
-
-/** Join a cwd root and store-relative path into the registry/model key.
- *  Mirrors the Global Editor store's absolutePath() join so both sides
- *  derive identical keys for the same buffer. */
-export function editorModelKey(root: string, relativePath: string): string {
-  return `${root.replace(/\/+$/, '')}/${relativePath.replace(/^\/+/, '')}`
 }

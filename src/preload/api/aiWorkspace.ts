@@ -4,6 +4,7 @@ import { subscribe } from '@preload/api/ipc.js'
 import type { Unsub } from '@preload/api/types.js'
 import type {
   AiWorkspaceCreateParams,
+  AiWorkspaceChangeEvent,
   AiWorkspaceDetachFileParams,
   AiWorkspaceOpenRequest,
   AiWorkspaceReadFileResult,
@@ -37,4 +38,6 @@ export const aiWorkspaceApi = {
   onAiWorkspaceOpenRequest: (
     cb: (request: AiWorkspaceOpenRequest) => void,
   ): Unsub => subscribe('ai-workspace:open-request', cb),
+  onAiWorkspaceChanged: (cb: (event: AiWorkspaceChangeEvent) => void): Unsub =>
+    subscribe('ai-workspace:changed', cb),
 }

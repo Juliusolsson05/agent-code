@@ -5,6 +5,7 @@ import { isAbsolute, relative, resolve } from 'path'
 import { fileURLToPath, pathToFileURL } from 'url'
 
 import {
+  CancellationTokenSource,
   createMessageConnection,
   StreamMessageReader,
   StreamMessageWriter,
@@ -57,10 +58,23 @@ type OpenDocumentRecord = {
   clientUri: string
   serverKey: string
   serverUri: string
+  serverDocumentKey: string
   version: number
   language: string
   refs: number
+  content: string
   completionItems: Map<number, CompletionItem>
+}
+
+type ServerDocumentRecord = {
+  key: string
+  serverKey: string
+  serverUri: string
+  language: string
+  version: number
+  refs: number
+  content: string
+  activeClientUri: string
 }
 
 type ServerRecord = {
@@ -73,6 +87,10 @@ type ServerRecord = {
   legendPromise: Promise<SemanticTokensLegend | null>
   closed: boolean
 }
+
+const LSP_DOCUMENT_REQUEST_TIMEOUT_MS = 15_000
+const LSP_INITIALIZE_TIMEOUT_MS = 30_000
+const LSP_REQUEST_TIMED_OUT = Symbol('lsp-request-timed-out')
 
 function toSeverity(severity?: DiagnosticSeverity): LspDiagnostic['severity'] {
   if (severity === DiagnosticSeverity.Error) return 'error'
@@ -119,6 +137,10 @@ function resolveLspFileInsideRoot(workspaceRoot: string, filePath: string): stri
     throw new Error('LSP file path escapes workspace root')
   }
   return target
+}
+
+function serverDocumentKey(serverKey: string, serverUri: string): string {
+  return `${serverKey}\0${serverUri}`
 }
 
 // ── Raw-LSP → shared-shape normalizers ────────────────────────────────────
@@ -213,26 +235,62 @@ function normalizeSymbols(
   result: DocumentSymbol[] | SymbolInformation[] | null,
 ): LspDocumentSymbol[] {
   if (!result || result.length === 0) return []
+  const MAX_SYMBOLS = 2_000
+  const MAX_SYMBOL_DEPTH = 32
+  let remaining = MAX_SYMBOLS
   const first = result[0]
   if ('range' in first) {
-    const mapSymbol = (symbol: DocumentSymbol): LspDocumentSymbol => ({
-      name: symbol.name,
-      kind: symbol.kind,
-      startLine: symbol.selectionRange.start.line,
-      startCharacter: symbol.selectionRange.start.character,
-      endLine: symbol.selectionRange.end.line,
-      endCharacter: symbol.selectionRange.end.character,
-      children: (symbol.children ?? []).map(mapSymbol),
-    })
-    return (result as DocumentSymbol[]).map(mapSymbol)
+    const mapSymbol = (symbol: DocumentSymbol, depth: number): LspDocumentSymbol | null => {
+      if (remaining <= 0) return null
+      remaining -= 1
+      const mapped: LspDocumentSymbol = {
+        name: symbol.name,
+        kind: symbol.kind,
+        startLine: symbol.range.start.line,
+        startCharacter: symbol.range.start.character,
+        endLine: symbol.range.end.line,
+        endCharacter: symbol.range.end.character,
+        selectionStartLine: symbol.selectionRange.start.line,
+        selectionStartCharacter: symbol.selectionRange.start.character,
+        selectionEndLine: symbol.selectionRange.end.line,
+        selectionEndCharacter: symbol.selectionRange.end.character,
+        children: [],
+      }
+      // WHY preserve parents while bounding preorder: outline consumers need a
+      // valid tree, so flattening/slicing after recursive mapping either spends
+      // unbounded memory first or produces orphaned children. A bounded preorder
+      // keeps the first useful hierarchy and rejects pathological server depth
+      // before it can overflow the stack or flood IPC.
+      if (depth + 1 < MAX_SYMBOL_DEPTH) {
+        for (const child of symbol.children ?? []) {
+          const mappedChild = mapSymbol(child, depth + 1)
+          if (!mappedChild) break
+          mapped.children.push(mappedChild)
+        }
+      }
+      return mapped
+    }
+    const normalized: LspDocumentSymbol[] = []
+    for (const symbol of result as DocumentSymbol[]) {
+      const mapped = mapSymbol(symbol, 0)
+      if (!mapped) break
+      normalized.push(mapped)
+    }
+    return normalized
   }
-  return (result as SymbolInformation[]).map(symbol => ({
+  return (result as SymbolInformation[]).slice(0, MAX_SYMBOLS).map(symbol => ({
     name: symbol.name,
     kind: symbol.kind,
     startLine: symbol.location.range.start.line,
     startCharacter: symbol.location.range.start.character,
     endLine: symbol.location.range.end.line,
     endCharacter: symbol.location.range.end.character,
+    // SymbolInformation has no separate selection range. Its location is
+    // therefore the only truthful navigation range available.
+    selectionStartLine: symbol.location.range.start.line,
+    selectionStartCharacter: symbol.location.range.start.character,
+    selectionEndLine: symbol.location.range.end.line,
+    selectionEndCharacter: symbol.location.range.end.character,
     children: [],
   }))
 }
@@ -256,6 +314,12 @@ export interface LspManager {
 export class LspManager extends EventEmitter {
   private readonly servers = new Map<string, ServerRecord>()
   private readonly docs = new Map<string, OpenDocumentRecord>()
+  // LSP document identity belongs to the server URI, not Monaco's client URI.
+  // Global Editor and AI Workspace deliberately use distinct Monaco models for
+  // independent undo/drafts, yet both can resolve to the same real file URI in
+  // one language server. This table owns the one legal didOpen/didClose
+  // lifetime and monotonically increasing version for that shared server view.
+  private readonly serverDocuments = new Map<string, ServerDocumentRecord>()
   // Single-flight per server key. getOrCreateServer is async (PATH
   // detection via the registry), and a transcript can mount dozens of
   // code blocks in one tick — without coalescing, every one of them would
@@ -268,6 +332,12 @@ export class LspManager extends EventEmitter {
   // write is pending. A per-document queue prevents late didOpen from landing
   // after close, and prevents two full-text changes from reordering versions.
   private readonly documentQueues = new Map<string, Promise<void>>()
+  private readonly serverDocumentQueues = new Map<string, Promise<void>>()
+  // Mutation intent advances before its queued protocol work begins. Language
+  // feature requests use the captured epoch to discard a response as soon as
+  // the renderer has submitted newer text/close intent, even while that
+  // didChange is waiting behind the request's shared-server-URI lock.
+  private readonly documentIntentEpochs = new Map<string, number>()
   private completionResolveSequence = 0
 
   async ensureSemanticLegend(
@@ -283,7 +353,12 @@ export class LspManager extends EventEmitter {
   }
 
   async openDocument(params: OpenDocumentParams): Promise<void> {
-    await this.serializeDocument(params.clientUri, () => this.openDocumentNow(params))
+    this.bumpDocumentIntent(params.clientUri)
+    try {
+      await this.serializeDocument(params.clientUri, () => this.openDocumentNow(params))
+    } finally {
+      this.clearOrphanedDocumentIntent(params.clientUri)
+    }
   }
 
   private async openDocumentNow(params: OpenDocumentParams): Promise<void> {
@@ -304,103 +379,186 @@ export class LspManager extends EventEmitter {
     const serverUri = params.filePath
       ? pathToFileURL(resolveLspFileInsideRoot(workspaceRoot, params.filePath)).href
       : makeVirtualServerUri(workspaceRoot, params.clientUri, language)
-    const existing = this.docs.get(params.clientUri)
-    if (existing) {
-      if (existing.serverKey !== server.key || existing.serverUri !== serverUri) {
-        // One Monaco URI cannot safely represent two simultaneous server
-        // documents. The visible editor will retry on its next mount; mutating
-        // the old record here would let its late close tear down the new one.
+    const key = serverDocumentKey(server.key, serverUri)
+    await this.serializeServerDocument(key, async () => {
+      const existing = this.docs.get(params.clientUri)
+      if (existing) {
+        if (existing.serverKey !== server.key || existing.serverUri !== serverUri) {
+          // One Monaco URI cannot safely represent two simultaneous server
+          // documents. The visible editor will retry on its next mount;
+          // mutating the old record here would let its late close tear down the
+          // new one.
+          return
+        }
+        const shared = this.serverDocuments.get(key)
+        if (!shared) return
+        existing.refs += 1
+        shared.refs += 1
+        await this.changeSharedDocument(server, shared, existing, params.content)
         return
       }
-      existing.refs += 1
-      await this.changeDocumentNow(params.clientUri, params.content)
-      return
-    }
 
-    await this.sendNotificationIfOpen(server, 'textDocument/didOpen', {
-      textDocument: {
-        uri: serverUri,
-        languageId: language,
-        version: 1,
-        text: params.content,
-      },
-    })
-    if (server.closed) return
+      const shared = this.serverDocuments.get(key)
+      if (!shared) {
+        await this.sendNotificationIfOpen(server, 'textDocument/didOpen', {
+          textDocument: {
+            uri: serverUri,
+            languageId: language,
+            version: 1,
+            text: params.content,
+          },
+        })
+        if (server.closed) return
+        const created: ServerDocumentRecord = {
+          key,
+          serverKey: server.key,
+          serverUri,
+          language,
+          version: 1,
+          refs: 1,
+          content: params.content,
+          activeClientUri: params.clientUri,
+        }
+        this.serverDocuments.set(key, created)
+        this.docs.set(params.clientUri, {
+          clientUri: params.clientUri,
+          serverKey: server.key,
+          serverUri,
+          serverDocumentKey: key,
+          version: 1,
+          language,
+          refs: 1,
+          content: params.content,
+          completionItems: new Map(),
+        })
+        return
+      }
 
-    this.docs.set(params.clientUri, {
-      clientUri: params.clientUri,
-      serverKey: server.key,
-      serverUri,
-      version: 1,
-      language,
-      refs: 1,
-      completionItems: new Map(),
+      shared.refs += 1
+      const doc: OpenDocumentRecord = {
+        clientUri: params.clientUri,
+        serverKey: server.key,
+        serverUri,
+        serverDocumentKey: key,
+        version: shared.version,
+        language,
+        refs: 1,
+        content: params.content,
+        completionItems: new Map(),
+      }
+      this.docs.set(params.clientUri, doc)
+      await this.changeSharedDocument(server, shared, doc, params.content)
     })
   }
 
   async changeDocument(clientUri: string, content: string): Promise<void> {
-    await this.serializeDocument(clientUri, () => this.changeDocumentNow(clientUri, content))
+    this.bumpDocumentIntent(clientUri)
+    try {
+      await this.serializeDocument(clientUri, () => this.changeDocumentNow(clientUri, content))
+    } finally {
+      this.clearOrphanedDocumentIntent(clientUri)
+    }
   }
 
   private async changeDocumentNow(clientUri: string, content: string): Promise<void> {
     const doc = this.docs.get(clientUri)
     if (!doc) return
-    const server = this.servers.get(doc.serverKey)
-    if (!server) return
+    await this.serializeServerDocument(doc.serverDocumentKey, async () => {
+      if (this.docs.get(clientUri) !== doc) return
+      const server = this.servers.get(doc.serverKey)
+      const shared = this.serverDocuments.get(doc.serverDocumentKey)
+      if (!server || !shared) return
+      await this.changeSharedDocument(server, shared, doc, content)
+    })
+  }
+
+  private async changeSharedDocument(
+    server: ServerRecord,
+    shared: ServerDocumentRecord,
+    source: OpenDocumentRecord,
+    content: string,
+  ): Promise<void> {
+    source.content = content
+    shared.activeClientUri = source.clientUri
+    if (shared.content === content) {
+      source.version = shared.version
+      source.completionItems.clear()
+      return
+    }
+    shared.content = content
+    shared.version += 1
     // Completion resolve handles describe the server's view at the time the
-    // list was produced. A full-text change invalidates that view; retaining
-    // handles would let a late Monaco resolve apply imports/edits computed for
-    // older text to the current buffer.
-    doc.completionItems.clear()
-    doc.version += 1
+    // list was produced. A change through either surface invalidates handles
+    // for every client alias of this real URI, not just the writer.
+    for (const doc of this.docs.values()) {
+      if (doc.serverDocumentKey !== shared.key) continue
+      doc.version = shared.version
+      doc.completionItems.clear()
+      // Diagnostics describe the prior shared server text until a fresh
+      // publish arrives. Every alias may have a different draft, so retaining
+      // those markers after switching the server view makes the inactive
+      // surface's errors appear on the newly active one.
+      this.emit('diagnostics', { clientUri: doc.clientUri, diagnostics: [] })
+    }
     await this.sendNotificationIfOpen(server, 'textDocument/didChange', {
-      textDocument: {
-        uri: doc.serverUri,
-        version: doc.version,
-      },
+      textDocument: { uri: shared.serverUri, version: shared.version },
       contentChanges: [{ text: content }],
     })
   }
 
   async closeDocument(clientUri: string): Promise<void> {
-    await this.serializeDocument(clientUri, () => this.closeDocumentNow(clientUri))
+    this.bumpDocumentIntent(clientUri)
+    try {
+      await this.serializeDocument(clientUri, () => this.closeDocumentNow(clientUri))
+    } finally {
+      this.clearOrphanedDocumentIntent(clientUri)
+    }
   }
 
   private async closeDocumentNow(clientUri: string): Promise<void> {
     const doc = this.docs.get(clientUri)
     if (!doc) return
-    // Multiple editor surfaces can temporarily mount the same Monaco URI
-    // during React transitions. didClose is a lifetime operation, not a
-    // content change: only the last owner may tear down the server document.
-    // Keeping the decrement here (and never in changeDocument) preserves both
-    // live diagnostics and later changes from whichever owner survives.
-    doc.refs -= 1
-    if (doc.refs > 0) return
-    const server = this.servers.get(doc.serverKey)
-    if (server) {
-      await this.sendNotificationIfOpen(server, 'textDocument/didClose', {
-        textDocument: { uri: doc.serverUri },
-      })
-    }
-    this.docs.delete(clientUri)
-    this.emit('diagnostics', { clientUri, diagnostics: [] })
+    await this.serializeServerDocument(doc.serverDocumentKey, async () => {
+      if (this.docs.get(clientUri) !== doc) return
+      const shared = this.serverDocuments.get(doc.serverDocumentKey)
+      if (!shared) {
+        this.docs.delete(clientUri)
+        this.emit('diagnostics', { clientUri, diagnostics: [] })
+        return
+      }
+      // Multiple mounts of one client URI and multiple client aliases of one
+      // server URI are separate refcount layers. Only the final server ref may
+      // emit didClose; closing the active alias first restores a surviving
+      // alias's draft so the server never keeps content owned by a dead view.
+      doc.refs -= 1
+      shared.refs -= 1
+      if (doc.refs > 0) return
+      this.docs.delete(clientUri)
+      this.emit('diagnostics', { clientUri, diagnostics: [] })
+      const server = this.servers.get(doc.serverKey)
+      if (shared.refs <= 0) {
+        if (server) {
+          await this.sendNotificationIfOpen(server, 'textDocument/didClose', {
+            textDocument: { uri: shared.serverUri },
+          })
+        }
+        this.serverDocuments.delete(shared.key)
+        return
+      }
+      if (shared.activeClientUri !== clientUri || !server) return
+      const survivor = [...this.docs.values()].find(
+        candidate => candidate.serverDocumentKey === shared.key,
+      )
+      if (survivor) await this.changeSharedDocument(server, shared, survivor, survivor.content)
+    })
   }
 
   async getSemanticTokens(clientUri: string): Promise<SemanticTokens | null> {
-    await this.waitForDocument(clientUri)
-    const doc = this.docs.get(clientUri)
-    if (!doc) return null
-    const server = this.servers.get(doc.serverKey)
-    if (!server) return null
-    await server.initialized
-    try {
-      return await server.connection.sendRequest('textDocument/semanticTokens/full', {
-        textDocument: { uri: doc.serverUri },
-      })
-    } catch (err) {
-      if (isDestroyedStreamError(err) || server.closed) return null
-      throw err
-    }
+    return await this.sendDocRequest<SemanticTokens>(
+      clientUri,
+      'textDocument/semanticTokens/full',
+      {},
+    )
   }
 
   // ── Editor language-feature requests ────────────────────────────────
@@ -425,18 +583,79 @@ export class LspManager extends EventEmitter {
     method: string,
     extraParams: Record<string, unknown>,
   ): Promise<T | null> {
-    await this.waitForDocument(clientUri)
-    const ctx = this.requestContext(clientUri)
-    if (!ctx) return null
-    await ctx.server.initialized
+    // Capture at invocation time, before joining the per-client queue. If a
+    // change was invoked first, the request queues behind it with the same
+    // epoch. If a change arrives later, it advances the map immediately and
+    // invalidates this response even though protocol ordering makes the
+    // didChange wait for the request to release the server-URI queue.
+    const intentEpoch = this.documentIntentEpochs.get(clientUri) ?? 0
     try {
-      return (await ctx.server.connection.sendRequest(method, {
-        textDocument: { uri: ctx.doc.serverUri },
-        ...extraParams,
-      })) as T
-    } catch (err) {
-      if (isDestroyedStreamError(err) || ctx.server.closed) return null
-      throw err
+      return await this.serializeDocument(clientUri, async () => {
+        if ((this.documentIntentEpochs.get(clientUri) ?? 0) !== intentEpoch) return null
+        const ctx = this.requestContext(clientUri)
+        if (!ctx) return null
+        await ctx.server.initialized
+        if ((this.documentIntentEpochs.get(clientUri) ?? 0) !== intentEpoch) return null
+        return await this.serializeServerDocument(ctx.doc.serverDocumentKey, async () => {
+          if (
+            this.docs.get(clientUri) !== ctx.doc ||
+            (this.documentIntentEpochs.get(clientUri) ?? 0) !== intentEpoch
+          ) {
+            return null
+          }
+          const shared = this.serverDocuments.get(ctx.doc.serverDocumentKey)
+          if (!shared || this.servers.get(ctx.doc.serverKey) !== ctx.server) return null
+          // Monaco models intentionally have per-surface client URIs, but the
+          // language server sees one real file URI. Restore the requesting draft
+          // while holding the same URI queue through the response; a renderer-side
+          // didChange followed by a separate request still leaves an interleaving
+          // window where another surface can become active between those IPCs.
+          if (shared.activeClientUri !== clientUri || shared.content !== ctx.doc.content) {
+            await this.changeSharedDocument(ctx.server, shared, ctx.doc, ctx.doc.content)
+          }
+
+          const cancellation = new CancellationTokenSource()
+          let timeout: ReturnType<typeof setTimeout> | undefined
+          try {
+            const response = await Promise.race([
+              ctx.server.connection.sendRequest<T>(
+                method,
+                {
+                  textDocument: { uri: ctx.doc.serverUri },
+                  ...extraParams,
+                },
+                cancellation.token,
+              ),
+              new Promise<typeof LSP_REQUEST_TIMED_OUT>(resolveTimeout => {
+                timeout = setTimeout(() => {
+                  // Cancellation is advisory in LSP. The local timeout is what
+                  // releases our queues even when a wedged server ignores it;
+                  // the token merely gives healthy servers a chance to stop the
+                  // now-useless computation.
+                  cancellation.cancel()
+                  resolveTimeout(LSP_REQUEST_TIMED_OUT)
+                }, LSP_DOCUMENT_REQUEST_TIMEOUT_MS)
+              }),
+            ])
+            if (response === LSP_REQUEST_TIMED_OUT) return null
+            if (
+              this.docs.get(clientUri) !== ctx.doc ||
+              (this.documentIntentEpochs.get(clientUri) ?? 0) !== intentEpoch
+            ) {
+              return null
+            }
+            return response
+          } catch (err) {
+            if (isDestroyedStreamError(err) || ctx.server.closed) return null
+            throw err
+          } finally {
+            if (timeout) clearTimeout(timeout)
+            cancellation.dispose()
+          }
+        })
+      })
+    } finally {
+      this.clearOrphanedDocumentIntent(clientUri)
     }
   }
 
@@ -473,9 +692,9 @@ export class LspManager extends EventEmitter {
       { position, context },
     )
     const doc = this.docs.get(clientUri)
-    // A completion request is not cancellable across our IPC boundary. If the
-    // user typed while the server was answering, discard that older response
-    // rather than repopulating resolve handles after didChange cleared them.
+    // Cancellation is advisory and can race a server response. Keep this
+    // version proof as a second boundary: if the user typed while the server
+    // was answering, never repopulate resolve handles for the older text.
     if (doc !== requestedDoc || doc.version !== requestedVersion || !result) {
       return { items: [], incomplete: false }
     }
@@ -511,10 +730,35 @@ export class LspManager extends EventEmitter {
         : null
     }
     try {
-      const response = (await ctx.server.connection.sendRequest(
-        'completionItem/resolve',
-        item,
-      )) as CompletionItem
+      const cancellation = new CancellationTokenSource()
+      let timeout: ReturnType<typeof setTimeout> | undefined
+      let response: CompletionItem | typeof LSP_REQUEST_TIMED_OUT
+      try {
+        response = await Promise.race([
+          ctx.server.connection.sendRequest<CompletionItem>(
+            'completionItem/resolve',
+            item,
+            cancellation.token,
+          ),
+          new Promise<typeof LSP_REQUEST_TIMED_OUT>(resolveTimeout => {
+            timeout = setTimeout(() => {
+              cancellation.cancel()
+              resolveTimeout(LSP_REQUEST_TIMED_OUT)
+            }, LSP_DOCUMENT_REQUEST_TIMEOUT_MS)
+          }),
+        ])
+      } finally {
+        if (timeout) clearTimeout(timeout)
+        cancellation.dispose()
+      }
+      // Resolve enriches a suggestion after it is already usable. A hung
+      // details request must never leave Monaco's completion UI waiting
+      // indefinitely; keep the original item as the graceful fallback.
+      if (response === LSP_REQUEST_TIMED_OUT) {
+        return this.docs.get(clientUri) === ctx.doc && ctx.doc.version === requestedVersion
+          ? normalizeCompletionItem(item, resolveId)
+          : null
+      }
       if (
         this.docs.get(clientUri) !== ctx.doc ||
         ctx.doc.version !== requestedVersion ||
@@ -570,6 +814,11 @@ export class LspManager extends EventEmitter {
     // normal close path. Calling close once per URI while refs > 1 would leave
     // records pointing at servers that are about to be killed.
     for (const doc of this.docs.values()) doc.refs = 1
+    for (const shared of this.serverDocuments.values()) {
+      shared.refs = [...this.docs.values()].filter(
+        doc => doc.serverDocumentKey === shared.key,
+      ).length
+    }
     for (const clientUri of [...this.docs.keys()]) {
       await this.closeDocument(clientUri)
     }
@@ -579,6 +828,23 @@ export class LspManager extends EventEmitter {
       server.process.kill()
     }
     this.servers.clear()
+    this.serverDocuments.clear()
+    this.documentIntentEpochs.clear()
+  }
+
+  private bumpDocumentIntent(clientUri: string): number {
+    const next = (this.documentIntentEpochs.get(clientUri) ?? 0) + 1
+    this.documentIntentEpochs.set(clientUri, next)
+    return next
+  }
+
+  private clearOrphanedDocumentIntent(clientUri: string): void {
+    // Failed/unsupported opens never create a doc, while final close and
+    // crashed servers remove one. Retaining their epochs forever would turn
+    // every transient CodeBlock URI into a process-lifetime map entry.
+    if (!this.docs.has(clientUri) && !this.documentQueues.has(clientUri)) {
+      this.documentIntentEpochs.delete(clientUri)
+    }
   }
 
   private async serializeDocument<T>(clientUri: string, task: () => Promise<T>): Promise<T> {
@@ -598,6 +864,21 @@ export class LspManager extends EventEmitter {
 
   private async waitForDocument(clientUri: string): Promise<void> {
     await this.documentQueues.get(clientUri)?.catch(() => undefined)
+  }
+
+  private async serializeServerDocument<T>(key: string, task: () => Promise<T>): Promise<T> {
+    const previous = this.serverDocumentQueues.get(key) ?? Promise.resolve()
+    const result = previous.catch(() => undefined).then(task)
+    const tail = result.then(
+      () => undefined,
+      () => undefined,
+    )
+    this.serverDocumentQueues.set(key, tail)
+    try {
+      return await result
+    } finally {
+      if (this.serverDocumentQueues.get(key) === tail) this.serverDocumentQueues.delete(key)
+    }
   }
 
   private getOrCreateServer(
@@ -649,22 +930,7 @@ export class LspManager extends EventEmitter {
 
     connection.onNotification(
       'textDocument/publishDiagnostics',
-      (params: PublishDiagnosticsParams) => {
-        for (const doc of this.docs.values()) {
-          if (doc.serverKey !== key || doc.serverUri !== params.uri) continue
-          this.emit('diagnostics', {
-            clientUri: doc.clientUri,
-            diagnostics: params.diagnostics.map(diagnostic => ({
-              message: diagnostic.message,
-              severity: toSeverity(diagnostic.severity),
-              startLine: diagnostic.range.start.line,
-              startCharacter: diagnostic.range.start.character,
-              endLine: diagnostic.range.end.line,
-              endCharacter: diagnostic.range.end.character,
-            })),
-          })
-        }
-      },
+      (params: PublishDiagnosticsParams) => this.handlePublishDiagnostics(key, params),
     )
 
     connection.listen()
@@ -712,10 +978,42 @@ export class LspManager extends EventEmitter {
       ],
     }
 
-    const initialized = connection.sendRequest(
+    const initializeCancellation = new CancellationTokenSource()
+    const initializeRequest = connection.sendRequest<InitializeResult>(
       'initialize',
       initializeParams,
-    ) as Promise<InitializeResult>
+      initializeCancellation.token,
+    )
+    const initialized = new Promise<InitializeResult>((resolve, reject) => {
+      // A process can spawn successfully yet never speak LSP (broken shim,
+      // corrupt runtime, or a server blocked during startup). Every didOpen for
+      // this root waits on initialization, so leaving this unbounded wedges all
+      // later change/close operations and retains the dead child indefinitely.
+      // Cancellation is advisory; rejecting the owned promise is the hard
+      // bound, and the existing rejection path disposes/kills the server.
+      const timeout = setTimeout(() => {
+        initializeCancellation.cancel()
+        initializeCancellation.dispose()
+        reject(
+          new Error(
+            `language server initialization timed out after ${LSP_INITIALIZE_TIMEOUT_MS}ms`,
+          ),
+        )
+      }, LSP_INITIALIZE_TIMEOUT_MS)
+      timeout.unref()
+      initializeRequest.then(
+        result => {
+          clearTimeout(timeout)
+          initializeCancellation.dispose()
+          resolve(result)
+        },
+        error => {
+          clearTimeout(timeout)
+          initializeCancellation.dispose()
+          reject(error)
+        },
+      )
+    })
     initialized
       .then(() => {
         const server = this.servers.get(key)
@@ -752,6 +1050,38 @@ export class LspManager extends EventEmitter {
     return record
   }
 
+  private handlePublishDiagnostics(serverKey: string, params: PublishDiagnosticsParams): void {
+    const shared = this.serverDocuments.get(serverDocumentKey(serverKey, params.uri))
+    // Alias content equality alone cannot identify a delayed publish: A's v3
+    // diagnostics may arrive after B made the shared URI v4, at which point
+    // comparing only current text can paint those old markers onto B. Servers
+    // that provide the protocol version give us an exact ordering proof; drop
+    // stale publishes rather than clearing a newer marker set with old news.
+    if (params.version != null && params.version !== shared?.version) return
+    for (const doc of this.docs.values()) {
+      if (doc.serverKey !== serverKey || doc.serverUri !== params.uri) continue
+      this.emit('diagnostics', {
+        clientUri: doc.clientUri,
+        // A publish belongs to the current server text. Aliases with an
+        // independent draft must stay marker-free until their next request
+        // restores that draft and the server publishes for it. Versionless
+        // servers remain best-effort because the protocol offers no stronger
+        // ordering identity for them.
+        diagnostics:
+          shared?.content === doc.content
+            ? params.diagnostics.map(diagnostic => ({
+                message: diagnostic.message,
+                severity: toSeverity(diagnostic.severity),
+                startLine: diagnostic.range.start.line,
+                startCharacter: diagnostic.range.start.character,
+                endLine: diagnostic.range.end.line,
+                endCharacter: diagnostic.range.end.character,
+              }))
+            : [],
+      })
+    }
+  }
+
   private discardServer(server: ServerRecord, kill = true): void {
     if (this.servers.get(server.key) === server) this.servers.delete(server.key)
     if (!server.closed) {
@@ -766,7 +1096,11 @@ export class LspManager extends EventEmitter {
     for (const doc of [...this.docs.values()]) {
       if (doc.serverKey !== server.key) continue
       this.docs.delete(doc.clientUri)
+      this.documentIntentEpochs.delete(doc.clientUri)
       this.emit('diagnostics', { clientUri: doc.clientUri, diagnostics: [] })
+    }
+    for (const [key, doc] of this.serverDocuments) {
+      if (doc.serverKey === server.key) this.serverDocuments.delete(key)
     }
   }
 

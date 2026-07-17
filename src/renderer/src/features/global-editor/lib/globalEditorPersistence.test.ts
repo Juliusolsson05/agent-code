@@ -66,4 +66,25 @@ describe('global editor persistence projection', () => {
     expect(result.tabsByCwd['/repo-a']).toBeUndefined()
     expect(result.tabsByCwd['/repo-b']).toBeDefined()
   })
+
+  it('retains the active tab when a project exceeds the restore budget', () => {
+    const fileOrder = Array.from({ length: 30 }, (_, index) => `file-${index}.ts`)
+    const result = buildPersistedGlobalEditorState(
+      {
+        byCwd: {
+          '/repo-a': { fileOrder, activeFilePath: 'file-2.ts', openFiles: {} },
+        },
+        cwdRecency: ['/repo-a'],
+        activeCwd: '/repo-a',
+        splitterRatio: 0.5,
+        fileTreeWidthPx: 260,
+        fileTreeVisible: true,
+      },
+      previous,
+    )
+
+    expect(result.tabsByCwd['/repo-a']?.fileOrder).toHaveLength(24)
+    expect(result.tabsByCwd['/repo-a']?.fileOrder.at(-1)).toBe('file-2.ts')
+    expect(result.tabsByCwd['/repo-a']?.activeFilePath).toBe('file-2.ts')
+  })
 })
