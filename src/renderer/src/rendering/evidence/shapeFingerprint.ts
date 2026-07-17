@@ -158,18 +158,6 @@ export type ShapeFingerprint = {
 
 export const CURRENT_RENDER_SHAPE_FINGERPRINT_VERSION = 'fp2'
 
-/**
- * Old developer recordings are durable evidence, but a fingerprint minted by
- * an earlier canonicalizer cannot be looked up in the current catalog. Mixing
- * fp1 with fp2 in one unknown count made an already-classified session look
- * like fresh upstream drift after every algorithm migration. Only the exact
- * released fp1 syntax is legacy; an unfamiliar future prefix must remain an
- * unknown instead of being silently excused.
- */
-export function isLegacyRenderShapeFingerprint(value: string): boolean {
-  return /^fp1-[0-9a-f]{8}$/.test(value)
-}
-
 /** Leaf type tag. Distinguishes the JSON-ish types the painter branches on;
  *  everything unserializable collapses to its typeof so hostile inputs are
  *  identity-stable without ever being stringified. */

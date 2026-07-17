@@ -1,4 +1,4 @@
-import { SENSITIVE_KEY } from '@renderer/rendering/model/unknowns'
+import { SENSITIVE_KEY } from '@renderer/rendering/model/sensitiveKey'
 
 // ---------------------------------------------------------------------------
 // Session-recording redaction (plan §5) — the one genuinely novel piece of

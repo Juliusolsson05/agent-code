@@ -64,8 +64,6 @@ const MAX_KEYS = 4096
  * forever and merged stale counts into a reused session id). Three misses ≈
  * three flush windows of a recorder that is definitively gone.
  */
-const RECORDER_MISSES_BEFORE_DISARM = 3
-
 /** Leave headroom below main's 1 MiB trust-boundary cap. JSON string length
  * is the boundary's current metric, so using the same metric here makes the
  * split deterministic without allocating a second byte buffer. */
@@ -104,7 +102,6 @@ type SessionObserverState = {
   droppedQueue: number
   droppedKeys: number
   failures: number
-  recorderMisses: number
 }
 
 const sessions = new Map<string, SessionObserverState>()
@@ -148,7 +145,6 @@ export function armRenderShapeCapture(sessionId: string): void {
     droppedQueue: 0,
     droppedKeys: 0,
     failures: 0,
-    recorderMisses: 0,
   })
 }
 
@@ -260,6 +256,10 @@ export function observeRenderShape(input: ObserveRenderShapeInput): void {
       sourceRecordingCursor: null,
       observedAt: Date.now(),
       outcome: input.outcome,
+      // Every writer in this PR emits an explicit cumulative count. Keeping
+      // the field required avoids inventing a compatibility path for a wire
+      // shape that never shipped outside this branch.
+      seenCount: 1,
     }
     state.keys.set(key, { sighting, count: 1, flushedCount: 0 })
     enqueue(state, key)
@@ -383,20 +383,16 @@ async function transmitOne(
       snapshots.map(snapshot => snapshot.sighting),
     )
     if (result.status === 'accepted') {
-      state.recorderMisses = 0
       acknowledgeSnapshots(state, snapshots)
       return
     }
     state.failures += 1
     if (result.status === 'no-recorder') {
-      // Main said the recorder is gone. Keep evidence queued for a bounded
-      // number of races (recording-start notification can beat construction),
-      // then release the observer state rather than leak it indefinitely.
-      state.recorderMisses += 1
-      if (state.recorderMisses >= RECORDER_MISSES_BEFORE_DISARM && sessions.get(sessionId) === state) {
-        if (state.timer) clearTimeout(state.timer)
-        retireSession(sessionId, state)
-      }
+      // The recorder-start push is the arming authority. Once main explicitly
+      // says this session has no recorder, polling the same negative answer is
+      // stale compatibility machinery, not recovery. Retire immediately; a
+      // later real start push can arm a fresh observer with a fresh writer.
+      if (sessions.get(sessionId) === state) retireSession(sessionId, state)
       return
     }
     if ((result.reason === 'too-many' || result.reason === 'too-large') && snapshots.length > 1) {
@@ -408,15 +404,10 @@ async function transmitOne(
     dropSnapshots(state, snapshots)
   } catch {
     // window.api absent (tests without preload) or IPC failure — swallowed
-    // by contract. Crucially, snapshots remain queued for bounded retries;
-    // after repeated failures there is no usable sink, so retaining the full
-    // per-session key map would turn a diagnostic outage into a heap leak.
+    // by contract. Keep the snapshots for the final stop handshake, but do
+    // not manufacture a polling protocol on top of an event-driven recorder.
     state.failures += 1
-    state.recorderMisses += 1
-    if (state.recorderMisses >= RECORDER_MISSES_BEFORE_DISARM && sessions.get(sessionId) === state) {
-      if (state.timer) clearTimeout(state.timer)
-      retireSession(sessionId, state)
-    }
+    removeQueued(state, snapshots.map(snapshot => snapshot.key))
   }
 }
 

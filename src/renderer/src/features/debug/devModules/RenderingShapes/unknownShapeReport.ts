@@ -81,6 +81,7 @@ function asSighting(value: unknown): (RenderShapeSighting & { sourceRecordingId?
   if (typeof s.lifecycle !== 'string') return null
   if (typeof s.eventType !== 'string') return null
   if (typeof s.outcome !== 'object' || s.outcome === null) return null
+  if (typeof s.seenCount !== 'number' || !Number.isFinite(s.seenCount) || s.seenCount < 1) return null
   // A non-number observedAt would poison Math.min/max into NaN downstream.
   if (typeof s.observedAt !== 'number') return null
   if (s.shapePaths !== undefined && !Array.isArray(s.shapePaths)) return null
@@ -125,7 +126,7 @@ export function buildUnknownShapeReport(
       invalid += 1
       continue
     }
-    const count = s.seenCount ?? 1
+    const count = s.seenCount
     const writerKey = renderShapeWriterKey(s, s.sourceRecordingId ?? '')
     const prev = countsByWriterKey.get(writerKey) ?? 0
     const delta = Math.max(0, count - prev)

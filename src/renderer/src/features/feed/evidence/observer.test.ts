@@ -143,7 +143,7 @@ describe('render-shape observer (Phase 2 gates)', () => {
     expect(renderShapeObserverStats().failures).toBeGreaterThan(0)
   })
 
-  it('does not mark a sighting persisted until a later retry is acknowledged', async () => {
+  it('keeps an unacknowledged sighting for the authoritative stop flush without polling', async () => {
     let attempts = 0
     ;(globalThis as Record<string, unknown>).window = {
       api: {
@@ -158,6 +158,8 @@ describe('render-shape observer (Phase 2 gates)', () => {
     armRenderShapeCapture(SESSION)
     observeRenderShape(input({ payload: { once: true } }))
     await vi.runAllTimersAsync()
+    expect(attempts).toBe(1)
+    await disarmRenderShapeCapture(SESSION)
     expect(attempts).toBe(2)
     expect(sent.flatMap(item => item.batch)).toHaveLength(1)
   })
@@ -193,17 +195,15 @@ describe('render-shape observer (Phase 2 gates)', () => {
     expect(JSON.stringify(sent)).not.toContain('/Users/private')
   })
 
-  it('a gone recorder auto-disarms the observer after consecutive misses', async () => {
+  it('a definitive no-recorder acknowledgement disarms immediately', async () => {
     ;(globalThis as Record<string, unknown>).window = {
       api: { appendRenderShapeSightings: () => Promise.resolve({ status: 'no-recorder' as const }) },
     }
     armRenderShapeCapture(SESSION)
-    for (let i = 0; i < 4; i++) {
-      observeRenderShape(input({ payload: { [`miss${i}`]: 1 } }))
-      await vi.runAllTimersAsync()
-    }
-    // Main kept answering "no recorder" (session exited) — the observer
-    // must not stay armed and leak its key map forever.
+    observeRenderShape(input({ payload: { miss: true } }))
+    await vi.runAllTimersAsync()
+    // A later recording start has its own push and will arm fresh state, so
+    // retrying this explicit negative would only poll a closed lifecycle.
     expect(isRenderShapeCaptureArmed(SESSION)).toBe(false)
   })
 })

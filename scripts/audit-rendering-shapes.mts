@@ -35,7 +35,6 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 import { sweepBundleShapes } from '../src/renderer/src/rendering/evidence/bundleShapeSweep.ts'
-import { isLegacyRenderShapeFingerprint } from '../src/renderer/src/rendering/evidence/shapeFingerprint.ts'
 import {
   buildFingerprintIndex,
   classifySighting,
@@ -79,8 +78,6 @@ type Observation = {
 }
 
 const observations: Observation[] = []
-let legacyRecordingShapes = 0
-let legacyRecordingSightings = 0
 
 // ---- Source 1: the frozen bundle corpus -----------------------------------
 const bundleDir = join(process.cwd(), 'testing', 'fixtures', 'rendering-bundles')
@@ -140,7 +137,8 @@ if (RECORDINGS_DIR) {
         for (const s of parsed.sightings) {
           if (!s.outcome) continue
           const key = renderShapeWriterKey(s as RenderShapeSighting, dir)
-          const count = typeof s.seenCount === 'number' ? s.seenCount : 1
+          if (typeof s.seenCount !== 'number' || !Number.isFinite(s.seenCount) || s.seenCount < 1) continue
+          const count = s.seenCount
           const existing = maxByWriterKey.get(key)
           if (existing && existing.count >= count) continue
           maxByWriterKey.set(key, {
@@ -160,14 +158,7 @@ if (RECORDINGS_DIR) {
       }
     }
   }
-  for (const observation of maxByWriterKey.values()) {
-    if (isLegacyRenderShapeFingerprint(observation.fingerprint)) {
-      legacyRecordingShapes += 1
-      legacyRecordingSightings += observation.count
-      continue
-    }
-    observations.push(observation)
-  }
+  observations.push(...maxByWriterKey.values())
 }
 
 // ---- Classify ---------------------------------------------------------------
@@ -212,10 +203,7 @@ const summary = [...byStatus.entries()]
       `${status}: ${groups.size} shapes / ${[...groups.values()].reduce((n, g) => n + g.reduce((m, o) => m + o.count, 0), 0)} sightings`,
   )
   .join('\n')
-const legacySummary = legacyRecordingShapes > 0
-  ? `legacy-fingerprint-telemetry: ${legacyRecordingShapes} writer keys / ${legacyRecordingSightings} sightings (reported, excluded from fp2 drift)`
-  : ''
-console.log(`observations: ${observations.length}\n${summary}${legacySummary ? `\n${legacySummary}` : ''}\n`)
+console.log(`observations: ${observations.length}\n${summary}\n`)
 
 // WHY fatal groups are printed instead of leaving only the aggregate count:
 // Phase 9 uses this command as the local unknown-shape inbox. A report saying

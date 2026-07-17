@@ -2,7 +2,7 @@
 // arbitrary parsed fixture roots and print the survivors as JSON.
 //
 // WHY a tsx bridge instead of a key-regex copy in audit-rendering-fixture.mjs:
-// SENSITIVE_KEY (rendering/model/unknowns.ts) is the single source of truth
+// SENSITIVE_KEY (rendering/model/sensitiveKey.ts) is the single source of truth
 // for "which object keys carry a secret", and findSensitiveSurvivors
 // (rendering/replay/redact.ts) is the supported walker over it — the same
 // gate that refuses to emit a leaky recording fixture. A private regex copy
@@ -37,7 +37,7 @@ import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 
 import { findSensitiveSurvivors } from '../src/renderer/src/rendering/replay/redact.ts'
-import { SENSITIVE_KEY } from '../src/renderer/src/rendering/model/unknowns.ts'
+import { SENSITIVE_KEY } from '../src/renderer/src/rendering/model/sensitiveKey.ts'
 
 // Mirrors redact.ts's un-exported REDACTED_VALUE. A drift here (redact.ts
 // changing its placeholder) is caught by the path-list assertion below, so

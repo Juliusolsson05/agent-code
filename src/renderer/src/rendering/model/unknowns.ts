@@ -22,15 +22,6 @@ import { fingerprintRenderShape } from '@renderer/rendering/evidence/shapeFinger
 // ---------------------------------------------------------------------------
 
 const PREVIEW_MAX = 80
-// Historical home of the SINGLE source-of-truth secret-key regex. The
-// definition moved to ./sensitiveKey.ts (Phase 1, evidence-first rendering
-// plan) so the structural fingerprint helper and this registry can both use
-// it without a circular import — see that file's header. Re-exported here so
-// rendering/replay/redact.ts and scripts/audit-sensitive-core.mts keep their
-// documented import path; it is still the same one regex everywhere.
-import { SENSITIVE_KEY } from '@renderer/rendering/model/sensitiveKey'
-export { SENSITIVE_KEY }
-
 /**
  * How many distinct payload-hash samples one finding retains. Samples are
  * DIAGNOSTIC (they prove "n different payloads shared this structure" and

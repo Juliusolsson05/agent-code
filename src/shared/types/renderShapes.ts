@@ -142,7 +142,7 @@ export type RenderShapeSighting = {
    * prevent. The disarm flush re-emits keys whose count grew so the sidecar
    * records the true volume.
    */
-  seenCount?: number
+  seenCount: number
 }
 
 /**

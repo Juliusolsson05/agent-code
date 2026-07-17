@@ -41,6 +41,7 @@ function sighting(over: Partial<RenderShapeSighting>): RenderShapeSighting {
     sourceRecordingCursor: null,
     observedAt: 1_700_000_000_000,
     outcome: { kind: 'generic', rendererId: 'shared.generic-tool' },
+    seenCount: 1,
     ...over,
   }
 }

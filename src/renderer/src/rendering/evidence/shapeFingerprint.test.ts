@@ -2,20 +2,10 @@ import { describe, expect, it } from 'vitest'
 
 import {
   fingerprintRenderShape,
-  isLegacyRenderShapeFingerprint,
   MAX_SHAPE_DEPTH,
   MAX_SHAPE_PATHS,
   MAX_VISITED_NODES,
 } from '@renderer/rendering/evidence/shapeFingerprint'
-
-describe('structural fingerprint — schema versions', () => {
-  it('separates known fp1 telemetry without hiding malformed or future versions', () => {
-    expect(isLegacyRenderShapeFingerprint('fp1-1234abcd')).toBe(true)
-    expect(isLegacyRenderShapeFingerprint('fp2-1234abcd')).toBe(false)
-    expect(isLegacyRenderShapeFingerprint('fp3-1234abcd')).toBe(false)
-    expect(isLegacyRenderShapeFingerprint('fp1-not-a-hash')).toBe(false)
-  })
-})
 
 // Phase 1 exit gate (plan §Test-first delivery phases): the fingerprint is
 // DETERMINISTIC, CONTENT-FREE, and stable under content churn. These tests
