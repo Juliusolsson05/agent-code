@@ -78,21 +78,4 @@ describe('EditorFsRootRegistry', () => {
     await expect(registry.authorize(owner as never, root)).resolves.toBe(await realpath(root))
     await expect(registry.authorize(otherOwner as never, root)).rejects.toThrow('not authorized')
   })
-
-  it('admits project roots derived from explicitly attached AI Workspace files', async () => {
-    const base = await mkdtemp(join(tmpdir(), 'agent-code-editor-roots-'))
-    tempRoots.push(base)
-    const attachedProject = join(base, 'attached-project')
-    const unrelated = join(base, 'unrelated')
-    await mkdir(attachedProject)
-    await mkdir(unrelated)
-    const manager = { list: () => [], getSpawnCwd: () => null }
-    const registry = new EditorFsRootRegistry(manager as never, async () => [attachedProject])
-    const owner = new FakeWebContents(4)
-
-    await expect(registry.authorize(owner as never, attachedProject)).resolves.toBe(
-      await realpath(attachedProject),
-    )
-    await expect(registry.authorize(owner as never, unrelated)).rejects.toThrow('not authorized')
-  })
 })

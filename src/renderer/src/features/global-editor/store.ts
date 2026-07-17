@@ -114,6 +114,7 @@ type GlobalEditorStore = {
   openFile: (params: {
     cwd: string
     path: string
+    absolutePath?: string
     text: string
     mtimeMs: number
     diskVersion: string
@@ -192,6 +193,7 @@ function absolutePath(root: string, path: string): string {
 function createBuffer(params: {
   root: string
   path: string
+  absolutePath?: string
   text: string
   mtimeMs: number
   diskVersion: string
@@ -199,7 +201,7 @@ function createBuffer(params: {
 }): EditorFileBuffer {
   return makeBuffer({
     path: params.path,
-    absolutePath: absolutePath(params.root, params.path),
+    absolutePath: params.absolutePath ?? absolutePath(params.root, params.path),
     fileName: basename(params.path),
     text: params.text,
     mtimeMs: params.mtimeMs,
@@ -274,7 +276,17 @@ export const useGlobalEditorStore = create<GlobalEditorStore>()((set, get) => ({
   closeAiWorkspace: () => set({ aiWorkspaceVisible: false }),
   showProjectEditor: () => set({ aiWorkspaceVisible: false }),
 
-  openFile: ({ cwd, path, text, mtimeMs, diskVersion, selection, activate = true, focus = true }) =>
+  openFile: ({
+    cwd,
+    path,
+    absolutePath: physicalPath,
+    text,
+    mtimeMs,
+    diskVersion,
+    selection,
+    activate = true,
+    focus = true,
+  }) =>
     set(state => {
       const prev = state.byCwd[cwd] ?? EMPTY_CWD_STATE
       const existing = prev.openFiles[path]
@@ -284,10 +296,14 @@ export const useGlobalEditorStore = create<GlobalEditorStore>()((set, get) => ({
       // the next save silently overwrite it. withDiskObserved preserves the
       // original baseline and raises a conflict instead.
       let buffer: EditorFileBuffer = existing
-        ? withDiskObserved(existing, text, mtimeMs, diskVersion)
+        ? {
+            ...withDiskObserved(existing, text, mtimeMs, diskVersion),
+            absolutePath: physicalPath ?? existing.absolutePath,
+          }
         : createBuffer({
             root: cwd,
             path,
+            absolutePath: physicalPath,
             text,
             mtimeMs,
             diskVersion,
@@ -507,10 +523,24 @@ export const useGlobalEditorStore = create<GlobalEditorStore>()((set, get) => ({
         }
         const suffix = path === fromPath ? '' : path.slice(fromPath.length)
         const nextPath = `${toPath}${suffix}`
+        const normalizedAbsolute = buffer.absolutePath.replace(/\\/g, '/')
+        const normalizedPath = path.replace(/\\/g, '/').replace(/^\/+/, '')
+        const caseInsensitive = /^[A-Za-z]:\//.test(normalizedAbsolute)
+        const comparableAbsolute = caseInsensitive
+          ? normalizedAbsolute.toLowerCase()
+          : normalizedAbsolute
+        const comparablePath = caseInsensitive ? normalizedPath.toLowerCase() : normalizedPath
+        const physicalRoot = comparableAbsolute.endsWith(`/${comparablePath}`)
+          ? normalizedAbsolute.slice(0, -normalizedPath.length - 1)
+          : cwd.replace(/\\/g, '/').replace(/\/+$/, '')
         nextFiles[nextPath] = {
           ...buffer,
           path: nextPath,
-          absolutePath: absolutePath(cwd, nextPath),
+          // Preserve a canonical root learned from main on read. Falling back
+          // to cwd is only for legacy/restored buffers that predate the
+          // physical-path field; using cwd unconditionally reintroduced the
+          // symlink alias immediately after an Explorer rename.
+          absolutePath: absolutePath(physicalRoot, nextPath),
           language: normalizeCodeLanguage(null, basename(nextPath)),
         }
       }

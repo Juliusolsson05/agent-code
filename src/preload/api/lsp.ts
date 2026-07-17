@@ -1,9 +1,12 @@
 import { ipcRenderer } from 'electron'
 
 import type {
+  LspCompletionContext,
   LspCompletionItem,
+  LspCompletionResult,
   LspDiagnosticsEvent,
   LspDocumentSymbol,
+  LspDocumentAuthorization,
   LspHoverResult,
   LspLocation,
   LspPosition,
@@ -46,11 +49,11 @@ function subscribeLspDiagnostics(cb: (payload: LspDiagnosticsEvent) => void): Un
 }
 
 export const lspApi = {
-  ensureLspLegend: (
-    workspaceRoot: string,
-    language: string,
-  ): Promise<LspSemanticLegend | null> =>
-    ipcRenderer.invoke('lsp:ensure-legend', workspaceRoot, language),
+  ensureLspLegend: (params: {
+    workspaceRoot: string
+    language: string
+    authorization: LspDocumentAuthorization
+  }): Promise<LspSemanticLegend | null> => ipcRenderer.invoke('lsp:ensure-legend', params),
 
   openLspDocument: (params: {
     clientUri: string
@@ -58,6 +61,7 @@ export const lspApi = {
     language: string
     workspaceRoot: string
     filePath?: string | null
+    authorization: LspDocumentAuthorization
   }): Promise<void> => ipcRenderer.invoke('lsp:open-document', params),
 
   changeLspDocument: (clientUri: string, content: string): Promise<void> =>
@@ -66,9 +70,7 @@ export const lspApi = {
   closeLspDocument: (clientUri: string): Promise<void> =>
     ipcRenderer.invoke('lsp:close-document', clientUri),
 
-  getLspSemanticTokens: (
-    clientUri: string,
-  ): Promise<{ data: number[] } | null> =>
+  getLspSemanticTokens: (clientUri: string): Promise<{ data: number[] } | null> =>
     ipcRenderer.invoke('lsp:get-semantic-tokens', clientUri),
 
   // Editor language-feature requests (#513). Positions are 0-based LSP
@@ -77,27 +79,24 @@ export const lspApi = {
   getLspHover: (clientUri: string, position: LspPosition): Promise<LspHoverResult> =>
     ipcRenderer.invoke('lsp:get-hover', clientUri, position),
 
-  getLspDefinition: (
-    clientUri: string,
-    position: LspPosition,
-  ): Promise<LspLocation[]> =>
+  getLspDefinition: (clientUri: string, position: LspPosition): Promise<LspLocation[]> =>
     ipcRenderer.invoke('lsp:get-definition', clientUri, position),
 
   getLspCompletions: (
     clientUri: string,
     position: LspPosition,
-  ): Promise<LspCompletionItem[]> =>
-    ipcRenderer.invoke('lsp:get-completions', clientUri, position),
+    context: LspCompletionContext,
+  ): Promise<LspCompletionResult> =>
+    ipcRenderer.invoke('lsp:get-completions', clientUri, position, context),
 
-  getLspReferences: (
-    clientUri: string,
-    position: LspPosition,
-  ): Promise<LspLocation[]> =>
+  resolveLspCompletion: (clientUri: string, resolveId: number): Promise<LspCompletionItem | null> =>
+    ipcRenderer.invoke('lsp:resolve-completion', clientUri, resolveId),
+
+  getLspReferences: (clientUri: string, position: LspPosition): Promise<LspLocation[]> =>
     ipcRenderer.invoke('lsp:get-references', clientUri, position),
 
   getLspDocumentSymbols: (clientUri: string): Promise<LspDocumentSymbol[]> =>
     ipcRenderer.invoke('lsp:get-document-symbols', clientUri),
 
-  onLspDiagnostics: (cb: (e: LspDiagnosticsEvent) => void): Unsub =>
-    subscribeLspDiagnostics(cb),
+  onLspDiagnostics: (cb: (e: LspDiagnosticsEvent) => void): Unsub => subscribeLspDiagnostics(cb),
 }

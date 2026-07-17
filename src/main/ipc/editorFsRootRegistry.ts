@@ -19,10 +19,7 @@ export class EditorFsRootRegistry {
    * document's ended-session capability by guessing the path. */
   private readonly mainKnownRootCandidates = new Map<string, number | null>()
 
-  constructor(
-    private readonly manager: SessionManager,
-    private readonly listAdditionalRoots: () => Promise<string[]> = async () => [],
-  ) {
+  constructor(private readonly manager: SessionManager) {
     // Session exit must not revoke the first editor access to its cwd. Remember
     // roots from main-owned lifecycle events, not only from the current live
     // list sampled by authorize(). A renderer still has to name the exact
@@ -68,15 +65,6 @@ export class EditorFsRootRegistry {
       if (sessionRoot === canonical) {
         known = true
         break
-      }
-    }
-    if (!known) {
-      for (const root of await this.listAdditionalRoots()) {
-        const additionalRoot = await realpath(resolve(root)).catch(() => null)
-        if (additionalRoot === canonical) {
-          known = true
-          break
-        }
       }
     }
     if (!known) throw new Error('project root is not authorized')

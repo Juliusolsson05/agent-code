@@ -40,6 +40,11 @@ export type EditorFsReadResult =
   | {
       ok: true
       path: string
+      /** Absolute identity under main's canonical project root, used for
+       * Monaco model URIs. `path` remains project-relative UI identity;
+       * keeping both avoids symlinked worktrees making valid definition
+       * targets look outside the project. */
+      absolutePath: string
       text: string
       mtimeMs: number
       size: number

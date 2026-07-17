@@ -72,16 +72,14 @@ export type IpcDeps = {
 }
 
 export function registerAllIpc(deps: IpcDeps): void {
-  const editorFsRoots = new EditorFsRootRegistry(deps.manager, () =>
-    deps.aiWorkspaceRegistry.listAttachedProjectRoots(),
-  )
+  const editorFsRoots = new EditorFsRootRegistry(deps.manager)
   registerPerformanceIpc(deps.manager)
   installPerformanceIpcInstrumentation()
   registerEditorFsIpc(editorFsRoots)
   registerEditorFsWatchIpc(editorFsRoots)
   registerSessionIpc(deps.manager, deps.pasteDebugJournals)
   registerProviderIpc()
-  registerLspIpc(deps.lspManager, editorFsRoots)
+  registerLspIpc(deps.lspManager, editorFsRoots, deps.aiWorkspaceRegistry)
   registerFsIpc()
   registerSessionsIpc()
   registerWorkspaceIpc()

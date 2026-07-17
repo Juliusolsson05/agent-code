@@ -31,6 +31,13 @@ export type LspSemanticLegend = {
   tokenModifiers: string[]
 }
 
+/** Main-process proof used when opening/bootstrapping an LSP document. Project
+ * editors are authorized through their session-root capability; AI Workspace
+ * editors name a main-owned curated entry instead of laundering its project
+ * root into the generic editor filesystem API. */
+export type LspDocumentAuthorization =
+  { kind: 'editor-root' } | { kind: 'ai-workspace'; workspaceId: string; entryId: string }
+
 // ── Request/response shapes for editor language features ─────────────────
 //
 // WHY raw-LSP-shaped (0-based positions, numeric kind enums) instead of
@@ -53,25 +60,45 @@ export type LspLocation = {
 
 export type LspHoverResult = { markdown: string } | null
 
+export type LspCompletionTextEdit = {
+  newText: string
+  startLine: number
+  startCharacter: number
+  endLine: number
+  endCharacter: number
+}
+
+export type LspCompletionContext = {
+  /** LSP CompletionTriggerKind (1=invoked, 2=character, 3=incomplete). */
+  triggerKind: 1 | 2 | 3
+  triggerCharacter?: string
+}
+
 export type LspCompletionItem = {
   label: string
   /** Raw LSP CompletionItemKind (1-based enum); renderer maps to Monaco's
    *  DIFFERENT integer space. */
   kind: number
   insertText: string
-  textEdit?: {
-    newText: string
-    startLine: number
-    startCharacter: number
-    endLine: number
-    endCharacter: number
-  }
+  textEdit?: LspCompletionTextEdit
+  /** Opaque, document-scoped handle for completionItem/resolve. Raw server
+   * data stays in main so renderer code cannot forge arbitrary protocol
+   * payloads or retain them after the document changes. */
+  resolveId?: number
+  additionalTextEdits?: LspCompletionTextEdit[]
   detail?: string
   documentation?: string
   sortText?: string
   /** LSP InsertTextFormat.Snippet — Monaco needs the InsertAsSnippet rule
    *  flag or `$0` placeholders render literally. */
   isSnippet: boolean
+}
+
+export type LspCompletionResult = {
+  items: LspCompletionItem[]
+  /** Monaco uses this to ask again after the user narrows an intentionally
+   * incomplete server result instead of filtering a partial list forever. */
+  incomplete: boolean
 }
 
 export type LspDocumentSymbol = {

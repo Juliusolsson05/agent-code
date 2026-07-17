@@ -242,8 +242,11 @@ export type {
   LspPosition,
   LspLocation,
   LspHoverResult,
+  LspCompletionContext,
   LspCompletionItem,
+  LspCompletionResult,
   LspDocumentSymbol,
+  LspDocumentAuthorization,
 } from '@shared/types/lsp.js'
 
 // Claude image save params/result live in @shared/types/claudeImage.

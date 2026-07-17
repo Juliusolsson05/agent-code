@@ -413,6 +413,12 @@ export function registerEditorFsIpc(roots: EditorFsRootRegistry): void {
         )
         const read = {
           path: targetPath,
+          // Keep the project-relative spelling under the canonical root. An
+          // intermediate symlink may resolve to a different physical suffix;
+          // retaining the UI spelling while canonicalizing the root lets the
+          // renderer derive a stable project boundary for safe definition
+          // navigation and still lets the syscall use physicalTarget above.
+          absolutePath: target,
           text: bounded.text,
           mtimeMs: bounded.stat.mtimeMs,
           size: bounded.stat.size,

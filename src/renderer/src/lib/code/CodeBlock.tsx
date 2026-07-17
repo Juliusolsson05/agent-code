@@ -149,15 +149,17 @@ export const CodeBlock = memo(function CodeBlock({
       const monaco = await getMonaco()
       if (disposed || !containerRef.current) return
 
-      await ensureSemanticProvider(monaco, workspaceRoot, normalizedLanguage).catch(() => {
-        // WHY semantic provider setup is allowed to fail open: syntax-colored
-        // code blocks are still useful when the TypeScript/JSON/CSS language
-        // server cannot start, and the renderer has no recovery action to
-        // offer from inside a transcript row. Let Monaco render the model with
-        // its built-in tokenization and let a future mount retry provider
-        // registration; do not turn an LSP startup hiccup into an empty code
-        // block plus an unhandled async effect rejection.
-      })
+      if (workspaceRoot && supportsTranscriptLsp(normalizedLanguage)) {
+        await ensureSemanticProvider(monaco, workspaceRoot, normalizedLanguage, {
+          kind: 'editor-root',
+        }).catch(() => {
+          // WHY semantic provider setup is allowed to fail open: syntax-colored
+          // code blocks are still useful when the bundled TypeScript server
+          // cannot start. Other language servers are intentionally not started
+          // for transcript snippets at all; supportsTranscriptLsp is the cost
+          // boundary shared with didOpen below.
+        })
+      }
       if (disposed) return
 
       const uri = monaco.Uri.parse(clientUri)
@@ -259,6 +261,7 @@ export const CodeBlock = memo(function CodeBlock({
           content: visibleCode,
           language: normalizedLanguage,
           workspaceRoot,
+          authorization: { kind: 'editor-root' },
           // A rendered transcript block is never the actual file, even when
           // the message labels it with a path. Sending that path would make a
           // partial/truncated snippet replace the real document in tsserver.

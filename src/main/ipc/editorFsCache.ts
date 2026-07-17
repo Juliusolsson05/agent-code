@@ -8,6 +8,7 @@ export type EditorFsCacheEntry = {
 
 export type EditorFsCachedRead = {
   path: string
+  absolutePath: string
   text: string
   mtimeMs: number
   size: number

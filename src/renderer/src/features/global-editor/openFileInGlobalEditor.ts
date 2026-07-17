@@ -60,6 +60,7 @@ export async function openFileInGlobalEditor({
   editor.openFile({
     cwd: root,
     path: result.path,
+    absolutePath: result.absolutePath,
     text: result.text,
     mtimeMs: result.mtimeMs,
     diskVersion: result.version,

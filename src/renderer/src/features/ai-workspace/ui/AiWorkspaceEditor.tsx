@@ -20,6 +20,7 @@ import {
 import { releaseEditorModelOwner } from '@renderer/features/editor/lib/editorModelRegistry'
 import type { EditorFileBuffer } from '@renderer/features/editor/types'
 import { EditorWorkbench } from '@renderer/features/editor/ui/EditorWorkbench'
+import type { EditorLspContext } from '@renderer/features/editor/ui/MonacoFileEditor'
 import { useGlobalEditorStore } from '@renderer/features/global-editor/store'
 
 type Props = {
@@ -58,6 +59,8 @@ export function AiWorkspaceEditor({ workspaceId, visible, onClose }: Props) {
   const [workspace, setWorkspace] = useState<AiWorkspaceRecord | null>(
     () => cached?.workspace ?? null,
   )
+  const workspaceRef = useRef(workspace)
+  workspaceRef.current = workspace
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(() => cached?.error ?? null)
   const [fileOrder, setFileOrder] = useState<string[]>(() => cached?.fileOrder ?? [])
@@ -175,50 +178,82 @@ export function AiWorkspaceEditor({ workspaceId, visible, onClose }: Props) {
     return map
   }, [workspace])
 
-  const openEntry = useCallback(async (entry: AiWorkspaceFileEntry) => {
-    if (!entry.status.exists || !entry.status.readable) {
-      setError(
-        `Could not open ${basename(entry.path)}: ${entry.status.staleReason ?? 'unavailable'}`,
-      )
-      return
-    }
-    const readGeneration = (entryReadGenerationRef.current.get(entry.entryId) ?? 0) + 1
-    entryReadGenerationRef.current.set(entry.entryId, readGeneration)
-    const intentGeneration = ++openIntentGenerationRef.current
-    const result = await window.api.aiWorkspaceReadFile(entry.path).catch(err => ({
-      ok: false as const,
-      error: err instanceof Error ? err.message : 'failed to read file',
-    }))
-    if (!mountedRef.current) return
-    if (entryReadGenerationRef.current.get(entry.entryId) !== readGeneration) {
-      return
-    }
-    if (!result.ok) {
+  const openEntry = useCallback(
+    async (
+      entry: AiWorkspaceFileEntry,
+      selection: EditorFileBuffer['selection'] = null,
+    ): Promise<boolean> => {
+      if (!entry.status.exists || !entry.status.readable) {
+        setError(
+          `Could not open ${basename(entry.path)}: ${entry.status.staleReason ?? 'unavailable'}`,
+        )
+        return false
+      }
+      const readGeneration = (entryReadGenerationRef.current.get(entry.entryId) ?? 0) + 1
+      entryReadGenerationRef.current.set(entry.entryId, readGeneration)
+      const intentGeneration = ++openIntentGenerationRef.current
+      const result = await window.api.aiWorkspaceReadFile(entry.path).catch(err => ({
+        ok: false as const,
+        error: err instanceof Error ? err.message : 'failed to read file',
+      }))
+      if (!mountedRef.current) return false
+      if (entryReadGenerationRef.current.get(entry.entryId) !== readGeneration) return false
+      if (!result.ok) {
+        setOpenFiles(prev => {
+          const current = prev[entry.entryId]
+          if (!current) return prev
+          return {
+            ...prev,
+            [entry.entryId]: withFocusRequested(withError(current, result.error)),
+          }
+        })
+        if (!openFilesRef.current[entry.entryId]) {
+          setError(`Could not open ${basename(entry.path)}: ${result.error}`)
+        }
+        return false
+      }
       setOpenFiles(prev => {
-        const current = prev[entry.entryId]
-        if (!current) return prev
+        const existing = prev[entry.entryId]
+        const observed = existing
+          ? withDiskObserved(existing, result.text, result.mtimeMs, result.version)
+          : bufferFromEntry(entry, result.text, result.mtimeMs, result.version)
         return {
           ...prev,
-          [entry.entryId]: withFocusRequested(withError(current, result.error)),
+          [entry.entryId]: { ...withFocusRequested(observed), selection },
         }
       })
-      if (!openFilesRef.current[entry.entryId])
-        setError(`Could not open ${basename(entry.path)}: ${result.error}`)
-      return
-    }
-    setOpenFiles(prev => {
-      const existing = prev[entry.entryId]
-      const observed = existing
-        ? withDiskObserved(existing, result.text, result.mtimeMs, result.version)
-        : bufferFromEntry(entry, result.text, result.mtimeMs, result.version)
-      return { ...prev, [entry.entryId]: withFocusRequested(observed) }
-    })
-    setFileOrder(prev => (prev.includes(entry.entryId) ? prev : [...prev, entry.entryId]))
-    setError(null)
-    if (intentGeneration === openIntentGenerationRef.current) {
-      setActiveFilePath(entry.entryId)
-    }
-  }, [])
+      setFileOrder(prev => (prev.includes(entry.entryId) ? prev : [...prev, entry.entryId]))
+      setError(null)
+      if (intentGeneration === openIntentGenerationRef.current) {
+        setActiveFilePath(entry.entryId)
+      }
+      return true
+    },
+    [],
+  )
+
+  const openAiDefinition = useCallback(
+    async (absolutePath: string, line: number, column: number): Promise<boolean> => {
+      const normalizedTarget = absolutePath.replace(/\\/g, '/')
+      const entry = workspaceRef.current?.entries.find(candidate => {
+        const normalizedCandidate = candidate.path.replace(/\\/g, '/')
+        const caseInsensitive = /^[A-Za-z]:\//.test(normalizedCandidate)
+        return caseInsensitive
+          ? normalizedCandidate.toLowerCase() === normalizedTarget.toLowerCase()
+          : normalizedCandidate === normalizedTarget
+      })
+      // AI Workspace is a curated review surface, not a project browser. A
+      // definition outside the attached set may still be a valid LSP answer,
+      // but opening it would silently expand the workspace's authority and
+      // violate the consumer promise that this list is the review boundary.
+      if (!entry) {
+        setError('That definition is not attached to this AI Workspace.')
+        return false
+      }
+      return await openEntry(entry, { line, column })
+    },
+    [openEntry],
+  )
 
   const updateText = useCallback((entryId: string, text: string) => {
     setOpenFiles(prev => {
@@ -476,7 +511,11 @@ export function AiWorkspaceEditor({ workspaceId, visible, onClose }: Props) {
       openFiles={openFiles}
       activeFilePath={activeFilePath}
       activeFile={activeFile}
-      lspContext={lspContextForEntry(activeFilePath ? entriesById.get(activeFilePath) : undefined)}
+      lspContext={lspContextForEntry(
+        workspaceId,
+        activeFilePath ? entriesById.get(activeFilePath) : undefined,
+        openAiDefinition,
+      )}
       onActivateFile={(entryId, options) => {
         setActiveFilePath(entryId)
         if (!options.focusEditor) return
@@ -498,20 +537,27 @@ export function AiWorkspaceEditor({ workspaceId, visible, onClose }: Props) {
           return { ...prev, [entryId]: { ...current, focusRequest: null } }
         })
       }}
+      onSelectionRevealed={entryId => {
+        setOpenFiles(prev => {
+          const current = prev[entryId]
+          if (!current?.selection) return prev
+          return { ...prev, [entryId]: { ...current, selection: null } }
+        })
+      }}
     />
   )
 }
 
 function lspContextForEntry(
+  workspaceId: string,
   entry: AiWorkspaceFileEntry | undefined,
-): { workspaceRoot: string; filePath: string } | null {
+  openDefinition: EditorLspContext['openDefinition'],
+): EditorLspContext | null {
   if (!entry?.projectRoot) return null
-  const root = entry.projectRoot.replace(/\\/g, '/').replace(/\/+$/, '')
-  const absolute = entry.path.replace(/\\/g, '/')
-  if (!absolute.startsWith(`${root}/`)) return null
-  const filePath = absolute.slice(root.length + 1)
-  if (!filePath || filePath.split('/').some(part => part === '..' || part === '')) {
-    return null
+  return {
+    workspaceRoot: entry.projectRoot,
+    filePath: null,
+    authorization: { kind: 'ai-workspace', workspaceId, entryId: entry.entryId },
+    openDefinition,
   }
-  return { workspaceRoot: entry.projectRoot, filePath }
 }

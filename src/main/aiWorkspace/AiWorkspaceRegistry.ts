@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
 import type { Stats } from 'node:fs'
-import { access, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
-import { basename, dirname, resolve } from 'node:path'
+import { access, mkdir, readFile, realpath, rename, stat, writeFile } from 'node:fs/promises'
+import { basename, dirname, isAbsolute, relative, resolve } from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 
@@ -162,20 +162,28 @@ export class AiWorkspaceRegistry {
       }))
   }
 
-  /** Project roots derived by main from files the user/agent explicitly
-   * attached. LSP inherently indexes the project containing an attached source
-   * file, so these roots are legitimate capabilities even when that worktree
-   * no longer has a live terminal session. The renderer never supplies or
-   * persists this authority itself. */
-  async listAttachedProjectRoots(): Promise<string[]> {
+  async authorizeLspEntry(
+    workspaceId: string,
+    entryId: string,
+  ): Promise<{ workspaceRoot: string; filePath: string }> {
     await this.ensureLoaded()
-    return [
-      ...new Set(
-        [...this.workspaces.values()].flatMap(workspace =>
-          workspace.entries.flatMap(entry => (entry.projectRoot ? [entry.projectRoot] : [])),
-        ),
-      ),
-    ]
+    const workspace = this.requiredWorkspace(workspaceId)
+    const entry = workspace.entries.find(candidate => candidate.entryId === entryId)
+    if (!entry?.projectRoot) throw new Error('AI Workspace entry has no project root')
+    const workspaceRoot = await realpath(resolve(entry.projectRoot))
+    const physicalFile = await realpath(resolve(entry.path))
+    const filePath = relative(workspaceRoot, physicalFile)
+    if (
+      !filePath ||
+      filePath === '..' ||
+      filePath.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) ||
+      isAbsolute(filePath)
+    ) {
+      throw new Error('AI Workspace entry is outside its project root')
+    }
+    const fileStat = await stat(physicalFile)
+    if (!fileStat.isFile()) throw new Error('AI Workspace entry is not a file')
+    return { workspaceRoot, filePath }
   }
 
   async get(workspaceId: string): Promise<AiWorkspaceRecord | null> {
@@ -198,7 +206,11 @@ export class AiWorkspaceRegistry {
     // file"; it does not grant the model new filesystem authority. The user
     // still opens the real path explicitly in Agent Code's UI, with stale /
     // unreadable status visible instead of silently pruning references.
-    const path = normalizePath(params.path)
+    // Store the physical path once at capability creation. Without this, an
+    // attached symlink and its target become two spellings of the same file,
+    // LSP definitions (which use physical file URIs) cannot match the curated
+    // entry, and swapping the final symlink can silently redirect later saves.
+    const path = await realpath(normalizePath(params.path))
     const fileStat = await stat(path)
     if (!fileStat.isFile()) throw new Error('AI Workspace can only attach files')
     // Process-lifetime capability: detaching/clearing metadata must not make an
@@ -236,7 +248,9 @@ export class AiWorkspaceRegistry {
   ): Promise<{ removed: boolean; remaining: number }> {
     await this.ensureLoaded()
     const workspace = this.requiredWorkspace(params.workspaceId)
-    const normalized = params.path ? normalizePath(params.path) : null
+    const normalized = params.path
+      ? await realpath(normalizePath(params.path)).catch(() => normalizePath(params.path!))
+      : null
     const before = workspace.entries.length
     workspace.entries = workspace.entries.filter(entry => {
       if (params.entryId && entry.entryId === params.entryId) return false
@@ -339,6 +353,14 @@ export class AiWorkspaceRegistry {
       const text = await readFile(this.stateFile, 'utf8')
       const parsed = JSON.parse(text) as PersistedAiWorkspaceState
       for (const workspace of parsed.workspaces ?? []) {
+        for (const entry of workspace.entries) {
+          const normalized = normalizePath(entry.path)
+          // Migrate live legacy symlink entries in memory so their editor and
+          // LSP identities agree. Stale references intentionally retain their
+          // lexical path: preserving a useful broken-link explanation is more
+          // valuable than dropping an entry merely because realpath fails.
+          entry.path = await realpath(normalized).catch(() => normalized)
+        }
         this.workspaces.set(workspace.workspaceId, workspace)
         for (const entry of workspace.entries) this.knownFilePaths.add(normalizePath(entry.path))
       }

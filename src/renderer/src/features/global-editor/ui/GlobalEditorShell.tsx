@@ -189,6 +189,9 @@ export function GlobalEditorShell({ children, workspace }: Props) {
       }
     }),
   )
+  const active = cwdState.activeFilePath
+    ? (cwdState.openFiles[cwdState.activeFilePath] ?? null)
+    : null
 
   // Sync the editor's active cwd ONLY when the user navigates between
   // tabs. The dep list is intentionally `activeTabId` — not the
@@ -676,6 +679,50 @@ export function GlobalEditorShell({ children, workspace }: Props) {
     [activeCwd],
   )
 
+  const openProjectDefinition = useCallback(
+    async (absolutePath: string, line: number, column: number): Promise<boolean> => {
+      if (!activeCwd) return false
+      const activeAbsolute = active?.absolutePath.replace(/\\/g, '/')
+      const activeRelative = active?.path.replace(/\\/g, '/').replace(/^\/+/, '')
+      const caseInsensitiveActive = activeAbsolute
+        ? /^[A-Za-z]:\//.test(activeAbsolute)
+        : false
+      const comparableActiveAbsolute = caseInsensitiveActive
+        ? activeAbsolute?.toLowerCase()
+        : activeAbsolute
+      const comparableActiveRelative = caseInsensitiveActive
+        ? activeRelative?.toLowerCase()
+        : activeRelative
+      const physicalRoot =
+        activeAbsolute &&
+        activeRelative &&
+        comparableActiveAbsolute?.endsWith(`/${comparableActiveRelative}`)
+          ? activeAbsolute.slice(0, -activeRelative.length - 1)
+          : null
+      const root = (physicalRoot ?? activeCwd).replace(/\\/g, '/').replace(/\/+$/, '')
+      const target = absolutePath.replace(/\\/g, '/')
+      // LSP locations originate outside our renderer trust boundary. Main has
+      // already constrained the document that produced the request, but the
+      // returned target can point at dependencies or arbitrary file URIs. Keep
+      // navigation on the same project capability as Explorer reads instead
+      // of turning Monaco's global opener into an unrestricted file picker.
+      const caseInsensitive = /^[A-Za-z]:\//.test(root)
+      const comparableRoot = caseInsensitive ? root.toLowerCase() : root
+      const comparableTarget = caseInsensitive ? target.toLowerCase() : target
+      if (!comparableTarget.startsWith(`${comparableRoot}/`)) return false
+      const path = target.slice(root.length + 1)
+      if (!path || path.split('/').some(part => part === '' || part === '..')) return false
+      const result = await openFileInGlobalEditor({
+        root: activeCwd,
+        path,
+        line,
+        column,
+      })
+      return result.ok
+    },
+    [active?.absolutePath, active?.path, activeCwd],
+  )
+
   const clearRevealedSelection = useCallback(
     (path: string) => {
       if (!activeCwd) return
@@ -757,10 +804,6 @@ export function GlobalEditorShell({ children, workspace }: Props) {
   // explorer pointed at nowhere.
   const leftPercent = (splitterRatio * 100).toFixed(2)
   const rightPercent = ((1 - splitterRatio) * 100).toFixed(2)
-  const active = cwdState.activeFilePath
-    ? (cwdState.openFiles[cwdState.activeFilePath] ?? null)
-    : null
-
   return (
     // WHY h-full w-full instead of `flex-1`:
     //   The parent here is App.tsx's `<main>`, which has
@@ -870,7 +913,16 @@ export function GlobalEditorShell({ children, workspace }: Props) {
                 openFiles={cwdState.openFiles}
                 activeFilePath={cwdState.activeFilePath}
                 activeFile={active}
-                lspContext={active ? { workspaceRoot: activeCwd, filePath: active.path } : null}
+                lspContext={
+                  active
+                    ? {
+                        workspaceRoot: activeCwd,
+                        filePath: active.path,
+                        authorization: { kind: 'editor-root' },
+                        openDefinition: openProjectDefinition,
+                      }
+                    : null
+                }
                 onActivateFile={(path, options) =>
                   setActiveFile(activeCwd, path, { focus: options.focusEditor })
                 }

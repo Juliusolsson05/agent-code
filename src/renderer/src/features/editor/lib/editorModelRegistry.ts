@@ -11,14 +11,14 @@ import type * as Monaco from 'monaco-editor'
 // tab).
 //
 // Ownership contract:
-//   - MonacoFileEditor acquires on mount / releases on unmount (it is a
-//     *viewer* of the model, not its owner).
+//   - MonacoFileEditor acquires on mount / releases its generation on unmount
+//     (it is a *viewer* of the model, not its owner).
 //   - The tab-close path releases its buffer generation as an owner. The
 //     model is disposed only after the last logical owner and mounted viewer
 //     are both gone.
-//   - Models are keyed by absolutePath because that is what
-//     monaco.Uri.file() keys on; two cwds can't collide (absolute
-//     paths).
+//   - Models are keyed by buffer generation, not path. Global Editor and AI
+//     Workspace can intentionally hold independent drafts of the same file;
+//     sharing Monaco's path URI made typing in one silently mutate the other.
 //
 // WHY zero refs alone does NOT dispose: an open-but-inactive tab has zero
 // mounted viewers and must keep its undo stack alive — that's the whole
@@ -28,30 +28,15 @@ import type * as Monaco from 'monaco-editor'
 type Entry = {
   model: Monaco.editor.ITextModel
   refs: number
-  /** Buffer generations, not mounted editor instances. Two surfaces can own
-   * the same absolute file while only one is visible. */
-  owners: Set<number>
+  absolutePath: string
+  ownerActive: boolean
 }
-const entries = new Map<string, Entry>()
-const pathByOwner = new Map<number, string>()
+const entries = new Map<number, Entry>()
 
-function disposeIfUnowned(absolutePath: string, entry: Entry): void {
-  if (entry.refs > 0 || entry.owners.size > 0) return
-  if (entries.get(absolutePath) === entry) entries.delete(absolutePath)
+function disposeIfUnowned(ownerId: number, entry: Entry): void {
+  if (entry.refs > 0 || entry.ownerActive) return
+  if (entries.get(ownerId) === entry) entries.delete(ownerId)
   if (!entry.model.isDisposed()) entry.model.dispose()
-}
-
-function bindOwner(ownerId: number, absolutePath: string, entry: Entry): void {
-  const previousPath = pathByOwner.get(ownerId)
-  if (previousPath && previousPath !== absolutePath) {
-    const previous = entries.get(previousPath)
-    if (previous) {
-      previous.owners.delete(ownerId)
-      disposeIfUnowned(previousPath, previous)
-    }
-  }
-  pathByOwner.set(ownerId, absolutePath)
-  entry.owners.add(ownerId)
 }
 
 function replaceModelTextPreservingUndo(model: Monaco.editor.ITextModel, text: string): void {
@@ -66,10 +51,11 @@ export function acquireEditorModel(
   monaco: typeof Monaco,
   params: { absolutePath: string; text: string; monacoLangId: string; ownerId: number },
 ): Monaco.editor.ITextModel {
-  const existing = entries.get(params.absolutePath)
+  const existing = entries.get(params.ownerId)
   if (existing && !existing.model.isDisposed()) {
     existing.refs += 1
-    bindOwner(params.ownerId, params.absolutePath, existing)
+    existing.ownerActive = true
+    existing.absolutePath = params.absolutePath
     // A rename can change the extension while retaining the same semantic
     // buffer (for example .js → .ts). Monaco language is model state, not an
     // editor option, so reusing the model without updating it leaves the old
@@ -84,7 +70,12 @@ export function acquireEditorModel(
     replaceModelTextPreservingUndo(existing.model, params.text)
     return existing.model
   }
-  const uri = monaco.Uri.file(params.absolutePath)
+  // Monaco globally de-duplicates models by URI. Preserve the real file path
+  // (workers use its extension) but add the buffer lifetime as an opaque query
+  // so two surfaces editing the same disk file never share text/undo state.
+  const uri = monaco.Uri.file(params.absolutePath).with({
+    query: `agent-code-buffer=${params.ownerId}`,
+  })
   // A stale model can exist under this URI if a previous dispose path
   // leaked it; reuse rather than crash (createModel throws on duplicate
   // URIs).
@@ -94,41 +85,41 @@ export function acquireEditorModel(
     monaco.editor.setModelLanguage(model, params.monacoLangId)
   }
   replaceModelTextPreservingUndo(model, params.text)
-  const entry: Entry = { model, refs: 1, owners: new Set() }
-  entries.set(params.absolutePath, entry)
-  bindOwner(params.ownerId, params.absolutePath, entry)
+  const entry: Entry = {
+    model,
+    refs: 1,
+    absolutePath: params.absolutePath,
+    ownerActive: true,
+  }
+  entries.set(params.ownerId, entry)
   return model
 }
 
-export function releaseEditorModel(absolutePath: string): void {
-  const entry = entries.get(absolutePath)
+export function releaseEditorModel(ownerId: number): void {
+  const entry = entries.get(ownerId)
   if (!entry) return
   entry.refs = Math.max(0, entry.refs - 1)
   // Zero viewers alone is not disposal: an inactive open tab still owns the
   // undo model. Once its final buffer owner also closes, a delayed component
   // cleanup is allowed to finish disposal here.
-  disposeIfUnowned(absolutePath, entry)
+  disposeIfUnowned(ownerId, entry)
 }
 
 export function releaseEditorModelOwner(ownerId: number): void {
-  const absolutePath = pathByOwner.get(ownerId)
-  if (!absolutePath) return
-  pathByOwner.delete(ownerId)
-  const entry = entries.get(absolutePath)
+  const entry = entries.get(ownerId)
   if (!entry) return
-  entry.owners.delete(ownerId)
-  disposeIfUnowned(absolutePath, entry)
+  entry.ownerActive = false
+  disposeIfUnowned(ownerId, entry)
 }
 
 /** Hygiene hook for evicting a whole project's models (e.g. if a future
  *  change trims byCwd). Not called in the steady state today. */
 export function disposeAllEditorModelsUnder(rootAbs: string): void {
   const prefix = rootAbs.endsWith('/') ? rootAbs : `${rootAbs}/`
-  for (const [path, entry] of [...entries]) {
-    if (!path.startsWith(prefix)) continue
-    for (const ownerId of entry.owners) pathByOwner.delete(ownerId)
-    entry.owners.clear()
-    disposeIfUnowned(path, entry)
+  for (const [ownerId, entry] of [...entries]) {
+    if (!entry.absolutePath.startsWith(prefix)) continue
+    entry.ownerActive = false
+    disposeIfUnowned(ownerId, entry)
   }
 }
 

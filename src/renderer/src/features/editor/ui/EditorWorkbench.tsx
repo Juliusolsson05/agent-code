@@ -5,7 +5,10 @@ import { basename } from '@renderer/features/editor/lib/path'
 import { ConfirmCloseDialog } from '@renderer/features/editor/ui/ConfirmCloseDialog'
 import { EditorStatusBanner } from '@renderer/features/editor/ui/EditorStatusBanner'
 import { EditorTabs } from '@renderer/features/editor/ui/EditorTabs'
-import { MonacoFileEditor } from '@renderer/features/editor/ui/MonacoFileEditor'
+import {
+  MonacoFileEditor,
+  type EditorLspContext,
+} from '@renderer/features/editor/ui/MonacoFileEditor'
 import { ResizableSidebar } from '@renderer/features/editor/ui/ResizableSidebar'
 
 type EditorWorkbenchProps = {
@@ -17,7 +20,7 @@ type EditorWorkbenchProps = {
   openFiles: Record<string, EditorFileBuffer>
   activeFilePath: string | null
   activeFile: EditorFileBuffer | null
-  lspContext: { workspaceRoot: string; filePath: string } | null
+  lspContext: EditorLspContext | null
   onActivateFile: (path: string, options: { focusEditor: boolean }) => void
   /** Close a tab. Returns false when the buffer is dirty and the close
    *  was refused — the workbench then owns showing ConfirmCloseDialog and

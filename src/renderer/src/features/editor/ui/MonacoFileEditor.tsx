@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import type * as Monaco from 'monaco-editor'
 
 import { monacoLanguageId, supportsLsp } from '@shared/code/language'
+import type { LspDocumentAuthorization } from '@shared/types/lsp'
 import {
   ensureEditorLanguageFeatures,
   registerEditorLspContext,
@@ -16,16 +17,32 @@ import {
 } from '@renderer/features/editor/lib/monacoEditorTheme'
 import type { EditorFileBuffer } from '@renderer/features/editor/types'
 
+// Language servers keep a second full-text copy and every didChange crosses
+// IPC. Editing remains fully available above this bound; only optional code
+// intelligence is skipped so opening a generated/minified file cannot double
+// its memory pressure or stall the renderer on repeated serialization.
+const MAX_LSP_DOCUMENT_BYTES = 1_048_576
+
 type Props = {
   file: EditorFileBuffer | null
   /** Explicit filesystem identity for LSP. UI/model identity is `file`;
    * multi-root AI Workspaces cannot use an opaque workspace id here. */
-  lspContext: { workspaceRoot: string; filePath: string } | null
+  lspContext: EditorLspContext | null
   onChange: (path: string, text: string) => void
   onSave: () => void
   onClose: () => void
   onSelectionRevealed?: (path: string) => void
   onFocusRequestHandled?: (path: string) => void
+}
+
+export type EditorLspContext = {
+  workspaceRoot: string
+  /** Project editors send their contained relative path. AI Workspace sends
+   * null because main derives both root and file from the curated entry proof;
+   * renderer metadata is never authoritative for that surface. */
+  filePath: string | null
+  authorization: LspDocumentAuthorization
+  openDefinition: (absolutePath: string, line: number, column: number) => Promise<boolean>
 }
 
 export function MonacoFileEditor({
@@ -56,6 +73,7 @@ export function MonacoFileEditor({
     const container = containerRef.current
     if (!container || !file) return
     const mountedPath = file.absolutePath
+    const mountedOwner = file.generation
     let disposed = false
     let editor: Monaco.editor.IStandaloneCodeEditor | null = null
     let model: Monaco.editor.ITextModel | null = null
@@ -75,7 +93,12 @@ export function MonacoFileEditor({
       const monaco = await getMonaco()
       if (disposed) return
       const currentFile = fileRef.current
-      if (!currentFile || currentFile.absolutePath !== mountedPath) return
+      if (
+        !currentFile ||
+        currentFile.absolutePath !== mountedPath ||
+        currentFile.generation !== mountedOwner
+      )
+        return
       // Register and switch to the editor-mode theme before creating the
       // instance so the first paint already uses the canvas background
       // instead of flashing the darker code-slab theme. See
@@ -97,8 +120,8 @@ export function MonacoFileEditor({
       // The model must outlive this component so the undo stack survives
       // tab switches; disposal happens on actual tab close via
       // releaseEditorModelOwner — see the registry's ownership contract.
-      const acquiredModelPath = currentFile.absolutePath
-      cleanups.push(() => releaseEditorModel(acquiredModelPath))
+      const acquiredModelOwner = currentFile.generation
+      cleanups.push(() => releaseEditorModel(acquiredModelOwner))
       editor = monaco.editor.create(container, {
         model,
         readOnly: false,
@@ -133,7 +156,8 @@ export function MonacoFileEditor({
       editorRef.current = editor
       const changeDisposable = model.onDidChangeContent(() => {
         const latest = fileRef.current
-        if (!latest || latest.absolutePath !== mountedPath) return
+        if (!latest || latest.absolutePath !== mountedPath || latest.generation !== mountedOwner)
+          return
         onChangeRef.current(latest.path, model?.getValue() ?? '')
       })
       cleanups.push(() => changeDisposable.dispose())
@@ -141,19 +165,38 @@ export function MonacoFileEditor({
       // Monaco. addAction scopes the precondition to this editor id and gives
       // us a real disposable, so tab switches cannot accumulate stale saves.
       const saveAction = editor.addAction({
-        id: `agent-code.save.${encodeURIComponent(mountedPath)}`,
+        id: `agent-code.save.${mountedOwner}.${encodeURIComponent(mountedPath)}`,
         label: 'Save File',
         keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS],
         run: () => onSaveRef.current(),
       })
       cleanups.push(() => saveAction.dispose())
       const closeAction = editor.addAction({
-        id: `agent-code.close.${encodeURIComponent(mountedPath)}`,
+        id: `agent-code.close.${mountedOwner}.${encodeURIComponent(mountedPath)}`,
         label: 'Close File',
         keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyW],
         run: () => onCloseRef.current(),
       })
       cleanups.push(() => closeAction.dispose())
+
+      // Focus and requested selection are core editor behavior, not an LSP
+      // feature. Apply them before any language-server startup awaits so a
+      // cold or missing server can never make an explicit file open feel
+      // unresponsive for several seconds.
+      const latestFile = fileRef.current
+      if (!latestFile || latestFile.generation !== mountedOwner) return
+      if (latestFile.selection) {
+        editor.setPosition({
+          lineNumber: latestFile.selection.line,
+          column: latestFile.selection.column,
+        })
+        editor.revealLineInCenter(latestFile.selection.line)
+        editor.focus()
+        onSelectionRevealedRef.current?.(latestFile.path)
+      } else if (latestFile.focusRequest !== null) {
+        editor.focus()
+        onFocusRequestHandledRef.current?.(latestFile.path)
+      }
 
       // ── LSP wiring (#513) ──────────────────────────────────────────
       // The transcript CodeBlock had all of this from day one; the actual
@@ -162,16 +205,28 @@ export function MonacoFileEditor({
       // request in editorLanguageFeatures key their main-process doc
       // lookup on it.
       ensureEditorLanguageFeatures(monaco, currentFile.language)
-      if (lspContext && supportsLsp(currentFile.language)) {
+      const openedContent = model.getValue()
+      if (
+        lspContext &&
+        supportsLsp(currentFile.language) &&
+        new Blob([openedContent]).size <= MAX_LSP_DOCUMENT_BYTES
+      ) {
         const clientUri = model.uri.toString()
-        cleanups.push(registerEditorLspContext(clientUri, lspContext.workspaceRoot))
-        const openedContent = model.getValue()
-        await ensureSemanticProvider(monaco, lspContext.workspaceRoot, currentFile.language).catch(
-          () => {
-            // fail open — same rationale as CodeBlock: a broken language
-            // server must never mean a broken editor.
-          },
+        cleanups.push(
+          registerEditorLspContext(clientUri, {
+            workspaceRoot: lspContext.workspaceRoot,
+            openDefinition: lspContext.openDefinition,
+          }),
         )
+        await ensureSemanticProvider(
+          monaco,
+          lspContext.workspaceRoot,
+          currentFile.language,
+          lspContext.authorization,
+        ).catch(() => {
+          // fail open — same rationale as CodeBlock: a broken language
+          // server must never mean a broken editor.
+        })
         if (disposed) return
         const opened = await window.api
           .openLspDocument({
@@ -180,6 +235,7 @@ export function MonacoFileEditor({
             language: currentFile.language,
             workspaceRoot: lspContext.workspaceRoot,
             filePath: lspContext.filePath,
+            authorization: lspContext.authorization,
           })
           .then(() => true)
           .catch(() => false)
@@ -252,21 +308,6 @@ export function MonacoFileEditor({
           }
         }
       }
-
-      const latestFile = fileRef.current
-      if (!latestFile || latestFile.absolutePath !== mountedPath) return
-      if (latestFile.selection) {
-        editor.setPosition({
-          lineNumber: latestFile.selection.line,
-          column: latestFile.selection.column,
-        })
-        editor.revealLineInCenter(latestFile.selection.line)
-        editor.focus()
-        onSelectionRevealedRef.current?.(latestFile.path)
-      } else if (latestFile.focusRequest !== null) {
-        editor.focus()
-        onFocusRequestHandledRef.current?.(latestFile.path)
-      }
     })()
 
     return () => {
@@ -281,7 +322,7 @@ export function MonacoFileEditor({
         }
       }
     }
-  }, [file?.absolutePath, lspContext?.workspaceRoot, lspContext?.filePath])
+  }, [file?.absolutePath, file?.generation, lspContext?.workspaceRoot, lspContext?.filePath])
 
   useEffect(() => {
     const editor = editorRef.current

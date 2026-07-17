@@ -6,6 +6,7 @@ import {
   supportsLsp,
 } from '@shared/code/language'
 import { APP_SLUG } from '@shared/appIdentity'
+import type { LspDocumentAuthorization } from '@shared/types/lsp'
 import {
   normalizeMonacoThemeColor,
   normalizeMonacoThemeColorAlpha,
@@ -60,6 +61,7 @@ const pendingSemanticProviders = new Map<string, Promise<void>>()
 let monacoPromise: Promise<typeof Monaco> | null = null
 let themeListenerInstalled = false
 let themesDefined = false
+let typescriptDefaultsConfigured = false
 
 function currentThemeName(): string {
   const root = document.documentElement
@@ -204,22 +206,38 @@ export async function getMonaco(): Promise<typeof Monaco> {
   // noise. Real semantic diagnostics come from the typescript-language-
   // server via LspManager (which sees the whole project); the worker keeps
   // only syntax validation, which is reliable single-file.
-  const tsDefaults = [
-    monaco.languages.typescript.typescriptDefaults,
-    monaco.languages.typescript.javascriptDefaults,
-  ]
-  for (const defaults of tsDefaults) {
-    defaults.setCompilerOptions({
-      ...defaults.getCompilerOptions(),
-      jsx: monaco.languages.typescript.JsxEmit.ReactJSX,
-      allowJs: true,
-      allowNonTsExtensions: true,
-      target: monaco.languages.typescript.ScriptTarget.ESNext,
-    })
-    defaults.setDiagnosticsOptions({
-      noSemanticValidation: true,
-      noSyntaxValidation: false,
-    })
+  if (!typescriptDefaultsConfigured) {
+    typescriptDefaultsConfigured = true
+    const tsDefaults = [
+      monaco.languages.typescript.typescriptDefaults,
+      monaco.languages.typescript.javascriptDefaults,
+    ]
+    for (const defaults of tsDefaults) {
+      defaults.setCompilerOptions({
+        ...defaults.getCompilerOptions(),
+        jsx: monaco.languages.typescript.JsxEmit.ReactJSX,
+        allowJs: true,
+        allowNonTsExtensions: true,
+        target: monaco.languages.typescript.ScriptTarget.ESNext,
+      })
+      defaults.setDiagnosticsOptions({
+        noSemanticValidation: true,
+        noSyntaxValidation: false,
+      })
+      // Monaco's TS worker registers these providers globally by default. The
+      // file editor also registers project-aware LSP providers for the same
+      // language IDs; leaving both enabled produces duplicate suggestions and
+      // races two definition/hover answers. Retain the worker's syntax
+      // diagnostics and non-overlapping features (rename/signature help/etc.)
+      // while assigning these four capabilities to LSP alone.
+      defaults.setModeConfiguration({
+        ...defaults.modeConfiguration,
+        completionItems: false,
+        hovers: false,
+        definitions: false,
+        references: false,
+      })
+    }
   }
   // Define-once: getMonaco() is called by every CodeBlock mount, and
   // re-deriving all four themes from getComputedStyle on each mount is
@@ -237,6 +255,7 @@ export async function ensureSemanticProvider(
   monaco: typeof Monaco,
   workspaceRoot: string | null | undefined,
   language: string,
+  authorization: LspDocumentAuthorization = { kind: 'editor-root' },
 ): Promise<void> {
   const normalized = normalizeCodeLanguage(language)
   if (!workspaceRoot || !supportsLsp(normalized)) return
@@ -254,7 +273,11 @@ export async function ensureSemanticProvider(
   // safest fix is to let the first mount own registration while later mounts
   // await the same promise.
   const registration = (async () => {
-    const legend = await window.api.ensureLspLegend(workspaceRoot, normalized)
+    const legend = await window.api.ensureLspLegend({
+      workspaceRoot,
+      language: normalized,
+      authorization,
+    })
     if (!legend) return
 
     semanticLegends.set(normalized, legend)

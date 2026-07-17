@@ -1,9 +1,7 @@
 import type * as Monaco from 'monaco-editor'
 
 import { monacoLanguageId, normalizeCodeLanguage, supportsLsp } from '@shared/code/language'
-import type { LspCompletionItem } from '@shared/types/lsp'
-import { openFileInGlobalEditor } from '@renderer/features/global-editor/openFileInGlobalEditor'
-import { useGlobalEditorStore } from '@renderer/features/global-editor/store'
+import type { LspCompletionItem, LspCompletionTextEdit } from '@shared/types/lsp'
 
 // Monaco↔LSP feature providers for the FILE EDITOR surface (#513).
 //
@@ -16,30 +14,53 @@ import { useGlobalEditorStore } from '@renderer/features/global-editor/store'
 // LSP docs too — so the providers are inert-or-consistent there by
 // construction rather than by special-casing.
 //
-// WHY this lives in lib/code but imports from features/global-editor:
-// the editor OPENER (cross-file go-to-definition) must route through the
-// Global Editor's open-file path to inherit its root-containment and tab
-// semantics. This is a deliberate upward dependency, mirrored on
-// rendered-content's SafeMarkdownLink; if a second editor host ever
-// needs different routing, lift the opener callback into a registration
-// parameter instead of forking this module.
+// WHY navigation is registered per model instead of importing one global
+// editor store: Monaco providers/openers are process-global, while Global
+// Editor and AI Workspace have intentionally different file capabilities.
+// Keeping the host callback beside the model URI prevents focus changes from
+// routing a result through the wrong workspace and avoids an upward feature
+// dependency from this shared Monaco layer.
 
 const registeredMonacoLanguages = new Set<string>()
 let openerInstalled = false
-const modelContexts = new Map<string, { workspaceRoot: string; refs: number }>()
+type ModelContext = {
+  workspaceRoot: string
+  openDefinition: (absolutePath: string, line: number, column: number) => Promise<boolean>
+  refs: number
+}
+const modelContexts = new Map<string, ModelContext>()
 
 /** Bind a Monaco model to the filesystem root that authorized its LSP doc.
  * Global providers cannot infer this from the currently focused agent: AI
  * Workspaces deliberately edit files from other worktrees. */
-export function registerEditorLspContext(clientUri: string, workspaceRoot: string): () => void {
+export function registerEditorLspContext(
+  clientUri: string,
+  context: Omit<ModelContext, 'refs'>,
+): () => void {
   const existing = modelContexts.get(clientUri)
-  if (existing && existing.workspaceRoot === workspaceRoot) existing.refs += 1
-  else modelContexts.set(clientUri, { workspaceRoot, refs: 1 })
+  if (existing && existing.workspaceRoot === context.workspaceRoot) {
+    existing.refs += 1
+    existing.openDefinition = context.openDefinition
+  } else modelContexts.set(clientUri, { ...context, refs: 1 })
   return () => {
     const current = modelContexts.get(clientUri)
-    if (!current || current.workspaceRoot !== workspaceRoot) return
+    if (!current || current.workspaceRoot !== context.workspaceRoot) return
     current.refs -= 1
     if (current.refs <= 0) modelContexts.delete(clientUri)
+  }
+}
+
+async function syncLspModel(model: Monaco.editor.ITextModel): Promise<boolean> {
+  const clientUri = model.uri.toString()
+  if (!modelContexts.has(clientUri)) return false
+  try {
+    // The ordinary didChange path is debounced for typing throughput. Feature
+    // requests are explicit user actions and must observe the exact current
+    // buffer, so flush one ordered full-text change before asking for an answer.
+    await window.api.changeLspDocument(clientUri, model.getValue())
+    return true
+  } catch {
+    return false
   }
 }
 
@@ -108,6 +129,21 @@ function toMonacoRange(
   )
 }
 
+function completionEditToMonaco(
+  monaco: typeof Monaco,
+  edit: LspCompletionTextEdit,
+): { range: Monaco.Range; text: string } {
+  return {
+    range: toMonacoRange(monaco, edit),
+    text: edit.newText,
+  }
+}
+
+type ResolvableCompletionItem = Monaco.languages.CompletionItem & {
+  lspClientUri?: string
+  lspResolveId?: number
+}
+
 export function ensureEditorLanguageFeatures(monaco: typeof Monaco, language: string): void {
   installEditorOpener(monaco)
   const normalized = normalizeCodeLanguage(language)
@@ -117,19 +153,23 @@ export function ensureEditorLanguageFeatures(monaco: typeof Monaco, language: st
   registeredMonacoLanguages.add(monacoId)
 
   monaco.languages.registerHoverProvider(monacoId, {
-    async provideHover(model, position) {
-      const result = await window.api.getLspHover(model.uri.toString(), toLspPosition(position))
-      if (!result) return null
+    async provideHover(model, position, token) {
+      if (!(await syncLspModel(model)) || token.isCancellationRequested) return null
+      const result = await window.api
+        .getLspHover(model.uri.toString(), toLspPosition(position))
+        .catch(() => null)
+      if (!result || token.isCancellationRequested) return null
       return { contents: [{ value: result.markdown }] }
     },
   })
 
   monaco.languages.registerDefinitionProvider(monacoId, {
-    async provideDefinition(model, position) {
-      const locations = await window.api.getLspDefinition(
-        model.uri.toString(),
-        toLspPosition(position),
-      )
+    async provideDefinition(model, position, token) {
+      if (!(await syncLspModel(model)) || token.isCancellationRequested) return []
+      const locations = await window.api
+        .getLspDefinition(model.uri.toString(), toLspPosition(position))
+        .catch(() => [])
+      if (token.isCancellationRequested) return []
       return locations.map(loc => ({
         uri: monaco.Uri.file(loc.absolutePath),
         range: toMonacoRange(monaco, loc),
@@ -138,11 +178,12 @@ export function ensureEditorLanguageFeatures(monaco: typeof Monaco, language: st
   })
 
   monaco.languages.registerReferenceProvider(monacoId, {
-    async provideReferences(model, position) {
-      const locations = await window.api.getLspReferences(
-        model.uri.toString(),
-        toLspPosition(position),
-      )
+    async provideReferences(model, position, _context, token) {
+      if (!(await syncLspModel(model)) || token.isCancellationRequested) return []
+      const locations = await window.api
+        .getLspReferences(model.uri.toString(), toLspPosition(position))
+        .catch(() => [])
+      if (token.isCancellationRequested) return []
       return locations.map(loc => ({
         uri: monaco.Uri.file(loc.absolutePath),
         range: toMonacoRange(monaco, loc),
@@ -152,11 +193,20 @@ export function ensureEditorLanguageFeatures(monaco: typeof Monaco, language: st
 
   monaco.languages.registerCompletionItemProvider(monacoId, {
     triggerCharacters: ['.', '"', "'", '/', '@', '<'],
-    async provideCompletionItems(model, position) {
-      const items = await window.api.getLspCompletions(
-        model.uri.toString(),
-        toLspPosition(position),
-      )
+    async provideCompletionItems(model, position, context, token) {
+      if (!(await syncLspModel(model)) || token.isCancellationRequested) {
+        return { suggestions: [] }
+      }
+      const result = await window.api
+        .getLspCompletions(model.uri.toString(), toLspPosition(position), {
+          // Monaco and LSP encode the same three states with Monaco zero-based
+          // and LSP one-based enums. Passing the real trigger is important for
+          // servers that return a deliberately incomplete first list.
+          triggerKind: (context.triggerKind + 1) as 1 | 2 | 3,
+          ...(context.triggerCharacter ? { triggerCharacter: context.triggerCharacter } : {}),
+        })
+        .catch(() => ({ items: [], incomplete: false }))
+      if (token.isCancellationRequested) return { suggestions: [] }
       const word = model.getWordUntilPosition(position)
       // Replace the word being typed. LSP servers CAN send precise
       // textEdit ranges per item, but tsserver's default suggestions are
@@ -170,7 +220,8 @@ export function ensureEditorLanguageFeatures(monaco: typeof Monaco, language: st
         word.endColumn,
       )
       return {
-        suggestions: items.map((item: LspCompletionItem) => {
+        incomplete: result.incomplete,
+        suggestions: result.items.map((item: LspCompletionItem) => {
           const itemRange = item.textEdit
             ? new monaco.Range(
                 item.textEdit.startLine + 1,
@@ -190,8 +241,47 @@ export function ensureEditorLanguageFeatures(monaco: typeof Monaco, language: st
             documentation: item.documentation ? { value: item.documentation } : undefined,
             sortText: item.sortText,
             range: itemRange,
+            additionalTextEdits: item.additionalTextEdits?.map(edit =>
+              completionEditToMonaco(monaco, edit),
+            ),
+            lspClientUri: model.uri.toString(),
+            lspResolveId: item.resolveId,
           }
         }),
+      }
+    },
+    async resolveCompletionItem(item, token) {
+      const unresolved = item as ResolvableCompletionItem
+      if (
+        token.isCancellationRequested ||
+        !unresolved.lspClientUri ||
+        unresolved.lspResolveId == null
+      ) {
+        return item
+      }
+      const resolved = await window.api
+        .resolveLspCompletion(unresolved.lspClientUri, unresolved.lspResolveId)
+        .catch(() => null)
+      if (!resolved || token.isCancellationRequested) return item
+      // Servers commonly defer auto-import edits and documentation until
+      // resolution. Preserve Monaco's original range when the server does not
+      // replace it, but accept a resolved primary edit when it does.
+      return {
+        ...item,
+        insertText: resolved.textEdit?.newText ?? resolved.insertText ?? item.insertText,
+        insertTextRules: resolved.isSnippet
+          ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet
+          : item.insertTextRules,
+        range: resolved.textEdit
+          ? completionEditToMonaco(monaco, resolved.textEdit).range
+          : item.range,
+        detail: resolved.detail ?? item.detail,
+        documentation: resolved.documentation
+          ? { value: resolved.documentation }
+          : item.documentation,
+        additionalTextEdits: resolved.additionalTextEdits
+          ? resolved.additionalTextEdits.map(edit => completionEditToMonaco(monaco, edit))
+          : item.additionalTextEdits,
       }
     },
   })
@@ -212,13 +302,8 @@ function installEditorOpener(monaco: typeof Monaco): void {
     async openCodeEditor(source, resource, selectionOrPosition) {
       if (resource.scheme !== 'file') return false
       const sourceUri = source?.getModel()?.uri.toString()
-      const sourceRoot = sourceUri ? modelContexts.get(sourceUri)?.workspaceRoot : null
-      const root = sourceRoot ?? useGlobalEditorStore.getState().activeCwd
-      if (!root) return false
-      const rootAbs = root.replace(/\\/g, '/').replace(/\/+$/, '')
-      const targetAbs = resource.fsPath.replace(/\\/g, '/')
-      if (!targetAbs.startsWith(`${rootAbs}/`)) return false
-      const relative = targetAbs.slice(rootAbs.length + 1)
+      const context = sourceUri ? modelContexts.get(sourceUri) : null
+      if (!context) return false
       let line = 1
       let column = 1
       if (selectionOrPosition) {
@@ -230,12 +315,11 @@ function installEditorOpener(monaco: typeof Monaco): void {
           column = selectionOrPosition.column
         }
       }
-      const result = await openFileInGlobalEditor({ root, path: relative, line, column })
-      // Returning true before the contained IPC read completed made Monaco
-      // suppress its fallback while the UI stayed on the source file. Report
-      // actual navigation success so stale/deleted/unauthorized definitions
-      // fail honestly instead of looking like a dead click.
-      return result.ok
+      // Each editor host owns its navigation semantics. Global Editor may open
+      // any contained project file; AI Workspace may open only another curated
+      // entry. Keeping that callback beside the authorized model context avoids
+      // turning a definition result into generic filesystem authority.
+      return await context.openDefinition(resource.fsPath, line, column)
     },
   })
 }

@@ -34,6 +34,8 @@ import { lspServerForLanguage, type LspServerSpec } from '@main/lsp/serverRegist
 // `@main/lspManager` keep working, but the source of truth is shared.
 import type {
   LspCompletionItem,
+  LspCompletionContext,
+  LspCompletionResult,
   LspDiagnostic,
   LspDiagnosticsEvent,
   LspDocumentSymbol,
@@ -58,6 +60,7 @@ type OpenDocumentRecord = {
   version: number
   language: string
   refs: number
+  completionItems: Map<number, CompletionItem>
 }
 
 type ServerRecord = {
@@ -173,39 +176,37 @@ function normalizeDefinitionResult(
   return out
 }
 
-function normalizeCompletionResult(
-  result: CompletionItem[] | CompletionList | null,
-): LspCompletionItem[] {
-  const items = Array.isArray(result) ? result : (result?.items ?? [])
-  // Cap: tsserver returns 1k+ global symbols on a bare identifier;
-  // IPC-serializing all of them per keystroke is renderer jank for
-  // entries nobody scrolls to. Servers front-load relevance via sortText,
-  // and Monaco re-filters client-side as the user types more.
-  return items.slice(0, 200).map(item => {
-    const label = item.label
-    const rawEdit = item.textEdit
-    const editRange = rawEdit ? ('range' in rawEdit ? rawEdit.range : rawEdit.replace) : null
-    return {
-      label,
-      kind: item.kind ?? 1,
-      insertText: item.insertText ?? label,
-      textEdit:
-        rawEdit && editRange
-          ? {
-              newText: rawEdit.newText,
-              startLine: editRange.start.line,
-              startCharacter: editRange.start.character,
-              endLine: editRange.end.line,
-              endCharacter: editRange.end.character,
-            }
-          : undefined,
-      detail: item.detail ?? undefined,
-      documentation:
-        typeof item.documentation === 'string' ? item.documentation : item.documentation?.value,
-      sortText: item.sortText ?? undefined,
-      isSnippet: item.insertTextFormat === 2, // InsertTextFormat.Snippet
-    }
-  })
+function normalizeTextEdit(edit: {
+  newText: string
+  range: Range
+}): NonNullable<LspCompletionItem['textEdit']> {
+  return {
+    newText: edit.newText,
+    startLine: edit.range.start.line,
+    startCharacter: edit.range.start.character,
+    endLine: edit.range.end.line,
+    endCharacter: edit.range.end.character,
+  }
+}
+
+function normalizeCompletionItem(item: CompletionItem, resolveId?: number): LspCompletionItem {
+  const label = item.label
+  const rawEdit = item.textEdit
+  const editRange = rawEdit ? ('range' in rawEdit ? rawEdit.range : rawEdit.replace) : null
+  return {
+    label,
+    kind: item.kind ?? 1,
+    insertText: item.insertText ?? label,
+    textEdit:
+      rawEdit && editRange ? normalizeTextEdit({ ...rawEdit, range: editRange }) : undefined,
+    resolveId,
+    additionalTextEdits: item.additionalTextEdits?.map(normalizeTextEdit),
+    detail: item.detail ?? undefined,
+    documentation:
+      typeof item.documentation === 'string' ? item.documentation : item.documentation?.value,
+    sortText: item.sortText ?? undefined,
+    isSnippet: item.insertTextFormat === 2, // InsertTextFormat.Snippet
+  }
 }
 
 function normalizeSymbols(
@@ -262,6 +263,12 @@ export class LspManager extends EventEmitter {
   // process. Same pattern (and WHY) as monacoRuntime's
   // pendingSemanticProviders.
   private readonly serverPromises = new Map<string, Promise<ServerRecord | null>>()
+  // didOpen/didChange/didClose are an ordered protocol for each client URI,
+  // but renderer IPC handlers can overlap while server startup or a stream
+  // write is pending. A per-document queue prevents late didOpen from landing
+  // after close, and prevents two full-text changes from reordering versions.
+  private readonly documentQueues = new Map<string, Promise<void>>()
+  private completionResolveSequence = 0
 
   async ensureSemanticLegend(
     workspaceRoot: string,
@@ -276,6 +283,10 @@ export class LspManager extends EventEmitter {
   }
 
   async openDocument(params: OpenDocumentParams): Promise<void> {
+    await this.serializeDocument(params.clientUri, () => this.openDocumentNow(params))
+  }
+
+  private async openDocumentNow(params: OpenDocumentParams): Promise<void> {
     if (!supportsLsp(params.language)) return
     const spec = lspServerForLanguage(params.language)
     if (!spec) return
@@ -302,7 +313,7 @@ export class LspManager extends EventEmitter {
         return
       }
       existing.refs += 1
-      await this.changeDocument(params.clientUri, params.content)
+      await this.changeDocumentNow(params.clientUri, params.content)
       return
     }
 
@@ -323,14 +334,24 @@ export class LspManager extends EventEmitter {
       version: 1,
       language,
       refs: 1,
+      completionItems: new Map(),
     })
   }
 
   async changeDocument(clientUri: string, content: string): Promise<void> {
+    await this.serializeDocument(clientUri, () => this.changeDocumentNow(clientUri, content))
+  }
+
+  private async changeDocumentNow(clientUri: string, content: string): Promise<void> {
     const doc = this.docs.get(clientUri)
     if (!doc) return
     const server = this.servers.get(doc.serverKey)
     if (!server) return
+    // Completion resolve handles describe the server's view at the time the
+    // list was produced. A full-text change invalidates that view; retaining
+    // handles would let a late Monaco resolve apply imports/edits computed for
+    // older text to the current buffer.
+    doc.completionItems.clear()
     doc.version += 1
     await this.sendNotificationIfOpen(server, 'textDocument/didChange', {
       textDocument: {
@@ -342,6 +363,10 @@ export class LspManager extends EventEmitter {
   }
 
   async closeDocument(clientUri: string): Promise<void> {
+    await this.serializeDocument(clientUri, () => this.closeDocumentNow(clientUri))
+  }
+
+  private async closeDocumentNow(clientUri: string): Promise<void> {
     const doc = this.docs.get(clientUri)
     if (!doc) return
     // Multiple editor surfaces can temporarily mount the same Monaco URI
@@ -362,6 +387,7 @@ export class LspManager extends EventEmitter {
   }
 
   async getSemanticTokens(clientUri: string): Promise<SemanticTokens | null> {
+    await this.waitForDocument(clientUri)
     const doc = this.docs.get(clientUri)
     if (!doc) return null
     const server = this.servers.get(doc.serverKey)
@@ -399,6 +425,7 @@ export class LspManager extends EventEmitter {
     method: string,
     extraParams: Record<string, unknown>,
   ): Promise<T | null> {
+    await this.waitForDocument(clientUri)
     const ctx = this.requestContext(clientUri)
     if (!ctx) return null
     await ctx.server.initialized
@@ -431,13 +458,84 @@ export class LspManager extends EventEmitter {
     return normalizeDefinitionResult(result)
   }
 
-  async getCompletions(clientUri: string, position: LspPosition): Promise<LspCompletionItem[]> {
+  async getCompletions(
+    clientUri: string,
+    position: LspPosition,
+    context: LspCompletionContext,
+  ): Promise<LspCompletionResult> {
+    await this.waitForDocument(clientUri)
+    const requestedDoc = this.docs.get(clientUri)
+    const requestedVersion = requestedDoc?.version
+    if (!requestedDoc) return { items: [], incomplete: false }
     const result = await this.sendDocRequest<CompletionItem[] | CompletionList | null>(
       clientUri,
       'textDocument/completion',
-      { position },
+      { position, context },
     )
-    return normalizeCompletionResult(result)
+    const doc = this.docs.get(clientUri)
+    // A completion request is not cancellable across our IPC boundary. If the
+    // user typed while the server was answering, discard that older response
+    // rather than repopulating resolve handles after didChange cleared them.
+    if (doc !== requestedDoc || doc.version !== requestedVersion || !result) {
+      return { items: [], incomplete: false }
+    }
+    const items = Array.isArray(result) ? result : result.items
+    // Our transport cap is also an incomplete list from Monaco's point of
+    // view. Mark it as such even when the server returned a complete larger
+    // list so narrowing input gets a fresh request instead of filtering only
+    // the first 200 forever.
+    const incomplete = (!Array.isArray(result) && result.isIncomplete) || items.length > 200
+    doc.completionItems.clear()
+    // Cap: tsserver returns 1k+ global symbols on a bare identifier;
+    // IPC-serializing all of them per keystroke is renderer jank for entries
+    // nobody scrolls to. Servers front-load relevance via sortText, and Monaco
+    // re-filters client-side as the user types more.
+    const normalizedItems = items.slice(0, 200).map(item => {
+      const resolveId = ++this.completionResolveSequence
+      doc.completionItems.set(resolveId, item)
+      return normalizeCompletionItem(item, resolveId)
+    })
+    return { items: normalizedItems, incomplete }
+  }
+
+  async resolveCompletion(clientUri: string, resolveId: number): Promise<LspCompletionItem | null> {
+    await this.waitForDocument(clientUri)
+    const ctx = this.requestContext(clientUri)
+    const item = ctx?.doc.completionItems.get(resolveId)
+    if (!ctx || !item) return null
+    const requestedVersion = ctx.doc.version
+    const initialized = await ctx.server.initialized
+    if (!initialized.capabilities.completionProvider?.resolveProvider) {
+      return this.docs.get(clientUri) === ctx.doc && ctx.doc.version === requestedVersion
+        ? normalizeCompletionItem(item, resolveId)
+        : null
+    }
+    try {
+      const response = (await ctx.server.connection.sendRequest(
+        'completionItem/resolve',
+        item,
+      )) as CompletionItem
+      if (
+        this.docs.get(clientUri) !== ctx.doc ||
+        ctx.doc.version !== requestedVersion ||
+        ctx.doc.completionItems.get(resolveId) !== item
+      ) {
+        return null
+      }
+      // Some servers return only the fields populated during resolve even
+      // though the protocol describes a full CompletionItem. Merge over the
+      // main-owned original so labels, snippets, and precomputed edits cannot
+      // disappear when one of those pragmatic partial responses arrives.
+      const resolved = { ...item, ...response }
+      // Preserve the opaque handle because Monaco may call resolve again as
+      // its details widget reopens. The main-owned raw item remains the only
+      // protocol payload accepted from renderer.
+      ctx.doc.completionItems.set(resolveId, resolved)
+      return normalizeCompletionItem(resolved, resolveId)
+    } catch (err) {
+      if (isDestroyedStreamError(err) || ctx.server.closed) return null
+      throw err
+    }
   }
 
   async getReferences(clientUri: string, position: LspPosition): Promise<LspLocation[]> {
@@ -472,7 +570,7 @@ export class LspManager extends EventEmitter {
     // normal close path. Calling close once per URI while refs > 1 would leave
     // records pointing at servers that are about to be killed.
     for (const doc of this.docs.values()) doc.refs = 1
-    for (const clientUri of this.docs.keys()) {
+    for (const clientUri of [...this.docs.keys()]) {
       await this.closeDocument(clientUri)
     }
     for (const server of this.servers.values()) {
@@ -481,6 +579,25 @@ export class LspManager extends EventEmitter {
       server.process.kill()
     }
     this.servers.clear()
+  }
+
+  private async serializeDocument<T>(clientUri: string, task: () => Promise<T>): Promise<T> {
+    const previous = this.documentQueues.get(clientUri) ?? Promise.resolve()
+    const result = previous.catch(() => undefined).then(task)
+    const tail = result.then(
+      () => undefined,
+      () => undefined,
+    )
+    this.documentQueues.set(clientUri, tail)
+    try {
+      return await result
+    } finally {
+      if (this.documentQueues.get(clientUri) === tail) this.documentQueues.delete(clientUri)
+    }
+  }
+
+  private async waitForDocument(clientUri: string): Promise<void> {
+    await this.documentQueues.get(clientUri)?.catch(() => undefined)
   }
 
   private getOrCreateServer(

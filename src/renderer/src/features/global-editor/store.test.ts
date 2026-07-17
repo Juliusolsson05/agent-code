@@ -58,6 +58,23 @@ describe('global editor store transitions', () => {
     expect(state?.openFiles['src-old/keep.ts']).toBeDefined()
   })
 
+  it('preserves a canonical model root across an Explorer rename', () => {
+    useGlobalEditorStore.getState().openFile({
+      cwd,
+      path: 'src/index.ts',
+      absolutePath: '/physical/repo/src/index.ts',
+      text: 'content',
+      mtimeMs: 10,
+      diskVersion: 'v1',
+    })
+
+    useGlobalEditorStore.getState().renameOpenPath(cwd, 'src', 'client')
+
+    expect(
+      useGlobalEditorStore.getState().byCwd[cwd]?.openFiles['client/index.ts']?.absolutePath,
+    ).toBe('/physical/repo/client/index.ts')
+  })
+
   it('ignores a late save acknowledgement after a path was closed and reopened', () => {
     open('late.ts', 'first lifetime')
     useGlobalEditorStore.getState().updateFileText(cwd, 'late.ts', 'submitted')
