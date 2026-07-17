@@ -49,9 +49,7 @@ export function buildAppMenu(): Menu {
     // expands to the standard About/Services/Hide/HideOthers/Unhide/Quit block
     // with platform-correct labels and accelerators (⌘Q, ⌘H). On non-mac we
     // skip this whole submenu; Quit lives elsewhere there.
-    ...(isMac
-      ? ([{ role: 'appMenu' }] as MenuItemConstructorOptions[])
-      : []),
+    ...(isMac ? ([{ role: 'appMenu' }] as MenuItemConstructorOptions[]) : []),
     {
       label: 'File',
       submenu: [
@@ -66,6 +64,16 @@ export function buildAppMenu(): Menu {
           // → renderer command `resume-session`. Opens the resume picker for
           // the focused project's history.
           click: () => dispatchCommand('resume-session'),
+        },
+        {
+          label: 'Save Editor File',
+          // The visible workbench owns project-vs-AI save authority. Main only
+          // dispatches the command, matching the other renderer-owned actions.
+          click: () => dispatchCommand('save-editor-file'),
+        },
+        {
+          label: 'Save All Editor Files',
+          click: () => dispatchCommand('save-all-editor-files'),
         },
         { type: 'separator' },
         {

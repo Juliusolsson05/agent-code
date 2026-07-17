@@ -94,9 +94,11 @@ export function useResizableSplitter({ enabled = true, onDrag }: Options): Contr
     // Monaco does its own selection handling).
     window.addEventListener('mousemove', onMove, true)
     window.addEventListener('mouseup', onUp, true)
+    window.addEventListener('blur', onUp)
     return () => {
       window.removeEventListener('mousemove', onMove, true)
       window.removeEventListener('mouseup', onUp, true)
+      window.removeEventListener('blur', onUp)
     }
   }, [dragging])
 

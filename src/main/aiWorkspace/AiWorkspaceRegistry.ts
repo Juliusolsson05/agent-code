@@ -1,13 +1,19 @@
 import { randomUUID } from 'node:crypto'
+import { EventEmitter } from 'node:events'
 import { constants } from 'node:fs'
 import type { Stats } from 'node:fs'
-import { access, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
-import { basename, dirname, resolve } from 'node:path'
+import { access, mkdir, readFile, realpath, rename, stat, writeFile } from 'node:fs/promises'
+import { basename, dirname, isAbsolute, relative, resolve } from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 
 import { STATE_DIR } from '@main/storage/paths.js'
 import { getToolPath } from '@main/setup/toolchain.js'
+import {
+  atomicWriteTextFile,
+  readBoundedTextFile,
+  serializeEditorFileMutation,
+} from '@main/editorFileIO.js'
 import type {
   AiWorkspaceAttachFileParams,
   AiWorkspaceCreateParams,
@@ -19,12 +25,14 @@ import type {
   AiWorkspaceSummary,
   AiWorkspaceWriteFileParams,
   AiWorkspaceWriteFileResult,
+  AiWorkspaceChangeEvent,
 } from '@mcp/shared/aiWorkspaceTypes.js'
 
 const execFileAsync = promisify(execFile)
 const AI_WORKSPACE_FILE = `${STATE_DIR}/ai-workspaces.json`
 const STATUS_REFRESH_CONCURRENCY = 12
 const GIT_CONTEXT_CACHE_TTL_MS = 5_000
+const MAX_AI_WORKSPACE_FILE_BYTES = 8 * 1_048_576
 
 type PersistedAiWorkspaceState = {
   workspaces: AiWorkspaceRecord[]
@@ -91,19 +99,31 @@ async function detectGitContext(path: string): Promise<{
   return { projectRoot, gitBranch }
 }
 
-export class AiWorkspaceRegistry {
+export interface AiWorkspaceRegistry {
+  on(event: 'changed', listener: (event: AiWorkspaceChangeEvent) => void): this
+  off(event: 'changed', listener: (event: AiWorkspaceChangeEvent) => void): this
+  emit(event: 'changed', payload: AiWorkspaceChangeEvent): boolean
+}
+
+export class AiWorkspaceRegistry extends EventEmitter {
   private readonly workspaces = new Map<string, AiWorkspaceRecord>()
   private loadPromise: Promise<void> | null = null
   private saveQueue: Promise<void> = Promise.resolve()
-  private readonly gitContextCache = new Map<string, {
-    expiresAt: number
-    promise: Promise<{
-      projectRoot?: string
-      gitBranch?: string
-    }>
-  }>()
+  private readonly knownFilePaths = new Set<string>()
+  private readonly gitContextCache = new Map<
+    string,
+    {
+      expiresAt: number
+      promise: Promise<{
+        projectRoot?: string
+        gitBranch?: string
+      }>
+    }
+  >()
 
-  constructor(private readonly stateFile = AI_WORKSPACE_FILE) {}
+  constructor(private readonly stateFile = AI_WORKSPACE_FILE) {
+    super()
+  }
 
   async create(params: AiWorkspaceCreateParams): Promise<AiWorkspaceRecord> {
     await this.ensureLoaded()
@@ -127,6 +147,10 @@ export class AiWorkspaceRegistry {
     }
     this.workspaces.set(workspace.workspaceId, workspace)
     await this.save()
+    this.emit('changed', {
+      workspaceId: workspace.workspaceId,
+      kind: 'created',
+    })
     return workspace
   }
 
@@ -146,8 +170,34 @@ export class AiWorkspaceRegistry {
         createdAt: workspace.createdAt,
         updatedAt: workspace.updatedAt,
         fileCount: workspace.entries.length,
-        staleCount: workspace.entries.filter(entry => !entry.status.exists || !entry.status.readable).length,
+        staleCount: workspace.entries.filter(
+          entry => !entry.status.exists || !entry.status.readable,
+        ).length,
       }))
+  }
+
+  async authorizeLspEntry(
+    workspaceId: string,
+    entryId: string,
+  ): Promise<{ workspaceRoot: string; filePath: string }> {
+    await this.ensureLoaded()
+    const workspace = this.requiredWorkspace(workspaceId)
+    const entry = workspace.entries.find(candidate => candidate.entryId === entryId)
+    if (!entry?.projectRoot) throw new Error('AI Workspace entry has no project root')
+    const workspaceRoot = await realpath(resolve(entry.projectRoot))
+    const physicalFile = await realpath(resolve(entry.path))
+    const filePath = relative(workspaceRoot, physicalFile)
+    if (
+      !filePath ||
+      filePath === '..' ||
+      filePath.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) ||
+      isAbsolute(filePath)
+    ) {
+      throw new Error('AI Workspace entry is outside its project root')
+    }
+    const fileStat = await stat(physicalFile)
+    if (!fileStat.isFile()) throw new Error('AI Workspace entry is not a file')
+    return { workspaceRoot, filePath }
   }
 
   async get(workspaceId: string): Promise<AiWorkspaceRecord | null> {
@@ -170,9 +220,17 @@ export class AiWorkspaceRegistry {
     // file"; it does not grant the model new filesystem authority. The user
     // still opens the real path explicitly in Agent Code's UI, with stale /
     // unreadable status visible instead of silently pruning references.
-    const path = normalizePath(params.path)
+    // Store the physical path once at capability creation. Without this, an
+    // attached symlink and its target become two spellings of the same file,
+    // LSP definitions (which use physical file URIs) cannot match the curated
+    // entry, and swapping the final symlink can silently redirect later saves.
+    const path = await realpath(normalizePath(params.path))
     const fileStat = await stat(path)
     if (!fileStat.isFile()) throw new Error('AI Workspace can only attach files')
+    // Process-lifetime capability: detaching/clearing metadata must not make an
+    // already-open buffer suddenly unable to save, but an arbitrary renderer
+    // path must never mint filesystem authority merely by invoking read/write.
+    this.knownFilePaths.add(path)
 
     const status = await this.statusForPath(path, fileStat)
     const git = await this.detectGitContextCached(path)
@@ -196,13 +254,21 @@ export class AiWorkspaceRegistry {
     else workspace.entries.push(entry)
     workspace.updatedAt = timestamp
     await this.save()
+    this.emit('changed', {
+      workspaceId: workspace.workspaceId,
+      kind: 'entries',
+    })
     return entry
   }
 
-  async detachFile(params: AiWorkspaceDetachFileParams): Promise<{ removed: boolean; remaining: number }> {
+  async detachFile(
+    params: AiWorkspaceDetachFileParams,
+  ): Promise<{ removed: boolean; remaining: number }> {
     await this.ensureLoaded()
     const workspace = this.requiredWorkspace(params.workspaceId)
-    const normalized = params.path ? normalizePath(params.path) : null
+    const normalized = params.path
+      ? await realpath(normalizePath(params.path)).catch(() => normalizePath(params.path!))
+      : null
     const before = workspace.entries.length
     workspace.entries = workspace.entries.filter(entry => {
       if (params.entryId && entry.entryId === params.entryId) return false
@@ -213,6 +279,10 @@ export class AiWorkspaceRegistry {
     if (removed) {
       workspace.updatedAt = nowIso()
       await this.save()
+      this.emit('changed', {
+        workspaceId: workspace.workspaceId,
+        kind: 'entries',
+      })
     }
     return { removed, remaining: workspace.entries.length }
   }
@@ -224,23 +294,39 @@ export class AiWorkspaceRegistry {
     workspace.entries = []
     workspace.updatedAt = nowIso()
     await this.save()
+    if (removed > 0) this.emit('changed', { workspaceId, kind: 'entries' })
     return { removed }
   }
 
   async delete(workspaceId: string): Promise<{ deleted: boolean }> {
     await this.ensureLoaded()
     const deleted = this.workspaces.delete(workspaceId)
-    if (deleted) await this.save()
+    if (deleted) {
+      await this.save()
+      this.emit('changed', { workspaceId, kind: 'deleted' })
+    }
     return { deleted }
   }
 
   async readFile(path: string): Promise<AiWorkspaceReadFileResult> {
     try {
+      await this.ensureLoaded()
       const target = normalizePath(path)
-      const fileStat = await stat(target)
-      if (!fileStat.isFile()) return { ok: false, error: 'not a file' }
-      const text = await readFile(target, 'utf8')
-      return { ok: true, path: target, text, mtimeMs: fileStat.mtimeMs, size: fileStat.size }
+      if (!this.knownFilePaths.has(target)) return { ok: false, error: 'file is not attached' }
+      const read = await readBoundedTextFile(target, MAX_AI_WORKSPACE_FILE_BYTES).catch(err => {
+        if ((err as Error).message === 'file is too large') {
+          throw new Error('file is too large to open in the editor')
+        }
+        throw err
+      })
+      return {
+        ok: true,
+        path: target,
+        text: read.text,
+        mtimeMs: read.stat.mtimeMs,
+        size: read.stat.size,
+        version: read.version,
+      }
     } catch (err) {
       return { ok: false, error: errorMessage(err) }
     }
@@ -248,20 +334,47 @@ export class AiWorkspaceRegistry {
 
   async writeFile(params: AiWorkspaceWriteFileParams): Promise<AiWorkspaceWriteFileResult> {
     try {
+      await this.ensureLoaded()
       const target = normalizePath(params.path)
-      const before = await stat(target).catch(() => null)
-      if (before && !before.isFile()) return { ok: false, error: 'not a file' }
-      if (
-        before &&
-        typeof params.expectedMtimeMs === 'number' &&
-        Math.abs(before.mtimeMs - params.expectedMtimeMs) > 1
-      ) {
-        return { ok: false, error: 'file changed on disk', conflict: true }
-      }
-      await writeFile(target, params.text, 'utf8')
-      const after = await stat(target)
-      await this.refreshEntriesForPath(target)
-      return { ok: true, path: target, mtimeMs: after.mtimeMs, size: after.size }
+      if (!this.knownFilePaths.has(target)) return { ok: false, error: 'file is not attached' }
+      return await serializeEditorFileMutation(target, async () => {
+        const result = await atomicWriteTextFile({
+          absolutePath: target,
+          text: params.text,
+          expectedVersion: params.expectedVersion,
+          maxBytes: MAX_AI_WORKSPACE_FILE_BYTES,
+        })
+        if (!result.ok) {
+          return {
+            ok: false,
+            error:
+              result.conflictKind === 'deleted'
+                ? 'file was deleted on disk'
+                : 'file changed on disk',
+            conflict: true,
+            conflictKind: result.conflictKind,
+          }
+        }
+        await this.refreshEntriesForPath(target)
+        // One physical file can be curated into several workspaces. Every
+        // visible consumer needs the write signal; choosing an arbitrary first
+        // workspace would leave the others showing stale buffer metadata.
+        for (const workspace of this.workspaces.values()) {
+          if (workspace.entries.some(entry => entry.path === target)) {
+            this.emit('changed', {
+              workspaceId: workspace.workspaceId,
+              kind: 'file-written',
+            })
+          }
+        }
+        return {
+          ok: true,
+          path: target,
+          mtimeMs: result.stat.mtimeMs,
+          size: result.stat.size,
+          version: result.version,
+        }
+      })
     } catch (err) {
       return { ok: false, error: errorMessage(err) }
     }
@@ -277,7 +390,16 @@ export class AiWorkspaceRegistry {
       const text = await readFile(this.stateFile, 'utf8')
       const parsed = JSON.parse(text) as PersistedAiWorkspaceState
       for (const workspace of parsed.workspaces ?? []) {
+        for (const entry of workspace.entries) {
+          const normalized = normalizePath(entry.path)
+          // Migrate live legacy symlink entries in memory so their editor and
+          // LSP identities agree. Stale references intentionally retain their
+          // lexical path: preserving a useful broken-link explanation is more
+          // valuable than dropping an entry merely because realpath fails.
+          entry.path = await realpath(normalized).catch(() => normalized)
+        }
         this.workspaces.set(workspace.workspaceId, workspace)
+        for (const entry of workspace.entries) this.knownFilePaths.add(normalizePath(entry.path))
       }
       // Stored statuses are allowed to be slightly stale at startup.
       // Refreshing all references here made first use perform an uncapped
@@ -321,7 +443,7 @@ export class AiWorkspaceRegistry {
 
   private async statusForPath(path: string, knownStats?: Stats): Promise<AiWorkspaceFileStatus> {
     try {
-      const fileStat = knownStats ?? await stat(path)
+      const fileStat = knownStats ?? (await stat(path))
       if (!fileStat.isFile()) {
         return {
           exists: true,

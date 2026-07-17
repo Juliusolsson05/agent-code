@@ -9,13 +9,67 @@ export type {
   EditorFsReadResult,
   EditorFsWriteResult,
   EditorFsMutationResult,
+  EditorFsChangeEvent,
+  EditorFsDirectoryChangeEvent,
+  EditorFsRecursiveListResult,
+  EditorFsSearchMatch,
+  EditorFsSearchResult,
 } from '@shared/types/editorFs.js'
 import type {
   EditorFsListResult,
   EditorFsReadResult,
   EditorFsWriteResult,
   EditorFsMutationResult,
+  EditorFsChangeEvent,
+  EditorFsDirectoryChangeEvent,
+  EditorFsRecursiveListResult,
+  EditorFsSearchResult,
 } from '@shared/types/editorFs.js'
+
+type Unsub = () => void
+
+// Multiplexed subscription for file-change pushes — same pattern (and
+// WHY) as preload/api/lsp.ts's diagnostics bridge: buffers watch/unwatch
+// as tabs open and close, and per-subscription ipcRenderer.on listeners
+// would thrash Electron's IPC listener list. One process-lifetime
+// listener fans out to an in-memory Set.
+const fileChangeSubscribers = new Set<(event: EditorFsChangeEvent) => void>()
+let fileChangeListenerInstalled = false
+
+function subscribeFileChanges(cb: (event: EditorFsChangeEvent) => void): Unsub {
+  fileChangeSubscribers.add(cb)
+  if (!fileChangeListenerInstalled) {
+    fileChangeListenerInstalled = true
+    ipcRenderer.on(
+      'editor-fs:file-changed',
+      (_evt: unknown, payload: EditorFsChangeEvent) => {
+        for (const subscriber of fileChangeSubscribers) subscriber(payload)
+      },
+    )
+  }
+  return () => {
+    fileChangeSubscribers.delete(cb)
+  }
+}
+
+const directoryChangeSubscribers = new Set<(event: EditorFsDirectoryChangeEvent) => void>()
+let directoryChangeListenerInstalled = false
+
+function subscribeDirectoryChanges(cb: (event: EditorFsDirectoryChangeEvent) => void): Unsub {
+  directoryChangeSubscribers.add(cb)
+  if (!directoryChangeListenerInstalled) {
+    directoryChangeListenerInstalled = true
+    ipcRenderer.on(
+      'editor-fs:directory-changed',
+      (_evt: unknown, payload: EditorFsDirectoryChangeEvent) => {
+        for (const subscriber of directoryChangeSubscribers) subscriber(payload)
+      },
+    )
+  }
+  return () => {
+    directoryChangeSubscribers.delete(cb)
+  }
+}
 
 // Editor filesystem bridge.
 //
@@ -42,7 +96,7 @@ export const editorFsApi = {
     root: string
     path: string
     text: string
-    expectedMtimeMs?: number | null
+    expectedVersion?: string | null
   }): Promise<EditorFsWriteResult> =>
     ipcRenderer.invoke('editor-fs:write-text-file', params),
 
@@ -70,4 +124,38 @@ export const editorFsApi = {
     path: string
   }): Promise<EditorFsMutationResult> =>
     ipcRenderer.invoke('editor-fs:delete', params),
+
+  editorListFilesRecursive: (params: {
+    root: string
+  }): Promise<EditorFsRecursiveListResult> =>
+    ipcRenderer.invoke('editor-fs:list-files-recursive', params),
+
+  editorCancelListFilesRecursive: (): Promise<void> =>
+    ipcRenderer.invoke('editor-fs:cancel-list-files-recursive'),
+
+  editorSearchContent: (params: {
+    root: string
+    query: string
+    caseSensitive?: boolean
+    excludePaths?: string[]
+  }): Promise<EditorFsSearchResult> =>
+    ipcRenderer.invoke('editor-fs:search-content', params),
+
+  editorWatchFile: (params: { root: string; path: string }): Promise<void> =>
+    ipcRenderer.invoke('editor-fs:watch', params),
+
+  editorUnwatchFile: (params: { root: string; path: string }): Promise<void> =>
+    ipcRenderer.invoke('editor-fs:unwatch', params),
+
+  onEditorFileChanged: (cb: (event: EditorFsChangeEvent) => void): Unsub =>
+    subscribeFileChanges(cb),
+
+  editorWatchDirectory: (params: { root: string; path: string }): Promise<void> =>
+    ipcRenderer.invoke('editor-fs:watch-directory', params),
+
+  editorUnwatchDirectory: (params: { root: string; path: string }): Promise<void> =>
+    ipcRenderer.invoke('editor-fs:unwatch-directory', params),
+
+  onEditorDirectoryChanged: (cb: (event: EditorFsDirectoryChangeEvent) => void): Unsub =>
+    subscribeDirectoryChanges(cb),
 }

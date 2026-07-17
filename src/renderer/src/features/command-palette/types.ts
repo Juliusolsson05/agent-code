@@ -182,10 +182,17 @@ export type CommandContext = {
     caffeinateActive: boolean
     caffeinateSupported: boolean
     globalEditorOpen: boolean
+    /** Current command-target project. Editor open/search commands use this
+     * when the overlay is closed, because activeCwd may still point at the
+     * project that was visible before a tab/focus change. */
+    focusedCwd: string | null
     /** Whether the Global Editor's in-editor file tree is rendered.
      *  Only consulted while the overlay is open; otherwise it has no
      *  visible effect. Source of truth is the global-editor store. */
     fileTreeVisible: boolean
+    /** Whether the Global Editor is in fullscreen (workspace hidden).
+     *  Same scoping as fileTreeVisible — global-editor store owns it. */
+    editorFullscreen: boolean
     dispatchModeEnabled: boolean
     globalDispatchEnabled: boolean
     /** App-wide agent pane surface policy from Settings. The command registry

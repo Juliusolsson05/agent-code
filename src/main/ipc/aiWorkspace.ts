@@ -2,7 +2,6 @@ import { ipcMain } from 'electron'
 
 import type { AiWorkspaceRegistry } from '@main/aiWorkspace/AiWorkspaceRegistry.js'
 import type {
-  AiWorkspaceAttachFileParams,
   AiWorkspaceCreateParams,
   AiWorkspaceDetachFileParams,
   AiWorkspaceWriteFileParams,
@@ -15,9 +14,6 @@ export function registerAiWorkspaceIpc(registry: AiWorkspaceRegistry): void {
   ipcMain.handle('ai-workspace:list', () => registry.list())
   ipcMain.handle('ai-workspace:get', (_evt, workspaceId: string) =>
     registry.get(workspaceId),
-  )
-  ipcMain.handle('ai-workspace:attach-file', (_evt, params: AiWorkspaceAttachFileParams) =>
-    registry.attachFile(params),
   )
   ipcMain.handle('ai-workspace:detach-file', (_evt, params: AiWorkspaceDetachFileParams) =>
     registry.detachFile(params),

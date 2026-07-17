@@ -3,14 +3,12 @@ import hljs from 'highlight.js'
 
 import {
   languageFileExtension,
+  monacoLanguageId,
   normalizeCodeLanguage,
-  supportsLsp,
+  supportsTranscriptLsp,
 } from '@shared/code/language'
 import { APP_PROTOCOL_SCHEME } from '@shared/appIdentity'
-import {
-  THEME_CHANGED_EVENT,
-  getActiveAppFontFamily,
-} from '@renderer/app-state/settings/theme'
+import { THEME_CHANGED_EVENT, getActiveAppFontFamily } from '@renderer/app-state/settings/theme'
 import {
   registerCodeBlock,
   unregisterCodeBlock,
@@ -49,11 +47,7 @@ type Props = {
   transformPage?: (page: string) => string
 }
 
-function inferClientUri(
-  codeId: string,
-  language: string,
-  path?: string | null,
-): string {
+function inferClientUri(codeId: string, language: string, path?: string | null): string {
   if (path) {
     return `${APP_PROTOCOL_SCHEME}://file/${encodeURIComponent(path)}#${encodeURIComponent(codeId)}`
   }
@@ -73,8 +67,8 @@ export const CodeBlock = memo(function CodeBlock({
   transformPage,
 }: Props) {
   const normalizedLanguage = useMemo(
-    () => normalizeCodeLanguage(language, path),
-    [language, path],
+    () => normalizeCodeLanguage(language, path, code),
+    [code, language, path],
   )
   const oversized = useMemo(() => exceedsInlineTextBudget(code), [code])
   const [largeContentOpen, setLargeContentOpen] = useState(false)
@@ -91,12 +85,10 @@ export const CodeBlock = memo(function CodeBlock({
         hasNext: false,
       }
     }
-    return largeContentOpen
-      ? boundedTextPage(code, requestedPageStart)
-      : collapsedTextPreview(code)
+    return largeContentOpen ? boundedTextPage(code, requestedPageStart) : collapsedTextPreview(code)
   }, [code, largeContentOpen, oversized, requestedPageStart])
   const visibleCode = useMemo(
-    () => transformPage ? transformPage(visiblePage.text) : visiblePage.text,
+    () => (transformPage ? transformPage(visiblePage.text) : visiblePage.text),
     [transformPage, visiblePage.text],
   )
   const shouldUseStaticFallback =
@@ -130,7 +122,11 @@ export const CodeBlock = memo(function CodeBlock({
   const containerRef = useRef<HTMLDivElement>(null)
   const reactId = useId().replace(/:/g, '_')
   const clientUri = useMemo(
-    () => inferClientUri(codeId ?? reactId, normalizedLanguage, path),
+    // `codeId` is semantic identity for picker stability, not guaranteed DOM
+    // uniqueness (two messages can start with the same 24 code characters).
+    // Monaco rejects duplicate model URIs and LSP lifetime is keyed by that
+    // URI, so every mounted instance must contribute React's unique id too.
+    () => inferClientUri(`${codeId ?? 'anonymous'}:${reactId}`, normalizedLanguage, path),
     [codeId, normalizedLanguage, path, reactId],
   )
 
@@ -143,9 +139,7 @@ export const CodeBlock = memo(function CodeBlock({
   // visually collapsed row computationally open. After explicit expansion we
   // create Monaco for one bounded page only.
   const useMonaco =
-    engine !== 'static' &&
-    !shouldUseStaticFallback &&
-    (!oversized || largeContentOpen)
+    engine !== 'static' && !shouldUseStaticFallback && (!oversized || largeContentOpen)
   useEffect(() => {
     if (!useMonaco) return
     let disposed = false
@@ -162,19 +156,31 @@ export const CodeBlock = memo(function CodeBlock({
       const monaco = await getMonaco()
       if (disposed || !containerRef.current) return
 
-      await ensureSemanticProvider(monaco, workspaceRoot, normalizedLanguage).catch(() => {
-        // WHY semantic provider setup is allowed to fail open: syntax-colored
-        // code blocks are still useful when the TypeScript/JSON/CSS language
-        // server cannot start, and the renderer has no recovery action to
-        // offer from inside a transcript row. Let Monaco render the model with
-        // its built-in tokenization and let a future mount retry provider
-        // registration; do not turn an LSP startup hiccup into an empty code
-        // block plus an unhandled async effect rejection.
-      })
+      if (workspaceRoot && supportsTranscriptLsp(normalizedLanguage)) {
+        await ensureSemanticProvider(monaco, workspaceRoot, normalizedLanguage, {
+          kind: 'editor-root',
+        }).catch(() => {
+          // WHY semantic provider setup is allowed to fail open: syntax-colored
+          // code blocks are still useful when the bundled TypeScript server
+          // cannot start. Other language servers are intentionally not started
+          // for transcript snippets at all; supportsTranscriptLsp is the cost
+          // boundary shared with didOpen below.
+        })
+      }
       if (disposed) return
 
       const uri = monaco.Uri.parse(clientUri)
-      const model = monaco.editor.createModel(visibleCode, normalizedLanguage, uri)
+      // monacoLanguageId: 'typescriptreact'/'javascriptreact' are LSP ids
+      // Monaco doesn't ship — see language.ts. Without the mapping, .tsx
+      // snippets render with the plaintext tokenizer (blank highlighting).
+      // `visibleCode` is equally load-bearing: main now bounds oversized
+      // transcript payloads before Monaco sees them, so restoring the old
+      // full `code` value here would recreate the renderer-freeze regression.
+      const model = monaco.editor.createModel(
+        visibleCode,
+        monacoLanguageId(normalizedLanguage),
+        uri,
+      )
       cleanups.push(() => model.dispose())
 
       const editor = monaco.editor.create(containerRef.current, {
@@ -223,6 +229,10 @@ export const CodeBlock = memo(function CodeBlock({
           horizontalScrollbarSize: 8,
           alwaysConsumeMouseWheel: false,
         },
+        // See MonacoFileEditor — custom themes never enable semantic
+        // tokens by default, so the LSP semantic-token provider this
+        // component registers was painting nothing.
+        'semanticHighlighting.enabled': true,
       })
       cleanups.push(() => editor.dispose())
 
@@ -252,13 +262,17 @@ export const CodeBlock = memo(function CodeBlock({
       window.addEventListener(THEME_CHANGED_EVENT, onThemeChanged)
       cleanups.push(() => window.removeEventListener(THEME_CHANGED_EVENT, onThemeChanged))
 
-      if (workspaceRoot && supportsLsp(normalizedLanguage)) {
+      if (workspaceRoot && supportsTranscriptLsp(normalizedLanguage)) {
         await window.api.openLspDocument({
           clientUri,
           content: visibleCode,
           language: normalizedLanguage,
           workspaceRoot,
-          filePath: path ?? null,
+          authorization: { kind: 'editor-root' },
+          // A rendered transcript block is never the actual file, even when
+          // the message labels it with a path. Sending that path would make a
+          // partial/truncated snippet replace the real document in tsserver.
+          filePath: null,
         })
         if (disposed) {
           // WHY close after a late open: unmount can happen while the main-process LSP handshake is
@@ -304,7 +318,11 @@ export const CodeBlock = memo(function CodeBlock({
       // Run all cleanups in reverse order (LIFO) so resources that
       // depend on earlier ones are released first.
       for (let i = cleanups.length - 1; i >= 0; i--) {
-        try { cleanups[i]() } catch { /* best-effort */ }
+        try {
+          cleanups[i]()
+        } catch {
+          /* best-effort */
+        }
       }
     }
   }, [useMonaco, clientUri, visibleCode, engine, normalizedLanguage, path, workspaceRoot])
@@ -355,7 +373,9 @@ export const CodeBlock = memo(function CodeBlock({
             <button
               type="button"
               className="hover:text-ink cursor-pointer"
-              onClick={() => setPageStarts(current => current.length > 1 ? current.slice(0, -1) : current)}
+              onClick={() =>
+                setPageStarts(current => (current.length > 1 ? current.slice(0, -1) : current))
+              }
             >
               previous
             </button>

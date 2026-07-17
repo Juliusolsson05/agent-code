@@ -49,21 +49,27 @@ export function ResizableSidebar({
   if (!visible) return null
 
   return (
-    <div ref={containerRef} className="flex h-full min-h-0 flex-shrink-0 overflow-hidden">
-      <div className="flex-shrink-0 overflow-hidden" style={{ width: `${widthPx}px` }}>
-        {children}
-      </div>
+    <div
+      ref={containerRef}
+      className="flex h-full min-h-0 flex-shrink-0 overflow-hidden"
+      // Preserve at least 160px for Monaco when the outer editor pane is
+      // narrow. The stored preference remains unchanged and takes effect again
+      // when space returns; only the rendered geometry is constrained.
+      style={{
+        width: `max(0px, min(${widthPx + SIDEBAR_SPLITTER_HIT_PX}px, calc(100% - 160px)))`,
+      }}
+    >
+      <div className="min-w-0 flex-1 overflow-hidden">{children}</div>
       <SplitHandle
         dragging={splitter.dragging}
         onMouseDown={splitter.onMouseDown}
         hitSizePx={SIDEBAR_SPLITTER_HIT_PX}
         barSizePx={SIDEBAR_SPLITTER_BAR_PX}
-        // WHY opt out of separator semantics here: these sidebars live inside
-        // the Global Editor's left pane, below the app-level editor/workspace
-        // separator. The old inline file-tree splitter intentionally rendered
-        // as visual chrome only so assistive tech did not see it as a peer of
-        // the outer split. Keep that hierarchy while sharing the DOM shape.
-        exposeSeparatorRole={false}
+        label="Resize editor file list"
+        valueNow={Math.round(widthPx)}
+        valueMin={180}
+        valueMax={500}
+        onKeyboardDelta={direction => onWidthChange(widthPx + direction * 10)}
       />
       {splitter.cursorLock}
     </div>

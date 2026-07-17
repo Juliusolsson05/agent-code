@@ -1,13 +1,11 @@
 import type { SessionId, TabId } from '@renderer/workspace/types'
 
-export type EditorPreviousSurface =
-  | 'grid'
-  | 'dispatch'
-  | 'reader'
-  | 'spotlight'
-  | 'tile-tabs'
+export type EditorPreviousSurface = 'grid' | 'dispatch' | 'reader' | 'spotlight' | 'tile-tabs'
 
 export type EditorFileBuffer = {
+  /** Unique identity for this open-buffer lifetime. Async IO started before a
+   * close/reopen must not mutate the replacement at the same path. */
+  generation: number
   path: string
   absolutePath: string
   language: string
@@ -16,8 +14,31 @@ export type EditorFileBuffer = {
   dirty: boolean
   loading: boolean
   error: string | null
+  /** A non-IO warning owned by the host surface. AI Workspace uses this when
+   * metadata is detached while an unsaved buffer must remain recoverable.
+   * Keeping it separate from `error` means typing/retrying IO cannot erase the
+   * capability-boundary warning by accident. */
+  surfaceWarning?: string | null
+  /** True when the last save failed the optimistic mtime check ("file
+   *  changed on disk") or the watcher flagged an external change under a
+   *  dirty buffer. Distinct from `error` (which also covers hard IO
+   *  failures) because the conflict state has dedicated recovery actions
+   *  (reload / overwrite) while a hard error only has retry. */
+  conflict: boolean
+  /** The disk-side condition behind a conflict. A deletion needs different
+   * recovery actions from a changed file: there is nothing to reload, while
+   * "save my copy" is a deliberate recreation. Keeping this structured avoids
+   * inferring behavior from user-facing error text. */
+  externalChange: 'changed' | 'deleted' | null
   mtimeMs: number | null
+  /** Opaque main-process version used for optimistic writes. mtime remains UI
+   * metadata only because filesystems can preserve or coarsen timestamps. */
+  diskVersion: string | null
   selection: { line: number; column: number } | null
+  /** One-shot request to move keyboard focus into this model. Tab/cwd
+   * restoration must not steal focus from a terminal, while explicit tree,
+   * tab, and quick-open navigation should land in the editor. */
+  focusRequest: number | null
 }
 
 export type EditorModeState = {

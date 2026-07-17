@@ -1,4 +1,5 @@
 import type { SessionManager } from '@main/sessionManager.js'
+import { EditorFsRootRegistry } from './editorFsRootRegistry.js'
 import type { LspManager } from '@main/lspManager.js'
 import type { GhostJournalRegistry } from '@main/ghostJournal.js'
 import type { DictationDebugJournalRegistry } from '@main/dictationJournal.js'
@@ -16,6 +17,7 @@ import { registerDebugIpc } from '@main/ipc/debug.js'
 import { registerGitIpc } from '@main/ipc/git.js'
 import { registerPerformanceIpc } from '@main/ipc/performance.js'
 import { registerEditorFsIpc } from '@main/ipc/editorFs.js'
+import { registerEditorFsWatchIpc } from '@main/ipc/editorFsWatch.js'
 import { registerSetupIpc } from '@main/ipc/setup.js'
 import { registerWorktreeActivityIpc } from '@main/ipc/worktreeActivity.js'
 import { registerDictationIpc } from '@main/ipc/dictation.js'
@@ -70,12 +72,14 @@ export type IpcDeps = {
 }
 
 export function registerAllIpc(deps: IpcDeps): void {
+  const editorFsRoots = new EditorFsRootRegistry(deps.manager)
   registerPerformanceIpc(deps.manager)
   installPerformanceIpcInstrumentation()
-  registerEditorFsIpc()
+  registerEditorFsIpc(editorFsRoots)
+  registerEditorFsWatchIpc(editorFsRoots)
   registerSessionIpc(deps.manager, deps.pasteDebugJournals)
   registerProviderIpc()
-  registerLspIpc(deps.lspManager)
+  registerLspIpc(deps.lspManager, editorFsRoots, deps.aiWorkspaceRegistry)
   registerFsIpc()
   registerSessionsIpc()
   registerWorkspaceIpc()

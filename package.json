@@ -49,6 +49,7 @@
     "postinstall": "electron-rebuild -f -w node-pty"
   },
   "dependencies": {
+    "@iconify-json/vscode-icons": "1.2.67",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@openai/codex-sdk": "0.144.4",
     "@opentelemetry/api": "^1.9.1",
@@ -82,7 +83,7 @@
     "remark-gfm": "^4.0.1",
     "tailwind-merge": "^3.6.0",
     "typescript-language-server": "^4.4.0",
-    "vscode-icons-js": "^11.6.1",
+    "vscode-icons-js": "11.6.1",
     "vscode-jsonrpc": "^8.2.1",
     "vscode-languageserver-protocol": "^3.17.5",
     "ws": "^8.20.0",
