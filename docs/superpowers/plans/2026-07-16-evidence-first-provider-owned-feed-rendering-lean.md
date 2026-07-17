@@ -467,10 +467,9 @@ policies** as part of the feed rewrite.
 1. **Live condition:** `claude.compaction` is a transient read-only strip with
    running/error/done state; not an attention kind unless it errors.
 2. **Durable transcript semantics:** provider transcript mappers normalize a
-   completed compaction into `compact_boundary` + `compact_summary` entries,
-   currently rendered through the shared `CompactBoundaryRow` /
-   `CompactSummaryRow` exception. Phase 10 moves those durable entries through
-   provider-owned compaction components backed by a model-only shared protocol.
+   completed compaction into `compact_boundary` + `compact_summary` entries.
+   Provider durable-entry dispatch owns admission; a model-only shared protocol
+   owns only the visual grammar.
 
 The live strip must never become a feed tool card, and the durable summary must
 never depend on a still-live condition snapshot. Restart/replay must recover the
@@ -703,31 +702,34 @@ the PR merges only after Phase 10 plus the final whole-branch review.
   third-party-MCP shapes are deliberately generic with per-family evidence
   requirements rather than speculative cards. Provider condition destinations
   are explicit, large disclosures are lazy/bounded, non-conversational system
-  metadata remains ledger-excluded with a total muted fallback, and durable
-  compact entries remain Phase 10's exception.
-- **Phase 9 — long-tail coverage + proven deletion. Completed 2026-07-17.**
-  The frozen corpus has 3,686 known observations and the local recording soak
-  adds 7,250 current-`fp2` receipt sightings with no unknown/misrouted/unknown-
-  outcome group; old `fp1` telemetry is reported separately instead of posing
-  as current drift. The audit sorts its bounded newest-recording window and
+  metadata remains ledger-excluded with a total muted fallback. Durable compact
+  entries were intentionally deferred to Phase 10 and are now provider-owned.
+- **Phase 9 — long-tail coverage + proven deletion. Implementation completed
+  2026-07-17; fresh live soak remains an operator merge check.** The frozen
+  corpus has 3,686 known observations with no structural unknown. The retained
+  local sidecars contain 1,250 obsolete schema-v1 receipt sightings and zero
+  post-cutover schema-v2 sightings, so the audit ignores them explicitly rather
+  than posing old PR-local receipts as current drift. After the feature overlay
+  is restarted, a fresh schema-v2 developer recording must be captured before
+  merge. The audit sorts its bounded newest-recording window and
   prints actionable fatal details. Deterministic semantic routes graduated;
   content/paired-dependent prefixes, reasoning, results, unified exec, Git, and
-  compaction remain explicitly planned. Duplicate result/partial decoders and
+  compaction were left for the paired Phase 10 cutover. Duplicate result/partial decoders and
   the Claude/Codex feed barrels, central ToolUseRow, answered-question, and Todo
   exceptions are gone; the generic structured/MCP/media/raw fallback stays
   total and the import-boundary gate proves shared feed neutrality. Evergreen
   docs record the as-built deletion proof and PR #524 port/reject matrix; #524
-  is closed as superseded. The central Git and compact-entry branches remain
-  deliberately protected for Phase 10's paired evidence and replay cutover.
-- **Phase 10 — final Git + compaction ownership convergence.** First land the
+  is closed as superseded.
+- **Phase 10 — final Git + compaction ownership convergence. Completed
+  2026-07-17.** Landed the
   actual paired `renderOperation(ProviderOperationInput)` boundary promised by
   Phases 5–6, so one renderer receives correlated tool-use + result evidence.
-  Move feed Git detection/parsing/cards out of `Block.tsx` and
+  Moved feed Git detection/parsing/cards out of `Block.tsx` and
   `features/git/ui/GitRows.tsx` into a rich shared command formatter directory,
   preserving conservative decline, bounded raw output, and explicit result
   absorption receipts; keep the persistent Git bar in `features/git/`. Remove
-  or generalize the Git-only `customRendering` gate once its remaining product
-  meaning is proven. Move durable compact boundary/summary rows out of central
+  and deleted the Git-only `customRendering` gate after proving it had no
+  remaining product meaning. Moved durable compact boundary/summary rows out of central
   `EntryRow` selection into provider-owned compaction adapters/components backed
   by `providers/shared/renderer/protocols/compaction/`; colocate each provider's
   transient compaction condition view under its compaction directory while
@@ -736,12 +738,16 @@ the PR merges only after Phase 10 plus the final whole-branch review.
   only as a documented compatibility fallback. Fixtures cover structured-only
   with screen detection disabled, screen-only fallback, both-source dedup,
   disagreement, error/done, restart/replay, and Codex compaction never rendering
-  as an empty generic marker. Gate: no shared feed dispatcher recognizes Git or
-  compact kinds; named provider receipts own every migrated outcome; both signal
+  as an empty generic marker. Gate: no shared feed dispatcher recognizes Git
+  intent or raw provider compact discriminators; named provider receipts own
+  every migrated outcome; both signal
   sources produce one monotonic live lifecycle; durable compaction survives
   replay; every removed route has catalog + fixture + shadow/replay proof; and
   the corpus has no unknown, misrouted, unsupported, or unknown-outcome residue
-  for the migrated shapes.
+  for the migrated shapes. The Git comparison setting and prerelease evidence
+  compatibility were deleted; provider durable-entry dispatch now also owns
+  Claude task notifications/questions instead of leaving provider XML/payload
+  vocabulary in the shared feed.
 
 Cross-phase test contract (full lists: long plan §Testing): fingerprint
 stability + literal-key capture/normalized identity; catalog↔adapter agreement both directions; every

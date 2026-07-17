@@ -8,8 +8,7 @@ cannot yet express the facts it needs.
 
 Legend: **DELETED** = no shipped source remains · **GUTTED** = plumbing/view
 survives but its old decision or interpretation logic is gone · **KEPT** = a
-current responsibility still depends on it · **PHASE 10** = intentionally
-retained exception with a named replacement gate.
+current responsibility still depends on it.
 
 ## Ownership-decision cutover (complete before PR #555)
 
@@ -74,20 +73,21 @@ The fallback rows themselves are **KEPT**, not legacy. `JsonToolRow`,
 unknown-semantic-object view make the painter total when a provider adapter
 declines or upstream ships a new shape.
 
-## Deliberate Phase 10 exceptions
+## Phase 10 exceptions — closed
 
-Two central branches are retained because Phase 9 does not yet have the
-operation-level evidence required to delete them safely:
+The two protected Phase 9 exceptions were removed only after their paired and
+replay evidence was available:
 
-| route | current owner | deletion gate |
+| former route | fate | replacement proof |
 |---|---|---|
-| shell Git interception in `features/feed/ui/rows/Block.tsx` and result absorption into `features/git/ui/GitRows.tsx` | central paired tool indices + `shared.git-widget` receipt | provider `renderOperation` receives correlated use/result evidence; Git formatter fixtures cover decline, success, failure, restart/replay; no shared feed Git detection remains |
-| durable compact boundary/summary selection in `features/feed/ui/rows/EntryRow.tsx` plus provider condition views | central entry dispatcher + provider condition registry | provider compaction adapters define structured/screen precedence and dedup; fixtures cover structured-only, fallback-only, both/disagreement, error/done, and restart/replay |
+| shell Git interception in `features/feed/ui/rows/Block.tsx`, `features/git/ui/GitRows.tsx`, `shared/git/gitDetect.ts`, and `shared/git/gitParse.ts` | **DELETED** | providers normalize correlated command/result pairs through `renderOperation`; the shared Git formatter declines mixed chains, exposes bounded exact raw evidence on every claimed result, and returns an explicit absorption receipt |
+| durable compact selection in central `EntryRow`, `CompactBoundaryRow`, `CompactSummaryRow`, and the tile `CompactionStrip` | **DELETED** | provider durable-entry dispatch owns replayable boundary/summary evidence; shared compaction is only a narrow visual protocol; structured live lifecycle outranks screen fallback and durable summaries cannot regress to stale screen error/running state |
 
-The persistent Git workspace bar is not a feed renderer and is **KEPT** after
-Phase 10. Likewise, screen parsing may remain a versioned live-compaction
-compatibility fallback; it must not remain the primary semantic source or the
-owner of durable compact history.
+The persistent Git workspace bar is not a feed renderer and is **KEPT**. Screen
+parsing is also **KEPT** as a documented lower-confidence Claude live fallback,
+not as the owner of durable compact history. The unreleased Git comparison
+switch is **DELETED**, including its persistence shim, rather than carried as
+compatibility state for a setting that never shipped.
 
 ## PR #524 port-or-reject inventory
 
@@ -110,13 +110,13 @@ decision record required before closing that draft.
 | omission/projection receipts | **REIMPLEMENTED AT THE PAINT BOUNDARY** | shape sightings record specialized/generic/absorbed/condition/unknown outcomes; no `OperationVM → ArtifactVM` double projection |
 | global 17-family taxonomy and `presentation/` classifier | **REJECTED** | tool names and raw wrappers are provider vocabulary; provider adapters map only proven shapes into shared protocols |
 | shared classifiers importing provider extractors | **REJECTED** | forbidden by `src/providers/importBoundaries.test.ts` |
-| wholesale deletion of `Block`, `ConversationRow`, semantic rows, and result rows | **REJECTED** | those files still own neutral paint/fallback and the two documented Phase 10 exceptions |
+| wholesale deletion of `Block`, `ConversationRow`, semantic rows, and result rows | **REJECTED** | those files still own neutral container paint and total fallbacks; the former Git/compact exceptions have moved behind provider capabilities |
 
 ## Completion boundary
 
-Phase 9 is complete when the catalog/corpus queries above are green, all
-current `fp2` recording observations have a non-unknown accountable outcome,
-the full suite/build passes, this evergreen record matches the import graph,
-and PR #524 is closed as superseded by #555. This is not the end of the rewrite:
-the two Phase 10 exceptions remain deliberately visible here so “legacy
-deletion complete” cannot be misread as permission to merge #555 early.
+Phases 9 and 10 are complete when the catalog/corpus queries above are green,
+all schema-v2 recording observations have accountable outcomes, the full
+suite/build passes, this evergreen record matches the import graph, and the
+protected Git/compaction routes above remain absent. Pre-release schema-v1
+sidecars are reported as obsolete evidence and must be recaptured; the runtime
+does not reinterpret them to manufacture compatibility.

@@ -1507,10 +1507,10 @@ Compaction appears in two separate forms:
    kind unless it errors.
 2. **Durable transcript semantics:** provider transcript mappers normalize a
    completed compaction into `compact_boundary` and `compact_summary` entries.
-   The feed currently renders those through the central
-   `CompactBoundaryRow` / `CompactSummaryRow` exception. Phase 10 replaces that
-   exception with provider-owned compaction adapters/components backed by a
-   model-only shared compaction protocol.
+   Before Phase 10 the feed rendered those through central
+   `CompactBoundaryRow` / `CompactSummaryRow` exceptions. The completed phase
+   replaced both admission and painting with provider-owned classifiers and
+   adapters backed by a model-only shared compaction protocol.
 
 The live strip must not be converted into a feed tool card, and the durable
 summary must not depend on a still-live condition snapshot. Restart/replay must
@@ -2367,18 +2367,20 @@ Tasks:
 
 Completion boundary (2026-07-17):
 
-- the 48-bundle frozen corpus reports 3,686 structurally known observations;
-  the local 55-recording soak adds 7,250 current-`fp2` receipt sightings with
-  no unknown structure, misroute, or unknown outcome. Historical `fp1`
-  writer keys are reported separately because fingerprints produced by two
-  canonicalizers cannot be compared honestly;
+- the 48-bundle frozen corpus reports 3,686 structurally known observations.
+  The retained local sidecars contain 1,250 obsolete schema-v1 receipt
+  sightings and no post-cutover schema-v2 sightings; the audit ignores and
+  reports those old PR-local receipts rather than making them runtime-
+  compatible. A fresh schema-v2 developer recording after restarting the
+  feature overlay remains a required operator merge check;
 - the audit now sorts recording directories before applying its bounded newest
   window and prints fatal fingerprint/route/path details, so a failure is a
   usable inbox rather than a count that requires another ad hoc parser;
 - deterministic live Bash/Edit/Write and Codex apply_patch/exec_command routes
-  graduated from seed-era `planned` metadata. Prefixes, reasoning, result
-  envelopes, unified exec, durable Git commands, and patch success/error remain
-  planned only where content or paired-source evidence truly changes ownership;
+  graduated from seed-era `planned` metadata. The shipping catalog gate now
+  rejects every `planned` primary, lifecycle, or alternate route; uncertain or
+  incomplete structures deliberately stay on total generic fallback instead
+  of carrying a promise that the released painter does not implement;
 - Claude/Codex feed barrels, central ToolUseRow and answered-question/Todo
   exceptions, and duplicate result/partial-string/object decoders are deleted.
   The shared feed has no direct specific-provider renderer import; provider
@@ -2387,9 +2389,9 @@ Completion boundary (2026-07-17):
   objects, including bounded structured JSON/JSONL/path-line, typed MCP/media,
   and lazy exact-source evidence;
 - evergreen rendering/deletion docs now describe the as-built provider
-  directory boundary, shape memory, exact deletions, and the protected Phase 10
-  Git/compaction routes. PR #524 has a per-primitive port/reject inventory and
-  is closed as superseded by this evidence-first implementation.
+  directory boundary, shape memory, exact deletions, and the provider-owned
+  Phase 10 Git/compaction routes. PR #524 has a per-primitive port/reject
+  inventory and is closed as superseded by this evidence-first implementation.
 
 Exit gate:
 
@@ -2400,6 +2402,13 @@ Exit gate:
 - every deletion is backed by a catalog query and replay result.
 
 ### Phase 10 — final Git and compaction ownership convergence
+
+**Completed 2026-07-17.** The as-built result follows the tasks and exit gate
+below: correlated `renderOperation` decisions own Git use/result pairs;
+provider durable-entry dispatch owns compact history; structured compaction is
+authoritative with screen-only fallback; and the old central files/settings are
+deleted. See `docs/rendering/legacy-deletion-manifest.md` for exact deletion
+proof and retained neutral infrastructure.
 
 This final phase closes two architectural exceptions discovered while Phases
 1–6 were running. It does not invent new semantics: it migrates the already
@@ -2447,8 +2456,9 @@ Compaction tasks:
 
 Exit gate:
 
-- no shared feed dispatcher recognizes Git command intent or durable compact
-  entry kinds;
+- no shared feed dispatcher recognizes Git command intent or raw provider
+  compact-entry discriminators; the ledger sees only the provider-normalized
+  durable kind needed for ordering and debug evidence;
 - named provider receipts own every migrated Git/compaction outcome, including
   absorbed results;
 - structured-capable fixtures work with screen detection disabled, fallback-only
