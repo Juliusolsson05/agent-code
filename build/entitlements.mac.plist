@@ -12,5 +12,11 @@
   <true/>
   <key>com.apple.security.cs.disable-library-validation</key>
   <true/>
+  <!-- Dictation is opt-in, but hardened-runtime resource access is decided at
+       signing time. Without this entitlement a correctly worded Info.plist
+       prompt is not sufficient: Chromium can request the microphone while the
+       signed process is still denied access underneath it. -->
+  <key>com.apple.security.device.audio-input</key>
+  <true/>
 </dict>
 </plist>

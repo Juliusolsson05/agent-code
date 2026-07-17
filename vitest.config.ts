@@ -85,6 +85,12 @@ export default defineConfig({
   // not defined". Projects make the environment part of the test file contract,
   // so every entry point sees the same layer split.
   test: {
+    // Filesystem-polling tests can miss a single 100 ms watch tick when all
+    // three projects saturate a small CI runner. A one-time CI retry preserves
+    // the value of the assertion (a persistent regression still fails) while
+    // preventing release signing from being held hostage by scheduler jitter.
+    // Local runs stay retry-free so developers still see flakes immediately.
+    retry: process.env.CI ? 1 : 0,
     projects: [
       {
         extends: true,
@@ -108,6 +114,14 @@ export default defineConfig({
         test: {
           name: 'integration',
           environment: 'node',
+          // Electron 43 validates/downloads its binary lazily from index.js
+          // when an integration import reaches `electron`. Starting several
+          // fresh project workers at the same instant can make those workers
+          // race the same dist extraction and fail with EEXIST even though the
+          // installed binary is healthy. Integration files are few and mostly
+          // I/O-bound; serial files remove that package-installer race without
+          // slowing the large pure-unit/renderer suites.
+          fileParallelism: false,
           include: [
             'src/**/*.integration.test.ts',
             'packages/**/*.integration.test.ts',
