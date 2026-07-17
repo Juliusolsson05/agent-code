@@ -1,0 +1,83 @@
+name: CI
+
+# WHY this workflow exists: neither `electron-vite build` nor Vitest
+# type-checks — `tsc -b` is the repository's only type gate, and until this
+# file every PR merged on whatever the author remembered to run locally.
+# The #533 merge-then-revert ("these changes are unfinished") and PR #526
+# arriving with zero checks are the concrete failure mode this closes.
+#
+# WHY this is deliberately small: one job that mirrors the already-proven
+# validation half of release.yml's build-app job. Packaging, signing,
+# dual-arch structural verification, and `npm audit` intentionally stay in
+# release.yml — audit advisories drift independently of PR content, and the
+# packaged-app verifier hard-requires both arch builds.
+on:
+  pull_request:
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
+  push:
+    branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
+
+# One live run per ref: force-pushing a PR branch cancels the obsolete run
+# instead of queueing behind it.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    # WHY macos and not ubuntu: the suite is only proven on darwin
+    # (node-pty native rebuild via postinstall, tmux/pty assumptions).
+    # The repo is public, so macOS runner minutes are free.
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # All package submodules are public: anonymous HTTPS works with no
+          # secrets. release.yml's SUBMODULE_PAT/SSH steps exist only for
+          # private forks and are intentionally not replicated here.
+          submodules: recursive
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          # Keep the literal in sync with release.yml and .nvmrc (both 24).
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        # --include=dev guards the NODE_ENV=production trap: a production
+        # install strips electron-vite/vitest and every gate below with it.
+        run: npm ci --include=dev
+
+      - name: Type-check main and renderer
+        # electron-vite transpiles TypeScript but does not enforce the
+        # project references. This exact gate caught a real
+        # recovery_required count initializer that produced NaN in the
+        # shipped UI. The script also builds packages/workflow-mcp first,
+        # which the app build depends on.
+        run: npm run typecheck
+
+      - name: Test Workflow MCP
+        run: npm --prefix packages/workflow-mcp test
+
+      - name: Test unit
+        # The three projects run as separate steps so a failure names its
+        # layer in the Checks UI without spelunking one combined log.
+        # NODE_ENV is set to `test` by the npm scripts themselves; nothing
+        # here may export NODE_ENV (leaked `production` loads prod React and
+        # breaks act() in renderer tests). Flake policy is vitest's own
+        # `retry: CI ? 1 : 0` — no continue-on-error, no skips.
+        run: npm run test:unit
+
+      - name: Test integration
+        run: npm run test:integration
+
+      - name: Test renderer
+        run: npm run test:renderer
