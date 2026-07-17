@@ -18,15 +18,13 @@ import type { AgentProviderKind } from '@shared/types/providerKind'
 // NOT live here: catalogs are renderer-only reviewed source
 // (rendering/evidence/defineRenderShape.ts) and never cross IPC.
 //
-// THE PRIVACY INVARIANT (non-negotiable, tested in shapeFingerprint.test.ts):
-// nothing in this file may ever carry a prompt, command, file path, assistant
-// text, tool argument/output value, or condition option text. Sightings are
-// METADATA ONLY. `payloadHash` is the single deliberate exception — it is
-// content-SENSITIVE (a hash of the full payload) but not content-REVEALING,
-// kept purely as a local dedup/sample identity. It must never become the
-// catalog key: hashing content would turn every distinct command or prompt
-// into a supposedly new shape (the exact failure the structural fingerprint
-// exists to avoid).
+// DEV-EVIDENCE CONTRACT: sightings retain complete bounded structural key
+// paths, including dynamic/path/auth-looking keys. This capability is enabled
+// only with developer session recording, whose source events already contain
+// the full payload; sanitizing derived keys made the evidence strictly less
+// useful than its source. Scalar content still stays out of the structural
+// fingerprint because commands/prompts are not renderer shape identity.
+// `payloadHash` remains content-sensitive solely for dedup/sample counting.
 // ---------------------------------------------------------------------------
 
 /**
@@ -110,8 +108,9 @@ export type RenderOutcome =
  *
  * `sourceRecordingCursor` links the sighting back to the full session
  * recording (which retains the real payload under its existing local-only
- * privacy model) — that link is what lets `extract-rendering-shape.mjs`
- * turn a sighting into a redacted fixture without transcript archaeology.
+ * developer-mode recording contract) — that link is what lets
+ * `extract-rendering-shape.mts` turn a sighting into a complete local draft
+ * without transcript archaeology.
  *
  * `providerVersion`/`model` are provenance, not identity: upstream CLIs
  * regress and default unexpectedly, so knowing WHICH versions emitted a
@@ -144,6 +143,67 @@ export type RenderShapeSighting = {
    * records the true volume.
    */
   seenCount?: number
+}
+
+/**
+ * Renderer -> main acknowledgement for one sidecar append.
+ *
+ * WHY a tagged result instead of the old boolean: `false` used to mean three
+ * materially different things (the recorder had already closed, the batch was
+ * over the trust-boundary cap, or the payload was malformed). The observer
+ * consequently could neither retry a transient race nor split an oversized
+ * batch safely. Keeping the reason on the shared wire contract lets the
+ * renderer make a bounded recovery decision without parsing an error string.
+ */
+export type RenderShapeAppendResult =
+  | { status: 'accepted' }
+  | { status: 'no-recorder' }
+  | { status: 'rejected'; reason: 'empty' | 'too-many' | 'too-large' | 'invalid' }
+
+/**
+ * Closed route identity carried by every paint receipt.
+ *
+ * WHY this helper is shared: the writer already distinguished two renderers
+ * for the same structure, while the inbox and CLI later grouped only by
+ * `outcome.kind`. That erased the exact misroute evidence receipts were added
+ * to preserve. Consumers must use this function rather than independently
+ * guessing which property names the outcome union happens to use.
+ */
+export function renderOutcomeRouteIdentity(outcome: RenderOutcome): string {
+  switch (outcome.kind) {
+    case 'specialized':
+    case 'generic':
+      return `${outcome.kind}:${outcome.rendererId}`
+    case 'absorbed':
+      return `${outcome.kind}:${outcome.ownerRenderId}`
+    case 'condition-surface':
+      return `${outcome.kind}:${outcome.surface}`
+    case 'unknown':
+      return `${outcome.kind}:${outcome.fallbackRenderId}`
+  }
+}
+
+/** Canonical identity for MAX-not-SUM sidecar aggregation. */
+export function renderShapeWriterKey(
+  sighting: Pick<
+    RenderShapeSighting,
+    'provider' | 'sourcePlane' | 'lifecycle' | 'eventType' | 'structuralFingerprint' | 'outcome'
+  >,
+  recordingId = '',
+): string {
+  // A control separator prevents accidental ambiguity without ever being
+  // written literally into source (a previous raw NUL made git treat the
+  // observer as binary). Every component is closed metadata vocabulary.
+  const separator = String.fromCharCode(0)
+  return [
+    recordingId,
+    sighting.provider,
+    sighting.sourcePlane,
+    sighting.lifecycle,
+    sighting.eventType,
+    sighting.structuralFingerprint,
+    renderOutcomeRouteIdentity(sighting.outcome),
+  ].join(separator)
 }
 
 /**

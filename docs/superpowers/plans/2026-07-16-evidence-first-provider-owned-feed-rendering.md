@@ -1,14 +1,14 @@
 # Evidence-First, Provider-Owned Feed Rendering — Implementation Plan
 
-**Status:** Full implementation blueprint in review; no runtime implementation in this PR
+**Status:** Phases 1–7 implemented on PR #555 and under whole-branch hardening; Phases 8–10 remain. Do not merge until all ten phases and final gates pass.
 
 **Date:** 2026-07-16
 
-**Branch:** `plan/evidence-first-feed-rendering`
+**Branch:** `feat/render-shapes-phase1-fingerprint-catalog`
 
-**Worktree:** `/Users/juliusolsson/Desktop/Development/agent-code/.worktrees/evidence-first-feed-rendering-plan`
+**Worktree:** `/Users/juliusolsson/Desktop/Development/agent-code/.worktrees/render-shapes-phase1`
 
-**Baseline:** `origin/main` at `f28d1b26`
+**Baseline:** `origin/main` at `8f357260`
 
 **Related draft:** [PR #524](https://github.com/Juliusolsson05/agent-code/pull/524)
 
@@ -60,7 +60,7 @@ the system records that the known shape was seen again, under which provider,
 provider version, model, plane, and lifecycle state. If the fingerprint is not
 catalogued, it goes into a bounded local **Unknown Shape Inbox** immediately.
 The system preserves enough linkage to the existing session recording to turn
-that sighting into a redacted fixture without asking a future agent to rediscover
+that sighting into a complete local fixture draft without asking a future agent to rediscover
 the payload from prose or a transcript archaeology session.
 
 A developer then classifies the unknown shape. Classification answers:
@@ -172,8 +172,9 @@ implementation and must not be rebased wholesale onto `main`.
 - Inventory every distinctive observed raw shape, but do not create a React
   component for every shape. Components represent meaningful visual grammars.
 - Use composition, not a base-card inheritance hierarchy.
-- Extend the existing recorder, replay, redaction, unknown registry, and fixture
-  corpus. Do not build a second evidence framework.
+- Extend the existing recorder, replay, unknown registry, and fixture corpus.
+  Do not build a second evidence framework or filter explicit developer
+  evidence through the replay redactor.
 - Treat live conditions as a parallel provider-owned system. Do not route
   compaction, approvals, trust prompts, or pickers through ordinary tool cards.
 - Make no broad file moves or naming changes in the first implementation PRs.
@@ -197,7 +198,7 @@ The Dev Debug command palette exposes:
 Starting a rendering evidence capture reuses the existing session recorder. It
 does not create another raw event log. The recorder continues to own the nine
 `SessionFeed` channels, caps, retention, append ordering, note markers, and
-redaction/extraction path.
+exact developer-evidence extraction path.
 
 The command additionally enables the renderer-side **shape observer** for that
 session. The observer is off in normal production use. An explicit environment
@@ -278,10 +279,13 @@ type RenderShapeSighting = {
 };
 ```
 
-The sighting contains no prompt, command, path, assistant text, tool arguments,
-tool output, or condition content. `payloadHash` is a content-sensitive local
-sample identity and is never treated as the shape id. `shapePaths` and the
-structural discriminator allowlist are content-free.
+The structural sidecar does not duplicate prompt, command, assistant text, tool
+arguments, tool output, or condition scalar content because the linked explicit
+developer recording already preserves those values exactly. `payloadHash` is a
+content-sensitive local sample identity and is never treated as the shape id.
+`shapePaths` retains the complete bounded literal key tree, including path-like
+and auth-shaped keys, while catalog identity separately normalizes dynamic maps
+so one grammar does not mint a fingerprint per filename.
 
 ### Step 3 — deduplicate before crossing IPC
 
@@ -334,9 +338,9 @@ product screen, but it must show enough to work without reading JSONL by hand:
 - source plane and lifecycle milestone;
 - first/last seen and count;
 - current rendering outcome;
-- shape key tree with secret subtrees marked;
+- complete bounded literal shape key tree;
 - links to the source recording and nearest note/event cursor;
-- whether a safe fixture draft can be extracted;
+- whether a complete local fixture draft can be extracted;
 - classification state and catalog match if one exists under another version.
 
 The inbox groups by structural fingerprint, not payload hash. It is local,
@@ -389,7 +393,7 @@ fallback; it means no specialization is promised, not that the row disappears.
 ### Step 7 — extract a shape fixture
 
 The audit script takes a fingerprint or inbox entry, follows its recording
-cursor, and emits the smallest safe evidence package containing:
+cursor, and emits the smallest useful local evidence package containing:
 
 - the final renderer-facing input;
 - meaningful streaming prefix milestones;
@@ -397,11 +401,14 @@ cursor, and emits the smallest safe evidence package containing:
 - provider/model/version provenance;
 - expected ownership key and stable render id inputs;
 - the current outcome receipt;
-- fully redacted and capped raw context needed to reproduce parsing;
+- exact bounded raw context needed to reproduce parsing;
 - a human description from the attached note or classification command.
 
-The existing sensitive-survivor hard gate remains authoritative. The script
-refuses to write a checked-in fixture when redaction cannot prove safety.
+The extractor deliberately does not redact this local developer draft. Unknown
+rendering behavior can depend on scalar content, and transforming that evidence
+before diagnosis makes the capture less trustworthy than its source recording.
+Classification and curation remain reviewed code changes before a draft becomes
+a checked-in fixture.
 
 Shape fixtures live separately from whole-session recordings because they serve
 a different test altitude:
@@ -990,15 +997,14 @@ The repository already has most of the hard infrastructure:
 
 - `SessionRecorder` with bounded local capture and retention;
 - replay through the real reducers;
-- structure-only and capped-text redaction;
-- a sensitive-survivor hard gate before fixture check-in;
+- explicit developer recordings that preserve exact provider events;
 - `UnknownRegistry` with shape paths, payload hashes, counts, and dispositions;
 - recording and bundle corpus tests;
 - tick-by-tick replay that can exercise streaming prefixes;
 - 48 existing rendering bundles/fixtures that can seed the inventory.
 
 The implementation should extend these paths. A parallel recorder or fixture
-framework would duplicate privacy, cap, replay, and incident hardening.
+framework would duplicate cap, replay, and incident hardening.
 
 ### Canonical shape identity
 
@@ -1007,11 +1013,13 @@ unknown-shape code. Its inputs are:
 
 - provider and observation plane;
 - event/tool discriminator;
-- sorted key/type paths with secret subtrees removed;
+- normalized key/type identity paths, alongside complete literal key evidence;
 - an explicit allowlist of low-cardinality structural values.
 
-Its output is a stable short fingerprint. It never includes prompt text,
-command text, assistant text, tool payload values, paths, or result prose.
+Its output is a stable short fingerprint. It never includes scalar prompt text,
+command text, assistant text, tool payload values, or result prose. Literal
+path-like object keys remain in sightings while the identity projection
+normalizes them for catalog stability.
 
 Keep the existing payload hash as a separate sample/dedup identity. The shape
 catalog groups by structural fingerprint; sightings may count distinct payload
@@ -1072,20 +1080,19 @@ Runtime capture and repository truth have different safety budgets:
 
 **Runtime, explicit developer-capture mode:**
 
-- emit metadata-only structural sightings;
+- emit structural sightings with complete bounded literal keys;
 - deduplicate by fingerprint and increment counts;
 - keep all buffers bounded;
-- never record raw prompts, commands, assistant text, or tool payloads in the
-  shape sidecar;
+- do not duplicate bulky scalar values into the shape sidecar because the
+  linked developer recording is already their exact source of truth;
 - ensure observer failure cannot affect rendering or session execution;
 - reuse the existing recording/debug gate rather than enabling continuous
   production capture by accident.
 
 **Offline extraction and review:**
 
-- aggregate sightings from redacted recordings;
+- aggregate sightings from exact developer recordings;
 - suggest new catalog entries and representative fixture windows;
-- run the existing sensitive-data hard gate;
 - derive useful streaming-prefix fixtures from recorded ticks;
 - require a human-readable diff before catalog/fixture updates are accepted.
 
@@ -1102,7 +1109,7 @@ sighting sink without discarding its existing diagnostics:
 - preserve sample payload hashes only for counts/dedup;
 - optionally record known-shape sightings while explicit capture is active so
   corpus coverage can be proven;
-- keep capped redacted previews for local diagnosis, never for shape identity;
+- keep exact bounded local windows for diagnosis, never for shape identity;
 - attach a disposition and destination so intentional generic/hidden cases do
   not look like unfinished work.
 
@@ -1570,10 +1577,10 @@ Condition fixtures cover the full detector lifecycle, not only the final state:
 - resolution -> condition disappears while durable feed evidence survives;
 - malformed/unknown state -> no unsafe action, plus an inbox sighting.
 
-The observer records condition state structure and destination, never the
-question, command, workspace, or option text. The full local session recording
-retains the source under its existing local-only privacy model and the extractor
-produces a redacted minimal fixture.
+The observer records condition state structure and destination in its compact
+sidecar. The full explicit developer recording retains the complete question,
+command, workspace, and option text, and the extractor preserves an exact
+bounded window in its local draft.
 
 Unknown condition kinds remain forward-compatible at runtime, but explicit
 developer capture must record the unknown sighting. A condition coverage test
@@ -1602,7 +1609,8 @@ Every visual family lands through fixtures before broad integration.
 
 ### Shape and catalog tests
 
-- structural fingerprint stability and secret-key redaction;
+- structural fingerprint stability with complete literal-key sightings and
+  low-cardinality identity normalization;
 - same structure/different content produces the same fingerprint;
 - discriminator changes that alter rendering produce different fingerprints;
 - catalog ids and adapter claims agree in both directions;
@@ -1661,7 +1669,7 @@ src/shared/types/
   renderShapes.ts                    common metadata-only contracts
 
 src/renderer/src/rendering/evidence/
-  shapeFingerprint.ts               pure structural identity + redaction rules
+  shapeFingerprint.ts               literal key capture + normalized structural identity
   defineRenderShape.ts              catalog definition helper
   catalogCoverage.ts                fixture/catalog/claim audit
 
@@ -1703,7 +1711,7 @@ src/providers/shared/renderer/protocols/
 
 scripts/
   audit-rendering-shapes.mjs         known/unknown/misrouted coverage report
-  extract-rendering-shape.mjs        fingerprint -> redacted minimal fixture
+  extract-rendering-shape.mts        fingerprint -> complete local draft
 
 testing/fixtures/rendering-shapes/
   <provider>/<shape-id>/*             final/prefix/expected evidence
@@ -1984,8 +1992,8 @@ slice and should not be touched.
 | `src/preload/api/devDebug.ts`                              | Expose the safe rendering-shape capture/report calls.                                                                 | 2–3         |
 | `src/preload/api/types.ts`                                 | Type the metadata-only API crossing context isolation.                                                                | 2–3         |
 | `src/preload/api/index.ts`                                 | Export the API only if the existing spread does not already cover the added methods.                                  | 2–3         |
-| `scripts/extract-rendering-fixtures.mjs`                   | Reuse its extraction/redaction core rather than fork a second unsafe extractor.                                       | 3           |
-| `scripts/audit-rendering-fixture.mjs`                      | Validate shape manifests and sensitive-survivor rules alongside existing audits.                                      | 3–4         |
+| `scripts/extract-rendering-fixtures.mjs`                   | Keep for its existing replay-fixture role; rendering-shape drafts preserve exact developer events.                    | 3           |
+| `scripts/audit-rendering-fixture.mjs`                      | Validate the existing fixture corpus independently of local rendering-shape drafts.                                   | 3–4         |
 
 Adjacent test files are modified with their production file whenever existing
 coverage already has the right home. New tests are added only when no current
@@ -2000,7 +2008,7 @@ test expresses the responsibility; the tree above names those additions.
 | `src/renderer/src/features/feed/evidence/*`                       | Runtime observation, coalescing, and paint-outcome receipts.                                                  | 2           |
 | `src/renderer/src/features/debug/devModules/RenderingShapes/*`    | Developer-only Unknown Shape Inbox and disk-backed report derivation.                                         | 3           |
 | `scripts/audit-rendering-shapes.mjs`                              | Report known, unknown, misrouted, generic, specialized, and missing-prefix coverage.                          | 3           |
-| `scripts/extract-rendering-shape.mjs`                             | Convert one reviewed recording sighting into a redacted fixture draft.                                        | 3           |
+| `scripts/extract-rendering-shape.mts`                             | Convert one reviewed recording sighting into a complete local fixture draft.                                 | 3           |
 | `testing/fixtures/rendering-shapes/**`                            | Checked-in provider shape memory: final, meaningful prefixes, manifest, and expected decision.                | 3–4         |
 | `src/providers/{provider}/renderer/shapes.ts`                     | Provider-local source of truth for observed raw shapes and declared outcomes.                                 | 4           |
 | `src/renderer/src/features/feed/ui/ProviderOperationBoundary.tsx` | Select the provider capability, require an explicit decision, emit a receipt, and own the visible fallback.   | 5           |
@@ -2030,9 +2038,10 @@ in advance.
 
 ## Incremental delivery plan
 
-Each phase is intended as one or more small implementation PRs, not one giant
-rewrite branch. Every PR is independently reviewable, fixture-gated, and keeps
-the app usable.
+All ten phases land on PR #555. The phase boundaries remain independently
+reviewable, fixture-gated gates that keep the app usable, but they are not
+merge boundaries: the rewrite PR merges only after Phase 10 and the final
+whole-branch review.
 
 ### Phase 0 — this plan-only draft PR
 
@@ -2067,8 +2076,9 @@ Red-green tasks:
    same fingerprint.
 2. Add tests proving render-relevant discriminator changes yield different
    fingerprints.
-3. Add secret-key, cycle, depth, array, large-object, and unserializable-input
-   tests.
+3. Add dynamic/sensitive-key, cycle, depth, array, large-object, and
+   unserializable-input tests; retain every literal key in dev sightings while
+   keeping catalog identity low-cardinality.
 4. Implement canonical typed key paths including value types, not keys alone.
 5. Re-key unknown grouping by structural fingerprint while retaining bounded
    payload-hash samples/counts.
@@ -2082,7 +2092,8 @@ Exit gate:
 
 - fingerprint output is deterministic in renderer/unit environments;
 - existing unknown diagnostics remain bounded and reference-stable;
-- no content value enters the structural fingerprint;
+- no scalar content value enters the structural fingerprint; literal key paths
+  remain available in developer evidence;
 - all current rendering tests/corpora remain unchanged.
 
 ### Phase 2 — shape observer and recording sidecar
@@ -2102,8 +2113,8 @@ Red-green tasks:
 3. Test outcome changes and lifecycle milestones produce explicit records.
 4. Test queue caps, coalescing, final flush, renderer unmount, app shutdown,
    missing recorder, and serialization failure.
-5. Test sighting metadata contains no values from prompts, commands, paths,
-   results, or condition options.
+5. Test sightings retain bounded complete structural key paths while scalar
+   prompt/command/result values remain outside shape identity.
 6. Append `__render_shape` lines through the existing recording lifecycle.
 7. Include dropped/capped sighting counts in recorder metadata/debug output.
 
@@ -2130,14 +2141,15 @@ Red-green tasks:
 2. Group by structural fingerprint and show known/misrouted/unknown status.
 3. Link each item to source recording cursor/note and provenance.
 4. Extract final and meaningful prefix windows from the existing recording.
-5. Reuse redaction and sensitive-survivor gates; refuse unsafe output.
+5. Preserve exact admitted events in the local draft; do not erase evidence
+   before the unknown shape has been understood and deliberately curated.
 6. Add commands for opening/exporting the inbox and attaching evidence notes.
 7. Keep classification as reviewed source changes; no runtime source mutation.
 
 Exit gate:
 
 - a developer can use the app, see a new unknown in the inbox, run one command,
-  and obtain a safe fixture draft without manually grepping JSONL;
+  and obtain a complete local fixture draft without manually grepping JSONL;
 - the inbox survives restart because it is derived from disk-backed recordings;
 - known shapes and intentional generic/absorbed cases do not remain falsely
   unknown.
@@ -2153,7 +2165,7 @@ Inputs:
 
 Tasks:
 
-1. Run the audit over every available safe fixture.
+1. Run the audit over every available fixture.
 2. Create human-readable provider-prefixed ids for every distinct
    renderer-facing shape.
 3. Record multiple fingerprints under one shape id when versions differ but

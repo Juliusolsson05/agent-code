@@ -1,4 +1,5 @@
 import type { RenderShapeSighting } from '@shared/types/renderShapes'
+import { renderOutcomeRouteIdentity, renderShapeWriterKey } from '@shared/types/renderShapes'
 import {
   classifySighting,
   type FingerprintIndex,
@@ -38,7 +39,7 @@ export type UnknownShapeReportRow = {
   lifecycles: readonly string[]
   eventTypes: readonly string[]
   /** Sample of the structure the fingerprint denotes — from the first
-   *  sighting; content-free by the sighting contract. */
+   *  sighting. Literal keys are retained; scalar values are not copied. */
   shapePaths: readonly string[]
   discriminatorValues: Readonly<Record<string, string>>
   firstSeenAt: number
@@ -46,6 +47,9 @@ export type UnknownShapeReportRow = {
   totalCount: number
   /** Paint outcomes observed for this structure, by outcome kind. */
   outcomes: Readonly<Record<string, number>>
+  /** Exact renderer/owner/surface routes. Outcome kind alone erases the
+   *  difference between a correct specialized renderer and a misroute. */
+  routes: Readonly<Record<string, number>>
   /** Worst classification across the group's sightings. */
   status: SightingClassification['kind']
   /** Catalog id when the fingerprint is catalogued (any status). */
@@ -100,6 +104,7 @@ export function buildUnknownShapeReport(
       lastSeenAt: number
       totalCount: number
       outcomes: Record<string, number>
+      routes: Record<string, number>
       recordings: Set<string>
       status: SightingClassification['kind']
       catalogShapeId: string | null
@@ -121,15 +126,7 @@ export function buildUnknownShapeReport(
       continue
     }
     const count = s.seenCount ?? 1
-    const writerKey = [
-      s.sourceRecordingId ?? '',
-      s.provider,
-      s.sourcePlane,
-      s.lifecycle,
-      s.eventType,
-      s.structuralFingerprint,
-      s.outcome.kind,
-    ].join(' ')
+    const writerKey = renderShapeWriterKey(s, s.sourceRecordingId ?? '')
     const prev = countsByWriterKey.get(writerKey) ?? 0
     const delta = Math.max(0, count - prev)
     countsByWriterKey.set(writerKey, Math.max(prev, count))
@@ -160,6 +157,7 @@ export function buildUnknownShapeReport(
         lastSeenAt: s.observedAt,
         totalCount: delta,
         outcomes: { [s.outcome.kind]: delta },
+        routes: { [renderOutcomeRouteIdentity(s.outcome)]: delta },
         recordings: new Set(s.sourceRecordingId ? [s.sourceRecordingId] : []),
         status: classification.kind,
         catalogShapeId,
@@ -173,6 +171,8 @@ export function buildUnknownShapeReport(
     existing.lastSeenAt = Math.max(existing.lastSeenAt, s.observedAt)
     existing.totalCount += delta
     existing.outcomes[s.outcome.kind] = (existing.outcomes[s.outcome.kind] ?? 0) + delta
+    const route = renderOutcomeRouteIdentity(s.outcome)
+    existing.routes[route] = (existing.routes[route] ?? 0) + delta
     if (s.sourceRecordingId) existing.recordings.add(s.sourceRecordingId)
     if (STATUS_RANK[classification.kind] < STATUS_RANK[existing.status]) {
       existing.status = classification.kind

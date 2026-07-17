@@ -179,7 +179,13 @@ export function parseAnsi(
  *  OutputWell uses it to skip span-building for the overwhelmingly
  *  common plain-output case. */
 export function hasAnsi(text: string): boolean {
-  return text.includes('\x1b[') || text.includes('\x1b]') || text.includes('\r')
+  return (
+    text.includes('\x1b[') ||
+    text.includes('\x1b]') ||
+    text.includes('\x1b(') ||
+    text.includes('\x1b)') ||
+    text.includes('\r')
+  )
 }
 
 /** Strip all recognized escape sequences + collapse \r rewrites, returning

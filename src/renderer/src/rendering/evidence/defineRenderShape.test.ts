@@ -15,7 +15,7 @@ import {
 const claudeEdit = defineRenderShape({
   id: 'claude.edit.v1',
   provider: 'claude',
-  fingerprints: ['fp1-00000001'],
+  fingerprints: ['fp2-00000001'],
   eventTypes: ['tool_use'],
   planes: ['committed-tool-use'],
   lifecycles: ['input-complete', 'result-complete'],

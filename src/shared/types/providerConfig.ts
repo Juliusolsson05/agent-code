@@ -221,7 +221,16 @@ export type RendererProviderConfig = {
    * it impossible for Block.tsx to distinguish "fall back" from "intentionally
    * consumed".
    */
-  renderToolUse?: (block: ToolUseBlock) => ReactNode | undefined
+  renderToolUse?: (
+    block: ToolUseBlock,
+    context?: {
+      /** Present only on the semantic live plane. Committed transcript calls
+       * omit it so adapters preserve their durable historical semantics. */
+      live?: boolean
+      streaming?: boolean
+      result?: ToolResultBlock | null
+    },
+  ) => ReactNode | undefined
   renderToolResult?: (
     block: ToolResultBlock,
     context: { sourceTool?: ToolUseBlock | null },

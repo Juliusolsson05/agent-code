@@ -55,6 +55,7 @@ describe('ansi parser (ported, now ours)', () => {
     const text = '\x1b[?25lspinner\x1b]0;title\x07\x1b(Bdone'
     expect(stripAnsi(text)).toBe('spinnerdone')
     expect(hasAnsi(text)).toBe(true)
+    expect(hasAnsi('\x1b(Bcharset only')).toBe(true)
   })
 })
 
@@ -140,6 +141,20 @@ describe('cat-heredoc write → code-edit protocol (not a command headline)', ()
     expect(bash("cat > x <<'EOF'\nbody\nEOF\nrm -rf x")).toBeNull()
   })
 
+  it('DECLINES destructive/arbitrary compound prefixes and same-line suffixes', () => {
+    expect(bash("rm -rf old && cat > x <<'EOF'\nbody\nEOF")).toBeNull()
+    expect(bash("echo preparing && cat > x <<'EOF'\nbody\nEOF")).toBeNull()
+    expect(bash("cat > x <<'EOF' ; deploy\nbody\nEOF")).toBeNull()
+  })
+
+  it('caps a huge heredoc preview while retaining exact paged content', () => {
+    const body = Array.from({ length: 2_000 }, (_, index) => `line ${index}`).join('\n')
+    const model = bash(`cat > huge.txt <<'EOF'\n${body}\nEOF`)!
+    expect(model.files[0].lines.length).toBeLessThanOrEqual(400)
+    expect(model.files[0].previewTruncated).toBe(true)
+    expect(model.files[0].exactSections?.[0]?.text).toBe(body)
+  })
+
   it('a plain command is not a heredoc write — declines, command card owns it', () => {
     expect(bash('ls -la')).toBeNull()
     expect(bash('echo hi > out.txt')).toBeNull() // > write, but no heredoc body to show
@@ -205,5 +220,12 @@ describe('codex exec wrapper — plain-command case', () => {
       stripCodexTransportEnvelope('Script completed\nWall time 0.1 seconds\nOutput:\n\nreal output'),
     ).toBe('real output')
     expect(stripCodexTransportEnvelope('just output')).toBe('just output')
+    expect(stripCodexTransportEnvelope('Wall time 9 seconds\nOutput:\nlegitimate program output')).toBe(
+      'Wall time 9 seconds\nOutput:\nlegitimate program output',
+    )
+    expect(stripCodexTransportEnvelope('Output:\nlegitimate header')).toBe('Output:\nlegitimate header')
+    expect(stripCodexTransportEnvelope('Script completed\nnot an envelope')).toBe(
+      'Script completed\nnot an envelope',
+    )
   })
 })

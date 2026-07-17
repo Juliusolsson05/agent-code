@@ -27,6 +27,11 @@ export type CodeEditFile = {
   lines: readonly DiffLine[]
   additions: number
   deletions: number
+  /** The inline lines/counts are a bounded preview. A provider wrapper may
+   * expose the exact source below through paged text without mounting it all. */
+  previewTruncated?: boolean
+  countsTruncated?: boolean
+  exactSections?: readonly { label: string; text: string }[]
   /** True while this file's content is still streaming (tail updates in
    *  place; the view must keep gutter identity stable). */
   streaming: boolean
@@ -40,6 +45,9 @@ export type CodeEditRenderModel = {
    *  on it beyond printing. */
   label: string
   files: readonly CodeEditFile[]
+  /** Provider-reported cardinality before adapter admission caps. */
+  totalFiles?: number
+  filesTruncated?: boolean
   status: CodeEditStatus
   /** One bounded line, visible without expansion (plan: failure never
    *  hides behind a disclosure). */

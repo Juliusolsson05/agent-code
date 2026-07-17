@@ -26,26 +26,30 @@ export function DiffSlab({
   filePath?: string
   emptyLabel: string
 }) {
-  if (lines.length === 0) {
+  const highlightLanguage = useMemo(() => {
+    return toHighlightLanguage(normalizeCodeLanguage(undefined, filePath))
+  }, [filePath])
+  // Defensive leaf cap: callers usually provide an already-bounded protocol
+  // model, but this is the primitive that actually allocates highlighted DOM.
+  // Keeping the cap here makes one forgotten adapter gate non-catastrophic.
+  const visibleLines = useMemo(() => lines.slice(0, 400), [lines])
+  const renderedLines = useMemo(
+    () =>
+      visibleLines.map(line => {
+        if (line.text === '') return '\u200b'
+        if (!highlightLanguage) return escapeHtml(line.text)
+        return hljs.highlight(line.text, { language: highlightLanguage }).value
+      }),
+    [highlightLanguage, visibleLines],
+  )
+
+  if (visibleLines.length === 0) {
     return (
       <div className="bg-code-bg text-muted text-[11px] font-code px-3 py-2">
         {emptyLabel}
       </div>
     )
   }
-
-  const highlightLanguage = useMemo(() => {
-    return toHighlightLanguage(normalizeCodeLanguage(undefined, filePath))
-  }, [filePath])
-  const renderedLines = useMemo(
-    () =>
-      lines.map(line => {
-        if (line.text === '') return '\u200b'
-        if (!highlightLanguage) return escapeHtml(line.text)
-        return hljs.highlight(line.text, { language: highlightLanguage }).value
-      }),
-    [highlightLanguage, lines],
-  )
 
   return (
     <div className="bg-code-bg font-code text-[12px] leading-[1.55] overflow-x-auto">
@@ -59,7 +63,7 @@ export function DiffSlab({
           every line div to stretch across the full scrollable width, so the
           +/- tint covers the whole line no matter how far right you scroll. */}
       <div className="w-max min-w-full">
-        {lines.map((line, index) => {
+        {visibleLines.map((line, index) => {
           const bg =
             line.kind === '+'
               ? 'bg-diff-add-bg'
@@ -91,6 +95,11 @@ export function DiffSlab({
             </div>
           )
         })}
+        {lines.length > visibleLines.length ? (
+          <div className="px-3 py-1 text-[11px] text-muted">
+            … inline diff capped at {visibleLines.length} lines
+          </div>
+        ) : null}
       </div>
     </div>
   )

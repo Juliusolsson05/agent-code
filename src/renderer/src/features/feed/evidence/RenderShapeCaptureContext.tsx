@@ -1,7 +1,10 @@
 import { createContext, useContext, useEffect, useMemo, type ReactNode } from 'react'
 
 import type { AgentProviderKind } from '@shared/types/providerKind'
-import { armRenderShapeCapture } from '@renderer/features/feed/evidence/observer'
+import {
+  armRenderShapeCapture,
+  disarmRenderShapeCapture,
+} from '@renderer/features/feed/evidence/observer'
 
 // Capture gate / session binding — Phase 2.
 //
@@ -102,6 +105,7 @@ export function RenderShapeCaptureProvider({
     // start; the retries above remain as the reload-recovery belt (a
     // renderer that reloads MID-recording gets no fresh start event).
     let unsubscribe: (() => void) | undefined
+    let unsubscribeStopping: (() => void) | undefined
     try {
       unsubscribe = window.api.onSessionRecordingStarted?.(payload => {
         if (!cancelled && payload.sessionId === sessionId) {
@@ -111,10 +115,26 @@ export function RenderShapeCaptureProvider({
     } catch {
       /* preload absent — belt retries still ran */
     }
+    try {
+      unsubscribeStopping = window.api.onSessionRecordingStopping?.(payload => {
+        if (cancelled || payload.sessionId !== sessionId) return
+        // Main owns the recorder lifetime; renderer owns the coalesced queue.
+        // The acknowledgement closes that ownership loop without making the
+        // provider-exit path wait forever for a dead renderer.
+        void disarmRenderShapeCapture(sessionId)
+          .finally(() => window.api.finishSessionRecordingStop(sessionId))
+          .catch(() => {
+            /* main's grace timer is the fallback */
+          })
+      })
+    } catch {
+      /* preload absent — main's grace timer closes the recorder */
+    }
     return () => {
       cancelled = true
       for (const t of timers) clearTimeout(t)
       unsubscribe?.()
+      unsubscribeStopping?.()
     }
   }, [sessionId])
   return (

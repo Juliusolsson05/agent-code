@@ -70,7 +70,10 @@ export type RendererProviderCapabilities = {
    */
   splitShortcutKey?: string
   conditionViews: Record<string, ConditionView>
-  renderToolUse?: (block: ToolUseBlock) => ReactNode | undefined
+  renderToolUse?: (
+    block: ToolUseBlock,
+    context?: { live?: boolean; streaming?: boolean; result?: ToolResultBlock | null },
+  ) => ReactNode | undefined
   renderToolResult?: (
     block: ToolResultBlock,
     context: { sourceTool?: ToolUseBlock | null },

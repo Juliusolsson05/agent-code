@@ -44,7 +44,7 @@ beforeEach(() => {
     api: {
       appendRenderShapeSightings: (sessionId: string, batch: RenderShapeSighting[]) => {
         sent.push({ sessionId, batch })
-        return Promise.resolve(true)
+        return Promise.resolve({ status: 'accepted' as const })
       },
     },
   }
@@ -143,6 +143,47 @@ describe('render-shape observer (Phase 2 gates)', () => {
     expect(renderShapeObserverStats().failures).toBeGreaterThan(0)
   })
 
+  it('does not mark a sighting persisted until a later retry is acknowledged', async () => {
+    let attempts = 0
+    ;(globalThis as Record<string, unknown>).window = {
+      api: {
+        appendRenderShapeSightings: (sessionId: string, batch: RenderShapeSighting[]) => {
+          attempts += 1
+          if (attempts === 1) return Promise.reject(new Error('transient IPC failure'))
+          sent.push({ sessionId, batch })
+          return Promise.resolve({ status: 'accepted' as const })
+        },
+      },
+    }
+    armRenderShapeCapture(SESSION)
+    observeRenderShape(input({ payload: { once: true } }))
+    await vi.runAllTimersAsync()
+    expect(attempts).toBe(2)
+    expect(sent.flatMap(item => item.batch)).toHaveLength(1)
+  })
+
+  it('disarm waits for an in-flight append before computing the final delta', async () => {
+    let release: (() => void) | undefined
+    ;(globalThis as Record<string, unknown>).window = {
+      api: {
+        appendRenderShapeSightings: (sessionId: string, batch: RenderShapeSighting[]) =>
+          new Promise<{ status: 'accepted' }>(resolve => {
+            sent.push({ sessionId, batch })
+            release = () => resolve({ status: 'accepted' })
+          }),
+      },
+    }
+    armRenderShapeCapture(SESSION)
+    observeRenderShape(input({ payload: { finalRace: true } }))
+    await vi.advanceTimersByTimeAsync(2000)
+    const stopping = disarmRenderShapeCapture(SESSION)
+    expect(isRenderShapeCaptureArmed(SESSION)).toBe(true)
+    release?.()
+    await stopping
+    expect(isRenderShapeCaptureArmed(SESSION)).toBe(false)
+    expect(sent.flatMap(item => item.batch)).toHaveLength(1)
+  })
+
   it('sightings are metadata-only — no payload content crosses IPC', async () => {
     armRenderShapeCapture(SESSION)
     const secret = 'SECRET_COMMAND rm -rf /Users/private'
@@ -154,7 +195,7 @@ describe('render-shape observer (Phase 2 gates)', () => {
 
   it('a gone recorder auto-disarms the observer after consecutive misses', async () => {
     ;(globalThis as Record<string, unknown>).window = {
-      api: { appendRenderShapeSightings: () => Promise.resolve(false) },
+      api: { appendRenderShapeSightings: () => Promise.resolve({ status: 'no-recorder' as const }) },
     }
     armRenderShapeCapture(SESSION)
     for (let i = 0; i < 4; i++) {

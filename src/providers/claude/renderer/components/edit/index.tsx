@@ -20,8 +20,23 @@ import type { ToolUseBlock } from '@shared/types/transcript'
 import { fromClaudeEditBlock } from '@providers/claude/renderer/adapters/codeEdit'
 import { CodeEditView } from '@providers/shared/renderer/protocols/code-edit/CodeEditView'
 
-export const EditRow = memo(function EditRow({ block }: { block: ToolUseBlock }) {
-  const model = useMemo(() => fromClaudeEditBlock(block), [block])
+export const EditRow = memo(function EditRow({
+  block,
+  streaming = false,
+  failed = false,
+  running = false,
+  errorSummary,
+}: {
+  block: ToolUseBlock
+  streaming?: boolean
+  failed?: boolean
+  running?: boolean
+  errorSummary?: string
+}) {
+  const model = useMemo(() => {
+    const adapted = fromClaudeEditBlock(block, { streaming, failed, errorSummary })
+    return adapted && running && !streaming && !failed ? { ...adapted, status: 'running' as const } : adapted
+  }, [block, errorSummary, failed, running, streaming])
   if (!model) return null
   return <CodeEditView model={model} />
 })

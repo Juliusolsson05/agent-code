@@ -1,10 +1,12 @@
 import type { AgentProviderKind } from '@shared/types/providerKind'
 import type {
+  RenderShapeAppendResult,
   RenderOutcome,
   RenderShapeLifecycle,
   RenderShapePlane,
   RenderShapeSighting,
 } from '@shared/types/renderShapes'
+import { renderShapeWriterKey } from '@shared/types/renderShapes'
 import { fingerprintRenderShape } from '@renderer/rendering/evidence/shapeFingerprint'
 import { hashPayload } from '@renderer/rendering/model/unknowns'
 
@@ -64,10 +66,10 @@ const MAX_KEYS = 4096
  */
 const RECORDER_MISSES_BEFORE_DISARM = 3
 
-// Separator built via fromCharCode — NEVER a literal control byte. The
-// review panel caught this file shipping raw NULs in the key template,
-// which made git treat the whole file as binary (unreviewable diff).
-const KEY_SEP = String.fromCharCode(0)
+/** Leave headroom below main's 1 MiB trust-boundary cap. JSON string length
+ * is the boundary's current metric, so using the same metric here makes the
+ * split deterministic without allocating a second byte buffer. */
+const MAX_BATCH_JSON_CHARS = 900 * 1024
 
 export type ObserveRenderShapeInput = {
   sessionId: string
@@ -91,8 +93,14 @@ type TrackedSighting = {
 
 type SessionObserverState = {
   keys: Map<string, TrackedSighting>
-  queue: RenderShapeSighting[]
+  /** Dedup keys, not snapshot objects. Counts continue changing while an IPC
+   * is in flight; materializing only at send time prevents stale-count queue
+   * entries from winning over newer local evidence. */
+  queue: string[]
+  queuedKeys: Set<string>
   timer: ReturnType<typeof setTimeout> | null
+  inFlight: Promise<void> | null
+  stopping: boolean
   droppedQueue: number
   droppedKeys: number
   failures: number
@@ -100,6 +108,7 @@ type SessionObserverState = {
 }
 
 const sessions = new Map<string, SessionObserverState>()
+const retiredStats = { droppedQueue: 0, droppedKeys: 0, failures: 0 }
 
 /** Debug-panel visibility for swallowed problems (exit gate: failures are
  *  "swallowed, counted, surfaced"). Read-only aggregate snapshot. */
@@ -109,9 +118,9 @@ export function renderShapeObserverStats(): {
   droppedKeys: number
   failures: number
 } {
-  let droppedQueue = 0
-  let droppedKeys = 0
-  let failures = 0
+  let droppedQueue = retiredStats.droppedQueue
+  let droppedKeys = retiredStats.droppedKeys
+  let failures = retiredStats.failures
   for (const s of sessions.values()) {
     droppedQueue += s.droppedQueue
     droppedKeys += s.droppedKeys
@@ -132,7 +141,10 @@ export function armRenderShapeCapture(sessionId: string): void {
   sessions.set(sessionId, {
     keys: new Map(),
     queue: [],
+    queuedKeys: new Set(),
     timer: null,
+    inFlight: null,
+    stopping: false,
     droppedQueue: 0,
     droppedKeys: 0,
     failures: 0,
@@ -156,22 +168,34 @@ export async function disarmRenderShapeCapture(sessionId: string): Promise<void>
   const state = sessions.get(sessionId)
   if (!state) return
   if (state.timer) clearTimeout(state.timer)
-  sessions.delete(sessionId)
+  state.timer = null
+  state.stopping = true
   try {
-    const finals: RenderShapeSighting[] = state.queue.splice(0)
+    // An acknowledged queue cannot delete state optimistically. Wait for the
+    // active IPC receipt first, then compute the final delta from the updated
+    // counters. This closes the one-off-sighting loss window found in review.
+    await state.inFlight
     const now = Date.now()
+    const finals: PendingSnapshot[] = []
     for (const tracked of state.keys.values()) {
       if (tracked.count > tracked.flushedCount) {
         // Fresh observedAt: the final copy is the LATEST evidence for the
         // key; reusing first-sight time made lastSeenAt lie in reports.
-        finals.push({ ...tracked.sighting, seenCount: tracked.count, observedAt: now })
+        const sighting = { ...tracked.sighting, seenCount: tracked.count, observedAt: now }
+        finals.push({
+          key: renderShapeWriterKey(sighting),
+          sighting,
+          seenCount: tracked.count,
+        })
       }
     }
-    for (let i = 0; i < finals.length; i += MAX_QUEUE) {
-      await sendBatch(sessionId, state, finals.slice(i, i + MAX_QUEUE))
-    }
+    await transmitSnapshots(sessionId, state, finals)
   } catch {
     /* disarm must never throw into a command handler */
+  } finally {
+    // Keep the state addressable until every bounded final attempt finishes.
+    // Deleting it before awaiting IPC was the original shutdown data-loss bug.
+    retireSession(sessionId, state)
   }
 }
 
@@ -196,27 +220,19 @@ export function observeRenderShape(input: ObserveRenderShapeInput): void {
     // those under one key hid the second route entirely — the exact
     // misrouting evidence the receipts exist to provide (review finding #4).
     // These id vocabularies are small and closed, so no cardinality risk.
-    const o = input.outcome
-    const routeId =
-      o.kind === 'specialized' || o.kind === 'generic'
-        ? o.rendererId
-        : o.kind === 'absorbed'
-          ? o.ownerRenderId
-          : o.kind === 'condition-surface'
-            ? o.surface
-            : o.fallbackRenderId
-    const key = [
-      input.provider,
-      input.plane,
-      input.lifecycle,
-      input.eventType,
-      fingerprint,
-      o.kind,
-      routeId,
-    ].join(KEY_SEP)
+    const key = renderShapeWriterKey({
+      provider: input.provider,
+      sourcePlane: input.plane,
+      lifecycle: input.lifecycle,
+      eventType: input.eventType,
+      structuralFingerprint: fingerprint,
+      outcome: input.outcome,
+    })
     const existing = state.keys.get(key)
     if (existing) {
       existing.count += 1
+      enqueue(state, key)
+      scheduleFlush(input.sessionId, state)
       return
     }
     if (state.keys.size >= MAX_KEYS) {
@@ -245,25 +261,32 @@ export function observeRenderShape(input: ObserveRenderShapeInput): void {
       observedAt: Date.now(),
       outcome: input.outcome,
     }
-    const enqueued = enqueue(state, sighting)
-    state.keys.set(key, { sighting, count: 1, flushedCount: enqueued ? 1 : 0 })
+    state.keys.set(key, { sighting, count: 1, flushedCount: 0 })
+    enqueue(state, key)
     scheduleFlush(input.sessionId, state)
   } catch {
     state.failures += 1
   }
 }
 
-function enqueue(state: SessionObserverState, sighting: RenderShapeSighting): boolean {
+function enqueue(state: SessionObserverState, key: string): boolean {
+  if (state.queuedKeys.has(key)) return true
   if (state.queue.length >= MAX_QUEUE) {
     state.droppedQueue += 1
     return false
   }
-  state.queue.push(sighting)
+  state.queue.push(key)
+  state.queuedKeys.add(key)
   return true
 }
 
 function scheduleFlush(sessionId: string, state: SessionObserverState): void {
-  if (state.timer) return
+  if (
+    state.timer ||
+    state.stopping ||
+    state.queue.length === 0 ||
+    sessions.get(sessionId) !== state
+  ) return
   state.timer = setTimeout(() => {
     state.timer = null
     void flushNow(sessionId, state)
@@ -271,35 +294,161 @@ function scheduleFlush(sessionId: string, state: SessionObserverState): void {
 }
 
 async function flushNow(sessionId: string, state: SessionObserverState): Promise<void> {
+  if (state.inFlight) {
+    await state.inFlight
+    return
+  }
   if (state.queue.length === 0) return
-  await sendBatch(sessionId, state, state.queue.splice(0))
+  const run = flushQueued(sessionId, state)
+  state.inFlight = run
+  try {
+    await run
+  } finally {
+    if (state.inFlight === run) state.inFlight = null
+    if (state.queue.length > 0) scheduleFlush(sessionId, state)
+  }
 }
 
-async function sendBatch(
+type PendingSnapshot = {
+  key: string
+  sighting: RenderShapeSighting
+  seenCount: number
+}
+
+async function flushQueued(sessionId: string, state: SessionObserverState): Promise<void> {
+  const now = Date.now()
+  const snapshots: PendingSnapshot[] = []
+  for (const key of state.queue.slice(0, MAX_QUEUE)) {
+    const tracked = state.keys.get(key)
+    if (!tracked || tracked.count <= tracked.flushedCount) {
+      removeQueued(state, [key])
+      continue
+    }
+    snapshots.push({
+      key,
+      seenCount: tracked.count,
+      sighting: { ...tracked.sighting, seenCount: tracked.count, observedAt: now },
+    })
+  }
+  await transmitSnapshots(sessionId, state, snapshots)
+}
+
+/**
+ * Send count snapshots only after main acknowledges them. A failed/no-recorder
+ * call leaves every key queued, while an accepted subset advances exactly its
+ * own persisted count. Oversized aggregate batches split recursively; an
+ * irreducibly oversized single sighting is dropped and counted so a malformed
+ * dynamic key cannot create an infinite two-second retry loop.
+ */
+async function transmitSnapshots(
   sessionId: string,
   state: SessionObserverState,
-  batch: RenderShapeSighting[],
+  snapshots: PendingSnapshot[],
 ): Promise<void> {
-  if (batch.length === 0) return
+  if (snapshots.length === 0) return
+
+  const chunks: PendingSnapshot[][] = []
+  let chunk: PendingSnapshot[] = []
+  let chars = 2
+  for (const snapshot of snapshots) {
+    let nextChars: number
+    try {
+      nextChars = JSON.stringify(snapshot.sighting).length + (chunk.length > 0 ? 1 : 0)
+    } catch {
+      dropSnapshots(state, [snapshot])
+      continue
+    }
+    if (chunk.length > 0 && (chunk.length >= MAX_QUEUE || chars + nextChars > MAX_BATCH_JSON_CHARS)) {
+      chunks.push(chunk)
+      chunk = []
+      chars = 2
+    }
+    chunk.push(snapshot)
+    chars += nextChars
+  }
+  if (chunk.length > 0) chunks.push(chunk)
+
+  for (const candidate of chunks) await transmitOne(sessionId, state, candidate)
+}
+
+async function transmitOne(
+  sessionId: string,
+  state: SessionObserverState,
+  snapshots: PendingSnapshot[],
+): Promise<void> {
+  if (snapshots.length === 0) return
   try {
-    const accepted: boolean = await window.api.appendRenderShapeSightings(sessionId, batch)
-    if (accepted) {
+    const result: RenderShapeAppendResult = await window.api.appendRenderShapeSightings(
+      sessionId,
+      snapshots.map(snapshot => snapshot.sighting),
+    )
+    if (result.status === 'accepted') {
       state.recorderMisses = 0
+      acknowledgeSnapshots(state, snapshots)
       return
     }
-    // Main said "no recorder" (or rejected the batch): counted, and after
-    // enough consecutive misses the observer disarms itself — the recorder
-    // is gone (session exited / recording stopped in main) and an armed
-    // observer with no sink is just a leak (review finding #2/#12).
+    state.failures += 1
+    if (result.status === 'no-recorder') {
+      // Main said the recorder is gone. Keep evidence queued for a bounded
+      // number of races (recording-start notification can beat construction),
+      // then release the observer state rather than leak it indefinitely.
+      state.recorderMisses += 1
+      if (state.recorderMisses >= RECORDER_MISSES_BEFORE_DISARM && sessions.get(sessionId) === state) {
+        if (state.timer) clearTimeout(state.timer)
+        retireSession(sessionId, state)
+      }
+      return
+    }
+    if ((result.reason === 'too-many' || result.reason === 'too-large') && snapshots.length > 1) {
+      const middle = Math.ceil(snapshots.length / 2)
+      await transmitOne(sessionId, state, snapshots.slice(0, middle))
+      await transmitOne(sessionId, state, snapshots.slice(middle))
+      return
+    }
+    dropSnapshots(state, snapshots)
+  } catch {
+    // window.api absent (tests without preload) or IPC failure — swallowed
+    // by contract. Crucially, snapshots remain queued for bounded retries;
+    // after repeated failures there is no usable sink, so retaining the full
+    // per-session key map would turn a diagnostic outage into a heap leak.
     state.failures += 1
     state.recorderMisses += 1
     if (state.recorderMisses >= RECORDER_MISSES_BEFORE_DISARM && sessions.get(sessionId) === state) {
       if (state.timer) clearTimeout(state.timer)
-      sessions.delete(sessionId)
+      retireSession(sessionId, state)
     }
-  } catch {
-    // window.api absent (tests without preload) or IPC failure — swallowed
-    // by contract.
-    state.failures += 1
   }
+}
+
+function acknowledgeSnapshots(state: SessionObserverState, snapshots: PendingSnapshot[]): void {
+  const completed: string[] = []
+  for (const snapshot of snapshots) {
+    const tracked = state.keys.get(snapshot.key)
+    if (!tracked) continue
+    tracked.flushedCount = Math.max(tracked.flushedCount, snapshot.seenCount)
+    if (tracked.count <= snapshot.seenCount) completed.push(snapshot.key)
+  }
+  removeQueued(state, completed)
+}
+
+function dropSnapshots(state: SessionObserverState, snapshots: PendingSnapshot[]): void {
+  state.droppedQueue += snapshots.length
+  // An invalid/irreducibly-large snapshot cannot become valid by retrying.
+  // Advance its local watermark so final shutdown does not resend it forever.
+  acknowledgeSnapshots(state, snapshots)
+}
+
+function removeQueued(state: SessionObserverState, keys: readonly string[]): void {
+  if (keys.length === 0) return
+  const removed = new Set(keys)
+  state.queue = state.queue.filter(key => !removed.has(key))
+  for (const key of removed) state.queuedKeys.delete(key)
+}
+
+function retireSession(sessionId: string, state: SessionObserverState): void {
+  if (sessions.get(sessionId) !== state) return
+  sessions.delete(sessionId)
+  retiredStats.droppedQueue += state.droppedQueue
+  retiredStats.droppedKeys += state.droppedKeys
+  retiredStats.failures += state.failures
 }

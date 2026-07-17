@@ -51,6 +51,7 @@ function extractProvider(payload: unknown): string | null {
 
 export class SessionRecorderManager {
   private readonly recorders = new Map<string, SessionRecorder>()
+  private readonly pendingStopTimers = new Map<string, ReturnType<typeof setTimeout>>()
   // Monotonic note counter. A noteId must be UNIQUE within a recording because
   // fillNote targets a previously reserved marker BY ID; a millisecond-only id
   // (`n-<mono>`) collides when two notes are reserved inside the same ~1 ms
@@ -83,6 +84,7 @@ export class SessionRecorderManager {
     // poll schedule loses that race. The notification channel is not in
     // RECORDED_CHANNELS, so the observe() tap ignores it (no recursion).
     private readonly notifyRecordingStarted: (sessionId: string) => void = () => {},
+    private readonly notifyRecordingStopping: (sessionId: string) => void = () => {},
   ) {}
 
   /** The outbound observer registered on sendToMainWindow. The critical
@@ -112,8 +114,10 @@ export class SessionRecorderManager {
       const p = payload as { kind?: string; projectDir?: string }
       recorder.refreshIdentity({ provider: p.kind, cwd: p.projectDir })
     }
-    // session:exit finalizes the recording (end stats in meta.json).
-    if (channel === 'session:exit') void this.stop(sessionId)
+    // session:exit starts a bounded renderer-flush handshake. Closing here
+    // synchronously used to remove the recorder before the observer's final
+    // two-second coalesced batch could arrive, losing rare one-off shapes.
+    if (channel === 'session:exit') this.requestStop(sessionId)
   }
 
   /**
@@ -195,6 +199,30 @@ export class SessionRecorderManager {
     return true
   }
 
+  /**
+   * Ask the renderer to finish its metadata sidecar before finalizing the
+   * recorder. The timer is not a sleep in the hot path: it is the ownership
+   * fallback for renderer crash/reload/app shutdown, where no acknowledgement
+   * can ever arrive. A healthy renderer calls finishStopping immediately.
+   */
+  private requestStop(sessionId: string): void {
+    if (!this.recorders.has(sessionId) || this.pendingStopTimers.has(sessionId)) return
+    try {
+      this.notifyRecordingStopping(sessionId)
+    } catch {
+      /* notification failure falls through to the bounded timer */
+    }
+    const timer = setTimeout(() => {
+      this.pendingStopTimers.delete(sessionId)
+      void this.stop(sessionId)
+    }, 3_000)
+    this.pendingStopTimers.set(sessionId, timer)
+  }
+
+  finishStopping(sessionId: string): Promise<void> {
+    return this.stop(sessionId)
+  }
+
   isRecording(sessionId: string): boolean {
     return this.recorders.has(sessionId)
   }
@@ -221,6 +249,11 @@ export class SessionRecorderManager {
   }
 
   async stop(sessionId: string): Promise<void> {
+    const pending = this.pendingStopTimers.get(sessionId)
+    if (pending) {
+      clearTimeout(pending)
+      this.pendingStopTimers.delete(sessionId)
+    }
     const recorder = this.recorders.get(sessionId)
     if (!recorder) return
     this.recorders.delete(sessionId)
@@ -236,6 +269,8 @@ export class SessionRecorderManager {
   /** Drain + finalize every recording. Called on before-quit (mirrors
    *  ghostJournals.flushAll). */
   async flushAll(): Promise<void> {
+    for (const timer of this.pendingStopTimers.values()) clearTimeout(timer)
+    this.pendingStopTimers.clear()
     const all = [...this.recorders.values()]
     this.recorders.clear()
     await Promise.all(all.map(r => r.close()))

@@ -51,6 +51,18 @@ describe('Codex subagent state', () => {
     })
   })
 
+  it('does not create an unjoinable tracker entry for current task_name calls', () => {
+    expect(extractCodexSpawnCall({
+      type: 'response_item',
+      payload: {
+        type: 'function_call',
+        name: 'spawn_agent',
+        call_id: 'named-task',
+        arguments: JSON.stringify({ task_name: 'review', message: 'Inspect it' }),
+      },
+    })).toBeNull()
+  })
+
   it('extracts the spawn output join key from { text } object output', () => {
     const output = extractCodexSpawnOutput({
       type: 'response_item',

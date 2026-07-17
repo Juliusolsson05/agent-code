@@ -1,5 +1,6 @@
 import type { CodeEditRenderModel } from '@providers/shared/renderer/protocols/code-edit/model'
 import { lexShellLine, type ShellToken } from '@providers/shared/renderer/protocols/command/shellLex'
+import { boundedTextLineCount, boundedTextPage } from '@renderer/lib/text/boundedText'
 
 // Heredoc file-write extraction (PR #555 Phase 6 follow-up).
 //
@@ -47,9 +48,9 @@ import { lexShellLine, type ShellToken } from '@providers/shared/renderer/protoc
 export type ShellHeredocWrite = {
   path: string
   append: boolean
-  /** Real body lines (no trailing-newline artifact — each element is one
-   *  written line). */
-  contentLines: string[]
+  /** Exact recovered body. Kept as text so extraction does not allocate an
+   *  unbounded line array before renderer admission. */
+  content: string
   /** Terminator line seen. False while the body is still streaming. */
   complete: boolean
 }
@@ -73,13 +74,31 @@ export function extractShellHeredocWrite(commandText: string): ShellHeredocWrite
   }
 
   let writeSeg: ShellToken[] | null = null
-  for (const seg of segments) {
+  let writeIndex = -1
+  for (let index = 0; index < segments.length; index += 1) {
+    const seg = segments[index]
     if (seg.some(t => t.kind === 'op')) {
       if (writeSeg) return null // two op-bearing segments → undecidable
       writeSeg = seg
+      writeIndex = index
     }
   }
   if (!writeSeg) return null
+
+  // Only the observed safe prelude is admitted. Treating every op-free
+  // segment as harmless let `rm -rf x && cat ...` masquerade as a pure write,
+  // while a suffix such as `cat ... ; deploy` hid work performed afterwards.
+  if (writeIndex !== segments.length - 1 || writeIndex > 1) return null
+  if (writeIndex === 1) {
+    const prefix = segments[0]
+    if (
+      prefix.length !== 3 ||
+      prefix.some(token => token.kind !== 'word' || token.quoted) ||
+      prefix[0]?.text !== 'mkdir' ||
+      prefix[1]?.text !== '-p' ||
+      !prefix[2]?.text
+    ) return null
+  }
 
   // Canonical shape check: word `cat`, exactly one `>`/`>>` + unquoted plain
   // target, exactly one `<<` + QUOTED delimiter, and nothing else.
@@ -114,15 +133,26 @@ export function extractShellHeredocWrite(commandText: string): ShellHeredocWrite
   }
   if (!sawCat || path === null || delimiter === null) return null
 
-  const bodyLines = commandText.slice(nl + 1).split('\n')
-  const end = bodyLines.indexOf(delimiter)
-  if (end === -1) {
-    return { path, append, contentLines: bodyLines, complete: false }
+  const bodyStart = nl + 1
+  let cursor = bodyStart
+  while (cursor <= commandText.length) {
+    const newline = commandText.indexOf('\n', cursor)
+    const lineEnd = newline === -1 ? commandText.length : newline
+    if (commandText.slice(cursor, lineEnd) === delimiter) {
+      const contentEnd = cursor > bodyStart ? cursor - 1 : cursor
+      const afterTerminator = newline === -1 ? '' : commandText.slice(newline + 1)
+      if (/\S/.test(afterTerminator)) return null
+      return {
+        path,
+        append,
+        content: commandText.slice(bodyStart, contentEnd),
+        complete: true,
+      }
+    }
+    if (newline === -1) break
+    cursor = newline + 1
   }
-  for (let i = end + 1; i < bodyLines.length; i++) {
-    if (/\S/.test(bodyLines[i])) return null // trailing command after terminator
-  }
-  return { path, append, contentLines: bodyLines.slice(0, end), complete: true }
+  return { path, append, content: commandText.slice(bodyStart), complete: false }
 }
 
 /** ShellHeredocWrite → code-edit model (provider-neutral: both the Claude
@@ -133,7 +163,13 @@ export function shellHeredocWriteModel(
   write: ShellHeredocWrite,
   opts: { streaming: boolean; label: string },
 ): CodeEditRenderModel {
-  const lines = write.contentLines.map(text => ({ kind: '+' as const, text }))
+  const page = boundedTextPage(write.content)
+  const count = boundedTextLineCount(write.content)
+  const previewLines = write.content === '' ? [] : page.text.split('\n')
+  if (previewLines.length > 0 && previewLines.at(-1) === '' && page.text.endsWith('\n')) {
+    previewLines.pop()
+  }
+  const lines = previewLines.map(text => ({ kind: '+' as const, text }))
   return {
     label: opts.label,
     files: [
@@ -141,8 +177,11 @@ export function shellHeredocWriteModel(
         path: write.path,
         verb: write.append ? 'Appending' : 'Writing',
         lines,
-        additions: lines.length,
+        additions: count.count,
         deletions: 0,
+        previewTruncated: page.hasNext,
+        countsTruncated: count.truncated,
+        exactSections: page.hasNext ? [{ label: 'Content', text: write.content }] : undefined,
         streaming: opts.streaming,
       },
     ],

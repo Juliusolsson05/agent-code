@@ -164,6 +164,10 @@ export function fromAgentCodeOrchestrationResult(
   source: AgentCodeOrchestrationUseModel,
 ): AgentCodeOrchestrationResultModel | null {
   if (block.tool_use_id !== source.operationId) return null
+  // Transport failure outranks a contradictory JSON-looking body. Absorbing
+  // this row would let an outer MCP/IPC error disappear behind an inner
+  // `{ok:true}` value that was never actually delivered successfully.
+  if (block.is_error === true) return null
   const exact = exactResultSource(block.content)
   if (exact === null) return null
   const parsed = tryExtractJson(exact)

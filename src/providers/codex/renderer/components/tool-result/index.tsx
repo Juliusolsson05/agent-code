@@ -13,7 +13,7 @@ import { CodeRenderContext } from '@renderer/features/feed/context'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import { OutputWell } from '@renderer/lib/text/OutputWell'
 import { formatToolFilePath } from '@shared/paths/displayPath'
-import type { ToolResultBlock } from '@shared/types/transcript'
+import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 import { stripCodexTransportEnvelope } from '@providers/codex/renderer/adapters/command'
 import { JsonResultSlab } from '@providers/shared/renderer/rows/JsonResultSlab'
 import { tryExtractJson } from '@providers/shared/renderer/rows/jsonToolPresentation'
@@ -140,8 +140,10 @@ function ExpandableCodeResult({
 
 export const CodexToolResultRow = memo(function CodexToolResultRow({
   block,
+  sourceTool,
 }: {
   block: ToolResultBlock
+  sourceTool?: ToolUseBlock | null
 }) {
   const codeContext = useContext(CodeRenderContext)
   const materializedText = textFromContent(block.content)
@@ -259,7 +261,12 @@ export const CodexToolResultRow = memo(function CodexToolResultRow({
   // NOT merge the exec with an orchestration operation—cell correlation is
   // not proven—but it makes the nested structured evidence readable instead
   // of displaying two levels of escaped JSON.
-  const payloadText = stripCodexTransportEnvelope(text)
+  // Only unified `exec` owns this human transport envelope. Direct command,
+  // MCP, and future result families may legitimately begin with the same
+  // English words and must not have their evidence peeled heuristically.
+  const payloadText = sourceTool?.name === 'exec'
+    ? stripCodexTransportEnvelope(text)
+    : text
   const parsedJson = tryExtractJson(payloadText)
   if (parsedJson !== null && typeof parsedJson === 'object') {
     return <JsonResultSlab value={parsedJson} isError={isError} source={text} />

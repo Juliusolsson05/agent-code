@@ -4,6 +4,28 @@ import type {
   CodeEditFile,
   CodeEditRenderModel,
 } from '@providers/shared/renderer/protocols/code-edit/model'
+import { boundedTextLineCount, boundedTextPage } from '@renderer/lib/text/boundedText'
+
+const MAX_CODE_EDIT_FILES = 24
+
+function boundedSide(
+  text: string,
+  kind: '-' | '+',
+  maxLines: number,
+): { lines: DiffLine[]; count: number; previewTruncated: boolean; countTruncated: boolean } {
+  const page = boundedTextPage(text, 0, 16 * 1024, maxLines)
+  const count = boundedTextLineCount(text)
+  const previewLines = text === '' ? [] : page.text.split('\n')
+  if (previewLines.length > 0 && previewLines.at(-1) === '' && page.text.endsWith('\n')) {
+    previewLines.pop()
+  }
+  return {
+    lines: previewLines.map(line => ({ kind, text: line })),
+    count: count.count,
+    previewTruncated: page.hasNext,
+    countTruncated: count.truncated,
+  }
+}
 
 // Claude wire → CodeEditRenderModel (renderer rewrite, PR #555; Phase 5
 // adapter). Claude-PRIVATE: parses Claude's Edit/MultiEdit/Write input
@@ -28,24 +50,24 @@ function editFile(filePath: string, oldString: string, newString: string, stream
   // legacy path used a paged viewer; an uncapped -/+ dump of a huge string
   // would mount unbounded DOM). 200 lines per side + an explicit marker —
   // the full content remains in the transcript/committed views.
-  const OVERSIZE_SIDE_CAP = 200
-  const capSide = (text: string, kind: '-' | '+'): DiffLine[] => {
-    const all = text.split('\n')
-    const shown: DiffLine[] = all.slice(0, OVERSIZE_SIDE_CAP).map(t => ({ kind, text: t }))
-    if (all.length > OVERSIZE_SIDE_CAP) {
-      shown.push({ kind: 'ctx', text: `… ${all.length - OVERSIZE_SIDE_CAP} more ${kind === '+' ? 'added' : 'removed'} lines (view full content in the committed block)` })
-    }
-    return shown
-  }
-  const lines: DiffLine[] = canDiffLinesInline(oldString, newString)
+  const inline = canDiffLinesInline(oldString, newString)
+  const removed = inline ? null : boundedSide(oldString, '-', 200)
+  const added = inline ? null : boundedSide(newString, '+', 200)
+  const lines: DiffLine[] = inline
     ? diffLines(oldString, newString)
-    : [...capSide(oldString, '-'), ...capSide(newString, '+')]
+    : [...removed!.lines, ...added!.lines]
+  const previewTruncated = removed?.previewTruncated === true || added?.previewTruncated === true
   return {
     path: filePath,
     verb: oldString === '' ? 'Creating' : 'Editing',
     lines,
-    additions: lines.filter(l => l.kind === '+').length,
-    deletions: lines.filter(l => l.kind === '-').length,
+    additions: inline ? lines.filter(l => l.kind === '+').length : added!.count,
+    deletions: inline ? lines.filter(l => l.kind === '-').length : removed!.count,
+    previewTruncated,
+    countsTruncated: removed?.countTruncated === true || added?.countTruncated === true,
+    exactSections: previewTruncated
+      ? [{ label: 'Before', text: oldString }, { label: 'After', text: newString }]
+      : undefined,
     streaming,
   }
 }
@@ -73,7 +95,9 @@ export function fromClaudeEditBlock(
     const path = str(input.file_path)
     return {
       label: 'MultiEdit',
-      files: edits.map(e => editFile(path, str(e.old_string), str(e.new_string), streaming)),
+      files: edits.slice(0, MAX_CODE_EDIT_FILES).map(e => editFile(path, str(e.old_string), str(e.new_string), streaming)),
+      totalFiles: edits.length,
+      filesTruncated: edits.length > MAX_CODE_EDIT_FILES,
       status,
       errorSummary: opts.errorSummary,
       partial: streaming,
@@ -83,16 +107,19 @@ export function fromClaudeEditBlock(
     // Honest Write semantics (plan): no known before-state → pure
     // additions, never a fabricated diff.
     const content = str(input.content)
-    const lines: DiffLine[] = content === '' ? [] : content.split('\n').map(text => ({ kind: '+' as const, text }))
+    const preview = boundedSide(content, '+', 400)
     return {
       label: 'Write',
       files: [
         {
           path: str(input.file_path),
           verb: 'Writing',
-          lines,
-          additions: lines.length,
+          lines: preview.lines,
+          additions: preview.count,
           deletions: 0,
+          previewTruncated: preview.previewTruncated,
+          countsTruncated: preview.countTruncated,
+          exactSections: preview.previewTruncated ? [{ label: 'Content', text: content }] : undefined,
           streaming,
         },
       ],
@@ -156,12 +183,19 @@ export function fromClaudePartialEditJson(
   if (!path || !path.closed) return null
   if (toolName === 'Write') {
     const content = extractJsonStringField(rawInputJson, 'content')
-    const lines: DiffLine[] = (content?.value ?? '') === ''
-      ? []
-      : content!.value.split('\n').map(text => ({ kind: '+' as const, text }))
+    const preview = boundedSide(content?.value ?? '', '+', 400)
     return {
       label: 'Write',
-      files: [{ path: path.value, verb: 'Writing', lines, additions: lines.length, deletions: 0, streaming: true }],
+      files: [{
+        path: path.value,
+        verb: 'Writing',
+        lines: preview.lines,
+        additions: preview.count,
+        deletions: 0,
+        previewTruncated: preview.previewTruncated,
+        countsTruncated: preview.countTruncated,
+        streaming: true,
+      }],
       status: 'streaming',
       partial: true,
     }

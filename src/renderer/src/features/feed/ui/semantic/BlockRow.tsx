@@ -384,21 +384,26 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
     }
     return null
   })()
+  const liveResult: ToolResultBlock | null = providerToolBlock &&
+    (block.resultAt != null || block.resultContent != null)
+    ? {
+        type: 'tool_result',
+        tool_use_id: providerToolBlock.id,
+        content: block.resultContent ?? '',
+        ...(block.resultIsError === true ? { is_error: true } : {}),
+      }
+    : null
   const providerToolRow = providerToolBlock
-    ? providerCapabilities.renderToolUse?.(providerToolBlock)
+    ? providerCapabilities.renderToolUse?.(providerToolBlock, {
+        live: true,
+        streaming: liveResult === null && block.finalized !== true,
+        result: liveResult,
+      })
     : undefined
 
   const providerToolNode = (() => {
     if (providerToolRow === undefined || !providerToolBlock) return null
-    const hasResult = block.resultAt != null || block.resultContent != null
-    if (!hasResult) return providerToolRow
-
-    const liveResult: ToolResultBlock = {
-      type: 'tool_result',
-      tool_use_id: providerToolBlock.id,
-      content: block.resultContent ?? '',
-      ...(block.resultIsError === true ? { is_error: true } : {}),
-    }
+    if (!liveResult) return providerToolRow
     const resultRow = providerCapabilities.renderToolResult?.(liveResult, {
       sourceTool: providerToolBlock,
     })
@@ -657,6 +662,10 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
   // the generic live card until then (a half-streamed command must not
   // headline).
   if (block.toolName === 'Bash') {
+    // Once parsed input is authoritative, provider dispatch owns lifecycle
+    // and paired-result rendering. The partial component remains only for the
+    // honest pre-JSON streaming window.
+    if (providerToolNode) return providerToolNode
     return (
       <ClaudeLiveBashRow
         parsedInput={block.parsedInput ?? null}
@@ -691,6 +700,7 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
     // arrived, claudeLiveEditInput returns null and we fall through to the
     // existing raw preview — never worse than before.
     if (block.toolName === 'Edit' || block.toolName === 'MultiEdit') {
+      if (providerToolNode) return providerToolNode
       const liveEditInput = claudeLiveEditInput(block)
       if (liveEditInput) {
         const liveBlock: ToolUseBlock = {
@@ -704,7 +714,7 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
           input: liveEditInput,
         }
         return block.toolName === 'Edit' ? (
-          <EditRow block={liveBlock} />
+          <EditRow block={liveBlock} streaming />
         ) : (
           <MultiEditRow block={liveBlock} />
         )

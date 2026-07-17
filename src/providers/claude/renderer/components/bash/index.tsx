@@ -22,6 +22,7 @@ import {
 } from '@providers/claude/renderer/adapters/command'
 import { CommandView } from '@providers/shared/renderer/protocols/command/CommandView'
 import { CodeEditView } from '@providers/shared/renderer/protocols/code-edit/CodeEditView'
+import { JsonToolRow } from '@providers/shared/renderer/rows/JsonToolRow'
 
 export const ClaudeLiveBashRow = memo(function ClaudeLiveBashRow({
   parsedInput,
@@ -60,6 +61,20 @@ export const ClaudeLiveBashRow = memo(function ClaudeLiveBashRow({
     [parsedInput, inputJson, finalized, blockIndex],
   )
   if (editModel) return <CodeEditView model={editModel} />
-  if (!commandModel) return null // command not closed yet — caller falls through
+  if (!commandModel) {
+    // Returning null here used to erase the live invocation because BlockRow
+    // had already committed to this provider component. Preserve the raw
+    // partial shape through the same bounded generic row used everywhere else.
+    return (
+      <JsonToolRow
+        block={{
+          type: 'tool_use',
+          id: `live:${blockIndex}`,
+          name: 'Bash',
+          input: parsedInput ?? { inputJson },
+        } as ToolUseBlock}
+      />
+    )
+  }
   return <CommandView model={commandModel} />
 })

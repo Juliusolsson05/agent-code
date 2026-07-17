@@ -13,7 +13,7 @@ import {
   type RenderShapeDefinition,
 } from '@renderer/rendering/evidence/defineRenderShape'
 
-const FP = 'fp1-0000abcd'
+const FP = 'fp2-0000abcd'
 
 function shape(over: Partial<RenderShapeDefinition<'claude'>> = {}): RenderShapeDefinition<'claude'> {
   return defineRenderShape({
@@ -61,6 +61,29 @@ describe('classifySighting — the five plan §Step 4 states', () => {
     expect(c.kind).toBe('known-misrouted')
   })
 
+  it('uses a lifecycle-specific route when a strict adapter declines prefixes', () => {
+    const lifecycleIndex = buildFingerprintIndex([{ 'claude.edit.v1': shape({
+      lifecycles: ['prefix', 'input-complete'],
+      dispositionByLifecycle: {
+        prefix: {
+          kind: 'generic',
+          rendererId: 'shared.generic-tool',
+          reason: 'Incomplete input remains visible until required fields close.',
+        },
+      },
+    }) }])
+    expect(classifySighting({
+      structuralFingerprint: FP,
+      lifecycle: 'prefix',
+      outcome: { kind: 'generic', rendererId: 'shared.generic-tool' },
+    }, lifecycleIndex)).toEqual({ kind: 'known-claimed', shapeId: 'claude.edit.v1' })
+    expect(classifySighting({
+      structuralFingerprint: FP,
+      lifecycle: 'input-complete',
+      outcome: specialized,
+    }, lifecycleIndex)).toEqual({ kind: 'known-claimed', shapeId: 'claude.edit.v1' })
+  })
+
   it('known-but-unsupported-lifecycle for an undeclared prefix milestone', () => {
     const c = classifySighting(
       { structuralFingerprint: FP, lifecycle: 'prefix', outcome: specialized },
@@ -75,10 +98,10 @@ describe('classifySighting — the five plan §Step 4 states', () => {
 
   it('unknown-structure for an uncatalogued fingerprint', () => {
     const c = classifySighting(
-      { structuralFingerprint: 'fp1-ffffffff', lifecycle: 'input-complete', outcome: specialized },
+      { structuralFingerprint: 'fp2-ffffffff', lifecycle: 'input-complete', outcome: specialized },
       index,
     )
-    expect(c).toEqual({ kind: 'unknown-structure', structuralFingerprint: 'fp1-ffffffff' })
+    expect(c).toEqual({ kind: 'unknown-structure', structuralFingerprint: 'fp2-ffffffff' })
   })
 
   it('unknown-outcome when a catalogued shape fell to the unknown fallback', () => {
@@ -109,10 +132,10 @@ describe('classifySightingStructure — pre-receipt evidence stays honest', () =
   it('still reports unknown fingerprints and unsupported prefixes', () => {
     expect(
       classifySightingStructure(
-        { structuralFingerprint: 'fp1-ffffffff', lifecycle: 'input-complete' },
+        { structuralFingerprint: 'fp2-ffffffff', lifecycle: 'input-complete' },
         index,
       ),
-    ).toEqual({ kind: 'unknown-structure', structuralFingerprint: 'fp1-ffffffff' })
+    ).toEqual({ kind: 'unknown-structure', structuralFingerprint: 'fp2-ffffffff' })
     expect(
       classifySightingStructure({ structuralFingerprint: FP, lifecycle: 'prefix' }, index),
     ).toEqual({
@@ -174,7 +197,7 @@ describe('auditRenderShapeCatalog — invariants the type system cannot see', ()
         'claude.edit.v1': shape({ fixtures: { final: [], prefixes: [] } }),
         'claude.echo.v1': shape({
           id: 'claude.echo.v1',
-          fingerprints: ['fp1-00000002'],
+          fingerprints: ['fp2-00000002'],
           fixtures: { final: [], prefixes: [] },
           disposition: { kind: 'absorbed', ownerRendererId: 'claude.command', reason: 'echo' },
         }),

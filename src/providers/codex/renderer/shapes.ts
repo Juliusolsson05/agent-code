@@ -22,7 +22,7 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
   'codex.semantic.ai-workspace-attach-file.v1': defineRenderShape({
     id: 'codex.semantic.ai-workspace-attach-file.v1',
     provider: 'codex',
-    fingerprints: ["fp1-46b11a08","fp1-e684a8c6"],
+    fingerprints: ["fp2-46b11a08","fp2-e684a8c6"],
     eventTypes: ["function_call"],
     planes: ["semantic-tool"] as const,
     lifecycles: ["input-complete"] as const,
@@ -39,7 +39,7 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
   'codex.semantic.ai-workspace-create.v1': defineRenderShape({
     id: 'codex.semantic.ai-workspace-create.v1',
     provider: 'codex',
-    fingerprints: ["fp1-555245df"],
+    fingerprints: ["fp2-555245df"],
     eventTypes: ["function_call"],
     planes: ["semantic-tool"] as const,
     lifecycles: ["input-complete"] as const,
@@ -56,7 +56,7 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
   'codex.semantic.ai-workspace-list-files.v1': defineRenderShape({
     id: 'codex.semantic.ai-workspace-list-files.v1',
     provider: 'codex',
-    fingerprints: ["fp1-66af5be5"],
+    fingerprints: ["fp2-66af5be5"],
     eventTypes: ["function_call"],
     planes: ["semantic-tool"] as const,
     lifecycles: ["input-complete"] as const,
@@ -73,7 +73,7 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
   'codex.semantic.apply-patch.v1': defineRenderShape({
     id: 'codex.semantic.apply-patch.v1',
     provider: 'codex',
-    fingerprints: ["fp1-43e90a27","fp1-c31d4688"],
+    fingerprints: ["fp2-43e90a27","fp2-c31d4688"],
     eventTypes: ["custom_tool_call"],
     planes: ["semantic-tool"] as const,
     lifecycles: ["input-complete","prefix"] as const,
@@ -90,7 +90,7 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
   'codex.semantic.exec.v1': defineRenderShape({
     id: 'codex.semantic.exec.v1',
     provider: 'codex',
-    fingerprints: ["fp1-679797aa","fp1-9b9a69b3"],
+    fingerprints: ["fp2-679797aa","fp2-9b9a69b3"],
     eventTypes: ["custom_tool_call"],
     planes: ["semantic-tool"] as const,
     lifecycles: ["input-complete","prefix"] as const,
@@ -107,7 +107,7 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
   'codex.semantic.exec-command.v1': defineRenderShape({
     id: 'codex.semantic.exec-command.v1',
     provider: 'codex',
-    fingerprints: ["fp1-4c4186e6"],
+    fingerprints: ["fp2-4c4186e6"],
     eventTypes: ["function_call"],
     planes: ["semantic-tool"] as const,
     lifecycles: ["input-complete"] as const,
@@ -124,7 +124,7 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
   'codex.semantic.list-agents.v1': defineRenderShape({
     id: 'codex.semantic.list-agents.v1',
     provider: 'codex',
-    fingerprints: ["fp1-57c4063b","fp1-5d5bc614","fp1-995423c3"],
+    fingerprints: ["fp2-57c4063b","fp2-5d5bc614","fp2-995423c3"],
     eventTypes: ["function_call"],
     planes: ["semantic-tool"] as const,
     lifecycles: ["input-complete","prefix"] as const,
@@ -141,7 +141,7 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
   'codex.semantic.message.v1': defineRenderShape({
     id: 'codex.semantic.message.v1',
     provider: 'codex',
-    fingerprints: ["fp1-321e4161","fp1-469ca08d"],
+    fingerprints: ["fp2-321e4161","fp2-469ca08d"],
     eventTypes: ["message"],
     planes: ["semantic-tool"] as const,
     lifecycles: ["input-complete","prefix"] as const,
@@ -158,7 +158,7 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
   'codex.semantic.orchestration-close-run.v1': defineRenderShape({
     id: 'codex.semantic.orchestration-close-run.v1',
     provider: 'codex',
-    fingerprints: ["fp1-6a00e11c","fp1-b2902050"],
+    fingerprints: ["fp2-6a00e11c","fp2-b2902050"],
     eventTypes: ["function_call"],
     planes: ["semantic-tool"] as const,
     lifecycles: ["input-complete"] as const,
@@ -175,7 +175,7 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
   'codex.semantic.orchestration-create-agent.v1': defineRenderShape({
     id: 'codex.semantic.orchestration-create-agent.v1',
     provider: 'codex',
-    fingerprints: ["fp1-04161150","fp1-77b08045","fp1-90024bf4","fp1-f7e03cb8"],
+    fingerprints: ["fp2-04161150","fp2-77b08045","fp2-90024bf4","fp2-f7e03cb8"],
     eventTypes: ["function_call"],
     planes: ["semantic-tool"] as const,
     lifecycles: ["input-complete"] as const,
@@ -192,7 +192,7 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
   'codex.semantic.orchestration-list-agents.v1': defineRenderShape({
     id: 'codex.semantic.orchestration-list-agents.v1',
     provider: 'codex',
-    fingerprints: ["fp1-097bb801","fp1-6a999231","fp1-77d0c37d"],
+    fingerprints: ["fp2-097bb801","fp2-6a999231","fp2-77d0c37d"],
     eventTypes: ["function_call"],
     planes: ["semantic-tool"] as const,
     lifecycles: ["input-complete"] as const,
@@ -209,7 +209,7 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
   'codex.semantic.orchestration-read-agent.v1': defineRenderShape({
     id: 'codex.semantic.orchestration-read-agent.v1',
     provider: 'codex',
-    fingerprints: ["fp1-a3a3ffc7","fp1-cf9730dd"],
+    fingerprints: ["fp2-a3a3ffc7","fp2-cf9730dd"],
     eventTypes: ["function_call"],
     planes: ["semantic-tool"] as const,
     lifecycles: ["input-complete"] as const,
@@ -226,7 +226,7 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
   'codex.semantic.orchestration-read-run-outputs.v1': defineRenderShape({
     id: 'codex.semantic.orchestration-read-run-outputs.v1',
     provider: 'codex',
-    fingerprints: ["fp1-59ccc71b","fp1-98624d27"],
+    fingerprints: ["fp2-59ccc71b","fp2-98624d27"],
     eventTypes: ["function_call"],
     planes: ["semantic-tool"] as const,
     lifecycles: ["input-complete"] as const,
@@ -243,7 +243,7 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
   'codex.semantic.orchestration-send-prompt.v1': defineRenderShape({
     id: 'codex.semantic.orchestration-send-prompt.v1',
     provider: 'codex',
-    fingerprints: ["fp1-31729a98"],
+    fingerprints: ["fp2-31729a98"],
     eventTypes: ["function_call"],
     planes: ["semantic-tool"] as const,
     lifecycles: ["input-complete"] as const,
@@ -260,7 +260,7 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
   'codex.semantic.orchestration-wait-agents.v1': defineRenderShape({
     id: 'codex.semantic.orchestration-wait-agents.v1',
     provider: 'codex',
-    fingerprints: ["fp1-615dc5db","fp1-de751c05"],
+    fingerprints: ["fp2-615dc5db","fp2-de751c05"],
     eventTypes: ["function_call"],
     planes: ["semantic-tool"] as const,
     lifecycles: ["input-complete"] as const,
@@ -277,7 +277,7 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
   'codex.semantic.reasoning.v1': defineRenderShape({
     id: 'codex.semantic.reasoning.v1',
     provider: 'codex',
-    fingerprints: ["fp1-48584664","fp1-cdc8554d"],
+    fingerprints: ["fp2-48584664","fp2-cdc8554d"],
     eventTypes: ["reasoning"],
     planes: ["semantic-tool"] as const,
     lifecycles: ["input-complete","prefix"] as const,
@@ -294,7 +294,7 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
   'codex.semantic.spawn-agent.v1': defineRenderShape({
     id: 'codex.semantic.spawn-agent.v1',
     provider: 'codex',
-    fingerprints: ["fp1-ac799d86","fp1-b1a3f043","fp1-ca116f72"],
+    fingerprints: ["fp2-ac799d86","fp2-b1a3f043","fp2-ca116f72"],
     eventTypes: ["function_call"],
     planes: ["semantic-tool"] as const,
     lifecycles: ["input-complete","prefix"] as const,
@@ -306,12 +306,13 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
     },
     fixtures: { final: ["rendering-bundles/2026-06-18T11-12-28-535-21c515e9.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'codex.rows.dispatch' },
+    dispositionByLifecycle: { prefix: { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'Incomplete provider input remains visible through the bounded fallback until required fields close.' } },
     why: 'GRADUATED Phase 7 with generation-aware input parsing: both frozen agent_type and current task_name calls share one bounded card, while unrecognized generations fall through and spawn acknowledgements remain visible.',
   }),
   'codex.semantic.wait-agent.v1': defineRenderShape({
     id: 'codex.semantic.wait-agent.v1',
     provider: 'codex',
-    fingerprints: ["fp1-087966cb"],
+    fingerprints: ["fp2-087966cb"],
     eventTypes: ["function_call"],
     planes: ["semantic-tool"] as const,
     lifecycles: ["input-complete"] as const,
@@ -328,7 +329,7 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
   'codex.semantic.wait.v1': defineRenderShape({
     id: 'codex.semantic.wait.v1',
     provider: 'codex',
-    fingerprints: ["fp1-cee28660","fp1-d3325ec0"],
+    fingerprints: ["fp2-cee28660","fp2-d3325ec0"],
     eventTypes: ["function_call"],
     planes: ["semantic-tool"] as const,
     lifecycles: ["input-complete","prefix"] as const,
@@ -345,7 +346,7 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
   'codex.semantic.web-search-call.v1': defineRenderShape({
     id: 'codex.semantic.web-search-call.v1',
     provider: 'codex',
-    fingerprints: ["fp1-2f07bc25","fp1-964ad542"],
+    fingerprints: ["fp2-2f07bc25","fp2-964ad542"],
     eventTypes: ["web_search_call"],
     planes: ["semantic-tool"] as const,
     lifecycles: ["input-complete"] as const,
@@ -362,7 +363,7 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
   'codex.semantic.write-stdin.v1': defineRenderShape({
     id: 'codex.semantic.write-stdin.v1',
     provider: 'codex',
-    fingerprints: ["fp1-d534209e"],
+    fingerprints: ["fp2-d534209e"],
     eventTypes: ["function_call"],
     planes: ["semantic-tool"] as const,
     lifecycles: ["input-complete"] as const,
@@ -379,7 +380,7 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
   'codex.tool-result.custom-tool-call-output.v1': defineRenderShape({
     id: 'codex.tool-result.custom-tool-call-output.v1',
     provider: 'codex',
-    fingerprints: ["fp1-8571cc95"],
+    fingerprints: ["fp2-8571cc95"],
     eventTypes: ["tool_result"],
     planes: ["committed-tool-result"] as const,
     lifecycles: ["durable"] as const,
@@ -396,7 +397,7 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
   'codex.tool-result.patch-apply-end.v1': defineRenderShape({
     id: 'codex.tool-result.patch-apply-end.v1',
     provider: 'codex',
-    fingerprints: ["fp1-0033a48e","fp1-1b549f52","fp1-9c456bea","fp1-d2336fb0","fp1-efb8be1e"],
+    fingerprints: ["fp2-0033a48e","fp2-1b549f52","fp2-9c456bea","fp2-d2336fb0","fp2-efb8be1e"],
     eventTypes: ["tool_result"],
     planes: ["committed-tool-result"] as const,
     lifecycles: ["durable"] as const,
@@ -413,7 +414,7 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
   'codex.tool-result.tool-result.v1': defineRenderShape({
     id: 'codex.tool-result.tool-result.v1',
     provider: 'codex',
-    fingerprints: ["fp1-5b0abcb6"],
+    fingerprints: ["fp2-5b0abcb6"],
     eventTypes: ["tool_result"],
     planes: ["committed-tool-result"] as const,
     lifecycles: ["durable"] as const,
@@ -430,7 +431,7 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
   'codex.tool-use.ai-workspace-attach-file.v1': defineRenderShape({
     id: 'codex.tool-use.ai-workspace-attach-file.v1',
     provider: 'codex',
-    fingerprints: ["fp1-4d5ad8fb","fp1-579b18ba"],
+    fingerprints: ["fp2-4d5ad8fb","fp2-579b18ba"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -447,7 +448,7 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
   'codex.tool-use.ai-workspace-create.v1': defineRenderShape({
     id: 'codex.tool-use.ai-workspace-create.v1',
     provider: 'codex',
-    fingerprints: ["fp1-57c7b414"],
+    fingerprints: ["fp2-57c7b414"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -464,7 +465,7 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
   'codex.tool-use.ai-workspace-list-files.v1': defineRenderShape({
     id: 'codex.tool-use.ai-workspace-list-files.v1',
     provider: 'codex',
-    fingerprints: ["fp1-6e9b4ecb"],
+    fingerprints: ["fp2-6e9b4ecb"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -481,7 +482,7 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
   'codex.tool-use.ai-workspace-open.v1': defineRenderShape({
     id: 'codex.tool-use.ai-workspace-open.v1',
     provider: 'codex',
-    fingerprints: ["fp1-ad90a563"],
+    fingerprints: ["fp2-ad90a563"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -498,7 +499,7 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
   'codex.tool-use.apply-patch.v1': defineRenderShape({
     id: 'codex.tool-use.apply-patch.v1',
     provider: 'codex',
-    fingerprints: ["fp1-a55c7935"],
+    fingerprints: ["fp2-a55c7935"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -515,7 +516,7 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
   'codex.tool-use.exec.v1': defineRenderShape({
     id: 'codex.tool-use.exec.v1',
     provider: 'codex',
-    fingerprints: ["fp1-bb2ab36f"],
+    fingerprints: ["fp2-bb2ab36f"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -532,7 +533,7 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
   'codex.tool-use.exec-command.v1': defineRenderShape({
     id: 'codex.tool-use.exec-command.v1',
     provider: 'codex',
-    fingerprints: ["fp1-c24cb78f","fp1-e4175845"],
+    fingerprints: ["fp2-c24cb78f","fp2-e4175845"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -549,7 +550,7 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
   'codex.tool-use.followup-task.v1': defineRenderShape({
     id: 'codex.tool-use.followup-task.v1',
     provider: 'codex',
-    fingerprints: ["fp1-77cd1721"],
+    fingerprints: ["fp2-77cd1721"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -566,7 +567,7 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
   'codex.tool-use.interrupt-agent.v1': defineRenderShape({
     id: 'codex.tool-use.interrupt-agent.v1',
     provider: 'codex',
-    fingerprints: ["fp1-ebd10da6"],
+    fingerprints: ["fp2-ebd10da6"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -583,7 +584,7 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
   'codex.tool-use.list-agents.v1': defineRenderShape({
     id: 'codex.tool-use.list-agents.v1',
     provider: 'codex',
-    fingerprints: ["fp1-e6c69b6a"],
+    fingerprints: ["fp2-e6c69b6a"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -600,7 +601,7 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
   'codex.tool-use.orchestration-close-agent.v1': defineRenderShape({
     id: 'codex.tool-use.orchestration-close-agent.v1',
     provider: 'codex',
-    fingerprints: ["fp1-e1dbbea9"],
+    fingerprints: ["fp2-e1dbbea9"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -617,7 +618,7 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
   'codex.tool-use.orchestration-close-run.v1': defineRenderShape({
     id: 'codex.tool-use.orchestration-close-run.v1',
     provider: 'codex',
-    fingerprints: ["fp1-26a0b16d","fp1-782a61d2"],
+    fingerprints: ["fp2-26a0b16d","fp2-782a61d2"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -634,7 +635,7 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
   'codex.tool-use.orchestration-create-agent.v1': defineRenderShape({
     id: 'codex.tool-use.orchestration-create-agent.v1',
     provider: 'codex',
-    fingerprints: ["fp1-0f61d81c","fp1-4dd7966e","fp1-5e2248ee","fp1-a595182f","fp1-c4377ff9","fp1-ca218f41"],
+    fingerprints: ["fp2-0f61d81c","fp2-4dd7966e","fp2-5e2248ee","fp2-a595182f","fp2-c4377ff9","fp2-ca218f41"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -651,7 +652,7 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
   'codex.tool-use.orchestration-list-agents.v1': defineRenderShape({
     id: 'codex.tool-use.orchestration-list-agents.v1',
     provider: 'codex',
-    fingerprints: ["fp1-85a76d94","fp1-c000085f"],
+    fingerprints: ["fp2-85a76d94","fp2-c000085f"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -668,7 +669,7 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
   'codex.tool-use.orchestration-read-agent.v1': defineRenderShape({
     id: 'codex.tool-use.orchestration-read-agent.v1',
     provider: 'codex',
-    fingerprints: ["fp1-481d078c"],
+    fingerprints: ["fp2-481d078c"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -685,7 +686,7 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
   'codex.tool-use.orchestration-read-run-outputs.v1': defineRenderShape({
     id: 'codex.tool-use.orchestration-read-run-outputs.v1',
     provider: 'codex',
-    fingerprints: ["fp1-dc137904"],
+    fingerprints: ["fp2-dc137904"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -702,7 +703,7 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
   'codex.tool-use.orchestration-send-prompt.v1': defineRenderShape({
     id: 'codex.tool-use.orchestration-send-prompt.v1',
     provider: 'codex',
-    fingerprints: ["fp1-d5c55b7f"],
+    fingerprints: ["fp2-d5c55b7f"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -719,7 +720,7 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
   'codex.tool-use.orchestration-wait-agents.v1': defineRenderShape({
     id: 'codex.tool-use.orchestration-wait-agents.v1',
     provider: 'codex',
-    fingerprints: ["fp1-307fdc90","fp1-9eecebe7"],
+    fingerprints: ["fp2-307fdc90","fp2-9eecebe7"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -736,7 +737,7 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
   'codex.tool-use.send-message.v1': defineRenderShape({
     id: 'codex.tool-use.send-message.v1',
     provider: 'codex',
-    fingerprints: ["fp1-e8529357"],
+    fingerprints: ["fp2-e8529357"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -753,7 +754,7 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
   'codex.tool-use.spawn-agent.v1': defineRenderShape({
     id: 'codex.tool-use.spawn-agent.v1',
     provider: 'codex',
-    fingerprints: ["fp1-5e28af9a","fp1-78dab7c7"],
+    fingerprints: ["fp2-5e28af9a","fp2-78dab7c7"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -770,7 +771,7 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
   'codex.tool-use.update-plan.v1': defineRenderShape({
     id: 'codex.tool-use.update-plan.v1',
     provider: 'codex',
-    fingerprints: ["fp1-1511e1b6"],
+    fingerprints: ["fp2-1511e1b6"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -787,7 +788,7 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
   'codex.tool-use.wait.v1': defineRenderShape({
     id: 'codex.tool-use.wait.v1',
     provider: 'codex',
-    fingerprints: ["fp1-32f6d3bc"],
+    fingerprints: ["fp2-32f6d3bc"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -804,7 +805,7 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
   'codex.tool-use.wait-agent.v1': defineRenderShape({
     id: 'codex.tool-use.wait-agent.v1',
     provider: 'codex',
-    fingerprints: ["fp1-032ae165","fp1-3db5716d"],
+    fingerprints: ["fp2-032ae165","fp2-3db5716d"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -821,7 +822,7 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
   'codex.tool-use.web-search.v1': defineRenderShape({
     id: 'codex.tool-use.web-search.v1',
     provider: 'codex',
-    fingerprints: ["fp1-0b98f9bb","fp1-183c6527"],
+    fingerprints: ["fp2-0b98f9bb","fp2-183c6527"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -838,7 +839,7 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
   'codex.tool-use.write-stdin.v1': defineRenderShape({
     id: 'codex.tool-use.write-stdin.v1',
     provider: 'codex',
-    fingerprints: ["fp1-4751b52b"],
+    fingerprints: ["fp2-4751b52b"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,

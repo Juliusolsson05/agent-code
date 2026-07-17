@@ -104,17 +104,17 @@ describe('SessionRecorderManager', () => {
     expect(m.isRecording('anything')).toBe(false)
   })
 
-  it('finalizes a recording on session:exit', async () => {
-    const m = mgr()
+  it('keeps the recorder open on session:exit until the renderer finishes its shape flush', async () => {
+    const stopping = vi.fn()
+    const m = new SessionRecorderManager(nowWall, nowMono, false, () => {}, stopping)
     m.startRecording('s2', { kind: 'claude' }) // command passes provider hint
     m.observe('session:started', [{ sessionId: 's2', kind: 'claude' }])
     expect(m.isRecording('s2')).toBe(true)
     m.observe('session:exit', [{ sessionId: 's2', code: 0 }])
-    // session:exit synchronously drops the session from the active map
-    // (stop() deletes BEFORE awaiting close()); the recording folder + its
-    // eagerly-written meta.json already exist from the first event. End
-    // stats (endedAtWall) are covered by the explicit `await m.stop` test —
-    // asserting them here would race the void'd async close under load.
+    expect(stopping).toHaveBeenCalledWith('s2')
+    expect(m.isRecording('s2')).toBe(true)
+    expect(m.appendRenderShapes('s2', [{ structuralFingerprint: 'fp2-deadbeef' }])).toBe(true)
+    await m.finishStopping('s2')
     expect(m.isRecording('s2')).toBe(false)
     const dir = await readRecordingDir('s2')
     const meta = JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8'))

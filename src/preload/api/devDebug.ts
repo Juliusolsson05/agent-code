@@ -1,6 +1,7 @@
 import { ipcRenderer } from 'electron'
 
 import type { DevDebugConfig, PasteDebugSession } from '@preload/api/types.js'
+import type { RenderShapeAppendResult } from '@shared/types/renderShapes.js'
 
 export const devDebugApi = {
   getDevDebugConfig: (): Promise<DevDebugConfig> =>
@@ -37,7 +38,7 @@ export const devDebugApi = {
   // coalesced metadata-only batch into the live recording's __render_shape
   // line; read sweeps every on-disk recording for the Unknown Shape Inbox
   // (derived state — recordings ARE the database).
-  appendRenderShapeSightings: (sessionId: string, sightings: unknown[]): Promise<boolean> =>
+  appendRenderShapeSightings: (sessionId: string, sightings: unknown[]): Promise<RenderShapeAppendResult> =>
     ipcRenderer.invoke('render-shape:append', sessionId, sightings),
   // Push channel: main announces a recorder STARTING for a session so the
   // shape observer can arm immediately. WHY push (PR #555, live-test
@@ -50,6 +51,17 @@ export const devDebugApi = {
     ipcRenderer.on('record-session:started', listener)
     return () => ipcRenderer.removeListener('record-session:started', listener)
   },
+  // Natural provider exit is a two-step close: main keeps the recorder open
+  // for a short grace window and asks the renderer to flush its coalesced
+  // shape counters. The renderer acknowledges by calling finish below; main's
+  // timer remains the crash/reload fallback when no renderer can answer.
+  onSessionRecordingStopping: (cb: (payload: { sessionId: string }) => void): (() => void) => {
+    const listener = (_evt: unknown, payload: { sessionId: string }): void => cb(payload)
+    ipcRenderer.on('record-session:stopping', listener)
+    return () => ipcRenderer.removeListener('record-session:stopping', listener)
+  },
+  finishSessionRecordingStop: (sessionId: string): Promise<void> =>
+    ipcRenderer.invoke('record-session:finish-stop', sessionId),
   readRenderShapeSightings: (): Promise<{
     sightings: unknown[]
     recordingsScanned: number

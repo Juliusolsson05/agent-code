@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
@@ -19,10 +19,11 @@ import { ALL_RENDER_SHAPE_CATALOGS } from '@providers/registry.renderShapes'
 // and land the printed entries in the owning provider's shapes.ts (a
 // reviewed change — decide grouping and target grammar, don't paste
 // blindly). When it fails after touching shapeFingerprint.ts: STOP — the
-// algorithm is pinned by the catalogs (see the fp1 stability contract in
+// algorithm is pinned by the catalogs (see the fp2 stability contract in
 // that file); re-pinning every catalog is part of any algorithm change.
 
 const BUNDLE_DIR = join(process.cwd(), 'testing', 'fixtures', 'rendering-bundles')
+const FIXTURE_ROOT = join(process.cwd(), 'testing', 'fixtures')
 
 describe('render-shape catalog coverage (Phase 4 gate)', () => {
   const index = buildFingerprintIndex(ALL_RENDER_SHAPE_CATALOGS)
@@ -63,5 +64,35 @@ describe('render-shape catalog coverage (Phase 4 gate)', () => {
 
   it('every catalogued fingerprint is claimed by exactly one entry', () => {
     expect([...index.duplicateFingerprints.entries()]).toEqual([])
+  })
+
+  it('fixture references exist and bundle-backed claims match their declared shape', () => {
+    const missing: string[] = []
+    const unrelated: string[] = []
+    for (const catalog of ALL_RENDER_SHAPE_CATALOGS) {
+      for (const def of Object.values(catalog)) {
+        const refs = [...def.fixtures.final, ...def.fixtures.prefixes]
+        for (const ref of refs) {
+          if (!existsSync(join(FIXTURE_ROOT, ref))) missing.push(`${def.id}: ${ref}`)
+        }
+        const bundleRefs = def.fixtures.final.filter(ref => ref.startsWith('rendering-bundles/'))
+        if (bundleRefs.length === 0) continue
+        // WHY inspect semantic contents, not merely existence: a broad bundle
+        // can exist while containing none of the shape it supposedly proves,
+        // making the specialized/absorbed fixture gate tautological.
+        const matched = bundleRefs.some(ref => {
+          const bundle = JSON.parse(readFileSync(join(FIXTURE_ROOT, ref), 'utf-8'))
+          return sweepBundleShapes(bundle).some(obs =>
+            obs.provider === def.provider &&
+            def.planes.includes(obs.plane) &&
+            def.eventTypes.includes(obs.eventType) &&
+            def.fingerprints.includes(obs.fingerprint.fingerprint),
+          )
+        })
+        if (!matched) unrelated.push(def.id)
+      }
+    }
+    expect(missing, 'catalog fixture paths that do not exist').toEqual([])
+    expect(unrelated, 'bundle-backed catalog entries with no matching observation').toEqual([])
   })
 })

@@ -5,7 +5,7 @@ import { buildFingerprintIndex } from '@renderer/rendering/evidence/catalogCover
 import { defineRenderShape } from '@renderer/rendering/evidence/defineRenderShape'
 import { buildUnknownShapeReport } from '@renderer/features/debug/devModules/RenderingShapes/unknownShapeReport'
 
-const KNOWN_FP = 'fp1-000000aa'
+const KNOWN_FP = 'fp2-000000aa'
 
 const index = buildFingerprintIndex([
   {
@@ -51,7 +51,7 @@ describe('unknown-shape report derivation (Phase 3)', () => {
       [
         sighting({}),
         sighting({ seenCount: 41, lifecycle: 'durable' }),
-        sighting({ structuralFingerprint: 'fp1-ffffffff', eventType: 'mystery' }),
+        sighting({ structuralFingerprint: 'fp2-ffffffff', eventType: 'mystery' }),
       ],
       index,
     )
@@ -64,7 +64,7 @@ describe('unknown-shape report derivation (Phase 3)', () => {
     expect(report.inbox).toHaveLength(1)
     expect(report.inbox[0].status).toBe('unknown-structure')
     // Unknown rows sort ABOVE clean rows — worst first is the inbox contract.
-    expect(report.rows[0].structuralFingerprint).toBe('fp1-ffffffff')
+    expect(report.rows[0].structuralFingerprint).toBe('fp2-ffffffff')
     const clean = report.rows[1]
     expect(clean.status).toBe('known-claimed')
     expect(clean.catalogShapeId).toBe('claude.tool-use.bash.v1')
@@ -75,6 +75,24 @@ describe('unknown-shape report derivation (Phase 3)', () => {
     expect(report.inbox).toHaveLength(1)
     expect(report.inbox[0].status).toBe('known-unsupported-lifecycle')
     expect(report.inbox[0].catalogShapeId).toBe('claude.tool-use.bash.v1')
+  })
+
+  it('keeps same-kind renderer routes separate in writer counts and report evidence', () => {
+    const report = buildUnknownShapeReport([
+      sighting({
+        seenCount: 3,
+        outcome: { kind: 'specialized', shapeId: 'a', rendererId: 'renderer.a' },
+      }),
+      sighting({
+        seenCount: 5,
+        outcome: { kind: 'specialized', shapeId: 'b', rendererId: 'renderer.b' },
+      }),
+    ], index)
+    expect(report.totalSightings).toBe(8)
+    expect(report.rows[0].routes).toEqual({
+      'specialized:renderer.a': 3,
+      'specialized:renderer.b': 5,
+    })
   })
 
   it('malformed sidecar lines are counted, never thrown, never rows', () => {

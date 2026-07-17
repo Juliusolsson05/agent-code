@@ -30,7 +30,7 @@
 // in-repo coverage test (shapes.coverage.test.ts); this script exists for
 // local triage and recording sweeps, which CI does not have.
 
-import { readdirSync, readFileSync } from 'node:fs'
+import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
@@ -41,7 +41,8 @@ import {
   classifySightingStructure,
 } from '../src/renderer/src/rendering/evidence/catalogCoverage.ts'
 import { ALL_RENDER_SHAPE_CATALOGS } from '../src/providers/registry.renderShapes.ts'
-import type { RenderOutcome } from '../src/shared/types/renderShapes.ts'
+import type { RenderOutcome, RenderShapeSighting } from '../src/shared/types/renderShapes.ts'
+import { renderShapeWriterKey } from '../src/shared/types/renderShapes.ts'
 
 const args = process.argv.slice(2)
 const SEED = args.includes('--seed')
@@ -55,6 +56,8 @@ const RECORDINGS_DIR =
       ? args[recIdx + 1]
       : join(homedir(), '.config', 'agent-code', 'session-recordings')
     : null
+const MAX_RECORDINGS = 200
+const MAX_RECORDING_BYTES = 64 * 1024 * 1024
 
 type Observation = {
   provider: string
@@ -104,10 +107,15 @@ if (RECORDINGS_DIR) {
   // cumulative seenCount — MAX per writer key, never sum (review finding:
   // summing double-counted every repeated key by one).
   const maxByWriterKey = new Map<string, Observation>()
-  for (const dir of dirs) {
+  for (const dir of dirs.slice(0, MAX_RECORDINGS)) {
     let body: string
     try {
-      body = readFileSync(join(RECORDINGS_DIR, dir, 'events.jsonl'), 'utf-8')
+      const eventPath = join(RECORDINGS_DIR, dir, 'events.jsonl')
+      // A local diagnostic should not accidentally turn one runaway recording
+      // into an unbounded allocation. Skipping is explicit in the final count;
+      // the recorder remains the source and can be inspected separately.
+      if (statSync(eventPath).size > MAX_RECORDING_BYTES) continue
+      body = readFileSync(eventPath, 'utf-8')
     } catch {
       continue
     }
@@ -117,7 +125,8 @@ if (RECORDINGS_DIR) {
         const parsed = JSON.parse(line)
         if (parsed.ch !== '__render_shape' || !Array.isArray(parsed.sightings)) continue
         for (const s of parsed.sightings) {
-          const key = [dir, s.provider, s.sourcePlane, s.lifecycle, s.eventType, s.structuralFingerprint, s.outcome?.kind].join(' ')
+          if (!s.outcome) continue
+          const key = renderShapeWriterKey(s as RenderShapeSighting, dir)
           const count = typeof s.seenCount === 'number' ? s.seenCount : 1
           const existing = maxByWriterKey.get(key)
           if (existing && existing.count >= count) continue

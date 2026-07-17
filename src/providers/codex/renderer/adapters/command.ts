@@ -126,13 +126,28 @@ function applyPatchScriptText(input: unknown): string {
  *  consumed the whole preview). Failure state is preserved by the caller
  *  via is_error/exit; wall time is dropped as decoration. */
 export function stripCodexTransportEnvelope(text: string): string {
-  const lines = text.split('\n')
-  let i = 0
-  while (
-    i < lines.length &&
-    /^(Script (completed|failed|running).*|Wall time.*|Output:|\s*)$/.test(lines[i])
-  ) {
-    i += 1
+  const takeLine = (start: number): { line: string; next: number } => {
+    const newline = text.indexOf('\n', start)
+    return newline === -1
+      ? { line: text.slice(start), next: text.length }
+      : { line: text.slice(start, newline), next: newline + 1 }
   }
-  return i > 0 && i < lines.length ? lines.slice(i).join('\n') : text
+  const first = takeLine(0)
+  if (!/^Script (completed|failed|running)(?:\b.*)?$/.test(first.line)) return text
+  let cursor = first.next
+  let current = takeLine(cursor)
+  if (/^Wall time(?::|\b)/.test(current.line)) {
+    cursor = current.next
+    current = takeLine(cursor)
+  }
+  // `Output:` is the structural proof that the preceding lines are transport
+  // chrome. A legitimate program can print "Script completed" itself; without
+  // this delimiter, retain the complete output verbatim.
+  if (current.line !== 'Output:') return text
+  cursor = current.next
+  if (cursor < text.length) {
+    current = takeLine(cursor)
+    if (/^\s*$/.test(current.line)) cursor = current.next
+  }
+  return text.slice(cursor)
 }

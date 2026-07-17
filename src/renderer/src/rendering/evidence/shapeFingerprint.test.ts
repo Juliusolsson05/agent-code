@@ -138,9 +138,10 @@ describe('structural fingerprint — arrays', () => {
     expect(a.discriminatorValues['content[].type']).toBe('text|tool_use')
   })
 
-  it('dynamic (non-identifier) object keys collapse to <dyn> — one shape per grammar, not per filename', () => {
-    // Codex patch results key `changes` by ABSOLUTE PATH (review finding:
-    // 18 path-specific fingerprint variants landed in the seeded catalog).
+  it('retains dynamic object keys because dev evidence must preserve the actual observed structure', () => {
+    // Codex patch results key `changes` by absolute path. The source session
+    // recording already contains those paths; throwing them away only makes
+    // the derived evidence unable to explain why two results routed apart.
     const a = fingerprintRenderShape({
       ...base,
       payload: { changes: { '/repo/a.ts': { add: 3 } } },
@@ -150,8 +151,8 @@ describe('structural fingerprint — arrays', () => {
       payload: { changes: { '/other/place/b.md': { add: 9 } } },
     })
     expect(a.fingerprint).toBe(b.fingerprint)
-    expect(a.shapePaths).toContain('changes.<dyn>:object')
-    expect(JSON.stringify(a)).not.toContain('/repo/a.ts')
+    expect(a.shapePaths).toContain('changes./repo/a.ts:object')
+    expect(JSON.stringify(a)).toContain('/repo/a.ts')
   })
 
   it('empty array is a stable shape of its own', () => {
@@ -161,7 +162,7 @@ describe('structural fingerprint — arrays', () => {
   })
 })
 
-describe('structural fingerprint — privacy (the hard invariant)', () => {
+describe('structural fingerprint — structural identity boundaries', () => {
   it('no content value ever enters fingerprint/shapePaths/discriminators', () => {
     const secret = 'SECRET_PROMPT_DO_NOT_LEAK ' + 'x'.repeat(200)
     const out = fingerprintRenderShape({
@@ -177,19 +178,20 @@ describe('structural fingerprint — privacy (the hard invariant)', () => {
     expect(serialized).not.toContain('private-project')
   })
 
-  it('secret-keyed subtrees are dropped, key name retained (lockstep with unknowns.ts)', () => {
+  it('retains auth-looking keys and their value structure without copying scalar values', () => {
     const withSecret = fingerprintRenderShape({
       ...base,
       payload: { headers: { authorization: 'Bearer abc' }, ok: 1 },
     })
-    expect(withSecret.shapePaths).toContain('headers.authorization=<redacted-key>')
+    expect(withSecret.shapePaths).toContain('headers.authorization:string')
     expect(JSON.stringify(withSecret)).not.toContain('Bearer')
-    // The VALUE STRUCTURE under a secret key must not influence identity:
-    // string token vs whole object under `authorization` → same shape.
+    // String vs object is a real render/data shape distinction and dev-only
+    // evidence deliberately captures it.
     const withObjectSecret = fingerprintRenderShape({
       ...base,
       payload: { headers: { authorization: { scheme: 'Bearer', token: 'x' } }, ok: 1 },
     })
+    expect(withObjectSecret.shapePaths).toContain('headers.authorization.token:string')
     expect(withSecret.fingerprint).toBe(withObjectSecret.fingerprint)
   })
 

@@ -1,5 +1,6 @@
 import hljs from 'highlight.js'
 import { memo, useRef } from 'react'
+import { boundedTextPage } from '@renderer/lib/text/boundedText'
 
 // Sealed-line streaming highlighter (renderer rewrite PR #555, Phase 5 —
 // ported from the PR #524 salvage list per tonight's product verdict:
@@ -47,7 +48,11 @@ export const StreamingCodeText = memo(function StreamingCodeText({
   // well enough for a streaming preview.
   const hljsLanguage = language.replace(/react$/, '')
   const canHighlight = hljsLanguage !== 'plaintext' && !!hljs.getLanguage(hljsLanguage)
-  const lines = code.split('\n')
+  // Streaming buffers are provider-controlled and may already contain a full
+  // generated file on the first paint. Page before split/highlight so neither
+  // allocation nor DOM size scales with the complete buffer.
+  const page = boundedTextPage(code)
+  const lines = page.text.split('\n')
   const cache = cacheRef.current.byLine
   const lineHtml = (text: string, i: number): string => {
     if (!canHighlight) return ''
@@ -81,6 +86,9 @@ export const StreamingCodeText = memo(function StreamingCodeText({
               )}
             </div>
           ))}
+          {page.hasNext ? (
+            <div className="px-3 py-1 text-[11px] text-muted">… streaming preview capped</div>
+          ) : null}
         </div>
       </div>
     )
@@ -98,6 +106,7 @@ export const StreamingCodeText = memo(function StreamingCodeText({
             />
           )
         })}
+        {page.hasNext ? '\n… streaming preview capped' : null}
       </code>
     </pre>
   )

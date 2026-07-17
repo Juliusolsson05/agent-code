@@ -27,7 +27,6 @@ import { ToolResultRow } from '@renderer/features/feed/ui/rows/ToolResultRow'
 import { ToolUseRow } from '@renderer/features/feed/ui/rows/ToolUseRow'
 import { isAgentSpawnToolName } from '@providers/registry.renderer.capabilities'
 import { JsonToolRow } from '@providers/shared/renderer/rows/JsonToolRow'
-import { TaskSubagentRow } from '@renderer/features/feed/ui/rows/TaskSubagentRow'
 import {
   isWorkflowViewToolName,
   parseWorkflowToolResult,
@@ -197,15 +196,15 @@ export const Block = memo(function Block({
         // Phase 7 cutover: ask the current provider first. Claude's built-in
         // Agent and both provider spellings of Agent Code's orchestration MCP
         // now own their wire adapters and shared protocol view. A provider
-        // decline keeps the proven native Codex legacy row alive until that
-        // separate vocabulary has enough evidence for migration.
+        // decline must remain visible without inventing a legacy task shape:
+        // future spawn vocabularies may not carry Claude's fields at all.
         const providerSpawnRow = getRendererProviderCapabilities(currentProvider).renderToolUse?.(tu)
         if (providerSpawnRow !== undefined) {
           sight('committed-tool-use', tu, specializedOutcome(`${currentProvider}.rows.dispatch`))
           return providerSpawnRow
         }
-        sight('committed-tool-use', tu, specializedOutcome('shared.task-subagent'))
-        return <TaskSubagentRow block={tu} />
+        sight('committed-tool-use', tu, GENERIC_OUTCOME)
+        return <JsonToolRow block={tu} />
       }
 
       if (tu.name === 'AskUserQuestion') {

@@ -20,7 +20,14 @@ export function CodexNativeSpawnRow({ model }: { model: CodexNativeSpawnModel })
   const state = notificationKind ?? subagent?.status ?? (committed
     ? committed.is_error === true ? 'error' : 'reported'
     : 'running')
-  const marker = state === 'done' ? '✓' : state === 'error' ? '✗' : state === 'stale' ? '◌' : '◐'
+  const unverifiedReport = !notificationKind && !subagent && committed?.is_error !== true && Boolean(committed)
+  const marker = state === 'done'
+    ? '✓'
+    : state === 'error'
+      ? '✗'
+      : state === 'stale' || unverifiedReport
+        ? '◌'
+        : '◐'
   const toolCount = subagent ? subagent.toolCalls.length + subagent.droppedToolCalls : 0
   const status = notification
     ? `${notification.status ?? 'reported'}${notification.usage ? ` · ${notification.usage}` : ''}`

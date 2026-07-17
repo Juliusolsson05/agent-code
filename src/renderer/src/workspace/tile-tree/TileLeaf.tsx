@@ -628,6 +628,7 @@ export function TileLeaf({
       )}
 
       <ProviderConditionOutlet
+        sessionId={sessionId}
         conditions={runtime.conditions}
         onSend={send}
         onResolveCustom={(action) => feed.resolveCondition(sessionId, action)}

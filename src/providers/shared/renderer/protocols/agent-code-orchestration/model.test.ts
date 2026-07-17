@@ -111,5 +111,12 @@ describe('Agent Code orchestration protocol ownership', () => {
       is_error: false,
     }
     expect(fromAgentCodeOrchestrationResult(result, model)?.value).toEqual(value)
+
+    const contradictoryTransportFailure: ToolResultBlock = {
+      ...result,
+      content: JSON.stringify({ ok: true, sessionId: 'child-1' }),
+      is_error: true,
+    }
+    expect(fromAgentCodeOrchestrationResult(contradictoryTransportFailure, model)).toBeNull()
   })
 })

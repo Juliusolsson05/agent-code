@@ -1,42 +1,37 @@
 #!/usr/bin/env npx tsx --tsconfig tsconfig.web.json
-// Fingerprint → redacted shape-fixture DRAFT (Phase 3, PR #555).
+// Fingerprint → complete local shape-fixture DRAFT (Phase 3, PR #555).
 //
 // Follows the plan's §Step 7: take one structural fingerprint from the
 // Unknown Shape Inbox, locate its sightings in local session recordings via
-// the __render_shape sidecar lines, and emit the smallest safe evidence
+// the __render_shape sidecar lines, and emit the smallest useful evidence
 // package into testing/fixtures/rendering-shapes/<provider>/<slug>/.
 //
-// The output is a DRAFT: draft.json holds the redacted ±window of real
+// The output is a DRAFT: draft.json holds the exact bounded ±window of real
 // events around each sighting plus the sighting metadata itself. A human
 // (or the next agent) curates it into the final/prefixes/expected files and
 // the catalog entry — classification stays a reviewed code change (plan
 // §Step 6), so this script never edits shapes.ts.
 //
-// SAFETY: redaction runs through the SAME redactRecording + the SAME
-// findSensitiveSurvivors hard gate as recording extraction (one
-// implementation — scripts/audit-sensitive-core.mts documents why a second
-// copy is forbidden). If any SENSITIVE_KEY value survives, the script exits
-// non-zero and writes NOTHING.
+// DEV-EVIDENCE CONTRACT: do not redact or structurally collapse this local
+// draft. Session recording is an explicit developer-mode action and the
+// entire point of the extractor is to preserve the provider evidence needed
+// to understand a shape we did not anticipate. The draft is not a checked-in
+// fixture; curation remains the deliberate boundary before anything enters
+// the repository.
 //
 // Run: npx tsx --tsconfig tsconfig.web.json scripts/extract-rendering-shape.mts \
-//        <fingerprint> [--recordings <dir>] [--window 8] [--mode full-text-capped|structure-only]
+//        <fingerprint> [--recordings <dir>] [--window 8]
 
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
-import {
-  findSensitiveSurvivors,
-  redactRecording,
-  type Recording,
-  type RecordingEvent,
-  type RedactionMode,
-} from '../src/renderer/src/rendering/replay/redact.ts'
+import type { RecordingEvent } from '../src/renderer/src/rendering/replay/redact.ts'
 
 const args = process.argv.slice(2)
 const fingerprint = args[0]
-if (!fingerprint || !/^fp1-[0-9a-f]{8}$/.test(fingerprint)) {
-  console.error('usage: extract-rendering-shape.mts <fp1-xxxxxxxx> [--recordings <dir>] [--window 8] [--mode full-text-capped]')
+if (!fingerprint || !/^fp2-[0-9a-f]{8}$/.test(fingerprint)) {
+  console.error('usage: extract-rendering-shape.mts <fp2-xxxxxxxx> [--recordings <dir>] [--window 8]')
   process.exit(2)
 }
 function flag(name: string, fallback: string): string {
@@ -45,43 +40,34 @@ function flag(name: string, fallback: string): string {
 }
 const RECORDINGS_DIR = flag('--recordings', join(homedir(), '.config', 'agent-code', 'session-recordings'))
 const WINDOW = Number(flag('--window', '8'))
-// DEFAULT structure-only (review finding A2): full-text-capped keeps every
-// non-secret-keyed string up to 8000 chars — prompts, commands, file
-// contents — and the sensitive-survivor gate only detects values under
-// secret-NAMED keys, so a token pasted into chat would sail through into a
-// git-adjacent draft. structure-only is the safe default; full text is an
-// explicit, warned opt-in for payloads whose parsing evidence needs prose.
-const MODE_RAW = flag('--mode', 'structure-only')
-if (MODE_RAW !== 'structure-only' && MODE_RAW !== 'full-text-capped') {
-  console.error(`unknown --mode "${MODE_RAW}" (structure-only | full-text-capped)`)
+if (!Number.isInteger(WINDOW) || WINDOW < 0 || WINDOW > 100) {
+  console.error('--window must be an integer from 0 through 100')
   process.exit(2)
 }
-const MODE = MODE_RAW as RedactionMode
-if (MODE === 'full-text-capped') {
-  console.error(
-    'WARNING: full-text-capped keeps free text (prompts/commands/outputs). The hard gate only\n' +
-      'catches secret-NAMED keys — review draft.json line by line before it goes anywhere shared.',
-  )
-}
-
 type Draft = {
   recordingId: string
   sighting: unknown
-  /** Redacted real events around the sighting's sidecar line — the parsing
-   *  evidence a fixture needs (plan §Step 7 "redacted and capped raw
-   *  context needed to reproduce parsing"). */
+  /** Exact real events around the sighting's sidecar line. The window is
+   *  bounded for script/runtime safety, but its admitted events are not
+   *  altered: an unknown renderer shape often depends on the very scalar
+   *  content a structure-only transform would erase. */
   window: RecordingEvent[]
 }
 
 const drafts: Draft[] = []
 let provider = 'unknown'
+const PROVIDERS = new Set(['claude', 'codex', 'opencode', 'unknown'])
+const MAX_RECORDINGS = 200
+const MAX_RECORDING_BYTES = 64 * 1024 * 1024
+const MAX_DRAFTS_SCANNED = 20
 
-for (const dir of readdirSync(RECORDINGS_DIR, { withFileTypes: true }).filter(e => e.isDirectory())) {
+for (const dir of readdirSync(RECORDINGS_DIR, { withFileTypes: true }).filter(e => e.isDirectory()).slice(0, MAX_RECORDINGS)) {
+  if (drafts.length >= MAX_DRAFTS_SCANNED) break
   let lines: string[]
-  let meta: Record<string, unknown> = {}
   try {
-    lines = readFileSync(join(RECORDINGS_DIR, dir.name, 'events.jsonl'), 'utf-8').split('\n')
-    meta = JSON.parse(readFileSync(join(RECORDINGS_DIR, dir.name, 'meta.json'), 'utf-8'))
+    const eventPath = join(RECORDINGS_DIR, dir.name, 'events.jsonl')
+    if (statSync(eventPath).size > MAX_RECORDING_BYTES) continue
+    lines = readFileSync(eventPath, 'utf-8').split('\n')
   } catch {
     continue
   }
@@ -93,12 +79,16 @@ for (const dir of readdirSync(RECORDINGS_DIR, { withFileTypes: true }).filter(e 
     }
   })
   parsed.forEach((line, i) => {
+    if (drafts.length >= MAX_DRAFTS_SCANNED) return
     if (!line || line.ch !== '__render_shape') return
     const sightings = (line as { sightings?: unknown[] }).sightings ?? []
     for (const s of sightings) {
+      if (drafts.length >= MAX_DRAFTS_SCANNED) break
       const sighting = s as { structuralFingerprint?: string; provider?: string }
       if (sighting.structuralFingerprint !== fingerprint) continue
-      provider = sighting.provider ?? provider
+      if (!sighting.provider || !PROVIDERS.has(sighting.provider)) continue
+      if (provider !== 'unknown' && provider !== sighting.provider) continue
+      provider = sighting.provider
       // ±window of REAL channel events around the sidecar line. The sidecar
       // is appended within one flush interval of the paint, so its position
       // bounds the source events tightly enough for a draft.
@@ -112,9 +102,11 @@ for (const dir of readdirSync(RECORDINGS_DIR, { withFileTypes: true }).filter(e 
         const e = parsed[j]
         if (e && !e.ch.startsWith('__')) realAfter.push(e)
       }
-      const recording: Recording = { meta, events: [...realBefore, ...realAfter] }
-      const redacted = redactRecording(recording, MODE)
-      drafts.push({ recordingId: dir.name, sighting: s, window: redacted.events })
+      drafts.push({
+        recordingId: dir.name,
+        sighting: s,
+        window: [...realBefore, ...realAfter],
+      })
     }
   })
 }
@@ -122,13 +114,6 @@ for (const dir of readdirSync(RECORDINGS_DIR, { withFileTypes: true }).filter(e 
 if (drafts.length === 0) {
   console.error(`no sightings of ${fingerprint} in ${RECORDINGS_DIR} — was capture armed?`)
   process.exit(1)
-}
-
-// THE HARD GATE — refuse to write anything carrying a sensitive survivor.
-const survivors = findSensitiveSurvivors(drafts)
-if (survivors.length > 0) {
-  console.error(`REFUSING to write: ${survivors.length} sensitive value(s) survived redaction:\n  ${survivors.slice(0, 10).join('\n  ')}`)
-  process.exit(3)
 }
 
 const outDir = join(process.cwd(), 'testing', 'fixtures', 'rendering-shapes', provider, fingerprint)
@@ -141,7 +126,7 @@ writeFileSync(
       kind: 'render-shape-draft',
       fingerprint,
       provider,
-      redaction: MODE,
+      redaction: 'none',
       extractedAt: new Date().toISOString(),
       drafts: drafts.slice(0, 5), // a handful of windows is plenty for curation
     },

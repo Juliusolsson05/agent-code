@@ -29,7 +29,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.entry.attachment.v1': defineRenderShape({
     id: 'claude.entry.attachment.v1',
     provider: 'claude',
-    fingerprints: ["fp1-17325b53","fp1-1f43958e","fp1-20f22b8f","fp1-38e7ef3d","fp1-3ae4cf2b","fp1-40425c51","fp1-43858260","fp1-4d79e5d3","fp1-581ac6d5","fp1-60e3d224","fp1-6399aefe","fp1-69882ce4","fp1-753c33b9","fp1-83a3fbfd","fp1-8628c635","fp1-8feef6e3","fp1-abe64889","fp1-b0d9d248","fp1-b4071732","fp1-b8a64f27","fp1-bc298de8","fp1-c1d8a2a6","fp1-cdb2f73a","fp1-d192dbac","fp1-dd5cff49","fp1-e4e63295","fp1-f08b1406","fp1-f30522fc","fp1-f7b66ff2"],
+    fingerprints: ["fp2-17325b53","fp2-1f43958e","fp2-20f22b8f","fp2-38e7ef3d","fp2-3ae4cf2b","fp2-40425c51","fp2-43858260","fp2-4d79e5d3","fp2-581ac6d5","fp2-60e3d224","fp2-6399aefe","fp2-69882ce4","fp2-753c33b9","fp2-83a3fbfd","fp2-8628c635","fp2-8feef6e3","fp2-abe64889","fp2-b0d9d248","fp2-b4071732","fp2-b8a64f27","fp2-bc298de8","fp2-c1d8a2a6","fp2-cdb2f73a","fp2-d192dbac","fp2-dd5cff49","fp2-e4e63295","fp2-f08b1406","fp2-f30522fc","fp2-f7b66ff2"],
     eventTypes: ["attachment"],
     planes: ["transcript-entry"] as const,
     lifecycles: ["durable"] as const,
@@ -46,7 +46,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.entry.pr-link.v1': defineRenderShape({
     id: 'claude.entry.pr-link.v1',
     provider: 'claude',
-    fingerprints: ["fp1-696bfb91"],
+    fingerprints: ["fp2-696bfb91"],
     eventTypes: ["pr-link"],
     planes: ["transcript-entry"] as const,
     lifecycles: ["durable"] as const,
@@ -63,7 +63,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.entry.queue-operation.v1': defineRenderShape({
     id: 'claude.entry.queue-operation.v1',
     provider: 'claude',
-    fingerprints: ["fp1-93af4392","fp1-ffa1daf8"],
+    fingerprints: ["fp2-93af4392","fp2-ffa1daf8"],
     eventTypes: ["queue-operation"],
     planes: ["transcript-entry"] as const,
     lifecycles: ["durable"] as const,
@@ -80,7 +80,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.entry.system-compact-boundary.v1': defineRenderShape({
     id: 'claude.entry.system-compact-boundary.v1',
     provider: 'claude',
-    fingerprints: ["fp1-d3594ad3"],
+    fingerprints: ["fp2-d3594ad3"],
     eventTypes: ["system:compact_boundary"],
     planes: ["transcript-entry"] as const,
     lifecycles: ["durable"] as const,
@@ -97,7 +97,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.entry.system-turn-duration.v1': defineRenderShape({
     id: 'claude.entry.system-turn-duration.v1',
     provider: 'claude',
-    fingerprints: ["fp1-2c0c0341","fp1-624904d3","fp1-acba5abf","fp1-cb7091d5"],
+    fingerprints: ["fp2-2c0c0341","fp2-624904d3","fp2-acba5abf","fp2-cb7091d5"],
     eventTypes: ["system:turn_duration"],
     planes: ["transcript-entry"] as const,
     lifecycles: ["durable"] as const,
@@ -114,7 +114,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.entry.user.v1': defineRenderShape({
     id: 'claude.entry.user.v1',
     provider: 'claude',
-    fingerprints: ["fp1-688dff42","fp1-92c29c6f"],
+    fingerprints: ["fp2-688dff42","fp2-92c29c6f"],
     eventTypes: ["user"],
     planes: ["transcript-entry"] as const,
     lifecycles: ["durable"] as const,
@@ -131,7 +131,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.semantic.agent.v1': defineRenderShape({
     id: 'claude.semantic.agent.v1',
     provider: 'claude',
-    fingerprints: ["fp1-279fd9c3","fp1-7148ba15","fp1-d06574fa","fp1-d36d2d0d"],
+    fingerprints: ["fp2-279fd9c3","fp2-7148ba15","fp2-d06574fa","fp2-d36d2d0d"],
     eventTypes: ["tool_use"],
     planes: ["semantic-tool"] as const,
     lifecycles: ["input-complete","prefix"] as const,
@@ -143,12 +143,13 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     },
     fixtures: { final: ["rendering-bundles/2026-06-04T09-09-57-625-4177cefb.json","rendering-bundles/2026-06-04T09-14-29-649-4177cefb.json","rendering-bundles/2026-06-14T13-59-16-931-4757ae44.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch' },
+    dispositionByLifecycle: { prefix: { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'Incomplete provider input remains visible through the bounded fallback until required fields close.' } },
     why: 'GRADUATED Phase 7: parsed semantic Agent input now routes through the same provider adapter/card as the committed operation; incomplete prefixes keep the visible generic stream until the strict Agent grammar closes.',
   }),
   'claude.semantic.askuserquestion.v1': defineRenderShape({
     id: 'claude.semantic.askuserquestion.v1',
     provider: 'claude',
-    fingerprints: ["fp1-21c00403","fp1-af6fbebc"],
+    fingerprints: ["fp2-21c00403","fp2-af6fbebc"],
     eventTypes: ["tool_use"],
     planes: ["semantic-tool"] as const,
     lifecycles: ["input-complete"] as const,
@@ -165,7 +166,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.semantic.bash.v1': defineRenderShape({
     id: 'claude.semantic.bash.v1',
     provider: 'claude',
-    fingerprints: ["fp1-326d9120","fp1-42e564e8","fp1-9d6cf8fc","fp1-cad93e7b","fp1-ee539da9","fp1-f0bd83a7"],
+    fingerprints: ["fp2-326d9120","fp2-42e564e8","fp2-9d6cf8fc","fp2-cad93e7b","fp2-ee539da9","fp2-f0bd83a7"],
     eventTypes: ["tool_use"],
     planes: ["semantic-tool"] as const,
     lifecycles: ["input-complete","prefix"] as const,
@@ -182,7 +183,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.semantic.edit.v1': defineRenderShape({
     id: 'claude.semantic.edit.v1',
     provider: 'claude',
-    fingerprints: ["fp1-2323238a","fp1-28bc3225","fp1-c29bd417","fp1-d152c062"],
+    fingerprints: ["fp2-2323238a","fp2-28bc3225","fp2-c29bd417","fp2-d152c062"],
     eventTypes: ["tool_use"],
     planes: ["semantic-tool"] as const,
     lifecycles: ["input-complete","prefix"] as const,
@@ -199,7 +200,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.semantic.enterworktree.v1': defineRenderShape({
     id: 'claude.semantic.enterworktree.v1',
     provider: 'claude',
-    fingerprints: ["fp1-48eed2e4"],
+    fingerprints: ["fp2-48eed2e4"],
     eventTypes: ["tool_use"],
     planes: ["semantic-tool"] as const,
     lifecycles: ["input-complete"] as const,
@@ -216,7 +217,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.semantic.mcp-orchestration-close-agent.v1': defineRenderShape({
     id: 'claude.semantic.mcp-orchestration-close-agent.v1',
     provider: 'claude',
-    fingerprints: ["fp1-4789512c","fp1-a13b27bf","fp1-ecd79fdb"],
+    fingerprints: ["fp2-4789512c","fp2-a13b27bf","fp2-ecd79fdb"],
     eventTypes: ["tool_use"],
     planes: ["semantic-tool"] as const,
     lifecycles: ["input-complete","prefix"] as const,
@@ -228,12 +229,13 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     },
     fixtures: { final: ["rendering-bundles/2026-06-29T14-11-47-099-1b2b5e96.json","rendering-bundles/2026-06-29T14-13-09-044-1b2b5e96.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch', protocolId: 'agent-code.orchestration' },
+    dispositionByLifecycle: { prefix: { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'Incomplete provider input remains visible through the bounded fallback until required fields close.' } },
     why: 'GRADUATED Phase 7: the exact mcp__agent_code__ namespace proves the source-controlled orchestration protocol; new 2026-07-17 prefix variants remain visible until parsed input is complete.',
   }),
   'claude.semantic.mcp-orchestration-close-run.v1': defineRenderShape({
     id: 'claude.semantic.mcp-orchestration-close-run.v1',
     provider: 'claude',
-    fingerprints: ["fp1-782d249b","fp1-b0effe07"],
+    fingerprints: ["fp2-782d249b","fp2-b0effe07"],
     eventTypes: ["tool_use"],
     planes: ["semantic-tool"] as const,
     lifecycles: ["input-complete","prefix"] as const,
@@ -245,12 +247,13 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     },
     fixtures: { final: ["rendering-shapes/claude/agent-code-orchestration/final.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch', protocolId: 'agent-code.orchestration' },
+    dispositionByLifecycle: { prefix: { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'Incomplete provider input remains visible through the bounded fallback until required fields close.' } },
     why: 'GRADUATED Phase 7 from the live capture plus the owned close-run schema; the curated fixture records that provenance because the frozen bundle corpus did not contain this semantic mirror.',
   }),
   'claude.semantic.mcp-orchestration-create-agent.v1': defineRenderShape({
     id: 'claude.semantic.mcp-orchestration-create-agent.v1',
     provider: 'claude',
-    fingerprints: ["fp1-23af1de7","fp1-78b9c8e2","fp1-7b34fd2f","fp1-7b63e36c","fp1-7ed23c16","fp1-e64f1cc9","fp1-eebdcf03"],
+    fingerprints: ["fp2-23af1de7","fp2-78b9c8e2","fp2-7b34fd2f","fp2-7b63e36c","fp2-7ed23c16","fp2-e64f1cc9","fp2-eebdcf03"],
     eventTypes: ["tool_use"],
     planes: ["semantic-tool"] as const,
     lifecycles: ["input-complete","prefix"] as const,
@@ -262,12 +265,13 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     },
     fixtures: { final: ["rendering-bundles/2026-06-14T15-52-20-411-b728adb8.json","rendering-bundles/2026-06-21T17-32-48-749-5e75540c.json","rendering-bundles/2026-06-21T19-19-55-972-62432945.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch', protocolId: 'agent-code.orchestration' },
+    dispositionByLifecycle: { prefix: { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'Incomplete provider input remains visible through the bounded fallback until required fields close.' } },
     why: 'GRADUATED Phase 7: Agent Code create is provider-recognized by its exact MCP namespace and rendered by the shared owned-protocol view, never by the open-world MCP fallback.',
   }),
   'claude.semantic.mcp-orchestration-list-agents.v1': defineRenderShape({
     id: 'claude.semantic.mcp-orchestration-list-agents.v1',
     provider: 'claude',
-    fingerprints: ["fp1-74655986","fp1-a8b077ae","fp1-f0d1e7da"],
+    fingerprints: ["fp2-74655986","fp2-a8b077ae","fp2-f0d1e7da"],
     eventTypes: ["tool_use"],
     planes: ["semantic-tool"] as const,
     lifecycles: ["input-complete","prefix"] as const,
@@ -279,12 +283,13 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     },
     fixtures: { final: ["rendering-bundles/2026-06-14T15-52-20-411-b728adb8.json","rendering-bundles/2026-06-21T20-14-23-131-62432945.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch', protocolId: 'agent-code.orchestration' },
+    dispositionByLifecycle: { prefix: { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'Incomplete provider input remains visible through the bounded fallback until required fields close.' } },
     why: 'GRADUATED Phase 7: list-agent inputs share the owned protocol card; the newly observed prefix stays generic until the reducer provides authoritative parsed input.',
   }),
   'claude.semantic.mcp-orchestration-read-agent.v1': defineRenderShape({
     id: 'claude.semantic.mcp-orchestration-read-agent.v1',
     provider: 'claude',
-    fingerprints: ["fp1-cb2cb220"],
+    fingerprints: ["fp2-cb2cb220"],
     eventTypes: ["tool_use"],
     planes: ["semantic-tool"] as const,
     lifecycles: ["input-complete"] as const,
@@ -301,7 +306,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.semantic.mcp-orchestration-send-prompt.v1': defineRenderShape({
     id: 'claude.semantic.mcp-orchestration-send-prompt.v1',
     provider: 'claude',
-    fingerprints: ["fp1-0538cebb","fp1-c9fd7a40"],
+    fingerprints: ["fp2-0538cebb","fp2-c9fd7a40"],
     eventTypes: ["tool_use"],
     planes: ["semantic-tool"] as const,
     lifecycles: ["input-complete","prefix"] as const,
@@ -313,12 +318,13 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     },
     fixtures: { final: ["rendering-bundles/2026-06-14T15-52-20-411-b728adb8.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch', protocolId: 'agent-code.orchestration' },
+    dispositionByLifecycle: { prefix: { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'Incomplete provider input remains visible through the bounded fallback until required fields close.' } },
     why: 'GRADUATED Phase 7: send-prompt input is provider-owned only for the agent_code namespace; failures keep operation-specific diagnostics in the raw protocol disclosure.',
   }),
   'claude.semantic.mcp-orchestration-wait-agents.v1': defineRenderShape({
     id: 'claude.semantic.mcp-orchestration-wait-agents.v1',
     provider: 'claude',
-    fingerprints: ["fp1-0ce1d5ee","fp1-0fa4ac05","fp1-93dec72c","fp1-cb45a301"],
+    fingerprints: ["fp2-0ce1d5ee","fp2-0fa4ac05","fp2-93dec72c","fp2-cb45a301"],
     eventTypes: ["tool_use"],
     planes: ["semantic-tool"] as const,
     lifecycles: ["input-complete","prefix"] as const,
@@ -330,12 +336,13 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     },
     fixtures: { final: ["rendering-bundles/2026-06-21T17-32-48-749-5e75540c.json","rendering-bundles/2026-06-21T20-14-23-131-62432945.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch', protocolId: 'agent-code.orchestration' },
+    dispositionByLifecycle: { prefix: { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'Incomplete provider input remains visible through the bounded fallback until required fields close.' } },
     why: 'GRADUATED Phase 7: wait results render bounded agent summaries and lazy child output; the 2026-07-17 complete-input variant is folded into the same visual operation.',
   }),
   'claude.semantic.notebookedit.v1': defineRenderShape({
     id: 'claude.semantic.notebookedit.v1',
     provider: 'claude',
-    fingerprints: ["fp1-974fdedb","fp1-a64230ba"],
+    fingerprints: ["fp2-974fdedb","fp2-a64230ba"],
     eventTypes: ["tool_use"],
     planes: ["semantic-tool"] as const,
     lifecycles: ["input-complete","prefix"] as const,
@@ -352,7 +359,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.semantic.read.v1': defineRenderShape({
     id: 'claude.semantic.read.v1',
     provider: 'claude',
-    fingerprints: ["fp1-3ad02d79","fp1-7e45af3e","fp1-f959f6c0","fp1-faf7aca7"],
+    fingerprints: ["fp2-3ad02d79","fp2-7e45af3e","fp2-f959f6c0","fp2-faf7aca7"],
     eventTypes: ["tool_use"],
     planes: ["semantic-tool"] as const,
     lifecycles: ["input-complete"] as const,
@@ -369,7 +376,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.semantic.skill.v1': defineRenderShape({
     id: 'claude.semantic.skill.v1',
     provider: 'claude',
-    fingerprints: ["fp1-690826ce","fp1-72e2f303"],
+    fingerprints: ["fp2-690826ce","fp2-72e2f303"],
     eventTypes: ["tool_use"],
     planes: ["semantic-tool"] as const,
     lifecycles: ["input-complete"] as const,
@@ -386,7 +393,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.semantic.taskcreate.v1': defineRenderShape({
     id: 'claude.semantic.taskcreate.v1',
     provider: 'claude',
-    fingerprints: ["fp1-0203f177","fp1-072fd53b","fp1-15718172"],
+    fingerprints: ["fp2-0203f177","fp2-072fd53b","fp2-15718172"],
     eventTypes: ["tool_use"],
     planes: ["semantic-tool"] as const,
     lifecycles: ["input-complete","prefix"] as const,
@@ -403,7 +410,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.semantic.taskupdate.v1': defineRenderShape({
     id: 'claude.semantic.taskupdate.v1',
     provider: 'claude',
-    fingerprints: ["fp1-083fb7d8","fp1-3159a259","fp1-37a1ba2a"],
+    fingerprints: ["fp2-083fb7d8","fp2-3159a259","fp2-37a1ba2a"],
     eventTypes: ["tool_use"],
     planes: ["semantic-tool"] as const,
     lifecycles: ["input-complete","prefix"] as const,
@@ -420,7 +427,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.semantic.text.v1': defineRenderShape({
     id: 'claude.semantic.text.v1',
     provider: 'claude',
-    fingerprints: ["fp1-c5003421","fp1-f134003d"],
+    fingerprints: ["fp2-c5003421","fp2-f134003d"],
     eventTypes: ["text"],
     planes: ["semantic-tool"] as const,
     lifecycles: ["input-complete","prefix"] as const,
@@ -437,7 +444,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.semantic.thinking.v1': defineRenderShape({
     id: 'claude.semantic.thinking.v1',
     provider: 'claude',
-    fingerprints: ["fp1-a006c766","fp1-e8268b73"],
+    fingerprints: ["fp2-a006c766","fp2-e8268b73"],
     eventTypes: ["thinking"],
     planes: ["semantic-tool"] as const,
     lifecycles: ["input-complete","prefix"] as const,
@@ -454,7 +461,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.semantic.toolsearch.v1': defineRenderShape({
     id: 'claude.semantic.toolsearch.v1',
     provider: 'claude',
-    fingerprints: ["fp1-9cf197fc","fp1-c3b66ae8","fp1-ed0e9987"],
+    fingerprints: ["fp2-9cf197fc","fp2-c3b66ae8","fp2-ed0e9987"],
     eventTypes: ["tool_use"],
     planes: ["semantic-tool"] as const,
     lifecycles: ["input-complete","prefix"] as const,
@@ -466,12 +473,13 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     },
     fixtures: { final: ["rendering-bundles/2026-06-04T09-09-57-625-4177cefb.json","rendering-bundles/2026-06-04T09-14-29-649-4177cefb.json","rendering-bundles/2026-06-14T15-52-20-411-b728adb8.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch' },
+    dispositionByLifecycle: { prefix: { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'Incomplete provider input remains visible through the bounded fallback until required fields close.' } },
     why: 'GRADUATED Phase 7: parsed semantic ToolSearch reuses the committed structured discovery row and result adapter instead of maintaining a second live JSON grammar.',
   }),
   'claude.semantic.webfetch.v1': defineRenderShape({
     id: 'claude.semantic.webfetch.v1',
     provider: 'claude',
-    fingerprints: ["fp1-02b29108","fp1-39f6fc6f"],
+    fingerprints: ["fp2-02b29108","fp2-39f6fc6f"],
     eventTypes: ["tool_use"],
     planes: ["semantic-tool"] as const,
     lifecycles: ["input-complete","prefix"] as const,
@@ -483,12 +491,13 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     },
     fixtures: { final: ["rendering-shapes/claude/web-fetch/semantic-final.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch' },
+    dispositionByLifecycle: { prefix: { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'Incomplete provider input remains visible through the bounded fallback until required fields close.' } },
     why: 'GRADUATED Phase 7 from live capture: authoritative parsed input reuses the committed WebFetch adapter; the synthetic fixture preserves the captured structure without inventing a frozen-bundle claim.',
   }),
   'claude.semantic.websearch.v1': defineRenderShape({
     id: 'claude.semantic.websearch.v1',
     provider: 'claude',
-    fingerprints: ["fp1-790c707c","fp1-befc9470"],
+    fingerprints: ["fp2-790c707c","fp2-befc9470"],
     eventTypes: ["tool_use"],
     planes: ["semantic-tool"] as const,
     lifecycles: ["input-complete","prefix"] as const,
@@ -500,12 +509,13 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     },
     fixtures: { final: ["rendering-shapes/claude/web-search/semantic-final.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch' },
+    dispositionByLifecycle: { prefix: { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'Incomplete provider input remains visible through the bounded fallback until required fields close.' } },
     why: 'GRADUATED Phase 7 from live capture: authoritative parsed input reuses the committed WebSearch adapter; streaming prefixes keep the bounded generic path until the query closes.',
   }),
   'claude.semantic.write.v1': defineRenderShape({
     id: 'claude.semantic.write.v1',
     provider: 'claude',
-    fingerprints: ["fp1-80a4cece","fp1-ad91ef51","fp1-bb84f08f"],
+    fingerprints: ["fp2-80a4cece","fp2-ad91ef51","fp2-bb84f08f"],
     eventTypes: ["tool_use"],
     planes: ["semantic-tool"] as const,
     lifecycles: ["input-complete","prefix"] as const,
@@ -522,7 +532,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.tool-result.tool-result.v1': defineRenderShape({
     id: 'claude.tool-result.tool-result.v1',
     provider: 'claude',
-    fingerprints: ["fp1-05148fe5","fp1-5088f736","fp1-ac6ff7c0","fp1-cfd69380"],
+    fingerprints: ["fp2-05148fe5","fp2-5088f736","fp2-ac6ff7c0","fp2-cfd69380"],
     eventTypes: ["tool_result"],
     planes: ["committed-tool-result"] as const,
     lifecycles: ["durable"] as const,
@@ -539,7 +549,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.tool-use.agent.v1': defineRenderShape({
     id: 'claude.tool-use.agent.v1',
     provider: 'claude',
-    fingerprints: ["fp1-0406b30d","fp1-29d6969a","fp1-76182cb6","fp1-8f84787b"],
+    fingerprints: ["fp2-0406b30d","fp2-29d6969a","fp2-76182cb6","fp2-8f84787b"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -556,7 +566,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.tool-use.askuserquestion.v1': defineRenderShape({
     id: 'claude.tool-use.askuserquestion.v1',
     provider: 'claude',
-    fingerprints: ["fp1-78de3d3e"],
+    fingerprints: ["fp2-78de3d3e"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -573,7 +583,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.tool-use.bash.v1': defineRenderShape({
     id: 'claude.tool-use.bash.v1',
     provider: 'claude',
-    fingerprints: ["fp1-3da1120c","fp1-490f20a2","fp1-c4cd6b80","fp1-cb2c6fd2","fp1-eab9de5c","fp1-fd75288a"],
+    fingerprints: ["fp2-3da1120c","fp2-490f20a2","fp2-c4cd6b80","fp2-cb2c6fd2","fp2-eab9de5c","fp2-fd75288a"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -590,7 +600,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.tool-use.edit.v1': defineRenderShape({
     id: 'claude.tool-use.edit.v1',
     provider: 'claude',
-    fingerprints: ["fp1-8bad26f1"],
+    fingerprints: ["fp2-8bad26f1"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -607,7 +617,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.tool-use.lsp.v1': defineRenderShape({
     id: 'claude.tool-use.lsp.v1',
     provider: 'claude',
-    fingerprints: ["fp1-296283bb"],
+    fingerprints: ["fp2-296283bb"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -624,7 +634,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.tool-use.mcp-get-projects-list.v1': defineRenderShape({
     id: 'claude.tool-use.mcp-get-projects-list.v1',
     provider: 'claude',
-    fingerprints: ["fp1-51ac2727"],
+    fingerprints: ["fp2-51ac2727"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -641,7 +651,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.tool-use.mcp-list-calendars.v1': defineRenderShape({
     id: 'claude.tool-use.mcp-list-calendars.v1',
     provider: 'claude',
-    fingerprints: ["fp1-40794dd0"],
+    fingerprints: ["fp2-40794dd0"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -658,7 +668,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.tool-use.mcp-list-labels.v1': defineRenderShape({
     id: 'claude.tool-use.mcp-list-labels.v1',
     provider: 'claude',
-    fingerprints: ["fp1-cbe2bb34"],
+    fingerprints: ["fp2-cbe2bb34"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -675,7 +685,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.tool-use.mcp-orchestration-close-agent.v1': defineRenderShape({
     id: 'claude.tool-use.mcp-orchestration-close-agent.v1',
     provider: 'claude',
-    fingerprints: ["fp1-8d5a374c"],
+    fingerprints: ["fp2-8d5a374c"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -692,7 +702,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.tool-use.mcp-orchestration-close-run.v1': defineRenderShape({
     id: 'claude.tool-use.mcp-orchestration-close-run.v1',
     provider: 'claude',
-    fingerprints: ["fp1-d51238ff"],
+    fingerprints: ["fp2-d51238ff"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -709,7 +719,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.tool-use.mcp-orchestration-create-agent.v1': defineRenderShape({
     id: 'claude.tool-use.mcp-orchestration-create-agent.v1',
     provider: 'claude',
-    fingerprints: ["fp1-3bb32d92","fp1-89e9a6cc","fp1-b50901e3","fp1-e715b7f7","fp1-f53af93d","fp1-fdc02391"],
+    fingerprints: ["fp2-3bb32d92","fp2-89e9a6cc","fp2-b50901e3","fp2-e715b7f7","fp2-f53af93d","fp2-fdc02391"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -726,7 +736,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.tool-use.mcp-orchestration-list-agents.v1': defineRenderShape({
     id: 'claude.tool-use.mcp-orchestration-list-agents.v1',
     provider: 'claude',
-    fingerprints: ["fp1-5ba767ef","fp1-f4ce844a"],
+    fingerprints: ["fp2-5ba767ef","fp2-f4ce844a"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -743,7 +753,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.tool-use.mcp-orchestration-read-agent.v1': defineRenderShape({
     id: 'claude.tool-use.mcp-orchestration-read-agent.v1',
     provider: 'claude',
-    fingerprints: ["fp1-37f59a8d","fp1-e6ed123a"],
+    fingerprints: ["fp2-37f59a8d","fp2-e6ed123a"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -760,7 +770,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.tool-use.mcp-orchestration-send-prompt.v1': defineRenderShape({
     id: 'claude.tool-use.mcp-orchestration-send-prompt.v1',
     provider: 'claude',
-    fingerprints: ["fp1-4f2b8052"],
+    fingerprints: ["fp2-4f2b8052"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -777,7 +787,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.tool-use.mcp-orchestration-wait-agents.v1': defineRenderShape({
     id: 'claude.tool-use.mcp-orchestration-wait-agents.v1',
     provider: 'claude',
-    fingerprints: ["fp1-358c4c4f","fp1-447639d2","fp1-59ede605","fp1-b2fe7f1d"],
+    fingerprints: ["fp2-358c4c4f","fp2-447639d2","fp2-59ede605","fp2-b2fe7f1d"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -794,7 +804,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.tool-use.mcp-ref-search-documentation.v1': defineRenderShape({
     id: 'claude.tool-use.mcp-ref-search-documentation.v1',
     provider: 'claude',
-    fingerprints: ["fp1-12a71d56"],
+    fingerprints: ["fp2-12a71d56"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -811,7 +821,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.tool-use.monitor.v1': defineRenderShape({
     id: 'claude.tool-use.monitor.v1',
     provider: 'claude',
-    fingerprints: ["fp1-3ccd9ea4"],
+    fingerprints: ["fp2-3ccd9ea4"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -828,7 +838,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.tool-use.notebookedit.v1': defineRenderShape({
     id: 'claude.tool-use.notebookedit.v1',
     provider: 'claude',
-    fingerprints: ["fp1-cc6cefa5"],
+    fingerprints: ["fp2-cc6cefa5"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -845,7 +855,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.tool-use.read.v1': defineRenderShape({
     id: 'claude.tool-use.read.v1',
     provider: 'claude',
-    fingerprints: ["fp1-17828ea4","fp1-4f808916","fp1-668e025e","fp1-9cdbe334"],
+    fingerprints: ["fp2-17828ea4","fp2-4f808916","fp2-668e025e","fp2-9cdbe334"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -862,7 +872,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.tool-use.schedulewakeup.v1': defineRenderShape({
     id: 'claude.tool-use.schedulewakeup.v1',
     provider: 'claude',
-    fingerprints: ["fp1-bbd55bdc"],
+    fingerprints: ["fp2-bbd55bdc"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -879,7 +889,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.tool-use.skill.v1': defineRenderShape({
     id: 'claude.tool-use.skill.v1',
     provider: 'claude',
-    fingerprints: ["fp1-c651173c"],
+    fingerprints: ["fp2-c651173c"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -896,7 +906,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.tool-use.taskcreate.v1': defineRenderShape({
     id: 'claude.tool-use.taskcreate.v1',
     provider: 'claude',
-    fingerprints: ["fp1-af9ab62f"],
+    fingerprints: ["fp2-af9ab62f"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -913,7 +923,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.tool-use.taskget.v1': defineRenderShape({
     id: 'claude.tool-use.taskget.v1',
     provider: 'claude',
-    fingerprints: ["fp1-1c76760b"],
+    fingerprints: ["fp2-1c76760b"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -930,7 +940,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.tool-use.taskoutput.v1': defineRenderShape({
     id: 'claude.tool-use.taskoutput.v1',
     provider: 'claude',
-    fingerprints: ["fp1-8232b4d2"],
+    fingerprints: ["fp2-8232b4d2"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -947,7 +957,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.tool-use.taskstop.v1': defineRenderShape({
     id: 'claude.tool-use.taskstop.v1',
     provider: 'claude',
-    fingerprints: ["fp1-8d4dfa22"],
+    fingerprints: ["fp2-8d4dfa22"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -964,7 +974,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.tool-use.taskupdate.v1': defineRenderShape({
     id: 'claude.tool-use.taskupdate.v1',
     provider: 'claude',
-    fingerprints: ["fp1-ddd6329d"],
+    fingerprints: ["fp2-ddd6329d"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -981,7 +991,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.tool-use.toolsearch.v1': defineRenderShape({
     id: 'claude.tool-use.toolsearch.v1',
     provider: 'claude',
-    fingerprints: ["fp1-68bade64"],
+    fingerprints: ["fp2-68bade64"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -998,7 +1008,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.tool-use.webfetch.v1': defineRenderShape({
     id: 'claude.tool-use.webfetch.v1',
     provider: 'claude',
-    fingerprints: ["fp1-9382b7f6"],
+    fingerprints: ["fp2-9382b7f6"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -1015,7 +1025,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.tool-use.websearch.v1': defineRenderShape({
     id: 'claude.tool-use.websearch.v1',
     provider: 'claude',
-    fingerprints: ["fp1-c5a5c976"],
+    fingerprints: ["fp2-c5a5c976"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,
@@ -1032,7 +1042,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.tool-use.write.v1': defineRenderShape({
     id: 'claude.tool-use.write.v1',
     provider: 'claude',
-    fingerprints: ["fp1-471cb5b5"],
+    fingerprints: ["fp2-471cb5b5"],
     eventTypes: ["tool_use"],
     planes: ["committed-tool-use"] as const,
     lifecycles: ["durable"] as const,

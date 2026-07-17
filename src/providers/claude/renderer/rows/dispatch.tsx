@@ -46,7 +46,13 @@ import { AgentCodeOrchestrationView } from '@providers/shared/renderer/protocols
 import { fromAgentCodeOrchestrationResult } from '@providers/shared/renderer/protocols/agent-code-orchestration/model'
 import { fromClaudeAgentCodeOrchestrationUse } from '@providers/claude/renderer/adapters/agentCodeOrchestration'
 
-export function renderClaudeToolUse(block: ToolUseBlock): ReactNode | undefined {
+export function renderClaudeToolUse(
+  block: ToolUseBlock,
+  context: { live?: boolean; streaming?: boolean; result?: ToolResultBlock | null } = {},
+): ReactNode | undefined {
+  const failed = context.result?.is_error === true
+  const running = context.live === true && !context.streaming && context.result == null
+  const errorSummary = failed ? firstResultLine(context.result) : undefined
   const agentCodeOrchestration = fromClaudeAgentCodeOrchestrationUse(block)
   if (agentCodeOrchestration) {
     return <AgentCodeOrchestrationView model={agentCodeOrchestration} />
@@ -72,13 +78,23 @@ export function renderClaudeToolUse(block: ToolUseBlock): ReactNode | undefined 
       // visible (product-owner verdict 2026-07-17). The extractor's strict
       // contract means this claims only the honest cases; everything else
       // falls through to the command card unchanged.
-      const write = fromClaudeBashCodeEdit(block)
+      const write = fromClaudeBashCodeEdit(block, {
+        streaming: context.streaming,
+        running,
+        failed,
+        errorSummary,
+      })
       if (write) return <CodeEditView model={write} />
-      const model = fromClaudeBashBlock(block)
+      const model = fromClaudeBashBlock(block, {
+        streaming: context.streaming,
+        running,
+        failed,
+        errorSummary,
+      })
       return model ? <CommandView model={model} /> : undefined
     }
     case 'Edit':
-      return <EditRow block={block} />
+      return <EditRow block={block} streaming={context.streaming} running={running} failed={failed} errorSummary={errorSummary} />
     case 'MultiEdit':
       return <MultiEditRow block={block} />
     case 'Read': {
@@ -98,12 +114,24 @@ export function renderClaudeToolUse(block: ToolUseBlock): ReactNode | undefined 
       return model ? <ClaudeWebSearchRow model={model} /> : undefined
     }
     case 'Write':
-      return <WriteRow block={block} />
+      return <WriteRow block={block} streaming={context.streaming} running={running} failed={failed} errorSummary={errorSummary} />
     case 'TodoWrite':
       return <TodoRow block={block} />
     default:
       return undefined
   }
+}
+
+function firstResultLine(result: ToolResultBlock | null | undefined): string | undefined {
+  if (!result) return undefined
+  const content = result.content
+  const text = typeof content === 'string'
+    ? content
+    : Array.isArray(content)
+      ? content.map(item => typeof item === 'string' ? item : typeof item?.text === 'string' ? item.text : '').join('\n')
+      : ''
+  const newline = text.indexOf('\n')
+  return (newline === -1 ? text : text.slice(0, newline)).slice(0, 200) || 'tool failed'
 }
 
 export function renderClaudeToolResult(

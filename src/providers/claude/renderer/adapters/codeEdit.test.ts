@@ -70,6 +70,24 @@ describe('claude code-edit adapter — streaming first', () => {
     expect(multi.files).toHaveLength(2)
     expect(fromClaudeEditBlock({ type: 'tool_use', id: 't3', name: 'Bash', input: {} } as never)).toBeNull()
   })
+
+  it('bounds huge Write and MultiEdit models before they reach the DOM', () => {
+    const content = Array.from({ length: 2_000 }, (_, index) => `line ${index}`).join('\n')
+    const write = fromClaudeEditBlock({
+      type: 'tool_use', id: 'tw', name: 'Write', input: { file_path: '/huge.ts', content },
+    } as never)!
+    expect(write.files[0].lines.length).toBeLessThanOrEqual(400)
+    expect(write.files[0].previewTruncated).toBe(true)
+    expect(write.files[0].exactSections?.[0]?.text).toBe(content)
+
+    const edits = Array.from({ length: 100 }, (_, index) => ({ old_string: `${index}`, new_string: `${index + 1}` }))
+    const multi = fromClaudeEditBlock({
+      type: 'tool_use', id: 'tm', name: 'MultiEdit', input: { file_path: '/many.ts', edits },
+    } as never)!
+    expect(multi.files).toHaveLength(24)
+    expect(multi.totalFiles).toBe(100)
+    expect(multi.filesTruncated).toBe(true)
+  })
 })
 
 describe('codex code-edit adapter — streaming first', () => {
@@ -106,6 +124,11 @@ describe('codex code-edit adapter — streaming first', () => {
   it('UNIFIED-EXEC wrapper: a plain command script declines (no false patch)', () => {
     const script = 'const r = await tools.exec_command({ cmd: "ls -la" });'
     expect(decodeEmbeddedPatchLiteral(script)).toBeNull()
+    expect(fromCodexApplyPatch({ type: 'tool_use', id: '', name: 'exec', input: { cmd: script } } as never)).toBeNull()
+  })
+
+  it('UNIFIED-EXEC wrapper: patch-looking literal without tools.apply_patch declines', () => {
+    const script = 'const example = "*** Begin Patch\\n*** Add File: docs/example.txt\\n+demo\\n*** End Patch"; console.log(example);'
     expect(fromCodexApplyPatch({ type: 'tool_use', id: '', name: 'exec', input: { cmd: script } } as never)).toBeNull()
   })
 

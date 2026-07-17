@@ -1,4 +1,5 @@
 import { ipcMain } from 'electron'
+import type { RenderShapeAppendResult } from '@shared/types/renderShapes.js'
 
 import { readRecentPasteSessions } from '../pasteDebugJournal.js'
 import type { SessionRecorderManager } from '@main/recording/SessionRecorderManager.js'
@@ -156,6 +157,10 @@ export function registerDevDebugIpc(sessionRecorders: SessionRecorderManager | n
     if (!isSessionRecordingEnabled() || !sessionRecorders) return false
     return sessionRecorders.isRecording(sessionId)
   })
+  ipcMain.handle('record-session:finish-stop', async (_evt, sessionId: string): Promise<void> => {
+    if (!isSessionRecordingEnabled() || !sessionRecorders) return
+    await sessionRecorders.finishStopping(sessionId)
+  })
 
   // Render-shape sighting sidecar (Phase 2/3, PR #555). Same trust posture
   // as the note handlers: dev-debug flag is the boundary, manager may be
@@ -168,16 +173,24 @@ export function registerDevDebugIpc(sessionRecorders: SessionRecorderManager | n
   const MAX_SIGHTING_BATCH_BYTES = 1024 * 1024
   ipcMain.handle(
     'render-shape:append',
-    (_evt, sessionId: string, sightings: unknown): boolean => {
-      if (!isSessionRecordingEnabled() || !sessionRecorders) return false
-      if (!Array.isArray(sightings) || sightings.length === 0) return false
-      if (sightings.length > MAX_SIGHTING_BATCH) return false
+    (_evt, sessionId: string, sightings: unknown): RenderShapeAppendResult => {
+      if (!isSessionRecordingEnabled() || !sessionRecorders) return { status: 'no-recorder' }
+      if (!Array.isArray(sightings) || sightings.length === 0) {
+        return { status: 'rejected', reason: 'empty' }
+      }
+      if (sightings.length > MAX_SIGHTING_BATCH) {
+        return { status: 'rejected', reason: 'too-many' }
+      }
       try {
-        if (JSON.stringify(sightings).length > MAX_SIGHTING_BATCH_BYTES) return false
+        if (JSON.stringify(sightings).length > MAX_SIGHTING_BATCH_BYTES) {
+          return { status: 'rejected', reason: 'too-large' }
+        }
       } catch {
-        return false // unserializable batch can't be recorded anyway
+        return { status: 'rejected', reason: 'invalid' }
       }
       return sessionRecorders.appendRenderShapes(sessionId, sightings)
+        ? { status: 'accepted' }
+        : { status: 'no-recorder' }
     },
   )
   // Disk sweep for the Unknown Shape Inbox — derived-state read, no writes.

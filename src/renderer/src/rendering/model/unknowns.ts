@@ -13,18 +13,12 @@ import { fingerprintRenderShape } from '@renderer/rendering/evidence/shapeFinger
 // future provider behavior gets discovered from a debug bundle instead of
 // re-reading raw event archives (the dump's explicit design goal).
 //
-// Redaction (#115) is structural, not best-effort: the registry stores
-// shape PATHS and a content HASH — never the payload. The optional preview
-// must be passed pre-redacted by the caller and is hard-capped, so a
-// mistake at a call site cannot leak a full prompt into feed-debug or a
-// bundle. Auth-looking keys are redacted IN PLACE in the shape paths as a
-// second belt: the KEY NAME is retained (so a bundle reader still sees the
-// structural shape — that a secret-carrying key was present at this path),
-// but its VALUE/subtree is never walked and is replaced with a
-// `<redacted-key>` marker. Keeping the name while dropping the value is what
-// makes the path diagnostic without ever carrying the secret itself; the
-// earlier wording claimed key NAMES were stripped, which the code has never
-// done (see `shapePathsOf`).
+// The registry stores complete bounded shape PATHS and a bounded content
+// HASH, never a second copy of the payload. This is a developer evidence
+// surface: arbitrary key names are deliberately retained because they are
+// frequently the clue needed to classify an unknown MCP result. The optional
+// preview remains hard-capped because the original recording is the place to
+// inspect full scalar content.
 // ---------------------------------------------------------------------------
 
 const PREVIEW_MAX = 80
@@ -57,16 +51,75 @@ const DISTINCT_HASH_TRACK_MAX = 64
 /** Deterministic, dependency-free FNV-1a — identity for dedupe/counting,
  *  NOT cryptographic. Collisions merely merge two counters. */
 export function hashPayload(payload: unknown): string {
-  let json: string
-  try {
-    json = JSON.stringify(payload) ?? 'undefined'
-  } catch {
-    json = 'unserializable'
-  }
   let h = 0x811c9dc5
-  for (let i = 0; i < json.length; i++) {
-    h ^= json.charCodeAt(i)
-    h = Math.imul(h, 0x01000193)
+  let nodes = 0
+  let chars = 0
+  const MAX_HASH_NODES = 4_000
+  const MAX_HASH_CHARS = 256 * 1024
+  const MAX_CONTAINER_MEMBERS = 1_024
+  const ancestors = new Set<object>()
+  const add = (value: string): void => {
+    const remaining = MAX_HASH_CHARS - chars
+    if (remaining <= 0) return
+    // A bounded head plus the original length distinguishes common payloads
+    // without copying or walking an arbitrarily large string.
+    const admitted = value.length <= remaining ? value : `${value.slice(0, remaining)}#${value.length}`
+    chars += admitted.length
+    for (let i = 0; i < admitted.length; i += 1) {
+      h ^= admitted.charCodeAt(i)
+      h = Math.imul(h, 0x01000193)
+    }
+  }
+
+  const walk = (value: unknown): void => {
+    if (nodes >= MAX_HASH_NODES || chars >= MAX_HASH_CHARS) {
+      add('<truncated>')
+      return
+    }
+    nodes += 1
+    if (value === null || typeof value !== 'object') {
+      add(`${typeof value}:${typeof value === 'string' ? value : String(value)}`)
+      return
+    }
+    if (ancestors.has(value)) {
+      add('<cycle>')
+      return
+    }
+    ancestors.add(value)
+    try {
+      if (Array.isArray(value)) {
+        add(`array:${value.length}`)
+        const admitted = Math.min(value.length, MAX_CONTAINER_MEMBERS)
+        for (let i = 0; i < admitted; i += 1) walk(value[i])
+        if (value.length > admitted) add('<truncated-array>')
+        return
+      }
+      const record = value as Record<string, unknown>
+      const entries: [string, unknown][] = []
+      let truncated = false
+      for (const key in record) {
+        if (!Object.prototype.hasOwnProperty.call(record, key)) continue
+        if (entries.length >= MAX_CONTAINER_MEMBERS) {
+          truncated = true
+          break
+        }
+        entries.push([key, record[key]])
+      }
+      entries.sort(([a], [b]) => a.localeCompare(b))
+      for (const [key, child] of entries) {
+        add(`key:${key}`)
+        walk(child)
+      }
+      if (truncated) add('<truncated-object>')
+    } finally {
+      ancestors.delete(value)
+    }
+  }
+
+  try {
+    walk(payload)
+  } catch {
+    add('<unserializable>')
   }
   return (h >>> 0).toString(16)
 }
@@ -74,18 +127,17 @@ export function hashPayload(payload: unknown): string {
 /** Sorted key paths to depth 3 — enough to recognize a shape in a bundle
  *  without carrying any values. */
 export function shapePathsOf(payload: unknown, prefix = '', depth = 0): string[] {
-  if (depth >= 3 || typeof payload !== 'object' || payload === null) return []
-  const out: string[] = []
-  for (const key of Object.keys(payload as Record<string, unknown>).sort()) {
-    if (SENSITIVE_KEY.test(key)) {
-      out.push(`${prefix}${key}=<redacted-key>`)
-      continue
-    }
-    const path = `${prefix}${key}`
-    out.push(path)
-    out.push(...shapePathsOf((payload as Record<string, unknown>)[key], `${path}.`, depth + 1))
-  }
-  return out
+  // Kept as the compatibility API used by older debug callers. Delegating to
+  // the canonical fingerprint walker prevents this secondary registry from
+  // reintroducing its own unbounded traversal or key-name privacy policy.
+  void prefix
+  void depth
+  return [...fingerprintRenderShape({
+    provider: 'unknown',
+    plane: 'unknown',
+    eventType: 'unknown',
+    payload,
+  }).shapePaths]
 }
 
 export type UnknownSighting = {

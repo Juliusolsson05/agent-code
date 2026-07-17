@@ -189,9 +189,11 @@ export function extractCodexSpawnCall(entry: JsonlEntry): SpawnCall | null {
   // pretending the tracker supports them would attach unrelated live state.
   // TODO(native-collaboration-identity): add the task_name generation only when
   // the provider exposes a stable parent-call -> child-session join key.
+  const agentType = stringField(input, 'agent_type')
+  if (!agentType) return null
   return {
     callId: payload.call_id,
-    agentType: stringField(input, 'agent_type') ?? 'agent',
+    agentType,
     description: stringField(input, 'message') ?? stringField(input, 'description') ?? '',
   }
 }

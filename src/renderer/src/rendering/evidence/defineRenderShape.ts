@@ -71,6 +71,15 @@ export type RenderShapeDefinition<
     prefixes: readonly string[]
   }
   disposition: RenderShapeDisposition
+  /**
+   * A single structural fingerprint may be visible both as an incomplete
+   * prefix and a closed input, while the honest renderer route differs. Strict
+   * provider adapters deliberately decline incomplete Agent/MCP inputs to the
+   * generic row, then claim the same structure after required fields close.
+   * Without a lifecycle override the catalog falsely reports one of those two
+   * correct routes as a misroute. Omitted milestones inherit `disposition`.
+   */
+  dispositionByLifecycle?: Partial<Record<RenderShapeLifecycle, RenderShapeDisposition>>
   why: string
 }
 

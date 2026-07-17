@@ -29,7 +29,7 @@ function boundCommand(command: string): string {
 
 export function fromClaudeBashBlock(
   block: ToolUseBlock,
-  opts: { streaming?: boolean } = {},
+  opts: { streaming?: boolean; running?: boolean; failed?: boolean; errorSummary?: string } = {},
 ): CommandRenderModel | null {
   if (block.name !== 'Bash') return null
   const input = (block.input ?? {}) as Record<string, unknown>
@@ -38,8 +38,15 @@ export function fromClaudeBashBlock(
   return {
     label: 'Bash',
     command: boundCommand(command),
-    status: opts.streaming ? 'streaming' : 'success',
+    status: opts.failed
+      ? 'failure'
+      : opts.streaming
+        ? 'streaming'
+        : opts.running
+          ? 'running'
+          : 'success',
     exitCode: null, // Claude reports failure via the paired result's is_error
+    errorSummary: opts.errorSummary,
     // output arrives on the SEPARATE result row — undefined by design here.
   }
 }
@@ -72,14 +79,25 @@ export function fromClaudePartialBashJson(rawInputJson: string): CommandRenderMo
 
 export function fromClaudeBashCodeEdit(
   block: ToolUseBlock,
-  opts: { streaming?: boolean } = {},
+  opts: { streaming?: boolean; running?: boolean; failed?: boolean; errorSummary?: string } = {},
 ): CodeEditRenderModel | null {
   if (block.name !== 'Bash') return null
   const input = (block.input ?? {}) as Record<string, unknown>
   const command = typeof input.command === 'string' ? input.command : ''
   const write = extractShellHeredocWrite(command)
   if (!write) return null
-  return shellHeredocWriteModel(write, { streaming: opts.streaming === true, label: 'Bash' })
+  const model = shellHeredocWriteModel(write, { streaming: opts.streaming === true, label: 'Bash' })
+  return {
+    ...model,
+    status: opts.failed
+      ? 'failure'
+      : opts.streaming
+        ? 'streaming'
+        : opts.running
+          ? 'running'
+          : 'success',
+    errorSummary: opts.errorSummary,
+  }
 }
 
 /** STREAMING-FIRST partial variant: the heredoc parse is trustworthy the

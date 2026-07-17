@@ -381,7 +381,10 @@ export function classifySemanticToolActivity(block: SemanticLiveTurn['blocks'][n
     if (looksLikeReadCommand(command)) {
       return { collapsible: true, category: 'read', hint: command }
     }
-    return { collapsible: true, category: 'bash', hint: command }
+    // Arbitrary commands are primary work, not low-signal discovery churn.
+    // Collapsing them while running bypassed provider lifecycle/result cards
+    // and could make a real command disappear into an activity counter.
+    return { collapsible: false, category: null, hint: null }
   }
 
   return { collapsible: false, category: null, hint: null }

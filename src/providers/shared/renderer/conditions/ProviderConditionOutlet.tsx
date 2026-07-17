@@ -28,8 +28,11 @@ import { ConditionOutlet } from '@shared/conditions-core/ConditionOutlet'
 import { makeDispatchFromOnSend } from '@shared/conditions-core/dispatch'
 import type { ConditionCustomAction } from '@shared/conditions-core/contract'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
+import { observeRenderShape } from '@renderer/features/feed/evidence/observer'
+import type { RenderOutcome } from '@shared/types/renderShapes'
 
 type Props = {
+  sessionId: string
   conditions: ProviderConditionSnapshot | null
   onSend: (data: string) => Promise<void>
   onResolveCustom?: (action: ConditionCustomAction) => Promise<unknown>
@@ -37,6 +40,7 @@ type Props = {
 }
 
 export function ProviderConditionOutlet({
+  sessionId,
   conditions,
   onSend,
   onResolveCustom,
@@ -44,8 +48,34 @@ export function ProviderConditionOutlet({
 }: Props) {
   if (!conditions) return null
 
-  const { conditionViews: registry } = getRendererProviderCapabilities(conditions.provider)
+  const capabilities = getRendererProviderCapabilities(conditions.provider)
+  const { conditionViews: registry, conditionPolicy } = capabilities
   const dispatch = makeDispatchFromOnSend(onSend, onResolveCustom)
+
+  for (const [kind, condition] of Object.entries(conditions.conditions)) {
+    if (!condition) continue
+    const outcome: RenderOutcome = kind === 'claude.ask-user-question'
+      ? { kind: 'condition-surface', shapeId: `condition:${kind}`, surface: 'feed-inline' }
+      : conditionPolicy.composerPickerKind === kind
+        ? { kind: 'condition-surface', shapeId: `condition:${kind}`, surface: 'composer' }
+        : registry[kind]
+          ? { kind: 'condition-surface', shapeId: `condition:${kind}`, surface: 'outlet' }
+          : conditionPolicy.attentionKinds.has(kind)
+            ? { kind: 'condition-surface', shapeId: `condition:${kind}`, surface: 'attention-only' }
+            : { kind: 'unknown', fallbackRenderId: 'shared.condition-unhandled' }
+    // Conditions live outside Feed's capture context, so observe against the
+    // session directly. The observer's armed Map remains the sole dev-mode
+    // gate; no capture state enters React and no condition render is changed.
+    observeRenderShape({
+      sessionId,
+      provider: conditions.provider,
+      plane: 'condition',
+      lifecycle: 'running',
+      eventType: kind,
+      payload: condition,
+      outcome,
+    })
+  }
 
   // The app-side open snapshot types its map Partial (an artifact of
   // the per-provider mapped types it must absorb); conditions-core's

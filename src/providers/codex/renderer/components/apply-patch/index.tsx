@@ -3,7 +3,7 @@
 
 import { memo, useMemo } from 'react'
 
-import type { ToolUseBlock } from '@shared/types/transcript'
+import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 import { applyPatchText, fromCodexApplyPatch } from '@providers/codex/renderer/adapters/codeEdit'
 import { CodeEditView } from '@providers/shared/renderer/protocols/code-edit/CodeEditView'
 import { boundedTextPage } from '@renderer/lib/text/boundedText'
@@ -12,15 +12,24 @@ import { CodexToolRow } from '@providers/codex/renderer/components/tool'
 
 export const CodexApplyPatchRow = memo(function CodexApplyPatchRow({
   block,
+  streaming = false,
+  running = false,
+  result = null,
 }: {
   block: ToolUseBlock
+  streaming?: boolean
+  running?: boolean
+  result?: ToolResultBlock | null
 }) {
   // CUT OVER to the code-edit protocol (PR #555 Phase 5): Codex adapter →
   // shared CodeEditView. The provider component WRAPS the shared view (the
   // plan's chrome rule) to keep two codex-specific affordances: the
   // fallback to CodexToolRow before the patch sentinel is recognizable,
   // and the "rich preview is partial" exact-paged-patch disclosure.
-  const model = useMemo(() => fromCodexApplyPatch(block), [block])
+  const model = useMemo(
+    () => fromCodexApplyPatch(block, { streaming, running, result }),
+    [block, result, running, streaming],
+  )
   const rawPatch = applyPatchText(block.input)
   const previewIncomplete = boundedTextPage(rawPatch).hasNext
 

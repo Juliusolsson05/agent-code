@@ -29,19 +29,19 @@ export type ApplyPatchFile = {
   lines: DiffLine[]
 }
 
+function rawPatchInputText(input: unknown): string {
+  if (typeof input === 'string') return input
+  const rec = asRecord(input)
+  if (typeof rec?.raw === 'string') return rec.raw
+  if (typeof rec?.arguments === 'string') return rec.arguments
+  if (typeof rec?.cmd === 'string') return rec.cmd
+  if (typeof rec?.patch === 'string') return rec.patch
+  if (typeof rec?.input === 'string') return rec.input
+  return ''
+}
+
 export function applyPatchText(input: unknown): string {
-  const direct =
-    typeof input === 'string'
-      ? input
-      : (() => {
-          const rec = asRecord(input)
-          if (typeof rec?.raw === 'string') return rec.raw
-          if (typeof rec?.arguments === 'string') return rec.arguments
-          if (typeof rec?.cmd === 'string') return rec.cmd
-          if (typeof rec?.patch === 'string') return rec.patch
-          if (typeof rec?.input === 'string') return rec.input
-          return ''
-        })()
+  const direct = rawPatchInputText(input)
   // MODERN UNIFIED-EXEC WRAPPER (first caught in the wild 2026-07-16, the
   // corpus's documented #1 gap): the patch arrives EMBEDDED in a JS script —
   //   const patch = "*** Begin Patch\n*** Add File: …"; await tools.apply_patch(patch)
@@ -55,6 +55,25 @@ export function applyPatchText(input: unknown): string {
     if (embedded) return embedded
   }
   return direct
+}
+
+/** Prove that a tool invocation owns apply-patch rendering. Sentinel text is
+ * insufficient for unified exec: documentation/tests may contain a patch
+ * literal without ever invoking the tool. Requiring the Agent Code wrapper's
+ * call site keeps those scripts on the generic/command path. */
+export function isCodexApplyPatchUse(
+  block: ToolUseBlock,
+  opts: { streamingPrefix?: boolean } = {},
+): boolean {
+  if (block.name === 'apply_patch') return true
+  if (block.name !== 'exec') return false
+  const script = rawPatchInputText(block.input)
+  const hasPatch = applyPatchText(block.input).includes('*** Begin Patch')
+  // Unified exec streams the patch literal before the later call expression.
+  // Admit that prefix only while lifecycle evidence says the script is still
+  // incomplete; a completed script must prove the actual tools.apply_patch
+  // invocation or it falls back.
+  return hasPatch && (/\btools\.apply_patch\s*\(/.test(script) || opts.streamingPrefix === true)
 }
 
 /** Find the JS string literal containing the patch sentinel and decode its
@@ -164,8 +183,9 @@ function toFiles(input: unknown, streaming: boolean): CodeEditFile[] {
 
 export function fromCodexApplyPatch(
   block: ToolUseBlock,
-  opts: { streaming?: boolean; result?: ToolResultBlock | null } = {},
+  opts: { streaming?: boolean; running?: boolean; result?: ToolResultBlock | null } = {},
 ): CodeEditRenderModel | null {
+  if (!isCodexApplyPatchUse(block, { streamingPrefix: opts.streaming === true })) return null
   const files = toFiles(block.input, opts.streaming === true)
   // No recognizable patch yet (input still streaming its preamble, or an
   // unexpected wrapper): decline — the caller's fallback stays visible.
@@ -175,7 +195,15 @@ export function fromCodexApplyPatch(
   return {
     label: 'apply_patch',
     files,
-    status: opts.streaming ? 'streaming' : failed ? 'failure' : 'success',
+    status: failed
+      ? 'failure'
+      : opts.result
+        ? 'success'
+        : opts.streaming
+          ? 'streaming'
+          : opts.running
+            ? 'running'
+            : 'success',
     errorSummary: failed
       ? firstLine(opts.result)
       : undefined,
@@ -195,4 +223,3 @@ function firstLine(result: ToolResultBlock | null | undefined): string | undefin
   const text = typeof c === 'string' ? c : Array.isArray(c) ? String((c[0] as { text?: unknown })?.text ?? '') : ''
   return text ? text.split('\n')[0].slice(0, 200) : 'patch failed'
 }
-

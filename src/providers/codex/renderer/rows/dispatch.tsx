@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { applyPatchText } from '@providers/codex/renderer/adapters/codeEdit'
+import { isCodexApplyPatchUse } from '@providers/codex/renderer/adapters/codeEdit'
 import { fromCodexExecScript } from '@providers/codex/renderer/adapters/command'
 import { CommandView } from '@providers/shared/renderer/protocols/command/CommandView'
 
@@ -20,7 +20,10 @@ import { CodexWebRow } from '@providers/codex/renderer/components/web'
 import { fromCodexNativeSpawnUse } from '@providers/codex/renderer/adapters/collaboration'
 import { CodexNativeSpawnRow } from '@providers/codex/renderer/components/native-spawn'
 
-export function renderCodexToolUse(block: ToolUseBlock): ReactNode | undefined {
+export function renderCodexToolUse(
+  block: ToolUseBlock,
+  context: { live?: boolean; streaming?: boolean; result?: ToolResultBlock | null } = {},
+): ReactNode | undefined {
   const agentCodeOrchestration = fromCodexAgentCodeOrchestrationUse(block)
   if (agentCodeOrchestration) {
     return <AgentCodeOrchestrationView model={agentCodeOrchestration} />
@@ -32,13 +35,27 @@ export function renderCodexToolUse(block: ToolUseBlock): ReactNode | undefined {
   // Provider-specific components below claim only grammars with evidence.
   // Every other Codex function call returns undefined at the end and reaches
   // the same bounded JsonToolRow used by other providers.
-  if (block.name === 'apply_patch') return <CodexApplyPatchRow block={block} />
+  if (block.name === 'apply_patch') return (
+    <CodexApplyPatchRow
+      block={block}
+      streaming={context.streaming}
+      running={context.live === true && !context.streaming && context.result == null}
+      result={context.result}
+    />
+  )
   // Modern unified-exec wrapper: a patch may hide inside the exec script
   // (tools.apply_patch("*** Begin Patch…")). CodexApplyPatchRow decodes the
   // embedded literal and falls back to the generic CodexToolRow when the
   // script is a plain command — so routing exec here is strictly additive.
-  if (block.name === 'exec' && applyPatchText(block.input).includes('*** Begin Patch'))
-    return <CodexApplyPatchRow block={block} />
+  if (block.name === 'exec' && isCodexApplyPatchUse(block, { streamingPrefix: context.streaming === true }))
+    return (
+      <CodexApplyPatchRow
+        block={block}
+        streaming={context.streaming}
+        running={context.live === true && !context.streaming && context.result == null}
+        result={context.result}
+      />
+    )
   // …and its plain-command case (Phase 6): extract every embedded
   // tools.exec_command call and render a real command card. Scripts with
   // neither patch nor command intent still fall to the generic row.
@@ -75,5 +92,5 @@ export function renderCodexToolResult(
   // fallback preserve the actual handle. Agent Code MCP results are the only
   // absorbed branch above because that same card includes a raw protocol
   // disclosure backed by the schema we own.
-  return <CodexToolResultRow block={block} />
+  return <CodexToolResultRow block={block} sourceTool={context.sourceTool} />
 }

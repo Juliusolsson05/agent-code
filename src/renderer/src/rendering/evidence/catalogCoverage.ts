@@ -133,14 +133,15 @@ export function classifySighting(
   // coverage without fabricating a paint outcome; the full runtime path still
   // continues here and verifies the actual owner.
   const def = index.byFingerprint.get(sighting.structuralFingerprint)!
+  const expectedDisposition = def.dispositionByLifecycle?.[sighting.lifecycle] ?? def.disposition
   if (sighting.outcome.kind === 'unknown') {
     return { kind: 'unknown-outcome', shapeId: def.id, actual: sighting.outcome }
   }
-  if (!outcomeSatisfiesDisposition(def.disposition, sighting.outcome)) {
+  if (!outcomeSatisfiesDisposition(expectedDisposition, sighting.outcome)) {
     return {
       kind: 'known-misrouted',
       shapeId: def.id,
-      expected: def.disposition,
+      expected: expectedDisposition,
       actual: sighting.outcome,
     }
   }
@@ -203,7 +204,7 @@ export function auditRenderShapeCatalog(
         findings.push({ kind: 'empty-fingerprints', shapeId: def.id })
       }
       for (const fp of def.fingerprints) {
-        if (!/^fp1-[0-9a-f]{8}$/.test(fp)) {
+        if (!/^fp2-[0-9a-f]{8}$/.test(fp)) {
           findings.push({ kind: 'malformed-fingerprint', shapeId: def.id, fingerprint: fp })
         }
       }
