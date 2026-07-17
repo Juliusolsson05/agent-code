@@ -34,29 +34,6 @@ const srcRoot = resolve(testDir, '..') // src/
 const PROVIDERS = ['claude', 'codex', 'opencode'] as const
 type Provider = (typeof PROVIDERS)[number]
 
-/**
- * Grandfathered legacy edges — every entry is DEBT with a named eviction
- * phase, not permission. Adding to this list requires the same justification
- * as deleting the test: a new edge means a new cross-provider coupling.
- *
- * BlockRow is the live-semantic painter that predates the provider
- * capability registry's operation dispatch; the plan migrates its families
- * through `renderOperation` in Phases 5–6, at which point these two entries
- * MUST come out with the migration PR.
- */
-const GRANDFATHERED: ReadonlyArray<{ file: string; specifier: string; removeIn: string }> = [
-  {
-    file: 'renderer/src/features/feed/ui/semantic/BlockRow.tsx',
-    specifier: '@providers/codex/renderer/rows/CodexRows',
-    removeIn: 'Phase 6 (command grammar migration)',
-  },
-  {
-    file: 'renderer/src/features/feed/ui/semantic/BlockRow.tsx',
-    specifier: '@providers/claude/renderer/rows/ClaudeRows',
-    removeIn: 'Phase 5 (code-edit vertical slice)',
-  },
-]
-
 function listSourceFiles(dir: string): string[] {
   const out: string[] = []
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -127,7 +104,6 @@ function scan(dir: string, rule: string, forbidden: (target: Provider) => boolea
     for (const specifier of importSpecifiers(source)) {
       const target = targetsProviderRenderer(specifier, file)
       if (!target || !forbidden(target)) continue
-      if (GRANDFATHERED.some(g => g.file === rel && g.specifier === specifier)) continue
       violations.push({ file: rel, specifier, rule })
     }
   }
@@ -174,16 +150,4 @@ describe('provider renderer import boundaries (plan PR #554, rules 1–5)', () =
     expect(violations, formatViolations(violations)).toEqual([])
   })
 
-  it('grandfathered edges still exist (delete their entries when migrated)', () => {
-    // A stale allowlist is a silent hole: if the BlockRow edges are removed
-    // by a migration PR but the entries stay, the next accidental import of
-    // that exact specifier would be waved through. Force the cleanup.
-    for (const g of GRANDFATHERED) {
-      const source = readFileSync(join(srcRoot, g.file), 'utf-8')
-      expect(
-        importSpecifiers(source).includes(g.specifier),
-        `${g.file} no longer imports ${g.specifier} — remove its GRANDFATHERED entry (was scheduled for ${g.removeIn})`,
-      ).toBe(true)
-    }
-  })
 })

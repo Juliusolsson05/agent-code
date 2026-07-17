@@ -1,9 +1,10 @@
 import type { ReactNode } from 'react'
 
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
-// Provider-internal imports reach the component DIRECTORIES directly —
-// rows/ClaudeRows.tsx is a barrel that exists only for the feed's
-// grandfathered import edge (see its header) and must gain no new users.
+// Provider-internal imports reach component directories directly. Phase 9
+// removed the old ClaudeRows feed barrel after live semantic dispatch moved
+// behind the registry capability; reintroducing that barrel would reopen a
+// shared-feed → provider interpretation edge.
 import { EditRow } from '@providers/claude/renderer/components/edit'
 import { ClaudeAgentRow } from '@providers/claude/renderer/components/agent'
 import { MultiEditRow } from '@providers/claude/renderer/components/multi-edit'
@@ -16,7 +17,6 @@ import { ClaudeWebFetchResultRow } from '@providers/claude/renderer/components/w
 import { ClaudeWebSearchRow } from '@providers/claude/renderer/components/web-search'
 import { ClaudeWebSearchResultRow } from '@providers/claude/renderer/components/web-search-result'
 import { WriteRow } from '@providers/claude/renderer/components/write'
-import { TodoRow } from '@providers/shared/renderer/components/todo'
 import {
   fromClaudeAgentResult,
   fromClaudeAgentUse,
@@ -45,6 +45,26 @@ import { OutputWell } from '@renderer/lib/text/OutputWell'
 import { AgentCodeOrchestrationView } from '@providers/shared/renderer/protocols/agent-code-orchestration/AgentCodeOrchestrationView'
 import { fromAgentCodeOrchestrationResult } from '@providers/shared/renderer/protocols/agent-code-orchestration/model'
 import { fromClaudeAgentCodeOrchestrationUse } from '@providers/claude/renderer/adapters/agentCodeOrchestration'
+import { fromClaudeAgentCodeWorkspaceUse } from '@providers/claude/renderer/adapters/agentCodeWorkspace'
+import { AgentCodeWorkspaceView } from '@providers/shared/renderer/protocols/agent-code-workspace/AgentCodeWorkspaceView'
+import { fromAgentCodeWorkspaceResult } from '@providers/shared/renderer/protocols/agent-code-workspace/model'
+import {
+  fromClaudeTaskActivityResult,
+  fromClaudeTaskActivityUse,
+} from '@providers/claude/renderer/adapters/tasks'
+import { ClaudeTaskActivityRow } from '@providers/claude/renderer/components/task-activity'
+import {
+  fromClaudeQuestionResult,
+  fromClaudeQuestionUse,
+} from '@providers/claude/renderer/adapters/questions'
+import {
+  ClaudeAnsweredQuestionRow,
+  ClaudeLiveQuestionRow,
+} from '@providers/claude/renderer/components/ask-user-question'
+import { fromClaudeAgentCodeWorkflowUse } from '@providers/claude/renderer/adapters/agentCodeWorkflow'
+import { AgentCodeWorkflowView } from '@providers/shared/renderer/protocols/agent-code-workflow/AgentCodeWorkflowView'
+import { fromAgentCodeWorkflowResult } from '@providers/shared/renderer/protocols/agent-code-workflow/model'
+import { GenericLiveResult } from '@providers/shared/renderer/rows/GenericLiveResult'
 
 export function renderClaudeToolUse(
   block: ToolUseBlock,
@@ -56,6 +76,24 @@ export function renderClaudeToolUse(
   const agentCodeOrchestration = fromClaudeAgentCodeOrchestrationUse(block)
   if (agentCodeOrchestration) {
     return <AgentCodeOrchestrationView model={agentCodeOrchestration} />
+  }
+  const agentCodeWorkspace = fromClaudeAgentCodeWorkspaceUse(block)
+  if (agentCodeWorkspace) {
+    return <AgentCodeWorkspaceView model={agentCodeWorkspace} />
+  }
+  const agentCodeWorkflow = fromClaudeAgentCodeWorkflowUse(block)
+  if (agentCodeWorkflow) {
+    return <AgentCodeWorkflowView model={agentCodeWorkflow} />
+  }
+  const taskActivity = fromClaudeTaskActivityUse(block)
+  if (taskActivity) {
+    return <ClaudeTaskActivityRow model={taskActivity} />
+  }
+  const question = fromClaudeQuestionUse(block)
+  if (question) {
+    return context.live === true && context.result == null
+      ? <ClaudeLiveQuestionRow model={question} />
+      : <ClaudeAnsweredQuestionRow model={question} result={context.result ?? null} />
   }
   // WHY this dispatch lives with the provider rows: these names are Claude Code
   // transcript vocabulary, not feed vocabulary. Keeping the table beside the
@@ -115,8 +153,6 @@ export function renderClaudeToolUse(
     }
     case 'Write':
       return <WriteRow block={block} streaming={context.streaming} running={running} failed={failed} errorSummary={errorSummary} />
-    case 'TodoWrite':
-      return <TodoRow block={block} />
     default:
       return undefined
   }
@@ -157,6 +193,34 @@ export function renderClaudeToolResult(
       ? null
       : undefined
   }
+  const agentCodeWorkspace = source
+    ? fromClaudeAgentCodeWorkspaceUse(source)
+    : null
+  if (agentCodeWorkspace) {
+    return fromAgentCodeWorkspaceResult(block, agentCodeWorkspace)
+      ? null
+      : undefined
+  }
+  const agentCodeWorkflow = source
+    ? fromClaudeAgentCodeWorkflowUse(source)
+    : null
+  if (agentCodeWorkflow) {
+    return fromAgentCodeWorkflowResult(block, agentCodeWorkflow)
+      ? null
+      : undefined
+  }
+  const taskActivity = source ? fromClaudeTaskActivityUse(source) : null
+  if (taskActivity) {
+    return fromClaudeTaskActivityResult(block, taskActivity)
+      ? null
+      : undefined
+  }
+  const question = source ? fromClaudeQuestionUse(source) : null
+  if (question) {
+    return fromClaudeQuestionResult(block, question) !== null
+      ? null
+      : undefined
+  }
   if (source?.name === 'Agent') {
     // A validated Agent result is rendered inside the provider-owned spawn
     // card, which already has the paired result through ToolResultIndexContext.
@@ -180,7 +244,11 @@ export function renderClaudeToolResult(
         {conclusion ? (
           <div className="text-ink-dim text-[12px] pl-6">{conclusion}</div>
         ) : null}
-        <OutputWell text={text} isError={block.is_error === true} />
+        <GenericLiveResult
+          source={text}
+          isError={block.is_error === true}
+          textFallback="output-well"
+        />
       </div>
     )
   }

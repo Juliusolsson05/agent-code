@@ -12,9 +12,7 @@ export function isWorkflowRunToolName(name: string | null | undefined): boolean 
   const normalized = name.trim().toLowerCase()
   return (
     normalized === 'workflow_run' ||
-    normalized.endsWith('__workflow_run') ||
-    normalized.endsWith('/workflow_run') ||
-    normalized.endsWith(':workflow_run')
+    normalized === 'mcp__agent_code__workflow_run'
   )
 }
 
@@ -23,9 +21,7 @@ export function isWorkflowResumeToolName(name: string | null | undefined): boole
   const normalized = name.trim().toLowerCase()
   return (
     normalized === 'workflow_resume' ||
-    normalized.endsWith('__workflow_resume') ||
-    normalized.endsWith('/workflow_resume') ||
-    normalized.endsWith(':workflow_resume')
+    normalized === 'mcp__agent_code__workflow_resume'
   )
 }
 

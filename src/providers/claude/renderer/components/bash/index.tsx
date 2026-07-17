@@ -1,10 +1,10 @@
 // Claude `Bash` live streaming component (PR #555 Phase 6; dir-per-component
 // convention — see components/edit/index.tsx).
 //
-// WHY this lives in a provider component, not BlockRow: the import-boundary
-// test (correctly) rejected the feed importing a provider adapter directly —
-// the feed may only reach Claude through the grandfathered ClaudeRows
-// specifier, and provider composition belongs in provider files anyway.
+// WHY this lives in a provider component, not BlockRow: the feed reaches it
+// only through Claude's registry capability. Partial Bash JSON is provider
+// vocabulary, so provider composition belongs here rather than behind a
+// grandfathered feed import.
 // STREAMING-FIRST: paints the moment the `command` string closes in the
 // partial JSON; nothing before that. The COMMITTED Bash card is dispatched
 // straight from rows/dispatch.tsx (adapter → CommandView, no wrapper needed);

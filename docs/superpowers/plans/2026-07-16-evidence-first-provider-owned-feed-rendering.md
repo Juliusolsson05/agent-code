@@ -2313,6 +2313,41 @@ Migrate:
 Workflow UI and large MCP output must reuse the already-landed IPC/rendering
 backpressure protections. No family earns an exception to bounded, lazy output.
 
+Completion boundary (2026-07-17):
+
+- captured Claude TaskCreate/TaskUpdate, Skill, and ScheduleWakeup plus Codex
+  update_plan have provider-owned lifecycle/checklist rows; uncaptured Claude TodoWrite,
+  plan-mode, and task query/output/stop generations do not inherit speculative
+  legacy semantics;
+- AskUserQuestion uses the durable provider row for history and the live Claude
+  condition as the only interaction authority. Every provider condition kind
+  now has an explicit destination (`condition-outlet`, `feed-inline`,
+  `composer`, or `attention-only`) instead of shared inference;
+- Agent Code AI Workspace and Workflow tools sit above open-world MCP through
+  exact provider adapters and source-controlled schemas. Workflow has no frozen
+  invocation/result fixture yet, so thick TODOs prohibit richer phase/coverage
+  interpretation until a real paired capture lands;
+- arbitrary MCP results recognize typed text, image, audio, embedded-resource,
+  and resource-link blocks; serialized SDK envelopes and direct provider arrays
+  share the same bounded view, while exact transport bytes stay lazy;
+- JSON/JSONL/path-line/timestamped/provenance command output has one conservative
+  structured fallback after command/read/search/diff specializations decline;
+- image blocks and Codex image generation use media-safe, lazy previews and
+  preserve rejected active formats as visible diagnostics;
+- NotebookEdit, LSP, Monitor, TaskGet, TaskOutput, TaskStop, EnterWorktree, and
+  one-off third-party MCP calls are explicitly generic because the available
+  evidence is invocation-only. Each catalog entry names the missing paired
+  success/failure/replay fixture required for graduation;
+- hook attachments, PR links, queue operations, and turn-duration records are
+  explicitly classified as non-conversational system metadata. The ownership
+  ledger keeps them out of chat (queue reconstruction remains the queue owner),
+  while the muted bounded system fallback remains total if another transcript
+  surface admits them. Durable compact entries remain the Phase 10 exception.
+
+Exit gate met at the evidence boundary: every captured Phase 8 structure is
+specialized or deliberately generic, all large/raw disclosures are bounded and
+lazy, and no component was invented from the provider tool list alone.
+
 ### Phase 9 — long-tail coverage and proven deletion
 
 Tasks:

@@ -4,9 +4,10 @@ import { fromCodexExecScript } from '@providers/codex/renderer/adapters/command'
 import { CommandView } from '@providers/shared/renderer/protocols/command/CommandView'
 
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
-// Provider-internal imports reach the component DIRECTORIES directly —
-// rows/CodexRows.tsx is a barrel that exists only for the feed's
-// grandfathered import edge (see its header) and must gain no new users.
+// Provider-internal imports reach component directories directly. Phase 9
+// removed the old CodexRows feed barrel after live semantic dispatch moved
+// behind the registry capability; provider vocabulary must not leak back into
+// the shared feed.
 import { CodexApplyPatchRow } from '@providers/codex/renderer/components/apply-patch'
 import { CodexExecCommandRow } from '@providers/codex/renderer/components/exec-command'
 import { CodexToolResultRow } from '@providers/codex/renderer/components/tool-result'
@@ -19,6 +20,16 @@ import { fromCodexWebUse } from '@providers/codex/renderer/adapters/web'
 import { CodexWebRow } from '@providers/codex/renderer/components/web'
 import { fromCodexNativeSpawnUse } from '@providers/codex/renderer/adapters/collaboration'
 import { CodexNativeSpawnRow } from '@providers/codex/renderer/components/native-spawn'
+import { fromCodexAgentCodeWorkspaceUse } from '@providers/codex/renderer/adapters/agentCodeWorkspace'
+import { AgentCodeWorkspaceView } from '@providers/shared/renderer/protocols/agent-code-workspace/AgentCodeWorkspaceView'
+import { fromAgentCodeWorkspaceResult } from '@providers/shared/renderer/protocols/agent-code-workspace/model'
+import { fromCodexPlanUse, isCodexPlanResult } from '@providers/codex/renderer/adapters/tasks'
+import { CodexPlanRow } from '@providers/codex/renderer/components/update-plan'
+import { fromCodexAgentCodeWorkflowUse } from '@providers/codex/renderer/adapters/agentCodeWorkflow'
+import { AgentCodeWorkflowView } from '@providers/shared/renderer/protocols/agent-code-workflow/AgentCodeWorkflowView'
+import { fromAgentCodeWorkflowResult } from '@providers/shared/renderer/protocols/agent-code-workflow/model'
+import { fromCodexImageGenerationUse } from '@providers/codex/renderer/adapters/imageGeneration'
+import { CodexImageGenerationRow } from '@providers/codex/renderer/components/image-generation'
 
 export function renderCodexToolUse(
   block: ToolUseBlock,
@@ -28,6 +39,18 @@ export function renderCodexToolUse(
   if (agentCodeOrchestration) {
     return <AgentCodeOrchestrationView model={agentCodeOrchestration} />
   }
+  const agentCodeWorkspace = fromCodexAgentCodeWorkspaceUse(block)
+  if (agentCodeWorkspace) {
+    return <AgentCodeWorkspaceView model={agentCodeWorkspace} />
+  }
+  const agentCodeWorkflow = fromCodexAgentCodeWorkflowUse(block)
+  if (agentCodeWorkflow) {
+    return <AgentCodeWorkflowView model={agentCodeWorkflow} />
+  }
+  const plan = fromCodexPlanUse(block)
+  if (plan) return <CodexPlanRow model={plan} />
+  const imageGeneration = fromCodexImageGenerationUse(block)
+  if (imageGeneration) return <CodexImageGenerationRow model={imageGeneration} />
   const web = fromCodexWebUse(block)
   if (web) return <CodexWebRow model={web} />
   const nativeSpawn = fromCodexNativeSpawnUse(block)
@@ -86,6 +109,24 @@ export function renderCodexToolResult(
       ? null
       : undefined
   }
+  const agentCodeWorkspace = context.sourceTool
+    ? fromCodexAgentCodeWorkspaceUse(context.sourceTool)
+    : null
+  if (agentCodeWorkspace) {
+    return fromAgentCodeWorkspaceResult(block, agentCodeWorkspace)
+      ? null
+      : undefined
+  }
+  const agentCodeWorkflow = context.sourceTool
+    ? fromCodexAgentCodeWorkflowUse(context.sourceTool)
+    : null
+  if (agentCodeWorkflow) {
+    return fromAgentCodeWorkflowResult(block, agentCodeWorkflow)
+      ? null
+      : undefined
+  }
+  const plan = context.sourceTool ? fromCodexPlanUse(context.sourceTool) : null
+  if (plan) return isCodexPlanResult(block, plan) ? null : undefined
   // Native spawn results stay visible. They are small handle/identity payloads
   // whose exact fields have changed across Codex generations; the invocation
   // card uses result presence only for terminal status and lets the structured

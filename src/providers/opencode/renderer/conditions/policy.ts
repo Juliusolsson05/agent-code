@@ -10,6 +10,10 @@
 import type { ProviderConditionPolicy } from '@providers/registry.renderer.capabilities'
 
 export const OPENCODE_CONDITION_POLICY: ProviderConditionPolicy = {
+  destinations: {
+    'opencode.permission': 'condition-outlet',
+    'opencode.question': 'condition-outlet',
+  },
   attentionKinds: new Set(['opencode.permission', 'opencode.question']),
   actionKinds: new Set(),
   attentionLabels: [

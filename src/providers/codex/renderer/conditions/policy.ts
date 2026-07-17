@@ -4,6 +4,10 @@
 import type { ProviderConditionPolicy } from '@providers/registry.renderer.capabilities'
 
 export const CODEX_CONDITION_POLICY: ProviderConditionPolicy = {
+  destinations: {
+    'codex.trust-dialog': 'condition-outlet',
+    'codex.approval': 'condition-outlet',
+  },
   attentionKinds: new Set(['codex.trust-dialog', 'codex.approval']),
   actionKinds: new Set(['codex.trust-dialog', 'codex.approval']),
   attentionLabels: [

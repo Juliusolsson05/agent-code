@@ -1,8 +1,6 @@
 import { useContext, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 
-import type { SemanticLiveTurn } from '@renderer/session-runtime/state'
-
 import {
   AskUserQuestionConditionContext,
   CodeRenderContext,
@@ -67,8 +65,6 @@ import {
 //   BlockRow stops routing to this component, so the row unmounts. We
 //   never hide ourselves manually — ownership is decided one level up.
 
-type SemanticLiveBlock = SemanticLiveTurn['blocks'][number]
-
 // Defensive shapes for the parsed input. `parsedInput` is a
 // `Record<string, unknown>`. The defensive narrowing here is NOT about
 // partial objects: foldEvent.ts populates `parsedInput` only on
@@ -85,7 +81,11 @@ function isFreeTextOption(option: AskOption): boolean {
 }
 
 
-export function AskUserQuestionRow({ block }: { block: SemanticLiveBlock }) {
+export function AskUserQuestionRow({
+  input,
+}: {
+  input: Record<string, unknown> | undefined
+}) {
   // sessionId is obtained the SAME way every other feed row gets it: via
   // CodeRenderContext, which Feed.tsx wraps the entire render-item list
   // in (`<CodeRenderContext.Provider value={{ sessionId, workspaceRoot }}>`).
@@ -121,7 +121,7 @@ export function AskUserQuestionRow({ block }: { block: SemanticLiveBlock }) {
   // `true` and bails. It is reset only for structured/rejected failures.
   const submittedRef = useRef(false)
 
-  const questions = readAskQuestions(block.parsedInput)
+  const questions = readAskQuestions(input)
   const pickerKnownGone = liveAskUserQuestion === null
 
   if (questions.length === 0) {

@@ -30,6 +30,7 @@ import type { ConditionCustomAction } from '@shared/conditions-core/contract'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { observeRenderShape } from '@renderer/features/feed/evidence/observer'
 import type { RenderOutcome } from '@shared/types/renderShapes'
+import type { ConditionDestination } from '@providers/registry.renderer.capabilities'
 
 type Props = {
   sessionId: string
@@ -37,6 +38,35 @@ type Props = {
   onSend: (data: string) => Promise<void>
   onResolveCustom?: (action: ConditionCustomAction) => Promise<unknown>
   interactionActive: boolean
+}
+
+export function conditionOutcomeForDestination(
+  kind: string,
+  destination: ConditionDestination | undefined,
+): RenderOutcome {
+  const shapeId = `condition:${kind}`
+  switch (destination) {
+    case 'condition-outlet':
+      return { kind: 'condition-surface', shapeId, surface: 'outlet' }
+    case 'feed-inline':
+      return { kind: 'condition-surface', shapeId, surface: 'feed-inline' }
+    case 'composer':
+      return { kind: 'condition-surface', shapeId, surface: 'composer' }
+    case 'attention-only':
+      return { kind: 'condition-surface', shapeId, surface: 'attention-only' }
+    case 'intentional-hidden':
+      // A deliberately non-visual condition still needs a receipt. Encoding it
+      // as an absorption names the reviewed owner instead of manufacturing a
+      // fake visible surface or returning null, either of which would make the
+      // evidence system lie about what happened.
+      return {
+        kind: 'absorbed',
+        ownerRenderId: 'provider.condition.intentional-hidden',
+        reason: `Provider policy intentionally keeps ${kind} off visual surfaces.`,
+      }
+    case undefined:
+      return { kind: 'unknown', fallbackRenderId: 'shared.condition-unhandled' }
+  }
 }
 
 export function ProviderConditionOutlet({
@@ -54,15 +84,7 @@ export function ProviderConditionOutlet({
 
   for (const [kind, condition] of Object.entries(conditions.conditions)) {
     if (!condition) continue
-    const outcome: RenderOutcome = kind === 'claude.ask-user-question'
-      ? { kind: 'condition-surface', shapeId: `condition:${kind}`, surface: 'feed-inline' }
-      : conditionPolicy.composerPickerKind === kind
-        ? { kind: 'condition-surface', shapeId: `condition:${kind}`, surface: 'composer' }
-        : registry[kind]
-          ? { kind: 'condition-surface', shapeId: `condition:${kind}`, surface: 'outlet' }
-          : conditionPolicy.attentionKinds.has(kind)
-            ? { kind: 'condition-surface', shapeId: `condition:${kind}`, surface: 'attention-only' }
-            : { kind: 'unknown', fallbackRenderId: 'shared.condition-unhandled' }
+    const outcome = conditionOutcomeForDestination(kind, conditionPolicy.destinations[kind])
     // Conditions live outside Feed's capture context, so observe against the
     // session directly. The observer's armed Map remains the sole dev-mode
     // gate; no capture state enters React and no condition render is changed.

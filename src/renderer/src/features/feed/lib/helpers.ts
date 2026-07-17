@@ -202,27 +202,6 @@ export function splitStreamingCodeFence(text: string): {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Image / content block helpers
-// ---------------------------------------------------------------------------
-
-/** Produce a data: URL for an image content block. Returns null if
- *  the source is missing or not a base64 payload. Gates on
- *  `source.type === 'base64'` because Anthropic's spec allows both
- *  "base64" (inline data) and "url" shapes; only the base64 shape
- *  has the `data` field we need to embed. mediaType defaults to
- *  'image/png' when the block omits it — that's the most common
- *  case for CC-pasted screenshots. */
-export function imageDataUrl(block: ContentBlock): string | null {
-  const rec = asRecord(asRecord(block)?.source)
-  if (!rec) return null
-  if (rec.type !== 'base64') return null
-  const mediaType = typeof rec.media_type === 'string' ? rec.media_type : 'image/png'
-  const data = typeof rec.data === 'string' ? rec.data : null
-  if (!data) return null
-  return `data:${mediaType};base64,${data}`
-}
-
 /** Extract the human text of a compact-summary entry. Both `text`
  *  and `thinking` blocks contribute — summaries often start with a
  *  thinking block that captures the planning step before the final

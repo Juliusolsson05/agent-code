@@ -693,11 +693,18 @@ the PR merges only after Phase 10 plus the final whole-branch review.
   `wait`, LSP, and compaction are classified into their actual later phases.
   The frozen corpus is structurally clean and all unsupported observed Phase 7
   shapes have a named fallback/TODO rather than an invented component.
-- **Phase 8 — tasks/questions/workflows/MCP + rich media.** Migrate todo/task/
-  plan/schedule/skill/workflow, condition-gated questions, generic MCP typed
-  content, images/generation, notebook/LSP/workspace/config/system. Workflow UI +
-  large MCP output reuse the already-landed IPC/rendering backpressure; no family
-  earns an exception to bounded, lazy output.
+- **Phase 8 — tasks/questions/workflows/MCP + rich media. Completed 2026-07-17
+  at the evidence boundary.** Captured task mutations, Skill, ScheduleWakeup,
+  Codex update_plan, questions, Agent Code workspace operations, typed MCP
+  blocks, structured output, and safe media now have provider-owned paths.
+  Agent Code Workflow is admitted only by its source-controlled schema and
+  carries an explicit paired-fixture TODO. Uncaptured Claude TodoWrite/plan-mode and
+  invocation-only Notebook/LSP/Monitor/task-query/workspace-transition/
+  third-party-MCP shapes are deliberately generic with per-family evidence
+  requirements rather than speculative cards. Provider condition destinations
+  are explicit, large disclosures are lazy/bounded, non-conversational system
+  metadata remains ledger-excluded with a total muted fallback, and durable
+  compact entries remain Phase 10's exception.
 - **Phase 9 — long-tail coverage + proven deletion.** Capture soaks across
   providers/models; classify every new fingerprint; keep the generic fallback
   total; remove duplicate decoders only after provider adapters are canonical;

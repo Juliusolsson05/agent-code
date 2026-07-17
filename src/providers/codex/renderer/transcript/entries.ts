@@ -120,6 +120,54 @@ export function codexToolUseEntry(
   }
 }
 
+/** Build the durable image-generation operation plus its generated image.
+ *
+ * WHY this is not encoded as a giant tool_result string: the Responses item
+ * already distinguishes lifecycle metadata from binary image content. Keeping
+ * that distinction in the normalized transcript lets the provider-owned tool
+ * card render status/prompt while the provider-neutral image block uses the
+ * same lazy media protocol as pasted images. It also prevents generic JSON
+ * rendering from ever trying to pretty-print megabytes of base64. */
+export function codexImageGenerationEntry(
+  uuid: string,
+  timestamp: string | undefined,
+  id: string,
+  input: Record<string, unknown>,
+  result: string | null,
+): Entry {
+  return {
+    type: 'assistant',
+    uuid,
+    parentUuid: null,
+    timestamp,
+    message: {
+      role: 'assistant',
+      content: [
+        {
+          type: 'tool_use',
+          id,
+          name: 'image_generation',
+          input,
+        },
+        ...(result
+          ? [{
+              type: 'image',
+              source: {
+                type: 'base64',
+                // The Codex/OpenAI response item exposes `result` as image
+                // base64 without a MIME field. The image-generation protocol
+                // currently returns PNG; if upstream adds MIME evidence, map
+                // it here instead of guessing from bytes in the renderer.
+                media_type: 'image/png',
+                data: result,
+              },
+            }]
+          : []),
+      ],
+    },
+  }
+}
+
 /** Synthesize a Claude-shaped assistant Entry from a single text
  *  string. Used for rollout events that surface advisory text with
  *  no tool context (exec_approval_request narrative, etc.). */

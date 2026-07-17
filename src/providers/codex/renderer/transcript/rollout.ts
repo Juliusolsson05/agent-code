@@ -3,6 +3,7 @@ import { asRecord } from '@shared/lib/asRecord'
 
 import {
   codexAssistantTextEntry,
+  codexImageGenerationEntry,
   codexToolResultEntry,
   codexToolUseEntry,
   codexOutputText,
@@ -475,14 +476,15 @@ export function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): En
       stringField(payload, 'revised_prompt')
     const status =
       stringField(payload, 'status') ?? 'unknown'
+    const result = stringField(payload, 'result')
     return [
-      codexToolUseEntry(uuid, timestamp, callId, 'image_generation', {
+      codexImageGenerationEntry(uuid, timestamp, callId, {
         description: revisedPrompt
           ? `Image: ${revisedPrompt}`
           : `Image generation (${status})`,
         status,
         revisedPrompt,
-      }),
+      }, result),
     ]
   }
 

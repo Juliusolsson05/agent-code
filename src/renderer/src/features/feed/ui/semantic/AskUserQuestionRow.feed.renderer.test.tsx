@@ -18,17 +18,15 @@ import { AskUserQuestionRow } from './AskUserQuestionRow'
 // just a synchronous sendInput of the escape sequence.
 
 function renderRow(fake = createFakeSessionFeed()) {
-  const block = {
-    parsedInput: {
-      questions: [
-        {
-          question: 'Pick an option',
-          header: 'Choice',
-          options: [{ label: 'Option A' }, { label: 'Option B' }],
-        },
-      ],
-    },
-  } as never
+  const input = {
+    questions: [
+      {
+        question: 'Pick an option',
+        header: 'Choice',
+        options: [{ label: 'Option A' }, { label: 'Option B' }],
+      },
+    ],
+  }
   // Only non-nullness gates the keyboard path; the row reads selection state
   // from its own parsed block, not from this condition snapshot.
   const live = {} as ClaudeAskUserQuestionState
@@ -36,7 +34,7 @@ function renderRow(fake = createFakeSessionFeed()) {
     <SessionFeedProvider value={fake}>
       <CodeRenderContext.Provider value={{ sessionId: 's1', workspaceRoot: null } as never}>
         <AskUserQuestionConditionContext.Provider value={live}>
-          <AskUserQuestionRow block={block} />
+          <AskUserQuestionRow input={input} />
         </AskUserQuestionConditionContext.Provider>
       </CodeRenderContext.Provider>
     </SessionFeedProvider>,

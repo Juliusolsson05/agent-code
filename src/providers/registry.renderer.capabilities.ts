@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import type { ConditionView } from '@shared/conditions-core/view'
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
+import type { SemanticLiveBlock } from '@renderer/session-runtime/state'
 import { AGENT_PROVIDER_KINDS, type AgentProviderKind, isAgentProviderKind } from '@shared/types/providerKind'
 import { CLAUDE_VIEWS } from '@providers/claude/renderer/conditions/views'
 import { CODEX_VIEWS } from '@providers/codex/renderer/conditions/views'
@@ -8,10 +9,12 @@ import {
   renderClaudeToolResult,
   renderClaudeToolUse,
 } from '@providers/claude/renderer/rows/dispatch'
+import { renderClaudeSemanticBlock } from '@providers/claude/renderer/semantic/dispatch'
 import {
   renderCodexToolResult,
   renderCodexToolUse,
 } from '@providers/codex/renderer/rows/dispatch'
+import { renderCodexSemanticBlock } from '@providers/codex/renderer/semantic/dispatch'
 import type {
   PromptDeliveryResult,
   SemanticFoldPolicy,
@@ -77,6 +80,13 @@ export type RendererProviderCapabilities = {
   renderToolResult?: (
     block: ToolResultBlock,
     context: { sourceTool?: ToolUseBlock | null },
+  ) => ReactNode | undefined
+  /** Provider-only semantic variants that cannot be represented as a generic
+   * tool_use without dropping typed evidence. Shared live prose/reasoning and
+   * ordinary function calls continue through the provider-neutral paths. */
+  renderSemanticBlock?: (
+    block: SemanticLiveBlock,
+    context: { committedToolResults: ReadonlyMap<string, ToolResultBlock> },
   ) => ReactNode | undefined
   /**
    * Does this tool_use name spawn a subagent the fleet row should own?
@@ -158,6 +168,18 @@ export type RendererProviderCapabilities = {
 /** See providers/<kind>/renderer/conditions/policy.ts for the concrete
  *  policies and the WHY on each field's gating semantics. */
 export type ProviderConditionPolicy = {
+  /**
+   * The presentation owner for every condition kind the provider can emit.
+   *
+   * WHY this is explicit instead of inferred from `conditionViews`, attention,
+   * or one-off shared checks: those sets intentionally overlap without being
+   * equivalent. AskUserQuestion is feed-owned with no outlet view, the slash
+   * picker is composer-owned and deliberately non-attention, and compaction has
+   * an outlet view while usually being non-actionable progress. Inferring one
+   * concern from another recreated the exact invisible-condition failure that
+   * the provider registry was introduced to prevent.
+   */
+  destinations: Readonly<Record<string, ConditionDestination>>
   /** Kinds that mark a backgrounded pane unread (visible-gated). */
   attentionKinds: ReadonlySet<string>
   /** Kinds that route keystrokes to the PTY instead of the composer
@@ -174,6 +196,13 @@ export type ProviderConditionPolicy = {
    *  dropdown; omitted when the provider has no picker condition. */
   composerPickerKind?: string
 }
+
+export type ConditionDestination =
+  | 'condition-outlet'
+  | 'feed-inline'
+  | 'composer'
+  | 'attention-only'
+  | 'intentional-hidden'
 
 /** IO bag for composerSubmit. Draft images are structural (not the
  *  workspace-store type) so provider impls and this registry never
@@ -206,6 +235,7 @@ const claudeCapabilities: RendererProviderCapabilities = {
   conditionViews: CLAUDE_VIEWS,
   renderToolUse: renderClaudeToolUse,
   renderToolResult: renderClaudeToolResult,
+  renderSemanticBlock: renderClaudeSemanticBlock,
   // This capability is a broad spawn-name signal used by the feed's ownership
   // gate; it is not proof that a tracker or legacy fleet row can parse every
   // generation. Provider dispatch gets first refusal and the Agent Code adapter
@@ -227,6 +257,7 @@ const codexCapabilities: RendererProviderCapabilities = {
   conditionViews: CODEX_VIEWS,
   renderToolUse: renderCodexToolUse,
   renderToolResult: renderCodexToolResult,
+  renderSemanticBlock: renderCodexSemanticBlock,
   // Historical Codex rollouts committed Agent Code MCP spawns as a bare name.
   // Current MCP-inside-exec calls are not classified by executable source text,
   // and native `spawn_agent` still has generation-aware provider parsing before

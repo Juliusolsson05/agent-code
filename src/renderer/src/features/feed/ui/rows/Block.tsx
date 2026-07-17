@@ -1,5 +1,4 @@
-import { AskUserQuestionAnsweredRow } from '@renderer/features/feed/ui/rows/AskUserQuestionAnsweredRow'
-import { memo, useContext } from 'react'
+import { memo, useContext, useState } from 'react'
 
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import type {
@@ -24,13 +23,10 @@ import { TextProse } from '@renderer/features/feed/ui/markdown'
 import { ImageBlockRow } from '@renderer/features/feed/ui/rows/ImageBlockRow'
 import { UserBand } from '@renderer/features/feed/ui/rows/primitives'
 import { ToolResultRow } from '@renderer/features/feed/ui/rows/ToolResultRow'
-import { ToolUseRow } from '@renderer/features/feed/ui/rows/ToolUseRow'
 import { isAgentSpawnToolName } from '@providers/registry.renderer.capabilities'
 import { JsonToolRow } from '@providers/shared/renderer/rows/JsonToolRow'
-import {
-  isWorkflowViewToolName,
-  parseWorkflowToolResult,
-} from '@renderer/features/workflows/model/workflowTool'
+import { CodeBlock } from '@renderer/lib/code/CodeBlock'
+import { boundedJsonPreview } from '@renderer/lib/text/boundedJson'
 import type { RenderOutcome, RenderShapePlane } from '@shared/types/renderShapes'
 import { observeRenderShape } from '@renderer/features/feed/evidence/observer'
 import { useRenderShapeCapture } from '@renderer/features/feed/evidence/RenderShapeCaptureContext'
@@ -52,9 +48,9 @@ import {
 //   - text under role='assistant' → TextProse with `⏺` marker
 //   - thinking → collapsed <details> if non-empty, else nothing
 //   - image → ImageBlockRow
-//   - tool_use → provider-specific renderer (Claude: Edit/MultiEdit/
-//     Write/TodoWrite rich rows; Codex: CodexToolRow; everything else:
-//     generic ToolUseRow). Plus the git-widget interception.
+//   - tool_use → provider-specific renderer (Claude: evidence-backed rich
+//     rows; Codex: evidence-backed rich rows; everything else:
+//     bounded JsonToolRow fallback). Plus the git-widget interception.
 //   - tool_result → provider-specific result renderer, with the git
 //     widget suppression mirrored here.
 // #442 finding-21: the git-widget card renders for a shell tool_use, and the
@@ -66,6 +62,35 @@ import {
 // impossible: whatever the widget renders for, the result suppresses for.
 function isGitWidgetShellTool(name: string | undefined): boolean {
   return name === 'Bash' || name === 'exec_command' || name === 'bash'
+}
+
+function UnknownBlockRow({ block }: { block: ContentBlock }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <MarkerRow marker="⏺" tone="muted">
+      <details
+        className="min-w-0 text-[11px] text-muted"
+        onToggle={event => setOpen(event.currentTarget.open)}
+      >
+        <summary className="cursor-pointer select-none uppercase tracking-wider">
+          Unknown block · {block.type}
+        </summary>
+        {/* WHY unknown must remain useful on first contact: the catalog inbox
+            is a developer aid, but the user still needs a bounded view of the
+            new provider payload now. Projection/highlighting happens only on
+            demand so a novel giant block cannot freeze every feed repaint. */}
+        {open ? (
+          <div className="mt-1">
+            <CodeBlock
+              code={boundedJsonPreview(block) ?? '(unavailable)'}
+              language="json"
+              highlight={false}
+            />
+          </div>
+        ) : null}
+      </details>
+    </MarkerRow>
+  )
 }
 
 export const Block = memo(function Block({
@@ -148,10 +173,9 @@ export const Block = memo(function Block({
       return <ImageBlockRow block={block} role={role} />
     }
     case 'tool_use': {
-      // Dispatch tool_use blocks to provider-specific row renderers.
-      // Claude has rich renderers for Edit/MultiEdit/Write/TodoWrite;
-      // codex uses a generic CodexToolRow for now (will grow per-tool
-      // renderers as we learn codex's tool shapes from recordings).
+      // Dispatch tool_use blocks to provider-specific row renderers. A name is
+      // not enough to earn a custom component: families without captured wire
+      // evidence deliberately fall through to the bounded generic card.
       const tu = block as ToolUseBlock
 
       // Custom rendering: intercept shell/bash invocations that are
@@ -207,20 +231,9 @@ export const Block = memo(function Block({
         return <JsonToolRow block={tu} />
       }
 
-      if (tu.name === 'AskUserQuestion') {
-        // Committed-plane question rendering (P2d): questions + verbatim
-        // answer from the paired result. The LIVE picker (semantic plane)
-        // owns the interaction; this is the durable record of it.
-        sight('committed-tool-use', tu, specializedOutcome('shared.ask-user-question-answered'))
-        return (
-          <AskUserQuestionAnsweredRow
-            block={tu}
-            result={toolResultIndex.get(tu.id) ?? null}
-          />
-        )
-      }
-
-      const providerRow = getRendererProviderCapabilities(currentProvider).renderToolUse?.(tu)
+      const providerRow = getRendererProviderCapabilities(currentProvider).renderToolUse?.(tu, {
+        result: toolResultIndex.get(tu.id) ?? null,
+      })
       sight(
         'committed-tool-use',
         tu,
@@ -229,7 +242,7 @@ export const Block = memo(function Block({
           : GENERIC_OUTCOME,
       )
       // Shared fallback is the generic JSON tool row (residue plan P1):
-      // it degrades to the old ToolUseRow look for headline-only inputs
+      // it stays concise for headline-only inputs
       // (Bash keeps its 2-line cap) and gives MCP/orchestration payloads
       // a real rendering instead of a bare name over raw JSON.
       return providerRow !== undefined ? providerRow : <JsonToolRow block={tu} />
@@ -252,27 +265,6 @@ export const Block = memo(function Block({
         }
       }
       const sourceTool = toolUseIndex.get(tr.tool_use_id)
-      if (
-        isWorkflowViewToolName(sourceTool?.name) &&
-        tr.is_error !== true &&
-        parseWorkflowToolResult(tr) !== null
-      ) {
-        // The session shell consumes the launch envelope to add a view row below the composer.
-        // Keep Main readable by suppressing the raw JSON result, but leave the generic tool-use row
-        // in place as the durable transcript record that a workflow was launched or resumed.
-        sight('committed-tool-result', tr, absorbedOutcome('workflow.session-view', 'launch envelope consumed by the session workflow view'))
-        return null
-      }
-      // #442 finding-C2: an answered AskUserQuestion renders the picked answer
-      // inside AskUserQuestionAnsweredRow on the tool_use row (it reads the
-      // paired tool_result). Painting the tool_result again here shows the same
-      // answer twice — the committed plane never had the suppression the live
-      // semantic plane does. Suppress it so the answered-question card is the
-      // single surface, mirroring the git-widget suppression just above.
-      if (sourceTool?.name === 'AskUserQuestion') {
-        sight('committed-tool-result', tr, absorbedOutcome('shared.ask-user-question-answered', 'answer painted on the tool_use row'))
-        return null
-      }
       const providerRow = getRendererProviderCapabilities(currentProvider).renderToolResult?.(tr, {
         sourceTool,
       })
@@ -299,12 +291,6 @@ export const Block = memo(function Block({
       // 'transcript-entry' because a non-tool content block is normalized
       // transcript content, not a tool envelope.
       sight('transcript-entry', block, unknownOutcome('shared.block-type-label'))
-      return (
-        <MarkerRow marker="⏺" tone="muted">
-          <div className="text-muted text-[11px] uppercase tracking-wider">
-            {block.type}
-          </div>
-        </MarkerRow>
-      )
+      return <UnknownBlockRow block={block} />
   }
 })

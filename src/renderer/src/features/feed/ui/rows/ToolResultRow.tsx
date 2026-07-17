@@ -1,4 +1,4 @@
-import { memo, useContext, useState, type ReactNode } from 'react'
+import { memo, useContext, useMemo, useState, type ReactNode } from 'react'
 
 import type { ToolResultBlock } from '@shared/types/transcript'
 
@@ -10,6 +10,13 @@ import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 
 import { JsonResultSlab } from '@providers/shared/renderer/rows/JsonResultSlab'
 import { tryExtractJson } from '@providers/shared/renderer/rows/jsonToolPresentation'
+import { StructuredOutputView } from '@providers/shared/renderer/protocols/structured-output/StructuredOutputView'
+import { parseStructuredOutput } from '@providers/shared/renderer/protocols/structured-output/model'
+import { McpContentView } from '@providers/shared/renderer/protocols/mcp-content/McpContentView'
+import {
+  isMcpContentCarrier,
+  parseMcpContentResult,
+} from '@providers/shared/renderer/protocols/mcp-content/model'
 import { TruncatedOutputRow } from '@renderer/features/feed/ui/rows/TruncatedOutputRow'
 import { boundedTextLineCount, TEXT_PAGE_MAX_CHARS } from '@renderer/lib/text/boundedText'
 
@@ -58,6 +65,65 @@ function toolResultText(content: ToolResultBlock['content']): string {
   return content.map((_, index) => textAt(index)).join('\n')
 }
 
+const GenericToolResultPresentation = memo(function GenericToolResultPresentation({
+  content,
+  sourceTool,
+  text,
+  isError,
+}: {
+  content: ToolResultBlock['content']
+  sourceTool?: string
+  text: string
+  isError: boolean
+}) {
+  // WHY parse only after provider/read/search specializations decline and
+  // memoize by durable input: committed results re-render when feed index
+  // contexts change identity. Re-running up to three bounded scans across
+  // every historical result on each append recreated the renderer GC churn
+  // this rewrite is intended to remove.
+  const presentation = useMemo(() => {
+    const json = tryExtractJson(text)
+    const directMcp = sourceTool?.startsWith('mcp__') === true
+      ? parseMcpContentResult(content, { allowDirectArray: true })
+      : null
+    const serializedMcp = parseMcpContentResult(text)
+    const jsonIsCarrier = isMcpContentCarrier(json)
+    const mcp = json !== null && !jsonIsCarrier && directMcp === null
+      ? null
+      : directMcp ?? (serializedMcp && jsonIsCarrier ? serializedMcp : null)
+    return {
+      json,
+      mcp,
+      structured: mcp !== null || (json !== null && typeof json === 'object')
+        ? null
+        : parseStructuredOutput(text),
+    }
+  }, [content, sourceTool, text])
+
+  if (presentation.mcp !== null) {
+    return (
+      <McpContentView
+        model={presentation.mcp}
+        source={typeof content === 'string' ? text : undefined}
+        transportError={isError}
+      />
+    )
+  }
+  if (presentation.json !== null && typeof presentation.json === 'object') {
+    return <JsonResultSlab value={presentation.json} isError={isError} source={text} />
+  }
+  if (presentation.structured !== null) {
+    return (
+      <StructuredOutputView
+        model={presentation.structured}
+        source={text}
+        isError={isError}
+      />
+    )
+  }
+  return <TruncatedOutputRow content={text} isError={isError} />
+})
+
 /**
  * Look at the tool_use this result came from (via the feed-level
  * index in context) and decide how to render the result:
@@ -99,17 +165,16 @@ export const ToolResultRow = memo(function ToolResultRow({
     ? text.replace(/\s+$/, '')
     : text
 
-  // File-write tools AND TodoWrite: the rendered diff/content/checklist
-  // on the preceding tool_use row already tells the story. The result
-  // in all four cases is a stub success string that would just clutter
+  // File-write tools: the rendered diff/content on the preceding tool_use row
+  // already tells the story. The result in all three cases is a stub success
+  // string that would just clutter
   // the feed. Errors still fall through to the normal result renderer
   // so failures remain visible.
   if (
     !isError &&
     (sourceTool === 'Edit' ||
       sourceTool === 'MultiEdit' ||
-      sourceTool === 'Write' ||
-      sourceTool === 'TodoWrite')
+      sourceTool === 'Write')
   ) {
     return null
   }
@@ -191,19 +256,12 @@ export const ToolResultRow = memo(function ToolResultRow({
     )
   }
 
-  // JSON-shaped results (MCP envelope / plain JSON) get a collapsed
-  // pretty rendering instead of an escaped one-liner (residue plan P1).
-  // tryExtractJson returns null for anything not JSON-shaped, so this
-  // can never make a result LESS readable than the truncation below.
-  const parsedJson = tryExtractJson(trimmed)
-  if (parsedJson !== null && typeof parsedJson === 'object') {
-    return <JsonResultSlab value={parsedJson} isError={isError} source={trimmed} />
-  }
-
-  // Everything else — Bash, Glob, LS, tool errors — truncates to the
-  // first few lines and offers a click-to-expand for the rest. Mirrors
-  // claude-code's OutputLine + renderTruncatedContent (MAX_LINES_TO_SHOW
-  // = 3). The collapsed view keeps the feed dense so a long `find .`
-  // or noisy test run doesn't push the assistant's next message off.
-  return <TruncatedOutputRow content={trimmed} isError={isError} />
+  return (
+    <GenericToolResultPresentation
+      content={block.content}
+      sourceTool={sourceTool}
+      text={trimmed}
+      isError={isError}
+    />
+  )
 })

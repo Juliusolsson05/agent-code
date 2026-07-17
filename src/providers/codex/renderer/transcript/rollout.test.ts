@@ -84,4 +84,31 @@ describe('mapCodexRolloutToFeedEntries', () => {
       status: 'completed',
     })
   })
+
+  it('normalizes image generation as provider lifecycle plus lazy shared image content', () => {
+    const entries = mapCodexRolloutToFeedEntries({
+      type: 'response_item',
+      timestamp: '2026-06-18T11:12:00.000Z',
+      payload: {
+        type: 'image_generation_call',
+        id: 'image-1',
+        status: 'completed',
+        revised_prompt: 'A small blue lighthouse',
+        result: 'YWJj',
+      },
+    })
+
+    expect(entries).toHaveLength(1)
+    const entry = entries[0] as { message?: { content?: Array<Record<string, unknown>> } }
+    expect(entry.message?.content?.[0]).toMatchObject({
+      type: 'tool_use',
+      id: 'image-1',
+      name: 'image_generation',
+      input: { status: 'completed', revisedPrompt: 'A small blue lighthouse' },
+    })
+    expect(entry.message?.content?.[1]).toMatchObject({
+      type: 'image',
+      source: { type: 'base64', media_type: 'image/png', data: 'YWJj' },
+    })
+  })
 })

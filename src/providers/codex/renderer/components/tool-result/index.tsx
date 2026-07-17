@@ -6,7 +6,7 @@
 // is owned by the apply-patch card above), and the generic fallthrough
 // (JSON slab, then ANSI-aware OutputWell).
 
-import { memo, useContext, useState } from 'react'
+import { memo, useContext, useMemo, useState } from 'react'
 
 import { CodeBlock } from '@renderer/lib/code/CodeBlock'
 import { CodeRenderContext } from '@renderer/features/feed/context'
@@ -17,6 +17,13 @@ import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 import { stripCodexTransportEnvelope } from '@providers/codex/renderer/adapters/command'
 import { JsonResultSlab } from '@providers/shared/renderer/rows/JsonResultSlab'
 import { tryExtractJson } from '@providers/shared/renderer/rows/jsonToolPresentation'
+import { StructuredOutputView } from '@providers/shared/renderer/protocols/structured-output/StructuredOutputView'
+import { parseStructuredOutput } from '@providers/shared/renderer/protocols/structured-output/model'
+import { McpContentView } from '@providers/shared/renderer/protocols/mcp-content/McpContentView'
+import {
+  isMcpContentCarrier,
+  parseMcpContentResult,
+} from '@providers/shared/renderer/protocols/mcp-content/model'
 import { asRecord } from '@shared/lib/asRecord'
 import { boundedTextLineCount } from '@renderer/lib/text/boundedText'
 
@@ -154,6 +161,27 @@ export const CodexToolResultRow = memo(function CodexToolResultRow({
   const kind = typeof meta?.kind === 'string' ? meta.kind : null
   const isError = block.is_error === true
 
+  // Current unified `exec` calls often contain an MCP call rather than a
+  // shell command. Their result is still wrapped in Codex's human transport
+  // header (`Script completed / Wall time / Output`) before the serialized
+  // CallToolResult. Strip only that verified provider envelope, then give the
+  // payload to the shared structured recognizers.
+  const payloadText = sourceTool?.name === 'exec'
+    ? stripCodexTransportEnvelope(text)
+    : text
+  const outputPresentation = useMemo(() => {
+    const json = tryExtractJson(payloadText)
+    const mcp = parseMcpContentResult(payloadText)
+    const ownsMcp = mcp !== null && isMcpContentCarrier(json)
+    return {
+      json: !ownsMcp && json !== null && typeof json === 'object' ? json : null,
+      mcp: ownsMcp ? mcp : null,
+      structured: ownsMcp || (json !== null && typeof json === 'object')
+        ? null
+        : parseStructuredOutput(payloadText),
+    }
+  }, [payloadText])
+
   if (kind === 'exec_command_end') {
     const parsed = parsedCommand(meta)
     const parsedType = typeof parsed?.type === 'string' ? parsed.type : null
@@ -253,23 +281,28 @@ export const CodexToolResultRow = memo(function CodexToolResultRow({
   // JSON) gets the shared collapsed pretty rendering; anything else keeps
   // the truncated text path (residue plan P1 — one result behavior across
   // providers).
-  // Current unified `exec` calls often contain an MCP call rather than a
-  // shell command. Their result is still wrapped in Codex's human transport
-  // header (`Script completed / Wall time / Output`) before the serialized
-  // CallToolResult. Strip only that verified provider envelope, then give the
-  // payload to the same bounded JSON/MCP parser as direct results. This does
+  // Current unified `exec` results are already stripped above before being
+  // given to the same bounded JSON/MCP parser as direct results. This does
   // NOT merge the exec with an orchestration operation—cell correlation is
   // not proven—but it makes the nested structured evidence readable instead
   // of displaying two levels of escaped JSON.
   // Only unified `exec` owns this human transport envelope. Direct command,
   // MCP, and future result families may legitimately begin with the same
   // English words and must not have their evidence peeled heuristically.
-  const payloadText = sourceTool?.name === 'exec'
-    ? stripCodexTransportEnvelope(text)
-    : text
-  const parsedJson = tryExtractJson(payloadText)
-  if (parsedJson !== null && typeof parsedJson === 'object') {
-    return <JsonResultSlab value={parsedJson} isError={isError} source={text} />
+  if (outputPresentation.json !== null) {
+    return <JsonResultSlab value={outputPresentation.json} isError={isError} source={text} />
+  }
+  if (outputPresentation.mcp !== null) {
+    return <McpContentView model={outputPresentation.mcp} source={text} transportError={isError} />
+  }
+  if (outputPresentation.structured !== null) {
+    return (
+      <StructuredOutputView
+        model={outputPresentation.structured}
+        source={text}
+        isError={isError}
+      />
+    )
   }
 
   // Phase 6 upgrade: OutputWell (ported #524 primitive) replaces the plain
