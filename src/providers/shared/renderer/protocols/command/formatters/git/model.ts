@@ -7,4 +7,3 @@ export type GitOperationModel = {
   status: 'running' | 'success' | 'failure'
   output?: string
 }
-
