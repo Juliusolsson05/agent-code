@@ -1,72 +1,100 @@
-type FileIconProps = {
-  name: string
+import { icons as bundledVsCodeIcons } from '@iconify-json/vscode-icons'
+import {
+  DEFAULT_FILE,
+  DEFAULT_FOLDER,
+  DEFAULT_FOLDER_OPENED,
+  getIconForFile,
+  getIconForFolder,
+  getIconForOpenFolder,
+} from 'vscode-icons-js'
+
+type IconProps = {
   className?: string
 }
 
-const EXTENSION_BADGES: Record<string, { label: string; color: string }> = {
-  ts: { label: 'TS', color: 'text-blue-400' },
-  tsx: { label: 'TX', color: 'text-blue-300' },
-  js: { label: 'JS', color: 'text-yellow-300' },
-  jsx: { label: 'JX', color: 'text-yellow-200' },
-  py: { label: 'PY', color: 'text-green-300' },
-  rs: { label: 'RS', color: 'text-orange-300' },
-  go: { label: 'GO', color: 'text-cyan-300' },
-  json: { label: '{}', color: 'text-yellow-200' },
-  md: { label: 'M↓', color: 'text-sky-300' },
-  css: { label: '#', color: 'text-violet-300' },
-  html: { label: '<>', color: 'text-orange-300' },
-  sh: { label: '>_', color: 'text-green-300' },
+type FileIconProps = IconProps & {
+  name: string
 }
 
-function extensionOf(name: string): string {
-  const index = name.lastIndexOf('.')
-  return index > 0 ? name.slice(index + 1).toLowerCase() : ''
+type FolderIconProps = FileIconProps & {
+  open: boolean
 }
 
-// The previous icon layer fetched unpinned SVGs from a CDN for every file.
-// That made the explorer blank offline, leaked filenames-by-extension timing
-// to a third party, and let upstream visuals change without a release. These
-// compact code-native glyphs are deterministic, CSP-local, and intentionally
-// legible at the tree's real 16px size.
-export function FileIcon({ name, className }: FileIconProps) {
-  const badge = EXTENSION_BADGES[extensionOf(name)] ?? {
-    label: '·',
-    color: 'text-muted',
-  }
+type BundledIcon = {
+  body: string
+  width?: number
+  height?: number
+}
+
+function iconifyName(filename: string): string {
+  // vscode-icons-js returns upstream asset filenames such as
+  // `file_type_typescript.svg`; Iconify packages the same artwork under the
+  // equivalent kebab-case key. Keeping this tiny adapter means the mature
+  // filename/folder lookup remains the source of truth instead of maintaining
+  // our own inevitably incomplete extension table.
+  return filename.replace(/\.svg$/i, '').replace(/_/g, '-')
+}
+
+function bundledIcon(filename: string, fallback: string): BundledIcon {
+  const icons = bundledVsCodeIcons.icons as Record<string, BundledIcon>
+  return icons[iconifyName(filename)] ?? icons[iconifyName(fallback)]
+}
+
+function LocalVsCodeIcon({
+  filename,
+  fallback,
+  className,
+}: IconProps & { filename: string; fallback: string }) {
+  const icon = bundledIcon(filename, fallback)
+  const width = icon.width ?? bundledVsCodeIcons.width ?? 32
+  const height = icon.height ?? bundledVsCodeIcons.height ?? 32
   return (
-    <span
+    <svg
+      viewBox={`0 0 ${width} ${height}`}
+      width={16}
+      height={16}
       aria-hidden="true"
-      className={`flex h-4 w-3.5 items-center justify-center rounded-[2px] border border-current/40 bg-surface-hi font-code text-[6px] font-semibold leading-none ${badge.color} ${className ?? ''}`}
-    >
-      {badge.label}
-    </span>
+      focusable="false"
+      className={className}
+      // WHY trusted inner SVG is acceptable here: this body comes from the
+      // exact, lockfile-pinned @iconify-json package at build time—not from a
+      // filename, workspace, network response, or other runtime input. Parsing
+      // 1,500 upstream SVGs into handwritten React trees would create a larger,
+      // less auditable generated source surface without improving the trust
+      // boundary. The package body is bundled into our renderer JavaScript and
+      // remains covered by the existing `img-src 'self'` CSP.
+      dangerouslySetInnerHTML={{ __html: icon.body }}
+    />
   )
 }
 
-type FolderIconProps = {
-  name: string
-  open: boolean
-  className?: string
+/** VS Code Icons artwork with local, deterministic delivery.
+ *
+ * `vscode-icons-js` chooses the same rich per-file icon users already know;
+ * `@iconify-json/vscode-icons` supplies the matching SVG body inside the app
+ * bundle. This deliberately restores the old visual language without bringing
+ * back the old `@latest` CDN dependency or its offline/CSP failure mode.
+ */
+export function FileIcon({ name, className }: FileIconProps) {
+  return (
+    <LocalVsCodeIcon
+      filename={getIconForFile(name) ?? DEFAULT_FILE}
+      fallback={DEFAULT_FILE}
+      className={className}
+    />
+  )
 }
 
-export function FolderIcon({ open, className }: FolderIconProps) {
+export function FolderIcon({ name, open, className }: FolderIconProps) {
   return (
-    <svg
-      viewBox="0 0 16 16"
-      width="16"
-      height="16"
-      aria-hidden="true"
-      className={`text-amber-300/90 ${className ?? ''}`}
-      fill="none"
-    >
-      <path
-        d={open ? 'M1.5 5.25h13l-1.35 7H2.85l-1.35-7Z' : 'M1.5 3.25h4l1.25 1.5h7.75v7.5h-13v-9Z'}
-        fill="currentColor"
-        fillOpacity={open ? 0.72 : 0.58}
-        stroke="currentColor"
-        strokeWidth="0.8"
-        strokeLinejoin="round"
-      />
-    </svg>
+    <LocalVsCodeIcon
+      filename={
+        open
+          ? getIconForOpenFolder(name) ?? DEFAULT_FOLDER_OPENED
+          : getIconForFolder(name) ?? DEFAULT_FOLDER
+      }
+      fallback={open ? DEFAULT_FOLDER_OPENED : DEFAULT_FOLDER}
+      className={className}
+    />
   )
 }
