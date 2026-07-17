@@ -1,13 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 
-import {
-  ACCENTS,
-  type AccentId,
-  type Settings,
-  THEME_MODES,
-  isDarkThemeMode,
-  type ThemeMode,
-} from '@renderer/app-state/settings/types'
+import { ACCENTS, THEME_MODES, isDarkThemeMode } from '@renderer/app-state/settings/types'
+import type { AccentId, Settings, ThemeMode } from '@renderer/app-state/settings/types'
 
 // WHY Custom is intentionally absent from the compact header menu: unlike the
 // built-in modes, Custom is not a one-click preset. It needs the JSON editor

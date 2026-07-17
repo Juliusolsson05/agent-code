@@ -4,6 +4,7 @@ import type { DiffLine } from '@shared/parsers/lineDiff'
 import { CodeBlock } from '@renderer/lib/code/CodeBlock'
 import { CodeRenderContext } from '@renderer/features/feed/context'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
+import { TruncatedOutputRow } from '@renderer/features/feed/ui/rows/TruncatedOutputRow'
 import { formatToolFilePath } from '@shared/paths/displayPath'
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 
@@ -11,6 +12,11 @@ import { JsonResultSlab } from '@providers/shared/renderer/rows/JsonResultSlab'
 import { tryExtractJson } from '@providers/shared/renderer/rows/jsonToolPresentation'
 import { asRecord } from '@shared/lib/asRecord'
 import { DiffSlab } from '@providers/shared/renderer/rows/DiffSlab'
+import {
+  boundedTextLineCount,
+  boundedTextPage,
+} from '@renderer/lib/text/boundedText'
+import { PagedTextViewer } from '@renderer/lib/text/PagedTextViewer'
 // WHY the import switch matters here: the local copy this replaced
 // did NOT exclude arrays — it returned `value as Record<...>` for
 // any non-null object including arrays. The shared helper rejects
@@ -23,27 +29,43 @@ import { DiffSlab } from '@providers/shared/renderer/rows/DiffSlab'
 function textFromContent(content: unknown): string {
   if (typeof content === 'string') return content
   if (Array.isArray(content)) {
+    const textAt = (index: number): string => {
+      const item = content[index]
+      if (typeof item === 'string') return item
+      const rec = asRecord(item)
+      return typeof rec?.text === 'string' ? rec.text : JSON.stringify(item, null, 2)
+    }
+    // WHY avoid Array.map().join() for the overwhelmingly common single text block: the result can
+    // be megabytes, and joining makes a second full string before bounded rendering gets control.
+    // Multi-part output still has to become one exact source for paging/copy, but one block can be
+    // handed through by identity with no transient duplicate.
+    if (content.length === 1) return textAt(0)
     return content
-      .map(item => {
-        if (typeof item === 'string') return item
-        const rec = asRecord(item)
-        return typeof rec?.text === 'string' ? rec.text : JSON.stringify(item, null, 2)
-      })
+      .map((_, index) => textAt(index))
       .join('\n')
   }
   return String(content ?? '')
 }
 
 function summarizePatchTargets(input: unknown): string[] {
-  const text =
+  const fullText =
     typeof input === 'string'
       ? input
       : typeof asRecord(input)?.raw === 'string'
         ? String(asRecord(input)?.raw)
         : ''
-  if (!text) return []
-  const matches = [...text.matchAll(/^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm)]
-  return matches.map(match => match[1]).slice(0, 6)
+  if (!fullText) return []
+
+  // WHY only scan one renderer page: this headline is a preview, not a patch
+  // parser. Spreading matchAll over a generated megabyte patch allocates every
+  // match before slice(0, 6) can discard them, and repeats during live deltas.
+  const text = boundedTextPage(fullText).text
+  const targets: string[] = []
+  for (const match of text.matchAll(/^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm)) {
+    targets.push(match[1])
+    if (targets.length >= 6) break
+  }
+  return targets
 }
 
 type ApplyPatchFile = {
@@ -65,8 +87,14 @@ function applyPatchText(input: unknown): string {
 }
 
 function parseApplyPatch(input: unknown): ApplyPatchFile[] {
-  const text = applyPatchText(input)
-  if (!text.includes('*** Begin Patch')) return []
+  const fullText = applyPatchText(input)
+  if (!fullText.includes('*** Begin Patch')) return []
+
+  // WHY the rich diff card parses only one bounded page: DiffSlab creates a
+  // node per line. CSS clipping never reduced that parse/DOM/layout cost. The
+  // durable tool input still owns the complete patch; this card is explicitly
+  // a safe preview of its leading files/hunks.
+  const text = boundedTextPage(fullText).text
 
   const files: ApplyPatchFile[] = []
   let current: ApplyPatchFile | null = null
@@ -156,7 +184,7 @@ function headlineForTool(block: ToolUseBlock): string | null {
   if (block.name === 'exec_command') {
     const cmd = input.cmd
     if (typeof cmd === 'string') return cmd
-    if (Array.isArray(cmd)) return cmd.join(' ')
+    if (Array.isArray(cmd)) return boundedCommandParts(cmd)
   }
 
   if (block.name === 'apply_patch') {
@@ -178,8 +206,6 @@ function headlineForTool(block: ToolUseBlock): string | null {
 
 const MAX_COMMAND_DISPLAY_LINES = 2
 const MAX_COMMAND_DISPLAY_CHARS = 160
-const RESULT_MAX_LINES = 3
-
 type ExecCommandInput = {
   command: string
   workdir: string | null
@@ -192,11 +218,11 @@ function execCommandInput(input: unknown): ExecCommandInput | null {
   if (!rec) return null
   const rawCommand = rec.cmd ?? rec.command
   const command = Array.isArray(rawCommand)
-    ? rawCommand.map(String).join(' ')
+    ? boundedCommandParts(rawCommand)
     : typeof rawCommand === 'string'
-      ? rawCommand
+      ? truncateCommand(rawCommand)
       : ''
-  if (!command.trim()) return null
+  if (!/\S/.test(command)) return null
   return {
     command,
     workdir: typeof rec.workdir === 'string' ? rec.workdir : null,
@@ -206,20 +232,32 @@ function execCommandInput(input: unknown): ExecCommandInput | null {
   }
 }
 
-function truncateCommand(text: string): string {
-  const lines = text.split('\n')
-  const needsLineTruncation = lines.length > MAX_COMMAND_DISPLAY_LINES
-  const needsCharTruncation = text.length > MAX_COMMAND_DISPLAY_CHARS
-  if (!needsLineTruncation && !needsCharTruncation) return text
+function boundedCommandParts(parts: readonly unknown[]): string {
+  let command = ''
+  for (const part of parts) {
+    const separator = command ? ' ' : ''
+    const remaining = MAX_COMMAND_DISPLAY_CHARS - command.length - separator.length
+    if (remaining <= 0) return `${command}…`
+    const page = boundedTextPage(String(part), 0, remaining, MAX_COMMAND_DISPLAY_LINES)
+    command += separator + page.text
+    if (page.hasNext) return `${command}…`
+  }
+  // WHY the join is built only to the display budget: command arrays are provider data, not a
+  // trusted argv size. Array.map(String).join(' ') used to materialize every argument before the
+  // two-line card truncated it. The transcript remains the complete tool-call source; this helper
+  // owns only the deliberately compact activity headline.
+  return truncateCommand(command)
+}
 
-  let truncated = text
-  if (needsLineTruncation) {
-    truncated = lines.slice(0, MAX_COMMAND_DISPLAY_LINES).join('\n')
-  }
-  if (truncated.length > MAX_COMMAND_DISPLAY_CHARS) {
-    truncated = truncated.slice(0, MAX_COMMAND_DISPLAY_CHARS)
-  }
-  return truncated.trimEnd() + '…'
+function truncateCommand(text: string): string {
+  const page = boundedTextPage(
+    text,
+    0,
+    MAX_COMMAND_DISPLAY_CHARS,
+    MAX_COMMAND_DISPLAY_LINES,
+  )
+  if (!page.hasNext) return text
+  return page.text.trimEnd() + '…'
 }
 
 export const CodexExecCommandRow = memo(function CodexExecCommandRow({
@@ -288,29 +326,26 @@ function parsedPath(parsed: Record<string, unknown> | null): string | null {
   return null
 }
 
-function countNonEmptyLines(text: string): number {
-  if (!text.trim()) return 0
-  return text.split('\n').length
-}
-
 function summaryLabelForCommandResult(
   parsedType: string | null,
   lineCount: number,
+  lineCountTruncated: boolean,
   path: string | null,
   workspaceRoot: string | null,
 ): string {
   const displayPath = path ? formatToolFilePath(path, workspaceRoot) : null
+  const countLabel = lineCountTruncated ? `≥${lineCount}` : String(lineCount)
   if (parsedType === 'read') {
-    const noun = lineCount === 1 ? 'line' : 'lines'
+    const noun = lineCount === 1 && !lineCountTruncated ? 'line' : 'lines'
     return displayPath
-      ? `Read ${lineCount} ${noun} from ${displayPath}`
-      : `Read ${lineCount} ${noun}`
+      ? `Read ${countLabel} ${noun} from ${displayPath}`
+      : `Read ${countLabel} ${noun}`
   }
   if (parsedType === 'search') {
-    const noun = lineCount === 1 ? 'line' : 'lines'
+    const noun = lineCount === 1 && !lineCountTruncated ? 'line' : 'lines'
     return displayPath
-      ? `Search results: ${lineCount} ${noun} in ${displayPath}`
-      : `Search results: ${lineCount} ${noun}`
+      ? `Search results: ${countLabel} ${noun} in ${displayPath}`
+      : `Search results: ${countLabel} ${noun}`
   }
   return displayPath ?? 'Result'
 }
@@ -330,25 +365,24 @@ function ExpandableCodeResult({
   codeId: string
   language?: string | null
 }) {
-  const [opened, setOpened] = useState(false)
+  const [open, setOpen] = useState(false)
   return (
     <MarkerRow marker="⎿" tone="muted">
-      {/* Closed <details> still mounts React children. Keep the Monaco
-          CodeBlock behind first-open state so a resumed transcript with
-          many read/search results does not create hidden editors, models,
-          LSP documents, and diagnostics listeners before the user asks to
-          inspect the raw payload. Once opened, keep it mounted so copy-code
-          IDs and Monaco state remain stable while the user expands/collapses. */}
+      {/* WHY close destroys the child instead of latching first-open: restored
+          sessions can contain hundreds of previously inspected reads. A latch
+          turns every historical click into permanent editor/model ownership.
+          Recreating one bounded page on the next explicit open is cheaper and
+          preserves the invariant that collapsed content owns no heavy UI. */}
       <details
         className="text-[12px] leading-[1.55] text-ink-dim"
         onToggle={event => {
-          if (event.currentTarget.open) setOpened(true)
+          setOpen(event.currentTarget.open)
         }}
       >
         <summary className="cursor-pointer select-none">
           {summary}
         </summary>
-        {opened ? (
+        {open ? (
           <div className="mt-2">
           <CodeBlock
             code={code}
@@ -366,49 +400,6 @@ function ExpandableCodeResult({
   )
 }
 
-function TruncatedOutputRow({
-  content,
-  isError,
-}: {
-  content: string
-  isError: boolean
-}) {
-  const [expanded, setExpanded] = useState(false)
-  const lines = content.length === 0 ? [] : content.split('\n')
-  const needsTruncation = lines.length > RESULT_MAX_LINES
-  const shown = expanded || !needsTruncation
-    ? content
-    : lines.slice(0, RESULT_MAX_LINES).join('\n')
-  const hiddenCount = needsTruncation ? lines.length - RESULT_MAX_LINES : 0
-
-  return (
-    <MarkerRow marker="⎿" tone="muted">
-      <div className="min-w-0">
-        <pre
-          className={`
-            font-code text-[12px] leading-[1.55] whitespace-pre-wrap break-words m-0
-            ${expanded ? 'max-h-[360px] overflow-auto' : ''}
-            ${isError ? 'text-danger' : 'text-ink-dim'}
-          `}
-        >
-          {shown || '(no output)'}
-        </pre>
-        {needsTruncation && (
-          <button
-            type="button"
-            onClick={() => setExpanded(prev => !prev)}
-            className="mt-1 text-[11px] text-muted hover:text-ink cursor-pointer"
-          >
-            {expanded
-              ? 'collapse'
-              : `… +${hiddenCount} ${hiddenCount === 1 ? 'line' : 'lines'} (click to expand)`}
-          </button>
-        )}
-      </div>
-    </MarkerRow>
-  )
-}
-
 export const CodexToolRow = memo(function CodexToolRow({
   block,
 }: {
@@ -418,7 +409,7 @@ export const CodexToolRow = memo(function CodexToolRow({
     const raw = headlineForTool(block)
     if (!raw) return null
     if (block.name === 'exec_command') return truncateCommand(raw)
-    return raw
+    return boundedTextPage(raw, 0, MAX_COMMAND_DISPLAY_CHARS, MAX_COMMAND_DISPLAY_LINES).text
   }, [block])
 
   return (
@@ -479,6 +470,8 @@ export const CodexApplyPatchRow = memo(function CodexApplyPatchRow({
   block: ToolUseBlock
 }) {
   const files = useMemo(() => parseApplyPatch(block.input), [block.input])
+  const rawPatch = applyPatchText(block.input)
+  const previewIncomplete = boundedTextPage(rawPatch).hasNext
 
   if (files.length === 0) {
     return <CodexToolRow block={block} />
@@ -497,6 +490,16 @@ export const CodexApplyPatchRow = memo(function CodexApplyPatchRow({
             <DiffSlab lines={file.lines} filePath={file.path} emptyLabel="(no inline diff)" />
           </div>
         ))}
+        {previewIncomplete ? (
+          <details className="text-[11px] text-muted">
+            <summary className="cursor-pointer select-none">
+              Rich preview is partial · view exact paged patch
+            </summary>
+            <div className="mt-1 rounded border border-border bg-surface px-2 py-1.5">
+              <PagedTextViewer source={rawPatch} />
+            </div>
+          </details>
+        ) : null}
       </div>
     </MarkerRow>
   )
@@ -508,7 +511,10 @@ export const CodexToolResultRow = memo(function CodexToolResultRow({
   block: ToolResultBlock
 }) {
   const codeContext = useContext(CodeRenderContext)
-  const text = textFromContent(block.content).replace(/\s+$/, '')
+  const materializedText = textFromContent(block.content)
+  const text = materializedText.length <= 16 * 1024
+    ? materializedText.replace(/\s+$/, '')
+    : materializedText
   const meta = asRecord(asRecord(block)?.codex)
   const kind = typeof meta?.kind === 'string' ? meta.kind : null
   const isError = block.is_error === true
@@ -525,10 +531,11 @@ export const CodexToolResultRow = memo(function CodexToolResultRow({
       path &&
       text
     ) {
-      const lineCount = countNonEmptyLines(text)
+      const lineCount = boundedTextLineCount(text)
       const summary = summaryLabelForCommandResult(
         parsedType,
-        lineCount,
+        lineCount.count,
+        lineCount.truncated,
         path,
         codeContext.workspaceRoot,
       )
@@ -613,7 +620,7 @@ export const CodexToolResultRow = memo(function CodexToolResultRow({
   // providers).
   const parsedJson = tryExtractJson(text)
   if (parsedJson !== null && typeof parsedJson === 'object') {
-    return <JsonResultSlab value={parsedJson} isError={isError} />
+    return <JsonResultSlab value={parsedJson} isError={isError} source={text} />
   }
 
   return <TruncatedOutputRow content={text} isError={isError} />

@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
+import { Button } from '@renderer/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from '@renderer/components/ui/dialog'
 import type { TabId } from '@renderer/workspace/types'
 
 type ReorderTabOption = {
@@ -46,7 +53,6 @@ export function ReorderTabsModal({
       )
       setMovingTabId(null)
       setError(null)
-      requestAnimationFrame(() => dialogRef.current?.focus())
     }
     wasOpenRef.current = open
   }, [activeTabId, open, tabs])
@@ -111,15 +117,6 @@ export function ReorderTabsModal({
       // a tab, then arrows move only that picked tab. Keeping cursor and moving
       // ids separate is what prevents accidental reorders while the user is
       // still browsing the list.
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        if (movingTabId) {
-          setMovingTabId(null)
-          return
-        }
-        onCancel()
-        return
-      }
       if (e.key === 'Enter') {
         e.preventDefault()
         if (movingTabId) {
@@ -150,29 +147,38 @@ export function ReorderTabsModal({
         }
       }
     },
-    [confirm, cursorIndex, cursorTabId, moveCursor, movePickedTab, movingTabId, onCancel],
+    [confirm, cursorIndex, cursorTabId, moveCursor, movePickedTab, movingTabId],
   )
 
-  if (!open) return null
-
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      className="fixed inset-0 z-[1000] flex items-center justify-center bg-canvas/80 backdrop-blur-sm"
-      onMouseDown={e => {
-        if (e.target === e.currentTarget) onCancel()
+    <Dialog
+      open={open}
+      onOpenChange={nextOpen => {
+        if (!nextOpen) onCancel()
       }}
     >
-      <div
+      <DialogContent
         ref={dialogRef}
         tabIndex={-1}
         onKeyDown={onKeyDown}
-        className="w-[460px] max-w-[calc(100vw-64px)] max-h-[80vh] bg-surface border border-border-hi p-5 flex flex-col outline-none"
+        onOpenAutoFocus={event => {
+          event.preventDefault()
+          dialogRef.current?.focus()
+        }}
+        onEscapeKeyDown={event => {
+          // WHY the first Escape can be consumed: while a row is "picked",
+          // Escape means abandon that local move, not abandon the entire
+          // reorder draft. Radix remains the owner of the actual dialog close.
+          if (!movingTabId) return
+          event.preventDefault()
+          setMovingTabId(null)
+        }}
+        className="flex max-h-[80vh] w-[460px] max-w-[calc(100vw-64px)] flex-col p-5"
       >
-        <div className="text-[13px] font-semibold text-ink mb-4 flex-shrink-0">
-          Reorder Tabs
-        </div>
+        <DialogTitle className="mb-1 flex-shrink-0 font-semibold">Reorder Tabs</DialogTitle>
+        <DialogDescription className="sr-only">
+          Select a tab, then use arrow keys to move it. Enter confirms the order.
+        </DialogDescription>
 
         <div className="flex-1 min-h-0 overflow-auto border border-border bg-canvas">
           {draftTabs.map((tab, index) => {
@@ -223,23 +229,22 @@ export function ReorderTabsModal({
             {error ?? `${cursorIndex >= 0 ? cursorIndex + 1 : 0}/${draftTabs.length}`}
           </div>
           <div className="flex gap-2">
-            <button
+            <Button
               type="button"
               onClick={onCancel}
-              className="px-4 py-1.5 text-[12px] border border-border text-ink-dim hover:text-ink hover:border-border-hi"
+              variant="outline"
             >
               Cancel
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
               onClick={confirm}
-              className="px-4 py-1.5 text-[12px] bg-accent text-accent-fg border border-accent"
             >
               Done
-            </button>
+            </Button>
           </div>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }

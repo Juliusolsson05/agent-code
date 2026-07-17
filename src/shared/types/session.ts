@@ -1,11 +1,78 @@
-import type { BuiltInMcpServerConfig } from '@mcp/shared/types.js'
+import type {
+  BuiltInMcpDomain,
+  BuiltInMcpServerConfig,
+} from '@mcp/shared/types.js'
 import type { ProviderConditionSnapshot } from '@shared/types/providerConditions.js'
+import type { SessionKind } from '@shared/types/providerKind.js'
 
 // Re-export the provider/session kind source of truth so callers that
 // already import session types from here keep one import. The canonical
 // definition (and the rationale for the AgentProviderKind vs SessionKind
 // split) lives in providerKind.ts — see that file before adding a kind.
 export type { AgentProviderKind, SessionKind } from '@shared/types/providerKind.js'
+
+// WHY recovery types live at the neutral shared boundary: main owns the
+// operation, preload transports it, and the renderer consumes it. Defining a
+// look-alike at each layer would make the most important fields in the restart
+// protocol (the stable local id and readiness revision) vulnerable to silent
+// drift. Provider history ids remain launch hints; they are intentionally not
+// part of the ownership comparison represented by SessionBackendSnapshot.
+export type SessionInputReadiness = {
+  ready: boolean
+  revision: number
+  reason?: 'starting' | 'replaying-history' | 'provider-not-ready' | 'ready'
+}
+
+// Provider runtimes know *when* their composer is safe, but they do not own
+// the cross-process ordering counter. SessionManager adds `revision` when it
+// folds this provider fact into the level-triggered backend snapshot.
+export type AgentInputReadiness = Omit<SessionInputReadiness, 'revision'>
+
+export type SessionBackendSnapshot = {
+  sessionId: string
+  kind: SessionKind
+  cwd: string
+  lifecycle: 'spawning' | 'live'
+  input: SessionInputReadiness
+}
+
+export type SessionRecoverOptions = {
+  sessionId: string
+  kind?: SessionKind
+  cwd: string
+  cols?: number
+  rows?: number
+  resumeSessionId?: string
+  dangerousMode?: boolean
+  useProxy?: boolean
+  recoverTmuxName?: string
+  builtInMcpDomains?: BuiltInMcpDomain[]
+}
+
+export type SessionOwnershipOptions = Pick<
+  SessionRecoverOptions,
+  'sessionId' | 'kind' | 'cwd'
+>
+
+export type SessionRecoverFailureCode =
+  | 'ownership-conflict'
+  | 'cancelled'
+  | 'start-failed'
+
+export type SessionRecoverResult =
+  | {
+      ok: true
+      disposition: 'adopted' | 'spawned'
+      snapshot: SessionBackendSnapshot
+      tmuxName?: string
+    }
+  | {
+      ok: false
+      code: SessionRecoverFailureCode
+      retryable: boolean
+      message: string
+      actual?: Pick<SessionBackendSnapshot, 'kind' | 'cwd' | 'lifecycle'>
+    }
 
 // ---------------------------------------------------------------------------
 // AgentSession contract (#394 phase 2a)
@@ -169,6 +236,7 @@ export type AgentCompactionState = {
  */
 export type AgentSessionEvents = {
   started: [{ projectDir?: string; proxyUrl?: string }]
+  'input-readiness': [AgentInputReadiness]
   'pty-data': [string]
   screen: [AgentScreenSnapshot]
   'jsonl-entry': [AgentTranscriptEntry, string]
@@ -288,6 +356,32 @@ export interface AgentSession extends AgentSessionEmitter {
    *  headless instance isn't up yet. */
   snapshotScreen?(): string
 
+  /**
+   * Optional (Claude today): arm an authoritative prompt-acceptance waiter
+   * BEFORE Enter is written. Claude acknowledges a finished prompt through
+   * either a `type: "user"` JSONL entry (new turn) or a
+   * `queue-operation/enqueue` entry (Claude was already working). Keeping the
+   * arm synchronous closes the fastest possible race: a local JSONL append can
+   * arrive immediately after the PTY consumes Enter, before an `await` resumes.
+   *
+   * The returned cancel function is load-bearing on absorption failure. A
+   * paste that never reaches the Enter phase must not leave a content-bearing
+   * waiter alive to accidentally match a later manual submission.
+   */
+  armPromptAcceptance?(
+    prompt: string,
+    opts?: {
+      timeoutMs?: number
+      aliases?: string[]
+      requiresImage?: boolean
+      expectedImageCount?: number
+    },
+  ): PromptAcceptanceWaiter
+
+  /** Claude's bootstrap JSONL replay must quiesce before a new waiter can be
+   * armed, otherwise a historical identical entry can acknowledge new bytes. */
+  isPromptAcceptanceReady?(): boolean
+
   /** Optional (Codex today): wait for the composer to be ready to
    *  accept a prompt (past the startup/trust chrome). See
    *  sessionManager.ts:987. */
@@ -307,6 +401,18 @@ export interface AgentSession extends AgentSessionEmitter {
    *  paste PTY writes. Throws on transport failure so the delivery
    *  protocol can report ok:false and the composer keeps the draft. */
   deliverPromptText?(text: string): Promise<void>
+}
+
+export type PromptAcceptanceOutcome =
+  | { kind: 'user'; acceptedAt: number; entryId?: string }
+  | { kind: 'queue'; acceptedAt: number }
+  | { kind: 'timeout' }
+  | { kind: 'cancelled' }
+  | { kind: 'session-exited' }
+
+export type PromptAcceptanceWaiter = {
+  promise: Promise<PromptAcceptanceOutcome>
+  cancel: () => void
 }
 
 

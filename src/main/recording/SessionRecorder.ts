@@ -1,4 +1,4 @@
-import { appendFile, mkdir, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import { SESSION_RECORDING_DIR } from '@main/storage/paths.js'
@@ -38,6 +38,20 @@ const MAX_QUEUE = 2000
 // Per-recording events-file byte cap. 128 MiB mirrors feedDebugLog's cap;
 // past it we stop appending and tombstone (cap, never rotate).
 const MAX_BYTES = 128 * 1024 * 1024
+// Serialization is CPU work, not IO. A recording with cumulative semantic
+// snapshots can spend many milliseconds JSON-stringifying one 100 ms batch,
+// so yielding by wall-clock budget matters more than an arbitrary item count:
+// ten tiny screen events and one multi-MB tool-input event are not comparable.
+const SERIALIZE_SLICE_BUDGET_MS = 8
+
+type PendingRecordingLine = {
+  kind: 'event' | 'note' | 'truncated'
+  value: Record<string, unknown>
+}
+
+function yieldToMainLoop(): Promise<void> {
+  return new Promise(resolve => setImmediate(resolve))
+}
 
 export type RecordingMeta = {
   v: 1
@@ -65,7 +79,16 @@ export class SessionRecorder {
   private readonly eventsPath: string
   private readonly startMono: number
 
-  private queue: string[] = []
+  // WHY queue structured values rather than ready-made JSON strings:
+  // `record()` is called by the passive outbound observer immediately after
+  // BrowserWindow.send. JSON.stringify used to run synchronously there, so an
+  // opt-in diagnostic could delay the next main-loop turn for every growing
+  // semantic payload. The writer already owns a 100 ms async drain; keeping the
+  // immutable outbound payload until that drain moves serialization off the IPC
+  // delivery stack and lets us time-slice it below. Callers must continue to
+  // treat sent payloads as immutable—the same invariant Electron's send path
+  // already relies on while it structured-clones the arguments.
+  private queue: PendingRecordingLine[] = []
   private timer: ReturnType<typeof setTimeout> | null = null
   private draining = false
   // Handle to the CURRENTLY-RUNNING drain, or null when idle. This exists so
@@ -125,14 +148,15 @@ export class SessionRecorder {
    */
   record(channel: string, payload: unknown): void {
     if (this.closed || this.capped) return
-    const line =
-      JSON.stringify({
+    this.enqueue({
+      kind: 'event',
+      value: {
         t: Math.round(this.nowMono() - this.startMono),
         wall: this.nowWall(),
         ch: channel,
         payload,
-      }) + '\n'
-    this.enqueue(line)
+      },
+    })
     this.eventCount += 1
   }
 
@@ -146,20 +170,21 @@ export class SessionRecorder {
    */
   note(note: { id: string; status: 'reserved' | 'filled'; text?: string }): void {
     if (this.closed) return
-    const line =
-      JSON.stringify({
+    this.enqueue({
+      kind: 'note',
+      value: {
         t: Math.round(this.nowMono() - this.startMono),
         wall: this.nowWall(),
         ch: '__note',
         note,
-      }) + '\n'
+      },
+    })
     // Notes bypass the size cap — they are tiny and are the whole point of a
     // long recording (you must be able to mark the bug even in a capped
     // file). They still respect the queue backpressure.
-    this.enqueue(line)
   }
 
-  private enqueue(line: string): void {
+  private enqueue(line: PendingRecordingLine): void {
     this.queue.push(line)
     if (this.queue.length > MAX_QUEUE) {
       // Drop-oldest: shed the front so the heap can't grow unbounded when
@@ -171,13 +196,16 @@ export class SessionRecorder {
       this.queue.splice(0, shed)
       this.dropped += shed
       this.queue.unshift(
-        JSON.stringify({
-          t: Math.round(this.nowMono() - this.startMono),
-          wall: this.nowWall(),
-          ch: '__truncated',
-          reason: 'queue-drop',
-          dropped: shed,
-        }) + '\n',
+        {
+          kind: 'truncated',
+          value: {
+            t: Math.round(this.nowMono() - this.startMono),
+            wall: this.nowWall(),
+            ch: '__truncated',
+            reason: 'queue-drop',
+            dropped: shed,
+          },
+        },
       )
     }
     this.scheduleDrain()
@@ -218,6 +246,12 @@ export class SessionRecorder {
     // capping batch drops — both impossible once the batch is one blob.
     const pending = this.queue.splice(0)
 
+    // Always cross an event-loop boundary before serialization. `flush()` is
+    // also called from the session:exit observer, and without this first yield
+    // a final large batch would still run synchronously inside
+    // sendToMainWindow despite the normal 100 ms timer path being deferred.
+    await yieldToMainLoop()
+
     // Partition. `__note` lines bypass the size cap entirely: a note is the
     // whole point of a long recording (you must still be able to mark the bug
     // in a file that has already capped), and its bytes must NOT count toward
@@ -225,14 +259,45 @@ export class SessionRecorder {
     // Real event lines remain subject to the cap. Before this split we join()'d
     // everything and made the cap decision on the whole batch, which silently
     // dropped any notes queued in the capping batch and mis-counted note bytes
-    // (findings 5 / C8). The `"ch":"__note"` sniff is exact because we built
-    // every line via JSON.stringify ourselves — no need to re-parse on the hot
-    // path.
+    // (findings 5 / C8). The structured queue gives us an exact discriminator;
+    // the old implementation had to sniff JSON text here because enqueue() had
+    // already serialized every value on the IPC call stack.
     const notes: string[] = []
     const events: string[] = []
-    for (const line of pending) {
-      if (line.includes('"ch":"__note"')) notes.push(line)
+    let sliceStartedAt = performance.now()
+    for (const pendingLine of pending) {
+      let line: string
+      try {
+        line = `${JSON.stringify(pendingLine.value)}\n`
+      } catch {
+        // Electron's SessionFeed payloads are JSON-shaped, but the recorder is
+        // diagnostic code at a generic outbound seam. If a future channel
+        // accidentally introduces a cycle or BigInt, one bad payload must not
+        // reject the background drain forever. Preserve an explicit replay gap
+        // (and the original event timestamp) instead of the old synchronous
+        // observer behavior, which merely threw and was silently swallowed.
+        this.dropped += 1
+        line = `${JSON.stringify({
+          t: pendingLine.value.t,
+          wall: pendingLine.value.wall,
+          ch: '__truncated',
+          reason: 'serialize-error',
+          dropped: 1,
+        })}\n`
+      }
+      if (pendingLine.kind === 'note') notes.push(line)
       else events.push(line)
+
+      // WHY yield by elapsed time: payload sizes grow cumulatively during tool
+      // input, so "N records per turn" provides no responsiveness guarantee.
+      // Eight milliseconds regularly returns control to Electron lifecycle/IPC
+      // work while retaining large sequential append batches. One individual
+      // JSON.stringify cannot be preempted, but later records never compound an
+      // already-expensive payload in the same event-loop slice.
+      if (performance.now() - sliceStartedAt >= SERIALIZE_SLICE_BUDGET_MS) {
+        await yieldToMainLoop()
+        sliceStartedAt = performance.now()
+      }
     }
 
     // Notes ALWAYS flush — cap or no cap, tombstoned or not — and never touch
@@ -308,9 +373,19 @@ export class SessionRecorder {
       /* re-ensured lazily on first event append */
     }
     try {
-      await writeFile(join(this.dir, 'meta.json'), JSON.stringify(snapshot, null, 1), {
+      const metaPath = join(this.dir, 'meta.json')
+      const temporaryPath = join(this.dir, '.meta.json.tmp')
+      // WHY replace instead of overwriting meta.json in place: readers discover
+      // recordings concurrently while the recorder is active. writeFile first
+      // truncates an existing file, which gives a correctly synchronized reader
+      // a small but real window in which JSON.parse sees empty/partial bytes.
+      // The per-recorder FIFO above guarantees only one metadata write owns this
+      // fixed temporary path, and a same-directory rename makes every visible
+      // meta.json revision complete on POSIX and Windows filesystems.
+      await writeFile(temporaryPath, JSON.stringify(snapshot, null, 1), {
         mode: 0o600,
       })
+      await rename(temporaryPath, metaPath)
     } catch {
       /* non-fatal: the events stream is the source of truth; meta is a convenience */
     }

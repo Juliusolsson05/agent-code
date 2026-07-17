@@ -1,16 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
 import type { Entry } from '@shared/types/transcript'
-import { type FeedRenderItem } from '@renderer/features/feed/model/renderModel'
-import {
-  emptyRuntime,
-  type SemanticLiveTurn,
-  type SessionRuntime,
-} from '@renderer/session-runtime/state'
-import {
-  createLedgerInputAdapter,
-  type RuntimeLedgerSlices,
-} from '@renderer/rendering/adapter/collectLedgerInput'
+import type { FeedRenderItem } from '@renderer/features/feed/model/renderModel'
+import { emptyRuntime } from '@renderer/session-runtime/state'
+import type { SemanticLiveTurn, SessionRuntime } from '@renderer/session-runtime/state'
+import { createLedgerInputAdapter } from '@renderer/rendering/adapter/collectLedgerInput'
+import type { RuntimeLedgerSlices } from '@renderer/rendering/adapter/collectLedgerInput'
 import { createSessionLedger } from '@renderer/rendering/model/ledger'
 import {
   ledgerFeedContextFromRuntime,

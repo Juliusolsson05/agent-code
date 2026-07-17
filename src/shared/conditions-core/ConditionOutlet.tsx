@@ -35,9 +35,15 @@ type Props = {
   // its own kind.
   registry: Record<string, ConditionView>
   dispatch: (action: ConditionAction) => Promise<void>
+  interactionActive: boolean
 }
 
-export function ConditionOutlet({ snapshot, registry, dispatch }: Props): ReactElement | null {
+export function ConditionOutlet({
+  snapshot,
+  registry,
+  dispatch,
+  interactionActive,
+}: Props): ReactElement | null {
   // Render order is INCIDENTAL, not a contract (conditions audit Finding 9;
   // docs/design/conditions-system.md is the source of truth). We iterate
   // Object.values in the snapshot map's insertion order from the headless
@@ -61,6 +67,7 @@ export function ConditionOutlet({ snapshot, registry, dispatch }: Props): ReactE
         state={condition.state}
         actions={condition.actions}
         dispatch={dispatch}
+        interactionActive={interactionActive}
       />,
     )
   }

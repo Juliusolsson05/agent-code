@@ -1,7 +1,7 @@
 import type {
   AgentWorkContext,
   WorktreeIdentity,
-} from '@shared/work-context/types'
+} from '@shared/work-context/types.js'
 
 export function matchWorktree(
   candidatePath: string | null | undefined,

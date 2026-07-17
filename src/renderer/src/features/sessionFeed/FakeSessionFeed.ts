@@ -6,6 +6,7 @@ import type {
   SessionExitEvent,
   SessionJsonlEntriesEvent,
   SessionJsonlErrorEvent,
+  SessionInputReadinessEvent,
   SessionProcessStateEvent,
   SessionScreenEvent,
   SessionSemanticEvent,
@@ -13,6 +14,7 @@ import type {
   SessionSubAgentsEvent,
   Unsub,
 } from '@shared/sessionFeed/types'
+import type { PromptDeliveryResult } from '@shared/types/providerConfig'
 
 // In-memory SessionFeed for tests — the proof that the phase-0 decoupling
 // worked: renderer code driven by this fake runs with no Electron, no IPC,
@@ -33,9 +35,10 @@ export interface FakeSessionFeed extends SessionFeed {
   calls: FakeFeedCall[]
   /** Override the canned command results when a test needs failure paths. */
   nextSendInputResult: boolean
-  nextDeliverPromptResult: { ok: true } | { ok: false; message: string }
+  nextDeliverPromptResult: PromptDeliveryResult
   nextResolveConditionResult: ResolveConditionResult
   emitStarted(e: SessionStartedEvent): void
+  emitInputReadiness(e: SessionInputReadinessEvent): void
   emitScreen(e: SessionScreenEvent): void
   emitJsonlEntries(e: SessionJsonlEntriesEvent): void
   emitJsonlError(e: SessionJsonlErrorEvent): void
@@ -53,6 +56,7 @@ export function createFakeSessionFeed(): FakeSessionFeed {
   // transports — no replay, because the contract doesn't promise one.
   const listeners = {
     started: new Set<(e: SessionStartedEvent) => void>(),
+    inputReadiness: new Set<(e: SessionInputReadinessEvent) => void>(),
     screen: new Set<(e: SessionScreenEvent) => void>(),
     jsonlEntries: new Set<(e: SessionJsonlEntriesEvent) => void>(),
     jsonlError: new Set<(e: SessionJsonlErrorEvent) => void>(),
@@ -77,10 +81,14 @@ export function createFakeSessionFeed(): FakeSessionFeed {
   const feed: FakeSessionFeed = {
     calls: [],
     nextSendInputResult: true,
-    nextDeliverPromptResult: { ok: true },
+    nextDeliverPromptResult: {
+      ok: true,
+      acceptance: { kind: 'transport', acceptedAt: 123 },
+    },
     nextResolveConditionResult: { ok: true },
 
     onSessionStarted: cb => subscribe(listeners.started, cb),
+    onSessionInputReadiness: cb => subscribe(listeners.inputReadiness, cb),
     onSessionScreen: cb => subscribe(listeners.screen, cb),
     onSessionJsonlEntries: cb => subscribe(listeners.jsonlEntries, cb),
     onSessionJsonlError: cb => subscribe(listeners.jsonlError, cb),
@@ -104,6 +112,7 @@ export function createFakeSessionFeed(): FakeSessionFeed {
     },
 
     emitStarted: e => emit(listeners.started, e),
+    emitInputReadiness: e => emit(listeners.inputReadiness, e),
     emitScreen: e => emit(listeners.screen, e),
     emitJsonlEntries: e => emit(listeners.jsonlEntries, e),
     emitJsonlError: e => emit(listeners.jsonlError, e),

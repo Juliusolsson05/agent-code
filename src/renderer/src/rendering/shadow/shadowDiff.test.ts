@@ -2,12 +2,8 @@ import { describe, expect, it } from 'vitest'
 
 import { createSessionLedger } from '@renderer/rendering/model/ledger'
 import type { RenderCandidate } from '@renderer/rendering/model/types'
-import {
-  diffShadowUnits,
-  ledgerUnits,
-  legacyUnits,
-  type LegacyItemLike,
-} from '@renderer/rendering/shadow/shadowDiff'
+import { diffShadowUnits, ledgerUnits, legacyUnits } from '@renderer/rendering/shadow/shadowDiff'
+import type { LegacyItemLike } from '@renderer/rendering/shadow/shadowDiff'
 
 // ---------------------------------------------------------------------------
 // Shadow diff: the normalization must collapse REPRESENTATION differences

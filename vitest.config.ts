@@ -42,6 +42,9 @@ const alias = [
   { find: 'agent-transcript-parser', replacement: resolve(root, 'packages/agent-transcript-parser/src/index.ts') },
   { find: /^agent-voice-dictation\/(.+)$/, replacement: `${resolve(root, 'packages/agent-voice-dictation/src')}/$1/index.ts` },
   { find: 'agent-voice-dictation', replacement: resolve(root, 'packages/agent-voice-dictation/src/index.ts') },
+  { find: 'workflow-mcp/state', replacement: resolve(root, 'packages/workflow-mcp/src/state.ts') },
+  { find: 'workflow-mcp/worker', replacement: resolve(root, 'packages/workflow-mcp/src/worker.ts') },
+  { find: 'workflow-mcp', replacement: resolve(root, 'packages/workflow-mcp/src/index.ts') },
   { find: '@main', replacement: resolve(root, 'src/main') },
   { find: '@preload', replacement: resolve(root, 'src/preload') },
   { find: '@renderer', replacement: resolve(root, 'src/renderer/src') },
@@ -63,11 +66,13 @@ const exclude = [
   // belongs to the package. App-level dictation integration can still add
   // colocated tests under src/ when it has an Agent Code invariant to protect.
   'packages/agent-voice-dictation/src/**/*.test.ts',
-  // The submodule's standalone Electron demo uses node:test rather than
-  // Vitest. Collecting it through the root `packages/**/*.test.ts` glob makes
-  // hundreds of healthy Agent Code tests end in a false-red "No test suite
-  // found". The demo owns that suite; Agent Code owns its integration surface.
-  'packages/agent-voice-dictation/apps/**/*.test.ts',
+  // WHY the nested Flow Electron app is excluded as a unit rather than one
+  // mystery file: it owns a Node `node:test` suite and its own package runner.
+  // Vitest can execute those assertions but cannot discover them as Vitest
+  // tests, then fails the aggregate Agent Code run with "No test suite found".
+  // Root-level integration belongs here only after that app intentionally
+  // exposes a Vitest project instead of being swept up by packages/**/*.test.ts.
+  'packages/agent-voice-dictation/apps/flow-electron/**',
 ]
 
 export default defineConfig({

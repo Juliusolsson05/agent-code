@@ -6,17 +6,18 @@ import type { PasteDebugJournalRegistry } from '@main/pasteDebugJournal.js'
 import { sha8FromDigestBytes } from '@shared/code/sha8.js'
 import type { ConditionCustomAction } from '@shared/types/providerConditions.js'
 import { getMainProvider } from '@providers/registry.main.js'
-import {
-  AGENT_PROVIDER_KINDS,
-  DEFAULT_PROVIDER,
-  type AgentProviderKind,
-} from '@shared/types/providerKind.js'
+import { AGENT_PROVIDER_KINDS, DEFAULT_PROVIDER } from '@shared/types/providerKind.js'
+import type { AgentProviderKind } from '@shared/types/providerKind.js'
 import {
   loadInitialHistoryChunk,
   loadOlderHistoryChunk,
 } from '@main/sessions/historyLoader.js'
 import { resolveTranscriptPaths } from '@main/sessions/transcriptPaths.js'
 import type { SessionSpawnOptions } from '@preload/api/types.js'
+import type {
+  SessionOwnershipOptions,
+  SessionRecoverOptions,
+} from '@shared/types/session.js'
 
 // Session lifecycle + I/O IPC.
 //
@@ -45,8 +46,27 @@ export function registerSessionIpc(
     },
   )
 
+  ipcMain.handle('session:recover', async (_evt, options: SessionRecoverOptions) => {
+    return await manager.recover(options)
+  })
+
+  ipcMain.handle(
+    'session:cancel-recovery',
+    async (_evt, options: SessionOwnershipOptions) => {
+      return await manager.cancelRecovery(options)
+    },
+  )
+
+  ipcMain.handle('session:get-backend-snapshot', (_evt, sessionId: string) => {
+    return manager.getBackendSnapshot(sessionId)
+  })
+
   ipcMain.handle('session:kill', async (_evt, sessionId: string) => {
     return await manager.kill(sessionId)
+  })
+
+  ipcMain.handle('session:kill-owned', async (_evt, options: SessionOwnershipOptions) => {
+    return await manager.killOwned(options)
   })
 
   ipcMain.handle('session:kind', (_evt, sessionId: string) => {
@@ -133,8 +153,23 @@ export function registerSessionIpc(
   // composer chooses between them per provider capability, not per keypress.
   ipcMain.handle(
     'session:deliver-prompt',
-    async (_evt, sessionId: string, prompt: string) => {
-      return await manager.deliverPromptToAgent(sessionId, prompt)
+    async (
+      _evt,
+      sessionId: string,
+      prompt: string,
+      imagePaths?: string[],
+      deliveryId?: string,
+    ) => {
+      const record = typeof deliveryId === 'string' && deliveryId.length > 0
+        ? (event: string, data?: Record<string, unknown>) => {
+            pasteDebugJournals.get(deliveryId).append({
+              layer: 'PTY',
+              event: `delivery:${event}`,
+              data: { sessionId, ...data },
+            })
+          }
+        : undefined
+      return await manager.deliverPromptToAgent(sessionId, prompt, imagePaths, record)
     },
   )
 

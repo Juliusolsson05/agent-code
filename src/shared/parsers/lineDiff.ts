@@ -32,6 +32,26 @@ export type DiffLine = {
   text: string
 }
 
+const MAX_DIFF_SOURCE_CHARS = 32 * 1024
+const MAX_DIFF_LINES = 400
+const MAX_DIFF_LCS_CELLS = 160_000
+
+/**
+ * Admit only edits whose quadratic LCS table and eventual DOM are both bounded.
+ *
+ * WHY this is a separate preflight instead of catching allocation failure: a 10k×10k edit asks
+ * for roughly 400 MB before the renderer can throw, which is enough to make Electron look dead.
+ * The scan stops as soon as the line ceiling is crossed and does not allocate split arrays. Callers
+ * preserve the complete old/new strings in a paged raw disclosure when this returns false.
+ */
+export function canDiffLinesInline(oldText: string, newText: string): boolean {
+  if (oldText.length + newText.length > MAX_DIFF_SOURCE_CHARS) return false
+  const oldLines = boundedLineCount(oldText)
+  const newLines = boundedLineCount(newText)
+  if (oldLines === null || newLines === null || oldLines + newLines > MAX_DIFF_LINES) return false
+  return (oldLines + 1) * (newLines + 1) <= MAX_DIFF_LCS_CELLS
+}
+
 /**
  * Line-level LCS diff between two multi-line strings.
  *
@@ -119,5 +139,19 @@ function splitLines(text: string): string[] {
   // If the original ended with '\n', split produces a trailing '' we
   // don't want to diff against. Drop it.
   if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
+  return lines
+}
+
+function boundedLineCount(text: string): number | null {
+  if (text.length === 0) return 0
+  let lines = 1
+  let cursor = 0
+  while (cursor < text.length) {
+    const newline = text.indexOf('\n', cursor)
+    if (newline < 0) return lines
+    lines += 1
+    if (lines > MAX_DIFF_LINES) return null
+    cursor = newline + 1
+  }
   return lines
 }

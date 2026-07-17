@@ -8,7 +8,7 @@ import { saveClaudeImage } from '@main/storage/claudeImageCache.js'
 // Filesystem-level IPC — path expansion, directory listing, Claude
 // image paste cache.
 //
-// fs:listDirectory + fs:expandCwd both ship `~` / `~/…` expansion in
+// fs:list-directory + fs:expand-cwd both ship `~` / `~/…` expansion in
 // the same shape; we deliberately don't expand `~user` (needs passwd
 // lookup, nobody uses it in practice). Both return a discriminated
 // union so callers can show errors inline without throwing.
@@ -28,7 +28,7 @@ export function registerFsIpc(): void {
     | { ok: false; error: string }
 
   ipcMain.handle(
-    'fs:listDirectory',
+    'fs:list-directory',
     async (
       _evt,
       rawPath: string,
@@ -78,7 +78,7 @@ export function registerFsIpc(): void {
   )
 
   ipcMain.handle(
-    'fs:saveClaudeImage',
+    'fs:save-claude-image',
     async (
       _evt,
       params: { base64Data: string; mediaType: string; filename?: string },
@@ -93,7 +93,7 @@ export function registerFsIpc(): void {
   // it exists and is a directory. Keyboard-first is faster for power
   // users and matches Agent Code's terminal-native vibe.
   ipcMain.handle(
-    'fs:expandCwd',
+    'fs:expand-cwd',
     async (
       _evt,
       raw: string,
@@ -135,7 +135,7 @@ export function registerFsIpc(): void {
 
   // Create a directory the user just typed into the path picker.
   //
-  // WHY this is a peer of fs:expandCwd instead of a flag on it:
+  // WHY this is a peer of fs:expand-cwd instead of a flag on it:
   //   `expandCwd` is the validation gate the rest of the new-tab flow
   //   has always depended on — it returns a discriminated "ok | error"
   //   shape and the caller uses that exact result to gate session
@@ -164,7 +164,7 @@ export function registerFsIpc(): void {
   //   entry is a file or symlink to a non-directory — which is what
   //   the user-facing error should say.
   ipcMain.handle(
-    'fs:createDirectory',
+    'fs:create-directory',
     async (
       _evt,
       raw: string,

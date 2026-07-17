@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
-import { PinAgentsModal, type PinAgentsModalRow } from '@renderer/features/dispatch-pin/PinAgentsModal'
+import { PinAgentsModal } from '@renderer/features/dispatch-pin/PinAgentsModal'
+import type { PinAgentsModalRow } from '@renderer/features/dispatch-pin/PinAgentsModal'
 import { useAppStore } from '@renderer/app-state/hooks'
 import { useWorkspaceContext } from '@renderer/workspace/WorkspaceContext'
 import { resolveTabSessions } from '@renderer/workspace/queries'

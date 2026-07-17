@@ -28,6 +28,10 @@ import { ToolUseRow } from '@renderer/features/feed/ui/rows/ToolUseRow'
 import { isAgentSpawnToolName } from '@providers/registry.renderer.capabilities'
 import { JsonToolRow } from '@providers/shared/renderer/rows/JsonToolRow'
 import { TaskSubagentRow } from '@renderer/features/feed/ui/rows/TaskSubagentRow'
+import {
+  isWorkflowViewToolName,
+  parseWorkflowToolResult,
+} from '@renderer/features/workflows/model/workflowTool'
 
 /* ---------- Block dispatcher ---------- */
 
@@ -199,6 +203,16 @@ export const Block = memo(function Block({
         }
       }
       const sourceTool = toolUseIndex.get(tr.tool_use_id)
+      if (
+        isWorkflowViewToolName(sourceTool?.name) &&
+        tr.is_error !== true &&
+        parseWorkflowToolResult(tr) !== null
+      ) {
+        // The session shell consumes the launch envelope to add a view row below the composer.
+        // Keep Main readable by suppressing the raw JSON result, but leave the generic tool-use row
+        // in place as the durable transcript record that a workflow was launched or resumed.
+        return null
+      }
       // #442 finding-C2: an answered AskUserQuestion renders the picked answer
       // inside AskUserQuestionAnsweredRow on the tool_use row (it reads the
       // paired tool_result). Painting the tool_result again here shows the same

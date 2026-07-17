@@ -28,6 +28,13 @@ const headlessAlias = [
   // is meant to avoid.
   { find: /^agent-voice-dictation\/(.+)$/, replacement: `${resolve(__dirname, 'packages/agent-voice-dictation/src')}/$1/index.ts` },
   { find: 'agent-voice-dictation', replacement: resolve(__dirname, 'packages/agent-voice-dictation/src/index.ts') },
+  // workflow-mcp deliberately exposes a browser-safe state entry. Keep it
+  // before the package-root alias: alias order is load-bearing, and letting
+  // the root swallow `/state` would drag fs, child_process, the MCP SDK, and
+  // the Codex SDK into a browser bundle.
+  { find: 'workflow-mcp/state', replacement: resolve(__dirname, 'packages/workflow-mcp/src/state.ts') },
+  { find: 'workflow-mcp/worker', replacement: resolve(__dirname, 'packages/workflow-mcp/src/worker.ts') },
+  { find: 'workflow-mcp', replacement: resolve(__dirname, 'packages/workflow-mcp/src/index.ts') },
 ]
 
 // Project-wide absolute-import aliases. MUST match tsconfig.node.json
@@ -43,7 +50,16 @@ const projectAlias = {
   '@mcp': resolve(__dirname, 'src/mcp'),
 }
 
-const headlessExclude = ['claude-code-headless', 'codex-headless', 'opencode-headless', 'agent-transcript-parser', 'agent-voice-dictation']
+const headlessExclude = [
+  'claude-code-headless',
+  'codex-headless',
+  'opencode-headless',
+  'agent-transcript-parser',
+  'agent-voice-dictation',
+  // Compile the submodule from source so a recursive clone does not have a
+  // hidden "build the child package first" prerequisite.
+  'workflow-mcp',
+]
 
 function copyMainRuntimeResourcesPlugin(): Plugin {
   const resources = [
@@ -174,7 +190,18 @@ export default defineConfig(({ mode }) => ({
     resolve: { alias: [...headlessAlias, ...Object.entries(projectAlias).map(([find, replacement]) => ({ find, replacement }))] },
     build: {
       rollupOptions: {
-        input: resolve(__dirname, 'src/main/index.ts'),
+        input: {
+          index: resolve(__dirname, 'src/main/index.ts'),
+          // utilityProcess.fork needs a real module entry rather than a
+          // function buried in the main bundle. The stable input name keeps
+          // dev, preview, and packaged paths identical.
+          workflowWorker: resolve(__dirname, 'src/main/workflows/workflowWorkerEntry.ts'),
+          // child_process.fork cannot address a function buried in the main
+          // bundle. A stable sibling entry gives every Codex attempt its own
+          // killable process group in preview and the packaged application;
+          // changing this name also requires changing createWorkflowService.
+          workflowProviderHost: resolve(__dirname, 'src/main/workflows/workflowProviderHostEntry.ts'),
+        },
         // `agent-voice-dictation` uses `ws` for Deepgram streaming. Main runs
         // in Node, so bundling `ws` through Vite is the wrong tradeoff: Rollup
         // can inline the optional bufferutil fallback into a shape where
@@ -182,7 +209,17 @@ export default defineConfig(({ mode }) => ({
         // chunk send. Leave `ws` external and let Node/Electron resolve the
         // package at runtime, matching the standalone dictation app's proven
         // Electron config.
-        external: ['ws']
+        external: [
+          'ws',
+          // workflow-mcp is compiled from submodule source, but its parser and
+          // schema validator are ordinary production dependencies. Bundling
+          // acorn's CommonJS distribution through electron-vite currently
+          // corrupts one generated shim inside the 1MB+ main chunk; leaving
+          // both dependencies external preserves their tested Node entry
+          // points and lets electron-builder package them from node_modules.
+          'acorn',
+          'ajv',
+        ]
       }
     }
   },

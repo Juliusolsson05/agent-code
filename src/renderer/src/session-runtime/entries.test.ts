@@ -11,10 +11,8 @@ import {
   planLiveEntryTrim,
   stampHistoryMarker,
 } from '@renderer/session-runtime/liveEntryWindow'
-import {
-  emptySemanticRuntime,
-  type SemanticRuntimeState,
-} from '@renderer/session-runtime/state'
+import { emptySemanticRuntime } from '@renderer/session-runtime/state'
+import type { SemanticRuntimeState } from '@renderer/session-runtime/state'
 import type { GhostEntry } from 'agent-transcript-parser/ghost'
 import type {
   Entry,

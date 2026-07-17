@@ -11,6 +11,7 @@ import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import { JsonResultSlab } from '@providers/shared/renderer/rows/JsonResultSlab'
 import { tryExtractJson } from '@providers/shared/renderer/rows/jsonToolPresentation'
 import { TruncatedOutputRow } from '@renderer/features/feed/ui/rows/TruncatedOutputRow'
+import { boundedTextLineCount, TEXT_PAGE_MAX_CHARS } from '@renderer/lib/text/boundedText'
 
 /* ---------- Tool result: "⎿  (lines of output)" ---------- */
 
@@ -21,25 +22,40 @@ function LazyDetails({
   summary: ReactNode
   children: ReactNode
 }) {
-  const [opened, setOpened] = useState(false)
+  const [open, setOpen] = useState(false)
   return (
-    // Closed <details> hides its contents visually but React still mounts
-    // children. The expensive child here is usually a Monaco CodeBlock,
-    // which means editor creation, model allocation, and sometimes LSP
-    // document lifecycle. Gate it on first-open so dense restored feeds
-    // stay cheap until the user explicitly drills into the raw file output.
+    // WHY close unmounts rather than latching after first-open: an old session
+    // can contain hundreds of once-inspected reads. A latch turns interaction
+    // history into permanent Monaco/model/listener ownership, whereas a closed
+    // disclosure promises it is no longer consuming heavy renderer resources.
     <details
       className="text-[12px] leading-[1.55] text-ink-dim"
       onToggle={event => {
-        if (event.currentTarget.open) setOpened(true)
+        setOpen(event.currentTarget.open)
       }}
     >
       <summary className="cursor-pointer select-none">
         {summary}
       </summary>
-      {opened ? <div className="mt-2">{children}</div> : null}
+      {open ? <div className="mt-2">{children}</div> : null}
     </details>
   )
+}
+
+function toolResultText(content: ToolResultBlock['content']): string {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return String(content)
+  if (content.length === 0) return ''
+  const textAt = (index: number): string => {
+    const item = content[index]
+    return typeof item === 'string' ? item : item?.text ?? ''
+  }
+  // WHY the one-item fast path matters: provider-normalized results are commonly `[textBlock]`.
+  // Joining that array copies a multi-megabyte output before any paging decision can run, doubling
+  // peak live memory and blocking input. Multi-part results still require one contiguous durable
+  // source for exact paging/copy today, but the pathological common case no longer pays that copy.
+  if (content.length === 1) return textAt(0)
+  return content.map((_, index) => textAt(index)).join('\n')
 }
 
 /**
@@ -72,17 +88,16 @@ export const ToolResultRow = memo(function ToolResultRow({
   const codeContext = useContext(CodeRenderContext)
   const sourceTool = toolUseIndex.get(block.tool_use_id)?.name
 
-  const text =
-    typeof block.content === 'string'
-      ? block.content
-      : Array.isArray(block.content)
-        ? block.content
-            .map(c => (typeof c === 'string' ? c : c.text ?? ''))
-            .join('\n')
-        : String(block.content)
+  const text = toolResultText(block.content)
 
   const isError = block.is_error === true
-  const trimmed = text.replace(/\s+$/, '')
+  // WHY giant output skips eager trim: trim creates another near-complete
+  // string before the paged viewer can discard almost all of it. Small output
+  // preserves the historical whitespace cleanup; large output stays as the
+  // durable source and each admitted page handles its own presentation.
+  const trimmed = text.length <= TEXT_PAGE_MAX_CHARS
+    ? text.replace(/\s+$/, '')
+    : text
 
   // File-write tools AND TodoWrite: the rendered diff/content/checklist
   // on the preceding tool_use row already tells the story. The result
@@ -112,8 +127,10 @@ export const ToolResultRow = memo(function ToolResultRow({
   // code review). Syntax highlighting happens inside CodeBlock
   // only when expanded.
   if (sourceTool === 'Read' && !isError) {
-    const stripped = stripLineNumberPrefix(trimmed)
-    const numLines = stripped ? stripped.split('\n').length : 0
+    // WHY count with an index scan instead of split: this summary is rendered
+    // before the disclosure opens. Allocating one array element per source line
+    // would make the collapsed row pay proportional heap churn for hidden data.
+    const lineCount = boundedTextLineCount(trimmed)
     const sourceInput = toolUseIndex.get(block.tool_use_id)?.input as
       | Record<string, unknown>
       | undefined
@@ -128,18 +145,21 @@ export const ToolResultRow = memo(function ToolResultRow({
         <LazyDetails
           summary={(
             <>
-            Read <span className="text-ink font-semibold">{numLines}</span>{' '}
-            {numLines === 1 ? 'line' : 'lines'}
+            Read <span className="text-ink font-semibold">
+              {lineCount.truncated ? `≥${lineCount.count}` : lineCount.count}
+            </span>{' '}
+            {lineCount.count === 1 && !lineCount.truncated ? 'line' : 'lines'}
             </>
           )}
         >
           <CodeBlock
-            code={stripped}
+            code={trimmed}
             path={filePath}
             workspaceRoot={codeContext.workspaceRoot}
             codeId={`read:${block.tool_use_id}`}
             engine="monaco"
             allowAutoDetect
+            transformPage={stripLineNumberPrefix}
           />
         </LazyDetails>
       </MarkerRow>
@@ -177,7 +197,7 @@ export const ToolResultRow = memo(function ToolResultRow({
   // can never make a result LESS readable than the truncation below.
   const parsedJson = tryExtractJson(trimmed)
   if (parsedJson !== null && typeof parsedJson === 'object') {
-    return <JsonResultSlab value={parsedJson} isError={isError} />
+    return <JsonResultSlab value={parsedJson} isError={isError} source={trimmed} />
   }
 
   // Everything else — Bash, Glob, LS, tool errors — truncates to the

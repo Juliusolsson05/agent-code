@@ -83,13 +83,43 @@ export function slabEntries(
   return Object.entries(input).filter(([k]) => k !== headlineKey)
 }
 
+export const MAX_SLAB_PARAMS = 40
+
+/**
+ * Return a bounded top-level parameter prefix without allocating all keys.
+ *
+ * WHY this is separate from `slabEntries`: that older helper is still useful
+ * in small pure-presentation tests, but it uses `Object.entries` and therefore
+ * cannot defend a renderer boundary. Tool inputs are provider data, not trusted
+ * UI models; a generated map with hundreds of thousands of keys must cost the
+ * same as forty ordinary parameters when the row is collapsed.
+ */
+export function boundedSlabEntries(
+  input: Record<string, unknown> | null | undefined,
+  headlineKey: string | null,
+): { entries: [string, unknown][]; hasMore: boolean } {
+  if (!input) return { entries: [], hasMore: false }
+
+  const entries: [string, unknown][] = []
+  for (const key in input) {
+    if (!Object.prototype.hasOwnProperty.call(input, key) || key === headlineKey) {
+      continue
+    }
+    if (entries.length >= MAX_SLAB_PARAMS) {
+      return { entries, hasMore: true }
+    }
+    entries.push([key, input[key]])
+  }
+  return { entries, hasMore: false }
+}
+
 export function isAbsolutePathLike(s: string): boolean {
   // Length cap guards the classifier, not the value: a "path" longer than a
   // real filesystem limit (~512 chars is already generous vs PATH_MAX) is
   // almost certainly prose that merely starts with `/` or `~/`, and mis-
   // classifying it as a path would route it through path-shortening display
   // that mangles the text. Bounding the regex input also keeps it linear.
-  return /^(~\/|\/)[^\0\n]*$/.test(s) && s.length < 512
+  return s.length < 512 && /^(~\/|\/)[^\0\n]*$/.test(s)
 }
 
 export function isHttpUrl(s: string): boolean {
@@ -97,7 +127,7 @@ export function isHttpUrl(s: string): boolean {
   // token/blob that happens to start with http(s):// than a real link, and we
   // don't want to wrap 2KB of text in an <a>. 2KB matches the de-facto
   // browser URL-length ceiling, so anything longer wouldn't navigate anyway.
-  return /^https?:\/\/\S+$/.test(s) && s.length < 2048
+  return s.length < 2048 && /^https?:\/\/\S+$/.test(s)
 }
 
 /**
@@ -110,8 +140,13 @@ export function isHttpUrl(s: string): boolean {
  * LESS readable than today.
  */
 export function tryExtractJson(text: string): unknown | null {
+  // WHY length is checked before trim: String#trim allocates a second string.
+  // A non-JSON multi-megabyte command result should fall through to the paged
+  // text viewer without first being copied merely to discover it exceeds the
+  // parser budget.
+  if (text.length > 256 * 1024) return null
   const trimmed = text.trim()
-  if (trimmed.length === 0 || trimmed.length > 256 * 1024) return null
+  if (trimmed.length === 0) return null
 
   const parse = (s: string): unknown | null => {
     const t = s.trim()
@@ -153,7 +188,18 @@ export function jsonResultSummary(value: unknown): { label: string; isError: boo
     const rec = value as Record<string, unknown>
     if (rec.ok === false) return { label: 'ok: false', isError: true }
     if (rec.ok === true) return { label: 'ok: true', isError: false }
-    return { label: `${Object.keys(rec).length} keys`, isError: false }
+    // WHY this deliberately stops counting: a summary must never enumerate an
+    // untrusted generated map just to print an exact integer. "40+" conveys the
+    // useful shape while keeping the closed-row cost constant.
+    let keyCount = 0
+    for (const key in rec) {
+      if (!Object.prototype.hasOwnProperty.call(rec, key)) continue
+      keyCount += 1
+      if (keyCount >= MAX_SLAB_PARAMS) {
+        return { label: `${MAX_SLAB_PARAMS}+ keys`, isError: false }
+      }
+    }
+    return { label: `${keyCount} keys`, isError: false }
   }
   return { label: String(value).slice(0, 60), isError: false }
 }

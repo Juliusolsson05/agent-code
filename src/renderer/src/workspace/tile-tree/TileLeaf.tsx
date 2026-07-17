@@ -1,9 +1,9 @@
-import {
-  conditionStateByKind,
-  type ClaudeAskUserQuestionState,
-} from '@shared/types/providerConditions'
-import { DEFAULT_PROVIDER, isAgentProviderKind, type AgentProviderKind } from '@shared/types/providerKind'
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
+import { conditionStateByKind } from '@shared/types/providerConditions'
+import type { ClaudeAskUserQuestionState } from '@shared/types/providerConditions'
+import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
+import type { AgentProviderKind } from '@shared/types/providerKind'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { KeyboardEvent } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
 import { useGlobalToast } from '@renderer/ui/GlobalToast'
@@ -30,9 +30,14 @@ import { usePasteToFocus } from '@renderer/workspace/tile-tree/TileLeaf/usePaste
 import { usePromptHistory } from '@renderer/workspace/tile-tree/TileLeaf/usePromptHistory'
 import { useClaudeImagePaste } from '@renderer/workspace/tile-tree/TileLeaf/useClaudeImagePaste'
 import { registerComposerEnterTarget } from '@renderer/workspace/tile-tree/TileLeaf/composerEnterRegistry'
+import { resolveReadinessText } from '@renderer/workspace/tile-tree/TileLeaf/readiness'
 import { recordHtmlTraceSnapshot } from '@renderer/features/debug/renderTrace'
 import { isSessionExited } from '@renderer/workspace/providerSessionIdentity'
 import { useLedgerFeedItems } from '@renderer/features/feed/ledger/useLedgerFeedItems'
+import { collectWorkflowRunReferences } from '@renderer/features/workflows/model/workflowTool'
+import { useSessionWorkflowViews } from '@renderer/features/workflows/model/useSessionWorkflowViews'
+import { WorkflowRunView } from '@renderer/features/workflows/ui/WorkflowRunRow'
+import { WorkflowViewSelector } from '@renderer/features/workflows/ui/WorkflowViewSelector'
 
 // Claude paste-state-machine constants + helpers moved to
 // ./TileLeaf/claudePaste.ts. Image helpers moved to
@@ -217,13 +222,11 @@ export function TileLeaf({
       runtime.processStatus !== 'started' ||
       isSessionExited(runtime)
     ) {
-      if (runtime.processStatus === 'failed' || runtime.processStatus === 'exited') {
-        const message = runtime.processStatus === 'failed'
-          ? (runtime.processError ?? 'Agent failed to start')
-          : 'Agent has exited'
-        workspace.showPaneToast(sessionId, message)
-        throw new Error(message)
-      }
+      // WHY failed/exited panes use the same wake path as dormant panes:
+      // provider attempts are disposable. Keeping the old early throw made a
+      // retained recovery failure permanent even though main's stable-id
+      // recovery protocol is explicitly retryable. The draft stays intact
+      // while ensureSessionLive replaces only the backend generation.
       try {
         await workspace.ensureSessionLive(sessionId)
       } catch (err) {
@@ -249,7 +252,11 @@ export function TileLeaf({
         throw err
       }
       if (!ok) {
-        const message = 'Agent backend is unavailable; draft preserved'
+        // `false` also means main deliberately rejected input while a
+        // provider-owned prompt delivery holds the composer reservation. Do
+        // not diagnose that healthy safety gate as a dead backend; both cases
+        // have the same useful action here—preserve the draft and retry later.
+        const message = 'Agent input is temporarily unavailable; draft preserved'
         workspace.showPaneToast(sessionId, message)
         throw new Error(message)
       }
@@ -287,6 +294,27 @@ export function TileLeaf({
       runtime.semantic.history,
     ],
   )
+
+  const workflowCwd = workspace.state.sessions[sessionId]?.cwd ?? null
+  const transcriptWorkflowReferences = useMemo(() => collectWorkflowRunReferences({
+    toolUseIndex: runtime.toolUseIndex,
+    toolResultIndex: runtime.toolResultIndex,
+    semanticTurns: [
+      ...runtime.semantic.history,
+      ...(runtime.semantic.currentTurn ? [runtime.semantic.currentTurn] : []),
+    ],
+  }), [
+    runtime.semantic.currentTurn,
+    runtime.semantic.history,
+    runtime.toolIndexVersion,
+    runtime.toolResultIndex,
+    runtime.toolUseIndex,
+  ])
+  const workflowViews = useSessionWorkflowViews({
+    sessionId,
+    cwd: workflowCwd,
+    transcriptReferences: transcriptWorkflowReferences,
+  })
 
   // Claude image-paste flow — three clipboard ingress paths, media-
   // type gate, 5 MB size cap. Hook in ./TileLeaf/useClaudeImagePaste.ts.
@@ -387,28 +415,9 @@ export function TileLeaf({
   }, [input, submitCurrentDraft])
 
   const isSessionLive = runtime.sessionStatus === 'running'
-  const readinessText =
-    runtime.transcriptStatus === 'loading'
-      ? 'loading transcript'
-      : runtime.transcriptStatus === 'error'
-        ? `transcript unavailable${runtime.transcriptError ? `: ${runtime.transcriptError}` : ''}`
-        : runtime.transcriptStatus === 'disconnected'
-          ? `transcript disconnected${runtime.transcriptError ? `: ${runtime.transcriptError}` : ''}`
-        // WHY exited beats "not input ready":
-        //
-        // A resumed agent can die before the renderer finishes the
-        // bootstrap quiet-window. That leaves `inputReady=false`,
-        // which used to render "starting agent" forever even though
-        // the composer correctly blocked Enter with "Agent has
-        // exited". The process lifecycle is the stronger signal here:
-        // once main has emitted exit, this pane is no longer starting.
-        : isSessionExited(runtime)
-          ? `agent exited${runtime.exited !== null ? ` (code ${runtime.exited})` : ''}`
-        : !runtime.inputReady || runtime.processStatus === 'spawning'
-          ? 'starting agent'
-          : runtime.processStatus === 'failed'
-            ? (runtime.processError ?? 'agent failed to start')
-            : null
+  const readinessText = resolveReadinessText(runtime)
+  const canRetryBackend = runtime.processStatus === 'failed' ||
+    runtime.processStatus === 'exited'
 
   useEffect(() => {
     if (!htmlDebugPanelOpen || !focused) return
@@ -480,11 +489,18 @@ export function TileLeaf({
           (see Feed.tsx FeedImpl). This wrapper just provides the
           flex cell sizing; the scroller is a child. */}
       <div className="flex-1 min-h-0">
-        <Feed
-          renderItemsOverride={ledgerFeedItems}
-          sessionId={sessionId}
-          provider={provider}
-          workspaceRoot={workspace.state.sessions[sessionId]?.cwd ?? null}
+        {workflowViews.selectedReference && workflowCwd ? (
+          <WorkflowRunView
+            reference={workflowViews.selectedReference}
+            cwd={workflowCwd}
+            onReferenceChange={workflowViews.replaceReference}
+          />
+        ) : (
+          <Feed
+            renderItemsOverride={ledgerFeedItems}
+            sessionId={sessionId}
+            provider={provider}
+            workspaceRoot={workspace.state.sessions[sessionId]?.cwd ?? null}
           // Committed transcript + (rare) orphan-ghost fallback.
           // The layered predicate in selectMergedEntries renders
           // a ghost only when JSONL has stalled past the proxy
@@ -514,10 +530,10 @@ export function TileLeaf({
           // displays whatever phase the headless package published.
           // See 2026-04-18-thinking-phase-in-headless.md for the
           // derivation contract.
-          streamPhase={runtime.streamPhase}
-          streamPhasePendingToolName={runtime.streamPhasePendingToolName}
-          streamPhasePendingToolUseId={runtime.streamPhasePendingToolUseId}
-          turnStartedAt={runtime.turnStartedAt}
+            streamPhase={runtime.streamPhase}
+            streamPhasePendingToolName={runtime.streamPhasePendingToolName}
+            streamPhasePendingToolUseId={runtime.streamPhasePendingToolUseId}
+            turnStartedAt={runtime.turnStartedAt}
           // Live-turn ownership: SemanticStreamingTurn renders the
           // current turn end-to-end off the semantic channel. Ghosts
           // for semantic current/history turn ids are filtered out of
@@ -531,39 +547,39 @@ export function TileLeaf({
           // semantic turn makes the visible feed shrink until the
           // durable transcript catches up — the exact "conversation
           // clears while the agent is working" failure.
-          semanticHistory={runtime.semantic.history}
-          semanticTurn={runtime.semantic.currentTurn}
-          tailMode={runtime.tailMode}
-          pickerSelectedUuid={runtime.assistantPicker?.selectedUuid ?? null}
-          codeBlockSelectedId={runtime.codeBlockPicker?.selectedId ?? null}
-          onScrollInfo={onScrollInfo}
-          onUserEngagement={acknowledgeSession}
-          hasOlderHistory={runtime.hasOlderHistory}
-          loadingOlderHistory={runtime.loadingOlderHistory}
-          onLoadOlderHistory={loadOlderHistory}
+            semanticHistory={runtime.semantic.history}
+            semanticTurn={runtime.semantic.currentTurn}
+            tailMode={runtime.tailMode}
+            pickerSelectedUuid={runtime.assistantPicker?.selectedUuid ?? null}
+            codeBlockSelectedId={runtime.codeBlockPicker?.selectedId ?? null}
+            onScrollInfo={onScrollInfo}
+            onUserEngagement={acknowledgeSession}
+            hasOlderHistory={runtime.hasOlderHistory}
+            loadingOlderHistory={runtime.loadingOlderHistory}
+            onLoadOlderHistory={loadOlderHistory}
           // Bootstrap-replay perf wiring — see workspaceStore +
           // Feed for the WHY. While `bootstrapping` is true Feed
           // suspends per-append auto-scroll and lazy-mount cascades;
           // the indices spare Feed from a useMemo rebuild on every
           // append.
-          bootstrapping={runtime.bootstrapping}
-          scrollToLatestRequest={runtime.scrollToLatestRequest}
-          toolUseIndex={runtime.toolUseIndex}
-          toolResultIndex={runtime.toolResultIndex}
-          toolIndexVersion={runtime.toolIndexVersion}
-          subAgents={runtime.subAgents}
-          askUserQuestionState={
-            // Kind-keyed lookup (#394 phase 3): globally namespaced
-            // kinds make the provider narrow redundant. undefined =
-            // "no snapshot yet", null = "snapshot without AUQ" — Feed
-            // distinguishes the two.
-            runtime.conditions
-              ? conditionStateByKind<ClaudeAskUserQuestionState>(
-                  runtime.conditions,
-                  'claude.ask-user-question',
-                )
-              : undefined
-          }
+            bootstrapping={runtime.bootstrapping}
+            scrollToLatestRequest={runtime.scrollToLatestRequest}
+            toolUseIndex={runtime.toolUseIndex}
+            toolResultIndex={runtime.toolResultIndex}
+            toolIndexVersion={runtime.toolIndexVersion}
+            subAgents={runtime.subAgents}
+            askUserQuestionState={
+              // Kind-keyed lookup (#394 phase 3): globally namespaced
+              // kinds make the provider narrow redundant. undefined =
+              // "no snapshot yet", null = "snapshot without AUQ" — Feed
+              // distinguishes the two.
+              runtime.conditions
+                ? conditionStateByKind<ClaudeAskUserQuestionState>(
+                    runtime.conditions,
+                    'claude.ask-user-question',
+                  )
+                : undefined
+            }
           // Keep render-decision logging tied to mounted feeds, not
           // to the debug panel or the transient focus flag. The
           // state/semantic layers already persist aggressively in
@@ -578,15 +594,34 @@ export function TileLeaf({
           // rows. `Feed` logs only row/count changes and the debug
           // store is capped, so all-mounted logging is the correct
           // diagnostic boundary.
-          onDebugLog={appendRenderDebug}
-        />
+            onDebugLog={appendRenderDebug}
+          />
+        )}
       </div>
 
       <QueueStrip queuedMessages={runtime.queuedMessages} />
 
       {readinessText && (
-        <div className="flex-shrink-0 border-t border-border bg-surface px-3 py-1 font-code text-[10px] text-muted">
-          {readinessText}
+        <div className="flex flex-shrink-0 items-center justify-between gap-3 border-t border-border bg-surface px-3 py-1 font-code text-[10px] text-muted">
+          <span className="min-w-0 truncate">{readinessText}</span>
+          {canRetryBackend && (
+            <button
+              type="button"
+              className="flex-shrink-0 text-accent hover:underline"
+              onClick={() => {
+                void workspace.ensureSessionLive(sessionId).catch(err => {
+                  workspace.showPaneToast(
+                    sessionId,
+                    err instanceof Error && err.message.length > 0
+                      ? err.message
+                      : 'Could not restart agent',
+                  )
+                })
+              }}
+            >
+              Retry
+            </button>
+          )}
         </div>
       )}
 
@@ -594,6 +629,7 @@ export function TileLeaf({
         conditions={runtime.conditions}
         onSend={send}
         onResolveCustom={(action) => feed.resolveCondition(sessionId, action)}
+        interactionActive={focused}
       />
 
       <PaneToast message={runtime.paneToast} />
@@ -641,6 +677,20 @@ export function TileLeaf({
         onDismissSuggestion={() =>
           workspace.updateRuntime(sessionId, { promptSuggestion: null })
         }
+        promptDelivery={runtime.promptDelivery}
+        onResolveUncertainDelivery={() =>
+          workspace.updateRuntime(sessionId, { promptDelivery: { kind: 'idle' } })
+        }
+      />
+
+      {/* WHY navigation sits after the composer in DOM and visual order: a workflow is another
+          view of this same agent session, not a feed row and not a detached panel. Keeping the
+          selector below the stable composer makes Main/workflow selection explicit while swapping
+          only the feed-sized viewport above it. */}
+      <WorkflowViewSelector
+        references={workflowViews.references}
+        selectedRunId={workflowViews.selectedRunId}
+        onSelect={workflowViews.selectRun}
       />
     </div>
   )

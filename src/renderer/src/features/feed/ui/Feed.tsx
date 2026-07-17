@@ -976,6 +976,14 @@ function FeedImpl({
     }
   }
 
+  // WHY provider value identity is stable: every CodeBlock consumes this context. Recreating the
+  // object on unrelated feed ticks bypasses memoized row boundaries and wakes every mounted code
+  // renderer during exactly the high-frequency semantic traffic this PR is trying to absorb.
+  const codeRenderContextValue = useMemo(
+    () => ({ sessionId, workspaceRoot }),
+    [sessionId, workspaceRoot],
+  )
+
   return (
     <ProviderContext.Provider value={provider}>
     <ToolUseIndexContext.Provider value={toolUseIndex}>
@@ -983,7 +991,7 @@ function FeedImpl({
     <SubAgentsContext.Provider value={subAgents}>
     <TaskNotificationsContext.Provider value={taskNotifications}>
     <AskUserQuestionConditionContext.Provider value={askUserQuestionState}>
-    <CodeRenderContext.Provider value={{ sessionId, workspaceRoot }}>
+    <CodeRenderContext.Provider value={codeRenderContextValue}>
       <div
         ref={scrollerRef}
         className="h-full overflow-auto @container"

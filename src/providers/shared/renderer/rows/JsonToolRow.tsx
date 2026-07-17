@@ -1,4 +1,4 @@
-import { memo } from 'react'
+import { memo, useState } from 'react'
 
 import type { ToolUseBlock } from '@shared/types/transcript'
 import { formatToolFilePath } from '@shared/paths/displayPath'
@@ -6,11 +6,13 @@ import { formatToolFilePath } from '@shared/paths/displayPath'
 import { truncateBashCommand } from '@renderer/features/feed/lib/helpers'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import { CodeBlock } from '@renderer/lib/code/CodeBlock'
+import { boundedJsonPreview } from '@renderer/lib/text/boundedJson'
+import { boundedTextPage } from '@renderer/lib/text/boundedText'
 import {
+  boundedSlabEntries,
   isAbsolutePathLike,
   isHttpUrl,
   prettifyToolName,
-  slabEntries,
   smartHeadline,
 } from '@providers/shared/renderer/rows/jsonToolPresentation'
 
@@ -88,21 +90,19 @@ export const JsonToolRow = memo(function JsonToolRow({
     if (block.name === 'Bash' && headline.key === 'command') {
       return truncateBashCommand(headline.value)
     }
-    if (isAbsolutePathLike(headline.value)) return formatToolFilePath(headline.value, null)
-    return headline.value
+    // WHY clamp before URL/path classification and DOM insertion: providers sometimes place an
+    // entire prompt, diff, or file in a field named `path`/`description`. The headline is a hint;
+    // the structured parameter disclosure below remains the route to more context.
+    const preview = boundedTextPage(headline.value, 0, 400, 2).text
+    if (isAbsolutePathLike(preview)) return formatToolFilePath(preview, null)
+    return preview
   })()
 
-  const params = slabEntries(input, headline?.key ?? null)
-  const nested = params.filter(([, v]) => typeof v === 'object' && v !== null)
-  const nestedJson = (() => {
-    if (nested.length === 0) return null
-    try {
-      const json = JSON.stringify(Object.fromEntries(nested), null, 2)
-      return json.length > SLAB_MAX_CHARS ? `${json.slice(0, SLAB_MAX_CHARS)}\n…` : json
-    } catch {
-      return null
-    }
-  })()
+  const { entries: params, hasMore } = boundedSlabEntries(
+    input,
+    headline?.key ?? null,
+  )
+  const [open, setOpen] = useState(false)
 
   return (
     <MarkerRow marker="⏺">
@@ -124,11 +124,18 @@ export const JsonToolRow = memo(function JsonToolRow({
         )}
         {params.length > 0 && (
           <MarkerRow marker="⎿" tone="muted">
-            <details className="text-[12px]">
+            <details
+              className="text-[12px]"
+              onToggle={event => setOpen(event.currentTarget.open)}
+            >
               <summary className="cursor-pointer text-ink-dim select-none">
-                {params.length} param{params.length === 1 ? '' : 's'}
+                {params.length}{hasMore ? '+' : ''} param{params.length === 1 && !hasMore ? '' : 's'}
               </summary>
-              <div className="mt-1 space-y-0.5">
+              {/* WHY the body unmounts again when details closes: a closed DOM
+                  subtree is still a live React tree. Keeping CodeBlock and its
+                  JSON projection mounted made "collapse" cosmetic and let a
+                  restored transcript retain every highlighter/model forever. */}
+              {open ? <div className="mt-1 space-y-0.5">
                 {params
                   .filter(([, v]) => typeof v !== 'object' || v === null)
                   .map(([k, v]) => (
@@ -136,15 +143,25 @@ export const JsonToolRow = memo(function JsonToolRow({
                       <span className="text-ink-dim">{k}:</span> <ParamValue value={v} />
                     </div>
                   ))}
-                {nestedJson && (
-                  <CodeBlock
-                    code={nestedJson}
-                    language="json"
-                    codeId={`json-tool:${block.id ?? block.name}`}
-                    highlight={!live}
-                  />
-                )}
-              </div>
+                {(() => {
+                  const nested = params.filter(
+                    ([, value]) => typeof value === 'object' && value !== null,
+                  )
+                  if (nested.length === 0) return null
+                  const nestedJson = boundedJsonPreview(
+                    Object.fromEntries(nested),
+                    SLAB_MAX_CHARS,
+                  )
+                  return nestedJson ? (
+                    <CodeBlock
+                      code={nestedJson}
+                      language="json"
+                      codeId={`json-tool:${block.id ?? block.name}`}
+                      highlight={!live}
+                    />
+                  ) : null
+                })()}
+              </div> : null}
             </details>
           </MarkerRow>
         )}

@@ -1,6 +1,13 @@
-import { DEFAULT_PROVIDER, isAgentProviderKind, type AgentProviderKind } from '@shared/types/providerKind'
+import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
+import type { AgentProviderKind } from '@shared/types/providerKind'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from '@renderer/components/ui/dialog'
 import { relativeTime } from '@renderer/lib/relativeTime'
 import { cwdBasename, providerGlyph } from '@renderer/features/workspace/lib/sessionDisplay'
 import { resolveTabSessions } from '@renderer/workspace/queries'
@@ -273,37 +280,21 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
     }
   }, [closing, matchingRows, onClose, workspace])
 
-  const onKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        onClose()
-      }
-    },
-    [onClose],
-  )
-
-  if (!open) return null
-
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label="Close Old Agents"
-      className="fixed inset-0 z-[1100] flex items-center justify-center bg-black/30"
-      onMouseDown={e => {
-        if (e.target === e.currentTarget) onClose()
+    <Dialog
+      open={open}
+      onOpenChange={nextOpen => {
+        if (!nextOpen) onClose()
       }}
-      onKeyDown={onKeyDown}
     >
-      <div className="w-[min(860px,94vw)] max-h-[86vh] overflow-hidden bg-surface border border-border-hi flex flex-col">
+      <DialogContent className="flex max-h-[86vh] w-[min(860px,94vw)] flex-col overflow-hidden">
         <div className="flex-shrink-0 border-b border-border px-4 py-3">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <div className="text-[13px] text-ink">Close Old Agents</div>
-              <div className="mt-1 text-[11px] text-muted">
+              <DialogTitle>Close Old Agents</DialogTitle>
+              <DialogDescription>
                 Close Claude and Codex agents that have been inactive past the threshold.
-              </div>
+              </DialogDescription>
             </div>
             <button
               type="button"
@@ -565,7 +556,7 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
             </button>
           </div>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }

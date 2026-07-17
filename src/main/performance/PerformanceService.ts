@@ -1,4 +1,5 @@
-import { SpanStatusCode, trace, type Attributes } from '@opentelemetry/api'
+import { SpanStatusCode, trace } from '@opentelemetry/api'
+import type { Attributes } from '@opentelemetry/api'
 import { resourceFromAttributes } from '@opentelemetry/resources'
 import { BatchSpanProcessor } from '@opentelemetry/sdk-trace-base'
 import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node'
@@ -17,8 +18,8 @@ import {
   queuePerformanceAppend,
   readPerformanceTail,
   writePerformanceManifest,
-  type PerformanceLogFile,
 } from '@main/storage/performanceLog.js'
+import type { PerformanceLogFile } from '@main/storage/performanceLog.js'
 import { LocalJsonlSpanExporter } from '@main/performance/LocalJsonlSpanExporter.js'
 import { getAppRunId } from '@main/incident/appRunIds.js'
 import { APP_SLUG } from '@shared/appIdentity.js'

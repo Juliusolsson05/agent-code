@@ -2,17 +2,20 @@ import {
   AGENT_PROVIDER_KINDS,
   DEFAULT_PROVIDER,
   isAgentProviderKind,
-  type AgentProviderKind,
 } from '@shared/types/providerKind'
+import type { AgentProviderKind } from '@shared/types/providerKind'
 import { useEffect } from 'react'
 
 import type { Entry } from '@shared/types/transcript'
 import type { SessionFeed } from '@shared/sessionFeed/SessionFeed'
+import type { SessionSemanticEvent } from '@shared/sessionFeed/types'
 import { isCompactSummaryEntry } from '@shared/types/transcript'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import type { TranscriptEntryMapper } from '@shared/types/providerConfig'
-import { emptyRuntime, type SessionRuntime } from '@renderer/session-runtime/state'
-import { appendFeedDebugLog, type FeedDebugInput } from '@renderer/session-runtime/feedDebug'
+import { emptyRuntime } from '@renderer/session-runtime/state'
+import type { SessionRuntime } from '@renderer/session-runtime/state'
+import { appendFeedDebugLog } from '@renderer/session-runtime/feedDebug'
+import type { FeedDebugInput } from '@renderer/session-runtime/feedDebug'
 import type { SessionId } from '@renderer/workspace/types'
 import {
   hasPendingSemanticTools,
@@ -59,16 +62,16 @@ import {
 import { applyClaudeQueueDequeue } from '@renderer/session-runtime/claudeQueueReconstruction'
 import { shouldClearIdleQueuedMessages } from '@renderer/session-runtime/queueInvariants'
 import type { StreamPhase } from '@renderer/session-runtime/state'
-import {
-  conditionStateByKind,
-  type ClaudeCompactionState,
-  type ClaudePermissionPromptState,
-  type ClaudeResumePromptState,
-  type ClaudeSlashPickerState,
-  type ClaudeTrustDialogState,
-  type CodexApprovalState,
-  type CodexTrustDialogState,
-  type ProviderConditionSnapshot,
+import { conditionStateByKind } from '@shared/types/providerConditions'
+import type {
+  ClaudeCompactionState,
+  ClaudePermissionPromptState,
+  ClaudeResumePromptState,
+  ClaudeSlashPickerState,
+  ClaudeTrustDialogState,
+  CodexApprovalState,
+  CodexTrustDialogState,
+  ProviderConditionSnapshot,
 } from '@shared/types/providerConditions'
 import {
   clearConditionRuntimeState,
@@ -95,8 +98,9 @@ import {
   decideJsonlProviderBurst,
   resumableProviderSessionId,
   shouldMarkProviderSessionDisconnected,
-  type JsonlProviderStreamState,
 } from '@renderer/workspace/providerSessionIdentity'
+import type { JsonlProviderStreamState } from '@renderer/workspace/providerSessionIdentity'
+import { SemanticEventBackpressureQueue } from '@renderer/workspace/hook/ipc/semanticEventBackpressure'
 
 // Codex rollout is delivered as many small IPC bursts, but `turn_context`
 // is only one line near the beginning of the task. The bundle that
@@ -183,6 +187,18 @@ const GHOST_SUPERSEDED_GC_MS = 5000
 // enough that the sampling stringify work is noise and fast enough to catch
 // growth trends inside a single debugging session.
 const MEMORY_GAUGE_INTERVAL_MS = 30_000
+
+// WHY semantic deltas render at 10 Hz instead of transport speed:
+// Claude/Codex publish cumulative text, thinking, and tool-input snapshots so
+// the renderer can recover from a missed prefix. Folding every prefix threw
+// that advantage away: four busy agents produced 100+ React/ghost/debug/perf
+// pipelines per second, and the input/paint queue then sat behind seconds (or
+// minutes) of obsolete work even while JS heap stayed flat. A 100 ms preview
+// cadence matches the existing transcript and ghost journal batches, remains
+// visually live for text, and puts a hard per-owner ceiling on renderer work.
+// Structural semantic events bypass this delay and first flush the latest
+// queued snapshots, preserving block/turn completion ordering.
+const SEMANTIC_DELTA_FLUSH_MS = 100
 
 // WHY this quiet-window exists (Codex queued-message idle reconciliation):
 // The three edge-site clears (onSessionProcessState, onSessionSemanticEvent,
@@ -575,12 +591,26 @@ export function useIpcSubscriptions(
       }
     }
 
+    const quarantinesSessionFeed = (sessionId: string): boolean =>
+      refs.latestRuntimesRef.current[sessionId]?.recoveryFailureCode ===
+      'ownership-conflict'
+
+    // WHY every SessionFeed channel is fenced, rather than only transcript
+    // ingestion: session ids are renderer-chosen routing keys, not proof that
+    // the backend process currently attached to that key belongs to this
+    // workspace pane. A failed recovery can discover that another cwd/provider
+    // already owns the id after a few feed messages have arrived. Accepting even
+    // "harmless" lifecycle or screen events after that point can overwrite the
+    // quarantined runtime, clear its warning, or expose another agent's content.
+    // The conflict marker therefore acts as a fail-closed ownership fence until
+    // a later recovery has positively validated both provider kind and cwd.
+
     const offStarted = feed.onSessionStarted(({ sessionId, projectDir }) => {
+      if (quarantinesSessionFeed(sessionId)) return
       updateRuntime(sessionId, {
         projectDir,
         processStatus: 'started',
         processError: null,
-        inputReady: true,
       })
       const cwd = refs.stateRef.current.sessions[sessionId]?.cwd ?? projectDir
       refreshWorktrees(cwd)
@@ -592,8 +622,38 @@ export function useIpcSubscriptions(
       })
     })
 
+    const offInputReadiness = feed.onSessionInputReadiness(({ sessionId, input }) => {
+      if (quarantinesSessionFeed(sessionId)) return
+      setRuntimes(prev => {
+        const current = prev[sessionId] ?? emptyRuntime()
+        if (input.revision <= current.inputReadinessRevision) return prev
+        // WHY revisions are compared in the renderer instead of trusting IPC
+        // arrival order: a recovery snapshot is requested over invoke while
+        // live readiness travels over the feed. Either can win the race. Main's
+        // monotonic revision is the only ordering shared by both paths, so an
+        // older seed must never disable (or enable) a newer provider verdict.
+        return {
+          ...prev,
+          [sessionId]: appendFeedDebugLog(
+            {
+              ...current,
+              inputReady: input.ready,
+              inputReadinessRevision: input.revision,
+            },
+            {
+              layer: 'STATE',
+              kind: 'input_readiness',
+              summary: `input ${input.ready ? 'ready' : 'blocked'} · rev ${input.revision}`,
+              data: { revision: input.revision, reason: input.reason ?? null },
+            },
+          ),
+        }
+      })
+    })
+
     const offScreen = feed.onSessionScreen(
       ({ sessionId, plain, markdown, recent, recentMarkdown, picker }) => {
+        if (quarantinesSessionFeed(sessionId)) return
         const startedAt = performance.now()
         // latestScreenRef is the synchronous source of truth for
         // the Enter-baseline capture in TileLeaf — always update
@@ -740,6 +800,8 @@ export function useIpcSubscriptions(
     // a second IPC channel that races the bulk one.
 
     const offErr = feed.onSessionJsonlError(({ sessionId, message }) => {
+      if (quarantinesSessionFeed(sessionId)) return
+      flushSemanticEventQueue()
       // eslint-disable-next-line no-console
       console.warn(`[jsonl ${sessionId.slice(0, 8)}]`, message)
       updateRuntime(sessionId, {
@@ -749,6 +811,8 @@ export function useIpcSubscriptions(
     })
 
     const offExit = feed.onSessionExit(({ sessionId, exitCode }) => {
+      if (quarantinesSessionFeed(sessionId)) return
+      flushSemanticEventQueue()
       recentWorkContextRawBySession.delete(sessionId)
       codexCurrentTurnIdBySession.delete(sessionId)
       jsonlProviderStreamBySession.delete(sessionId)
@@ -813,6 +877,8 @@ export function useIpcSubscriptions(
     // too.
     const offProcessState = feed.onSessionProcessState(
       ({ sessionId, active, status }) => {
+        if (quarantinesSessionFeed(sessionId)) return
+        flushSemanticEventQueue()
         setRuntimes(prev => {
           const current = prev[sessionId] ?? emptyRuntime()
           const sessionKind = refs.stateRef.current.sessions[sessionId]?.kind
@@ -830,7 +896,6 @@ export function useIpcSubscriptions(
                 processActive: active,
                 processStatus: current.exited === null ? 'started' : current.processStatus,
                 processError: null,
-                inputReady: current.exited === null,
                 activityStatus: active ? (status ?? null) : null,
                 awaitingAssistant: false,
                 queuedMessages: shouldClearIdleQueue
@@ -860,13 +925,20 @@ export function useIpcSubscriptions(
       },
     )
 
-    const offSemantic = feed.onSessionSemanticEvent(({ sessionId, event }) => {
+    const handleSemanticEvent = (
+      { sessionId, event }: SessionSemanticEvent,
+      rawEventCount = 1,
+    ): void => {
+      // Re-check at fold time as well as enqueue time. A delta can be queued
+      // immediately before recovery discovers an ownership conflict; letting
+      // that queued payload through afterward would punch a hole in the fence.
+      if (quarantinesSessionFeed(sessionId)) return
       const span = perf.span('workspace.ipc.semantic.fold', { sessionId })
       let spanClosed = false
       const closeSpan = (data: Record<string, unknown>) => {
         if (spanClosed) return
         spanClosed = true
-        span.end(data)
+        span.end({ ...data, rawEventCount })
       }
       const semanticEvent = asRecord(event) ?? {}
       const observedProvider = providerSessionObservedEvent(event)
@@ -1119,11 +1191,48 @@ export function useIpcSubscriptions(
       closeSpan({
         sessionId,
         eventType: typeof semanticEvent.type === 'string' ? semanticEvent.type : 'semantic',
-        scheduled: true,
+        processed: true,
       })
+    }
+
+    const semanticEventQueue = new SemanticEventBackpressureQueue()
+    let semanticFlushTimer: number | null = null
+    const flushSemanticEventQueue = (): void => {
+      if (semanticFlushTimer !== null) {
+        window.clearTimeout(semanticFlushTimer)
+        semanticFlushTimer = null
+      }
+      for (const pending of semanticEventQueue.drain()) {
+        handleSemanticEvent(pending.message, pending.rawEventCount)
+      }
+    }
+    const scheduleSemanticEventFlush = (): void => {
+      if (semanticFlushTimer !== null) return
+      semanticFlushTimer = window.setTimeout(() => {
+        semanticFlushTimer = null
+        for (const pending of semanticEventQueue.drain()) {
+          handleSemanticEvent(pending.message, pending.rawEventCount)
+        }
+      }, SEMANTIC_DELTA_FLUSH_MS)
+    }
+    const offSemantic = feed.onSessionSemanticEvent(message => {
+      if (quarantinesSessionFeed(message.sessionId)) return
+      if (semanticEventQueue.tryPush(message)) {
+        scheduleSemanticEventFlush()
+        return
+      }
+
+      // WHY structural events flush first: delaying only deltas is safe because
+      // their snapshots supersede one another. Delaying block_completed,
+      // tool_result, turn_completed, or error boundaries would reorder them
+      // against process/JSONL channels and could resurrect already-finished
+      // turns. Flush the compact latest state, then fold the boundary now.
+      flushSemanticEventQueue()
+      handleSemanticEvent(message, message.rawEventCount ?? 1)
     })
 
     const offConditions = feed.onSessionConditions(({ sessionId, snapshot }) => {
+      if (quarantinesSessionFeed(sessionId)) return
       setRuntimes(prev => {
         const current = prev[sessionId] ?? emptyRuntime()
         const next = applyConditionSnapshot(current, snapshot)
@@ -1163,6 +1272,7 @@ export function useIpcSubscriptions(
     // timeline), so we just replace the field wholesale. Reference-equal bail
     // keeps Feed from re-rendering when an unrelated session updates.
     const offSubAgents = feed.onSessionSubAgents(({ sessionId, subAgents }) => {
+      if (quarantinesSessionFeed(sessionId)) return
       setRuntimes(prev => {
         const current = prev[sessionId] ?? emptyRuntime()
         if (current.subAgents === subAgents) return prev
@@ -1188,7 +1298,15 @@ export function useIpcSubscriptions(
     //   5. pendingCompaction clearing on compact summary entries.
     //   6. Optimistic-Codex-user reconciliation against the head row.
     const offEntries = feed.onSessionJsonlEntries(({ sessionId, entries }) => {
+      if (quarantinesSessionFeed(sessionId)) return
       if (!entries || entries.length === 0) return
+      // JSONL/process/exit live on sibling SessionFeed channels but still form
+      // ordering boundaries with semantic state. Letting a queued delta cross
+      // one would make committed reconciliation or process shutdown observe an
+      // older semantic turn, then apply the stale preview afterward. The queue
+      // is already compact, so boundary flush cost is proportional to active
+      // semantic owners rather than raw transport events.
+      flushSemanticEventQueue()
       const span = perf.span('workspace.ipc.jsonl.bulk', {
         sessionId,
         burstSize: entries.length,
@@ -2133,7 +2251,10 @@ export function useIpcSubscriptions(
     return () => {
       window.clearInterval(orphanSweepTimer)
       window.clearInterval(memoryGaugeTimer)
+      if (semanticFlushTimer !== null) window.clearTimeout(semanticFlushTimer)
+      semanticEventQueue.drain()
       offStarted()
+      offInputReadiness()
       offScreen()
       // No singular offEntry() — see the deleted-handler comment
       // above. The bulk path is the only one.

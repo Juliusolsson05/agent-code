@@ -1,4 +1,5 @@
-import { useEffect, type RefObject } from 'react'
+import { useEffect } from 'react'
+import type { RefObject } from 'react'
 
 // Auto-grow the composer textarea to fit its content, up to a cap.
 // We keep a single line by default; as the user types (or pastes) a

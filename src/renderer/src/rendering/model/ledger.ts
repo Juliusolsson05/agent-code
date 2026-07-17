@@ -1,8 +1,8 @@
 import type { AgentProviderKind } from '@shared/types/providerKind'
-import {
-  decideGhostCandidate,
-  type GhostPredicateContext,
-  type GhostPredicateInput,
+import { decideGhostCandidate } from '@renderer/rendering/model/ghostPredicate'
+import type {
+  GhostPredicateContext,
+  GhostPredicateInput,
 } from '@renderer/rendering/model/ghostPredicate'
 import {
   buildCommittedOwnership,

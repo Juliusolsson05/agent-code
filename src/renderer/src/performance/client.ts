@@ -1,10 +1,7 @@
-import { SpanStatusCode, trace, type Attributes } from '@opentelemetry/api'
-import {
-  BasicTracerProvider,
-  BatchSpanProcessor,
-  type ReadableSpan,
-  type SpanExporter,
-} from '@opentelemetry/sdk-trace-base'
+import { SpanStatusCode, trace } from '@opentelemetry/api'
+import type { Attributes } from '@opentelemetry/api'
+import { BasicTracerProvider, BatchSpanProcessor } from '@opentelemetry/sdk-trace-base'
+import type { ReadableSpan, SpanExporter } from '@opentelemetry/sdk-trace-base'
 import { ExportResultCode } from '@opentelemetry/core'
 
 import type {

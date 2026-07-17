@@ -34,6 +34,7 @@
       "opencode-headless/*": ["./packages/opencode-headless/src/*"],
       "agent-transcript-parser": ["./packages/agent-transcript-parser/src/index.ts"],
       "agent-transcript-parser/*": ["./packages/agent-transcript-parser/src/*"],
+      "workflow-mcp/state": ["./packages/workflow-mcp/src/state.ts"],
       "@main/*": ["./src/main/*"],
       "@preload/*": ["./src/preload/*"],
       "@renderer/*": ["./src/renderer/src/*"],
@@ -44,6 +45,11 @@
   },
   "include": [
     "src/renderer/**/*",
+    // Renderer specs use the DOM matchers installed by the Vitest setup module. The setup lived
+    // outside every web include glob, so runtime tests passed while the authoritative web checker
+    // could not see its `expect` augmentation. Include the one shared setup instead of adding
+    // matcher imports to individual specs and letting the two test environments drift.
+    "testing/setup/renderer.ts",
     // The phone client is browser code type-checked here (react-jsx, DOM
     // lib) even though it builds through its own plain-Vite config — the
     // tsc gate must cover it or client drift ships silently.

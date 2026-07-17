@@ -1,9 +1,7 @@
 import { useMemo } from 'react'
 
-import {
-  buildAgentStatusModel,
-  type AgentStatusModel,
-} from '@renderer/features/agent-status/model/agentStatusModel'
+import { buildAgentStatusModel } from '@renderer/features/agent-status/model/agentStatusModel'
+import type { AgentStatusModel } from '@renderer/features/agent-status/model/agentStatusModel'
 import {
   errorFields,
   identityFields,
@@ -11,8 +9,8 @@ import {
   placementFields,
   relationshipFields,
   runtimeFields,
-  type AgentStatusField,
 } from '@renderer/features/agent-status/model/formatAgentStatus'
+import type { AgentStatusField } from '@renderer/features/agent-status/model/formatAgentStatus'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 
 type Props = {

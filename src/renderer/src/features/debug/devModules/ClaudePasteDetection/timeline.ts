@@ -55,6 +55,8 @@ export function buildLifecycle(session: PasteDebugSession): SubmitLifecycle {
   // Content-match events (#279 fix) with back-compat to the older
   // placeholder-only event names so historical journals still read.
   const appeared =
+    find(ev, 'PTY', 'delivery:paste-absorbed') ??
+    find(ev, 'PTY', 'delivery:images-absorbed') ??
     find(ev, 'SCREEN', 'paste:absorbed') ?? find(ev, 'SCREEN', 'placeholder:appeared')
   const timedOut =
     find(ev, 'SCREEN', 'paste:absorb-timeout') ??
@@ -62,18 +64,27 @@ export function buildLifecycle(session: PasteDebugSession): SubmitLifecycle {
     find(ev, 'SCREEN', 'placeholder:no-session')
   const submitCr = find(ev, 'IPC', 'write:submit-cr')
   const singleWrite = find(ev, 'IPC', 'write:paste-and-submit-single')
+  const accepted =
+    find(ev, 'PTY', 'delivery:acceptance-user') ??
+    find(ev, 'PTY', 'delivery:acceptance-queue')
+  const mainEnter = find(ev, 'PTY', 'delivery:enter-written')
+  const uncertain = find(ev, 'PTY', 'delivery:uncertain')
   const threw = ev.find(e => e.layer === 'ERROR')
 
-  // Outcome precedence: a thrown submit is the worst, then a placeholder that
-  // never rendered (the racy stuck case #90 chases), then any CR/single write
-  // that actually went out, else we only saw the keypress.
-  const outcome: SubmitOutcome = threw
-    ? 'error'
-    : timedOut
-      ? 'stuck'
-      : submitCr || singleWrite
-        ? 'submitted'
-        : enter
+  // Durable acceptance outranks renderer bookkeeping: a late UI error cannot
+  // undo a user/queue entry Claude already committed. Conversely, historical
+  // CR/single-write events prove only that bytes were attempted, not that the
+  // TUI consumed Enter; retaining them as "submitted" would preserve the exact
+  // false-success diagnosis this state machine was added to eliminate.
+  const outcome: SubmitOutcome = accepted
+    ? 'submitted'
+    : threw
+      ? 'error'
+      : uncertain
+        ? 'error'
+        : timedOut
+          ? 'pending'
+          : enter || mainEnter || submitCr || singleWrite
           ? 'pending'
           : 'unknown'
 
@@ -86,7 +97,9 @@ export function buildLifecycle(session: PasteDebugSession): SubmitLifecycle {
     startedAt: session.startedAt,
     issuedToDetectedMs: enter && appeared ? appeared.ts - enter.ts : null,
     waitedMs: num(appeared?.data, 'waitedMs'),
-    detectedToSubmitMs: appeared && submitCr ? submitCr.ts - appeared.ts : null,
+    detectedToSubmitMs: appeared && (submitCr ?? mainEnter)
+      ? (submitCr ?? mainEnter)!.ts - appeared.ts
+      : null,
     outcome,
     composerLen: num(enter?.data, 'composerLen'),
     strategy,

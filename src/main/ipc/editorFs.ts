@@ -3,7 +3,7 @@ import { constants } from 'fs'
 import { access, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'fs/promises'
 import { basename, dirname, join, relative, resolve } from 'path'
 
-import { EditorFsCache } from './editorFsCache'
+import { EditorFsCache } from './editorFsCache.js'
 // Result shapes are the shared renderer↔main contract. Importing them
 // (instead of redeclaring) makes a field change here a compile error in
 // preload/renderer rather than silent drift. Validation stays in this file.

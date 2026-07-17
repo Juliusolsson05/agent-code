@@ -13,16 +13,13 @@ import { memo, useEffect, useRef, useState, type ReactNode } from 'react'
 // Solution: entries in the last EAGER_TAIL positions render immediately
 // (they're in/near the viewport). Everything above starts as a thin
 // placeholder div. An IntersectionObserver watches each placeholder and
-// swaps in the real content when the user scrolls up to it. Once
-// mounted, the entry stays mounted forever — React.memo keeps
-// subsequent re-renders free, and we avoid the re-parse cost that full
-// virtualization (unmount→remount on scroll) would cause.
+// swaps in the real content when the user scrolls up to it. Historical rows
+// outside a generous retention margin unmount again while preserving their
+// measured height, so a long browsing session cannot eventually materialize
+// the entire durable transcript.
 //
-// Why not full virtualization (react-window / tanstack-virtual):
+// Why not an index-based virtualizer (react-window / tanstack-virtual):
 //   - Our entry count is low hundreds, not tens of thousands.
-//   - Virtualization unmounts rows that scroll out of view. Re-mounting
-//     means re-parsing markdown (React.memo doesn't survive unmount).
-//     We'd need a separate parsed-output cache. Complexity for no gain.
 //   - Variable row heights (user prompt = 1 line, assistant with code
 //     blocks = 500px+) make fixed-size virtualizers useless and
 //     measured-height virtualizers finicky.
@@ -43,10 +40,10 @@ export const EAGER_TAIL = 30
  * immediately. Otherwise, renders a placeholder and waits for the
  * IntersectionObserver to fire before mounting the real content.
  *
- * Once mounted, stays mounted permanently — the `mounted` state only
- * transitions false→true, never back. This is load-bearing: unmounting
- * would discard React.memo's cached render tree and force a full
- * re-parse of the entry's markdown on the next scroll-into-view.
+ * Historical entries can transition back to a measured placeholder. The
+ * renderer pays a remount only if the user actually returns; that bounded,
+ * interaction-driven cost is preferable to retaining every Markdown AST,
+ * highlighted code tree, and disclosure the user has ever scrolled past.
  */
 export const LazyEntry = memo(function LazyEntry({
   eager,
@@ -65,6 +62,7 @@ export const LazyEntry = memo(function LazyEntry({
   children: ReactNode
 }) {
   const [mounted, setMounted] = useState(eager)
+  const [measuredHeight, setMeasuredHeight] = useState<number | null>(null)
   const placeholderRef = useRef<HTMLDivElement>(null)
 
   // If this entry starts lazy but later falls into the eager zone
@@ -105,6 +103,39 @@ export const LazyEntry = memo(function LazyEntry({
     return () => observer.disconnect()
   }, [mounted, suspended, scrollerRef])
 
+  useEffect(() => {
+    if (!mounted || eager) return
+    const element = placeholderRef.current
+    if (!element) return
+
+    const rememberHeight = (): void => {
+      const height = Math.ceil(element.getBoundingClientRect().height)
+      if (height > 0) setMeasuredHeight(previous => previous === height ? previous : height)
+    }
+    rememberHeight()
+    const resize = new ResizeObserver(rememberHeight)
+    resize.observe(element)
+
+    // WHY the retention margin is much larger than the mount lookahead: rows
+    // stay warm across ordinary small scroll corrections, but a trip through a
+    // long resumed conversation eventually releases old DOM. Preserving the
+    // measured block height keeps scroll geometry stable when that happens.
+    const visibility = new IntersectionObserver(
+      ([entry]) => {
+        if (!entry.isIntersecting) {
+          rememberHeight()
+          setMounted(false)
+        }
+      },
+      { root: scrollerRef.current, rootMargin: '1200px 0px 1200px 0px' },
+    )
+    visibility.observe(element)
+    return () => {
+      resize.disconnect()
+      visibility.disconnect()
+    }
+  }, [eager, mounted, scrollerRef])
+
   if (!mounted) {
     // Placeholder: a fixed-height div that approximates a typical
     // entry. The exact height doesn't matter much — it just needs to
@@ -115,8 +146,14 @@ export const LazyEntry = memo(function LazyEntry({
     // result or system row). Taller entries will cause a small layout
     // shift on mount, but that happens off-screen (200px above the
     // viewport) so the user never sees it.
-    return <div ref={placeholderRef} className="min-h-[48px]" />
+    return (
+      <div
+        ref={placeholderRef}
+        className="min-h-[48px]"
+        style={measuredHeight === null ? undefined : { height: measuredHeight }}
+      />
+    )
   }
 
-  return <>{children}</>
+  return <div ref={placeholderRef}>{children}</div>
 })

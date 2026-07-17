@@ -78,11 +78,41 @@ export function focusMainWindow(): void {
 type OutboundObserver = (channel: string, args: readonly unknown[]) => void
 let outboundObserver: OutboundObserver | null = null
 
+type OutboundIpcBreadcrumb = {
+  at: number
+  channel: string
+  metadata: Record<string, string | number | boolean>
+}
+
+const OUTBOUND_IPC_BREADCRUMB_LIMIT = 32
+const outboundIpcBreadcrumbs = new Array<OutboundIpcBreadcrumb | undefined>(
+  OUTBOUND_IPC_BREADCRUMB_LIMIT,
+)
+let outboundIpcBreadcrumbCount = 0
+let outboundIpcBreadcrumbWriteIndex = 0
+const outboundIpcCounts = new Map<string, { count: number; lastAt: number }>()
+
 export function setOutboundObserver(observer: OutboundObserver | null): void {
   outboundObserver = observer
 }
 
+export function getOutboundIpcDiagnostics(): {
+  recent: OutboundIpcBreadcrumb[]
+  counts: Array<{ channel: string; count: number; lastAt: number }>
+} {
+  // Return copies because the freeze logger serializes asynchronously from the same main-process
+  // structures that hot session traffic continues mutating. A stable diagnostic snapshot matters
+  // more than saving two tiny allocations on a path that only runs after a detected stall.
+  return {
+    recent: readOutboundIpcBreadcrumbs(),
+    counts: [...outboundIpcCounts.entries()]
+      .map(([channel, value]) => ({ channel, ...value }))
+      .sort((left, right) => right.lastAt - left.lastAt),
+  }
+}
+
 export function sendToMainWindow(channel: string, ...args: unknown[]): void {
+  recordOutboundIpcBreadcrumb(channel, args)
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send(channel, ...args)
   }
@@ -95,6 +125,142 @@ export function sendToMainWindow(channel: string, ...args: unknown[]): void {
       /* recording is a diagnostic; never let it break IPC */
     }
   }
+}
+
+export function recordIpcDiagnosticBreadcrumb(
+  channel: string,
+  metadata: Record<string, string | number | boolean>,
+): void {
+  // WHY request/response milestones share the bounded outbound ring: a renderer freeze often sits
+  // exactly between a main-process IPC response and its renderer acknowledgement. OpenTelemetry
+  // spans eventually reach disk but were missing request cursors and response sizes in the copied
+  // terminal snapshot. This metadata-only hook makes that causal edge visible without retaining
+  // prompts, commands, output, or arbitrary IPC arguments.
+  const at = Date.now()
+  const previous = outboundIpcCounts.get(channel)
+  outboundIpcCounts.set(channel, { count: (previous?.count ?? 0) + 1, lastAt: at })
+  appendOutboundIpcBreadcrumb({
+    at,
+    channel,
+    metadata: sanitizeDiagnosticMetadata(metadata),
+  })
+}
+
+function recordOutboundIpcBreadcrumb(channel: string, args: readonly unknown[]): void {
+  const at = Date.now()
+  const previous = outboundIpcCounts.get(channel)
+  outboundIpcCounts.set(channel, { count: (previous?.count ?? 0) + 1, lastAt: at })
+  appendOutboundIpcBreadcrumb({
+    at,
+    channel,
+    metadata: outboundMetadata(args),
+  })
+}
+
+function appendOutboundIpcBreadcrumb(item: OutboundIpcBreadcrumb): void {
+  // WHY this is a fixed ring rather than push/splice: this function is on the
+  // IPC hot path. A prolonged stream must replace one slot without growing an
+  // array, shifting old entries, or retaining arguments beyond their metadata.
+  outboundIpcBreadcrumbs[outboundIpcBreadcrumbWriteIndex] = item
+  outboundIpcBreadcrumbWriteIndex =
+    (outboundIpcBreadcrumbWriteIndex + 1) % OUTBOUND_IPC_BREADCRUMB_LIMIT
+  outboundIpcBreadcrumbCount = Math.min(
+    outboundIpcBreadcrumbCount + 1,
+    OUTBOUND_IPC_BREADCRUMB_LIMIT,
+  )
+}
+
+function readOutboundIpcBreadcrumbs(): OutboundIpcBreadcrumb[] {
+  const result: OutboundIpcBreadcrumb[] = []
+  const start = outboundIpcBreadcrumbCount < OUTBOUND_IPC_BREADCRUMB_LIMIT
+    ? 0
+    : outboundIpcBreadcrumbWriteIndex
+  for (let offset = 0; offset < outboundIpcBreadcrumbCount; offset += 1) {
+    const item = outboundIpcBreadcrumbs[
+      (start + offset) % OUTBOUND_IPC_BREADCRUMB_LIMIT
+    ]
+    if (item) result.push({ ...item, metadata: { ...item.metadata } })
+  }
+  return result
+}
+
+function outboundMetadata(args: readonly unknown[]): Record<string, string | number | boolean> {
+  const metadata: Record<string, string | number | boolean> = { argumentCount: args.length }
+  const payload = asRecord(args[0])
+  if (!payload) {
+    if (typeof args[0] === 'string') metadata.firstStringLength = args[0].length
+    return metadata
+  }
+
+  // WHY this intentionally captures shape, not content: the freeze line belongs in the terminal
+  // and can therefore outlive debug-retention cleanup or be pasted into an issue. Identifiers,
+  // event families, and collection/string sizes are enough to identify a transport avalanche;
+  // prompts, tool input, terminal bytes, and assistant output are both noisy and potentially
+  // sensitive, so none of their actual text belongs in this always-on breadcrumb ring. Even
+  // identifier and event-family fields are represented only by length; their expected shape is not
+  // a trustworthy guarantee once provider data crosses the boundary.
+  copyStringLength(payload, metadata, 'sessionId')
+  copyStringLength(payload, metadata, 'runId')
+  copyStringLength(payload, metadata, 'type')
+  copyNumberMetadata(payload, metadata, 'fromCursor')
+  copyNumberMetadata(payload, metadata, 'toCursor')
+  copyNumberMetadata(payload, metadata, 'rawEventCount')
+  copyCollectionLength(payload, metadata, 'events')
+  copyCollectionLength(payload, metadata, 'entries')
+  copyCollectionLength(payload, metadata, 'runs')
+  copyStringLength(payload, metadata, 'data')
+  copyStringLength(payload, metadata, 'screen')
+  const event = asRecord(payload.event)
+  if (event && typeof event.type === 'string') metadata.eventTypeLength = event.type.length
+  return metadata
+}
+
+function sanitizeDiagnosticMetadata(
+  source: Record<string, string | number | boolean>,
+): Record<string, string | number | boolean> {
+  const result: Record<string, string | number | boolean> = {}
+  for (const [key, value] of Object.entries(source).slice(0, 24)) {
+    if (typeof value !== 'string') {
+      result[key] = value
+      continue
+    }
+    // WHY no renderer/provider string is ever copied verbatim: names such as `runId`, `type`, or
+    // `code` describe expected shape, not trustworthy provenance. A malformed payload can place a
+    // prompt, command, token, or path in any of them. Counts and lengths retain avalanche evidence
+    // without attempting an impossible content classifier at the terminal logging boundary.
+    result[`${key}Length`] = value.length
+  }
+  return result
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
+}
+
+function copyNumberMetadata(
+  source: Record<string, unknown>,
+  target: Record<string, string | number | boolean>,
+  key: string,
+): void {
+  if (typeof source[key] === 'number' && Number.isFinite(source[key])) target[key] = source[key]
+}
+
+function copyCollectionLength(
+  source: Record<string, unknown>,
+  target: Record<string, string | number | boolean>,
+  key: string,
+): void {
+  if (Array.isArray(source[key])) target[`${key}Count`] = source[key].length
+}
+
+function copyStringLength(
+  source: Record<string, unknown>,
+  target: Record<string, string | number | boolean>,
+  key: string,
+): void {
+  if (typeof source[key] === 'string') target[`${key}Length`] = source[key].length
 }
 
 export function zoomMainWindow(direction: 'in' | 'out' | 'reset'): void {
@@ -168,6 +334,17 @@ export function createMainWindow(): void {
       sandbox: false,
       contextIsolation: true,
       nodeIntegration: false,
+      // WHY Agent Code opts out of Chromium's background scheduler suspension: workflows and
+      // provider sessions keep producing durable state while the window is occluded or lives on a
+      // different macOS Space. On Electron 31/macOS 26 we captured a foreground-visible renderer
+      // whose heartbeat stopped for 20+ seconds while its native main thread slept in a condition
+      // wait; Electron never emitted `unresponsive`, main stayed healthy, and the next workflow IPC
+      // hint could not wake the page. That is the signature of lifecycle throttling, not expensive
+      // React work. A brief power saving is not worth making the control plane appear crashed or
+      // forcing a huge catch-up burst when the window returns. This also makes Page Visibility stay
+      // `visible`, which gives workflow polling one stable contract across occlusion/fullscreen
+      // transitions instead of relying on Chromium's platform-specific timer budget.
+      backgroundThrottling: false,
     },
   })
 

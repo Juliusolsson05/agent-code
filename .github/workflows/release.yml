@@ -133,11 +133,19 @@ jobs:
       - name: Install dependencies
         run: npm ci --include=dev
 
-      - name: Typecheck
+      - name: Type-check main and renderer
+        # electron-vite transpiles TypeScript but does not enforce the project references. This gate
+        # caught a real recovery_required count initializer that produced NaN in the shipped UI.
         run: npm run typecheck
 
-      - name: Test
-        run: npm test
+      - name: Test Workflow MCP
+        run: npm --prefix packages/workflow-mcp test
+
+      - name: Test Agent Code workflow integration
+        run: |
+          npm run test:unit
+          npm run test:integration
+          npm run test:renderer
 
       - name: Audit production dependencies
         run: npm run audit:production

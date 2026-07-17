@@ -4,19 +4,20 @@ import {
   FONT_FAMILIES,
   THEME_MODES,
   WORKSPACE_MODES,
-  type AccentId,
-  type AgentViewMode,
-  type FontFamilyId,
-  type Settings,
-  type ThemeMode,
-  type WorkspaceModeId,
+} from '@renderer/app-state/settings/types'
+import type {
+  AccentId,
+  AgentViewMode,
+  FontFamilyId,
+  Settings,
+  ThemeMode,
+  WorkspaceModeId,
 } from '@renderer/app-state/settings/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
-import { SETTING_CATEGORIES, type SettingCategoryId } from '@renderer/features/settings/lib/settingsCategories'
-import {
-  listPickerCommandMeta,
-  type PickerCommandMeta,
-} from '@renderer/features/command-palette/registry'
+import { SETTING_CATEGORIES } from '@renderer/features/settings/lib/settingsCategories'
+import type { SettingCategoryId } from '@renderer/features/settings/lib/settingsCategories'
+import { listPickerCommandMeta } from '@renderer/features/command-palette/registry'
+import type { PickerCommandMeta } from '@renderer/features/command-palette/registry'
 
 export type SettingActionContext = {
   workspace: Workspace
@@ -361,6 +362,45 @@ export function getSettingsRegistry(): SettingDefinition[] {
         type: 'toggle',
         getValue: settings => settings.showWorktreeBadges,
         onToggle: (ctx, value) => ctx.onChange({ showWorktreeBadges: value }),
+      },
+    },
+    {
+      id: 'usage-header',
+      category: 'workspace',
+      title: 'Usage in Header',
+      description:
+        'Show Claude and Codex quota usage in the header bar. Click the indicator to open the full Usage modal.',
+      keywords: ['usage', 'quota', 'limits', 'header', 'tokens', 'claude', 'codex'],
+      control: {
+        type: 'toggle',
+        getValue: settings => settings.usageHeaderEnabled,
+        onToggle: (ctx, value) => ctx.onChange({ usageHeaderEnabled: value }),
+      },
+    },
+    {
+      // The registry has no dependent-visibility concept, so this select
+      // stays visible while the toggle above is off — it simply has no
+      // visible effect until the header is enabled, and the description
+      // says so. Modeling enable+level as one 5-option select was
+      // rejected: the palette needs a plain on/off toggle command, and
+      // splitting keeps setting↔command mappings 1:1.
+      id: 'usage-header-level',
+      category: 'workspace',
+      title: 'Usage Header Detail',
+      description:
+        'How much detail the header usage indicator shows (no effect while Usage in Header is off).',
+      keywords: ['usage', 'quota', 'level', 'detail', 'header'],
+      control: {
+        type: 'select',
+        getValue: settings => settings.usageHeaderLevel,
+        options: [
+          { value: 'minimal', label: 'Minimal', description: 'Single worst-case percentage across both providers.' },
+          { value: 'providers', label: 'Providers', description: 'One chip per provider showing its most constrained limit.' },
+          { value: 'all', label: 'All limits', description: 'Every active limit row per provider, compact labels.' },
+          { value: 'detailed', label: 'Detailed', description: 'All limits plus severity bars and reset countdowns.' },
+        ],
+        onSelect: (ctx, value) =>
+          ctx.onChange({ usageHeaderLevel: value as Settings['usageHeaderLevel'] }),
       },
     },
     {

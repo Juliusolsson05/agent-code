@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
-import { createSessionLedger, type LedgerInput } from '@renderer/rendering/model/ledger'
+import { createSessionLedger } from '@renderer/rendering/model/ledger'
+import type { LedgerInput } from '@renderer/rendering/model/ledger'
 import type { RenderCandidate } from '@renderer/rendering/model/types'
 
 // ---------------------------------------------------------------------------

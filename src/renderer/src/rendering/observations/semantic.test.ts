@@ -1,9 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
-import {
-  collectSemanticCandidates,
-  type SemanticTurnLike,
-} from '@renderer/rendering/observations/semantic'
+import { collectSemanticCandidates } from '@renderer/rendering/observations/semantic'
+import type { SemanticTurnLike } from '@renderer/rendering/observations/semantic'
 
 const T0 = 1_700_000_000_000
 

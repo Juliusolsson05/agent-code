@@ -10,9 +10,9 @@
 // Direct file imports — the parser files are pure TypeScript, safe for
 // the renderer bundle. The headless package entry points pull in Node
 // deps so we can't import through them in browser context.
-import { extractAssistantInProgress as claudeExtract } from '@shared/parsers/claudeScreen'
-import { extractCodexAssistantInProgress as codexExtract } from '@shared/parsers/codexScreen'
-import type { AgentProviderKind } from '@shared/types/providerKind'
+import { extractAssistantInProgress as claudeExtract } from '@shared/parsers/claudeScreen.js'
+import { extractCodexAssistantInProgress as codexExtract } from '@shared/parsers/codexScreen.js'
+import type { AgentProviderKind } from '@shared/types/providerKind.js'
 
 // Alias of the single provider source of truth (#394 phase 1). The
 // dispatch below is still hand-written — moving the parser onto the

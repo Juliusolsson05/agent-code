@@ -45,18 +45,26 @@ export function formatPercent(percent: number | null): string {
   return percent === null ? 'unknown' : `${percent}%`
 }
 
-export function formatReset(value: string | null): string | null {
+/** Compact reset countdown for the header widget: "42m" / "3h" / "4d" /
+ *  "soon". Same bucketing as the modal's formatReset — that function now
+ *  delegates here so the two surfaces can never disagree about rounding. */
+export function formatResetShort(value: string | null): string | null {
   if (!value) return null
   const ts = Date.parse(value)
   if (!Number.isFinite(ts)) return null
   const deltaMs = ts - Date.now()
-  if (deltaMs <= 0) return 'resets soon'
+  if (deltaMs <= 0) return 'soon'
   const minutes = Math.round(deltaMs / 60_000)
-  if (minutes < 60) return `resets in ${minutes}m`
+  if (minutes < 60) return `${minutes}m`
   const hours = Math.round(minutes / 60)
-  if (hours < 48) return `resets in ${hours}h`
-  const days = Math.round(hours / 24)
-  return `resets in ${days}d`
+  if (hours < 48) return `${hours}h`
+  return `${Math.round(hours / 24)}d`
+}
+
+export function formatReset(value: string | null): string | null {
+  const short = formatResetShort(value)
+  if (short === null) return null
+  return short === 'soon' ? 'resets soon' : `resets in ${short}`
 }
 
 export function formatMoney(amount: number, currency: string | null): string {

@@ -10,6 +10,7 @@
 // construction). Same duplication discipline the preload bridge uses for
 // RemoteStatus. If a field changes shape, the client<->server integration
 // test (WebSocketSessionFeed.integration.test.ts) is what catches drift.
+import type { PromptDeliveryResult } from '@shared/types/providerConfig'
 
 export type RemoteSessionSummary = {
   sessionId: string
@@ -23,6 +24,7 @@ export type RemoteSessionSummary = {
 
 export type FeedChannel =
   | 'started'
+  | 'input-readiness'
   | 'screen'
   | 'jsonl-entries'
   | 'jsonl-error'
@@ -49,7 +51,14 @@ export type OutboundFrame =
   | { type: 'theme-settings'; themeSettings: Record<string, unknown> | null }
   | { type: 'session-list'; sessions: RemoteSessionSummary[] }
   | { type: 'session-event'; channel: FeedChannel; payload: unknown }
-  | { type: 'reply'; id?: string; ok: boolean; error?: string; result?: unknown }
+  | {
+      type: 'reply'
+      id?: string
+      ok: boolean
+      error?: string
+      result?: unknown
+      delivery?: PromptDeliveryResult
+    }
   | { type: 'error'; error: string }
 
 export type InboundMessage =

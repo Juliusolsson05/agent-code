@@ -4,23 +4,21 @@ import type { SemanticLiveTurn } from '@renderer/session-runtime/state'
 import type { GhostPredicateContext } from '@renderer/rendering/model/ghostPredicate'
 import type { GhostLedgerCandidate, LedgerInput } from '@renderer/rendering/model/ledger'
 import type { OwnershipDecision, RenderCandidate } from '@renderer/rendering/model/types'
-import {
-  collectCommittedCandidates,
-  type RawCommittedEntry,
-} from '@renderer/rendering/observations/committed'
-import { collectGhostCandidates, type GhostLike } from '@renderer/rendering/observations/ghosts'
+import { collectCommittedCandidates } from '@renderer/rendering/observations/committed'
+import type { RawCommittedEntry } from '@renderer/rendering/observations/committed'
+import { collectGhostCandidates } from '@renderer/rendering/observations/ghosts'
+import type { GhostLike } from '@renderer/rendering/observations/ghosts'
 import {
   buildEmptyCandidate,
   collectLifecycleCandidates,
   collectOptimisticCandidates,
-  type OptimisticPromptLike,
 } from '@renderer/rendering/observations/local'
+import type { OptimisticPromptLike } from '@renderer/rendering/observations/local'
 import {
   collectSemanticCandidates,
   isKnownBlockKind,
-  type SemanticBlockLike,
-  type SemanticTurnLike,
 } from '@renderer/rendering/observations/semantic'
+import type { SemanticBlockLike, SemanticTurnLike } from '@renderer/rendering/observations/semantic'
 import { createUnknownRegistry } from '@renderer/rendering/model/unknowns'
 import type { UnknownBehavior } from '@renderer/rendering/model/types'
 

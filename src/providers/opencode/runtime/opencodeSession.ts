@@ -21,13 +21,13 @@
 
 import { EventEmitter } from 'events'
 
-import {
-  OpencodeHeadless,
-  type CommittedEntryEvent,
-  type ScreenActivityEvent,
-  type ScreenPermissionEvent,
-  type ScreenQuestionEvent,
-  type SemanticEvent,
+import { OpencodeHeadless } from 'opencode-headless'
+import type {
+  CommittedEntryEvent,
+  ScreenActivityEvent,
+  ScreenPermissionEvent,
+  ScreenQuestionEvent,
+  SemanticEvent,
 } from 'opencode-headless'
 import type {
   AgentSession,
@@ -132,6 +132,10 @@ export class OpencodeSession extends EventEmitter implements AgentSession {
   }
 
   async start(): Promise<{ projectDir?: string } | void> {
+    this.emit('input-readiness', {
+      ready: false,
+      reason: this.resumeSessionId ? 'replaying-history' : 'provider-not-ready',
+    })
     const headless = new OpencodeHeadless({
       mode: 'spawn',
       cwd: this.cwd,
@@ -147,6 +151,7 @@ export class OpencodeSession extends EventEmitter implements AgentSession {
 
     headless.on('exit', ({ exitCode }) => {
       this.exited = true
+      this.emit('input-readiness', { ready: false, reason: 'provider-not-ready' })
       // AgentSession's exit payload types exitCode as a number; the
       // server can exit with a null code when killed by a signal.
       // Normalize null → -1, matching how the PTY providers report a
@@ -230,6 +235,23 @@ export class OpencodeSession extends EventEmitter implements AgentSession {
       this.headless = null
       throw err
     }
+
+    if (this.exited || this.headless !== headless) {
+      // WHY a resolved start promise is not sufficient evidence of liveness:
+      // the spawned server can emit exit while history publication is still
+      // unwinding, then let start() resolve. Emitting ready/started afterward
+      // creates a phantom writable backend in SessionManager. Treat the exit as
+      // the authoritative fact and run the same rollback as a rejected start.
+      try {
+        await headless.stop()
+      } catch {
+        /* best-effort */
+      }
+      if (this.headless === headless) this.headless = null
+      throw new Error('opencode exited during startup')
+    }
+
+    this.emit('input-readiness', { ready: true, reason: 'ready' })
 
     // Opencode has no per-cwd transcript directory to report as
     // projectDir (its storage root is server-owned, #406 blocker 1), so

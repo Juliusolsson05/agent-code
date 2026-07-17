@@ -10,7 +10,8 @@ import { DevicePairing } from './auth/DevicePairing.js'
 import { DeviceRegistry } from './auth/deviceRegistry.js'
 import { SessionFeedSource } from './SessionFeedSource.js'
 import { LanTransport } from './transport/LanTransport.js'
-import { RemoteServer, type RemoteSessionControl } from './RemoteServer.js'
+import { RemoteServer } from './RemoteServer.js'
+import type { RemoteSessionControl } from './RemoteServer.js'
 
 // End-to-end over real sockets: pairing over HTTP, authenticated WS,
 // feed fan-out, and the scope gate applied to a live connection. The
@@ -24,12 +25,17 @@ function makeManager(): FakeManager {
   emitter.list = vi.fn(() => [])
   emitter.getScreenSnapshot = vi.fn(() => null)
   emitter.getConditionsSnapshot = vi.fn(() => null)
+  emitter.getBackendSnapshot = vi.fn(() => null)
   emitter.resolveTranscriptFile = vi.fn(async () => null)
   emitter.getSpawnCwd = vi.fn(() => null)
   emitter.getLastActivityAt = vi.fn(() => null)
   emitter.write = vi.fn(() => true)
+  emitter.submitStagedPrompt = vi.fn(sessionId => emitter.write(sessionId, '\r'))
   emitter.resolveCondition = vi.fn(async () => ({ ok: true as const }))
-  emitter.deliverPromptToAgent = vi.fn(async () => ({ ok: true as const }))
+  emitter.deliverPromptToAgent = vi.fn(async () => ({
+    ok: true as const,
+    acceptance: { kind: 'transport' as const, acceptedAt: 123 },
+  }))
   emitter.getSessionKind = vi.fn(() => 'claude' as const)
   return emitter
 }
@@ -195,6 +201,13 @@ describe('event fan-out', () => {
         },
       },
     })
+    ;(manager.getBackendSnapshot as ReturnType<typeof vi.fn>).mockReturnValue({
+      sessionId: 'pre',
+      kind: 'claude',
+      cwd: '/repo',
+      lifecycle: 'live',
+      input: { ready: false, revision: 3, reason: 'replaying-history' },
+    })
     feedSource.dispose()
     feedSource = new SessionFeedSource(manager as never)
     server = new RemoteServer({
@@ -208,7 +221,8 @@ describe('event fan-out', () => {
     const { ws, frames } = await connect(token)
     await waitFor(frames, f =>
       framesOfType(f, 'session-event').some(e => e.channel === 'conditions') &&
-      framesOfType(f, 'session-event').some(e => e.channel === 'screen'),
+      framesOfType(f, 'session-event').some(e => e.channel === 'screen') &&
+      framesOfType(f, 'session-event').some(e => e.channel === 'input-readiness'),
     )
     // And the primed condition's pty action must be actionable.
     ws.send(JSON.stringify({
@@ -254,7 +268,7 @@ describe('inbound scope enforcement on a live socket', () => {
     ws.send(JSON.stringify({ token, id: 'a', message: { type: 'submit', sessionId: 's1' } }))
     ws.send(JSON.stringify({ token, id: 'b', message: { type: 'interrupt', sessionId: 's1' } }))
     await waitFor(frames, f => framesOfType(f, 'reply').length >= 2)
-    expect(manager.write).toHaveBeenCalledWith('s1', '\r')
+    expect(manager.submitStagedPrompt).toHaveBeenCalledWith('s1')
     expect(manager.write).toHaveBeenCalledWith('s1', '\x1b')
     ws.close()
   })

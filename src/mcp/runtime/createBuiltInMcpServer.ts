@@ -22,8 +22,9 @@ import {
   AGENT_PROVIDER_KINDS,
   DEFAULT_PROVIDER,
   isAgentProviderKind,
-  type AgentProviderKind,
 } from '@shared/types/providerKind.js'
+import type { AgentProviderKind } from '@shared/types/providerKind.js'
+import { registerWorkflowMcpTools, WORKFLOW_MCP_INSTRUCTIONS } from 'workflow-mcp'
 
 export function createBuiltInMcpServer(
   scope: McpSessionScope,
@@ -38,6 +39,13 @@ export function createBuiltInMcpServer(
       capabilities: {
         tools: {},
       },
+      // WHY the instructions travel in MCP initialization instead of Agent Code's chat prompt:
+      // workflow tools can be discovered lazily by Claude/Codex, and neither client should need
+      // implementation-repository context to know how to author, persist, poll, or resume a run.
+      // A session without the workflow domain must not be taught capabilities it cannot call.
+      ...(scope.domains.includes('workflows')
+        ? { instructions: WORKFLOW_MCP_INSTRUCTIONS }
+        : {}),
     },
   )
 
@@ -80,6 +88,32 @@ export function createBuiltInMcpServer(
 
   if (scope.domains.includes('agent_transcripts')) {
     registerAgentTranscriptTools(server)
+  }
+
+  if (scope.domains.includes('workflows')) {
+    // WHY the service is injected while registration stays request-scoped:
+    // BuiltInMcpHttpHost deliberately constructs a fresh McpServer for every
+    // POST so a provider's long-lived GET stream cannot wedge tool calls. The
+    // workflow service, however, owns active AbortControllers, durable cursors,
+    // and the one-writer guarantee for events.jsonl. Recreating that service
+    // with the protocol server would split run ownership and make cancel,
+    // idempotency, and resume racy. A cheap registrar over one app-owned
+    // service preserves both lifetimes.
+    if (dependencies.workflowService) {
+      registerWorkflowMcpTools(server, dependencies.workflowService, {
+        cwd: scope.cwd,
+        clientId: scope.sessionId,
+      }, {
+        onRunStarted: run => {
+          // WHY the provider transcript is not consulted here: current Codex intentionally defers
+          // MCP tools behind code mode, so the visible outer call is often `functions.exec` rather
+          // than `mcp__agent_code__workflow_run`. The scoped MCP handler still has the authoritative
+          // session ID and run result, making this boundary stable across Claude, Codex, and future
+          // clients regardless of how they choose to present tools to the model.
+          dependencies.workflowBridge?.registerRun(scope.sessionId, scope.cwd, run)
+        },
+      })
+    }
   }
 
   return server
@@ -434,7 +468,13 @@ function registerOrchestrationTools(
             'Pass all required context in the prompt until the inheritance path is redesigned.',
           ].join(' '),
         ),
-        builtInMcpDomains: z.array(z.enum(['ping', 'orchestration', 'ai_workspace', 'agent_transcripts'])).optional(),
+        builtInMcpDomains: z.array(z.enum([
+          'ping',
+          'orchestration',
+          'ai_workspace',
+          'agent_transcripts',
+          'workflows',
+        ])).optional(),
       },
     },
     async args => {
@@ -472,17 +512,23 @@ function registerOrchestrationTools(
           let cleanupAttempted = false
           let agentClosed = false
           let cleanupError: string | undefined
-          try {
-            cleanupAttempted = true
-            const cleanup = await bridge.closeAgent({
-              parentSessionId: scope.sessionId,
-              sessionId: agent.sessionId,
-            })
-            agentClosed = cleanup.closedSessionIds.includes(agent.sessionId)
-          } catch (err) {
-            cleanupError = err instanceof Error && err.message.length > 0
-              ? err.message
-              : 'Unknown orchestration cleanup failure.'
+          // WHY cleanup only a retry-safe rejection: after any prompt/Enter
+          // bytes were written, a timeout means acceptance is UNKNOWN, not
+          // absent. Closing that child can kill a correctly submitted turn and
+          // encourages callers to create a duplicate replacement agent.
+          if (delivery.retrySafe) {
+            try {
+              cleanupAttempted = true
+              const cleanup = await bridge.closeAgent({
+                parentSessionId: scope.sessionId,
+                sessionId: agent.sessionId,
+              })
+              agentClosed = cleanup.closedSessionIds.includes(agent.sessionId)
+            } catch (err) {
+              cleanupError = err instanceof Error && err.message.length > 0
+                ? err.message
+                : 'Unknown orchestration cleanup failure.'
+            }
           }
           dependencies.appRunJournal?.recordIncident({
             kind: 'orchestration.prompt_delivery_failed',
@@ -491,6 +537,11 @@ function registerOrchestrationTools(
             context: {
               sessionId: agent.sessionId,
               message: delivery.message,
+              stage: delivery.stage,
+              code: delivery.code,
+              retrySafe: delivery.retrySafe,
+              promptWritten: delivery.promptWritten,
+              enterWritten: delivery.enterWritten,
               cleanupAttempted,
               agentClosed,
               cleanupError,
@@ -500,6 +551,7 @@ function registerOrchestrationTools(
             ok: false,
             error: 'prompt_delivery_failed',
             message: delivery.message,
+            retrySafe: delivery.retrySafe,
             // WHY omit the live agent object on bootstrap failure:
             // `create_agent` is a two-step operation. By this point the
             // renderer has already created a real provider session with PTY,
@@ -508,12 +560,18 @@ function registerOrchestrationTools(
             // the full agent here made that half-created child look usable while
             // leaving cleanup to memory and luck. The failure result now reports
             // the session id plus cleanup outcome, and the child is best-effort
-            // closed before the error crosses the MCP boundary.
+            // closed before the error crosses the MCP boundary only when no
+            // bytes were written and the result explicitly says retry is safe.
             sessionId: agent.sessionId,
             cleanupAttempted,
             agentClosed,
             cleanupError,
-            promptSubmitted: false,
+            // `false` is only truthful when no bytes crossed the boundary.
+            // Omit it for uncertainty so an orchestrator cannot interpret a
+            // late acknowledgement as permission to duplicate the task.
+            ...(delivery.retrySafe
+              ? { promptSubmitted: false }
+              : { promptSubmission: 'uncertain' as const }),
           })
         }
         bridge.notePromptSubmitted(agent.sessionId)
@@ -632,12 +690,26 @@ function registerOrchestrationTools(
           kind: 'orchestration.prompt_delivery_failed',
           severity: 'error',
           reason: 'send_prompt',
-          context: { sessionId: args.sessionId, message: delivery.message },
+          context: {
+            sessionId: args.sessionId,
+            message: delivery.message,
+            stage: delivery.stage,
+            code: delivery.code,
+            retrySafe: delivery.retrySafe,
+            promptWritten: delivery.promptWritten,
+            enterWritten: delivery.enterWritten,
+          },
         })
         return toolText({
           ok: false,
           error: 'prompt_delivery_failed',
           message: delivery.message,
+          retrySafe: delivery.retrySafe,
+          stage: delivery.stage,
+          code: delivery.code,
+          promptWritten: delivery.promptWritten,
+          enterWritten: delivery.enterWritten,
+          promptSubmission: delivery.retrySafe ? 'not-submitted' : 'uncertain',
           sessionId: args.sessionId,
         })
       }
@@ -1078,7 +1150,7 @@ function sleep(ms: number): Promise<void> {
 // manager.deliverPromptToAgent → getMainProvider(kind).deliverPrompt →
 // providers/<kind>/runtime/promptDelivery.ts. The per-provider WHY
 // blocks (Codex readiness-before-paste + atomic paste+Enter; Claude
-// paste → placeholder confirm → separate Enter) moved with the code.
+// paste/image absorption → Enter → durable acceptance) moved with the code.
 // The inline `if codex … if claude …` that lived here let a third
 // provider fall through to a protocol-free paste (#394 §4.2).
 

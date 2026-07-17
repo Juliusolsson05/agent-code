@@ -31,6 +31,7 @@ import type {
   WorktreeActivityState,
 } from '@shared/work-context/types'
 import type { ProviderConditionSnapshot } from '@shared/types/providerConditions'
+import type { SessionRecoverFailureCode } from '@shared/types/session'
 import type { BuiltInMcpDomain } from '@mcp/shared/types'
 import type { SubAgentState } from '@preload/api/types'
 export type { SubAgentState, SubAgentToolCall } from '@preload/api/types'
@@ -63,6 +64,12 @@ export type ClaudeDraftImage = {
   previewUrl: string
   filename: string
 }
+
+export type PromptDeliveryUiState =
+  | { kind: 'idle' }
+  | { kind: 'sending'; prompt: string; startedAt: number }
+  | { kind: 'failed-safe'; message: string }
+  | { kind: 'uncertain'; prompt: string; message: string; failedAt: number }
 
 export type PendingRewindUndo = {
   createdAt: number
@@ -348,6 +355,15 @@ export type SessionRuntime = {
   conditions: ProviderConditionSnapshot | null
   draftInput: string
   draftImages: ClaudeDraftImage[]
+  /**
+   * WHY uncertainty survives TileLeaf remounts: a local hook ref disappears
+   * when tabs/panes remount and would immediately make an already-written
+   * prompt resendable. Runtime is the pane's stable ownership boundary. An
+   * uncertain copy is retained for manual recovery, but ordinary Enter is
+   * blocked until authoritative transcript activity or an explicit future
+   * recovery action resolves it.
+   */
+  promptDelivery: PromptDeliveryUiState
   /** Ephemeral next-prompt suggestion offered by the model (issue #174).
    *  Lives on the per-session runtime (not a global uiShell slice) because
    *  each pane has its own suggestion and it must survive tab switches.
@@ -507,7 +523,21 @@ export type SessionRuntime = {
    *  avoids treating an idle, ready agent as unavailable. */
   processStatus: ProcessStatus
   processError: string | null
+  /**
+   * Typed backend-recovery failure retained only for lifecycle decisions.
+   *
+   * WHY the human-readable processError is insufficient: an ownership
+   * conflict means this renderer explicitly does NOT own the main-process
+   * backend under the stable id. Closing that failed pane must therefore not
+   * call the ordinary id-only kill API, or it would terminate the unrelated
+   * backend recovery correctly refused to adopt. Other failures still own (or
+   * may own) their cancelled startup and should use normal teardown.
+   */
+  recoveryFailureCode: SessionRecoverFailureCode | null
   inputReady: boolean
+  /** Last main-owned readiness revision applied to this runtime. -1 means no
+   * authoritative snapshot/event has arrived yet. */
+  inputReadinessRevision: number
   semantic: SemanticRuntimeState
   /** Current in-feed stream phase. Set by the `stream_phase` reducer
    *  case from SemanticStreamPhaseEvent; additionally set by the
@@ -680,6 +710,7 @@ export function emptyRuntime(): SessionRuntime {
     conditions: null,
     draftInput: '',
     draftImages: [],
+    promptDelivery: { kind: 'idle' },
     promptSuggestion: null,
     pendingRewindUndo: null,
     activityStatus: null,
@@ -710,7 +741,9 @@ export function emptyRuntime(): SessionRuntime {
     transcriptError: null,
     processStatus: 'idle',
     processError: null,
+    recoveryFailureCode: null,
     inputReady: false,
+    inputReadinessRevision: -1,
     semantic: emptySemanticRuntime(),
     streamPhase: 'idle',
     streamPhasePendingToolName: null,

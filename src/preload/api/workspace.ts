@@ -16,5 +16,5 @@ export const workspaceApi = {
     ipcRenderer.invoke('workspace:save', json),
 
   defaultCwd: (): Promise<string> =>
-    ipcRenderer.invoke('workspace:defaultCwd'),
+    ipcRenderer.invoke('workspace:default-cwd'),
 }

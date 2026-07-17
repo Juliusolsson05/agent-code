@@ -3,7 +3,11 @@ import type { AgentProviderKind } from '@shared/types/providerKind'
 import type { MutableRefObject } from 'react'
 
 import { SlashCommandPicker } from '@providers/claude/renderer/SlashCommandPicker'
-import type { ClaudeDraftImage, SlashPickerState } from '@renderer/session-runtime/state'
+import type {
+  ClaudeDraftImage,
+  PromptDeliveryUiState,
+  SlashPickerState,
+} from '@renderer/session-runtime/state'
 import type { ComposerDictationController } from '@renderer/workspace/tile-tree/TileLeaf/useComposerDictation'
 import { PromptSuggestionChip } from '@renderer/workspace/tile-tree/TileLeaf/PromptSuggestionChip'
 
@@ -48,6 +52,8 @@ export function ComposerInput({
   promptSuggestion,
   onApplySuggestion,
   onDismissSuggestion,
+  promptDelivery,
+  onResolveUncertainDelivery,
 }: {
   inputRef: MutableRefObject<HTMLTextAreaElement | null>
   input: string
@@ -74,6 +80,8 @@ export function ComposerInput({
   onApplySuggestion: (text: string) => void
   /** Clear the suggestion without applying. */
   onDismissSuggestion: () => void
+  promptDelivery: PromptDeliveryUiState
+  onResolveUncertainDelivery: () => void
 }) {
   const showDictationPlaceholder = dictation.enabled && dictation.busy && input.length === 0
   const showDictationActivity = dictation.enabled && dictation.busy
@@ -100,6 +108,19 @@ export function ComposerInput({
           onApply={onApplySuggestion}
           onDismiss={onDismissSuggestion}
         />
+      ) : null}
+
+      {promptDelivery.kind === 'uncertain' ? (
+        <div className="mb-2 rounded border border-warning/50 bg-warning/10 p-2 text-[11px] text-ink">
+          <div>Claude may already have this prompt. Normal resend is blocked.</div>
+          <button
+            type="button"
+            className="mt-1 text-accent hover:underline"
+            onClick={onResolveUncertainDelivery}
+          >
+            I verified the transcript — allow sending again
+          </button>
+        </div>
       ) : null}
 
       {/* The composer is a <textarea> (not <input>) so the box can

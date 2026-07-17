@@ -3,14 +3,14 @@ import type {
   WorktreeActivityEvent,
   WorktreeActivityState,
   WorktreeIdentity,
-} from '@shared/work-context/types'
-import { extractWorktreeActivityEvents } from '@shared/work-context/extractors'
+} from '@shared/work-context/types.js'
+import { extractWorktreeActivityEvents } from '@shared/work-context/extractors.js'
 import {
   contextFromPath,
   fallbackContext,
   matchWorktree,
-} from '@shared/work-context/matching'
-import { confidenceRank } from '@shared/work-context/scoring'
+} from '@shared/work-context/matching.js'
+import { confidenceRank } from '@shared/work-context/scoring.js'
 
 const TIMELINE_LIMIT = 120
 const RECENT_KEY_LIMIT = 300

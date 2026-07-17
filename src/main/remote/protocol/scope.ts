@@ -1,4 +1,5 @@
-import { inboundFrameSchema, type InboundFrame } from '@main/remote/protocol/messages.js'
+import { inboundFrameSchema } from '@main/remote/protocol/messages.js'
+import type { InboundFrame } from '@main/remote/protocol/messages.js'
 
 // The v1 scope gate. One function, one job: nothing reaches a RemoteServer
 // handler unless it round-trips through the inbound schema union. The

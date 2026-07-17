@@ -5,7 +5,7 @@ import {
   SESSION_KINDS,
   isAgentProviderKind,
   isSessionKind,
-} from '@shared/types/providerKind'
+} from '@shared/types/providerKind.js'
 
 // Guards for the provider/session-kind source of truth. These protect the
 // boundary contract: untrusted strings (IPC args, persisted SessionMeta.kind,

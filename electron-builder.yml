@@ -24,6 +24,13 @@ files:
   - out/**
   - package.json
   - node_modules/**
+  # Agent Code resolves and validates one Codex CLI during setup and passes
+  # that absolute path to the SDK. Shipping the SDK's optional per-platform
+  # CLI packages would add hundreds of megabytes and create a second binary
+  # source of truth that setup never verified.
+  - "!node_modules/@openai/codex-darwin-*/**"
+  - "!node_modules/@openai/codex-linux-*/**"
+  - "!node_modules/@openai/codex-win32-*/**"
   - "!node_modules/.cache/**"
   - "!vendor/**"
   - "!testing/**"

@@ -21,7 +21,9 @@ const GlobalToastContext = createContext<GlobalToastContextValue>({
   showToast: () => {},
 })
 
-export const useGlobalToast = () => useContext(GlobalToastContext)
+export function useGlobalToast(): GlobalToastContextValue {
+  return useContext(GlobalToastContext)
+}
 
 export function GlobalToastProvider({ children }: { children: React.ReactNode }) {
   const [toast, setToast] = useState<string | null>(null)
