@@ -705,16 +705,20 @@ the PR merges only after Phase 10 plus the final whole-branch review.
   are explicit, large disclosures are lazy/bounded, non-conversational system
   metadata remains ledger-excluded with a total muted fallback, and durable
   compact entries remain Phase 10's exception.
-- **Phase 9 — long-tail coverage + proven deletion.** Capture soaks across
-  providers/models; classify every new fingerprint; keep the generic fallback
-  total; remove duplicate decoders only after provider adapters are canonical;
-  remove legacy branches only when catalog coverage proves no shape uses them;
-  update evergreen docs from as-built; close/supersede PR #524 with a recorded
-  port-or-reject decision per valuable primitive. Gate: no unknown/misrouted shape
-  in the corpus; the inbox still catches future upstream drift; one provider-owned
-  path per catalogued shape; every deletion backed by a catalog query + replay.
-  Keep the central Git and compact-entry exceptions until Phase 10 has their
-  paired evidence and replacement fixtures; Phase 9 must not delete them early.
+- **Phase 9 — long-tail coverage + proven deletion. Completed 2026-07-17.**
+  The frozen corpus has 3,686 known observations and the local recording soak
+  adds 7,250 current-`fp2` receipt sightings with no unknown/misrouted/unknown-
+  outcome group; old `fp1` telemetry is reported separately instead of posing
+  as current drift. The audit sorts its bounded newest-recording window and
+  prints actionable fatal details. Deterministic semantic routes graduated;
+  content/paired-dependent prefixes, reasoning, results, unified exec, Git, and
+  compaction remain explicitly planned. Duplicate result/partial decoders and
+  the Claude/Codex feed barrels, central ToolUseRow, answered-question, and Todo
+  exceptions are gone; the generic structured/MCP/media/raw fallback stays
+  total and the import-boundary gate proves shared feed neutrality. Evergreen
+  docs record the as-built deletion proof and PR #524 port/reject matrix; #524
+  is closed as superseded. The central Git and compact-entry branches remain
+  deliberately protected for Phase 10's paired evidence and replay cutover.
 - **Phase 10 — final Git + compaction ownership convergence.** First land the
   actual paired `renderOperation(ProviderOperationInput)` boundary promised by
   Phases 5–6, so one renderer receives correlated tool-use + result evidence.

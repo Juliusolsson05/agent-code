@@ -2365,6 +2365,32 @@ Tasks:
   paired evidence, replacement fixtures, and shadow/replay proof; Phase 9 must
   not delete them early.
 
+Completion boundary (2026-07-17):
+
+- the 48-bundle frozen corpus reports 3,686 structurally known observations;
+  the local 55-recording soak adds 7,250 current-`fp2` receipt sightings with
+  no unknown structure, misroute, or unknown outcome. Historical `fp1`
+  writer keys are reported separately because fingerprints produced by two
+  canonicalizers cannot be compared honestly;
+- the audit now sorts recording directories before applying its bounded newest
+  window and prints fatal fingerprint/route/path details, so a failure is a
+  usable inbox rather than a count that requires another ad hoc parser;
+- deterministic live Bash/Edit/Write and Codex apply_patch/exec_command routes
+  graduated from seed-era `planned` metadata. Prefixes, reasoning, result
+  envelopes, unified exec, durable Git commands, and patch success/error remain
+  planned only where content or paired-source evidence truly changes ownership;
+- Claude/Codex feed barrels, central ToolUseRow and answered-question/Todo
+  exceptions, and duplicate result/partial-string/object decoders are deleted.
+  The shared feed has no direct specific-provider renderer import; provider
+  interpretation enters only through the capability registry;
+- the generic fallback remains total across unknown tools/results/semantic
+  objects, including bounded structured JSON/JSONL/path-line, typed MCP/media,
+  and lazy exact-source evidence;
+- evergreen rendering/deletion docs now describe the as-built provider
+  directory boundary, shape memory, exact deletions, and the protected Phase 10
+  Git/compaction routes. PR #524 has a per-primitive port/reject inventory and
+  is closed as superseded by this evidence-first implementation.
+
 Exit gate:
 
 - the checked-in corpus has no unknown or misrouted shape;

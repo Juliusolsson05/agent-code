@@ -1,6 +1,6 @@
 # The Rendering System
 
-> **Status:** evergreen reference — describes the rendering pipeline as it is *today* (post the 2026-07 ownership-ledger rewrite and the #491/#492 block-level un-collapse). If you change the pipeline, change this doc in the same PR.
+> **Status:** evergreen reference — describes the rendering pipeline as it is *today* (post the 2026-07 ownership-ledger rewrite, the #491/#492 block-level un-collapse, and PR #555 Phases 1–9's evidence-first provider painter). If you change the pipeline, change this doc in the same PR.
 >
 > **Companion:** [`rendering-design-principles.md`](./rendering-design-principles.md) — how we *work on* this system (test-first, fixture-gated). Read that before touching any file below.
 >
@@ -191,9 +191,24 @@ A discriminated union: `entry` (a committed/ghost/optimistic transcript entry) �
 
 ### Row dispatch
 
-`EntryRow` → (`CompactBoundaryRow` / `CompactSummaryRow` / `TaskNotificationRow` / `ConversationRow` / `SystemRow`). `ConversationRow` renders string content as one `MarkerRow`, array content as one `Block` per content-block (coalescing adjacent subagent spawns under a `SubagentGroupHeader`). **`Block`** is the per-content-block dispatcher — `text`/`thinking`/`image`/`tool_use`/`tool_result` — routing tools through `getRendererProviderCapabilities(provider).renderToolUse/renderToolResult` with a shared `JsonToolRow`/`ToolResultRow` fallback, plus git-widget interception (`GitCardRow`), subagent rows, and AskUserQuestion answered rows.
+`EntryRow` → (`CompactBoundaryRow` / `CompactSummaryRow` / `TaskNotificationRow` / `ConversationRow` / `SystemRow`). `ConversationRow` renders string content as one `MarkerRow`, array content as one `Block` per content-block (coalescing adjacent subagent spawns under a `SubagentGroupHeader`). **`Block`** is the per-content-block dispatcher — `text`/`thinking`/`image`/`tool_use`/`tool_result` — routing tools through `getRendererProviderCapabilities(provider).renderToolUse/renderToolResult` with a shared `JsonToolRow`/`ToolResultRow` fallback, plus the still-central Git interception and subagent fleet grouping. Questions, tasks, Agent Code MCP, and every other provider vocabulary now enter through provider capabilities rather than central tool-name branches.
 
-Live rows mirror committed ones so streaming ≈ final: **`SemanticLiveBlockRow`** dispatches by `block.kind` and *reuses the committed provider renderers* for live Edit/MultiEdit/Codex tools (same card, partial input). Everything hangs off **`MarkerRow`** — the universal `❯` (user) / `⏺` (assistant) / `⎿` (tool/sub-item) fixed-marker-column + hanging-indent primitive — and prose flows through `TextProse`/`StreamingProse` (react-markdown + remark-gfm, `remark-breaks` for the streaming screen buffer). The single "agent is working" affordance is **`WorkIndicator`**, driven solely by `streamPhase`.
+The apparent centrality of `Block` is intentionally shallow. Provider interpretation lives under `src/providers/<provider>/renderer/`: `adapters/` decode that provider's wire vocabulary, `components/<family>/` compose provider chrome, and `rows/dispatch.tsx` is the committed capability. Shared code starts only after an adapter has produced a narrow semantic protocol model (`providers/shared/renderer/protocols/{code-edit,command,mcp-content,structured-output,…}`). The feed imports no specific provider renderer; the filesystem-scanning boundary test in `src/providers/importBoundaries.test.ts` makes that architectural rule executable.
+
+Live rows mirror committed ones so streaming ≈ final: **`SemanticLiveBlockRow`** first asks the provider's `renderSemanticBlock` capability, whose provider-local semantic dispatcher reuses the committed adapters/components when the wire shape is equivalent. Provider-neutral prose/reasoning and the total bounded JSON fallback remain central because they interpret no provider vocabulary. Everything hangs off **`MarkerRow`** — the universal `❯` (user) / `⏺` (assistant) / `⎿` (tool/sub-item) fixed-marker-column + hanging-indent primitive — and prose flows through `TextProse`/`StreamingProse` (react-markdown + remark-gfm). The single "agent is working" affordance is **`WorkIndicator`**, driven solely by `streamPhase`.
+
+Two central routes remain on purpose, and they are the complete Phase 10 list:
+
+- `Block` still intercepts paired shell commands whose *content* proves a Git operation, and absorbs the paired result into `GitCardRow`. A structural tool fingerprint cannot distinguish `git status` from `npm test`; moving this safely requires the paired provider operation boundary, not another name switch.
+- `EntryRow` still selects durable compact boundary/summary rows. Live compaction conditions and durable replayable transcript entries are different evidence planes; Phase 10 moves both to provider-owned compaction directories only after source precedence, screen-fallback provenance, deduplication, and replay fixtures exist.
+
+### Shape memory and total fallback
+
+The painter is instrumented at its actual decision points (`Block`, `EntryRow`, and `SemanticLiveBlockRow`). When developer session recording is armed, the observer in `features/feed/evidence/observer.ts` computes a bounded `fp2-*` structural fingerprint and records the paint outcome beside the ordinary recording. It retains literal structural key paths because this is developer evidence and the source recording already contains the complete local payload; scalar content is excluded from fingerprint *identity* so two different commands with the same grammar remain one shape.
+
+Reviewed shape promises live in `src/providers/{claude,codex,opencode}/renderer/shapes.ts`. A catalog entry says where the structure was observed, which lifecycle milestones exist, which fixture proves it, and whether the route is specialized, generic, absorbed, condition-owned, or deliberately still planned. `scripts/audit-rendering-shapes.mts` joins the frozen bundle corpus with optional live recording sidecars. Current `fp2` unknown, misrouted, and unknown-outcome observations fail the audit; old `fp1` telemetry is reported separately because fingerprints minted by two canonicalizers are not comparable. `src/providers/shapes.coverage.test.ts` permanently gates the checked-in corpus and catalog invariants.
+
+Unknown does not mean raw garbage or invisibility. Unknown tools use the bounded `JsonToolRow`; unknown results first try typed MCP, structured JSON/JSONL/path-line, and safe media presentations before the bounded raw result; an unknown semantic block exposes its normalized object lazily. Provider adapters are conservative and may decline to these same fallbacks. This is why the system can support open-world MCP without pretending to own every server schema.
 
 ---
 
@@ -228,9 +243,13 @@ This is why typing in the composer never re-parses the transcript's markdown, an
 | the item contract | `features/feed/model/renderModel.ts` |
 | row dispatch | `features/feed/ui/rows/{EntryRow,ConversationRow,Block}.tsx` |
 | live rows | `features/feed/ui/semantic/BlockRow.tsx` |
+| provider interpretation + components | `providers/<provider>/renderer/{adapters,components,rows,semantic}/` |
+| shared visual protocols | `providers/shared/renderer/protocols/` |
+| shape catalogs + coverage gate | `providers/<provider>/renderer/shapes.ts` + `providers/shapes.coverage.test.ts` |
+| runtime shape capture + audit | `features/feed/evidence/observer.ts` + `scripts/audit-rendering-shapes.mts` |
 | the layout primitive | `features/feed/ui/MarkerRow.tsx` |
 | machine-checked invariants | `rendering/replay/invariants.ts` |
 
 ### A note on what's *gone*
 
-The pre-rewrite decision core is deleted: `deriveFeedRenderModel` (the plane partitioner), `deriveFeedCommittedProjection` (the dedup feeder), the `SemanticStreamingTurn` / `StreamingTurn.tsx` component (retired by #491 block-level un-collapse), the `AGENT_CODE_RENDER_PIPELINE` flag and the legacy runtime path it gated (Stage-3 cutover, parity was green over the incident corpus), and `rendering/policy/foldPolicy.ts` (dead since the per-provider fold policy moved to `src/providers/*/renderer/semanticFoldPolicy.ts`; removed in #493). Note that `rendering/shadow/shadowDiff.ts` is **not** gone — the runtime shadow *mode* died at cutover, but the normalization/diff engine survives as the comparison core of the bundle and recording corpus tests. If you find a comment referencing any of the deleted names as live code, it is stale — fix it in the same PR.
+The pre-rewrite decision core is deleted: `deriveFeedRenderModel` (the plane partitioner), `deriveFeedCommittedProjection` (the dedup feeder), the `SemanticStreamingTurn` / `StreamingTurn.tsx` component (retired by #491 block-level un-collapse), the `AGENT_CODE_RENDER_PIPELINE` flag and the legacy runtime path it gated (Stage-3 cutover, parity was green over the incident corpus), and `rendering/policy/foldPolicy.ts` (dead since the per-provider fold policy moved to `src/providers/*/renderer/semanticFoldPolicy.ts`; removed in #493). PR #555 Phase 9 also deleted the old `ClaudeRows`/`CodexRows` feed barrels, central `ToolUseRow`, central answered-question exception, and duplicate result/partial-string decoders after provider adapters became canonical. Note that `rendering/shadow/shadowDiff.ts` is **not** gone — the runtime shadow *mode* died at cutover, but the normalization/diff engine survives as the comparison core of the bundle and recording corpus tests. The Git and compact-entry routes named above are current code, not forgotten residue.
