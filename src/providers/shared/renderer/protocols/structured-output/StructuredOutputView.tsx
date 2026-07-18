@@ -48,6 +48,7 @@ function recordLabel(record: StructuredJsonRecord, workspaceRoot: string | null)
     return `${formatToolFilePath(record.path, workspaceRoot)}:${record.lineNumber}`
   }
   if (record.prefix) return record.prefix
+  if (record.discriminatorLabel) return record.discriminatorLabel
   return 'JSON record'
 }
 
@@ -71,6 +72,11 @@ function StructuredRecord({
       >
         <span className="font-code break-all">{label}</span>
         <span className="ml-2 text-[11px] text-muted">{record.summary}</span>
+        {record.messagePreview ? (
+          <span className="block truncate text-[11px] font-normal text-muted" title={record.messagePreview}>
+            {record.messagePreview}
+          </span>
+        ) : null}
       </summary>
       {open ? (
         <div className="mt-2 space-y-2">

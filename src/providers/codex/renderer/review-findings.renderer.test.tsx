@@ -274,6 +274,28 @@ results.forEach((r,i)=>{text(\`--- \${i+1} ---\`);text(r.output)});`,
     expect(decision.toolResult?.action).not.toBe('absorb')
   })
 
+  it('treats an upstream Script terminated envelope as a terminal failure', () => {
+    const toolUse: ToolUseBlock = {
+      type: 'tool_use',
+      id: 'unified-terminated',
+      name: 'exec',
+      input: {
+        raw: 'const r = await tools.exec_command({cmd:"npm run dev"}); text(r.output);',
+      },
+    }
+    const result = {
+      type: 'tool_result',
+      tool_use_id: toolUse.id,
+      content: 'Script terminated\nWall time 0.1 seconds\nOutput:\n\n',
+      is_error: false,
+      codex: { kind: 'custom_tool_call_output' },
+    } as ToolResultBlock & { codex: { kind: string } }
+
+    expect(fromCodexCommandOperation({ toolUse, result })?.model).toMatchObject({
+      status: 'failure',
+    })
+  })
+
   it('keeps native exec_command output verbatim even when it begins with transport text', () => {
     // `cat` of a captured unified-exec transcript legitimately starts with
     // "Script completed…Output:". Native results are the command's own bytes;

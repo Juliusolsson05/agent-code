@@ -1,0 +1,20 @@
+{
+  "evidence": "Reduced from the fp2-d3325ec0 prefix sighting recorded for session 8e4cf0a4-9af7-4aa6-97e3-129f4d11fcc1 on 2026-07-18. The fixture preserves every structural path while replacing provider IDs.",
+  "cases": [
+    {
+      "expectedRoute": "generic",
+      "semanticBlock": {
+        "blockIndex": 1,
+        "callId": "call-wait-prefix",
+        "inputJson": "",
+        "itemId": "fc-wait-prefix",
+        "kind": "function_call",
+        "status": "in_progress",
+        "text": "",
+        "thinking": "",
+        "toolName": "wait",
+        "toolUseId": "call-wait-prefix"
+      }
+    }
+  ]
+}

@@ -31,6 +31,7 @@ export type VisibleDecision = {
     | 'conversation'
     | 'not_conversation'
     | 'meta_filtered'
+    | 'provider_operation_absorbed'
 }
 
 export type DebugVisibleRow = {

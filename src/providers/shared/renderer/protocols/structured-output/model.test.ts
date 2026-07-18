@@ -16,6 +16,17 @@ describe('parseStructuredOutput', () => {
     expect(model?.records[1]?.summary).toBe('3 items')
   })
 
+  it('exposes bounded event discriminators and messages without domain guessing', () => {
+    const model = parseStructuredOutput(
+      '{"cursor":195,"type":"agent.completed","agentId":"agent_6","label":"Renderer audit","message":"Done"}',
+    )
+    expect(model?.records[0]).toMatchObject({
+      discriminatorLabel: 'Renderer audit · agent.completed · cursor 195',
+      messagePreview: 'Done',
+      summary: '5 keys',
+    })
+  })
+
   it('preserves ripgrep provenance and surrounding truncation notices', () => {
     const source = [
       'Warning: truncated output (original token count: 30028)',

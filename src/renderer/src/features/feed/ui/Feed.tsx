@@ -24,6 +24,7 @@ import {
   ProviderContext,
   CommittedOperationDecisionContext,
   createCommittedOperationDecisionResolver,
+  type CommittedOperationDecisionResolver,
   ToolUseIndexContext,
   ToolResultIndexContext,
   CodeRenderContext,
@@ -132,13 +133,18 @@ type Props = {
   entries: Entry[]
   /**
    * The ownership-ledger pipeline's pre-decided, pre-ordered item list — the
-   * ONLY source of Feed's rows since the Stage 3 cutover. The ledger made
-   * every visibility/ownership/order decision upstream (desktop: TileLeaf via
-   * useLedgerFeedItems; phone: remote SessionView via the same hook); Feed
-   * just paints. Kept nullable only so a caller mid-migration can pass null
+   * ONLY source of Feed's rows since the Stage 3 cutover. The ledger owns
+   * ordering and row ownership; its view bridge then proves post-correlation
+   * paintability (desktop: TileLeaf via useLedgerFeedItems; phone: remote
+   * SessionView via the same hook). Feed just paints. Kept nullable only so a
+   * caller mid-migration can pass null
    * for an empty feed — there is no longer a legacy fallback path behind it.
    */
   renderItemsOverride?: FeedRenderItem[] | null
+  /** The view bridge uses this exact resolver to classify absorbed committed
+   * entries before Feed. Sharing it here means mounted Block rows reuse the
+   * same WeakMap decision instead of parsing the operation a second time. */
+  committedOperationDecisionOverride?: CommittedOperationDecisionResolver
   // NOTE: the `activityStatus` prop was removed (feed audit Deletion Candidate
   // 1). It was declared and destructured but never read inside Feed — once
   // `streamPhase` took over the in-feed WorkIndicator, the spinner verb text
@@ -291,6 +297,7 @@ function FeedImpl({
   provider = 'claude',
   entries,
   renderItemsOverride = null,
+  committedOperationDecisionOverride,
   streamPhase = 'idle',
   streamPhasePendingToolName = null,
   streamPhasePendingToolUseId = null,
@@ -773,7 +780,7 @@ function FeedImpl({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- see above.
     [toolResultIndexProp, toolIndexVersion, fallbackToolResultIndex],
   )
-  const committedOperationDecision = useMemo(
+  const localCommittedOperationDecision = useMemo(
     () => createCommittedOperationDecisionResolver(
       getRendererProviderCapabilities(provider).renderOperation,
     ),
@@ -786,6 +793,7 @@ function FeedImpl({
     // only lifetime boundary because it selects a different adapter chain.
     [provider],
   )
+  const committedOperationDecision = committedOperationDecisionOverride ?? localCommittedOperationDecision
 
   // The shared feed transports a join map but never recognizes the provider's
   // transcript envelope. This registry call is the cutover boundary that keeps
@@ -803,7 +811,9 @@ function FeedImpl({
   // SemanticStreamingTurn is gone, so Feed no longer derives any committed
   // projection of its own.
 
-  // Stage 3 cutover (2026-07): the ownership ledger is the SOLE decision core.
+  // Stage 3 cutover (2026-07): the ownership ledger is the SOLE order/owner
+  // core; its provider-aware view bridge adds the post-correlation paint
+  // verdict that entry-grain candidates cannot carry.
   // Feed no longer derives its own render model — both the desktop (TileLeaf)
   // and the phone (remote SessionView) hand it the ledger's pre-decided,
   // pre-ordered items via renderItemsOverride, and `feedRenderModelFromItems`
@@ -925,6 +935,10 @@ function FeedImpl({
         // same ordered list, but markdown parse cost still belongs to
         // committed entries. Counting non-entry rows here would make a
         // busy turn accidentally lazy-mount the newest committed prompt.
+        // WHY use the post-absorption ordinal: the ledger's entryOrdinal still
+        // counts protocol-only result entries. Comparing that sparse number to
+        // the painted count makes an old tail increasingly eager as invisible
+        // entries accumulate, defeating LazyEntry on long command sessions.
         const eager = item.entryOrdinal >= visibleEntryCount - EAGER_TAIL
         return (
           <RenderDebugBoundary
@@ -960,6 +974,12 @@ function FeedImpl({
           </RenderDebugBoundary>
         )
       }
+      case 'absorbed-entry':
+        // The view bridge already recorded the provider-owned absorption in
+        // visibleDecisions. Mounting its Blocks here would restore the exact
+        // history-proportional React work and invisible flex children this
+        // explicit data item exists to remove.
+        return null
       case 'semantic-block':
         // #491: the ledger already decided this block is visible; the row is a
         // pure drawer (no suppression). SemanticLiveBlockRow renders the exact

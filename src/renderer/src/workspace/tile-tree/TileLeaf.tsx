@@ -283,7 +283,11 @@ export function TileLeaf({
   // (The Stage-2 shadow that diffed this against the legacy renderer is gone:
   // its job — proving parity before cutover — is done, and the legacy renderer
   // it diffed against has been deleted.)
-  const ledgerFeedItems = useLedgerFeedItems(runtime, provider, sessionId)
+  const ledgerFeedPlan = useLedgerFeedItems(runtime, provider, sessionId, {
+    toolUseIndex: runtime.toolUseIndex,
+    toolResultIndex: runtime.toolResultIndex,
+    version: runtime.toolIndexVersion,
+  })
 
   const mergedEntries = useMemo(
     () => selectMergedEntries(runtime, runtime.semantic.currentTurn?.turnId ?? null),
@@ -508,7 +512,8 @@ export function TileLeaf({
           />
         ) : (
           <Feed
-            renderItemsOverride={ledgerFeedItems}
+            renderItemsOverride={ledgerFeedPlan.items}
+            committedOperationDecisionOverride={ledgerFeedPlan.resolveOperation}
             sessionId={sessionId}
             provider={provider}
             workspaceRoot={workspace.state.sessions[sessionId]?.cwd ?? null}
