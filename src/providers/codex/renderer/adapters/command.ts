@@ -37,6 +37,17 @@ export type CodexCommandOperation = {
   ownsResult: boolean
 }
 
+export type CodexCommandGroupOperation = {
+  /** Every child is normalized through the same command contract as a native
+   * exec_command. Group admission changes presentation, never command truth. */
+  commands: CodexCommandOperation[]
+  /** Exact numbered payload emitted by the canonical fan-out presentation.
+   * Child cards show attributed sections; this source remains available so a
+   * delimiter-looking command output can never make bytes disappear. */
+  exactOutput?: string
+  ownsResult: boolean
+}
+
 type TransparentExecInvocation = {
   command: string
   workdir: string | null
@@ -180,6 +191,17 @@ export function fromCodexCommandOperation(input: {
     input.result,
     native ? 'native' : invocation.presentation,
   )
+  return buildCodexCommandOperation(invocation, evidence, input)
+}
+
+function buildCodexCommandOperation(
+  invocation: TransparentExecInvocation,
+  evidence: CommandResultEvidence,
+  input: {
+    result: ToolResultBlock | null
+    streaming?: boolean
+  },
+): CodexCommandOperation {
   const meta: string[] = []
   if (invocation.yieldTimeMs !== null) meta.push(`yield ${invocation.yieldTimeMs}ms`)
   if (invocation.maxOutputTokens !== null) meta.push(`max ${invocation.maxOutputTokens} tok`)
@@ -259,6 +281,162 @@ function transparentExecInvocation(input: unknown): TransparentExecInvocation | 
   const argument = script.slice(cursor + 1, callEnd).trim()
   const parsed = parseExecCommandArgument(argument)
   return parsed ? { ...parsed, presentation } : null
+}
+
+/**
+ * Admit the one bounded Codex fan-out grammar whose result attribution is
+ * explicit in the generated JavaScript.
+ *
+ * WHY this is intentionally much narrower than “find every exec_command in a
+ * Promise.all”: concurrent commands may be printed in completion order,
+ * serialized as arbitrary objects, mixed with notify(), or accompanied by
+ * unrelated script output. The captured Codex grammar awaits the ordered
+ * Promise.all array and then prints each result under a deterministic
+ * one-based delimiter. Only that exact topology lets one operation surface
+ * preserve the paired result while still assigning output to child commands.
+ * Every other fan-out keeps the old command-headline plus separate result row.
+ */
+export function fromCodexCommandGroupOperation(input: {
+  toolUse: ToolUseBlock
+  result: ToolResultBlock | null
+  streaming?: boolean
+  live?: boolean
+}): CodexCommandGroupOperation | null {
+  if (input.toolUse.name !== 'exec') return null
+  const invocations = numberedPromiseAllInvocations(input.toolUse.input)
+  if (!invocations) return null
+
+  if (!input.result) {
+    const evidence = commandResultEvidence(null, 'direct-output')
+    return {
+      commands: invocations.map(invocation =>
+        buildCodexCommandOperation(invocation, evidence, input)),
+      ownsResult: false,
+    }
+  }
+
+  const combined = commandResultEvidence(input.result, 'direct-output')
+  // A failed/yielded/unrecognized wrapper proves that the numbered forEach
+  // either did not run or has not finished. Keeping the result separate is
+  // the only honest behavior in those states.
+  if (!combined.owned || combined.failed || combined.output === undefined) return null
+  // WHY direct-output fan-outs need the same admission ceiling as serialized
+  // single commands: section attribution scans the complete result before any
+  // lazy output component can page it. Without this guard, one large build log
+  // is copied and regex-scanned on every operation-dispatch render. Declining
+  // keeps the original paired result visible through the bounded generic row.
+  if (combined.output.length > SERIALIZED_EXEC_RESULT_MAX_CHARS) return null
+  const outputs = numberedFanOutSections(combined.output, invocations.length)
+  if (!outputs) return null
+
+  return {
+    commands: invocations.map((invocation, index) =>
+      buildCodexCommandOperation(
+        invocation,
+        {
+          ...combined,
+          output: outputs[index],
+          // The direct-output fan-out carrier preserves bytes but, like the
+          // single-command carrier, drops each nested exit code. Unknown is
+          // materially safer than manufacturing N successful commands from a
+          // successfully completed JavaScript wrapper.
+          exitCode: null,
+          exitProven: false,
+        },
+        input,
+      )),
+    exactOutput: combined.output,
+    ownsResult: true,
+  }
+}
+
+function numberedPromiseAllInvocations(input: unknown): TransparentExecInvocation[] | null {
+  const script = applyPatchScriptText(input)
+  if (!script || script.length > TEXT_PAGE_MAX_CHARS) return null
+  if (/\btools\.apply_patch\s*\(/.test(script)) return null
+
+  const marker = 'Promise.all'
+  const promiseAt = script.indexOf(marker)
+  if (promiseAt < 0 || script.indexOf(marker, promiseAt + marker.length) >= 0) return null
+  let cursor = promiseAt + marker.length
+  while (/\s/.test(script[cursor] ?? '')) cursor += 1
+  if (script[cursor] !== '(') return null
+  const callEnd = matchingCallEnd(script, cursor)
+  if (callEnd === null) return null
+
+  const prefix = script.slice(0, promiseAt).trim()
+  const assignment = /^(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*await\s*$/.exec(prefix)
+  if (!assignment) return null
+  const suffix = script.slice(callEnd + 1).trim()
+  if (!isNumberedFanOutPresentation(suffix, assignment[1])) return null
+
+  const argument = script.slice(cursor + 1, callEnd).trim()
+  if (!argument.startsWith('[') || !argument.endsWith(']')) return null
+  const elements = splitSimpleTopLevel(argument.slice(1, -1), ',')
+  if (!elements || elements.length < 2 || elements.length > 6) return null
+  const invocations: TransparentExecInvocation[] = []
+  for (const element of elements) {
+    const invocation = embeddedExecInvocation(element.trim())
+    if (!invocation) return null
+    invocations.push(invocation)
+  }
+  return invocations
+}
+
+function embeddedExecInvocation(source: string): TransparentExecInvocation | null {
+  const marker = 'tools.exec_command'
+  if (!source.startsWith(marker)) return null
+  let cursor = marker.length
+  while (/\s/.test(source[cursor] ?? '')) cursor += 1
+  if (source[cursor] !== '(') return null
+  const callEnd = matchingCallEnd(source, cursor)
+  if (callEnd === null || source.slice(callEnd + 1).trim() !== '') return null
+  const parsed = parseExecCommandArgument(source.slice(cursor + 1, callEnd).trim())
+  return parsed ? { ...parsed, presentation: 'direct-output' } : null
+}
+
+function isNumberedFanOutPresentation(suffix: string, resultsVariable: string): boolean {
+  const outer = new RegExp(
+    `^;?\\s*${escapeRegExp(resultsVariable)}\\.forEach\\(\\s*\\(\\s*([A-Za-z_$][\\w$]*)\\s*,\\s*([A-Za-z_$][\\w$]*)\\s*\\)\\s*=>\\s*\\{([\\s\\S]*)\\}\\s*\\)\\s*;?$`,
+  ).exec(suffix)
+  if (!outer) return false
+  const item = escapeRegExp(outer[1])
+  const index = escapeRegExp(outer[2])
+  // Template literals are admitted only here, after both interpolation names
+  // are bound by the immediately enclosing callback. General template
+  // expressions remain rejected by matchingCallEnd because evaluating them
+  // would require a JavaScript parser and could introduce unrelated output.
+  const body = new RegExp(
+    '^\\s*text\\(\\s*`--- \\$\\{\\s*' + index + '\\s*\\+\\s*1\\s*\\} ---`\\s*\\)\\s*;\\s*' +
+      'text\\(\\s*' + item + '\\.output\\s*\\)\\s*;?\\s*$',
+  )
+  return body.test(outer[3])
+}
+
+function numberedFanOutSections(output: string, count: number): string[] | null {
+  // Match framing on the original source instead of normalizing line endings.
+  // Command output is evidence: CRLF and lone-CR progress bytes must survive
+  // unchanged in each child model just as they do in exactOutput.
+  const marker = /^--- (\d+) ---\r?$/gm
+  const matches = [...output.matchAll(marker)]
+  if (matches.length !== count) return null
+  const sections: string[] = []
+  for (let index = 0; index < matches.length; index += 1) {
+    const match = matches[index]
+    if (Number(match[1]) !== index + 1 || match.index === undefined) return null
+    if (index === 0 && output.slice(0, match.index).trim() !== '') return null
+    const start = match.index + match[0].length
+    const contentStart = output[start] === '\n' ? start + 1 : start
+    const end = matches[index + 1]?.index ?? output.length
+    // Each text(result.output) contribution is followed by one carrier-owned
+    // LF, including the final contribution. Remove exactly that framing byte
+    // from every section. If the command itself ended in LF/CRLF, the combined
+    // source contains both the command newline and this carrier newline, so
+    // removing one preserves the command-owned terminator byte-for-byte.
+    const framed = output.slice(contentStart, end)
+    sections.push(framed.endsWith('\n') ? framed.slice(0, -1) : framed)
+  }
+  return sections
 }
 
 /** Locate the closing parenthesis without executing or fully parsing generated

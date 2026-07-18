@@ -9,7 +9,7 @@
 // Heuristic, not a shell parser. We care about the common shapes
 // agents actually emit ("git diff", "git diff --staged", "git
 // commit -m ...", "git add .", "git status", "git log --oneline
-// -5"). Anything exotic (pipes, subshells, aliases, `git -C <dir>`
+// -5"). Anything exotic (mixed-program pipes, subshells, aliases, `git -C <dir>`
 // invocations) returns null so the feed falls back to the generic command
 // renderer. Unknown but syntactically plain Git subcommands retain a generic
 // Git workflow card with bounded inline output plus the exact raw disclosure.
@@ -79,7 +79,7 @@ export type GitWorkflowStep = {
 export type GitWorkflowIntent = {
   kind: 'workflow'
   steps: GitWorkflowStep[]
-  operators: Array<'&&' | ';' | 'newline'>
+  operators: Array<'&&' | ';' | 'newline' | '|'>
   /** The mutation or query that best names the workflow. This is display
    * vocabulary only; every step remains visible and no output is discarded. */
   primaryVerb: string
@@ -97,13 +97,14 @@ export type GitIntent =
 /**
  * Detect a git intent from a command string. Returns null if:
  *   - the command isn't a straightforward git invocation
- *   - it's been composed with pipes/subshells/redirects that make
+ *   - it's been composed with mixed pipes/subshells/redirects that make
  *     the output unlikely to be clean git output
  *
- * We bail on pipes and redirects because our widgets parse raw git
- * output. `git diff | head -20` pipes into head which truncates
- * mid-hunk and produces unparseable output — better to let the
- * generic renderer show the raw string than parse nonsense.
+ * A pipeline is admitted only when EVERY segment is independently a Git
+ * invocation. `git diff | head -20` therefore still declines, while the
+ * captured `git diff --binary ... | git apply --check` remains one all-Git
+ * workflow. Pipelines use the neutral workflow card rather than a per-verb
+ * output parser because downstream Git still transforms/consumes stdout.
  */
 export function detectGitIntent(cmd: string | undefined | null): GitIntent | null {
   if (!cmd || typeof cmd !== 'string') return null
@@ -212,7 +213,7 @@ function primaryWorkflowVerb(steps: readonly GitWorkflowStep[]): string {
   // Mutations outrank observations so `diff guard && reset && status` names
   // the state change, while every guard/verification remains visible below.
   const priority = [
-    'commit', 'push', 'merge', 'rebase', 'reset', 'stash', 'switch',
+    'commit', 'push', 'merge', 'rebase', 'apply', 'reset', 'stash', 'switch',
     'checkout', 'restore', 'branch', 'tag', 'add', 'pull', 'fetch',
     'worktree', 'submodule', 'status', 'diff', 'log', 'show', 'rev-parse',
   ]
@@ -384,8 +385,8 @@ function parseCommit(cmd: string): GitCommitIntent | null {
 // ---------- tokenizer ----------
 
 /**
- * Split a command string into segments at top-level `&&`, `;`, or newline
- * separators, ignoring anything inside double- or single-quoted
+ * Split a command string into segments at top-level `&&`, `;`, newline, or a
+ * plain stdout pipe, ignoring anything inside double- or single-quoted
  * runs. The agent's typical heredoc-commit pattern wraps the
  * commit body inside `"$(cat <<'EOF' ... EOF)"` — the outer `"..."`
  * keeps the heredoc body invisible to this splitter, so we can
@@ -400,10 +401,10 @@ function parseCommit(cmd: string): GitCommitIntent | null {
  */
 function splitTopLevel(s: string): {
   segments: string[]
-  operators: Array<'&&' | ';' | 'newline'>
+  operators: Array<'&&' | ';' | 'newline' | '|'>
 } | null {
   const out: string[] = []
-  const operators: Array<'&&' | ';' | 'newline'> = []
+  const operators: Array<'&&' | ';' | 'newline' | '|'> = []
   let buf = ''
   let i = 0
   let quote: '"' | "'" | null = null
@@ -454,13 +455,22 @@ function splitTopLevel(s: string): {
       i++
       continue
     }
-    // WHY pipes, OR-lists, and background jobs are not ordinary segments:
-    // even when both sides happen to be Git, their stdout/stderr may be
-    // transformed, conditional, or interleaved. Splitting a lone `&` as if
-    // it were `;` was especially tempting, but that would turn concurrent
-    // output into a sequential card. The safe model is to recognize these
-    // top-level operators and decline the rich formatter altogether.
-    if (c === '|' || c === '&') return null
+    // WHY only a plain stdout pipe is a segment operator: the recursive
+    // all-Git check below proves both producer and consumer before the result
+    // can be absorbed. `||`, `|&`, and background `&` have conditional,
+    // stderr-merging, or concurrent semantics that the workflow card does
+    // not model, so those remain generic. A pipe never earns success checks;
+    // GitWorkflowCard treats it as an unproven step boundary even when the
+    // shell's final exit is known.
+    if (c === '|') {
+      if (s[i + 1] === '|' || s[i + 1] === '&') return null
+      out.push(buf)
+      operators.push('|')
+      buf = ''
+      i++
+      continue
+    }
+    if (c === '&') return null
     // Any top-level redirect changes or removes Git's parseable result.
     // Redirect-looking text inside a quoted commit message never reaches
     // this branch, which is why this scan replaces the old quote-stripping

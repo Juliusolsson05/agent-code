@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 
 import {
   fromCodexApplyPatch,
   parseApplyPatch,
 } from '@providers/codex/renderer/adapters/codeEdit'
 import {
+  fromCodexCommandGroupOperation,
   fromCodexCommandOperation,
   fromCodexExecCommand,
   fromCodexExecScript,
@@ -20,6 +21,167 @@ import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 import { CodeEditView } from '@providers/shared/renderer/protocols/code-edit/CodeEditView'
 
 describe('Codex command review findings', () => {
+  function compactNumberedFanOut(id: string): ToolUseBlock {
+    return {
+      type: 'tool_use',
+      id,
+      name: 'exec',
+      input: {
+        raw: 'const results = await Promise.all([tools.exec_command({cmd:"printf A"}),tools.exec_command({cmd:"printf B"})]); results.forEach((r,i)=>{text(`--- ${i+1} ---`);text(r.output)});',
+      },
+    }
+  }
+
+  it('correlates the captured numbered Promise.all fan-out without detaching its result', () => {
+    const toolUse: ToolUseBlock = {
+      type: 'tool_use',
+      id: 'captured-numbered-fanout',
+      name: 'exec',
+      input: {
+        raw: `const results = await Promise.all([
+  tools.exec_command({
+    cmd: "git status --short --branch && git rev-parse HEAD && git rev-parse origin/main",
+    workdir: "/repo",
+    yield_time_ms: 10000,
+    max_output_tokens: 10000
+  }),
+  tools.exec_command({
+    cmd: "gh pr view 560 --json state,mergedAt,mergeCommit,url",
+    workdir: "/repo",
+    yield_time_ms: 10000,
+    max_output_tokens: 10000
+  })
+]);
+results.forEach((r,i)=>{text(\`--- \${i+1} ---\`);text(r.output)});`,
+      },
+    }
+    const sha = 'ad6043439dc794efe6da0928300ab98d2a0f5609'
+    const framedOutput = [
+      '--- 1 ---',
+      '## main...origin/main',
+      sha,
+      sha,
+      '',
+      '--- 2 ---',
+      '{"state":"MERGED","url":"https://github.com/example/repo/pull/560"}',
+      '',
+    ].join('\n')
+    const result = {
+      type: 'tool_result',
+      tool_use_id: toolUse.id,
+      content: `Script completed\nWall time 0.7 seconds\nOutput:\n\n${framedOutput}`,
+      is_error: false,
+      codex: { kind: 'custom_tool_call_output' },
+    } as ToolResultBlock & { codex: { kind: string } }
+
+    const group = fromCodexCommandGroupOperation({ toolUse, result })
+    expect(group).toMatchObject({
+      ownsResult: true,
+      exactOutput: framedOutput,
+      commands: [
+        {
+          rawCommand: 'git status --short --branch && git rev-parse HEAD && git rev-parse origin/main',
+          model: { status: 'unknown', output: expect.stringContaining('## main...origin/main') },
+        },
+        {
+          rawCommand: 'gh pr view 560 --json state,mergedAt,mergeCommit,url',
+          model: { status: 'unknown', output: expect.stringContaining('"state":"MERGED"') },
+        },
+      ],
+    })
+
+    const decision = renderCodexOperation({ toolUse, result, live: false, streaming: false })
+    expect(decision.toolResult).toMatchObject({
+      action: 'absorb',
+      ownerRenderId: 'codex.rows.dispatch',
+    })
+    if (decision.toolUse.action !== 'render') throw new Error('expected grouped command owner')
+    const { container } = render(decision.toolUse.node)
+    expect(screen.getByText('git status workflow')).toBeInTheDocument()
+    expect(container.textContent).toContain('gh pr view 560')
+    expect(screen.getAllByText('exit unknown')).toHaveLength(2)
+    expect(container.textContent).toContain('"state":"MERGED"')
+
+    const exact = screen.getByText(/view exact grouped output/).closest('details')!
+    fireEvent.click(exact.querySelector('summary')!)
+    expect(exact.textContent).toContain('--- 1 ---')
+    expect(exact.textContent).toContain('--- 2 ---')
+  })
+
+  it('leaves noncanonical fan-out output separately visible', () => {
+    const toolUse: ToolUseBlock = {
+      type: 'tool_use',
+      id: 'ambiguous-numbered-fanout',
+      name: 'exec',
+      input: {
+        raw: 'const results = await Promise.all([tools.exec_command({cmd:"git status"}),tools.exec_command({cmd:"npm test"})]); text(JSON.stringify(results));',
+      },
+    }
+    const result = {
+      type: 'tool_result',
+      tool_use_id: toolUse.id,
+      content: 'Script completed\nOutput:\n\n[{"output":"clean"},{"output":"passed"}]',
+      codex: { kind: 'custom_tool_call_output' },
+    } as ToolResultBlock & { codex: { kind: string } }
+
+    expect(fromCodexCommandGroupOperation({ toolUse, result })).toBeNull()
+    expect(renderCodexOperation({ toolUse, result, live: false, streaming: false }).toolResult)
+      .not.toMatchObject({ action: 'absorb' })
+  })
+
+  it('preserves command line endings while removing each carrier framing newline', () => {
+    const toolUse = compactNumberedFanOut('fanout-line-endings')
+    const exactOutput = '--- 1 ---\r\nA\r\n\n--- 2 ---\r\nB\n'
+    const result = {
+      type: 'tool_result',
+      tool_use_id: toolUse.id,
+      content: `Script completed\nOutput:\n\n${exactOutput}`,
+      codex: { kind: 'custom_tool_call_output' },
+    } as ToolResultBlock & { codex: { kind: string } }
+
+    const group = fromCodexCommandGroupOperation({ toolUse, result })
+    expect(group?.exactOutput).toBe(exactOutput)
+    expect(group?.commands.map(command => command.model.output)).toEqual(['A\r\n', 'B'])
+  })
+
+  it('declines ambiguous, yielded, failed, and oversized numbered fan-outs', () => {
+    const toolUse = compactNumberedFanOut('fanout-safety-boundaries')
+    const result = (content: string, isError = false) => ({
+      type: 'tool_result' as const,
+      tool_use_id: toolUse.id,
+      content,
+      is_error: isError,
+      codex: { kind: 'custom_tool_call_output' },
+    }) as ToolResultBlock & { codex: { kind: string } }
+
+    // A delimiter-looking command line adds a third marker. Count mismatch is
+    // the proof that prevents output from being attributed to the wrong child.
+    expect(fromCodexCommandGroupOperation({
+      toolUse,
+      result: result('Script completed\nOutput:\n\n--- 1 ---\nA\n--- 2 ---\n--- 2 ---\nB\n'),
+    })).toBeNull()
+    expect(fromCodexCommandGroupOperation({
+      toolUse,
+      result: result('Script running with cell ID cell-1\nOutput:\n\n'),
+    })).toBeNull()
+    expect(fromCodexCommandGroupOperation({
+      toolUse,
+      result: result('Script failed\nOutput:\n\nboom', true),
+    })).toBeNull()
+
+    const oversized = 'x'.repeat(2 * 1024 * 1024 + 1)
+    const oversizedResult = result(
+      `Script completed\nOutput:\n\n--- 1 ---\n${oversized}\n--- 2 ---\nB\n`,
+    )
+    expect(fromCodexCommandGroupOperation({ toolUse, result: oversizedResult })).toBeNull()
+    expect(renderCodexOperation({
+      toolUse,
+      result: oversizedResult,
+      live: false,
+      streaming: false,
+    }).toolResult).not.toMatchObject({ action: 'absorb' })
+  })
+
   it('normalizes a transparent unified exec into the same owned command operation', () => {
     const toolUse: ToolUseBlock = {
       type: 'tool_use',

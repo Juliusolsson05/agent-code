@@ -31,6 +31,19 @@ describe('Git formatter review invariants', () => {
     })
   })
 
+  it('admits a Git-only pipeline while rejecting a mixed output transformer', () => {
+    expect(detectGitIntent(
+      'git diff --binary origin/main...feat/rendering-debug-mode | git apply --check',
+    )).toMatchObject({
+      kind: 'workflow',
+      primaryVerb: 'apply',
+      operators: ['|'],
+      steps: [{ verb: 'diff' }, { verb: 'apply' }],
+    })
+    expect(detectGitIntent('git diff --binary HEAD | head -20')).toBeNull()
+    expect(detectGitIntent('git diff --binary HEAD |& git apply --check')).toBeNull()
+  })
+
   it.each([
     'git commit -m "checkpoint" | cat',
     'git commit -m "checkpoint" || git status',
