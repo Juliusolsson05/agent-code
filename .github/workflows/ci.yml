@@ -67,10 +67,13 @@ jobs:
         # which the app build depends on.
         run: npm run typecheck
 
-      - name: Test Workflow MCP
-        run: npm --prefix packages/workflow-mcp test
-
       - name: Test core
+        # WHY there is no per-submodule test step here: each owned package
+        # enforces its private suite in its own `package / quality-gate` CI.
+        # Agent Code only builds Workflow MCP above because its generated output
+        # is an app compile-time dependency; running that package's tests here
+        # would recreate the cross-repository ownership exception this workflow
+        # otherwise removes.
         # The three projects run as separate steps so a failure names its
         # layer in the Checks UI without spelunking one combined log.
         # NODE_ENV is set to `test` by the npm scripts themselves; nothing
