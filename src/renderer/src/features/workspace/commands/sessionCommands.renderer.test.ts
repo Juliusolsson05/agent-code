@@ -76,3 +76,25 @@ describe('Duplicate Agent command', () => {
     expect(closePalette).toHaveBeenCalledOnce()
   })
 })
+
+describe('Rendering Debug Mode command', () => {
+  it('reports its interception state and delegates the toggle to the UI shell', () => {
+    const toggleRenderingDebugMode = vi.fn()
+    const command = sessionCommands.find(
+      candidate => candidate.id === 'toggle-rendering-debug-mode',
+    )
+    if (!command) throw new Error('Rendering Debug Mode command is missing')
+
+    const context = {
+      flags: { renderingDebugMode: true },
+      ui: { toggleRenderingDebugMode },
+    } as unknown as CommandContext
+
+    // The red On badge is a safety signal, not decoration: while active the
+    // mode captures clicks before ordinary controls. A stale palette state
+    // would leave users thinking the app itself had stopped responding.
+    expect(command.getState?.(context)).toEqual({ label: 'On', tone: 'danger' })
+    command.run(context)
+    expect(toggleRenderingDebugMode).toHaveBeenCalledOnce()
+  })
+})

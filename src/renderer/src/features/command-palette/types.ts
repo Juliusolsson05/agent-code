@@ -105,6 +105,7 @@ export type CommandContext = {
     toggleFeedDebugPanel: () => void
     toggleProxyDebugPanel: () => void
     toggleHtmlDebugPanel: () => void
+    toggleRenderingDebugMode: () => void
     toggleDevDebugPanel: () => void
     openAgentStatusPanel: () => void
     closeAgentStatusPanel: () => void
@@ -167,6 +168,7 @@ export type CommandContext = {
     feedDebugPanelOpen: boolean
     proxyDebugPanelOpen: boolean
     htmlDebugPanelOpen: boolean
+    renderingDebugMode: boolean
     devDebugEnabled: boolean
     /** The recording CAPABILITY is available (dev-debug on). Gates the
      *  Start/Stop Session Recording and Attach-Recording-Note commands (plan

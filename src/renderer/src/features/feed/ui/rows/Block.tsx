@@ -1,4 +1,4 @@
-import { memo, useContext, useState } from 'react'
+import { memo, useContext, useState, type ReactNode } from 'react'
 
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import type {
@@ -34,6 +34,13 @@ import {
   committedBlockObservationDisposition,
   CONTENT_BLOCK_DRIFT_FALLBACK_RENDER_ID,
 } from '@renderer/rendering/evidence/observationScope'
+import { RenderDebugBoundary } from '@renderer/features/debug/renderingDebug/registry'
+import {
+  operationRoutingTrace,
+  reactComponentName,
+  reactNodeModel,
+} from '@renderer/features/debug/renderingDebug/diagnostics'
+import type { RenderDebugSnapshot } from '@renderer/features/debug/renderingDebug/types'
 
 /* ---------- Block dispatcher ---------- */
 
@@ -95,6 +102,28 @@ export const Block = memo(function Block({
   const committedOperationDecision = useContext(CommittedOperationDecisionContext)
   const capture = useRenderShapeCapture()
   const observationDisposition = committedBlockObservationDisposition(block)
+  const debugBlock = (
+    node: ReactNode,
+    overrides: Partial<RenderDebugSnapshot> = {},
+  ): ReactNode => {
+    // Absorbed operation routes intentionally paint no element. Returning an
+    // empty debug carrier would make invisible ownership decisions alter the
+    // DOM and create selectable zero-content artifacts while the mode is on.
+    if (node === null) return null
+    return (
+      <RenderDebugBoundary
+        snapshot={{
+          sourcePlane: 'transcript-entry',
+          lifecycle: 'durable',
+          eventType: block.type,
+          input: block,
+          ...overrides,
+        }}
+      >
+        {node}
+      </RenderDebugBoundary>
+    )
+  }
   // Shape sighting at the exact paint-decision point (Phase 2, PR #555).
   // A module-state side effect during render, on purpose: it never touches
   // React state (no re-render), it is inert unless capture is armed (one
@@ -141,7 +170,7 @@ export const Block = memo(function Block({
           <TextProse text={(block as { text: string }).text} />
         </MarkerRow>
       )
-      return role === 'user' ? <UserBand>{row}</UserBand> : row
+      return debugBlock(role === 'user' ? <UserBand>{row}</UserBand> : row)
     }
     case 'thinking': {
       // Persisted thinking block. Anthropic strips the plaintext from
@@ -159,7 +188,7 @@ export const Block = memo(function Block({
       // See docs/superpowers/plans/2026-04-18-thinking-indicator-rework.md.
       const text = (block as { thinking?: string }).thinking ?? ''
       if (!text) return null
-      return (
+      return debugBlock(
         <MarkerRow marker="⏺" tone="muted">
           <details className="text-muted text-[12px]">
             <summary className="cursor-pointer select-none italic">
@@ -176,7 +205,7 @@ export const Block = memo(function Block({
       )
     }
     case 'image': {
-      return <ImageBlockRow block={block} role={role} />
+      return debugBlock(<ImageBlockRow block={block} role={role} />)
     }
     case 'tool_use': {
       // Dispatch tool_use blocks to provider-specific row renderers. A name is
@@ -207,11 +236,24 @@ export const Block = memo(function Block({
       // it stays concise for headline-only inputs
       // (Bash keeps its 2-line cap) and gives MCP/orchestration payloads
       // a real rendering instead of a bare name over raw JSON.
-      return route.action === 'render'
+      const rendered = route.action === 'render'
         ? route.node
         : route.action === 'absorb'
           ? null
           : <JsonToolRow block={tu} />
+      return debugBlock(rendered, {
+        sourcePlane: 'committed-tool-use',
+        eventType: tu.type,
+        input: { toolUse: tu, result, live: false, streaming: false },
+        shapePayload: tu,
+        pairedResult: result,
+        decision,
+        normalizedModel: route.action === 'render' ? reactNodeModel(route.node) : undefined,
+        component: route.action === 'render'
+          ? { name: reactComponentName(route.node) }
+          : { name: route.action === 'fallback' ? 'JsonToolRow' : null },
+        routingTrace: operationRoutingTrace(decision, result !== null, 'tool-use'),
+      })
     }
     case 'tool_result': {
       const tr = block as ToolResultBlock
@@ -221,7 +263,22 @@ export const Block = memo(function Block({
       // specialized parse or absorption.
       if (!sourceTool) {
         sight('committed-tool-result', tr, GENERIC_OUTCOME)
-        return <ToolResultRow block={tr} sourceTool={sourceTool} />
+        return debugBlock(
+          <ToolResultRow block={tr} sourceTool={sourceTool} />,
+          {
+            sourcePlane: 'committed-tool-result',
+            eventType: tr.type,
+            input: { toolUse: null, result: tr, live: false, streaming: false },
+            shapePayload: tr,
+            pairedResult: tr,
+            component: { name: 'ToolResultRow' },
+            routingTrace: [{
+              id: 'orphan-tool-result',
+              condition: 'Was a correlated tool invocation available for provider routing?',
+              outcome: 'absent; shared generic result owns visibility',
+            }],
+          },
+        )
       }
       const decision = committedOperationDecision
         ? committedOperationDecision(sourceTool, tr)
@@ -241,11 +298,24 @@ export const Block = memo(function Block({
             ? absorbedOutcome(route.ownerRenderId, route.reason, route.protocolId)
             : specializedOutcome(route.receipt.rendererId, route.receipt.protocolId),
       )
-      return route?.action === 'render'
+      const rendered = route?.action === 'render'
         ? route.node
         : route?.action === 'absorb'
           ? null
-        : <ToolResultRow block={tr} sourceTool={sourceTool} />
+          : <ToolResultRow block={tr} sourceTool={sourceTool} />
+      return debugBlock(rendered, {
+        sourcePlane: 'committed-tool-result',
+        eventType: tr.type,
+        input: { toolUse: sourceTool, result: tr, live: false, streaming: false },
+        shapePayload: tr,
+        pairedResult: tr,
+        decision,
+        normalizedModel: route?.action === 'render' ? reactNodeModel(route.node) : undefined,
+        component: route?.action === 'render'
+          ? { name: reactComponentName(route.node) }
+          : { name: route?.action === 'fallback' || !route ? 'ToolResultRow' : null },
+        routingTrace: operationRoutingTrace(decision, true, 'tool-result'),
+      })
     }
     default:
       // An unknown committed block kind is exactly the class of shape the
@@ -254,6 +324,6 @@ export const Block = memo(function Block({
       // 'transcript-entry' because a non-tool content block is normalized
       // transcript content, not a tool envelope.
       sight('transcript-entry', block, unknownOutcome('shared.block-type-label'))
-      return <UnknownBlockRow block={block} />
+      return debugBlock(<UnknownBlockRow block={block} />)
   }
 })

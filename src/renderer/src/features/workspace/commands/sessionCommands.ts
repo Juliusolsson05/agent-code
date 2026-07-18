@@ -940,6 +940,18 @@ export const sessionCommands: CommandDef[] = [
     },
   },
   {
+    id: 'toggle-rendering-debug-mode',
+    surface: 'debug',
+    title: 'Rendering Debug Mode',
+    description: '**What it does:** Lets you click rendered feed elements to inspect their exact input, routing provenance, and HTML.\n\n**Use when:** A row is missing, duplicated, misleading, or formatted incorrectly.\n\n**Notes:** Clicks are intercepted while active; toggle the mode off to restore normal interaction.',
+    keywords: ['rendering', 'renderer', 'inspect', 'element', 'html', 'input', 'receipt', 'routing', 'provenance', 'debug'],
+    getState: ({ flags }) => ({
+      label: flags.renderingDebugMode ? 'On' : 'Off',
+      tone: flags.renderingDebugMode ? 'danger' : 'neutral',
+    }),
+    run: ({ ui }) => ui.toggleRenderingDebugMode(),
+  },
+  {
     id: 'toggle-html-debug-panel',
     surface: 'debug',
     title: 'HTML Debug Panel',

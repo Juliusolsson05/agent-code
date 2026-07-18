@@ -180,6 +180,7 @@ function OpenCommandPalette({
   const toggleFeedDebugPanel = useAppStore(state => state.toggleFeedDebugPanel)
   const toggleProxyDebugPanel = useAppStore(state => state.toggleProxyDebugPanel)
   const toggleHtmlDebugPanel = useAppStore(state => state.toggleHtmlDebugPanel)
+  const toggleRenderingDebugMode = useAppStore(state => state.toggleRenderingDebugMode)
   const toggleDevDebugPanel = useAppStore(state => state.toggleDevDebugPanel)
   const openAgentStatusPanel = useAppStore(state => state.openAgentStatusPanel)
   const closeAgentStatusPanel = useAppStore(state => state.closeAgentStatusPanel)
@@ -237,6 +238,7 @@ function OpenCommandPalette({
   const feedDebugPanelOpen = useAppStore(state => state.feedDebugPanelOpen)
   const proxyDebugPanelOpen = useAppStore(state => state.proxyDebugPanelOpen)
   const htmlDebugPanelOpen = useAppStore(state => state.htmlDebugPanelOpen)
+  const renderingDebugMode = useAppStore(state => state.renderingDebugMode)
   const devDebugPanelOpen = useAppStore(state => state.devDebugPanelOpen)
   const agentStatusPanelOpen = useAppStore(state => state.agentStatusPanelOpen)
   const performancePanelOpen = useAppStore(state => state.performancePanelOpen)
@@ -434,6 +436,7 @@ function OpenCommandPalette({
         toggleFeedDebugPanel,
         toggleProxyDebugPanel,
         toggleHtmlDebugPanel,
+        toggleRenderingDebugMode,
         toggleDevDebugPanel,
         openAgentStatusPanel,
         closeAgentStatusPanel,
@@ -479,6 +482,7 @@ function OpenCommandPalette({
         feedDebugPanelOpen,
         proxyDebugPanelOpen,
         htmlDebugPanelOpen,
+        renderingDebugMode,
         devDebugEnabled,
         sessionRecordingEnabled,
         devDebugPanelOpen,
@@ -518,6 +522,7 @@ function OpenCommandPalette({
       toggleFeedDebugPanel,
       toggleProxyDebugPanel,
       toggleHtmlDebugPanel,
+      toggleRenderingDebugMode,
       toggleDevDebugPanel,
       openAgentStatusPanel,
       closeAgentStatusPanel,
@@ -561,6 +566,7 @@ function OpenCommandPalette({
       feedDebugPanelOpen,
       proxyDebugPanelOpen,
       htmlDebugPanelOpen,
+      renderingDebugMode,
       devDebugEnabled,
       sessionRecordingEnabled,
       devDebugPanelOpen,

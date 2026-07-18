@@ -3,7 +3,7 @@ import { useAppStore } from '@renderer/app-state/hooks'
 
 // Issue #494 wants debug surfaces "out of the production render tree."
 // We deliberately did NOT adopt the issue's stricter sketch (gate all
-// five panels on the dev-debug config): today debugPanelOpen /
+// debug panels on the dev-debug config): today debugPanelOpen /
 // feedDebugPanelOpen / proxyDebugPanelOpen / htmlDebugPanelOpen open
 // WITHOUT dev-debug (only DevDebugPanel requires it), and this refactor
 // is behavior-preserving. Instead the whole group is a lazy chunk that
@@ -22,6 +22,7 @@ export function DebugSurfaces() {
       state.feedDebugPanelOpen ||
       state.proxyDebugPanelOpen ||
       state.htmlDebugPanelOpen ||
+      state.renderingDebugMode ||
       state.devDebugPanelOpen,
   )
   if (!anyOpen) return null
