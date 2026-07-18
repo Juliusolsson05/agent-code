@@ -125,6 +125,10 @@ describe('provider-owned Git operation formatting', () => {
   })
 
   it('normalizes the captured transparent unified exec before Git formatting', () => {
+    // Direct text(r.output) carrier: the output bytes are owned, but no exit
+    // code survives this transport, so the Git route claims the pair while the
+    // view stays in the neutral "exit unknown" grammar (rich success cards
+    // require proven exit 0).
     const decision = operation('codex', {
       toolUse: {
         type: 'tool_use',
@@ -153,43 +157,100 @@ describe('provider-owned Git operation formatting', () => {
       ownerRenderId: 'shared.command',
       protocolId: 'command.git',
     })
-    render(decision.toolUse.node)
-    expect(screen.getByText('src/example.ts')).toBeInTheDocument()
+    const { container } = render(decision.toolUse.node)
+    expect(screen.getByText('exit unknown')).toBeInTheDocument()
+    expect(container.textContent).toContain('src/example.ts')
   })
 
-  it('renders the captured stash-and-verification chain as one Git workflow', () => {
+  /** Serialized text(JSON.stringify(r)) carrier — the transport that DOES
+   * prove the inner exit code and therefore unlocks the rich Git cards. */
+  function serializedExecResult(output: string, exitCode = 0): string {
+    return [
+      'Script completed',
+      'Wall time 0.4 seconds',
+      'Output:',
+      '',
+      JSON.stringify({ exit_code: exitCode, output, wall_time_seconds: 0.4 }),
+    ].join('\n')
+  }
+
+  it('renders the captured stash-and-verification chain as one proven Git workflow', () => {
     const command = 'git stash push -u -m "snapshot" && git status --short --branch && git rev-parse HEAD && git rev-parse origin/main && git stash list -1'
-    const script = `const r = await tools.exec_command({cmd:${JSON.stringify(command)}}); text(r.output);`
+    const script = `const r = await tools.exec_command({cmd:${JSON.stringify(command)}}); text(JSON.stringify(r));`
     const sha = '1fa345713623811d8fe6a2708ddb180f8fc0188a'
+    const output = [
+      'Saved working directory and index state On main: snapshot',
+      '## main...origin/main',
+      sha,
+      sha,
+      'stash@{0}: On main: snapshot',
+    ].join('\n')
     const decision = operation('codex', {
       toolUse: { type: 'tool_use', id: 'git', name: 'exec', input: { raw: script } },
       result: {
         type: 'tool_result',
         tool_use_id: 'git',
-        content: [
-          'Script completed',
-          'Wall time 0.4 seconds',
-          'Output:',
-          '',
-          'Saved working directory and index state On main: snapshot',
-          '## main...origin/main',
-          sha,
-          sha,
-          'stash@{0}: On main: snapshot',
-        ].join('\n'),
+        content: serializedExecResult(output),
         codex: { kind: 'custom_tool_call_output' },
       } as never,
     })
 
     if (decision.toolUse.action !== 'render') throw new Error('expected Git workflow')
-    render(decision.toolUse.node)
+    const { container } = render(decision.toolUse.node)
     expect(screen.getByText('git stash and verify')).toBeInTheDocument()
+    // The single stash line and the single porcelain branch header are each
+    // uniquely attributable, so they may be promoted to summaries.
     expect(screen.getByText('stash@{0}: On main: snapshot')).toBeInTheDocument()
-    expect(screen.getByText('HEAD matches origin/main')).toBeInTheDocument()
+    expect(screen.getByText('Branch main...origin/main')).toBeInTheDocument()
+    // Exit 0 was proven by the serialized carrier and every operator is `&&`,
+    // so each step provably ran and succeeded.
     expect(screen.getAllByText('✓')).toHaveLength(5)
+    expect(screen.getByText('complete')).toBeInTheDocument()
+    // The ref-equality heuristic was removed: two equal hex lines in a
+    // combined stream never proved WHICH refs matched.
+    expect(screen.queryByText('HEAD matches origin/main')).toBeNull()
+    // The exact hashes remain visible inline instead.
+    expect(container.textContent).toContain(sha)
   })
 
-  it('names a diff guard + mixed reset + status chain after its mutation', () => {
+  it('names a diff guard + mixed reset + status chain without command-derived claims', () => {
+    const command = 'git diff --cached --quiet && git reset --mixed origin/main && git status --short --branch'
+    const script = `const r = await tools.exec_command({cmd:${JSON.stringify(command)}}); text(JSON.stringify(r));`
+    const output = [
+      'Unstaged changes after reset:',
+      'M\tdocs/rendering.md',
+      'M\tsrc/renderer.ts',
+      '## main...origin/main',
+    ].join('\n')
+    const decision = operation('codex', {
+      toolUse: { type: 'tool_use', id: 'git', name: 'exec', input: { raw: script } },
+      result: {
+        type: 'tool_result',
+        tool_use_id: 'git',
+        content: serializedExecResult(output),
+        codex: { kind: 'custom_tool_call_output' },
+      } as never,
+    })
+
+    if (decision.toolUse.action !== 'render') throw new Error('expected Git workflow')
+    const { container } = render(decision.toolUse.node)
+    expect(screen.getByText('git reset and inspect')).toBeInTheDocument()
+    expect(screen.getAllByText('✓')).toHaveLength(3)
+    // Reset-mode prose was derived from the command STRING, not output — a
+    // claim about a mutation is only honest when the output itself proves it.
+    expect(screen.queryByText(/Mixed reset/)).toBeNull()
+    // Changed-path counting matched loose two-letter prefixes and could count
+    // prose; the literal reset output stays visible inline instead.
+    expect(screen.queryByText(/changed paths?/)).toBeNull()
+    expect(container.textContent).toContain('Unstaged changes after reset:')
+    expect(container.textContent).toContain('M\tdocs/rendering.md')
+  })
+
+  it('refuses success chrome when a guard chain fails invisibly on the direct carrier', () => {
+    // The guard exits 1, so the reset NEVER ran — but the harness still says
+    // "Script completed" and the direct carrier drops the exit code. This is
+    // the exact scenario that previously rendered "reset and inspect ·
+    // complete ✓✓✓" for a chain that mutated nothing.
     const command = 'git diff --cached --quiet && git reset --mixed origin/main && git status --short --branch'
     const script = `const r = await tools.exec_command({cmd:${JSON.stringify(command)}}); text(r.output);`
     const decision = operation('codex', {
@@ -197,25 +258,117 @@ describe('provider-owned Git operation formatting', () => {
       result: {
         type: 'tool_result',
         tool_use_id: 'git',
-        content: [
-          'Script completed',
-          'Wall time 0.3 seconds',
-          'Output:',
-          '',
-          'Unstaged changes after reset:',
-          'M\tdocs/rendering.md',
-          'M\tsrc/renderer.ts',
-          '## main...origin/main',
-        ].join('\n'),
+        content: 'Script completed\nWall time 0.3 seconds\nOutput:\n\n',
+        codex: { kind: 'custom_tool_call_output' },
+      } as never,
+    })
+
+    if (decision.toolUse.action !== 'render') throw new Error('expected neutral Git operation')
+    expect(decision.toolUse.receipt).toEqual({
+      rendererId: 'shared.command',
+      protocolId: 'command.git',
+    })
+    render(decision.toolUse.node)
+    expect(screen.getByText('exit unknown')).toBeInTheDocument()
+    expect(screen.queryByText('✓')).toBeNull()
+    expect(screen.queryByText('complete')).toBeNull()
+    expect(screen.queryByText(/reset and inspect/)).toBeNull()
+  })
+
+  it('keeps broader single-verb output readable inline instead of one line', () => {
+    const script = 'const r = await tools.exec_command({cmd:"git branch -a"}); text(JSON.stringify(r));'
+    const output = '* main\n  feature/one\n  remotes/origin/main'
+    const decision = operation('codex', {
+      toolUse: { type: 'tool_use', id: 'git', name: 'exec', input: { raw: script } },
+      result: {
+        type: 'tool_result',
+        tool_use_id: 'git',
+        content: serializedExecResult(output),
+        codex: { kind: 'custom_tool_call_output' },
+      } as never,
+    })
+
+    if (decision.toolUse.action !== 'render') throw new Error('expected Git workflow')
+    const { container } = render(decision.toolUse.node)
+    expect(screen.getByText('git branch')).toBeInTheDocument()
+    expect(container.textContent).toContain('* main')
+    expect(container.textContent).toContain('feature/one')
+    expect(container.textContent).toContain('remotes/origin/main')
+  })
+
+  it('does not manufacture a ref match from hash ordering', () => {
+    // The first two hex lines are BOTH the HEAD hash (log then rev-parse);
+    // origin/main differs. The removed heuristic claimed a match here.
+    const command = 'git log --format=%H -1 && git rev-parse HEAD && git rev-parse origin/main'
+    const script = `const r = await tools.exec_command({cmd:${JSON.stringify(command)}}); text(JSON.stringify(r));`
+    const head = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+    const origin = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+    const decision = operation('codex', {
+      toolUse: { type: 'tool_use', id: 'git', name: 'exec', input: { raw: script } },
+      result: {
+        type: 'tool_result',
+        tool_use_id: 'git',
+        content: serializedExecResult([head, head, origin].join('\n')),
+        codex: { kind: 'custom_tool_call_output' },
+      } as never,
+    })
+
+    if (decision.toolUse.action !== 'render') throw new Error('expected Git workflow')
+    const { container } = render(decision.toolUse.node)
+    expect(screen.queryByText(/HEAD matches/)).toBeNull()
+    expect(container.textContent).toContain(origin)
+  })
+
+  it('does not promote a stash identity from a multi-entry stash list', () => {
+    const command = 'git stash push -m "wip" && git stash list'
+    const script = `const r = await tools.exec_command({cmd:${JSON.stringify(command)}}); text(JSON.stringify(r));`
+    const output = [
+      'Saved working directory and index state On main: wip',
+      'stash@{0}: On main: wip',
+      'stash@{1}: On main: earlier',
+      'stash@{2}: WIP on feature: oldest',
+    ].join('\n')
+    const decision = operation('codex', {
+      toolUse: { type: 'tool_use', id: 'git', name: 'exec', input: { raw: script } },
+      result: {
+        type: 'tool_result',
+        tool_use_id: 'git',
+        content: serializedExecResult(output),
+        codex: { kind: 'custom_tool_call_output' },
+      } as never,
+    })
+
+    if (decision.toolUse.action !== 'render') throw new Error('expected Git workflow')
+    const { container } = render(decision.toolUse.node)
+    // No summary line may pick one of several stash refs (exact-text queries
+    // match only summary rows; the inline slab is a single larger text node).
+    expect(screen.queryByText('stash@{0}: On main: wip')).toBeNull()
+    expect(screen.queryByText('stash@{2}: WIP on feature: oldest')).toBeNull()
+    // Every entry stays visible verbatim in the inline output.
+    expect(container.textContent).toContain('stash@{2}: WIP on feature: oldest')
+  })
+
+  it('does not count prose lines as changed paths', () => {
+    const command = 'git stash push -m "wip" && git stash apply'
+    const script = `const r = await tools.exec_command({cmd:${JSON.stringify(command)}}); text(JSON.stringify(r));`
+    const output = [
+      'Saved working directory and index state On main: wip',
+      'AM I sure this ran',
+      'OK done',
+    ].join('\n')
+    const decision = operation('codex', {
+      toolUse: { type: 'tool_use', id: 'git', name: 'exec', input: { raw: script } },
+      result: {
+        type: 'tool_result',
+        tool_use_id: 'git',
+        content: serializedExecResult(output),
         codex: { kind: 'custom_tool_call_output' },
       } as never,
     })
 
     if (decision.toolUse.action !== 'render') throw new Error('expected Git workflow')
     render(decision.toolUse.node)
-    expect(screen.getByText('git reset and inspect')).toBeInTheDocument()
-    expect(screen.getByText('Mixed reset · working-tree files preserved')).toBeInTheDocument()
-    expect(screen.getByText('2 changed paths')).toBeInTheDocument()
+    expect(screen.queryByText(/changed paths?/)).toBeNull()
   })
 
   it.each([

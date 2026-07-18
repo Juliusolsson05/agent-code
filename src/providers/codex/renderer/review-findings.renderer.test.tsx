@@ -37,12 +37,17 @@ describe('Codex command review findings', () => {
     } as ToolResultBlock & { codex: { kind: string } }
     const operation = fromCodexCommandOperation({ toolUse, result })
 
+    // WHY status is "unknown" and not "success": "Script completed" proves
+    // only that the wrapper JavaScript ran. The text(r.output) carrier drops
+    // the inner exit code, so success is unprovable on this transport even
+    // though the output bytes are fully owned and absorbable.
     expect(operation).toMatchObject({
       rawCommand: 'npm test',
       ownsResult: true,
       model: {
         cwd: '/repo',
-        status: 'success',
+        status: 'unknown',
+        exitCode: null,
         output: 'Tests  12 passed',
         conclusion: 'Tests: 12 passed',
       },
@@ -52,6 +57,114 @@ describe('Codex command review findings', () => {
       action: 'absorb',
       ownerRenderId: 'codex.rows.dispatch',
     })
+  })
+
+  it('never reports success for a failed inner command on the direct-output carrier', () => {
+    // The inner command exits 1, but code mode still says "Script completed"
+    // because the JavaScript itself did not throw, and no exit code survives
+    // the text(r.output) carrier. The old mapping rendered this green.
+    const toolUse: ToolUseBlock = {
+      type: 'tool_use',
+      id: 'unified-hidden-failure',
+      name: 'exec',
+      input: {
+        raw: 'const r = await tools.exec_command({cmd:"npm test"}); text(r.output);',
+      },
+    }
+    const result = {
+      type: 'tool_result',
+      tool_use_id: toolUse.id,
+      content: 'Script completed\nWall time 1.2 seconds\nOutput:\n\nFAIL src/a.test.ts\nTests  1 failed',
+      codex: { kind: 'custom_tool_call_output' },
+    } as ToolResultBlock & { codex: { kind: string } }
+    const operation = fromCodexCommandOperation({ toolUse, result })
+
+    expect(operation?.model.status).toBe('unknown')
+    expect(operation?.model.status).not.toBe('success')
+    expect(operation?.model.output).toBe('FAIL src/a.test.ts\nTests  1 failed')
+    expect(operation?.ownsResult).toBe(true)
+  })
+
+  it('treats a yielded "Script running" envelope as partial, never as an owned terminal result', () => {
+    // Codex's notify() can inject MORE custom_tool_call_output items for this
+    // call_id after a yield. Absorbing the partial flush would both claim a
+    // terminal outcome and orphan the continuation output.
+    const toolUse: ToolUseBlock = {
+      type: 'tool_use',
+      id: 'unified-yielded',
+      name: 'exec',
+      input: {
+        raw: 'const r = await tools.exec_command({cmd:"npm run dev",yield_time_ms:5000}); text(r.output);',
+      },
+    }
+    const result = {
+      type: 'tool_result',
+      tool_use_id: toolUse.id,
+      content: 'Script running with cell ID cell-3\nWall time 5.0 seconds\nOutput:\n\nserver starting…',
+      codex: { kind: 'custom_tool_call_output' },
+    } as ToolResultBlock & { codex: { kind: string } }
+    const operation = fromCodexCommandOperation({ toolUse, result })
+
+    expect(operation?.ownsResult).toBe(false)
+    expect(operation?.model.status).toBe('running')
+
+    const decision = renderCodexOperation({ toolUse, result, live: false, streaming: false })
+    expect(decision.toolResult?.action).not.toBe('absorb')
+  })
+
+  it('keeps native exec_command output verbatim even when it begins with transport text', () => {
+    // `cat` of a captured unified-exec transcript legitimately starts with
+    // "Script completed…Output:". Native results are the command's own bytes;
+    // stripping them here would destroy the only copy once the result row is
+    // absorbed.
+    const toolUse: ToolUseBlock = {
+      type: 'tool_use',
+      id: 'native-envelope-lookalike',
+      name: 'exec_command',
+      input: { cmd: 'cat exec-transcript.log' },
+    }
+    const content = 'Script completed\nWall time 0.2 seconds\nOutput:\n\nreal payload line'
+    const result = {
+      type: 'tool_result',
+      tool_use_id: toolUse.id,
+      content,
+      is_error: false,
+      codex: { kind: 'exec_command_end', exitCode: 0 },
+    } as ToolResultBlock & { codex: { kind: string; exitCode: number } }
+
+    expect(fromCodexCommandOperation({ toolUse, result })?.model).toMatchObject({
+      status: 'success',
+      output: content,
+    })
+  })
+
+  it('summarizes an unowned failed script from its visible result text', () => {
+    // Fan-out scripts never own their result, but the failure headline should
+    // still quote the real first error line instead of a generic "command
+    // failed" — the separate result row keeps every byte either way.
+    const toolUse: ToolUseBlock = {
+      type: 'tool_use',
+      id: 'fanout-failure',
+      name: 'exec',
+      input: {
+        raw: 'await Promise.all([tools.exec_command({cmd:"npm run lint"}), tools.exec_command({cmd:"npm test"})]);',
+      },
+    }
+    const result = {
+      type: 'tool_result',
+      tool_use_id: toolUse.id,
+      content: 'Script failed\nWall time 0.4 seconds\nOutput:\n\nlint: 3 errors found\nScript error:\nExecution failed',
+      codex: { kind: 'custom_tool_call_output' },
+    } as ToolResultBlock & { codex: { kind: string } }
+    const model = fromCodexExecScript(toolUse, { result })
+
+    expect(model).toMatchObject({
+      status: 'failure',
+      errorSummary: 'lint: 3 errors found',
+    })
+
+    const decision = renderCodexOperation({ toolUse, result, live: false, streaming: false })
+    expect(decision.toolResult?.action).not.toBe('absorb')
   })
 
   it('extracts the captured serialized ExecCommandResult carrier without showing transport JSON', () => {
@@ -175,13 +288,17 @@ describe('Codex command review findings', () => {
     const failure = {
       type: 'tool_result',
       tool_use_id: toolUse.id,
-      content: 'Script failed\nWall time: 0.2 seconds\nOutput:\n\ntests failed',
+      content: 'tests failed\n42 assertions did not hold',
       is_error: true,
       codex: { exitCode: 7 },
     } as ToolResultBlock & { codex: { exitCode: number } }
+    // Native exec_command results are the command's own bytes — no code-mode
+    // envelope exists on this transport, so nothing is stripped and the first
+    // line of the real output becomes the failure headline.
     expect(fromCodexExecCommand(toolUse, { result: failure })).toMatchObject({
       status: 'failure',
       exitCode: 7,
+      output: 'tests failed\n42 assertions did not hold',
       errorSummary: 'tests failed',
     })
   })

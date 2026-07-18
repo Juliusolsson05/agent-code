@@ -14,6 +14,13 @@ export type CommandStatus =
   | 'success'
   | 'failure'
   | 'timeout'
+  /** Terminal result arrived, but the provider transport carried no exit
+   *  evidence (e.g. Codex code-mode `text(r.output)`, where "Script
+   *  completed" only proves the wrapper JavaScript ran). Adapters MUST use
+   *  this instead of `success` whenever they cannot prove exit 0 — the view
+   *  renders a muted "exit unknown" so the feed never claims an outcome the
+   *  wire did not carry. */
+  | 'unknown'
 
 export type CommandRenderModel = {
   /** Provider-chosen label vocabulary (Bash, exec, local_shell…). The view

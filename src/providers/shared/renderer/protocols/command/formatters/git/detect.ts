@@ -12,8 +12,8 @@
 // -5"). Anything exotic (pipes, subshells, aliases, `git -C <dir>`
 // invocations) returns null so the feed falls back to the generic command
 // renderer. Unknown but syntactically plain Git subcommands retain a generic
-// Git workflow card with exact raw output. A missed
-// detection is always safer than a wrong one.
+// Git workflow card with bounded inline output plus the exact raw disclosure.
+// A missed detection is always safer than a wrong one.
 
 export type GitDiffIntent = {
   kind: 'diff'

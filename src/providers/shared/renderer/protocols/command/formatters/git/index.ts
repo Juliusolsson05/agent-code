@@ -15,6 +15,12 @@ export function gitOperationModel(input: {
   resultPresent: boolean
   output?: string
   isError: boolean
+  /** Set by adapters whose transport delivered a terminal result WITHOUT exit
+   *  evidence (Codex code-mode `text(r.output)`). Claude/opencode Bash results
+   *  omit it: their `is_error` is stamped from the actual exit status, so a
+   *  non-error result there is a proven success. Rich Git cards are gated on
+   *  proven success because their parsers assume clean output. */
+  exitUnknown?: boolean
 }): GitOperationModel | null {
   const intent = detectGitIntent(input.command)
   if (!intent) return null
@@ -25,7 +31,9 @@ export function gitOperationModel(input: {
       ? 'running'
       : input.isError
         ? 'failure'
-        : 'success',
+        : input.exitUnknown === true
+          ? 'unknown'
+          : 'success',
     ...(input.resultPresent ? { output: input.output ?? '' } : {}),
   }
 }

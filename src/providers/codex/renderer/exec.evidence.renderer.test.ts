@@ -30,6 +30,21 @@ function fixture<T>(name: keyof typeof fixtures): { cases: T[] } {
 
 const context = { committedToolResults: new Map() }
 
+// WHY the specialized receipt is pinned to the Git protocol since the
+// transport-normalization change: every captured specialized sample in these
+// fixtures is a transparent `tools.exec_command({cmd:"git …"})` bridge, and a
+// proven single-command bridge now deliberately shares native exec_command
+// operation ownership — including the finite `command.git` route. Pinning the
+// exact receipt (instead of accepting either renderer) keeps this suite an
+// intentional record of the routing decision: if the Git route ever loses or
+// gains these samples, that is a provider-boundary change that must be made
+// here on purpose, not discovered in production. Generic-route coverage is
+// unchanged: the non-command samples must still fall back.
+const SPECIALIZED_RECEIPT = {
+  rendererId: 'shared.command',
+  protocolId: 'command.git',
+}
+
 describe('Codex unified-exec evidence', () => {
   it('pins the captured prefix structure and proves both finite routes', () => {
     for (const sample of fixture<SemanticCase>('semantic-prefix.json').cases) {
@@ -43,7 +58,7 @@ describe('Codex unified-exec evidence', () => {
       const decision = renderCodexSemanticBlock(sample.semanticBlock, context)
       expect(decision?.action).toBe(sample.expectedRoute === 'specialized' ? 'render' : 'fallback')
       if (sample.expectedRoute === 'specialized' && decision?.action === 'render') {
-        expect(decision.receipt).toEqual({ rendererId: 'codex.rows.dispatch' })
+        expect(decision.receipt).toEqual(SPECIALIZED_RECEIPT)
       }
     }
   })
@@ -60,7 +75,7 @@ describe('Codex unified-exec evidence', () => {
       const decision = renderCodexSemanticBlock(sample.semanticBlock, context)
       expect(decision?.action).toBe(sample.expectedRoute === 'specialized' ? 'render' : 'fallback')
       if (sample.expectedRoute === 'specialized' && decision?.action === 'render') {
-        expect(decision.receipt).toEqual({ rendererId: 'codex.rows.dispatch' })
+        expect(decision.receipt).toEqual(SPECIALIZED_RECEIPT)
       }
     }
   })
@@ -84,7 +99,7 @@ describe('Codex unified-exec evidence', () => {
         sample.expectedRoute === 'specialized' ? 'render' : 'fallback',
       )
       if (sample.expectedRoute === 'specialized' && decision.toolUse.action === 'render') {
-        expect(decision.toolUse.receipt).toEqual({ rendererId: 'codex.rows.dispatch' })
+        expect(decision.toolUse.receipt).toEqual(SPECIALIZED_RECEIPT)
       }
     }
   })

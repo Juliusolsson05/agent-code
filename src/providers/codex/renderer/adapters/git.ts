@@ -23,5 +23,11 @@ export function fromCodexGitOperation(input: {
     resultPresent: input.result !== null,
     output: command.model.output,
     isError: command.model.status === 'failure',
+    // The `text(r.output)` carrier owns the bytes but not the exit code
+    // (command.ts commandResultEvidence). The Git view must not enter the
+    // rich success cards on it: a rejected push or failed guard chain would
+    // parse as a clean success card. `unknown` keeps the exact output in the
+    // neutral command grammar with an explicit "exit unknown" state.
+    exitUnknown: command.model.status === 'unknown',
   })
 }

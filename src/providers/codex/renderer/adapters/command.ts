@@ -49,6 +49,20 @@ type CommandResultEvidence = {
   output?: string
   exitCode: number | null
   failed: boolean
+  /** True only when a transport actually carried terminal exit evidence:
+   * native exec_command metadata, a serialized ExecCommandResult exit_code, or
+   * a proven failure signal (is_error / "Script failed"). The dominant
+   * `text(r.output)` carrier deliberately never proves success — code mode's
+   * "Script completed" line means only that the JavaScript did not throw
+   * (vendor/codex-src code_mode/mod.rs format_script_status), while the inner
+   * command's nonzero exit is swallowed by the harness. Without this flag that
+   * blindness silently became a green "success" for failed commands. */
+  exitProven: boolean
+  /** True when the envelope says the script is still running (Yielded /
+   * "Script running with cell ID …"). Such a result is a partial flush, and
+   * Codex's notify() can inject MORE outputs for the same call_id later, so
+   * it must never be absorbed as a terminal owned result. */
+  running: boolean
   owned: boolean
 }
 
@@ -497,44 +511,84 @@ function commandResultEvidence(
   result: ToolResultBlock | null,
   transport: 'native' | UnifiedResultPresentation,
 ): CommandResultEvidence {
-  if (!result) return { exitCode: null, failed: false, owned: false }
+  if (!result) {
+    return { exitCode: null, failed: false, exitProven: false, running: false, owned: false }
+  }
   const codex = asRecord(asRecord(result)?.codex)
   const nativeExit = numericField(codex, 'exitCode', 'exit_code')
   const materialized = toolResultContentText(result.content)
 
   if (transport === 'native') {
-    const envelope = parseCodexTransportEnvelope(materialized)
-    const output = envelope?.output ?? materialized
+    // WHY the native transport never envelope-strips: exec_command_end results
+    // are the command's own bytes, not a code-mode script wrapper. A command
+    // whose output legitimately BEGINS with "Script completed…Output:" (for
+    // example `cat` of a captured unified-exec transcript) must keep those
+    // header lines — the paired result row is absorbed, so trimming here would
+    // destroy the only copy of that prefix.
+    const failed = result.is_error === true || (nativeExit !== null && nativeExit !== 0)
     return {
-      output,
+      output: materialized,
       exitCode: nativeExit,
-      failed: result.is_error === true || envelope?.status === 'failed' ||
-        (nativeExit !== null && nativeExit !== 0),
+      failed,
+      // Native exec_command_end results always carry exit-derived evidence:
+      // rollout.ts computes is_error from `exit_code !== 0 || status ===
+      // 'failed'` and stamps codex.exitCode. is_error === false is therefore a
+      // proven success on THIS transport — unlike code-mode
+      // custom_tool_call_output, whose is_error never reflects the inner
+      // command.
+      exitProven: true,
+      running: false,
       owned: true,
     }
   }
 
   const envelope = parseCodexTransportEnvelope(materialized)
   if (!envelope) {
+    const failed = result.is_error === true || (nativeExit !== null && nativeExit !== 0)
     return {
       exitCode: nativeExit,
-      failed: result.is_error === true || (nativeExit !== null && nativeExit !== 0),
+      failed,
+      exitProven: failed || nativeExit !== null,
+      running: false,
       owned: false,
     }
   }
+  // A Yielded script ("Script running with cell ID …") is a partial flush:
+  // the trailing text(...) carrier has not run yet, and later notify()
+  // injections share this call_id. Owning/absorbing it would both claim a
+  // terminal outcome that does not exist and orphan the continuation output.
+  if (envelope.status === 'running') {
+    return {
+      exitCode: nativeExit,
+      failed: result.is_error === true,
+      exitProven: result.is_error === true,
+      running: true,
+      owned: false,
+    }
+  }
+  const scriptFailed = result.is_error === true || envelope.status === 'failed'
   if (transport === 'discarded') {
     return {
       exitCode: nativeExit,
-      failed: result.is_error === true || envelope.status === 'failed',
+      failed: scriptFailed,
+      exitProven: scriptFailed,
+      running: false,
       owned: false,
     }
   }
   if (transport === 'direct-output') {
+    const failed = scriptFailed || (nativeExit !== null && nativeExit !== 0)
     return {
       output: envelope.output,
       exitCode: nativeExit,
-      failed: result.is_error === true || envelope.status === 'failed' ||
-        (nativeExit !== null && nativeExit !== 0),
+      failed,
+      // "Script completed" proves only that the JavaScript ran; the inner
+      // command's exit code is unrecoverable on this carrier (the nested
+      // exec_command tool returns exit_code inside its JSON result and never
+      // fails the script — see the vendored code_mode handler). Success must
+      // therefore stay UNPROVEN even though the output bytes are fully owned.
+      exitProven: failed || nativeExit !== null,
+      running: false,
       owned: true,
     }
   }
@@ -547,7 +601,9 @@ function commandResultEvidence(
   if (envelope.output.length > SERIALIZED_EXEC_RESULT_MAX_CHARS) {
     return {
       exitCode: nativeExit,
-      failed: result.is_error === true || envelope.status === 'failed',
+      failed: scriptFailed,
+      exitProven: scriptFailed,
+      running: false,
       owned: false,
     }
   }
@@ -561,16 +617,24 @@ function commandResultEvidence(
   if (output === null) {
     return {
       exitCode: nativeExit,
-      failed: result.is_error === true || envelope.status === 'failed',
+      failed: scriptFailed,
+      exitProven: scriptFailed,
+      running: false,
       owned: false,
     }
   }
-  const exitCode = numericField(serialized, 'exit_code', 'exitCode') ?? nativeExit
+  const serializedExit = numericField(serialized, 'exit_code', 'exitCode')
+  const exitCode = serializedExit ?? nativeExit
+  const failed = scriptFailed || (exitCode !== null && exitCode !== 0)
   return {
     output,
     exitCode,
-    failed: result.is_error === true || envelope.status === 'failed' ||
-      (exitCode !== null && exitCode !== 0),
+    failed,
+    // Background/yielded sessions omit exit_code from the serialized result
+    // (vendored UnifiedExecCodeModeResult skips None); an absent field means
+    // the exit is genuinely unknown, not zero.
+    exitProven: failed || exitCode !== null,
+    running: false,
     owned: true,
   }
 }
@@ -588,16 +652,30 @@ function commandLifecycle(opts: {
   // distinguish those states at this seam, but both disprove success. Live
   // context still matters for the streaming prefix; terminal success/failure
   // is granted only by an actual correlated result.
+  //
+  // WHY "unknown" exists between running and success: a terminal result whose
+  // transport carried no exit evidence (the dominant `text(r.output)` carrier)
+  // proves the bytes but not the outcome. Mapping it to "success" made failed
+  // pushes, guarded resets, and red test runs render green. The honest state
+  // is a completed command with an unproven exit.
   const status: CommandRenderModel['status'] = evidence.failed
     ? 'failure'
-    : result
-      ? 'success'
-      : opts.streaming
-        ? 'streaming'
-        : 'running'
+    : evidence.running
+      ? 'running'
+      : result
+        ? evidence.exitProven ? 'success' : 'unknown'
+        : opts.streaming
+          ? 'streaming'
+          : 'running'
   if (!evidence.failed) return { status, errorSummary: undefined }
 
-  const output = evidence.output ?? ''
+  // A failed unowned/fan-out script has no evidence.output, but the paired
+  // result row (which stays visible in that state) still holds the real error
+  // text. Summarize from it rather than degrading to a generic "command
+  // failed" headline; the envelope chrome is stripped for the summary only —
+  // the result row itself keeps every byte.
+  const output = evidence.output ??
+    (result ? stripCodexTransportEnvelope(toolResultContentText(result.content)) : '')
   const newline = output.indexOf('\n')
   const firstLine = (newline === -1 ? output : output.slice(0, newline)).slice(0, 200)
   return {
