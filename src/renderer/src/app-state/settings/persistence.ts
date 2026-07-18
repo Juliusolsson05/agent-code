@@ -8,10 +8,12 @@ import {
   WORKSPACE_MODES,
 } from '@renderer/app-state/settings/types'
 import {
+  V4_CUSTOM_MIGRATION_MARKER,
   coerceSavedThemes,
   createSavedTheme,
   findSavedTheme,
   isSavedThemeId,
+  isV4MigratedTheme,
 } from '@renderer/app-state/settings/savedThemes'
 import type { SavedTheme } from '@renderer/app-state/settings/savedThemes'
 import { parseCustomAppearanceJson } from '@renderer/app-state/settings/customAppearance'
@@ -124,25 +126,35 @@ export function coerceSettings(value: unknown): Settings {
 // can still be stale (interrupted writes, hand-edited localStorage, a dev build
 // that ran this branch before the version bump landed). Coercion runs on every
 // launch through `merge`, so putting the conversion here makes it unconditional.
-// The name guard is what makes re-running it idempotent.
+// The migration marker is what makes re-running it idempotent.
 function migrateLegacyCustomAppearance(
   parsed: Partial<Settings>,
   savedThemes: SavedTheme[],
 ): SavedTheme[] {
   if (parsed.mode !== 'custom') return savedThemes
-  if (savedThemes.some(theme => theme.name === LEGACY_CUSTOM_THEME_NAME)) return savedThemes
+  // WHY the guard keys on the marker and NOT on the theme's name: names are
+  // deliberately non-unique AND user-editable. A name match lets this sequence
+  // orphan real data — name a theme "Custom" on v5, run a v4 build (which
+  // rewrites version: 4 but leaves savedThemes in the blob) and set
+  // mode: 'custom', then upgrade: the migration sees the name, concludes it has
+  // already run, and the customAppearanceJson the user was just looking at is
+  // silently abandoned. A marker cannot be produced by renaming.
+  if (savedThemes.some(isV4MigratedTheme)) return savedThemes
   const raw = typeof parsed.customAppearanceJson === 'string'
     ? parsed.customAppearanceJson
     : ''
   try {
-    parseCustomAppearanceJson(raw)
+    parseCustomAppearanceJson(raw, 'lenient')
   } catch {
     // Matches the pre-existing coerceCustomAppearanceJson policy: an
     // unparseable payload degrades silently rather than blocking boot. The
     // user lands on Dark, which is what they would have seen anyway.
     return savedThemes
   }
-  return [createSavedTheme(LEGACY_CUSTOM_THEME_NAME, raw), ...savedThemes]
+  return [
+    createSavedTheme(LEGACY_CUSTOM_THEME_NAME, raw, V4_CUSTOM_MIGRATION_MARKER),
+    ...savedThemes,
+  ]
 }
 
 const LEGACY_CUSTOM_THEME_NAME = 'Custom'
@@ -156,7 +168,10 @@ function resolvePersistedMode(
   savedThemes: SavedTheme[],
 ): Settings['mode'] {
   if (parsed.mode === 'custom') {
-    const migrated = savedThemes.find(theme => theme.name === LEGACY_CUSTOM_THEME_NAME)
+    // Same marker, same reason as the guard above — resolving the legacy mode
+    // by name would hand the user whichever theme they happened to call
+    // "Custom" rather than the one their old payload became.
+    const migrated = savedThemes.find(isV4MigratedTheme)
     return migrated ? migrated.id : DEFAULT_SETTINGS.mode
   }
   if (isBuiltInThemeMode(parsed.mode)) return parsed.mode

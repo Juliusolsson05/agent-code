@@ -2,7 +2,6 @@ import {
   ACCENTS,
   AGENT_VIEW_MODES,
   FONT_FAMILIES,
-  THEME_MODES,
   WORKSPACE_MODES,
 } from '@renderer/app-state/settings/types'
 import type {
@@ -10,7 +9,6 @@ import type {
   AgentViewMode,
   FontFamilyId,
   Settings,
-  ThemeMode,
   WorkspaceModeId,
 } from '@renderer/app-state/settings/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'

@@ -25,9 +25,22 @@ export const SAVED_THEME_ID_PREFIX = 'theme:'
 // out the picker grid cell.
 export const SAVED_THEME_NAME_MAX = 48
 
+// Marks a theme created by the v4→v5 migration rather than by the user.
+//
+// WHY a dedicated marker instead of matching on the name "Custom": names are
+// deliberately non-unique AND user-editable, so a name match makes migration
+// idempotency depend on data the user controls. Concretely — create a theme you
+// happen to name "Custom", downgrade to a v4 build (which rewrites version: 4
+// but leaves savedThemes in the blob), then upgrade again: the migration sees
+// the name, decides it already ran, and orphans the customAppearanceJson the
+// user was actually looking at. The marker cannot be produced by renaming.
+export const V4_CUSTOM_MIGRATION_MARKER = 'v4-custom'
+
 export type SavedTheme = {
   id: string
   name: string
+  /** Set only by the v4→v5 legacy migration; never written by the editor. */
+  migratedFrom?: typeof V4_CUSTOM_MIGRATION_MARKER
   // WHY raw JSON text rather than a parsed object: the editor is a JSON
   // textarea, and users expect their formatting, key ordering, and blank lines
   // to survive a round trip. Storing parsed objects would silently reformat
@@ -47,7 +60,11 @@ export function mintSavedThemeId(): string {
   return `${SAVED_THEME_ID_PREFIX}${crypto.randomUUID()}`
 }
 
-export function createSavedTheme(name: string, json: string): SavedTheme {
+export function createSavedTheme(
+  name: string,
+  json: string,
+  migratedFrom?: typeof V4_CUSTOM_MIGRATION_MARKER,
+): SavedTheme {
   const now = Date.now()
   return {
     id: mintSavedThemeId(),
@@ -55,18 +72,23 @@ export function createSavedTheme(name: string, json: string): SavedTheme {
     json,
     createdAt: now,
     updatedAt: now,
+    ...(migratedFrom ? { migratedFrom } : {}),
   }
+}
+
+export function isV4MigratedTheme(theme: SavedTheme): boolean {
+  return theme.migratedFrom === V4_CUSTOM_MIGRATION_MARKER
 }
 
 // Mirrors normalizeCustomTemplates in the prompt-templates feature: drop
 // anything malformed rather than letting one bad entry poison the list.
 //
-// WHY invalid JSON is dropped here but missing *keys* are not: a theme whose
-// json no longer parses cannot be applied at all, so keeping it would put an
-// unusable cell in the picker. A theme merely missing newly-added tokens is
-// still perfectly applicable — parseCustomAppearanceJson backfills those from
-// DEFAULT_CUSTOM_APPEARANCE, which is exactly what keeps a user's older theme
-// alive as the product's token set grows.
+// WHY the load path parses LENIENTLY: only structurally hopeless JSON (not an
+// object, unparseable text) costs a theme its place in the list. A theme
+// carrying a key we no longer recognize — which is what a future token rename
+// produces for every theme authored before it — keeps working with that key
+// ignored. Strict parsing here would mean a one-line rename in
+// CUSTOM_APPEARANCE_COLOR_KEYS silently deletes every saved theme at boot.
 export function coerceSavedThemes(value: unknown): SavedTheme[] {
   if (!Array.isArray(value)) return []
   const seen = new Set<string>()
@@ -78,7 +100,7 @@ export function coerceSavedThemes(value: unknown): SavedTheme[] {
     if (typeof record.json !== 'string') return []
     if (seen.has(record.id)) return []
     try {
-      parseCustomAppearanceJson(record.json)
+      parseCustomAppearanceJson(record.json, 'lenient')
     } catch {
       return []
     }
@@ -89,6 +111,9 @@ export function coerceSavedThemes(value: unknown): SavedTheme[] {
       json: record.json,
       createdAt: typeof record.createdAt === 'number' ? record.createdAt : 0,
       updatedAt: typeof record.updatedAt === 'number' ? record.updatedAt : 0,
+      ...(record.migratedFrom === V4_CUSTOM_MIGRATION_MARKER
+        ? { migratedFrom: V4_CUSTOM_MIGRATION_MARKER }
+        : {}),
     }]
   })
 }
@@ -99,7 +124,9 @@ export function findSavedTheme(themes: SavedTheme[], id: string): SavedTheme | n
 
 export function resolveSavedThemeColors(theme: SavedTheme): CustomAppearanceColors | null {
   try {
-    return parseCustomAppearanceJson(theme.json)
+    // Lenient for the same reason coerceSavedThemes is: an unrecognized key
+    // must not stop a theme the user can see in the picker from rendering.
+    return parseCustomAppearanceJson(theme.json, 'lenient')
   } catch {
     // Unreachable for themes that came through coerceSavedThemes, which
     // already dropped unparseable entries. Kept because this function is also

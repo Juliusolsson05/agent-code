@@ -1,11 +1,5 @@
 import { DEFAULT_CUSTOM_APPEARANCE_JSON } from '@renderer/app-state/settings/customAppearance'
-import {
-  findSavedTheme,
-  isSavedThemeId,
-  resolveSavedThemeColors,
-} from '@renderer/app-state/settings/savedThemes'
 import type { SavedTheme } from '@renderer/app-state/settings/savedThemes'
-import { relativeLuminance } from '@renderer/lib/color/luminance'
 import type { DictationProvider } from '@shared/types/dictation'
 
 // Built-in theme ids only. 'custom' used to live here as a sentinel that
@@ -44,33 +38,25 @@ export function isBuiltInThemeMode(value: unknown): value is ThemeMode {
   return THEME_MODES.some(option => option.id === value)
 }
 
-// Retained for the many callers that pass a built-in id. Anything not in the
-// light family counts as dark, which is precisely why a saved theme must NOT
-// be routed through here — see isDarkThemeValue.
+// Anything not in the light family counts as dark, so a saved-theme id resolves
+// to "dark" here.
+//
+// WHY that is correct rather than a bug worth inferring around: this function
+// exists to pick which half of an ACCENT pair to write, and a saved theme never
+// needs that decision made for it. `accent` and `accentFg` are themselves two
+// of the 81 custom-appearance tokens, so parseCustomAppearanceJson backfills
+// them and applyCustomAppearance writes the theme's own concrete accent
+// directly — the accent-pair branch in applyTheme is only reachable when there
+// is no custom payload at all.
+//
+// An earlier version of this PR shipped an `isDarkThemeValue` that inferred a
+// saved theme's family from its canvas luminance. Review proved the luminance
+// branch was unreachable at both call sites: reaching it required the theme to
+// exist AND parse, which is exactly the condition that produces a payload and
+// takes the other branch. It was deleted rather than kept as defense, because
+// dead code that looks load-bearing invites the next person to build on it.
 export function isDarkThemeMode(mode: ThemeModeValue): boolean {
   return THEME_MODES.find(option => option.id === mode)?.family !== 'light'
-}
-
-// WHY a saved theme cannot use isDarkThemeMode: that function returns true for
-// anything not in the light family, so every user theme would be treated as
-// dark. That was tolerable when there was one unnamed custom slot; with named
-// themes a user's light theme is a first-class thing, and getting its family
-// wrong picks the wrong half of the accent pair.
-//
-// We infer from the theme's own canvas luminance — the same signal xterm
-// already uses to choose its ANSI ramp — so the chrome and the terminal always
-// agree about which world they are in. A canvas expressed as
-// rgb()/oklch()/color-mix() returns null from relativeLuminance; we fall back
-// to dark, matching the historical default for custom appearance.
-export function isDarkThemeValue(mode: ThemeModeValue, savedThemes: SavedTheme[]): boolean {
-  if (!isSavedThemeId(mode)) return isDarkThemeMode(mode)
-  const theme = findSavedTheme(savedThemes, mode)
-  if (!theme) return true
-  const colors = resolveSavedThemeColors(theme)
-  if (!colors) return true
-  const luminance = relativeLuminance(colors.canvas)
-  if (luminance === null) return true
-  return luminance <= 0.5
 }
 
 export type AccentId =

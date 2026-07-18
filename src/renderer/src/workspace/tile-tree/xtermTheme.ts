@@ -1,7 +1,5 @@
 import type { ITheme } from '@xterm/xterm'
 
-import { relativeLuminance } from '@renderer/lib/color/luminance'
-
 function readThemeToken(styles: CSSStyleDeclaration, name: string, fallback: string): string {
   return styles.getPropertyValue(name).trim() || fallback
 }
@@ -11,6 +9,18 @@ function withAlpha(hex: string, alpha: string, fallback: string): string {
   if (/^#[0-9a-f]{6}$/i.test(normalized)) return `${normalized}${alpha}`
   if (/^#[0-9a-f]{8}$/i.test(normalized)) return `${normalized.slice(0, 7)}${alpha}`
   return fallback
+}
+
+function relativeLuminance(hex: string): number | null {
+  const match = /^#([0-9a-f]{6})$/i.exec(hex.trim())
+  if (!match) return null
+  const [r, g, b] = [0, 2, 4].map(offset => {
+    const channel = Number.parseInt(match[1].slice(offset, offset + 2), 16) / 255
+    return channel <= 0.03928
+      ? channel / 12.92
+      : ((channel + 0.055) / 1.055) ** 2.4
+  })
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b
 }
 
 export function readXtermTheme(): ITheme {

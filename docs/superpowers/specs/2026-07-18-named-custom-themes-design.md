@@ -219,6 +219,21 @@ Deliberately excluded to keep this shippable:
 - **System theme following.** Nothing reads `prefers-color-scheme` today.
 - **A test asserting key-set parity** between `CUSTOM_APPEARANCE_COLOR_KEYS` and the `@theme inline` bindings. Real gap, but a test-suite change, and this repo's convention is not to add test files in feature PRs.
 
+## Durability of saved themes (added post-review)
+
+Making themes *named and durable* changed the cost of a parse failure, and the original design missed it.
+
+`parseCustomAppearanceJson` backfills missing keys but **throws on unknown** ones, and `coerceSavedThemes` drops any theme whose JSON throws. Under the old single-slot design that asymmetry cost one throwaway payload. With named themes — seeded **dense with all 81 keys** by `readAppliedAppearance` — the day a product token is renamed, *every* saved theme carrying the old key would be silently deleted at boot and the user dropped back to Dark.
+
+The parser now takes a strictness mode:
+
+- **`strict`** (default, used by the editor) — unknown keys and bad values throw. A typo must not look like a successfully-applied color; that is the whole reason the check exists.
+- **`lenient`** (used by `coerceSavedThemes`, `resolveSavedThemeColors`, and the legacy migration) — unrecognized keys are ignored and unusable values fall back per-token, so the theme survives. Only structurally hopeless JSON still costs a theme its place.
+
+The value allowlist (`isSafeCssColorValue`) is enforced in **both** modes. Leniency is about recovering a user's theme, never about relaxing what may reach a CSS custom property.
+
+**One undocumented dependency worth knowing:** `readAppliedAppearance` works only because the theme custom properties are *unregistered*. Their computed value is the token stream with `var()` already substituted, which is what lets `color-mix(in srgb, var(--theme-accent) 12%, transparent)` come back as `color-mix(in srgb, #7dd3a0 12%, transparent)` and pass `isSafeCssColorValue` (which rejects any value containing `var(`). Adding a single `@property` registration for a theme token — or a `light-dark()` value — would silently break "+ New theme…" with an error naming a token the user never typed.
+
 ## Files touched
 
 **New**
@@ -235,7 +250,9 @@ Deliberately excluded to keep this shippable:
 
 ## Risks
 
-1. **`isDarkThemeMode` for saved themes.** Today it returns `true` for anything not in the `light` family, so a user's light custom theme is treated as dark for accent resolution. With named themes this becomes more visible. Mitigation: resolve a saved theme's `canvas` luminance, reusing the approach `xtermTheme.ts` already takes. If that proves noisy, the fallback is an explicit `family: 'light' | 'dark'` field on `SavedTheme` set at save time.
+1. ~~**`isDarkThemeMode` for saved themes.**~~ **This risk was wrong — corrected post-review.** The original analysis claimed a light saved theme would be treated as dark and "pick the wrong half of the accent pair." It cannot: `accent` and `accentFg` are themselves two of the 81 custom-appearance tokens, so `parseCustomAppearanceJson` backfills them and `applyCustomAppearance` writes the theme's own concrete accent directly. The accent-pair branch in `applyTheme` is only reachable when there is *no* custom payload, i.e. on a built-in mode.
+
+   An `isDarkThemeValue()` helper (plus an extraction of `relativeLuminance` into `lib/color/`) was implemented to mitigate this non-problem. Review proved its luminance branch was **unreachable at both call sites**: reaching it required a saved theme that both resolves and parses, which is exactly the condition that produces a payload and takes the other branch. All of it was deleted rather than kept as defense-in-depth — dead code that looks load-bearing invites the next person to build on a branch that has never executed.
 2. **Migration correctness.** The #249 black-screen precedent is the worst case. Mitigation: the version bump, plus `coerceSettings` being defensive enough that a malformed `savedThemes` degrades to an empty array rather than throwing.
 3. **Coercion ordering.** `mode` validation depends on coerced `savedThemes`. Called out above; needs a WHY comment at the call site.
 4. **Monaco theme refcount.** `lib/code/monacoThemeState.ts` documents the #513 "theme war" — Monaco's `setTheme` is process-global and code slabs fought the file editor. This design does not change how Monaco consumes themes (it still reacts to the `theme-changed` event), but any implementation that adds a new `setTheme` call must honor `isEditorThemeActive()`.

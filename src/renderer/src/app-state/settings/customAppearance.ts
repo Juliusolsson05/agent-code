@@ -368,7 +368,28 @@ export function stringifyCustomAppearance(colors: CustomAppearanceColors): strin
   return JSON.stringify(colors, null, 2)
 }
 
-export function parseCustomAppearanceJson(raw: string): CustomAppearanceColors {
+// WHY there are two strictnesses rather than one parser:
+//
+// The editor and the loader want opposite things from a bad key, and serving
+// both from one function was a latent theme-destroying bug. In the EDITOR, a
+// typo must be fatal — silently ignoring `"surfacce"` would render as "saved
+// successfully" while that color never applies, which is exactly the
+// unfalsifiable failure the strict check was added to prevent. At LOAD time
+// the same fatality is catastrophic: coerceSavedThemes drops any theme whose
+// JSON throws, so the day a product token is renamed, every *saved, named*
+// theme still carrying the old key would be silently deleted at boot and the
+// user dropped back to Dark.
+//
+// That asymmetry was tolerable when custom appearance was one throwaway slot.
+// Named themes are durable user-authored artifacts — and they are seeded dense
+// with all 81 keys by readAppliedAppearance(), which maximizes the exposure. So
+// the loader now keeps the theme and drops what it cannot understand.
+export type CustomAppearanceParseMode = 'strict' | 'lenient'
+
+export function parseCustomAppearanceJson(
+  raw: string,
+  mode: CustomAppearanceParseMode = 'strict',
+): CustomAppearanceColors {
   let parsed: unknown
   try {
     parsed = JSON.parse(raw)
@@ -381,10 +402,13 @@ export function parseCustomAppearanceJson(raw: string): CustomAppearanceColors {
     throw new Error('Custom appearance must be a JSON object.')
   }
 
+  const lenient = mode === 'lenient'
   const record = parsed as Record<string, unknown>
   const allowed = new Set<string>(CUSTOM_APPEARANCE_COLOR_KEYS)
   const extra = Object.keys(record).filter(key => !allowed.has(key))
-  if (extra.length > 0) {
+  // Structurally broken input (not JSON, not an object) still throws in both
+  // modes — there is no theme to salvage. Only *recognition* failures degrade.
+  if (extra.length > 0 && !lenient) {
     throw new Error(`Unknown custom appearance key: ${extra.join(', ')}`)
   }
 
@@ -395,17 +419,28 @@ export function parseCustomAppearanceJson(raw: string): CustomAppearanceColors {
     // palette invalid: Custom Appearance is persisted user data, and new
     // product tokens are added over time. Treating a missing *new* key as a
     // fatal schema error would silently throw a user's old custom theme away
-    // during coerceSettings(). Unknown keys are still rejected above because a
-    // typo should not look like a successfully-applied color.
+    // during coerceSettings().
     if (value === undefined) {
       colors[key] = DEFAULT_CUSTOM_APPEARANCE[key]
       continue
     }
     if (typeof value !== 'string') {
+      if (lenient) {
+        colors[key] = DEFAULT_CUSTOM_APPEARANCE[key]
+        continue
+      }
       throw new Error(`Custom appearance key "${key}" must be a string.`)
     }
     const trimmed = value.trim()
+    // Note the value allowlist is enforced in BOTH modes. Leniency is about
+    // recovering a user's theme, never about relaxing what may reach a CSS
+    // custom property — isSafeCssColorValue is a security boundary (several
+    // tokens land in `background` shorthand, where url() can fetch).
     if (!isSafeCssColorValue(trimmed)) {
+      if (lenient) {
+        colors[key] = DEFAULT_CUSTOM_APPEARANCE[key]
+        continue
+      }
       throw new Error(
         `Custom appearance key "${key}" must be a supported CSS color string.`,
       )

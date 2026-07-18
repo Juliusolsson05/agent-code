@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 
-import { ACCENTS, THEME_MODES, isDarkThemeValue } from '@renderer/app-state/settings/types'
+import { ACCENTS, THEME_MODES, isDarkThemeMode } from '@renderer/app-state/settings/types'
 import type { AccentId, Settings, ThemeModeValue } from '@renderer/app-state/settings/types'
 import { isSavedThemeId } from '@renderer/app-state/settings/savedThemes'
 
@@ -108,7 +108,9 @@ export function AppearanceMenu({ settings, onChange }: Props) {
                   <AccentSwatch
                     key={a.id}
                     id={a.id}
-                    color={isDarkThemeValue(settings.mode, settings.savedThemes) ? a.dark : a.light}
+                    // Only reachable for built-in modes — the enclosing branch
+                    // excludes saved themes, which carry their own accent token.
+                    color={isDarkThemeMode(settings.mode) ? a.dark : a.light}
                     name={a.name}
                     active={settings.accent === a.id}
                     onPick={accent => onChange({ accent })}

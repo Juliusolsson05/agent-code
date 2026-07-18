@@ -1,4 +1,10 @@
-import { ACCENTS, FONT_FAMILIES, isDarkThemeValue } from '@renderer/app-state/settings/types'
+import {
+  ACCENTS,
+  DEFAULT_SETTINGS,
+  FONT_FAMILIES,
+  isBuiltInThemeMode,
+  isDarkThemeMode,
+} from '@renderer/app-state/settings/types'
 import type { Settings } from '@renderer/app-state/settings/types'
 import {
   CUSTOM_APPEARANCE_COLOR_KEYS,
@@ -83,21 +89,34 @@ export function applyTheme(settings: Settings): void {
   // forcing each pure consumer to mock `document` merely to inspect policy.
   if (typeof document === 'undefined' || typeof window === 'undefined') return
   const root = document.documentElement
-  // WHY data-mode gets a literal 'custom' for saved themes rather than the raw
-  // theme id: styles.css keys its blocks off known values, and an unknown
-  // data-mode matches no block — which is exactly right here, because the
-  // inline properties written below fully define the palette. Writing 'custom'
-  // keeps any existing [data-mode="custom"] styling and debug tooling working
-  // without having to teach them about uuids.
   const payload = resolveThemePayload(settings)
-  root.dataset.mode = payload ? 'custom' : settings.mode
+  // WHY data-mode is never allowed to hold a raw `theme:<uuid>`:
+  //
+  // With a payload, 'custom' is written because the 81 inline properties fully
+  // define the palette; the literal keeps existing [data-mode="custom"] styling
+  // and debug tooling working without teaching them about uuids.
+  //
+  // WITHOUT a payload (a theme id that no longer resolves), writing the id
+  // through would put a value in data-mode that matches no CSS block. That is
+  // not a black screen — `:root` doubles as the dark palette — but every
+  // high-contrast rule is a compound selector
+  // ([data-contrast="high"][data-mode="dark"] and friends), so all of them miss
+  // and high contrast silently switches off while its toggle still reads on.
+  // No in-app sequence reaches this today (delete resets mode, coerceSettings
+  // repairs at boot, the editor validates before save) — but applyTheme is
+  // called by the phone client on an UNCOERCED blob, so this is the one place
+  // that has to be defensive on its own.
+  const mode = payload
+    ? 'custom'
+    : isBuiltInThemeMode(settings.mode) ? settings.mode : DEFAULT_SETTINGS.mode
+  root.dataset.mode = mode
   root.dataset.contrast = settings.contrast ? 'high' : 'normal'
   if (payload) {
     applyCustomAppearance(root, payload)
   } else {
     clearCustomAppearance(root)
     const accent = ACCENTS.find(a => a.id === settings.accent) ?? ACCENTS[0]
-    const dark = isDarkThemeValue(settings.mode, settings.savedThemes)
+    const dark = isDarkThemeMode(mode)
     root.style.setProperty('--theme-accent', dark ? accent.dark : accent.light)
     root.style.setProperty('--theme-accent-fg', dark ? accent.fgDark : accent.fgLight)
   }
