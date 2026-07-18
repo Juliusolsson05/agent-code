@@ -20,6 +20,8 @@ export type StructuredJsonRecord = {
   lineNumber: number | null
   jsonSource: string
   summary: string
+  discriminatorLabel: string | null
+  messagePreview: string | null
   isError: boolean
 }
 
@@ -66,6 +68,41 @@ function summarizeJson(value: unknown): JsonSummary {
   }
 }
 
+function boundedScalar(value: unknown, maxChars = 80): string | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value)
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    value.length > maxChars ||
+    !/\S/.test(value)
+  ) return null
+  return value.replace(/\s+/g, ' ').trim()
+}
+
+function recordDiscriminator(value: unknown): {
+  label: string | null
+  messagePreview: string | null
+} {
+  if (Array.isArray(value)) return { label: null, messagePreview: null }
+  const record = value as Record<string, unknown>
+  const discriminator = boundedScalar(record.type) ??
+    boundedScalar(record.kind) ??
+    boundedScalar(record.event) ??
+    boundedScalar(record.status) ??
+    boundedScalar(record.action)
+  const identity = boundedScalar(record.label) ??
+    boundedScalar(record.name) ??
+    boundedScalar(record.agentId) ??
+    boundedScalar(record.id)
+  const cursor = boundedScalar(record.cursor)
+  const pieces = [identity, discriminator, cursor === null ? null : `cursor ${cursor}`]
+    .filter((piece): piece is string => piece !== null)
+  return {
+    label: pieces.length > 0 ? pieces.join(' · ') : null,
+    messagePreview: boundedScalar(record.message, 180),
+  }
+}
+
 function sourceLocation(prefix: string): { path: string; lineNumber: number } | null {
   // `rg -n`, grep, compiler diagnostics, and many search tools use this exact
   // shape. The greedy path group deliberately keeps colons inside a filename;
@@ -107,6 +144,7 @@ function parseRecord(line: string, recordIndex: number): StructuredJsonRecord | 
       if (typeof value !== 'object' || value === null) continue
       const location = sourceLocation(prefix)
       const summary = summarizeJson(value)
+      const discriminator = recordDiscriminator(value)
       return {
         key: `${recordIndex}:${index}`,
         prefix,
@@ -114,6 +152,8 @@ function parseRecord(line: string, recordIndex: number): StructuredJsonRecord | 
         lineNumber: location?.lineNumber ?? null,
         jsonSource,
         summary: summary.label,
+        discriminatorLabel: discriminator.label,
+        messagePreview: discriminator.messagePreview,
         isError: summary.isError,
       }
     } catch {

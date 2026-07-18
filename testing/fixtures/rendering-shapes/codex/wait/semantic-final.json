@@ -1,0 +1,28 @@
+{
+  "evidence": "Reduced from the fp2-cee28660 input-complete sighting recorded for session 8e4cf0a4-9af7-4aa6-97e3-129f4d11fcc1 on 2026-07-18. The literal input is the captured cell/yield/token grammar and every structural path is retained.",
+  "cases": [
+    {
+      "expectedRoute": "specialized",
+      "semanticBlock": {
+        "argumentsJson": "{\"cell_id\":\"5\",\"yield_time_ms\":30000,\"max_tokens\":30000}",
+        "blockIndex": 1,
+        "callId": "call-wait-final",
+        "finalized": true,
+        "inputJson": "{\"cell_id\":\"5\",\"yield_time_ms\":30000,\"max_tokens\":30000}",
+        "inputJsonValid": true,
+        "itemId": "fc-wait-final",
+        "kind": "function_call",
+        "parsedInput": {
+          "cell_id": "5",
+          "yield_time_ms": 30000,
+          "max_tokens": 30000
+        },
+        "status": "completed",
+        "text": "",
+        "thinking": "",
+        "toolName": "wait",
+        "toolUseId": "call-wait-final"
+      }
+    }
+  ]
+}

@@ -131,9 +131,10 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
     disposition: { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'An unrecognized unified-exec script remains visible through the bounded structured fallback.' },
     alternateDispositions: [
       { kind: 'specialized', rendererId: 'codex.rows.dispatch' },
+      { kind: 'specialized', rendererId: 'codex.rows.dispatch', protocolId: 'agent-code.embedded-operation' },
       { kind: 'specialized', rendererId: 'shared.command', protocolId: 'command.git' },
     ],
-    why: 'GRADUATED Phase 10: unified exec is admitted only after provider parsing proves an apply_patch call or embedded exec_command call. Arbitrary generated scripts stay generic. Complete transparent single-command bridges share native exec_command ownership, including the finite Git route. The bounded canonical Promise.all + numbered-forEach fan-out is also provider-owned because each result section is attributable and the exact grouped payload remains disclosed; ambiguous fan-outs and yielded envelopes retain separate result evidence. Direct text(output) carriers report an unproven exit as "unknown" rather than success.',
+    why: 'Unified exec is admitted only after bounded provider parsing proves a patch, command, Git workflow, numbered command group, or one top-level awaited Agent Code MCP call with JSON-compatible literal input. Embedded MCP identity is specialized without absorbing arbitrary projected output; scripts with dynamic arguments, multiple calls, executable templates, or unproven prefixes remain generic. Direct text(output) command carriers report an unproven exit as "unknown" rather than success.',
   }),
   'codex.semantic.exec-command.v1': defineRenderShape({
     id: 'codex.semantic.exec-command.v1',
@@ -377,9 +378,15 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
       firstSeen: '2026-07-17',
       lastSeen: '2026-07-17',
     },
-    fixtures: { final: [], prefixes: [] },
-    disposition: { kind: 'unsupported', reason: 'Codex wait continuation lacks stable paired cell/result evidence and therefore stays visibly structured by the generic tool row.' },
-    why: 'Phase 10 intentionally does not guess that wait is collaboration or silently attach it to a command. TODO(command-continuation-evidence): promote only after paired yielded-cell fixtures prove correlation and terminal states.',
+    fixtures: {
+      final: ["rendering-shapes/codex/wait/semantic-final.json"],
+      prefixes: ["rendering-shapes/codex/wait/semantic-prefix.json"],
+    },
+    disposition: { kind: 'specialized', rendererId: 'codex.rows.dispatch', protocolId: 'command.continuation' },
+    alternateDispositions: [
+      { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'Incomplete or drifted wait inputs remain visible without inventing a continuation identity.' },
+    ],
+    why: 'The captured wait grammar carries a non-empty cell_id plus bounded yield/token controls. It renders as a continuation and strips transport chrome only from its correlated Codex result; malformed prefixes remain generic and no result is attached to a different command.',
   }),
   'codex.semantic.web-search-call.v1': defineRenderShape({
     id: 'codex.semantic.web-search-call.v1',
@@ -435,6 +442,8 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
     disposition: { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'Unknown, uncorrelated, or arbitrary custom outputs remain visible through the shared structured result formatter.' },
     alternateDispositions: [
       { kind: 'specialized', rendererId: 'codex.rows.dispatch' },
+      { kind: 'specialized', rendererId: 'codex.rows.dispatch', protocolId: 'agent-code.embedded-operation' },
+      { kind: 'specialized', rendererId: 'codex.rows.dispatch', protocolId: 'command.continuation' },
       { kind: 'absorbed', ownerRendererId: 'codex.rows.dispatch', reason: 'A validated paired provider card preserves the useful result evidence.' },
       { kind: 'absorbed', ownerRendererId: 'codex.rows.dispatch', protocolId: 'agent-code.orchestration', reason: 'The source-controlled Agent Code orchestration card preserves its validated result protocol.' },
       { kind: 'absorbed', ownerRendererId: 'codex.rows.dispatch', protocolId: 'agent-code.workspace', reason: 'The source-controlled Agent Code workspace card preserves its validated result protocol.' },
@@ -594,9 +603,10 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
     disposition: { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'An unrecognized unified-exec script remains visible through the bounded structured fallback.' },
     alternateDispositions: [
       { kind: 'specialized', rendererId: 'codex.rows.dispatch' },
+      { kind: 'specialized', rendererId: 'codex.rows.dispatch', protocolId: 'agent-code.embedded-operation' },
       { kind: 'specialized', rendererId: 'shared.command', protocolId: 'command.git' },
     ],
-    why: 'GRADUATED Phase 10: committed unified exec uses the same conservative provider admission as the semantic plane. Actual patch calls and embedded commands are provider-owned, while every unrecognized script remains visible. Transparent single-command bridges share native command operation ownership, including the finite Git route. The exact bounded Promise.all + numbered-forEach grammar owns and discloses its grouped output; ambiguous fan-outs and yielded envelopes retain separate result evidence. Unproven exits render as "unknown", never success.',
+    why: 'Committed unified exec uses the same bounded admission as the semantic plane. One top-level awaited Agent Code MCP call with JSON-compatible literal input receives truthful inner-operation identity while its projected paired result remains independently visible. Patches, commands, Git workflows, and exact numbered groups retain their existing ownership; arbitrary scripts and dynamic or ambiguous calls remain generic.',
   }),
   'codex.tool-use.exec-command.v1': defineRenderShape({
     id: 'codex.tool-use.exec-command.v1',
@@ -870,9 +880,12 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
       firstSeen: '2026-07-16',
       lastSeen: '2026-07-16',
     },
-    fixtures: { final: [], prefixes: [] },
-    disposition: { kind: 'unsupported', reason: 'Codex wait continuation lacks stable paired cell/result evidence and therefore stays visibly structured by the generic tool row.' },
-    why: 'Phase 10 explicitly keeps wait outside collaboration and outside silent command ownership. TODO(command-continuation-evidence): promote only when paired yielded-cell fixtures prove correlation and terminal states.',
+    fixtures: { final: ["rendering-shapes/codex/wait/committed.json"], prefixes: [] },
+    disposition: { kind: 'specialized', rendererId: 'codex.rows.dispatch', protocolId: 'command.continuation' },
+    alternateDispositions: [
+      { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'A wait envelope without a valid cell_id or bounded controls remains visible through the generic row.' },
+    ],
+    why: 'The durable wait fixture proves a correlated Codex continuation envelope. The specialized row names the cell and lifecycle, while only its paired result may lose the verified Script/Wall time/Output transport header; drifted inputs remain generic.',
   }),
   'codex.tool-use.wait-agent.v1': defineRenderShape({
     id: 'codex.tool-use.wait-agent.v1',

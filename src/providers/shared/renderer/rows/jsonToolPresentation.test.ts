@@ -135,4 +135,15 @@ describe('jsonResultSummary', () => {
     expect(jsonResultSummary({ a: 1, b: 2 }).label).toBe('2 keys')
     expect(jsonResultSummary([1, 2, 3]).label).toBe('3 items')
   })
+  it('surfaces bounded literal discriminators before anonymous key counts', () => {
+    expect(jsonResultSummary({ status: 'running', cursor: 203, agents: {} })).toEqual({
+      label: 'status: running · cursor 203',
+      isError: false,
+    })
+    expect(jsonResultSummary({ state: 'failed', runId: 'run-1' })).toEqual({
+      label: 'state: failed · run run-1',
+      isError: true,
+    })
+    expect(jsonResultSummary({ status: { nested: true }, cursor: 4 }).label).toBe('2 keys')
+  })
 })

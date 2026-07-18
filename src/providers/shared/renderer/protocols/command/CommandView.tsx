@@ -47,7 +47,7 @@ export const CommandView = memo(function CommandView({ model }: { model: Command
             <span className="text-accent font-semibold flex-shrink-0">{model.label}</span>
             {commandHtml ? (
               <span
-                className="hljs font-code text-[12px] text-ink-dim truncate min-w-0 bg-transparent"
+                className="hljs font-code text-[12px] text-ink-dim min-w-0 bg-transparent whitespace-pre-wrap break-words line-clamp-2"
                 title={model.command}
                 dangerouslySetInnerHTML={{ __html: commandHtml }}
               />

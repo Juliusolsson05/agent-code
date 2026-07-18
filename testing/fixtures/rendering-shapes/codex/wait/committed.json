@@ -1,0 +1,40 @@
+{
+  "evidence": "Preserves the direct Codex wait invocation/result grammar shown in the 2026-07-18 Rendering Debug capture. The scalar IDs and output are reduced, but the committed fp2-32f6d3bc invocation and fp2-8571cc95 result envelopes are unchanged.",
+  "cases": [
+    {
+      "expectedRoute": "specialized",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "wait-captured",
+        "name": "wait",
+        "input": {
+          "cell_id": "7",
+          "yield_time_ms": 10000,
+          "max_tokens": 10000
+        }
+      },
+      "toolResult": {
+        "type": "tool_result",
+        "tool_use_id": "wait-captured",
+        "content": "Script completed\nWall time 16.3 seconds\nOutput:\nAgent completed",
+        "is_error": false,
+        "codex": {
+          "kind": "custom_tool_call_output"
+        }
+      }
+    },
+    {
+      "expectedRoute": "generic",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "wait-drifted",
+        "name": "wait",
+        "input": {
+          "cell_id": "   ",
+          "yield_time_ms": 1000,
+          "max_tokens": 1000
+        }
+      }
+    }
+  ]
+}

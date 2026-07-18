@@ -146,7 +146,7 @@ export const CodexToolResultRow = memo(function CodexToolResultRow({
   // header (`Script completed / Wall time / Output`) before the serialized
   // CallToolResult. Strip only that verified provider envelope, then give the
   // payload to the shared structured recognizers.
-  const payloadText = sourceTool?.name === 'exec'
+  const payloadText = sourceTool?.name === 'exec' || sourceTool?.name === 'wait'
     ? stripCodexTransportEnvelope(text)
     : text
   const outputPresentation = useMemo(() => {

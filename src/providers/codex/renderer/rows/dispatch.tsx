@@ -56,6 +56,15 @@ import {
   gitOperationModel,
 } from '@providers/shared/renderer/protocols/command/formatters/git'
 import { toolResultContentText } from '@providers/shared/renderer/rows/toolResultContent'
+import {
+  fromCodexEmbeddedOperation,
+  fromCodexWaitOperation,
+} from '@providers/codex/renderer/adapters/embeddedOperation'
+import {
+  CodexEmbeddedOperationRow,
+  CodexNamedOperationResultRow,
+  CodexWaitOperationRow,
+} from '@providers/codex/renderer/components/embedded-operation'
 
 type CodexToolUseAdmission = {
   node: ReactNode
@@ -138,6 +147,61 @@ export function renderCodexOperation(
             action: 'absorb',
             ownerRenderId: 'codex.rows.dispatch',
             reason: 'normalized command operation preserves the validated paired output',
+          }
+        : null,
+    }
+  }
+
+  const embeddedOperation = fromCodexEmbeddedOperation({
+    toolUse: input.toolUse,
+    result: input.result,
+  })
+  if (embeddedOperation) {
+    return {
+      toolUse: {
+        action: 'render',
+        node: <CodexEmbeddedOperationRow model={embeddedOperation} />,
+        receipt: { rendererId: 'codex.rows.dispatch', protocolId: 'agent-code.embedded-operation' },
+      },
+      // WHY the result remains independently visible: the adapter proves the
+      // inner call identity, but arbitrary post-call projection can still add
+      // or remove bytes. A named result row fixes the detached UX without
+      // claiming byte ownership we do not have.
+      toolResult: input.result
+        ? {
+            action: 'render',
+            node: (
+              <CodexNamedOperationResultRow
+                label={embeddedOperation.action}
+                block={input.result}
+                sourceTool={input.toolUse}
+              />
+            ),
+            receipt: { rendererId: 'codex.rows.dispatch', protocolId: 'agent-code.embedded-operation' },
+          }
+        : null,
+    }
+  }
+
+  const wait = fromCodexWaitOperation({ toolUse: input.toolUse, result: input.result })
+  if (wait) {
+    return {
+      toolUse: {
+        action: 'render',
+        node: <CodexWaitOperationRow model={wait} />,
+        receipt: { rendererId: 'codex.rows.dispatch', protocolId: 'command.continuation' },
+      },
+      toolResult: input.result
+        ? {
+            action: 'render',
+            node: (
+              <CodexNamedOperationResultRow
+                label="Command continuation"
+                block={input.result}
+                sourceTool={input.toolUse}
+              />
+            ),
+            receipt: { rendererId: 'codex.rows.dispatch', protocolId: 'command.continuation' },
           }
         : null,
     }
@@ -376,6 +440,7 @@ function renderCodexToolResult(
     source.name === 'exec' ||
     source.name === 'exec_command' ||
     source.name === 'write_stdin' ||
+    source.name === 'wait' ||
     source.name === 'apply_patch'
   const providerEnvelope =
     kind === 'exec_command_end' ||

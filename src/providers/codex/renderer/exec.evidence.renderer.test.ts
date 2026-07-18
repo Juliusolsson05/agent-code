@@ -12,7 +12,11 @@ import type { ToolUseBlock } from '@shared/types/transcript'
 
 type Route = 'specialized' | 'generic'
 type SemanticCase = { expectedRoute: Route; semanticBlock: SemanticLiveBlock }
-type CommittedCase = { expectedRoute: Route; toolUse: ToolUseBlock }
+type CommittedCase = {
+  expectedRoute: Route
+  expectedReceipt?: { rendererId: string; protocolId?: string }
+  toolUse: ToolUseBlock
+}
 
 const fixtures = {
   'semantic-prefix.json': semanticPrefixFixture,
@@ -99,7 +103,12 @@ describe('Codex unified-exec evidence', () => {
         sample.expectedRoute === 'specialized' ? 'render' : 'fallback',
       )
       if (sample.expectedRoute === 'specialized' && decision.toolUse.action === 'render') {
-        expect(decision.toolUse.receipt).toEqual(SPECIALIZED_RECEIPT)
+        // WHY the receipt now belongs to the fixture case: one structural exec
+        // fingerprint legitimately contains native Git bridges and embedded
+        // Agent Code MCP operations. Collapsing both to a single expected
+        // receipt would erase the content-gated route this evidence exists to
+        // protect.
+        expect(decision.toolUse.receipt).toEqual(sample.expectedReceipt ?? SPECIALIZED_RECEIPT)
       }
     }
   })

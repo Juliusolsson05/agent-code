@@ -1,14 +1,33 @@
 {
-  "evidence": "Curated from the 2026-07-17 developer recording. The structural keys are copied from fp2-bb2ab36f; scalar scripts are reduced while retaining both observed content-dependent routes.",
+  "evidence": "The command/generic cases are curated from the 2026-07-17 developer recording. The embedded workflow case preserves the operation grammar from the 2026-07-18 Rendering Debug capture for call_vTEidDSgaGSppCl89dtpD8X4. All cases share fp2-bb2ab36f, so the fixture pins each bounded content-dependent route explicitly.",
   "cases": [
     {
       "expectedRoute": "specialized",
+      "expectedReceipt": {
+        "rendererId": "shared.command",
+        "protocolId": "command.git"
+      },
       "toolUse": {
         "type": "tool_use",
         "id": "exec-committed-command",
         "name": "exec",
         "input": {
           "raw": "const r = await tools.exec_command({cmd:\"git status --short\"}); text(r.output);"
+        }
+      }
+    },
+    {
+      "expectedRoute": "specialized",
+      "expectedReceipt": {
+        "rendererId": "codex.rows.dispatch",
+        "protocolId": "agent-code.embedded-operation"
+      },
+      "toolUse": {
+        "type": "tool_use",
+        "id": "call_vTEidDSgaGSppCl89dtpD8X4",
+        "name": "exec",
+        "input": {
+          "raw": "const r = await tools.mcp__agent_code__workflow_run_events({runId:\"run_26332a0c-68b9-474e-8e9d-5d547a97040f\",after:191,limit:20,waitMs:1000});\nconst payload=(r?.content??[]).find(c=>c.type===\"text\")?.text??\"\";try{const d=JSON.parse(payload);for(const e of d.page?.events??[])text(JSON.stringify({cursor:e.cursor,type:e.event?.type,agentId:e.event?.agentId,label:e.event?.payload?.label,message:e.event?.payload?.message}))}catch{text(payload.slice(0,10000))}\n"
         }
       }
     },

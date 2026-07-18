@@ -3,6 +3,7 @@ import { RenderShapeCaptureProvider } from '@renderer/features/feed/evidence/Ren
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import {
   memo,
+  Fragment,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -11,6 +12,7 @@ import {
 } from 'react'
 
 import {
+  isConversationEntry,
   type Entry,
 } from '@shared/types/transcript'
 
@@ -66,6 +68,8 @@ import {
   RenderDebugBoundary,
   RenderingDebugProvider,
 } from '@renderer/features/debug/renderingDebug/registry'
+import { Block } from '@renderer/features/feed/ui/rows/Block'
+import { committedEntryPaints } from '@renderer/features/feed/model/entryVisibility'
 
 // Re-export — many external callers import these types from Feed
 // directly rather than reaching into ../types/../context. Keep the
@@ -818,8 +822,46 @@ function FeedImpl({
 
   const visibleDecisions = renderModel.visibleDecisions
   const renderItems = renderModel.items
-  const renderedRows = renderModel.debugRows
-  const visibleEntryCount = renderItems.filter(item => item.type === 'entry').length
+  const committedPaintPlan = useMemo(() => {
+    const paintsByItemKey = new Map<string, boolean>()
+    const paintedOrdinalByItemKey = new Map<string, number>()
+    let paintedCount = 0
+    for (const item of renderItems) {
+      if (item.type !== 'entry') continue
+      const paints = committedEntryPaints({
+        entry: item.entry,
+        toolUseIndex,
+        toolResultIndex,
+        resolveOperation: committedOperationDecision,
+      })
+      paintsByItemKey.set(item.key, paints)
+      if (!paints) continue
+      paintedOrdinalByItemKey.set(item.key, paintedCount)
+      paintedCount += 1
+    }
+    return { paintsByItemKey, paintedOrdinalByItemKey, paintedCount }
+  }, [committedOperationDecision, renderItems, toolResultIndex, toolUseIndex])
+  const visibleEntryCount = committedPaintPlan.paintedCount
+  const renderedRows = useMemo(
+    () => renderModel.debugRows.filter(
+      row => row.slot !== 'entry' || committedPaintPlan.paintsByItemKey.get(row.key) !== false,
+    ),
+    [committedPaintPlan.paintsByItemKey, renderModel.debugRows],
+  )
+  const absorbedCommittedRows = useMemo(
+    () => renderItems
+      .filter(
+        (item): item is Extract<FeedRenderItem, { type: 'entry' }> =>
+          item.type === 'entry' && committedPaintPlan.paintsByItemKey.get(item.key) === false,
+      )
+      .slice(-12)
+      .map(item => ({
+        key: item.key,
+        label: debugLabelForEntry(item.entry),
+        reason: 'provider_operation_absorbed',
+      })),
+    [committedPaintPlan.paintsByItemKey, renderItems],
+  )
   // #491: semantic items are now block-level (semantic-block/-collapsed-activity/
   // -text), each tagged with its turn's owner. Derive the same debug signals the
   // old turn-level items exposed — unique history turnIds, and "is the current
@@ -874,14 +916,17 @@ function FeedImpl({
     const nextKeys = new Set(renderedRows.map(row => row.key))
     const added = renderedRows.filter(row => !prevKeys.has(row.key))
     const removed = (previous ?? []).filter(row => !nextKeys.has(row.key))
-    const hidden = visibleDecisions
+    const hidden = [
+      ...visibleDecisions
       .filter(item => !item.visible)
       .slice(-12)
       .map(item => ({
         key: item.key,
         label: debugLabelForEntry(item.entry),
         reason: item.reason,
-      }))
+      })),
+      ...absorbedCommittedRows,
+    ].slice(-12)
     const changed =
       previous === null ||
       previousRenderDebugSignatureRef.current !== renderDebugSignature ||
@@ -911,12 +956,26 @@ function FeedImpl({
     })
     previousRenderedRowsRef.current = renderedRows
     previousRenderDebugSignatureRef.current = renderDebugSignature
-  }, [entries.length, onDebugLog, renderedRows, renderedSemanticHistorySignature, renderedSemanticHistoryTurnIds, semanticTurn?.turnId, streamPhase, visibleDecisions, visibleEntryCount])
+  }, [absorbedCommittedRows, entries.length, onDebugLog, renderedRows, renderedSemanticHistorySignature, renderedSemanticHistoryTurnIds, semanticTurn?.turnId, streamPhase, visibleDecisions, visibleEntryCount])
 
   const renderFeedItem = (item: FeedRenderItem) => {
     switch (item.type) {
       case 'entry': {
         const e = item.entry
+        if (committedPaintPlan.paintsByItemKey.get(item.key) === false && isConversationEntry(e) && Array.isArray(e.message.content)) {
+          // WHY still evaluate the null-producing Blocks: their evidence
+          // observers record the provider's named absorption decisions. The
+          // old path wrapped those null leaves in ledger/LazyEntry divs, which
+          // manufactured visible flex gaps. A Fragment preserves diagnostics
+          // while ensuring a fully absorbed committed entry owns no DOM box.
+          return (
+            <Fragment key={item.key}>
+              {e.message.content.map((block, index) => (
+                <Block key={index} block={block} role={e.message.role} />
+              ))}
+            </Fragment>
+          )
+        }
         const uuid = e.uuid
         const selected =
           pickerSelectedUuid != null && uuid === pickerSelectedUuid
@@ -925,7 +984,13 @@ function FeedImpl({
         // same ordered list, but markdown parse cost still belongs to
         // committed entries. Counting non-entry rows here would make a
         // busy turn accidentally lazy-mount the newest committed prompt.
-        const eager = item.entryOrdinal >= visibleEntryCount - EAGER_TAIL
+        // WHY use the post-absorption ordinal: the ledger's entryOrdinal still
+        // counts protocol-only result entries. Comparing that sparse number to
+        // the painted count makes an old tail increasingly eager as invisible
+        // entries accumulate, defeating LazyEntry on long command sessions.
+        const paintedOrdinal = committedPaintPlan.paintedOrdinalByItemKey.get(item.key)
+          ?? item.entryOrdinal
+        const eager = paintedOrdinal >= visibleEntryCount - EAGER_TAIL
         return (
           <RenderDebugBoundary
             key={item.key}

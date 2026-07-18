@@ -270,6 +270,28 @@ export function jsonResultSummary(value: unknown): { label: string; isError: boo
     if (rec.isError === true) return { label: 'isError: true', isError: true }
     if (rec.ok === false) return { label: 'ok: false', isError: true }
     if (rec.ok === true) return { label: 'ok: true', isError: false }
+    // WHY literal discriminators outrank an anonymous key count: projected
+    // status/MCP objects often intentionally omit their transport-level `ok`
+    // field. Showing `4 keys` then hides the only useful collapsed evidence.
+    // This is a shallow allowlist with strict scalar bounds—not recursive
+    // schema inference—so arbitrary domain objects keep the generic fallback.
+    for (const key of ['status', 'state', 'type', 'kind', 'action'] as const) {
+      const discriminator = boundedSummaryScalar(rec[key])
+      if (discriminator === null) continue
+      const cursor = boundedSummaryScalar(rec.cursor)
+      const runId = boundedSummaryScalar(rec.runId)
+      const id = boundedSummaryScalar(rec.id)
+      const identity = cursor !== null
+        ? `cursor ${cursor}`
+        : runId !== null
+          ? `run ${runId}`
+          : id
+      const failed = typeof rec[key] === 'string' && /^(?:error|failed|failure|cancelled)$/i.test(rec[key])
+      return {
+        label: `${key}: ${discriminator}${identity === null ? '' : ` · ${identity}`}`,
+        isError: failed,
+      }
+    }
     // WHY this deliberately stops counting: a summary must never enumerate an
     // untrusted generated map just to print an exact integer. "40+" conveys the
     // useful shape while keeping the closed-row cost constant.
@@ -284,4 +306,15 @@ export function jsonResultSummary(value: unknown): { label: string; isError: boo
     return { label: `${keyCount} ${keyCount === 1 ? 'key' : 'keys'}`, isError: false }
   }
   return { label: String(value).slice(0, 60), isError: false }
+}
+
+function boundedSummaryScalar(value: unknown): string | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value)
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    value.length > 80 ||
+    !/\S/.test(value)
+  ) return null
+  return value.replace(/\s+/g, ' ').trim()
 }
