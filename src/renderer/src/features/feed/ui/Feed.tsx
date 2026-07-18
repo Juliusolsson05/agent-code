@@ -1044,6 +1044,7 @@ function FeedImpl({
                       <CodeRenderContext.Provider value={codeRenderContextValue}>
                         <div
                           ref={scrollerRef}
+                          data-render-debug-feed-root
                           className="h-full overflow-auto @container"
                           onWheel={() => {
                             onUserEngagement?.()

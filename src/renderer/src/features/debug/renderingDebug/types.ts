@@ -33,9 +33,8 @@ export type RenderDebugSnapshot = {
 
 export type RenderDebugSelection = {
   selectedAt: number
-  selectedElement: HTMLElement
+  selectedElement: Element
   selectedHtml: string
-  boundaryElement: HTMLElement | null
   boundaryHtml: string | null
   boundaryId: string | null
   snapshot: RenderDebugSnapshot | null

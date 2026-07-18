@@ -8,7 +8,7 @@ import {
 } from '@shared/types/renderShapes'
 import { fingerprintRenderShape } from '@renderer/rendering/evidence/shapeFingerprint'
 import { resolveRenderShapeDefinition } from '@providers/registry.renderShapes'
-import { renderDebugSnapshot } from './registry'
+import { renderDebugBoundaryForElement } from './registry'
 import { operationDecisionDiagnostic } from './diagnostics'
 import type { RenderDebugSelection, RenderDebugSnapshot } from './types'
 
@@ -23,9 +23,9 @@ type Props = {
 
 type Bounds = { top: number; left: number; width: number; height: number }
 
-function domPath(element: HTMLElement, pane: HTMLElement): string {
+function domPath(element: Element, pane: HTMLElement): string {
   const parts: string[] = []
-  let cursor: HTMLElement | null = element
+  let cursor: Element | null = element
   while (cursor && cursor !== pane) {
     const tag = cursor.tagName.toLowerCase()
     const id = cursor.id ? `#${cursor.id}` : ''
@@ -41,7 +41,7 @@ function domPath(element: HTMLElement, pane: HTMLElement): string {
   return parts.join(' > ')
 }
 
-function selectedBounds(element: HTMLElement): Bounds {
+function selectedBounds(element: Element): Bounds {
   const rect = element.getBoundingClientRect()
   return { top: rect.top, left: rect.left, width: rect.width, height: rect.height }
 }
@@ -160,7 +160,7 @@ export function RenderingDebugInspector({ sessionId, provider, onSave, onClose }
   const [bounds, setBounds] = useState<Bounds | null>(null)
   const [copyState, setCopyState] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
-  const selectedRef = useRef<HTMLElement | null>(null)
+  const selectedRef = useRef<Element | null>(null)
 
   const pane = useCallback((): HTMLElement | null => {
     for (const candidate of document.querySelectorAll<HTMLElement>('[data-pane-id]')) {
@@ -170,34 +170,41 @@ export function RenderingDebugInspector({ sessionId, provider, onSave, onClose }
   }, [sessionId])
 
   useEffect(() => {
-    const shouldIntercept = (target: EventTarget | null): target is HTMLElement => {
-      if (!(target instanceof HTMLElement)) return false
-      if (target.closest('[data-render-debug-ui]')) return false
-      const ownerPane = target.closest<HTMLElement>('[data-pane-id]')
-      return ownerPane?.dataset.paneId === sessionId
+    const inspectableTarget = (target: EventTarget | null): Element | null => {
+      const element = target instanceof Element
+        ? target
+        : target instanceof Node
+          ? target.parentElement
+          : null
+      if (!element || element.closest('[data-render-debug-ui]')) return null
+      const ownerPane = element.closest<HTMLElement>('[data-pane-id]')
+      if (ownerPane?.dataset.paneId !== sessionId) return null
+      // TileLeaf's pane id also contains its header, related-agent tabs, and
+      // composer. Those controls must remain usable while inspecting feed
+      // rendering, so interception requires the narrower feed-owned hook.
+      if (!element.closest('[data-render-debug-feed-root]')) return null
+      return element
     }
     const suppress = (event: Event) => {
-      if (!shouldIntercept(event.target)) return
+      if (!inspectableTarget(event.target)) return
       event.preventDefault()
       event.stopPropagation()
       event.stopImmediatePropagation()
     }
     const select = (event: MouseEvent | PointerEvent) => {
-      if (!shouldIntercept(event.target)) return
+      const element = inspectableTarget(event.target)
+      if (!element) return
       suppress(event)
-      const element = event.target
       const ownerPane = pane()
       if (!ownerPane) return
-      const boundary = element.closest<HTMLElement>('[data-render-debug-id]')
-      const boundaryId = boundary?.dataset.renderDebugId ?? null
+      const boundary = renderDebugBoundaryForElement(element)
       const next: RenderDebugSelection = {
         selectedAt: Date.now(),
         selectedElement: element,
         selectedHtml: element.outerHTML,
-        boundaryElement: boundary,
-        boundaryHtml: boundary?.outerHTML ?? null,
-        boundaryId,
-        snapshot: boundaryId ? renderDebugSnapshot(boundaryId) : null,
+        boundaryHtml: boundary?.html ?? null,
+        boundaryId: boundary?.id ?? null,
+        snapshot: boundary?.snapshot ?? null,
         domPath: domPath(element, ownerPane),
       }
       selectedRef.current = element
@@ -218,10 +225,16 @@ export function RenderingDebugInspector({ sessionId, provider, onSave, onClose }
     document.addEventListener('pointerdown', select, true)
     document.addEventListener('mousedown', suppress, true)
     document.addEventListener('click', select, true)
+    document.addEventListener('auxclick', suppress, true)
+    document.addEventListener('dblclick', suppress, true)
+    document.addEventListener('contextmenu', suppress, true)
     return () => {
       document.removeEventListener('pointerdown', select, true)
       document.removeEventListener('mousedown', suppress, true)
       document.removeEventListener('click', select, true)
+      document.removeEventListener('auxclick', suppress, true)
+      document.removeEventListener('dblclick', suppress, true)
+      document.removeEventListener('contextmenu', suppress, true)
     }
   }, [pane, sessionId])
 
@@ -257,12 +270,15 @@ export function RenderingDebugInspector({ sessionId, provider, onSave, onClose }
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return
-      event.preventDefault()
+      if (event.key !== 'Escape' || event.defaultPrevented) return
       onClose()
     }
-    window.addEventListener('keydown', onKey, true)
-    return () => window.removeEventListener('keydown', onKey, true)
+    // Radix dialogs listen in document capture and prevent the Escape event
+    // after dismissing their highest layer. Bubble phase therefore gives the
+    // innermost modal first refusal: one Escape closes the palette/note dialog,
+    // while Escape with no active layer closes Rendering Debug Mode.
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
   }, [onClose])
 
   const allJson = useMemo(

@@ -55,14 +55,11 @@ export function DebugSurfacesImpl() {
         files: [{ name: 'rendering-element.json', content: diagnosticJson }],
       })
 
-      let clipboardOk = true
-      try {
-        await navigator.clipboard.writeText(bundlePath)
-      } catch {
-        clipboardOk = false
-      }
-      const prefix = clipboardOk ? 'element saved · copied path · ' : 'element saved · '
-      workspace.showPaneToast(targetId, `${prefix}${bundlePath}`, 6000)
+      // Save must not replace a diagnostic the operator deliberately put on
+      // the clipboard with Copy All. The path remains visible in both this
+      // toast and the note prompt; clipboard mutation belongs to an explicit
+      // copy affordance, not a button named only "Save".
+      workspace.showPaneToast(targetId, `element saved · ${bundlePath}`, 6000)
       // This is intentionally the same note flow used by Save Debug Logs. The
       // snapshot is durable before the prompt opens, and Skip leaves a valid
       // uncommented artifact instead of discarding the evidence the user just

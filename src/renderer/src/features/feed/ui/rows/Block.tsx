@@ -252,7 +252,7 @@ export const Block = memo(function Block({
         component: route.action === 'render'
           ? { name: reactComponentName(route.node) }
           : { name: route.action === 'fallback' ? 'JsonToolRow' : null },
-        routingTrace: operationRoutingTrace(decision, result !== null),
+        routingTrace: operationRoutingTrace(decision, result !== null, 'tool-use'),
       })
     }
     case 'tool_result': {
@@ -314,7 +314,7 @@ export const Block = memo(function Block({
         component: route?.action === 'render'
           ? { name: reactComponentName(route.node) }
           : { name: route?.action === 'fallback' || !route ? 'ToolResultRow' : null },
-        routingTrace: operationRoutingTrace(decision, true),
+        routingTrace: operationRoutingTrace(decision, true, 'tool-result'),
       })
     }
     default:

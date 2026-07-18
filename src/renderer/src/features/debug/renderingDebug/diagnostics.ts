@@ -34,9 +34,18 @@ export function operationDecisionDiagnostic(decision: ProviderOperationDecision)
 export function operationRoutingTrace(
   decision: ProviderOperationDecision,
   resultPresent: boolean,
+  inspectedSide: 'tool-use' | 'tool-result',
 ): RenderDebugTraceStep[] {
   const use = decision.toolUse
   const result = decision.toolResult
+  const visibleRoute = inspectedSide === 'tool-use' ? use : result
+  const visibleOwner = visibleRoute === null
+    ? 'shared.generic-tool'
+    : visibleRoute.action === 'render'
+      ? `${visibleRoute.receipt.rendererId}${visibleRoute.receipt.protocolId ? ` / ${visibleRoute.receipt.protocolId}` : ''}`
+      : visibleRoute.action === 'absorb'
+        ? `${visibleRoute.ownerRenderId}${visibleRoute.protocolId ? ` / ${visibleRoute.protocolId}` : ''}`
+        : 'shared.generic-tool'
   return [
     {
       id: 'paired-result',
@@ -58,12 +67,10 @@ export function operationRoutingTrace(
     {
       id: 'visible-owner',
       condition: 'What ultimately owns the selected visible operation?',
-      outcome:
-        use.action === 'render'
-          ? `${use.receipt.rendererId}${use.receipt.protocolId ? ` / ${use.receipt.protocolId}` : ''}`
-          : use.action === 'absorb'
-            ? `${use.ownerRenderId}${use.protocolId ? ` / ${use.protocolId}` : ''}`
-            : 'shared.generic-tool',
+      // Tool-use and tool-result routes can legitimately choose different
+      // owners. Deriving this line from the invocation unconditionally made a
+      // specialized result claim it was painted by the generic fallback.
+      outcome: visibleOwner,
     },
   ]
 }
