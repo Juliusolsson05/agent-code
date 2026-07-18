@@ -374,9 +374,11 @@ export interface AgentSession extends AgentSessionEmitter {
    * armed, otherwise a historical identical entry can acknowledge new bytes. */
   isPromptAcceptanceReady?(): boolean
 
-  /** Optional (Codex today): wait for the composer to be ready to
-   *  accept a prompt (past the startup/trust chrome). See
-   *  sessionManager.ts:987. */
+  /** Optional provider-owned readiness boundary before prompt bytes may be
+   *  written. Codex waits past startup/trust chrome; Claude waits until its
+   *  transcript replay cursor has quiesced and an empty composer is visible,
+   *  so historical entries cannot acknowledge a new prompt and startup chrome
+   *  cannot swallow its bytes. */
   awaitReadyForPrompt?(
     opts?: { timeoutMs?: number; pollIntervalMs?: number },
   ): Promise<

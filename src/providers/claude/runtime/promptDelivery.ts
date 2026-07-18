@@ -12,6 +12,7 @@ import type { PromptAcceptanceOutcome } from '@shared/types/session.js'
 const CONFIRM_TIMEOUT_MS = 2000
 const CONFIRM_POLL_INTERVAL_MS = 10
 const IMAGE_CONFIRM_TIMEOUT_MS = 5_000
+const READY_TIMEOUT_MS = 5_000
 // Longer than JsonlTailer's 15s watchdog so a recoverable watcher stall gets a
 // chance to self-heal before we classify an already-written Enter as uncertain.
 const ACCEPTANCE_TIMEOUT_MS = 20_000
@@ -40,7 +41,20 @@ export async function deliverClaudePrompt(
       message: `Claude session ${io.sessionId} cannot observe prompt acceptance`,
     })
   }
-  if (io.session.isPromptAcceptanceReady?.() === false) {
+  if (typeof io.session.awaitReadyForPrompt === 'function') {
+    const ready = await io.session.awaitReadyForPrompt({ timeoutMs: READY_TIMEOUT_MS })
+    if (ready.kind !== 'ready') {
+      return failure({
+        stage: 'before-write', code: 'not-ready', retrySafe: true,
+        promptWritten: false, enterWritten: false,
+        message: `Claude session ${io.sessionId} prompt input did not become ready (${ready.kind})`,
+      })
+    }
+  } else if (io.session.isPromptAcceptanceReady?.() === false) {
+    // WHY retain the synchronous fallback for capability-skewed sessions:
+    // persisted/dev sessions can outlive a renderer/main update. They must
+    // still reject safely before bytes rather than bypassing the historical
+    // replay guard merely because they predate the awaited capability.
     return failure({
       stage: 'before-write', code: 'not-ready', retrySafe: true,
       promptWritten: false, enterWritten: false,

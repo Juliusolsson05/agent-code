@@ -8,6 +8,9 @@ describe('ClaudeSession prompt acceptance', () => {
   it('publishes readiness from the existing replay quiet-window boundary', () => {
     vi.useFakeTimers()
     const session = new ClaudeSession()
+    ;(session as unknown as { headless: { getScreen(): string } }).headless = {
+      getScreen: () => '❯',
+    }
     const seen: boolean[] = []
     session.on('input-readiness', input => seen.push(input.ready))
     ;(session as unknown as { transcriptTailAttached: boolean }).transcriptTailAttached = true
@@ -17,6 +20,66 @@ describe('ClaudeSession prompt acceptance', () => {
     vi.advanceTimersByTime(249)
     expect(seen).toEqual([])
     vi.advanceTimersByTime(1)
+    expect(seen).toEqual([true])
+    expect(session.isPromptAcceptanceReady()).toBe(true)
+  })
+
+  it('lets immediate post-spawn delivery await the replay quiet-window event', async () => {
+    vi.useFakeTimers()
+    const session = new ClaudeSession()
+    ;(session as unknown as { headless: { getScreen(): string } }).headless = {
+      getScreen: () => '❯',
+    }
+    ;(session as unknown as { transcriptTailAttached: boolean }).transcriptTailAttached = true
+    ;(session as unknown as { armLiveBridgeReady(): void }).armLiveBridgeReady()
+
+    const readiness = session.awaitReadyForPrompt({ timeoutMs: 1_000 })
+    await vi.advanceTimersByTimeAsync(249)
+    let settled = false
+    void readiness.then(() => { settled = true })
+    await Promise.resolve()
+    expect(settled).toBe(false)
+
+    await vi.advanceTimersByTimeAsync(1)
+    await expect(readiness).resolves.toEqual({ kind: 'ready', waitedMs: 250 })
+  })
+
+  it('bounds readiness waiting and removes lifecycle listeners on timeout', async () => {
+    vi.useFakeTimers()
+    const session = new ClaudeSession()
+    ;(session as unknown as { headless: { getScreen(): string } }).headless = {
+      getScreen: () => '',
+    }
+    const readiness = session.awaitReadyForPrompt({ timeoutMs: 100 })
+
+    expect(session.listenerCount('input-readiness')).toBe(1)
+    expect(session.listenerCount('screen')).toBe(1)
+    expect(session.listenerCount('exit')).toBe(1)
+    await vi.advanceTimersByTimeAsync(100)
+    await expect(readiness).resolves.toEqual({ kind: 'timeout' })
+    expect(session.listenerCount('input-readiness')).toBe(0)
+    expect(session.listenerCount('screen')).toBe(0)
+    expect(session.listenerCount('exit')).toBe(0)
+  })
+
+  it('does not publish readiness until Claude paints an empty composer', () => {
+    vi.useFakeTimers()
+    const session = new ClaudeSession()
+    let screen = 'Starting Claude Code…'
+    ;(session as unknown as { headless: { getScreen(): string } }).headless = {
+      getScreen: () => screen,
+    }
+    const seen: boolean[] = []
+    session.on('input-readiness', input => seen.push(input.ready))
+    ;(session as unknown as { transcriptTailAttached: boolean }).transcriptTailAttached = true
+    ;(session as unknown as { armLiveBridgeReady(): void }).armLiveBridgeReady()
+
+    vi.advanceTimersByTime(250)
+    expect(seen).toEqual([])
+    expect(session.isPromptAcceptanceReady()).toBe(false)
+
+    screen = '❯'
+    ;(session as unknown as { markInputReady(screen: string): void }).markInputReady(screen)
     expect(seen).toEqual([true])
     expect(session.isPromptAcceptanceReady()).toBe(true)
   })

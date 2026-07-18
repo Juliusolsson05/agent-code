@@ -50,6 +50,40 @@ afterEach(() => {
 })
 
 describe('deliverClaudePrompt routing', () => {
+  it('waits for transcript replay readiness before writing any prompt bytes', async () => {
+    let releaseReady!: () => void
+    const ready = new Promise<
+      { kind: 'ready'; waitedMs: number }
+    >(resolve => {
+      releaseReady = () => resolve({ kind: 'ready', waitedMs: 250 })
+    })
+    const { io, writes } = makeIo('fix the bug', '❯ fix the bug')
+    io.session.awaitReadyForPrompt = vi.fn(() => ready)
+
+    const delivery = deliverClaudePrompt(io)
+    await Promise.resolve()
+    expect(writes).toEqual([])
+
+    releaseReady()
+    await expect(delivery).resolves.toMatchObject({ ok: true })
+    expect(writes).toEqual(['fix the bug', '\r'])
+  })
+
+  it('returns a retry-safe pre-write failure when replay readiness times out', async () => {
+    const { io, writes } = makeIo('fix the bug', '❯ fix the bug')
+    io.session.awaitReadyForPrompt = vi.fn(async () => ({ kind: 'timeout' as const }))
+
+    await expect(deliverClaudePrompt(io)).resolves.toMatchObject({
+      ok: false,
+      stage: 'before-write',
+      code: 'not-ready',
+      retrySafe: true,
+      promptWritten: false,
+      enterWritten: false,
+    })
+    expect(writes).toEqual([])
+  })
+
   it('short single-line prompts prove composer absorption before a separate Enter', async () => {
     const { io, writes, snapshotScreen } = makeIo('fix the bug', '❯ fix the bug')
     const result = await deliverClaudePrompt(io)

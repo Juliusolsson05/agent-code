@@ -105,6 +105,16 @@ export function extractActiveClaudeComposer(screen: string): string {
   return lines.slice(start, end).join('\n')
 }
 
+/** True only when Claude has painted an empty, writable composer. Startup
+ * chrome and trust/resume overlays do not have this scoped `❯` row; a draft
+ * with existing text is deliberately not writable by automated delivery
+ * because appending a bootstrap prompt would corrupt both submissions. */
+export function isClaudePromptComposerReady(screen: string): boolean {
+  return extractActiveClaudeComposer(screen)
+    .split('\n')
+    .some(line => /^\s*❯\s*$/u.test(line))
+}
+
 export function placeholderCount(screen: string): number {
   const matches = screen.match(PASTE_PLACEHOLDER_RE)
   return matches ? matches.length : 0

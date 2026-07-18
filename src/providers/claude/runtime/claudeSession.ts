@@ -17,6 +17,7 @@ import type {
   PromptAcceptanceOutcome,
   PromptAcceptanceWaiter,
 } from '@shared/types/session.js'
+import { isClaudePromptComposerReady } from '@shared/claude/pasteConfirm.js'
 import { ClaudeCodeHeadless, createProxyServer } from 'claude-code-headless'
 import type {
   ClaudeConditionSnapshot,
@@ -124,6 +125,9 @@ export interface ClaudeSession {
     event: K,
     ...args: ClaudeSessionEvents[K]
   ): boolean
+  awaitReadyForPrompt(
+    opts?: { timeoutMs?: number; pollIntervalMs?: number },
+  ): Promise<{ kind: 'ready'; waitedMs: number } | { kind: 'timeout' } | { kind: 'no-headless' }>
 }
 
 export class ClaudeSession extends EventEmitter {
@@ -145,6 +149,7 @@ export class ClaudeSession extends EventEmitter {
    *  because a real streaming turn always has a longer gap between
    *  the committed entry and the prior bootstrap burst. */
   private readyForLiveBridge = false
+  private inputReady = false
   private transcriptTailAttached = false
   private liveBridgeTimer: NodeJS.Timeout | null = null
   private readonly promptAcceptanceWaiters = new Set<{
@@ -471,6 +476,7 @@ export class ClaudeSession extends EventEmitter {
         recentMarkdown: snap.recentMarkdown,
         picker: this.headless?.getSlashPickerState() ?? { visible: false, items: [] },
       })
+      this.markInputReady(snap.plain)
     })
 
     this.headless.on('jsonl-entry', (entry, file) => {
@@ -517,6 +523,7 @@ export class ClaudeSession extends EventEmitter {
     )
     this.headless.on('exit', ({ exitCode, signal }) => {
       this.exited = true
+      this.inputReady = false
       if (this.liveBridgeTimer) clearTimeout(this.liveBridgeTimer)
       this.liveBridgeTimer = null
       this.emit('input-readiness', { ready: false, reason: 'provider-not-ready' })
@@ -720,8 +727,21 @@ export class ClaudeSession extends EventEmitter {
       this.liveBridgeTimer = null
       if (this.exited) return
       this.readyForLiveBridge = true
-      this.emit('input-readiness', { ready: true, reason: 'ready' })
+      this.markInputReady()
     }, 250)
+  }
+
+  private markInputReady(screen = this.headless?.getScreen() ?? ''): void {
+    if (this.inputReady || this.exited || !this.readyForLiveBridge) return
+    // WHY replay safety and TUI writability are separate gates: headless.start
+    // can finish attaching the transcript before Claude paints its composer.
+    // Waiting only for the 250 ms replay boundary fixed historical false
+    // acknowledgements but still allowed bootstrap bytes to disappear into
+    // startup/trust chrome. The first empty scoped composer is the provider's
+    // positive evidence that those bytes have somewhere safe to land.
+    if (!isClaudePromptComposerReady(screen)) return
+    this.inputReady = true
+    this.emit('input-readiness', { ready: true, reason: 'ready' })
   }
 
   armPromptAcceptance(
@@ -772,7 +792,58 @@ export class ClaudeSession extends EventEmitter {
   }
 
   isPromptAcceptanceReady(): boolean {
-    return this.readyForLiveBridge && !this.exited
+    return this.inputReady &&
+      !this.exited &&
+      isClaudePromptComposerReady(this.headless?.getScreen() ?? '')
+  }
+
+  async awaitReadyForPrompt(
+    opts: { timeoutMs?: number; pollIntervalMs?: number } = {},
+  ): Promise<{ kind: 'ready'; waitedMs: number } | { kind: 'timeout' } | { kind: 'no-headless' }> {
+    const startedAt = Date.now()
+    if (!this.headless) return { kind: 'no-headless' }
+    if (this.isPromptAcceptanceReady()) return { kind: 'ready', waitedMs: 0 }
+
+    return await new Promise(resolve => {
+      let settled = false
+      let timer: NodeJS.Timeout | null = null
+      const finish = (
+        outcome: { kind: 'ready'; waitedMs: number } | { kind: 'timeout' },
+      ): void => {
+        if (settled) return
+        settled = true
+        if (timer) clearTimeout(timer)
+        this.off('input-readiness', onReadiness)
+        this.off('screen', onScreen)
+        this.off('exit', onExit)
+        resolve(outcome)
+      }
+      const onReadiness = (input: AgentInputReadiness): void => {
+        if (input.ready && this.isPromptAcceptanceReady()) {
+          finish({ kind: 'ready', waitedMs: Date.now() - startedAt })
+        }
+      }
+      const onScreen = (): void => {
+        if (this.isPromptAcceptanceReady()) {
+          finish({ kind: 'ready', waitedMs: Date.now() - startedAt })
+        }
+      }
+      const onExit = (): void => finish({ kind: 'timeout' })
+
+      // WHY subscribe before re-checking: the 250 ms quiet-window timer can
+      // fire between the initial fast-path read and listener installation.
+      // Installing first and then reading the latched state closes both sides
+      // of that race without polling or making MCP know Claude's delay.
+      this.on('input-readiness', onReadiness)
+      this.on('screen', onScreen)
+      this.on('exit', onExit)
+      timer = setTimeout(() => finish({ kind: 'timeout' }), opts.timeoutMs ?? 5_000)
+      if (this.isPromptAcceptanceReady()) {
+        finish({ kind: 'ready', waitedMs: Date.now() - startedAt })
+      } else if (this.exited) {
+        finish({ kind: 'timeout' })
+      }
+    })
   }
 
   private resolvePromptAcceptance(entry: JsonlEntry, cursor: number): void {
@@ -871,6 +942,7 @@ export class ClaudeSession extends EventEmitter {
     }
     this.finishPromptAcceptanceWaiters({ kind: 'session-exited' })
     this.transcriptTailAttached = false
+    this.inputReady = false
     await this.headless?.stop()
     try { this.pty?.kill() } catch { /* already gone */ }
     this.pty = null
