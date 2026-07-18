@@ -1,11 +1,16 @@
-import { ACCENTS, FONT_FAMILIES, isDarkThemeMode } from '@renderer/app-state/settings/types'
+import { ACCENTS, FONT_FAMILIES, isDarkThemeValue } from '@renderer/app-state/settings/types'
 import type { Settings } from '@renderer/app-state/settings/types'
 import {
   CUSTOM_APPEARANCE_COLOR_KEYS,
   CUSTOM_APPEARANCE_CSS_VARS,
-  DEFAULT_CUSTOM_APPEARANCE,
   parseCustomAppearanceJson,
 } from '@renderer/app-state/settings/customAppearance'
+import type { CustomAppearanceColors } from '@renderer/app-state/settings/customAppearance'
+import {
+  findSavedTheme,
+  isSavedThemeId,
+  resolveSavedThemeColors,
+} from '@renderer/app-state/settings/savedThemes'
 import { APP_SLUG } from '@shared/appIdentity'
 
 // Event name fired on `window` after every applyTheme run. Subscribers
@@ -39,6 +44,36 @@ const LEGACY_CODE_FONT_CSS_VAR = '--theme-font-code'
 const FALLBACK_APP_FONT_FAMILY =
   "'JetBrains Mono', ui-monospace, Menlo, Monaco, monospace"
 
+// The seam between "which theme" and "what colors". Returns null for built-in
+// modes, meaning "no inline overrides — let the [data-mode] CSS block win and
+// run the accent path".
+//
+// WHY a dangling theme id falls back to null rather than to the legacy custom
+// payload: a saved theme id can outlive its theme (deleted in another window,
+// or a Settings blob synced from a machine with different themes). The safe
+// degradation is a built-in theme that definitely renders, not a
+// half-remembered palette the user may never have seen.
+export function resolveThemePayload(settings: Settings): CustomAppearanceColors | null {
+  if (isSavedThemeId(settings.mode)) {
+    const theme = findSavedTheme(settings.savedThemes, settings.mode)
+    if (!theme) return null
+    return resolveSavedThemeColors(theme)
+  }
+  // Transitional: a v4 blob that somehow skipped migration can still say
+  // 'custom'. coerceSettings converts those into a real saved theme, so this
+  // branch should be unreachable in practice — it exists so a partially
+  // migrated state still renders the user's colors instead of silently
+  // reverting them to Dark.
+  if (settings.mode === 'custom') {
+    try {
+      return parseCustomAppearanceJson(settings.customAppearanceJson)
+    } catch {
+      return null
+    }
+  }
+  return null
+}
+
 export function applyTheme(settings: Settings): void {
   // Renderer capability registries are also consumed by Node-side replay,
   // policy, and transcript tests. A presentational component may therefore
@@ -48,17 +83,23 @@ export function applyTheme(settings: Settings): void {
   // forcing each pure consumer to mock `document` merely to inspect policy.
   if (typeof document === 'undefined' || typeof window === 'undefined') return
   const root = document.documentElement
-  root.dataset.mode = settings.mode
+  // WHY data-mode gets a literal 'custom' for saved themes rather than the raw
+  // theme id: styles.css keys its blocks off known values, and an unknown
+  // data-mode matches no block — which is exactly right here, because the
+  // inline properties written below fully define the palette. Writing 'custom'
+  // keeps any existing [data-mode="custom"] styling and debug tooling working
+  // without having to teach them about uuids.
+  const payload = resolveThemePayload(settings)
+  root.dataset.mode = payload ? 'custom' : settings.mode
   root.dataset.contrast = settings.contrast ? 'high' : 'normal'
-  if (settings.mode === 'custom') {
-    applyCustomAppearance(root, settings.customAppearanceJson)
+  if (payload) {
+    applyCustomAppearance(root, payload)
   } else {
     clearCustomAppearance(root)
     const accent = ACCENTS.find(a => a.id === settings.accent) ?? ACCENTS[0]
-    const hex = isDarkThemeMode(settings.mode) ? accent.dark : accent.light
-    const fg = isDarkThemeMode(settings.mode) ? accent.fgDark : accent.fgLight
-    root.style.setProperty('--theme-accent', hex)
-    root.style.setProperty('--theme-accent-fg', fg)
+    const dark = isDarkThemeValue(settings.mode, settings.savedThemes)
+    root.style.setProperty('--theme-accent', dark ? accent.dark : accent.light)
+    root.style.setProperty('--theme-accent-fg', dark ? accent.fgDark : accent.fgLight)
   }
   // Font family: the user-visible picker resolves to a curated meta entry
   // whose `family` is a complete CSS font-family declaration (including
@@ -74,7 +115,7 @@ export function applyTheme(settings: Settings): void {
   window.dispatchEvent(new CustomEvent(THEME_CHANGED_EVENT, { detail: settings }))
 }
 
-function applyCustomAppearance(root: HTMLElement, raw: string): void {
+function applyCustomAppearance(root: HTMLElement, colors: CustomAppearanceColors): void {
   // WHY custom mode writes every color token inline instead of generating a
   // stylesheet block: the built-in themes are static CSS keyed by
   // `[data-mode]`, but user JSON is runtime data from persisted settings.
@@ -82,12 +123,9 @@ function applyCustomAppearance(root: HTMLElement, raw: string): void {
   // accent picker already uses, and they deliberately outrank the mode blocks
   // in styles.css. That gives live updates with zero React re-render plumbing
   // and keeps Monaco/xterm listeners on the existing theme-changed event.
-  let colors = DEFAULT_CUSTOM_APPEARANCE
-  try {
-    colors = parseCustomAppearanceJson(raw)
-  } catch {
-    colors = DEFAULT_CUSTOM_APPEARANCE
-  }
+  //
+  // Parsing moved out to resolveThemePayload so there is exactly one place
+  // that decides which palette is active; this function only writes.
   for (const key of CUSTOM_APPEARANCE_COLOR_KEYS) {
     root.style.setProperty(CUSTOM_APPEARANCE_CSS_VARS[key], colors[key])
   }
