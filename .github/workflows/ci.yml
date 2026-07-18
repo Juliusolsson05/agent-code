@@ -13,14 +13,13 @@ name: CI
 # packaged-app verifier hard-requires both arch builds.
 on:
   pull_request:
-    paths-ignore:
-      - "docs/**"
-      - "**.md"
   push:
     branches: [main]
-    paths-ignore:
-      - "docs/**"
-      - "**.md"
+
+# WHY documentation-only changes still run this workflow: once `quality-gate`
+# is required by branch protection, GitHub leaves the check permanently pending
+# when path filters prevent the workflow from being created. A few macOS minutes
+# are cheaper than a PR that cannot merge under the repository's own policy.
 
 # One live run per ref: force-pushing a PR branch cancels the obsolete run
 # instead of queueing behind it.
@@ -29,7 +28,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  checks:
+  quality-gate:
+    name: quality-gate
     # WHY macos and not ubuntu: the suite is only proven on darwin
     # (node-pty native rebuild via postinstall, tmux/pty assumptions).
     # The repo is public, so macOS runner minutes are free.
@@ -56,6 +56,9 @@ jobs:
         # install strips electron-vite/vitest and every gate below with it.
         run: npm ci --include=dev
 
+      - name: Validate testing contract
+        run: npm run test:contract
+
       - name: Type-check main and renderer
         # electron-vite transpiles TypeScript but does not enforce the
         # project references. This exact gate caught a real
@@ -67,17 +70,32 @@ jobs:
       - name: Test Workflow MCP
         run: npm --prefix packages/workflow-mcp test
 
-      - name: Test unit
+      - name: Test core
         # The three projects run as separate steps so a failure names its
         # layer in the Checks UI without spelunking one combined log.
         # NODE_ENV is set to `test` by the npm scripts themselves; nothing
         # here may export NODE_ENV (leaked `production` loads prod React and
-        # breaks act() in renderer tests). Flake policy is vitest's own
-        # `retry: CI ? 1 : 0` — no continue-on-error, no skips.
-        run: npm run test:unit
+        # breaks act() in renderer tests). There is no global retry: one failed
+        # attempt is evidence, and polling tests own explicit deadlines.
+        run: npm run test:core
 
-      - name: Test integration
-        run: npm run test:integration
+      - name: Test system
+        run: npm run test:system
 
       - name: Test renderer
         run: npm run test:renderer
+
+      - name: Enforce coverage baseline
+        run: npm run test:coverage
+
+      - name: Upload coverage report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-code-coverage
+          path: coverage/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Verify distributable output
+        run: npm run test:package

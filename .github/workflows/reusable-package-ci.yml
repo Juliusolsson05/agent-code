@@ -43,6 +43,24 @@ jobs:
       - run: npm ci --include=dev
       - run: npm run check
 
+  tiers:
+    name: Tier commands
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --include=dev
+      # WHY these run independently even though `npm test` covers the same
+      # deterministic files: the command contract is user-facing. A misplaced
+      # passWithNoTests or project selector can leave `check` green while the
+      # documented focused command exits 1, as happened in three repositories.
+      - run: npm run test:core
+      - run: npm run test:system
+
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
@@ -55,19 +73,30 @@ jobs:
           cache: npm
       - run: npm ci --include=dev
       - run: npm run test:coverage
+      - name: Upload coverage report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ github.event.repository.name }}-coverage
+          path: coverage/
+          if-no-files-found: ignore
+          retention-days: 14
 
   quality-gate:
     name: quality-gate
     if: ${{ always() }}
-    needs: [contract, deterministic, coverage]
+    needs: [contract, deterministic, tiers, coverage]
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Require every deterministic package gate
         env:
           CONTRACT_RESULT: ${{ needs.contract.result }}
           DETERMINISTIC_RESULT: ${{ needs.deterministic.result }}
+          TIERS_RESULT: ${{ needs.tiers.result }}
           COVERAGE_RESULT: ${{ needs.coverage.result }}
         run: |
           test "$CONTRACT_RESULT" = success
           test "$DETERMINISTIC_RESULT" = success
+          test "$TIERS_RESULT" = success
           test "$COVERAGE_RESULT" = success

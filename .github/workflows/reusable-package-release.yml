@@ -1,0 +1,69 @@
+name: Reusable package release
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        description: Node version used to verify and pack the release artifact.
+        required: false
+        default: "24"
+        type: string
+
+# WHY delivery stops at a GitHub Release instead of running `npm publish`:
+# the owned packages do not yet exist in the public npm registry, and one
+# caller (workflow-mcp) is deliberately private. A first registry publication
+# chooses a permanent package identity and access policy; a testing/CI cleanup
+# must not make that product decision implicitly. Tagged, immutable-ish build
+# artifacts still give every repository a real continuous-delivery path while
+# keeping registry publication as a later, explicit decision.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Package release
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout tagged source
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --include=dev
+
+      - name: Require tag and package versions to agree
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          package_version="$(node -p "require('./package.json').version")"
+          expected_tag="v${package_version}"
+          if [ "$RELEASE_TAG" != "$expected_tag" ]; then
+            printf 'Release tag must match package.json: expected %s, got %s\n' "$expected_tag" "$RELEASE_TAG"
+            exit 1
+          fi
+
+      - name: Run the deterministic release gate
+        run: npm run check
+
+      - name: Pack the distributable
+        id: pack
+        run: |
+          # WHY the npm JSON result lives outside the checkout: packages
+          # without a restrictive `files` allowlist would otherwise include
+          # this workflow scratch file inside the artifact being described.
+          npm pack --json > "$RUNNER_TEMP/package-artifact.json"
+          archive="$(node -e "const fs=require('node:fs'); const result=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/package-artifact.json','utf8')); if (!result[0]?.filename) process.exit(1); process.stdout.write(result[0].filename)")"
+          printf 'archive=%s\n' "$archive" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          ARCHIVE: ${{ steps.pack.outputs.archive }}
+        run: gh release create "$RELEASE_TAG" "$ARCHIVE" --verify-tag --generate-notes

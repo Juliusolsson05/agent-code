@@ -27,8 +27,9 @@ npm run test:renderer
 
 ## Projects (see `vitest.config.ts`)
 
-- `unit` — node env: `src/**/*.test.ts`, `packages/**`, `testing/unit/**`
-- `integration` — node env: `**/*.integration.test.ts`
+- `unit` — node env: `src/**/*.test.ts`, `testing/unit/**`
+- `system` — node env: `**/*.system.test.ts` plus the existing legacy
+  `**/*.integration.test.ts` files
 - `renderer` — happy-dom: `**/*.renderer.test.{ts,tsx}` (+ `testing/setup/renderer.ts`)
 
 ## Policy

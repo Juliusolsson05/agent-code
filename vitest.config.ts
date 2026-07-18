@@ -58,22 +58,37 @@ const exclude = [
   '**/out/**',
   '**/.tsc-out/**',
   '**/vendor/**',
-  // WHY this package is excluded here:
-  //
-  // agent-voice-dictation already owns package-local `node --test` coverage
-  // for its speech/browser surfaces. Pulling those tests into the app runner
-  // would make the root suite responsible for DOM/audio provider behavior that
-  // belongs to the package. App-level dictation integration can still add
-  // colocated tests under src/ when it has an Agent Code invariant to protect.
-  'packages/agent-voice-dictation/src/**/*.test.ts',
-  // WHY the nested Flow Electron app is excluded as a unit rather than one
-  // mystery file: it owns a Node `node:test` suite and its own package runner.
-  // Vitest can execute those assertions but cannot discover them as Vitest
-  // tests, then fails the aggregate Agent Code run with "No test suite found".
-  // Root-level integration belongs here only after that app intentionally
-  // exposes a Vitest project instead of being swept up by packages/**/*.test.ts.
-  'packages/agent-voice-dictation/apps/flow-electron/**',
 ]
+
+// WHY these arrays are exported instead of being buried inside defineConfig:
+// the suffix split is an execution-safety boundary, not merely organization.
+// A system/live/soak/corpus file can start processes, bind sockets, or require
+// credentials. Keeping the exact patterns inspectable lets a focused contract
+// test prevent a future broad `**/*.test.ts` edit from silently pulling those
+// files back into the parallel core project.
+export const unitTestIncludes = [
+  'testing/unit/**/*.test.ts',
+  'src/**/*.test.ts',
+] as const
+
+export const unitTierExcludes = [
+  '**/*.integration.test.ts',
+  '**/*.renderer.test.ts',
+  '**/*.system.test.ts',
+  '**/*.live.test.ts',
+  '**/*.soak.test.ts',
+  '**/*.corpus.test.ts',
+] as const
+
+export const systemTestIncludes = [
+  'testing/system/**/*.test.ts',
+  'src/**/*.system.test.ts',
+  // WHY the legacy suffix stays accepted: Agent Code already has useful
+  // operating-system-boundary coverage under `.integration.test.ts`. Renaming
+  // those files is review noise and would not change their execution contract;
+  // new cross-boundary tests should use the shared `.system.test.ts` suffix.
+  'src/**/*.integration.test.ts',
+] as const
 
 export default defineConfig({
   resolve: { alias },
@@ -85,34 +100,32 @@ export default defineConfig({
   // not defined". Projects make the environment part of the test file contract,
   // so every entry point sees the same layer split.
   test: {
-    // Filesystem-polling tests can miss a single 100 ms watch tick when all
-    // three projects saturate a small CI runner. A one-time CI retry preserves
-    // the value of the assertion (a persistent regression still fails) while
-    // preventing release signing from being held hostage by scheduler jitter.
-    // Local runs stay retry-free so developers still see flakes immediately.
-    retry: process.env.CI ? 1 : 0,
+    // WHY there is no global retry here: the shared testing standard treats a
+    // first-attempt failure as evidence. Polling scenarios must own generous
+    // monotonic deadlines and cleanup; retrying the complete assertion would
+    // hide scheduler-sensitive leaks and make local/CI behavior disagree.
     projects: [
       {
         extends: true,
         test: {
           name: 'unit',
           environment: 'node',
-          include: [
-            'testing/unit/**/*.test.ts',
-            'src/**/*.test.ts',
-            'packages/**/*.test.ts',
-          ],
+          // WHY package tests are not swept into this project: every submodule
+          // owns its private suite and CI environment. Agent Code tests package
+          // integration through public APIs under src/, otherwise a submodule's
+          // serial system or opt-in live test can be reclassified as a parallel
+          // app unit test merely because Git checked out the source tree.
+          include: [...unitTestIncludes],
           exclude: [
             ...exclude,
-            '**/*.integration.test.ts',
-            '**/*.renderer.test.ts',
+            ...unitTierExcludes,
           ],
         },
       },
       {
         extends: true,
         test: {
-          name: 'integration',
+          name: 'system',
           environment: 'node',
           // Electron 43 validates/downloads its binary lazily from index.js
           // when an integration import reaches `electron`. Starting several
@@ -122,10 +135,7 @@ export default defineConfig({
           // I/O-bound; serial files remove that package-installer race without
           // slowing the large pure-unit/renderer suites.
           fileParallelism: false,
-          include: [
-            'src/**/*.integration.test.ts',
-            'packages/**/*.integration.test.ts',
-          ],
+          include: [...systemTestIncludes],
           exclude,
         },
       },
@@ -146,8 +156,27 @@ export default defineConfig({
     ],
     coverage: {
       provider: 'v8',
-      reporter: ['text', 'html'],
+      // WHY CI prints only the aggregate: a per-file report for this application
+      // is tens of thousands of lines and hides the actual failing assertion in
+      // GitHub logs. The HTML artifact retains complete drill-down data.
+      reporter: ['text-summary', 'json-summary', 'html'],
       reportsDirectory: 'coverage',
+      // WHY the application declares its denominator: V8 otherwise reports
+      // only modules imported by today's tests. Untested preload, remote-client,
+      // and main-process code would disappear instead of showing up at zero,
+      // turning the coverage job into a misleading activity counter.
+      include: ['src/**/*.ts', 'src/**/*.tsx'],
+      // WHY imported package sources are excluded explicitly: V8 can retain
+      // modules loaded through Agent Code's source aliases even when include is
+      // app-only. Each submodule has its own honest coverage gate; counting the
+      // same file here at near-zero would violate the ownership boundary and
+      // make a pointer update rewrite Agent Code's baseline.
+      exclude: ['packages/**'],
+      // WHY the first floor matches the measured all-app baseline: this turns
+      // coverage into a ratchet immediately without pretending the existing
+      // application has already covered every Electron/UI boundary. New tests
+      // should raise the relevant number in the same PR.
+      thresholds: { statements: 32, branches: 30, functions: 27, lines: 34 },
     },
   },
 })
