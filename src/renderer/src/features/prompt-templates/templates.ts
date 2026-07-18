@@ -156,6 +156,44 @@ function buildActiveTabTranscriptPrompt(
 }
 
 export const builtinPromptTemplates: PromptTemplate[] = [
+  // The first two built-ins are deliberately ordered ahead of the older
+  // three. `allPromptTemplates` returns custom templates first and then
+  // this array verbatim, so array position is the only ranking signal the
+  // palette has — there is no usage-frequency sort. These two are the ones
+  // reached for constantly (every fresh agent, and as a follow-up to almost
+  // any long answer), so they get the top slots.
+  {
+    id: 'builtin:context-bootstrap',
+    // Titled for what the user would type, not for what the feature is
+    // called internally. The palette filters on title + description only
+    // (see `filteredPromptTemplates`), and nobody searching for this types
+    // "bootstrap" — they type "read" or "project".
+    title: 'Read This Project',
+    description: 'Bootstrap a fresh agent with what this project actually is.',
+    scope: 'builtin',
+    body: [
+      'Please read what this project is for me — README, CLAUDE.md/AGENTS.md, and the repo layout.',
+      '',
+      'Tell me what it is, why it exists, how it works, and any conventions I would get wrong.',
+      // Load-bearing final line. Without an explicit stop, a fresh agent
+      // reliably reads two or three files and then starts "helpfully"
+      // editing something it has only half-understood. The whole point of
+      // this template is to spend a turn on comprehension and nothing else.
+      'Do not change anything yet. This is context bootstrapping.',
+    ].join('\n'),
+  },
+  {
+    id: 'builtin:adhd-friendly-breakdown',
+    title: 'ADHD-Friendly Breakdown',
+    description: 'Re-explain the last answer as scannable chunks instead of prose.',
+    scope: 'builtin',
+    // Intentionally a single sentence with no formatting instructions
+    // appended. Longer drafts that spelled out "short chunks, bold the key
+    // thing, no long paragraphs" did not measurably beat the bare phrase —
+    // models already have a strong prior for it — and the extra lines only
+    // made the inserted draft more tedious to edit before sending.
+    body: 'Give me that in an ADHD-friendly breakdown.',
+  },
   {
     id: 'builtin:ask-agent-for-review-prompt',
     title: 'Ask Agent For Review Prompt',
