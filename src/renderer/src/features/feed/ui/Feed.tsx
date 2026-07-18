@@ -61,6 +61,11 @@ import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 import type { SubAgentState } from '@renderer/session-runtime/state'
 import type { ClaudeAskUserQuestionState } from '@shared/types/providerConditions'
 import * as perf from '@renderer/performance/client'
+import { useAppStore } from '@renderer/app-state/hooks'
+import {
+  RenderDebugBoundary,
+  RenderingDebugProvider,
+} from '@renderer/features/debug/renderingDebug/registry'
 
 // Re-export — many external callers import these types from Feed
 // directly rather than reaching into ../types/../context. Keep the
@@ -310,6 +315,7 @@ function FeedImpl({
   askUserQuestionState,
   onDebugLog,
 }: Props) {
+  const renderingDebugMode = useAppStore(state => state.renderingDebugMode)
   // Scroll container owned by Feed itself — not by TileLeaf — so the
   // sticky-bottom logic below can own its own scroll listener without
   // reaching up the tree. TileLeaf's wrapper is just a flex cell and
@@ -921,23 +927,37 @@ function FeedImpl({
         // busy turn accidentally lazy-mount the newest committed prompt.
         const eager = item.entryOrdinal >= visibleEntryCount - EAGER_TAIL
         return (
-          <div
+          <RenderDebugBoundary
             key={item.key}
-            data-entry-uuid={uuid ?? undefined}
-            className={
-              selected
-                ? 'outline outline-2 outline-accent outline-offset-2 transition-[outline-color] duration-150'
-                : undefined
-            }
+            snapshot={{
+              sourcePlane: 'feed-entry',
+              lifecycle: 'visible',
+              eventType: e.type,
+              input: e,
+              routingTrace: [{
+                id: 'ledger-entry',
+                condition: 'Which ownership-ledger item supplied this committed entry?',
+                outcome: item.key,
+              }],
+            }}
           >
-            <LazyEntry
-              eager={eager}
-              suspended={bootstrapping}
-              scrollerRef={scrollerRef}
+            <div
+              data-entry-uuid={uuid ?? undefined}
+              className={
+                selected
+                  ? 'outline outline-2 outline-accent outline-offset-2 transition-[outline-color] duration-150'
+                  : undefined
+              }
             >
-              <EntryRow entry={e} />
-            </LazyEntry>
-          </div>
+              <LazyEntry
+                eager={eager}
+                suspended={bootstrapping}
+                scrollerRef={scrollerRef}
+              >
+                <EntryRow entry={e} />
+              </LazyEntry>
+            </div>
+          </RenderDebugBoundary>
         )
       }
       case 'semantic-block':
@@ -945,11 +965,25 @@ function FeedImpl({
         // pure drawer (no suppression). SemanticLiveBlockRow renders the exact
         // per-kind streaming affordances it always did.
         return (
-          <SemanticLiveBlockRow
+          <RenderDebugBoundary
             key={item.key}
-            block={item.block}
-            toolState={item.toolState}
-          />
+            snapshot={{
+              sourcePlane: 'feed-semantic',
+              lifecycle: item.block.finalized ? 'input-complete' : 'prefix',
+              eventType: item.block.kind,
+              input: item.block,
+              routingTrace: [{
+                id: 'ledger-semantic',
+                condition: 'Which ownership-ledger item supplied this semantic block?',
+                outcome: item.key,
+              }],
+            }}
+          >
+            <SemanticLiveBlockRow
+              block={item.block}
+              toolState={item.toolState}
+            />
+          </RenderDebugBoundary>
         )
       case 'semantic-collapsed-activity':
         return <SemanticCollapsedActivityRow key={item.key} unit={item.unit} />
@@ -994,64 +1028,66 @@ function FeedImpl({
 
   return (
     <ProviderContext.Provider value={provider}>
-    {/* Shape-capture binding (Phase 2, PR #555): carries {sessionId, provider}
-        to the observation call sites in Block/EntryRow/SemanticLiveBlockRow and
-        syncs the observer's armed state with main's recording truth on mount.
-        Value is memoized per session — armed-ness deliberately lives OUTSIDE
-        the context so toggling capture never re-renders the feed. */}
-    <RenderShapeCaptureProvider sessionId={sessionId} provider={provider}>
-    <ToolUseIndexContext.Provider value={toolUseIndex}>
-    <ToolResultIndexContext.Provider value={toolResultIndex}>
-    <CommittedOperationDecisionContext.Provider value={committedOperationDecision}>
-    <SubAgentsContext.Provider value={subAgents}>
-    <TaskNotificationsContext.Provider value={taskNotifications}>
-    <AskUserQuestionConditionContext.Provider value={askUserQuestionState}>
-    <CodeRenderContext.Provider value={codeRenderContextValue}>
-      <div
-        ref={scrollerRef}
-        className="h-full overflow-auto @container"
-        onWheel={() => {
-          onUserEngagement?.()
-        }}
-        onPointerDown={() => {
-          onUserEngagement?.()
-        }}
-      >
-        {/* Container-query responsive (mobile-feed-rewrite Part A). This node
-         *  is SHARED with the desktop and with narrow tiled panes, so the
-         *  WIDEST step (@min-[768px]) restores the historical desktop classes
-         *  VERBATIM — wide output must not change (regression invariant). Only
-         *  narrow widths (phone, skinny tiles) diverge: they drop the max-w cap
-         *  and shrink the gutters, instead of eating 64px of px-8 on a ~375px
-         *  screen. The scroller above carries `@container` so these variants
-         *  respond to the FEED's own width, not the viewport — which is why a
-         *  narrow desktop tile benefits identically to a phone. */}
-        <div className="min-h-full flex flex-col gap-4 mx-auto px-3 pt-3 pb-6 @min-[480px]:px-5 @min-[480px]:pt-5 @min-[768px]:max-w-[880px] @min-[768px]:px-8 @min-[768px]:pt-6 @min-[768px]:pb-8">
-          {/* ONE owner rule for every visible feed surface.
-           *
-           * The old JSX rendered separate buckets in a fixed order:
-           * committed entries first, semantic history/current later,
-           * work last. That let a
-           * stale semantic history row mount under a newer submitted
-           * prompt, which looked exactly like "my user prompt never
-           * rendered" in real conversations. Feed now consumes the
-           * selector's single ordered item list so ownership,
-           * chronological placement, debug rows, and lazy-entry
-           * eagerness all share one render contract. Queued prompts
-           * remain composer-adjacent because they are pending input,
-           * not transcript history. */}
-          {renderItems.map(renderFeedItem)}
-          <div ref={endRef} />
-        </div>
-      </div>
-    </CodeRenderContext.Provider>
-    </AskUserQuestionConditionContext.Provider>
-    </TaskNotificationsContext.Provider>
-    </SubAgentsContext.Provider>
-    </CommittedOperationDecisionContext.Provider>
-    </ToolResultIndexContext.Provider>
-    </ToolUseIndexContext.Provider>
-    </RenderShapeCaptureProvider>
+      {/* Shape-capture binding (Phase 2, PR #555): carries {sessionId, provider}
+          to the observation call sites in Block/EntryRow/SemanticLiveBlockRow and
+          syncs the observer's armed state with main's recording truth on mount.
+          Value is memoized per session — armed-ness deliberately lives OUTSIDE
+          the context so toggling capture never re-renders the feed. */}
+      <RenderingDebugProvider enabled={renderingDebugMode}>
+        <RenderShapeCaptureProvider sessionId={sessionId} provider={provider}>
+          <ToolUseIndexContext.Provider value={toolUseIndex}>
+            <ToolResultIndexContext.Provider value={toolResultIndex}>
+              <CommittedOperationDecisionContext.Provider value={committedOperationDecision}>
+                <SubAgentsContext.Provider value={subAgents}>
+                  <TaskNotificationsContext.Provider value={taskNotifications}>
+                    <AskUserQuestionConditionContext.Provider value={askUserQuestionState}>
+                      <CodeRenderContext.Provider value={codeRenderContextValue}>
+                        <div
+                          ref={scrollerRef}
+                          className="h-full overflow-auto @container"
+                          onWheel={() => {
+                            onUserEngagement?.()
+                          }}
+                          onPointerDown={() => {
+                            onUserEngagement?.()
+                          }}
+                        >
+                          {/* Container-query responsive (mobile-feed-rewrite Part A). This node
+                           *  is SHARED with the desktop and with narrow tiled panes, so the
+                           *  WIDEST step (@min-[768px]) restores the historical desktop classes
+                           *  VERBATIM — wide output must not change (regression invariant). Only
+                           *  narrow widths (phone, skinny tiles) diverge: they drop the max-w cap
+                           *  and shrink the gutters, instead of eating 64px of px-8 on a ~375px
+                           *  screen. The scroller above carries `@container` so these variants
+                           *  respond to the FEED's own width, not the viewport — which is why a
+                           *  narrow desktop tile benefits identically to a phone. */}
+                          <div className="min-h-full flex flex-col gap-4 mx-auto px-3 pt-3 pb-6 @min-[480px]:px-5 @min-[480px]:pt-5 @min-[768px]:max-w-[880px] @min-[768px]:px-8 @min-[768px]:pt-6 @min-[768px]:pb-8">
+                            {/* ONE owner rule for every visible feed surface.
+                             *
+                             * The old JSX rendered separate buckets in a fixed order:
+                             * committed entries first, semantic history/current later,
+                             * work last. That let a
+                             * stale semantic history row mount under a newer submitted
+                             * prompt, which looked exactly like "my user prompt never
+                             * rendered" in real conversations. Feed now consumes the
+                             * selector's single ordered item list so ownership,
+                             * chronological placement, debug rows, and lazy-entry
+                             * eagerness all share one render contract. Queued prompts
+                             * remain composer-adjacent because they are pending input,
+                             * not transcript history. */}
+                            {renderItems.map(renderFeedItem)}
+                            <div ref={endRef} />
+                          </div>
+                        </div>
+                      </CodeRenderContext.Provider>
+                    </AskUserQuestionConditionContext.Provider>
+                  </TaskNotificationsContext.Provider>
+                </SubAgentsContext.Provider>
+              </CommittedOperationDecisionContext.Provider>
+            </ToolResultIndexContext.Provider>
+          </ToolUseIndexContext.Provider>
+        </RenderShapeCaptureProvider>
+      </RenderingDebugProvider>
     </ProviderContext.Provider>
   )
 }

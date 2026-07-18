@@ -1,7 +1,7 @@
 import { JsonResultSlab } from '@providers/shared/renderer/rows/JsonResultSlab'
 import { JsonToolRow } from '@providers/shared/renderer/rows/JsonToolRow'
 import { GenericLiveResult } from '@providers/shared/renderer/rows/GenericLiveResult'
-import { memo, useContext, useState } from 'react'
+import { memo, useContext, useState, type ReactNode } from 'react'
 
 import type { ToolUseBlock } from '@shared/types/transcript'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
@@ -31,6 +31,13 @@ import {
   ProviderContext,
   ToolResultIndexContext,
 } from '@renderer/features/feed/context'
+import { RenderDebugBoundary } from '@renderer/features/debug/renderingDebug/registry'
+import {
+  reactComponentName,
+  reactNodeModel,
+  routeDiagnostic,
+} from '@renderer/features/debug/renderingDebug/diagnostics'
+
 function DeferredJsonDetails({
   value,
   blockIndex,
@@ -127,6 +134,34 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
   const providerSemanticDecision = providerCapabilities.renderSemanticBlock?.(block, {
     committedToolResults,
   })
+  const debugBlock = (
+    node: ReactNode,
+    componentName: string | null,
+    routeOutcome = 'shared.semantic-blockrow',
+    routeEvidence?: unknown,
+  ): ReactNode => {
+    if (node === null) return null
+    return (
+      <RenderDebugBoundary
+        snapshot={{
+          sourcePlane: 'semantic-tool',
+          lifecycle: block.finalized ? 'input-complete' : 'prefix',
+          eventType: block.kind,
+          input: block,
+          shapePayload: block,
+          component: { name: componentName },
+          routingTrace: [{
+            id: 'semantic-render-route',
+            condition: 'Which semantic rendering branch owns this visible block?',
+            outcome: routeOutcome,
+            evidence: routeEvidence,
+          }],
+        }}
+      >
+        {node}
+      </RenderDebugBoundary>
+    )
+  }
 
   // Observe the provider's actual admission decision, not merely whether a
   // React node happened to be returned. Git-in-exec, ordinary exec, and an
@@ -183,14 +218,39 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
     const text = semanticThinkingText(block)
     if (text === null) return null
     const isStreaming = !block.finalized
-    return (
+    return debugBlock(
       <MarkerRow marker="⏺" tone="muted">
         <DeferredThinking text={text} streaming={isStreaming} />
-      </MarkerRow>
+      </MarkerRow>,
+      'DeferredThinking',
+      'shared.semantic-thinking',
     )
   }
 
-  if (providerSemanticDecision?.action === 'render') return providerSemanticDecision.node
+  if (providerSemanticDecision?.action === 'render') {
+    const node = providerSemanticDecision.node
+    return (
+      <RenderDebugBoundary
+        snapshot={{
+          sourcePlane: 'semantic-tool',
+          lifecycle: block.finalized ? 'input-complete' : 'prefix',
+          eventType: block.kind,
+          input: block,
+          shapePayload: block,
+          normalizedModel: reactNodeModel(node),
+          component: { name: reactComponentName(node) },
+          routingTrace: [{
+            id: 'semantic-render-route',
+            condition: 'Which semantic rendering branch owns this visible block?',
+            outcome: providerSemanticDecision.receipt.rendererId,
+            evidence: routeDiagnostic(providerSemanticDecision),
+          }],
+        }}
+      >
+        {node}
+      </RenderDebugBoundary>
+    )
+  }
   if (providerSemanticDecision?.action === 'absorb') return null
 
   if (
@@ -205,9 +265,15 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
     // it with the call via the shared callId if the renderer wants to.
     const raw = block.output
     if (raw !== undefined && typeof raw !== 'string') {
-      return <JsonResultSlab value={raw} isError={false} />
+      return debugBlock(
+        <JsonResultSlab value={raw} isError={false} />,
+        'JsonResultSlab',
+      )
     }
-    return <GenericLiveResult source={raw ?? '(no output)'} isError={false} />
+    return debugBlock(
+      <GenericLiveResult source={raw ?? '(no output)'} isError={false} />,
+      'GenericLiveResult',
+    )
   }
 
   if (
@@ -229,7 +295,7 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
         raw: block.argumentsJson ?? block.inputJson ?? '',
       },
     }
-    return (
+    return debugBlock(
       <div className="flex flex-col gap-2">
         <JsonToolRow block={genericTool} live />
         {block.parseError ? (
@@ -243,7 +309,8 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
             isError={block.resultIsError === true}
           />
         ) : null}
-      </div>
+      </div>,
+      'JsonToolRow',
     )
   }
 
@@ -256,7 +323,7 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
     ? splitStreamingCodeFence(text)
     : null
   if (fence) {
-    return (
+    return debugBlock(
       <MarkerRow marker="⏺">
         <div className="flex flex-col gap-2">
           {fence.prose ? <StreamingProse text={fence.prose} /> : null}
@@ -268,12 +335,13 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
             allowAutoDetect={!fence.language}
           />
         </div>
-      </MarkerRow>
+      </MarkerRow>,
+      'CodeBlock',
     )
   }
 
   if (block.citations && block.citations.length > 0) {
-    return (
+    return debugBlock(
       <MarkerRow marker="⏺">
         <div className="flex flex-col gap-2">
           {text ? <StreamingProse text={text} /> : null}
@@ -281,7 +349,8 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
             {block.citations.length} citation{block.citations.length === 1 ? '' : 's'}
           </div>
         </div>
-      </MarkerRow>
+      </MarkerRow>,
+      'StreamingProse',
     )
   }
 
@@ -290,7 +359,7 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
     // upstream can add a new typed item before Agent Code knows its grammar.
     // A name-only row hid exactly the evidence needed to understand those
     // additions; eager JSON would make a giant novel item a render hazard.
-    return (
+    return debugBlock(
       <MarkerRow marker="⏺" tone="muted">
         <div className="min-w-0">
           <div className="text-[11px] uppercase tracking-wider text-muted">
@@ -301,13 +370,16 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
             blockIndex={block.blockIndex}
           />
         </div>
-      </MarkerRow>
+      </MarkerRow>,
+      'DeferredJsonDetails',
+      'shared.semantic-unknown-kind',
     )
   }
 
-  return (
+  return debugBlock(
     <MarkerRow marker="⏺">
       <StreamingProse text={text} />
-    </MarkerRow>
+    </MarkerRow>,
+    'StreamingProse',
   )
 })

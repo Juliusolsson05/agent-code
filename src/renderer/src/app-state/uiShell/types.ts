@@ -104,6 +104,12 @@ export type UiShellState = {
    *  Lives on the uiShell slice alongside the other three debug panels
    *  and follows the same toggle pattern. */
   htmlDebugPanelOpen: boolean
+  /** Transient element-level renderer inspection mode. While enabled, clicks
+   * inside the focused pane select DOM instead of activating it and open the
+   * Rendering Debug inspector. This is intentionally not a persisted setting:
+   * leaving click interception active after restart would make the app appear
+   * broken, and the captured inputs may contain developer-sensitive payloads. */
+  renderingDebugMode: boolean
   /** When true, the .env-gated Dev Debug Panel is mounted. Unlike the
    *  stable debug panels above, this is a temporary module host for
    *  one-off investigations. Its modules are intentionally freeform:
