@@ -211,13 +211,16 @@ export function renderCodexOperation(
 }
 
 function commandGroupModel(group: CodexCommandGroupOperation): CodexCommandGroupModel {
-  const resultPresent = group.exactOutput !== undefined
   return {
     items: group.commands.map(command => ({
       command: command.model,
       git: gitOperationModel({
         command: command.rawCommand,
-        resultPresent,
+        // The child model is the source of truth. Tying lifecycle to the
+        // group's disclosure field would make a future safely-attributed
+        // grammar look perpetually running merely because it stores exact
+        // evidence elsewhere.
+        resultPresent: command.model.output !== undefined,
         output: command.model.output,
         isError: command.model.status === 'failure',
         exitUnknown: command.model.status === 'unknown',

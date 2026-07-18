@@ -320,6 +320,12 @@ export function fromCodexCommandGroupOperation(input: {
   // either did not run or has not finished. Keeping the result separate is
   // the only honest behavior in those states.
   if (!combined.owned || combined.failed || combined.output === undefined) return null
+  // WHY direct-output fan-outs need the same admission ceiling as serialized
+  // single commands: section attribution scans the complete result before any
+  // lazy output component can page it. Without this guard, one large build log
+  // is copied and regex-scanned on every operation-dispatch render. Declining
+  // keeps the original paired result visible through the bounded generic row.
+  if (combined.output.length > SERIALIZED_EXEC_RESULT_MAX_CHARS) return null
   const outputs = numberedFanOutSections(combined.output, invocations.length)
   if (!outputs) return null
 
@@ -408,25 +414,27 @@ function isNumberedFanOutPresentation(suffix: string, resultsVariable: string): 
 }
 
 function numberedFanOutSections(output: string, count: number): string[] | null {
-  const normalized = output.replace(/\r\n?/g, '\n')
-  const marker = /^--- (\d+) ---$/gm
-  const matches = [...normalized.matchAll(marker)]
+  // Match framing on the original source instead of normalizing line endings.
+  // Command output is evidence: CRLF and lone-CR progress bytes must survive
+  // unchanged in each child model just as they do in exactOutput.
+  const marker = /^--- (\d+) ---\r?$/gm
+  const matches = [...output.matchAll(marker)]
   if (matches.length !== count) return null
   const sections: string[] = []
   for (let index = 0; index < matches.length; index += 1) {
     const match = matches[index]
     if (Number(match[1]) !== index + 1 || match.index === undefined) return null
-    if (index === 0 && normalized.slice(0, match.index).trim() !== '') return null
+    if (index === 0 && output.slice(0, match.index).trim() !== '') return null
     const start = match.index + match[0].length
-    const contentStart = normalized[start] === '\n' ? start + 1 : start
-    const end = matches[index + 1]?.index ?? normalized.length
-    // The separator newline belongs to the presentation, not the previous
-    // command. Remove only that one framing byte; all command-owned leading,
-    // trailing, and internal whitespace remains intact.
-    const framed = normalized.slice(contentStart, end)
-    sections.push(index < matches.length - 1 && framed.endsWith('\n')
-      ? framed.slice(0, -1)
-      : framed)
+    const contentStart = output[start] === '\n' ? start + 1 : start
+    const end = matches[index + 1]?.index ?? output.length
+    // Each text(result.output) contribution is followed by one carrier-owned
+    // LF, including the final contribution. Remove exactly that framing byte
+    // from every section. If the command itself ended in LF/CRLF, the combined
+    // source contains both the command newline and this carrier newline, so
+    // removing one preserves the command-owned terminator byte-for-byte.
+    const framed = output.slice(contentStart, end)
+    sections.push(framed.endsWith('\n') ? framed.slice(0, -1) : framed)
   }
   return sections
 }

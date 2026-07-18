@@ -21,6 +21,17 @@ import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 import { CodeEditView } from '@providers/shared/renderer/protocols/code-edit/CodeEditView'
 
 describe('Codex command review findings', () => {
+  function compactNumberedFanOut(id: string): ToolUseBlock {
+    return {
+      type: 'tool_use',
+      id,
+      name: 'exec',
+      input: {
+        raw: 'const results = await Promise.all([tools.exec_command({cmd:"printf A"}),tools.exec_command({cmd:"printf B"})]); results.forEach((r,i)=>{text(`--- ${i+1} ---`);text(r.output)});',
+      },
+    }
+  }
+
   it('correlates the captured numbered Promise.all fan-out without detaching its result', () => {
     const toolUse: ToolUseBlock = {
       type: 'tool_use',
@@ -116,6 +127,59 @@ results.forEach((r,i)=>{text(\`--- \${i+1} ---\`);text(r.output)});`,
     expect(fromCodexCommandGroupOperation({ toolUse, result })).toBeNull()
     expect(renderCodexOperation({ toolUse, result, live: false, streaming: false }).toolResult)
       .not.toMatchObject({ action: 'absorb' })
+  })
+
+  it('preserves command line endings while removing each carrier framing newline', () => {
+    const toolUse = compactNumberedFanOut('fanout-line-endings')
+    const exactOutput = '--- 1 ---\r\nA\r\n\n--- 2 ---\r\nB\n'
+    const result = {
+      type: 'tool_result',
+      tool_use_id: toolUse.id,
+      content: `Script completed\nOutput:\n\n${exactOutput}`,
+      codex: { kind: 'custom_tool_call_output' },
+    } as ToolResultBlock & { codex: { kind: string } }
+
+    const group = fromCodexCommandGroupOperation({ toolUse, result })
+    expect(group?.exactOutput).toBe(exactOutput)
+    expect(group?.commands.map(command => command.model.output)).toEqual(['A\r\n', 'B'])
+  })
+
+  it('declines ambiguous, yielded, failed, and oversized numbered fan-outs', () => {
+    const toolUse = compactNumberedFanOut('fanout-safety-boundaries')
+    const result = (content: string, isError = false) => ({
+      type: 'tool_result' as const,
+      tool_use_id: toolUse.id,
+      content,
+      is_error: isError,
+      codex: { kind: 'custom_tool_call_output' },
+    }) as ToolResultBlock & { codex: { kind: string } }
+
+    // A delimiter-looking command line adds a third marker. Count mismatch is
+    // the proof that prevents output from being attributed to the wrong child.
+    expect(fromCodexCommandGroupOperation({
+      toolUse,
+      result: result('Script completed\nOutput:\n\n--- 1 ---\nA\n--- 2 ---\n--- 2 ---\nB\n'),
+    })).toBeNull()
+    expect(fromCodexCommandGroupOperation({
+      toolUse,
+      result: result('Script running with cell ID cell-1\nOutput:\n\n'),
+    })).toBeNull()
+    expect(fromCodexCommandGroupOperation({
+      toolUse,
+      result: result('Script failed\nOutput:\n\nboom', true),
+    })).toBeNull()
+
+    const oversized = 'x'.repeat(2 * 1024 * 1024 + 1)
+    const oversizedResult = result(
+      `Script completed\nOutput:\n\n--- 1 ---\n${oversized}\n--- 2 ---\nB\n`,
+    )
+    expect(fromCodexCommandGroupOperation({ toolUse, result: oversizedResult })).toBeNull()
+    expect(renderCodexOperation({
+      toolUse,
+      result: oversizedResult,
+      live: false,
+      streaming: false,
+    }).toolResult).not.toMatchObject({ action: 'absorb' })
   })
 
   it('normalizes a transparent unified exec into the same owned command operation', () => {
