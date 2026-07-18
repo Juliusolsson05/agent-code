@@ -71,17 +71,69 @@ describe('deliverClaudePrompt routing', () => {
 
   it('returns a retry-safe pre-write failure when replay readiness times out', async () => {
     const { io, writes } = makeIo('fix the bug', '❯ fix the bug')
-    io.session.awaitReadyForPrompt = vi.fn(async () => ({ kind: 'timeout' as const }))
+    io.session.awaitReadyForPrompt = vi.fn(async () => ({
+      kind: 'timeout' as const,
+      waitedMs: 12_000,
+      lastState: { kind: 'warming' as const, reason: 'composer-unpainted' as const },
+    }))
 
     await expect(deliverClaudePrompt(io)).resolves.toMatchObject({
       ok: false,
       stage: 'before-write',
       code: 'not-ready',
       retrySafe: true,
+      disposition: 'retry-same-session',
       promptWritten: false,
       enterWritten: false,
     })
     expect(writes).toEqual([])
+  })
+
+  it.each([
+    [
+      { kind: 'blocked' as const, condition: 'claude.trust-dialog', resolvable: true },
+      'retry-after-resolve',
+    ],
+    [
+      { kind: 'occupied' as const, reason: 'human-draft' as const },
+      'retry-after-resolve',
+    ],
+    [
+      { kind: 'terminal' as const, reason: 'exited' as const },
+      'session-unusable',
+    ],
+  ])('maps readiness state to an explicit session disposition', async (readiness, disposition) => {
+    const { io, writes } = makeIo('fix the bug', '❯ fix the bug')
+    io.session.awaitReadyForPrompt = vi.fn(async () => readiness)
+
+    await expect(deliverClaudePrompt(io)).resolves.toMatchObject({
+      ok: false,
+      retrySafe: true,
+      disposition,
+      promptWritten: false,
+    })
+    expect(writes).toEqual([])
+  })
+
+  it('charges readiness time against the later acceptance budget', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_000)
+    const { io } = makeIo('fix the bug', '❯ fix the bug')
+    let acceptanceTimeoutMs = -1
+    io.session.awaitReadyForPrompt = vi.fn(async () => {
+      vi.setSystemTime(11_000)
+      return { kind: 'ready' as const, waitedMs: 10_000 }
+    })
+    io.session.armPromptAcceptance = (_prompt, opts) => {
+      acceptanceTimeoutMs = opts?.timeoutMs ?? -1
+      return {
+        promise: Promise.resolve({ kind: 'user' as const, acceptedAt: 123 }),
+        cancel: vi.fn(),
+      }
+    }
+
+    await expect(deliverClaudePrompt(io)).resolves.toMatchObject({ ok: true })
+    expect(acceptanceTimeoutMs).toBe(18_000)
   })
 
   it('short single-line prompts prove composer absorption before a separate Enter', async () => {
@@ -192,6 +244,7 @@ describe('deliverClaudePrompt routing', () => {
       stage: 'after-enter',
       code: 'acceptance-timeout',
       retrySafe: false,
+      disposition: 'do-not-retry',
       promptWritten: true,
       enterWritten: true,
     })

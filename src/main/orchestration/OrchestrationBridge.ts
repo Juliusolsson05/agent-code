@@ -188,6 +188,11 @@ export class OrchestrationBridge {
     }
     this.invalidateStatusCache(params.parentSessionId)
     this.parentSessionByChildSession.delete(params.sessionId)
+    // Prompt-delivery metadata is keyed by the same child lifetime. Keeping it
+    // after close cannot help recovery—the session id is no longer writable—
+    // and high-churn orchestration runs otherwise retain one dead record per
+    // child until the coarse global pruning threshold is reached.
+    this.promptDeliveries.delete(params.sessionId)
     return response.result
   }
 
@@ -217,6 +222,7 @@ export class OrchestrationBridge {
     this.invalidateStatusCache(params.parentSessionId)
     for (const sessionId of response.result.closedSessionIds) {
       this.parentSessionByChildSession.delete(sessionId)
+      this.promptDeliveries.delete(sessionId)
     }
     return response.result
   }

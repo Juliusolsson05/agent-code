@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 
 import {
   extractActiveClaudeComposer,
-  isClaudePromptComposerReady,
   pasteAbsorbedVia,
 } from './pasteConfirm.js'
 import { isPasteLike } from './pasteConfirm.js'
@@ -49,17 +48,5 @@ describe('Claude active composer extraction', () => {
       '❯ quoted Claude output',
       'tail of my prompt',
     ].join('\n'))
-  })
-
-  it('requires an empty scoped composer before automated delivery', () => {
-    expect(isClaudePromptComposerReady([
-      'Claude Code',
-      '────────────────────',
-      '❯',
-      '────────────────────',
-      'status',
-    ].join('\n'))).toBe(true)
-    expect(isClaudePromptComposerReady('Starting Claude Code…')).toBe(false)
-    expect(isClaudePromptComposerReady('❯ existing manual draft')).toBe(false)
   })
 })

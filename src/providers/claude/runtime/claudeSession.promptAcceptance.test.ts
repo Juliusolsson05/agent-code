@@ -4,34 +4,57 @@ import { ClaudeSession } from './claudeSession.js'
 
 afterEach(() => vi.useRealTimers())
 
+function installPromptSurface(
+  session: ClaudeSession,
+  initial: {
+    composer?: 'empty' | 'drafted' | 'unpainted'
+    conditions?: Record<string, { kind: string; actions: unknown[] }>
+  } = {},
+): {
+  setComposer(value: 'empty' | 'drafted' | 'unpainted'): void
+  setConditions(value: Record<string, { kind: string; actions: unknown[] }>): void
+  getComposerState: ReturnType<typeof vi.fn>
+} {
+  let composer = initial.composer ?? 'empty'
+  let conditions = initial.conditions ?? {}
+  const getComposerState = vi.fn(() => composer)
+  ;(session as unknown as { headless: unknown }).headless = {
+    getScreen: () => '',
+    getComposerState,
+    getConditionSnapshot: () => ({ provider: 'claude', conditions, ts: Date.now() }),
+  }
+  return {
+    setComposer: value => { composer = value },
+    setConditions: value => { conditions = value },
+    getComposerState,
+  }
+}
+
+function refreshPromptGate(session: ClaudeSession): void {
+  ;(session as unknown as { refreshPromptGate(): void }).refreshPromptGate()
+}
+
 describe('ClaudeSession prompt acceptance', () => {
-  it('publishes readiness from the existing replay quiet-window boundary', () => {
-    vi.useFakeTimers()
+  it('makes a fresh session ready immediately after transcript attachment', () => {
     const session = new ClaudeSession()
-    ;(session as unknown as { headless: { getScreen(): string } }).headless = {
-      getScreen: () => '❯',
-    }
+    installPromptSurface(session)
     const seen: boolean[] = []
     session.on('input-readiness', input => seen.push(input.ready))
     ;(session as unknown as { transcriptTailAttached: boolean }).transcriptTailAttached = true
-    ;(session as unknown as { armLiveBridgeReady(): void }).armLiveBridgeReady()
+    ;(session as unknown as { transcriptReplayQuiesced: boolean }).transcriptReplayQuiesced = true
+    refreshPromptGate(session)
 
-    expect(seen).toEqual([])
-    vi.advanceTimersByTime(249)
-    expect(seen).toEqual([])
-    vi.advanceTimersByTime(1)
     expect(seen).toEqual([true])
     expect(session.isPromptAcceptanceReady()).toBe(true)
   })
 
   it('lets immediate post-spawn delivery await the replay quiet-window event', async () => {
     vi.useFakeTimers()
-    const session = new ClaudeSession()
-    ;(session as unknown as { headless: { getScreen(): string } }).headless = {
-      getScreen: () => '❯',
-    }
+    const session = new ClaudeSession({ resumeSessionId: 'resume-me' })
+    installPromptSurface(session)
     ;(session as unknown as { transcriptTailAttached: boolean }).transcriptTailAttached = true
-    ;(session as unknown as { armLiveBridgeReady(): void }).armLiveBridgeReady()
+    ;(session as unknown as { armTranscriptReplayQuietWindow(): void })
+      .armTranscriptReplayQuietWindow()
 
     const readiness = session.awaitReadyForPrompt({ timeoutMs: 1_000 })
     await vi.advanceTimersByTimeAsync(249)
@@ -47,41 +70,102 @@ describe('ClaudeSession prompt acceptance', () => {
   it('bounds readiness waiting and removes lifecycle listeners on timeout', async () => {
     vi.useFakeTimers()
     const session = new ClaudeSession()
-    ;(session as unknown as { headless: { getScreen(): string } }).headless = {
-      getScreen: () => '',
-    }
+    installPromptSurface(session, { composer: 'unpainted' })
     const readiness = session.awaitReadyForPrompt({ timeoutMs: 100 })
 
-    expect(session.listenerCount('input-readiness')).toBe(1)
-    expect(session.listenerCount('screen')).toBe(1)
-    expect(session.listenerCount('exit')).toBe(1)
+    expect(session.listenerCount('prompt-gate')).toBe(1)
     await vi.advanceTimersByTimeAsync(100)
-    await expect(readiness).resolves.toEqual({ kind: 'timeout' })
-    expect(session.listenerCount('input-readiness')).toBe(0)
-    expect(session.listenerCount('screen')).toBe(0)
-    expect(session.listenerCount('exit')).toBe(0)
+    await expect(readiness).resolves.toEqual({
+      kind: 'timeout',
+      waitedMs: 100,
+      lastState: { kind: 'warming', reason: 'replay-pending' },
+    })
+    expect(session.listenerCount('prompt-gate')).toBe(0)
   })
 
   it('does not publish readiness until Claude paints an empty composer', () => {
     vi.useFakeTimers()
     const session = new ClaudeSession()
-    let screen = 'Starting Claude Code…'
-    ;(session as unknown as { headless: { getScreen(): string } }).headless = {
-      getScreen: () => screen,
-    }
+    const surface = installPromptSurface(session, { composer: 'unpainted' })
     const seen: boolean[] = []
     session.on('input-readiness', input => seen.push(input.ready))
     ;(session as unknown as { transcriptTailAttached: boolean }).transcriptTailAttached = true
-    ;(session as unknown as { armLiveBridgeReady(): void }).armLiveBridgeReady()
+    ;(session as unknown as { transcriptReplayQuiesced: boolean }).transcriptReplayQuiesced = true
+    refreshPromptGate(session)
 
-    vi.advanceTimersByTime(250)
     expect(seen).toEqual([])
     expect(session.isPromptAcceptanceReady()).toBe(false)
 
-    screen = '❯'
-    ;(session as unknown as { markInputReady(screen: string): void }).markInputReady(screen)
+    surface.setComposer('empty')
+    refreshPromptGate(session)
     expect(seen).toEqual([true])
     expect(session.isPromptAcceptanceReady()).toBe(true)
+  })
+
+  it('returns structured blockers and human drafts immediately without consuming the clock', async () => {
+    const session = new ClaudeSession()
+    const surface = installPromptSurface(session, {
+      conditions: {
+        'claude.trust-dialog': {
+          kind: 'claude.trust-dialog',
+          actions: [{ kind: 'pty', keys: '\r' }],
+        },
+      },
+    })
+    ;(session as unknown as { transcriptTailAttached: boolean }).transcriptTailAttached = true
+    ;(session as unknown as { transcriptReplayQuiesced: boolean }).transcriptReplayQuiesced = true
+
+    await expect(session.awaitReadyForPrompt({ timeoutMs: 10_000 })).resolves.toEqual({
+      kind: 'blocked',
+      condition: 'claude.trust-dialog',
+      resolvable: true,
+    })
+
+    surface.setConditions({})
+    surface.setComposer('drafted')
+    refreshPromptGate(session)
+    await expect(session.awaitReadyForPrompt({ timeoutMs: 10_000 })).resolves.toEqual({
+      kind: 'occupied',
+      reason: 'human-draft',
+    })
+  })
+
+  it('moves back to warming when transcript replay safety is re-armed', () => {
+    const session = new ClaudeSession({ resumeSessionId: 'resume-me' })
+    installPromptSurface(session)
+    ;(session as unknown as { transcriptTailAttached: boolean }).transcriptTailAttached = true
+    ;(session as unknown as { transcriptReplayQuiesced: boolean }).transcriptReplayQuiesced = true
+    refreshPromptGate(session)
+    expect(session.isPromptAcceptanceReady()).toBe(true)
+
+    ;(session as unknown as { transcriptReplayQuiesced: boolean }).transcriptReplayQuiesced = false
+    refreshPromptGate(session)
+    expect(session.isPromptAcceptanceReady()).toBe(false)
+  })
+
+  it('fans one gate transition out to many waiters without reparsing per waiter', async () => {
+    const session = new ClaudeSession()
+    session.setMaxListeners(0)
+    const surface = installPromptSurface(session, { composer: 'unpainted' })
+    ;(session as unknown as { transcriptTailAttached: boolean }).transcriptTailAttached = true
+    ;(session as unknown as { transcriptReplayQuiesced: boolean }).transcriptReplayQuiesced = true
+
+    const waits = Array.from({ length: 50 }, () =>
+      session.awaitReadyForPrompt({ timeoutMs: 10_000 }),
+    )
+    const readsBeforeTransition = surface.getComposerState.mock.calls.length
+    surface.setComposer('empty')
+    refreshPromptGate(session)
+
+    await expect(Promise.all(waits)).resolves.toEqual(
+      Array.from({ length: 50 }, () => ({ kind: 'ready', waitedMs: expect.any(Number) })),
+    )
+    // The headless package already parsed the frame once. ClaudeSession reads
+    // that cached classification once for the transition and gives the same
+    // immutable state to every waiter; listener count does not multiply parser
+    // work.
+    expect(surface.getComposerState).toHaveBeenCalledTimes(readsBeforeTransition + 1)
+    expect(session.listenerCount('prompt-gate')).toBe(0)
   })
 
   it('assigns distinct exact transcript ids to concurrent fresh sessions', () => {

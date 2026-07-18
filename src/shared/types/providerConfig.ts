@@ -418,6 +418,18 @@ export type PromptDeliveryFailureCode =
   | 'transport-failed'
 
 /**
+ * What the caller may do with the session after delivery fails. This is
+ * intentionally independent from `retrySafe`: duplicate safety answers whether
+ * the prompt may be attempted again, while disposition answers whether this
+ * particular child is still healthy enough to keep.
+ */
+export type PromptDeliveryDisposition =
+  | 'retry-same-session'
+  | 'retry-after-resolve'
+  | 'do-not-retry'
+  | 'session-unusable'
+
+/**
  * Finished-prompt delivery result.
  *
  * WHY this is richer than the old `{ok,message}` boolean: once prompt bytes or
@@ -434,6 +446,7 @@ export type PromptDeliveryResult =
       code: PromptDeliveryFailureCode
       message: string
       retrySafe: boolean
+      disposition: PromptDeliveryDisposition
       promptWritten: boolean
       enterWritten: boolean
     }

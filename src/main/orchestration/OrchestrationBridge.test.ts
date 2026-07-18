@@ -132,4 +132,48 @@ describe('OrchestrationBridge status cache', () => {
     })
     await second
   })
+
+  it('releases prompt-delivery metadata when a child closes', async () => {
+    sentRendererRequests.length = 0
+    const bridge = new OrchestrationBridge()
+    const created = bridge.createAgent({ parentSessionId: 'parent-1', kind: 'claude' })
+    const createRequest = sentRendererRequests[0] as { requestId: string }
+    bridge.resolve({
+      requestId: createRequest.requestId,
+      ok: true,
+      type: 'create-agent',
+      agent: {
+        sessionId: 'child-1',
+        kind: 'claude',
+        cwd: '/tmp/project',
+        orchestrationParentId: 'parent-1',
+        orchestrationRootId: 'parent-1',
+      },
+    })
+    await created
+    bridge.notePromptSubmitted('child-1')
+    expect((bridge as unknown as { promptDeliveries: Map<string, unknown> })
+      .promptDeliveries.has('child-1')).toBe(true)
+
+    const closing = bridge.closeAgent({ parentSessionId: 'parent-1', sessionId: 'child-1' })
+    const readRequest = sentRendererRequests[1] as { requestId: string }
+    bridge.resolve({
+      requestId: readRequest.requestId,
+      ok: false,
+      type: 'read-agent',
+      message: 'not needed for this lifecycle assertion',
+    })
+    await vi.waitFor(() => expect(sentRendererRequests).toHaveLength(3))
+    const closeRequest = sentRendererRequests[2] as { requestId: string }
+    bridge.resolve({
+      requestId: closeRequest.requestId,
+      ok: true,
+      type: 'close-agent',
+      result: { closedSessionIds: ['child-1'] },
+    })
+    await closing
+
+    expect((bridge as unknown as { promptDeliveries: Map<string, unknown> })
+      .promptDeliveries.has('child-1')).toBe(false)
+  })
 })

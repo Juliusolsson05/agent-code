@@ -30,6 +30,7 @@ export async function deliverOpencodePrompt(
       code: 'missing-capability',
       message: `opencode session ${io.sessionId} has no HTTP prompt delivery (runtime not started?)`,
       retrySafe: true,
+      disposition: 'session-unusable',
       promptWritten: false,
       enterWritten: false,
     }
@@ -48,6 +49,7 @@ export async function deliverOpencodePrompt(
         err instanceof Error ? err.message : String(err)
       }`,
       retrySafe: false,
+      disposition: 'do-not-retry',
       promptWritten: true,
       enterWritten: false,
     }
