@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { vi } from 'vitest'
 
 import { committedEntryPaints } from './entryVisibility'
 import type { ContentBlock, Entry, ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
@@ -45,5 +46,21 @@ describe('committedEntryPaints', () => {
       entry: entry([result]),
       toolUseIndex: new Map([['tool-1', toolUse]]), toolResultIndex: new Map(), resolveOperation: generic,
     })).toBe(true)
+  })
+
+  it('does not invoke provider admission when an obvious text sibling already paints', () => {
+    // WHY this is a performance contract rather than merely an optimization:
+    // the bridge scans the full committed history to identify rows that are
+    // wholly absorbed. Most real entries have prose alongside protocol blocks;
+    // parsing their embedded scripts cannot change the row-level answer and
+    // would restore the history-proportional provider work this bridge removed.
+    const resolveOperation = vi.fn<CommittedOperationDecisionResolver>()
+    expect(committedEntryPaints({
+      entry: entry([result, { type: 'text', text: 'already visible' }]),
+      toolUseIndex: new Map([['tool-1', toolUse]]),
+      toolResultIndex: new Map([['tool-1', result]]),
+      resolveOperation,
+    })).toBe(true)
+    expect(resolveOperation).not.toHaveBeenCalled()
   })
 })

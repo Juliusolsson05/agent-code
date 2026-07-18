@@ -49,6 +49,13 @@ export type ProviderOperationInput = {
   result: ToolResultBlock | null
   live: boolean
   streaming: boolean
+  /**
+   * The semantic source has closed this invocation even when it emitted no
+   * result payload. This is intentionally distinct from `!streaming`: durable
+   * replay also passes streaming=false for an invocation whose result may be
+   * missing, so deriving completion from that flag would invent lifecycle.
+   */
+  finalized?: boolean
 }
 
 export type ProviderOperationDecision = {

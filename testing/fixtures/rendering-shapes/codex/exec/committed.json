@@ -1,5 +1,20 @@
 {
-  "evidence": "The command/generic cases are curated from the 2026-07-17 developer recording. The embedded workflow case preserves the operation grammar from the 2026-07-18 Rendering Debug capture for call_vTEidDSgaGSppCl89dtpD8X4. All cases share fp2-bb2ab36f, so the fixture pins each bounded content-dependent route explicitly.",
+  "evidence": "The command/generic cases are curated from the 2026-07-17 developer recording. The embedded workflow pair preserves the operation and result grammar from the 2026-07-18 Rendering Debug capture for call_vTEidDSgaGSppCl89dtpD8X4. All invocations share fp2-bb2ab36f, so the fixture pins each bounded content-dependent route explicitly.",
+  "sourceShapeEvidence": {
+    "capturedAt": "2026-07-18T20:12:38.529Z",
+    "provider": "codex",
+    "sessionId": "8e4cf0a4-9af7-4aa6-97e3-129f4d11fcc1",
+    "invocation": {
+      "fingerprint": "fp2-bb2ab36f",
+      "shapePaths": ["<root>:object", "id:string", "input.raw:string", "input:object", "name:string", "type:string"],
+      "discriminatorValues": { "name": "exec", "type": "tool_use" }
+    },
+    "result": {
+      "fingerprint": "fp2-8571cc95",
+      "shapePaths": ["<root>:object", "codex.kind:string", "codex:object", "content:string", "is_error:boolean", "tool_use_id:string", "type:string"],
+      "discriminatorValues": { "codex.kind": "custom_tool_call_output", "type": "tool_result" }
+    }
+  },
   "cases": [
     {
       "expectedRoute": "specialized",
@@ -29,6 +44,13 @@
         "input": {
           "raw": "const r = await tools.mcp__agent_code__workflow_run_events({runId:\"run_26332a0c-68b9-474e-8e9d-5d547a97040f\",after:191,limit:20,waitMs:1000});\nconst payload=(r?.content??[]).find(c=>c.type===\"text\")?.text??\"\";try{const d=JSON.parse(payload);for(const e of d.page?.events??[])text(JSON.stringify({cursor:e.cursor,type:e.event?.type,agentId:e.event?.agentId,label:e.event?.payload?.label,message:e.event?.payload?.message}))}catch{text(payload.slice(0,10000))}\n"
         }
+      },
+      "toolResult": {
+        "type": "tool_result",
+        "tool_use_id": "call_vTEidDSgaGSppCl89dtpD8X4",
+        "content": "Script completed\nWall time 0.0 seconds\nOutput:\n\n{\"cursor\":192,\"type\":\"agent.activity.started\",\"agentId\":\"agent_6\"}\n{\"cursor\":195,\"type\":\"agent.completed\",\"agentId\":\"agent_6\"}",
+        "is_error": false,
+        "codex": { "kind": "custom_tool_call_output" }
       }
     },
     {

@@ -48,6 +48,12 @@ export type LedgerFeedContext = {
   streamPhase: StreamPhase
   streamPhasePendingToolName: string | null
   streamPhasePendingToolUseId: string | null
+  /**
+   * Provider-owned block paintability for committed entries. Optional keeps
+   * pure ledger fixtures focused on row mapping; production always supplies
+   * it from useLedgerFeedItems with the same pair cache Feed uses.
+   */
+  committedEntryPaints?: (entry: Entry) => boolean
 }
 
 export type LedgerFeedItemsResult = {
@@ -93,7 +99,11 @@ function orderAt(index: number, phase: FeedRenderItemOrder['phase']): FeedRender
   return { phase, timeMs: null, sequence: index, source: 'ledger' }
 }
 
-function visibleDecisionFor(entry: Entry, provider: AgentProviderKind): VisibleDecision {
+function visibleDecisionFor(
+  entry: Entry,
+  provider: AgentProviderKind,
+  visible = true,
+): VisibleDecision {
   // This bridge reports the ledger's decision but does not reinterpret raw
   // entry keys. Durable provider vocabulary was already admitted through the
   // same classifier used by the painter; the reason below is only a generic
@@ -107,8 +117,8 @@ function visibleDecisionFor(entry: Entry, provider: AgentProviderKind): VisibleD
   return {
     key: typeof entry.uuid === 'string' ? entry.uuid : 'no-uuid',
     entry,
-    visible: true,
-    reason,
+    visible,
+    reason: visible ? reason : 'provider_operation_absorbed',
   }
 }
 
@@ -237,6 +247,16 @@ export function ledgerToFeedItems(
           dropped.push(c.id)
           break
         }
+        if (ctx.committedEntryPaints?.(entry) === false) {
+          items.push({
+            type: 'absorbed-entry',
+            key: `absorbed-entry:${uuid}`,
+            entry,
+            visibleDecision: visibleDecisionFor(entry, ctx.provider, false),
+            order: orderAt(items.length, 'content'),
+          })
+          break
+        }
         items.push({
           type: 'entry',
           key: `entry:${uuid}`,
@@ -294,6 +314,34 @@ export function ledgerToFeedItems(
       default:
         dropped.push(c.id)
         break
+    }
+  }
+
+  // WHY the bridge repairs emptiness here: provider operation correlation is
+  // block-grain information the entry-grain ledger candidate deliberately does
+  // not carry. Once all selected committed carriers are resolved, they may all
+  // become named absorptions. Without this post-correlation verdict the ledger
+  // counted a content survivor but Feed painted none, recreating the blank
+  // surface invariant this pipeline was built to prevent. This is still an
+  // upstream data decision—Feed receives an explicit empty item and never
+  // filters a selected row itself.
+  const hasPaintedContent = items.some(item =>
+    item.type !== 'absorbed-entry' && item.type !== 'empty' && item.type !== 'work',
+  )
+  if (!hasPaintedContent && !items.some(item => item.type === 'empty')) {
+    const workIndex = items.findIndex(item => item.type === 'work')
+    const insertionIndex = workIndex < 0 ? items.length : workIndex
+    items.splice(insertionIndex, 0, {
+      type: 'empty',
+      key: 'empty:post-correlation',
+      provider: ctx.provider,
+      order: orderAt(insertionIndex, 'empty'),
+    })
+    // Keep the order metadata truthful after inserting before a work item.
+    for (let index = insertionIndex + 1; index < items.length; index += 1) {
+      const item = items[index]
+      const phase = item.type === 'work' ? 'work' : item.type === 'empty' ? 'empty' : 'content'
+      item.order = orderAt(index, phase)
     }
   }
 

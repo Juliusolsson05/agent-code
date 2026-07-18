@@ -12,9 +12,9 @@ import type {
   ReplayTick,
 } from '@renderer/rendering/replay/recordedSession'
 import {
-  ledgerFeedContextFromRuntime,
   ledgerToFeedItems,
 } from '@renderer/features/feed/ledger/ledgerFeedItems'
+import { providerLedgerFeedContextFromRuntime } from '@renderer/features/feed/ledger/providerLedgerFeedContext'
 
 // The REAL feed-owned view bridge, injected through the harness's
 // projectItems seam (#493 PR-3): the harness itself may not import
@@ -22,7 +22,10 @@ import {
 // including the #239 dropped-candidate accounting — so it supplies the
 // production bridge.
 const projectItems: ReplayItemsProjection = (ledger, view, provider) =>
-  ledgerToFeedItems(ledger, ledgerFeedContextFromRuntime(view, provider))
+  ledgerToFeedItems(
+    ledger,
+    providerLedgerFeedContextFromRuntime(view, provider).context,
+  )
 import { assertInvariants } from '@renderer/rendering/replay/invariants'
 
 // ---------------------------------------------------------------------------

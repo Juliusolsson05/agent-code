@@ -744,7 +744,9 @@ function commandResultEvidence(
       owned: false,
     }
   }
-  const scriptFailed = result.is_error === true || envelope.status === 'failed'
+  const scriptFailed = result.is_error === true ||
+    envelope.status === 'failed' ||
+    envelope.status === 'terminated'
   if (transport === 'discarded') {
     return {
       exitCode: nativeExit,
@@ -890,9 +892,23 @@ export function stripCodexTransportEnvelope(text: string): string {
   return parseCodexTransportEnvelope(text)?.output ?? text
 }
 
+/**
+ * Expose only the transport lifecycle discriminator to sibling adapters.
+ *
+ * WHY not export the complete parser result: command output ownership belongs
+ * to this adapter and `stripCodexTransportEnvelope`. Wait rendering needs one
+ * narrower fact—whether Codex said the yielded cell is still running—so it can
+ * avoid translating mere result presence into a false completion claim.
+ */
+export function codexTransportEnvelopeStatus(
+  text: string,
+): 'completed' | 'failed' | 'running' | 'terminated' | null {
+  return parseCodexTransportEnvelope(text)?.status ?? null
+}
+
 function parseCodexTransportEnvelope(
   text: string,
-): { status: 'completed' | 'failed' | 'running'; output: string } | null {
+): { status: 'completed' | 'failed' | 'running' | 'terminated'; output: string } | null {
   const takeLine = (start: number): { line: string; next: number } => {
     const newline = text.indexOf('\n', start)
     return newline === -1
@@ -900,7 +916,11 @@ function parseCodexTransportEnvelope(
       : { line: text.slice(start, newline), next: newline + 1 }
   }
   const first = takeLine(0)
-  const statusMatch = /^Script (completed|failed|running)(?:\b.*)?$/.exec(first.line)
+  // WHY terminated is a first-class transport state: code mode returns
+  // `Script terminated` after wait({ terminate: true }). Treating that as an
+  // unfamiliar envelope both leaks boilerplate and can make an interrupted
+  // command look successful through the generic non-failure path.
+  const statusMatch = /^Script (completed|failed|running|terminated)(?:\b.*)?$/.exec(first.line)
   if (!statusMatch) return null
   let cursor = first.next
   let current = takeLine(cursor)
@@ -918,7 +938,7 @@ function parseCodexTransportEnvelope(
     if (/^\s*$/.test(current.line)) cursor = current.next
   }
   return {
-    status: statusMatch[1] as 'completed' | 'failed' | 'running',
+    status: statusMatch[1] as 'completed' | 'failed' | 'running' | 'terminated',
     output: text.slice(cursor),
   }
 }

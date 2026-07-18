@@ -7,8 +7,10 @@ import committedFixture from '../../../../testing/fixtures/rendering-shapes/code
 import { renderCodexOperation } from '@providers/codex/renderer/rows/dispatch'
 import { renderCodexSemanticBlock } from '@providers/codex/renderer/semantic/dispatch'
 import { fingerprintRenderShape } from '@renderer/rendering/evidence/shapeFingerprint'
+import { buildFingerprintIndex, classifySighting } from '@renderer/rendering/evidence/catalogCoverage'
+import { CODEX_RENDER_SHAPES } from '@providers/codex/renderer/shapes'
 import type { SemanticLiveBlock } from '@renderer/session-runtime/state'
-import type { ToolUseBlock } from '@shared/types/transcript'
+import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 
 type Route = 'specialized' | 'generic'
 type SemanticCase = { expectedRoute: Route; semanticBlock: SemanticLiveBlock }
@@ -16,6 +18,7 @@ type CommittedCase = {
   expectedRoute: Route
   expectedReceipt?: { rendererId: string; protocolId?: string }
   toolUse: ToolUseBlock
+  toolResult?: ToolResultBlock
 }
 
 const fixtures = {
@@ -33,6 +36,7 @@ function fixture<T>(name: keyof typeof fixtures): { cases: T[] } {
 }
 
 const context = { committedToolResults: new Map() }
+const catalogIndex = buildFingerprintIndex([CODEX_RENDER_SHAPES])
 
 // WHY the specialized receipt is pinned to the Git protocol since the
 // transport-normalization change: every captured specialized sample in these
@@ -95,7 +99,7 @@ describe('Codex unified-exec evidence', () => {
 
       const decision = renderCodexOperation({
         toolUse: sample.toolUse,
-        result: null,
+        result: sample.toolResult ?? null,
         live: false,
         streaming: false,
       })
@@ -109,6 +113,27 @@ describe('Codex unified-exec evidence', () => {
         // receipt would erase the content-gated route this evidence exists to
         // protect.
         expect(decision.toolUse.receipt).toEqual(sample.expectedReceipt ?? SPECIALIZED_RECEIPT)
+      }
+      if (sample.toolResult && decision.toolResult?.action === 'render') {
+        const fingerprint = fingerprintRenderShape({
+          provider: 'codex',
+          plane: 'committed-tool-result',
+          eventType: 'tool_result',
+          payload: sample.toolResult,
+        }).fingerprint
+        expect(fingerprint).toBe('fp2-8571cc95')
+        const definition = catalogIndex.byFingerprint.get(fingerprint)
+        expect(definition).toBeDefined()
+        expect(classifySighting({
+          structuralFingerprint: fingerprint,
+          lifecycle: 'durable',
+          outcome: {
+            kind: 'specialized',
+            shapeId: definition!.id,
+            rendererId: decision.toolResult.receipt.rendererId,
+            protocolId: decision.toolResult.receipt.protocolId,
+          },
+        }, catalogIndex)).toEqual({ kind: 'known-claimed', shapeId: definition!.id })
       }
     }
   })

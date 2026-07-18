@@ -1,5 +1,19 @@
 {
   "evidence": "Preserves the direct Codex wait invocation/result grammar shown in the 2026-07-18 Rendering Debug capture. The scalar IDs and output are reduced, but the committed fp2-32f6d3bc invocation and fp2-8571cc95 result envelopes are unchanged.",
+  "sourceShapeEvidence": {
+    "capturedAt": "2026-07-18T20:11:47.739Z",
+    "provider": "codex",
+    "invocation": {
+      "fingerprint": "fp2-32f6d3bc",
+      "shapePaths": ["<root>:object", "id:string", "input.cell_id:string", "input.max_tokens:number", "input.yield_time_ms:number", "input:object", "name:string", "type:string"],
+      "discriminatorValues": { "name": "wait", "type": "tool_use" }
+    },
+    "result": {
+      "fingerprint": "fp2-8571cc95",
+      "shapePaths": ["<root>:object", "codex.kind:string", "codex:object", "content:string", "is_error:boolean", "tool_use_id:string", "type:string"],
+      "discriminatorValues": { "codex.kind": "custom_tool_call_output", "type": "tool_result" }
+    }
+  },
   "cases": [
     {
       "expectedRoute": "specialized",

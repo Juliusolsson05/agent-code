@@ -286,7 +286,7 @@ export function jsonResultSummary(value: unknown): { label: string; isError: boo
         : runId !== null
           ? `run ${runId}`
           : id
-      const failed = typeof rec[key] === 'string' && /^(?:error|failed|failure|cancelled)$/i.test(rec[key])
+      const failed = typeof rec[key] === 'string' && /^(?:error|failed|failure|cancelled|canceled)$/i.test(rec[key])
       return {
         label: `${key}: ${discriminator}${identity === null ? '' : ` · ${identity}`}`,
         isError: failed,

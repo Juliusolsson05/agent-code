@@ -146,4 +146,8 @@ describe('jsonResultSummary', () => {
     })
     expect(jsonResultSummary({ status: { nested: true }, cursor: 4 }).label).toBe('2 keys')
   })
+  it('treats both provider cancellation spellings as failures', () => {
+    expect(jsonResultSummary({ status: 'canceled' }).isError).toBe(true)
+    expect(jsonResultSummary({ status: 'cancelled' }).isError).toBe(true)
+  })
 })

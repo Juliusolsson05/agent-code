@@ -20,7 +20,9 @@ export function CodexEmbeddedOperationRow({
     ? 'failed'
     : model.resultPresent
       ? 'response received'
-      : 'running'
+      : model.finalized
+        ? 'request completed'
+        : 'running'
   return (
     <MarkerRow marker={model.failed ? '✗' : model.resultPresent ? '✓' : '◐'}>
       <div className="min-w-0 w-full">
@@ -66,17 +68,29 @@ export function CodexWaitOperationRow({ model }: { model: CodexWaitOperationMode
     model.yieldTimeMs === null ? null : `wait ${model.yieldTimeMs}ms`,
     model.maxTokens === null ? null : `max ${model.maxTokens} tok`,
   ].filter(Boolean).join(' · '), [model.maxTokens, model.yieldTimeMs])
-  const status = model.failed ? 'failed' : model.resultPresent ? 'completed' : 'waiting'
+  const marker = model.failed
+    ? '✗'
+    : model.status === 'completed'
+      ? '✓'
+      : model.status === 'waiting' || model.status === 'running'
+        ? '◐'
+        : '•'
   return (
-    <MarkerRow marker={model.failed ? '✗' : model.resultPresent ? '✓' : '◐'}>
+    <MarkerRow marker={marker}>
       <div className="min-w-0 flex items-baseline gap-2 text-[13px] leading-[1.65]">
-        <span className="shrink-0 text-accent font-semibold">Wait for command</span>
+        {/* WHY termination is named in the collapsed headline: `terminate`
+            changes this from an observation into a destructive control. Hiding
+            it behind “Wait” makes the transcript materially false even if the
+            raw input remains available elsewhere in debug state. */}
+        <span className="shrink-0 text-accent font-semibold">
+          {model.terminate ? 'Terminate command' : 'Wait for command'}
+        </span>
         <span className="min-w-0 truncate font-code text-[12px] text-ink-dim" title={model.cellId}>
           {model.cellId}
         </span>
         {meta ? <span className="shrink-0 text-[11px] text-muted">{meta}</span> : null}
         <span className={model.failed ? 'shrink-0 text-[11px] text-danger' : 'shrink-0 text-[11px] text-muted'}>
-          {status}
+          {model.status}
         </span>
       </div>
     </MarkerRow>

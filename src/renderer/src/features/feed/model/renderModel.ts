@@ -18,8 +18,10 @@ import type { SemanticRenderUnit } from '@renderer/features/feed/ui/semantic/typ
 // plane partitioner) AND `deriveFeedCommittedProjection` (which only fed
 // SemanticStreamingTurn's committed dedup, now that the ledger owns that and the
 // component is gone). The ownership ledger (src/renderer/src/rendering/) is the
-// sole decision-maker; desktop and phone hand Feed the ledger's pre-ordered
-// items. What remains is deliberately dumb: the FeedRenderItem contract and
+// sole ordering/ownership decision-maker; the view bridge adds provider-pair
+// paintability because the ledger deliberately has no block payload. Desktop
+// and phone hand Feed those pre-ordered items. What remains is deliberately
+// dumb: the FeedRenderItem contract and
 // `feedRenderModelFromItems` (attaches debug side-products to the ledger's list).
 
 export type FeedRenderModel = {
@@ -42,6 +44,24 @@ export type FeedRenderItem =
       entry: Entry
       visibleDecision: VisibleDecision
       entryOrdinal: number
+      order: FeedRenderItemOrder
+    }
+  | {
+      /**
+       * A ledger-selected committed carrier whose blocks are all explicitly
+       * absorbed by their provider operation owner.
+       *
+       * WHY retain this as data instead of dropping it or mounting null Blocks:
+       * debug output must explain the hidden row, while React must not allocate
+       * offscreen fibers merely to run evidence observers. The view bridge is
+       * the last ownership boundary with both the joined operation decision and
+       * the empty-state context, so it records the absorption once and Feed
+       * treats this item as non-painting by construction.
+       */
+      type: 'absorbed-entry'
+      key: string
+      entry: Entry
+      visibleDecision: VisibleDecision
       order: FeedRenderItemOrder
     }
   // #491 block-level un-collapse: the view bridge no longer hands Feed a whole
@@ -95,6 +115,7 @@ export type FeedRenderItem =
 function labelForItem(item: FeedRenderItem, provider: AgentProvider): string {
   switch (item.type) {
     case 'entry':
+    case 'absorbed-entry':
       return debugLabelForEntry(item.entry)
     case 'semantic-block':
       return `semantic ${item.owner === 'semantic-current' ? 'current' : 'history'} ${item.turnId.slice(0, 12)}#${item.block.blockIndex} · ${item.block.kind}`
@@ -118,6 +139,7 @@ function labelForItem(item: FeedRenderItem, provider: AgentProvider): string {
 function slotForItem(item: FeedRenderItem): DebugVisibleRow['slot'] {
   switch (item.type) {
     case 'entry':
+    case 'absorbed-entry':
       return 'entry'
     case 'semantic-block':
     case 'semantic-collapsed-activity':
@@ -131,7 +153,7 @@ function slotForItem(item: FeedRenderItem): DebugVisibleRow['slot'] {
 }
 
 function debugRowsForItems(items: FeedRenderItem[], provider: AgentProvider): DebugVisibleRow[] {
-  return items.map(item => ({
+  return items.filter(item => item.type !== 'absorbed-entry').map(item => ({
     key: item.key,
     slot: slotForItem(item),
     label: labelForItem(item, provider),
@@ -156,8 +178,9 @@ export function feedRenderModelFromItems(
 ): FeedRenderModel {
   const visibleDecisions: VisibleDecision[] = []
   for (const item of items) {
-    if (item.type === 'entry') visibleDecisions.push(item.visibleDecision)
+    if (item.type === 'entry' || item.type === 'absorbed-entry') {
+      visibleDecisions.push(item.visibleDecision)
+    }
   }
   return { items, visibleDecisions, debugRows: debugRowsForItems(items, provider) }
 }
-

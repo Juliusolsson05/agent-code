@@ -83,6 +83,8 @@ const shape = (i: FeedRenderItem): string => {
   switch (i.type) {
     case 'entry':
       return `entry:${typeof i.entry.uuid === 'string' ? i.entry.uuid : '?'}`
+    case 'absorbed-entry':
+      return `absorbed:${typeof i.entry.uuid === 'string' ? i.entry.uuid : '?'}`
     case 'semantic-block':
       return `semantic-block:${i.turnId}#${i.block.blockIndex}`
     case 'semantic-collapsed-activity':
@@ -278,5 +280,37 @@ describe('view bridge: ledger rows drive block-level FeedRenderItems', () => {
     })
     expect(items.filter(i => i.type === 'entry')).toEqual([])
     expect(dropped).toEqual(['entry:u1'])
+  })
+
+  it('represents absorbed history as data and restores the empty verdict without mounting entries', () => {
+    const rt = emptyRuntime()
+    rt.entries = Array.from({ length: 100 }, (_, index) =>
+      assistantEntry(`absorbed-${index}`, `msg-${index}`, T + index, ''),
+    )
+    rt.lastJsonlEntryAt = T + 99
+    const slices: RuntimeLedgerSlices = {
+      provider: 'codex',
+      sessionId: 's1',
+      entries: rt.entries,
+      semanticCurrent: null,
+      semanticHistory: [],
+      ghosts: rt.ghosts,
+      streamPhase: 'idle',
+      lastJsonlEntryAtMs: rt.lastJsonlEntryAt,
+    }
+    const ledger = createSessionLedger()(createLedgerInputAdapter()(slices).input)
+    const context = ledgerFeedContextFromRuntime(rt, 'codex')
+    let resolutions = 0
+    context.committedEntryPaints = () => {
+      resolutions += 1
+      return false
+    }
+    const { items, dropped } = ledgerToFeedItems(ledger, context)
+
+    expect(dropped).toEqual([])
+    expect(resolutions).toBe(100)
+    expect(items.filter(item => item.type === 'entry')).toEqual([])
+    expect(items.filter(item => item.type === 'absorbed-entry')).toHaveLength(100)
+    expect(items.some(item => item.type === 'empty')).toBe(true)
   })
 })

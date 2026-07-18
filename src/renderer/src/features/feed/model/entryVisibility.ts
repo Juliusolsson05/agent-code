@@ -18,7 +18,20 @@ export function committedEntryPaints(input: {
   resolveOperation: CommittedOperationDecisionResolver
 }): boolean {
   if (!isConversationEntry(input.entry) || !Array.isArray(input.entry.message.content)) return true
-  return input.entry.message.content.some(block => blockPaints(block, input))
+  const blocks = input.entry.message.content
+  // WHY prove obvious paint before resolving any operation: mixed assistant
+  // entries commonly contain prose followed by a tool call. The prose already
+  // guarantees a feed box, so parsing a potentially large embedded script here
+  // would front-load work LazyEntry can defer until the row enters view.
+  if (blocks.some(block => obviousNonOperationPaint(block))) return true
+  return blocks.some(block => blockPaints(block, input))
+}
+
+function obviousNonOperationPaint(block: ContentBlock): boolean {
+  if (block.type === 'thinking') {
+    return Boolean((block as { thinking?: string }).thinking)
+  }
+  return block.type !== 'tool_use' && block.type !== 'tool_result'
 }
 
 function blockPaints(
@@ -29,9 +42,7 @@ function blockPaints(
     resolveOperation: CommittedOperationDecisionResolver
   },
 ): boolean {
-  if (block.type === 'thinking') {
-    return Boolean((block as { thinking?: string }).thinking)
-  }
+  if (block.type === 'thinking') return false
   if (block.type === 'tool_use') {
     const toolUse = block as ToolUseBlock
     const result = input.toolResultIndex.get(toolUse.id) ?? null

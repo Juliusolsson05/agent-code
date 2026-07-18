@@ -57,6 +57,7 @@ import {
 } from '@providers/shared/renderer/protocols/command/formatters/git'
 import { toolResultContentText } from '@providers/shared/renderer/rows/toolResultContent'
 import {
+  codexResultHasVisibleOutput,
   fromCodexEmbeddedOperation,
   fromCodexWaitOperation,
 } from '@providers/codex/renderer/adapters/embeddedOperation'
@@ -155,6 +156,7 @@ export function renderCodexOperation(
   const embeddedOperation = fromCodexEmbeddedOperation({
     toolUse: input.toolUse,
     result: input.result,
+    finalized: input.finalized,
   })
   if (embeddedOperation) {
     return {
@@ -168,22 +170,33 @@ export function renderCodexOperation(
       // or remove bytes. A named result row fixes the detached UX without
       // claiming byte ownership we do not have.
       toolResult: input.result
-        ? {
-            action: 'render',
-            node: (
-              <CodexNamedOperationResultRow
-                label={embeddedOperation.action}
-                block={input.result}
-                sourceTool={input.toolUse}
-              />
-            ),
-            receipt: { rendererId: 'codex.rows.dispatch', protocolId: 'agent-code.embedded-operation' },
-          }
+        ? !codexResultHasVisibleOutput(input.result)
+          ? {
+              action: 'absorb',
+              ownerRenderId: 'codex.rows.dispatch',
+              protocolId: 'agent-code.embedded-operation',
+              reason: 'the named embedded operation owns an empty successful transport acknowledgement',
+            }
+          : {
+              action: 'render',
+              node: (
+                <CodexNamedOperationResultRow
+                  label={embeddedOperation.action}
+                  block={input.result}
+                  sourceTool={input.toolUse}
+                />
+              ),
+              receipt: { rendererId: 'codex.rows.dispatch', protocolId: 'agent-code.embedded-operation' },
+            }
         : null,
     }
   }
 
-  const wait = fromCodexWaitOperation({ toolUse: input.toolUse, result: input.result })
+  const wait = fromCodexWaitOperation({
+    toolUse: input.toolUse,
+    result: input.result,
+    finalized: input.finalized,
+  })
   if (wait) {
     return {
       toolUse: {
@@ -192,17 +205,24 @@ export function renderCodexOperation(
         receipt: { rendererId: 'codex.rows.dispatch', protocolId: 'command.continuation' },
       },
       toolResult: input.result
-        ? {
-            action: 'render',
-            node: (
-              <CodexNamedOperationResultRow
-                label="Command continuation"
-                block={input.result}
-                sourceTool={input.toolUse}
-              />
-            ),
-            receipt: { rendererId: 'codex.rows.dispatch', protocolId: 'command.continuation' },
-          }
+        ? !codexResultHasVisibleOutput(input.result)
+          ? {
+              action: 'absorb',
+              ownerRenderId: 'codex.rows.dispatch',
+              protocolId: 'command.continuation',
+              reason: 'the wait operation owns an empty successful continuation acknowledgement',
+            }
+          : {
+              action: 'render',
+              node: (
+                <CodexNamedOperationResultRow
+                  label="Command continuation"
+                  block={input.result}
+                  sourceTool={input.toolUse}
+                />
+              ),
+              receipt: { rendererId: 'codex.rows.dispatch', protocolId: 'command.continuation' },
+            }
         : null,
     }
   }

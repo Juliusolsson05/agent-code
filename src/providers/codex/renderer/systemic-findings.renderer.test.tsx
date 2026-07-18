@@ -63,6 +63,21 @@ describe('systemic Codex operation rendering', () => {
     expect(screen.queryByText('JSON record')).not.toBeInTheDocument()
   })
 
+  it('absorbs an empty embedded-operation acknowledgement instead of painting a detached box', () => {
+    const toolUse: ToolUseBlock = {
+      type: 'tool_use', id: 'cancel-1', name: 'exec',
+      input: {
+        raw: 'const r = await tools.mcp__agent_code__workflow_run_cancel({runId:"run-1"}); text(r.output)',
+      },
+    }
+    const paired = result(toolUse, '')
+    const decision = renderCodexOperation({ toolUse, result: paired, live: false, streaming: false })
+    expect(decision.toolResult).toMatchObject({
+      action: 'absorb',
+      protocolId: 'agent-code.embedded-operation',
+    })
+  })
+
   it('renders wait as a continuation and removes only its verified transport chrome', () => {
     const toolUse: ToolUseBlock = {
       type: 'tool_use', id: 'wait-1', name: 'wait',

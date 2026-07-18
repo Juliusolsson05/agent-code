@@ -162,7 +162,11 @@ export function SessionView({
       transcript.phase.streamPhasePendingToolUseId,
     ],
   )
-  const ledgerFeedItems = useLedgerFeedItems(runtimeView, provider, sessionId)
+  const ledgerFeedPlan = useLedgerFeedItems(runtimeView, provider, sessionId, {
+    toolUseIndex: transcript.toolUseIndex,
+    toolResultIndex: transcript.toolResultIndex,
+    version: transcript.toolIndexVersion,
+  })
 
   const askUserQuestionState = useMemo(
     () =>
@@ -323,7 +327,8 @@ export function SessionView({
           <Feed
             sessionId={sessionId}
             provider={provider}
-            renderItemsOverride={ledgerFeedItems}
+            renderItemsOverride={ledgerFeedPlan.items}
+            committedOperationDecisionOverride={ledgerFeedPlan.resolveOperation}
             entries={transcript.entries}
             streamPhase={transcript.phase.streamPhase}
             streamPhasePendingToolName={transcript.phase.streamPhasePendingToolName}

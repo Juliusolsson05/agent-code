@@ -49,6 +49,7 @@ export function renderLiveProviderTool({
     result,
     live: true,
     streaming: result === null && !finalized,
+    finalized,
   })
   if (decision.toolUse.action === 'fallback') return { action: 'fallback' }
   if (decision.toolUse.action === 'absorb') return decision.toolUse

@@ -4,10 +4,14 @@ import {
   fromCodexEmbeddedOperation,
   fromCodexWaitOperation,
 } from './embeddedOperation'
-import type { ToolUseBlock } from '@shared/types/transcript'
+import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 
 function exec(raw: string): ToolUseBlock {
   return { type: 'tool_use', id: 'call-1', name: 'exec', input: { raw } }
+}
+
+function result(content: string, isError = false): ToolResultBlock {
+  return { type: 'tool_result', tool_use_id: 'wait-1', content, is_error: isError }
 }
 
 describe('fromCodexEmbeddedOperation', () => {
@@ -37,6 +41,29 @@ describe('fromCodexEmbeddedOperation', () => {
       filters: ['warning', null],
       includeHealth: true,
     })
+  })
+
+  it('uses whole-program AST admission and counts computed tool calls', () => {
+    expect(fromCodexEmbeddedOperation({
+      toolUse: exec('const r = await tools.mcp__agent_code__workflow_run_status({runId:"run-1"}); await tools["mcp__agent_code__workflow_run_cancel"]({runId:"run-1"}); text(r)'),
+      result: null,
+    })).toBeNull()
+    expect(fromCodexEmbeddedOperation({
+      toolUse: exec('const r = await tools.mcp__agent_code__workflow_run_status({runId:"run-1"}); }'),
+      result: null,
+    })).toBeNull()
+    expect(fromCodexEmbeddedOperation({
+      toolUse: exec('const r = await tools.mcp__agent_code__workflow_run_status({run-id:"run-1"})'),
+      result: null,
+    })).toBeNull()
+  })
+
+  it('accepts valid comments, trailing commas, and quoted hyphenated keys', () => {
+    const model = fromCodexEmbeddedOperation({
+      toolUse: exec('const r = await tools.mcp__agent_code__workflow_run_status({runId:"run-1"/* captured comment */, "trace-id":"t-1", values:[1,2,],}); text(r)'),
+      result: null,
+    })
+    expect(model?.input).toEqual({ runId: 'run-1', 'trace-id': 't-1', values: [1, 2] })
   })
 
   it('declines examples, ambiguous calls, dynamic arguments, and executable templates', () => {
@@ -70,5 +97,51 @@ describe('fromCodexWaitOperation', () => {
       toolUse: { type: 'tool_use', id: 'wait-2', name: 'wait', input: { cell_id: 'x', extra: true } },
       result: null,
     })).toBeNull()
+  })
+
+  it('preserves termination and never equates a yielded receipt with completion', () => {
+    const running = fromCodexWaitOperation({
+      toolUse: {
+        type: 'tool_use', id: 'wait-1', name: 'wait',
+        input: { cell_id: 'cell-9', terminate: true },
+      },
+      result: result('Script running with cell ID cell-9\nWall time 10 seconds\nOutput:\n\nstill working'),
+    })
+    expect(running).toMatchObject({ terminate: true, status: 'running' })
+
+    const terminated = fromCodexWaitOperation({
+      toolUse: {
+        type: 'tool_use', id: 'wait-1', name: 'wait',
+        input: { cell_id: 'cell-9', terminate: true },
+      },
+      result: result('Script terminated\nWall time 0.1 seconds\nOutput:\n\n'),
+    })
+    expect(terminated).toMatchObject({ terminate: true, status: 'terminated' })
+
+    const finalizedWithoutResult = fromCodexWaitOperation({
+      toolUse: { type: 'tool_use', id: 'wait-1', name: 'wait', input: { cell_id: 'cell-9' } },
+      result: null,
+      finalized: true,
+    })
+    expect(finalizedWithoutResult?.status).toBe('request completed')
+  })
+
+  it('enforces the upstream safe-integer control grammar', () => {
+    for (const value of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1, Number.POSITIVE_INFINITY]) {
+      expect(fromCodexWaitOperation({
+        toolUse: {
+          type: 'tool_use', id: 'wait-1', name: 'wait',
+          input: { cell_id: 'cell-9', yield_time_ms: value },
+        },
+        result: null,
+      })).toBeNull()
+    }
+    expect(fromCodexWaitOperation({
+      toolUse: {
+        type: 'tool_use', id: 'wait-1', name: 'wait',
+        input: { cell_id: 'cell-9', yield_time_ms: Number.MAX_SAFE_INTEGER },
+      },
+      result: null,
+    })).not.toBeNull()
   })
 })
