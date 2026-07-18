@@ -1,6 +1,6 @@
 # Evidence-First, Provider-Owned Feed Rendering — Implementation Plan
 
-**Status:** Phases 1–7 implemented on PR #555 and under whole-branch hardening; Phases 8–10 remain. Do not merge until all ten phases and final gates pass.
+**Status:** Phases 1–10 are implemented on PR #555; review-finding hardening and the final whole-branch gates remain. Do not merge until those gates pass.
 
 **Date:** 2026-07-16
 
@@ -261,7 +261,7 @@ type RenderOutcome =
     };
 
 type RenderShapeSighting = {
-  schemaVersion: 1;
+  schemaVersion: 2;
   sessionId: string;
   provider: AgentProviderKind | "unknown";
   providerVersion: string | null;
@@ -276,6 +276,7 @@ type RenderShapeSighting = {
   sourceRecordingCursor: number | null;
   observedAt: number;
   outcome: RenderOutcome;
+  seenCount: number;
 };
 ```
 
@@ -900,9 +901,9 @@ src/providers/shared/renderer/protocols/
     model.ts
     CompactionView.tsx
     CompactionView.test.tsx
-  structured-tool/
+  structured-output/
     model.ts
-    StructuredToolView.tsx
+    StructuredOutputView.tsx
 ```
 
 An example mapping is deliberately one-way:
@@ -1682,7 +1683,7 @@ src/renderer/src/features/feed/evidence/
   RenderShapeCaptureContext.tsx      capture gate/session binding
 
 src/renderer/src/features/debug/devModules/RenderingShapes/
-  UnknownShapeInbox.tsx              local grouped report
+  module.tsx                         local grouped report UI
   unknownShapeReport.ts              derive report from sidecars + catalogs
 
 src/main/recording/
@@ -1694,23 +1695,25 @@ src/preload/api/devDebug.ts           metadata-only renderer API
 
 src/providers/claude/renderer/
   shapes.ts                          typed Claude catalog
-  operations/*                       Claude-only parsing/mapping + composition
+  adapters/* + components/*          Claude-only parsing/mapping + composition
+  entries/dispatch.tsx               committed provider dispatch
 
 src/providers/codex/renderer/
   shapes.ts                          typed Codex catalog
-  operations/*                       Codex-only parsing/mapping + composition
+  adapters/* + components/*          Codex-only parsing/mapping + composition
+  entries/dispatch.tsx               committed provider dispatch
 
 src/providers/opencode/renderer/
   shapes.ts                          typed OpenCode catalog
-  operations/*                       OpenCode-only parsing/mapping + composition
+  adapters/* + rows/dispatch.tsx     OpenCode parsing/mapping + dispatch
 
 src/providers/shared/renderer/protocols/
   code-edit/*                        first proven shared visual protocol
   command/*                          later, after independent adapters exist
-  structured-tool/*                  bounded long-tail protocol
+  structured-output/*                bounded long-tail protocol
 
 scripts/
-  audit-rendering-shapes.mjs         known/unknown/misrouted coverage report
+  audit-rendering-shapes.mts         known/unknown/misrouted coverage report
   extract-rendering-shape.mts        fingerprint -> complete local draft
 
 testing/fixtures/rendering-shapes/
@@ -1722,12 +1725,14 @@ not introduced. `projection/` remains deferred. Existing provider `rows/` and
 shared `rows/` coexist until each shape family has migrated and its old route is
 provably unused.
 
-### Concrete before-and-after tree
+### Historical proposed before-and-after tree
 
-This is the filesystem contract for the complete program. The lean companion
-shows only the responsibility-level tree; this long reference records the
-expected additions and modifications so each implementation PR does not invent
-a different home.
+This section preserves the proposal that guided implementation; it is not an
+as-built filesystem contract. Several planning names below were intentionally
+replaced during implementation (for example, provider `adapters/` +
+`components/` instead of an `operations/` tree, and `module.tsx` instead of an
+`UnknownShapeInbox.tsx` file). Use `docs/rendering/rendering-system.md` and the
+concise responsibility map above for current paths.
 
 The map is incremental, not a request to scaffold empty directories. An added
 path lands only when its phase has evidence and tests. A deletion candidate is
@@ -1792,7 +1797,7 @@ src/preload/api/types.ts                            [M] exposed typings
 src/preload/api/index.ts                            [M] export wiring if needed
 ```
 
-#### After: target tree when every phase is complete
+#### Historical proposal: target tree envisioned before implementation
 
 ```text
 src/
@@ -1837,19 +1842,15 @@ src/
 │       │   ├── model/renderModel.ts                [M]
 │       │   └── ui/
 │       │       ├── Feed.tsx                        [M]
-│       │       ├── ProviderOperationBoundary.tsx   [A]
-│       │       ├── ProviderOperationBoundary.test.tsx [A]
+│       │       ├── Block.tsx                       [M] paired operation boundary
 │       │       └── rows/
 │       │           ├── EntryRow.tsx                [M]
-│       │           ├── ToolUseRow.tsx              [M/D?]
-│       │           ├── ToolResultRow.tsx           [M/D?]
-│       │           └── UnknownOperationRow.tsx     [A]
+│       │           └── ToolResultRow.tsx           [M] bounded fallback
 │       │
 │       └── debug/devModules/
 │           ├── registry.ts                         [M]
 │           └── RenderingShapes/                    [A]
 │               ├── module.tsx                      [A]
-│               ├── UnknownShapeInbox.tsx           [A]
 │               ├── unknownShapeReport.ts           [A]
 │               └── unknownShapeReport.test.ts      [A]
 │
@@ -1921,7 +1922,7 @@ src/
 │       │   ├── read-search/                        [A when proven shared]
 │       │   ├── web/                                [A when proven shared]
 │       │   ├── collaboration/                      [A when proven shared]
-│       │   └── structured-tool/
+│       │   └── structured-output/
 │       │       ├── model.ts                        [A]
 │       │       ├── StructuredToolView.tsx          [A]
 │       │       └── StructuredToolView.test.tsx     [A]
@@ -1940,9 +1941,9 @@ src/
     └── index.ts                                    [M if wiring changes]
 
 scripts/
-├── audit-rendering-shapes.mjs                      [A]
+├── audit-rendering-shapes.mts                      [A]
 ├── audit-rendering-shapes.test.mjs                 [A]
-├── extract-rendering-shape.mjs                     [A]
+├── extract-rendering-shape.mts                     [A]
 ├── extract-rendering-shape.test.mjs                [A]
 ├── extract-rendering-fixtures.mjs                  [M]
 └── audit-rendering-fixture.mjs                     [M]
@@ -2007,13 +2008,12 @@ test expresses the responsibility; the tree above names those additions.
 | `src/renderer/src/rendering/evidence/*`                           | Pure structural identity, typed catalog definition, and coverage audit logic.                                 | 1           |
 | `src/renderer/src/features/feed/evidence/*`                       | Runtime observation, coalescing, and paint-outcome receipts.                                                  | 2           |
 | `src/renderer/src/features/debug/devModules/RenderingShapes/*`    | Developer-only Unknown Shape Inbox and disk-backed report derivation.                                         | 3           |
-| `scripts/audit-rendering-shapes.mjs`                              | Report known, unknown, misrouted, generic, specialized, and missing-prefix coverage.                          | 3           |
+| `scripts/audit-rendering-shapes.mts`                              | Report known, unknown, misrouted, generic, specialized, and missing-prefix coverage.                          | 3           |
 | `scripts/extract-rendering-shape.mts`                             | Convert one reviewed recording sighting into a complete local fixture draft.                                 | 3           |
 | `testing/fixtures/rendering-shapes/**`                            | Checked-in provider shape memory: final, meaningful prefixes, manifest, and expected decision.                | 3–4         |
 | `src/providers/{provider}/renderer/shapes.ts`                     | Provider-local source of truth for observed raw shapes and declared outcomes.                                 | 4           |
-| `src/renderer/src/features/feed/ui/ProviderOperationBoundary.tsx` | Select the provider capability, require an explicit decision, emit a receipt, and own the visible fallback.   | 5           |
-| `src/renderer/src/features/feed/ui/rows/UnknownOperationRow.tsx`  | High-quality bounded rendering for unclaimed structures; unknown never means invisible.                       | 5           |
-| `src/providers/{provider}/renderer/operations/*`                  | Provider-private raw recognition/mapping and provider-specific composition.                                   | 5–9         |
+| `src/renderer/src/features/feed/ui/rows/Block.tsx`                | Select the paired provider capability, record its decision, and retain the bounded visible fallback.          | 5           |
+| `src/providers/{provider}/renderer/{adapters,components,entries}` | Provider-private raw recognition/mapping, composition, and committed dispatch.                                | 5–10        |
 | `src/providers/shared/renderer/protocols/*`                       | Narrow provider-neutral visual models and views introduced only after independent mappings prove equivalence. | 5–9         |
 
 ### Deletion and rename policy
@@ -2116,7 +2116,9 @@ Red-green tasks:
 5. Test sightings retain bounded complete structural key paths while scalar
    prompt/command/result values remain outside shape identity.
 6. Append `__render_shape` lines through the existing recording lifecycle.
-7. Include dropped/capped sighting counts in recorder metadata/debug output.
+7. Surface observer queue/key drops in observer debug stats; reserve recorder
+   `droppedCount`/`capped` metadata for losses imposed by the recorder writer
+   itself, so the two lifecycle layers are not falsely aggregated.
 
 Exit gate:
 
@@ -2130,8 +2132,8 @@ Exit gate:
 Files:
 
 - Dev Debug inbox module;
-- `scripts/audit-rendering-shapes.mjs`;
-- `scripts/extract-rendering-shape.mjs`;
+- `scripts/audit-rendering-shapes.mts`;
+- `scripts/extract-rendering-shape.mts`;
 - extraction core tests;
 - `testing/fixtures/rendering-shapes/README.md` when the first fixture lands.
 

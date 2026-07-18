@@ -1,6 +1,8 @@
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+
+import semanticPrefixFixture from '../../../../testing/fixtures/rendering-shapes/codex/exec/semantic-prefix.json'
+import semanticFinalFixture from '../../../../testing/fixtures/rendering-shapes/codex/exec/semantic-final.json'
+import committedFixture from '../../../../testing/fixtures/rendering-shapes/codex/exec/committed.json'
 
 import { renderCodexOperation } from '@providers/codex/renderer/rows/dispatch'
 import { renderCodexSemanticBlock } from '@providers/codex/renderer/semantic/dispatch'
@@ -12,16 +14,18 @@ type Route = 'specialized' | 'generic'
 type SemanticCase = { expectedRoute: Route; semanticBlock: SemanticLiveBlock }
 type CommittedCase = { expectedRoute: Route; toolUse: ToolUseBlock }
 
-function fixture<T>(name: string): { cases: T[] } {
-  return JSON.parse(readFileSync(join(
-    process.cwd(),
-    'testing',
-    'fixtures',
-    'rendering-shapes',
-    'codex',
-    'exec',
-    name,
-  ), 'utf8')) as { cases: T[] }
+const fixtures = {
+  'semantic-prefix.json': semanticPrefixFixture,
+  'semantic-final.json': semanticFinalFixture,
+  'committed.json': committedFixture,
+} as const
+
+function fixture<T>(name: keyof typeof fixtures): { cases: T[] } {
+  // WHY the fixtures are static imports: this is a renderer-project test and
+  // therefore runs in a browser-like environment. The former node:fs loader
+  // made Vitest fail before collecting the receipt assertions, so the test
+  // never guarded the catalog it claimed to pin.
+  return fixtures[name] as unknown as { cases: T[] }
 }
 
 const context = { committedToolResults: new Map() }

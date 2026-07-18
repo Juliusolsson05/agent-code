@@ -27,41 +27,63 @@ export const devDebugApi = {
   // control; recording is command-driven, not auto). start returns true
   // (recording), stop resolves false. isSessionRecording lets the command
   // label itself Start vs Stop for the focused pane.
-  startSessionRecording: (sessionId: string, provider?: string): Promise<boolean> =>
+  startSessionRecording: (
+    sessionId: string,
+    provider?: string,
+  ): Promise<{ recording: boolean; generation: string | null }> =>
     ipcRenderer.invoke('record-session:start', sessionId, provider),
   stopSessionRecording: (sessionId: string): Promise<boolean> =>
     ipcRenderer.invoke('record-session:stop', sessionId),
-  isSessionRecording: (sessionId: string): Promise<boolean> =>
+  isSessionRecording: (
+    sessionId: string,
+  ): Promise<{ recording: boolean; generation: string | null }> =>
     ipcRenderer.invoke('record-session:is-recording', sessionId),
 
   // Render-shape sighting sidecar (Phase 2/3, PR #555). append routes one
   // coalesced metadata-only batch into the live recording's __render_shape
   // line; read sweeps every on-disk recording for the Unknown Shape Inbox
   // (derived state — recordings ARE the database).
-  appendRenderShapeSightings: (sessionId: string, sightings: unknown[]): Promise<RenderShapeAppendResult> =>
-    ipcRenderer.invoke('render-shape:append', sessionId, sightings),
+  appendRenderShapeSightings: (
+    sessionId: string,
+    generation: string,
+    sightings: unknown[],
+  ): Promise<RenderShapeAppendResult> =>
+    ipcRenderer.invoke('render-shape:append', sessionId, generation, sightings),
   // Push channel: main announces a recorder STARTING for a session so the
   // shape observer can arm immediately. WHY push (PR #555, live-test
   // finding): under auto-record the recorder starts on the session's FIRST
   // event — for an idle restored pane that is whenever the user first
   // prompts it, unboundedly after Feed mount, so every renderer-side poll
   // schedule loses the race. Same subscribe shape as lsp:diagnostics.
-  onSessionRecordingStarted: (cb: (payload: { sessionId: string }) => void): (() => void) => {
-    const listener = (_evt: unknown, payload: { sessionId: string }): void => cb(payload)
+  onSessionRecordingStarted: (
+    cb: (payload: { sessionId: string; generation: string }) => void,
+  ): (() => void) => {
+    const listener = (
+      _evt: unknown,
+      payload: { sessionId: string; generation: string },
+    ): void => cb(payload)
     ipcRenderer.on('record-session:started', listener)
     return () => ipcRenderer.removeListener('record-session:started', listener)
   },
   // Natural provider exit is a two-step close: main keeps the recorder open
   // for a short grace window and asks the renderer to flush its coalesced
   // shape counters. The renderer acknowledges by calling finish below; main's
-  // timer remains the crash/reload fallback when no renderer can answer.
-  onSessionRecordingStopping: (cb: (payload: { sessionId: string }) => void): (() => void) => {
-    const listener = (_evt: unknown, payload: { sessionId: string }): void => cb(payload)
+  // timer remains the crash/reload fallback when no renderer can answer. The
+  // generation is opaque but load-bearing for reused sessionIds: when present,
+  // a generation-aware caller echoes the value it received and never looks up
+  // "the current" recording. It remains optional at this compatibility seam
+  // so a tokenless notification/consumer degrades to the safe timer instead of
+  // closing fresh state.
+  onSessionRecordingStopping: (
+    cb: (payload: { sessionId: string; generation?: string }) => void,
+  ): (() => void) => {
+    const listener = (_evt: unknown, payload: { sessionId: string; generation?: string }): void =>
+      cb(payload)
     ipcRenderer.on('record-session:stopping', listener)
     return () => ipcRenderer.removeListener('record-session:stopping', listener)
   },
-  finishSessionRecordingStop: (sessionId: string): Promise<void> =>
-    ipcRenderer.invoke('record-session:finish-stop', sessionId),
+  finishSessionRecordingStop: (sessionId: string, generation?: string): Promise<void> =>
+    ipcRenderer.invoke('record-session:finish-stop', sessionId, generation),
   readRenderShapeSightings: (): Promise<{
     sightings: unknown[]
     recordingsScanned: number

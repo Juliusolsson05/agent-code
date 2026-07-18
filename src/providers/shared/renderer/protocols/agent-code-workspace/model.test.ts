@@ -59,6 +59,15 @@ describe('Agent Code workspace protocol', () => {
       summary: 'Plans',
     })
     expect(fromAgentCodeWorkspaceResult({ ...result, content: '{"workspace":{}}' }, source)).toBeNull()
+    expect(fromAgentCodeWorkspaceResult({ ...result, is_error: true }, source)).toBeNull()
+    expect(fromAgentCodeWorkspaceResult({
+      ...result,
+      content: [{
+        type: 'text',
+        text: result.content as string,
+        annotations: { audience: ['assistant'] },
+      }] as never,
+    }, source)).toBeNull()
   })
 
   it('preserves the captured Codex transport envelope around workspace results', () => {

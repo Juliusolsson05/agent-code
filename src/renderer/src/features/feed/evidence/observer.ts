@@ -28,13 +28,12 @@ import { resolveRenderShapeDefinition } from '@providers/registry.renderShapes'
 //
 // StrictMode/concurrent caveat, accepted by contract: React may run a
 // render without committing it, so counters can over-count and an
-// uncommitted render's NOVEL shape can leave a sighting for a paint that
-// never hit the DOM. The dedup key makes duplicates merge (never new
-// sidecar lines), and sighting counts are documented as approximate —
-// evidence of existence and rough volume, not an exact meter. The
-// uncommitted-novel-shape case is tolerated because the shape WAS emitted
-// by the provider (the evidence is about wire structures, not committed
-// pixels); Phase 5 receipts move outcome fidelity to the commit phase.
+// uncommitted render's NOVEL shape can leave a sighting for a route that
+// never hit the DOM. The dedup key makes duplicates merge (never new sidecar
+// lines), and sighting counts are documented as approximate — evidence of
+// existence and rough volume, not an exact commit meter. Receipts name the
+// exact painter decision React evaluated; they deliberately do not claim a
+// browser-paint acknowledgement that this render-time observer cannot prove.
 //
 // BACKPRESSURE BY CONSTRUCTION (the renderer-freeze lesson — a diagnostic
 // must never become the performance bug):
@@ -59,13 +58,6 @@ const MAX_QUEUE = 256
  *  are dropped+counted — an unbounded key set is the same heap leak the
  *  queue cap exists to prevent, just slower. */
 const MAX_KEYS = 4096
-/**
- * Consecutive "no recorder" responses from main before the observer
- * auto-disarms. Main stops a recording on session:exit without telling the
- * renderer (review finding: an armed observer then leaked its key map
- * forever and merged stale counts into a reused session id). Three misses ≈
- * three flush windows of a recorder that is definitively gone.
- */
 /** Leave headroom below main's 1 MiB trust-boundary cap. JSON string length
  * is the boundary's current metric, so using the same metric here makes the
  * split deterministic without allocating a second byte buffer. */
@@ -92,6 +84,7 @@ type TrackedSighting = {
 }
 
 type SessionObserverState = {
+  generation: string
   keys: Map<string, TrackedSighting>
   /** Dedup keys, not snapshot objects. Counts continue changing while an IPC
    * is in flight; materializing only at send time prevents stale-count queue
@@ -106,8 +99,32 @@ type SessionObserverState = {
   failures: number
 }
 
-const sessions = new Map<string, SessionObserverState>()
+/**
+ * A recorder generation, not a session id, owns buffered evidence.
+ *
+ * WHY two indexes: stopping generation A may still be awaiting its final IPC
+ * acknowledgement after generation B has started for the same session. Keying
+ * state only by session id lets A's eventual cleanup delete B, while replacing
+ * A immediately loses the only state from which its final counts can flush.
+ * Keeping every live generation addressable and selecting one active generation
+ * for paint gives both lifecycles an independent, deterministic owner.
+ */
+const sessionsByGeneration = new Map<string, SessionObserverState>()
+const activeGenerations = new Map<string, string>()
 const retiredStats = { droppedQueue: 0, droppedKeys: 0, failures: 0 }
+
+function sessionGenerationKey(sessionId: string, generation: string): string {
+  return `${sessionId}\u0000${generation}`
+}
+
+function stateForGeneration(sessionId: string, generation: string): SessionObserverState | undefined {
+  return sessionsByGeneration.get(sessionGenerationKey(sessionId, generation))
+}
+
+function activeState(sessionId: string): SessionObserverState | undefined {
+  const generation = activeGenerations.get(sessionId)
+  return generation === undefined ? undefined : stateForGeneration(sessionId, generation)
+}
 
 /** Debug-panel visibility for swallowed problems (exit gate: failures are
  *  "swallowed, counted, surfaced"). Read-only aggregate snapshot. */
@@ -120,24 +137,28 @@ export function renderShapeObserverStats(): {
   let droppedQueue = retiredStats.droppedQueue
   let droppedKeys = retiredStats.droppedKeys
   let failures = retiredStats.failures
-  for (const s of sessions.values()) {
+  for (const s of sessionsByGeneration.values()) {
     droppedQueue += s.droppedQueue
     droppedKeys += s.droppedKeys
     failures += s.failures
   }
-  return { armedSessions: sessions.size, droppedQueue, droppedKeys, failures }
+  return { armedSessions: activeGenerations.size, droppedQueue, droppedKeys, failures }
 }
 
-export function isRenderShapeCaptureArmed(sessionId: string): boolean {
-  return sessions.has(sessionId)
+export function isRenderShapeCaptureArmed(sessionId: string, generation?: string): boolean {
+  return generation === undefined
+    ? activeState(sessionId) !== undefined
+    : stateForGeneration(sessionId, generation) !== undefined
 }
 
 /** Arm capture for one session. Idempotent. Called by the recording toggle
  *  command (capture rides session recording — plan §Step 1) and by the
  *  capture context's mount sync (which ARMS ONLY — see that file's WHY). */
-export function armRenderShapeCapture(sessionId: string): void {
-  if (sessions.has(sessionId)) return
-  sessions.set(sessionId, {
+export function armRenderShapeCapture(sessionId: string, generation: string): void {
+  if (!sessionId || !generation) return
+  const key = sessionGenerationKey(sessionId, generation)
+  if (!sessionsByGeneration.has(key)) sessionsByGeneration.set(key, {
+    generation,
     keys: new Map(),
     queue: [],
     queuedKeys: new Set(),
@@ -148,6 +169,10 @@ export function armRenderShapeCapture(sessionId: string): void {
     droppedKeys: 0,
     failures: 0,
   })
+  // A duplicate push/query for the same generation is intentionally
+  // idempotent. A different generation is a real recorder replacement and
+  // becomes paint's owner without destroying its predecessor's final flush.
+  activeGenerations.set(sessionId, generation)
 }
 
 /**
@@ -162,8 +187,8 @@ export function armRenderShapeCapture(sessionId: string): void {
  * — they go straight out in bounded chunks instead; the cap exists to bound
  * steady-state memory, not to lose the shutdown accounting.
  */
-export async function disarmRenderShapeCapture(sessionId: string): Promise<void> {
-  const state = sessions.get(sessionId)
+export async function disarmRenderShapeCapture(sessionId: string, generation: string): Promise<void> {
+  const state = stateForGeneration(sessionId, generation)
   if (!state) return
   if (state.timer) clearTimeout(state.timer)
   state.timer = null
@@ -193,7 +218,7 @@ export async function disarmRenderShapeCapture(sessionId: string): Promise<void>
   } finally {
     // Keep the state addressable until every bounded final attempt finishes.
     // Deleting it before awaiting IPC was the original shutdown data-loss bug.
-    retireSession(sessionId, state)
+    retireSession(sessionId, generation, state)
   }
 }
 
@@ -203,7 +228,7 @@ export async function disarmRenderShapeCapture(sessionId: string): Promise<void>
  * swallowed here so no call site needs its own guard.
  */
 export function observeRenderShape(input: ObserveRenderShapeInput): void {
-  const state = sessions.get(input.sessionId)
+  const state = activeState(input.sessionId)
   if (!state) return
   try {
     const { fingerprint, shapePaths, discriminatorValues } = fingerprintRenderShape({
@@ -297,7 +322,7 @@ function scheduleFlush(sessionId: string, state: SessionObserverState): void {
     state.timer ||
     state.stopping ||
     state.queue.length === 0 ||
-    sessions.get(sessionId) !== state
+    stateForGeneration(sessionId, state.generation) !== state
   ) return
   state.timer = setTimeout(() => {
     state.timer = null
@@ -392,6 +417,7 @@ async function transmitOne(
   try {
     const result: RenderShapeAppendResult = await window.api.appendRenderShapeSightings(
       sessionId,
+      state.generation,
       snapshots.map(snapshot => snapshot.sighting),
     )
     if (result.status === 'accepted') {
@@ -404,7 +430,9 @@ async function transmitOne(
       // says this session has no recorder, polling the same negative answer is
       // stale compatibility machinery, not recovery. Retire immediately; a
       // later real start push can arm a fresh observer with a fresh writer.
-      if (sessions.get(sessionId) === state) retireSession(sessionId, state)
+      if (stateForGeneration(sessionId, state.generation) === state) {
+        retireSession(sessionId, state.generation, state)
+      }
       return
     }
     if ((result.reason === 'too-many' || result.reason === 'too-large') && snapshots.length > 1) {
@@ -448,9 +476,13 @@ function removeQueued(state: SessionObserverState, keys: readonly string[]): voi
   for (const key of removed) state.queuedKeys.delete(key)
 }
 
-function retireSession(sessionId: string, state: SessionObserverState): void {
-  if (sessions.get(sessionId) !== state) return
-  sessions.delete(sessionId)
+function retireSession(sessionId: string, generation: string, state: SessionObserverState): void {
+  const key = sessionGenerationKey(sessionId, generation)
+  if (sessionsByGeneration.get(key) !== state) return
+  sessionsByGeneration.delete(key)
+  // Generation A's delayed stop must never disarm replacement B. Only the
+  // active generation is allowed to clear the session's paint-time selector.
+  if (activeGenerations.get(sessionId) === generation) activeGenerations.delete(sessionId)
   retiredStats.droppedQueue += state.droppedQueue
   retiredStats.droppedKeys += state.droppedKeys
   retiredStats.failures += state.failures

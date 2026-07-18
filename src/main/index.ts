@@ -110,18 +110,20 @@ const sessionRecorders = isSessionRecordingEnabled()
       undefined,
       undefined,
       isSessionRecordingAutoStart(),
-      sessionId =>
+      (sessionId, generation) =>
         // Push "recording started" to the renderer so the shape observer arms
         // the moment a recorder exists (PR #555). Polling from the renderer
         // provably loses the auto-record race: the recorder starts on a
         // session's FIRST event, which for an idle restored pane is whenever
         // the user first prompts it — unboundedly after Feed mount.
-        sendToMainWindow('record-session:started', { sessionId }),
-      sessionId =>
+        sendToMainWindow('record-session:started', { sessionId, generation }),
+      (sessionId, generation) =>
         // Natural exit keeps the recorder writable until the renderer has
         // flushed its coalesced shape evidence (or the manager's grace timer
-        // expires). This channel is deliberately outside recorded session data.
-        sendToMainWindow('record-session:stopping', { sessionId }),
+        // expires). The opaque generation is load-bearing: sessionId is reusable,
+        // so an acknowledgement without it cannot prove which recorder should
+        // close. This channel is deliberately outside recorded session data.
+        sendToMainWindow('record-session:stopping', { sessionId, generation }),
     )
   : null
 if (sessionRecorders) setOutboundObserver(sessionRecorders.observe)

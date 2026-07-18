@@ -7,6 +7,7 @@ import type {
 
 import type { AgentProvider } from '@renderer/features/feed/types'
 import type { ProviderTaskNotification } from '@shared/types/providerConfig'
+import type { ProviderOperationDecision } from '@shared/types/providerConfig'
 import type { SubAgentState } from '@renderer/session-runtime/state'
 import type { ClaudeAskUserQuestionState } from '@shared/types/providerConditions'
 
@@ -66,6 +67,52 @@ export const ToolUseIndexContext = createContext<Map<string, ToolUseBlock>>(new 
 // with the real output.
 export const ToolResultIndexContext =
   createContext<Map<string, ToolResultBlock>>(new Map())
+
+export type CommittedOperationDecisionResolver = (
+  toolUse: ToolUseBlock,
+  result: ToolResultBlock | null,
+) => ProviderOperationDecision
+
+/** Build one cache for a provider's committed operation decisions.
+ *
+ * WHY the cache belongs beside the pair indices: a committed invocation and
+ * its result render in different EntryRow subtrees, but provider adapters
+ * decide the correlated pair together. Dispatching independently in both
+ * rows repeated every parser/adapter and could even produce two React node
+ * trees for one pair.
+ *
+ * The exact object pair is the invalidation key. Runtime transcript blocks are
+ * immutable once admitted, while a later result arrives as a new object. That
+ * means an unrelated index append must NOT discard decisions for every older
+ * pair, and a result arrival still MUST recompute the one affected tool use.
+ * Keeping this distinction here prevents large owned-result parsers from
+ * becoming an ever-growing tax on otherwise unrelated feed traffic.
+ */
+export function createCommittedOperationDecisionResolver(
+  renderOperation: (input: {
+    toolUse: ToolUseBlock
+    result: ToolResultBlock | null
+    live: false
+    streaming: false
+  }) => ProviderOperationDecision,
+): CommittedOperationDecisionResolver {
+  const decisions = new WeakMap<
+    ToolUseBlock,
+    { result: ToolResultBlock | null; decision: ProviderOperationDecision }
+  >()
+  return (toolUse, result) => {
+    const cached = decisions.get(toolUse)
+    if (cached?.result === result) return cached.decision
+    const decision = renderOperation({ toolUse, result, live: false, streaming: false })
+    decisions.set(toolUse, { result, decision })
+    return decision
+  }
+}
+
+// Null keeps standalone row tests honest: without Feed's provider-owned cache
+// owner, Block dispatches directly instead of sharing process-global state.
+export const CommittedOperationDecisionContext =
+  createContext<CommittedOperationDecisionResolver | null>(null)
 
 export const CodeRenderContext = createContext<{
   sessionId: string

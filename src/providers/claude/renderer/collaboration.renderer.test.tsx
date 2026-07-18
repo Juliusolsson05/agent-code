@@ -67,8 +67,9 @@ describe('Claude provider-owned Agent collaboration card', () => {
     fireEvent.click(button)
     expect(button).toHaveAttribute('aria-expanded', 'true')
     expect(
-      within(screen.getByRole('region', { name: 'Agent prompt' })).getByTestId('text-prose')
-        .textContent,
+      within(screen.getByRole('region', { name: 'Agent prompt' })).getByText(
+        agentFixture.toolUse.input.prompt,
+      ).textContent,
     ).toBe(agentFixture.toolUse.input.prompt)
     expect(
       within(screen.getByRole('region', { name: 'Agent final report' })).getByTestId('text-prose')

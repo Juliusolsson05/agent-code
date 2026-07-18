@@ -96,12 +96,53 @@ describe('unknown-shape report derivation (Phase 3)', () => {
     })
   })
 
-  it('malformed sidecar lines are counted, never thrown, never rows', () => {
+  it('separates rejected v1 evidence from malformed v2/current records', () => {
     const report = buildUnknownShapeReport(
-      [null, 42, { schemaVersion: 3 }, { schemaVersion: 1 }, sighting({})],
+      [
+        null,
+        42,
+        { schemaVersion: 3 },
+        { schemaVersion: 1 },
+        sighting({ outcome: { kind: 'future-route' } as never }),
+        sighting({}),
+      ],
       index,
     )
-    expect(report.invalidSightings).toBe(4)
+    expect(report.invalidSightings).toBe(5)
+    expect(report.legacySightings).toBe(1)
+    expect(report.malformedSightings).toBe(4)
     expect(report.rows).toHaveLength(1)
+  })
+
+  it('rejects renamed provider, plane, and lifecycle vocabulary as schema drift', () => {
+    const report = buildUnknownShapeReport(
+      [
+        sighting({ provider: 'claude-next' as never }),
+        sighting({ sourcePlane: 'semantic-v2' as never }),
+        sighting({ lifecycle: 'finished' as never }),
+      ],
+      index,
+    )
+    // These are malformed writer contracts, not unsupported catalog routes.
+    // Treating a renamed lifecycle as ordinary coverage debt would hide the
+    // observer/reader version skew this trust boundary is meant to expose.
+    expect(report.malformedSightings).toBe(3)
+    expect(report.rows).toHaveLength(0)
+  })
+
+  it('rejects sibling fields outside the selected outcome union arm', () => {
+    const report = buildUnknownShapeReport(
+      [sighting({
+        outcome: {
+          kind: 'generic',
+          rendererId: 'shared.generic-tool',
+          shapeId: null,
+          protocolId: 'renamed-wire-field',
+        } as never,
+      })],
+      index,
+    )
+    expect(report.malformedSightings).toBe(1)
+    expect(report.rows).toHaveLength(0)
   })
 })

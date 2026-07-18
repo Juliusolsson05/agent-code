@@ -34,7 +34,19 @@ export const GenericLiveResult = memo(function GenericLiveResult({
     const json = tryExtractJson(source)
     const mcp = parseMcpContentResult(source, { allowDirectArray: allowDirectMcpArray })
     const ownsMcp = mcp !== null && (
-      isMcpContentCarrier(json) || (allowDirectMcpArray && Array.isArray(json))
+      isMcpContentCarrier(json) ||
+      (allowDirectMcpArray && Array.isArray(json)) ||
+      // WHY raw MCP ownership is only a recovery path after generic parsing
+      // declines: tryExtractJson deliberately peels a small transparent
+      // `{content:[{type:"text",text:"{...}"}]}` carrier so the domain JSON
+      // remains the visible owner. Consulting `mcp.raw` unconditionally stole
+      // those small results back into the protocol chrome. Above 256 KiB the
+      // generic parser declines before allocating; the independently bounded
+      // 1 MiB MCP parser may then prove the raw carrier without requiring a
+      // second generic parse of the same large source.
+      json === null && (
+        isMcpContentCarrier(mcp.raw) || (allowDirectMcpArray && Array.isArray(mcp.raw))
+      )
     )
     return {
       json: !ownsMcp && json !== null && typeof json === 'object' ? json : null,

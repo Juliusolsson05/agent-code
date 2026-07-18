@@ -8,6 +8,7 @@ import type {
 } from '@shared/types/transcript'
 import {
   ProviderContext,
+  CommittedOperationDecisionContext,
   ToolResultIndexContext,
   ToolUseIndexContext,
 } from '@renderer/features/feed/context'
@@ -29,6 +30,10 @@ import {
   specializedOutcome,
   unknownOutcome,
 } from '@renderer/features/feed/evidence/outcome'
+import {
+  committedBlockObservationDisposition,
+  CONTENT_BLOCK_DRIFT_FALLBACK_RENDER_ID,
+} from '@renderer/rendering/evidence/observationScope'
 
 /* ---------- Block dispatcher ---------- */
 
@@ -87,7 +92,9 @@ export const Block = memo(function Block({
   const currentProvider = useContext(ProviderContext)
   const toolUseIndex = useContext(ToolUseIndexContext)
   const toolResultIndex = useContext(ToolResultIndexContext)
+  const committedOperationDecision = useContext(CommittedOperationDecisionContext)
   const capture = useRenderShapeCapture()
+  const observationDisposition = committedBlockObservationDisposition(block)
   // Shape sighting at the exact paint-decision point (Phase 2, PR #555).
   // A module-state side effect during render, on purpose: it never touches
   // React state (no re-render), it is inert unless capture is armed (one
@@ -96,6 +103,11 @@ export const Block = memo(function Block({
   // are durable transcript evidence, hence lifecycle 'durable'.
   const sight = (plane: RenderShapePlane, payload: unknown, outcome: RenderOutcomeRoute): void => {
     if (!capture) return
+    // Only exact normalized content envelopes are excluded. The shared
+    // payload-aware predicate deliberately lets known-label drift through;
+    // otherwise a future sibling field or image source kind would be painted
+    // by this switch while remaining invisible to the evidence inbox.
+    if (observationDisposition === 'content-native') return
     observeRenderShape({
       sessionId: capture.sessionId,
       provider: capture.provider,
@@ -105,6 +117,17 @@ export const Block = memo(function Block({
       payload,
       outcome,
     })
+  }
+  if (observationDisposition === 'content-drift') {
+    // WHY `unknown`, not `generic`: the known leaf below still paints the
+    // fields it understands; JsonToolRow does not own conversation content.
+    // The unknown receipt honestly says that no reviewed renderer owns the
+    // novel envelope while preserving the best-effort text/thinking/image UI.
+    sight(
+      'transcript-entry',
+      block,
+      unknownOutcome(CONTENT_BLOCK_DRIFT_FALLBACK_RENDER_ID),
+    )
   }
   switch (block.type) {
     case 'text': {
@@ -161,12 +184,15 @@ export const Block = memo(function Block({
       // evidence deliberately fall through to the bounded generic card.
       const tu = block as ToolUseBlock
 
-      const decision = getRendererProviderCapabilities(currentProvider).renderOperation({
-        toolUse: tu,
-        result: toolResultIndex.get(tu.id) ?? null,
-        live: false,
-        streaming: false,
-      })
+      const result = toolResultIndex.get(tu.id) ?? null
+      const decision = committedOperationDecision
+        ? committedOperationDecision(tu, result)
+        : getRendererProviderCapabilities(currentProvider).renderOperation({
+            toolUse: tu,
+            result,
+            live: false,
+            streaming: false,
+          })
       const route = decision.toolUse
       sight(
         'committed-tool-use',
@@ -197,12 +223,14 @@ export const Block = memo(function Block({
         sight('committed-tool-result', tr, GENERIC_OUTCOME)
         return <ToolResultRow block={tr} sourceTool={sourceTool} />
       }
-      const decision = getRendererProviderCapabilities(currentProvider).renderOperation({
-        toolUse: sourceTool,
-        result: tr,
-        live: false,
-        streaming: false,
-      })
+      const decision = committedOperationDecision
+        ? committedOperationDecision(sourceTool, tr)
+        : getRendererProviderCapabilities(currentProvider).renderOperation({
+            toolUse: sourceTool,
+            result: tr,
+            live: false,
+            streaming: false,
+          })
       const route = decision.toolResult
       sight(
         'committed-tool-result',

@@ -14,5 +14,17 @@ describe('toolResultContentText', () => {
 
   it('keeps unknown structured blocks inspectable instead of erasing them', () => {
     expect(toolResultContentText([{ type: 'future_block', value: 3 }] as never)).toContain('future_block')
+    expect(toolResultContentText([{
+      type: 'text',
+      text: 'answer',
+      annotations: { audience: ['assistant'] },
+    }] as never)).toContain('annotations')
+    const projectedImage = toolResultContentText([{
+      type: 'image',
+      mimeType: 'image/png',
+      data: 'x'.repeat(1_000_000),
+    }] as never)
+    expect(projectedImage).toContain('image/png')
+    expect(projectedImage.length).toBeLessThan(20_000)
   })
 })

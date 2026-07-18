@@ -22,23 +22,48 @@
 // Run: npx tsx --tsconfig tsconfig.web.json scripts/extract-rendering-shape.mts \
 //        <fingerprint> [--recordings <dir>] [--window 8]
 
-import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import {
+  closeSync,
+  mkdirSync,
+  openSync,
+  readSync,
+  readdirSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import type { RecordingEvent } from '../src/renderer/src/rendering/replay/redact.ts'
 
 const args = process.argv.slice(2)
+const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url))
 const fingerprint = args[0]
 if (!fingerprint || !/^fp2-[0-9a-f]{8}$/.test(fingerprint)) {
-  console.error('usage: extract-rendering-shape.mts <fp2-xxxxxxxx> [--recordings <dir>] [--window 8]')
+  console.error(
+    'usage: extract-rendering-shape.mts <fp2-xxxxxxxx> [--recordings <dir>] [--window 8]',
+  )
   process.exit(2)
 }
 function flag(name: string, fallback: string): string {
   const i = args.indexOf(name)
-  return i >= 0 && args[i + 1] ? args[i + 1] : fallback
+  if (i < 0) return fallback
+  const value = args[i + 1]
+  // Treat another option as a missing value. The previous helper swallowed
+  // `--window` as the recordings directory in `--recordings --window 8`, then
+  // failed later with a misleading ENOENT (and interpreted 8 as no option at
+  // all). Fail at the argument boundary where the operator can fix the call.
+  if (!value || value.startsWith('--')) {
+    console.error(`${name} requires a value`)
+    process.exit(2)
+  }
+  return value
 }
-const RECORDINGS_DIR = flag('--recordings', join(homedir(), '.config', 'agent-code', 'session-recordings'))
+const RECORDINGS_DIR = resolve(
+  process.cwd(),
+  flag('--recordings', join(homedir(), '.config', 'agent-code', 'session-recordings')),
+)
 const WINDOW = Number(flag('--window', '8'))
 if (!Number.isInteger(WINDOW) || WINDOW < 0 || WINDOW > 100) {
   console.error('--window must be an integer from 0 through 100')
@@ -55,39 +80,136 @@ type Draft = {
 }
 
 const drafts: Draft[] = []
-let provider = 'unknown'
+let provider: string | null = null
 const PROVIDERS = new Set(['claude', 'codex', 'opencode', 'unknown'])
 const MAX_RECORDINGS = 200
 const MAX_RECORDING_BYTES = 64 * 1024 * 1024
+const MAX_LINE_BYTES = 4 * 1024 * 1024
 const MAX_DRAFTS_SCANNED = 20
+let malformedRecords = 0
 
-for (const dir of readdirSync(RECORDINGS_DIR, { withFileTypes: true }).filter(e => e.isDirectory()).slice(0, MAX_RECORDINGS)) {
-  if (drafts.length >= MAX_DRAFTS_SCANNED) break
-  let lines: string[]
+function readBoundedRecordingLines(eventPath: string): Buffer[] {
+  const fileBytes = statSync(eventPath).size
+  const admittedBytes = Math.min(fileBytes, MAX_RECORDING_BYTES)
+  if (admittedBytes === 0) return []
+
+  // WHY an explicit bounded read instead of readFileSync-after-stat: a live
+  // recording can grow after stat, and readFileSync would then allocate/read
+  // beyond the same 64 MiB contract used by the inbox and audit. The extractor
+  // needs source-event windows, so it materializes the admitted prefix, but it
+  // must never admit more bytes than those other two evidence consumers.
+  const fd = openSync(eventPath, 'r')
+  const buffer = Buffer.allocUnsafe(admittedBytes)
+  let offset = 0
   try {
-    const eventPath = join(RECORDINGS_DIR, dir.name, 'events.jsonl')
-    if (statSync(eventPath).size > MAX_RECORDING_BYTES) continue
-    lines = readFileSync(eventPath, 'utf-8').split('\n')
+    while (offset < admittedBytes) {
+      const read = readSync(fd, buffer, offset, admittedBytes - offset, offset)
+      if (read === 0) break
+      offset += read
+    }
+  } finally {
+    closeSync(fd)
+  }
+
+  const admitted = buffer.subarray(0, offset)
+  const lines: Buffer[] = []
+  let start = 0
+  while (start < admitted.length) {
+    const newline = admitted.indexOf(0x0a, start)
+    if (newline === -1) break
+    const raw = admitted.subarray(start, newline)
+    const framed = raw.length > 0 && raw[raw.length - 1] === 0x0d
+      ? raw.subarray(0, raw.length - 1)
+      : raw
+    // Count the CR framing byte exactly as the inbox and audit splitters do.
+    // Stripping it before applying the policy made a CRLF record with exactly
+    // 4 MiB of JSON bytes extractor-visible but invisible to the other two
+    // consumers. Newline framing is excluded everywhere; the optional CR is
+    // retained for the byte admission decision and removed only before parse.
+    if (raw.length <= MAX_LINE_BYTES) lines.push(framed)
+    else malformedRecords += 1
+    start = newline + 1
+  }
+  // A complete, uncapped file may legally omit its final newline. A capped
+  // prefix may not: decoding that tail could accept split UTF-8 or a
+  // coincidentally complete JSON prefix that was never a committed record.
+  if (fileBytes <= offset && start < admitted.length) {
+    const tail = admitted.subarray(start)
+    if (tail.length <= MAX_LINE_BYTES) lines.push(tail)
+    else malformedRecords += 1
+  }
+  return lines
+}
+
+let recordingDirs: string[]
+try {
+  recordingDirs = readdirSync(RECORDINGS_DIR, { withFileTypes: true })
+    .filter(entry => entry.isDirectory())
+    .map(entry => entry.name)
+    // Match the audit and inbox: recording IDs begin with an ISO timestamp,
+    // so lexical newest-first ordering gives deterministic bounded selection
+    // and prioritizes the drift the developer just observed.
+    .sort()
+    .reverse()
+    .slice(0, MAX_RECORDINGS)
+} catch {
+  console.error(`no recordings directory at ${RECORDINGS_DIR}`)
+  process.exit(1)
+}
+
+for (const dir of recordingDirs) {
+  if (drafts.length >= MAX_DRAFTS_SCANNED) break
+  let lines: Buffer[]
+  try {
+    const eventPath = join(RECORDINGS_DIR, dir, 'events.jsonl')
+    lines = readBoundedRecordingLines(eventPath)
   } catch {
     continue
   }
-  const parsed: (RecordingEvent | null)[] = lines.map(l => {
+  const parsed: (RecordingEvent | null)[] = lines.map(line => {
     try {
-      return l ? (JSON.parse(l) as RecordingEvent) : null
+      if (line.length === 0) return null
+      const value = JSON.parse(line.toString('utf8')) as unknown
+      if (
+        typeof value !== 'object' ||
+        value === null ||
+        Array.isArray(value) ||
+        typeof (value as { t?: unknown }).t !== 'number' ||
+        !Number.isFinite((value as { t: number }).t) ||
+        typeof (value as { wall?: unknown }).wall !== 'number' ||
+        !Number.isFinite((value as { wall: number }).wall) ||
+        typeof (value as { ch?: unknown }).ch !== 'string'
+      ) {
+        malformedRecords += 1
+        return null
+      }
+      return value as RecordingEvent
     } catch {
+      malformedRecords += 1
       return null // torn tail tolerated, same as replay
     }
   })
   parsed.forEach((line, i) => {
     if (drafts.length >= MAX_DRAFTS_SCANNED) return
     if (!line || line.ch !== '__render_shape') return
-    const sightings = (line as { sightings?: unknown[] }).sightings ?? []
+    const sightings = (line as unknown as { sightings?: unknown }).sightings
+    if (!Array.isArray(sightings)) {
+      malformedRecords += 1
+      return
+    }
     for (const s of sightings) {
       if (drafts.length >= MAX_DRAFTS_SCANNED) break
-      const sighting = s as { structuralFingerprint?: string; provider?: string }
+      if (typeof s !== 'object' || s === null || Array.isArray(s)) {
+        malformedRecords += 1
+        continue
+      }
+      const sighting = s as {
+        structuralFingerprint?: string
+        provider?: string
+      }
       if (sighting.structuralFingerprint !== fingerprint) continue
       if (!sighting.provider || !PROVIDERS.has(sighting.provider)) continue
-      if (provider !== 'unknown' && provider !== sighting.provider) continue
+      if (provider !== null && provider !== sighting.provider) continue
       provider = sighting.provider
       // ±window of REAL channel events around the sidecar line. The sidecar
       // is appended within one flush interval of the paint, so its position
@@ -103,7 +225,7 @@ for (const dir of readdirSync(RECORDINGS_DIR, { withFileTypes: true }).filter(e 
         if (e && !e.ch.startsWith('__')) realAfter.push(e)
       }
       drafts.push({
-        recordingId: dir.name,
+        recordingId: dir,
         sighting: s,
         window: [...realBefore, ...realAfter],
       })
@@ -116,7 +238,10 @@ if (drafts.length === 0) {
   process.exit(1)
 }
 
-const outDir = join(process.cwd(), 'testing', 'fixtures', 'rendering-shapes', provider, fingerprint)
+if (malformedRecords > 0) {
+  console.error(`ignored ${malformedRecords} malformed/torn recording records while extracting`)
+}
+const outDir = join(REPO_ROOT, 'testing', 'fixtures', 'rendering-shapes', provider!, fingerprint)
 mkdirSync(outDir, { recursive: true })
 writeFileSync(
   join(outDir, 'draft.json'),
@@ -125,7 +250,7 @@ writeFileSync(
       v: 1,
       kind: 'render-shape-draft',
       fingerprint,
-      provider,
+      provider: provider!,
       redaction: 'none',
       extractedAt: new Date().toISOString(),
       drafts: drafts.slice(0, 5), // a handful of windows is plenty for curation
@@ -134,5 +259,9 @@ writeFileSync(
     1,
   ),
 )
-console.log(`wrote ${join(outDir, 'draft.json')} (${drafts.length} sighting(s), ${Math.min(drafts.length, 5)} kept)`)
-console.log('next: curate into final.json/prefixes.json/expected.json and land a catalog entry (reviewed change).')
+console.log(
+  `wrote ${join(outDir, 'draft.json')} (${drafts.length} sighting(s), ${Math.min(drafts.length, 5)} kept)`,
+)
+console.log(
+  'next: curate into final.json/prefixes.json/expected.json and land a catalog entry (reviewed change).',
+)

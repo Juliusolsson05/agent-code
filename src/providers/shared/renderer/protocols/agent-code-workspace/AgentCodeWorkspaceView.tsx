@@ -1,4 +1,4 @@
-import { useContext, useState } from 'react'
+import { useContext, useMemo, useState } from 'react'
 
 import { ToolResultIndexContext } from '@renderer/features/feed/context'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
@@ -34,12 +34,23 @@ function ExactSourceDisclosure({ source, isError }: { source: string; isError: b
 export function AgentCodeWorkspaceView({ model }: { model: AgentCodeWorkspaceModel }) {
   const [open, setOpen] = useState(false)
   const resultBlock = useContext(ToolResultIndexContext).get(model.operationId) ?? null
-  const result = resultBlock ? fromAgentCodeWorkspaceResult(resultBlock, model) : null
+  // Context identity changes whenever any paired result changes, and provider
+  // dispatch may allocate a fresh but equivalent model while reconciling that
+  // update. Parsing up to the owned protocol ceiling for every unrelated append
+  // would make one large response tax every future feed event. Workspace result
+  // ownership uses only operationId from the model, so the exact result object
+  // and that scalar are the complete semantic cache key.
+  const result = useMemo(
+    () => resultBlock ? fromAgentCodeWorkspaceResult(resultBlock, model) : null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- see identity proof above.
+    [model.operationId, resultBlock],
+  )
   const failed = resultBlock?.is_error === true || result?.ok === false
-  const marker = result ? (failed ? '✗' : '✓') : resultBlock ? '◌' : '◐'
-  const status = result
-    ? failed ? 'failed' : 'done'
-    : resultBlock ? 'unrecognized response' : 'running'
+  const marker = failed ? '✗' : result ? '✓' : resultBlock ? '◌' : '◐'
+  const status = failed
+    ? 'failed'
+    : result ? 'done'
+      : resultBlock ? 'unrecognized response' : 'running'
 
   return (
     <MarkerRow marker={marker}>

@@ -1,8 +1,8 @@
 import { memo, useMemo, useState } from 'react'
 
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
-import { TextProse } from '@renderer/features/feed/ui/markdown'
 import { boundedTextPage } from '@renderer/lib/text/boundedText'
+import { LazyTextProse } from '@providers/shared/renderer/components/lazy-prose'
 import type { CompactionRenderModel } from './model'
 import { compactionSummaryPreview } from './model'
 
@@ -56,7 +56,11 @@ const CompactionSummaryView = memo(function CompactionSummaryView({ text }: { te
         ) : null}
       </div>
       <div className="px-4 py-3">
-        <TextProse text={visibleText} />
+        {/* The provider capability registry is also imported by DOM-free replay and evidence code.
+            Keep the Markdown/CodeBlock/theme graph behind the same browser boundary as every other
+            provider-authored prose view; a summary being immediately visible does not justify
+            eagerly loading browser modules into headless consumers. */}
+        <LazyTextProse text={visibleText} />
       </div>
     </div>
   )

@@ -324,7 +324,7 @@ export function buildSemanticRenderUnits(
     const activity = classifySemanticToolActivity(block)
     // AskUserQuestion must NEVER fold into a collapsed_activity run — it
     // is a live, blocking picker the user has to act on, not low-signal
-    // read/search/bash churn. classifySemanticToolActivity already
+    // read/search/list churn. classifySemanticToolActivity already
     // returns collapsible:false for it (it isn't Read/Grep/Glob/Bash), so
     // this is belt-and-suspenders: if a future tweak to that classifier
     // ever marks it collapsible, this guard keeps the picker rendering as
@@ -351,7 +351,6 @@ export function buildSemanticRenderUnits(
         searchCount: 0,
         readCount: 0,
         listCount: 0,
-        bashCount: 0,
         latestHint: null,
         blockIndices: [],
         isRunning: false,
@@ -366,7 +365,6 @@ export function buildSemanticRenderUnits(
     if (activity.category === 'search') pending.searchCount += 1
     else if (activity.category === 'read') pending.readCount += 1
     else if (activity.category === 'list') pending.listCount += 1
-    else if (activity.category === 'bash') pending.bashCount += 1
   }
 
   flush()
@@ -428,7 +426,6 @@ export function groupSemanticActivity(
         searchCount: 0,
         readCount: 0,
         listCount: 0,
-        bashCount: 0,
         latestHint: null,
         blockIndices: [],
         isRunning: false,
@@ -441,7 +438,6 @@ export function groupSemanticActivity(
     if (activity.category === 'search') pending.searchCount += 1
     else if (activity.category === 'read') pending.readCount += 1
     else if (activity.category === 'list') pending.listCount += 1
-    else if (activity.category === 'bash') pending.bashCount += 1
   }
   flush()
   return units

@@ -58,4 +58,19 @@ describe('Claude task activity adapter', () => {
     expect(fromClaudeTaskActivityResult(result, model)?.text).toContain('created successfully')
     expect(fromClaudeTaskActivityResult({ ...result, content: 'maybe created' }, model)).toBeNull()
   })
+
+  it('bounds inline task scalars while retaining the paged wake prompt', () => {
+    const prompt = 'p'.repeat(30_000)
+    const model = fromClaudeTaskActivityUse({
+      type: 'tool_use', id: 'wake', name: 'ScheduleWakeup', input: {
+        delaySeconds: 1,
+        reason: 'r'.repeat(2_000),
+        prompt,
+      },
+    })!
+    expect(model.kind).toBe('schedule')
+    if (model.kind !== 'schedule') throw new Error('expected schedule model')
+    expect(model.reason.length).toBe(1_000)
+    expect(model.prompt).toBe(prompt)
+  })
 })

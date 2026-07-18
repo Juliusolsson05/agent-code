@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 
 import {
   fingerprintRenderShape,
+  MAX_ARRAY_ITEMS_SCANNED,
+  MAX_OBJECT_KEYS_SCANNED,
   MAX_SHAPE_DEPTH,
   MAX_SHAPE_PATHS,
   MAX_VISITED_NODES,
@@ -248,6 +250,63 @@ describe('structural fingerprint — structural identity boundaries', () => {
     expect(fingerprintRenderShape({ ...base, payload: wide }).fingerprint).toBe(out.fingerprint)
   })
 
+  it('safety-cap markers do not mint a second fingerprint identity', () => {
+    const atPathBudget: Record<string, number> = {}
+    // The root object itself consumes one path, so 511 leaves fill the 512
+    // evidence-path budget exactly without tripping the marker.
+    for (let i = 0; i < MAX_SHAPE_PATHS - 1; i++) {
+      atPathBudget[`k${String(i).padStart(6, '0')}`] = i
+    }
+    const beyondPathBudget = { ...atPathBudget, k999999: 1 }
+    const exact = fingerprintRenderShape({ ...base, payload: atPathBudget })
+    const clipped = fingerprintRenderShape({ ...base, payload: beyondPathBudget })
+    expect(exact.shapePaths).not.toContain('<truncated-paths>')
+    expect(clipped.shapePaths).toContain('<truncated-paths>')
+    expect(clipped.fingerprint).toBe(exact.fingerprint)
+
+    const admittedArray = Array.from({ length: MAX_ARRAY_ITEMS_SCANNED }, () => ({ value: 1 }))
+    const justBelowArray = admittedArray.slice(0, -1)
+    const cappedArray = [...admittedArray, { value: 2 }]
+    const justBelow = fingerprintRenderShape({ ...base, payload: { items: justBelowArray } })
+    const admitted = fingerprintRenderShape({ ...base, payload: { items: admittedArray } })
+    const capped = fingerprintRenderShape({ ...base, payload: { items: cappedArray } })
+    expect(capped.shapePaths).toContain('<truncated-paths>')
+    expect(admitted.fingerprint).toBe(justBelow.fingerprint)
+    expect(capped.fingerprint).toBe(admitted.fingerprint)
+
+    // Root object + array consume two visits; each repeated element below
+    // consumes four. 999 elements stay just under the 4,000-node budget and
+    // the thousandth trips it without introducing any new merged path.
+    const repeated = () => ({ a: { b: { c: 1 } } })
+    const underNodeBudget = Array.from({ length: Math.floor((MAX_VISITED_NODES - 2) / 4) }, repeated)
+    const overNodeBudget = [...underNodeBudget, repeated()]
+    const underNodes = fingerprintRenderShape({ ...base, payload: { items: underNodeBudget } })
+    const overNodes = fingerprintRenderShape({ ...base, payload: { items: overNodeBudget } })
+    expect(underNodes.shapePaths).not.toContain('<truncated-paths>')
+    expect(overNodes.shapePaths).toContain('<truncated-paths>')
+    expect(overNodes.fingerprint).toBe(underNodes.fingerprint)
+  })
+
+  it('non-structural sensitive keys use <dyn> in identity without merging stable schema keys', () => {
+    const dynamicA = fingerprintRenderShape({
+      ...base,
+      payload: { headers: { '/tenant/a/secret-token': { value: 'secret' } } },
+    })
+    const dynamicB = fingerprintRenderShape({
+      ...base,
+      payload: { headers: { '/tenant/b/secret-token': { value: 'other secret' } } },
+    })
+    // Literal names remain useful in local developer evidence, but changing
+    // only an open-world sensitive map key cannot churn checked-in catalog ids.
+    expect(dynamicA.shapePaths).toContain('headers./tenant/a/secret-token:object')
+    expect(dynamicB.shapePaths).toContain('headers./tenant/b/secret-token:object')
+    expect(dynamicA.fingerprint).toBe(dynamicB.fingerprint)
+
+    const authorization = fingerprintRenderShape({ ...base, payload: { authorization: 'x' } })
+    const apiKey = fingerprintRenderShape({ ...base, payload: { api_key: 'x' } })
+    expect(authorization.fingerprint).not.toBe(apiKey.fingerprint)
+  })
+
   it('nested `name` is NOT a discriminator (MCP inputs put user values there)', () => {
     const a = fingerprintRenderShape({
       ...base,
@@ -258,6 +317,28 @@ describe('structural fingerprint — structural identity boundaries', () => {
       payload: { input: { name: 'beta' } },
     })
     expect(a.fingerprint).toBe(b.fingerprint)
+  })
+
+  it('token-shaped secrets in nested discriminator-named fields stay out of identity', () => {
+    const hunter = fingerprintRenderShape({
+      ...base,
+      payload: { input: { type: 'hunter2' } },
+    })
+    const different = fingerprintRenderShape({
+      ...base,
+      payload: { input: { type: 'differentsecret' } },
+    })
+    expect(hunter.fingerprint).toBe(different.fingerprint)
+    expect(JSON.stringify(hunter)).not.toContain('hunter2')
+
+    // Reviewed provider enums still carry the structural split the renderer
+    // actually branches on; only open-world token-shaped values are excluded.
+    const text = fingerprintRenderShape({ ...base, payload: { content: [{ type: 'text' }] } })
+    const toolUse = fingerprintRenderShape({
+      ...base,
+      payload: { content: [{ type: 'tool_use' }] },
+    })
+    expect(text.fingerprint).not.toBe(toolUse.fingerprint)
   })
 })
 
@@ -289,6 +370,66 @@ describe('structural fingerprint — hostile/degenerate inputs never throw', () 
     expect(a.fingerprint).toBe(b.fingerprint)
     expect(a.shapePaths.length).toBeLessThanOrEqual(MAX_SHAPE_PATHS + 1) // +1 truncation marker
     expect(a.shapePaths[a.shapePaths.length - 1]).toBe('<truncated-paths>')
+  })
+
+  it('wide-object identity is independent of insertion order at the local admission cap', () => {
+    const ascending: Record<string, unknown> = {}
+    const descending: Record<string, unknown> = {}
+    const keys = Array.from(
+      { length: MAX_OBJECT_KEYS_SCANNED + 1 },
+      (_, index) => `key_${String(index).padStart(5, '0')}`,
+    )
+    for (const key of keys) ascending[key] = { value: 1 }
+    for (const key of [...keys].reverse()) descending[key] = { value: 1 }
+
+    const forward = fingerprintRenderShape({ ...base, payload: ascending })
+    const reverse = fingerprintRenderShape({ ...base, payload: descending })
+
+    // The diagnostic prefixes intentionally differ: they show what bounded
+    // evidence was actually inspected. Catalog identity must not differ just
+    // because insertion order moved one key across the safety cutoff.
+    expect(forward.shapePaths).not.toEqual(reverse.shapePaths)
+    expect(forward.shapePaths).toContain('<truncated-paths>')
+    expect(reverse.shapePaths).toContain('<truncated-paths>')
+    expect(forward.fingerprint).toBe(reverse.fingerprint)
+  })
+
+  it('wide-object collapse cannot be escaped by a capped sensitive or discriminator key', () => {
+    const make = (specialFirst: boolean): Record<string, unknown> => {
+      const record: Record<string, unknown> = {}
+      if (specialFirst) {
+        record.authorization = 'secret'
+        record.kind = 'captured-kind'
+      }
+      for (let index = 0; index < MAX_OBJECT_KEYS_SCANNED + 2; index += 1) {
+        record[`key_${String(index).padStart(5, '0')}`] = index
+      }
+      if (!specialFirst) {
+        record.authorization = 'secret'
+        record.kind = 'captured-kind'
+      }
+      return record
+    }
+    const admitted = fingerprintRenderShape({ ...base, payload: make(true) })
+    const capped = fingerprintRenderShape({ ...base, payload: make(false) })
+    expect(admitted.fingerprint).toBe(capped.fingerprint)
+  })
+
+  it('wide-array identity is independent of member order at the local admission cap', () => {
+    const common = Array.from(
+      { length: MAX_ARRAY_ITEMS_SCANNED },
+      () => ({ kind: 'common', value: 1 }),
+    )
+    const distinct = { kind: 'distinct', extra: true }
+    const distinctAtEnd = [...common, distinct]
+    const distinctAtStart = [distinct, ...common]
+
+    const tail = fingerprintRenderShape({ ...base, payload: { items: distinctAtEnd } })
+    const head = fingerprintRenderShape({ ...base, payload: { items: distinctAtStart } })
+
+    expect(tail.shapePaths).toContain('<truncated-paths>')
+    expect(head.shapePaths).toContain('<truncated-paths>')
+    expect(tail.fingerprint).toBe(head.fingerprint)
   })
 
   it('JSON parity: undefined-valued keys fingerprint as ABSENT, undefined elements as null', () => {

@@ -22,6 +22,11 @@ export type TaskNotification = ProviderTaskNotification
 
 const OPEN_TAG = '<task-notification>'
 
+function boundDisplayScalar(value: string | null, maxChars: number): string | null {
+  if (value === null || value.length <= maxChars) return value
+  return `${value.slice(0, maxChars - 1)}…`
+}
+
 function tag(text: string, name: string): string | null {
   const m = new RegExp(`<${name}>\\s*([\\s\\S]*?)\\s*</${name}>`).exec(text)
   return m ? m[1] : null
@@ -53,13 +58,17 @@ export function taskNotificationTextOf(entry: Entry): string | null {
 export function parseTaskNotification(text: string): TaskNotification | null {
   if (!text.trimStart().startsWith(OPEN_TAG)) return null
   return {
-    taskId: tag(text, 'task-id'),
+    // WHY correlation identity is the sole unbounded scalar: toolUseId is a
+    // map key and truncating it would join a completion to the wrong parent.
+    // Every presentation-only scalar is bounded here because both the joined
+    // Agent headline and standalone notification render it synchronously.
+    taskId: boundDisplayScalar(tag(text, 'task-id'), 240),
     toolUseId: tag(text, 'tool-use-id'),
-    status: tag(text, 'status'),
-    summary: tag(text, 'summary'),
+    status: boundDisplayScalar(tag(text, 'status'), 120),
+    summary: boundDisplayScalar(tag(text, 'summary'), 500),
     result: tagGreedy(text, 'result'),
-    outputFile: tag(text, 'output-file'),
-    usage: tag(text, 'usage'),
+    outputFile: boundDisplayScalar(tag(text, 'output-file'), 2_048),
+    usage: boundDisplayScalar(tag(text, 'usage'), 240),
   }
 }
 

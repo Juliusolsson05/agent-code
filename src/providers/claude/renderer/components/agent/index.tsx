@@ -5,6 +5,7 @@ import {
   type ClaudeAgentModel,
 } from '@providers/claude/renderer/adapters/collaboration'
 import { LazyTextProse } from '@providers/shared/renderer/components/lazy-prose'
+import { PagedTextViewer } from '@renderer/lib/text/PagedTextViewer'
 import {
   SubAgentsContext,
   TaskNotificationsContext,
@@ -92,7 +93,15 @@ export function ClaudeAgentRow({ model }: { model: ClaudeAgentModel }) {
           <span className="text-ink flex-1 min-w-0 truncate" title={model.description}>
             {model.description}
           </span>
-          <span className="text-muted text-[11px] whitespace-nowrap">{status}</span>
+          {/* WHY status is width-bounded even after scalar admission: usage is
+              intentionally informative but must not squeeze the agent identity
+              out of a narrow tile. The title retains the admitted full label. */}
+          <span
+            className="max-w-[45%] min-w-0 truncate text-muted text-[11px] whitespace-nowrap"
+            title={status}
+          >
+            {status}
+          </span>
           <span className="text-muted shrink-0" aria-hidden="true">
             {open ? '▾' : '▸'}
           </span>
@@ -104,7 +113,10 @@ export function ClaudeAgentRow({ model }: { model: ClaudeAgentModel }) {
           <div className="mt-2 ml-4 border-l border-border/60 pl-3 flex flex-col gap-2">
             <section aria-label="Agent prompt">
               <div className="text-muted text-[10px] uppercase tracking-wider mb-1">Prompt</div>
-              <LazyTextProse text={model.prompt} />
+              {/* Provider prompts are untrusted and can be megabytes. A paged
+                  source preserves every byte without mounting one unbounded
+                  Markdown tree merely because the disclosure opened. */}
+              <PagedTextViewer source={model.prompt} />
             </section>
             {subagent ? <SubagentMiniFeed sa={subagent} /> : null}
             {reportTexts.length > 0 ? (

@@ -10,6 +10,8 @@
 // Kept separate from detect.ts because detection is cheap/always
 // runs and parsing is opt-in per widget.
 
+import { stripAnsi as stripTerminalAnsi } from '@shared/parsers/ansi'
+
 // --- Unified diff parser ---------------------------------------------------
 
 export type GitDiffLine = {
@@ -214,6 +216,10 @@ export function parseGitStatus(text: string): GitStatusResult {
       const m = porcelainRe.exec(l)
       if (!m) continue
       const [, index, worktree, pathRest] = m
+      // `!!` is porcelain's ignored-file marker, not two independent status
+      // columns. Treating `!` like an ordinary code fabricated both a staged
+      // and modified change for a path Git explicitly said to ignore.
+      if (index === '!' && worktree === '!') continue
       // Rename: "R  old -> new". `pathRest` contains both paths.
       let path = pathRest
       let oldPath: string | undefined
@@ -303,12 +309,8 @@ export type GitCommitResult = {
  */
 export function parseGitCommit(text: string): GitCommitResult {
   const result: GitCommitResult = { noop: false }
-  const lines = text.replace(/\r\n?/g, '\n').split('\n')
-
-  if (/nothing to commit|no changes added/i.test(text)) {
-    result.noop = true
-    return result
-  }
+  const normalized = text.replace(/\r\n?/g, '\n')
+  const lines = normalized.split('\n')
 
   const headerRe = /^\[([^\s\]]+)(?:\s+\(root-commit\))?\s+([0-9a-f]{7,40})\]\s*(.*)$/
   let i = 0
@@ -322,12 +324,22 @@ export function parseGitCommit(text: string): GitCommitResult {
     break
   }
 
+  // WHY success wins over earlier no-op advice: an all-Git chain can emit a
+  // status hint such as "no changes added to commit" before `git add` and a
+  // successful commit. The commit header is positive proof that a commit was
+  // created; global advice text is only a no-op signal when that proof is
+  // absent. Returning before the header scan made a real commit look skipped.
+  if (!result.sha && /nothing to commit|no changes added/i.test(normalized)) {
+    result.noop = true
+    return result
+  }
+
   // Body: indented lines before the stats line. Stop when we hit the
   // "N files changed" summary or a blank run followed by non-indented text.
   const bodyLines: string[] = []
   for (; i < lines.length; i++) {
     const l = lines[i]
-    const stats = /^\s*(\d+) files? changed(?:, (\d+) insertions?\(\+\))?(?:, (\d+) deletions?\(-\))?/.exec(l)
+    const stats = /^\s*(\d+) files? changed(?:, (\d+) insertions?\(\+\))?(?:, (\d+) deletions?\(-\))?\s*$/.exec(l)
     if (stats) {
       result.filesChanged = parseInt(stats[1], 10)
       if (stats[2]) result.insertions = parseInt(stats[2], 10)
@@ -427,7 +439,13 @@ export function parseGitPush(text: string): GitPushResult {
     const to = /^To\s+(.+)$/.exec(l)
     if (to) { result.remoteUrl = to[1]; continue }
     // "   a119043..07390a0  main -> main"
-    const ref = /^\s+([0-9a-f]{7,40}\.\.[0-9a-f]{7,40}|\[new branch\]|\[deleted\])\s+(.+)$/.exec(l)
+    // A forced update uses a leading `+` marker and a three-dot range. Keep
+    // the marker out of `range` so the card's range column remains comparable
+    // with ordinary updates; the command intent already carries `force`, and
+    // Git's `(forced update)` suffix remains in the ref description as raw
+    // evidence. Other porcelain-ish markers are accepted for the same reason:
+    // they describe the row, while the bracket/range is its stable payload.
+    const ref = /^\s*[+*!-=]?\s*([0-9a-f]{7,40}(?:\.\.|\.\.\.)[0-9a-f]{7,40}|\[new branch\]|\[deleted\])\s+(.+)$/.exec(l)
     if (ref) result.refs.push({ range: ref[1], ref: ref[2].trim() })
   }
   return result
@@ -442,7 +460,11 @@ export function parseGitPush(text: string): GitPushResult {
  * to every parser.
  */
 export function stripAnsi(text: string): string {
-  // Match ESC[...m SGR sequences only. Broader CSI patterns aren't
-  // common in git output and leaving them untouched is harmless.
-  return text.replace(/\x1b\[[0-9;]*m/g, '')
+  // WHY delegate to the terminal parser's complete stripper instead of an
+  // SGR-only regex: Git hooks and pagers can emit OSC titles, cursor-control
+  // CSI, and charset designators alongside color. Leaving one of those bytes
+  // before `diff --git`, `On branch`, or `[main sha]` prevents an otherwise
+  // exact parser match. The shared stripper preserves printable content while
+  // removing that broader terminal-control vocabulary.
+  return stripTerminalAnsi(text)
 }

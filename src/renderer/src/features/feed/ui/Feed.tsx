@@ -22,6 +22,8 @@ import { WorkIndicator } from '@renderer/features/feed/WorkIndicator'
 import { toolHintFromTurn } from '@renderer/features/feed/workIndicatorHints'
 import {
   ProviderContext,
+  CommittedOperationDecisionContext,
+  createCommittedOperationDecisionResolver,
   ToolUseIndexContext,
   ToolResultIndexContext,
   CodeRenderContext,
@@ -765,6 +767,19 @@ function FeedImpl({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- see above.
     [toolResultIndexProp, toolIndexVersion, fallbackToolResultIndex],
   )
+  const committedOperationDecision = useMemo(
+    () => createCommittedOperationDecisionResolver(
+      getRendererProviderCapabilities(provider).renderOperation,
+    ),
+    // WHY index identities are deliberately absent: the resolver's WeakMap is
+    // already keyed by the immutable tool-use object and compares the exact
+    // paired result object. Replacing this resolver for an unrelated map
+    // append erased every older decision and repeatedly reparsed large Agent
+    // Code results. A real result arrival changes that pair's result identity,
+    // so it still invalidates precisely the affected decision. Provider is the
+    // only lifetime boundary because it selects a different adapter chain.
+    [provider],
+  )
 
   // The shared feed transports a join map but never recognizes the provider's
   // transcript envelope. This registry call is the cutover boundary that keeps
@@ -987,6 +1002,7 @@ function FeedImpl({
     <RenderShapeCaptureProvider sessionId={sessionId} provider={provider}>
     <ToolUseIndexContext.Provider value={toolUseIndex}>
     <ToolResultIndexContext.Provider value={toolResultIndex}>
+    <CommittedOperationDecisionContext.Provider value={committedOperationDecision}>
     <SubAgentsContext.Provider value={subAgents}>
     <TaskNotificationsContext.Provider value={taskNotifications}>
     <AskUserQuestionConditionContext.Provider value={askUserQuestionState}>
@@ -1032,6 +1048,7 @@ function FeedImpl({
     </AskUserQuestionConditionContext.Provider>
     </TaskNotificationsContext.Provider>
     </SubAgentsContext.Provider>
+    </CommittedOperationDecisionContext.Provider>
     </ToolResultIndexContext.Provider>
     </ToolUseIndexContext.Provider>
     </RenderShapeCaptureProvider>

@@ -1,4 +1,4 @@
-import { useContext, useState } from 'react'
+import { useContext, useMemo, useState } from 'react'
 
 import { ToolResultIndexContext } from '@renderer/features/feed/context'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
@@ -12,14 +12,14 @@ import {
 
 function ExactInput({ input }: { input: Record<string, unknown> }) {
   const [open, setOpen] = useState(false)
-  let source: string | null = null
-  if (open) {
+  const source = useMemo(() => {
+    if (!open) return null
     try {
-      source = JSON.stringify(input, null, 2)
+      return JSON.stringify(input, null, 2)
     } catch {
-      source = null
+      return null
     }
-  }
+  }, [input, open])
   return (
     <details className="text-[11px] text-muted" onToggle={event => setOpen(event.currentTarget.open)}>
       <summary className="cursor-pointer select-none">Exact workflow input</summary>
@@ -35,7 +35,16 @@ function ExactInput({ input }: { input: Record<string, unknown> }) {
 export function AgentCodeWorkflowView({ model }: { model: AgentCodeWorkflowModel }) {
   const [open, setOpen] = useState(false)
   const resultBlock = useContext(ToolResultIndexContext).get(model.operationId) ?? null
-  const run = resultBlock ? fromAgentCodeWorkflowResult(resultBlock, model) : null
+  // WHY the adapter-created model object is not a dependency: unrelated feed
+  // index updates can rerun parent dispatch and allocate a structurally equal
+  // model. Result ownership depends only on the operation id, while parsing the
+  // result may traverse a multi-megabyte workflow payload. The exact result
+  // object plus that scalar identity are therefore the complete cache key.
+  const run = useMemo(
+    () => resultBlock ? fromAgentCodeWorkflowResult(resultBlock, model) : null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- see identity proof above.
+    [model.operationId, resultBlock],
+  )
   const failed = resultBlock?.is_error === true
   const marker = failed ? '✗' : run ? '✓' : resultBlock ? '◌' : '◐'
   const status = failed

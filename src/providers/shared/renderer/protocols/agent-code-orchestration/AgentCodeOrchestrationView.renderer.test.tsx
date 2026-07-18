@@ -10,6 +10,22 @@ import { Block } from '@renderer/features/feed/ui/rows/Block'
 import { SemanticLiveBlockRow } from '@renderer/features/feed/ui/semantic/BlockRow'
 import type { SemanticLiveTurn } from '@renderer/session-runtime/state'
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
+import { AgentCodeOrchestrationView } from './AgentCodeOrchestrationView'
+
+const orchestrationResultParse = vi.hoisted(() => vi.fn())
+
+vi.mock('./model', async importOriginal => {
+  const actual = await importOriginal<typeof import('./model')>()
+  return {
+    ...actual,
+    fromAgentCodeOrchestrationResult: (
+      ...args: Parameters<typeof actual.fromAgentCodeOrchestrationResult>
+    ) => {
+      orchestrationResultParse()
+      return actual.fromAgentCodeOrchestrationResult(...args)
+    },
+  }
+})
 
 vi.mock('@renderer/lib/code/CodeBlock', () => ({
   CodeBlock: ({ code }: { code: string }) => <pre data-testid="code-block">{code}</pre>,
@@ -89,6 +105,27 @@ describe('Agent Code orchestration protocol view', () => {
     expect(screen.queryByText('Agent Code MCP')).not.toBeInTheDocument()
   })
 
+  it('labels a transport failure as failure while leaving its result visible', () => {
+    const failedResult: ToolResultBlock = {
+      ...result,
+      is_error: true,
+      content: 'Agent Code server disconnected',
+    }
+    render(
+      <ProviderContext.Provider value="claude">
+        <ToolUseIndexContext.Provider value={new Map([[use.id, use]])}>
+          <ToolResultIndexContext.Provider value={new Map([[use.id, failedResult]])}>
+            <Block block={use} role="assistant" />
+            <Block block={failedResult} role="user" />
+          </ToolResultIndexContext.Provider>
+        </ToolUseIndexContext.Provider>
+      </ProviderContext.Provider>,
+    )
+
+    expect(screen.getByText(/transport failed/)).toHaveClass('text-danger')
+    expect(screen.getByText('Agent Code server disconnected')).toBeInTheDocument()
+  })
+
   it('uses the same owned card and absorbs a validated result on the semantic plane', () => {
     const live = {
       kind: 'mcp_tool_use',
@@ -115,5 +152,35 @@ describe('Agent Code orchestration protocol view', () => {
 
     fireEvent.click(screen.getByText('Create agent').closest('summary')!)
     expect(screen.getByText('child-session')).toBeInTheDocument()
+  })
+
+  it('does not revalidate a large agent result for an unrelated pair append', () => {
+    orchestrationResultParse.mockClear()
+    const model = {
+      operationId: use.id,
+      operation: 'create-agent' as const,
+      input: use.input as Record<string, unknown>,
+    }
+    const unrelated: ToolResultBlock = {
+      type: 'tool_result',
+      tool_use_id: 'unrelated-agent',
+      content: 'unrelated',
+    }
+    const { rerender } = render(
+      <ToolResultIndexContext.Provider value={new Map([[use.id, result]])}>
+        <AgentCodeOrchestrationView model={model} />
+      </ToolResultIndexContext.Provider>,
+    )
+    expect(orchestrationResultParse).toHaveBeenCalledTimes(1)
+
+    rerender(
+      <ToolResultIndexContext.Provider value={new Map([
+        [use.id, result],
+        [unrelated.tool_use_id, unrelated],
+      ])}>
+        <AgentCodeOrchestrationView model={{ ...model, input: { ...model.input } }} />
+      </ToolResultIndexContext.Provider>,
+    )
+    expect(orchestrationResultParse).toHaveBeenCalledTimes(1)
   })
 })

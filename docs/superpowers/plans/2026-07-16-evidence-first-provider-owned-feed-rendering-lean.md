@@ -1,6 +1,6 @@
 # Evidence-First, Provider-Owned Feed Rendering — Lean Plan
 
-**Status:** Phases 1–7 implemented on PR #555 and under whole-branch hardening; Phases 8–10 remain. Do not merge until all ten phases pass.
+**Status:** Phases 1–10 are implemented on PR #555; review-finding hardening and the final whole-branch gates remain. Do not merge until those gates pass.
 
 **Date:** 2026-07-16
 
@@ -556,7 +556,7 @@ src/renderer/src/features/feed/evidence/
   outcome.ts                                 paint decision -> receipt
   RenderShapeCaptureContext.tsx              capture gate / session binding
 src/renderer/src/features/debug/devModules/RenderingShapes/
-  UnknownShapeInbox.tsx                      local grouped report
+  module.tsx                                 local grouped report UI
   unknownShapeReport.ts                      derive report from sidecars+catalogs
 src/main/recording/SessionRecorder*.ts       existing; accepts __render_shape
 src/main/ipc/devDebug.ts + src/preload/api/devDebug.ts   dev-gated batch IPC
@@ -564,12 +564,12 @@ src/providers/<provider>/renderer/
   shapes.ts                                  typed per-provider catalog
   adapters/*.ts                              provider wire -> protocol model mapping
   components/<component>/index.tsx           ONE distinguished component per directory
-  rows/dispatch.tsx                          provider dispatch table
+  entries/dispatch.tsx + rows/dispatch.tsx   committed/live provider dispatch
 src/providers/shared/renderer/protocols/
   code-edit/*                                first proven shared protocol
-  command/*  structured-tool/*               later, after independent adapters
+  command/*  structured-output/*             proven shared protocols
 scripts/
-  audit-rendering-shapes.mjs                 known/unknown/misrouted coverage
+  audit-rendering-shapes.mts                 known/unknown/misrouted coverage
   extract-rendering-shape.mts                fingerprint -> complete local draft
 testing/fixtures/rendering-shapes/<provider>/<shape-id>/*
 ```
@@ -626,12 +626,13 @@ the PR merges only after Phase 10 plus the final whole-branch review.
   milestones emit explicit records; queue caps / coalescing / final flush /
   unmount / shutdown / missing recorder / serialization failure; sighting
   metadata retains bounded literal structural keys but no scalar prompt/command/result values; `__render_shape`
-  appended through the existing lifecycle; dropped/capped counts in metadata.
+  appended through the existing lifecycle; observer drops surfaced in observer
+  stats, while recorder writer drops/capping remain in recording metadata.
   Gate: capture creates recording-linked sightings, no per-token flood possible
   by construction, capture-on doesn't change the render tree, diagnostic failure
   can't throw into provider/feed.
 - **Phase 3 — inbox + audit/extraction tools.** Files: Dev Debug inbox,
-  `scripts/audit-rendering-shapes.mjs`, `scripts/extract-rendering-shape.mjs`,
+  `scripts/audit-rendering-shapes.mts`, `scripts/extract-rendering-shape.mts`,
   fixtures README on first fixture. Red/green: pure report over sidecars +
   catalogs; group by fingerprint with known/misrouted/unknown status; link to
   cursor/note/provenance; extract exact final + prefix windows;
@@ -727,8 +728,8 @@ the PR merges only after Phase 10 plus the final whole-branch review.
   Moved feed Git detection/parsing/cards out of `Block.tsx` and
   `features/git/ui/GitRows.tsx` into a rich shared command formatter directory,
   preserving conservative decline, bounded raw output, and explicit result
-  absorption receipts; keep the persistent Git bar in `features/git/`. Remove
-  and deleted the Git-only `customRendering` gate after proving it had no
+  absorption receipts; the persistent Git bar remains in `features/git/`.
+  Deleted the Git-only `customRendering` gate after proving it had no
   remaining product meaning. Moved durable compact boundary/summary rows out of central
   `EntryRow` selection into provider-owned compaction adapters/components backed
   by `providers/shared/renderer/protocols/compaction/`; colocate each provider's

@@ -193,7 +193,7 @@ export function looksLikeListCommand(command: string): boolean {
 
 export function classifySemanticToolActivity(block: SemanticLiveTurn['blocks'][number]): {
   collapsible: boolean
-  category: 'search' | 'read' | 'list' | 'bash' | null
+  category: 'search' | 'read' | 'list' | null
   hint: string | null
 } {
   const toolName = block.toolName ?? ''

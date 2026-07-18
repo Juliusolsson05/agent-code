@@ -1,6 +1,6 @@
 # The Rendering System
 
-> **Status:** evergreen reference — describes the rendering pipeline as it is *today* (post the 2026-07 ownership-ledger rewrite, the #491/#492 block-level un-collapse, and PR #555 Phases 1–9's evidence-first provider painter). If you change the pipeline, change this doc in the same PR.
+> **Status:** evergreen reference — describes the rendering pipeline as it is *today* (post the 2026-07 ownership-ledger rewrite, the #491/#492 block-level un-collapse, and PR #555 Phases 1–10's evidence-first provider painter). If you change the pipeline, change this doc in the same PR.
 >
 > **Companion:** [`rendering-design-principles.md`](./rendering-design-principles.md) — how we *work on* this system (test-first, fixture-gated). Read that before touching any file below.
 >

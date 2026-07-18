@@ -1,15 +1,24 @@
 import type { ToolResultBlock } from '@shared/types/transcript'
+import { boundedJsonPreview } from '@renderer/lib/text/boundedJson'
 
 function unknownPartText(value: unknown): string {
   if (typeof value === 'string') return value
   if (typeof value === 'object' && value !== null) {
-    const text = (value as { text?: unknown }).text
-    if (typeof text === 'string') return text
-    try {
-      return JSON.stringify(value, null, 2)
-    } catch {
-      return String(value)
+    const record = value as Record<string, unknown>
+    const keys = Object.keys(record)
+    if (
+      record.type === 'text' &&
+      typeof record.text === 'string' &&
+      keys.every(key => key === 'type' || key === 'text')
+    ) {
+      return record.text
     }
+    // A hybrid text block's sibling fields may contain citations, annotations, or future typed
+    // semantics; returning only .text would erase them. Conversely, JSON.stringify on an image
+    // block eagerly copies its full base64 payload before a bounded viewer can help. The bounded
+    // projector preserves representative structure and emits explicit ellipses without traversing
+    // or allocating the complete provider-controlled object.
+    return boundedJsonPreview(value) ?? String(value)
   }
   return String(value ?? '')
 }

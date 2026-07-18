@@ -18,6 +18,8 @@ import { CodeRenderContext } from '@renderer/features/feed/context'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import { DiffSlab } from '@providers/shared/renderer/rows/DiffSlab'
 import { PagedTextViewer } from '@renderer/lib/text/PagedTextViewer'
+import { LazyJsonDisclosure } from '@providers/shared/renderer/rows/LazyJsonDisclosure'
+import { asRecord } from '@shared/lib/asRecord'
 
 /** Header row for file-tool blocks: "⏺ MultiEdit  <path>"
  *
@@ -76,30 +78,54 @@ function FileToolHeader({
 
 const MULTI_EDIT_PAGE_SIZE = 20
 
+type NormalizedMultiEdit =
+  | { kind: 'edit'; oldString: string; newString: string }
+  | { kind: 'malformed'; raw: unknown }
+
+export function isClaudeMultiEditEnvelope(block: ToolUseBlock): boolean {
+  const input = asRecord(block.input)
+  // WHY array-member drift is preserved page-by-page below, while envelope
+  // drift must decline here: without a non-blank file identity and a real
+  // edits array there is no MultiEdit operation to summarize. Coercing a
+  // missing/non-array value to [] paints a plausible “0 changes” card and
+  // hides the malformed provider payload that the generic row can expose.
+  return Boolean(
+    input &&
+    typeof input.file_path === 'string' &&
+    /\S/.test(input.file_path) &&
+    Array.isArray(input.edits),
+  )
+}
+
 export const MultiEditRow = memo(function MultiEditRow({
   block,
 }: {
   block: ToolUseBlock
 }) {
-  const input = (block.input ?? {}) as Record<string, unknown>
+  const input = asRecord(block.input) ?? {}
   const filePath =
     typeof input.file_path === 'string' ? input.file_path : ''
-  const edits = Array.isArray(input.edits)
-    ? (input.edits as Array<Record<string, unknown>>)
-    : []
+  const edits: unknown[] = Array.isArray(input.edits) ? input.edits : []
   const [pageStart, setPageStart] = useState(0)
   const safePageStart = Math.min(
     pageStart,
     Math.max(0, Math.floor((edits.length - 1) / MULTI_EDIT_PAGE_SIZE) * MULTI_EDIT_PAGE_SIZE),
   )
-  // WHY both normalization and rendering operate on one page: an untrusted MultiEdit can contain
-  // thousands of entries, each with an LCS diff and code DOM. Memoizing each child does not reduce
-  // the first mount. Paging preserves exact access to every edit while bounding allocations and
-  // React ownership independently of payload cardinality.
-  const normalized = edits.slice(safePageStart, safePageStart + MULTI_EDIT_PAGE_SIZE).map(e => ({
-    oldString: typeof e.old_string === 'string' ? e.old_string : '',
-    newString: typeof e.new_string === 'string' ? e.new_string : '',
-  }))
+  // WHY both validation and rendering operate on one page: an untrusted MultiEdit can contain
+  // thousands of entries, each with an LCS diff and code DOM. Validating the entire hidden tail
+  // merely to choose a whole-operation generic fallback would reintroduce the unbounded traversal
+  // this component's paging exists to prevent. A malformed item is therefore preserved as visible
+  // evidence on its own page, while valid later pages remain exactly reachable. We must not coerce
+  // bad members or missing strings to empty edits: that would turn provider drift into a plausible
+  // but invented “no changes” diff.
+  const normalized: NormalizedMultiEdit[] = edits
+    .slice(safePageStart, safePageStart + MULTI_EDIT_PAGE_SIZE)
+    .map(raw => {
+      const edit = asRecord(raw)
+      return edit && typeof edit.old_string === 'string' && typeof edit.new_string === 'string'
+        ? { kind: 'edit', oldString: edit.old_string, newString: edit.new_string }
+        : { kind: 'malformed', raw }
+    })
   return (
     <MarkerRow marker="⏺">
       <div className="flex flex-col gap-1">
@@ -109,15 +135,25 @@ export const MultiEditRow = memo(function MultiEditRow({
           extra={`${edits.length} change${edits.length === 1 ? '' : 's'}`}
         />
         <div className="flex flex-col gap-2">
-          {normalized.map((e, i) => (
-            <MultiEditChunk
-              key={safePageStart + i}
-              index={safePageStart + i}
-              total={edits.length}
-              filePath={filePath}
-              edit={e}
-            />
-          ))}
+          {normalized.map((edit, i) => {
+            const index = safePageStart + i
+            return edit.kind === 'edit' ? (
+              <MultiEditChunk
+                key={index}
+                index={index}
+                total={edits.length}
+                filePath={filePath}
+                edit={edit}
+              />
+            ) : (
+              <MalformedMultiEditChunk
+                key={index}
+                index={index}
+                total={edits.length}
+                raw={edit.raw}
+              />
+            )
+          })}
           {edits.length > MULTI_EDIT_PAGE_SIZE ? (
             <div className="flex items-center gap-3 text-[11px] text-muted">
               <span>
@@ -147,6 +183,30 @@ export const MultiEditRow = memo(function MultiEditRow({
         </div>
       </div>
     </MarkerRow>
+  )
+})
+
+const MalformedMultiEditChunk = memo(function MalformedMultiEditChunk({
+  index,
+  total,
+  raw,
+}: {
+  index: number
+  total: number
+  raw: unknown
+}) {
+  return (
+    <div className="rounded border border-border bg-surface px-2.5 py-2">
+      <div className="text-[10px] uppercase tracking-wider text-warning select-none">
+        unrecognized change {index + 1} / {total}
+      </div>
+      {/* WHY raw drift stays collapsed: visibility is required for diagnosis,
+          but eagerly projecting arbitrary JSON would defeat page-level DOM
+          bounds even though only twenty array members are mounted. */}
+      <div className="mt-1">
+        <LazyJsonDisclosure label="View raw change input" value={raw} />
+      </div>
+    </div>
   )
 })
 

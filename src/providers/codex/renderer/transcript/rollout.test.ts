@@ -16,6 +16,36 @@ function userMessage(text: string): Record<string, unknown> {
 }
 
 describe('mapCodexRolloutToFeedEntries', () => {
+  it('preserves successful silent command completion as terminal evidence', () => {
+    const entries = mapCodexRolloutToFeedEntries({
+      type: 'event_msg',
+      timestamp: '2026-06-18T11:12:01.000Z',
+      payload: {
+        type: 'exec_command_end',
+        call_id: 'silent-command',
+        aggregated_output: '',
+        exit_code: 0,
+        status: 'completed',
+      },
+    })
+
+    // WHY the empty content is intentional: correlation needs the result
+    // block's existence, not fabricated output text. The operation renderer
+    // consumes this evidence into the command card and absorbs the otherwise
+    // blank result row.
+    expect(entries).toHaveLength(1)
+    const entry = entries[0] as {
+      message?: { content?: Array<Record<string, unknown>> }
+    }
+    expect(entry.message?.content?.[0]).toMatchObject({
+      type: 'tool_result',
+      tool_use_id: 'silent-command',
+      content: '',
+      is_error: false,
+      codex: { kind: 'exec_command_end', exitCode: 0 },
+    })
+  })
+
   it('drops Codex subagent notifications instead of rendering them as user prompts', () => {
     const entries = mapCodexRolloutToFeedEntries(
       userMessage(

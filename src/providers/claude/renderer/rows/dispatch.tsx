@@ -6,8 +6,11 @@ import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 // behind the registry capability; reintroducing that barrel would reopen a
 // shared-feed → provider interpretation edge.
 import { EditRow } from '@providers/claude/renderer/components/edit'
+import {
+  isClaudeMultiEditEnvelope,
+  MultiEditRow,
+} from '@providers/claude/renderer/components/multi-edit'
 import { ClaudeAgentRow } from '@providers/claude/renderer/components/agent'
-import { MultiEditRow } from '@providers/claude/renderer/components/multi-edit'
 import { ClaudeReadRow } from '@providers/claude/renderer/components/read'
 import { ClaudeReadResultRow } from '@providers/claude/renderer/components/read-result'
 import { ClaudeToolSearchRow } from '@providers/claude/renderer/components/tool-search'
@@ -72,6 +75,7 @@ import {
 import type {
   ProviderOperationDecision,
   ProviderOperationInput,
+  ProviderResultDecision,
   ProviderSpecializedReceipt,
 } from '@shared/types/providerConfig'
 import { fromClaudeGitOperation } from '@providers/claude/renderer/adapters/git'
@@ -87,6 +91,13 @@ function claudeOperationReceipt(toolUse: ToolUseBlock): ProviderSpecializedRecei
   }
   if (fromClaudeAgentCodeWorkspaceUse(toolUse)) {
     return { rendererId: 'claude.rows.dispatch', protocolId: 'agent-code.workspace' }
+  }
+  if (fromClaudeAgentCodeWorkflowUse(toolUse)) {
+    // WHY workflow carries the same protocol identity on invocation and
+    // absorption as orchestration/workspace: omitting it made the result
+    // receipt look provider-generic even though the paired parser had proved
+    // a source-controlled Agent Code contract.
+    return { rendererId: 'claude.rows.dispatch', protocolId: 'agent-code.workflow' }
   }
   return { rendererId: 'claude.rows.dispatch' }
 }
@@ -122,30 +133,44 @@ export function renderClaudeOperation(
     ? renderClaudeToolResult(input.result, { sourceTool: input.toolUse })
     : undefined
   const receipt = claudeOperationReceipt(input.toolUse)
+  const toolUseDecision: ProviderResultDecision = toolUse === undefined
+    ? { action: 'fallback' }
+    : {
+        action: 'render',
+        node: toolUse,
+        receipt,
+      }
+  let toolResultDecision: ProviderResultDecision | null = null
+  if (input.result) {
+    if (toolResult === undefined) {
+      toolResultDecision = { action: 'fallback' }
+    } else if (toolResult !== null) {
+      toolResultDecision = {
+        action: 'render',
+        node: toolResult,
+        receipt,
+      }
+    } else if (toolUseDecision.action === 'render') {
+      toolResultDecision = {
+        action: 'absorb',
+        ownerRenderId: toolUseDecision.receipt.rendererId,
+        ...(toolUseDecision.receipt.protocolId
+          ? { protocolId: toolUseDecision.receipt.protocolId }
+          : {}),
+        reason: 'the admitted provider operation card validated and consumed its paired result',
+      }
+    } else {
+      // WHY a recognized acknowledgement cannot create its own owner: strict
+      // invocation adapters may decline blank/drifted content while a result
+      // still resembles an old success grammar. Hiding that result under a
+      // card that never painted would violate both total fallback and receipt
+      // truth. The generic pair remains visible until both sides are admitted.
+      toolResultDecision = { action: 'fallback' }
+    }
+  }
   return {
-    toolUse: toolUse === undefined
-      ? { action: 'fallback' }
-      : {
-          action: 'render',
-          node: toolUse,
-          receipt,
-        },
-    toolResult: !input.result
-      ? null
-      : toolResult === undefined
-        ? { action: 'fallback' }
-        : toolResult === null
-          ? {
-              action: 'absorb',
-              ownerRenderId: receipt.rendererId,
-              ...(receipt.protocolId ? { protocolId: receipt.protocolId } : {}),
-              reason: 'provider operation card validated and consumed its paired result',
-            }
-          : {
-              action: 'render',
-              node: toolResult,
-              receipt,
-            },
+    toolUse: toolUseDecision,
+    toolResult: toolResultDecision,
   }
 }
 
@@ -225,7 +250,11 @@ function renderClaudeToolUse(
       return model ? <EditRow model={model} /> : undefined
     }
     case 'MultiEdit':
-      return <MultiEditRow block={block} />
+      // WHY MultiEdit retains its dedicated row while Edit/Write use the
+      // shared protocol: its page model is what keeps every item reachable
+      // without normalizing or mounting an attacker-sized edits array. The
+      // shared files model currently has truncation but no next-page contract.
+      return isClaudeMultiEditEnvelope(block) ? <MultiEditRow block={block} /> : undefined
     case 'Read': {
       const model = fromClaudeReadUse(block)
       return model ? <ClaudeReadRow model={model} /> : undefined

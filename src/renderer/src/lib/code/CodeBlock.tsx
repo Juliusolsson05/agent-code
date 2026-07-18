@@ -130,7 +130,6 @@ export const CodeBlock = memo(function CodeBlock({
   // swap Monaco in place. Layered tokens by design: plain text → lexical
   // colors in the same frame → Monaco/LSP semantics as a later, invisible
   // upgrade. First paint must never wait on a language server.
-  const [monacoReady, setMonacoReady] = useState(false)
   const reactId = useId().replace(/:/g, '_')
   const clientUri = useMemo(
     // `codeId` is semantic identity for picker stability, not guaranteed DOM
@@ -151,12 +150,22 @@ export const CodeBlock = memo(function CodeBlock({
   // create Monaco for one bounded page only.
   const useMonaco =
     engine !== 'static' && !shouldUseStaticFallback && (!oversized || largeContentOpen)
+  // Readiness belongs to one exact editor build, not to the component as a
+  // boolean. On a code/page/language change React renders before useEffect can
+  // dispose the old editor. A sticky `true` therefore hid the lexical layer;
+  // cleanup then removed Monaco and left one blank frame before the effect's
+  // setState(false) committed. The render-generation token makes readiness
+  // false synchronously in that first rebuild render, so placeholder and old
+  // editor exchange visibility without an empty paint. The token is local and
+  // discarded on every dependency change—this is not content caching.
+  const monacoBuild = useMemo(
+    () => ({}),
+    [clientUri, normalizedLanguage, useMonaco, visibleCode, workspaceRoot],
+  )
+  const [readyMonacoBuild, setReadyMonacoBuild] = useState<object | null>(null)
+  const monacoReady = readyMonacoBuild === monacoBuild
   useEffect(() => {
     if (!useMonaco) return
-    // Re-arm the static placeholder whenever the editor must be rebuilt
-    // (page change, language resolution, remount) — the swap below flips
-    // it back off the moment the new editor exists.
-    setMonacoReady(false)
     let disposed = false
     // Collect ALL cleanup functions as they're created — even inside
     // the async block. The effect cleanup runs them all, regardless
@@ -253,7 +262,7 @@ export const CodeBlock = memo(function CodeBlock({
       // Editor exists — retire the instant static placeholder. Semantic/LSP
       // tokens may still be pending, but Monaco's built-in tokenization
       // paints immediately from here, so the handoff is colored→colored.
-      if (!disposed) setMonacoReady(true)
+      if (!disposed) setReadyMonacoBuild(monacoBuild)
 
       const syncHeight = () => {
         const nextHeight = Math.min(Math.max(editor.getContentHeight(), 48), 360)
@@ -344,7 +353,7 @@ export const CodeBlock = memo(function CodeBlock({
         }
       }
     }
-  }, [useMonaco, clientUri, visibleCode, engine, normalizedLanguage, path, workspaceRoot])
+  }, [useMonaco, clientUri, visibleCode, engine, monacoBuild, normalizedLanguage, path, workspaceRoot])
 
   // Register only the currently materialized page in the code-block registry.
   //

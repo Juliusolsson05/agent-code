@@ -27,15 +27,16 @@ export const CodeEditView = memo(function CodeEditView({ model }: { model: CodeE
   const files = model.files.slice(0, 24)
   const filesTruncated = model.filesTruncated === true || model.files.length > files.length
   const totalFiles = model.totalFiles ?? model.files.length
+  const fileCountTruncated = model.fileCountTruncated === true
   const totalAdd = files.reduce((n, f) => n + f.additions, 0)
   const totalDel = files.reduce((n, f) => n + f.deletions, 0)
-  const countsTruncated = filesTruncated || files.some(file => file.countsTruncated)
+  const countsTruncated = fileCountTruncated || filesTruncated || files.some(file => file.countsTruncated)
   return (
     <MarkerRow marker="⏺">
       <div className="flex flex-col gap-1">
         <div className="flex items-baseline gap-2 text-[13px] leading-[1.65] min-w-0">
           <span className="text-accent font-semibold flex-shrink-0">{model.label}</span>
-          {totalFiles === 1 && files.length === 1 ? (
+          {!fileCountTruncated && totalFiles === 1 && files.length === 1 ? (
             <span
               className="text-ink-dim truncate min-w-0"
               title={model.files[0].path || undefined}
@@ -46,7 +47,9 @@ export const CodeEditView = memo(function CodeEditView({ model }: { model: CodeE
                 : '…'}
             </span>
           ) : (
-            <span className="text-ink-dim">{totalFiles} files</span>
+            <span className="text-ink-dim">
+              {fileCountTruncated ? '≥' : ''}{totalFiles} {totalFiles === 1 ? 'file' : 'files'}
+            </span>
           )}
           <span className="text-muted text-[11px] tabular-nums flex-shrink-0">
             {totalAdd > 0 || totalDel > 0
@@ -64,8 +67,16 @@ export const CodeEditView = memo(function CodeEditView({ model }: { model: CodeE
           </div>
         ) : null}
         {files.map((file, i) => (
-          <div key={file.path || i} className="flex flex-col gap-0.5">
-            {totalFiles > 1 ? (
+          // WHY ordinal identity is the truthful key here: MultiEdit may
+          // contain several operations against the same path, while a live
+          // operation begins with an empty path and fills it on a later props
+          // update. Path-based keys are therefore neither unique nor stable;
+          // they trigger duplicate-key reconciliation and remount the exact
+          // streaming tail DiffSlab is designed to preserve. Adapters append
+          // operations in wire order and never reorder this bounded list, so
+          // the ordinal is the model's stable operation identity.
+          <div key={i} className="flex flex-col gap-0.5">
+            {fileCountTruncated || totalFiles > 1 ? (
               <div
                 className="text-ink-dim text-[12px] truncate"
                 title={file.path || undefined}
@@ -87,8 +98,10 @@ export const CodeEditView = memo(function CodeEditView({ model }: { model: CodeE
                   Rich preview is partial · view exact paged content
                 </summary>
                 <div className="mt-1 flex flex-col gap-2 rounded border border-border bg-surface px-2 py-1.5">
-                  {file.exactSections.map(section => (
-                    <div key={section.label} className="min-w-0">
+                  {file.exactSections.map((section, sectionIndex) => (
+                    // Labels are presentation vocabulary (for example two
+                    // "Content" sections), not guaranteed identifiers.
+                    <div key={sectionIndex} className="min-w-0">
                       <div className="mb-1 font-semibold text-ink-dim">{section.label}</div>
                       <PagedTextViewer source={section.text} />
                     </div>
@@ -103,6 +116,11 @@ export const CodeEditView = memo(function CodeEditView({ model }: { model: CodeE
         {filesTruncated ? (
           <div className="text-[11px] text-muted">
             Showing {files.length} of {totalFiles} file operations.
+          </div>
+        ) : null}
+        {fileCountTruncated ? (
+          <div className="text-[11px] text-muted">
+            File and change totals are lower bounds from a renderer-safe patch prefix.
           </div>
         ) : null}
       </div>

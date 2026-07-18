@@ -45,12 +45,20 @@ export function normalizeClaudeCompactionConditions({
   const latestSummaryAt = summaryTimes.length > 0 ? Math.max(...summaryTimes) : null
   if (currentTurn?.isCompactionSynthesis !== true) {
     if (!screen || snapshot?.provider !== 'claude') return snapshot
-    // Once a durable summary exists, a screen-only `running` frame cannot
-    // prove a newer operation. Let the next structured synthesis turn reopen
-    // the lifecycle instead. This monotonic rule deliberately favors durable
-    // replay evidence over a terminal parser that may keep emitting stale
-    // frames; older no-proxy sessions still get screen fallback before their
-    // first durable summary.
+    // WHY completion latches only across later *running* screen frames: snapshot.ts
+    // is observation time, not the time the text was painted or the operation
+    // began. Claude leaves status text in terminal history, and the elapsed
+    // suffix changes while compacting, so a stale frame can be re-emitted with
+    // an arbitrarily new timestamp. Comparing that timestamp with the durable
+    // summary therefore manufactures correlation evidence we do not have and
+    // lets "done" regress to "running" forever during replay.
+    //
+    // An explicit terminal error is different evidence. Suppressing every
+    // later screen error made a second proxy-less `/compact` failure vanish
+    // merely because an unrelated earlier compaction had succeeded. Without
+    // operation identity there is no perfect stale/new correlation, but error
+    // truth must win over a historical success: a false repeated warning is
+    // recoverable, while hiding the only failure signal is not.
     const summaryClosedScreenOperation = latestSummaryAt !== null
     return {
       ...snapshot,
@@ -58,7 +66,7 @@ export function normalizeClaudeCompactionConditions({
         ...snapshot.conditions,
         'claude.compaction': {
           ...snapshot.conditions['claude.compaction']!,
-          state: summaryClosedScreenOperation
+          state: summaryClosedScreenOperation && screen.phase !== 'error'
             ? {
                 visible: true,
                 phase: 'done',
@@ -71,8 +79,15 @@ export function normalizeClaudeCompactionConditions({
     }
   }
 
+  // The structured turn supplies the operation identity missing from screen
+  // snapshots, so its start time is a real correlation boundary. Once a
+  // summary at or after that boundary exists, an observation-time screen tick
+  // — running *or error* — cannot overturn it. If the latest summary predates
+  // this turn, this is a distinguishable later operation and remains visible.
+  // Clock-skew grace is intentionally absent: it admitted summaries that
+  // actually preceded the operation and completed the wrong turn.
   const summaryArrived = latestSummaryAt !== null &&
-    latestSummaryAt >= currentTurn.startedAt - 5_000
+    latestSummaryAt >= currentTurn.startedAt
   const state: ClaudeCompactionState = summaryArrived
     ? {
           visible: true,

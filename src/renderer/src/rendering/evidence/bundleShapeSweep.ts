@@ -2,8 +2,16 @@ import {
   fingerprintRenderShape,
   type ShapeFingerprint,
 } from '@renderer/rendering/evidence/shapeFingerprint'
-import type { RenderShapeLifecycle, RenderShapePlane } from '@shared/types/renderShapes'
+import type {
+  RenderOutcomeRoute,
+  RenderShapeLifecycle,
+  RenderShapePlane,
+} from '@shared/types/renderShapes'
 import { asRecord } from '@shared/lib/asRecord'
+import {
+  committedBlockObservationDisposition,
+  CONTENT_BLOCK_DRIFT_FALLBACK_RENDER_ID,
+} from '@renderer/rendering/evidence/observationScope'
 
 // Bundle → shape-observation sweep (Phase 4, PR #555).
 //
@@ -26,8 +34,10 @@ import { asRecord } from '@shared/lib/asRecord'
 //   semanticHistory/current turn blocks      → semantic-tool,
 //                                              finalized ? input-complete
 //                                                        : prefix
-// Text/thinking/image content blocks are skipped for the same reason
-// Block.tsx does not sight them: prose is not a tool shape.
+// Exact normalized text/thinking/image envelopes are deliberately outside the
+// routing catalog; known labels with novel structure and unknown labels are
+// NOT. observationScope.ts is shared with Block so this fixture walk cannot
+// silently skip drift that the runtime painter records.
 
 export type BundleShapeObservation = {
   provider: string
@@ -36,6 +46,10 @@ export type BundleShapeObservation = {
   eventType: string
   payload: unknown
   fingerprint: ShapeFingerprint
+  /** Fixture sweeps cannot infer provider tool receipts, but content drift
+   *  has one honest route by construction: the known leaf paints its supported
+   *  projection while no reviewed renderer claims the novel envelope. */
+  outcome: RenderOutcomeRoute | null
 }
 
 export function sweepBundleShapes(bundle: unknown): BundleShapeObservation[] {
@@ -50,6 +64,7 @@ export function sweepBundleShapes(bundle: unknown): BundleShapeObservation[] {
     lifecycle: RenderShapeLifecycle,
     eventType: string,
     payload: unknown,
+    outcome: RenderOutcomeRoute | null = null,
   ): void => {
     out.push({
       provider,
@@ -57,6 +72,7 @@ export function sweepBundleShapes(bundle: unknown): BundleShapeObservation[] {
       lifecycle,
       eventType,
       payload,
+      outcome,
       fingerprint: fingerprintRenderShape({
         provider: provider as never,
         plane,
@@ -114,12 +130,23 @@ export function sweepBundleShapes(bundle: unknown): BundleShapeObservation[] {
     for (const rawBlock of content) {
       const block = asRecord(rawBlock)
       if (!block || typeof block.type !== 'string') continue
-      if (block.type === 'tool_use') {
+      const disposition = committedBlockObservationDisposition(block)
+      if (disposition === 'tool-use') {
         observe('committed-tool-use', 'durable', 'tool_use', block)
-      } else if (block.type === 'tool_result') {
+      } else if (disposition === 'tool-result') {
         observe('committed-tool-result', 'durable', 'tool_result', block)
+      } else if (disposition === 'unknown-block') {
+        observe('transcript-entry', 'durable', block.type, block, {
+          kind: 'unknown',
+          fallbackRenderId: 'shared.block-type-label',
+        })
+      } else if (disposition === 'content-drift') {
+        observe('transcript-entry', 'durable', block.type, block, {
+          kind: 'unknown',
+          fallbackRenderId: CONTENT_BLOCK_DRIFT_FALLBACK_RENDER_ID,
+        })
       }
-      // text/thinking/image: skipped — mirrors Block.tsx sighting scope.
+      // content-native: exact shared-leaf exclusion — see scope helper.
     }
   }
 
@@ -143,5 +170,79 @@ export function sweepBundleShapes(bundle: unknown): BundleShapeObservation[] {
     }
   }
 
+  return out
+}
+
+/** Sweep one curated `testing/fixtures/rendering-shapes/**` envelope.
+ *
+ * WHY this is separate from sweepBundleShapes: curated fixtures intentionally
+ * store only the provider object(s) under test, not a fake RuntimeLedgerSlices
+ * wrapper. Making them impersonate a full bundle would add invented evidence.
+ * The accepted carrier keys are the fixture schema used in-tree: direct
+ * toolUse/toolResult/semanticBlock fields or a `cases[]` array containing
+ * those fields. Every emitted observation still goes through the canonical
+ * fingerprint helper and the same painter lifecycle semantics.
+ */
+export function sweepCuratedShapeFixture(
+  fixture: unknown,
+  provider: string,
+): BundleShapeObservation[] {
+  const out: BundleShapeObservation[] = []
+  const root = asRecord(fixture)
+  if (!root) return out
+
+  const observe = (
+    plane: RenderShapePlane,
+    lifecycle: RenderShapeLifecycle,
+    eventType: string,
+    payload: unknown,
+    outcome: RenderOutcomeRoute | null = null,
+  ): void => {
+    out.push({
+      provider,
+      plane,
+      lifecycle,
+      eventType,
+      payload,
+      outcome,
+      fingerprint: fingerprintRenderShape({
+        provider: provider as never,
+        plane,
+        eventType,
+        payload,
+      }),
+    })
+  }
+
+  const sweepCarrier = (rawCarrier: unknown): void => {
+    const carrier = asRecord(rawCarrier)
+    if (!carrier) return
+    const toolUse = asRecord(carrier.toolUse)
+    if (toolUse?.type === 'tool_use') {
+      observe('committed-tool-use', 'durable', 'tool_use', toolUse)
+    }
+    const toolResult = asRecord(carrier.toolResult)
+    if (toolResult?.type === 'tool_result') {
+      observe('committed-tool-result', 'durable', 'tool_result', toolResult)
+    }
+    const semanticBlock = asRecord(carrier.semanticBlock)
+    if (semanticBlock && typeof semanticBlock.kind === 'string') {
+      // Mirrors SemanticLiveBlockRow exactly. `status:completed` affects text
+      // ownership, but the evidence lifecycle closes only on finalized=true;
+      // silently treating the two as synonyms would let fixtures prove a
+      // lifecycle the painter never reports.
+      observe(
+        'semantic-tool',
+        semanticBlock.finalized === true ? 'input-complete' : 'prefix',
+        semanticBlock.kind,
+        semanticBlock,
+      )
+    }
+  }
+
+  sweepCarrier(root)
+  if (Array.isArray(root.cases)) {
+    for (const fixtureCase of root.cases) sweepCarrier(fixtureCase)
+  }
   return out
 }

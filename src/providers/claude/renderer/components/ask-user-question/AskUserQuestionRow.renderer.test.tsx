@@ -53,4 +53,36 @@ describe('AskUserQuestionRow input routing', () => {
       pasteId: undefined,
     })
   })
+
+  it('retains Submit when typed text is replaced by an option selection', () => {
+    const fake = renderRow()
+    const input = screen.getByPlaceholderText('Type something')
+    fireEvent.change(input, { target: { value: 'A custom draft' } })
+    fireEvent.click(screen.getByRole('button', { name: /Option A/ }))
+
+    const submit = screen.getByRole('button', { name: 'Submit' })
+    expect(submit).toBeEnabled()
+    fireEvent.click(submit)
+    expect(fake.calls).toContainEqual(expect.objectContaining({
+      method: 'resolveCondition',
+      sessionId: 's1',
+      action: expect.objectContaining({
+        payload: {
+          answers: [expect.objectContaining({
+            selectedLabels: ['Option A'],
+            text: undefined,
+          })],
+        },
+      }),
+    }))
+  })
+
+  it('does not append an absent resolver step to an error message', async () => {
+    const fake = createFakeSessionFeed()
+    fake.nextResolveConditionResult = { ok: false, reason: 'no-resolver' }
+    renderRow(fake)
+    fireEvent.click(screen.getByRole('button', { name: /Option A/ }))
+    expect(await screen.findByText('Answer failed: no-resolver')).toBeInTheDocument()
+    expect(screen.queryByText(/undefined/)).not.toBeInTheDocument()
+  })
 })

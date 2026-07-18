@@ -19,7 +19,12 @@ import {
   absorbedOutcome,
   GENERIC_OUTCOME,
   specializedOutcome,
+  unknownOutcome,
 } from '@renderer/features/feed/evidence/outcome'
+import {
+  isKnownBlockKind,
+  semanticThinkingText,
+} from '@renderer/rendering/observations/semantic'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import { StreamingProse } from '@renderer/features/feed/ui/markdown'
 import {
@@ -132,7 +137,7 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
   const capture = useRenderShapeCapture()
   if (capture) {
     const isThinking = block.kind === 'thinking' || block.kind === 'reasoning'
-    const thinkingEmpty = isThinking && !(block.thinking ?? block.text ?? '').trim()
+    const thinkingEmpty = isThinking && semanticThinkingText(block) === null
     observeRenderShape({
       sessionId: capture.sessionId,
       provider: capture.provider,
@@ -153,7 +158,9 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
                 providerSemanticDecision.reason,
                 providerSemanticDecision.protocolId,
               )
-            : GENERIC_OUTCOME,
+            : isKnownBlockKind(block.kind)
+              ? GENERIC_OUTCOME
+              : unknownOutcome('shared.semantic-block-type-label'),
     })
   }
   if (block.kind === 'thinking' || block.kind === 'reasoning') {
@@ -173,12 +180,8 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
     //     nobody sees a flood of italic prose they didn't ask for.
     //
     // See docs/superpowers/plans/2026-04-18-thinking-indicator-rework.md.
-    const text =
-      block.thinking ||
-      block.reasoningSummary ||
-      block.reasoningText ||
-      ''
-    if (!text) return null
+    const text = semanticThinkingText(block)
+    if (text === null) return null
     const isStreaming = !block.finalized
     return (
       <MarkerRow marker="⏺" tone="muted">

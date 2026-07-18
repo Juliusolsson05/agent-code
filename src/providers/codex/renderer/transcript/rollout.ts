@@ -281,7 +281,14 @@ export function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): En
       )
       const exitCode =
         typeof payload.exit_code === 'number' ? payload.exit_code : 0
-      if (!output.trim() && exitCode === 0) return []
+      // WHY an empty successful result must survive normalization: stdout is
+      // not the lifecycle signal. Commands such as `true`, `mkdir`, and
+      // `touch` legitimately finish without printing anything, while the
+      // correlated `exec_command_end` is the only durable proof that lets a
+      // replay distinguish that success from an invocation interrupted before
+      // its result was persisted. The provider renderer absorbs this empty
+      // result after it has updated the command card, so retaining terminal
+      // evidence does not reintroduce a blank standalone row.
       return [
         codexToolResultEntry(
           uuid,

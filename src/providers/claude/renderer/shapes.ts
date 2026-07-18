@@ -30,6 +30,22 @@ import {
 // Do not fingerprint TypeScript examples and call them evidence. The first
 // real developer recording of each kind must arrive through the Unknown Shape
 // Inbox, then land here with its exact destination disposition and fixture.
+//
+// WHY this route is named once but is NOT a blanket policy: fingerprints
+// describe key/type structure, not whether a required string is blank or an
+// enum value is recognized. A generic alternate belongs only on a shape whose
+// production adapter can reject content without changing that fingerprint,
+// and only at the lifecycle where rejection can occur. Semantic Bash is the
+// important counterexample: its final provider fallback component claims even
+// malformed/blank input, so permitting a generic receipt there would hide a
+// real routing regression. Keeping the disposition text shared avoids wording
+// drift; the finite declarations below remain the source of route truth.
+const CONTENT_GATED_GENERIC_FALLBACK = {
+  kind: 'generic',
+  rendererId: 'shared.generic-tool',
+  reason: 'Required provider content did not validate; the bounded generic row preserves the raw shape.',
+} as const
+
 export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.entry.attachment.v1': defineRenderShape({
     id: 'claude.entry.attachment.v1',
@@ -166,6 +182,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     fixtures: { final: ["rendering-bundles/2026-06-04T09-09-57-625-4177cefb.json","rendering-bundles/2026-06-04T09-14-29-649-4177cefb.json","rendering-bundles/2026-06-14T13-59-16-931-4757ae44.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch' },
     dispositionByLifecycle: { prefix: { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'Incomplete provider input remains visible through the bounded fallback until required fields close.' } },
+    alternateDispositionsByLifecycle: { 'input-complete': [CONTENT_GATED_GENERIC_FALLBACK] },
     why: 'GRADUATED Phase 7: parsed semantic Agent input now routes through the same provider adapter/card as the committed operation; incomplete prefixes keep the visible generic stream until the strict Agent grammar closes.',
   }),
   'claude.semantic.askuserquestion.v1': defineRenderShape({
@@ -183,6 +200,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     },
     fixtures: { final: ["rendering-bundles/2026-06-17T11-50-56-053-a6c70f19.json","rendering-bundles/2026-06-21T18-16-49-177-fc397785.json","rendering-bundles/2026-06-21T19-19-55-972-62432945.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch' },
+    alternateDispositions: [CONTENT_GATED_GENERIC_FALLBACK],
     why: 'GRADUATED Phase 8: complete semantic question input is admitted by Claude dispatch and rendered by the existing condition-gated SessionFeed interaction surface; the shared feed no longer routes by tool name.',
   }),
   'claude.semantic.bash.v1': defineRenderShape({
@@ -221,7 +239,10 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     fixtures: { final: ["rendering-bundles/2026-06-14T14-02-05-796-a8ad1ebb.json","rendering-bundles/2026-06-21T17-32-48-749-5e75540c.json","rendering-bundles/2026-06-29T11-38-28-652-42071335.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch' },
     dispositionByLifecycle: { prefix: { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'A prefix without a closed file path remains visible through the bounded structured fallback.' } },
-    alternateDispositionsByLifecycle: { prefix: [{ kind: 'specialized', rendererId: 'claude.rows.dispatch' }] },
+    alternateDispositionsByLifecycle: {
+      prefix: [{ kind: 'specialized', rendererId: 'claude.rows.dispatch' }],
+      'input-complete': [CONTENT_GATED_GENERIC_FALLBACK],
+    },
     why: 'GRADUATED Phase 10: complete Edit input is provider-owned; a prefix earns that card only after file_path closes. The finite prefix routes describe that content threshold without pretending the structural fingerprint alone resolves it.',
   }),
   'claude.semantic.enterworktree.v1': defineRenderShape({
@@ -257,6 +278,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     fixtures: { final: ["rendering-bundles/2026-06-29T14-11-47-099-1b2b5e96.json","rendering-bundles/2026-06-29T14-13-09-044-1b2b5e96.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch', protocolId: 'agent-code.orchestration' },
     dispositionByLifecycle: { prefix: { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'Incomplete provider input remains visible through the bounded fallback until required fields close.' } },
+    alternateDispositionsByLifecycle: { 'input-complete': [CONTENT_GATED_GENERIC_FALLBACK] },
     why: 'GRADUATED Phase 7: the exact mcp__agent_code__ namespace proves the source-controlled orchestration protocol; new 2026-07-17 prefix variants remain visible until parsed input is complete.',
   }),
   'claude.semantic.mcp-orchestration-close-run.v1': defineRenderShape({
@@ -275,6 +297,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     fixtures: { final: ["rendering-shapes/claude/agent-code-orchestration/final.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch', protocolId: 'agent-code.orchestration' },
     dispositionByLifecycle: { prefix: { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'Incomplete provider input remains visible through the bounded fallback until required fields close.' } },
+    alternateDispositionsByLifecycle: { 'input-complete': [CONTENT_GATED_GENERIC_FALLBACK] },
     why: 'GRADUATED Phase 7 from the live capture plus the owned close-run schema; the curated fixture records that provenance because the frozen bundle corpus did not contain this semantic mirror.',
   }),
   'claude.semantic.mcp-orchestration-create-agent.v1': defineRenderShape({
@@ -293,6 +316,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     fixtures: { final: ["rendering-bundles/2026-06-14T15-52-20-411-b728adb8.json","rendering-bundles/2026-06-21T17-32-48-749-5e75540c.json","rendering-bundles/2026-06-21T19-19-55-972-62432945.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch', protocolId: 'agent-code.orchestration' },
     dispositionByLifecycle: { prefix: { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'Incomplete provider input remains visible through the bounded fallback until required fields close.' } },
+    alternateDispositionsByLifecycle: { 'input-complete': [CONTENT_GATED_GENERIC_FALLBACK] },
     why: 'GRADUATED Phase 7: Agent Code create is provider-recognized by its exact MCP namespace and rendered by the shared owned-protocol view, never by the open-world MCP fallback.',
   }),
   'claude.semantic.mcp-orchestration-list-agents.v1': defineRenderShape({
@@ -311,6 +335,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     fixtures: { final: ["rendering-bundles/2026-06-14T15-52-20-411-b728adb8.json","rendering-bundles/2026-06-21T20-14-23-131-62432945.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch', protocolId: 'agent-code.orchestration' },
     dispositionByLifecycle: { prefix: { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'Incomplete provider input remains visible through the bounded fallback until required fields close.' } },
+    alternateDispositionsByLifecycle: { 'input-complete': [CONTENT_GATED_GENERIC_FALLBACK] },
     why: 'GRADUATED Phase 7: list-agent inputs share the owned protocol card; the newly observed prefix stays generic until the reducer provides authoritative parsed input.',
   }),
   'claude.semantic.mcp-orchestration-read-agent.v1': defineRenderShape({
@@ -328,6 +353,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     },
     fixtures: { final: ["rendering-bundles/2026-06-14T15-52-20-411-b728adb8.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch', protocolId: 'agent-code.orchestration' },
+    alternateDispositions: [CONTENT_GATED_GENERIC_FALLBACK],
     why: 'GRADUATED Phase 7: read-agent is an owned orchestration discovery operation, with bounded per-message disclosures and an exact raw protocol fallback inside the card.',
   }),
   'claude.semantic.mcp-orchestration-send-prompt.v1': defineRenderShape({
@@ -346,6 +372,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     fixtures: { final: ["rendering-bundles/2026-06-14T15-52-20-411-b728adb8.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch', protocolId: 'agent-code.orchestration' },
     dispositionByLifecycle: { prefix: { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'Incomplete provider input remains visible through the bounded fallback until required fields close.' } },
+    alternateDispositionsByLifecycle: { 'input-complete': [CONTENT_GATED_GENERIC_FALLBACK] },
     why: 'GRADUATED Phase 7: send-prompt input is provider-owned only for the agent_code namespace; failures keep operation-specific diagnostics in the raw protocol disclosure.',
   }),
   'claude.semantic.mcp-orchestration-wait-agents.v1': defineRenderShape({
@@ -364,6 +391,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     fixtures: { final: ["rendering-bundles/2026-06-21T17-32-48-749-5e75540c.json","rendering-bundles/2026-06-21T20-14-23-131-62432945.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch', protocolId: 'agent-code.orchestration' },
     dispositionByLifecycle: { prefix: { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'Incomplete provider input remains visible through the bounded fallback until required fields close.' } },
+    alternateDispositionsByLifecycle: { 'input-complete': [CONTENT_GATED_GENERIC_FALLBACK] },
     why: 'GRADUATED Phase 7: wait results render bounded agent summaries and lazy child output; the 2026-07-17 complete-input variant is folded into the same visual operation.',
   }),
   'claude.semantic.notebookedit.v1': defineRenderShape({
@@ -398,6 +426,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     },
     fixtures: { final: ["rendering-bundles/2026-06-04T09-09-57-625-4177cefb.json","rendering-bundles/2026-06-04T09-14-29-649-4177cefb.json","rendering-bundles/2026-06-14T13-59-16-931-4757ae44.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch' },
+    alternateDispositions: [CONTENT_GATED_GENERIC_FALLBACK],
     why: 'GRADUATED Phase 7: complete semantic Read input is converted to the committed ToolUseBlock contract and routed through the same Claude read adapter/component; prefixes remain visible.',
   }),
   'claude.semantic.skill.v1': defineRenderShape({
@@ -415,6 +444,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     },
     fixtures: { final: ["rendering-bundles/2026-06-04T09-09-57-625-4177cefb.json","rendering-bundles/2026-06-04T09-14-29-649-4177cefb.json","rendering-bundles/2026-06-14T14-25-07-012-a8ad1ebb.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch' },
+    alternateDispositions: [CONTENT_GATED_GENERIC_FALLBACK],
     why: 'GRADUATED Phase 8: complete Skill input renders through the Claude-owned task activity adapter; the paired launch acknowledgement is absorbed only after its captured grammar validates.',
   }),
   'claude.semantic.taskcreate.v1': defineRenderShape({
@@ -433,6 +463,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     fixtures: { final: ["rendering-bundles/2026-06-04T09-09-57-625-4177cefb.json","rendering-bundles/2026-06-04T09-14-29-649-4177cefb.json","rendering-bundles/2026-06-22T09-05-45-698-7733b0fc.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch' },
     dispositionByLifecycle: { prefix: { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'Task identity and descriptions are not complete until all required TaskCreate fields close.' } },
+    alternateDispositionsByLifecycle: { 'input-complete': [CONTENT_GATED_GENERIC_FALLBACK] },
     why: 'GRADUATED Phase 8: complete semantic TaskCreate input shares the committed lifecycle card; incomplete prefixes retain bounded raw evidence.',
   }),
   'claude.semantic.taskupdate.v1': defineRenderShape({
@@ -451,6 +482,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     fixtures: { final: ["rendering-bundles/2026-06-04T09-14-29-649-4177cefb.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch' },
     dispositionByLifecycle: { prefix: { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'A task id plus a recognized terminal/in-progress status is required before specialization.' } },
+    alternateDispositionsByLifecycle: { 'input-complete': [CONTENT_GATED_GENERIC_FALLBACK] },
     why: 'GRADUATED Phase 8: recognized TaskUpdate statuses now read as lifecycle transitions; drifted statuses remain generic rather than being guessed.',
   }),
   'claude.semantic.text.v1': defineRenderShape({
@@ -506,6 +538,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     fixtures: { final: ["rendering-bundles/2026-06-04T09-09-57-625-4177cefb.json","rendering-bundles/2026-06-04T09-14-29-649-4177cefb.json","rendering-bundles/2026-06-14T15-52-20-411-b728adb8.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch' },
     dispositionByLifecycle: { prefix: { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'Incomplete provider input remains visible through the bounded fallback until required fields close.' } },
+    alternateDispositionsByLifecycle: { 'input-complete': [CONTENT_GATED_GENERIC_FALLBACK] },
     why: 'GRADUATED Phase 7: parsed semantic ToolSearch reuses the committed structured discovery row and result adapter instead of maintaining a second live JSON grammar.',
   }),
   'claude.semantic.webfetch.v1': defineRenderShape({
@@ -524,6 +557,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     fixtures: { final: ["rendering-shapes/claude/web-fetch/semantic-final.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch' },
     dispositionByLifecycle: { prefix: { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'Incomplete provider input remains visible through the bounded fallback until required fields close.' } },
+    alternateDispositionsByLifecycle: { 'input-complete': [CONTENT_GATED_GENERIC_FALLBACK] },
     why: 'GRADUATED Phase 7 from live capture: authoritative parsed input reuses the committed WebFetch adapter; the synthetic fixture preserves the captured structure without inventing a frozen-bundle claim.',
   }),
   'claude.semantic.websearch.v1': defineRenderShape({
@@ -542,6 +576,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     fixtures: { final: ["rendering-shapes/claude/web-search/semantic-final.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch' },
     dispositionByLifecycle: { prefix: { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'Incomplete provider input remains visible through the bounded fallback until required fields close.' } },
+    alternateDispositionsByLifecycle: { 'input-complete': [CONTENT_GATED_GENERIC_FALLBACK] },
     why: 'GRADUATED Phase 7 from live capture: authoritative parsed input reuses the committed WebSearch adapter; streaming prefixes keep the bounded generic path until the query closes.',
   }),
   'claude.semantic.write.v1': defineRenderShape({
@@ -560,7 +595,10 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     fixtures: { final: ["rendering-bundles/2026-06-14T14-25-07-012-a8ad1ebb.json","rendering-bundles/2026-06-14T14-32-42-750-a8ad1ebb.json","rendering-bundles/2026-06-14T14-32-54-340-a8ad1ebb.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch' },
     dispositionByLifecycle: { prefix: { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'A prefix without a closed file path remains visible through the bounded structured fallback.' } },
-    alternateDispositionsByLifecycle: { prefix: [{ kind: 'specialized', rendererId: 'claude.rows.dispatch' }] },
+    alternateDispositionsByLifecycle: {
+      prefix: [{ kind: 'specialized', rendererId: 'claude.rows.dispatch' }],
+      'input-complete': [CONTENT_GATED_GENERIC_FALLBACK],
+    },
     why: 'GRADUATED Phase 10: complete Write input is provider-owned; streaming input earns the partial file card only after the bounded scanner closes file_path. Both legal prefix routes are declared rather than hidden behind a planned wildcard.',
   }),
   'claude.tool-result.tool-result.v1': defineRenderShape({
@@ -583,6 +621,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
       { kind: 'absorbed', ownerRendererId: 'claude.rows.dispatch', reason: 'A validated paired provider card preserves the useful result evidence.' },
       { kind: 'absorbed', ownerRendererId: 'claude.rows.dispatch', protocolId: 'agent-code.orchestration', reason: 'The source-controlled Agent Code orchestration card preserves its validated result protocol.' },
       { kind: 'absorbed', ownerRendererId: 'claude.rows.dispatch', protocolId: 'agent-code.workspace', reason: 'The source-controlled Agent Code workspace card preserves its validated result protocol.' },
+      { kind: 'absorbed', ownerRendererId: 'claude.rows.dispatch', protocolId: 'agent-code.workflow', reason: 'The source-controlled Agent Code workflow card preserves its validated result protocol.' },
       { kind: 'absorbed', ownerRendererId: 'shared.command', protocolId: 'command.git', reason: 'The paired Git operation view preserves the bounded result evidence.' },
     ],
     why: 'GRADUATED Phase 10: the paired operation boundary, not the uniform result envelope, decides ownership. The catalog enumerates the only legal visible/absorbed routes and every absorption names its evidence owner.',
@@ -602,6 +641,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     },
     fixtures: { final: ["rendering-shapes/claude/agent/final.json","rendering-bundles/2026-06-04T09-09-57-625-4177cefb.json","rendering-bundles/2026-06-04T09-14-29-649-4177cefb.json","rendering-bundles/2026-06-14T13-59-16-931-4757ae44.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch' },
+    alternateDispositions: [CONTENT_GATED_GENERIC_FALLBACK],
     why: 'Observed across the frozen corpus and fresh 2026-07-16 recordings; Phase 7 moves the built-in Claude Agent grammar off the shared spawn interceptor into a provider-owned paired card.',
   }),
   'claude.tool-use.askuserquestion.v1': defineRenderShape({
@@ -619,6 +659,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     },
     fixtures: { final: ["rendering-bundles/2026-06-21T18-16-49-177-fc397785.json","rendering-bundles/2026-06-21T19-19-55-972-62432945.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch' },
+    alternateDispositions: [CONTENT_GATED_GENERIC_FALLBACK],
     why: 'GRADUATED Phase 8: committed questions and their losslessly-carried answers now render through the Claude provider component, with validated result absorption instead of a central name exception.',
   }),
   'claude.tool-use.bash.v1': defineRenderShape({
@@ -638,6 +679,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch' },
     alternateDispositions: [
       { kind: 'specialized', rendererId: 'shared.command', protocolId: 'command.git' },
+      CONTENT_GATED_GENERIC_FALLBACK,
     ],
     why: 'GRADUATED Phase 10: Claude operation dispatch owns Bash and chooses either its normal command row or the evidence-backed Git formatter. No central feed interception remains, and both routes carry exact receipts.',
   }),
@@ -656,6 +698,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     },
     fixtures: { final: ["rendering-bundles/2026-06-14T13-59-16-931-4757ae44.json","rendering-bundles/2026-06-14T14-02-05-796-a8ad1ebb.json","rendering-bundles/2026-06-14T15-52-20-411-b728adb8.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch' },
+    alternateDispositions: [CONTENT_GATED_GENERIC_FALLBACK],
     why: 'Seeded from the 48-bundle corpus + 2026-07-16 live capture (12 sightings); structural variants share this id. GRADUATED 2026-07-16: cut over to the code-edit protocol (adapter + CodeEditView); receipts must name this renderer or the sighting files as misrouted',
   }),
   'claude.tool-use.lsp.v1': defineRenderShape({
@@ -741,6 +784,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     },
     fixtures: { final: ["rendering-bundles/2026-06-29T14-11-47-099-1b2b5e96.json","rendering-bundles/2026-06-29T14-13-09-044-1b2b5e96.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch', protocolId: 'agent-code.orchestration' },
+    alternateDispositions: [CONTENT_GATED_GENERIC_FALLBACK],
     why: 'GRADUATED Phase 7: the provider adapter proves the exact agent_code namespace before the owned orchestration close card can claim this committed operation.',
   }),
   'claude.tool-use.mcp-orchestration-close-run.v1': defineRenderShape({
@@ -758,6 +802,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     },
     fixtures: { final: ["rendering-bundles/2026-06-21T17-32-48-749-5e75540c.json","rendering-bundles/2026-06-21T18-16-49-177-fc397785.json","rendering-bundles/2026-06-21T19-19-55-972-62432945.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch', protocolId: 'agent-code.orchestration' },
+    alternateDispositions: [CONTENT_GATED_GENERIC_FALLBACK],
     why: 'GRADUATED Phase 7: close-run uses the source-controlled Agent Code result contract and retains closed/skipped session ids in the raw protocol disclosure.',
   }),
   'claude.tool-use.mcp-orchestration-create-agent.v1': defineRenderShape({
@@ -775,6 +820,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     },
     fixtures: { final: ["rendering-bundles/2026-06-14T15-52-20-411-b728adb8.json","rendering-bundles/2026-06-21T17-32-48-749-5e75540c.json","rendering-bundles/2026-06-21T19-19-55-972-62432945.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch', protocolId: 'agent-code.orchestration' },
+    alternateDispositions: [CONTENT_GATED_GENERIC_FALLBACK],
     why: 'GRADUATED Phase 7: committed create-agent bypasses the deleted central name-only spawn route and renders the owned Agent Code lifecycle/result protocol.',
   }),
   'claude.tool-use.mcp-orchestration-list-agents.v1': defineRenderShape({
@@ -792,6 +838,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     },
     fixtures: { final: ["rendering-bundles/2026-06-14T15-52-20-411-b728adb8.json","rendering-bundles/2026-06-21T18-16-49-177-fc397785.json","rendering-bundles/2026-06-21T20-14-23-131-62432945.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch', protocolId: 'agent-code.orchestration' },
+    alternateDispositions: [CONTENT_GATED_GENERIC_FALLBACK],
     why: 'GRADUATED Phase 7: list results use a capped agent table while the full structured protocol stays available behind a lazy disclosure.',
   }),
   'claude.tool-use.mcp-orchestration-read-agent.v1': defineRenderShape({
@@ -809,6 +856,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     },
     fixtures: { final: ["rendering-bundles/2026-06-14T15-52-20-411-b728adb8.json","rendering-bundles/2026-06-29T14-11-47-099-1b2b5e96.json","rendering-bundles/2026-06-29T14-13-09-044-1b2b5e96.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch', protocolId: 'agent-code.orchestration' },
+    alternateDispositions: [CONTENT_GATED_GENERIC_FALLBACK],
     why: 'GRADUATED Phase 7: Agent Code output is source-bounded and then DOM-bounded again with per-agent/per-message lazy disclosures; parser drift falls through visibly.',
   }),
   'claude.tool-use.mcp-orchestration-send-prompt.v1': defineRenderShape({
@@ -826,6 +874,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     },
     fixtures: { final: ["rendering-bundles/2026-06-14T15-52-20-411-b728adb8.json","rendering-bundles/2026-06-29T14-11-47-099-1b2b5e96.json","rendering-bundles/2026-06-29T14-13-09-044-1b2b5e96.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch', protocolId: 'agent-code.orchestration' },
+    alternateDispositions: [CONTENT_GATED_GENERIC_FALLBACK],
     why: 'GRADUATED Phase 7: prompt text is collapsed/lazy, target identity remains visible, and uncertain delivery diagnostics are retained instead of collapsed to success/failure folklore.',
   }),
   'claude.tool-use.mcp-orchestration-wait-agents.v1': defineRenderShape({
@@ -843,6 +892,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     },
     fixtures: { final: ["rendering-bundles/2026-06-21T17-32-48-749-5e75540c.json","rendering-bundles/2026-06-21T18-16-49-177-fc397785.json","rendering-bundles/2026-06-21T20-14-23-131-62432945.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch', protocolId: 'agent-code.orchestration' },
+    alternateDispositions: [CONTENT_GATED_GENERIC_FALLBACK],
     why: 'GRADUATED Phase 7: wait is an owned multi-agent protocol with capped rows and nested lazy outputs; the 2026-07-17 cap-field variant joins the same visual operation.',
   }),
   'claude.tool-use.mcp-ref-search-documentation.v1': defineRenderShape({
@@ -911,6 +961,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     },
     fixtures: { final: ["rendering-shapes/claude/read/final.json","rendering-bundles/2026-06-04T09-09-57-625-4177cefb.json","rendering-bundles/2026-06-04T09-14-29-649-4177cefb.json","rendering-bundles/2026-06-14T13-59-16-931-4757ae44.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch' },
+    alternateDispositions: [CONTENT_GATED_GENERIC_FALLBACK],
     why: 'Observed in the frozen corpus and live recordings; Phase 7 routes the committed invocation through the provider-owned Read component.',
   }),
   'claude.tool-use.schedulewakeup.v1': defineRenderShape({
@@ -928,6 +979,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     },
     fixtures: { final: ["rendering-bundles/2026-07-07T13-17-20-472-5b19529f.json","rendering-bundles/2026-07-07T13-17-48-452-5b19529f.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch' },
+    alternateDispositions: [CONTENT_GATED_GENERIC_FALLBACK],
     why: 'GRADUATED Phase 8: the captured delay/reason/prompt contract renders as a wake lifecycle card with the full prompt behind explicit expansion.',
   }),
   'claude.tool-use.skill.v1': defineRenderShape({
@@ -945,6 +997,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     },
     fixtures: { final: ["rendering-bundles/2026-06-04T09-09-57-625-4177cefb.json","rendering-bundles/2026-06-04T09-14-29-649-4177cefb.json","rendering-bundles/2026-06-14T14-25-07-012-a8ad1ebb.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch' },
+    alternateDispositions: [CONTENT_GATED_GENERIC_FALLBACK],
     why: 'GRADUATED Phase 8: committed Skill input and its strict launch acknowledgement share one provider-owned activity row.',
   }),
   'claude.tool-use.taskcreate.v1': defineRenderShape({
@@ -962,6 +1015,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     },
     fixtures: { final: ["rendering-bundles/2026-06-04T09-09-57-625-4177cefb.json","rendering-bundles/2026-06-04T09-14-29-649-4177cefb.json","rendering-bundles/2026-06-22T09-05-45-698-7733b0fc.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch' },
+    alternateDispositions: [CONTENT_GATED_GENERIC_FALLBACK],
     why: 'GRADUATED Phase 8: committed TaskCreate now exposes subject/description/active form as one lifecycle card and preserves exact input on demand.',
   }),
   'claude.tool-use.taskget.v1': defineRenderShape({
@@ -1030,6 +1084,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     },
     fixtures: { final: ["rendering-bundles/2026-06-04T09-14-29-649-4177cefb.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch' },
+    alternateDispositions: [CONTENT_GATED_GENERIC_FALLBACK],
     why: 'GRADUATED Phase 8: committed TaskUpdate displays its task id and proven status while unknown status generations fall through visibly.',
   }),
   'claude.tool-use.toolsearch.v1': defineRenderShape({
@@ -1047,6 +1102,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     },
     fixtures: { final: ["rendering-shapes/claude/tool-search/final.json","rendering-bundles/2026-06-04T09-09-57-625-4177cefb.json","rendering-bundles/2026-06-04T09-14-29-649-4177cefb.json","rendering-bundles/2026-06-14T15-52-20-411-b728adb8.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch' },
+    alternateDispositions: [CONTENT_GATED_GENERIC_FALLBACK],
     why: 'Observed in the frozen corpus and live recordings; Phase 7 routes the committed invocation through the provider-owned ToolSearch component.',
   }),
   'claude.tool-use.webfetch.v1': defineRenderShape({
@@ -1064,6 +1120,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     },
     fixtures: { final: ["rendering-shapes/claude/web-fetch/final.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch' },
+    alternateDispositions: [CONTENT_GATED_GENERIC_FALLBACK],
     why: 'Observed in fresh 2026-07-16 recordings; Phase 7 routes committed WebFetch invocation and paired string output through provider-owned components.',
   }),
   'claude.tool-use.websearch.v1': defineRenderShape({
@@ -1081,6 +1138,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     },
     fixtures: { final: ["rendering-shapes/claude/web-search/final.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch' },
+    alternateDispositions: [CONTENT_GATED_GENERIC_FALLBACK],
     why: 'Observed in fresh 2026-07-16 recordings; Phase 7 routes committed WebSearch invocation and paired string output through provider-owned components.',
   }),
   'claude.tool-use.write.v1': defineRenderShape({
@@ -1098,6 +1156,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     },
     fixtures: { final: ["rendering-bundles/2026-06-14T14-25-07-012-a8ad1ebb.json","rendering-bundles/2026-06-14T14-32-42-750-a8ad1ebb.json","rendering-bundles/2026-06-14T14-32-54-340-a8ad1ebb.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch' },
+    alternateDispositions: [CONTENT_GATED_GENERIC_FALLBACK],
     why: 'Seeded from the 48-bundle corpus + 2026-07-16 live capture (16 sightings); structural variants share this id. GRADUATED 2026-07-16: cut over to the code-edit protocol (adapter + CodeEditView); receipts must name this renderer or the sighting files as misrouted',
   }),})
 

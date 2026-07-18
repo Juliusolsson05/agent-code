@@ -136,6 +136,22 @@ function blockContentKind(b: SemanticBlockLike): RenderCandidate['contentKind'] 
   return 'assistant-text'
 }
 
+/** The exact reasoning payload the semantic painter can put on screen.
+ *
+ * WHY this is shared with SemanticLiveBlockRow: candidate admission and paint
+ * receipts used to carry two subtly different predicates. The collector
+ * checked all four producer fields with trim(), while the painter checked a
+ * nullish-coalesced subset and later rendered whitespace-only text. That let
+ * debug claim a selected/absorbed row opposite to what React actually painted.
+ * Returning the original string preserves formatting; trim is admission only.
+ */
+export function semanticThinkingText(b: SemanticBlockLike): string | null {
+  for (const candidate of [b.thinking, b.reasoningSummary, b.reasoningText, b.text]) {
+    if (typeof candidate === 'string' && candidate.trim().length > 0) return candidate
+  }
+  return null
+}
+
 /** The non-empty `chars` payload of a Codex write_stdin tool block, or ''.
  *  Mirrors the retired renderUnits.writeStdinChars: b.text is always '' for a
  *  tool block, so the real chars must be read from parsedInput / argumentsJson /
@@ -193,12 +209,7 @@ function collectTurn(
     // thinking || reasoningSummary || reasoningText) so live and ghost agree
     // on what counts as a paintable reasoning block.
     if (kind === 'thinking') {
-      const hasThinkingContent =
-        (b.thinking !== undefined && b.thinking.trim().length > 0) ||
-        (b.reasoningSummary !== undefined && b.reasoningSummary.trim().length > 0) ||
-        (b.reasoningText !== undefined && b.reasoningText.trim().length > 0) ||
-        (b.text !== undefined && b.text.trim().length > 0)
-      if (!hasThinkingContent) {
+      if (semanticThinkingText(b) === null) {
         out.decisions.push({ candidateId: id, selected: false, reason: 'empty-thinking', evidence: [] })
         return
       }

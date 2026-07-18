@@ -12,7 +12,12 @@ export function isWorkflowRunToolName(name: string | null | undefined): boolean 
   const normalized = name.trim().toLowerCase()
   return (
     normalized === 'workflow_run' ||
-    normalized === 'mcp__agent_code__workflow_run'
+    normalized === 'mcp__agent_code__workflow_run' ||
+    // Older MCP clients serialized the same source-controlled Agent Code namespace with slash or
+    // colon separators. Keep those two exact historical spellings for replay without restoring the
+    // old suffix matcher, which also admitted unrelated servers such as external workflow tools.
+    normalized === 'agent-code/workflow_run' ||
+    normalized === 'agent-code:workflow_run'
   )
 }
 
@@ -21,7 +26,9 @@ export function isWorkflowResumeToolName(name: string | null | undefined): boole
   const normalized = name.trim().toLowerCase()
   return (
     normalized === 'workflow_resume' ||
-    normalized === 'mcp__agent_code__workflow_resume'
+    normalized === 'mcp__agent_code__workflow_resume' ||
+    normalized === 'agent-code/workflow_resume' ||
+    normalized === 'agent-code:workflow_resume'
   )
 }
 

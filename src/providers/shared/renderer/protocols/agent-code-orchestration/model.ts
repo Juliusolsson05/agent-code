@@ -1,6 +1,7 @@
 import { asRecord } from '@shared/lib/asRecord'
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
-import { tryExtractJson } from '@providers/shared/renderer/rows/jsonToolPresentation'
+
+import { parseAgentCodeResultBlockJson } from '../agent-code-result'
 
 // Agent Code orchestration is a protocol we own, not a guess about MCP in
 // general. Provider adapters are responsible for proving that their wire name
@@ -170,7 +171,7 @@ export function fromAgentCodeOrchestrationResult(
   if (block.is_error === true) return null
   const exact = exactResultSource(block.content)
   if (exact === null) return null
-  const parsed = tryExtractJson(exact)
+  const parsed = parseAgentCodeResultBlockJson(block, exact)
   const value = asRecord(parsed)
   if (!value || typeof value.ok !== 'boolean') return null
 

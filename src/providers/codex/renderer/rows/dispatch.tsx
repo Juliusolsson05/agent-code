@@ -7,6 +7,7 @@ import {
 import {
   fromCodexExecCommand,
   fromCodexExecScript,
+  stripCodexTransportEnvelope,
 } from '@providers/codex/renderer/adapters/command'
 import { CommandView } from '@providers/shared/renderer/protocols/command/CommandView'
 
@@ -39,23 +40,29 @@ import { asRecord } from '@shared/lib/asRecord'
 import type {
   ProviderOperationDecision,
   ProviderOperationInput,
+  ProviderResultDecision,
   ProviderSpecializedReceipt,
 } from '@shared/types/providerConfig'
 import { fromCodexGitOperation } from '@providers/codex/renderer/adapters/git'
 import { GitOperationView } from '@providers/shared/renderer/protocols/command/formatters/git'
 import { toolResultContentText } from '@providers/shared/renderer/rows/toolResultContent'
 
-function codexOperationReceipt(toolUse: ToolUseBlock): ProviderSpecializedReceipt {
-  // Receipt protocol ids are proof-bearing claims. Only our source-controlled
-  // Agent Code adapters may mint them; open-world MCP and generated exec
-  // shapes remain ordinary Codex specialization or the shared fallback.
-  if (fromCodexAgentCodeOrchestrationUse(toolUse)) {
-    return { rendererId: 'codex.rows.dispatch', protocolId: 'agent-code.orchestration' }
+type CodexToolUseAdmission = {
+  node: ReactNode
+  receipt: ProviderSpecializedReceipt
+}
+
+function codexAdmission(
+  node: ReactNode,
+  protocolId?: string,
+): CodexToolUseAdmission {
+  return {
+    node,
+    receipt: {
+      rendererId: 'codex.rows.dispatch',
+      ...(protocolId ? { protocolId } : {}),
+    },
   }
-  if (fromCodexAgentCodeWorkspaceUse(toolUse)) {
-    return { rendererId: 'codex.rows.dispatch', protocolId: 'agent-code.workspace' }
-  }
-  return { rendererId: 'codex.rows.dispatch' }
 }
 
 export function renderCodexOperation(
@@ -85,89 +92,108 @@ export function renderCodexOperation(
     streaming: input.streaming,
     result: input.result,
   })
-  const toolResult = input.result
-    ? renderCodexToolResult(input.result, { sourceTool: input.toolUse })
-    : undefined
   const toolInput = asRecord(input.toolUse.input)
   const emptyContinuationPoll = input.toolUse.name === 'write_stdin' &&
     (typeof toolInput?.chars !== 'string' || toolInput.chars.length === 0)
-  const receipt = codexOperationReceipt(input.toolUse)
-  return {
-    toolUse: emptyContinuationPoll
-      ? {
-          action: 'absorb',
-          ownerRenderId: 'codex.command-continuation',
-          protocolId: 'command.continuation',
-          reason: 'empty write_stdin is a transport poll owned by the running command surface',
-        }
-      : toolUse === undefined
+  const toolUseDecision: ProviderResultDecision = emptyContinuationPoll
+    ? {
+        action: 'absorb',
+        ownerRenderId: 'codex.command-continuation',
+        protocolId: 'command.continuation',
+        reason: 'empty write_stdin is a transport poll owned by the running command surface',
+      }
+    : toolUse === undefined
       ? { action: 'fallback' }
       : {
           action: 'render',
-          node: toolUse,
-          receipt,
-        },
-    toolResult: !input.result
-      ? null
-      : toolResult === undefined
-        ? { action: 'fallback' }
-        : toolResult === null
-          ? emptyContinuationPoll
-            ? {
-                action: 'absorb',
-                ownerRenderId: 'codex.command-continuation',
-                protocolId: 'command.continuation',
-                reason: 'empty poll acknowledgement belongs to the already-running command surface',
-              }
-            : {
-                action: 'absorb',
-                ownerRenderId: receipt.rendererId,
-                ...(receipt.protocolId ? { protocolId: receipt.protocolId } : {}),
-                reason: 'provider operation card validated and consumed its paired result',
-              }
-          : {
-              action: 'render',
-              node: toolResult,
-              receipt,
-            },
+          node: toolUse.node,
+          receipt: toolUse.receipt,
+        }
+
+  const toolResult = input.result
+    ? renderCodexToolResult(input.result, { sourceTool: input.toolUse })
+    : undefined
+  let toolResultDecision: ProviderResultDecision | null = null
+  if (input.result) {
+    if (toolResult === undefined) {
+      toolResultDecision = { action: 'fallback' }
+    } else if (toolResult !== null) {
+      toolResultDecision = {
+        action: 'render',
+        node: toolResult,
+        receipt: { rendererId: 'codex.rows.dispatch' },
+      }
+    } else if (toolUseDecision.action === 'render') {
+      toolResultDecision = {
+        action: 'absorb',
+        ownerRenderId: toolUseDecision.receipt.rendererId,
+        ...(toolUseDecision.receipt.protocolId
+          ? { protocolId: toolUseDecision.receipt.protocolId }
+          : {}),
+        reason: 'the admitted provider operation card validated and consumed its paired result',
+      }
+    } else if (toolUseDecision.action === 'absorb') {
+      toolResultDecision = {
+        action: 'absorb',
+        ownerRenderId: toolUseDecision.ownerRenderId,
+        ...(toolUseDecision.protocolId ? { protocolId: toolUseDecision.protocolId } : {}),
+        reason: 'the admitted continuation owner consumed its empty acknowledgement',
+      }
+    } else {
+      // WHY a result parser's `null` is only a candidate absorption: result
+      // metadata can look familiar even when a malformed invocation declined.
+      // Without an actually admitted owner, hiding the result would destroy
+      // the only visible evidence of drift or failure. The shared fallback is
+      // therefore mandatory whenever the paired invocation fell through.
+      toolResultDecision = { action: 'fallback' }
+    }
+  }
+  return {
+    toolUse: toolUseDecision,
+    toolResult: toolResultDecision,
   }
 }
 
 function renderCodexToolUse(
   block: ToolUseBlock,
   context: { live?: boolean; streaming?: boolean; result?: ToolResultBlock | null } = {},
-): ReactNode | undefined {
+): CodexToolUseAdmission | undefined {
   const agentCodeOrchestration = fromCodexAgentCodeOrchestrationUse(block)
   if (agentCodeOrchestration) {
-    return <AgentCodeOrchestrationView model={agentCodeOrchestration} />
+    return codexAdmission(
+      <AgentCodeOrchestrationView model={agentCodeOrchestration} />,
+      'agent-code.orchestration',
+    )
   }
   const agentCodeWorkspace = fromCodexAgentCodeWorkspaceUse(block)
   if (agentCodeWorkspace) {
-    return <AgentCodeWorkspaceView model={agentCodeWorkspace} />
+    return codexAdmission(
+      <AgentCodeWorkspaceView model={agentCodeWorkspace} />,
+      'agent-code.workspace',
+    )
   }
   const agentCodeWorkflow = fromCodexAgentCodeWorkflowUse(block)
   if (agentCodeWorkflow) {
-    return <AgentCodeWorkflowView model={agentCodeWorkflow} />
+    return codexAdmission(<AgentCodeWorkflowView model={agentCodeWorkflow} />)
   }
   const plan = fromCodexPlanUse(block)
-  if (plan) return <CodexPlanRow model={plan} />
+  if (plan) return codexAdmission(<CodexPlanRow model={plan} />)
   const imageGeneration = fromCodexImageGenerationUse(block)
-  if (imageGeneration) return <CodexImageGenerationRow model={imageGeneration} />
+  if (imageGeneration) return codexAdmission(<CodexImageGenerationRow model={imageGeneration} />)
   const web = fromCodexWebUse(block)
-  if (web) return <CodexWebRow model={web} />
+  if (web) return codexAdmission(<CodexWebRow model={web} />)
   const nativeSpawn = fromCodexNativeSpawnUse(block)
-  if (nativeSpawn) return <CodexNativeSpawnRow model={nativeSpawn} />
+  if (nativeSpawn) return codexAdmission(<CodexNativeSpawnRow model={nativeSpawn} />)
   // Provider-specific components below claim only grammars with evidence.
   // Every other Codex function call returns undefined at the end and reaches
   // the same bounded JsonToolRow used by other providers.
   if (block.name === 'apply_patch') {
     const model = fromCodexApplyPatch(block, {
       streaming: context.streaming,
-      running: context.live === true && !context.streaming && context.result == null,
       result: context.result,
     })
     return model
-      ? <CodexApplyPatchRow model={model} rawPatch={applyPatchText(block.input)} />
+      ? codexAdmission(<CodexApplyPatchRow model={model} rawPatch={applyPatchText(block.input)} />)
       : undefined
   }
   // Modern unified-exec wrappers may hide a patch inside the script
@@ -179,25 +205,32 @@ function renderCodexToolUse(
   if (block.name === 'exec' && isCodexApplyPatchUse(block, { streamingPrefix: context.streaming === true })) {
     const model = fromCodexApplyPatch(block, {
       streaming: context.streaming,
-      running: context.live === true && !context.streaming && context.result == null,
       result: context.result,
     })
     return model
-      ? <CodexApplyPatchRow model={model} rawPatch={applyPatchText(block.input)} />
+      ? codexAdmission(<CodexApplyPatchRow model={model} rawPatch={applyPatchText(block.input)} />)
       : undefined
   }
   // …and its plain-command case (Phase 6): extract every embedded
   // tools.exec_command call and render a real command card. Scripts with
   // neither patch nor command intent still fall to the generic row.
   if (block.name === 'exec') {
-    const model = fromCodexExecScript(block)
-    if (model) return <CommandView model={model} />
+    const model = fromCodexExecScript(block, {
+      streaming: context.streaming,
+      live: context.live,
+      result: context.result,
+    })
+    if (model) return codexAdmission(<CommandView model={model} />)
   }
   if (block.name === 'exec_command') {
-    const model = fromCodexExecCommand(block, { streaming: context.streaming })
-    return model ? <CommandView model={model} /> : undefined
+    const model = fromCodexExecCommand(block, {
+      streaming: context.streaming,
+      live: context.live,
+      result: context.result,
+    })
+    return model ? codexAdmission(<CommandView model={model} />) : undefined
   }
-  if (block.name === 'write_stdin') return <CodexWriteStdinRow block={block} />
+  if (block.name === 'write_stdin') return codexAdmission(<CodexWriteStdinRow block={block} />)
   // Unknown names deliberately fall through to the SHARED fallback
   // (JsonToolRow via Block.tsx) — the residue-plan P1 convergence. Codex
   // used to claim everything with CodexToolRow, which is why its MCP /
@@ -253,6 +286,11 @@ function renderCodexToolResult(
   // so every vanished row has a named absorption receipt.
   if (block.is_error !== true && kind === 'patch_apply_end') return null
   if (block.is_error !== true && kind === 'exec_command_end' && resultText === '') return null
+  if (
+    block.is_error !== true &&
+    source.name === 'exec' &&
+    stripCodexTransportEnvelope(resultText).trim() === ''
+  ) return null
   if (
     block.is_error !== true &&
     source.name === 'write_stdin' &&

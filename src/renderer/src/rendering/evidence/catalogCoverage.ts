@@ -135,9 +135,15 @@ export function classifySighting(
   if (sighting.outcome.kind === 'unknown') {
     return { kind: 'unknown-outcome', shapeId: def.id, actual: sighting.outcome }
   }
-  const alternates = def.alternateDispositionsByLifecycle?.[sighting.lifecycle]
-    ?? def.alternateDispositions
-    ?? []
+  // Global alternates remain legal at every declared lifecycle; a
+  // lifecycle-specific list ADDS routes for that milestone. Treating the
+  // latter as a replacement made adding one prefix-only route accidentally
+  // revoke an otherwise-valid global route at prefix, even though the type's
+  // two fields describe orthogonal scopes.
+  const alternates = [
+    ...(def.alternateDispositions ?? []),
+    ...(def.alternateDispositionsByLifecycle?.[sighting.lifecycle] ?? []),
+  ]
   const shapeMatches = sighting.outcome.shapeId === def.id
   const routeMatches = [expectedDisposition, ...alternates].some(disposition =>
     outcomeSatisfiesDisposition(disposition, sighting.outcome),
@@ -186,11 +192,13 @@ export type CatalogAuditFinding =
   | { kind: 'empty-fingerprints'; shapeId: string }
   | { kind: 'malformed-fingerprint'; shapeId: string; fingerprint: string }
   | { kind: 'duplicate-fingerprint'; fingerprint: string; shapeIds: readonly string[] }
+  | { kind: 'duplicate-shape-id'; shapeId: string }
+  | { kind: 'undeclared-lifecycle-route'; shapeId: string; lifecycle: string }
 
 /**
  * Structural audit of catalog entries themselves — the invariants the type
  * system cannot express. Run by the coverage test (Phase 1) and by
- * scripts/audit-rendering-shapes.mjs (Phase 3) so CI and the CLI report
+ * scripts/audit-rendering-shapes.mts (Phase 3) so CI and the CLI report
  * cannot disagree about what a healthy catalog is.
  *
  * Every declared route is audited, including lifecycle overrides and finite
@@ -203,8 +211,13 @@ export function auditRenderShapeCatalog(
   catalogs: readonly Readonly<Record<string, RenderShapeDefinition>>[],
 ): readonly CatalogAuditFinding[] {
   const findings: CatalogAuditFinding[] = []
+  const seenShapeIds = new Set<string>()
   for (const catalog of catalogs) {
     for (const def of Object.values(catalog)) {
+      if (seenShapeIds.has(def.id)) {
+        findings.push({ kind: 'duplicate-shape-id', shapeId: def.id })
+      }
+      seenShapeIds.add(def.id)
       if (def.fingerprints.length === 0) {
         findings.push({ kind: 'empty-fingerprints', shapeId: def.id })
       }
@@ -219,6 +232,19 @@ export function auditRenderShapeCatalog(
         ...(def.alternateDispositions ?? []),
         ...Object.values(def.alternateDispositionsByLifecycle ?? {}).flatMap(routes => routes ?? []),
       ]
+      const lifecycleRouteKeys = new Set([
+        ...Object.keys(def.dispositionByLifecycle ?? {}),
+        ...Object.keys(def.alternateDispositionsByLifecycle ?? {}),
+      ])
+      for (const lifecycle of lifecycleRouteKeys) {
+        // A route for a lifecycle the definition itself does not claim is
+        // dead catalog vocabulary: classifySightingStructure rejects it
+        // before route matching can ever run. Make that contradiction fail
+        // the audit instead of leaving a convincing but unreachable promise.
+        if (!def.lifecycles.includes(lifecycle as RenderShapeLifecycle)) {
+          findings.push({ kind: 'undeclared-lifecycle-route', shapeId: def.id, lifecycle })
+        }
+      }
       const hasFixture = def.fixtures.final.length > 0 || def.fixtures.prefixes.length > 0
       if (routes.some(route => route.kind === 'planned')) {
         findings.push({ kind: 'planned-shape', shapeId: def.id })

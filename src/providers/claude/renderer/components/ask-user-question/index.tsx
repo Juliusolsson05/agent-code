@@ -55,7 +55,10 @@ export function ClaudeAnsweredQuestionRow({
           <div className="text-[11px] text-ink-dim mt-0.5">
             {result
               ? 'response received — the unrecognized or failed result remains visible below'
-              : 'unanswered — the live picker owns the interaction'}
+              // WHY committed history cannot claim the picker is still live:
+              // a missing result can also mean a truncated/interrupted replay.
+              // The semantic live row owns interaction when it actually exists.
+              : 'no answer recorded'}
           </div>
         ) : null}
       </div>
