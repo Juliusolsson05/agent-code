@@ -2,16 +2,17 @@
 //
 // Provider adapters hand the command protocol one command string. This
 // formatter decides:
-//   - Is this a git invocation we have a custom widget for?
-//   - Which subcommand + flags did they use?
-//   - What paths did they pass?
+//   - Is the shell program solely one or more Git invocations?
+//   - Which familiar subcommand can use a rich parser?
+//   - Which broader or compound workflow needs the generic Git workflow card?
 //
 // Heuristic, not a shell parser. We care about the common shapes
 // agents actually emit ("git diff", "git diff --staged", "git
 // commit -m ...", "git add .", "git status", "git log --oneline
 // -5"). Anything exotic (pipes, subshells, aliases, `git -C <dir>`
-// invocations, `git config`, unknown subcommands) returns null so
-// the feed falls back to the generic tool renderer. A missed
+// invocations) returns null so the feed falls back to the generic command
+// renderer. Unknown but syntactically plain Git subcommands retain a generic
+// Git workflow card with exact raw output. A missed
 // detection is always safer than a wrong one.
 
 export type GitDiffIntent = {
@@ -69,6 +70,21 @@ export type GitPushIntent = {
   force: boolean
 }
 
+export type GitWorkflowStep = {
+  command: string
+  verb: string
+  args: string
+}
+
+export type GitWorkflowIntent = {
+  kind: 'workflow'
+  steps: GitWorkflowStep[]
+  operators: Array<'&&' | ';' | 'newline'>
+  /** The mutation or query that best names the workflow. This is display
+   * vocabulary only; every step remains visible and no output is discarded. */
+  primaryVerb: string
+}
+
 export type GitIntent =
   | GitDiffIntent
   | GitCommitIntent
@@ -76,11 +92,11 @@ export type GitIntent =
   | GitAddIntent
   | GitLogIntent
   | GitPushIntent
+  | GitWorkflowIntent
 
 /**
  * Detect a git intent from a command string. Returns null if:
  *   - the command isn't a straightforward git invocation
- *   - it's a git command we don't have a widget for
  *   - it's been composed with pipes/subshells/redirects that make
  *     the output unlikely to be clean git output
  *
@@ -123,26 +139,32 @@ export function detectGitIntent(cmd: string | undefined | null): GitIntent | nul
   // inside quoted runs, so the canonical `"$(cat <<'EOF' ... EOF)"` commit
   // message remains one segment.
   //
-  // Priority order encodes "what is the user actually trying to see":
-  // commit > push > log > diff > status > add. A commit chained after
-  // status renders as a commit card, not a status card, because the
-  // commit is the meaningful event. add is lowest because its output
-  // is usually empty and exists only as setup for whatever follows.
+  // WHY a chain is a workflow instead of one "winning" intent: collapsing
+  // `diff guard && reset && status` into diff made the actual mutation vanish;
+  // collapsing `add && diff --cached --check` into diff hid staging and its
+  // verification. One shell execution remains one card, but every Git step is
+  // retained and the primary mutation names the card.
   const split = splitTopLevel(trimmed)
   if (!split) return null
-  const { segments } = split
+  const { segments, operators } = split
   if (segments.length > 1) {
-    const intents: GitIntent[] = []
+    const steps: GitWorkflowStep[] = []
     for (const seg of segments) {
       const sub = detectGitIntent(seg.trim())
       if (!sub) return null
-      intents.push(sub)
+      if (sub.kind === 'workflow') steps.push(...sub.steps)
+      else {
+        const step = parsePlainGitStep(seg.trim())
+        if (!step) return null
+        steps.push(step)
+      }
     }
-    const priority: Record<GitIntent['kind'], number> = {
-      commit: 6, push: 5, log: 4, diff: 3, status: 2, add: 1,
+    return {
+      kind: 'workflow',
+      steps,
+      operators,
+      primaryVerb: primaryWorkflowVerb(steps),
     }
-    intents.sort((a, b) => priority[b.kind] - priority[a.kind])
-    return intents[0]
   }
 
   // Heredoc-commits (`git commit -m "$(cat <<'EOF' ... EOF)"`) are the
@@ -171,8 +193,33 @@ export function detectGitIntent(cmd: string | undefined | null): GitIntent | nul
     case 'add': return parseAdd(tokens)
     case 'log': return parseLog(tokens)
     case 'push': return parsePush(tokens)
-    default: return null
+    default: {
+      const step = parsePlainGitStep(trimmed)
+      return step
+        ? { kind: 'workflow', steps: [step], operators: [], primaryVerb: step.verb }
+        : null
+    }
   }
+}
+
+function parsePlainGitStep(command: string): GitWorkflowStep | null {
+  const match = /^git\s+([a-z][a-z-]*)\b\s*([\s\S]*)$/i.exec(command)
+  if (!match) return null
+  return { command, verb: match[1].toLowerCase(), args: match[2] ?? '' }
+}
+
+function primaryWorkflowVerb(steps: readonly GitWorkflowStep[]): string {
+  // Mutations outrank observations so `diff guard && reset && status` names
+  // the state change, while every guard/verification remains visible below.
+  const priority = [
+    'commit', 'push', 'merge', 'rebase', 'reset', 'stash', 'switch',
+    'checkout', 'restore', 'branch', 'tag', 'add', 'pull', 'fetch',
+    'worktree', 'submodule', 'status', 'diff', 'log', 'show', 'rev-parse',
+  ]
+  for (const verb of priority) {
+    if (steps.some(step => step.verb === verb)) return verb
+  }
+  return steps[0]?.verb ?? 'workflow'
 }
 
 /** Return the index immediately after a canonical `$(cat <<'EOF' … EOF)`
@@ -351,8 +398,12 @@ function parseCommit(cmd: string): GitCommitIntent | null {
  *
  * into three pieces without slicing the heredoc.
  */
-function splitTopLevel(s: string): { segments: string[] } | null {
+function splitTopLevel(s: string): {
+  segments: string[]
+  operators: Array<'&&' | ';' | 'newline'>
+} | null {
   const out: string[] = []
+  const operators: Array<'&&' | ';' | 'newline'> = []
   let buf = ''
   let i = 0
   let quote: '"' | "'" | null = null
@@ -383,18 +434,21 @@ function splitTopLevel(s: string): { segments: string[] } | null {
     // `&&` separator — two chars, only at top level.
     if (c === '&' && s[i + 1] === '&') {
       out.push(buf)
+      operators.push('&&')
       buf = ''
       i += 2
       continue
     }
     if (c === ';') {
       out.push(buf)
+      operators.push(';')
       buf = ''
       i++
       continue
     }
     if (c === '\n' || c === '\r') {
       out.push(buf)
+      operators.push('newline')
       buf = ''
       if (c === '\r' && s[i + 1] === '\n') i++
       i++
@@ -421,7 +475,7 @@ function splitTopLevel(s: string): { segments: string[] } | null {
   // trustworthy single Git operation. The caller recursively rejects the
   // empty segment instead of accidentally reparsing the unsplit original.
   if (buf || out.length > 0) out.push(buf)
-  return { segments: out }
+  return { segments: out, operators }
 }
 
 /**

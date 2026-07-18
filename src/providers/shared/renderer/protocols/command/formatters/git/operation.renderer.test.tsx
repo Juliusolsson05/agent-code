@@ -124,6 +124,100 @@ describe('provider-owned Git operation formatting', () => {
     expect(decision.toolResult?.action).not.toBe('absorb')
   })
 
+  it('normalizes the captured transparent unified exec before Git formatting', () => {
+    const decision = operation('codex', {
+      toolUse: {
+        type: 'tool_use',
+        id: 'git',
+        name: 'exec',
+        input: {
+          raw: 'const r = await tools.exec_command({cmd:"git status --short",workdir:"/repo"}); text(r.output);',
+        },
+      },
+      result: {
+        type: 'tool_result',
+        tool_use_id: 'git',
+        content: 'Script completed\nWall time 0.1 seconds\nOutput:\n\n M src/example.ts',
+        codex: { kind: 'custom_tool_call_output' },
+      } as never,
+    })
+
+    expect(decision.toolUse.action).toBe('render')
+    if (decision.toolUse.action !== 'render') return
+    expect(decision.toolUse.receipt).toEqual({
+      rendererId: 'shared.command',
+      protocolId: 'command.git',
+    })
+    expect(decision.toolResult).toMatchObject({
+      action: 'absorb',
+      ownerRenderId: 'shared.command',
+      protocolId: 'command.git',
+    })
+    render(decision.toolUse.node)
+    expect(screen.getByText('src/example.ts')).toBeInTheDocument()
+  })
+
+  it('renders the captured stash-and-verification chain as one Git workflow', () => {
+    const command = 'git stash push -u -m "snapshot" && git status --short --branch && git rev-parse HEAD && git rev-parse origin/main && git stash list -1'
+    const script = `const r = await tools.exec_command({cmd:${JSON.stringify(command)}}); text(r.output);`
+    const sha = '1fa345713623811d8fe6a2708ddb180f8fc0188a'
+    const decision = operation('codex', {
+      toolUse: { type: 'tool_use', id: 'git', name: 'exec', input: { raw: script } },
+      result: {
+        type: 'tool_result',
+        tool_use_id: 'git',
+        content: [
+          'Script completed',
+          'Wall time 0.4 seconds',
+          'Output:',
+          '',
+          'Saved working directory and index state On main: snapshot',
+          '## main...origin/main',
+          sha,
+          sha,
+          'stash@{0}: On main: snapshot',
+        ].join('\n'),
+        codex: { kind: 'custom_tool_call_output' },
+      } as never,
+    })
+
+    if (decision.toolUse.action !== 'render') throw new Error('expected Git workflow')
+    render(decision.toolUse.node)
+    expect(screen.getByText('git stash and verify')).toBeInTheDocument()
+    expect(screen.getByText('stash@{0}: On main: snapshot')).toBeInTheDocument()
+    expect(screen.getByText('HEAD matches origin/main')).toBeInTheDocument()
+    expect(screen.getAllByText('✓')).toHaveLength(5)
+  })
+
+  it('names a diff guard + mixed reset + status chain after its mutation', () => {
+    const command = 'git diff --cached --quiet && git reset --mixed origin/main && git status --short --branch'
+    const script = `const r = await tools.exec_command({cmd:${JSON.stringify(command)}}); text(r.output);`
+    const decision = operation('codex', {
+      toolUse: { type: 'tool_use', id: 'git', name: 'exec', input: { raw: script } },
+      result: {
+        type: 'tool_result',
+        tool_use_id: 'git',
+        content: [
+          'Script completed',
+          'Wall time 0.3 seconds',
+          'Output:',
+          '',
+          'Unstaged changes after reset:',
+          'M\tdocs/rendering.md',
+          'M\tsrc/renderer.ts',
+          '## main...origin/main',
+        ].join('\n'),
+        codex: { kind: 'custom_tool_call_output' },
+      } as never,
+    })
+
+    if (decision.toolUse.action !== 'render') throw new Error('expected Git workflow')
+    render(decision.toolUse.node)
+    expect(screen.getByText('git reset and inspect')).toBeInTheDocument()
+    expect(screen.getByText('Mixed reset · working-tree files preserved')).toBeInTheDocument()
+    expect(screen.getByText('2 changed paths')).toBeInTheDocument()
+  })
+
   it.each([
     'git status --short && npm test',
     'git commit -m "checkpoint" && npm test',

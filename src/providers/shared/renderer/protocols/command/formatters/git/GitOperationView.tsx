@@ -25,7 +25,7 @@ import { boundedTextPage } from '@renderer/lib/text/boundedText'
 import { escapeHtml, toHighlightLanguage } from '@shared/code/htmlHighlight'
 import { normalizeCodeLanguage } from '@shared/code/language'
 import { CommandView } from '@providers/shared/renderer/protocols/command/CommandView'
-import type { GitIntent } from './detect'
+import type { GitIntent, GitWorkflowIntent } from './detect'
 import type { GitOperationModel } from './model'
 import {
   parseGitCommit,
@@ -650,6 +650,108 @@ export const GitPushCard = memo(function GitPushCard({
 // Dispatcher — pick the right card for an intent
 // ---------------------------------------------------------------------------
 
+function workflowTitle(intent: GitWorkflowIntent): string {
+  if (intent.steps.length === 1) return intent.primaryVerb
+  switch (intent.primaryVerb) {
+    case 'stash': return 'stash and verify'
+    case 'reset': return 'reset and inspect'
+    case 'add': return 'stage and verify'
+    case 'fetch': return 'fetch and inspect'
+    default: return `${intent.primaryVerb} workflow`
+  }
+}
+
+function GitWorkflowCard({
+  intent,
+  output,
+  partial,
+}: {
+  intent: GitWorkflowIntent
+  output: string
+  partial: boolean
+}) {
+  const plain = stripAnsi(output)
+  const lines = plain.replace(/\r\n?/g, '\n').split('\n')
+  const allStepsProven = intent.operators.every(operator => operator === '&&')
+  const stashRef = [...lines].reverse().find(line => /^stash@\{\d+\}:/.test(line.trim()))?.trim()
+  const branch = lines.find(line => /^##\s+/.test(line))?.replace(/^##\s+/, '').trim()
+  const hashes = lines.filter(line => /^[0-9a-f]{40}$/.test(line.trim())).map(line => line.trim())
+  const verifiesMatchingRefs = intent.steps.some(step => /\brev-parse\s+HEAD\b/.test(step.command)) &&
+    intent.steps.some(step => /\brev-parse\s+origin\/main\b/.test(step.command)) &&
+    hashes.length >= 2 && hashes[0] === hashes[1]
+  const changedPaths = lines.filter(line =>
+    /^[ MADRCU?!]{2}\s+\S/.test(line) || /^[MADRCU?!]\t\S/.test(line),
+  ).length
+  const commit = intent.steps.some(step => step.verb === 'commit')
+    ? parseGitCommit(plain)
+    : null
+  const commitStats = commit?.filesChanged !== undefined
+    ? [
+        `${commit.filesChanged.toLocaleString()} ${commit.filesChanged === 1 ? 'file' : 'files'}`,
+        commit.insertions !== undefined ? `+${commit.insertions.toLocaleString()}` : null,
+        commit.deletions !== undefined ? `-${commit.deletions.toLocaleString()}` : null,
+      ].filter((part): part is string => part !== null).join(' · ')
+    : null
+  const push = intent.steps.some(step => step.verb === 'push')
+    ? parseGitPush(plain)
+    : null
+  const reset = intent.steps.find(step => step.verb === 'reset')
+  const resetMode = reset
+    ? /--hard\b/.test(reset.args)
+      ? 'Hard reset'
+      : /--soft\b/.test(reset.args)
+        ? 'Soft reset'
+        : /--merge\b/.test(reset.args)
+          ? 'Merge reset'
+          : /--keep\b/.test(reset.args)
+            ? 'Keep reset'
+            : 'Mixed reset'
+    : null
+  const summaries = [
+    stashRef,
+    commit?.sha ? `${commit.sha}  ${commit.subject ?? 'commit created'}` : null,
+    commitStats,
+    push?.upToDate ? 'Everything already up to date' : null,
+    push && push.refs.length > 0 ? push.refs.map(ref => ref.ref).join(', ') : null,
+    resetMode ? `${resetMode}${resetMode === 'Mixed reset' ? ' · working-tree files preserved' : ''}` : null,
+    branch ? `Branch ${branch}` : null,
+    verifiesMatchingRefs ? 'HEAD matches origin/main' : null,
+    changedPaths > 0 ? `${changedPaths.toLocaleString()} changed ${changedPaths === 1 ? 'path' : 'paths'}` : null,
+  ].filter((summary): summary is string => summary !== null && summary !== undefined)
+
+  return (
+    <Card>
+      <GitCardHeader
+        sub={workflowTitle(intent)}
+        badges={<span className="text-[10.5px] uppercase tracking-wide text-muted">complete</span>}
+      />
+      {summaries.length > 0 ? (
+        <div className="flex flex-col gap-0.5 mb-2 text-[12px] text-ink-dim">
+          {summaries.map(summary => <div key={summary}>{summary}</div>)}
+        </div>
+      ) : null}
+      <ol className="list-none p-0 m-0 flex flex-col gap-0.5">
+        {intent.steps.map((step, index) => (
+          <li key={`${index}:${step.command}`} className="flex items-baseline gap-2 min-w-0">
+            <span className={allStepsProven ? 'text-success' : 'text-muted'}>
+              {allStepsProven ? '✓' : '•'}
+            </span>
+            <span className="font-code text-[11.5px] text-ink-dim truncate" title={step.command}>
+              {step.command}
+            </span>
+          </li>
+        ))}
+      </ol>
+      {summaries.length === 0 ? (
+        <pre className="font-code text-[11.5px] leading-[1.55] text-ink-dim whitespace-pre-wrap break-words m-0 mt-2">
+          {plain.trim().split('\n', 1)[0] || '(no output)'}
+        </pre>
+      ) : null}
+      {partial ? <PartialPreviewNotice /> : null}
+    </Card>
+  )
+}
+
 export function renderGitCard(intent: GitIntent, output: string): React.ReactNode {
   // WHY custom git cards enforce the same admission budget as generic tool
   // output: the parsers split output into files/hunks/lines and the diff card
@@ -672,6 +774,7 @@ export function renderGitCard(intent: GitIntent, output: string): React.ReactNod
       case 'add':    return <GitAddCard intent={intent} output={parseableOutput} partial={page.hasNext} />
       case 'log':    return <GitLogCard intent={intent} output={parseableOutput} partial={page.hasNext} />
       case 'push':   return <GitPushCard intent={intent} output={parseableOutput} partial={page.hasNext} />
+      case 'workflow': return <GitWorkflowCard intent={intent} output={parseableOutput} partial={page.hasNext} />
       default: return null
     }
   })()

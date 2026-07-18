@@ -6,6 +6,7 @@ import {
   parseApplyPatch,
 } from '@providers/codex/renderer/adapters/codeEdit'
 import {
+  fromCodexCommandOperation,
   fromCodexExecCommand,
   fromCodexExecScript,
 } from '@providers/codex/renderer/adapters/command'
@@ -19,6 +20,85 @@ import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 import { CodeEditView } from '@providers/shared/renderer/protocols/code-edit/CodeEditView'
 
 describe('Codex command review findings', () => {
+  it('normalizes a transparent unified exec into the same owned command operation', () => {
+    const toolUse: ToolUseBlock = {
+      type: 'tool_use',
+      id: 'unified-test',
+      name: 'exec',
+      input: {
+        raw: 'const r = await tools.exec_command({cmd:"npm test",workdir:"/repo",yield_time_ms:30000,max_output_tokens:12000}); text(r.output);',
+      },
+    }
+    const result = {
+      type: 'tool_result',
+      tool_use_id: toolUse.id,
+      content: 'Script completed\nWall time 0.2 seconds\nOutput:\n\nTests  12 passed',
+      codex: { kind: 'custom_tool_call_output' },
+    } as ToolResultBlock & { codex: { kind: string } }
+    const operation = fromCodexCommandOperation({ toolUse, result })
+
+    expect(operation).toMatchObject({
+      rawCommand: 'npm test',
+      ownsResult: true,
+      model: {
+        cwd: '/repo',
+        status: 'success',
+        output: 'Tests  12 passed',
+        conclusion: 'Tests: 12 passed',
+      },
+    })
+    const decision = renderCodexOperation({ toolUse, result, live: false, streaming: false })
+    expect(decision.toolResult).toMatchObject({
+      action: 'absorb',
+      ownerRenderId: 'codex.rows.dispatch',
+    })
+  })
+
+  it('extracts the captured serialized ExecCommandResult carrier without showing transport JSON', () => {
+    const toolUse: ToolUseBlock = {
+      type: 'tool_use',
+      id: 'serialized-command',
+      name: 'exec',
+      input: {
+        raw: 'const result = await tools.exec_command({cmd:"printf failed"}); text(JSON.stringify(result));',
+      },
+    }
+    const result = {
+      type: 'tool_result',
+      tool_use_id: toolUse.id,
+      content: [
+        'Script completed',
+        'Wall time 0.2 seconds',
+        'Output:',
+        '',
+        '{"exit_code":7,"output":"assertion failed\\nlast line","wall_time_seconds":0.2}',
+      ].join('\n'),
+      codex: { kind: 'custom_tool_call_output' },
+    } as ToolResultBlock & { codex: { kind: string } }
+
+    expect(fromCodexCommandOperation({ toolUse, result })).toMatchObject({
+      ownsResult: true,
+      model: {
+        status: 'failure',
+        exitCode: 7,
+        output: 'assertion failed\nlast line',
+        errorSummary: 'assertion failed',
+      },
+    })
+  })
+
+  it('does not absorb a command-looking script with unrelated JavaScript output', () => {
+    const toolUse: ToolUseBlock = {
+      type: 'tool_use',
+      id: 'ambiguous-command',
+      name: 'exec',
+      input: {
+        raw: 'const r = await tools.exec_command({cmd:"npm test"}); text(r.output); text("unrelated");',
+      },
+    }
+    expect(fromCodexCommandOperation({ toolUse, result: null })).toBeNull()
+  })
+
   it('routes sentinel-only scripts with real commands and discloses calls beyond the cap', () => {
     const calls = Array.from(
       { length: 8 },
@@ -239,6 +319,8 @@ describe('Codex catalog receipt alternates', () => {
   it('covers Git interception for both exec_command planes and committed empty polls', () => {
     const semanticExec = CODEX_RENDER_SHAPES['codex.semantic.exec-command.v1']
     const committedExec = CODEX_RENDER_SHAPES['codex.tool-use.exec-command.v1']
+    const semanticUnifiedExec = CODEX_RENDER_SHAPES['codex.semantic.exec.v1']
+    const committedUnifiedExec = CODEX_RENDER_SHAPES['codex.tool-use.exec.v1']
     const committedStdin = CODEX_RENDER_SHAPES['codex.tool-use.write-stdin.v1']
 
     expect(semanticExec.alternateDispositions).toContainEqual({
@@ -247,6 +329,16 @@ describe('Codex catalog receipt alternates', () => {
       protocolId: 'command.git',
     })
     expect(committedExec.alternateDispositions).toContainEqual({
+      kind: 'specialized',
+      rendererId: 'shared.command',
+      protocolId: 'command.git',
+    })
+    expect(semanticUnifiedExec.alternateDispositions).toContainEqual({
+      kind: 'specialized',
+      rendererId: 'shared.command',
+      protocolId: 'command.git',
+    })
+    expect(committedUnifiedExec.alternateDispositions).toContainEqual({
       kind: 'specialized',
       rendererId: 'shared.command',
       protocolId: 'command.git',

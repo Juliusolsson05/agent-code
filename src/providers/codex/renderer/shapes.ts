@@ -131,8 +131,9 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
     disposition: { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'An unrecognized unified-exec script remains visible through the bounded structured fallback.' },
     alternateDispositions: [
       { kind: 'specialized', rendererId: 'codex.rows.dispatch' },
+      { kind: 'specialized', rendererId: 'shared.command', protocolId: 'command.git' },
     ],
-    why: 'GRADUATED Phase 10: unified exec is admitted only after provider parsing proves an apply_patch call or embedded exec_command call. Arbitrary generated scripts stay generic; Git is intentionally not inferred from arbitrary JavaScript and is owned only by native exec_command shapes.',
+    why: 'GRADUATED Phase 10: unified exec is admitted only after provider parsing proves an apply_patch call or embedded exec_command call. Arbitrary generated scripts stay generic. A complete transparent single-command bridge now shares native exec_command operation ownership, including the finite Git route; ambiguous JavaScript and fan-outs retain separate result evidence.',
   }),
   'codex.semantic.exec-command.v1': defineRenderShape({
     id: 'codex.semantic.exec-command.v1',
@@ -593,8 +594,9 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
     disposition: { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'An unrecognized unified-exec script remains visible through the bounded structured fallback.' },
     alternateDispositions: [
       { kind: 'specialized', rendererId: 'codex.rows.dispatch' },
+      { kind: 'specialized', rendererId: 'shared.command', protocolId: 'command.git' },
     ],
-    why: 'GRADUATED Phase 10: committed unified exec uses the same conservative provider admission as the semantic plane. Actual patch calls and embedded commands are provider-owned, while every unrecognized script remains visible; Git interception is reserved for native exec_command.',
+    why: 'GRADUATED Phase 10: committed unified exec uses the same conservative provider admission as the semantic plane. Actual patch calls and embedded commands are provider-owned, while every unrecognized script remains visible. Transparent single-command bridges share native command operation ownership, including the finite Git route; ambiguous scripts never absorb their result.',
   }),
   'codex.tool-use.exec-command.v1': defineRenderShape({
     id: 'codex.tool-use.exec-command.v1',
