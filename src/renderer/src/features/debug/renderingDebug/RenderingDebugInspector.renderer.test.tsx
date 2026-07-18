@@ -12,10 +12,13 @@ class TestResizeObserver {
 
 describe('RenderingDebugInspector', () => {
   const writeText = vi.fn<(text: string) => Promise<void>>()
+  const save = vi.fn<(diagnosticJson: string) => Promise<void>>()
 
   beforeEach(() => {
     writeText.mockReset()
     writeText.mockResolvedValue(undefined)
+    save.mockReset()
+    save.mockResolvedValue(undefined)
     vi.stubGlobal('ResizeObserver', TestResizeObserver)
     Object.defineProperty(navigator, 'clipboard', {
       configurable: true,
@@ -65,6 +68,7 @@ describe('RenderingDebugInspector', () => {
         <RenderingDebugInspector
           sessionId="session-1"
           provider="codex"
+          onSave={save}
           onClose={() => undefined}
         />
       </>,
@@ -102,6 +106,10 @@ describe('RenderingDebugInspector', () => {
     expect(copied.shapePayload).toEqual(input.toolUse)
     expect(copied.renderer.component.name).toBe('CommandView')
     expect(copied.routingTrace[0].outcome).toBe('codex.rows.dispatch')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1))
+    expect(JSON.parse(save.mock.calls[0][0])).toEqual(copied)
   })
 
   it('adds no DOM metadata while the mode is disabled', () => {

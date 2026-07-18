@@ -17,6 +17,7 @@ const PREVIEW_CHARS = 100_000
 type Props = {
   sessionId: string
   provider: import('@shared/types/providerKind').AgentProviderKind | 'unknown'
+  onSave: (diagnosticJson: string) => Promise<void>
   onClose: () => void
 }
 
@@ -154,10 +155,11 @@ function preview(text: string): string {
     : `${text.slice(0, PREVIEW_CHARS)}\n\n[… preview truncated; copy retains all ${text.length.toLocaleString()} characters]`
 }
 
-export function RenderingDebugInspector({ sessionId, provider, onClose }: Props) {
+export function RenderingDebugInspector({ sessionId, provider, onSave, onClose }: Props) {
   const [selection, setSelection] = useState<RenderDebugSelection | null>(null)
   const [bounds, setBounds] = useState<Bounds | null>(null)
   const [copyState, setCopyState] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
   const selectedRef = useRef<HTMLElement | null>(null)
 
   const pane = useCallback((): HTMLElement | null => {
@@ -199,6 +201,10 @@ export function RenderingDebugInspector({ sessionId, provider, onClose }: Props)
         domPath: domPath(element, ownerPane),
       }
       selectedRef.current = element
+      // Status belongs to the previous snapshot. In particular, leaving
+      // "snapshot saved" visible after selecting a different element would
+      // falsely imply that the new selection is already durable.
+      setCopyState(null)
       setSelection(next)
       setBounds(selectedBounds(element))
     }
@@ -279,6 +285,24 @@ export function RenderingDebugInspector({ sessionId, provider, onClose }: Props)
     window.setTimeout(() => setCopyState(null), 1800)
   }, [])
 
+  const save = useCallback(async () => {
+    if (!allJson || saving) return
+    setSaving(true)
+    setCopyState(null)
+    try {
+      // Saving receives the exact same string shown and copied by this
+      // inspector. Reconstructing the record in the parent would introduce a
+      // second serialization path that could disagree with the selected HTML
+      // or route evidence at the moment the operator chose to preserve it.
+      await onSave(allJson)
+      setCopyState('snapshot saved')
+    } catch (error) {
+      setCopyState(`save failed: ${error instanceof Error ? error.message : String(error)}`)
+    } finally {
+      setSaving(false)
+    }
+  }, [allJson, onSave, saving])
+
   return (
     <>
       {bounds ? (
@@ -303,6 +327,14 @@ export function RenderingDebugInspector({ sessionId, provider, onClose }: Props)
           <span className="text-red-400">Rendering Debug Mode</span>
           <div className="flex items-center gap-2">
             {copyState ? <span className="normal-case text-accent">{copyState}</span> : null}
+            <button
+              type="button"
+              disabled={!selection || saving}
+              onClick={() => void save()}
+              className="border border-border rounded px-2 py-1 text-ink-dim hover:bg-canvas disabled:opacity-40"
+            >
+              {saving ? 'Saving…' : 'Save'}
+            </button>
             <button
               type="button"
               disabled={!selection}

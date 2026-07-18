@@ -29,6 +29,7 @@ export function DebugSurfacesImpl() {
   const toggleProxyDebugPanel = useAppStore(state => state.toggleProxyDebugPanel)
   const toggleHtmlDebugPanel = useAppStore(state => state.toggleHtmlDebugPanel)
   const toggleRenderingDebugMode = useAppStore(state => state.toggleRenderingDebugMode)
+  const openDebugBundleNotePrompt = useAppStore(state => state.openDebugBundleNotePrompt)
   const toggleDevDebugPanel = useAppStore(state => state.toggleDevDebugPanel)
   const agentViewMode = useAppStore(state => state.settings.agentViewMode)
   const devDebugEnabled = useDevDebugConfig(state => state.enabled)
@@ -36,6 +37,48 @@ export function DebugSurfacesImpl() {
   const targetId = commandTargetSessionId(workspace)
   if (!targetId) return null
   const kind = workspace.state.sessions[targetId]?.kind ?? DEFAULT_PROVIDER
+  const session = workspace.state.sessions[targetId]
+
+  const saveRenderingElement = async (diagnosticJson: string): Promise<void> => {
+    try {
+      // Element snapshots use the established manual debug-bundle path rather
+      // than a parallel storage directory. That gives them the same retention,
+      // incident-run provenance, searchable ledger, portable note.json, and
+      // filesystem safety checks as Save Debug Logs while keeping the actual
+      // renderer capture in one purpose-specific file.
+      const { bundlePath } = await window.api.saveDebugBundle({
+        sessionId: targetId,
+        kind,
+        reason: 'rendering-element',
+        cwd: session?.cwd ?? null,
+        providerSessionId: session?.providerSessionId ?? null,
+        files: [{ name: 'rendering-element.json', content: diagnosticJson }],
+      })
+
+      let clipboardOk = true
+      try {
+        await navigator.clipboard.writeText(bundlePath)
+      } catch {
+        clipboardOk = false
+      }
+      const prefix = clipboardOk ? 'element saved · copied path · ' : 'element saved · '
+      workspace.showPaneToast(targetId, `${prefix}${bundlePath}`, 6000)
+      // This is intentionally the same note flow used by Save Debug Logs. The
+      // snapshot is durable before the prompt opens, and Skip leaves a valid
+      // uncommented artifact instead of discarding the evidence the user just
+      // asked to preserve.
+      openDebugBundleNotePrompt({
+        bundlePath,
+        sessionId: targetId,
+        title: `Rendering element · ${kind}`,
+        description: session?.cwd ?? '',
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      workspace.showPaneToast(targetId, `element save failed: ${message}`, 5000)
+      throw error
+    }
+  }
 
   return (
     <>
@@ -72,6 +115,7 @@ export function DebugSurfacesImpl() {
         <RenderingDebugInspector
           sessionId={targetId}
           provider={kind === 'terminal' ? 'unknown' : kind}
+          onSave={saveRenderingElement}
           onClose={toggleRenderingDebugMode}
         />
       )}
