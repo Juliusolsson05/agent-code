@@ -1,0 +1,18 @@
+{
+  "evidence": "Curated from the 2026-07-16 Claude semantic capture soak; values are synthetic, structure is preserved.",
+  "semanticBlock": {
+    "kind": "tool_use",
+    "blockIndex": 0,
+    "toolName": "WebFetch",
+    "toolUseId": "web-fetch-semantic-fixture",
+    "text": "",
+    "thinking": "",
+    "inputJson": "{\"url\":\"https://example.com/docs\",\"prompt\":\"Summarize the page\"}",
+    "inputJsonValid": true,
+    "parsedInput": {
+      "url": "https://example.com/docs",
+      "prompt": "Summarize the page"
+    },
+    "finalized": true
+  }
+}

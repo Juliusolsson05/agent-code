@@ -1,4 +1,5 @@
 import { ipcMain } from 'electron'
+import type { RenderShapeAppendResult } from '@shared/types/renderShapes.js'
 
 import { readRecentPasteSessions } from '../pasteDebugJournal.js'
 import type { SessionRecorderManager } from '@main/recording/SessionRecorderManager.js'
@@ -139,21 +140,85 @@ export function registerDevDebugIpc(sessionRecorders: SessionRecorderManager | n
   // toggle correctly.
   ipcMain.handle(
     'record-session:start',
-    (_evt, sessionId: string, provider?: string): boolean => {
-      if (!isSessionRecordingEnabled() || !sessionRecorders) return false
+    (_evt, sessionId: string, provider?: string): { recording: boolean; generation: string | null } => {
+      if (!isSessionRecordingEnabled() || !sessionRecorders) {
+        return { recording: false, generation: null }
+      }
       // The command knows the pane's provider (workspace meta.kind); pass it
       // so a mid-session start still records the right provider (the
       // session:started event that carries it has usually already fired).
       sessionRecorders.startRecording(sessionId, provider ? { kind: provider } : undefined)
-      return true
+      return { recording: true, generation: sessionRecorders.recordingGeneration(sessionId) }
     },
   )
   ipcMain.handle('record-session:stop', (_evt, sessionId: string): Promise<boolean> | boolean => {
     if (!isSessionRecordingEnabled() || !sessionRecorders) return false
     return sessionRecorders.stopRecording(sessionId).then(() => false)
   })
-  ipcMain.handle('record-session:is-recording', (_evt, sessionId: string): boolean => {
-    if (!isSessionRecordingEnabled() || !sessionRecorders) return false
-    return sessionRecorders.isRecording(sessionId)
+  ipcMain.handle('record-session:is-recording', (_evt, sessionId: string): {
+    recording: boolean
+    generation: string | null
+  } => {
+    if (!isSessionRecordingEnabled() || !sessionRecorders) {
+      return { recording: false, generation: null }
+    }
+    return {
+      recording: sessionRecorders.isRecording(sessionId),
+      generation: sessionRecorders.recordingGeneration(sessionId),
+    }
+  })
+  ipcMain.handle(
+    'record-session:finish-stop',
+    async (_evt, sessionId: string, generation?: string): Promise<void> => {
+      if (!isSessionRecordingEnabled() || !sessionRecorders) return
+      // Reused sessionIds make an unqualified acknowledgement ambiguous. The
+      // manager deliberately ignores a missing/stale generation and lets its
+      // bounded timer close the original recorder; forwarding the opaque token
+      // here is what allows generation-aware callers to complete immediately.
+      await sessionRecorders.finishStopping(sessionId, generation)
+    },
+  )
+
+  // Render-shape sighting sidecar (Phase 2/3, PR #555). Same trust posture
+  // as the note handlers: dev-debug flag is the boundary, manager may be
+  // null in a normal build, and the payload is bounded HERE because the
+  // renderer is not trusted to bound it. Sightings are metadata-only by
+  // construction on the sending side, but a compromised renderer could ship
+  // anything — the caps make the worst case a bounded write, and the
+  // recorder's own byte cap is the second belt.
+  const MAX_SIGHTING_BATCH = 512
+  const MAX_SIGHTING_BATCH_BYTES = 1024 * 1024
+  ipcMain.handle(
+    'render-shape:append',
+    (_evt, sessionId: string, generation: string, sightings: unknown): RenderShapeAppendResult => {
+      if (!isSessionRecordingEnabled() || !sessionRecorders) return { status: 'no-recorder' }
+      if (typeof generation !== 'string' || generation.length === 0) {
+        return { status: 'rejected', reason: 'invalid' }
+      }
+      if (!Array.isArray(sightings) || sightings.length === 0) {
+        return { status: 'rejected', reason: 'empty' }
+      }
+      if (sightings.length > MAX_SIGHTING_BATCH) {
+        return { status: 'rejected', reason: 'too-many' }
+      }
+      try {
+        if (JSON.stringify(sightings).length > MAX_SIGHTING_BATCH_BYTES) {
+          return { status: 'rejected', reason: 'too-large' }
+        }
+      } catch {
+        return { status: 'rejected', reason: 'invalid' }
+      }
+      return sessionRecorders.appendRenderShapes(sessionId, generation, sightings)
+        ? { status: 'accepted' }
+        : { status: 'no-recorder' }
+    },
+  )
+  // Disk sweep for the Unknown Shape Inbox — derived-state read, no writes.
+  ipcMain.handle('render-shape:read-sightings', async () => {
+    if (!isDevDebugEnabled()) {
+      return { sightings: [], recordingsScanned: 0, truncated: false }
+    }
+    const { readRenderShapeSightings } = await import('../recording/renderShapeSidecar.js')
+    return readRenderShapeSightings()
   })
 }

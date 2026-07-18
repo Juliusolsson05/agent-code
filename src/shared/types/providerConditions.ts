@@ -44,6 +44,10 @@ export type ClaudeCompactionState = {
   phase?: 'running' | 'error' | 'done'
   statusText?: string
   errorText?: string
+  /** Structured proxy lifecycle is authoritative; screen is an explicitly
+   * lower-confidence fallback for older/no-proxy sessions and errors. */
+  source?: 'structured' | 'screen'
+  operationId?: string
 }
 
 // AskUserQuestion picker state (PR-4). This MUST stay structurally identical to

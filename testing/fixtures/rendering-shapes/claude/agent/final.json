@@ -1,0 +1,26 @@
+{
+  "evidence": "Curated from Claude Agent observations in the frozen bundle corpus and 2026-07-16 session recordings; values are synthetic, structure is preserved.",
+  "toolUse": {
+    "type": "tool_use",
+    "id": "agent-fixture-1",
+    "name": "Agent",
+    "input": {
+      "description": "Inspect renderer ownership",
+      "prompt": "Inspect the provider rendering boundary and report the relevant ownership invariants.",
+      "subagent_type": "Explore"
+    },
+    "caller": {
+      "type": "direct"
+    }
+  },
+  "toolResult": {
+    "type": "tool_result",
+    "tool_use_id": "agent-fixture-1",
+    "content": [
+      {
+        "type": "text",
+        "text": "The provider dispatcher owns the validated Agent shape."
+      }
+    ]
+  }
+}

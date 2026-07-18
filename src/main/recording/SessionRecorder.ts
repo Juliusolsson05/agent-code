@@ -161,6 +161,38 @@ export class SessionRecorder {
   }
 
   /**
+   * Render-shape sighting sidecar (Phase 2, evidence-first rendering plan
+   * PR #555). `__render_shape` is a synthetic channel like `__note`: replay
+   * skips it as pipeline input (recordedSession.isSyntheticChannel) while
+   * the Unknown Shape Inbox and extraction tooling consume it.
+   *
+   * WHY event-kind (cap applies) and not note-kind (cap bypass): sightings
+   * are coalesced diagnostic BULK — bounded per batch but recurring for the
+   * life of a capture. Notes bypass the cap because a human bookmark must
+   * survive a capped file; sightings enjoy no such claim, and letting them
+   * bypass would turn a long soak into unbounded growth of the one file the
+   * cap exists to bound. A capped recording simply stops accruing sightings
+   * (counted in droppedCount like any capped event).
+   *
+   * Not counted in eventCount: that field means "real feed events" to the
+   * triage tooling; inflating it with sidecar lines would skew every
+   * recording-size heuristic built on it.
+   */
+  renderShapes(sightings: readonly unknown[]): void {
+    if (this.closed || this.capped) return
+    if (sightings.length === 0) return
+    this.enqueue({
+      kind: 'event',
+      value: {
+        t: Math.round(this.nowMono() - this.startMono),
+        wall: this.nowWall(),
+        ch: '__render_shape',
+        sightings,
+      },
+    })
+  }
+
+  /**
    * Attach-Recording-Note marker (plan §7b). `__note` is a synthetic
    * channel outside the 9 real SessionFeed channels, so replay ignores it
    * for pipeline input while the triage/extraction tooling reads it. Two

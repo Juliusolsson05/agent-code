@@ -34,15 +34,6 @@ export const createSettingsSlice: StateCreator<
       applyTheme(DEFAULT_SETTINGS)
       return { settings: DEFAULT_SETTINGS }
     }, false, 'settings/resetSettings'),
-  toggleCustomRendering: () =>
-    set(state => {
-      const next = {
-        ...state.settings,
-        customRendering: !state.settings.customRendering,
-      }
-      applyTheme(next)
-      return { settings: next }
-    }, false, 'settings/toggleCustomRendering'),
   toggleStatusMode: () =>
     set(state => {
       const next = {

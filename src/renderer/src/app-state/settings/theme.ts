@@ -40,6 +40,13 @@ const FALLBACK_APP_FONT_FAMILY =
   "'JetBrains Mono', ui-monospace, Menlo, Monaco, monospace"
 
 export function applyTheme(settings: Settings): void {
+  // Renderer capability registries are also consumed by Node-side replay,
+  // policy, and transcript tests. A presentational component may therefore
+  // pull the settings store into a graph that has no DOM. Theme application
+  // is a browser side effect, not a module-import precondition; keeping the
+  // guard here preserves one source of truth for every caller instead of
+  // forcing each pure consumer to mock `document` merely to inspect policy.
+  if (typeof document === 'undefined' || typeof window === 'undefined') return
   const root = document.documentElement
   root.dataset.mode = settings.mode
   root.dataset.contrast = settings.contrast ? 'high' : 'normal'

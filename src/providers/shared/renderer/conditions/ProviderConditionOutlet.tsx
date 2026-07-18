@@ -28,15 +28,48 @@ import { ConditionOutlet } from '@shared/conditions-core/ConditionOutlet'
 import { makeDispatchFromOnSend } from '@shared/conditions-core/dispatch'
 import type { ConditionCustomAction } from '@shared/conditions-core/contract'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
+import { observeRenderShape } from '@renderer/features/feed/evidence/observer'
+import type { RenderOutcomeRoute } from '@shared/types/renderShapes'
+import type { ConditionDestination } from '@providers/registry.renderer.capabilities'
 
 type Props = {
+  sessionId: string
   conditions: ProviderConditionSnapshot | null
   onSend: (data: string) => Promise<void>
   onResolveCustom?: (action: ConditionCustomAction) => Promise<unknown>
   interactionActive: boolean
 }
 
+export function conditionOutcomeForDestination(
+  kind: string,
+  destination: ConditionDestination | undefined,
+): RenderOutcomeRoute {
+  switch (destination) {
+    case 'condition-outlet':
+      return { kind: 'condition-surface', surface: 'outlet' }
+    case 'feed-inline':
+      return { kind: 'condition-surface', surface: 'feed-inline' }
+    case 'composer':
+      return { kind: 'condition-surface', surface: 'composer' }
+    case 'attention-only':
+      return { kind: 'condition-surface', surface: 'attention-only' }
+    case 'intentional-hidden':
+      // A deliberately non-visual condition still needs a receipt. Encoding it
+      // as an absorption names the reviewed owner instead of manufacturing a
+      // fake visible surface or returning null, either of which would make the
+      // evidence system lie about what happened.
+      return {
+        kind: 'absorbed',
+        ownerRenderId: 'provider.condition.intentional-hidden',
+        reason: `Provider policy intentionally keeps ${kind} off visual surfaces.`,
+      }
+    case undefined:
+      return { kind: 'unknown', fallbackRenderId: 'shared.condition-unhandled' }
+  }
+}
+
 export function ProviderConditionOutlet({
+  sessionId,
   conditions,
   onSend,
   onResolveCustom,
@@ -44,8 +77,26 @@ export function ProviderConditionOutlet({
 }: Props) {
   if (!conditions) return null
 
-  const { conditionViews: registry } = getRendererProviderCapabilities(conditions.provider)
+  const capabilities = getRendererProviderCapabilities(conditions.provider)
+  const { conditionViews: registry, conditionPolicy } = capabilities
   const dispatch = makeDispatchFromOnSend(onSend, onResolveCustom)
+
+  for (const [kind, condition] of Object.entries(conditions.conditions)) {
+    if (!condition) continue
+    const outcome = conditionOutcomeForDestination(kind, conditionPolicy.destinations[kind])
+    // Conditions live outside Feed's capture context, so observe against the
+    // session directly. The observer's armed Map remains the sole dev-mode
+    // gate; no capture state enters React and no condition render is changed.
+    observeRenderShape({
+      sessionId,
+      provider: conditions.provider,
+      plane: 'condition',
+      lifecycle: 'running',
+      eventType: kind,
+      payload: condition,
+      outcome,
+    })
+  }
 
   // The app-side open snapshot types its map Partial (an artifact of
   // the per-provider mapped types it must absorb); conditions-core's

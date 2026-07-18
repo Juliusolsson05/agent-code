@@ -1,0 +1,27 @@
+{
+  "evidence": "Curated from the 2026-07-17 developer recording. The structural keys are copied from fp2-bb2ab36f; scalar scripts are reduced while retaining both observed content-dependent routes.",
+  "cases": [
+    {
+      "expectedRoute": "specialized",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "exec-committed-command",
+        "name": "exec",
+        "input": {
+          "raw": "const r = await tools.exec_command({cmd:\"git status --short\"}); text(r.output);"
+        }
+      }
+    },
+    {
+      "expectedRoute": "generic",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "exec-committed-generic",
+        "name": "exec",
+        "input": {
+          "raw": "const answer = 42; text(answer);"
+        }
+      }
+    }
+  ]
+}

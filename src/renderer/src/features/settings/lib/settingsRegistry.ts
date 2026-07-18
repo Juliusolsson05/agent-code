@@ -287,18 +287,6 @@ export function getSettingsRegistry(): SettingDefinition[] {
       },
     },
     {
-      id: 'custom-rendering',
-      category: 'workspace',
-      title: 'Custom Rendering',
-      description: 'Enable richer widgets for recognized tool output instead of generic rows.',
-      keywords: ['custom', 'rendering', 'widgets', 'tool output'],
-      control: {
-        type: 'toggle',
-        getValue: settings => settings.customRendering,
-        onToggle: (ctx, value) => ctx.onChange({ customRendering: value }),
-      },
-    },
-    {
       // WHY this entry's copy is so explicit about "first launch":
       // existing users will flip it expecting an immediate effect, and
       // the setting deliberately doesn't behave that way. The friction

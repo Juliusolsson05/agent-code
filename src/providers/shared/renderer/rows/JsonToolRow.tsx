@@ -3,12 +3,12 @@ import { memo, useState } from 'react'
 import type { ToolUseBlock } from '@shared/types/transcript'
 import { formatToolFilePath } from '@shared/paths/displayPath'
 
-import { truncateBashCommand } from '@renderer/features/feed/lib/helpers'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import { CodeBlock } from '@renderer/lib/code/CodeBlock'
 import { boundedJsonPreview } from '@renderer/lib/text/boundedJson'
 import { boundedTextPage } from '@renderer/lib/text/boundedText'
 import {
+  boundedCommandHeadline,
   boundedSlabEntries,
   isAbsolutePathLike,
   isHttpUrl,
@@ -24,9 +24,10 @@ import {
 // bare name with nothing under it (no input key matched the old headline
 // chain), codex orchestration/workspace tools dumped raw JSON <pre> blobs.
 //
-// Degrades to EXACTLY the old ToolUseRow look (name + one muted headline)
-// when the input has nothing beyond its headline — so Bash rows keep their
-// current rendering, including the upstream 2-line/160-char command cap.
+// Degrades to the old ToolUseRow shape (name + one muted headline) when the
+// input has nothing beyond its headline. Any `command` field gets the same
+// provider-neutral 2-line/160-char cap; a fallback must not need to recognize
+// the tool name before it can apply its safety budget.
 //
 // `live` opts out of highlighting: one-shot hljs is fine for committed
 // rows, but per-delta re-highlighting on the live path is the O(bytes²)
@@ -87,8 +88,8 @@ export const JsonToolRow = memo(function JsonToolRow({
 
   const headlineText = (() => {
     if (!headline) return null
-    if (block.name === 'Bash' && headline.key === 'command') {
-      return truncateBashCommand(headline.value)
+    if (headline.key === 'command') {
+      return boundedCommandHeadline(headline.value)
     }
     // WHY clamp before URL/path classification and DOM insertion: providers sometimes place an
     // entire prompt, diff, or file in a field named `path`/`description`. The headline is a hint;

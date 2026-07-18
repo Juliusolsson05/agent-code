@@ -12,6 +12,7 @@ import type {
 import type { AgentProviderKind } from '@shared/types/providerKind'
 import type { RenderLedger, RenderRow } from '@renderer/rendering/model/types'
 import { groupSemanticActivity } from '@renderer/features/feed/ui/semantic/renderUnits'
+import { providerDurableEntryKind } from '@providers/registry.renderer.capabilities'
 
 // ---------------------------------------------------------------------------
 // The view bridge: RenderLedger rows → FeedRenderItem[].
@@ -92,14 +93,17 @@ function orderAt(index: number, phase: FeedRenderItemOrder['phase']): FeedRender
   return { phase, timeMs: null, sequence: index, source: 'ledger' }
 }
 
-function visibleDecisionFor(entry: Entry): VisibleDecision {
-  const type = (entry as { type?: string }).type
-  const reason =
-    type === 'system' || type === 'compact_boundary'
-      ? 'compact_boundary'
-      : (entry as { isCompactSummary?: boolean }).isCompactSummary
-        ? 'compact_summary'
-        : 'conversation'
+function visibleDecisionFor(entry: Entry, provider: AgentProviderKind): VisibleDecision {
+  // This bridge reports the ledger's decision but does not reinterpret raw
+  // entry keys. Durable provider vocabulary was already admitted through the
+  // same classifier used by the painter; the reason below is only a generic
+  // debug label for that provider-owned classification.
+  const durableKind = providerDurableEntryKind(entry, provider)
+  const reason = durableKind === 'compact-boundary'
+    ? 'compact_boundary'
+    : durableKind === 'compact-summary'
+      ? 'compact_summary'
+      : 'conversation'
   return {
     key: typeof entry.uuid === 'string' ? entry.uuid : 'no-uuid',
     entry,
@@ -237,7 +241,7 @@ export function ledgerToFeedItems(
           type: 'entry',
           key: `entry:${uuid}`,
           entry,
-          visibleDecision: visibleDecisionFor(entry),
+          visibleDecision: visibleDecisionFor(entry, ctx.provider),
           entryOrdinal: entryOrdinal++,
           order: orderAt(items.length, 'content'),
         })

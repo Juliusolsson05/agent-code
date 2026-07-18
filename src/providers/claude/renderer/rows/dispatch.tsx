@@ -1,34 +1,408 @@
 import type { ReactNode } from 'react'
 
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
+// Provider-internal imports reach component directories directly. Phase 9
+// removed the old ClaudeRows feed barrel after live semantic dispatch moved
+// behind the registry capability; reintroducing that barrel would reopen a
+// shared-feed → provider interpretation edge.
+import { EditRow } from '@providers/claude/renderer/components/edit'
 import {
-  EditRow,
+  isClaudeMultiEditEnvelope,
   MultiEditRow,
-  TodoRow,
-  WriteRow,
-} from '@providers/claude/renderer/rows/ClaudeRows'
+} from '@providers/claude/renderer/components/multi-edit'
+import { ClaudeAgentRow } from '@providers/claude/renderer/components/agent'
+import { ClaudeReadRow } from '@providers/claude/renderer/components/read'
+import { ClaudeReadResultRow } from '@providers/claude/renderer/components/read-result'
+import { ClaudeToolSearchRow } from '@providers/claude/renderer/components/tool-search'
+import { ClaudeToolSearchResultRow } from '@providers/claude/renderer/components/tool-search-result'
+import { ClaudeWebFetchRow } from '@providers/claude/renderer/components/web-fetch'
+import { ClaudeWebFetchResultRow } from '@providers/claude/renderer/components/web-fetch-result'
+import { ClaudeWebSearchRow } from '@providers/claude/renderer/components/web-search'
+import { ClaudeWebSearchResultRow } from '@providers/claude/renderer/components/web-search-result'
+import { WriteRow } from '@providers/claude/renderer/components/write'
+import {
+  fromClaudeAgentResult,
+  fromClaudeAgentUse,
+} from '@providers/claude/renderer/adapters/collaboration'
+import {
+  claudeBashConclusion,
+  claudeBashResultText,
+  fromClaudeBashBlock,
+  fromClaudeBashCodeEdit,
+} from '@providers/claude/renderer/adapters/command'
+import {
+  fromClaudeReadResult,
+  fromClaudeReadUse,
+  fromClaudeToolSearchResult,
+  fromClaudeToolSearchUse,
+} from '@providers/claude/renderer/adapters/readSearch'
+import {
+  fromClaudeWebFetchResult,
+  fromClaudeWebFetchUse,
+  fromClaudeWebSearchResult,
+  fromClaudeWebSearchUse,
+} from '@providers/claude/renderer/adapters/web'
+import { CommandView } from '@providers/shared/renderer/protocols/command/CommandView'
+import { CodeEditView } from '@providers/shared/renderer/protocols/code-edit/CodeEditView'
+import { OutputWell } from '@renderer/lib/text/OutputWell'
+import { AgentCodeOrchestrationView } from '@providers/shared/renderer/protocols/agent-code-orchestration/AgentCodeOrchestrationView'
+import { fromAgentCodeOrchestrationResult } from '@providers/shared/renderer/protocols/agent-code-orchestration/model'
+import { fromClaudeAgentCodeOrchestrationUse } from '@providers/claude/renderer/adapters/agentCodeOrchestration'
+import { fromClaudeAgentCodeWorkspaceUse } from '@providers/claude/renderer/adapters/agentCodeWorkspace'
+import { AgentCodeWorkspaceView } from '@providers/shared/renderer/protocols/agent-code-workspace/AgentCodeWorkspaceView'
+import { fromAgentCodeWorkspaceResult } from '@providers/shared/renderer/protocols/agent-code-workspace/model'
+import {
+  fromClaudeTaskActivityResult,
+  fromClaudeTaskActivityUse,
+} from '@providers/claude/renderer/adapters/tasks'
+import { ClaudeTaskActivityRow } from '@providers/claude/renderer/components/task-activity'
+import {
+  fromClaudeQuestionResult,
+  fromClaudeQuestionUse,
+} from '@providers/claude/renderer/adapters/questions'
+import {
+  ClaudeAnsweredQuestionRow,
+  ClaudeLiveQuestionRow,
+} from '@providers/claude/renderer/components/ask-user-question'
+import { fromClaudeAgentCodeWorkflowUse } from '@providers/claude/renderer/adapters/agentCodeWorkflow'
+import { AgentCodeWorkflowView } from '@providers/shared/renderer/protocols/agent-code-workflow/AgentCodeWorkflowView'
+import { fromAgentCodeWorkflowResult } from '@providers/shared/renderer/protocols/agent-code-workflow/model'
+import { GenericLiveResult } from '@providers/shared/renderer/rows/GenericLiveResult'
+import {
+  fromClaudeEditBlock,
+  isClaudeCodeEditSuccessResult,
+} from '@providers/claude/renderer/adapters/codeEdit'
+import type {
+  ProviderOperationDecision,
+  ProviderOperationInput,
+  ProviderResultDecision,
+  ProviderSpecializedReceipt,
+} from '@shared/types/providerConfig'
+import { fromClaudeGitOperation } from '@providers/claude/renderer/adapters/git'
+import { GitOperationView } from '@providers/shared/renderer/protocols/command/formatters/git'
 
-export function renderClaudeToolUse(block: ToolUseBlock): ReactNode | undefined {
+function claudeOperationReceipt(toolUse: ToolUseBlock): ProviderSpecializedReceipt {
+  // Owned Agent Code protocols are narrower than "Claude specialized". The
+  // adapter must prove the exact namespace/schema before the receipt may name
+  // one; otherwise the catalog cannot distinguish our MCP from an arbitrary
+  // third-party server whose verb happens to look similar.
+  if (fromClaudeAgentCodeOrchestrationUse(toolUse)) {
+    return { rendererId: 'claude.rows.dispatch', protocolId: 'agent-code.orchestration' }
+  }
+  if (fromClaudeAgentCodeWorkspaceUse(toolUse)) {
+    return { rendererId: 'claude.rows.dispatch', protocolId: 'agent-code.workspace' }
+  }
+  if (fromClaudeAgentCodeWorkflowUse(toolUse)) {
+    // WHY workflow carries the same protocol identity on invocation and
+    // absorption as orchestration/workspace: omitting it made the result
+    // receipt look provider-generic even though the paired parser had proved
+    // a source-controlled Agent Code contract.
+    return { rendererId: 'claude.rows.dispatch', protocolId: 'agent-code.workflow' }
+  }
+  return { rendererId: 'claude.rows.dispatch' }
+}
+
+export function renderClaudeOperation(
+  input: ProviderOperationInput,
+): ProviderOperationDecision {
+  const git = fromClaudeGitOperation(input)
+  if (git) {
+    return {
+      toolUse: {
+        action: 'render',
+        node: <GitOperationView model={git} />,
+        receipt: { rendererId: 'shared.command', protocolId: 'command.git' },
+      },
+      toolResult: input.result
+        ? {
+            action: 'absorb',
+            ownerRenderId: 'shared.command',
+            protocolId: 'command.git',
+            reason: 'paired Git operation view preserves the bounded result evidence',
+          }
+        : null,
+    }
+  }
+
+  const toolUse = renderClaudeToolUse(input.toolUse, {
+    live: input.live,
+    streaming: input.streaming,
+    result: input.result,
+  })
+  const toolResult = input.result
+    ? renderClaudeToolResult(input.result, { sourceTool: input.toolUse })
+    : undefined
+  const receipt = claudeOperationReceipt(input.toolUse)
+  const toolUseDecision: ProviderResultDecision = toolUse === undefined
+    ? { action: 'fallback' }
+    : {
+        action: 'render',
+        node: toolUse,
+        receipt,
+      }
+  let toolResultDecision: ProviderResultDecision | null = null
+  if (input.result) {
+    if (toolResult === undefined) {
+      toolResultDecision = { action: 'fallback' }
+    } else if (toolResult !== null) {
+      toolResultDecision = {
+        action: 'render',
+        node: toolResult,
+        receipt,
+      }
+    } else if (toolUseDecision.action === 'render') {
+      toolResultDecision = {
+        action: 'absorb',
+        ownerRenderId: toolUseDecision.receipt.rendererId,
+        ...(toolUseDecision.receipt.protocolId
+          ? { protocolId: toolUseDecision.receipt.protocolId }
+          : {}),
+        reason: 'the admitted provider operation card validated and consumed its paired result',
+      }
+    } else {
+      // WHY a recognized acknowledgement cannot create its own owner: strict
+      // invocation adapters may decline blank/drifted content while a result
+      // still resembles an old success grammar. Hiding that result under a
+      // card that never painted would violate both total fallback and receipt
+      // truth. The generic pair remains visible until both sides are admitted.
+      toolResultDecision = { action: 'fallback' }
+    }
+  }
+  return {
+    toolUse: toolUseDecision,
+    toolResult: toolResultDecision,
+  }
+}
+
+function renderClaudeToolUse(
+  block: ToolUseBlock,
+  context: { live?: boolean; streaming?: boolean; result?: ToolResultBlock | null } = {},
+): ReactNode | undefined {
+  const failed = context.result?.is_error === true
+  const running = context.live === true && !context.streaming && context.result == null
+  const errorSummary = failed ? firstResultLine(context.result) : undefined
+  const agentCodeOrchestration = fromClaudeAgentCodeOrchestrationUse(block)
+  if (agentCodeOrchestration) {
+    return <AgentCodeOrchestrationView model={agentCodeOrchestration} />
+  }
+  const agentCodeWorkspace = fromClaudeAgentCodeWorkspaceUse(block)
+  if (agentCodeWorkspace) {
+    return <AgentCodeWorkspaceView model={agentCodeWorkspace} />
+  }
+  const agentCodeWorkflow = fromClaudeAgentCodeWorkflowUse(block)
+  if (agentCodeWorkflow) {
+    return <AgentCodeWorkflowView model={agentCodeWorkflow} />
+  }
+  const taskActivity = fromClaudeTaskActivityUse(block)
+  if (taskActivity) {
+    return <ClaudeTaskActivityRow model={taskActivity} />
+  }
+  const question = fromClaudeQuestionUse(block)
+  if (question) {
+    return context.live === true && context.result == null
+      ? <ClaudeLiveQuestionRow model={question} />
+      : <ClaudeAnsweredQuestionRow model={question} result={context.result ?? null} />
+  }
   // WHY this dispatch lives with the provider rows: these names are Claude Code
   // transcript vocabulary, not feed vocabulary. Keeping the table beside the
   // row components makes adding/removing a Claude tool a provider-local change
   // and lets the shared feed keep one generic fallback for unknown tools.
   switch (block.name) {
-    case 'Edit':
-      return <EditRow block={block} />
+    case 'Agent': {
+      const model = fromClaudeAgentUse(block)
+      return model ? <ClaudeAgentRow model={model} /> : undefined
+    }
+    case 'Bash': {
+      // Phase 10 cutover: the paired provider operation admits Git before
+      // this provider-local command path. Reaching this branch therefore
+      // proves the command is non-Git; whitespace-only input still declines
+      // to the generic row.
+      //
+      // A quoted-delimiter cat-heredoc is a FILE WRITE wearing a command's
+      // clothes — route it into the code-edit card so the written content is
+      // visible (product-owner verdict 2026-07-17). The extractor's strict
+      // contract means this claims only the honest cases; everything else
+      // falls through to the command card unchanged.
+      const write = fromClaudeBashCodeEdit(block, {
+        streaming: context.streaming,
+        running,
+        failed,
+        errorSummary,
+      })
+      if (write) return <CodeEditView model={write} />
+      const model = fromClaudeBashBlock(block, {
+        streaming: context.streaming,
+        running,
+        failed,
+        errorSummary,
+      })
+      return model ? <CommandView model={model} /> : undefined
+    }
+    case 'Edit': {
+      const adapted = fromClaudeEditBlock(block, {
+        streaming: context.streaming,
+        failed,
+        errorSummary,
+      })
+      const model = adapted && running && !context.streaming && !failed
+        ? { ...adapted, status: 'running' as const }
+        : adapted
+      return model ? <EditRow model={model} /> : undefined
+    }
     case 'MultiEdit':
-      return <MultiEditRow block={block} />
-    case 'Write':
-      return <WriteRow block={block} />
-    case 'TodoWrite':
-      return <TodoRow block={block} />
+      // WHY MultiEdit retains its dedicated row while Edit/Write use the
+      // shared protocol: its page model is what keeps every item reachable
+      // without normalizing or mounting an attacker-sized edits array. The
+      // shared files model currently has truncation but no next-page contract.
+      return isClaudeMultiEditEnvelope(block) ? <MultiEditRow block={block} /> : undefined
+    case 'Read': {
+      const model = fromClaudeReadUse(block)
+      return model ? <ClaudeReadRow model={model} /> : undefined
+    }
+    case 'ToolSearch': {
+      const model = fromClaudeToolSearchUse(block)
+      return model ? <ClaudeToolSearchRow model={model} /> : undefined
+    }
+    case 'WebFetch': {
+      const model = fromClaudeWebFetchUse(block)
+      return model ? <ClaudeWebFetchRow model={model} /> : undefined
+    }
+    case 'WebSearch': {
+      const model = fromClaudeWebSearchUse(block)
+      return model ? <ClaudeWebSearchRow model={model} /> : undefined
+    }
+    case 'Write': {
+      const adapted = fromClaudeEditBlock(block, {
+        streaming: context.streaming,
+        failed,
+        errorSummary,
+      })
+      const model = adapted && running && !context.streaming && !failed
+        ? { ...adapted, status: 'running' as const }
+        : adapted
+      return model ? <WriteRow model={model} /> : undefined
+    }
     default:
       return undefined
   }
 }
 
-export function renderClaudeToolResult(
-  _block: ToolResultBlock,
+function firstResultLine(result: ToolResultBlock | null | undefined): string | undefined {
+  if (!result) return undefined
+  const content = result.content
+  const text = typeof content === 'string'
+    ? content
+    : Array.isArray(content)
+      ? content.map(item => typeof item === 'string' ? item : typeof item?.text === 'string' ? item.text : '').join('\n')
+      : ''
+  const newline = text.indexOf('\n')
+  return (newline === -1 ? text : text.slice(0, newline)).slice(0, 200) || 'tool failed'
+}
+
+function renderClaudeToolResult(
+  block: ToolResultBlock,
+  context: { sourceTool?: ToolUseBlock | null },
 ): ReactNode | undefined {
+  // Phase 6: Bash output gets the shared grammar — ANSI-aware OutputWell
+  // (head+tail preview so the final error/summary always survives) plus a
+  // formatter-registry conclusion line (test totals, JSON size) rendered
+  // ABOVE the raw evidence, terminal-only by construction on the committed
+  // plane. Everything else keeps the generic result row.
+  const source = context.sourceTool
+  const agentCodeOrchestration = source
+    ? fromClaudeAgentCodeOrchestrationUse(source)
+    : null
+  if (agentCodeOrchestration) {
+    // The provider-owned invocation card reads its paired result through the
+    // feed index and paints both the lifecycle summary and raw protocol
+    // disclosure. Suppress only after the owned result parser proves the
+    // operation contract; drift/malformed typed content remains visible via
+    // the generic result row.
+    return fromAgentCodeOrchestrationResult(block, agentCodeOrchestration)
+      ? null
+      : undefined
+  }
+  const agentCodeWorkspace = source
+    ? fromClaudeAgentCodeWorkspaceUse(source)
+    : null
+  if (agentCodeWorkspace) {
+    return fromAgentCodeWorkspaceResult(block, agentCodeWorkspace)
+      ? null
+      : undefined
+  }
+  const agentCodeWorkflow = source
+    ? fromClaudeAgentCodeWorkflowUse(source)
+    : null
+  if (agentCodeWorkflow) {
+    return fromAgentCodeWorkflowResult(block, agentCodeWorkflow)
+      ? null
+      : undefined
+  }
+  const taskActivity = source ? fromClaudeTaskActivityUse(source) : null
+  if (taskActivity) {
+    return fromClaudeTaskActivityResult(block, taskActivity)
+      ? null
+      : undefined
+  }
+  const question = source ? fromClaudeQuestionUse(source) : null
+  if (question) {
+    return fromClaudeQuestionResult(block, question) !== null
+      ? null
+      : undefined
+  }
+  if (source?.name === 'Agent') {
+    // A validated Agent result is rendered inside the provider-owned spawn
+    // card, which already has the paired result through ToolResultIndexContext.
+    // Returning null records an explicit absorption receipt; malformed/error
+    // variants decline to the visible generic result instead.
+    return fromClaudeAgentResult(block, source) ? null : undefined
+  }
+  if (source && isClaudeCodeEditSuccessResult(block, source)) {
+    return null
+  }
+  if (source?.name === 'Bash') {
+    const text = claudeBashResultText(block)
+    if (!text && block.is_error !== true) {
+      // Silent success stays visible as evidence (#524 lesson: an empty
+      // stdout must not erase that the command ran) — the command card
+      // above already shows it; render a quiet no-output marker.
+      return <OutputWell text="" isError={false} />
+    }
+    const input = (source.input ?? {}) as Record<string, unknown>
+    const command = typeof input.command === 'string' ? input.command : ''
+    const conclusion = claudeBashConclusion(block, command)
+    return (
+      <div className="flex flex-col gap-0.5">
+        {conclusion ? (
+          <div className="text-ink-dim text-[12px] pl-6">{conclusion}</div>
+        ) : null}
+        <GenericLiveResult
+          source={text}
+          isError={block.is_error === true}
+          textFallback="output-well"
+        />
+      </div>
+    )
+  }
+  if (source?.name === 'Read') {
+    const model = fromClaudeReadResult(block, source)
+    // A malformed/error result deliberately declines to Block.tsx's visible
+    // generic fallback. The tool-use card above can still be specialized,
+    // while unsupported result evidence remains verbatim instead of being
+    // forced through a parser that did not prove its grammar.
+    return model ? <ClaudeReadResultRow model={model} /> : undefined
+  }
+  if (source?.name === 'ToolSearch') {
+    const model = fromClaudeToolSearchResult(block, source)
+    return model ? <ClaudeToolSearchResultRow model={model} /> : undefined
+  }
+  if (source?.name === 'WebFetch') {
+    const model = fromClaudeWebFetchResult(block, source)
+    return model ? <ClaudeWebFetchResultRow model={model} /> : undefined
+  }
+  if (source?.name === 'WebSearch') {
+    const model = fromClaudeWebSearchResult(block, source)
+    return model ? <ClaudeWebSearchResultRow model={model} /> : undefined
+  }
   return undefined
 }

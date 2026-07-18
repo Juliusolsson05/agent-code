@@ -1,4 +1,4 @@
-import { memo, type ReactNode } from 'react'
+import { memo, useContext, type ReactNode } from 'react'
 
 import type {
   ConversationEntry,
@@ -8,7 +8,9 @@ import type {
 
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import { TextProse } from '@renderer/features/feed/ui/markdown'
-import { isAgentSpawnToolName } from '@providers/registry.renderer.capabilities'
+import { isAgentSpawnTool } from '@providers/registry.renderer.capabilities'
+import type { AgentProviderKind } from '@shared/types/providerKind'
+import { ProviderContext } from '@renderer/features/feed/context'
 
 import { Block } from '@renderer/features/feed/ui/rows/Block'
 import { SubagentGroupHeader } from '@renderer/features/feed/ui/rows/SubagentGroupHeader'
@@ -18,12 +20,15 @@ import { UserBand } from '@renderer/features/feed/ui/rows/primitives'
 // the same operation `spawn_agent`. Treating both names as the same semantic
 // row keeps the grouping rule tied to user-visible behavior rather than a
 // provider's wire vocabulary.
-function isAgentBlock(block: ContentBlock): block is ToolUseBlock {
+function isAgentBlock(
+  block: ContentBlock,
+  provider: AgentProviderKind,
+): block is ToolUseBlock {
   // P2c: same shared predicate as Block.tsx's fleet-row interception —
   // MCP orchestration spawns must group under the fleet header too.
   return (
     block.type === 'tool_use' &&
-    isAgentSpawnToolName((block as ToolUseBlock).name)
+    isAgentSpawnTool(block as ToolUseBlock, provider)
   )
 }
 
@@ -42,6 +47,7 @@ export const ConversationRow = memo(function ConversationRow({
 }) {
   const role = entry.message.role
   const content = entry.message.content
+  const provider = useContext(ProviderContext)
 
   // Simple string content — render as a single marker + text line.
   // For role==='user' this IS a real user prompt (no tool_result can
@@ -78,13 +84,13 @@ export const ConversationRow = memo(function ConversationRow({
   // The band lives at the *block* level instead: Block() wraps text
   // blocks in a UserBand when role === 'user', and leaves every other
   // block type (tool_use, tool_result, thinking) visually untouched.
-  return <div className="flex flex-col gap-2">{renderBlocks(content, role)}</div>
+  return <div className="flex flex-col gap-2">{renderBlocks(content, role, provider)}</div>
 })
 
 // Walk the block list, coalescing a run of ≥2 adjacent `Agent` spawns (same
 // assistant turn) under one SubagentGroupHeader so the user sees a single
 // "Spawned N agents" tally instead of N anonymous cards. A lone `Agent` block
-// renders as a plain TaskSubagentRow (no header — there's nothing to count).
+// renders as a plain provider spawn row (no header — there's nothing to count).
 // Every other block renders exactly as before, so this is invisible to
 // non-Agent content. Grouping is gated to assistant turns: an `Agent` tool_use
 // only ever appears in an assistant message, but being explicit keeps the
@@ -92,16 +98,17 @@ export const ConversationRow = memo(function ConversationRow({
 function renderBlocks(
   content: ContentBlock[],
   role: 'user' | 'assistant',
+  provider: AgentProviderKind,
 ): ReactNode[] {
   if (role !== 'assistant') {
     return content.map((block, i) => <Block key={i} block={block} role={role} />)
   }
   const out: ReactNode[] = []
   for (let i = 0; i < content.length; ) {
-    if (isAgentBlock(content[i])) {
+    if (isAgentBlock(content[i], provider)) {
       let j = i
       const ids: string[] = []
-      while (j < content.length && isAgentBlock(content[j])) {
+      while (j < content.length && isAgentBlock(content[j], provider)) {
         ids.push((content[j] as ToolUseBlock).id)
         j++
       }

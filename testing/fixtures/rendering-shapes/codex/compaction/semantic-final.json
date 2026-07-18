@@ -1,0 +1,12 @@
+{
+  "evidence": "Curated from the 2026-07-17 Codex developer recording; values are synthetic and the captured structural paths are preserved.",
+  "semanticBlock": {
+    "blockIndex": 0,
+    "finalized": true,
+    "inputJson": "",
+    "itemId": "compaction-final-fixture",
+    "kind": "compaction",
+    "text": "",
+    "thinking": ""
+  }
+}

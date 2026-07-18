@@ -1,4 +1,4 @@
-import { parseTaskNotification } from '@renderer/session-runtime/taskNotification'
+import { parseTaskNotification } from '@providers/claude/renderer/adapters/taskNotification'
 import type { QueuedMessage } from '@renderer/session-runtime/state'
 
 // Reconstruction of Claude's PROVIDER-OWNED message queue from the

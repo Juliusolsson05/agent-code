@@ -3,6 +3,7 @@ import { asRecord } from '@shared/lib/asRecord'
 
 import {
   codexAssistantTextEntry,
+  codexImageGenerationEntry,
   codexToolResultEntry,
   codexToolUseEntry,
   codexOutputText,
@@ -280,7 +281,14 @@ export function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): En
       )
       const exitCode =
         typeof payload.exit_code === 'number' ? payload.exit_code : 0
-      if (!output.trim() && exitCode === 0) return []
+      // WHY an empty successful result must survive normalization: stdout is
+      // not the lifecycle signal. Commands such as `true`, `mkdir`, and
+      // `touch` legitimately finish without printing anything, while the
+      // correlated `exec_command_end` is the only durable proof that lets a
+      // replay distinguish that success from an invocation interrupted before
+      // its result was persisted. The provider renderer absorbs this empty
+      // result after it has updated the command card, so retaining terminal
+      // evidence does not reintroduce a blank standalone row.
       return [
         codexToolResultEntry(
           uuid,
@@ -428,6 +436,12 @@ export function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): En
   // so a reload sees the same row.
 
   if (payload.type === 'web_search_call') {
+    // WHY semantic and committed web rows intentionally remain independently
+    // visible: live Codex identifiers (`ws_*`) and our synthesized fallback id
+    // do not form a proven join key. Visual convergence is safe; absorption is
+    // not, because a guessed match could hide a distinct search. TODO(web-identity):
+    // fold the pair only when the provider emits one durable identity across
+    // both planes or ATP records an explicit provenance edge.
     const callId =
       typeof payload.id === 'string' ? payload.id : `web_search:${uuid}`
     const action = asRecord(payload.action)
@@ -435,6 +449,8 @@ export function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): En
       stringField(action, 'query')
     const url =
       stringField(action, 'url')
+    const pattern =
+      stringField(action, 'pattern')
     const kind =
       stringField(action, 'type') ?? 'search'
     // `description` is the field headlineForTool falls back to when
@@ -453,6 +469,7 @@ export function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): En
         description,
         query,
         url,
+        pattern,
         kind,
         status: typeof payload.status === 'string' ? payload.status : null,
       }),
@@ -466,14 +483,15 @@ export function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): En
       stringField(payload, 'revised_prompt')
     const status =
       stringField(payload, 'status') ?? 'unknown'
+    const result = stringField(payload, 'result')
     return [
-      codexToolUseEntry(uuid, timestamp, callId, 'image_generation', {
+      codexImageGenerationEntry(uuid, timestamp, callId, {
         description: revisedPrompt
           ? `Image: ${revisedPrompt}`
           : `Image generation (${status})`,
         status,
         revisedPrompt,
-      }),
+      }, result),
     ]
   }
 

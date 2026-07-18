@@ -124,7 +124,7 @@ function parseJsonObject(text: string | null): Record<string, unknown> | null {
 // `[{ type: 'text', text: '…' }, …]`. `extractCodexSpawnOutput` used to read only
 // the first two, so when `spawn_agent` returned ARRAY output the join key
 // (`agent_id`) could not be parsed, the parent↔child correlation silently failed,
-// and the committed TaskSubagentRow showed no live child state even though the
+// and the committed Codex spawn row showed no live child state even though the
 // spawn succeeded. ATP already normalizes array output elsewhere; this is the
 // main-process twin so the subagent path makes the same decision.
 //
@@ -182,9 +182,18 @@ export function extractCodexSpawnCall(entry: JsonlEntry): SpawnCall | null {
     ? parseJsonObject(payload.arguments)
     : asRecord(payload.arguments)
   const input = asRecord(args)
+  // WHY this main-process tracker still reads only the historical `agent_type`
+  // generation: the current renderer can truthfully present `task_name`, but
+  // subagent-state correlation additionally needs a durable child identifier.
+  // Current spawn results expose a task name rather than the old agent UUID, so
+  // pretending the tracker supports them would attach unrelated live state.
+  // TODO(native-collaboration-identity): add the task_name generation only when
+  // the provider exposes a stable parent-call -> child-session join key.
+  const agentType = stringField(input, 'agent_type')
+  if (!agentType) return null
   return {
     callId: payload.call_id,
-    agentType: stringField(input, 'agent_type') ?? 'agent',
+    agentType,
     description: stringField(input, 'message') ?? stringField(input, 'description') ?? '',
   }
 }

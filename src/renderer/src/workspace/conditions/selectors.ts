@@ -51,28 +51,13 @@ export function hasVisibleConditions(
 // so the exit reducer can drop every condition-derived field in lockstep without
 // re-listing them (and drifting) at the call site.
 //
-// NOTE: this clears `conditions` AND the legacy `pending*` mirrors together. The
-// mirrors are a compatibility cache derived from the same snapshot (see
-// `applyConditionSnapshot`); clearing one without the other is exactly the
-// split-authority bug the audit calls out, so they must move as a unit.
 export function clearConditionRuntimeState(): Pick<
   SessionRuntime,
-  | 'conditions'
-  | 'picker'
-  | 'pendingApproval'
-  | 'pendingTrustDialog'
-  | 'pendingResumePrompt'
-  | 'pendingPermissionPrompt'
-  | 'pendingCompaction'
+  'conditions' | 'picker'
 > {
   return {
     conditions: null,
     picker: { visible: false, items: [] },
-    pendingApproval: null,
-    pendingTrustDialog: null,
-    pendingResumePrompt: null,
-    pendingPermissionPrompt: null,
-    pendingCompaction: null,
   }
 }
 

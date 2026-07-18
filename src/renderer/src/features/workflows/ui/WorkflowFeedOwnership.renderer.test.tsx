@@ -27,7 +27,7 @@ describe('workflow feed ownership', () => {
       type: 'tool_use',
       id: 'workflow-tool',
       name: 'mcp__agent_code__workflow_run',
-      input: { workflow: 'fat-bug-hunt' },
+      input: { name: 'fat-bug-hunt' },
     }
     const toolResult: ToolResultBlock = {
       type: 'tool_result',

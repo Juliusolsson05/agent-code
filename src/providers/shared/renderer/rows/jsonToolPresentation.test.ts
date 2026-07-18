@@ -6,6 +6,7 @@ import {
   smartHeadline,
   tryExtractJson,
 } from '@providers/shared/renderer/rows/jsonToolPresentation'
+import { stripCodexTransportEnvelope } from '@providers/codex/renderer/adapters/command'
 
 // Payload shapes below are lifted from the debug-bundle corpus
 // (docs/rendering/research-2026-07/plan-json-tool-rows.md §1) — the exact
@@ -56,6 +57,57 @@ describe('tryExtractJson', () => {
     const wire = 'Wall time: 2.1 s\nOutput:\n[{"type":"text","text":"{\\"ok\\":false}"}]'
     expect(tryExtractJson(wire)).toEqual({ ok: false })
   })
+  it('unwraps a full MCP CallToolResult carrying nested JSON', () => {
+    // This is the current Codex orchestration return shape: the function-call
+    // output serializes the SDK result object, whose text block serializes the
+    // actual tool protocol response. The renderer should show the agents, not
+    // force users to mentally decode two escaped JSON layers.
+    const wire = JSON.stringify({
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            ok: true,
+            agents: [{ sessionId: 'agent-1', lifecycleState: 'running' }],
+          }),
+        },
+      ],
+    })
+    expect(tryExtractJson(wire)).toEqual({
+      ok: true,
+      agents: [{ sessionId: 'agent-1', lifecycleState: 'running' }],
+    })
+  })
+  it('formats nested JSON after the current unified-exec transport is removed', () => {
+    const payload = JSON.stringify({
+      content: [{ type: 'text', text: '{"ok":true,"agents":[]}' }],
+    })
+    const wire = `Script completed\nWall time 16.9 seconds\nOutput:\n\n${payload}`
+    expect(tryExtractJson(stripCodexTransportEnvelope(wire))).toEqual({
+      ok: true,
+      agents: [],
+    })
+  })
+  it('retains unfamiliar CallToolResult siblings instead of discarding semantics', () => {
+    const wire = JSON.stringify({
+      content: [{ type: 'text', text: '{"ok":true}' }],
+      structuredContent: { authoritative: true },
+    })
+    expect(tryExtractJson(wire)).toEqual({
+      content: [{ type: 'text', text: '{"ok":true}' }],
+      structuredContent: { authoritative: true },
+    })
+  })
+  it('retains a CallToolResult transport error instead of hiding it inside the exact source', () => {
+    const wire = JSON.stringify({
+      content: [{ type: 'text', text: '{"message":"provider failed"}' }],
+      isError: true,
+    })
+    expect(tryExtractJson(wire)).toEqual({
+      content: [{ type: 'text', text: '{"message":"provider failed"}' }],
+      isError: true,
+    })
+  })
   it('keeps the envelope when the inner text is not JSON', () => {
     const wire = JSON.stringify([{ type: 'text', text: 'plain prose result' }])
     expect(tryExtractJson(wire)).toEqual([{ type: 'text', text: 'plain prose result' }])
@@ -73,8 +125,13 @@ describe('jsonResultSummary', () => {
       isError: true,
     })
     expect(jsonResultSummary({ ok: true })).toEqual({ label: 'ok: true', isError: false })
+    expect(jsonResultSummary({ isError: true, content: [] })).toEqual({
+      label: 'isError: true',
+      isError: true,
+    })
   })
   it('counts keys and items otherwise', () => {
+    expect(jsonResultSummary({ a: 1 }).label).toBe('1 key')
     expect(jsonResultSummary({ a: 1, b: 2 }).label).toBe('2 keys')
     expect(jsonResultSummary([1, 2, 3]).label).toBe('3 items')
   })

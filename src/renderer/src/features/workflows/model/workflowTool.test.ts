@@ -9,10 +9,12 @@ import {
 } from './workflowTool'
 
 describe('workflow tool recognition', () => {
-  it('recognizes bare, Claude MCP, and alternate namespace spellings only', () => {
+  it('recognizes only Agent Code owned bare and Claude MCP spellings', () => {
     expect(isWorkflowRunToolName('workflow_run')).toBe(true)
     expect(isWorkflowRunToolName('mcp__agent_code__workflow_run')).toBe(true)
     expect(isWorkflowRunToolName('agent-code/workflow_run')).toBe(true)
+    expect(isWorkflowRunToolName('agent-code:workflow_run')).toBe(true)
+    expect(isWorkflowRunToolName('mcp__external__workflow_run')).toBe(false)
     expect(isWorkflowRunToolName('workflow_run_status')).toBe(false)
     expect(isWorkflowRunToolName('some_workflow_runner')).toBe(false)
     expect(isWorkflowViewToolName('mcp__agent_code__workflow_resume')).toBe(true)

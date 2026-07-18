@@ -10,6 +10,7 @@ import { useGlobalToast } from '@renderer/ui/GlobalToast'
 import { Feed } from '@renderer/features/feed/ui/Feed'
 import type { ScrollInfo } from '@renderer/features/feed/ui/Feed'
 import { ProviderConditionOutlet } from '@providers/shared/renderer/conditions/ProviderConditionOutlet'
+import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import type { SessionRuntime, Workspace } from '@renderer/workspace/workspaceStore'
 import type { GridRelatedAgentTab } from '@renderer/workspace/gridRelatedAgents'
 import {
@@ -294,6 +295,16 @@ export function TileLeaf({
       runtime.semantic.history,
     ],
   )
+  const normalizedConditions = useMemo(() => {
+    const normalize = getRendererProviderCapabilities(provider).normalizeConditions
+    return normalize
+      ? normalize({
+          snapshot: runtime.conditions,
+          currentTurn: runtime.semantic.currentTurn,
+          entries: runtime.entries,
+        })
+      : runtime.conditions
+  }, [provider, runtime.conditions, runtime.entries, runtime.semantic.currentTurn])
 
   const workflowCwd = workspace.state.sessions[sessionId]?.cwd ?? null
   const transcriptWorkflowReferences = useMemo(() => collectWorkflowRunReferences({
@@ -626,7 +637,8 @@ export function TileLeaf({
       )}
 
       <ProviderConditionOutlet
-        conditions={runtime.conditions}
+        sessionId={sessionId}
+        conditions={normalizedConditions}
         onSend={send}
         onResolveCustom={(action) => feed.resolveCondition(sessionId, action)}
         interactionActive={focused}

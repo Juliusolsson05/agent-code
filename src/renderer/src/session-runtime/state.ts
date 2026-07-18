@@ -399,47 +399,6 @@ export type SessionRuntime = {
   unreadSince: number | null
   unreadKind: 'output' | 'attention' | null
   paneToast: string | null
-  // COMPATIBILITY / CACHE FIELDS — NOT a source of truth (conditions audit
-  // Finding 1). The authoritative live-prompt state is `conditions` above; these
-  // `pending*` fields are derived caches written by `applyConditionSnapshot` from
-  // the SAME snapshot. New code must read `runtime.conditions` (via
-  // `workspace/conditions/selectors.ts`), not these mirrors — keeping two
-  // independent truth surfaces is exactly the split-authority bug the audit
-  // calls out (e.g. the unread/attention transition was moved onto
-  // `conditionRequiresAttention` precisely to stop depending on these). They are
-  // cleared together with `conditions` on session exit via
-  // `clearConditionRuntimeState`. They survive only until every remaining
-  // consumer (notably compaction status in agent-status) is migrated, after
-  // which they should be deleted.
-  pendingApproval: {
-    callId: string | null
-    command: string[]
-    workdir: string | null
-    reason?: string | null
-    options?: string[]
-    selectedIndex?: number
-  } | null
-  pendingTrustDialog: {
-    workspace?: string
-  } | null
-  pendingResumePrompt: {
-    sessionAgeText?: string
-    tokenCountText?: string
-    options?: string[]
-    selectedIndex?: number
-  } | null
-  pendingPermissionPrompt: {
-    title?: string
-    toolName?: string
-    command?: string
-    options?: Array<{ key: string; label: string }>
-    selectedIndex?: number
-  } | null
-  pendingCompaction: {
-    phase: 'running' | 'error' | 'done'
-    statusText?: string
-    errorText?: string
-  } | null
   historyOldestMarker: string | null
   hasOlderHistory: boolean
   loadingOlderHistory: boolean
@@ -621,7 +580,7 @@ export type SessionRuntime = {
   /** Task-tool subagents spawned by this session's work, keyed by the parent
    *  `Agent` tool_use id. Folded from the `session:sub-agents` IPC push (which
    *  the main-process watcher derives from `<sessionDir>/subagents/*.jsonl`).
-   *  Read by the feed's TaskSubagentRow / SubagentGroupHeader to show how many
+   *  Read by provider spawn rows / SubagentGroupHeader to show how many
    *  agents are running and what each is doing. Empty `{}` when no subagents
    *  exist — the feed then renders exactly as before. */
   subAgents: Record<string, SubAgentState>
@@ -717,11 +676,6 @@ export function emptyRuntime(): SessionRuntime {
     unreadSince: null,
     unreadKind: null,
     paneToast: null,
-    pendingApproval: null,
-    pendingTrustDialog: null,
-    pendingResumePrompt: null,
-    pendingPermissionPrompt: null,
-    pendingCompaction: null,
     historyOldestMarker: null,
     hasOlderHistory: false,
     loadingOlderHistory: false,

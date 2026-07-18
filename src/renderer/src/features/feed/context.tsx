@@ -1,4 +1,3 @@
-import type { TaskNotification } from '@renderer/session-runtime/taskNotification'
 import { createContext } from 'react'
 
 import type {
@@ -7,6 +6,8 @@ import type {
 } from '@shared/types/transcript'
 
 import type { AgentProvider } from '@renderer/features/feed/types'
+import type { ProviderTaskNotification } from '@shared/types/providerConfig'
+import type { ProviderOperationDecision } from '@shared/types/providerConfig'
 import type { SubAgentState } from '@renderer/session-runtime/state'
 import type { ClaudeAskUserQuestionState } from '@shared/types/providerConditions'
 
@@ -67,6 +68,52 @@ export const ToolUseIndexContext = createContext<Map<string, ToolUseBlock>>(new 
 export const ToolResultIndexContext =
   createContext<Map<string, ToolResultBlock>>(new Map())
 
+export type CommittedOperationDecisionResolver = (
+  toolUse: ToolUseBlock,
+  result: ToolResultBlock | null,
+) => ProviderOperationDecision
+
+/** Build one cache for a provider's committed operation decisions.
+ *
+ * WHY the cache belongs beside the pair indices: a committed invocation and
+ * its result render in different EntryRow subtrees, but provider adapters
+ * decide the correlated pair together. Dispatching independently in both
+ * rows repeated every parser/adapter and could even produce two React node
+ * trees for one pair.
+ *
+ * The exact object pair is the invalidation key. Runtime transcript blocks are
+ * immutable once admitted, while a later result arrives as a new object. That
+ * means an unrelated index append must NOT discard decisions for every older
+ * pair, and a result arrival still MUST recompute the one affected tool use.
+ * Keeping this distinction here prevents large owned-result parsers from
+ * becoming an ever-growing tax on otherwise unrelated feed traffic.
+ */
+export function createCommittedOperationDecisionResolver(
+  renderOperation: (input: {
+    toolUse: ToolUseBlock
+    result: ToolResultBlock | null
+    live: false
+    streaming: false
+  }) => ProviderOperationDecision,
+): CommittedOperationDecisionResolver {
+  const decisions = new WeakMap<
+    ToolUseBlock,
+    { result: ToolResultBlock | null; decision: ProviderOperationDecision }
+  >()
+  return (toolUse, result) => {
+    const cached = decisions.get(toolUse)
+    if (cached?.result === result) return cached.decision
+    const decision = renderOperation({ toolUse, result, live: false, streaming: false })
+    decisions.set(toolUse, { result, decision })
+    return decision
+  }
+}
+
+// Null keeps standalone row tests honest: without Feed's provider-owned cache
+// owner, Block dispatches directly instead of sharing process-global state.
+export const CommittedOperationDecisionContext =
+  createContext<CommittedOperationDecisionResolver | null>(null)
+
 export const CodeRenderContext = createContext<{
   sessionId: string
   workspaceRoot: string | null
@@ -83,26 +130,20 @@ export const CodeRenderContext = createContext<{
 // when no subagents exist, so consumers render the plain spawn card.
 export const SubAgentsContext = createContext<Record<string, SubAgentState>>({})
 
-/** toolUseId → parsed <task-notification> (P2b). Built in Feed from
- *  committed entries beside the tool indexes; TaskSubagentRow reads it as
- *  its highest-priority status/result evidence (a notification is the
- *  task's own completion report — it outranks watcher-derived state). */
+/** Claude toolUseId → parsed <task-notification>. The shared context only
+ * transports a provider-owned join index; Feed leaves it empty for every
+ * other provider and only Claude components interpret its values. */
 export const TaskNotificationsContext = createContext<
-  ReadonlyMap<string, TaskNotification>
+  ReadonlyMap<string, ProviderTaskNotification>
 >(new Map())
 
-// Live AskUserQuestion screen state for answerability only.
+// Live Claude AskUserQuestion screen state for terminal-key forwarding only.
 //
 // WHY this is a separate side-channel instead of part of CodeRenderContext:
 // sessionId/workspaceRoot are stable render metadata used by many code/markdown
 // leaves. The AUQ state is a volatile screen-derived condition used by exactly
-// one semantic row to decide whether controls should still be clickable. Keeping
-// it separate prevents a terminal repaint from invalidating unrelated code-block
-// consumers while still avoiding prop drilling through every feed row.
-//
-// Undefined means "unknown/no snapshot yet"; null means "we have a conditions
-// snapshot and the picker is absent." The row uses that distinction to disable
-// only when absence is positively known, which closes the stray-digit race
-// without turning transient parser misses into flickery UI.
+// one Claude row to forward navigation keys when the terminal picker is present.
+// It deliberately does not gate durable rendering or structured submission;
+// the headless resolver reparses the terminal before any write.
 export const AskUserQuestionConditionContext =
   createContext<ClaudeAskUserQuestionState | null | undefined>(undefined)

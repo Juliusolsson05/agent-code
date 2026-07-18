@@ -50,6 +50,12 @@
     // could not see its `expect` augmentation. Include the one shared setup instead of adding
     // matcher imports to individual specs and letting the two test environments drift.
     "testing/setup/renderer.ts",
+    // Curated rendering-shape fixtures are imported by provider adapter and
+    // DOM contracts. Composite TypeScript refuses transitive JSON that is not
+    // named in the project file list; keeping the fixture tree explicit makes
+    // the authoritative typecheck validate those evidence contracts instead
+    // of forcing tests to duplicate captured structures inline.
+    "testing/fixtures/rendering-shapes/**/*.json",
     // The phone client is browser code type-checked here (react-jsx, DOM
     // lib) even though it builds through its own plain-Vite config — the
     // tsc gate must cover it or client drift ships silently.
@@ -86,6 +92,13 @@
     // list and go un-type-checked (the registry itself rides in
     // transitively via renderer imports; the node project excludes both).
     "src/providers/registry.renderer.capabilities.spawnTool.test.ts",
+    // Shape-catalog registry + Phase 4 coverage gate (PR #555): providers-
+    // root files importing the per-provider shapes.ts catalogs and renderer
+    // evidence modules — web-project citizens for the same reason as the
+    // capability registry (node project excludes them; see
+    // tsconfig.node.json's matching exclude comment).
+    "src/providers/registry.renderShapes.ts",
+    "src/providers/shapes.coverage.test.ts",
     // registry.renderer.ts lives at providers/ root, outside the
     // `*/renderer/**/*` glob above. TileTree imports it to mount
     // provider-specific TileLeaf components, so the web project

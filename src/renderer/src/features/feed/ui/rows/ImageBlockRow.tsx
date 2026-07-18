@@ -1,20 +1,19 @@
 import { memo } from 'react'
 
 import type { ContentBlock } from '@shared/types/transcript'
+import { asRecord } from '@shared/lib/asRecord'
 
-import { imageDataUrl } from '@renderer/features/feed/lib/helpers'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
+import { parseBase64MediaPreview } from '@providers/shared/renderer/protocols/media/base64'
+import { Base64MediaView } from '@providers/shared/renderer/protocols/media/Base64MediaView'
+import { LazyJsonDisclosure } from '@providers/shared/renderer/rows/LazyJsonDisclosure'
 
 import { UserBand } from '@renderer/features/feed/ui/rows/primitives'
 
-// Image content-block renderer. Handles both directions of the
-// conversation: an inline image pasted by the user (`❯` marker +
-// UserBand highlight) or an image emitted by an assistant tool call
-// (`⏺` marker, no band). The image itself is rendered from a base64
-// data: URL — the transcript wire format never carries remote URLs
-// for inline images, only inline bytes. When the data is missing
-// (malformed block), we render a small "image" placeholder pill
-// instead of failing silently.
+// Provider-neutral image content-block renderer. The providers own the step
+// that maps their wire image into this transcript block; this leaf owns only
+// safe, bounded media presentation shared by user attachments and generated
+// assistant images.
 export const ImageBlockRow = memo(function ImageBlockRow({
   block,
   role,
@@ -22,28 +21,38 @@ export const ImageBlockRow = memo(function ImageBlockRow({
   block: ContentBlock
   role: 'user' | 'assistant'
 }) {
-  const src = imageDataUrl(block)
-  const source = (block as { source?: { media_type?: unknown } }).source
-  const mediaType =
+  const source = asRecord(asRecord(block)?.source)
+  const media = parseBase64MediaPreview(
+    'image',
+    source?.media_type ?? source?.mimeType,
+    source?.data,
+  )
+  const mediaType = media?.mimeType ?? (
     typeof source?.media_type === 'string'
       ? source.media_type
-      : 'image'
+      : typeof source?.mimeType === 'string' ? source.mimeType : 'image'
+  )
   const alt = role === 'user' ? 'Pasted image' : 'Image'
   const row = (
     <MarkerRow marker={role === 'user' ? '❯' : '⏺'}>
-      <div>
-        {src ? (
-          <img
-            src={src}
-            alt={alt}
-            title={mediaType}
-            className="max-h-[28rem] max-w-full rounded border border-border object-contain bg-surface"
-          />
-        ) : (
-          <div className="text-muted text-[11px] uppercase tracking-wider">
-            image
+      <div className="min-w-0">
+        <Base64MediaView
+          model={media}
+          label={`${alt} · ${mediaType}`}
+          alt={alt}
+        />
+        {!media ? (
+          <div className="mt-1">
+            {/* WHY unsupported image envelopes retain raw structure: image is
+                a provider-neutral content leaf, so it is intentionally not a
+                provider-routing catalog entry. That scope is safe only if a
+                newly introduced URL/file/source schema remains inspectable.
+                Projection and CodeBlock mounting stay behind the disclosure;
+                a huge base64 or metadata carrier therefore cannot add eager
+                serialization or DOM work to every feed replay. */}
+            <LazyJsonDisclosure label="View unsupported image source" value={block} />
           </div>
-        )}
+        ) : null}
       </div>
     </MarkerRow>
   )

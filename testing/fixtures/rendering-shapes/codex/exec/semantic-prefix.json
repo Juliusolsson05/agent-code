@@ -1,0 +1,35 @@
+{
+  "evidence": "Curated from the 2026-07-17 developer recording. The structural keys are copied from fp2-679797aa; scalar scripts are reduced while retaining one captured specialized command route and one captured generic route.",
+  "cases": [
+    {
+      "expectedRoute": "specialized",
+      "semanticBlock": {
+        "blockIndex": 0,
+        "callId": "exec-prefix-command",
+        "inputJson": "const r = await tools.exec_command({cmd:\"git status --short\"}); text(r.output);",
+        "itemId": "exec-prefix-command",
+        "kind": "custom_tool_call",
+        "status": "in_progress",
+        "text": "",
+        "thinking": "",
+        "toolName": "exec",
+        "toolUseId": "exec-prefix-command"
+      }
+    },
+    {
+      "expectedRoute": "generic",
+      "semanticBlock": {
+        "blockIndex": 1,
+        "callId": "exec-prefix-generic",
+        "inputJson": "const answer = 42; text(answer);",
+        "itemId": "exec-prefix-generic",
+        "kind": "custom_tool_call",
+        "status": "in_progress",
+        "text": "",
+        "thinking": "",
+        "toolName": "exec",
+        "toolUseId": "exec-prefix-generic"
+      }
+    }
+  ]
+}

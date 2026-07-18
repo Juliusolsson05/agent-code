@@ -230,8 +230,8 @@ export const sessionApi = {
   // onSessionResumePrompt, onSessionPermissionPrompt, onSessionCompactionState)
   // were removed. The renderer consumes a single unified
   // `ProviderConditionSnapshot` through `onSessionConditions` and derives
-  // pendingTrustDialog/pendingResumePrompt/pendingPermissionPrompt/
-  // pendingCompaction/picker/approval from it (see
+  // normalized condition snapshot/picker
+  // picker/approval mirrors from it (see
   // workspace/hook/ipc/useIpcSubscriptions.ts applyConditionSnapshot).
   // No renderer ever subscribed to the legacy channels; keeping the dead
   // preload methods made it look valid to ingest legacy derived state in

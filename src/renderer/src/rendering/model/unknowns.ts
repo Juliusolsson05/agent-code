@@ -1,5 +1,6 @@
 import type { AgentProviderKind } from '@shared/types/providerKind'
 import type { RenderSourcePlane, UnknownBehavior } from '@renderer/rendering/model/types'
+import { fingerprintRenderShape } from '@renderer/rendering/evidence/shapeFingerprint'
 
 // ---------------------------------------------------------------------------
 // Unknown-behavior registry (plan §3 contract).
@@ -12,44 +13,104 @@ import type { RenderSourcePlane, UnknownBehavior } from '@renderer/rendering/mod
 // future provider behavior gets discovered from a debug bundle instead of
 // re-reading raw event archives (the dump's explicit design goal).
 //
-// Redaction (#115) is structural, not best-effort: the registry stores
-// shape PATHS and a content HASH — never the payload. The optional preview
-// must be passed pre-redacted by the caller and is hard-capped, so a
-// mistake at a call site cannot leak a full prompt into feed-debug or a
-// bundle. Auth-looking keys are redacted IN PLACE in the shape paths as a
-// second belt: the KEY NAME is retained (so a bundle reader still sees the
-// structural shape — that a secret-carrying key was present at this path),
-// but its VALUE/subtree is never walked and is replaced with a
-// `<redacted-key>` marker. Keeping the name while dropping the value is what
-// makes the path diagnostic without ever carrying the secret itself; the
-// earlier wording claimed key NAMES were stripped, which the code has never
-// done (see `shapePathsOf`).
+// The registry stores complete bounded shape PATHS and a bounded content
+// HASH, never a second copy of the payload. This is a developer evidence
+// surface: arbitrary key names are deliberately retained because they are
+// frequently the clue needed to classify an unknown MCP result. The optional
+// preview remains hard-capped because the original recording is the place to
+// inspect full scalar content.
 // ---------------------------------------------------------------------------
 
 const PREVIEW_MAX = 80
-// Exported as the SINGLE source of truth for "which object keys carry a
-// secret." `shapePathsOf` uses it to redact secret VALUES out of shape
-// paths (the key NAME stays, its subtree is dropped and marked
-// `<redacted-key>`); the session-recording redactor (rendering/replay/redact.ts) uses
-// the exact same regex to strip secret VALUES from a recording before it can
-// be checked in, and the extraction script's hard gate scans for the same.
-// One regex means a recording can never leak a key shape the unknown registry
-// would have hidden — the redaction surfaces stay in lockstep.
-export const SENSITIVE_KEY = /authorization|api[-_]?key|token|secret|cookie|password/i
+/**
+ * How many distinct payload-hash samples one finding retains. Samples are
+ * DIAGNOSTIC (they prove "n different payloads shared this structure" and
+ * seed extraction), never identity — so a small bound is enough and an
+ * unbounded list would grow with content churn, exactly the flood the
+ * fingerprint re-key exists to stop.
+ */
+const PAYLOAD_HASH_SAMPLES_MAX = 8
+/**
+ * Saturation bound for the distinct-hash COUNTER. Tracking every distinct
+ * hash forever is an unbounded Set per finding (a long session piping
+ * varied commands through one unknown shape would grow it indefinitely);
+ * past this bound `distinctPayloadHashes` simply stops incrementing.
+ * "At least 64 variants" is all the diagnosis ever needs.
+ */
+const DISTINCT_HASH_TRACK_MAX = 64
 
 /** Deterministic, dependency-free FNV-1a — identity for dedupe/counting,
  *  NOT cryptographic. Collisions merely merge two counters. */
 export function hashPayload(payload: unknown): string {
-  let json: string
-  try {
-    json = JSON.stringify(payload) ?? 'undefined'
-  } catch {
-    json = 'unserializable'
-  }
   let h = 0x811c9dc5
-  for (let i = 0; i < json.length; i++) {
-    h ^= json.charCodeAt(i)
-    h = Math.imul(h, 0x01000193)
+  let nodes = 0
+  let chars = 0
+  const MAX_HASH_NODES = 4_000
+  const MAX_HASH_CHARS = 256 * 1024
+  const MAX_CONTAINER_MEMBERS = 1_024
+  const ancestors = new Set<object>()
+  const add = (value: string): void => {
+    const remaining = MAX_HASH_CHARS - chars
+    if (remaining <= 0) return
+    // A bounded head plus the original length distinguishes common payloads
+    // without copying or walking an arbitrarily large string.
+    const admitted = value.length <= remaining ? value : `${value.slice(0, remaining)}#${value.length}`
+    chars += admitted.length
+    for (let i = 0; i < admitted.length; i += 1) {
+      h ^= admitted.charCodeAt(i)
+      h = Math.imul(h, 0x01000193)
+    }
+  }
+
+  const walk = (value: unknown): void => {
+    if (nodes >= MAX_HASH_NODES || chars >= MAX_HASH_CHARS) {
+      add('<truncated>')
+      return
+    }
+    nodes += 1
+    if (value === null || typeof value !== 'object') {
+      add(`${typeof value}:${typeof value === 'string' ? value : String(value)}`)
+      return
+    }
+    if (ancestors.has(value)) {
+      add('<cycle>')
+      return
+    }
+    ancestors.add(value)
+    try {
+      if (Array.isArray(value)) {
+        add(`array:${value.length}`)
+        const admitted = Math.min(value.length, MAX_CONTAINER_MEMBERS)
+        for (let i = 0; i < admitted; i += 1) walk(value[i])
+        if (value.length > admitted) add('<truncated-array>')
+        return
+      }
+      const record = value as Record<string, unknown>
+      const entries: [string, unknown][] = []
+      let truncated = false
+      for (const key in record) {
+        if (!Object.prototype.hasOwnProperty.call(record, key)) continue
+        if (entries.length >= MAX_CONTAINER_MEMBERS) {
+          truncated = true
+          break
+        }
+        entries.push([key, record[key]])
+      }
+      entries.sort(([a], [b]) => a.localeCompare(b))
+      for (const [key, child] of entries) {
+        add(`key:${key}`)
+        walk(child)
+      }
+      if (truncated) add('<truncated-object>')
+    } finally {
+      ancestors.delete(value)
+    }
+  }
+
+  try {
+    walk(payload)
+  } catch {
+    add('<unserializable>')
   }
   return (h >>> 0).toString(16)
 }
@@ -57,18 +118,17 @@ export function hashPayload(payload: unknown): string {
 /** Sorted key paths to depth 3 — enough to recognize a shape in a bundle
  *  without carrying any values. */
 export function shapePathsOf(payload: unknown, prefix = '', depth = 0): string[] {
-  if (depth >= 3 || typeof payload !== 'object' || payload === null) return []
-  const out: string[] = []
-  for (const key of Object.keys(payload as Record<string, unknown>).sort()) {
-    if (SENSITIVE_KEY.test(key)) {
-      out.push(`${prefix}${key}=<redacted-key>`)
-      continue
-    }
-    const path = `${prefix}${key}`
-    out.push(path)
-    out.push(...shapePathsOf((payload as Record<string, unknown>)[key], `${path}.`, depth + 1))
-  }
-  return out
+  // Kept as the compatibility API used by older debug callers. Delegating to
+  // the canonical fingerprint walker prevents this secondary registry from
+  // reintroducing its own unbounded traversal or key-name privacy policy.
+  void prefix
+  void depth
+  return [...fingerprintRenderShape({
+    provider: 'unknown',
+    plane: 'unknown',
+    eventType: 'unknown',
+    payload,
+  }).shapePaths]
 }
 
 export type UnknownSighting = {
@@ -84,23 +144,54 @@ export type UnknownSighting = {
 }
 
 /**
- * Per-session registry, deduping by (plane, eventType, payload hash) —
- * a flood of identical unknown events becomes ONE finding with a count,
- * which is what makes unknowns readable in a bundle instead of noise
- * (the same rollup lesson as feed-debug text-delta batching).
+ * Per-session registry, deduping by (plane, eventType, STRUCTURAL
+ * fingerprint) — a flood of identical unknown events becomes ONE finding
+ * with a count, which is what makes unknowns readable in a bundle instead
+ * of noise (the same rollup lesson as feed-debug text-delta batching).
+ *
+ * RE-KEYED 2026-07-16 (Phase 1, evidence-first rendering plan): identity was
+ * previously the content-sensitive payload hash, which split ONE structure
+ * into a new finding per distinct command/prompt — `Bash ls` and
+ * `Bash git status` read as two unknowns, so a busy session drowned the
+ * registry in duplicates of the same missing decoder. The structural
+ * fingerprint groups them into one finding; the payload hash demotes to a
+ * bounded per-finding SAMPLE list, still useful to prove "this structure
+ * arrived with many different contents" and to seed fixture extraction, but
+ * never identity again.
  */
 export function createUnknownRegistry(): {
   record: (s: UnknownSighting) => UnknownBehavior
   list: () => readonly UnknownBehavior[]
 } {
   const byId = new Map<string, UnknownBehavior>()
+  // Distinct-hash tracking lives OUTSIDE the published record: the Set is
+  // bookkeeping, and leaking it into UnknownBehavior would make every bump
+  // serialize an ever-growing structure into debug bundles.
+  const hashesById = new Map<string, Set<string>>()
   return {
     record(s) {
       const payloadHash = hashPayload(s.payload)
-      const id = `unknown:${s.sourcePlane}:${s.eventType ?? 'untyped'}:${payloadHash}`
+      const { fingerprint } = fingerprintRenderShape({
+        provider: s.provider,
+        plane: s.sourcePlane,
+        eventType: s.eventType ?? 'untyped',
+        payload: s.payload,
+      })
+      const id = `unknown:${s.sourcePlane}:${s.eventType ?? 'untyped'}:${fingerprint}`
       const existing = byId.get(id)
       if (existing) {
-        const bumped: UnknownBehavior = { ...existing, seenCount: existing.seenCount + 1 }
+        const hashes = hashesById.get(id)!
+        if (hashes.size < DISTINCT_HASH_TRACK_MAX) hashes.add(payloadHash)
+        const bumped: UnknownBehavior = {
+          ...existing,
+          seenCount: existing.seenCount + 1,
+          distinctPayloadHashes: hashes.size,
+          payloadHashSamples:
+            existing.payloadHashSamples.length < PAYLOAD_HASH_SAMPLES_MAX &&
+            !existing.payloadHashSamples.includes(payloadHash)
+              ? [...existing.payloadHashSamples, payloadHash]
+              : existing.payloadHashSamples,
+        }
         byId.set(id, bumped)
         return bumped
       }
@@ -109,8 +200,11 @@ export function createUnknownRegistry(): {
         provider: s.provider,
         sourcePlane: s.sourcePlane,
         eventType: s.eventType,
+        structuralFingerprint: fingerprint,
         shapePaths: shapePathsOf(s.payload),
         payloadHash,
+        payloadHashSamples: [payloadHash],
+        distinctPayloadHashes: 1,
         redactedPreview: s.redactedPreview?.slice(0, PREVIEW_MAX),
         firstSeenAt: s.nowMs,
         seenCount: 1,
@@ -118,6 +212,7 @@ export function createUnknownRegistry(): {
         evidence: s.evidence ?? [],
       }
       byId.set(id, fresh)
+      hashesById.set(id, new Set([payloadHash]))
       return fresh
     },
     list() {

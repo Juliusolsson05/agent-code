@@ -4,12 +4,18 @@ import type {
   RenderCandidate,
   RenderContentKind,
 } from '@renderer/rendering/model/types'
-// Value import (not a type): the SAME spawn-tool predicate the fleet row uses
-// to decide which tool_use becomes a TaskSubagentRow. Reusing it here keeps
-// the join-suppression set (below) tied to the exact blocks that CONSUME a
+// Value import (not a type): the SAME provider capability the fleet row uses
+// to decide which tool_use becomes a spawn card. Reusing it here keeps
+// the join-suppression set tied to the exact blocks that CONSUME a
 // notification — if the two ever diverged, we'd either suppress a standalone
 // row nobody re-renders (lost background result) or double-paint one.
-import { isAgentSpawnToolName } from '@providers/registry.renderer.capabilities'
+import {
+  isAgentSpawnTool,
+  providerDurableEntryKind,
+  providerTaskNotificationFromEntry,
+} from '@providers/registry.renderer.capabilities'
+import type { Entry, ToolUseBlock } from '@shared/types/transcript'
+import type { ProviderDurableEntryKind } from '@shared/types/providerConfig'
 
 // ---------------------------------------------------------------------------
 // Committed candidate collector — the anti-corruption boundary between raw
@@ -28,6 +34,13 @@ import { isAgentSpawnToolName } from '@providers/registry.renderer.capabilities'
 // ---------------------------------------------------------------------------
 
 export type RawCommittedEntry = {
+  /**
+   * Provider classifiers receive the intact entry object through the registry.
+   * Keep provider-only keys structurally available without naming them here:
+   * naming `subtype`/`isCompactSummary` in this shared collector would turn a
+   * transport boundary back into a second provider vocabulary parser.
+   */
+  [key: string]: unknown
   uuid?: string
   type?: string
   isMeta?: boolean
@@ -55,19 +68,6 @@ export type CommittedCollection = {
 }
 
 const CONVERSATION_TYPES = new Set(['user', 'assistant'])
-const COMPACT_TYPES = new Set(['compact-boundary', 'compact_boundary', 'compact-summary', 'compact_summary'])
-
-/** Claude writes the compaction marker as `type:'system'` with
- *  `subtype:'compact_boundary'` — NOT as a first-class compact type.
- *  Bundle-corpus catch (2026-06-22 c973322e, "did we not have custom
- *  rendering UI for the compaction?"): the legacy renderer painted the
- *  boundary via its VisibleDecision 'compact_boundary' branch while this
- *  collector dropped the row as not-conversation, deleting the compaction
- *  marker from the feed at cutover. */
-function isSystemCompactBoundary(e: RawCommittedEntry): boolean {
-  return e.type === 'system' && (e as { subtype?: string }).subtype === 'compact_boundary'
-}
-
 function entryTimestampMs(e: RawCommittedEntry): number | null {
   // Committed entry.timestamp is the TOP of the trust hierarchy (plan D4) —
   // producer wall-clock. Never substitute Date.now(): resume comparisons
@@ -142,47 +142,14 @@ function isSyntheticClaudeUserRow(
 }
 
 /**
- * Task-notification carve-out (residue plan P0b — the cutover blocker).
- *
- * `<task-notification>` entries are user-typed, start with '<', and carry
- * no permissionMode — structurally IDENTICAL to the sidecar junk the
- * synthetic filter exists to kill, but they are the ONLY carrier of
- * background-task results (subagents AND background Bash; verified in
- * real transcripts). Legacy paints them (badly, as raw-XML bubbles) but
- * never LOSES them; the filter alone would. They must be detected BEFORE
- * the synthetic filter and kept visible.
- *
- * The extracted <tool-use-id> is stamped on the candidate so the P2 row
- * work can join the notification into its parent Task row (and later
- * suppress the standalone row with reason 'task-notification-joined' —
- * reserved in RenderReason now so the fixture-gated enum doesn't churn
- * twice).
- */
-const TASK_NOTIFICATION_OPEN = '<task-notification>'
-const TOOL_USE_ID_TAG = /<tool-use-id>\s*([^<\s]+)\s*<\/tool-use-id>/
-
-function taskNotificationToolUseId(e: RawCommittedEntry): string | null {
-  if (e.type !== 'user' || e.message?.role !== 'user') return null
-  const text = textOf(e)
-  if (typeof text !== 'string' || !text.trimStart().startsWith(TASK_NOTIFICATION_OPEN)) return null
-  const m = TOOL_USE_ID_TAG.exec(text)
-  return m?.[1] ?? null
-}
-
-function isTaskNotificationRow(e: RawCommittedEntry): boolean {
-  if (e.type !== 'user' || e.message?.role !== 'user') return false
-  const text = textOf(e)
-  return typeof text === 'string' && text.trimStart().startsWith(TASK_NOTIFICATION_OPEN)
-}
-
-/**
  * Pre-scan for the P2b join-suppression: the committed tool_use ids of
  * subagent-SPAWN blocks (claude `Agent`, codex `spawn_agent`, the MCP
- * orchestration forms — whatever `isAgentSpawnToolName` recognizes).
+ * orchestration forms — but only when the active provider's adapter validates
+ * the complete spawn input).
  *
  * WHY this set exists — the row-double-render this closes: a
  * `<task-notification>` is the spawn's OWN completion report, and
- * TaskSubagentRow ALREADY paints it inside the parent Task card via
+ * the provider spawn row ALREADY paints it inside the parent card via
  * `notifications.get(spawnBlock.id)` (see Feed's taskNotifications map,
  * keyed by the notification's <tool-use-id>). If this collector ALSO selects
  * the standalone notification entry as a user row, the identical background
@@ -192,7 +159,7 @@ function isTaskNotificationRow(e: RawCommittedEntry): boolean {
  * reinstate it or the corruption returns at cutover.
  *
  * WHY filter to SPAWN tools instead of any committed tool_use (as legacy's
- * broad index technically did): only spawn blocks route to TaskSubagentRow,
+ * broad index technically did): only spawn blocks route to provider spawn rows,
  * the sole row that consumes a notification. Matching a non-spawn tool would
  * suppress a notification that no card re-renders — silently losing the
  * result. Narrowing to spawn ids makes "suppressed here" iff "joined there",
@@ -202,6 +169,7 @@ function isTaskNotificationRow(e: RawCommittedEntry): boolean {
  */
 function collectSpawnToolUseIds(
   entries: readonly RawCommittedEntry[],
+  provider: AgentProviderKind,
 ): Set<string> {
   const ids = new Set<string>()
   for (const e of entries) {
@@ -216,7 +184,7 @@ function collectSpawnToolUseIds(
         block?.type === 'tool_use' &&
         typeof block.id === 'string' &&
         typeof block.name === 'string' &&
-        isAgentSpawnToolName(block.name)
+        isAgentSpawnTool(block as ToolUseBlock, provider)
       ) {
         ids.add(block.id)
       }
@@ -225,11 +193,40 @@ function collectSpawnToolUseIds(
   return ids
 }
 
-function contentKindOf(e: RawCommittedEntry): RenderContentKind {
+function contentKindOf(
+  e: RawCommittedEntry,
+  durableKind: ProviderDurableEntryKind | null,
+): RenderContentKind {
+  // Provider admission MUST outrank the transport's conversation discriminator:
+  // both Claude and Codex persist a compact summary as a synthetic `user`
+  // entry. Checking `type` first would admit the right row but relabel it as a
+  // user prompt, breaking ordering/debug evidence and reopening the exact
+  // compact-summary ambiguity this capability boundary removes.
+  switch (durableKind) {
+    case 'compact-boundary':
+      return 'compact-boundary'
+    case 'compact-summary':
+      return 'compact-summary'
+    case null:
+      break
+    default: {
+      // Compile-time tripwire plus runtime totality: when the shared durable
+      // union grows, assigning the new member to `never` fails typecheck and
+      // forces this mapping to be reviewed. A stale/bypassed runtime can still
+      // hand us that value before all bundles update; classify it unknown
+      // instead of throwing out of the feed's total fallback path.
+      const futureKind: never = durableKind
+      void futureKind
+      return 'unknown'
+    }
+  }
   if (e.type === 'assistant') return 'assistant-text'
   if (e.type === 'user') return 'user-text'
-  if (e.type?.includes('boundary') || isSystemCompactBoundary(e)) return 'compact-boundary'
-  return 'compact-summary'
+  // A non-conversation row should reach here only after provider admission,
+  // but collectors are a trust boundary and the feed promises total fallback.
+  // `unknown` keeps the candidate visible/debuggable if a provider violates
+  // that contract rather than turning classification drift into a crash.
+  return 'unknown'
 }
 
 // NFKC + whitespace-collapse + trim — the same conservative normalization
@@ -251,7 +248,7 @@ export function collectCommittedCandidates(
   // rather than an O(N²) rescan, and so a notification that appears BEFORE
   // its spawn entry in iteration order still suppresses correctly (the whole
   // committed slice is scanned before any decision is emitted).
-  const spawnToolUseIds = collectSpawnToolUseIds(entries)
+  const spawnToolUseIds = collectSpawnToolUseIds(entries, provider)
 
   entries.forEach((e, index) => {
     // Ingest-time stable id (plan migration hazard: keys must never fall
@@ -276,9 +273,9 @@ export function collectCommittedCandidates(
     const id = `entry:${e.uuid ?? `ingest-${index}`}`
 
     const isConversation = CONVERSATION_TYPES.has(e.type ?? '')
-    const isCompact = COMPACT_TYPES.has(e.type ?? '') || isSystemCompactBoundary(e)
+    const durableKind = providerDurableEntryKind(e as Entry, provider)
 
-    if (!isConversation && !isCompact) {
+    if (!isConversation && durableKind === null) {
       decisions.push({ candidateId: id, selected: false, reason: 'not-conversation', evidence: [`type=${e.type ?? 'unknown'}`] })
       return
     }
@@ -286,11 +283,15 @@ export function collectCommittedCandidates(
       decisions.push({ candidateId: id, selected: false, reason: 'meta-entry', evidence: [] })
       return
     }
-    if (isTaskNotificationRow(e)) {
-      const toolUseId = taskNotificationToolUseId(e)
+    const taskNotification = providerTaskNotificationFromEntry(
+      e as Entry,
+      provider,
+    )
+    if (taskNotification !== null) {
+      const toolUseId = taskNotification.toolUseId
       // P2b join-suppression (mirrors legacy's
       // committedToolUseIndex.has(notification.toolUseId) guard): when the
-      // spawn that produced this notification is committed, TaskSubagentRow
+      // spawn that produced this notification is committed, the provider row
       // already renders the notification INSIDE the parent Task card, so
       // selecting the standalone entry too would double-paint the same
       // background result. A PARENTLESS notification (no toolUseId, or a
@@ -369,7 +370,7 @@ export function collectCommittedCandidates(
       sessionId,
       messageId: e.message?.id,
       turnId: e.message?.id,
-      contentKind: contentKindOf(e),
+      contentKind: contentKindOf(e, durableKind),
       timestampMs: entryTimestampMs(e),
       sequence: index,
       textKey: e.type === 'assistant' && text ? text : undefined,

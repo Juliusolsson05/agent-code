@@ -22,7 +22,6 @@ export const SemanticCollapsedActivityRow = memo(function SemanticCollapsedActiv
   if (unit.searchCount > 0) parts.push(`${unit.searchCount} search${unit.searchCount === 1 ? '' : 'es'}`)
   if (unit.readCount > 0) parts.push(`${unit.readCount} read${unit.readCount === 1 ? '' : 's'}`)
   if (unit.listCount > 0) parts.push(`${unit.listCount} list${unit.listCount === 1 ? '' : 's'}`)
-  if (unit.bashCount > 0) parts.push(`${unit.bashCount} bash`)
   const summary = parts.length > 0 ? parts.join(', ') : `${unit.count} tool calls`
 
   return (

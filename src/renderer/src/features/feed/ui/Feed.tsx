@@ -1,8 +1,5 @@
-import {
-  taskNotificationFromEntry,
-  type TaskNotification,
-} from '@renderer/session-runtime/taskNotification'
 import { TaskNotificationsContext } from '@renderer/features/feed/context'
+import { RenderShapeCaptureProvider } from '@renderer/features/feed/evidence/RenderShapeCaptureContext'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import {
   memo,
@@ -25,6 +22,8 @@ import { WorkIndicator } from '@renderer/features/feed/WorkIndicator'
 import { toolHintFromTurn } from '@renderer/features/feed/workIndicatorHints'
 import {
   ProviderContext,
+  CommittedOperationDecisionContext,
+  createCommittedOperationDecisionResolver,
   ToolUseIndexContext,
   ToolResultIndexContext,
   CodeRenderContext,
@@ -263,7 +262,7 @@ type Props = {
 //      compare bails the entire subtree out. Zero markdown work happens.
 //
 //   2. Every row component (`EntryRow`, `ConversationRow`, `TextProse`,
-//      `ToolUseRow`, `ToolResultRow`) is individually memoized. Even when
+//      `JsonToolRow`, `ToolResultRow`) is individually memoized. Even when
 //      Feed DOES need to re-render (new entry lands, streaming frame
 //      ticks), existing rows receive the exact same entry/block/text
 //      reference they had last time and skip. Only the genuinely new
@@ -768,20 +767,29 @@ function FeedImpl({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- see above.
     [toolResultIndexProp, toolIndexVersion, fallbackToolResultIndex],
   )
+  const committedOperationDecision = useMemo(
+    () => createCommittedOperationDecisionResolver(
+      getRendererProviderCapabilities(provider).renderOperation,
+    ),
+    // WHY index identities are deliberately absent: the resolver's WeakMap is
+    // already keyed by the immutable tool-use object and compares the exact
+    // paired result object. Replacing this resolver for an unrelated map
+    // append erased every older decision and repeatedly reparsed large Agent
+    // Code results. A real result arrival changes that pair's result identity,
+    // so it still invalidates precisely the affected decision. Provider is the
+    // only lifetime boundary because it selects a different adapter chain.
+    [provider],
+  )
 
-  // P2b: toolUseId → parsed task-notification. Entries-only memo (same
-  // cadence as the committed projection): notifications are committed
-  // rows, so live semantic ticks never rebuild this. TaskSubagentRow
-  // treats a notification as its top status/result evidence; renderModel
-  // uses the same parse to skip joined notification entries pre-LazyEntry.
-  const taskNotifications = useMemo(() => {
-    const out = new Map<string, TaskNotification>()
-    for (const entry of entries) {
-      const n = taskNotificationFromEntry(entry)
-      if (n?.toolUseId) out.set(n.toolUseId, n)
-    }
-    return out
-  }, [entries])
+  // The shared feed transports a join map but never recognizes the provider's
+  // transcript envelope. This registry call is the cutover boundary that keeps
+  // Claude XML out of Codex/OpenCode while preserving cross-entry correlation.
+  const taskNotifications = useMemo(
+    () =>
+      getRendererProviderCapabilities(provider).collectTaskNotifications?.(entries) ??
+      new Map(),
+    [entries, provider],
+  )
 
   // #491: `committedProjection` (deriveFeedCommittedProjection) is deleted — it
   // existed ONLY to feed SemanticStreamingTurn's committedAssistantText for its
@@ -986,8 +994,15 @@ function FeedImpl({
 
   return (
     <ProviderContext.Provider value={provider}>
+    {/* Shape-capture binding (Phase 2, PR #555): carries {sessionId, provider}
+        to the observation call sites in Block/EntryRow/SemanticLiveBlockRow and
+        syncs the observer's armed state with main's recording truth on mount.
+        Value is memoized per session — armed-ness deliberately lives OUTSIDE
+        the context so toggling capture never re-renders the feed. */}
+    <RenderShapeCaptureProvider sessionId={sessionId} provider={provider}>
     <ToolUseIndexContext.Provider value={toolUseIndex}>
     <ToolResultIndexContext.Provider value={toolResultIndex}>
+    <CommittedOperationDecisionContext.Provider value={committedOperationDecision}>
     <SubAgentsContext.Provider value={subAgents}>
     <TaskNotificationsContext.Provider value={taskNotifications}>
     <AskUserQuestionConditionContext.Provider value={askUserQuestionState}>
@@ -1033,8 +1048,10 @@ function FeedImpl({
     </AskUserQuestionConditionContext.Provider>
     </TaskNotificationsContext.Provider>
     </SubAgentsContext.Provider>
+    </CommittedOperationDecisionContext.Provider>
     </ToolResultIndexContext.Provider>
     </ToolUseIndexContext.Provider>
+    </RenderShapeCaptureProvider>
     </ProviderContext.Provider>
   )
 }
@@ -1050,16 +1067,9 @@ function FeedImpl({
 // Row components moved to ./rows/
 // ---------------------------------------------------------------------------
 //
-// The entire row surface (LazyEntry, EntryRow, ConversationRow, Block,
-// ImageBlockRow, CompactBoundaryRow, CompactSummaryRow, SystemRow,
-// ToolUseRow, ToolResultRow, TruncatedOutputRow, UserBand,
-// plus the EAGER_TAIL constant) moved to ./rows/. Each component lives
-// in its own file, and the long WHY comments (lazy mount rationale,
-// the "CRITICAL: don't wrap tool_results in UserBand" gotcha, the
-// Read/Grep/Edit result-rendering taxonomy, the bash headline cap,
-// etc.) travelled with the code. Feed.tsx now imports EAGER_TAIL +
-// EntryRow + LazyEntry through ./rows/index.ts — the rest are internal
-// to the rows tree. The "Streaming row REMOVED" + "Activity indicator
-// REMOVED" rationale blocks that used to live at the tail of this
-// file are folded into ./semantic/StreamingTurn.tsx + ./WorkIndicator.tsx
-// where those replacements actually live.
+// Neutral row infrastructure (LazyEntry, EntryRow, ConversationRow, Block,
+// image/prose/system fallbacks, and EAGER_TAIL) lives under ./rows/. Provider
+// interpretation does not: paired operations and durable provider artifacts
+// enter through registry capabilities and are painted under providers/. This
+// division keeps scrolling/lazy-mount mechanics reusable without rebuilding a
+// second central rendering engine inside Feed.

@@ -63,7 +63,9 @@ describe('SessionRecorderManager', () => {
     mono = 10
     m.observe('session:semantic-event', [{ sessionId: 's1', event: { kind: 'turn_started' } }])
     mono = 25
-    m.observe('session:jsonl-entries', [{ sessionId: 's1', entries: [{ uuid: 'u1' }], file: '/x.jsonl' }])
+    m.observe('session:jsonl-entries', [
+      { sessionId: 's1', entries: [{ uuid: 'u1' }], file: '/x.jsonl' },
+    ])
     await m.stop('s1')
 
     const dir = await readRecordingDir('s1')
@@ -72,7 +74,10 @@ describe('SessionRecorderManager', () => {
     expect(meta.eventCount).toBe(2) // the two allowlisted, not the pty/lsp
     expect(meta.endedAtWall).toBe(wall)
 
-    const lines = readFileSync(join(dir, 'events.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l))
+    const lines = readFileSync(join(dir, 'events.jsonl'), 'utf8')
+      .trim()
+      .split('\n')
+      .map(l => JSON.parse(l))
     expect(lines.map(l => l.ch)).toEqual(['session:semantic-event', 'session:jsonl-entries'])
     // t is relative to recording START (explicit startRecording at mono=0);
     // the two events at mono 10 and 25 are t=10 and t=25.
@@ -86,10 +91,12 @@ describe('SessionRecorderManager', () => {
     m.startRecording('deferred')
     const toJSON = vi.fn(() => ({ safely: 'serialized later' }))
 
-    m.observe('session:semantic-event', [{
-      sessionId: 'deferred',
-      event: { type: 'tool_input_delta', payload: { toJSON } },
-    }])
+    m.observe('session:semantic-event', [
+      {
+        sessionId: 'deferred',
+        event: { type: 'tool_input_delta', payload: { toJSON } },
+      },
+    ])
 
     // The observer is invoked synchronously after BrowserWindow.send. Calling
     // user JSON hooks here proves serialization is still on that critical path.
@@ -104,21 +111,83 @@ describe('SessionRecorderManager', () => {
     expect(m.isRecording('anything')).toBe(false)
   })
 
-  it('finalizes a recording on session:exit', async () => {
-    const m = mgr()
+  it('keeps the recorder open on session:exit until the renderer finishes its shape flush', async () => {
+    const stopping = vi.fn()
+    const m = new SessionRecorderManager(nowWall, nowMono, false, () => {}, stopping)
     m.startRecording('s2', { kind: 'claude' }) // command passes provider hint
     m.observe('session:started', [{ sessionId: 's2', kind: 'claude' }])
     expect(m.isRecording('s2')).toBe(true)
     m.observe('session:exit', [{ sessionId: 's2', code: 0 }])
-    // session:exit synchronously drops the session from the active map
-    // (stop() deletes BEFORE awaiting close()); the recording folder + its
-    // eagerly-written meta.json already exist from the first event. End
-    // stats (endedAtWall) are covered by the explicit `await m.stop` test —
-    // asserting them here would race the void'd async close under load.
+    const generation = stopping.mock.calls[0]?.[1]
+    expect(stopping).toHaveBeenCalledWith('s2', expect.any(String))
+    expect(m.isRecording('s2')).toBe(true)
+    expect(m.appendRenderShapes('s2', generation, [{ structuralFingerprint: 'fp2-deadbeef' }])).toBe(true)
+    await m.finishStopping('s2', generation)
     expect(m.isRecording('s2')).toBe(false)
     const dir = await readRecordingDir('s2')
     const meta = JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8'))
     expect(meta.provider).toBe('claude')
+  })
+
+  it('cannot apply a late acknowledgement or timer to a reused sessionId generation', async () => {
+    const stopping = vi.fn()
+    const m = new SessionRecorderManager(nowWall, nowMono, false, () => {}, stopping)
+
+    m.startRecording('reused')
+    m.observe('session:exit', [{ sessionId: 'reused', code: 0 }])
+    const oldGeneration = stopping.mock.calls[0]?.[1]
+    expect(oldGeneration).toEqual(expect.any(String))
+
+    // A provider can reuse a logical id before the old generation's grace
+    // timer expires. The fresh start itself must detach the stopping recorder,
+    // create a distinct folder even when Date.now() has not advanced, and keep
+    // the old flush reply addressed only to the recorder that issued it.
+    m.startRecording('reused')
+    const newGeneration = m.recordingGeneration('reused')
+    expect(newGeneration).toEqual(expect.any(String))
+    expect(newGeneration).not.toBe(oldGeneration)
+    if (!newGeneration) throw new Error('replacement recorder did not expose its generation')
+    // The generation is both an append fence and a grace-period address. A's
+    // delayed final batch must still reach A, never B, while B is already the
+    // active ordinary-event recorder for the reused logical session id.
+    expect(m.appendRenderShapes('reused', oldGeneration, [{ structuralFingerprint: 'old' }])).toBe(true)
+    expect(m.appendRenderShapes('reused', newGeneration, [{ structuralFingerprint: 'new' }])).toBe(true)
+    await m.finishStopping('reused', oldGeneration)
+    expect(m.isRecording('reused')).toBe(true)
+    expect(m.appendRenderShapes('reused', oldGeneration, [{ structuralFingerprint: 'too-late' }])).toBe(false)
+
+    // requestStop's timer captures this same (sessionId, generation) pair and
+    // delegates to stopGeneration. Call that endpoint directly instead of
+    // sleeping three seconds: the assertion is specifically that its identity
+    // guard, not clearTimeout timing, protects the replacement recorder.
+    await (
+      m as unknown as {
+        stopGeneration(sessionId: string, generation: string): Promise<void>
+      }
+    ).stopGeneration('reused', oldGeneration)
+    expect(m.isRecording('reused')).toBe(true)
+
+    // The pre-generation API is intentionally fail-safe as well. It cannot
+    // prove which reused session it means, so the bounded timer owns closure.
+    await m.finishStopping('reused')
+    expect(m.isRecording('reused')).toBe(true)
+    await m.stopRecording('reused')
+
+    const dirs = readdirSync(TMP).filter(d => d.endsWith('-reused'))
+    expect(new Set(dirs).size).toBe(2)
+    const shapeFingerprints = dirs.map(dir =>
+      readFileSync(join(TMP, dir, 'events.jsonl'), 'utf8')
+        .trim()
+        .split('\n')
+        .filter(Boolean)
+        .map(line => JSON.parse(line))
+        .filter(line => line.ch === '__render_shape')
+        .flatMap(line => line.sightings.map((sighting: { structuralFingerprint: string }) =>
+          sighting.structuralFingerprint,
+        )),
+    )
+    expect(shapeFingerprints).toContainEqual(['old'])
+    expect(shapeFingerprints).toContainEqual(['new'])
   })
 
   it('captures reserve-then-fill notes as __note lines', async () => {
@@ -177,7 +246,10 @@ describe('SessionRecorderManager', () => {
     await m.stopRecording('go')
     expect(m.isRecording('go')).toBe(false)
     const dir = await readRecordingDir('go')
-    const lines = readFileSync(join(dir, 'events.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l))
+    const lines = readFileSync(join(dir, 'events.jsonl'), 'utf8')
+      .trim()
+      .split('\n')
+      .map(l => JSON.parse(l))
     expect(lines.some(l => l.ch === 'session:semantic-event')).toBe(true)
   })
 
@@ -187,5 +259,4 @@ describe('SessionRecorderManager', () => {
     expect(m.isRecording('auto')).toBe(true)
     await m.stopRecording('auto')
   })
-
 })

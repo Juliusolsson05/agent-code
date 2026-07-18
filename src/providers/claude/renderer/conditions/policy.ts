@@ -15,6 +15,14 @@
 import type { ProviderConditionPolicy } from '@providers/registry.renderer.capabilities'
 
 export const CLAUDE_CONDITION_POLICY: ProviderConditionPolicy = {
+  destinations: {
+    'claude.trust-dialog': 'condition-outlet',
+    'claude.permission-prompt': 'condition-outlet',
+    'claude.resume-prompt': 'condition-outlet',
+    'claude.compaction': 'condition-outlet',
+    'claude.ask-user-question': 'feed-inline',
+    'claude.slash-picker': 'composer',
+  },
   // Live, user-actionable prompts. EXCLUDES claude.compaction
   // (progress, not actionable) and claude.slash-picker (a composer
   // affordance, not an attention surface).

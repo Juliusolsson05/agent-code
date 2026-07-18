@@ -3,6 +3,30 @@
 // testable without rendering (the corpus bundles are the test inputs:
 // docs/rendering/research-2026-07/plan-json-tool-rows.md).
 
+import { boundedTextPage } from '@renderer/lib/text/boundedText'
+
+const COMMAND_HEADLINE_MAX_LINES = 2
+const COMMAND_HEADLINE_MAX_CHARS = 160
+
+/** Bound a generic `command` headline without knowing the provider or tool.
+ *
+ * WHY the field key owns this rule instead of names such as Bash, bash, or
+ * exec_command: JsonToolRow is the open-world fallback reached precisely when
+ * a provider did not claim the tool. A new provider can still use the common
+ * `{command:string}` grammar, and rendering its megabyte heredoc eagerly just
+ * because its tool name is unfamiliar would make the safety budget depend on
+ * provider vocabulary. The exact input remains in the expandable parameters /
+ * transcript; this is only the compact two-line headline. */
+export function boundedCommandHeadline(command: string): string {
+  const page = boundedTextPage(
+    command,
+    0,
+    COMMAND_HEADLINE_MAX_CHARS,
+    COMMAND_HEADLINE_MAX_LINES,
+  )
+  return page.hasNext ? `${page.text.trimEnd()}…` : page.text
+}
+
 /** `mcp__<server>__<tool>` → tool display name + MCP badge. Claude names
  *  MCP tools with the double-underscore convention; codex strips the
  *  prefix upstream so bare names pass through untouched. */
@@ -20,7 +44,7 @@ export function prettifyToolName(name: string): {
  * drifted apart (shared ToolUseRow.pickString and codex headlineForTool).
  *
  * ORDER MATTERS and is evidence-driven:
- * - `command` first (Bash-shaped tools; the identifier IS the action)
+ * - `command` first (shell-shaped tools; the identifier IS the action)
  * - path-shaped keys BEFORE `title`/`description` — the corpus caught
  *   `ai_workspace_attach_file` showing its `description` gloss while
  *   hiding the actual `path` (plan §1b); a path is an identifier, a
@@ -132,7 +156,8 @@ export function isHttpUrl(s: string): boolean {
 
 /**
  * Best-effort JSON extraction from tool RESULT text. Handles, in order:
- * 1. the MCP text envelope `[{"type":"text","text":"<json>"}]` (one level)
+ * 1. MCP text envelopes (`[{"type":"text",...}]` and the newer
+ *    `{content:[{"type":"text",...}]}` CallToolResult wrapper)
  * 2. codex's `Wall time: …\nOutput:\n<json>` wrapper
  * 3. plain JSON
  * Returns null when the text is not JSON-shaped — callers fall through to
@@ -162,21 +187,74 @@ export function tryExtractJson(text: string): unknown | null {
   const wallTime = /^Wall time: [^\n]*\nOutput:\n([\s\S]*)$/.exec(trimmed)
   const candidate = wallTime ? wallTime[1] : trimmed
 
-  const parsed = parse(candidate)
+  let parsed = parse(candidate)
   if (parsed === null) return null
 
-  // MCP text envelope: [{type:'text', text:'<inner json or text>'}].
-  if (
-    Array.isArray(parsed) &&
-    parsed.length === 1 &&
-    typeof parsed[0] === 'object' &&
-    parsed[0] !== null &&
-    (parsed[0] as { type?: unknown }).type === 'text' &&
-    typeof (parsed[0] as { text?: unknown }).text === 'string'
-  ) {
-    const inner = parse((parsed[0] as { text: string }).text)
-    return inner ?? parsed
+  // WHY peel only two explicitly-known MCP transport wrappers instead of
+  // recursively hunting every `text` property: arbitrary MCP schemas are not
+  // ours. A domain object may legitimately contain `{ text: "{...}" }`, and
+  // treating that as an envelope would discard sibling semantics. The two
+  // shapes below are protocol carriers emitted by MCP SDK/tool transports,
+  // not application payloads. A small depth cap admits the real Codex shape
+  // (`CallToolResult` -> content[] -> JSON text) plus one accidental nested
+  // carrier while making malformed self-similar input constant-work.
+  for (let depth = 0; depth < 3; depth += 1) {
+    let envelopeText: string | null = null
+
+    // Claude transcript normalization commonly stores the content array
+    // itself. Extra fields on the text block make it typed MCP content rather
+    // than the transparent JSON carrier we know, so keep that array visible.
+    if (Array.isArray(parsed) && parsed.length === 1) {
+      const item = parsed[0]
+      if (
+        typeof item === 'object' &&
+        item !== null &&
+        !Array.isArray(item) &&
+        (item as { type?: unknown }).type === 'text' &&
+        typeof (item as { text?: unknown }).text === 'string' &&
+        Object.keys(item).every(key => key === 'type' || key === 'text')
+      ) {
+        envelopeText = (item as { text: string }).text
+      }
+    } else if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+      const record = parsed as Record<string, unknown>
+      const keys = Object.keys(record)
+      const content = record.content
+      // Current tool orchestration surfaces the MCP SDK's full CallToolResult
+      // object. A missing/false `isError` adds no error evidence, so the nested
+      // JSON can be shown directly. A TRUE or malformed value must remain on
+      // screen: generic MCP payloads are open-world and need not duplicate the
+      // transport error in an inner `ok` field. Any other sibling key may also
+      // carry semantics, so an unfamiliar wrapper stays pretty-printed intact.
+      if (
+        keys.every(key => key === 'content' || key === 'isError') &&
+        (record.isError === undefined || record.isError === false) &&
+        Array.isArray(content) &&
+        content.length === 1
+      ) {
+        const item = content[0]
+        if (
+          typeof item === 'object' &&
+          item !== null &&
+          !Array.isArray(item) &&
+          (item as { type?: unknown }).type === 'text' &&
+          typeof (item as { text?: unknown }).text === 'string' &&
+          Object.keys(item).every(key => key === 'type' || key === 'text')
+        ) {
+          envelopeText = (item as { text: string }).text
+        }
+      }
+    }
+
+    if (envelopeText === null) break
+    const inner = parse(envelopeText)
+    // Plain-prose MCP results are still structured evidence (content type,
+    // transport error bit). Retain their carrier instead of collapsing them
+    // to a string that loses those facts.
+    if (inner === null) break
+    parsed = inner
   }
+
   return parsed
 }
 
@@ -186,6 +264,10 @@ export function jsonResultSummary(value: unknown): { label: string; isError: boo
   if (Array.isArray(value)) return { label: `${value.length} items`, isError: false }
   if (typeof value === 'object' && value !== null) {
     const rec = value as Record<string, unknown>
+    // Serialized MCP CallToolResult transport errors can reach the generic
+    // fallback without becoming ToolResultBlock.is_error. Preserve that
+    // explicit provider evidence in both the collapsed label and danger tone.
+    if (rec.isError === true) return { label: 'isError: true', isError: true }
     if (rec.ok === false) return { label: 'ok: false', isError: true }
     if (rec.ok === true) return { label: 'ok: true', isError: false }
     // WHY this deliberately stops counting: a summary must never enumerate an
@@ -199,7 +281,7 @@ export function jsonResultSummary(value: unknown): { label: string; isError: boo
         return { label: `${MAX_SLAB_PARAMS}+ keys`, isError: false }
       }
     }
-    return { label: `${keyCount} keys`, isError: false }
+    return { label: `${keyCount} ${keyCount === 1 ? 'key' : 'keys'}`, isError: false }
   }
   return { label: String(value).slice(0, 60), isError: false }
 }

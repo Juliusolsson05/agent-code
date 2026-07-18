@@ -41,6 +41,7 @@
     "smoke:tmux": "node scripts/tmux-smoke.mjs",
     "smoke:tmux:minimal": "node scripts/tmux-smoke.mjs --minimal-env",
     "fixture:audit": "node scripts/audit-rendering-fixture.mjs",
+    "rendering-shapes:audit": "tsx --tsconfig tsconfig.web.json scripts/audit-rendering-shapes.mts",
     "runtime:fetch:mitmproxy": "node scripts/runtime-tools/fetch-mitmproxy.mjs",
     "runtime:verify:mitmproxy": "node scripts/runtime-tools/verify-mitmproxy.mjs",
     "runtime:fetch:tmux": "node scripts/runtime-tools/fetch-tmux.mjs",

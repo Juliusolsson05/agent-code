@@ -10,9 +10,8 @@ import type { ReactNode } from 'react'
  * is flex-1, long lines wrap under the content column only — they
  * don't creep back under the marker. Standard hanging-indent pattern.
  *
- * Exported because the git custom renderers (features/git/ui/GitRows)
- * also want the same marker+hanging-indent layout when they render
- * git-tool widgets in the feed.
+ * Exported because provider-owned rows and narrow shared protocol views use the
+ * same marker+hanging-indent layout without duplicating feed chrome.
  */
 export function MarkerRow({
   marker,

@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
-import { collectSemanticCandidates } from '@renderer/rendering/observations/semantic'
+import {
+  collectSemanticCandidates,
+  semanticThinkingText,
+} from '@renderer/rendering/observations/semantic'
 import type { SemanticTurnLike } from '@renderer/rendering/observations/semantic'
 
 const T0 = 1_700_000_000_000
@@ -68,6 +71,23 @@ describe('semantic collector', () => {
     )
     expect(candidates.map(c => c.blockIndex)).toEqual([1])
     expect(decisions.find(d => d.candidateId === 'sem:turn-1:0')?.reason).toBe('empty-thinking')
+  })
+
+  it('uses the painter-shared reasoning predicate across every producer field', () => {
+    expect(semanticThinkingText({
+      blockIndex: 0,
+      kind: 'reasoning',
+      thinking: '  ',
+      reasoningSummary: '\n',
+      reasoningText: 'reasoning from Codex',
+      text: 'fallback',
+    })).toBe('reasoning from Codex')
+    expect(semanticThinkingText({
+      blockIndex: 0,
+      kind: 'thinking',
+      thinking: '',
+      text: '   ',
+    })).toBeNull()
   })
 
   it('empty write_stdin is Codex poll noise; non-empty renders (dump invariants 12/13, #492 finding 1)', () => {

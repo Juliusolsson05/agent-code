@@ -2,7 +2,7 @@ import type { QueuedMessage } from '@renderer/session-runtime/state'
 import {
   parseTaskNotification,
   taskNotificationStatusKind,
-} from '@renderer/session-runtime/taskNotification'
+} from '@providers/claude/renderer/adapters/taskNotification'
 
 // Pending queue strip. Renders only when the provider's local queue
 // has items: prompts accepted while the agent is still generating a

@@ -1,18 +1,34 @@
-import type { ReactNode } from 'react'
 import type { ConditionView } from '@shared/conditions-core/view'
-import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
-import { AGENT_PROVIDER_KINDS, type AgentProviderKind, isAgentProviderKind } from '@shared/types/providerKind'
+import type { Entry, ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
+import type { ProviderConditionSnapshot } from '@shared/types/providerConditions'
+import type { SemanticLiveBlock, SemanticLiveTurn } from '@renderer/session-runtime/state'
+import { type AgentProviderKind, isAgentProviderKind } from '@shared/types/providerKind'
 import { CLAUDE_VIEWS } from '@providers/claude/renderer/conditions/views'
 import { CODEX_VIEWS } from '@providers/codex/renderer/conditions/views'
+import { renderClaudeOperation } from '@providers/claude/renderer/rows/dispatch'
+import { renderClaudeDurableEntry } from '@providers/claude/renderer/entries/dispatch'
+import { classifyClaudeDurableEntry } from '@providers/claude/renderer/entries/classify'
 import {
-  renderClaudeToolResult,
-  renderClaudeToolUse,
-} from '@providers/claude/renderer/rows/dispatch'
-import {
-  renderCodexToolResult,
-  renderCodexToolUse,
-} from '@providers/codex/renderer/rows/dispatch'
+  collectClaudeTaskNotifications,
+  taskNotificationFromEntry,
+} from '@providers/claude/renderer/adapters/taskNotification'
+import { fromClaudeAgentUse } from '@providers/claude/renderer/adapters/collaboration'
+import { fromClaudeAgentCodeOrchestrationUse } from '@providers/claude/renderer/adapters/agentCodeOrchestration'
+import { renderClaudeSemanticBlock } from '@providers/claude/renderer/semantic/dispatch'
+import { renderCodexOperation } from '@providers/codex/renderer/rows/dispatch'
+import { renderCodexDurableEntry } from '@providers/codex/renderer/entries/dispatch'
+import { classifyCodexDurableEntry } from '@providers/codex/renderer/entries/classify'
+import { fromCodexNativeSpawnUse } from '@providers/codex/renderer/adapters/collaboration'
+import { fromCodexAgentCodeOrchestrationUse } from '@providers/codex/renderer/adapters/agentCodeOrchestration'
+import { renderCodexSemanticBlock } from '@providers/codex/renderer/semantic/dispatch'
 import type {
+  ProviderOperationDecision,
+  ProviderOperationInput,
+  ProviderSemanticDecision,
+  ProviderDurableEntryDecision,
+  ProviderDurableEntryKind,
+  ProviderDurableEntryInput,
+  ProviderTaskNotification,
   PromptDeliveryResult,
   SemanticFoldPolicy,
   TranscriptEntryMapper,
@@ -23,6 +39,7 @@ import { OPENCODE_SEMANTIC_FOLD_POLICY } from '@providers/opencode/renderer/sema
 import { CLAUDE_IDENTITY } from '@providers/claude/renderer/identity'
 import { claudeComposerSubmit } from '@providers/claude/renderer/composerSubmit'
 import { CLAUDE_CONDITION_POLICY } from '@providers/claude/renderer/conditions/policy'
+import { normalizeClaudeCompactionConditions } from '@providers/claude/renderer/conditions/compaction/model'
 import { CODEX_CONDITION_POLICY } from '@providers/codex/renderer/conditions/policy'
 import { OPENCODE_IDENTITY } from '@providers/opencode/renderer/identity'
 import { OPENCODE_CONDITION_POLICY } from '@providers/opencode/renderer/conditions/policy'
@@ -32,10 +49,7 @@ import {
   extractOpencodeProviderSessionId,
 } from '@providers/opencode/renderer/transcript/mapper'
 import { opencodeComposerSubmit } from '@providers/opencode/renderer/composerSubmit'
-import {
-  renderOpencodeToolUse,
-  renderOpencodeToolResult,
-} from '@providers/opencode/renderer/rows/dispatch'
+import { renderOpencodeOperation } from '@providers/opencode/renderer/rows/dispatch'
 import { codexComposerSubmit } from '@providers/codex/renderer/composerSubmit'
 import { CODEX_IDENTITY } from '@providers/codex/renderer/identity'
 import {
@@ -70,27 +84,50 @@ export type RendererProviderCapabilities = {
    */
   splitShortcutKey?: string
   conditionViews: Record<string, ConditionView>
-  renderToolUse?: (block: ToolUseBlock) => ReactNode | undefined
-  renderToolResult?: (
-    block: ToolResultBlock,
-    context: { sourceTool?: ToolUseBlock | null },
-  ) => ReactNode | undefined
+  normalizeConditions?: (input: {
+    snapshot: ProviderConditionSnapshot | null
+    currentTurn: SemanticLiveTurn | null
+    entries: readonly Entry[]
+  }) => ProviderConditionSnapshot | null
+  renderOperation: (input: ProviderOperationInput) => ProviderOperationDecision
+  renderDurableEntry?: (
+    input: ProviderDurableEntryInput,
+  ) => ProviderDurableEntryDecision | undefined
   /**
-   * Does this tool_use name spawn a subagent the fleet row should own?
-   * Provider-owned because the spawn vocabulary is provider-specific and
-   * used to live as a hardcoded global name set in feed/lib/agentSpawnTools —
-   * exactly the kind of "which provider says what" knowledge #394 pulls into
-   * the registry. Claude records fanout as an `Agent` tool_use and (for
-   * MCP-orchestrated sessions) `mcp__<server>__orchestration_create_agent`;
-   * Codex as a `spawn_agent` function_call and the bare
-   * `orchestration_create_agent`; opencode has no spawn tool yet. The shared
-   * feed predicate (isAgentSpawnToolName) unions these so the committed and
-   * grouping planes route identically (the P2c blind spot: 73 tracked
-   * children, zero cards, because only 'Agent'/'spawn_agent' were known).
-   * wait/list/read orchestration tools are deliberately excluded — they are
-   * queries about the fleet, not spawns.
+   * Admit provider-authored durable rows before the ownership ledger. This is
+   * intentionally separate from `renderDurableEntry`: observations are pure
+   * data and must not instantiate React nodes merely to ask whether an entry
+   * exists. Both capabilities delegate to the same provider-local classifier,
+   * which prevents central raw-discriminator compatibility branches.
    */
-  isSpawnTool: (name: string) => boolean
+  classifyDurableEntry: (entry: Entry) => ProviderDurableEntryKind | null
+  /** Provider-owned durable carrier decoding used by correlated rows. The
+   * shared feed may transport this map but must never recognize a provider's
+   * raw transcript envelope itself. */
+  collectTaskNotifications?: (
+    entries: readonly Entry[],
+  ) => ReadonlyMap<string, ProviderTaskNotification>
+  /** Decode only provider-authored completion carriers. Ownership collection
+   * uses presence plus the optional parent id to keep parentless carriers
+   * visible without learning the provider's envelope syntax. */
+  classifyTaskNotificationEntry?: (entry: Entry) => ProviderTaskNotification | null
+  /** Provider-only semantic variants that cannot be represented as a generic
+   * tool_use without dropping typed evidence. Shared live prose/reasoning and
+   * ordinary function calls continue through the provider-neutral paths. */
+  renderSemanticBlock?: (
+    block: SemanticLiveBlock,
+    context: {
+      committedToolResults: ReadonlyMap<string, ToolResultBlock>
+    },
+  ) => ProviderSemanticDecision | undefined
+  /**
+   * Does this complete tool_use prove a subagent spawn operation the fleet row
+   * can own? Provider-owned and schema-aware: a name is routing vocabulary,
+   * not proof that ids/prompts/Agent Code namespace fields are parseable.
+   * Every caller has the active provider, so cross-provider unioning would
+   * only let one backend claim another backend's coincidentally named tool.
+   */
+  isSpawnTool: (block: ToolUseBlock) => boolean
   /**
    * Provider-owned transcript-line → feed-entry mapping (#394 phase
    * 2b). One fresh mapper per ingestion stream; see the
@@ -155,6 +192,18 @@ export type RendererProviderCapabilities = {
 /** See providers/<kind>/renderer/conditions/policy.ts for the concrete
  *  policies and the WHY on each field's gating semantics. */
 export type ProviderConditionPolicy = {
+  /**
+   * The presentation owner for every condition kind the provider can emit.
+   *
+   * WHY this is explicit instead of inferred from `conditionViews`, attention,
+   * or one-off shared checks: those sets intentionally overlap without being
+   * equivalent. AskUserQuestion is feed-owned with no outlet view, the slash
+   * picker is composer-owned and deliberately non-attention, and compaction has
+   * an outlet view while usually being non-actionable progress. Inferring one
+   * concern from another recreated the exact invisible-condition failure that
+   * the provider registry was introduced to prevent.
+   */
+  destinations: Readonly<Record<string, ConditionDestination>>
   /** Kinds that mark a backgrounded pane unread (visible-gated). */
   attentionKinds: ReadonlySet<string>
   /** Kinds that route keystrokes to the PTY instead of the composer
@@ -172,6 +221,13 @@ export type ProviderConditionPolicy = {
   composerPickerKind?: string
 }
 
+export type ConditionDestination =
+  | 'condition-outlet'
+  | 'feed-inline'
+  | 'composer'
+  | 'attention-only'
+  | 'intentional-hidden'
+
 /** IO bag for composerSubmit. Draft images are structural (not the
  *  workspace-store type) so provider impls and this registry never
  *  import workspaceState — the same cycle-avoidance rule as the rest
@@ -186,25 +242,29 @@ export type ComposerSubmitIo = {
   getScreen: () => string | undefined
 }
 
-// Does a tool name reduce to the MCP orchestration spawn verb? The built-in
-// orchestration MCP server names its spawn tool `orchestration_create_agent`;
-// claude keeps the `mcp__<server>__` prefix on the wire, so only the prefixed
-// form is claude's. `[^]*` (not `.*`) so an embedded newline in a server name
-// still matches — the same tolerance the old shared predicate used.
-const isMcpOrchestrationCreateAgent = (name: string): boolean =>
-  /^mcp__[^]*__orchestration_create_agent$/.test(name)
-
+// Does a tool name identify Agent Code's OWN orchestration spawn verb? The
+// server namespace is part of the contract, not decorative text. The former
+// `mcp__<anything>__orchestration_create_agent` regex claimed arbitrary MCP
+// servers and routed them into our subagent state model even though their
+// inputs/results could be unrelated. Phase 7's explicit hierarchy requires
+// those open-world tools to reach the bounded generic structured fallback;
+// only `agent_code` is eligible for an Agent Code lifecycle card.
 const claudeCapabilities: RendererProviderCapabilities = {
   id: 'claude',
   name: 'Claude Code',
   ...CLAUDE_IDENTITY,
   conditionViews: CLAUDE_VIEWS,
-  renderToolUse: renderClaudeToolUse,
-  renderToolResult: renderClaudeToolResult,
-  // Claude fanout: `Agent` tool_use, plus MCP-orchestrated spawns that arrive
-  // prefixed. The bare `orchestration_create_agent` is codex's (see below), so
-  // the fleet-row union still covers it.
-  isSpawnTool: (name) => name === 'Agent' || isMcpOrchestrationCreateAgent(name),
+  normalizeConditions: normalizeClaudeCompactionConditions,
+  renderOperation: renderClaudeOperation,
+  renderDurableEntry: renderClaudeDurableEntry,
+  classifyDurableEntry: classifyClaudeDurableEntry,
+  collectTaskNotifications: collectClaudeTaskNotifications,
+  classifyTaskNotificationEntry: taskNotificationFromEntry,
+  renderSemanticBlock: renderClaudeSemanticBlock,
+  isSpawnTool: block => Boolean(
+    fromClaudeAgentUse(block) ||
+    fromClaudeAgentCodeOrchestrationUse(block)?.operation === 'create-agent'
+  ),
   createTranscriptEntryMapper: () => createClaudeTranscriptEntryMapper(),
   extractProviderSessionId: extractClaudeProviderSessionId,
   composerSubmit: claudeComposerSubmit,
@@ -219,11 +279,14 @@ const codexCapabilities: RendererProviderCapabilities = {
   name: 'Codex',
   ...CODEX_IDENTITY,
   conditionViews: CODEX_VIEWS,
-  renderToolUse: renderCodexToolUse,
-  renderToolResult: renderCodexToolResult,
-  // Codex fanout: `spawn_agent` function_call, plus the MCP orchestration spawn
-  // whose `mcp__` prefix codex strips on the wire (so it arrives bare).
-  isSpawnTool: (name) => name === 'spawn_agent' || name === 'orchestration_create_agent',
+  renderOperation: renderCodexOperation,
+  renderDurableEntry: renderCodexDurableEntry,
+  classifyDurableEntry: classifyCodexDurableEntry,
+  renderSemanticBlock: renderCodexSemanticBlock,
+  isSpawnTool: block => Boolean(
+    fromCodexNativeSpawnUse(block) ||
+    fromCodexAgentCodeOrchestrationUse(block)?.operation === 'create-agent'
+  ),
   createTranscriptEntryMapper: (initialTurnCursor) =>
     createCodexTranscriptEntryMapper(initialTurnCursor ?? null),
   extractProviderSessionId: extractCodexProviderSessionId,
@@ -241,8 +304,8 @@ const opencodeCapabilities: RendererProviderCapabilities = {
   conditionViews: OPENCODE_VIEWS,
   // Evidence-backed rows only (live probe 2026-07-06): todowrite renders as
   // a real todo list; everything else falls through to the generic rows.
-  renderToolUse: renderOpencodeToolUse,
-  renderToolResult: renderOpencodeToolResult,
+  renderOperation: renderOpencodeOperation,
+  classifyDurableEntry: () => null,
   // opencode has no subagent-spawn tool yet (no fleet fanout on this backend).
   isSpawnTool: () => false,
   createTranscriptEntryMapper: () => createOpencodeTranscriptEntryMapper(),
@@ -273,29 +336,20 @@ export function getRendererProviderCapabilities(id: string): RendererProviderCap
   return provider
 }
 
-// Shared predicate: does this tool_use spawn a subagent the fleet row
-// should own? (Residue plan P2c — the 2026-06-21 dispatch-name blind
-// spot: a session spawning via the built-in MCP orchestration server
-// painted ZERO Task cards while state-snapshot.subAgents held 73 tracked
-// children, because the interception only knew 'Agent'/'spawn_agent'.)
-//
-// Lives HERE (not in features/feed/lib, its pre-#493 home) because it is a
-// pure union over each provider's RendererProviderCapabilities.isSpawnTool —
-// provider vocabulary, owned by this registry. Moving it also cut the last
-// value-level rendering/ → features/feed edge (#493 PR-2): the committed
-// collector's task-notification join and the feed's fleet rows now share it
-// through the providers layer, which BOTH may legally import.
-//
-// WHY union across ALL providers instead of resolving the caller's provider:
-// the call sites differ. Block.tsx has the ProviderContext, but
-// ConversationRow.tsx's grouping walk (isAgentBlock) does not thread a
-// provider. A provider-agnostic union preserves the previous behavior EXACTLY
-// — the old Set matched any of the three names regardless of provider — while
-// still sourcing the names from the registry. Because each provider's spawn
-// names are disjoint in practice (no backend emits another's spawn verb), the
-// union is identical to a per-provider check for any real transcript.
-export function isAgentSpawnToolName(name: string): boolean {
-  return AGENT_PROVIDER_KINDS.some(kind =>
-    getRendererProviderCapabilities(kind).isSpawnTool(name),
-  )
+export function isAgentSpawnTool(block: ToolUseBlock, provider: AgentProviderKind): boolean {
+  return getRendererProviderCapabilities(provider).isSpawnTool(block)
+}
+
+export function providerTaskNotificationFromEntry(
+  entry: Entry,
+  provider: AgentProviderKind,
+): ProviderTaskNotification | null {
+  return getRendererProviderCapabilities(provider).classifyTaskNotificationEntry?.(entry) ?? null
+}
+
+export function providerDurableEntryKind(
+  entry: Entry,
+  provider: AgentProviderKind,
+): ProviderDurableEntryKind | null {
+  return getRendererProviderCapabilities(provider).classifyDurableEntry(entry)
 }

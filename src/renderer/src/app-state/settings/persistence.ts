@@ -20,7 +20,6 @@ export function coerceSettings(value: unknown): Settings {
   const parsed = value && typeof value === 'object'
     ? value as Partial<Settings>
     : {}
-
   return {
     ...DEFAULT_SETTINGS,
     ...parsed,
@@ -32,7 +31,6 @@ export function coerceSettings(value: unknown): Settings {
       ? (parsed.accent as AccentId)
       : DEFAULT_SETTINGS.accent,
     customAppearanceJson: coerceCustomAppearanceJson(parsed.customAppearanceJson),
-    customRendering: parsed.customRendering === true,
     showStatusMode: parsed.showStatusMode !== false,
     showWorktreeBadges: parsed.showWorktreeBadges !== false,
     dangerousAgentsEnabled: parsed.dangerousAgentsEnabled === true,
