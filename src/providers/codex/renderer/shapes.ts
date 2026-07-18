@@ -133,7 +133,7 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
       { kind: 'specialized', rendererId: 'codex.rows.dispatch' },
       { kind: 'specialized', rendererId: 'shared.command', protocolId: 'command.git' },
     ],
-    why: 'GRADUATED Phase 10: unified exec is admitted only after provider parsing proves an apply_patch call or embedded exec_command call. Arbitrary generated scripts stay generic. A complete transparent single-command bridge now shares native exec_command operation ownership, including the finite Git route; ambiguous JavaScript, fan-outs, and yielded (still-running) envelopes retain separate result evidence, and the direct text(r.output) carrier reports an unproven exit as "unknown" rather than success.',
+    why: 'GRADUATED Phase 10: unified exec is admitted only after provider parsing proves an apply_patch call or embedded exec_command call. Arbitrary generated scripts stay generic. Complete transparent single-command bridges share native exec_command ownership, including the finite Git route. The bounded canonical Promise.all + numbered-forEach fan-out is also provider-owned because each result section is attributable and the exact grouped payload remains disclosed; ambiguous fan-outs and yielded envelopes retain separate result evidence. Direct text(output) carriers report an unproven exit as "unknown" rather than success.',
   }),
   'codex.semantic.exec-command.v1': defineRenderShape({
     id: 'codex.semantic.exec-command.v1',
@@ -596,7 +596,7 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
       { kind: 'specialized', rendererId: 'codex.rows.dispatch' },
       { kind: 'specialized', rendererId: 'shared.command', protocolId: 'command.git' },
     ],
-    why: 'GRADUATED Phase 10: committed unified exec uses the same conservative provider admission as the semantic plane. Actual patch calls and embedded commands are provider-owned, while every unrecognized script remains visible. Transparent single-command bridges share native command operation ownership, including the finite Git route; ambiguous scripts and yielded envelopes never absorb their result, and unproven exits render as "unknown", never success.',
+    why: 'GRADUATED Phase 10: committed unified exec uses the same conservative provider admission as the semantic plane. Actual patch calls and embedded commands are provider-owned, while every unrecognized script remains visible. Transparent single-command bridges share native command operation ownership, including the finite Git route. The exact bounded Promise.all + numbered-forEach grammar owns and discloses its grouped output; ambiguous fan-outs and yielded envelopes retain separate result evidence. Unproven exits render as "unknown", never success.',
   }),
   'codex.tool-use.exec-command.v1': defineRenderShape({
     id: 'codex.tool-use.exec-command.v1',

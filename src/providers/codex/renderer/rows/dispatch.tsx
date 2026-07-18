@@ -5,11 +5,13 @@ import {
   isCodexApplyPatchUse,
 } from '@providers/codex/renderer/adapters/codeEdit'
 import {
+  fromCodexCommandGroupOperation,
   fromCodexCommandOperation,
   fromCodexExecCommand,
   fromCodexExecScript,
   stripCodexTransportEnvelope,
 } from '@providers/codex/renderer/adapters/command'
+import type { CodexCommandGroupOperation } from '@providers/codex/renderer/adapters/command'
 import { CommandView } from '@providers/shared/renderer/protocols/command/CommandView'
 
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
@@ -20,6 +22,10 @@ import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 import { CodexApplyPatchRow } from '@providers/codex/renderer/components/apply-patch'
 import { CodexToolResultRow } from '@providers/codex/renderer/components/tool-result'
 import { CodexWriteStdinRow } from '@providers/codex/renderer/components/write-stdin'
+import {
+  CodexCommandGroupRow,
+  type CodexCommandGroupModel,
+} from '@providers/codex/renderer/components/command-group'
 import { AgentCodeOrchestrationView } from '@providers/shared/renderer/protocols/agent-code-orchestration/AgentCodeOrchestrationView'
 import { fromAgentCodeOrchestrationResult } from '@providers/shared/renderer/protocols/agent-code-orchestration/model'
 import { fromCodexAgentCodeOrchestrationUse } from '@providers/codex/renderer/adapters/agentCodeOrchestration'
@@ -45,7 +51,10 @@ import type {
   ProviderSpecializedReceipt,
 } from '@shared/types/providerConfig'
 import { fromCodexGitOperation } from '@providers/codex/renderer/adapters/git'
-import { GitOperationView } from '@providers/shared/renderer/protocols/command/formatters/git'
+import {
+  GitOperationView,
+  gitOperationModel,
+} from '@providers/shared/renderer/protocols/command/formatters/git'
 import { toolResultContentText } from '@providers/shared/renderer/rows/toolResultContent'
 
 type CodexToolUseAdmission = {
@@ -69,6 +78,29 @@ function codexAdmission(
 export function renderCodexOperation(
   input: ProviderOperationInput,
 ): ProviderOperationDecision {
+  const commandGroup = fromCodexCommandGroupOperation({
+    toolUse: input.toolUse,
+    result: input.result,
+    streaming: input.streaming,
+    live: input.live,
+  })
+  if (commandGroup) {
+    return {
+      toolUse: {
+        action: 'render',
+        node: <CodexCommandGroupRow model={commandGroupModel(commandGroup)} />,
+        receipt: { rendererId: 'codex.rows.dispatch' },
+      },
+      toolResult: input.result && commandGroup.ownsResult
+        ? {
+            action: 'absorb',
+            ownerRenderId: 'codex.rows.dispatch',
+            reason: 'numbered command group preserves every attributed section and the exact paired output',
+          }
+        : null,
+    }
+  }
+
   const git = fromCodexGitOperation(input)
   if (git) {
     return {
@@ -175,6 +207,23 @@ export function renderCodexOperation(
   return {
     toolUse: toolUseDecision,
     toolResult: toolResultDecision,
+  }
+}
+
+function commandGroupModel(group: CodexCommandGroupOperation): CodexCommandGroupModel {
+  const resultPresent = group.exactOutput !== undefined
+  return {
+    items: group.commands.map(command => ({
+      command: command.model,
+      git: gitOperationModel({
+        command: command.rawCommand,
+        resultPresent,
+        output: command.model.output,
+        isError: command.model.status === 'failure',
+        exitUnknown: command.model.status === 'unknown',
+      }),
+    })),
+    ...(group.exactOutput !== undefined ? { exactOutput: group.exactOutput } : {}),
   }
 }
 

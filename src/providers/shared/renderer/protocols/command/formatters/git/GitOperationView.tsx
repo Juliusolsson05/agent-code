@@ -653,6 +653,9 @@ export const GitPushCard = memo(function GitPushCard({
 function workflowTitle(intent: GitWorkflowIntent): string {
   if (intent.steps.length === 1) return intent.primaryVerb
   switch (intent.primaryVerb) {
+    case 'apply': return intent.steps.some(step => step.verb === 'diff')
+      ? 'diff and apply'
+      : 'apply workflow'
     case 'stash': return 'stash and verify'
     case 'reset': return 'reset and inspect'
     case 'add': return 'stage and verify'
@@ -671,9 +674,10 @@ const WORKFLOW_INLINE_OUTPUT_LINES = 40
 /**
  * Generic card for all-Git chains and broader single verbs.
  *
- * This card renders ONLY under proven success (GitOperationView gates rich
- * cards on `status === 'success'`, which adapters grant only with exit-0
- * evidence). That proof is what legitimizes the per-step claims below.
+ * This card also renders for an unknown-exit all-Git workflow, but in a
+ * deliberately neutral state. Unlike the verb-specific cards, it does not
+ * interpret an empty stream as "clean" or "no changes": it lists commands
+ * and exact output. Only proven exit 0 can legitimize completion/checkmarks.
  *
  * Summary discipline: every summary line must be ANCHORED — either a verbatim
  * output line whose grammar is unique to one step, or the product of a parser
@@ -689,10 +693,12 @@ function GitWorkflowCard({
   intent,
   output,
   partial,
+  status,
 }: {
   intent: GitWorkflowIntent
   output: string
   partial: boolean
+  status: 'success' | 'unknown'
 }) {
   const plain = stripAnsi(output)
   const lines = plain.replace(/\r\n?/g, '\n').split('\n')
@@ -700,7 +706,8 @@ function GitWorkflowCard({
   // AND succeeded. A `;`/newline chain exits with the LAST segment's status,
   // so even proven success leaves earlier steps unaccounted for — those render
   // neutral bullets and no "complete" badge.
-  const allStepsProven = intent.operators.every(operator => operator === '&&')
+  const allStepsProven = status === 'success' &&
+    intent.operators.every(operator => operator === '&&')
   // Stash identity: only claim a `stash@{n}:` line when the output contains
   // exactly one. A chain ending in a multi-entry `git stash list` has several,
   // and picking any one of them would misattribute which stash this operation
@@ -758,7 +765,9 @@ function GitWorkflowCard({
         sub={workflowTitle(intent)}
         badges={allStepsProven
           ? <span className="text-[10.5px] uppercase tracking-wide text-muted">complete</span>
-          : null}
+          : status === 'unknown'
+            ? <span className="text-[10.5px] uppercase tracking-wide text-muted">exit unknown</span>
+            : null}
       />
       {summaries.length > 0 ? (
         <div className="flex flex-col gap-0.5 mb-2 text-[12px] text-ink-dim">
@@ -785,7 +794,11 @@ function GitWorkflowCard({
   )
 }
 
-export function renderGitCard(intent: GitIntent, output: string): React.ReactNode {
+export function renderGitCard(
+  intent: GitIntent,
+  output: string,
+  status: 'success' | 'unknown' = 'success',
+): React.ReactNode {
   // WHY custom git cards enforce the same admission budget as generic tool
   // output: the parsers split output into files/hunks/lines and the diff card
   // highlights each line. A huge `git diff` therefore bypassed CodeBlock's
@@ -807,7 +820,14 @@ export function renderGitCard(intent: GitIntent, output: string): React.ReactNod
       case 'add':    return <GitAddCard intent={intent} output={parseableOutput} partial={page.hasNext} />
       case 'log':    return <GitLogCard intent={intent} output={parseableOutput} partial={page.hasNext} />
       case 'push':   return <GitPushCard intent={intent} output={parseableOutput} partial={page.hasNext} />
-      case 'workflow': return <GitWorkflowCard intent={intent} output={parseableOutput} partial={page.hasNext} />
+      case 'workflow': return (
+        <GitWorkflowCard
+          intent={intent}
+          output={parseableOutput}
+          partial={page.hasNext}
+          status={status}
+        />
+      )
       default: return null
     }
   })()
@@ -854,10 +874,18 @@ function GitOutputDisclosure({ output }: { output: string }) {
  * the same left ornament. Keeps the git widgets visually in the
  * same lane as Edit/MultiEdit/Write rows.
  */
-export function GitCardRow({ intent, output }: { intent: GitIntent; output: string }) {
+export function GitCardRow({
+  intent,
+  output,
+  status = 'success',
+}: {
+  intent: GitIntent
+  output: string
+  status?: 'success' | 'unknown'
+}) {
   return (
     <MarkerRow marker="⏺">
-      {renderGitCard(intent, output)}
+      {renderGitCard(intent, output, status)}
     </MarkerRow>
   )
 }
@@ -865,15 +893,23 @@ export function GitCardRow({ intent, output }: { intent: GitIntent; output: stri
 /**
  * One paired Git operation surface.
  *
- * Failed AND unknown-exit commands deliberately stay in the ordinary command
- * grammar. Git's success parsers are intentionally best-effort and could
- * otherwise turn an authentication error into an empty/clean-looking card —
- * and an unknown exit (Codex `text(r.output)` carrier) is exactly the state
- * where a failure can masquerade as clean output. The raw bounded output is
- * the evidence the user needs, and result absorption is safe only because
- * this exact surface carries it. Rich cards therefore require PROVEN success.
+ * Failed commands and unknown-exit single verbs deliberately stay in the
+ * ordinary command grammar. Git's verb-specific parsers are best-effort and
+ * could turn an authentication error into an empty/clean-looking card. An
+ * all-Git workflow is different: its card makes no verb-specific result claim,
+ * keeps every step and raw byte visible, and can therefore improve structure
+ * under an unknown exit as long as it remains visibly neutral.
  */
 export function GitOperationView({ model }: { model: GitOperationModel }) {
+  if (model.status === 'unknown' && model.intent.kind === 'workflow') {
+    return (
+      <GitCardRow
+        intent={model.intent}
+        output={model.output ?? ''}
+        status="unknown"
+      />
+    )
+  }
   if (model.status !== 'success') {
     const firstLine = model.output?.split('\n', 1)[0]?.slice(0, 200)
     const commandPage = boundedTextPage(model.command, 0, 160, 2)

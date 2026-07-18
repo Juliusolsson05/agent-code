@@ -162,6 +162,41 @@ describe('provider-owned Git operation formatting', () => {
     expect(container.textContent).toContain('src/example.ts')
   })
 
+  it('renders the captured Git-only pipe as a neutral Git workflow', () => {
+    const command = 'git diff --binary origin/main...feat/rendering-debug-mode | git apply --check'
+    const decision = operation('codex', {
+      toolUse: {
+        type: 'tool_use',
+        id: 'git',
+        name: 'exec',
+        input: {
+          raw: `const r = await tools.exec_command({cmd:${JSON.stringify(command)},workdir:"/repo"}); text(r.output);`,
+        },
+      },
+      result: {
+        type: 'tool_result',
+        tool_use_id: 'git',
+        content: 'Script completed\nWall time 0.2 seconds\nOutput:\n\n',
+        codex: { kind: 'custom_tool_call_output' },
+      } as never,
+    })
+
+    expect(decision.toolUse.action).toBe('render')
+    if (decision.toolUse.action !== 'render') return
+    expect(decision.toolUse.receipt).toEqual({
+      rendererId: 'shared.command',
+      protocolId: 'command.git',
+    })
+    expect(decision.toolResult?.action).toBe('absorb')
+    const { container } = render(decision.toolUse.node)
+    expect(screen.getByText('git diff and apply')).toBeInTheDocument()
+    expect(screen.getByText('exit unknown')).toBeInTheDocument()
+    expect(screen.queryByText('complete')).toBeNull()
+    expect(screen.queryByText('✓')).toBeNull()
+    expect(container.textContent).toContain('git diff --binary')
+    expect(container.textContent).toContain('git apply --check')
+  })
+
   /** Serialized text(JSON.stringify(r)) carrier — the transport that DOES
    * prove the inner exit code and therefore unlocks the rich Git cards. */
   function serializedExecResult(output: string, exitCode = 0): string {
@@ -272,7 +307,9 @@ describe('provider-owned Git operation formatting', () => {
     expect(screen.getByText('exit unknown')).toBeInTheDocument()
     expect(screen.queryByText('✓')).toBeNull()
     expect(screen.queryByText('complete')).toBeNull()
-    expect(screen.queryByText(/reset and inspect/)).toBeNull()
+    // Workflow structure is factual even when outcome is not. The card may
+    // name/list the commands, but must remain visibly neutral.
+    expect(screen.getByText('git reset and inspect')).toBeInTheDocument()
   })
 
   it('keeps broader single-verb output readable inline instead of one line', () => {

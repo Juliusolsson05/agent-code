@@ -4,11 +4,10 @@ import type { GitIntent } from './detect'
  *
  * `status` semantics are strict: `success` is granted ONLY when the provider
  * adapter proved exit 0 (or an equivalent hard success signal). `unknown`
- * covers transports that deliver output without exit evidence — the rich Git
- * cards parse output under a success assumption (best-effort parsers can turn
- * an auth error into a clean-looking card), so they render only on proven
- * success; `unknown` keeps the exact output visible in the neutral command
- * grammar instead. */
+ * covers transports that deliver output without exit evidence. Verb-specific
+ * cards parse under a success assumption and therefore remain generic in that
+ * state; an all-Git workflow may keep its factual step structure while using
+ * neutral bullets and an explicit `exit unknown` badge. */
 export type GitOperationModel = {
   command: string
   intent: GitIntent
