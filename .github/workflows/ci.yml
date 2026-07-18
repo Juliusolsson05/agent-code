@@ -13,14 +13,13 @@ name: CI
 # packaged-app verifier hard-requires both arch builds.
 on:
   pull_request:
-    paths-ignore:
-      - "docs/**"
-      - "**.md"
   push:
     branches: [main]
-    paths-ignore:
-      - "docs/**"
-      - "**.md"
+
+# WHY documentation-only changes still run this workflow: once `quality-gate`
+# is required by branch protection, GitHub leaves the check permanently pending
+# when path filters prevent the workflow from being created. A few macOS minutes
+# are cheaper than a PR that cannot merge under the repository's own policy.
 
 # One live run per ref: force-pushing a PR branch cancels the obsolete run
 # instead of queueing behind it.
