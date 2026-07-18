@@ -3,6 +3,80 @@ import {
   parseTaskNotification,
   taskNotificationStatusKind,
 } from '@providers/claude/renderer/adapters/taskNotification'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@renderer/components/ui/dialog'
+import { PagedTextViewer } from '@renderer/lib/text/PagedTextViewer'
+import { useId, useState } from 'react'
+
+// The browsing surface must stay cheap even when somebody pastes a whole
+// design document as their next prompt. CSS clipping alone still leaves the
+// browser shaping and measuring the complete text node. Keep only a bounded,
+// two-line summary in the lane; the exact source is materialized on demand
+// in QueuedPromptDialog, whose PagedTextViewer also bounds DOM size.
+const PREVIEW_SCAN_CHARACTERS = 320
+const PREVIEW_CHARACTERS = 180
+
+function queuedPromptPreview(content: string): string {
+  const scanned = content.slice(0, PREVIEW_SCAN_CHARACTERS)
+  // Preserve line boundaries because they are the only cheap hint that a
+  // queued item contains pasted instructions or code. Horizontal whitespace
+  // is normalized so an indented block cannot make the compact lane look
+  // empty; the exact indentation remains untouched in the dialog.
+  const compact = scanned
+    .replace(/\r\n?/g, '\n')
+    .replace(/[^\S\n]+/g, ' ')
+    .trim()
+  if (content.length <= PREVIEW_CHARACTERS && compact.length <= PREVIEW_CHARACTERS) {
+    return compact
+  }
+  return `${compact.slice(0, PREVIEW_CHARACTERS - 1).trimEnd()}…`
+}
+
+function QueuedPromptDialog({
+  message,
+  position,
+  total,
+  onClose,
+}: {
+  message: QueuedMessage | null
+  position: number
+  total: number
+  onClose: () => void
+}) {
+  return (
+    <Dialog
+      open={message !== null}
+      onOpenChange={open => {
+        if (!open) onClose()
+      }}
+    >
+      <DialogContent
+        className="flex max-h-[82vh] w-[min(760px,92vw)] flex-col overflow-hidden"
+        showCloseButton
+      >
+        <DialogHeader>
+          <DialogTitle>Queued prompt</DialogTitle>
+          <DialogDescription>
+            {position} of {total} · waiting behind the active turn
+          </DialogDescription>
+        </DialogHeader>
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+          {message ? (
+            <PagedTextViewer
+              source={message.content}
+              className="text-ink [overflow-wrap:anywhere]"
+            />
+          ) : null}
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
 
 // Pending queue strip. Renders only when the provider's local queue
 // has items: prompts accepted while the agent is still generating a
@@ -16,67 +90,121 @@ export function QueueStrip({
 }: {
   queuedMessages: QueuedMessage[]
 }) {
+  const listId = useId()
+  const [collapsed, setCollapsed] = useState(false)
+  const [selectedPrompt, setSelectedPrompt] = useState<QueuedMessage | null>(null)
+
   if (queuedMessages.length === 0) return null
+
+  const selectedIndex = selectedPrompt === null
+    ? -1
+    : queuedMessages.findIndex(message =>
+        message.timestamp === selectedPrompt.timestamp &&
+        message.content === selectedPrompt.content,
+      )
+  const selectedMessage = selectedIndex >= 0 ? queuedMessages[selectedIndex] ?? null : null
+
   return (
-    <div
-      className="flex-shrink-0 border-t border-border bg-surface px-5 py-2"
-      aria-label="queued messages"
-    >
-      <div className="text-muted text-[10px] uppercase tracking-wider mb-1 select-none">
-        {queuedMessages.length} queued
-      </div>
-      <ul className="flex flex-col gap-0.5 list-none m-0 p-0">
-        {queuedMessages.map(q => {
-          // P2b display-only mapping (plan D1 — no queue-model change): a
-          // task-notification parked pre-delivery renders as a one-line
-          // chip, never the raw XML with the child's whole report inside
-          // (the 2026-06-29 "agent output buried" burial surface).
-          const notification = parseTaskNotification(q.content)
-          if (notification) {
-            const kind = taskNotificationStatusKind(notification)
-            return (
-              <li
-                key={q.timestamp}
-                className="flex items-start gap-2 text-[12px] leading-[1.5] text-ink-dim"
-              >
-                <span className="flex-shrink-0 select-none opacity-60" aria-hidden="true">
-                  {kind === 'error' ? '✗' : '✓'}
-                </span>
-                <span className="flex-1 min-w-0 truncate">
-                  {/*
-                    WHY no raw `status` append (2026-07-07 bundle
-                    debug-bundles/manual/2026-07-07T13-17-20-472-5b19529f
-                    "completed agents renders as queued"): the summary already
-                    reads `Agent "X" finished`, and appending the raw <status>
-                    produced the nonsense "finished completed — delivering to
-                    agent…" the user screenshotted. The ✓/✗ glyph (driven by
-                    taskNotificationStatusKind) already carries the outcome, so
-                    the summary alone is the human-readable line.
-                  */}
-                  {notification.summary ?? notification.taskId ?? 'background task'} —
-                  delivering to agent…
-                </span>
-              </li>
-            )
-          }
-          return (
-            <li
-              key={q.timestamp}
-              className="flex items-start gap-2 text-[12px] leading-[1.5] text-ink-dim"
-            >
-              <span
-                className="text-accent flex-shrink-0 select-none opacity-60"
-                aria-hidden="true"
-              >
-                ❯
-              </span>
-              <span className="flex-1 min-w-0 break-words font-code">
-                {q.content}
-              </span>
-            </li>
-          )
-        })}
-      </ul>
-    </div>
+    <>
+      <section
+        className="flex min-w-0 flex-shrink-0 flex-col overflow-hidden border-t border-border bg-surface [max-height:clamp(32px,30%,160px)]"
+        aria-label="queued messages"
+      >
+        <button
+          type="button"
+          className="flex min-h-8 flex-none items-center justify-between gap-3 px-3 text-left text-[10px] uppercase tracking-wider text-muted hover:bg-surface-hi hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+          aria-controls={listId}
+          aria-expanded={!collapsed}
+          onClick={() => setCollapsed(current => !current)}
+        >
+          <span>{queuedMessages.length} queued</span>
+          <span className="shrink-0 normal-case tracking-normal" aria-hidden="true">
+            {collapsed ? '▴ show' : '▾ hide'}
+          </span>
+        </button>
+
+        {!collapsed ? (
+          <ul
+            id={listId}
+            aria-label="queued prompt list"
+            className="m-0 min-h-0 list-none overflow-y-auto overscroll-contain border-t border-border px-3 py-1"
+          >
+            {queuedMessages.map(q => {
+              // P2b display-only mapping (plan D1 — no queue-model change): a
+              // task-notification parked pre-delivery renders as a one-line
+              // chip, never the raw XML with the child's whole report inside
+              // (the 2026-06-29 "agent output buried" burial surface).
+              const notification = parseTaskNotification(q.content)
+              if (notification) {
+                const kind = taskNotificationStatusKind(notification)
+                return (
+                  <li
+                    key={q.timestamp}
+                    className="flex min-w-0 items-start gap-2 py-0.5 text-[12px] leading-[1.5] text-ink-dim"
+                  >
+                    <span className="flex-shrink-0 select-none opacity-60" aria-hidden="true">
+                      {kind === 'error' ? '✗' : '✓'}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate">
+                      {/*
+                        WHY no raw `status` append (2026-07-07 bundle
+                        debug-bundles/manual/2026-07-07T13-17-20-472-5b19529f
+                        "completed agents renders as queued"): the summary already
+                        reads `Agent "X" finished`, and appending the raw <status>
+                        produced the nonsense "finished completed — delivering to
+                        agent…" the user screenshotted. The ✓/✗ glyph (driven by
+                        taskNotificationStatusKind) already carries the outcome, so
+                        the summary alone is the human-readable line.
+                      */}
+                      {notification.summary ?? notification.taskId ?? 'background task'} —
+                      delivering to agent…
+                    </span>
+                  </li>
+                )
+              }
+
+              const preview = queuedPromptPreview(q.content)
+              return (
+                <li key={q.timestamp} className="min-w-0 py-0.5">
+                  <button
+                    type="button"
+                    className="flex w-full min-w-0 items-center gap-2 text-left text-[12px] leading-[1.5] text-ink-dim hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+                    onClick={() => setSelectedPrompt(q)}
+                    aria-label={`View queued prompt: ${preview}`}
+                  >
+                    <span
+                      className="flex-shrink-0 select-none text-accent opacity-60"
+                      aria-hidden="true"
+                    >
+                      ❯
+                    </span>
+                    {/* WHY this is a two-line, character-bounded preview instead
+                        of the full prompt with CSS overflow: the lane competes
+                        directly with Feed and Composer for a pane's height, and
+                        CSS clipping still makes Chromium shape the entire text
+                        node. Exact whitespace and every byte remain available
+                        through the dialog, but browsing N queued prompts stays
+                        constant-height and cheap even for pasted documents. */}
+                    <span className="min-w-0 flex-1 line-clamp-2 whitespace-pre-wrap font-code [overflow-wrap:anywhere]">
+                      {preview || '(empty prompt)'}
+                    </span>
+                    <span className="shrink-0 text-[10px] text-muted" aria-hidden="true">
+                      view
+                    </span>
+                  </button>
+                </li>
+              )
+            })}
+          </ul>
+        ) : null}
+      </section>
+
+      <QueuedPromptDialog
+        message={selectedMessage}
+        position={selectedIndex + 1}
+        total={queuedMessages.length}
+        onClose={() => setSelectedPrompt(null)}
+      />
+    </>
   )
 }
