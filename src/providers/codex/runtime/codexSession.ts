@@ -10,7 +10,7 @@ import { CodexHeadless, CodexResponsesAdapter, ResponsesProxy } from 'codex-head
 import type { CodexConditionSnapshot, CodexRolloutLine, CodexSemanticEvent } from 'codex-headless'
 import { canonicalizePath, sanitizePathSegment } from '@shared/runtime/projectDir.js'
 import type { BuiltInMcpServerConfig } from '@mcp/shared/types.js'
-import type { AgentInputReadiness } from '@shared/types/session.js'
+import type { AgentInputReadiness, PromptReadinessOutcome } from '@shared/types/session.js'
 import { isCodexReadyForPromptScreen } from '@providers/codex/runtime/codexReadyForPrompt.js'
 import { addCodexBuiltInMcpLaunchConfig } from '@providers/shared/runtime/builtInMcpLaunch.js'
 
@@ -156,8 +156,8 @@ export interface CodexSession {
     ...args: CodexSessionEvents[K]
   ): boolean
   awaitReadyForPrompt(
-    opts?: { timeoutMs?: number; pollIntervalMs?: number },
-  ): Promise<{ kind: 'ready'; waitedMs: number } | { kind: 'timeout' } | { kind: 'no-headless' }>
+    opts?: { deadlineAt?: number; timeoutMs?: number; pollIntervalMs?: number },
+  ): Promise<PromptReadinessOutcome>
 }
 
 export class CodexSession extends EventEmitter {
@@ -427,23 +427,36 @@ export class CodexSession extends EventEmitter {
   }
 
   async awaitReadyForPrompt(
-    opts?: { timeoutMs?: number; pollIntervalMs?: number },
-  ): Promise<{ kind: 'ready'; waitedMs: number } | { kind: 'timeout' } | { kind: 'no-headless' }> {
-    const timeoutMs = opts?.timeoutMs ?? 10_000
+    opts?: { deadlineAt?: number; timeoutMs?: number; pollIntervalMs?: number },
+  ): Promise<PromptReadinessOutcome> {
     const pollIntervalMs = opts?.pollIntervalMs ?? 50
     const startedAt = Date.now()
-    if (!this.headless) return { kind: 'no-headless' }
+    const deadlineAt = opts?.deadlineAt ?? startedAt + (opts?.timeoutMs ?? 10_000)
+    if (!this.headless) return { kind: 'terminal', reason: 'no-headless' }
+    if (this.exited) return { kind: 'terminal', reason: 'exited' }
 
     return await new Promise(resolve => {
       const tick = (): void => {
+        if (this.exited) {
+          resolve({ kind: 'terminal', reason: 'exited' })
+          return
+        }
+        if (!this.headless) {
+          resolve({ kind: 'terminal', reason: 'no-headless' })
+          return
+        }
         const screen = this.headless?.getScreen() ?? ''
         if (isCodexReadyForPromptScreen(screen)) {
           this.markComposerReady(screen)
           resolve({ kind: 'ready', waitedMs: Date.now() - startedAt })
           return
         }
-        if (Date.now() - startedAt >= timeoutMs) {
-          resolve({ kind: 'timeout' })
+        if (Date.now() >= deadlineAt) {
+          resolve({
+            kind: 'timeout',
+            waitedMs: Date.now() - startedAt,
+            lastState: { kind: 'warming', reason: 'composer-unpainted' },
+          })
           return
         }
         setTimeout(tick, pollIntervalMs)

@@ -7,11 +7,21 @@ import {
   pollClaudeImagesAbsorbed,
   pollPasteAbsorbed,
 } from '@shared/claude/pasteConfirm.js'
-import type { PromptAcceptanceOutcome } from '@shared/types/session.js'
+import type { PromptAcceptanceOutcome, PromptReadinessOutcome } from '@shared/types/session.js'
 
 const CONFIRM_TIMEOUT_MS = 2000
 const CONFIRM_POLL_INTERVAL_MS = 10
 const IMAGE_CONFIRM_TIMEOUT_MS = 5_000
+// One wall-clock budget covers readiness, absorption, and durable acceptance.
+// The previous independent 5s + 2/5s + 20s timers could exceed the caller's
+// 30-second transport window while every individual stage still believed it
+// had time left. Twenty-eight seconds leaves transport/serialization headroom;
+// readiness gets at most twelve, and every later timer is clipped to the same
+// absolute deadline. A normal already-painted composer therefore retains the
+// full 20-second JSONL watcher-recovery window, while a genuinely slow startup
+// cannot turn into an unbounded stack of fresh relative timeouts.
+const DELIVERY_TIMEOUT_MS = 28_000
+const READY_BUDGET_MS = 12_000
 // Longer than JsonlTailer's 15s watchdog so a recoverable watcher stall gets a
 // chance to self-heal before we classify an already-written Enter as uncertain.
 const ACCEPTANCE_TIMEOUT_MS = 20_000
@@ -33,28 +43,52 @@ const failure = (
 export async function deliverClaudePrompt(
   io: PromptDeliveryIo,
 ): Promise<PromptDeliveryResult> {
+  const deliveryDeadlineAt = Date.now() + DELIVERY_TIMEOUT_MS
   if (typeof io.session.armPromptAcceptance !== 'function') {
     return failure({
       stage: 'before-write', code: 'missing-capability', retrySafe: true,
+      disposition: 'session-unusable',
       promptWritten: false, enterWritten: false,
       message: `Claude session ${io.sessionId} cannot observe prompt acceptance`,
     })
   }
-  if (io.session.isPromptAcceptanceReady?.() === false) {
+  if (typeof io.session.awaitReadyForPrompt === 'function') {
+    const ready = await io.session.awaitReadyForPrompt({
+      deadlineAt: Math.min(deliveryDeadlineAt, Date.now() + READY_BUDGET_MS),
+    })
+    if (ready.kind !== 'ready') {
+      const disposition = ready.kind === 'timeout'
+        ? 'retry-same-session' as const
+        : ready.kind === 'blocked' || ready.kind === 'occupied'
+          ? 'retry-after-resolve' as const
+          : 'session-unusable' as const
+      return failure({
+        stage: 'before-write', code: 'not-ready', retrySafe: true, disposition,
+        promptWritten: false, enterWritten: false,
+        message: `Claude session ${io.sessionId} prompt input is ${describeReadiness(ready)}`,
+      })
+    }
+  } else if (io.session.isPromptAcceptanceReady?.() === false) {
+    // WHY retain the synchronous fallback for capability-skewed sessions:
+    // persisted/dev sessions can outlive a renderer/main update. They must
+    // still reject safely before bytes rather than bypassing the historical
+    // replay guard merely because they predate the awaited capability.
     return failure({
       stage: 'before-write', code: 'not-ready', retrySafe: true,
+      disposition: 'retry-same-session',
       promptWritten: false, enterWritten: false,
       message: `Claude session ${io.sessionId} transcript replay has not quiesced`,
     })
   }
 
   if (io.imagePaths && io.imagePaths.length > 0) {
-    return deliverClaudeImagePrompt(io)
+    return deliverClaudeImagePrompt(io, deliveryDeadlineAt)
   }
 
   if (typeof io.session.snapshotScreen !== 'function') {
     return failure({
       stage: 'before-write', code: 'missing-capability', retrySafe: true,
+      disposition: 'session-unusable',
       promptWritten: false, enterWritten: false,
       message: `Claude session ${io.sessionId} has no direct screen snapshot`,
     })
@@ -64,7 +98,7 @@ export async function deliverClaudePrompt(
   // are not supposed to interleave, but if one does, its durable acceptance
   // must not race past the observer and turn into a second Enter plus timeout.
   const acceptance = io.session.armPromptAcceptance(io.prompt, {
-    timeoutMs: ACCEPTANCE_TIMEOUT_MS,
+    timeoutMs: remainingBudget(deliveryDeadlineAt, ACCEPTANCE_TIMEOUT_MS),
   })
   io.record?.('acceptance-armed')
   const pasteLike = isPasteLike(io.prompt)
@@ -83,6 +117,7 @@ export async function deliverClaudePrompt(
     acceptance.cancel()
     return failure({
       stage: 'before-write', code: 'write-failed', retrySafe: true,
+      disposition: 'session-unusable',
       promptWritten: false, enterWritten: false,
       message: `Could not write prompt to session ${io.sessionId}`,
     })
@@ -93,7 +128,10 @@ export async function deliverClaudePrompt(
     () => io.session.snapshotScreen?.() ?? '',
     baselineScreen,
     io.prompt,
-    { timeoutMs: CONFIRM_TIMEOUT_MS, pollIntervalMs: CONFIRM_POLL_INTERVAL_MS },
+    {
+      timeoutMs: remainingBudget(deliveryDeadlineAt, CONFIRM_TIMEOUT_MS),
+      pollIntervalMs: CONFIRM_POLL_INTERVAL_MS,
+    },
   )
   if (absorbed.kind !== 'absorbed') {
     acceptance.cancel()
@@ -101,6 +139,7 @@ export async function deliverClaudePrompt(
     // out. Automatic retry is unsafe: it would append/duplicate those bytes.
     return failure({
       stage: 'absorption', code: 'absorption-timeout', retrySafe: false,
+      disposition: 'do-not-retry',
       promptWritten: true, enterWritten: false,
       message: `Claude session ${io.sessionId} did not visibly absorb the prompt`,
     })
@@ -116,6 +155,7 @@ export async function deliverClaudePrompt(
     acceptance.cancel()
     return failure({
       stage: 'after-enter', code: 'write-failed', retrySafe: false,
+      disposition: 'do-not-retry',
       promptWritten: true, enterWritten: false,
       message: `Could not submit prompt to session ${io.sessionId}`,
     })
@@ -126,10 +166,12 @@ export async function deliverClaudePrompt(
 
 async function deliverClaudeImagePrompt(
   io: PromptDeliveryIo,
+  deliveryDeadlineAt: number,
 ): Promise<PromptDeliveryResult> {
   if (typeof io.session.snapshotScreen !== 'function') {
     return failure({
       stage: 'before-write', code: 'missing-capability', retrySafe: true,
+      disposition: 'session-unusable',
       promptWritten: false, enterWritten: false,
       message: `Claude session ${io.sessionId} has no direct screen snapshot`,
     })
@@ -144,17 +186,22 @@ async function deliverClaudeImagePrompt(
       if (!io.write(`\x1b[200~${io.prompt}\x1b[201~`)) {
         return failure({
           stage: 'before-write', code: 'write-failed', retrySafe: true,
+          disposition: 'session-unusable',
           promptWritten: false, enterWritten: false,
           message: `Could not write image prompt text to session ${io.sessionId}`,
         })
       }
       const textAbsorbed = await pollPasteAbsorbed(
         () => io.session.snapshotScreen?.() ?? '', textBaseline, io.prompt,
-        { timeoutMs: CONFIRM_TIMEOUT_MS, pollIntervalMs: CONFIRM_POLL_INTERVAL_MS },
+        {
+          timeoutMs: remainingBudget(deliveryDeadlineAt, CONFIRM_TIMEOUT_MS),
+          pollIntervalMs: CONFIRM_POLL_INTERVAL_MS,
+        },
       )
       if (textAbsorbed.kind !== 'absorbed') {
         return failure({
           stage: 'absorption', code: 'absorption-timeout', retrySafe: false,
+          disposition: 'do-not-retry',
           promptWritten: true, enterWritten: false,
           message: `Claude session ${io.sessionId} did not absorb image prompt text`,
         })
@@ -162,6 +209,7 @@ async function deliverClaudeImagePrompt(
     } else if (!io.write(io.prompt)) {
       return failure({
         stage: 'before-write', code: 'write-failed', retrySafe: true,
+        disposition: 'session-unusable',
         promptWritten: false, enterWritten: false,
         message: `Could not write image prompt text to session ${io.sessionId}`,
       })
@@ -169,6 +217,7 @@ async function deliverClaudeImagePrompt(
     if (separator && !io.write(separator)) {
       return failure({
         stage: 'absorption', code: 'write-failed', retrySafe: false,
+        disposition: 'do-not-retry',
         promptWritten: true, enterWritten: false,
         message: `Could not separate image paths in session ${io.sessionId}`,
       })
@@ -180,17 +229,22 @@ async function deliverClaudeImagePrompt(
     return failure({
       stage: io.prompt.length > 0 ? 'absorption' : 'before-write',
       code: 'write-failed', retrySafe: io.prompt.length === 0,
+      disposition: io.prompt.length === 0 ? 'session-unusable' : 'do-not-retry',
       promptWritten: io.prompt.length > 0, enterWritten: false,
       message: `Could not paste image paths to session ${io.sessionId}`,
     })
   }
   const imagesAbsorbed = await pollClaudeImagesAbsorbed(
     () => io.session.snapshotScreen?.() ?? '', imageBaseline, imagePaths.length,
-    { timeoutMs: IMAGE_CONFIRM_TIMEOUT_MS, pollIntervalMs: CONFIRM_POLL_INTERVAL_MS },
+    {
+      timeoutMs: remainingBudget(deliveryDeadlineAt, IMAGE_CONFIRM_TIMEOUT_MS),
+      pollIntervalMs: CONFIRM_POLL_INTERVAL_MS,
+    },
   )
   if (imagesAbsorbed.kind !== 'absorbed') {
     return failure({
       stage: 'absorption', code: 'absorption-timeout', retrySafe: false,
+      disposition: 'do-not-retry',
       promptWritten: true, enterWritten: false,
       message: `Claude session ${io.sessionId} did not render all image attachments`,
     })
@@ -199,14 +253,13 @@ async function deliverClaudeImagePrompt(
     imageCount: imagePaths.length,
     waitedMs: imagesAbsorbed.waitedMs,
   })
-  // Image/text absorption can legitimately consume seven seconds. Starting
-  // the 20-second waiter before that work left less than JsonlTailer's 15-second
-  // watchdog window after Enter. Main's reservation now blocks every external
-  // writer, so arming at this exact pre-Enter boundary is race-free and gives
-  // durable acceptance the full recovery window without exceeding the remote
-  // transport's 30-second request timeout.
+  // Image/text absorption can legitimately consume seven seconds. Main's
+  // reservation blocks every external writer, so image acceptance can be armed
+  // at this exact pre-Enter boundary without a race. The waiter receives the
+  // remaining shared budget—not a fresh 20 seconds—so a delayed readiness or
+  // absorption phase cannot silently overrun the outer request deadline.
   const acceptance = io.session.armPromptAcceptance!(io.prompt, {
-    timeoutMs: ACCEPTANCE_TIMEOUT_MS,
+    timeoutMs: remainingBudget(deliveryDeadlineAt, ACCEPTANCE_TIMEOUT_MS),
     aliases: [rawComposer],
     requiresImage: io.prompt.length === 0,
     expectedImageCount: imagePaths.length,
@@ -216,6 +269,7 @@ async function deliverClaudeImagePrompt(
     acceptance.cancel()
     return failure({
       stage: 'after-enter', code: 'write-failed', retrySafe: false,
+      disposition: 'do-not-retry',
       promptWritten: true, enterWritten: false,
       message: `Could not submit image prompt to session ${io.sessionId}`,
     })
@@ -240,10 +294,24 @@ function acceptanceResult(
     stage: outcome.kind === 'session-exited' ? 'session-exit' : 'after-enter',
     code: outcome.kind === 'session-exited' ? 'session-exited' : 'acceptance-timeout',
     retrySafe: false,
+    disposition: 'do-not-retry',
     promptWritten,
     enterWritten,
     message: outcome.kind === 'session-exited'
       ? `Claude session ${sessionId} exited before accepting the prompt`
       : `Claude session ${sessionId} did not record prompt acceptance`,
   })
+}
+
+function remainingBudget(deadlineAt: number, stageCapMs: number): number {
+  return Math.max(0, Math.min(stageCapMs, deadlineAt - Date.now()))
+}
+
+function describeReadiness(
+  outcome: Exclude<PromptReadinessOutcome, { kind: 'ready' }>,
+): string {
+  if (outcome.kind === 'timeout') return `still warming (${outcome.lastState.reason})`
+  if (outcome.kind === 'blocked') return `blocked by ${outcome.condition}`
+  if (outcome.kind === 'occupied') return 'occupied by a human draft'
+  return `unavailable (${outcome.reason})`
 }

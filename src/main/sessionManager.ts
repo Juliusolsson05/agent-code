@@ -1651,36 +1651,6 @@ export class SessionManager extends EventEmitter {
     return entry.session.resolveCondition(action) as Promise<ResolveConditionResult>
   }
 
-  async awaitCodexReadyForPrompt(
-    sessionId: string,
-    opts?: { timeoutMs?: number; pollIntervalMs?: number },
-  ): Promise<
-    | { kind: 'ready'; waitedMs: number }
-    | { kind: 'timeout' }
-    | { kind: 'no-headless' }
-    | { kind: 'no-session' }
-  > {
-    const entry = this.sessions.get(sessionId)
-    if (!entry || entry.kind !== 'codex') return { kind: 'no-session' }
-    // WHY this mirrors the Claude paste-placeholder escape hatch instead of
-    // widening the whole AgentSessionLike contract:
-    //
-    // Provider startup hazards are different. Claude's race is "paste payload
-    // committed but Enter arrived too early"; Codex's race is "PTY exists but
-    // the TUI is still on startup/trust chrome and will drop composer input".
-    // Keeping both probes provider-specific prevents a fake no-op readiness API
-    // from becoming part of every future provider runtime, while still giving
-    // orchestration a truthful delivery boundary before it marks a prompt as
-    // submitted.
-    // No cast: awaitReadyForPrompt is now a typed optional on
-    // AgentSession (see @shared/types/session.ts).
-    const session = entry.session
-    if (typeof session.awaitReadyForPrompt !== 'function') {
-      return { kind: 'no-headless' }
-    }
-    return session.awaitReadyForPrompt(opts)
-  }
-
   /**
    * Deliver a prompt to an agent session using the PROVIDER'S OWN
    * delivery protocol (#394 phase 2c).
@@ -1709,7 +1679,8 @@ export class SessionManager extends EventEmitter {
       record?.('duplicate-blocked')
       return {
         ok: false, stage: 'reservation', code: 'delivery-in-flight',
-        retrySafe: true, promptWritten: false, enterWritten: false,
+        retrySafe: true, disposition: 'retry-same-session',
+        promptWritten: false, enterWritten: false,
         message: `A prompt delivery is already in flight for session ${sessionId}`,
       }
     }
@@ -1721,6 +1692,7 @@ export class SessionManager extends EventEmitter {
     if (!entry || entry.kind === 'terminal') {
       return {
         ok: false, stage: 'before-write', code: 'not-ready', retrySafe: true,
+        disposition: 'session-unusable',
         promptWritten: false, enterWritten: false,
         message: `Cannot deliver prompt: ${sessionId} is not a live agent session`,
       }
@@ -1759,6 +1731,9 @@ export class SessionManager extends EventEmitter {
         // The coordinator cannot know how far provider code progressed before
         // throwing. Conservatively forbid automatic retry.
         retrySafe: !promptWritten && !enterWritten,
+        disposition: !promptWritten && !enterWritten
+          ? 'session-unusable'
+          : 'do-not-retry',
         promptWritten,
         enterWritten,
       }

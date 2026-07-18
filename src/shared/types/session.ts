@@ -374,16 +374,12 @@ export interface AgentSession extends AgentSessionEmitter {
    * armed, otherwise a historical identical entry can acknowledge new bytes. */
   isPromptAcceptanceReady?(): boolean
 
-  /** Optional (Codex today): wait for the composer to be ready to
-   *  accept a prompt (past the startup/trust chrome). See
-   *  sessionManager.ts:987. */
+  /** Optional provider-owned readiness boundary before prompt bytes may be
+   *  written. `deadlineAt` is absolute so readiness cannot quietly consume a
+   *  fresh timeout budget that later delivery phases also assume they own. */
   awaitReadyForPrompt?(
-    opts?: { timeoutMs?: number; pollIntervalMs?: number },
-  ): Promise<
-    | { kind: 'ready'; waitedMs: number }
-    | { kind: 'timeout' }
-    | { kind: 'no-headless' }
-  >
+    opts?: { deadlineAt?: number; timeoutMs?: number; pollIntervalMs?: number },
+  ): Promise<PromptReadinessOutcome>
 
   /** Optional (opencode today): deliver a user prompt over the
    *  provider's own transport rather than as PTY keystrokes. Providers
@@ -406,6 +402,23 @@ export type PromptAcceptanceWaiter = {
   promise: Promise<PromptAcceptanceOutcome>
   cancel: () => void
 }
+
+/**
+ * Provider-owned prompt gate. Warming states are expected to resolve without
+ * user action; every other non-ready state is returned immediately so callers
+ * can report the real obstruction instead of spending an arbitrary timeout.
+ */
+export type PromptGateState =
+  | { kind: 'ready' }
+  | { kind: 'warming'; reason: 'replay-pending' | 'composer-unpainted' }
+  | { kind: 'blocked'; condition: string; resolvable: boolean }
+  | { kind: 'occupied'; reason: 'human-draft' }
+  | { kind: 'terminal'; reason: 'exited' | 'no-headless' }
+
+export type PromptReadinessOutcome =
+  | { kind: 'ready'; waitedMs: number }
+  | { kind: 'timeout'; waitedMs: number; lastState: Extract<PromptGateState, { kind: 'warming' }> }
+  | Exclude<PromptGateState, { kind: 'ready' } | { kind: 'warming' }>
 
 
 // Base session types that all providers implement. The shell and main

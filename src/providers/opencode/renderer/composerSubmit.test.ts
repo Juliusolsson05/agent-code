@@ -11,6 +11,7 @@ describe('opencodeComposerSubmit', () => {
       code: 'transport-failed' as const,
       message: 'request outcome unknown',
       retrySafe: false,
+      disposition: 'do-not-retry' as const,
       promptWritten: true,
       enterWritten: true,
     }

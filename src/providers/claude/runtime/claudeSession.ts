@@ -16,6 +16,8 @@ import type {
   AgentInputReadiness,
   PromptAcceptanceOutcome,
   PromptAcceptanceWaiter,
+  PromptGateState,
+  PromptReadinessOutcome,
 } from '@shared/types/session.js'
 import { ClaudeCodeHeadless, createProxyServer } from 'claude-code-headless'
 import type {
@@ -96,6 +98,7 @@ export type ClaudeSessionEvents = {
    *  `ProviderConditionSnapshot` union the sessionManager listens for, so
    *  the relay accepts it without a cast. */
   conditions: [ClaudeConditionSnapshot]
+  'prompt-gate': [PromptGateState]
   /** New. The flat union of semantic-channel events (see
    *  claude-code-headless EVENT_SPEC.md). Forwarded verbatim so the
    *  renderer can treat it as the authoritative live-turn stream —
@@ -124,6 +127,9 @@ export interface ClaudeSession {
     event: K,
     ...args: ClaudeSessionEvents[K]
   ): boolean
+  awaitReadyForPrompt(
+    opts?: { deadlineAt?: number; timeoutMs?: number; pollIntervalMs?: number },
+  ): Promise<PromptReadinessOutcome>
 }
 
 export class ClaudeSession extends EventEmitter {
@@ -144,9 +150,11 @@ export class ClaudeSession extends EventEmitter {
    *  log id:1-8). Live tool_results for the ACTIVE turn still fire
    *  because a real streaming turn always has a longer gap between
    *  the committed entry and the prior bootstrap burst. */
-  private readyForLiveBridge = false
+  private transcriptReplayQuiesced = false
   private transcriptTailAttached = false
-  private liveBridgeTimer: NodeJS.Timeout | null = null
+  private transcriptReplayTimer: NodeJS.Timeout | null = null
+  private promptGateState: PromptGateState = { kind: 'terminal', reason: 'no-headless' }
+  private promptGateRefreshQueued = false
   private readonly promptAcceptanceWaiters = new Set<{
     prompts: ReadonlySet<string>
     afterCursor: number
@@ -471,6 +479,12 @@ export class ClaudeSession extends EventEmitter {
         recentMarkdown: snap.recentMarkdown,
         picker: this.headless?.getSlashPickerState() ?? { visible: false, items: [] },
       })
+      // ClaudeCodeHeadless finishes the rest of its condition evaluation after
+      // emitting the legacy screen event. Deferring one microtask lets the gate
+      // combine the composer and condition snapshot from the SAME frame; an
+      // eager read here could briefly publish ready before the trust dialog from
+      // that frame became visible.
+      this.schedulePromptGateRefresh()
     })
 
     this.headless.on('jsonl-entry', (entry, file) => {
@@ -512,14 +526,15 @@ export class ClaudeSession extends EventEmitter {
     // the single new line that lights up the already-built renderer relay for
     // Claude (the generic sessionManager `conditions` handler does the rest).
     // Prompt-specific forwards remain temporarily; compaction does not.
-    this.headless.on('conditions', snapshot =>
-      this.emit('conditions', snapshot),
-    )
+    this.headless.on('conditions', snapshot => {
+      this.emit('conditions', snapshot)
+      this.schedulePromptGateRefresh()
+    })
     this.headless.on('exit', ({ exitCode, signal }) => {
       this.exited = true
-      if (this.liveBridgeTimer) clearTimeout(this.liveBridgeTimer)
-      this.liveBridgeTimer = null
-      this.emit('input-readiness', { ready: false, reason: 'provider-not-ready' })
+      if (this.transcriptReplayTimer) clearTimeout(this.transcriptReplayTimer)
+      this.transcriptReplayTimer = null
+      this.publishPromptGate({ kind: 'terminal', reason: 'exited' })
       this.finishPromptAcceptanceWaiters({ kind: 'session-exited' })
       this.emit('exit', { exitCode, signal })
     })
@@ -574,9 +589,9 @@ export class ClaudeSession extends EventEmitter {
       // the semantic bus at bootstrap just makes 8+ dead events land
       // in foldSemanticEvent (all of which no-op because currentTurn
       // is null during replay) and pollutes the feed-debug SEM log.
-      // After readyForLiveBridge flips, tool_results that arrive
+      // After transcriptReplayQuiesced flips, tool_results that arrive
       // during live turns flow through unchanged.
-      if (!this.readyForLiveBridge) return
+      if (!this.transcriptReplayQuiesced) return
       // `ev.turnId` is the committed parent entry uuid, not the live
       // semantic turn id (`msg_…`). Forwarding it causes
       // foldSemanticEvent's strict turnId guard to drop the event before
@@ -595,7 +610,7 @@ export class ClaudeSession extends EventEmitter {
       this.emit('semantic-event', bridged)
     })
 
-    // Arm the live-bridge gate off committed entry landings. Every
+    // Arm the replay boundary off committed entry landings. Every
     // committed entry (assistant commit, user commit, compact boundary)
     // resets a 250 ms quiet-window timer. When the timer fires without
     // another entry having landed, we know the initial tail replay
@@ -605,21 +620,20 @@ export class ClaudeSession extends EventEmitter {
     // tool_result (which can arrive seconds after replay) isn't
     // delayed by bridge-priming.
     //
-    // Fresh-session path: no committed entries arrive during tail
-    // replay (the JSONL file doesn't exist yet), so the 'entry'
-    // listener would never fire and readyForLiveBridge would stay
-    // false forever. Kick off the same timer unconditionally at the
-    // end of the constructor via `armLiveBridgeReady`, which serves
-    // double duty as the initial arm and the re-arm on every entry.
+    // Fresh sessions never use this timer: once their empty tail is attached,
+    // replay safety is satisfied immediately. A resumed tail may emit several
+    // synchronous committed entries, so each one attempts to re-arm; the method
+    // intentionally no-ops until start() marks attachment complete, then start()
+    // performs the one authoritative initial arm below.
     this.headless.committed.on('entry', () => {
-      this.armLiveBridgeReady()
+      this.armTranscriptReplayQuietWindow()
     })
     // start() owns the durable replay boundary. Arming here used to let this
     // 250 ms timer expire while getProjectDirForCwd/tailer discovery was still
     // in flight, after which an unread historical entry could acknowledge a
-    // brand-new identical prompt. armLiveBridgeReady intentionally no-ops
-    // until headless.start() has synchronously consumed the resume bootstrap.
-    this.armLiveBridgeReady()
+    // brand-new identical prompt. armTranscriptReplayQuietWindow intentionally
+    // no-ops until headless.start() has synchronously consumed the resume bootstrap.
+    this.armTranscriptReplayQuietWindow()
 
     // If headless.start() throws we are in the same leak shape as a
     // pty-spawn failure: a live mitmdump child, a live PTY, and a
@@ -640,8 +654,13 @@ export class ClaudeSession extends EventEmitter {
     // waiter can arm before every byte durable at attachment time was either
     // emitted or placed behind the tailer's EOF cursor.
     this.transcriptTailAttached = true
-    this.readyForLiveBridge = false
-    this.armLiveBridgeReady()
+    // Fresh sessions have no historical transcript to replay. Requiring the
+    // resumed-session quiet window here adds latency without adding safety.
+    // Resumed sessions still hold both prompt delivery and the committed-event
+    // bridge behind the replay boundary.
+    this.transcriptReplayQuiesced = this.resumeSessionId === null
+    if (this.transcriptReplayQuiesced) this.refreshPromptGate()
+    else this.armTranscriptReplayQuietWindow()
     this.emit('started', {
       projectDir,
       proxyUrl: this.proxyServer?.info.proxyUrl,
@@ -705,23 +724,72 @@ export class ClaudeSession extends EventEmitter {
   }
 
   /**
-   * Reset the live-bridge quiet-window timer. Called once at the end
-   * of the constructor (so fresh sessions that never replay anything
-   * still arm) and once per committed.entry landing (so resume
-   * sessions wait for tail replay to actually quiet down before
-   * bridging tool_results). Idempotent after `readyForLiveBridge`
-   * flips to true — the gate never goes back down.
+   * Reset the resumed-session replay quiet-window timer. Fresh sessions become
+   * observable immediately after tail attachment because there is no history;
+   * resumed sessions need this boundary so a historical identical entry cannot
+   * acknowledge a brand-new prompt.
    */
-  private armLiveBridgeReady(): void {
+  private armTranscriptReplayQuietWindow(): void {
     if (!this.transcriptTailAttached) return
-    if (this.readyForLiveBridge) return
-    if (this.liveBridgeTimer) clearTimeout(this.liveBridgeTimer)
-    this.liveBridgeTimer = setTimeout(() => {
-      this.liveBridgeTimer = null
+    if (this.transcriptReplayQuiesced) return
+    if (this.transcriptReplayTimer) clearTimeout(this.transcriptReplayTimer)
+    this.transcriptReplayTimer = setTimeout(() => {
+      this.transcriptReplayTimer = null
       if (this.exited) return
-      this.readyForLiveBridge = true
-      this.emit('input-readiness', { ready: true, reason: 'ready' })
+      this.transcriptReplayQuiesced = true
+      this.refreshPromptGate()
     }, 250)
+  }
+
+  private derivePromptGateState(): PromptGateState {
+    if (this.exited) return { kind: 'terminal', reason: 'exited' }
+    if (!this.headless) return { kind: 'terminal', reason: 'no-headless' }
+
+    const conditions = this.headless.getConditionSnapshot().conditions
+    const condition = Object.values(conditions).find(value => value !== undefined)
+    if (condition) {
+      return {
+        kind: 'blocked',
+        condition: condition.kind,
+        resolvable: condition.actions.length > 0,
+      }
+    }
+
+    const composer = this.headless.getComposerState()
+    if (composer === 'drafted') return { kind: 'occupied', reason: 'human-draft' }
+    if (!this.transcriptTailAttached || !this.transcriptReplayQuiesced) {
+      return { kind: 'warming', reason: 'replay-pending' }
+    }
+    if (composer === 'unpainted') return { kind: 'warming', reason: 'composer-unpainted' }
+    return { kind: 'ready' }
+  }
+
+  private publishPromptGate(next: PromptGateState): PromptGateState {
+    if (JSON.stringify(next) === JSON.stringify(this.promptGateState)) {
+      return this.promptGateState
+    }
+    const wasReady = this.promptGateState.kind === 'ready'
+    this.promptGateState = next
+    this.emit('prompt-gate', next)
+    if (next.kind === 'ready') {
+      this.emit('input-readiness', { ready: true, reason: 'ready' })
+    } else if (wasReady) {
+      this.emit('input-readiness', { ready: false, reason: 'provider-not-ready' })
+    }
+    return next
+  }
+
+  private refreshPromptGate(): PromptGateState {
+    return this.publishPromptGate(this.derivePromptGateState())
+  }
+
+  private schedulePromptGateRefresh(): void {
+    if (this.promptGateRefreshQueued) return
+    this.promptGateRefreshQueued = true
+    queueMicrotask(() => {
+      this.promptGateRefreshQueued = false
+      this.refreshPromptGate()
+    })
   }
 
   armPromptAcceptance(
@@ -772,7 +840,51 @@ export class ClaudeSession extends EventEmitter {
   }
 
   isPromptAcceptanceReady(): boolean {
-    return this.readyForLiveBridge && !this.exited
+    return this.refreshPromptGate().kind === 'ready'
+  }
+
+  async awaitReadyForPrompt(
+    opts: { deadlineAt?: number; timeoutMs?: number; pollIntervalMs?: number } = {},
+  ): Promise<PromptReadinessOutcome> {
+    const startedAt = Date.now()
+    const deadlineAt = opts.deadlineAt ?? startedAt + (opts.timeoutMs ?? 12_000)
+    const initial = this.refreshPromptGate()
+    if (initial.kind === 'ready') return { kind: 'ready', waitedMs: 0 }
+    if (initial.kind !== 'warming') return initial
+
+    return await new Promise(resolve => {
+      let settled = false
+      let timer: NodeJS.Timeout | null = null
+      let lastWarmingState = initial
+      const finish = (outcome: PromptReadinessOutcome): void => {
+        if (settled) return
+        settled = true
+        if (timer) clearTimeout(timer)
+        this.off('prompt-gate', onPromptGate)
+        resolve(outcome)
+      }
+      const onPromptGate = (state: PromptGateState): void => {
+        if (state.kind === 'warming') {
+          lastWarmingState = state
+          return
+        }
+        finish(state.kind === 'ready'
+          ? { kind: 'ready', waitedMs: Date.now() - startedAt }
+          : state)
+      }
+
+      // WHY subscribe before rechecking: a screen transition can land between
+      // the fast-path read and listener installation. This ordering closes the
+      // missed-event race without screen polling or one parser per waiter.
+      this.on('prompt-gate', onPromptGate)
+      const remainingMs = Math.max(0, deadlineAt - Date.now())
+      timer = setTimeout(() => finish({
+        kind: 'timeout',
+        waitedMs: Date.now() - startedAt,
+        lastState: lastWarmingState,
+      }), remainingMs)
+      onPromptGate(this.refreshPromptGate())
+    })
   }
 
   private resolvePromptAcceptance(entry: JsonlEntry, cursor: number): void {
@@ -865,13 +977,16 @@ export class ClaudeSession extends EventEmitter {
   }
 
   async stop(): Promise<void> {
-    if (this.liveBridgeTimer) {
-      clearTimeout(this.liveBridgeTimer)
-      this.liveBridgeTimer = null
+    if (this.transcriptReplayTimer) {
+      clearTimeout(this.transcriptReplayTimer)
+      this.transcriptReplayTimer = null
     }
     this.finishPromptAcceptanceWaiters({ kind: 'session-exited' })
     this.transcriptTailAttached = false
+    this.transcriptReplayQuiesced = false
     await this.headless?.stop()
+    this.headless = null
+    this.publishPromptGate({ kind: 'terminal', reason: 'no-headless' })
     try { this.pty?.kill() } catch { /* already gone */ }
     this.pty = null
     // Tear down the proxy runtime after the headless adapter has been
@@ -933,9 +1048,9 @@ export class ClaudeSession extends EventEmitter {
   // headless half-attached) doesn't cascade into a second throw that
   // masks the original error.
   private async rollbackStart(): Promise<void> {
-    if (this.liveBridgeTimer) {
-      clearTimeout(this.liveBridgeTimer)
-      this.liveBridgeTimer = null
+    if (this.transcriptReplayTimer) {
+      clearTimeout(this.transcriptReplayTimer)
+      this.transcriptReplayTimer = null
     }
     try { this.pty?.kill() } catch { /* best-effort */ }
     this.pty = null
