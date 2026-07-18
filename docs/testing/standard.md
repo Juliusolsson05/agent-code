@@ -66,4 +66,18 @@ Follow the repository comment policy in tests: comments explain WHY the setup or
 
 ## CI contract
 
-Pull requests run the contract check, minimum/current supported Node versions, the deterministic suite, build/package verification, and coverage. Live and soak suites are manual or scheduled. Every repository exposes one stable required result named `quality-gate`; individual job names may evolve without repeatedly changing branch protection.
+Pull requests run the contract check, minimum/current supported Node versions, the deterministic suite, build/package verification, and coverage. Live and soak suites are manual or scheduled.
+
+Agent Code exposes one stable required result named `quality-gate`. Package repositories call the reusable workflow through their `package` job, so GitHub exposes its final result as `package / quality-gate`. Branch protection MUST use that exact caller-qualified name; documenting only the inner reusable job name creates a required check that no workflow can satisfy.
+
+## Delivery contract
+
+Owned packages call the shared release workflow when a `v*` tag is pushed. The
+tag MUST equal `v${package.json.version}`; the workflow reruns `check`, packs the
+exact tagged source, and attaches the resulting `.tgz` to a GitHub Release.
+
+WHY this does not publish to npm yet: these package names have never been
+published, and `workflow-mcp` is private. Choosing public registry ownership and
+access is a product/release decision, not a side effect of standardizing tests.
+The GitHub Release is therefore the current continuous-delivery boundary. No
+release job runs on an ordinary branch or pull request.

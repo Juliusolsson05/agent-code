@@ -24,7 +24,15 @@ for (const script of requiredScripts) {
 }
 
 const vitestRange = manifest.devDependencies?.vitest ?? manifest.dependencies?.vitest
-if (!vitestRange || !/(?:^|[^0-9])4(?:\.|$)/.test(vitestRange)) {
+// WHY the major must be anchored at the start of the declared range: searching
+// for any standalone "4" also accepts ranges such as ^3.4.0 and ^2.1.4. The
+// repositories use ordinary npm range prefixes, so accepting only an optional
+// comparator followed by major 4 makes this gate strict without adding a
+// production dependency solely to inspect one pinned dev-tool version.
+const usesVitest4 =
+  typeof vitestRange === 'string' &&
+  /^\s*(?:\^|~|>=?|=)?\s*4(?:\.|$)/.test(vitestRange)
+if (!usesVitest4) {
   failures.push(`vitest must use major version 4; received ${JSON.stringify(vitestRange)}`)
 }
 
