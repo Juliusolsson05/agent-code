@@ -1,18 +1,35 @@
 import { DEFAULT_CUSTOM_APPEARANCE_JSON } from '@renderer/app-state/settings/customAppearance'
+import {
+  findSavedTheme,
+  isSavedThemeId,
+  resolveSavedThemeColors,
+} from '@renderer/app-state/settings/savedThemes'
+import type { SavedTheme } from '@renderer/app-state/settings/savedThemes'
+import { relativeLuminance } from '@renderer/lib/color/luminance'
 import type { DictationProvider } from '@shared/types/dictation'
 
+// Built-in theme ids only. 'custom' used to live here as a sentinel that
+// rendered as a picker cell but acted as a button (it opened the JSON editor
+// instead of setting the mode). Named saved themes replaced it: a saved theme
+// is a real, selectable value, so the fake entry — and the comment explaining
+// that it sat at index 5 to make the Appearance grid an even 3x2 — are gone.
+// The grid is now variable-length and always ends with a "+ New theme…" cell.
 export type ThemeMode =
   | 'dark'
   | 'dark-dim'
   | 'dark-tokyonight'
   | 'light'
-  | 'custom'
   | 'light-soft'
+
+// What `Settings.mode` may actually hold: a built-in id, or a `theme:<uuid>`
+// saved-theme id. Kept as a distinct alias so the many call sites that only
+// ever deal with built-ins can keep using the narrower ThemeMode.
+export type ThemeModeValue = ThemeMode | string
 
 export type ThemeModeMeta = {
   id: ThemeMode
   label: string
-  family: 'dark' | 'light' | 'custom'
+  family: 'dark' | 'light'
 }
 
 export const THEME_MODES: ThemeModeMeta[] = [
@@ -20,17 +37,40 @@ export const THEME_MODES: ThemeModeMeta[] = [
   { id: 'dark-dim', label: 'Gray Dark', family: 'dark' },
   { id: 'dark-tokyonight', label: 'Tokyonight', family: 'dark' },
   { id: 'light', label: 'Light', family: 'light' },
-  // WHY Custom sits before Soft Light: the settings UI renders theme modes in
-  // a two-column grid. Adding Custom as the fifth option lands it in the
-  // lower-left cell and Soft Light in the lower-right cell, which gives the
-  // Appearance section an even 3x2 shape without moving the established dark
-  // and light defaults at the top.
-  { id: 'custom', label: 'Custom', family: 'custom' },
   { id: 'light-soft', label: 'Soft Light', family: 'light' },
 ]
 
-export function isDarkThemeMode(mode: ThemeMode): boolean {
+export function isBuiltInThemeMode(value: unknown): value is ThemeMode {
+  return THEME_MODES.some(option => option.id === value)
+}
+
+// Retained for the many callers that pass a built-in id. Anything not in the
+// light family counts as dark, which is precisely why a saved theme must NOT
+// be routed through here — see isDarkThemeValue.
+export function isDarkThemeMode(mode: ThemeModeValue): boolean {
   return THEME_MODES.find(option => option.id === mode)?.family !== 'light'
+}
+
+// WHY a saved theme cannot use isDarkThemeMode: that function returns true for
+// anything not in the light family, so every user theme would be treated as
+// dark. That was tolerable when there was one unnamed custom slot; with named
+// themes a user's light theme is a first-class thing, and getting its family
+// wrong picks the wrong half of the accent pair.
+//
+// We infer from the theme's own canvas luminance — the same signal xterm
+// already uses to choose its ANSI ramp — so the chrome and the terminal always
+// agree about which world they are in. A canvas expressed as
+// rgb()/oklch()/color-mix() returns null from relativeLuminance; we fall back
+// to dark, matching the historical default for custom appearance.
+export function isDarkThemeValue(mode: ThemeModeValue, savedThemes: SavedTheme[]): boolean {
+  if (!isSavedThemeId(mode)) return isDarkThemeMode(mode)
+  const theme = findSavedTheme(savedThemes, mode)
+  if (!theme) return true
+  const colors = resolveSavedThemeColors(theme)
+  if (!colors) return true
+  const luminance = relativeLuminance(colors.canvas)
+  if (luminance === null) return true
+  return luminance <= 0.5
 }
 
 export type AccentId =
@@ -215,7 +255,16 @@ export const USAGE_HEADER_LEVELS = ['minimal', 'providers', 'all', 'detailed'] a
 export type UsageHeaderLevel = (typeof USAGE_HEADER_LEVELS)[number]
 
 export type Settings = {
-  mode: ThemeMode
+  /** Built-in theme id, or the id of an entry in `savedThemes`. One field
+   *  answers "what am I looking at" for applyTheme, useThemeSync, and the
+   *  paired phone client alike — see savedThemes.ts for why this is not a
+   *  separate `activeSavedThemeId`. */
+  mode: ThemeModeValue
+  /** Named custom color schemes. The active one is identified by `mode`
+   *  holding its id. Stored inside Settings (rather than in their own
+   *  localStorage key) so they ride the existing persist/coerce/IPC paths
+   *  for free — the phone client already receives the whole Settings blob. */
+  savedThemes: SavedTheme[]
   contrast: boolean
   accent: AccentId
   /** Raw JSON string for the Custom Appearance mode. It is stored as raw
@@ -347,6 +396,7 @@ export type Settings = {
 
 export const DEFAULT_SETTINGS: Settings = {
   mode: 'dark',
+  savedThemes: [],
   contrast: false,
   accent: 'lime',
   customAppearanceJson: DEFAULT_CUSTOM_APPEARANCE_JSON,
