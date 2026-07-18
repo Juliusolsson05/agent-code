@@ -512,11 +512,13 @@ function registerOrchestrationTools(
           let cleanupAttempted = false
           let agentClosed = false
           let cleanupError: string | undefined
-          // WHY cleanup only a retry-safe rejection: after any prompt/Enter
-          // bytes were written, a timeout means acceptance is UNKNOWN, not
-          // absent. Closing that child can kill a correctly submitted turn and
-          // encourages callers to create a duplicate replacement agent.
-          if (delivery.retrySafe) {
+          // Duplicate safety and child health are independent. A warming
+          // timeout or trust dialog is safe to retry after recovery but the
+          // child is still valuable; deleting every retry-safe child turned a
+          // transient startup delay into permanent session loss. Only an
+          // explicit provider verdict that this session cannot be used again
+          // authorizes cleanup.
+          if (delivery.disposition === 'session-unusable') {
             try {
               cleanupAttempted = true
               const cleanup = await bridge.closeAgent({
@@ -540,6 +542,7 @@ function registerOrchestrationTools(
               stage: delivery.stage,
               code: delivery.code,
               retrySafe: delivery.retrySafe,
+              disposition: delivery.disposition,
               promptWritten: delivery.promptWritten,
               enterWritten: delivery.enterWritten,
               cleanupAttempted,
@@ -552,6 +555,7 @@ function registerOrchestrationTools(
             error: 'prompt_delivery_failed',
             message: delivery.message,
             retrySafe: delivery.retrySafe,
+            disposition: delivery.disposition,
             // WHY omit the live agent object on bootstrap failure:
             // `create_agent` is a two-step operation. By this point the
             // renderer has already created a real provider session with PTY,
@@ -561,7 +565,9 @@ function registerOrchestrationTools(
             // leaving cleanup to memory and luck. The failure result now reports
             // the session id plus cleanup outcome, and the child is best-effort
             // closed before the error crosses the MCP boundary only when no
-            // bytes were written and the result explicitly says retry is safe.
+            // bytes were written and the provider explicitly says the session
+            // itself is unusable. Retry safety alone intentionally preserves
+            // warming and user-resolvable children.
             sessionId: agent.sessionId,
             cleanupAttempted,
             agentClosed,
@@ -695,6 +701,7 @@ function registerOrchestrationTools(
             message: delivery.message,
             stage: delivery.stage,
             code: delivery.code,
+            disposition: delivery.disposition,
             retrySafe: delivery.retrySafe,
             promptWritten: delivery.promptWritten,
             enterWritten: delivery.enterWritten,
@@ -707,6 +714,7 @@ function registerOrchestrationTools(
           retrySafe: delivery.retrySafe,
           stage: delivery.stage,
           code: delivery.code,
+          disposition: delivery.disposition,
           promptWritten: delivery.promptWritten,
           enterWritten: delivery.enterWritten,
           promptSubmission: delivery.retrySafe ? 'not-submitted' : 'uncertain',

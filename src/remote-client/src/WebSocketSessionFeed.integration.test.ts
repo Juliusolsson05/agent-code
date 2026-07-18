@@ -175,6 +175,7 @@ describe('WebSocketSessionFeed against a live RemoteServer', () => {
       code: 'acceptance-timeout' as const,
       message: 'uncertain',
       retrySafe: false,
+      disposition: 'do-not-retry' as const,
       promptWritten: true,
       enterWritten: true,
     }))
@@ -185,6 +186,26 @@ describe('WebSocketSessionFeed against a live RemoteServer', () => {
       code: 'acceptance-timeout',
       retrySafe: false,
       promptWritten: true,
+    })
+  })
+
+  it('conservatively normalizes a pre-disposition server failure', async () => {
+    manager.deliverPromptToAgent = vi.fn(async () => ({
+      ok: false as const,
+      stage: 'before-write' as const,
+      code: 'not-ready' as const,
+      message: 'legacy server still warming',
+      retrySafe: true,
+      promptWritten: false,
+      enterWritten: false,
+    } as never))
+    const f = makeFeed()
+    await waitForOpen(f)
+
+    await expect(f.deliverPrompt('s1', 'retry later')).resolves.toMatchObject({
+      ok: false,
+      disposition: 'retry-same-session',
+      retrySafe: true,
     })
   })
 

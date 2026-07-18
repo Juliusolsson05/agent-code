@@ -34,12 +34,13 @@ export async function deliverCodexPrompt(
       code: 'missing-capability',
       message: `Codex session ${io.sessionId} has no readiness probe (headless unavailable?)`,
       retrySafe: true,
+      disposition: 'session-unusable',
       promptWritten: false,
       enterWritten: false,
     }
   }
   const ready = await io.session.awaitReadyForPrompt({
-    timeoutMs: 15_000,
+    deadlineAt: Date.now() + 15_000,
     pollIntervalMs: 50,
   })
   if (ready.kind !== 'ready') {
@@ -49,6 +50,11 @@ export async function deliverCodexPrompt(
       code: 'not-ready',
       message: `Codex session ${io.sessionId} was not ready for prompt delivery (${ready.kind})`,
       retrySafe: true,
+      disposition: ready.kind === 'timeout'
+        ? 'retry-same-session'
+        : ready.kind === 'blocked' || ready.kind === 'occupied'
+          ? 'retry-after-resolve'
+          : 'session-unusable',
       promptWritten: false,
       enterWritten: false,
     }
@@ -60,6 +66,7 @@ export async function deliverCodexPrompt(
       code: 'write-failed',
       message: `Could not submit orchestration prompt to Codex session ${io.sessionId}`,
       retrySafe: true,
+      disposition: 'session-unusable',
       promptWritten: false,
       enterWritten: false,
     }

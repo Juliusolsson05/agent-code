@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
-import { extractActiveClaudeComposer, pasteAbsorbedVia } from './pasteConfirm.js'
+import {
+  extractActiveClaudeComposer,
+  pasteAbsorbedVia,
+} from './pasteConfirm.js'
 import { isPasteLike } from './pasteConfirm.js'
 
 describe('Claude active composer extraction', () => {

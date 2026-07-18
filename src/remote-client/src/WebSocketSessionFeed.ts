@@ -233,11 +233,25 @@ export class WebSocketSessionFeed implements SessionFeed {
       return {
         ok: false, stage: 'before-write', code: 'missing-capability',
         message: 'Remote image-path delivery is not supported', retrySafe: true,
+        disposition: 'retry-after-resolve',
         promptWritten: false, enterWritten: false,
       }
     }
     const reply = await this.request({ type: 'send-prompt', sessionId, text: prompt })
-    if (reply.delivery) return reply.delivery
+    if (reply.delivery) {
+      if (reply.delivery.ok || reply.delivery.disposition) return reply.delivery
+      // Mixed-version remote pairs are expected during desktop rollouts. An
+      // older server can send the pre-disposition failure shape even though the
+      // new client type already requires the field. Synthesize a conservative
+      // value at the wire boundary: preserve the session for clean pre-write
+      // retries and forbid automatic retry once duplicate safety is uncertain.
+      return {
+        ...reply.delivery,
+        disposition: reply.delivery.retrySafe
+          ? 'retry-same-session'
+          : 'do-not-retry',
+      }
+    }
     // A locally rejected request has crossed no transport boundary. Treating
     // this like an after-Enter timeout would lock the phone's composer behind
     // the manual transcript-verification escape hatch even though no server —
@@ -251,6 +265,7 @@ export class WebSocketSessionFeed implements SessionFeed {
         code: 'transport-failed',
         message: reply.error,
         retrySafe: true,
+        disposition: 'retry-same-session',
         promptWritten: false,
         enterWritten: false,
       }
@@ -263,6 +278,7 @@ export class WebSocketSessionFeed implements SessionFeed {
           code: 'transport-failed',
           message: reply.error ?? 'delivery failed',
           retrySafe: false,
+          disposition: 'do-not-retry',
           promptWritten: true,
           enterWritten: true,
         }
