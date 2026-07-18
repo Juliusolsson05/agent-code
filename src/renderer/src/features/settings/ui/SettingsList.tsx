@@ -7,6 +7,7 @@ import { SETTING_CATEGORIES } from '@renderer/features/settings/lib/settingsCate
 import { HotkeyInput } from '@renderer/features/settings/ui/HotkeyInput'
 import { CliUpdateBehaviorRow } from '@renderer/features/cli-updates/CliUpdateBehaviorRow'
 import { DictationApiKeyRow } from '@renderer/features/voice-dictation/DictationApiKeyRow'
+import { ThemePickerRow } from '@renderer/features/settings/ui/ThemePickerRow'
 
 type Props = {
   definitions: SettingDefinition[]
@@ -223,6 +224,19 @@ function SettingRow({
               safeStorage-backed main state, so the row owns the IPC
               round-trip. See features/voice-dictation/DictationApiKeyRow.tsx. */}
           {control.type === 'dictation-api-key' ? <DictationApiKeyRow /> : null}
+
+          {/* Theme grid — built-ins and saved themes in one list, with the
+              create/edit/delete affordances the generic select can't carry.
+              See features/settings/ui/ThemePickerRow.tsx. */}
+          {control.type === 'theme-picker' ? (
+            <ThemePickerRow
+              settings={settings}
+              onSelect={mode => actionContext.onChange({ mode })}
+              onCreate={() => actionContext.openThemeEditor(null)}
+              onEdit={theme => actionContext.openThemeEditor(theme.id)}
+              onDelete={theme => actionContext.deleteSavedTheme(theme.id)}
+            />
+          ) : null}
         </div>
       </div>
     </div>

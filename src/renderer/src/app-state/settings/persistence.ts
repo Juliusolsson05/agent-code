@@ -3,10 +3,20 @@ import {
   AGENT_VIEW_MODES,
   DEFAULT_SETTINGS,
   FONT_FAMILIES,
-  THEME_MODES,
+  isBuiltInThemeMode,
   USAGE_HEADER_LEVELS,
   WORKSPACE_MODES,
 } from '@renderer/app-state/settings/types'
+import {
+  V4_CUSTOM_MIGRATION_MARKER,
+  coerceSavedThemes,
+  createSavedTheme,
+  findSavedTheme,
+  isSavedThemeId,
+  isV4MigratedTheme,
+} from '@renderer/app-state/settings/savedThemes'
+import type { SavedTheme } from '@renderer/app-state/settings/savedThemes'
+import { parseCustomAppearanceJson } from '@renderer/app-state/settings/customAppearance'
 import type {
   AccentId,
   FontFamilyId,
@@ -20,12 +30,21 @@ export function coerceSettings(value: unknown): Settings {
   const parsed = value && typeof value === 'object'
     ? value as Partial<Settings>
     : {}
+
+  // WHY savedThemes is computed here rather than inline in the returned
+  // object: `mode` validity DEPENDS on which themes survived coercion — a mode
+  // pointing at a theme just dropped for unparseable JSON has to fall back to
+  // the default. Resolving both inline would read the raw, un-coerced array and
+  // could leave mode pointing at a theme that no longer exists, which renders
+  // as Dark with no inline properties and looks to the user like the setting
+  // silently reset itself.
+  const savedThemes = migrateLegacyCustomAppearance(parsed, coerceSavedThemes(parsed.savedThemes))
+
   return {
     ...DEFAULT_SETTINGS,
     ...parsed,
-    mode: THEME_MODES.some(option => option.id === parsed.mode)
-      ? (parsed.mode as Settings['mode'])
-      : DEFAULT_SETTINGS.mode,
+    savedThemes,
+    mode: resolvePersistedMode(parsed, savedThemes),
     contrast: parsed.contrast === true,
     accent: ACCENTS.some(a => a.id === parsed.accent)
       ? (parsed.accent as AccentId)
@@ -96,6 +115,70 @@ export function coerceSettings(value: unknown): Settings {
       parsed.commandVisibilityOverrides,
     ),
   }
+}
+
+// v4 and earlier had exactly one unnamed custom palette, selected by
+// `mode === 'custom'`. Converting it into a real saved theme is what keeps an
+// upgrading user looking at the same colors they had before the update.
+//
+// WHY this lives in coerceSettings instead of only in zustand's `migrate`:
+// `migrate` fires only when the stored version is older, but same-version blobs
+// can still be stale (interrupted writes, hand-edited localStorage, a dev build
+// that ran this branch before the version bump landed). Coercion runs on every
+// launch through `merge`, so putting the conversion here makes it unconditional.
+// The migration marker is what makes re-running it idempotent.
+function migrateLegacyCustomAppearance(
+  parsed: Partial<Settings>,
+  savedThemes: SavedTheme[],
+): SavedTheme[] {
+  if (parsed.mode !== 'custom') return savedThemes
+  // WHY the guard keys on the marker and NOT on the theme's name: names are
+  // deliberately non-unique AND user-editable. A name match lets this sequence
+  // orphan real data — name a theme "Custom" on v5, run a v4 build (which
+  // rewrites version: 4 but leaves savedThemes in the blob) and set
+  // mode: 'custom', then upgrade: the migration sees the name, concludes it has
+  // already run, and the customAppearanceJson the user was just looking at is
+  // silently abandoned. A marker cannot be produced by renaming.
+  if (savedThemes.some(isV4MigratedTheme)) return savedThemes
+  const raw = typeof parsed.customAppearanceJson === 'string'
+    ? parsed.customAppearanceJson
+    : ''
+  try {
+    parseCustomAppearanceJson(raw, 'lenient')
+  } catch {
+    // Matches the pre-existing coerceCustomAppearanceJson policy: an
+    // unparseable payload degrades silently rather than blocking boot. The
+    // user lands on Dark, which is what they would have seen anyway.
+    return savedThemes
+  }
+  return [
+    createSavedTheme(LEGACY_CUSTOM_THEME_NAME, raw, V4_CUSTOM_MIGRATION_MARKER),
+    ...savedThemes,
+  ]
+}
+
+const LEGACY_CUSTOM_THEME_NAME = 'Custom'
+
+// Accepts a built-in id, or a saved theme id that actually resolves against the
+// already-coerced list. Anything else — a typo, a theme deleted on another
+// machine, the legacy 'custom' sentinel whose migration just produced a real
+// theme — falls back rather than leaving mode pointing at nothing.
+function resolvePersistedMode(
+  parsed: Partial<Settings>,
+  savedThemes: SavedTheme[],
+): Settings['mode'] {
+  if (parsed.mode === 'custom') {
+    // Same marker, same reason as the guard above — resolving the legacy mode
+    // by name would hand the user whichever theme they happened to call
+    // "Custom" rather than the one their old payload became.
+    const migrated = savedThemes.find(isV4MigratedTheme)
+    return migrated ? migrated.id : DEFAULT_SETTINGS.mode
+  }
+  if (isBuiltInThemeMode(parsed.mode)) return parsed.mode
+  if (isSavedThemeId(parsed.mode) && findSavedTheme(savedThemes, parsed.mode)) {
+    return parsed.mode
+  }
+  return DEFAULT_SETTINGS.mode
 }
 
 function coerceCommandVisibilityOverrides(value: unknown): Record<string, boolean> {

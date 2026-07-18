@@ -1,15 +1,21 @@
 import { useEffect, useRef, useState } from 'react'
 
 import { ACCENTS, THEME_MODES, isDarkThemeMode } from '@renderer/app-state/settings/types'
-import type { AccentId, Settings, ThemeMode } from '@renderer/app-state/settings/types'
+import type { AccentId, Settings, ThemeModeValue } from '@renderer/app-state/settings/types'
+import { isSavedThemeId } from '@renderer/app-state/settings/savedThemes'
 
-// WHY Custom is intentionally absent from the compact header menu: unlike the
-// built-in modes, Custom is not a one-click preset. It needs the JSON editor
-// in full Settings, and selecting it here would look like a broken no-op
-// because the default custom payload starts as the dark theme. Keeping this
-// quick menu to built-ins also avoids exposing accent/contrast controls that
-// custom mode deliberately ignores.
-const COMPACT_THEME_MODES = THEME_MODES.filter(mode => mode.id !== 'custom')
+// Saved themes DO appear here, unlike the old 'custom' sentinel they replaced.
+// That entry was excluded because selecting it opened a JSON editor and looked
+// like a broken no-op in a compact popover, and because the default custom
+// payload started life as a copy of the dark theme. Neither is true of a named
+// saved theme — it is an ordinary one-click preset, and excluding it would
+// only make this menu disagree with Settings about which themes exist.
+// Creating and editing still live in Settings; this popover only selects.
+//
+// The accent and contrast controls stay hidden while a saved theme is active
+// for the same reason they were hidden for custom mode: a saved theme writes
+// all 81 tokens as inline properties, which outrank both the accent variables
+// and the [data-contrast="high"] blocks, so those controls would do nothing.
 
 type Props = {
   settings: Settings
@@ -69,7 +75,7 @@ export function AppearanceMenu({ settings, onChange }: Props) {
           >
           <Section title="mode">
             <div className="grid grid-cols-2 gap-1.5">
-              {COMPACT_THEME_MODES.map(mode => (
+              {THEME_MODES.map(mode => (
                 <ModeButton
                   key={mode.id}
                   mode={mode.id}
@@ -78,21 +84,32 @@ export function AppearanceMenu({ settings, onChange }: Props) {
                   onPick={nextMode => onChange({ mode: nextMode })}
                 />
               ))}
+              {settings.savedThemes.map(theme => (
+                <ModeButton
+                  key={theme.id}
+                  mode={theme.id}
+                  label={theme.name}
+                  current={settings.mode}
+                  onPick={nextMode => onChange({ mode: nextMode })}
+                />
+              ))}
             </div>
-            {settings.mode === 'custom' ? (
+            {isSavedThemeId(settings.mode) ? (
               <div className="mt-2 border border-border bg-canvas px-2 py-2 text-[10px] leading-4 text-muted">
-                Custom appearance is edited in Settings.
+                Saved theme colors are edited in Settings.
               </div>
             ) : null}
           </Section>
 
-          {settings.mode !== 'custom' ? (
+          {!isSavedThemeId(settings.mode) ? (
             <Section title="accent">
               <div className="grid grid-cols-4 gap-1.5">
                 {ACCENTS.map(a => (
                   <AccentSwatch
                     key={a.id}
                     id={a.id}
+                    // Only reachable for built-in modes — the enclosing branch
+                    // excludes saved themes, which carry their own accent token.
                     color={isDarkThemeMode(settings.mode) ? a.dark : a.light}
                     name={a.name}
                     active={settings.accent === a.id}
@@ -138,10 +155,10 @@ function ModeButton({
   current,
   onPick,
 }: {
-  mode: ThemeMode
+  mode: ThemeModeValue
   label: string
-  current: ThemeMode
-  onPick: (m: ThemeMode) => void
+  current: ThemeModeValue
+  onPick: (m: ThemeModeValue) => void
 }) {
   const active = mode === current
   return (

@@ -2,7 +2,6 @@ import {
   ACCENTS,
   AGENT_VIEW_MODES,
   FONT_FAMILIES,
-  THEME_MODES,
   WORKSPACE_MODES,
 } from '@renderer/app-state/settings/types'
 import type {
@@ -10,7 +9,6 @@ import type {
   AgentViewMode,
   FontFamilyId,
   Settings,
-  ThemeMode,
   WorkspaceModeId,
 } from '@renderer/app-state/settings/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
@@ -25,7 +23,12 @@ export type SettingActionContext = {
   onChange: (patch: Partial<Settings>) => void
   onReset: () => void
   onClose: () => void
-  openCustomAppearanceEditor: () => void
+  /** null means "create a new theme, seeded from what is currently applied";
+   *  an id means "edit that saved theme". One entry point rather than two
+   *  because the editor modal is the same in both cases — only its seed and
+   *  its save target differ. */
+  openThemeEditor: (themeId: string | null) => void
+  deleteSavedTheme: (themeId: string) => void
 }
 
 type ChoiceOption<T extends string> = {
@@ -107,6 +110,21 @@ export type SettingDefinition =
       title: string
       description: string
       keywords: string[]
+      // Marker for the theme grid. The generic `select` control renders
+      // uniform value cells; this row needs per-cell Edit/Delete affordances
+      // on saved themes plus a trailing "+ New theme…" cell that is an action
+      // rather than a value. Same escape hatch as cli-update-behavior.
+      // See features/settings/ui/ThemePickerRow.tsx.
+      control: {
+        type: 'theme-picker'
+      }
+    }
+  | {
+      id: string
+      category: SettingCategoryId
+      title: string
+      description: string
+      keywords: string[]
       // Marker for the voice-dictation Deepgram API-key row. Same
       // rationale as cli-update-behavior above — the value lives in
       // safeStorage-backed main state (see src/main/dictation/
@@ -147,17 +165,6 @@ export type SettingDefinition =
         onResetVisibility: (ctx: SettingActionContext) => void
       }
     }
-
-const THEME_MODE_OPTIONS: ChoiceOption<ThemeMode>[] = THEME_MODES.map(mode => ({
-  value: mode.id,
-  label: mode.label,
-  description:
-    mode.family === 'custom'
-      ? 'JSON colors'
-      : mode.family === 'light'
-        ? 'Light family'
-        : 'Dark family',
-}))
 
 const ACCENT_OPTIONS: ChoiceOption<AccentId>[] = ACCENTS.map(accent => ({
   value: accent.id,
@@ -225,22 +232,13 @@ export function getSettingsRegistry(): SettingDefinition[] {
     {
       id: 'theme-mode',
       category: 'appearance',
-      title: 'Theme Mode',
-      description: 'Switch between the dark and light theme variants.',
-      keywords: ['theme', 'mode', 'dark', 'light', 'tokyonight', 'dim'],
-      control: {
-        type: 'select',
-        getValue: settings => settings.mode,
-        options: THEME_MODE_OPTIONS,
-        columns: 2,
-        onSelect: (ctx, value) => {
-          if (value === 'custom') {
-            ctx.openCustomAppearanceEditor()
-            return
-          }
-          ctx.onChange({ mode: value as ThemeMode })
-        },
-      },
+      title: 'Theme',
+      description: 'Switch between built-in themes and your saved color schemes.',
+      keywords: [
+        'theme', 'mode', 'dark', 'light', 'tokyonight', 'dim',
+        'custom', 'color', 'colour', 'scheme', 'saved', 'palette',
+      ],
+      control: { type: 'theme-picker' },
     },
     {
       id: 'theme-accent',

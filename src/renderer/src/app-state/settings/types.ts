@@ -1,18 +1,29 @@
 import { DEFAULT_CUSTOM_APPEARANCE_JSON } from '@renderer/app-state/settings/customAppearance'
+import type { SavedTheme } from '@renderer/app-state/settings/savedThemes'
 import type { DictationProvider } from '@shared/types/dictation'
 
+// Built-in theme ids only. 'custom' used to live here as a sentinel that
+// rendered as a picker cell but acted as a button (it opened the JSON editor
+// instead of setting the mode). Named saved themes replaced it: a saved theme
+// is a real, selectable value, so the fake entry — and the comment explaining
+// that it sat at index 5 to make the Appearance grid an even 3x2 — are gone.
+// The grid is now variable-length and always ends with a "+ New theme…" cell.
 export type ThemeMode =
   | 'dark'
   | 'dark-dim'
   | 'dark-tokyonight'
   | 'light'
-  | 'custom'
   | 'light-soft'
+
+// What `Settings.mode` may actually hold: a built-in id, or a `theme:<uuid>`
+// saved-theme id. Kept as a distinct alias so the many call sites that only
+// ever deal with built-ins can keep using the narrower ThemeMode.
+export type ThemeModeValue = ThemeMode | string
 
 export type ThemeModeMeta = {
   id: ThemeMode
   label: string
-  family: 'dark' | 'light' | 'custom'
+  family: 'dark' | 'light'
 }
 
 export const THEME_MODES: ThemeModeMeta[] = [
@@ -20,16 +31,31 @@ export const THEME_MODES: ThemeModeMeta[] = [
   { id: 'dark-dim', label: 'Gray Dark', family: 'dark' },
   { id: 'dark-tokyonight', label: 'Tokyonight', family: 'dark' },
   { id: 'light', label: 'Light', family: 'light' },
-  // WHY Custom sits before Soft Light: the settings UI renders theme modes in
-  // a two-column grid. Adding Custom as the fifth option lands it in the
-  // lower-left cell and Soft Light in the lower-right cell, which gives the
-  // Appearance section an even 3x2 shape without moving the established dark
-  // and light defaults at the top.
-  { id: 'custom', label: 'Custom', family: 'custom' },
   { id: 'light-soft', label: 'Soft Light', family: 'light' },
 ]
 
-export function isDarkThemeMode(mode: ThemeMode): boolean {
+export function isBuiltInThemeMode(value: unknown): value is ThemeMode {
+  return THEME_MODES.some(option => option.id === value)
+}
+
+// Anything not in the light family counts as dark, so a saved-theme id resolves
+// to "dark" here.
+//
+// WHY that is correct rather than a bug worth inferring around: this function
+// exists to pick which half of an ACCENT pair to write, and a saved theme never
+// needs that decision made for it. `accent` and `accentFg` are themselves two
+// of the 81 custom-appearance tokens, so parseCustomAppearanceJson backfills
+// them and applyCustomAppearance writes the theme's own concrete accent
+// directly — the accent-pair branch in applyTheme is only reachable when there
+// is no custom payload at all.
+//
+// An earlier version of this PR shipped an `isDarkThemeValue` that inferred a
+// saved theme's family from its canvas luminance. Review proved the luminance
+// branch was unreachable at both call sites: reaching it required the theme to
+// exist AND parse, which is exactly the condition that produces a payload and
+// takes the other branch. It was deleted rather than kept as defense, because
+// dead code that looks load-bearing invites the next person to build on it.
+export function isDarkThemeMode(mode: ThemeModeValue): boolean {
   return THEME_MODES.find(option => option.id === mode)?.family !== 'light'
 }
 
@@ -215,7 +241,16 @@ export const USAGE_HEADER_LEVELS = ['minimal', 'providers', 'all', 'detailed'] a
 export type UsageHeaderLevel = (typeof USAGE_HEADER_LEVELS)[number]
 
 export type Settings = {
-  mode: ThemeMode
+  /** Built-in theme id, or the id of an entry in `savedThemes`. One field
+   *  answers "what am I looking at" for applyTheme, useThemeSync, and the
+   *  paired phone client alike — see savedThemes.ts for why this is not a
+   *  separate `activeSavedThemeId`. */
+  mode: ThemeModeValue
+  /** Named custom color schemes. The active one is identified by `mode`
+   *  holding its id. Stored inside Settings (rather than in their own
+   *  localStorage key) so they ride the existing persist/coerce/IPC paths
+   *  for free — the phone client already receives the whole Settings blob. */
+  savedThemes: SavedTheme[]
   contrast: boolean
   accent: AccentId
   /** Raw JSON string for the Custom Appearance mode. It is stored as raw
@@ -347,6 +382,7 @@ export type Settings = {
 
 export const DEFAULT_SETTINGS: Settings = {
   mode: 'dark',
+  savedThemes: [],
   contrast: false,
   accent: 'lime',
   customAppearanceJson: DEFAULT_CUSTOM_APPEARANCE_JSON,
