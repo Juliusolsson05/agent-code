@@ -1,4 +1,4 @@
-import { useContext, useState } from 'react'
+import { useContext, useMemo, useState } from 'react'
 
 import { asRecord } from '@shared/lib/asRecord'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
@@ -8,6 +8,7 @@ import { boundedJsonPreview } from '@renderer/lib/text/boundedJson'
 import { boundedTextPage } from '@renderer/lib/text/boundedText'
 import { PagedTextViewer } from '@renderer/lib/text/PagedTextViewer'
 import { JsonResultSlab } from '@providers/shared/renderer/rows/JsonResultSlab'
+import { LazyJsonDisclosure } from '@providers/shared/renderer/rows/LazyJsonDisclosure'
 import {
   fromAgentCodeOrchestrationResult,
   type AgentCodeOrchestrationOperation,
@@ -32,7 +33,9 @@ const OPERATION_LABELS: Record<AgentCodeOrchestrationOperation, string> = {
 }
 
 function boundedLabel(value: unknown): string | null {
-  if (typeof value !== 'string' || value.length === 0) return null
+  // Whitespace is not a subject. Accepting it would stop the fallback chain at an invisible label,
+  // even though a useful role/kind/session identity is available immediately after it.
+  if (typeof value !== 'string' || !/\S/.test(value)) return null
   const page = boundedTextPage(value, 0, LABEL_MAX_CHARS, 2)
   return page.hasNext ? `${page.text}…` : page.text
 }
@@ -127,7 +130,19 @@ function AgentOutputDisclosure({ value }: { value: unknown }) {
         <div className="mt-2 space-y-2">
           {messages.slice(0, MAX_MESSAGE_ROWS).map((message, index) => {
             const record = asRecord(message)
-            if (!record || typeof record.text !== 'string') return null
+            if (!record || typeof record.text !== 'string') {
+              // Output.message is intentionally open to future structured content. The header
+              // counts transport messages, so silently returning null here made that count lie.
+              // Keep an unfamiliar message inspectable behind a lazy bounded disclosure until its
+              // schema earns a richer renderer.
+              return (
+                <LazyJsonDisclosure
+                  key={index}
+                  label={'Message ' + (index + 1) + ' · unrecognized structured content'}
+                  value={message}
+                />
+              )
+            }
             return (
               <section key={index} aria-label={`Agent ${record.role === 'user' ? 'user' : 'assistant'} message`}>
                 <div className="text-muted text-[10px] uppercase tracking-wider mb-0.5">
@@ -280,10 +295,28 @@ export function AgentCodeOrchestrationView({
 }) {
   const [open, setOpen] = useState(false)
   const paired = useContext(ToolResultIndexContext).get(model.operationId) ?? null
-  const result = paired ? fromAgentCodeOrchestrationResult(paired, model) : null
+  // WHY model identity is excluded: dispatch can recreate an equivalent model
+  // after an unrelated pair enters the feed. Orchestration validation depends
+  // on operationId for correlation and operation for the success schema, so
+  // those scalars plus the exact result block are the exhaustive parse key.
+  // This keeps multi-megabyte read-agent outputs out of unrelated render work
+  // without allowing a changed operation contract to reuse a stale decision.
+  const result = useMemo(
+    () => paired ? fromAgentCodeOrchestrationResult(paired, model) : null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- see identity proof above.
+    [model.operation, model.operationId, paired],
+  )
   const subject = inputSubject(model)
-  const status = result ? resultSummary(result) : paired ? 'unrecognized result' : 'running'
-  const marker = result?.value.ok === false ? '✗' : result ? '✓' : paired ? '◌' : '◐'
+  const transportFailed = paired?.is_error === true
+  const failed = transportFailed || result?.value.ok === false
+  // A transport error is recognized evidence, not schema drift. Keep its generic row visible but
+  // make the owning invocation card tell the same failure truth instead of displaying a pending
+  // marker and the misleading phrase "unrecognized result".
+  const status = transportFailed
+    ? 'transport failed'
+    : result ? resultSummary(result)
+      : paired ? 'unrecognized result' : 'running'
+  const marker = failed ? '✗' : result ? '✓' : paired ? '◌' : '◐'
 
   return (
     <MarkerRow marker={marker}>
@@ -297,7 +330,7 @@ export function AgentCodeOrchestrationView({
             Agent Code MCP
           </span>
           {subject ? <span className="ml-2 text-ink-dim break-all">{subject}</span> : null}
-          <span className={result?.value.ok === false ? 'ml-2 text-danger' : 'ml-2 text-muted'}>
+          <span className={failed ? 'ml-2 text-danger' : 'ml-2 text-muted'}>
             · {status}
           </span>
         </summary>

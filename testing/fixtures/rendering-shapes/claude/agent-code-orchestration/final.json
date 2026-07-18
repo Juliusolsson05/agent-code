@@ -5,6 +5,8 @@
     "blockIndex": 0,
     "toolName": "mcp__agent_code__orchestration_close_run",
     "toolUseId": "orchestration-close-run-fixture",
+    "text": "",
+    "thinking": "",
     "inputJson": "{\"runId\":\"phase-7\"}",
     "inputJsonValid": true,
     "parsedInput": {
@@ -16,6 +18,9 @@
     "type": "tool_use",
     "id": "orchestration-close-run-fixture",
     "name": "mcp__agent_code__orchestration_close_run",
+    "caller": {
+      "type": "direct"
+    },
     "input": {
       "runId": "phase-7"
     }

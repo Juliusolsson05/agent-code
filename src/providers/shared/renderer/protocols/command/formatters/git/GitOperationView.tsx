@@ -61,9 +61,9 @@ function GitCardHeader({
   return (
     <div className="flex items-baseline gap-2 text-[12px] leading-[1.5] mb-1.5">
       <span className="text-accent font-semibold">git {sub}</span>
-      {flags?.map(f => (
+      {flags?.map((f, index) => (
         <span
-          key={f}
+          key={`${index}:${f}`}
           className="font-code text-[11px] text-code-ink-dim bg-code-bg px-1.5 py-0.5 rounded"
         >
           {f}
@@ -90,13 +90,29 @@ function Card({ children }: { children: React.ReactNode }) {
   )
 }
 
-function PlusMinus({ added, removed }: { added: number; removed: number }) {
+function PlusMinus({
+  added,
+  removed,
+  partial = false,
+}: {
+  added: number
+  removed: number
+  partial?: boolean
+}) {
   return (
     <span className="font-code text-[11px] tabular-nums whitespace-nowrap">
-      <span className="text-diff-add-fg">+{added}</span>
+      <span className="text-diff-add-fg">+{partial ? '≥' : ''}{added}</span>
       <span className="text-ink-dim"> / </span>
-      <span className="text-diff-remove-fg">-{removed}</span>
+      <span className="text-diff-remove-fg">-{partial ? '≥' : ''}{removed}</span>
     </span>
+  )
+}
+
+function PartialPreviewNotice({ children }: { children?: React.ReactNode }) {
+  return (
+    <div className="text-muted text-[11px] mt-1.5">
+      {children ?? 'Structured preview is partial; exact output continues below.'}
+    </div>
   )
 }
 
@@ -183,7 +199,7 @@ function HunkSlab({
  * default. Larger diffs default collapsed so a 400-line change doesn't
  * dominate the feed. The user can expand with a click.
  */
-function FileBlock({ file }: { file: GitDiffFile }) {
+function FileBlock({ file, countsPartial = false }: { file: GitDiffFile; countsPartial?: boolean }) {
   const totalChange = file.added + file.removed
   const defaultOpen = totalChange <= 20 && !file.binary
   const [open, setOpen] = useState(defaultOpen)
@@ -205,7 +221,7 @@ function FileBlock({ file }: { file: GitDiffFile }) {
         {file.created && <Tag tone="add">new</Tag>}
         {file.deleted && <Tag tone="remove">deleted</Tag>}
         {file.binary && <Tag tone="muted">binary</Tag>}
-        <PlusMinus added={file.added} removed={file.removed} />
+        <PlusMinus added={file.added} removed={file.removed} partial={countsPartial} />
       </button>
       {open && !file.binary && file.hunks.length > 0 && (
         <HunkSlab filePath={file.path} hunks={file.hunks} />
@@ -240,10 +256,24 @@ function Tag({
 export const GitDiffCard = memo(function GitDiffCard({
   intent,
   output,
+  partial = false,
 }: {
   intent: Extract<GitIntent, { kind: 'diff' }>
   output: string
+  partial?: boolean
 }) {
+  // WHY parse before the raw-mode branch despite `--stat`/`--name-only` not
+  // consuming this result: intent can change on an existing React row while
+  // streaming/provider normalization settles. A hook below the branch makes
+  // that legitimate props transition change the component's hook count and
+  // crash reconciliation. The input has already passed the strict one-page
+  // admission cap, so the small redundant parse is bounded and preferable to
+  // splitting identity across child component types.
+  const parsed = useMemo(
+    () => parseUnifiedDiff(stripAnsi(output)),
+    [output],
+  )
+
   // --name-only and --stat produce non-unified-diff output; render
   // those as the raw stdout (still inside a card) instead of trying
   // to parse them. It's not worth a custom list widget for a rarely-
@@ -255,14 +285,12 @@ export const GitDiffCard = memo(function GitDiffCard({
         <pre className="font-code text-[12px] leading-[1.55] text-ink-dim whitespace-pre-wrap break-words m-0">
           {output.trim() || '(no output)'}
         </pre>
+        {partial ? <PartialPreviewNotice /> : null}
       </Card>
     )
   }
 
-  const { files, added, removed } = useMemo(
-    () => parseUnifiedDiff(stripAnsi(output)),
-    [output],
-  )
+  const { files, added, removed } = parsed
 
   // Empty diff (no changes): often `git diff` with clean workspace.
   // Show a small "no changes" muted note instead of a silent card.
@@ -270,7 +298,10 @@ export const GitDiffCard = memo(function GitDiffCard({
     return (
       <Card>
         <GitCardHeader sub="diff" flags={intent.flags} paths={intent.paths} />
-        <div className="text-muted text-[12px] italic">(no changes)</div>
+        <div className="text-muted text-[12px] italic">
+          {partial ? '(no complete diff entries in bounded preview)' : '(no changes)'}
+        </div>
+        {partial ? <PartialPreviewNotice /> : null}
       </Card>
     )
   }
@@ -284,15 +315,29 @@ export const GitDiffCard = memo(function GitDiffCard({
         badges={
           <span className="flex items-baseline gap-2">
             <span className="text-muted text-[11px]">
-              {files.length} file{files.length === 1 ? '' : 's'}
+              {partial ? '≥' : ''}{files.length} file{files.length === 1 ? '' : 's'}
             </span>
-            <PlusMinus added={added} removed={removed} />
+            <PlusMinus added={added} removed={removed} partial={partial} />
           </span>
         }
       />
       <div className="flex flex-col gap-1">
-        {files.map(f => <FileBlock key={f.path + (f.oldPath ?? '')} file={f} />)}
+        {files.map((f, index) => (
+          <FileBlock
+            // Repeated path blocks are legal in concatenated/show output.
+            // The ordinal makes sibling identity unique without pretending
+            // path text is a primary key; successful Git cards do not reorder.
+            key={`${index}:${f.oldPath ?? ''}:${f.path}`}
+            file={f}
+            countsPartial={partial && index === files.length - 1}
+          />
+        ))}
       </div>
+      {partial ? (
+        <PartialPreviewNotice>
+          Counts are proven lower bounds from the parsed prefix; exact output continues below.
+        </PartialPreviewNotice>
+      ) : null}
     </Card>
   )
 })
@@ -304,13 +349,18 @@ export const GitDiffCard = memo(function GitDiffCard({
 export const GitCommitCard = memo(function GitCommitCard({
   intent,
   output,
+  partial = false,
 }: {
   intent: Extract<GitIntent, { kind: 'commit' }>
   output: string
+  partial?: boolean
 }) {
   const result = useMemo(() => parseGitCommit(stripAnsi(output)), [output])
 
-  if (result.noop) {
+  // A no-op line in a bounded prefix may belong to an earlier `git status`
+  // in an admitted all-Git chain, with the successful header beyond the page.
+  // Only a complete output can turn negative advice into the card verdict.
+  if (result.noop && !partial) {
     return (
       <Card>
         <GitCardHeader
@@ -356,6 +406,7 @@ export const GitCommitCard = memo(function GitCommitCard({
           <PlusMinus added={result.insertions ?? 0} removed={result.deletions ?? 0} />
         </div>
       )}
+      {partial ? <PartialPreviewNotice /> : null}
     </Card>
   )
 })
@@ -366,9 +417,11 @@ export const GitCommitCard = memo(function GitCommitCard({
 
 export const GitStatusCard = memo(function GitStatusCard({
   output,
+  partial = false,
 }: {
   intent: Extract<GitIntent, { kind: 'status' }>
   output: string
+  partial?: boolean
 }) {
   const r = useMemo(() => parseGitStatus(stripAnsi(output)), [output])
   const sections: Array<{ title: string; entries: typeof r.staged }> = [
@@ -389,13 +442,15 @@ export const GitStatusCard = memo(function GitStatusCard({
         )}
       />
       {!anyEntries && (
-        <div className="text-muted text-[12px] italic">working tree clean</div>
+        <div className="text-muted text-[12px] italic">
+          {partial ? 'no complete status entries in bounded preview' : 'working tree clean'}
+        </div>
       )}
       <div className="flex flex-col gap-2">
         {sections.map(s => s.entries.length > 0 && (
           <div key={s.title}>
             <div className="text-muted text-[10px] uppercase tracking-wider mb-0.5">
-              {s.title} ({s.entries.length})
+              {s.title} ({partial ? '≥' : ''}{s.entries.length})
             </div>
             <ul className="list-none p-0 m-0 flex flex-col gap-0.5">
               {s.entries.map((e, i) => (
@@ -413,6 +468,11 @@ export const GitStatusCard = memo(function GitStatusCard({
           </div>
         ))}
       </div>
+      {partial ? (
+        <PartialPreviewNotice>
+          Status counts cover only the parsed prefix; exact output continues below.
+        </PartialPreviewNotice>
+      ) : null}
     </Card>
   )
 })
@@ -442,9 +502,11 @@ function StatusCode({ code }: { code: string }) {
 export const GitAddCard = memo(function GitAddCard({
   intent,
   output,
+  partial = false,
 }: {
   intent: Extract<GitIntent, { kind: 'add' }>
   output: string
+  partial?: boolean
 }) {
   const trimmed = stripAnsi(output).trim()
   return (
@@ -455,8 +517,8 @@ export const GitAddCard = memo(function GitAddCard({
         : intent.paths.length > 0
           ? (
             <ul className="list-none p-0 m-0 flex flex-col gap-0.5">
-              {intent.paths.map(p => (
-                <li key={p} className="font-code text-[12px] text-ink">{p}</li>
+              {intent.paths.map((p, index) => (
+                <li key={`${index}:${p}`} className="font-code text-[12px] text-ink">{p}</li>
               ))}
             </ul>
           )
@@ -469,6 +531,7 @@ export const GitAddCard = memo(function GitAddCard({
           {trimmed}
         </pre>
       )}
+      {partial ? <PartialPreviewNotice /> : null}
     </Card>
   )
 })
@@ -480,11 +543,22 @@ export const GitAddCard = memo(function GitAddCard({
 export const GitLogCard = memo(function GitLogCard({
   intent,
   output,
+  partial = false,
 }: {
   intent: Extract<GitIntent, { kind: 'log' }>
   output: string
+  partial?: boolean
 }) {
-  const entries = useMemo(() => parseGitLog(stripAnsi(output)), [output])
+  const entries = useMemo(() => {
+    const parsed = parseGitLog(stripAnsi(output))
+    // One-line records are complete once their newline is admitted. Full log
+    // records end only when the next `commit` header arrives, so the final
+    // parsed block in a bounded prefix may be only a SHA/author fragment.
+    // Drop that uncertain block rather than counting/displaying it as a
+    // complete commit; every preceding block has a following header proving
+    // its boundary. The raw disclosure retains the omitted tail.
+    return partial && !intent.oneline ? parsed.slice(0, -1) : parsed
+  }, [intent.oneline, output, partial])
   return (
     <Card>
       <GitCardHeader
@@ -495,7 +569,9 @@ export const GitLogCard = memo(function GitLogCard({
         )}
       />
       {entries.length === 0 ? (
-        <div className="text-muted text-[12px] italic">(no commits)</div>
+        <div className="text-muted text-[12px] italic">
+          {partial ? '(no complete log entries in bounded preview)' : '(no commits)'}
+        </div>
       ) : (
         <ul className="list-none p-0 m-0 flex flex-col gap-1">
           {entries.map(e => (
@@ -515,6 +591,11 @@ export const GitLogCard = memo(function GitLogCard({
           ))}
         </ul>
       )}
+      {partial ? (
+        <PartialPreviewNotice>
+          Showing {entries.length} complete commit{entries.length === 1 ? '' : 's'} from the parsed prefix; exact output continues below.
+        </PartialPreviewNotice>
+      ) : null}
     </Card>
   )
 })
@@ -526,9 +607,11 @@ export const GitLogCard = memo(function GitLogCard({
 export const GitPushCard = memo(function GitPushCard({
   intent,
   output,
+  partial = false,
 }: {
   intent: Extract<GitIntent, { kind: 'push' }>
   output: string
+  partial?: boolean
 }) {
   const r = useMemo(() => parseGitPush(stripAnsi(output)), [output])
   return (
@@ -558,6 +641,7 @@ export const GitPushCard = memo(function GitPushCard({
           ))}
         </ul>
       )}
+      {partial ? <PartialPreviewNotice /> : null}
     </Card>
   )
 })
@@ -574,14 +658,20 @@ export function renderGitCard(intent: GitIntent, output: string): React.ReactNod
   // rows. Parse one bounded page; the complete durable output remains
   // available through an explicitly opened paged raw viewer.
   const page = boundedTextPage(output)
+  // A character-bounded page may end halfway through a Git record. Feeding
+  // that suffix to regex parsers can manufacture facts from a prefix (for
+  // example, `1 file changed, 2 inser` used to become +0). Keep every complete
+  // line; drop only the unfinished tail. The exact source is still retained by
+  // GitOutputDisclosure, so this is parser admission rather than data loss.
+  const parseableOutput = completeLinesFromBoundedPage(page.text, page.hasNext)
   const card = (() => {
     switch (intent.kind) {
-      case 'diff':   return <GitDiffCard intent={intent} output={page.text} />
-      case 'commit': return <GitCommitCard intent={intent} output={page.text} />
-      case 'status': return <GitStatusCard intent={intent} output={page.text} />
-      case 'add':    return <GitAddCard intent={intent} output={page.text} />
-      case 'log':    return <GitLogCard intent={intent} output={page.text} />
-      case 'push':   return <GitPushCard intent={intent} output={page.text} />
+      case 'diff':   return <GitDiffCard intent={intent} output={parseableOutput} partial={page.hasNext} />
+      case 'commit': return <GitCommitCard intent={intent} output={parseableOutput} partial={page.hasNext} />
+      case 'status': return <GitStatusCard intent={intent} output={parseableOutput} partial={page.hasNext} />
+      case 'add':    return <GitAddCard intent={intent} output={parseableOutput} partial={page.hasNext} />
+      case 'log':    return <GitLogCard intent={intent} output={parseableOutput} partial={page.hasNext} />
+      case 'push':   return <GitPushCard intent={intent} output={parseableOutput} partial={page.hasNext} />
       default: return null
     }
   })()
@@ -599,6 +689,12 @@ export function renderGitCard(intent: GitIntent, output: string): React.ReactNod
       <GitOutputDisclosure output={output} />
     </>
   )
+}
+
+function completeLinesFromBoundedPage(text: string, hasNext: boolean): string {
+  if (!hasNext || text.endsWith('\n')) return text
+  const lastNewline = text.lastIndexOf('\n')
+  return lastNewline < 0 ? '' : text.slice(0, lastNewline + 1)
 }
 
 function GitOutputDisclosure({ output }: { output: string }) {
@@ -642,11 +738,19 @@ export function GitCardRow({ intent, output }: { intent: GitIntent; output: stri
 export function GitOperationView({ model }: { model: GitOperationModel }) {
   if (model.status !== 'success') {
     const firstLine = model.output?.split('\n', 1)[0]?.slice(0, 200)
+    const commandPage = boundedTextPage(model.command, 0, 160, 2)
+    // Provider Git adapters intentionally retain the full command for intent
+    // proof. CommandView, however, syntax-highlights its headline under the
+    // invariant that adapters already bounded it. This operation-specific
+    // bridge must enforce that same limit or a failed megabyte command can
+    // synchronously enter highlight.js before OutputWell gets a chance to
+    // bound anything.
+    const boundedCommand = commandPage.hasNext ? `${commandPage.text}…` : commandPage.text
     return (
       <CommandView
         model={{
           label: 'Git',
-          command: model.command,
+          command: boundedCommand,
           status: model.status,
           exitCode: null,
           output: model.output,

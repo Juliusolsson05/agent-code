@@ -42,6 +42,16 @@ export type ClaudeTaskActivityResult = {
   text: string
 }
 
+const MAX_SUBJECT_CHARS = 400
+const MAX_DESCRIPTION_CHARS = 2_000
+const MAX_ACTIVE_FORM_CHARS = 400
+const MAX_REASON_CHARS = 1_000
+
+function boundScalar(value: string, maxChars: number): string {
+  if (value.length <= maxChars) return value
+  return `${value.slice(0, maxChars - 1)}…`
+}
+
 function nonEmptyString(value: unknown): string | null {
   return typeof value === 'string' && /\S/.test(value) ? value : null
 }
@@ -66,9 +76,9 @@ export function fromClaudeTaskActivityUse(block: ToolUseBlock): ClaudeTaskActivi
       kind: 'create',
       operationId: block.id,
       label: 'Create task',
-      subject,
-      description,
-      activeForm,
+      subject: boundScalar(subject, MAX_SUBJECT_CHARS),
+      description: boundScalar(description, MAX_DESCRIPTION_CHARS),
+      activeForm: boundScalar(activeForm, MAX_ACTIVE_FORM_CHARS),
       input,
     }
   }
@@ -101,7 +111,7 @@ export function fromClaudeTaskActivityUse(block: ToolUseBlock): ClaudeTaskActivi
       kind: 'skill',
       operationId: block.id,
       label: 'Skill',
-      subject: skill,
+      subject: boundScalar(skill, MAX_SUBJECT_CHARS),
       input,
     }
   }
@@ -123,7 +133,11 @@ export function fromClaudeTaskActivityUse(block: ToolUseBlock): ClaudeTaskActivi
       label: 'Schedule wakeup',
       subject: delayLabel(delaySeconds),
       delaySeconds,
-      reason,
+      reason: boundScalar(reason, MAX_REASON_CHARS),
+      // WHY prompt stays exact while the headline scalars are capped: the
+      // task row sends prompt through PagedTextViewer, which bounds each DOM
+      // page without discarding later evidence. Truncating here would make the
+      // wake instruction impossible to inspect in full.
       prompt,
       input,
     }

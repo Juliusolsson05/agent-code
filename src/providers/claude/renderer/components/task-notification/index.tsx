@@ -30,8 +30,8 @@ export const TaskNotificationRow = memo(function TaskNotificationRow({
 
   return (
     <MarkerRow marker={glyph} tone="muted">
-      <div className="text-[12px] leading-[1.6]">
-        <span className={kind === 'error' ? 'text-danger' : 'text-ink-dim'}>
+      <div className="min-w-0 text-[12px] leading-[1.6]">
+        <span className={`break-words ${kind === 'error' ? 'text-danger' : 'text-ink-dim'}`}>
           {label}
           {notification.status ? ` · ${notification.status}` : ''}
           {notification.usage ? ` · ${notification.usage}` : ''}

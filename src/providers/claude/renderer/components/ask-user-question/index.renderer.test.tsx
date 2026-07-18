@@ -39,4 +39,23 @@ describe('Claude provider-owned committed question', () => {
     expect(screen.getByText('Yes · No')).toBeInTheDocument()
     expect(screen.getAllByText('Yes')).toHaveLength(1)
   })
+
+  it('does not describe a missing durable answer as a proven live picker', () => {
+    const use: ToolUseBlock = {
+      type: 'tool_use', id: 'unanswered', name: 'AskUserQuestion', input: {
+        questions: [{ question: 'Continue?', options: [{ label: 'Yes' }] }],
+      },
+    }
+    render(
+      <ProviderContext.Provider value="claude">
+        <ToolUseIndexContext.Provider value={new Map([[use.id, use]])}>
+          <ToolResultIndexContext.Provider value={new Map()}>
+            <Block block={use} role="assistant" />
+          </ToolResultIndexContext.Provider>
+        </ToolUseIndexContext.Provider>
+      </ProviderContext.Provider>,
+    )
+    expect(screen.getByText('no answer recorded')).toBeInTheDocument()
+    expect(screen.queryByText(/live picker/)).not.toBeInTheDocument()
+  })
 })

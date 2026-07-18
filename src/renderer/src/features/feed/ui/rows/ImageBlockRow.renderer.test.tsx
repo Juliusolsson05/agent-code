@@ -35,4 +35,20 @@ describe('ImageBlockRow', () => {
     expect(screen.queryByRole('img')).not.toBeInTheDocument()
     expect(screen.getByText(/preview unavailable/)).toBeInTheDocument()
   })
+
+  it('keeps an unsupported image source schema visible through a lazy bounded disclosure', () => {
+    render(
+      <ImageBlockRow
+        role="assistant"
+        block={{
+          type: 'image',
+          source: { type: 'url', url: 'https://example.test/new-image-shape.png' },
+        } as never}
+      />,
+    )
+
+    expect(screen.queryByText(/new-image-shape\.png/)).not.toBeInTheDocument()
+    fireEvent.click(screen.getByText('View unsupported image source'))
+    expect(screen.getByText(/new-image-shape\.png/)).toBeInTheDocument()
+  })
 })

@@ -47,6 +47,10 @@ export type CodeEditRenderModel = {
   files: readonly CodeEditFile[]
   /** Provider-reported cardinality before adapter admission caps. */
   totalFiles?: number
+  /** `totalFiles` is a proven lower bound because source admission stopped
+   * before the complete operation was scanned. Distinct from filesTruncated:
+   * the adapter may not know whether the unseen tail contains another file. */
+  fileCountTruncated?: boolean
   filesTruncated?: boolean
   status: CodeEditStatus
   /** One bounded line, visible without expansion (plan: failure never

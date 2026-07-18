@@ -29,6 +29,14 @@ export type ApplyPatchFile = {
   lines: DiffLine[]
 }
 
+type ApplyPatchPreview = {
+  files: ApplyPatchFile[]
+  totalFiles: number
+  fileCountTruncated: boolean
+  patchClosed: boolean
+  previewTruncated: boolean
+}
+
 function rawPatchInputText(input: unknown): string {
   if (typeof input === 'string') return input
   const rec = asRecord(input)
@@ -114,21 +122,41 @@ export function decodeEmbeddedPatchLiteral(script: string): string | null {
   return out.includes('*** Begin Patch') ? out : null
 }
 
-export function parseApplyPatch(input: unknown): ApplyPatchFile[] {
+function parseApplyPatchPreview(input: unknown): ApplyPatchPreview {
   const fullText = applyPatchText(input)
-  if (!fullText.includes('*** Begin Patch')) return []
+  if (!fullText.includes('*** Begin Patch')) {
+    return {
+      files: [],
+      totalFiles: 0,
+      fileCountTruncated: false,
+      patchClosed: false,
+      previewTruncated: false,
+    }
+  }
 
   // WHY the rich diff card parses only one bounded page: DiffSlab creates a
   // node per line. CSS clipping never reduced that parse/DOM/layout cost. The
   // durable tool input still owns the complete patch; this card is explicitly
   // a safe preview of its leading files/hunks.
-  const text = boundedTextPage(fullText).text
+  const page = boundedTextPage(fullText)
+  const text = page.text
+  // WHY closure is searched only inside the admitted page: scanning the full
+  // patch to obtain an exact file count reintroduced work proportional to an
+  // untrusted hidden tail on every renderer decision. A complete sentinel line
+  // inside the page proves the patch ended there (script suffixes are outside
+  // the protocol); otherwise page.hasNext means both final counts and file
+  // cardinality are lower bounds. Truthful `≥N` is preferable to freezing the
+  // feed for an exact number that the rich preview cannot display anyway.
+  const endMatch = /^\*\*\* End Patch\r?$/m.exec(text)
 
   const files: ApplyPatchFile[] = []
   let current: ApplyPatchFile | null = null
 
   for (const rawLine of text.split('\n')) {
-    const fileMatch = rawLine.match(/^\*\*\* (Add|Update|Delete) File: (.+)$/)
+    const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine
+    if (line === '*** End Patch') break
+
+    const fileMatch = line.match(/^\*\*\* (Add|Update|Delete) File: (.+)$/)
     if (fileMatch) {
       current = {
         action: fileMatch[1] as ApplyPatchFile['action'],
@@ -141,52 +169,74 @@ export function parseApplyPatch(input: unknown): ApplyPatchFile[] {
 
     if (!current) continue
 
-    const moveMatch = rawLine.match(/^\*\*\* Move to: (.+)$/)
+    const moveMatch = line.match(/^\*\*\* Move to: (.+)$/)
     if (moveMatch) {
       current.movedTo = moveMatch[1] ?? ''
       continue
     }
 
     if (
-      rawLine === '*** Begin Patch' ||
-      rawLine === '*** End Patch' ||
-      rawLine === '*** End of File' ||
-      rawLine.startsWith('@@')
+      line === '*** Begin Patch' ||
+      line === '*** End of File' ||
+      line.startsWith('@@')
     ) {
       continue
     }
 
-    if (rawLine.startsWith('+')) {
-      current.lines.push({ kind: '+', text: rawLine.slice(1) })
-    } else if (rawLine.startsWith('-')) {
-      current.lines.push({ kind: '-', text: rawLine.slice(1) })
-    } else if (rawLine.startsWith(' ')) {
-      current.lines.push({ kind: 'ctx', text: rawLine.slice(1) })
+    if (line.startsWith('+')) {
+      current.lines.push({ kind: '+', text: line.slice(1) })
+    } else if (line.startsWith('-')) {
+      current.lines.push({ kind: '-', text: line.slice(1) })
+    } else if (line.startsWith(' ')) {
+      current.lines.push({ kind: 'ctx', text: line.slice(1) })
     }
   }
 
-  return files
+  return {
+    files,
+    totalFiles: files.length,
+    fileCountTruncated: page.hasNext && endMatch === null,
+    patchClosed: endMatch !== null,
+    // A unified-exec script suffix after End Patch does not make the patch
+    // partial; the complete in-page sentinel proves the protocol boundary.
+    previewTruncated: page.hasNext && endMatch === null,
+  }
+}
+
+export function parseApplyPatch(input: unknown): ApplyPatchFile[] {
+  return parseApplyPatchPreview(input).files
 }
 
 const VERB = { Add: 'Creating', Update: 'Editing', Delete: 'Deleting' } as const
 
-function toFiles(input: unknown, streaming: boolean): CodeEditFile[] {
-  return parseApplyPatch(input).map(f => ({
+function toFiles(
+  preview: ApplyPatchPreview,
+  streaming: boolean,
+): CodeEditFile[] {
+  return preview.files.map((f, index) => ({
     path: f.movedTo ? `${f.path} → ${f.movedTo}` : f.path,
     verb: f.movedTo ? 'Moving' : VERB[f.action],
     lines: f.lines,
     additions: f.lines.filter(l => l.kind === '+').length,
     deletions: f.lines.filter(l => l.kind === '-').length,
+    // The bounded page can cut only the final admitted file. Its visible
+    // counts are therefore proven lower bounds, while earlier files closed at
+    // a subsequent file header and remain exact. Propagating both flags is
+    // load-bearing: otherwise the shared view prints a precise-looking count
+    // for evidence the adapter deliberately did not parse.
+    previewTruncated: preview.previewTruncated && index === preview.files.length - 1,
+    countsTruncated: preview.previewTruncated && index === preview.files.length - 1,
     streaming,
   }))
 }
 
 export function fromCodexApplyPatch(
   block: ToolUseBlock,
-  opts: { streaming?: boolean; running?: boolean; result?: ToolResultBlock | null } = {},
+  opts: { streaming?: boolean; result?: ToolResultBlock | null } = {},
 ): CodeEditRenderModel | null {
   if (!isCodexApplyPatchUse(block, { streamingPrefix: opts.streaming === true })) return null
-  const files = toFiles(block.input, opts.streaming === true)
+  const preview = parseApplyPatchPreview(block.input)
+  const files = toFiles(preview, opts.streaming === true)
   // No recognizable patch yet (input still streaming its preamble, or an
   // unexpected wrapper): decline — the caller's fallback stays visible.
   // The `*** Begin Patch` sentinel is what makes intent provable ASAP.
@@ -195,19 +245,22 @@ export function fromCodexApplyPatch(
   return {
     label: 'apply_patch',
     files,
+    totalFiles: preview.totalFiles,
+    fileCountTruncated: preview.fileCountTruncated,
     status: failed
       ? 'failure'
       : opts.result
         ? 'success'
         : opts.streaming
           ? 'streaming'
-          : opts.running
-            ? 'running'
-            : 'success',
+          : 'running',
     errorSummary: failed
       ? firstLine(opts.result)
       : undefined,
-    partial: opts.streaming === true,
+    // A closed operation can still have a deliberately partial rich preview;
+    // conversely, a short but torn committed patch is partial even though it
+    // fits in one page. Neither case may masquerade as a complete parse.
+    partial: opts.streaming === true || preview.previewTruncated || !preview.patchClosed,
   }
 }
 

@@ -38,14 +38,17 @@ describe('provider-owned durable compaction entries', () => {
   it.each([
     ['claude', renderClaudeDurableEntry],
     ['codex', renderCodexDurableEntry],
-  ] as const)('renders %s boundary and summary from entries alone', (_provider, dispatch) => {
+  ] as const)('renders %s boundary and summary from entries alone', async (_provider, dispatch) => {
     const boundaryDecision = dispatch({ entry: boundary })
     const summaryDecision = dispatch({ entry: summary })
     expect(boundaryDecision?.receipt.protocolId).toBe('compaction.boundary')
     expect(summaryDecision?.receipt.protocolId).toBe('compaction.summary')
     render(<>{boundaryDecision?.node}{summaryDecision?.node}</>)
     expect(screen.getByText('Conversation compacted')).toBeInTheDocument()
-    expect(screen.getByText('Durable summary evidence')).toBeInTheDocument()
+    // Compaction intentionally uses the lazy prose boundary so importing the
+    // capability registry does not pull Markdown/DOM machinery into headless
+    // graphs. The heading is synchronous; body paint follows module admission.
+    expect(await screen.findByText('Durable summary evidence')).toBeInTheDocument()
   })
 
   it('declines ordinary entries instead of teaching the shared feed provider vocabulary', () => {
@@ -59,7 +62,7 @@ describe('provider-owned durable compaction entries', () => {
 
   it.each(['claude', 'codex'] as const)(
     'replays %s durable compaction through runtime, ledger, bridge, and provider paint with no condition state',
-    provider => {
+    async provider => {
       const replay = () => {
         // A fresh runtime + adapter + ledger models application restart: only
         // durable entries survive. No condition snapshot or screen parser state
@@ -97,7 +100,7 @@ describe('provider-owned durable compaction entries', () => {
           </ProviderContext.Provider>,
         )
         expect(screen.getByText('Conversation compacted')).toBeInTheDocument()
-        expect(screen.getByText('Durable summary evidence')).toBeInTheDocument()
+        expect(await screen.findByText('Durable summary evidence')).toBeInTheDocument()
         view.unmount()
       }
     },

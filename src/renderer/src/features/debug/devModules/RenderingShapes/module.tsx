@@ -104,7 +104,8 @@ function RenderingShapesPanel({ sessionId }: DevDebugModuleProps) {
         <>
           <div className="text-muted">
             {report.inbox.length} inbox / {report.rows.length} shapes · {report.totalSightings} sightings
-            {report.invalidSightings > 0 ? ` · ${report.invalidSightings} INVALID (schema drift!)` : ''}
+            {report.malformedSightings > 0 ? ` · ${report.malformedSightings} MALFORMED/non-v1` : ''}
+            {report.legacySightings > 0 ? ` · ${report.legacySightings} legacy v1 (recapture)` : ''}
           </div>
           <div className="max-h-[420px] overflow-auto">
             <table className="w-full text-left">
@@ -148,7 +149,7 @@ export const renderingShapesModule: DevDebugModule = {
     if (!report) return 'rendering-shapes: no report loaded (open the module first)'
     const rows = mode === 'useful' ? report.inbox : report.rows
     return [
-      `rendering-shapes report — ${report.rows.length} shapes, ${report.totalSightings} sightings, ${report.inbox.length} inbox, ${report.invalidSightings} invalid`,
+      `rendering-shapes report — ${report.rows.length} shapes, ${report.totalSightings} sightings, ${report.inbox.length} inbox, ${report.malformedSightings} malformed, ${report.legacySightings} legacy-v1`,
       ...rows.map(
         r =>
           `${r.status} ${r.provider} ${r.structuralFingerprint} events=${r.eventTypes.join(',')} planes=${r.planes.join(',')} lifecycles=${r.lifecycles.join(',')} count=${r.totalCount} catalog=${r.catalogShapeId ?? '-'}\n  paths: ${r.shapePaths.slice(0, 16).join(' ')}`,

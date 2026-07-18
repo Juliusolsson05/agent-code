@@ -6,6 +6,7 @@ import { asRecord } from '@shared/lib/asRecord'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import { parseBase64MediaPreview } from '@providers/shared/renderer/protocols/media/base64'
 import { Base64MediaView } from '@providers/shared/renderer/protocols/media/Base64MediaView'
+import { LazyJsonDisclosure } from '@providers/shared/renderer/rows/LazyJsonDisclosure'
 
 import { UserBand } from '@renderer/features/feed/ui/rows/primitives'
 
@@ -34,11 +35,25 @@ export const ImageBlockRow = memo(function ImageBlockRow({
   const alt = role === 'user' ? 'Pasted image' : 'Image'
   const row = (
     <MarkerRow marker={role === 'user' ? '❯' : '⏺'}>
-      <Base64MediaView
-        model={media}
-        label={`${alt} · ${mediaType}`}
-        alt={alt}
-      />
+      <div className="min-w-0">
+        <Base64MediaView
+          model={media}
+          label={`${alt} · ${mediaType}`}
+          alt={alt}
+        />
+        {!media ? (
+          <div className="mt-1">
+            {/* WHY unsupported image envelopes retain raw structure: image is
+                a provider-neutral content leaf, so it is intentionally not a
+                provider-routing catalog entry. That scope is safe only if a
+                newly introduced URL/file/source schema remains inspectable.
+                Projection and CodeBlock mounting stay behind the disclosure;
+                a huge base64 or metadata carrier therefore cannot add eager
+                serialization or DOM work to every feed replay. */}
+            <LazyJsonDisclosure label="View unsupported image source" value={block} />
+          </div>
+        ) : null}
+      </div>
     </MarkerRow>
   )
   return role === 'user' ? <UserBand>{row}</UserBand> : row

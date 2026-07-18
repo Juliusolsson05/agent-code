@@ -76,9 +76,11 @@ export function RenderShapeCaptureProvider({
       try {
         void window.api
           .isSessionRecording(sessionId)
-          .then((recording: boolean) => {
+          .then(state => {
             if (cancelled) return
-            if (recording) armRenderShapeCapture(sessionId)
+            if (state.recording && state.generation) {
+              armRenderShapeCapture(sessionId, state.generation)
+            }
           })
           .catch(() => {
             /* recording capability off — observer stays disarmed */
@@ -92,14 +94,14 @@ export function RenderShapeCaptureProvider({
     // auto-record the recorder starts on the session's FIRST event, which
     // for an idle restored pane is whenever the user first prompts it —
     // unboundedly after mount, past any retry schedule. Main announces the
-    // start; the retries above remain as the reload-recovery belt (a
+    // start; the one mount query above remains as the reload-recovery belt (a
     // renderer that reloads MID-recording gets no fresh start event).
     let unsubscribe: (() => void) | undefined
     let unsubscribeStopping: (() => void) | undefined
     try {
       unsubscribe = window.api.onSessionRecordingStarted?.(payload => {
         if (!cancelled && payload.sessionId === sessionId) {
-          armRenderShapeCapture(sessionId)
+          armRenderShapeCapture(sessionId, payload.generation)
         }
       })
     } catch {
@@ -109,10 +111,12 @@ export function RenderShapeCaptureProvider({
       unsubscribeStopping = window.api.onSessionRecordingStopping?.(payload => {
         if (cancelled || payload.sessionId !== sessionId) return
         // Main owns the recorder lifetime; renderer owns the coalesced queue.
-        // The acknowledgement closes that ownership loop without making the
-        // provider-exit path wait forever for a dead renderer.
-        void disarmRenderShapeCapture(sessionId)
-          .finally(() => window.api.finishSessionRecordingStop(sessionId))
+        // Echoing main's opaque generation closes that ownership loop without
+        // guessing from a reusable sessionId. A stale renderer can finish its
+        // own flush, but its acknowledgement cannot stop a newer recording.
+        if (!payload.generation) return
+        void disarmRenderShapeCapture(sessionId, payload.generation)
+          .finally(() => window.api.finishSessionRecordingStop(sessionId, payload.generation))
           .catch(() => {
             /* main's grace timer is the fallback */
           })

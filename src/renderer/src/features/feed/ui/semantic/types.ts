@@ -6,7 +6,7 @@ import type { SemanticLiveTurn } from '@renderer/session-runtime/state'
 // proxy saw: text, thinking, tool_use, tool_result, citations, etc.
 // We run one derivation pass over that bag to produce a tighter
 // render unit list, where runs of low-signal tool churn
-// (search/read/list/bash) collapse into a single "collapsed_activity"
+// (search/read/list) collapse into a single "collapsed_activity"
 // group. See renderUnits.ts for the flush/group logic and Feed.tsx's
 // "WHY add a derived render-unit pass" note for the design rationale.
 export type SemanticRenderUnit =
@@ -21,7 +21,6 @@ export type SemanticRenderUnit =
       searchCount: number
       readCount: number
       listCount: number
-      bashCount: number
       latestHint: string | null
       blockIndices: number[]
       isRunning: boolean

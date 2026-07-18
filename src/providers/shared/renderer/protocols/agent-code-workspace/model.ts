@@ -1,6 +1,7 @@
-import { tryExtractJson } from '@providers/shared/renderer/rows/jsonToolPresentation'
 import { asRecord } from '@shared/lib/asRecord'
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
+
+import { parseAgentCodeResultBlockJson } from '../agent-code-result'
 
 // Agent Code owns these MCP schemas in createBuiltInMcpServer.ts. That source
 // contract—not a name resemblance in a captured third-party server—is what
@@ -102,7 +103,18 @@ function resultText(result: ToolResultBlock): string | null {
   if (typeof result.content === 'string') return result.content
   if (!Array.isArray(result.content) || result.content.length !== 1) return null
   const item = asRecord(result.content[0])
-  return item?.type === 'text' && typeof item.text === 'string' ? item.text : null
+  if (
+    !item ||
+    item.type !== 'text' ||
+    typeof item.text !== 'string' ||
+    Object.keys(item).some(key => key !== 'type' && key !== 'text')
+  ) {
+    // A text-looking block with annotations/resources is no longer a transparent carrier. Those
+    // siblings are evidence the workspace protocol does not model, so the generic MCP result must
+    // remain visible instead of being absorbed behind a card that can render only item.text.
+    return null
+  }
+  return item.text
 }
 
 function resultSummary(value: Record<string, unknown>): string | null {
@@ -128,9 +140,13 @@ export function fromAgentCodeWorkspaceResult(
   source: AgentCodeWorkspaceModel,
 ): AgentCodeWorkspaceResult | null {
   if (result.tool_use_id !== source.operationId) return null
+  // Transport truth outranks an inner JSON body. A stale success body attached to is_error must
+  // remain in the generic error row; absorbing it would both hide the transport failure and let the
+  // workspace card summarize a success the host says was never delivered.
+  if (result.is_error === true) return null
   const text = resultText(result)
   if (text === null) return null
-  const parsed = tryExtractJson(text)
+  const parsed = parseAgentCodeResultBlockJson(result, text)
   const value = asRecord(parsed)
   // Every source-controlled workspace result returns an explicit `ok`. This
   // gate is what makes absorption safe: future typed content or additional

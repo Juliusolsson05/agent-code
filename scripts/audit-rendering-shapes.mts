@@ -23,14 +23,17 @@
 // Run: npx tsx --tsconfig tsconfig.web.json scripts/audit-rendering-shapes.mts [--seed] [--recordings [dir]]
 //
 // Exit codes: 0 = clean; 1 = unknown-structure, unsupported-lifecycle,
-// misrouted, or unknown-outcome shapes exist. Prefixes are first-class catalog
-// promises now that Phase 10 has no planned entries: treating an observed but
-// undeclared lifecycle as advisory would let the exact streaming regressions
-// this audit exists to catch ship behind a green command.
+// misrouted, unknown-outcome shapes, or malformed current-schema recording
+// evidence exists. Prefixes are first-class catalog promises now that Phase 10
+// has no planned entries: treating an observed but undeclared lifecycle (or a
+// renamed writer vocabulary) as advisory would let the exact observer/renderer
+// drift this audit exists to catch ship behind a green command.
 
-import { readdirSync, readFileSync, statSync } from 'node:fs'
+import { createReadStream, readdirSync, readFileSync } from 'node:fs'
+import { stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { sweepBundleShapes } from '../src/renderer/src/rendering/evidence/bundleShapeSweep.ts'
 import {
@@ -41,11 +44,15 @@ import {
 import { ALL_RENDER_SHAPE_CATALOGS } from '../src/providers/registry.renderShapes.ts'
 import type { RenderOutcome, RenderShapeSighting } from '../src/shared/types/renderShapes.ts'
 import {
+  RENDER_SHAPE_LIFECYCLES,
+  RENDER_SHAPE_PLANES,
   renderOutcomeRouteIdentity,
   renderShapeWriterKey,
 } from '../src/shared/types/renderShapes.ts'
+import { AGENT_PROVIDER_KINDS } from '../src/shared/types/providerKind.ts'
 
 const args = process.argv.slice(2)
+const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url))
 const SEED = args.includes('--seed')
 const recIdx = args.indexOf('--recordings')
 // STATE_DIR (src/main/storage/paths.ts) is electron-bound; scripts mirror the
@@ -54,11 +61,58 @@ const recIdx = args.indexOf('--recordings')
 const RECORDINGS_DIR =
   recIdx >= 0
     ? args[recIdx + 1] && !args[recIdx + 1].startsWith('--')
-      ? args[recIdx + 1]
+      ? resolve(process.cwd(), args[recIdx + 1])
       : join(homedir(), '.config', 'agent-code', 'session-recordings')
     : null
 const MAX_RECORDINGS = 200
 const MAX_RECORDING_BYTES = 64 * 1024 * 1024
+const MAX_LINE_BYTES = 4 * 1024 * 1024
+const RENDER_SHAPE_MARKER = Buffer.from('"__render_shape"')
+
+/** Match the inbox's byte-level JSONL boundary without importing Electron main.
+ *
+ * WHY this is not readline: readline retains a complete physical line before
+ * handing it to us, so a corrupt newline-free recording can consume the full
+ * 64 MiB file allowance and defeats the smaller line policy. Dropping retained
+ * slices as soon as the byte budget is crossed keeps audit and inbox decisions
+ * identical for both Unicode and hostile no-newline input.
+ */
+async function* splitBoundedJsonlLines(
+  input: AsyncIterable<Buffer | string>,
+  includeFinalFragment: boolean,
+): AsyncGenerator<Buffer> {
+  let pieces: Buffer[] = []
+  let retainedBytes = 0
+  let discarding = false
+  for await (const rawChunk of input) {
+    const chunk = typeof rawChunk === 'string' ? Buffer.from(rawChunk) : rawChunk
+    let cursor = 0
+    while (cursor < chunk.length) {
+      const newline = chunk.indexOf(0x0a, cursor)
+      const end = newline === -1 ? chunk.length : newline
+      if (!discarding && end > cursor) {
+        const segment = chunk.subarray(cursor, end)
+        if (retainedBytes + segment.length <= MAX_LINE_BYTES) {
+          pieces.push(segment)
+          retainedBytes += segment.length
+        } else {
+          pieces = []
+          retainedBytes = 0
+          discarding = true
+        }
+      }
+      if (newline === -1) break
+      if (!discarding) yield Buffer.concat(pieces, retainedBytes)
+      pieces = []
+      retainedBytes = 0
+      discarding = false
+      cursor = newline + 1
+    }
+  }
+  if (includeFinalFragment && !discarding && retainedBytes > 0) {
+    yield Buffer.concat(pieces, retainedBytes)
+  }
+}
 
 type Observation = {
   provider: string
@@ -75,10 +129,52 @@ type Observation = {
   count: number
 }
 
+function isPersistedOutcome(value: unknown): value is RenderShapeSighting['outcome'] {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const outcome = value as Record<string, unknown>
+  const hasShapeId = outcome.shapeId === null || typeof outcome.shapeId === 'string'
+  const hasOnlyKeys = (...allowed: string[]): boolean => {
+    const keys = Object.keys(outcome)
+    return keys.length === allowed.length && keys.every(key => allowed.includes(key))
+  }
+  // WHY the CLI repeats this closed wire check at its disk boundary: a cast to
+  // RenderShapeSighting does not make recorded JSON trustworthy. In particular,
+  // renderOutcomeRouteIdentity is exhaustive only for the TypeScript union; an
+  // arbitrary string kind otherwise falls through to `undefined`, coalesces
+  // unrelated malformed rows, and can make the audit report them as coverage.
+  switch (outcome.kind) {
+    case 'specialized':
+      return hasShapeId && typeof outcome.rendererId === 'string' &&
+        (outcome.protocolId === undefined || typeof outcome.protocolId === 'string') &&
+        hasOnlyKeys('kind', 'rendererId', 'shapeId', ...(outcome.protocolId === undefined ? [] : ['protocolId']))
+    case 'generic':
+      return hasShapeId && outcome.rendererId === 'shared.generic-tool' &&
+        hasOnlyKeys('kind', 'rendererId', 'shapeId')
+    case 'absorbed':
+      return hasShapeId && typeof outcome.ownerRenderId === 'string' &&
+        typeof outcome.reason === 'string' &&
+        (outcome.protocolId === undefined || typeof outcome.protocolId === 'string') &&
+        hasOnlyKeys('kind', 'ownerRenderId', 'reason', 'shapeId', ...(outcome.protocolId === undefined ? [] : ['protocolId']))
+    case 'condition-surface':
+      return hasShapeId &&
+        ['outlet', 'feed-inline', 'composer', 'attention-only'].includes(String(outcome.surface)) &&
+        hasOnlyKeys('kind', 'surface', 'shapeId')
+    case 'unknown':
+      return typeof outcome.fallbackRenderId === 'string' &&
+        hasOnlyKeys('kind', 'fallbackRenderId')
+    default:
+      return false
+  }
+}
+
 const observations: Observation[] = []
+let fatalRecordingSchemaSightings = 0
 
 // ---- Source 1: the frozen bundle corpus -----------------------------------
-const bundleDir = join(process.cwd(), 'testing', 'fixtures', 'rendering-bundles')
+// Repository fixtures are script-relative, not caller-cwd-relative. CI and
+// developers routinely invoke this through an absolute path or from a parent
+// directory; evidence selection must not silently change with the shell cwd.
+const bundleDir = join(REPO_ROOT, 'testing', 'fixtures', 'rendering-bundles')
 for (const file of readdirSync(bundleDir).filter(f => f.endsWith('.json'))) {
   const bundle = JSON.parse(readFileSync(join(bundleDir, file), 'utf-8'))
   for (const obs of sweepBundleShapes(bundle)) {
@@ -109,43 +205,91 @@ if (RECORDINGS_DIR) {
   // summing double-counted every repeated key by one).
   const maxByWriterKey = new Map<string, Observation>()
   let obsoleteReceiptSightings = 0
+  let malformedV2Sightings = 0
+  let unknownSchemaSightings = 0
+  let byteTruncatedRecordings = 0
   // Recording directory names begin with an ISO timestamp. Readdir order is
   // filesystem-dependent; slicing it directly made two identical audits scan
   // different sessions and even let an old 200-directory window hide the
   // newest upstream drift. Sorting and taking the newest bounded window keeps
   // the command deterministic while prioritizing the evidence Phase 9 is
   // actually trying to validate.
-  const selectedDirs = dirs.sort().slice(-MAX_RECORDINGS)
+  const selectedDirs = dirs.sort().slice(-MAX_RECORDINGS).reverse()
   for (const dir of selectedDirs) {
-    let body: string
+    const eventPath = join(RECORDINGS_DIR, dir, 'events.jsonl')
+    let fileBytes: number
     try {
-      const eventPath = join(RECORDINGS_DIR, dir, 'events.jsonl')
-      // A local diagnostic should not accidentally turn one runaway recording
-      // into an unbounded allocation. Skipping is explicit in the final count;
-      // the recorder remains the source and can be inspected separately.
-      if (statSync(eventPath).size > MAX_RECORDING_BYTES) continue
-      body = readFileSync(eventPath, 'utf-8')
+      fileBytes = (await stat(eventPath)).size
     } catch {
       continue
     }
-    for (const line of body.split('\n')) {
-      if (!line.includes('"__render_shape"')) continue
+    if (fileBytes === 0) continue
+    const clipped = fileBytes > MAX_RECORDING_BYTES
+    if (clipped) byteTruncatedRecordings += 1
+
+    // Stream a bounded prefix. readFile-after-stat still allocates the whole
+    // admitted file and has a TOCTOU hole if a live recorder grows between the
+    // two calls. A byte-limited stream makes the actual IO/allocation bound the
+    // contract, and holding one line back lets us reject the capped tail rather
+    // than parse a coincidentally valid JSON prefix as a committed record.
+    const input = createReadStream(eventPath, {
+      start: 0,
+      end: Math.min(fileBytes, MAX_RECORDING_BYTES) - 1,
+    })
+    const consume = (lineBuffer: Buffer): void => {
+      const line = lineBuffer.length > 0 && lineBuffer[lineBuffer.length - 1] === 0x0d
+        ? lineBuffer.subarray(0, lineBuffer.length - 1)
+        : lineBuffer
+      if (line.length === 0 || !line.includes(RENDER_SHAPE_MARKER)) return
       try {
-        const parsed = JSON.parse(line)
-        if (parsed.ch !== '__render_shape' || !Array.isArray(parsed.sightings)) continue
+        const parsed = JSON.parse(line.toString('utf8'))
+        if (parsed?.ch !== '__render_shape' || !Array.isArray(parsed.sightings)) return
         for (const s of parsed.sightings) {
           // v1 was an unreleased pre-receipt experiment: shapeId was either
           // missing or held a renderer id. Mixing it with v2 would make old
           // local recordings look like current routing failures. Report and
           // ignore it; no runtime compatibility is warranted for PR-local
           // evidence that can be recaptured.
-          if (s.schemaVersion !== 2) {
+          if (s?.schemaVersion === 1) {
             obsoleteReceiptSightings += 1
             continue
           }
-          if (!s.outcome) continue
-          const key = renderShapeWriterKey(s as RenderShapeSighting, dir)
-          if (typeof s.seenCount !== 'number' || !Number.isFinite(s.seenCount) || s.seenCount < 1) continue
+          if (s?.schemaVersion !== 2) {
+            unknownSchemaSightings += 1
+            continue
+          }
+          const validV2 =
+            typeof s.provider === 'string' &&
+            (s.provider === 'unknown' ||
+              (AGENT_PROVIDER_KINDS as readonly string[]).includes(s.provider)) &&
+            typeof s.sourcePlane === 'string' &&
+            (RENDER_SHAPE_PLANES as readonly string[]).includes(s.sourcePlane) &&
+            typeof s.lifecycle === 'string' &&
+            (RENDER_SHAPE_LIFECYCLES as readonly string[]).includes(s.lifecycle) &&
+            typeof s.eventType === 'string' &&
+            typeof s.structuralFingerprint === 'string' &&
+            isPersistedOutcome(s.outcome) &&
+            typeof s.seenCount === 'number' &&
+            Number.isFinite(s.seenCount) &&
+            s.seenCount >= 1 &&
+            (s.shapePaths === undefined ||
+              (Array.isArray(s.shapePaths) &&
+                s.shapePaths.every((p: unknown) => typeof p === 'string'))) &&
+            (s.discriminatorValues === undefined ||
+              (typeof s.discriminatorValues === 'object' &&
+                s.discriminatorValues !== null &&
+                !Array.isArray(s.discriminatorValues)))
+          if (!validV2) {
+            malformedV2Sightings += 1
+            continue
+          }
+          let key: string
+          try {
+            key = renderShapeWriterKey(s as RenderShapeSighting, dir)
+          } catch {
+            malformedV2Sightings += 1
+            continue
+          }
           const count = s.seenCount
           const existing = maxByWriterKey.get(key)
           if (existing && existing.count >= count) continue
@@ -162,13 +306,45 @@ if (RECORDINGS_DIR) {
           })
         }
       } catch {
-        continue
+        // Torn/malformed JSONL is not itself a v2 sighting because no schema
+        // can be established. The recorder/replay contract already tolerates
+        // such tails; malformed *parsed* v2 objects are counted above.
       }
     }
+    try {
+      for await (const line of splitBoundedJsonlLines(input, !clipped)) {
+        consume(line)
+      }
+    } catch {
+      // Recordings are live evidence and may be pruned while the audit runs.
+      // Losing that file is a skipped source, not a reason to crash after the
+      // bounded stream already protected the process.
+    }
+    input.destroy()
   }
   observations.push(...maxByWriterKey.values())
   if (obsoleteReceiptSightings > 0) {
-    console.error(`ignored ${obsoleteReceiptSightings} obsolete v1 receipt sightings; capture a fresh v2 soak`)
+    console.error(
+      `ignored ${obsoleteReceiptSightings} obsolete v1 receipt sightings; capture a fresh v2 soak`,
+    )
+  }
+  if (malformedV2Sightings > 0) {
+    console.error(`ignored ${malformedV2Sightings} malformed v2 receipt sightings`)
+  }
+  if (unknownSchemaSightings > 0) {
+    console.error(
+      `ignored ${unknownSchemaSightings} receipt sightings with an unknown/missing schema version`,
+    )
+  }
+  // Unlike obsolete prerelease v1 receipts, malformed v2 and unknown schema
+  // versions are current writer/reader contract failures. Printing them while
+  // returning success made a broken observer wire shape advisory precisely at
+  // the audit boundary intended to gate it.
+  fatalRecordingSchemaSightings = malformedV2Sightings + unknownSchemaSightings
+  if (byteTruncatedRecordings > 0) {
+    console.error(
+      `stream-limited ${byteTruncatedRecordings} recording(s) at ${MAX_RECORDING_BYTES} bytes each`,
+    )
   }
 }
 
@@ -198,7 +374,10 @@ for (const obs of observations) {
           index,
         )
         return structure.kind === 'known-structure'
-          ? { kind: 'known-outcome-unobserved' as const, shapeId: structure.shapeId }
+          ? {
+              kind: 'known-outcome-unobserved' as const,
+              shapeId: structure.shapeId,
+            }
           : structure
       })()
   const status = byStatus.get(classification.kind) ?? new Map<string, Observation[]>()
@@ -233,14 +412,22 @@ for (const kind of [
   if (!groups || groups.size === 0) continue
   console.log(`${kind} details:`)
   for (const [key, group] of groups) {
-    const outcomes = [...new Set(group.flatMap(observation =>
-      observation.outcome ? [renderOutcomeRouteIdentity(observation.outcome)] : [],
-    ))].sort()
+    // A structural fingerprint can be observed at several lifecycle
+    // milestones. Printing group[0] hid exactly which prefix was unsupported;
+    // aggregate every lifecycle/outcome represented by the fatal group.
+    const lifecycles = [...new Set(group.map(observation => observation.lifecycle))].sort()
+    const outcomes = [
+      ...new Set(
+        group.flatMap(observation =>
+          observation.outcome ? [renderOutcomeRouteIdentity(observation.outcome)] : [],
+        ),
+      ),
+    ].sort()
     const example = group[0]
     console.log(
-      `  ${key} lifecycle=${example.lifecycle}` +
-      `${outcomes.length > 0 ? ` outcomes=${outcomes.join(',')}` : ''}` +
-      `${example.shapePaths.length > 0 ? ` paths=${example.shapePaths.slice(0, 8).join(' ')}` : ''}`,
+      `  ${key} lifecycles=${lifecycles.join(',')}` +
+        `${outcomes.length > 0 ? ` outcomes=${outcomes.join(',')}` : ''}` +
+        `${example.shapePaths.length > 0 ? ` paths=${example.shapePaths.slice(0, 8).join(' ')}` : ''}`,
     )
   }
   console.log('')
@@ -320,10 +507,14 @@ if (SEED) {
     console.log(`    eventTypes: ${JSON.stringify([...g.eventTypes].sort())},`)
     console.log(`    planes: ${JSON.stringify([...g.planes].sort())} as const,`)
     console.log(`    lifecycles: ${JSON.stringify([...g.lifecycles].sort())} as const,`)
-    console.log(`    observed: { providerVersions: [], models: [], firstSeen: '${today}', lastSeen: '${today}' },`)
+    console.log(
+      `    observed: { providerVersions: [], models: [], firstSeen: '${today}', lastSeen: '${today}' },`,
+    )
     console.log(`    fixtures: { final: [], prefixes: [] },`)
     console.log(`    disposition: { kind: 'planned', targetGrammar: 'structured-tool' },`)
-    console.log(`    why: 'Seeded from observed sightings (${g.count}); REVIEW: set targetGrammar + fixtures.',`)
+    console.log(
+      `    why: 'Seeded from observed sightings (${g.count}); REVIEW: set targetGrammar + fixtures.',`,
+    )
     console.log(`  }),\n`)
   }
 }
@@ -332,5 +523,6 @@ const fatal =
   (byStatus.get('unknown-structure')?.size ?? 0) +
   (byStatus.get('known-unsupported-lifecycle')?.size ?? 0) +
   (byStatus.get('known-misrouted')?.size ?? 0) +
-  (byStatus.get('unknown-outcome')?.size ?? 0)
+  (byStatus.get('unknown-outcome')?.size ?? 0) +
+  fatalRecordingSchemaSightings
 process.exit(fatal > 0 ? 1 : 0)

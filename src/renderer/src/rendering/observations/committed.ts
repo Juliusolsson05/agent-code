@@ -202,14 +202,31 @@ function contentKindOf(
   // entry. Checking `type` first would admit the right row but relabel it as a
   // user prompt, breaking ordering/debug evidence and reopening the exact
   // compact-summary ambiguity this capability boundary removes.
-  if (durableKind === 'compact-boundary') return 'compact-boundary'
-  if (durableKind === 'compact-summary') return 'compact-summary'
+  switch (durableKind) {
+    case 'compact-boundary':
+      return 'compact-boundary'
+    case 'compact-summary':
+      return 'compact-summary'
+    case null:
+      break
+    default: {
+      // Compile-time tripwire plus runtime totality: when the shared durable
+      // union grows, assigning the new member to `never` fails typecheck and
+      // forces this mapping to be reviewed. A stale/bypassed runtime can still
+      // hand us that value before all bundles update; classify it unknown
+      // instead of throwing out of the feed's total fallback path.
+      const futureKind: never = durableKind
+      void futureKind
+      return 'unknown'
+    }
+  }
   if (e.type === 'assistant') return 'assistant-text'
   if (e.type === 'user') return 'user-text'
-  // Non-conversation rows reach this function only after the active provider
-  // admitted them. Keep the exhaustive fallback explicit so a future durable
-  // kind cannot silently masquerade as a summary in the ledger.
-  throw new Error('Committed entry reached contentKindOf without a supported provider classification')
+  // A non-conversation row should reach here only after provider admission,
+  // but collectors are a trust boundary and the feed promises total fallback.
+  // `unknown` keeps the candidate visible/debuggable if a provider violates
+  // that contract rather than turning classification drift into a crash.
+  return 'unknown'
 }
 
 // NFKC + whitespace-collapse + trim — the same conservative normalization

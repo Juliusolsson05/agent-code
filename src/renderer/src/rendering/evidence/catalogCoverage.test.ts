@@ -84,6 +84,28 @@ describe('classifySighting — the five plan §Step 4 states', () => {
     }, lifecycleIndex)).toEqual({ kind: 'known-claimed', shapeId: 'claude.edit.v1' })
   })
 
+  it('adds lifecycle alternates without revoking global alternate routes', () => {
+    const lifecycleIndex = buildFingerprintIndex([{ 'claude.edit.v1': shape({
+      lifecycles: ['prefix', 'input-complete'],
+      alternateDispositions: [
+        { kind: 'specialized', rendererId: 'shared.command', protocolId: 'command.git' },
+      ],
+      alternateDispositionsByLifecycle: {
+        prefix: [{ kind: 'generic', rendererId: 'shared.generic-tool', reason: 'partial input' }],
+      },
+    }) }])
+    expect(classifySighting({
+      structuralFingerprint: FP,
+      lifecycle: 'prefix',
+      outcome: {
+        kind: 'specialized',
+        shapeId: 'claude.edit.v1',
+        rendererId: 'shared.command',
+        protocolId: 'command.git',
+      },
+    }, lifecycleIndex)).toEqual({ kind: 'known-claimed', shapeId: 'claude.edit.v1' })
+  })
+
   it('known-but-unsupported-lifecycle for an undeclared prefix milestone', () => {
     const c = classifySighting(
       { structuralFingerprint: FP, lifecycle: 'prefix', outcome: specialized },
@@ -264,6 +286,23 @@ describe('auditRenderShapeCatalog — invariants the type system cannot see', ()
       kind: 'duplicate-fingerprint',
       fingerprint: FP,
       shapeIds: ['claude.a.v1', 'claude.b.v1'],
+    })
+  })
+
+  it('flags duplicate shape ids and lifecycle routes that can never be reached', () => {
+    const findings = auditRenderShapeCatalog([
+      { first: shape({
+        dispositionByLifecycle: {
+          prefix: { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'dead route' },
+        },
+      }) },
+      { second: shape({ fingerprints: ['fp2-00000002'] }) },
+    ])
+    expect(findings).toContainEqual({ kind: 'duplicate-shape-id', shapeId: 'claude.edit.v1' })
+    expect(findings).toContainEqual({
+      kind: 'undeclared-lifecycle-route',
+      shapeId: 'claude.edit.v1',
+      lifecycle: 'prefix',
     })
   })
 })

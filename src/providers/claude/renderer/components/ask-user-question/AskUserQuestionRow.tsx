@@ -181,7 +181,14 @@ export function AskUserQuestionRow({
           // interactive is the safer failure mode.
           submittedRef.current = false
           setAnswering(false)
-          setResolveError(`${result.reason} at ${result.failedAtStep}`)
+          // WHY failedAtStep is optional: transport-level refusals can explain
+          // the failure without entering the multi-step TUI driver. Appending
+          // an absent step produced the user-facing nonsense “at undefined”.
+          setResolveError(
+            result.failedAtStep === undefined
+              ? result.reason
+              : `${result.reason} at ${result.failedAtStep}`,
+          )
         }
       })
       .catch(() => {
@@ -197,11 +204,14 @@ export function AskUserQuestionRow({
     dispatchAnswer(
       buildAction([
         {
-          question: q.question,
-          header: q.header,
+          question: q.answerQuestion ?? q.question,
+          header: q.answerHeader ?? q.header,
           multiSelect: q.multiSelect,
-          selectedOptions: [{ label: option.label, number: q.options.indexOf(option) + 1 }],
-          selectedLabels: [option.label],
+          selectedOptions: [{
+            label: option.answerLabel ?? option.label,
+            number: q.options.indexOf(option) + 1,
+          }],
+          selectedLabels: [option.answerLabel ?? option.label],
         },
       ]),
     )
@@ -266,15 +276,15 @@ export function AskUserQuestionRow({
 
   const submitStructuredAnswers = () => {
     const answers = questions.map((q, qi) => ({
-      question: q.question,
-      header: q.header,
+      question: q.answerQuestion ?? q.question,
+      header: q.answerHeader ?? q.header,
       multiSelect: q.multiSelect,
       selectedOptions: (selectedByQuestion[qi] ?? []).map(number => ({
-        label: q.options[number - 1]?.label ?? '',
+        label: q.options[number - 1]?.answerLabel ?? q.options[number - 1]?.label ?? '',
         number,
       })),
       selectedLabels: (selectedByQuestion[qi] ?? [])
-        .map(number => q.options[number - 1]?.label)
+        .map(number => q.options[number - 1]?.answerLabel ?? q.options[number - 1]?.label)
         .filter((label): label is string => Boolean(label)),
       text: textByQuestion[qi]?.trim() || undefined,
     }))
@@ -290,7 +300,8 @@ export function AskUserQuestionRow({
   const useImmediateSingle =
     questions.length === 1 &&
     !questions[0].multiSelect &&
-    (textByQuestion[0]?.trim() ?? '').length === 0
+    (textByQuestion[0]?.trim() ?? '').length === 0 &&
+    (selectedByQuestion[0]?.length ?? 0) === 0
 
   const forwardTerminalNavigation = (event: KeyboardEvent<HTMLDivElement>) => {
     if (!sessionId || !liveAskUserQuestion) return
@@ -355,8 +366,6 @@ export function AskUserQuestionRow({
                           ? handleSingleOption(qi, opt)
                           : freeTextOption
                             ? activateCustomText(qi)
-                          : q.multiSelect
-                            ? toggleOption(qi, optionNumber)
                             : toggleOption(qi, optionNumber)
                       }
                       className={`
@@ -386,23 +395,26 @@ export function AskUserQuestionRow({
                     </button>
                   )
                 })}
-                {!useImmediateSingle || !q.multiSelect ? (
-                  <div className="mt-1 flex flex-col gap-1">
-                    {!q.multiSelect && (
-                      <div className="text-[10px] uppercase tracking-[0.12em] text-muted">
-                        or custom answer
-                      </div>
-                    )}
-                    <input
-                      value={textByQuestion[qi] ?? ''}
-                      disabled={controlsDisabled}
-                      onFocus={() => activateCustomText(qi)}
-                      onChange={event => updateCustomText(qi, event.target.value)}
-                      placeholder="Type something"
-                      className="rounded border border-border bg-surface px-2.5 py-1.5 text-[13px] text-ink outline-none focus:border-accent disabled:opacity-60"
-                    />
-                  </div>
-                ) : null}
+                {/* WHY this is unconditional: `useImmediateSingle` can only be
+                    true for a non-multi question, so the old
+                    `!useImmediateSingle || !q.multiSelect` guard was a
+                    tautology. Keeping the input explicit also makes the
+                    typed-text → option → Submit transition reviewable. */}
+                <div className="mt-1 flex flex-col gap-1">
+                  {!q.multiSelect && (
+                    <div className="text-[10px] uppercase tracking-[0.12em] text-muted">
+                      or custom answer
+                    </div>
+                  )}
+                  <input
+                    value={textByQuestion[qi] ?? ''}
+                    disabled={controlsDisabled}
+                    onFocus={() => activateCustomText(qi)}
+                    onChange={event => updateCustomText(qi, event.target.value)}
+                    placeholder="Type something"
+                    className="rounded border border-border bg-surface px-2.5 py-1.5 text-[13px] text-ink outline-none focus:border-accent disabled:opacity-60"
+                  />
+                </div>
               </div>
             </div>
           )

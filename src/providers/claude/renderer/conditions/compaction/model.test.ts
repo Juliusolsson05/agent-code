@@ -84,9 +84,24 @@ describe('Claude compaction condition normalization', () => {
   it('does not let a stale screen error regress a durable completion', () => {
     const summary: Entry = {
       type: 'user',
-      timestamp: new Date(1_500).toISOString(),
+      timestamp: new Date(2_500).toISOString(),
       isCompactSummary: true,
       message: { role: 'user', content: [{ type: 'text', text: 'summary' }] },
+    }
+    const result = normalizeClaudeCompactionConditions({
+      snapshot: screen('error'),
+      currentTurn: turn({ endedAt: 1_400 }),
+      entries: [summary],
+    })
+    expect(state(result)).toMatchObject({ phase: 'done', source: 'structured' })
+  })
+
+  it('does not let an observation-time screen error overturn a correlated durable summary', () => {
+    const summary: Entry = {
+      type: 'user',
+      timestamp: new Date(1_500).toISOString(),
+      isCompactSummary: true,
+      message: { role: 'user', content: [{ type: 'text', text: 'earlier summary' }] },
     }
     const result = normalizeClaudeCompactionConditions({
       snapshot: screen('error'),
@@ -110,10 +125,10 @@ describe('Claude compaction condition normalization', () => {
     expect(state(result)).toMatchObject({ phase: 'running', source: 'structured' })
   })
 
-  it('lets a recent durable summary close a stale screen operation after turn handoff', () => {
+  it('lets a newer durable summary close a stale screen operation after turn handoff', () => {
     const summary: Entry = {
       type: 'user',
-      timestamp: new Date(1_500).toISOString(),
+      timestamp: new Date(2_500).toISOString(),
       isCompactSummary: true,
       message: { role: 'user', content: [{ type: 'text', text: 'summary' }] },
     }
@@ -125,7 +140,7 @@ describe('Claude compaction condition normalization', () => {
     expect(state(result)).toMatchObject({ phase: 'done', source: 'structured' })
   })
 
-  it('does not regress durable completion when later screen ticks still say running', () => {
+  it('latches durable completion across a later stale running screen observation', () => {
     const summary: Entry = {
       type: 'user',
       timestamp: new Date(1_500).toISOString(),
@@ -139,5 +154,64 @@ describe('Claude compaction condition normalization', () => {
       entries: [summary],
     })
     expect(state(result)).toMatchObject({ phase: 'done', source: 'structured' })
+  })
+
+  it('keeps a later screen error authoritative after an older durable completion', () => {
+    const summary: Entry = {
+      type: 'user',
+      timestamp: new Date(1_500).toISOString(),
+      isCompactSummary: true,
+      message: { role: 'user', content: [{ type: 'text', text: 'old summary' }] },
+    }
+    const lateError = { ...screen('error'), ts: 120_000 }
+    const result = normalizeClaudeCompactionConditions({
+      snapshot: lateError,
+      currentTurn: null,
+      entries: [summary],
+    })
+    expect(state(result)).toMatchObject({
+      phase: 'error',
+      source: 'screen',
+      errorText: 'screen failure',
+    })
+  })
+
+  it('reopens for a distinguishable structured operation that starts after the summary', () => {
+    const summary: Entry = {
+      type: 'user',
+      timestamp: new Date(1_500).toISOString(),
+      isCompactSummary: true,
+      message: { role: 'user', content: [{ type: 'text', text: 'old summary' }] },
+    }
+    const result = normalizeClaudeCompactionConditions({
+      snapshot: { ...screen('running'), ts: 120_000 },
+      currentTurn: turn({ turnId: 'compact-2', startedAt: 100_000 }),
+      entries: [summary],
+    })
+    expect(state(result)).toMatchObject({
+      phase: 'running',
+      source: 'structured',
+      operationId: 'compact-2',
+    })
+  })
+
+  it('can surface an error for a distinguishable structured operation after the summary', () => {
+    const summary: Entry = {
+      type: 'user',
+      timestamp: new Date(1_500).toISOString(),
+      isCompactSummary: true,
+      message: { role: 'user', content: [{ type: 'text', text: 'old summary' }] },
+    }
+    const result = normalizeClaudeCompactionConditions({
+      snapshot: { ...screen('error'), ts: 120_000 },
+      currentTurn: turn({ turnId: 'compact-2', startedAt: 100_000 }),
+      entries: [summary],
+    })
+    expect(state(result)).toMatchObject({
+      phase: 'error',
+      source: 'screen',
+      operationId: 'compact-2',
+      errorText: 'screen failure',
+    })
   })
 })

@@ -48,17 +48,11 @@ export function renderOpencodeOperation(
       ? null
       : toolResult === undefined
         ? { action: 'fallback' }
-        : toolResult === null
-          ? {
-              action: 'absorb',
-              ownerRenderId: 'opencode.rows.dispatch',
-              reason: 'provider operation card validated and consumed its paired result',
-            }
-          : {
-              action: 'render',
-              node: toolResult,
-              receipt: { rendererId: 'opencode.rows.dispatch' },
-            },
+        : {
+            action: 'render',
+            node: toolResult,
+            receipt: { rendererId: 'opencode.rows.dispatch' },
+          },
   }
 }
 

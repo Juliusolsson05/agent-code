@@ -122,24 +122,100 @@ function applySgr(style: AnsiStyle, params: number[]): AnsiStyle {
   return s
 }
 
-/** Collapse carriage-return rewrites per line: keep only the final
- *  segment after the last `\r`. See module header for WHY. */
+type AnsiLinePart = { control: boolean; text: string }
+
+/** Return the exclusive end of one ESC control string.
+ *
+ * WHY this scanner exists beside the narrower rendering regexes: CR is valid
+ * payload data inside OSC (titles/hyperlinks) and can also occur in malformed
+ * or vendor-extended CSI strings. Splitting on every raw `\r` before removing
+ * controls tears those sequences in half; the remainder then leaks as visible
+ * text or, worse, changes which SGR state reaches the final progress rewrite.
+ * This boundary scanner need not interpret controls. It only keeps their bytes
+ * atomic until parseAnsi/stripAnsi apply the existing subset policy. */
+function ansiControlEnd(text: string, start: number): number {
+  if (text.charCodeAt(start) !== 0x1b) return start + 1
+  const introducer = text[start + 1]
+  if (introducer === '[') {
+    // ECMA-48 CSI ends at the first final byte 0x40–0x7e. Parameter and
+    // intermediate bytes are deliberately opaque here so extensions remain
+    // one token even when the SGR subset below does not understand them.
+    for (let i = start + 2; i < text.length; i++) {
+      const code = text.charCodeAt(i)
+      if (code >= 0x40 && code <= 0x7e) return i + 1
+    }
+    return text.length
+  }
+  if (introducer === ']') {
+    // OSC terminates with BEL or ST (ESC backslash). An unterminated OSC owns
+    // the tail: treating its embedded CR as display text would fabricate a
+    // rewrite boundary inside a control string.
+    for (let i = start + 2; i < text.length; i++) {
+      if (text.charCodeAt(i) === 0x07) return i + 1
+      if (text.charCodeAt(i) === 0x1b && text[i + 1] === '\\') return i + 2
+    }
+    return text.length
+  }
+  if (introducer === '(' || introducer === ')') return Math.min(start + 3, text.length)
+  return Math.min(start + 2, text.length)
+}
+
+/** Collapse carriage-return rewrites per line while retaining ANSI control
+ *  state. See module header and ansiControlEnd for WHY. */
 export function collapseCarriageReturns(text: string): string {
   if (!text.includes('\r')) return text
-  return text
-    .split('\n')
-    .map(line => {
-      // CRLF line endings: the \r is a line TERMINATOR, not a rewrite —
-      // strip it instead of collapsing, or every CRLF line (curl
-      // headers, Windows-origin output) collapses to the empty string
-      // after it (PR524 review, HIGH-1). Likewise a line that ENDS in
-      // \r mid-stream is a rewrite that hasn't arrived yet — keep the
-      // text before it visible, as a real terminal would.
-      const trimmed = line.endsWith('\r') ? line.slice(0, -1) : line
-      const at = trimmed.lastIndexOf('\r')
-      return at === -1 ? trimmed : trimmed.slice(at + 1)
-    })
-    .join('\n')
+  const output: string[] = []
+  let line: AnsiLinePart[] = []
+  const append = (control: boolean, value: string): void => {
+    const tail = line[line.length - 1]
+    if (tail?.control === control) tail.text += value
+    else line.push({ control, text: value })
+  }
+  const flushLine = (newline: boolean): void => {
+    output.push(line.map(part => part.text).join(''))
+    if (newline) output.push('\n')
+    line = []
+  }
+
+  for (let i = 0; i < text.length;) {
+    if (text.charCodeAt(i) === 0x1b) {
+      const end = ansiControlEnd(text, i)
+      append(true, text.slice(i, end))
+      i = end
+      continue
+    }
+    if (text[i] === '\n') {
+      flushLine(true)
+      i += 1
+      continue
+    }
+    if (text[i] === '\r') {
+      if (text[i + 1] === '\n') {
+        // CRLF is one line terminator. Consume both bytes here so the LF does
+        // not become a second blank line.
+        flushLine(true)
+        i += 2
+        continue
+      }
+      if (i === text.length - 1) {
+        // A trailing CR announces a rewrite whose replacement has not arrived
+        // in this growing payload. Keep the current visible line until it does.
+        i += 1
+        continue
+      }
+      // A terminal rewrite erases glyphs, not control-state transitions. Keep
+      // every control token in its original relative position and remove only
+      // visible text. Prefixing all controls would be subtly wrong: a color
+      // change emitted after replacement text must remain after that text.
+      line = line.filter(part => part.control)
+      i += 1
+      continue
+    }
+    append(false, text[i])
+    i += 1
+  }
+  flushLine(false)
+  return output.join('')
 }
 
 // DOM-span ceiling: adjacent-escape payloads (`x\x1b[m` repeated) can

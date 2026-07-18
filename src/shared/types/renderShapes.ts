@@ -37,12 +37,15 @@ import type { AgentProviderKind } from '@shared/types/providerKind'
  * result can arrive without its use (and vice versa) — collapsing them was
  * one source of the old duplicate-decoder mess.
  */
-export type RenderShapePlane =
-  | 'committed-tool-use'
-  | 'committed-tool-result'
-  | 'semantic-tool'
-  | 'transcript-entry'
-  | 'condition'
+export const RENDER_SHAPE_PLANES = [
+  'committed-tool-use',
+  'committed-tool-result',
+  'semantic-tool',
+  'transcript-entry',
+  'condition',
+] as const
+
+export type RenderShapePlane = (typeof RENDER_SHAPE_PLANES)[number]
 
 /**
  * How far along the operation was when observed. `prefix` is first-class
@@ -52,12 +55,15 @@ export type RenderShapePlane =
  * the moment input streams. `durable` marks transcript/replay evidence that
  * survives restart (vs the live lifecycle states that precede it).
  */
-export type RenderShapeLifecycle =
-  | 'prefix'
-  | 'input-complete'
-  | 'running'
-  | 'result-complete'
-  | 'durable'
+export const RENDER_SHAPE_LIFECYCLES = [
+  'prefix',
+  'input-complete',
+  'running',
+  'result-complete',
+  'durable',
+] as const
+
+export type RenderShapeLifecycle = (typeof RENDER_SHAPE_LIFECYCLES)[number]
 
 /**
  * What the painter actually did with the value — recorded as a receipt so

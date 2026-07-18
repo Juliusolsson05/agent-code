@@ -31,6 +31,18 @@ describe('ansi parser (ported, now ours)', () => {
     expect(collapseCarriageReturns('50%\r75%\r100%')).toBe('100%')
   })
 
+  it('preserves terminal control state across a carriage-return rewrite', () => {
+    const collapsed = collapseCarriageReturns('\x1b[31mold\rnew\x1b[0m')
+    expect(collapsed).toBe('\x1b[31mnew\x1b[0m')
+    expect(parseAnsi(collapsed).spans[0]).toMatchObject({ text: 'new', style: { fg: 1 } })
+  })
+
+  it('does not treat carriage returns inside OSC controls as display rewrites', () => {
+    const source = '\x1b]0;build\rtitle\x07old\rnew'
+    expect(collapseCarriageReturns(source)).toBe('\x1b]0;build\rtitle\x07new')
+    expect(stripAnsi(collapseCarriageReturns(source))).toBe('new')
+  })
+
   it('SGR reset-then-set in one sequence applies both', () => {
     const { spans } = parseAnsi('\x1b[0;31mred\x1b[0m plain')
     expect(spans[0].text).toBe('red')
@@ -71,6 +83,17 @@ describe('formatter registry — conservative by contract', () => {
         0,
       ),
     ).toBeNull()
+    expect(
+      analyzeCommandOutput('echo docs', 'Tests are part of the release checklist', 0),
+    ).toBeNull()
+    expect(
+      analyzeCommandOutput('echo docs', 'Tests  12 passed according to stale prose', 0),
+    ).toBeNull()
+    expect(analyzeCommandOutput('echo docs', 'Tests  12 passed', 0)).toBeNull()
+    expect(
+      analyzeCommandOutput('npx jest', 'Tests:  1 failed, 11 passed, 12 total', 1),
+    ).toContain('12 total')
+    expect(analyzeCommandOutput('npm test', 'Tests  12 passed', 0)).toBe('Tests: 12 passed')
   })
 
   it('complete JSON concludes; scalar and capped JSON decline', () => {
@@ -85,6 +108,11 @@ describe('formatter registry — conservative by contract', () => {
     expect(c("cat >> notes.md <<'EOF'\n…\nEOF")).toBe('appends to notes.md (heredoc)')
     expect(c("python3 - <<'EOF'\nio.open('x','w')\nEOF")).toContain('inline python3 script')
     expect(c("sed -i '' 's/a/b/' src/file.ts")).toBe('edits src/file.ts in place (sed -i)')
+    expect(c("sed -i '' 's/a/b/' src/a.ts src/b.ts")).toBeNull()
+    expect(c("sed -i '' 's/a/b/' src/file.ts > report.txt")).toBeNull()
+    expect(c("sed -i.bak -e 's/a/b/' 'src/file with spaces.ts'")).toBe(
+      'edits src/file with spaces.ts in place (sed -i)',
+    )
     // Reads and pipes must never claim a mutation.
     expect(c('cat file.ts | grep foo')).toBeNull()
     expect(c("sed 's/a/b/' file.ts")).toBeNull()
@@ -127,6 +155,11 @@ describe('cat-heredoc write → code-edit protocol (not a command headline)', ()
 
   it('DECLINES unquoted delimiters — the body would $-expand, bytes differ from text', () => {
     expect(bash('cat > x <<EOF\n$HOME\nEOF')).toBeNull()
+  })
+
+  it("DECLINES <<- heredocs because tab stripping makes the visible body inexact", () => {
+    expect(bash("cat > x <<-'EOF'\n\tindented\n\tEOF")).toBeNull()
+    expect(extractShellHeredocWrite("cat > x <<-'EOF'\nbody")).toBeNull()
   })
 
   it('DECLINES non-cat writers — grep transforms stdin, body is not the file content', () => {

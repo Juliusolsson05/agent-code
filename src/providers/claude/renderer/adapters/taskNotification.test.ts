@@ -35,6 +35,17 @@ describe('parseTaskNotification', () => {
     expect(taskNotificationStatusKind(n!)).toBe('error')
   })
 
+  it('bounds status and usage before they become joined headline text', () => {
+    const n = parseTaskNotification(`<task-notification>
+      <tool-use-id>exact-correlation-id</tool-use-id>
+      <status>${'s'.repeat(500)}</status>
+      <usage>${'u'.repeat(500)}</usage>
+    </task-notification>`)
+    expect(n?.toolUseId).toBe('exact-correlation-id')
+    expect(n?.status?.length).toBe(120)
+    expect(n?.usage?.length).toBe(240)
+  })
+
   it('rejects non-notification text', () => {
     expect(parseTaskNotification('<command-name>/compact</command-name>')).toBeNull()
   })

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { fromClaudeAgentCodeOrchestrationUse } from '@providers/claude/renderer/adapters/agentCodeOrchestration'
 import { fromCodexAgentCodeOrchestrationUse } from '@providers/codex/renderer/adapters/agentCodeOrchestration'
@@ -118,5 +118,55 @@ describe('Agent Code orchestration protocol ownership', () => {
       is_error: true,
     }
     expect(fromAgentCodeOrchestrationResult(contradictoryTransportFailure, model)).toBeNull()
+  })
+
+  it('accepts the server-owned large-read recovery range above the generic JSON budget', () => {
+    const use: ToolUseBlock = {
+      type: 'tool_use',
+      id: 'read-large',
+      name: 'orchestration_read_agent',
+      input: { sessionId: 'child-1', maxCharsPerAgent: 500_000 },
+    }
+    const model = fromCodexAgentCodeOrchestrationUse(use)!
+    const value = {
+      ok: true,
+      output: {
+        agent: { sessionId: 'child-1', kind: 'codex', cwd: '/workspace' },
+        messages: [{ role: 'assistant', text: 'x'.repeat(300_000) }],
+      },
+    }
+    const result: ToolResultBlock = {
+      type: 'tool_result',
+      tool_use_id: use.id,
+      content: JSON.stringify(value),
+    }
+
+    // WHY this exceeds tryExtractJson's generic 256 KiB limit on purpose: read-agent documents a
+    // larger follow-up request as the recovery path after truncation. The owned protocol must not
+    // label the server's own valid recovery response "unrecognized".
+    expect(fromAgentCodeOrchestrationResult(result, model)?.value).toEqual(value)
+  })
+
+  it('parses one immutable result block once across dispatch and owner reads', () => {
+    const use: ToolUseBlock = {
+      type: 'tool_use',
+      id: 'cached-list',
+      name: 'orchestration_list_agents',
+      input: { runId: 'phase-7' },
+    }
+    const model = fromCodexAgentCodeOrchestrationUse(use)!
+    const result: ToolResultBlock = {
+      type: 'tool_result',
+      tool_use_id: use.id,
+      content: JSON.stringify({ ok: true, agents: [] }),
+    }
+    const parse = vi.spyOn(JSON, 'parse')
+    try {
+      expect(fromAgentCodeOrchestrationResult(result, model)).not.toBeNull()
+      expect(fromAgentCodeOrchestrationResult(result, model)).not.toBeNull()
+      expect(parse).toHaveBeenCalledTimes(1)
+    } finally {
+      parse.mockRestore()
+    }
   })
 })

@@ -45,7 +45,7 @@ export const ClaudeLiveBashRow = memo(function ClaudeLiveBashRow({
       parsedInput
         ? fromClaudeBashCodeEdit(
             { type: 'tool_use', id: `live:${blockIndex}`, name: 'Bash', input: parsedInput } as ToolUseBlock,
-            { streaming: !finalized },
+            { streaming: !finalized, running: finalized },
           )
         : fromClaudePartialBashCodeEdit(inputJson),
     [parsedInput, inputJson, finalized, blockIndex],
@@ -55,7 +55,7 @@ export const ClaudeLiveBashRow = memo(function ClaudeLiveBashRow({
       parsedInput
         ? fromClaudeBashBlock(
             { type: 'tool_use', id: `live:${blockIndex}`, name: 'Bash', input: parsedInput } as ToolUseBlock,
-            { streaming: !finalized },
+            { streaming: !finalized, running: finalized },
           )
         : fromClaudePartialBashJson(inputJson),
     [parsedInput, inputJson, finalized, blockIndex],

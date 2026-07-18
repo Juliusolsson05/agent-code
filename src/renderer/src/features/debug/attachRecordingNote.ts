@@ -81,15 +81,17 @@ export async function runToggleSessionRecordingCommand(workspace: Workspace): Pr
   toggleInFlight.add(sessionId)
   try {
     const recording = await window.api.isSessionRecording(sessionId)
-    if (recording) {
-      await disarmRenderShapeCapture(sessionId)
+    if (recording.recording) {
+      if (recording.generation) {
+        await disarmRenderShapeCapture(sessionId, recording.generation)
+      }
       await window.api.stopSessionRecording(sessionId)
       workspace.showPaneToast(sessionId, 'recording stopped — saved to session-recordings/', 3500)
     } else {
       const provider = workspace.state.sessions[sessionId]?.kind
       const started = await window.api.startSessionRecording(sessionId, provider)
-      if (started) {
-        armRenderShapeCapture(sessionId)
+      if (started.recording && started.generation) {
+        armRenderShapeCapture(sessionId, started.generation)
         workspace.showPaneToast(sessionId, 'recording started for this pane (shape capture armed)', 3000)
       } else {
         workspace.showPaneToast(sessionId, 'recording unavailable (AGENT_CODE_DEV_DEBUG off?)', 4000)

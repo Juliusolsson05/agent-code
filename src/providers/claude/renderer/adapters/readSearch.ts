@@ -140,5 +140,9 @@ export function fromClaudeToolSearchResult(
  * Lines that do not match the captured grammar survive verbatim.
  */
 export function stripClaudeReadGutter(page: string): string {
-  return page.replace(/(^|\n)\s*\d+\t/g, '$1')
+  // WHY the boundary is a newline class rather than only LF: restored output
+  // can retain CR-only terminal lines. The following whitespace class
+  // deliberately excludes CR/LF; `\s*` crossed blank lines and silently
+  // collapsed source layout while looking for the next numbered gutter.
+  return page.replace(/(^|[\r\n])[^\S\r\n]*\d+\t/g, '$1')
 }

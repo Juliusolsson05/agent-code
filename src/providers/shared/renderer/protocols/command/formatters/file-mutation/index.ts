@@ -50,14 +50,17 @@ export const fileMutationFormatter: CommandFormatter = {
       return `runs an inline ${first.text} script (may write files — see body)`
     }
 
-    // sed -i: in-place edit; target = the last WORD (sed's file operand).
+    // sed -i has enough positional grammar that "last word wins" is unsafe:
+    // the last word may be a redirect target, and several preceding words may
+    // all be edited files. Parse the option/script boundary and admit exactly
+    // one proven file operand; unfamiliar sed syntax declines below.
     const words = tokens.filter((t): t is ShellToken & { kind: 'word' } => t.kind === 'word')
-    if (words[0]?.text === 'sed' && words.some(w => !w.quoted && (w.text === '-i' || w.text.startsWith('-i')))) {
-      const target = words[words.length - 1]
-      if (target && target.text !== 'sed' && !target.text.startsWith('-') && !target.quoted) {
-        return `edits ${target.text} in place (sed -i)`
-      }
-      return null
+    if (
+      words[0]?.text === 'sed' &&
+      words.some(word => word.text === '-i' || /^-i.+/.test(word.text) || word.text === '--in-place' || word.text.startsWith('--in-place='))
+    ) {
+      const target = parseSingleSedInPlaceTarget(tokens)
+      return target ? `edits ${target} in place (sed -i)` : null
     }
 
     // Unquoted > / >> with a plain word target = a real file mutation.
@@ -79,4 +82,71 @@ export const fileMutationFormatter: CommandFormatter = {
     const more = rest.length > 0 ? ` (+${rest.length} more target${rest.length === 1 ? '' : 's'})` : ''
     return `${head.append ? 'appends to' : 'writes'} ${head.path}${heredoc ? ' (heredoc)' : ''}${more}`
   },
+}
+
+const SED_FLAG_ONLY_OPTIONS = new Set([
+  '-n', '--quiet', '--silent', '-E', '-r', '--regexp-extended',
+  '-s', '--separate', '-u', '--unbuffered', '-z', '--null-data',
+])
+
+/**
+ * Return the sole file operand of a statically understood `sed -i` command.
+ *
+ * WHY one file instead of manufacturing a compact multi-file sentence: this
+ * formatter's conclusion is intentionally a precise mutation claim, not a
+ * second shell transcript. If several operands are present, naming only one
+ * hides work and joining arbitrary path text creates another truncation
+ * grammar. The generic command card already preserves every byte, so decline
+ * ambiguous/multi-target shapes until a first-class multi-file model exists.
+ */
+function parseSingleSedInPlaceTarget(tokens: ShellToken[]): string | null {
+  if (tokens.some(token => token.kind === 'op')) return null
+  const words = tokens as Array<Extract<ShellToken, { kind: 'word' }>>
+  if (words[0]?.text !== 'sed' || words[0].quoted) return null
+
+  let inPlace = false
+  let scriptProvidedByOption = false
+  let optionsEnded = false
+  const positional: string[] = []
+
+  for (let i = 1; i < words.length; i += 1) {
+    const word = words[i].text
+    if (!optionsEnded && word === '--') {
+      optionsEnded = true
+      continue
+    }
+    if (!optionsEnded && word.startsWith('-') && word !== '-') {
+      if (word === '-i' || /^-i.+/.test(word) || word === '--in-place' || word.startsWith('--in-place=')) {
+        inPlace = true
+        continue
+      }
+      if (word === '-e' || word === '--expression' || word === '-f' || word === '--file') {
+        // A missing expression/program file makes the command malformed. It
+        // must not cause the next would-be file operand to be relabeled.
+        if (!words[i + 1]) return null
+        scriptProvidedByOption = true
+        i += 1
+        continue
+      }
+      if (/^-[ef].+/.test(word) || word.startsWith('--expression=') || word.startsWith('--file=')) {
+        scriptProvidedByOption = true
+        continue
+      }
+      if (SED_FLAG_ONLY_OPTIONS.has(word)) continue
+      return null
+    }
+    positional.push(word)
+  }
+
+  if (!inPlace) return null
+  // Without -e/-f, sed's first positional is the program and only the rest
+  // are files. With -e/-f every positional is a file. This also safely handles
+  // BSD's `-i ''`: the lexer omits the empty static argv token, leaving the
+  // ordinary program/file pair. A non-empty separated backup suffix remains
+  // cross-platform ambiguous and naturally declines as an extra operand.
+  const files = scriptProvidedByOption ? positional : positional.slice(1)
+  if ((!scriptProvidedByOption && positional.length < 2) || files.length !== 1) return null
+  const [target] = files
+  if (!target || target === '-' || OUTPUT_SINKS.has(target)) return null
+  return target
 }

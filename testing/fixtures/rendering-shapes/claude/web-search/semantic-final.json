@@ -5,6 +5,8 @@
     "blockIndex": 0,
     "toolName": "WebSearch",
     "toolUseId": "web-search-semantic-fixture",
+    "text": "",
+    "thinking": "",
     "inputJson": "{\"query\":\"provider-owned rendering\"}",
     "inputJsonValid": true,
     "parsedInput": {

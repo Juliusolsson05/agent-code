@@ -14,10 +14,10 @@ import {
 //   - the semantic plane uses function_call/message/reasoning kinds (not
 //     Claude's text/tool_use/thinking) plus rare custom_tool_call and
 //     web_search_call variants;
-//   - NO unified-exec wrapper shapes appear in this corpus. When a modern
-//     Codex CLI emits them they will land in the Unknown Shape Inbox —
-//     that is the system working, not a gap in this file. Catalog them
-//     from real sightings, never from PR #524's draft classifier.
+//   - the original 48-bundle seed predates unified exec, but reviewed
+//     2026-07-16 semantic-prefix/final and committed fixtures now pin that
+//     carrier below. Those retained sightings—not PR #524's draft
+//     classifier—are the authority for its finite alternate routes.
 // TODO(condition-shape-soak): trust-dialog and approval have source-controlled
 // destinations but no retained condition-plane sightings yet. Their first real
 // developer captures must remain unknown until reviewed fixtures pin the exact
@@ -89,7 +89,10 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
     },
     fixtures: { final: ["rendering-bundles/2026-05-20T15-15-32-562-7b859c43.json","rendering-bundles/2026-06-18T11-37-47-852-e5236cbe.json","rendering-bundles/2026-06-23T08-41-35-901-d0bb555e.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'codex.rows.dispatch' },
-    why: 'GRADUATED Phase 9: the provider semantic capability always routes a named apply_patch call, including its bounded streaming prefix, to the Codex patch component. Malformed patch grammar remains visible inside that component instead of changing owners.',
+    alternateDispositions: [
+      { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'A named apply_patch envelope without a parseable file header remains visible instead of inventing an empty edit.' },
+    ],
+    why: 'GRADUATED Phase 9: a named apply_patch call is specialized only after the bounded parser proves at least one file header. Incomplete prefixes and malformed grammar decline to the shared fallback, while admitted previews disclose truncation and preserve exact paged patch evidence.',
   }),
   'codex.semantic.compaction.v1': defineRenderShape({
     id: 'codex.semantic.compaction.v1',
@@ -129,7 +132,7 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
     alternateDispositions: [
       { kind: 'specialized', rendererId: 'codex.rows.dispatch' },
     ],
-    why: 'GRADUATED Phase 10: unified exec is admitted only after provider parsing proves patch, command, or Git intent. Arbitrary generated scripts stay generic; the finite specialized routes carry exact operation receipts instead of a planned wildcard.',
+    why: 'GRADUATED Phase 10: unified exec is admitted only after provider parsing proves an apply_patch call or embedded exec_command call. Arbitrary generated scripts stay generic; Git is intentionally not inferred from arbitrary JavaScript and is owned only by native exec_command shapes.',
   }),
   'codex.semantic.exec-command.v1': defineRenderShape({
     id: 'codex.semantic.exec-command.v1',
@@ -146,7 +149,11 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
     },
     fixtures: { final: ["rendering-bundles/2026-05-20T14-00-04-079-b53fc4fe.json","rendering-bundles/2026-05-20T15-09-04-906-7b859c43.json","rendering-bundles/2026-05-20T15-15-32-562-7b859c43.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'codex.rows.dispatch' },
-    why: 'GRADUATED Phase 9: a complete native exec_command semantic block deterministically normalizes into Codex provider command rendering. The durable command shape remains a separate catalog entry because Phase 10 still owns its content-dependent Git interception.',
+    alternateDispositions: [
+      { kind: 'specialized', rendererId: 'shared.command', protocolId: 'command.git' },
+      { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'A blank or malformed exec_command input remains visible through the bounded structured fallback.' },
+    ],
+    why: 'GRADUATED Phase 9: a complete native exec_command semantic block normally normalizes into Codex provider command rendering. The structural fingerprint deliberately ignores command text, so the finite Git interception and malformed-input fallback are declared explicitly instead of turning intended content-gated routing into a false misroute.',
   }),
   'codex.semantic.list-agents.v1': defineRenderShape({
     id: 'codex.semantic.list-agents.v1',
@@ -564,7 +571,10 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
     },
     fixtures: { final: ["rendering-bundles/2026-05-20T15-15-32-562-7b859c43.json","rendering-bundles/2026-05-20T18-43-47-377-f6d733f8.json","rendering-bundles/2026-05-21T09-12-59-519-e4f30416.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'codex.rows.dispatch' },
-    why: 'Seeded from the 48-bundle corpus (22 sightings); structural variants share this id. GRADUATED 2026-07-16: cut over to the code-edit protocol (adapter + CodeEditView); receipts must name this renderer or the sighting files as misrouted',
+    alternateDispositions: [
+      { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'A named apply_patch envelope without a parseable file header remains visible instead of inventing an empty edit.' },
+    ],
+    why: 'Seeded from the 48-bundle corpus (22 sightings); structural variants share this id. GRADUATED 2026-07-16: valid patches cut over to the code-edit protocol, while malformed grammar deliberately declines to the shared fallback because the content-insensitive fingerprint cannot distinguish those finite routes.',
   }),
   'codex.tool-use.exec.v1': defineRenderShape({
     id: 'codex.tool-use.exec.v1',
@@ -584,7 +594,7 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
     alternateDispositions: [
       { kind: 'specialized', rendererId: 'codex.rows.dispatch' },
     ],
-    why: 'GRADUATED Phase 10: committed unified exec uses the same conservative provider admission as the semantic plane. Patches and commands are provider-owned, Git uses the shared protocol, and every unrecognized script remains visible.',
+    why: 'GRADUATED Phase 10: committed unified exec uses the same conservative provider admission as the semantic plane. Actual patch calls and embedded commands are provider-owned, while every unrecognized script remains visible; Git interception is reserved for native exec_command.',
   }),
   'codex.tool-use.exec-command.v1': defineRenderShape({
     id: 'codex.tool-use.exec-command.v1',
@@ -601,7 +611,11 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
     },
     fixtures: { final: ["rendering-bundles/2026-05-20T14-00-04-079-b53fc4fe.json","rendering-bundles/2026-05-20T15-09-04-906-7b859c43.json","rendering-bundles/2026-05-20T15-15-32-562-7b859c43.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'codex.rows.dispatch' },
-    why: 'Seeded from the 48-bundle corpus (408 sightings); structural variants share this id. GRADUATED 2026-07-16: command protocol cutover (adapter + CommandView); receipts must name this renderer or sightings file as misrouted',
+    alternateDispositions: [
+      { kind: 'specialized', rendererId: 'shared.command', protocolId: 'command.git' },
+      { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'A blank or malformed exec_command input remains visible through the bounded structured fallback.' },
+    ],
+    why: 'Seeded from the 48-bundle corpus (408 sightings); structural variants share this id. GRADUATED 2026-07-16: valid commands use the command protocol, while Git interception and malformed-input fallback are explicit finite routes because command scalar contents do not participate in structural identity.',
   }),
   'codex.tool-use.followup-task.v1': defineRenderShape({
     id: 'codex.tool-use.followup-task.v1',
@@ -907,7 +921,10 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
     },
     fixtures: { final: ["rendering-bundles/2026-05-20T14-00-04-079-b53fc4fe.json","rendering-bundles/2026-05-20T15-15-32-562-7b859c43.json","rendering-bundles/2026-05-20T18-43-47-377-f6d733f8.json"], prefixes: [] },
     disposition: { kind: 'specialized', rendererId: 'codex.rows.dispatch' },
-    why: 'Seeded from the 48-bundle corpus (65 sightings); structural variants share this id. GRADUATED 2026-07-16: command protocol cutover (adapter + CommandView); receipts must name this renderer or sightings file as misrouted',
+    alternateDispositions: [
+      { kind: 'absorbed', ownerRendererId: 'codex.command-continuation', protocolId: 'command.continuation', reason: 'An empty transport poll is represented by the already-running command surface.' },
+    ],
+    why: 'GRADUATED Phase 10: non-empty stdin is rendered by the Codex continuation row; an empty committed poll is explicitly absorbed by the running command owner instead of painting a blank stdin/result pair.',
   }),})
 
 export type CodexRenderShapeId = keyof typeof CODEX_RENDER_SHAPES

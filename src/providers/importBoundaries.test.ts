@@ -64,7 +64,13 @@ function listSourceFiles(dir: string): string[] {
  *  the comment), which is the right failure direction for a boundary. */
 function importSpecifiers(source: string): string[] {
   const out: string[] = []
-  const re = /(?:from\s*|import\s*\(\s*|import\s+|require\s*\(\s*)['"]([^'"]+)['"]/g
+  // WHY static `import` accepts zero whitespace: `import"./side-effect"` is
+  // legal JavaScript. Requiring `import\s+` left exactly the registration-only
+  // form most likely to hide a cross-provider dependency outside this gate.
+  // The quote immediately after optional space keeps `important`/`import.meta`
+  // from becoming false matches; dynamic import remains its own parenthesized
+  // alternative.
+  const re = /(?:from\s*|import\s*\(\s*|import\s*|require\s*\(\s*)['"]([^'"]+)['"]/g
   for (let m = re.exec(source); m; m = re.exec(source)) out.push(m[1])
   return out
 }
@@ -84,7 +90,11 @@ function targetsProviderRenderer(specifier: string, fromFile: string): Provider 
   if (specifier.startsWith('.')) {
     const resolved = resolve(dirname(fromFile), specifier)
     for (const p of PROVIDERS) {
-      if (resolved.includes(join(srcRoot, 'providers', p, 'renderer') + sep)) return p
+      const rendererRoot = join(srcRoot, 'providers', p, 'renderer')
+      // A provider barrel import resolves to the renderer directory itself, without the trailing
+      // separator that a child module has. Treat both forms identically; otherwise adding index.ts
+      // would create a relative-import escape hatch while the equivalent alias import still failed.
+      if (resolved === rendererRoot || resolved.startsWith(rendererRoot + sep)) return p
     }
   }
   return null
@@ -123,6 +133,31 @@ function formatViolations(violations: Violation[]): string {
 }
 
 describe('provider renderer import boundaries (plan PR #554, rules 1–5)', () => {
+  it('extracts every supported literal import spelling, including no-space side effects', () => {
+    expect(importSpecifiers(`
+      import"../../codex/renderer"
+      import '@providers/claude/renderer/register'
+      import value from "@providers/opencode/renderer/value"
+      const lazy = import("@providers/codex/renderer/lazy")
+      const legacy = require('@providers/claude/renderer/legacy')
+      const unrelated = "important'not-an-import'"
+    `)).toEqual([
+      '../../codex/renderer',
+      '@providers/claude/renderer/register',
+      '@providers/opencode/renderer/value',
+      '@providers/codex/renderer/lazy',
+      '@providers/claude/renderer/legacy',
+    ])
+  })
+
+  it('resolves both a provider renderer directory and one of its children', () => {
+    const fromClaudeFile = join(srcRoot, 'providers', 'claude', 'feature.ts')
+    expect(targetsProviderRenderer('./renderer', fromClaudeFile)).toBe('claude')
+    expect(targetsProviderRenderer('../codex/renderer', fromClaudeFile)).toBe('codex')
+    expect(targetsProviderRenderer('../codex/renderer/rows/dispatch', fromClaudeFile)).toBe('codex')
+    expect(targetsProviderRenderer('../shared/renderer', fromClaudeFile)).toBeNull()
+  })
+
   it.each(PROVIDERS)('rule: providers/%s never imports another provider’s renderer code', provider => {
     const violations = scan(
       join(srcRoot, 'providers', provider),

@@ -117,6 +117,14 @@ export function extractShellHeredocWrite(commandText: string): ShellHeredocWrite
         append = t.text === '>>'
       } else if (t.text === '<<') {
         if (delimiter !== null || !next.quoted) return null // unquoted → expansion → decline
+        // `<<-'EOF'` is a distinct shell operator: leading tabs are stripped
+        // from body and terminator lines before `cat` sees them. The shared
+        // line lexer intentionally exposes only `<<` plus a `-EOF` word, so we
+        // cannot distinguish that operator from the rare literal delimiter
+        // `<<'-EOF'` here. Decline both shapes. Recovering the visible body
+        // byte-for-byte is the admission invariant, and a missing Write card
+        // is safer than painting tab-indented bytes that were never written.
+        if (next.text.startsWith('-')) return null
         delimiter = next.text
       } else {
         return null

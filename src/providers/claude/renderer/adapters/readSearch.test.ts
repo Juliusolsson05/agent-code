@@ -57,6 +57,8 @@ describe('Claude read adapter — captured grammar only', () => {
     expect(stripClaudeReadGutter(model!.content)).toBe(
       'export const answer = 42\nexport type Answer = number',
     )
+    expect(stripClaudeReadGutter('  1\tfirst\r  2\tsecond')).toBe('first\rsecond')
+    expect(stripClaudeReadGutter('  1\tfirst\n\n  2\tsecond')).toBe('first\n\nsecond')
   })
 
   it('declines wrong names, missing paths, mismatched pairs, arrays, and errors', () => {

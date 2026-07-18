@@ -12,7 +12,8 @@ describe('workflow tool recognition', () => {
   it('recognizes only Agent Code owned bare and Claude MCP spellings', () => {
     expect(isWorkflowRunToolName('workflow_run')).toBe(true)
     expect(isWorkflowRunToolName('mcp__agent_code__workflow_run')).toBe(true)
-    expect(isWorkflowRunToolName('agent-code/workflow_run')).toBe(false)
+    expect(isWorkflowRunToolName('agent-code/workflow_run')).toBe(true)
+    expect(isWorkflowRunToolName('agent-code:workflow_run')).toBe(true)
     expect(isWorkflowRunToolName('mcp__external__workflow_run')).toBe(false)
     expect(isWorkflowRunToolName('workflow_run_status')).toBe(false)
     expect(isWorkflowRunToolName('some_workflow_runner')).toBe(false)

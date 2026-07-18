@@ -25,12 +25,14 @@ export const EntryRow = memo(function EntryRow({ entry }: { entry: Entry }) {
   const provider = useContext(ProviderContext)
   // Transcript-entry plane sighting (Phase 2, PR #555) — records which
   // ENTRY KINDS flow through the renderer and where each routed. The
-  // conversation branch is deliberately NOT sighted here: a conversation
-  // entry is a container whose content blocks are each observed at the
-  // Block dispatcher with far better outcome fidelity; sighting the
-  // container too would only double-count. eventType carries the entry
-  // type plus system subtype (`system:turn_duration` style) because subtype
-  // is the render-relevant discriminator for system entries.
+  // conversation branch is deliberately NOT sighted here: its native
+  // text/thinking/image leaves use provider-neutral renderers and are outside
+  // the routing-shape catalog, while tool and unknown leaves are observed by
+  // Block at their actual decision boundary. Sighting the container would
+  // fingerprint message cardinality instead of a route and would double-count
+  // every tool leaf. observationScope.ts is the executable source of truth for
+  // that distinction. eventType carries the entry type plus system subtype
+  // (`system:turn_duration` style) because subtype is render-relevant.
   const sight = (outcome: import('@shared/types/renderShapes').RenderOutcomeRoute): void => {
     if (!capture) return
     const subtype = (entry as { subtype?: unknown }).subtype
