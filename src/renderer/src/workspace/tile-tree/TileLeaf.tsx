@@ -610,7 +610,7 @@ export function TileLeaf({
         )}
       </div>
 
-      <QueueStrip queuedMessages={runtime.queuedMessages} />
+      <QueueStrip provider={provider} queuedMessages={runtime.queuedMessages} />
 
       {readinessText && (
         <div className="flex flex-shrink-0 items-center justify-between gap-3 border-t border-border bg-surface px-3 py-1 font-code text-[10px] text-muted">
