@@ -27,7 +27,7 @@ import { defineConfig } from 'vitest/config'
 // cannot load, which is worse than no test because it creates false confidence.
 const root = import.meta.dirname
 
-const alias = [
+export const alias = [
   { find: /^claude-code-headless\/(.+)$/, replacement: `${resolve(root, 'packages/claude-code-headless/src')}/$1` },
   { find: 'claude-code-headless', replacement: resolve(root, 'packages/claude-code-headless/src/index.ts') },
   { find: /^codex-headless\/(.+)$/, replacement: `${resolve(root, 'packages/codex-headless/src')}/$1` },
