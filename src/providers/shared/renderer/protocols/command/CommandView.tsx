@@ -20,6 +20,10 @@ const STATUS_LABEL: Record<CommandRenderModel['status'], string> = {
   success: '',
   failure: 'FAILED',
   timeout: 'TIMED OUT',
+  // Deliberately quiet but visible: the command finished and its output is
+  // real, but the transport never proved exit 0, so the row must not read as
+  // an implicit success (which an empty label would).
+  unknown: 'exit unknown',
 }
 
 export const CommandView = memo(function CommandView({ model }: { model: CommandRenderModel }) {

@@ -25,7 +25,7 @@ import { boundedTextPage } from '@renderer/lib/text/boundedText'
 import { escapeHtml, toHighlightLanguage } from '@shared/code/htmlHighlight'
 import { normalizeCodeLanguage } from '@shared/code/language'
 import { CommandView } from '@providers/shared/renderer/protocols/command/CommandView'
-import type { GitIntent } from './detect'
+import type { GitIntent, GitWorkflowIntent } from './detect'
 import type { GitOperationModel } from './model'
 import {
   parseGitCommit,
@@ -650,6 +650,141 @@ export const GitPushCard = memo(function GitPushCard({
 // Dispatcher — pick the right card for an intent
 // ---------------------------------------------------------------------------
 
+function workflowTitle(intent: GitWorkflowIntent): string {
+  if (intent.steps.length === 1) return intent.primaryVerb
+  switch (intent.primaryVerb) {
+    case 'stash': return 'stash and verify'
+    case 'reset': return 'reset and inspect'
+    case 'add': return 'stage and verify'
+    case 'fetch': return 'fetch and inspect'
+    default: return `${intent.primaryVerb} workflow`
+  }
+}
+
+/** Bound for the workflow card's INLINE output slab. The full page budget
+ * (16 KB / 400 lines) is a parser admission cap, not a card layout; a chain
+ * that dumps a large diff would visually drown the step list. The complete
+ * exact output always remains one click away in GitOutputDisclosure. */
+const WORKFLOW_INLINE_OUTPUT_CHARS = 2048
+const WORKFLOW_INLINE_OUTPUT_LINES = 40
+
+/**
+ * Generic card for all-Git chains and broader single verbs.
+ *
+ * This card renders ONLY under proven success (GitOperationView gates rich
+ * cards on `status === 'success'`, which adapters grant only with exit-0
+ * evidence). That proof is what legitimizes the per-step claims below.
+ *
+ * Summary discipline: every summary line must be ANCHORED — either a verbatim
+ * output line whose grammar is unique to one step, or the product of a parser
+ * gated on that step's presence. Heuristics that guessed from position or
+ * loose regexes ("HEAD matches origin/main" from the first two hex lines,
+ * changed-path counts from two-letter prefixes, reset-mode claims derived
+ * from the command STRING rather than output) asserted false facts and were
+ * removed. Prefer dropping an enrichment over guessing: the steps, the
+ * bounded output, and the raw disclosure are the evidence; summaries only
+ * restate what they already prove.
+ */
+function GitWorkflowCard({
+  intent,
+  output,
+  partial,
+}: {
+  intent: GitWorkflowIntent
+  output: string
+  partial: boolean
+}) {
+  const plain = stripAnsi(output)
+  const lines = plain.replace(/\r\n?/g, '\n').split('\n')
+  // `&&` + proven exit 0 is the only combination that proves every step ran
+  // AND succeeded. A `;`/newline chain exits with the LAST segment's status,
+  // so even proven success leaves earlier steps unaccounted for — those render
+  // neutral bullets and no "complete" badge.
+  const allStepsProven = intent.operators.every(operator => operator === '&&')
+  // Stash identity: only claim a `stash@{n}:` line when the output contains
+  // exactly one. A chain ending in a multi-entry `git stash list` has several,
+  // and picking any one of them would misattribute which stash this operation
+  // touched.
+  const stashLines = lines.map(line => line.trim()).filter(line => /^stash@\{\d+\}:/.test(line))
+  const stashRef = intent.steps.some(step => step.verb === 'stash') && stashLines.length === 1
+    ? stashLines[0]
+    : undefined
+  // Branch: requires a `status --branch` step (the only admitted step that
+  // emits the porcelain `## <branch>` header) AND exactly one candidate line.
+  // Other admitted verbs (`show`, `log`) can print arbitrary text including
+  // markdown headings; uniqueness plus the emitting step keeps this anchored.
+  const hasBranchStatusStep = intent.steps.some(step =>
+    step.verb === 'status' && /(?:^|\s)(?:--branch|-b)\b/.test(step.args),
+  )
+  const branchLines = lines.filter(line => /^##\s+\S/.test(line))
+  const branch = hasBranchStatusStep && branchLines.length === 1
+    ? branchLines[0].replace(/^##\s+/, '').trim()
+    : undefined
+  const commit = intent.steps.some(step => step.verb === 'commit')
+    ? parseGitCommit(plain)
+    : null
+  const commitStats = commit?.filesChanged !== undefined
+    ? [
+        `${commit.filesChanged.toLocaleString()} ${commit.filesChanged === 1 ? 'file' : 'files'}`,
+        commit.insertions !== undefined ? `+${commit.insertions.toLocaleString()}` : null,
+        commit.deletions !== undefined ? `-${commit.deletions.toLocaleString()}` : null,
+      ].filter((part): part is string => part !== null).join(' · ')
+    : null
+  const push = intent.steps.some(step => step.verb === 'push')
+    ? parseGitPush(plain)
+    : null
+  const summaries = [
+    stashRef,
+    commit?.sha ? `${commit.sha}  ${commit.subject ?? 'commit created'}` : null,
+    commitStats,
+    push?.upToDate ? 'Everything already up to date' : null,
+    push && push.refs.length > 0 ? push.refs.map(ref => ref.ref).join(', ') : null,
+    branch ? `Branch ${branch}` : null,
+  ].filter((summary): summary is string => summary !== null && summary !== undefined)
+  // Inline output keeps broader verbs useful: `git branch -a`, `git show`,
+  // `git stash list` were previously collapsed to their first line, hiding
+  // everything but one row behind the disclosure toggle. A second, tighter
+  // page keeps the card scannable while the raw disclosure retains all bytes.
+  const inline = boundedTextPage(
+    plain.trim(),
+    0,
+    WORKFLOW_INLINE_OUTPUT_CHARS,
+    WORKFLOW_INLINE_OUTPUT_LINES,
+  )
+
+  return (
+    <Card>
+      <GitCardHeader
+        sub={workflowTitle(intent)}
+        badges={allStepsProven
+          ? <span className="text-[10.5px] uppercase tracking-wide text-muted">complete</span>
+          : null}
+      />
+      {summaries.length > 0 ? (
+        <div className="flex flex-col gap-0.5 mb-2 text-[12px] text-ink-dim">
+          {summaries.map(summary => <div key={summary}>{summary}</div>)}
+        </div>
+      ) : null}
+      <ol className="list-none p-0 m-0 flex flex-col gap-0.5">
+        {intent.steps.map((step, index) => (
+          <li key={`${index}:${step.command}`} className="flex items-baseline gap-2 min-w-0">
+            <span className={allStepsProven ? 'text-success' : 'text-muted'}>
+              {allStepsProven ? '✓' : '•'}
+            </span>
+            <span className="font-code text-[11.5px] text-ink-dim truncate" title={step.command}>
+              {step.command}
+            </span>
+          </li>
+        ))}
+      </ol>
+      <pre className="font-code text-[11.5px] leading-[1.55] text-ink-dim whitespace-pre-wrap break-words m-0 mt-2">
+        {inline.text ? `${inline.text}${inline.hasNext ? '\n…' : ''}` : '(no output)'}
+      </pre>
+      {partial ? <PartialPreviewNotice /> : null}
+    </Card>
+  )
+}
+
 export function renderGitCard(intent: GitIntent, output: string): React.ReactNode {
   // WHY custom git cards enforce the same admission budget as generic tool
   // output: the parsers split output into files/hunks/lines and the diff card
@@ -672,6 +807,7 @@ export function renderGitCard(intent: GitIntent, output: string): React.ReactNod
       case 'add':    return <GitAddCard intent={intent} output={parseableOutput} partial={page.hasNext} />
       case 'log':    return <GitLogCard intent={intent} output={parseableOutput} partial={page.hasNext} />
       case 'push':   return <GitPushCard intent={intent} output={parseableOutput} partial={page.hasNext} />
+      case 'workflow': return <GitWorkflowCard intent={intent} output={parseableOutput} partial={page.hasNext} />
       default: return null
     }
   })()
@@ -729,11 +865,13 @@ export function GitCardRow({ intent, output }: { intent: GitIntent; output: stri
 /**
  * One paired Git operation surface.
  *
- * Failed commands deliberately stay in the ordinary command grammar. Git's
- * success parsers are intentionally best-effort and could otherwise turn an
- * authentication error into an empty/clean-looking card. The raw bounded
- * output is the evidence the user needs, and result absorption is safe only
- * because this exact surface carries it.
+ * Failed AND unknown-exit commands deliberately stay in the ordinary command
+ * grammar. Git's success parsers are intentionally best-effort and could
+ * otherwise turn an authentication error into an empty/clean-looking card —
+ * and an unknown exit (Codex `text(r.output)` carrier) is exactly the state
+ * where a failure can masquerade as clean output. The raw bounded output is
+ * the evidence the user needs, and result absorption is safe only because
+ * this exact surface carries it. Rich cards therefore require PROVEN success.
  */
 export function GitOperationView({ model }: { model: GitOperationModel }) {
   if (model.status !== 'success') {

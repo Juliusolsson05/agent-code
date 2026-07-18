@@ -5,6 +5,7 @@ import {
   TEXT_PAGE_MAX_CHARS,
 } from '@renderer/lib/text/boundedText'
 import type { CommandRenderModel } from '@providers/shared/renderer/protocols/command/model'
+import { analyzeCommandOutput } from '@providers/shared/renderer/protocols/command/formatters'
 import { toolResultContentText } from '@providers/shared/renderer/rows/toolResultContent'
 
 // Codex wire → CommandRenderModel (PR #555 Phase 6). Codex-PRIVATE. Covers
@@ -23,6 +24,49 @@ type ExecCommandInput = {
   yieldTimeMs: number | null
   maxOutputTokens: number | null
 }
+
+type UnifiedResultPresentation = 'direct-output' | 'serialized-result' | 'discarded'
+
+export type CodexCommandOperation = {
+  /** Full command is retained for semantic formatters. The leaf view receives
+   * the independently bounded command in `model.command`. */
+  rawCommand: string
+  model: CommandRenderModel
+  /** Only true when the adapter proved where every visible result byte lives.
+   * The operation boundary may absorb the paired result only in this state. */
+  ownsResult: boolean
+}
+
+type TransparentExecInvocation = {
+  command: string
+  workdir: string | null
+  yieldTimeMs: number | null
+  maxOutputTokens: number | null
+  presentation: UnifiedResultPresentation
+}
+
+type CommandResultEvidence = {
+  output?: string
+  exitCode: number | null
+  failed: boolean
+  /** True only when a transport actually carried terminal exit evidence:
+   * native exec_command metadata, a serialized ExecCommandResult exit_code, or
+   * a proven failure signal (is_error / "Script failed"). The dominant
+   * `text(r.output)` carrier deliberately never proves success — code mode's
+   * "Script completed" line means only that the JavaScript did not throw
+   * (vendor/codex-src code_mode/mod.rs format_script_status), while the inner
+   * command's nonzero exit is swallowed by the harness. Without this flag that
+   * blindness silently became a green "success" for failed commands. */
+  exitProven: boolean
+  /** True when the envelope says the script is still running (Yielded /
+   * "Script running with cell ID …"). Such a result is a partial flush, and
+   * Codex's notify() can inject MORE outputs for the same call_id later, so
+   * it must never be absorbed as a terminal owned result. */
+  running: boolean
+  owned: boolean
+}
+
+const SERIALIZED_EXEC_RESULT_MAX_CHARS = 2 * 1024 * 1024
 
 /** Full command for semantic formatters; display adapters use the bounded
  * sibling below. Never feed this unbounded string directly to a headline. */
@@ -93,21 +137,273 @@ export function fromCodexExecCommand(
     result?: ToolResultBlock | null
   } = {},
 ): CommandRenderModel | null {
-  const input = execCommandInput(block.input)
-  if (!input) return null // unparseable/whitespace → caller falls back (preserved behavior)
+  return fromCodexCommandOperation({
+    toolUse: block,
+    result: opts.result ?? null,
+    streaming: opts.streaming,
+    live: opts.live,
+  })?.model ?? null
+}
+
+/**
+ * Normalize both Codex command transports into one operation contract.
+ *
+ * Native `exec_command` is already a command envelope. Modern Codex instead
+ * emits a `custom_tool_call(name="exec")` whose JavaScript calls
+ * `tools.exec_command`. We admit the latter only when the complete script is a
+ * transparent one-call bridge and its trailing `text(...)` expression proves
+ * whether the result is direct output or a serialized ExecCommandResult.
+ *
+ * WHY this proof belongs here rather than in Git or another formatter: Git,
+ * test totals, JSON, file mutations, failures, ANSI output, and every future
+ * command family all consume the same operation. Teaching each formatter
+ * about Codex JavaScript would duplicate a provider transport grammar and
+ * guarantee drift. Conversely, treating every script containing the substring
+ * `tools.exec_command` as transparent could absorb unrelated JavaScript output.
+ */
+export function fromCodexCommandOperation(input: {
+  toolUse: ToolUseBlock
+  result: ToolResultBlock | null
+  streaming?: boolean
+  live?: boolean
+}): CodexCommandOperation | null {
+  const native = input.toolUse.name === 'exec_command'
+    ? nativeExecInvocation(input.toolUse.input)
+    : null
+  const unified = input.toolUse.name === 'exec'
+    ? transparentExecInvocation(input.toolUse.input)
+    : null
+  const invocation = native ?? unified
+  if (!invocation) return null
+
+  const evidence = commandResultEvidence(
+    input.result,
+    native ? 'native' : invocation.presentation,
+  )
   const meta: string[] = []
-  if (input.yieldTimeMs !== null) meta.push(`yield ${input.yieldTimeMs}ms`)
-  if (input.maxOutputTokens !== null) meta.push(`max ${input.maxOutputTokens} tok`)
-  const lifecycle = codexCommandLifecycle(opts)
+  if (invocation.yieldTimeMs !== null) meta.push(`yield ${invocation.yieldTimeMs}ms`)
+  if (invocation.maxOutputTokens !== null) meta.push(`max ${invocation.maxOutputTokens} tok`)
+  const lifecycle = commandLifecycle({
+    result: input.result,
+    evidence,
+    streaming: input.streaming,
+  })
+  const analyzed = evidence.output !== undefined && input.result
+    ? analyzeCommandOutput(invocation.command, evidence.output, evidence.exitCode)
+    : null
+
   return {
-    label: 'exec',
-    command: input.command,
-    cwd: input.workdir ?? undefined,
-    status: lifecycle.status,
-    exitCode: lifecycle.exitCode,
-    errorSummary: lifecycle.errorSummary,
-    conclusion: meta.length > 0 ? meta.join(' · ') : undefined,
+    rawCommand: invocation.command,
+    ownsResult: input.result !== null && evidence.owned,
+    model: {
+      label: 'exec',
+      command: truncateCommand(invocation.command),
+      cwd: invocation.workdir ?? undefined,
+      status: lifecycle.status,
+      exitCode: evidence.exitCode,
+      ...(evidence.output !== undefined ? { output: evidence.output } : {}),
+      ...(evidence.failed ? { outputIsError: true } : {}),
+      errorSummary: lifecycle.errorSummary,
+      conclusion: analyzed ?? (meta.length > 0 ? meta.join(' · ') : undefined),
+    },
   }
+}
+
+function nativeExecInvocation(input: unknown): TransparentExecInvocation | null {
+  const rawCommand = rawCodexExecCommand(input)
+  const parsed = execCommandInput(input)
+  if (!rawCommand || !parsed) return null
+  return {
+    command: rawCommand,
+    workdir: parsed.workdir,
+    yieldTimeMs: parsed.yieldTimeMs,
+    maxOutputTokens: parsed.maxOutputTokens,
+    presentation: 'direct-output',
+  }
+}
+
+function transparentExecInvocation(input: unknown): TransparentExecInvocation | null {
+  const script = applyPatchScriptText(input)
+  if (!script || script.length > TEXT_PAGE_MAX_CHARS) return null
+  if (/\btools\.apply_patch\s*\(/.test(script)) return null
+
+  const marker = 'tools.exec_command'
+  const callAt = script.indexOf(marker)
+  if (callAt < 0 || script.indexOf(marker, callAt + marker.length) >= 0) return null
+  let cursor = callAt + marker.length
+  while (/\s/.test(script[cursor] ?? '')) cursor += 1
+  if (script[cursor] !== '(') return null
+  const callEnd = matchingCallEnd(script, cursor)
+  if (callEnd === null) return null
+
+  const prefix = script.slice(0, callAt).trim()
+  const suffix = script.slice(callEnd + 1).trim()
+  const assignment = /^(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*await\s*$/.exec(prefix)
+  const unassigned = /^await\s*$/.test(prefix)
+  if (!assignment && !unassigned) return null
+
+  let presentation: UnifiedResultPresentation = 'discarded'
+  if (assignment) {
+    const variable = escapeRegExp(assignment[1])
+    const direct = new RegExp(`^;?\\s*text\\(\\s*${variable}\\.output\\s*\\)\\s*;?$`)
+    const serialized = new RegExp(
+      `^;?\\s*text\\(\\s*JSON\\.stringify\\(\\s*${variable}\\s*\\)\\s*\\)\\s*;?$`,
+    )
+    if (direct.test(suffix)) presentation = 'direct-output'
+    else if (serialized.test(suffix)) presentation = 'serialized-result'
+    else return null
+  } else if (!/^;?$/.test(suffix)) {
+    return null
+  }
+
+  const argument = script.slice(cursor + 1, callEnd).trim()
+  const parsed = parseExecCommandArgument(argument)
+  return parsed ? { ...parsed, presentation } : null
+}
+
+/** Locate the closing parenthesis without executing or fully parsing generated
+ * JavaScript. Backtick templates are deliberately rejected: `${...}` would
+ * require a JavaScript expression parser before we could prove the call
+ * boundary or the resulting command bytes. */
+function matchingCallEnd(source: string, openAt: number): number | null {
+  let depth = 1
+  let quote: '"' | "'" | null = null
+  for (let i = openAt + 1; i < source.length; i += 1) {
+    const char = source[i]
+    if (quote) {
+      if (char === '\\') {
+        i += 1
+        continue
+      }
+      if (char === quote) quote = null
+      continue
+    }
+    if (char === '`') return null
+    if (char === '"' || char === "'") {
+      quote = char
+      continue
+    }
+    if (char === '/' && source[i + 1] === '/') {
+      const newline = source.indexOf('\n', i + 2)
+      if (newline < 0) return null
+      i = newline
+      continue
+    }
+    if (char === '/' && source[i + 1] === '*') {
+      const close = source.indexOf('*/', i + 2)
+      if (close < 0) return null
+      i = close + 1
+      continue
+    }
+    if (char === '(') depth += 1
+    if (char === ')') {
+      depth -= 1
+      if (depth === 0) return i
+    }
+  }
+  return null
+}
+
+function parseExecCommandArgument(argument: string): Omit<TransparentExecInvocation, 'presentation'> | null {
+  const direct = decodeDoubleQuotedLiteral(argument)
+  if (direct !== null) {
+    return {
+      command: direct,
+      workdir: null,
+      yieldTimeMs: null,
+      maxOutputTokens: null,
+    }
+  }
+  if (!argument.startsWith('{') || !argument.endsWith('}')) return null
+  const fields = simpleObjectFields(argument.slice(1, -1))
+  if (!fields) return null
+  const command = decodeDoubleQuotedLiteral(fields.get('cmd') ?? fields.get('command') ?? '')
+  if (command === null || !/\S/.test(command)) return null
+  const workdirValue = fields.get('workdir')
+  const workdir = workdirValue === undefined
+    ? null
+    : decodeDoubleQuotedLiteral(workdirValue)
+  if (workdirValue !== undefined && workdir === null) return null
+  return {
+    command,
+    workdir,
+    yieldTimeMs: finiteNumber(fields.get('yield_time_ms') ?? fields.get('yield_time-ms')),
+    maxOutputTokens: finiteNumber(fields.get('max_output_tokens') ?? fields.get('max-output-tokens')),
+  }
+}
+
+function simpleObjectFields(body: string): Map<string, string> | null {
+  const fields = new Map<string, string>()
+  const segments = splitSimpleTopLevel(body, ',')
+  if (!segments) return null
+  for (const segment of segments) {
+    if (!segment.trim()) continue
+    const pair = splitSimpleTopLevel(segment, ':')
+    if (!pair || pair.length !== 2) return null
+    const rawKey = pair[0].trim()
+    const quotedKey = decodeDoubleQuotedLiteral(rawKey)
+    const key = quotedKey ?? (/^[A-Za-z_$][\w$-]*$/.test(rawKey) ? rawKey : null)
+    if (!key || fields.has(key)) return null
+    fields.set(key, pair[1].trim())
+  }
+  return fields
+}
+
+function splitSimpleTopLevel(source: string, separator: ',' | ':'): string[] | null {
+  const out: string[] = []
+  let start = 0
+  let quote: '"' | "'" | null = null
+  let round = 0
+  let square = 0
+  let curly = 0
+  for (let i = 0; i < source.length; i += 1) {
+    const char = source[i]
+    if (quote) {
+      if (char === '\\') i += 1
+      else if (char === quote) quote = null
+      continue
+    }
+    if (char === '`') return null
+    if (char === '"' || char === "'") {
+      quote = char
+      continue
+    }
+    if (char === '(') round += 1
+    else if (char === ')') round -= 1
+    else if (char === '[') square += 1
+    else if (char === ']') square -= 1
+    else if (char === '{') curly += 1
+    else if (char === '}') curly -= 1
+    if (round < 0 || square < 0 || curly < 0) return null
+    if (char === separator && round === 0 && square === 0 && curly === 0) {
+      out.push(source.slice(start, i))
+      start = i + 1
+    }
+  }
+  if (quote || round !== 0 || square !== 0 || curly !== 0) return null
+  out.push(source.slice(start))
+  return out
+}
+
+function decodeDoubleQuotedLiteral(value: string): string | null {
+  const trimmed = value.trim()
+  if (!trimmed.startsWith('"') || !trimmed.endsWith('"')) return null
+  try {
+    const parsed: unknown = JSON.parse(trimmed)
+    return typeof parsed === 'string' ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+function finiteNumber(value: string | undefined): number | null {
+  if (value === undefined) return null
+  const number = Number(value)
+  return Number.isFinite(number) ? number : null
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 /** Modern unified-exec wrapper, PLAIN-COMMAND case: extract up to six
@@ -122,6 +418,13 @@ export function fromCodexExecScript(
     result?: ToolResultBlock | null
   } = {},
 ): CommandRenderModel | null {
+  const exact = fromCodexCommandOperation({
+    toolUse: block,
+    result: opts.result ?? null,
+    streaming: opts.streaming,
+    live: opts.live,
+  })
+  if (exact) return exact.model
   const script = applyPatchScriptText(block.input)
   if (!script) return null
   // WHY precedence and command extraction share the same bounded page: this
@@ -160,7 +463,12 @@ export function fromCodexExecScript(
     }
   }
   if (commands.length === 0) return null
-  const lifecycle = codexCommandLifecycle(opts)
+  const evidence = commandResultEvidence(opts.result ?? null, 'discarded')
+  const lifecycle = commandLifecycle({
+    result: opts.result ?? null,
+    evidence,
+    streaming: opts.streaming,
+  })
   const omission = execScriptOmissionMessage(omittedCommands, hasUninspectedTail)
   return {
     label: 'exec',
@@ -169,7 +477,7 @@ export function fromCodexExecScript(
       ...(omission ? [omission] : []),
     ].join('\n'),
     status: lifecycle.status,
-    exitCode: lifecycle.exitCode,
+    exitCode: evidence.exitCode,
     errorSummary: lifecycle.errorSummary,
   }
 }
@@ -199,15 +507,144 @@ function execScriptOmissionMessage(
   return null
 }
 
-function codexCommandLifecycle(opts: {
-  streaming?: boolean
-  live?: boolean
-  result?: ToolResultBlock | null
-}): Pick<CommandRenderModel, 'status' | 'exitCode' | 'errorSummary'> {
-  const result = opts.result ?? null
+function commandResultEvidence(
+  result: ToolResultBlock | null,
+  transport: 'native' | UnifiedResultPresentation,
+): CommandResultEvidence {
+  if (!result) {
+    return { exitCode: null, failed: false, exitProven: false, running: false, owned: false }
+  }
   const codex = asRecord(asRecord(result)?.codex)
-  const exitCode = typeof codex?.exitCode === 'number' ? codex.exitCode : null
-  const failed = result?.is_error === true || (exitCode !== null && exitCode !== 0)
+  const nativeExit = numericField(codex, 'exitCode', 'exit_code')
+  const materialized = toolResultContentText(result.content)
+
+  if (transport === 'native') {
+    // WHY the native transport never envelope-strips: exec_command_end results
+    // are the command's own bytes, not a code-mode script wrapper. A command
+    // whose output legitimately BEGINS with "Script completed…Output:" (for
+    // example `cat` of a captured unified-exec transcript) must keep those
+    // header lines — the paired result row is absorbed, so trimming here would
+    // destroy the only copy of that prefix.
+    const failed = result.is_error === true || (nativeExit !== null && nativeExit !== 0)
+    return {
+      output: materialized,
+      exitCode: nativeExit,
+      failed,
+      // Native exec_command_end results always carry exit-derived evidence:
+      // rollout.ts computes is_error from `exit_code !== 0 || status ===
+      // 'failed'` and stamps codex.exitCode. is_error === false is therefore a
+      // proven success on THIS transport — unlike code-mode
+      // custom_tool_call_output, whose is_error never reflects the inner
+      // command.
+      exitProven: true,
+      running: false,
+      owned: true,
+    }
+  }
+
+  const envelope = parseCodexTransportEnvelope(materialized)
+  if (!envelope) {
+    const failed = result.is_error === true || (nativeExit !== null && nativeExit !== 0)
+    return {
+      exitCode: nativeExit,
+      failed,
+      exitProven: failed || nativeExit !== null,
+      running: false,
+      owned: false,
+    }
+  }
+  // A Yielded script ("Script running with cell ID …") is a partial flush:
+  // the trailing text(...) carrier has not run yet, and later notify()
+  // injections share this call_id. Owning/absorbing it would both claim a
+  // terminal outcome that does not exist and orphan the continuation output.
+  if (envelope.status === 'running') {
+    return {
+      exitCode: nativeExit,
+      failed: result.is_error === true,
+      exitProven: result.is_error === true,
+      running: true,
+      owned: false,
+    }
+  }
+  const scriptFailed = result.is_error === true || envelope.status === 'failed'
+  if (transport === 'discarded') {
+    return {
+      exitCode: nativeExit,
+      failed: scriptFailed,
+      exitProven: scriptFailed,
+      running: false,
+      owned: false,
+    }
+  }
+  if (transport === 'direct-output') {
+    const failed = scriptFailed || (nativeExit !== null && nativeExit !== 0)
+    return {
+      output: envelope.output,
+      exitCode: nativeExit,
+      failed,
+      // "Script completed" proves only that the JavaScript ran; the inner
+      // command's exit code is unrecoverable on this carrier (the nested
+      // exec_command tool returns exit_code inside its JSON result and never
+      // fails the script — see the vendored code_mode handler). Success must
+      // therefore stay UNPROVEN even though the output bytes are fully owned.
+      exitProven: failed || nativeExit !== null,
+      running: false,
+      owned: true,
+    }
+  }
+
+  // WHY serialized results have a hard parse ceiling: JSON.parse must
+  // materialize a second copy of every escaped output byte. Commands can emit
+  // attacker-sized text even when the feed itself pages it safely. Above this
+  // ceiling we retain the original paired result row instead of risking a
+  // renderer allocation spike or pretending we consumed evidence we skipped.
+  if (envelope.output.length > SERIALIZED_EXEC_RESULT_MAX_CHARS) {
+    return {
+      exitCode: nativeExit,
+      failed: scriptFailed,
+      exitProven: scriptFailed,
+      running: false,
+      owned: false,
+    }
+  }
+  let serialized: Record<string, unknown> | null = null
+  try {
+    serialized = asRecord(JSON.parse(envelope.output))
+  } catch {
+    serialized = null
+  }
+  const output = typeof serialized?.output === 'string' ? serialized.output : null
+  if (output === null) {
+    return {
+      exitCode: nativeExit,
+      failed: scriptFailed,
+      exitProven: scriptFailed,
+      running: false,
+      owned: false,
+    }
+  }
+  const serializedExit = numericField(serialized, 'exit_code', 'exitCode')
+  const exitCode = serializedExit ?? nativeExit
+  const failed = scriptFailed || (exitCode !== null && exitCode !== 0)
+  return {
+    output,
+    exitCode,
+    failed,
+    // Background/yielded sessions omit exit_code from the serialized result
+    // (vendored UnifiedExecCodeModeResult skips None); an absent field means
+    // the exit is genuinely unknown, not zero.
+    exitProven: failed || exitCode !== null,
+    running: false,
+    owned: true,
+  }
+}
+
+function commandLifecycle(opts: {
+  streaming?: boolean
+  result: ToolResultBlock | null
+  evidence: CommandResultEvidence
+}): Pick<CommandRenderModel, 'status' | 'errorSummary'> {
+  const { result, evidence } = opts
 
   // WHY a result-less durable invocation is "running", never "success": the
   // same committed shape represents both an in-flight command and a command
@@ -215,25 +652,47 @@ function codexCommandLifecycle(opts: {
   // distinguish those states at this seam, but both disprove success. Live
   // context still matters for the streaming prefix; terminal success/failure
   // is granted only by an actual correlated result.
-  const status: CommandRenderModel['status'] = failed
+  //
+  // WHY "unknown" exists between running and success: a terminal result whose
+  // transport carried no exit evidence (the dominant `text(r.output)` carrier)
+  // proves the bytes but not the outcome. Mapping it to "success" made failed
+  // pushes, guarded resets, and red test runs render green. The honest state
+  // is a completed command with an unproven exit.
+  const status: CommandRenderModel['status'] = evidence.failed
     ? 'failure'
-    : result
-      ? 'success'
-      : opts.streaming
-        ? 'streaming'
-        : 'running'
-  if (!failed) return { status, exitCode, errorSummary: undefined }
+    : evidence.running
+      ? 'running'
+      : result
+        ? evidence.exitProven ? 'success' : 'unknown'
+        : opts.streaming
+          ? 'streaming'
+          : 'running'
+  if (!evidence.failed) return { status, errorSummary: undefined }
 
-  const output = result
-    ? stripCodexTransportEnvelope(toolResultContentText(result.content))
-    : ''
+  // A failed unowned/fan-out script has no evidence.output, but the paired
+  // result row (which stays visible in that state) still holds the real error
+  // text. Summarize from it rather than degrading to a generic "command
+  // failed" headline; the envelope chrome is stripped for the summary only —
+  // the result row itself keeps every byte.
+  const output = evidence.output ??
+    (result ? stripCodexTransportEnvelope(toolResultContentText(result.content)) : '')
   const newline = output.indexOf('\n')
   const firstLine = (newline === -1 ? output : output.slice(0, newline)).slice(0, 200)
   return {
     status,
-    exitCode,
     errorSummary: firstLine || 'command failed',
   }
+}
+
+function numericField(
+  record: Record<string, unknown> | null,
+  ...keys: string[]
+): number | null {
+  for (const key of keys) {
+    const value = record?.[key]
+    if (typeof value === 'number' && Number.isFinite(value)) return value
+  }
+  return null
 }
 
 function applyPatchScriptText(input: unknown): string {
@@ -250,6 +709,12 @@ function applyPatchScriptText(input: unknown): string {
  *  consumed the whole preview). Failure state is preserved by the caller
  *  via is_error/exit; wall time is dropped as decoration. */
 export function stripCodexTransportEnvelope(text: string): string {
+  return parseCodexTransportEnvelope(text)?.output ?? text
+}
+
+function parseCodexTransportEnvelope(
+  text: string,
+): { status: 'completed' | 'failed' | 'running'; output: string } | null {
   const takeLine = (start: number): { line: string; next: number } => {
     const newline = text.indexOf('\n', start)
     return newline === -1
@@ -257,7 +722,8 @@ export function stripCodexTransportEnvelope(text: string): string {
       : { line: text.slice(start, newline), next: newline + 1 }
   }
   const first = takeLine(0)
-  if (!/^Script (completed|failed|running)(?:\b.*)?$/.test(first.line)) return text
+  const statusMatch = /^Script (completed|failed|running)(?:\b.*)?$/.exec(first.line)
+  if (!statusMatch) return null
   let cursor = first.next
   let current = takeLine(cursor)
   if (/^Wall time(?::|\b)/.test(current.line)) {
@@ -267,11 +733,14 @@ export function stripCodexTransportEnvelope(text: string): string {
   // `Output:` is the structural proof that the preceding lines are transport
   // chrome. A legitimate program can print "Script completed" itself; without
   // this delimiter, retain the complete output verbatim.
-  if (current.line !== 'Output:') return text
+  if (current.line !== 'Output:') return null
   cursor = current.next
   if (cursor < text.length) {
     current = takeLine(cursor)
     if (/^\s*$/.test(current.line)) cursor = current.next
   }
-  return text.slice(cursor)
+  return {
+    status: statusMatch[1] as 'completed' | 'failed' | 'running',
+    output: text.slice(cursor),
+  }
 }

@@ -5,6 +5,7 @@ import {
   isCodexApplyPatchUse,
 } from '@providers/codex/renderer/adapters/codeEdit'
 import {
+  fromCodexCommandOperation,
   fromCodexExecCommand,
   fromCodexExecScript,
   stripCodexTransportEnvelope,
@@ -82,6 +83,29 @@ export function renderCodexOperation(
             ownerRenderId: 'shared.command',
             protocolId: 'command.git',
             reason: 'paired Git operation view preserves the bounded result evidence',
+          }
+        : null,
+    }
+  }
+
+  const command = fromCodexCommandOperation({
+    toolUse: input.toolUse,
+    result: input.result,
+    streaming: input.streaming,
+    live: input.live,
+  })
+  if (command && (!input.result || command.ownsResult)) {
+    return {
+      toolUse: {
+        action: 'render',
+        node: <CommandView model={command.model} />,
+        receipt: { rendererId: 'codex.rows.dispatch' },
+      },
+      toolResult: input.result
+        ? {
+            action: 'absorb',
+            ownerRenderId: 'codex.rows.dispatch',
+            reason: 'normalized command operation preserves the validated paired output',
           }
         : null,
     }

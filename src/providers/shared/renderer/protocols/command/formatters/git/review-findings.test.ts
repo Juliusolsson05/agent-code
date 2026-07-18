@@ -9,6 +9,28 @@ import {
 } from './parse'
 
 describe('Git formatter review invariants', () => {
+  it('retains every step when a captured all-Git workflow uses broader verbs', () => {
+    expect(detectGitIntent(
+      'git diff --cached --quiet && git reset --mixed origin/main && git status --short --branch',
+    )).toMatchObject({
+      kind: 'workflow',
+      primaryVerb: 'reset',
+      operators: ['&&', '&&'],
+      steps: [
+        { verb: 'diff' },
+        { verb: 'reset' },
+        { verb: 'status' },
+      ],
+    })
+    expect(detectGitIntent(
+      'git stash push -u -m "snapshot" && git rev-parse HEAD && git stash list -1',
+    )).toMatchObject({
+      kind: 'workflow',
+      primaryVerb: 'stash',
+      steps: [{ verb: 'stash' }, { verb: 'rev-parse' }, { verb: 'stash' }],
+    })
+  })
+
   it.each([
     'git commit -m "checkpoint" | cat',
     'git commit -m "checkpoint" || git status',
@@ -28,7 +50,9 @@ describe('Git formatter review invariants', () => {
       kind: 'commit',
     })
     expect(detectGitIntent("git add -A && git commit -m \"$(cat <<'EOF'\nsubject\nEOF\n)\"")).toMatchObject({
-      kind: 'commit',
+      kind: 'workflow',
+      primaryVerb: 'commit',
+      steps: [{ verb: 'add' }, { verb: 'commit' }],
     })
   })
 
