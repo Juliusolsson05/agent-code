@@ -1,0 +1,73 @@
+name: Reusable package CI
+
+on:
+  workflow_call:
+    inputs:
+      node-versions:
+        description: JSON array containing the minimum and current Node versions.
+        required: false
+        default: '["22", "24"]'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    name: Contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --include=dev
+      - run: npm run test:contract
+
+  deterministic:
+    name: Node ${{ matrix.node-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ${{ fromJSON(inputs.node-versions) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - run: npm ci --include=dev
+      - run: npm run check
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --include=dev
+      - run: npm run test:coverage
+
+  quality-gate:
+    name: quality-gate
+    if: ${{ always() }}
+    needs: [contract, deterministic, coverage]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every deterministic package gate
+        env:
+          CONTRACT_RESULT: ${{ needs.contract.result }}
+          DETERMINISTIC_RESULT: ${{ needs.deterministic.result }}
+          COVERAGE_RESULT: ${{ needs.coverage.result }}
+        run: |
+          test "$CONTRACT_RESULT" = success
+          test "$DETERMINISTIC_RESULT" = success
+          test "$COVERAGE_RESULT" = success
