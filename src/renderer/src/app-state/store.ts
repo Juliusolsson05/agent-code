@@ -33,7 +33,13 @@ export const useAppStore = create<AppStore>()(
         // would skip coercion and thread `undefined` into the render-policy
         // selector, making the app's most central pane decision depend on a
         // missing persisted key.
-        version: 4,
+        //
+        // v5 adds `settings.savedThemes` and widens `settings.mode` to hold a
+        // `theme:<uuid>` id. Without a bump, an existing v4 user sitting on
+        // `mode: 'custom'` would skip migration, keep a mode value that no
+        // longer resolves to anything, and boot to Dark with their custom
+        // palette silently orphaned inside customAppearanceJson.
+        version: 5,
         storage: createJSONStorage(() => localStorage),
         partialize: state => ({ settings: state.settings }),
         merge: (persisted, current) => {

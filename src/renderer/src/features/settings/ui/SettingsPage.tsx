@@ -7,15 +7,23 @@ import {
   DialogDescription,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
+import { Input } from '@renderer/components/ui/input'
 import { Textarea } from '@renderer/components/ui/textarea'
 import { APP_INTERACTION_OWNER_ATTRIBUTE } from '@renderer/lib/interaction-ownership'
+import { DEFAULT_SETTINGS } from '@renderer/app-state/settings/types'
 import type { Settings } from '@renderer/app-state/settings/types'
 import {
   CUSTOM_APPEARANCE_SCHEMA_JSON,
   parseCustomAppearanceJson,
   stringifyCustomAppearance,
 } from '@renderer/app-state/settings/customAppearance'
-import type { CustomAppearanceColors } from '@renderer/app-state/settings/customAppearance'
+import {
+  SAVED_THEME_NAME_MAX,
+  createSavedTheme,
+  findSavedTheme,
+  readAppliedAppearance,
+} from '@renderer/app-state/settings/savedThemes'
+import type { SavedTheme } from '@renderer/app-state/settings/savedThemes'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { SETTING_CATEGORIES } from '@renderer/features/settings/lib/settingsCategories'
 import type { SettingCategoryId } from '@renderer/features/settings/lib/settingsCategories'
@@ -35,7 +43,15 @@ type Props = {
 export function SettingsPage({ onClose, workspace, settings, onChange, onReset }: Props) {
   const [query, setQuery] = useState('')
   const [selectedCategory, setSelectedCategory] = useState<SettingCategoryId | 'all'>('all')
-  const [customAppearanceOpen, setCustomAppearanceOpen] = useState(false)
+  // null           → editor closed
+  // { id: null }   → creating, seeded from the currently applied appearance
+  // { id: '...' }  → editing that saved theme
+  //
+  // WHY a target object rather than the old `customAppearanceOpen` boolean:
+  // there is now more than one thing the editor could be pointed at, and a
+  // boolean cannot express which. Wrapping the id in an object keeps "closed"
+  // (null) distinguishable from "creating" (id: null).
+  const [editorTarget, setEditorTarget] = useState<{ id: string | null } | null>(null)
 
   const registry = useMemo(() => getSettingsRegistry(), [])
   const visibleDefinitions = useMemo(
@@ -96,22 +112,53 @@ export function SettingsPage({ onClose, workspace, settings, onChange, onReset }
               onChange,
               onReset,
               onClose,
-              openCustomAppearanceEditor: () => setCustomAppearanceOpen(true),
+              openThemeEditor: (themeId: string | null) => setEditorTarget({ id: themeId }),
+              deleteSavedTheme: (themeId: string) => {
+                // WHY no confirmation dialog: the prompt-template delete this
+                // UI is modelled on has none either, and a theme is cheap to
+                // recreate. If this proves wrong, a confirm is a one-liner.
+                //
+                // Falling back to the default mode when the ACTIVE theme is
+                // deleted is what triggers applyTheme's clear-all path. Without
+                // it the 81 inline properties would keep outranking every
+                // [data-mode] block and the app would look broken until reload.
+                const savedThemes = settings.savedThemes.filter(theme => theme.id !== themeId)
+                onChange({
+                  savedThemes,
+                  mode: settings.mode === themeId ? DEFAULT_SETTINGS.mode : settings.mode,
+                })
+              },
             }}
           />
         </div>
       </div>
 
-      {customAppearanceOpen ? (
-        <CustomAppearanceModal
-          raw={settings.customAppearanceJson}
-          onClose={() => setCustomAppearanceOpen(false)}
-          onSave={parsed => {
-            onChange({
-              mode: 'custom',
-              customAppearanceJson: stringifyCustomAppearance(parsed),
-            })
-            setCustomAppearanceOpen(false)
+      {editorTarget ? (
+        <ThemeEditorModal
+          theme={editorTarget.id ? findSavedTheme(settings.savedThemes, editorTarget.id) : null}
+          onClose={() => setEditorTarget(null)}
+          onSave={(name, json, asCopy) => {
+            const existing = editorTarget.id
+              ? findSavedTheme(settings.savedThemes, editorTarget.id)
+              : null
+            // Saving always selects the theme, matching the old custom-appearance
+            // behavior where saving implied "and use this now". "Save a copy"
+            // takes the create branch on purpose: it mints a new id so the
+            // original is left exactly as it was.
+            if (existing && !asCopy) {
+              const updated: SavedTheme = { ...existing, name, json, updatedAt: Date.now() }
+              onChange({
+                savedThemes: settings.savedThemes.map(t => (t.id === existing.id ? updated : t)),
+                mode: updated.id,
+              })
+            } else {
+              const created = createSavedTheme(name, json)
+              onChange({
+                savedThemes: [...settings.savedThemes, created],
+                mode: created.id,
+              })
+            }
+            setEditorTarget(null)
           }}
         />
       ) : null}
@@ -119,25 +166,44 @@ export function SettingsPage({ onClose, workspace, settings, onChange, onReset }
   )
 }
 
-function CustomAppearanceModal({
-  raw,
+function ThemeEditorModal({
+  theme,
   onClose,
   onSave,
 }: {
-  raw: string
+  theme: SavedTheme | null
   onClose: () => void
-  onSave: (colors: CustomAppearanceColors) => void
+  onSave: (name: string, json: string, asCopy: boolean) => void
 }) {
-  const [draft, setDraft] = useState(raw)
+  // WHY a new theme seeds from readAppliedAppearance() rather than from
+  // DEFAULT_CUSTOM_APPEARANCE: it makes "+ New theme…" mean "duplicate what I
+  // am looking at", so the very first save is the user's current theme plus
+  // their one edit. Seeding from the hardcoded dark default would drop a
+  // Tokyonight user into an unrecognizable palette the moment they saved. It
+  // is also the ONLY way to reach built-in palette values at all — they exist
+  // solely as CSS in [data-mode] blocks (see savedThemes.ts).
+  const [draft, setDraft] = useState(
+    () => theme?.json ?? stringifyCustomAppearance(readAppliedAppearance()),
+  )
+  const [name, setName] = useState(theme?.name ?? '')
   const [view, setView] = useState<'json' | 'schema'>('json')
   const [error, setError] = useState<string | null>(null)
 
-  const save = () => {
+  // Validation stays save-time only, as before: the draft is raw user text and
+  // validating per keystroke would flag every half-typed hex as an error.
+  const save = (asCopy: boolean) => {
+    const trimmed = name.trim()
+    if (!trimmed) {
+      setError('Name is required')
+      return
+    }
     try {
-      onSave(parseCustomAppearanceJson(draft))
+      parseCustomAppearanceJson(draft)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
+      return
     }
+    onSave(trimmed, draft, asCopy)
   }
 
   return (
@@ -151,10 +217,10 @@ function CustomAppearanceModal({
         <div className="flex items-center justify-between border-b border-panel-border bg-panel-header-bg px-4 py-3">
           <div>
             <DialogTitle>
-              Custom Appearance
+              {theme ? 'Edit Theme' : 'New Theme'}
             </DialogTitle>
             <DialogDescription>
-              Define the application color tokens as validated JSON.
+              Name your color scheme and define its application tokens as validated JSON.
             </DialogDescription>
           </div>
           <div className="flex items-center gap-2">
@@ -177,10 +243,33 @@ function CustomAppearanceModal({
           </div>
         </div>
 
+        <div className="flex items-center gap-3 border-b border-panel-border px-4 py-3">
+          <label
+            htmlFor="theme-name"
+            className="text-[11px] uppercase tracking-wider text-muted"
+          >
+            Name
+          </label>
+          {/* autoFocus lives here rather than on the textarea: for a new theme
+              the name is the empty field, and for an edit it is still the field
+              most likely to be changed. */}
+          <Input
+            id="theme-name"
+            autoFocus
+            value={name}
+            maxLength={SAVED_THEME_NAME_MAX}
+            onChange={event => {
+              setName(event.target.value)
+              setError(null)
+            }}
+            placeholder="Nord Night"
+            className="max-w-xs"
+          />
+        </div>
+
         <div className="min-h-0 flex-1 px-4 py-4">
           {view === 'json' ? (
             <Textarea
-              autoFocus
               value={draft}
               onChange={event => {
                 setDraft(event.target.value)
@@ -198,12 +287,21 @@ function CustomAppearanceModal({
 
         <div className="flex items-center justify-between border-t border-panel-border bg-panel-header-bg px-4 py-3">
           <div className="min-w-0 text-[11px] text-danger">{error ?? ''}</div>
-          <Button
-            type="button"
-            onClick={save}
-          >
-            Save Custom Appearance
-          </Button>
+          <div className="flex flex-shrink-0 items-center gap-2">
+            <Button type="button" variant="secondary" onClick={onClose}>
+              Cancel
+            </Button>
+            {/* Only offered when editing — "save a copy" of a theme that does
+                not exist yet is just "save". */}
+            {theme ? (
+              <Button type="button" variant="secondary" onClick={() => save(true)}>
+                Save a copy
+              </Button>
+            ) : null}
+            <Button type="button" onClick={() => save(false)}>
+              Save &amp; apply
+            </Button>
+          </div>
         </div>
       </DialogContent>
     </Dialog>
