@@ -1051,7 +1051,13 @@ function OpenCommandPalette({
     (e: React.KeyboardEvent) => {
       if (e.key === 'ArrowDown') {
         e.preventDefault()
-        setSelectedIndex(prev => Math.min(prev + 1, filteredLength - 1))
+        // Clamp the ceiling at 0, not at filteredLength - 1. Modes that render
+        // their own pane instead of the shared list (the template manager,
+        // editor, and fill panes) deliberately report filteredLength 0, which
+        // made the old ceiling -1 and pushed selectedIndex negative. Nothing
+        // crashed because every consumer index-guards, but the index then had
+        // to be walked back up through 0 before the list responded again.
+        setSelectedIndex(prev => Math.min(prev + 1, Math.max(0, filteredLength - 1)))
         return
       }
       if (e.key === 'ArrowUp') {
@@ -1062,6 +1068,16 @@ function OpenCommandPalette({
       if (e.key === 'Enter') {
         e.preventDefault()
         if (aiWorkspacePending) return
+        // The manager pane is entirely button-driven — rows and their
+        // Edit/Dup/Delete actions are real <button>s, and the input above it
+        // is a plain search field with no highlighted row to commit. It needs
+        // an explicit no-op branch because it is the only template mode whose
+        // input stays writable: save/edit/fill are readOnly, so their stray
+        // keystrokes never reach here. Without this the mode fell through to
+        // the command-registry `else` below and ran paletteCommands[
+        // selectedIndex] — typing "kill" to filter templates and pressing
+        // Enter fired the Kill command instead of doing nothing.
+        if (mode === 'manage-prompt-template') return
         if (mode === 'save-prompt-template' || mode === 'edit-prompt-template') {
           savePromptTemplateForm()
         } else if (mode === 'fill-prompt-template') {

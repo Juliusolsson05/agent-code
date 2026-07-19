@@ -43,9 +43,20 @@ export function PromptTemplateManagerPane({
               template={template}
               onUse={() => onUse(template)}
               actions={
-                <Button type="button" variant="outline" size="xs" onClick={() => onDuplicate(template)}>
-                  Duplicate
-                </Button>
+                // Built-ins that build their body at insertion time (the
+                // worktree dump, the active-tab transcript list) cannot be
+                // duplicated meaningfully: duplicatePromptTemplate copies the
+                // static `body` field and drops `buildBody`, which for these
+                // two is a one-line placeholder like "Please analyze this
+                // Agent Code worktree status dump." The copy would sit in the
+                // Custom list looking identical to the original while silently
+                // carrying none of the generated context. Offering no button
+                // is honest; the alternative is a copy that quietly underdelivers.
+                template.buildBody ? null : (
+                  <Button type="button" variant="outline" size="xs" onClick={() => onDuplicate(template)}>
+                    Duplicate
+                  </Button>
+                )
               }
             />
           ))}
