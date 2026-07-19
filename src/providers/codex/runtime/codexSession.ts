@@ -445,6 +445,39 @@ export class CodexSession extends EventEmitter {
           resolve({ kind: 'terminal', reason: 'no-headless' })
           return
         }
+        // The trust dialog is checked BEFORE the screen, and this ordering is
+        // the whole point of the check.
+        //
+        // Codex readiness used to be screen-only, and a trust dialog hides the
+        // composer by design — so "a human must answer a modal" looked exactly
+        // like "the composer has not painted yet". That resolved as `timeout`,
+        // whose disposition is 'retry-same-session', so the caller retried at
+        // once and each attempt held the prompt-delivery reservation for a
+        // further 15 seconds. sessionManager.write() drops every external write
+        // while that reservation is held, so the user's clicks on the trust
+        // modal never reached the PTY and the app had to be restarted to
+        // recover. Claude never had this failure because its gate consults
+        // conditions first and reports 'blocked'.
+        //
+        // Two things change, and it is worth being precise about which does
+        // the work. Mechanically: the poll now resolves on the FIRST tick
+        // instead of running the 15s deadline, so the reservation is held for
+        // under a millisecond and the modal's keystrokes land. Semantically:
+        // 'blocked' carries disposition 'retry-after-resolve' rather than
+        // 'retry-same-session', so a caller is told a HUMAN must act. Note the
+        // retry loop was never in-process — no caller of deliverPromptToAgent
+        // retries; the loop is an orchestrating model reacting to the
+        // disposition text. The reservation window is the mechanical fix.
+        const condition = this.blockingCondition()
+        if (condition) {
+          resolve({
+            kind: 'blocked',
+            condition: condition.kind,
+            resolvable: condition.resolvable,
+          })
+          return
+        }
+
         const screen = this.headless?.getScreen() ?? ''
         if (isCodexReadyForPromptScreen(screen)) {
           this.markComposerReady(screen)
@@ -463,6 +496,63 @@ export class CodexSession extends EventEmitter {
       }
       tick()
     })
+  }
+
+  /**
+   * The blocking, human-answerable condition currently on screen, or null.
+   *
+   * WHY this is a curated list rather than "any condition". An earlier cut
+   * returned the first entry in the snapshot, which is unsafe for two reasons:
+   *
+   *   1. Not every condition is a modal a human answers. `codex.approval` can
+   *      linger as STALE state: `approvalMetadata` is set on
+   *      exec_approval_request and cleared at exactly one site — the
+   *      exec_command_end handler (CodexHeadless.ts). Deny an approval and no
+   *      command ever runs, so nothing clears it, and `mergeApprovalState`
+   *      keeps the record live on metadata alone. Blocking on that would have
+   *      made every later prompt to an otherwise healthy session fail forever,
+   *      with nothing for a human to resolve — a worse and far more routine
+   *      failure than the trust-dialog deadlock this fixes.
+   *   2. `resolvable` (actions.length > 0) does NOT filter that out, because a
+   *      stale approval still advertises approve/deny actions.
+   *
+   * The precise invariant that makes an entry safe to block on is NOT "level
+   * triggered" — the snapshot is a cached field republished from a 100ms
+   * throttled, change-gated screen flush, so it is edge-triggered. It is that
+   * the state is NEVER LATCHED and dismissing the modal necessarily produces a
+   * changed frame, so it clears within one flush. State that requires a
+   * specific clearing event (approvalMetadata) can outlive the modal; state
+   * overwritten on every frame cannot. Widen this list only for entries that
+   * meet that bar.
+   *
+   * Both blocking screens matter: they are the two that can hold a session
+   * before its composer paints, which is what turns them into deadlocks rather
+   * than delays. Note codexReadyForPrompt recognizes four more not-ready
+   * screens ('Working (', 'Allow command', "don't ask again"); those are
+   * transient or lack a condition record, so they still fall through to the
+   * screen poll deliberately.
+   */
+  private blockingCondition(): { kind: string; resolvable: boolean } | null {
+    const conditions = this.headless?.getConditionSnapshot()?.conditions
+    if (!conditions) return null
+
+    const trust = conditions['codex.trust-dialog']
+    if (trust) return { kind: trust.kind, resolvable: trust.actions.length > 0 }
+
+    // Approvals are included ONLY when the modal is provably on screen.
+    // `mergeApprovalState` merges two sources and just one of them is sticky:
+    // the screen half (`detectCodexApproval`) is overwritten every frame like
+    // the trust dialog, while `approvalMetadata` is rollout-sourced and clears
+    // at a single site. `options` is the discriminant — the metadata-only
+    // branch synthesizes `options: []`, so a non-empty options array proves the
+    // user is looking at the modal right now rather than at leftover state from
+    // an approval they denied. Blocking on the sticky half would strand healthy
+    // sessions forever with nothing to resolve.
+    const approval = conditions['codex.approval']
+    if (approval && approval.state.options.length > 0) {
+      return { kind: approval.kind, resolvable: approval.actions.length > 0 }
+    }
+    return null
   }
 
   private markComposerReady(screen: string): void {

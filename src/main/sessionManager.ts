@@ -1499,11 +1499,39 @@ export class SessionManager extends EventEmitter {
    * doesn't exist — this happens naturally if a session exits between
    * the renderer queueing input and the main process handling it.
    */
+  /**
+   * Whether a provider prompt delivery currently holds this session's write
+   * reservation. Exposed so the IPC layer can report WHY a write was dropped
+   * instead of guessing — see the session:input handler.
+   */
+  isDeliveryInFlight(sessionId: string): boolean {
+    return this.promptDeliveriesInFlight.has(sessionId)
+  }
+
   write(sessionId: string, data: string): boolean {
     // A raw Enter is globally meaningful to a TUI composer. While the provider
     // delivery state machine owns that composer, accepting Enter from a slash
     // path, remote submit, or raw terminal would let one operation submit
     // another's bytes. Provider-owned writes use writeReserved below.
+    //
+    // An earlier cut of this fix punched a hole here for "any active
+    // condition", so a trust modal's keystrokes could reach the PTY while a
+    // delivery held the reservation. It was reverted before merge for two
+    // reasons worth recording, because the idea is tempting and wrong:
+    //
+    //   1. It read getConditionSnapshot() off the SESSION, which no session
+    //      class implements (it lives on the headless), so it was inert in
+    //      production. A structural cast hid that from tsc and the tests
+    //      fabricated the method on hand-built stubs, so it went green.
+    //   2. Had it worked, it admitted EVERY write — raw terminal typing,
+    //      dictation, paste — not just condition keystrokes, and conditions
+    //      that delivery itself triggers (the slash picker paints while
+    //      delivery types) would have opened the gap mid-write, which is
+    //      exactly the interleaving this guard exists to prevent.
+    //
+    // The right shape, if a net is ever wanted, is a dedicated
+    // condition-resolution path that looks an action up in the live snapshot
+    // and writes only that action's bytes, leaving this guard untouched.
     if (this.promptDeliveriesInFlight.has(sessionId)) return false
     const entry = this.sessions.get(sessionId)
     if (!entry) {

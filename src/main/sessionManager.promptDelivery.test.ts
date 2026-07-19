@@ -159,4 +159,41 @@ describe('SessionManager prompt delivery reservation', () => {
       enterWritten: false,
     })
   })
+
+  it('blocks every external write while a delivery holds the reservation', async () => {
+    // The guard is unconditional on purpose. An earlier cut of the Codex
+    // trust-dialog fix punched a hole here for "any active condition"; it was
+    // inert in production (it probed a method no session implements) and would
+    // have admitted raw terminal typing, dictation and paste mid-delivery had
+    // it worked. The deadlock is fixed by providers reporting 'blocked' so
+    // delivery aborts instead of retrying — not by widening this.
+    const session = {
+      write: () => true,
+      isExited: () => false,
+      snapshotScreen: () => ({ plain: '', markdown: '', recent: '', recentMarkdown: '' }),
+      awaitReadyForPrompt: async () => ({
+        kind: 'blocked' as const, condition: 'codex.trust-dialog', resolvable: true,
+      }),
+    }
+    const manager = new SessionManager()
+    ;(manager as unknown as { sessions: Map<string, unknown> }).sessions.set('s1', {
+      kind: 'codex', session,
+    })
+
+    const delivery = manager.deliverPromptToAgent('s1', 'queued prompt')
+    expect(manager.write('s1', '\r')).toBe(false)
+
+    // The causal link the whole fix rests on: a blocked gate must surface as
+    // 'retry-after-resolve' (a human must act), NOT 'retry-same-session' (try
+    // again now). Nothing else asserted this, so the chain was unverified.
+    await expect(delivery).resolves.toMatchObject({
+      ok: false,
+      code: 'not-ready',
+      disposition: 'retry-after-resolve',
+    })
+
+    // And the reservation releases immediately afterwards, so the modal's
+    // keystrokes get through rather than waiting out a 15s poll.
+    expect(manager.write('s1', '\r')).toBe(true)
+  })
 })
