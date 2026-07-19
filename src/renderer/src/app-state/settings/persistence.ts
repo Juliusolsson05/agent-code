@@ -25,6 +25,7 @@ import type {
 } from '@renderer/app-state/settings/types'
 import { coerceCustomAppearanceJson } from '@renderer/app-state/settings/customAppearance'
 import { coerceHotkeyBinding } from '@renderer/lib/hotkeyBinding'
+import { coerceSavedPromptTemplates } from '@renderer/features/prompt-templates/savedPromptTemplates'
 
 export function coerceSettings(value: unknown): Settings {
   const parsed = value && typeof value === 'object'
@@ -39,11 +40,13 @@ export function coerceSettings(value: unknown): Settings {
   // as Dark with no inline properties and looks to the user like the setting
   // silently reset itself.
   const savedThemes = migrateLegacyCustomAppearance(parsed, coerceSavedThemes(parsed.savedThemes))
+  const savedPromptTemplates = coerceSavedPromptTemplates(parsed.savedPromptTemplates)
 
   return {
     ...DEFAULT_SETTINGS,
     ...parsed,
     savedThemes,
+    savedPromptTemplates,
     mode: resolvePersistedMode(parsed, savedThemes),
     contrast: parsed.contrast === true,
     accent: ACCENTS.some(a => a.id === parsed.accent)

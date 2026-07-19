@@ -12,6 +12,15 @@ function focusedAgentSessionId(workspace: Workspace): string | null {
 
 export const promptTemplateCommands: CommandDef[] = [
   {
+    id: 'manage-prompt-templates',
+    surface: 'app',
+    title: 'Manage Prompt Templates…',
+    description: '**What it does:** Opens the **prompt template manager** for creating, editing, duplicating, and deleting reusable prompts.\n\n**Use when:** You want to organize or author custom templates.\n\n**Notes:** Built-ins stay read-only; duplicate them to customize.',
+    keywords: ['prompt', 'template', 'manage', 'custom', 'variables', 'snippets'],
+    keepPaletteOpen: true,
+    run: ({ ui }) => ui.enterManagePromptTemplateMode(),
+  },
+  {
     id: 'prompt-template',
     surface: 'session',
     title: 'Prompt Template…',
