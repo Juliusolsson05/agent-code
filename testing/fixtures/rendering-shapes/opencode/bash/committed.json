@@ -1,0 +1,60 @@
+{
+  "evidence": "Curated from the 2026-07-19 OpenCode recording soak. Both cases preserve the observed committed invocation grammar (fp2-f0f0a673) while pinning the finite route split between generic shell commands and the shared Git command protocol.",
+  "sourceShapeEvidence": {
+    "capturedAt": "2026-07-19T11:39:04.242Z",
+    "provider": "opencode",
+    "sessionId": "295304f9-82ca-4945-bbc5-30dafe959281",
+    "invocation": {
+      "fingerprint": "fp2-f0f0a673",
+      "shapePaths": [
+        "<root>:object",
+        "id:string",
+        "input.command:string",
+        "input.description:string",
+        "input.timeout:number",
+        "input.workdir:string",
+        "input:object",
+        "name:string",
+        "type:string"
+      ],
+      "discriminatorValues": {
+        "name": "bash",
+        "type": "tool_use"
+      }
+    }
+  },
+  "cases": [
+    {
+      "expectedRoute": "generic",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "opencode-bash-generic",
+        "name": "bash",
+        "input": {
+          "command": "npm run typecheck",
+          "description": "Typechecks the project",
+          "timeout": 120000,
+          "workdir": "/workspace/project"
+        }
+      }
+    },
+    {
+      "expectedRoute": "specialized",
+      "expectedReceipt": {
+        "rendererId": "shared.command",
+        "protocolId": "command.git"
+      },
+      "toolUse": {
+        "type": "tool_use",
+        "id": "opencode-bash-git",
+        "name": "bash",
+        "input": {
+          "command": "git status --short",
+          "description": "Shows repository changes",
+          "timeout": 120000,
+          "workdir": "/workspace/project"
+        }
+      }
+    }
+  ]
+}
