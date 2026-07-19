@@ -1,5 +1,6 @@
 import { DEFAULT_CUSTOM_APPEARANCE_JSON } from '@renderer/app-state/settings/customAppearance'
 import type { SavedTheme } from '@renderer/app-state/settings/savedThemes'
+import type { PromptTemplate } from '@renderer/features/prompt-templates/types'
 import type { DictationProvider } from '@shared/types/dictation'
 
 // Built-in theme ids only. 'custom' used to live here as a sentinel that
@@ -251,6 +252,11 @@ export type Settings = {
    *  localStorage key) so they ride the existing persist/coerce/IPC paths
    *  for free — the phone client already receives the whole Settings blob. */
   savedThemes: SavedTheme[]
+  /** User-authored prompt templates live in Settings for the same reason as
+   *  savedThemes: one persisted/coerced settings blob means every renderer
+   *  surface sees the same template catalog, and migrations can move older
+   *  local-only shapes forward without inventing another storage authority. */
+  savedPromptTemplates: PromptTemplate[]
   contrast: boolean
   accent: AccentId
   /** Raw JSON string for the Custom Appearance mode. It is stored as raw
@@ -383,6 +389,7 @@ export type Settings = {
 export const DEFAULT_SETTINGS: Settings = {
   mode: 'dark',
   savedThemes: [],
+  savedPromptTemplates: [],
   contrast: false,
   accent: 'lime',
   customAppearanceJson: DEFAULT_CUSTOM_APPEARANCE_JSON,

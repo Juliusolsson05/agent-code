@@ -15,4 +15,8 @@ describe('coerceSettings agentViewMode', () => {
   it('falls back to Agent mode for invalid agentViewMode values', () => {
     expect(coerceSettings({ agentViewMode: 'feed-but-sometimes' }).agentViewMode).toBe('agent')
   })
+
+  it('defaults missing savedPromptTemplates to an empty list', () => {
+    expect(coerceSettings({}).savedPromptTemplates).toEqual([])
+  })
 })

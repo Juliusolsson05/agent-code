@@ -3,30 +3,10 @@ import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKin
 import type { AgentProviderKind } from '@shared/types/providerKind'
 import { formatWorktreeDumpPrompt } from '@renderer/features/worktrees/lib/formatWorktreeDump'
 import { loadWorktreeDump } from '@renderer/features/worktrees/lib/loadWorktreeDump'
+import type { PromptTemplate, PromptTemplateContext } from '@renderer/features/prompt-templates/types'
 import { resolveTabSessions } from '@renderer/workspace/queries'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
-import {
-  PROMPT_TEMPLATES_STORAGE_KEY,
-} from '@renderer/app-state/localStorageMigration'
 import { buildProviderResumeCommand } from '@renderer/workspace/providerResumeCommand'
-
-export type PromptTemplateContext = {
-  workspace: Workspace
-  sessionId: string
-}
-
-export type PromptTemplate = {
-  id: string
-  title: string
-  description: string
-  body: string
-  buildBody?: (context: PromptTemplateContext) => string | Promise<string>
-  scope: 'builtin' | 'custom'
-  createdAt?: number
-  updatedAt?: number
-}
-
-const CUSTOM_TEMPLATES_KEY = PROMPT_TEMPLATES_STORAGE_KEY
 
 type AgentTranscriptRequest = {
   sessionId: string
@@ -171,6 +151,8 @@ export const builtinPromptTemplates: PromptTemplate[] = [
     title: 'Read This Project',
     description: 'Bootstrap a fresh agent with what this project actually is.',
     scope: 'builtin',
+    insertMode: 'replace',
+    variables: [],
     body: [
       'Please read what this project is for me — README, CLAUDE.md/AGENTS.md, and the repo layout.',
       '',
@@ -187,6 +169,8 @@ export const builtinPromptTemplates: PromptTemplate[] = [
     title: 'ADHD-Friendly Breakdown',
     description: 'Re-explain the last answer as scannable chunks instead of prose.',
     scope: 'builtin',
+    insertMode: 'replace',
+    variables: [],
     // Intentionally a single sentence with no formatting instructions
     // appended. Longer drafts that spelled out "short chunks, bold the key
     // thing, no long paragraphs" did not measurably beat the bare phrase —
@@ -199,6 +183,8 @@ export const builtinPromptTemplates: PromptTemplate[] = [
     title: 'Ask Agent For Review Prompt',
     description: 'Draft a self-contained prompt for another agent to review this work.',
     scope: 'builtin',
+    insertMode: 'replace',
+    variables: [],
     body: [
       'Please write a prompt I can send to another agent to review the work we just did.',
       '',
@@ -217,6 +203,8 @@ export const builtinPromptTemplates: PromptTemplate[] = [
     title: 'Analyze Worktree Dump',
     description: 'Insert a live status dump for all Git worktrees in the focused project.',
     scope: 'builtin',
+    insertMode: 'replace',
+    variables: [],
     body: 'Please analyze this Agent Code worktree status dump.',
     buildBody: async ({ workspace, sessionId }) => {
       const cwd = workspace.state.sessions[sessionId]?.cwd ?? null
@@ -229,6 +217,8 @@ export const builtinPromptTemplates: PromptTemplate[] = [
     title: 'Active Tab Agent Transcripts',
     description: 'Insert transcript paths and read instructions for every agent in this tab (grid + Dispatch).',
     scope: 'builtin',
+    insertMode: 'replace',
+    variables: [],
     body: 'Please read the active-tab agent transcripts and use them as context.',
     buildBody: async ({ workspace }) => {
       const tab = workspace.activeTab
@@ -241,85 +231,6 @@ export const builtinPromptTemplates: PromptTemplate[] = [
   },
 ]
 
-function normalizeCustomTemplates(value: unknown): PromptTemplate[] {
-  if (!Array.isArray(value)) return []
-  const seen = new Set<string>()
-  return value.flatMap(item => {
-    if (!item || typeof item !== 'object') return []
-    const record = item as Record<string, unknown>
-    if (typeof record.id !== 'string') return []
-    if (typeof record.title !== 'string') return []
-    if (typeof record.body !== 'string') return []
-    if (seen.has(record.id)) return []
-    seen.add(record.id)
-    return [{
-      id: record.id,
-      title: record.title,
-      description: typeof record.description === 'string' ? record.description : 'Saved locally',
-      body: record.body,
-      scope: 'custom' as const,
-      createdAt: typeof record.createdAt === 'number' ? record.createdAt : undefined,
-      updatedAt: typeof record.updatedAt === 'number' ? record.updatedAt : undefined,
-    }]
-  })
-}
-
-function saveCustomPromptTemplates(templates: PromptTemplate[]): void {
-  window.localStorage.setItem(CUSTOM_TEMPLATES_KEY, JSON.stringify(templates))
-}
-
-export function loadCustomPromptTemplates(): PromptTemplate[] {
-  try {
-    const raw = window.localStorage.getItem(CUSTOM_TEMPLATES_KEY)
-    if (!raw) return []
-    return normalizeCustomTemplates(JSON.parse(raw))
-      .sort((a, b) => (b.updatedAt ?? b.createdAt ?? 0) - (a.updatedAt ?? a.createdAt ?? 0))
-  } catch {
-    return []
-  }
-}
-
-export function saveCustomPromptTemplate(title: string, body: string): PromptTemplate {
-  const now = Date.now()
-  const template: PromptTemplate = {
-    id: `custom:${crypto.randomUUID()}`,
-    title: title.trim(),
-    description: 'Saved locally',
-    body,
-    scope: 'custom',
-    createdAt: now,
-    updatedAt: now,
-  }
-  saveCustomPromptTemplates([template, ...loadCustomPromptTemplates()])
-  return template
-}
-
-export function updateCustomPromptTemplate(
-  id: string,
-  title: string,
-  body: string,
-): PromptTemplate | null {
-  const now = Date.now()
-  let updated: PromptTemplate | null = null
-  const next = loadCustomPromptTemplates().map(template => {
-    if (template.id !== id) return template
-    updated = {
-      ...template,
-      title: title.trim(),
-      body,
-      updatedAt: now,
-    }
-    return updated
-  })
-  if (!updated) return null
-  saveCustomPromptTemplates(next)
-  return updated
-}
-
-export function deleteCustomPromptTemplate(id: string): void {
-  saveCustomPromptTemplates(loadCustomPromptTemplates().filter(template => template.id !== id))
-}
-
-export function allPromptTemplates(customTemplates = loadCustomPromptTemplates()): PromptTemplate[] {
+export function allPromptTemplates(customTemplates: PromptTemplate[]): PromptTemplate[] {
   return [...customTemplates, ...builtinPromptTemplates]
 }

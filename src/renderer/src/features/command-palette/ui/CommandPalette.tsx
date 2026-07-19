@@ -23,12 +23,29 @@ import { fuzzyMatch, rankCommands } from '@renderer/features/command-palette/lib
 import type { CommandContext, ResolvedCommand } from '@renderer/features/command-palette/types'
 import {
   allPromptTemplates,
-  deleteCustomPromptTemplate,
-  loadCustomPromptTemplates,
-  saveCustomPromptTemplate,
-  updateCustomPromptTemplate,
 } from '@renderer/features/prompt-templates/templates'
-import type { PromptTemplate } from '@renderer/features/prompt-templates/templates'
+import {
+  applyPromptTemplateInsertMode,
+  fillPromptTemplateBody,
+} from '@renderer/features/prompt-templates/interpolate'
+import {
+  createSavedPromptTemplate,
+  duplicatePromptTemplate,
+  findSavedPromptTemplate,
+  syncTemplateVariablesFromBody,
+  updateSavedPromptTemplate,
+} from '@renderer/features/prompt-templates/savedPromptTemplates'
+import {
+  PromptTemplateEditorPane,
+  type PromptTemplateEditorForm,
+} from '@renderer/features/prompt-templates/ui/PromptTemplateEditorPane'
+import { PromptTemplateFillPane } from '@renderer/features/prompt-templates/ui/PromptTemplateFillPane'
+import { PromptTemplateManagerPane } from '@renderer/features/prompt-templates/ui/PromptTemplateManagerPane'
+import type {
+  PromptTemplate,
+  PromptTemplateInsertMode,
+  PromptTemplateVariableValueMap,
+} from '@renderer/features/prompt-templates/types'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import { resolveAgentPaneLabel } from '@renderer/workspace/tile-tree/paneLabels'
 import { useWorkspaceContext } from '@renderer/workspace/WorkspaceContext'
@@ -71,16 +88,18 @@ type PaletteMode =
   | 'buried'
   | 'kill-buried'
   | 'prompt-template'
+  | 'manage-prompt-template'
+  | 'fill-prompt-template'
   | 'save-prompt-template'
   | 'edit-prompt-template'
   | 'ai-workspace-open'
   | 'ai-workspace-create'
   | 'ai-workspace-clear'
 
-type PromptTemplateForm = {
-  id: string | null
-  title: string
-  body: string
+type PromptTemplateFillState = {
+  template: PromptTemplate
+  values: PromptTemplateVariableValueMap
+  insertMode: PromptTemplateInsertMode
 }
 
 // Global "reveal every command" escape hatch. Hard-coded false, moved
@@ -258,12 +277,15 @@ function OpenCommandPalette({
   const [aiWorkspaceError, setAiWorkspaceError] = useState<string | null>(null)
   const [aiWorkspacePending, setAiWorkspacePending] = useState<string | null>(null)
   const [armedAiWorkspaceClearId, setArmedAiWorkspaceClearId] = useState<string | null>(null)
-  const [customPromptTemplates, setCustomPromptTemplates] = useState<PromptTemplate[]>([])
-  const [promptTemplateForm, setPromptTemplateForm] = useState<PromptTemplateForm>({
+  const [promptTemplateForm, setPromptTemplateForm] = useState<PromptTemplateEditorForm>({
     id: null,
     title: '',
+    description: '',
     body: '',
+    insertMode: 'replace',
+    variables: [],
   })
+  const [promptTemplateFillState, setPromptTemplateFillState] = useState<PromptTemplateFillState | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
 
@@ -271,6 +293,7 @@ function OpenCommandPalette({
   const focusedMeta = focusedSessionId ? workspace.state.sessions[focusedSessionId] : null
   const focusedCwd = focusedMeta?.cwd ?? null
   const focusedProvider = focusedMeta?.kind ?? DEFAULT_PROVIDER
+  const customPromptTemplates = settings.savedPromptTemplates
   // The provider whose sessions the resume picker lists and resumes into.
   // Use the focused pane's ACTUAL provider so an opencode pane resumes
   // opencode, a codex pane codex, etc. The three call sites below used to
@@ -345,10 +368,16 @@ function OpenCommandPalette({
   }, [])
 
   const enterPromptTemplateMode = useCallback(() => {
-    setCustomPromptTemplates(loadCustomPromptTemplates())
     setMode('prompt-template')
     setQuery('')
     setSelectedIndex(0)
+  }, [])
+
+  const enterManagePromptTemplateMode = useCallback(() => {
+    setMode('manage-prompt-template')
+    setQuery('')
+    setSelectedIndex(0)
+    setPromptTemplateFillState(null)
   }, [])
 
   const enterSavePromptTemplateMode = useCallback(() => {
@@ -356,7 +385,14 @@ function OpenCommandPalette({
     if (!sessionId) return
     const draft = workspace.getRuntime(sessionId).draftInput.trim()
     if (!draft) return
-    setPromptTemplateForm({ id: null, title: '', body: draft })
+    setPromptTemplateForm({
+      id: null,
+      title: '',
+      description: '',
+      body: draft,
+      insertMode: 'replace',
+      variables: syncTemplateVariablesFromBody(draft, []),
+    })
     setMode('save-prompt-template')
     setQuery('')
     setSelectedIndex(0)
@@ -367,10 +403,28 @@ function OpenCommandPalette({
     setPromptTemplateForm({
       id: template.id,
       title: template.title,
+      description: template.description,
       body: template.body,
+      insertMode: template.insertMode,
+      variables: template.variables,
     })
     setMode('edit-prompt-template')
     setQuery(template.title)
+    setSelectedIndex(0)
+  }, [])
+
+  const enterDuplicatePromptTemplateMode = useCallback((template: PromptTemplate) => {
+    const duplicate = duplicatePromptTemplate(template)
+    setPromptTemplateForm({
+      id: null,
+      title: duplicate.title,
+      description: duplicate.description,
+      body: duplicate.body,
+      insertMode: duplicate.insertMode,
+      variables: duplicate.variables,
+    })
+    setMode('save-prompt-template')
+    setQuery(duplicate.title)
     setSelectedIndex(0)
   }, [])
 
@@ -463,6 +517,7 @@ function OpenCommandPalette({
         enterBuriedMode,
         enterKillBuriedMode,
         enterPromptTemplateMode,
+        enterManagePromptTemplateMode,
         enterSavePromptTemplateMode,
         enterAiWorkspaceOpenMode,
         enterAiWorkspaceCreateMode,
@@ -549,6 +604,7 @@ function OpenCommandPalette({
       enterBuriedMode,
       enterKillBuriedMode,
       enterPromptTemplateMode,
+      enterManagePromptTemplateMode,
       enterSavePromptTemplateMode,
       enterAiWorkspaceOpenMode,
       enterAiWorkspaceCreateMode,
@@ -704,7 +760,15 @@ function OpenCommandPalette({
     setAiWorkspaceError(null)
     setAiWorkspacePending(null)
     setArmedAiWorkspaceClearId(null)
-    setPromptTemplateForm({ id: null, title: '', body: '' })
+    setPromptTemplateForm({
+      id: null,
+      title: '',
+      description: '',
+      body: '',
+      insertMode: 'replace',
+      variables: [],
+    })
+    setPromptTemplateFillState(null)
     requestAnimationFrame(() => inputRef.current?.focus())
   }, [])
 
@@ -807,12 +871,24 @@ function OpenCommandPalette({
         const body = template.buildBody
           ? await template.buildBody({ workspace, sessionId })
           : template.body
+        if (template.variables.length > 0) {
+          setPromptTemplateFillState({
+            template: template.buildBody ? { ...template, body } : template,
+            values: {},
+            insertMode: template.insertMode,
+          })
+          setMode('fill-prompt-template')
+          setQuery('')
+          setSelectedIndex(0)
+          return
+        }
         // Template insertion deliberately stops at the draft boundary.
         // The user's next action is still visible and editable in the
         // composer; nothing is sent to Claude/Codex until they press
         // Enter themselves. This mirrors rewind-to-prompt's "prefill,
         // don't replay" contract.
-        workspace.setDraftInput(sessionId, body)
+        const currentDraft = workspace.getRuntime(sessionId).draftInput
+        workspace.setDraftInput(sessionId, applyPromptTemplateInsertMode(currentDraft, body, template.insertMode))
         workspace.showPaneToast(sessionId, `Inserted template: ${template.title}`)
         onClose()
       } catch (err) {
@@ -823,24 +899,45 @@ function OpenCommandPalette({
     [onClose, workspace],
   )
 
-  const refreshCustomPromptTemplates = useCallback(() => {
-    setCustomPromptTemplates(loadCustomPromptTemplates())
-  }, [])
-
   const savePromptTemplateForm = useCallback(() => {
     const title = promptTemplateForm.title.trim()
+    const description = promptTemplateForm.description.trim()
     const body = promptTemplateForm.body.trim()
     if (!title || !body) return
 
     const sessionId = commandTargetSessionId(workspace)
-    const template = promptTemplateForm.id
-      ? updateCustomPromptTemplate(promptTemplateForm.id, title, body)
-      : saveCustomPromptTemplate(title, body)
-    if (!template) return
+    const existing = promptTemplateForm.id
+      ? findSavedPromptTemplate(customPromptTemplates, promptTemplateForm.id)
+      : null
+    const template = existing
+      ? updateSavedPromptTemplate(existing, {
+        title,
+        description,
+        body,
+        insertMode: promptTemplateForm.insertMode,
+        variables: promptTemplateForm.variables,
+      })
+      : createSavedPromptTemplate({
+        title,
+        description,
+        body,
+        insertMode: promptTemplateForm.insertMode,
+        variables: promptTemplateForm.variables,
+      })
+    const savedPromptTemplates = existing
+      ? customPromptTemplates.map(candidate => candidate.id === existing.id ? template : candidate)
+      : [template, ...customPromptTemplates]
 
-    refreshCustomPromptTemplates()
-    setPromptTemplateForm({ id: null, title: '', body: '' })
-    setMode('prompt-template')
+    setSettings({ savedPromptTemplates })
+    setPromptTemplateForm({
+      id: null,
+      title: '',
+      description: '',
+      body: '',
+      insertMode: 'replace',
+      variables: [],
+    })
+    setMode('manage-prompt-template')
     setQuery('')
     setSelectedIndex(0)
     if (sessionId) {
@@ -851,7 +948,7 @@ function OpenCommandPalette({
           : `Saved prompt template: ${template.title}`,
       )
     }
-  }, [promptTemplateForm, refreshCustomPromptTemplates, workspace])
+  }, [customPromptTemplates, promptTemplateForm, setSettings, workspace])
 
   const openAiWorkspace = useCallback(
     (workspaceId: string) => {
@@ -918,18 +1015,49 @@ function OpenCommandPalette({
   const deletePromptTemplate = useCallback(
     (template: PromptTemplate) => {
       if (template.scope !== 'custom') return
-      deleteCustomPromptTemplate(template.id)
-      refreshCustomPromptTemplates()
+      setSettings({
+        savedPromptTemplates: customPromptTemplates.filter(candidate => candidate.id !== template.id),
+      })
       setSelectedIndex(i => Math.max(0, Math.min(i, customPromptTemplates.length - 2)))
     },
-    [customPromptTemplates.length, refreshCustomPromptTemplates],
+    [customPromptTemplates, setSettings],
   )
+
+  const insertFilledPromptTemplate = useCallback(() => {
+    const fill = promptTemplateFillState
+    if (!fill) return
+    const sessionId = commandTargetSessionId(workspace)
+    if (!sessionId) return
+    try {
+      const resolved = fillPromptTemplateBody({
+        body: fill.template.body,
+        variables: fill.template.variables,
+        values: fill.values,
+      })
+      const currentDraft = workspace.getRuntime(sessionId).draftInput
+      workspace.setDraftInput(
+        sessionId,
+        applyPromptTemplateInsertMode(currentDraft, resolved, fill.insertMode),
+      )
+      workspace.showPaneToast(sessionId, `Inserted template: ${fill.template.title}`)
+      onClose()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      workspace.showPaneToast(sessionId, `Template failed: ${message}`)
+    }
+  }, [onClose, promptTemplateFillState, workspace])
 
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (e.key === 'ArrowDown') {
         e.preventDefault()
-        setSelectedIndex(prev => Math.min(prev + 1, filteredLength - 1))
+        // Clamp the ceiling at 0, not at filteredLength - 1. Modes that render
+        // their own pane instead of the shared list (the template manager,
+        // editor, and fill panes) deliberately report filteredLength 0, which
+        // made the old ceiling -1 and pushed selectedIndex negative. Nothing
+        // crashed because every consumer index-guards, but the index then had
+        // to be walked back up through 0 before the list responded again.
+        setSelectedIndex(prev => Math.min(prev + 1, Math.max(0, filteredLength - 1)))
         return
       }
       if (e.key === 'ArrowUp') {
@@ -940,8 +1068,20 @@ function OpenCommandPalette({
       if (e.key === 'Enter') {
         e.preventDefault()
         if (aiWorkspacePending) return
+        // The manager pane is entirely button-driven — rows and their
+        // Edit/Dup/Delete actions are real <button>s, and the input above it
+        // is a plain search field with no highlighted row to commit. It needs
+        // an explicit no-op branch because it is the only template mode whose
+        // input stays writable: save/edit/fill are readOnly, so their stray
+        // keystrokes never reach here. Without this the mode fell through to
+        // the command-registry `else` below and ran paletteCommands[
+        // selectedIndex] — typing "kill" to filter templates and pressing
+        // Enter fired the Kill command instead of doing nothing.
+        if (mode === 'manage-prompt-template') return
         if (mode === 'save-prompt-template' || mode === 'edit-prompt-template') {
           savePromptTemplateForm()
+        } else if (mode === 'fill-prompt-template') {
+          insertFilledPromptTemplate()
         } else if (mode === 'ai-workspace-create') {
           void createAiWorkspace()
         } else if (mode === 'ai-workspace-open') {
@@ -987,6 +1127,7 @@ function OpenCommandPalette({
       clearAiWorkspace,
       openAiWorkspace,
       savePromptTemplateForm,
+      insertFilledPromptTemplate,
     ],
   )
 
@@ -1032,7 +1173,12 @@ function OpenCommandPalette({
           ${
             mode === 'resume'
               ? 'w-[min(1180px,95vw)] max-h-[80vh]'
-              : 'w-[min(900px,92vw)] max-h-[60vh]'
+              : mode === 'manage-prompt-template' ||
+                  mode === 'save-prompt-template' ||
+                  mode === 'edit-prompt-template' ||
+                  mode === 'fill-prompt-template'
+                ? 'w-[min(1080px,95vw)] max-h-[82vh]'
+                : 'w-[min(900px,92vw)] max-h-[60vh]'
           }
         `}
         onEscapeKeyDown={event => {
@@ -1042,12 +1188,22 @@ function OpenCommandPalette({
           // established keyboard model without reimplementing global Escape.
           if (mode === 'commands') return
           event.preventDefault()
-          if (mode === 'edit-prompt-template') {
+          if (mode === 'edit-prompt-template' || mode === 'save-prompt-template') {
+            setMode('manage-prompt-template')
+          } else if (mode === 'fill-prompt-template') {
             setMode('prompt-template')
           } else {
             setMode('commands')
           }
-          setPromptTemplateForm({ id: null, title: '', body: '' })
+          setPromptTemplateForm({
+            id: null,
+            title: '',
+            description: '',
+            body: '',
+            insertMode: 'replace',
+            variables: [],
+          })
+          setPromptTemplateFillState(null)
           setQuery('')
           setSelectedIndex(0)
         }}
@@ -1075,6 +1231,16 @@ function OpenCommandPalette({
           {mode === 'prompt-template' && (
             <span className="text-accent text-[11px] flex-shrink-0 select-none">
               template &rsaquo;
+            </span>
+          )}
+          {mode === 'manage-prompt-template' && (
+            <span className="text-accent text-[11px] flex-shrink-0 select-none">
+              manage templates &rsaquo;
+            </span>
+          )}
+          {mode === 'fill-prompt-template' && (
+            <span className="text-accent text-[11px] flex-shrink-0 select-none">
+              fill template &rsaquo;
             </span>
           )}
           {mode === 'save-prompt-template' && (
@@ -1113,7 +1279,9 @@ function OpenCommandPalette({
             "
             placeholder={
               mode === 'save-prompt-template' || mode === 'edit-prompt-template'
-                ? 'Template name…'
+                ? 'Template editor'
+                : mode === 'manage-prompt-template'
+                  ? 'Search managed templates…'
                 : mode === 'ai-workspace-create'
                   ? 'Workspace name…'
                   : mode === 'resume'
@@ -1128,15 +1296,16 @@ function OpenCommandPalette({
             }
             value={
               mode === 'save-prompt-template' || mode === 'edit-prompt-template'
-                ? promptTemplateForm.title
+                ? ''
+                : mode === 'fill-prompt-template'
+                  ? ''
                 : query
             }
             onChange={e => {
               if (mode === 'save-prompt-template' || mode === 'edit-prompt-template') {
-                setPromptTemplateForm(form => ({
-                  ...form,
-                  title: e.target.value,
-                }))
+                return
+              } else if (mode === 'fill-prompt-template') {
+                return
               } else {
                 setQuery(e.target.value)
               }
@@ -1145,7 +1314,21 @@ function OpenCommandPalette({
             onKeyDown={onKeyDown}
             spellCheck={false}
             autoComplete="off"
+            readOnly={
+              mode === 'save-prompt-template' ||
+              mode === 'edit-prompt-template' ||
+              mode === 'fill-prompt-template'
+            }
           />
+          {mode === 'prompt-template' && (
+            <button
+              type="button"
+              className="border border-control-border bg-control-bg px-2 py-1 text-[11px] text-control-fg hover:border-control-border-hover hover:bg-control-hover-bg hover:text-ink"
+              onClick={enterManagePromptTemplateMode}
+            >
+              Manage
+            </button>
+          )}
         </div>
 
         <div className="flex-1 min-h-0 flex overflow-hidden">
@@ -1163,51 +1346,72 @@ function OpenCommandPalette({
             `}
           >
             {(mode === 'save-prompt-template' || mode === 'edit-prompt-template') && (
-              <div className="px-3 py-3 space-y-3">
-                <textarea
-                  className="
-                  h-44 w-full resize-none border border-border bg-canvas
-                  px-2 py-2 text-[12px] text-ink font-code outline-none
-                  placeholder:text-muted focus:border-accent
-                "
-                  value={promptTemplateForm.body}
-                  onChange={e => {
-                    setPromptTemplateForm(form => ({
-                      ...form,
-                      body: e.target.value,
-                    }))
-                  }}
-                  onKeyDown={e => {
-                    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
-                      e.preventDefault()
-                      savePromptTemplateForm()
-                    }
-                  }}
-                  spellCheck={false}
-                />
-                <div className="flex justify-end gap-2">
-                  <button
-                    type="button"
-                    className="border border-control-border bg-control-hover-bg px-2 py-1 text-[11px] text-muted hover:text-ink"
-                    onClick={() => {
-                      setPromptTemplateForm({ id: null, title: '', body: '' })
-                      setMode(mode === 'edit-prompt-template' ? 'prompt-template' : 'commands')
-                      setQuery('')
-                      setSelectedIndex(0)
-                    }}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    className="border border-accent bg-accent px-2 py-1 text-[11px] text-accent-fg disabled:opacity-40"
-                    disabled={!promptTemplateForm.title.trim() || !promptTemplateForm.body.trim()}
-                    onClick={savePromptTemplateForm}
-                  >
-                    Save
-                  </button>
-                </div>
-              </div>
+              <PromptTemplateEditorPane
+                form={promptTemplateForm}
+                onChange={next => {
+                  const variables = next.body === promptTemplateForm.body
+                    ? next.variables
+                    : syncTemplateVariablesFromBody(next.body, next.variables)
+                  setPromptTemplateForm({ ...next, variables })
+                }}
+                onCancel={() => {
+                  setPromptTemplateForm({
+                    id: null,
+                    title: '',
+                    description: '',
+                    body: '',
+                    insertMode: 'replace',
+                    variables: [],
+                  })
+                  setMode('manage-prompt-template')
+                  setQuery('')
+                  setSelectedIndex(0)
+                }}
+                onSave={savePromptTemplateForm}
+              />
+            )}
+
+            {mode === 'manage-prompt-template' && (
+              <PromptTemplateManagerPane
+                templates={filteredPromptTemplates}
+                onUse={template => void executePromptTemplate(template)}
+                onCreate={() => {
+                  setPromptTemplateForm({
+                    id: null,
+                    title: '',
+                    description: '',
+                    body: '',
+                    insertMode: 'replace',
+                    variables: [],
+                  })
+                  setMode('save-prompt-template')
+                }}
+                onEdit={enterEditPromptTemplateMode}
+                onDuplicate={enterDuplicatePromptTemplateMode}
+                onDelete={deletePromptTemplate}
+              />
+            )}
+
+            {mode === 'fill-prompt-template' && promptTemplateFillState && (
+              <PromptTemplateFillPane
+                template={promptTemplateFillState.template}
+                values={promptTemplateFillState.values}
+                insertMode={promptTemplateFillState.insertMode}
+                onValueChange={(name, value) => {
+                  setPromptTemplateFillState(state => state ? {
+                    ...state,
+                    values: { ...state.values, [name]: value },
+                  } : state)
+                }}
+                onInsertModeChange={insertMode => {
+                  setPromptTemplateFillState(state => state ? { ...state, insertMode } : state)
+                }}
+                onCancel={() => {
+                  setPromptTemplateFillState(null)
+                  setMode('prompt-template')
+                }}
+                onInsert={insertFilledPromptTemplate}
+              />
             )}
 
             {mode === 'commands' &&

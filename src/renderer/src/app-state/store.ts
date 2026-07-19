@@ -7,8 +7,20 @@ import { createWorkspaceSlice } from '@renderer/app-state/workspace/slice'
 import type { AppStore } from '@renderer/app-state/types'
 import type { Settings } from '@renderer/app-state/settings/types'
 import { coerceSettings } from '@renderer/app-state/settings/persistence'
-import { APP_STORE_STORAGE_KEY } from '@renderer/app-state/localStorageMigration'
+import {
+  APP_STORE_STORAGE_KEY,
+  PROMPT_TEMPLATES_STORAGE_KEY,
+} from '@renderer/app-state/localStorageMigration'
 import { APP_DISPLAY_NAME } from '@shared/appIdentity'
+
+function readLegacyPromptTemplatesFromStandaloneStorage(): unknown {
+  try {
+    const raw = localStorage.getItem(PROMPT_TEMPLATES_STORAGE_KEY)
+    return raw ? JSON.parse(raw) : undefined
+  } catch {
+    return undefined
+  }
+}
 
 export const useAppStore = create<AppStore>()(
   devtools(
@@ -39,11 +51,17 @@ export const useAppStore = create<AppStore>()(
         // `mode: 'custom'` would skip migration, keep a mode value that no
         // longer resolves to anything, and boot to Dark with their custom
         // palette silently orphaned inside customAppearanceJson.
-        version: 5,
+        //
+        // v6 adds `settings.savedPromptTemplates`. Existing users must re-run
+        // coercion so the new array is always present in hydrated state.
+        version: 6,
         storage: createJSONStorage(() => localStorage),
         partialize: state => ({ settings: state.settings }),
         merge: (persisted, current) => {
           const data = persisted as { settings?: Partial<Settings> } | undefined
+          const legacyPromptTemplates = data?.settings?.savedPromptTemplates === undefined
+            ? readLegacyPromptTemplatesFromStandaloneStorage()
+            : undefined
           return {
             ...current,
             // WHY coerce on merge as well as migrate:
@@ -56,13 +74,22 @@ export const useAppStore = create<AppStore>()(
             // "agent" / "terminal" as Hybrid-like terminal-first behavior.
             // Running the same coercion at the final merge point makes every
             // launch shape-safe, not just older-version launches.
-            settings: coerceSettings(data?.settings),
+            settings: coerceSettings({
+              ...data?.settings,
+              savedPromptTemplates: data?.settings?.savedPromptTemplates ?? legacyPromptTemplates,
+            }),
           }
         },
-        migrate: persisted => {
+        migrate: (persisted, version) => {
           const data = persisted as { settings?: Partial<Settings> } | undefined
+          const legacyPromptTemplates = version < 6 && data?.settings?.savedPromptTemplates === undefined
+            ? readLegacyPromptTemplatesFromStandaloneStorage()
+            : undefined
           return {
-            settings: coerceSettings(data?.settings),
+            settings: coerceSettings({
+              ...data?.settings,
+              savedPromptTemplates: data?.settings?.savedPromptTemplates ?? legacyPromptTemplates,
+            }),
           } as Partial<AppStore>
         },
       },
