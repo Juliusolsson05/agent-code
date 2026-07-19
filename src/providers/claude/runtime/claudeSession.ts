@@ -132,6 +132,21 @@ export interface ClaudeSession {
   ): Promise<PromptReadinessOutcome>
 }
 
+/**
+ * How long a 'drafted' composer reading may keep the prompt gate at 'occupied'.
+ *
+ * WHY a bound exists at all: 'occupied' blocks every prompt, and nothing else
+ * re-opens the gate. When the underlying reading is wrong the user has no way
+ * out — they cannot clear a draft that does not exist — so a misread becomes a
+ * permanently dead session rather than a transient error.
+ *
+ * WHY 10s specifically: long enough that a human mid-sentence is never
+ * interrupted (the gate re-arms the moment the composer clears, so ordinary
+ * typing keeps resetting it), short enough that a wrong reading costs a pause
+ * rather than the session. The 2026-07-19 incident ran 186s.
+ */
+const OCCUPIED_STALENESS_MS = 10_000
+
 export class ClaudeSession extends EventEmitter {
   private headless: ClaudeCodeHeadless | null = null
   private pty: ReturnType<typeof ptySpawn> | null = null
@@ -154,6 +169,9 @@ export class ClaudeSession extends EventEmitter {
   private transcriptTailAttached = false
   private transcriptReplayTimer: NodeJS.Timeout | null = null
   private promptGateState: PromptGateState = { kind: 'terminal', reason: 'no-headless' }
+  /** When the composer first read 'drafted' in the current run. See
+   *  OCCUPIED_STALENESS_MS. */
+  private occupiedSince: number | null = null
   private promptGateRefreshQueued = false
   private readonly promptAcceptanceWaiters = new Set<{
     prompts: ReadonlySet<string>
@@ -756,7 +774,30 @@ export class ClaudeSession extends EventEmitter {
     }
 
     const composer = this.headless.getComposerState()
-    if (composer === 'drafted') return { kind: 'occupied', reason: 'human-draft' }
+    if (composer === 'drafted') {
+      // Bounded, because 'occupied' is otherwise unrecoverable BY CONSTRUCTION:
+      // it is derived from a screen heuristic, and when that heuristic is wrong
+      // the user cannot clear the draft — there is no draft to clear — so the
+      // session stays unusable until it is killed. That is not hypothetical:
+      // on 2026-07-19 a dim prompt suggestion read as a draft and blocked
+      // delivery for 186 continuous seconds.
+      //
+      // Correctness lives upstream in the composer attribute fix
+      // (claude-code-headless ComposerAttributes). This only caps how much
+      // damage any FUTURE misread can do, so a wrong reading degrades to a
+      // delay instead of a dead session.
+      if (this.occupiedSince === null) this.occupiedSince = Date.now()
+      if (Date.now() - this.occupiedSince < OCCUPIED_STALENESS_MS) {
+        return { kind: 'occupied', reason: 'human-draft' }
+      }
+      // Past the bound we deliberately fall through to the warming/ready checks
+      // below rather than forcing 'ready': the session may legitimately still
+      // be replaying, and the caller's readiness wait should decide.
+    } else {
+      // Re-arm on every clear so a user who types, sends, and types again gets
+      // the full grace window each time.
+      this.occupiedSince = null
+    }
     if (!this.transcriptTailAttached || !this.transcriptReplayQuiesced) {
       return { kind: 'warming', reason: 'replay-pending' }
     }

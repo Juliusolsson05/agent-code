@@ -34,6 +34,10 @@ function refreshPromptGate(session: ClaudeSession): void {
   ;(session as unknown as { refreshPromptGate(): void }).refreshPromptGate()
 }
 
+function promptGateState(session: ClaudeSession): { kind: string } {
+  return (session as unknown as { promptGateState: { kind: string } }).promptGateState
+}
+
 describe('ClaudeSession prompt acceptance', () => {
   it('makes a fresh session ready immediately after transcript attachment', () => {
     const session = new ClaudeSession()
@@ -298,5 +302,56 @@ describe('ClaudeSession prompt acceptance', () => {
     resolve('2000-01-01T00:00:00.000Z', 1)
     resolve(new Date(Date.now() + 1).toISOString(), 2)
     await expect(waiter.promise).resolves.toMatchObject({ kind: 'user' })
+  })
+
+  it('reports occupied while a draft is fresh', () => {
+    const session = new ClaudeSession()
+    installPromptSurface(session, { composer: 'drafted' })
+    ;(session as unknown as { transcriptTailAttached: boolean }).transcriptTailAttached = true
+    ;(session as unknown as { transcriptReplayQuiesced: boolean }).transcriptReplayQuiesced = true
+    refreshPromptGate(session)
+
+    expect(promptGateState(session)).toMatchObject({ kind: 'occupied' })
+  })
+
+  it('stops reporting occupied once a draft reading goes stale', () => {
+    // Regression guard: 'occupied' was unrecoverable by construction. It is
+    // derived from a screen heuristic, and a wrong reading cannot be cleared by
+    // the user — there is no draft to delete — so the session stayed unusable
+    // indefinitely. Observed as 186 continuous seconds of blocked delivery on
+    // 2026-07-19. Correctness comes from the composer attribute fix upstream;
+    // this only bounds the blast radius of any future misread.
+    vi.useFakeTimers()
+    const session = new ClaudeSession()
+    installPromptSurface(session, { composer: 'drafted' })
+    ;(session as unknown as { transcriptTailAttached: boolean }).transcriptTailAttached = true
+    ;(session as unknown as { transcriptReplayQuiesced: boolean }).transcriptReplayQuiesced = true
+    refreshPromptGate(session)
+    expect(promptGateState(session)).toMatchObject({ kind: 'occupied' })
+
+    vi.advanceTimersByTime(30_000)
+    refreshPromptGate(session)
+
+    expect(promptGateState(session).kind).not.toBe('occupied')
+  })
+
+  it('re-arms the staleness bound when the composer clears between drafts', () => {
+    // A user who types, sends, and types again must get the full grace window
+    // each time — otherwise a long session would eventually stop honouring
+    // real drafts at all.
+    vi.useFakeTimers()
+    const session = new ClaudeSession()
+    const surface = installPromptSurface(session, { composer: 'drafted' })
+    ;(session as unknown as { transcriptTailAttached: boolean }).transcriptTailAttached = true
+    ;(session as unknown as { transcriptReplayQuiesced: boolean }).transcriptReplayQuiesced = true
+    refreshPromptGate(session)
+
+    vi.advanceTimersByTime(30_000)
+    surface.setComposer('empty')
+    refreshPromptGate(session)
+    surface.setComposer('drafted')
+    refreshPromptGate(session)
+
+    expect(promptGateState(session)).toMatchObject({ kind: 'occupied' })
   })
 })
