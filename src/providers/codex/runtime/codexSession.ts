@@ -445,6 +445,33 @@ export class CodexSession extends EventEmitter {
           resolve({ kind: 'terminal', reason: 'no-headless' })
           return
         }
+        // Conditions are checked BEFORE the screen, and this ordering is the
+        // whole point of the check.
+        //
+        // Codex readiness used to be screen-only, and a trust dialog hides the
+        // composer by design — so "a human must answer a modal" looked exactly
+        // like "the composer has not painted yet". That resolved as `timeout`,
+        // whose disposition is 'retry-same-session', so the caller retried at
+        // once and each attempt held the prompt-delivery reservation for a
+        // further 15 seconds. sessionManager.write() drops every external write
+        // while that reservation is held, so the user's clicks on the trust
+        // modal never reached the PTY and the app had to be restarted to
+        // recover. Claude never had this failure because its gate consults
+        // conditions first and reports 'blocked'.
+        //
+        // 'blocked' carries disposition 'retry-after-resolve', which tells the
+        // caller a HUMAN must act rather than that it should try again. That
+        // ends the retry loop, which is what actually frees the write path.
+        const condition = this.firstActiveCondition()
+        if (condition) {
+          resolve({
+            kind: 'blocked',
+            condition: condition.kind,
+            resolvable: condition.resolvable,
+          })
+          return
+        }
+
         const screen = this.headless?.getScreen() ?? ''
         if (isCodexReadyForPromptScreen(screen)) {
           this.markComposerReady(screen)
@@ -463,6 +490,35 @@ export class CodexSession extends EventEmitter {
       }
       tick()
     })
+  }
+
+  /**
+   * The first condition currently demanding attention, or null.
+   *
+   * Mirrors ClaudeSession.derivePromptGateState's condition lookup so both
+   * providers agree on what "blocked" means. `resolvable` reports whether the
+   * condition ships actions a caller could dispatch — a trust dialog does, so
+   * the UI can offer real buttons rather than telling the user to go find the
+   * raw terminal.
+   *
+   * Tolerates a headless that predates the conditions API: getConditionSnapshot
+   * is optional here on purpose, because CodexSession is constructed directly
+   * in tests with hand-built headless stubs, and a missing method must mean
+   * "no conditions", never a crash inside the readiness poll.
+   */
+  private firstActiveCondition(): { kind: string; resolvable: boolean } | null {
+    const snapshot = this.headless?.getConditionSnapshot?.()
+    const conditions = snapshot?.conditions
+    if (!conditions) return null
+    for (const value of Object.values(conditions)) {
+      if (!value) continue
+      const actions = (value as { actions?: unknown[] }).actions
+      return {
+        kind: (value as { kind: string }).kind,
+        resolvable: Array.isArray(actions) && actions.length > 0,
+      }
+    }
+    return null
   }
 
   private markComposerReady(screen: string): void {
