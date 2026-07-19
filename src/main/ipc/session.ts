@@ -120,9 +120,19 @@ export function registerSessionIpc(
       }
       const ok = manager.write(sessionId, data)
       if (!ok) {
+        // WHY the reason is computed rather than asserted: this used to log
+        // "missing session" unconditionally, which is wrong for the far more
+        // common case — the session exists and a prompt delivery holds the
+        // write reservation. That message sent debugging of the Codex
+        // trust-dialog deadlock looking for a lifecycle bug for hours when the
+        // actual cause was contention.
+        const reason = manager.isDeliveryInFlight(sessionId)
+          ? 'prompt-delivery-in-flight'
+          : 'session-not-found'
         // eslint-disable-next-line no-console
-        console.warn('[session:input] dropped write for missing session', {
+        console.warn('[session:input] dropped write', {
           sessionId,
+          reason,
           dataLength: data.length,
         })
         if (typeof pasteId === 'string' && pasteId.length > 0) {

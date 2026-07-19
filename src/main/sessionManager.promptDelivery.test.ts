@@ -159,4 +159,71 @@ describe('SessionManager prompt delivery reservation', () => {
       enterWritten: false,
     })
   })
+
+  it('lets a condition-resolution write through while a delivery holds the reservation', async () => {
+    // Regression: the reservation drops EVERY external write, including the
+    // keystrokes that dismiss a trust dialog. Codex could not report 'blocked',
+    // so a trust modal produced timeout -> retry-same-session -> a fresh 15s
+    // reservation, forever. The user's clicks on "trust directory"/"cancel"
+    // were silently swallowed and the app had to be restarted.
+    //
+    // The reservation exists so one operation cannot submit another's bytes
+    // into the composer. That reasoning does not hold while a condition owns
+    // the screen: delivery is not using the composer, it is parked waiting for
+    // the very condition the user is trying to answer.
+    const writes: string[] = []
+    const session = {
+      write: (data: string) => { writes.push(data); return true },
+      isExited: () => false,
+      snapshotScreen: () => ({ plain: '', markdown: '', recent: '', recentMarkdown: '' }),
+      getConditionSnapshot: () => ({
+        provider: 'codex',
+        conditions: {
+          'codex.trust-dialog': {
+            kind: 'codex.trust-dialog',
+            actions: [{ kind: 'pty', id: 'accept', label: 'Trust folder', data: '\r' }],
+          },
+        },
+        ts: Date.now(),
+      }),
+      awaitReadyForPrompt: async () => ({
+        kind: 'blocked' as const, condition: 'codex.trust-dialog', resolvable: true,
+      }),
+    }
+    const manager = new SessionManager()
+    ;(manager as unknown as { sessions: Map<string, unknown> }).sessions.set('s1', {
+      kind: 'codex', session,
+    })
+
+    const delivery = manager.deliverPromptToAgent('s1', 'queued prompt')
+    // The accept keystroke must reach the PTY even though a delivery is
+    // in flight — otherwise the modal is dead and nothing can ever unblock.
+    expect(manager.write('s1', '\r')).toBe(true)
+    await delivery
+    expect(writes).toContain('\r')
+  })
+
+  it('still blocks ordinary writes during delivery when no condition is active', async () => {
+    // The guard must survive: without an active condition this is exactly the
+    // stray-Enter case the reservation exists to prevent.
+    const session = {
+      write: () => true,
+      isExited: () => false,
+      snapshotScreen: () => ({ plain: '', markdown: '', recent: '', recentMarkdown: '' }),
+      getConditionSnapshot: () => ({ provider: 'codex', conditions: {}, ts: Date.now() }),
+      awaitReadyForPrompt: async () => ({
+        kind: 'timeout' as const,
+        waitedMs: 1,
+        lastState: { kind: 'warming' as const, reason: 'composer-unpainted' as const },
+      }),
+    }
+    const manager = new SessionManager()
+    ;(manager as unknown as { sessions: Map<string, unknown> }).sessions.set('s1', {
+      kind: 'codex', session,
+    })
+
+    const delivery = manager.deliverPromptToAgent('s1', 'queued prompt')
+    expect(manager.write('s1', '\r')).toBe(false)
+    await delivery
+  })
 })

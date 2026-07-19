@@ -1499,12 +1499,55 @@ export class SessionManager extends EventEmitter {
    * doesn't exist — this happens naturally if a session exits between
    * the renderer queueing input and the main process handling it.
    */
+  /**
+   * Whether a provider prompt delivery currently holds this session's write
+   * reservation. Exposed so the IPC layer can report WHY a write was dropped
+   * instead of guessing — see the session:input handler.
+   */
+  isDeliveryInFlight(sessionId: string): boolean {
+    return this.promptDeliveriesInFlight.has(sessionId)
+  }
+
+  /**
+   * True when the session currently shows a condition (trust dialog, approval
+   * prompt, …) that a human is expected to answer.
+   *
+   * Provider-agnostic on purpose: it reads the same normalized condition
+   * snapshot every provider already publishes, so a new provider gets the
+   * deadlock protection in write() without touching this file. A session whose
+   * backend predates the conditions API simply reports nothing, which restores
+   * the old strict behaviour rather than failing open.
+   */
+  private hasActiveCondition(sessionId: string): boolean {
+    const entry = this.sessions.get(sessionId)
+    const snapshot = (
+      entry?.session as { getConditionSnapshot?: () => { conditions?: Record<string, unknown> } }
+    )?.getConditionSnapshot?.()
+    const conditions = snapshot?.conditions
+    if (!conditions) return false
+    return Object.values(conditions).some(value => value !== undefined && value !== null)
+  }
+
   write(sessionId: string, data: string): boolean {
     // A raw Enter is globally meaningful to a TUI composer. While the provider
     // delivery state machine owns that composer, accepting Enter from a slash
     // path, remote submit, or raw terminal would let one operation submit
     // another's bytes. Provider-owned writes use writeReserved below.
-    if (this.promptDeliveriesInFlight.has(sessionId)) return false
+    //
+    // EXCEPT while a condition owns the screen. The reservation's premise is
+    // that delivery owns the composer, and that premise is false when a trust
+    // dialog or approval prompt is up: delivery is not typing, it is parked
+    // waiting for a human to answer the very modal whose buttons write through
+    // here. Dropping those keystrokes deadlocked the session — the modal did
+    // nothing and the app had to be restarted (2026-07-19, Codex trust dialog).
+    //
+    // This is the safety net, not the fix. The fix is that providers report
+    // 'blocked' so delivery aborts instead of retrying (CodexSession
+    // firstActiveCondition). This exists so that ANY future readiness gap
+    // degrades to a resolvable modal rather than a dead session.
+    if (this.promptDeliveriesInFlight.has(sessionId) && !this.hasActiveCondition(sessionId)) {
+      return false
+    }
     const entry = this.sessions.get(sessionId)
     if (!entry) {
       // A silent miss here is brutal to debug from the renderer: the composer
