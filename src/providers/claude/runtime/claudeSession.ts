@@ -756,6 +756,24 @@ export class ClaudeSession extends EventEmitter {
     }
 
     const composer = this.headless.getComposerState()
+    // Unconditional, and deliberately NOT time-bounded.
+    //
+    // A 10s staleness bound was tried here and removed before merge: review
+    // proved it destroys user input. Typing never clears the composer, so the
+    // reading stays 'drafted' for the entire time a human writes; the bound
+    // therefore expired mid-sentence and the gate returned 'ready', letting an
+    // agent write its own prompt into the draft and press Enter. Verified:
+    // after 11s of continuous typing the gate returned { kind: 'ready' }.
+    //
+    // Re-arming on content change instead of on clear was the obvious repair,
+    // and it is still wrong — a human who pauses to think for longer than the
+    // bound is indistinguishable from a stuck reading. Elapsed time cannot
+    // separate "misread" from "user is composing", so any purely temporal
+    // escape hatch trades a recoverable stall for unrecoverable data loss.
+    //
+    // Correctness belongs upstream, where it is now: composer classification
+    // reads cell attributes (claude-code-headless ComposerAttributes), so
+    // placeholder text is no longer mistaken for a draft in the first place.
     if (composer === 'drafted') return { kind: 'occupied', reason: 'human-draft' }
     if (!this.transcriptTailAttached || !this.transcriptReplayQuiesced) {
       return { kind: 'warming', reason: 'replay-pending' }

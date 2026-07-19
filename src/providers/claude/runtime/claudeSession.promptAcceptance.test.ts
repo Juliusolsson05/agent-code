@@ -34,6 +34,10 @@ function refreshPromptGate(session: ClaudeSession): void {
   ;(session as unknown as { refreshPromptGate(): void }).refreshPromptGate()
 }
 
+function promptGateState(session: ClaudeSession): { kind: string } {
+  return (session as unknown as { promptGateState: { kind: string } }).promptGateState
+}
+
 describe('ClaudeSession prompt acceptance', () => {
   it('makes a fresh session ready immediately after transcript attachment', () => {
     const session = new ClaudeSession()
@@ -298,5 +302,37 @@ describe('ClaudeSession prompt acceptance', () => {
     resolve('2000-01-01T00:00:00.000Z', 1)
     resolve(new Date(Date.now() + 1).toISOString(), 2)
     await expect(waiter.promise).resolves.toMatchObject({ kind: 'user' })
+  })
+
+  it('reports occupied for as long as the composer holds a draft', () => {
+    // No time bound here on purpose. A 10s staleness escape hatch was tried and
+    // removed before merge: typing never clears the composer, so it expired
+    // mid-sentence and the gate returned 'ready', letting an agent overwrite a
+    // half-written human message. Elapsed time cannot distinguish a misread
+    // from a user who is still composing.
+    vi.useFakeTimers()
+    const session = new ClaudeSession()
+    installPromptSurface(session, { composer: 'drafted' })
+    ;(session as unknown as { transcriptTailAttached: boolean }).transcriptTailAttached = true
+    ;(session as unknown as { transcriptReplayQuiesced: boolean }).transcriptReplayQuiesced = true
+    refreshPromptGate(session)
+    expect(promptGateState(session)).toMatchObject({ kind: 'occupied' })
+
+    vi.advanceTimersByTime(600_000)
+    refreshPromptGate(session)
+    expect(promptGateState(session)).toMatchObject({ kind: 'occupied' })
+  })
+
+  it('becomes ready as soon as the composer clears', () => {
+    const session = new ClaudeSession()
+    const surface = installPromptSurface(session, { composer: 'drafted' })
+    ;(session as unknown as { transcriptTailAttached: boolean }).transcriptTailAttached = true
+    ;(session as unknown as { transcriptReplayQuiesced: boolean }).transcriptReplayQuiesced = true
+    refreshPromptGate(session)
+    expect(promptGateState(session)).toMatchObject({ kind: 'occupied' })
+
+    surface.setComposer('empty')
+    refreshPromptGate(session)
+    expect(promptGateState(session)).toMatchObject({ kind: 'ready' })
   })
 })
