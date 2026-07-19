@@ -445,8 +445,8 @@ export class CodexSession extends EventEmitter {
           resolve({ kind: 'terminal', reason: 'no-headless' })
           return
         }
-        // Conditions are checked BEFORE the screen, and this ordering is the
-        // whole point of the check.
+        // The trust dialog is checked BEFORE the screen, and this ordering is
+        // the whole point of the check.
         //
         // Codex readiness used to be screen-only, and a trust dialog hides the
         // composer by design — so "a human must answer a modal" looked exactly
@@ -462,7 +462,7 @@ export class CodexSession extends EventEmitter {
         // 'blocked' carries disposition 'retry-after-resolve', which tells the
         // caller a HUMAN must act rather than that it should try again. That
         // ends the retry loop, which is what actually frees the write path.
-        const condition = this.firstActiveCondition()
+        const condition = this.blockingCondition()
         if (condition) {
           resolve({
             kind: 'blocked',
@@ -493,32 +493,44 @@ export class CodexSession extends EventEmitter {
   }
 
   /**
-   * The first condition currently demanding attention, or null.
+   * The blocking, human-answerable condition currently on screen, or null.
    *
-   * Mirrors ClaudeSession.derivePromptGateState's condition lookup so both
-   * providers agree on what "blocked" means. `resolvable` reports whether the
-   * condition ships actions a caller could dispatch — a trust dialog does, so
-   * the UI can offer real buttons rather than telling the user to go find the
-   * raw terminal.
+   * WHY only the trust dialog and not every condition. An earlier cut returned
+   * the first entry in the snapshot, which is unsafe for two distinct reasons:
    *
-   * Tolerates a headless that predates the conditions API: getConditionSnapshot
-   * is optional here on purpose, because CodexSession is constructed directly
-   * in tests with hand-built headless stubs, and a missing method must mean
-   * "no conditions", never a crash inside the readiness poll.
+   *   1. Not every condition is a modal a human answers. `codex.approval` can
+   *      linger as STALE state: `approvalMetadata` is set on
+   *      exec_approval_request and cleared at exactly one site — the
+   *      exec_command_end handler (CodexHeadless.ts). Deny an approval and no
+   *      command ever runs, so nothing clears it, and `mergeApprovalState`
+   *      keeps the record live on metadata alone. Blocking on that would have
+   *      made every later prompt to an otherwise healthy session fail forever,
+   *      with nothing for a human to resolve — a worse and far more routine
+   *      failure than the trust-dialog deadlock this fixes.
+   *   2. `resolvable` (actions.length > 0) does NOT filter that out, because a
+   *      stale approval still advertises approve/deny actions.
+   *
+   * The trust dialog has neither problem: it is derived level-triggered from
+   * the screen (detectCodexTrustDialog -> trustDialogModule.detect returns null
+   * the moment it stops being visible), so it cannot outlive what the user can
+   * see. It is also the only Codex condition that blocks a session before its
+   * composer has ever painted, which is what made it deadlock.
+   *
+   * Widen this only for conditions proven to clear reliably.
+   *
+   * getConditionSnapshot is optional here because CodexSession is constructed
+   * directly in tests against hand-built headless stubs; a missing method must
+   * mean "no conditions", never a crash inside the readiness poll.
    */
-  private firstActiveCondition(): { kind: string; resolvable: boolean } | null {
+  private blockingCondition(): { kind: string; resolvable: boolean } | null {
     const snapshot = this.headless?.getConditionSnapshot?.()
-    const conditions = snapshot?.conditions
-    if (!conditions) return null
-    for (const value of Object.values(conditions)) {
-      if (!value) continue
-      const actions = (value as { actions?: unknown[] }).actions
-      return {
-        kind: (value as { kind: string }).kind,
-        resolvable: Array.isArray(actions) && actions.length > 0,
-      }
+    const trust = snapshot?.conditions?.['codex.trust-dialog']
+    if (!trust) return null
+    const actions = (trust as { actions?: unknown[] }).actions
+    return {
+      kind: (trust as { kind: string }).kind,
+      resolvable: Array.isArray(actions) && actions.length > 0,
     }
-    return null
   }
 
   private markComposerReady(screen: string): void {

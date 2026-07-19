@@ -118,21 +118,24 @@ export function registerSessionIpc(
           data: { sessionId, bytes, sha8, head },
         })
       }
+      // Sampled BEFORE the write so the log describes the state the write
+      // actually met. Sampling afterwards races a delivery that released in
+      // between and reports the wrong cause — the same misdiagnosis this
+      // replaces, just narrower.
+      const deliveryInFlight = manager.isDeliveryInFlight(sessionId)
       const ok = manager.write(sessionId, data)
       if (!ok) {
-        // WHY the reason is computed rather than asserted: this used to log
-        // "missing session" unconditionally, which is wrong for the far more
-        // common case — the session exists and a prompt delivery holds the
-        // write reservation. That message sent debugging of the Codex
-        // trust-dialog deadlock looking for a lifecycle bug for hours when the
-        // actual cause was contention.
-        const reason = manager.isDeliveryInFlight(sessionId)
-          ? 'prompt-delivery-in-flight'
-          : 'session-not-found'
+        // WHY both facts instead of one verdict: this used to log "missing
+        // session" unconditionally, which is wrong for the far more common
+        // case — the session exists and a prompt delivery holds the write
+        // reservation. That message sent the Codex trust-dialog investigation
+        // hunting a lifecycle bug when the real cause was contention. Log what
+        // was observed and let the reader conclude; a wrong verdict in a log is
+        // worse than no verdict.
         // eslint-disable-next-line no-console
         console.warn('[session:input] dropped write', {
           sessionId,
-          reason,
+          deliveryInFlight,
           dataLength: data.length,
         })
         if (typeof pasteId === 'string' && pasteId.length > 0) {
