@@ -182,9 +182,18 @@ describe('SessionManager prompt delivery reservation', () => {
 
     const delivery = manager.deliverPromptToAgent('s1', 'queued prompt')
     expect(manager.write('s1', '\r')).toBe(false)
-    await delivery
-    // Released once delivery settles, so the modal works the moment the
-    // provider stops retrying.
+
+    // The causal link the whole fix rests on: a blocked gate must surface as
+    // 'retry-after-resolve' (a human must act), NOT 'retry-same-session' (try
+    // again now). Nothing else asserted this, so the chain was unverified.
+    await expect(delivery).resolves.toMatchObject({
+      ok: false,
+      code: 'not-ready',
+      disposition: 'retry-after-resolve',
+    })
+
+    // And the reservation releases immediately afterwards, so the modal's
+    // keystrokes get through rather than waiting out a 15s poll.
     expect(manager.write('s1', '\r')).toBe(true)
   })
 })
