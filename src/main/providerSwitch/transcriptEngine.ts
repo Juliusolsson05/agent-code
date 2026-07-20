@@ -1,4 +1,5 @@
 import { readFile } from 'fs/promises'
+import { setTimeout as delay } from 'node:timers/promises'
 
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
 import type {
@@ -23,6 +24,7 @@ import type {
   NativeResumeProjectionResult,
   PromptAddress,
   PromptReference,
+  RawJsonlDocument,
 } from 'agent-transcript-parser'
 
 import { readInstalledVersion } from '@main/setup/cliVersion.js'
@@ -150,8 +152,8 @@ async function loadClaudeSnapshot(
   providerSessionId: string,
 ): Promise<TranscriptSnapshot> {
   const path = await getClaudeSessionFilePath(cwd, providerSessionId)
-  const source = await readFile(path, 'utf8')
-  const records = classifyClaudeDocument(decodeJsonl(source)).records
+  const document = await readStableTranscript(path)
+  const records = classifyClaudeDocument(document).records
   return {
     conversation: decodeClaudeConversation(records),
     prompts: analyzeClaudeTranscript(records).prompts,
@@ -164,12 +166,39 @@ async function loadCodexSnapshot(
 ): Promise<TranscriptSnapshot> {
   const path = await findCodexRolloutPathBySessionId(providerSessionId)
   if (!path) throw new Error(`Codex rollout for session ${providerSessionId} was not found.`)
-  const source = await readFile(path, 'utf8')
-  const records = classifyCodexDocument(decodeJsonl(source)).records
+  const document = await readStableTranscript(path)
+  const records = classifyCodexDocument(document).records
   return {
     conversation: decodeCodexConversation(records),
     prompts: analyzeCodexTranscript(records).prompts,
   }
+}
+
+async function readStableTranscript(path: string): Promise<RawJsonlDocument> {
+  const maxAttempts = 2
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const document = decodeJsonl(await readFile(path, 'utf8'))
+    const malformed = document.lines.filter(line => line.kind === 'malformed')
+    if (malformed.length === 0) return document
+
+    const finalLine = document.lines.at(-1)
+    const onlyActiveTail = malformed.length === 1 && (
+      finalLine?.kind === 'malformed' && finalLine.unterminated
+    )
+    if (onlyActiveTail && attempt + 1 < maxAttempts) {
+      // WHY one bounded reread is preferable to accepting the valid prefix:
+      // provider files are append-oriented, so a snapshot can land between a
+      // record write and its terminator. A short retry handles that race while
+      // still failing durable corruption before any projected file is written.
+      await delay(25)
+      continue
+    }
+
+    const lines = malformed.map(line => line.index).join(', ')
+    throw new Error(`Transcript ${path} contains malformed JSONL at physical line(s) ${lines}.`)
+  }
+
+  throw new Error(`Transcript ${path} could not be read as stable JSONL.`)
 }
 
 function promptsFromSnapshot(

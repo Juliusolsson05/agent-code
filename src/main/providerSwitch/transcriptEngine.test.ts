@@ -52,6 +52,56 @@ describe('host transcript adapter registry', () => {
         timestamp: null,
       }])
   })
+
+  it('rejects malformed middle JSONL instead of projecting the surrounding prefix', async () => {
+    mocks.readFile.mockResolvedValue([
+      jsonl({ type: 'session_meta', payload: { id: 'session' } }),
+      '{"type":"response_item",broken}',
+      jsonl({ type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'lost boundary' }] } }),
+    ].join('\n'))
+
+    await expect(getHostTranscriptAdapter('codex').read('/project', 'session'))
+      .rejects.toThrow('contains malformed JSONL at physical line(s) 1')
+    expect(mocks.readFile).toHaveBeenCalledTimes(1)
+  })
+
+  it('retries one partially appended tail and accepts it once complete', async () => {
+    const complete = jsonl({
+      type: 'user',
+      sessionId: 'session',
+      message: { role: 'user', content: 'complete prompt' },
+    })
+    mocks.readFile
+      .mockResolvedValueOnce(`${complete}\n{"type":"assistant"`)
+      .mockResolvedValueOnce(`${complete}\n`)
+
+    await expect(getHostTranscriptAdapter('claude').read('/project', 'session'))
+      .resolves.toMatchObject({ sourceProvider: 'claude', sourceSessionIds: ['session'] })
+    expect(mocks.readFile).toHaveBeenCalledTimes(2)
+  })
+
+  it('rejects a partial tail that remains malformed after the bounded retry', async () => {
+    mocks.readFile.mockResolvedValue([
+      jsonl({ type: 'session_meta', payload: { id: 'session' } }),
+      '{"type":"response_item"',
+    ].join('\n'))
+
+    await expect(getHostTranscriptAdapter('codex').read('/project', 'session'))
+      .rejects.toThrow('contains malformed JSONL at physical line(s) 1')
+    expect(mocks.readFile).toHaveBeenCalledTimes(2)
+  })
+
+  it('accepts a complete final JSON record without a newline', async () => {
+    mocks.readFile.mockResolvedValue(jsonl({
+      type: 'user',
+      sessionId: 'session',
+      message: { role: 'user', content: 'complete but unterminated' },
+    }))
+
+    await expect(getHostTranscriptAdapter('claude').read('/project', 'session'))
+      .resolves.toMatchObject({ sourceProvider: 'claude', sourceSessionIds: ['session'] })
+    expect(mocks.readFile).toHaveBeenCalledTimes(1)
+  })
 })
 
 function jsonl(value: Record<string, unknown>): string {
