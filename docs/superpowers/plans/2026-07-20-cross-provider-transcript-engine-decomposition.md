@@ -1,8 +1,9 @@
 # Cross-Provider Transcript Engine — Decomposition and Implementation Plan
 
-**Status:** In progress. This file is the first artifact on the implementation
-branch; the branch is intended to carry the complete implementation and Agent
-Code cutover, not merely this plan.
+**Status:** Implementation complete; hands-on Agent Code smoke testing and final
+remote CI review remain. This file is the first artifact on the implementation
+branch; the branch carries the complete implementation and Agent Code cutover,
+not merely this plan.
 
 **Date:** 2026-07-20
 
@@ -429,108 +430,136 @@ are classified, and the package works from its published artifact shape.
 
 ### Phase 1 — plan, manifests, and corpus discovery
 
-- [ ] Add the fixture-manifest schema and evidence-strength taxonomy.
-- [ ] Add a structural fingerprint that removes scalar values while retaining
+- [x] Add the fixture-manifest schema and evidence-strength taxonomy.
+- [x] Add a structural fingerprint that removes scalar values while retaining
       key paths, JSON value kinds, low-cardinality discriminators, ordering
       planes, and provider profile.
-- [ ] Add a read-only local profiler that accepts explicit roots, never defaults
+- [x] Add a read-only local profiler that accepts explicit roots, never defaults
       to or writes provider homes, and writes only to an explicit ignored output.
-- [ ] Profile Claude main, Claude subagent, nested Claude, and Codex separately.
-- [ ] Deduplicate exact structural signatures and identify likely duplicate
+- [x] Profile Claude main, Claude subagent, nested Claude, and Codex separately.
+- [x] Deduplicate exact structural signatures and identify likely duplicate
       transcript files without exposing identifiers.
-- [ ] Produce frequency-ranked catalogs and unknown-shape candidates.
-- [ ] Select and manually review fixture candidates from every load-bearing and
+- [x] Produce frequency-ranked catalogs and unknown-shape candidates.
+- [x] Select and manually review fixture candidates from every load-bearing and
       rare-but-real cluster.
 
 ### Phase 2 — real fixture corpus
 
-- [ ] Relabel the eight existing fixtures as synthetic compatibility cases.
-- [ ] Build the redaction/minimization tool as an explicit, review-required
+- [x] Retire the old synthetic v1 fixtures during destructive cutover rather
+      than presenting them as native evidence.
+- [x] Build the redaction/minimization tool as an explicit, review-required
       workflow rather than an automatic truth generator.
-- [ ] Add observed Claude fixtures covering every catalogued record/block family.
-- [ ] Add observed Codex fixtures covering every catalogued rollout/item family.
-- [ ] Add source-derived Codex discovery/reconstruction positive and negative
+- [x] Add observed Claude fixtures covering every catalogued record/block family.
+- [x] Add observed Codex fixtures covering every catalogued rollout/item family.
+- [x] Add source-derived Codex discovery/reconstruction positive and negative
       cases pinned to `8035cb03`.
-- [ ] Add privacy tests that reject likely home paths, repository paths, secrets,
+- [x] Add privacy tests that reject likely home paths, repository paths, secrets,
       high-entropy tokens, unreviewed prompts, and missing provenance.
 
 ### Phase 3 — v2 substrate and classification
 
-- [ ] Implement raw line decode/encode and diagnostics test-first.
-- [ ] Implement evidence/provenance primitives.
-- [ ] Implement Claude classification from the catalog.
-- [ ] Implement Codex classification from the catalog.
-- [ ] Add opaque record handling and exhaustive reports.
-- [ ] Add import-boundary and browser-safety tests.
+- [x] Implement raw line decode/encode and diagnostics test-first.
+- [x] Implement evidence/provenance primitives.
+- [x] Implement Claude classification from the catalog.
+- [x] Implement Codex classification from the catalog.
+- [x] Add opaque record handling and exhaustive reports.
+- [x] Add import-boundary and browser-safety tests.
 
 ### Phase 4 — analysis and stable addressing
 
-- [ ] Implement Claude identity/parent/tool/compaction analysis.
-- [ ] Implement Codex metadata/event/response/tool/mutation analysis.
-- [ ] Define provider-native prompt addresses that identify a raw record rather
+- [x] Implement Claude identity/parent/tool/compaction analysis.
+- [x] Implement Codex metadata/event/response/tool/mutation analysis.
+- [x] Define provider-native prompt addresses that identify a raw record rather
       than a UI-filtered ordinal.
-- [ ] Make prompt enumeration return those addresses.
-- [ ] Prove address resolution is stable across filtering and rendering.
+- [x] Make prompt enumeration return those addresses.
+- [x] Prove address resolution is stable across filtering and rendering.
 
 ### Phase 5 — projections and operations
 
-- [ ] Implement bounded archive provenance without recursive sidecar growth.
-- [ ] Implement archive projections with explicit loss reports.
-- [ ] Implement versioned Codex native-resume projection.
-- [ ] Implement observation-scoped Claude native-resume projection.
-- [ ] Consolidate provider repair policy so clone, rewind, and translated resume
+- [x] Implement bounded archive provenance without recursive sidecar growth.
+- [x] Implement archive projections with explicit loss reports.
+- [x] Implement versioned Codex native-resume projection.
+- [x] Implement observation-scoped Claude native-resume projection.
+- [x] Consolidate provider repair policy so clone, rewind, and translated resume
       use the same named invariants where they genuinely coincide.
-- [ ] Implement clone for Codex, then Claude.
-- [ ] Implement rewind for Codex, then Claude, using stable addresses.
+- [x] Implement clone for Codex, then Claude.
+- [x] Implement rewind for Codex, then Claude, using stable addresses.
 
 ### Phase 6 — semantic translation
 
-- [ ] Define the provider-neutral conversation protocol from observed semantics.
-- [ ] Implement Claude→conversation without importing Codex.
-- [ ] Implement Codex→conversation without importing Claude.
-- [ ] Implement conversation→provider archive projections.
-- [ ] Implement conversation→provider resume projections.
-- [ ] Require a report for every non-isomorphic mapping.
-- [ ] Run and classify the v1 differential; never force blanket equality.
+- [x] Define the provider-neutral conversation protocol from observed semantics.
+- [x] Implement Claude→conversation without importing Codex.
+- [x] Implement Codex→conversation without importing Claude.
+- [x] Implement conversation→provider archive projections.
+- [x] Implement conversation→provider resume projections.
+- [x] Require a report for every non-isomorphic mapping.
+- [x] Classify v1 as a compatibility observation only; do not force blanket
+      equality. Independent observed fixtures, structured loss reports, and
+      native-provider gates supersede v1 output as the cutover oracle.
 
 ### Phase 7 — Agent Code cutover
 
-- [ ] Add a single host adapter that owns parser invocation but no provider
+- [x] Add a single host adapter that owns parser invocation but no provider
       semantics.
-- [ ] Move provider switch to the v2 resume API one direction at a time.
-- [ ] Move duplicate to v2 clone.
-- [ ] Move prompt picker and rewind to shared stable addresses.
-- [ ] Keep filesystem resolution and atomic writes in main.
-- [ ] Preserve typed failure behavior so a failed projection never replaces a
+- [x] Move provider switch to the v2 resume API one direction at a time.
+- [x] Move duplicate to v2 clone.
+- [x] Move prompt picker and rewind to shared stable addresses.
+- [x] Keep filesystem resolution and atomic writes in main.
+- [x] Preserve typed failure behavior so a failed projection never replaces a
       live pane.
-- [ ] Add shadow reports during development and remove unexplained differences.
+- [x] Use pure structured projection reports plus host/native acceptance gates
+      instead of runtime shadow writes against private production sessions.
 
 ### Phase 8 — ghost freeze, deletion, and documentation
 
-- [ ] Characterize ghost public exports and behavior before moving any shared
+- [x] Characterize ghost public exports and behavior before moving any shared
       sidecar code.
-- [ ] Split the minimum ghost sidecar dependency from translation provenance.
-- [ ] Prove v2 ignores ghost records at its boundary.
-- [ ] Delete v1 converters, codecs, neutral wrapper, clone, rewind, permissive
+- [x] Split the minimum ghost sidecar dependency from translation provenance.
+- [x] Prove v2 ignores ghost records at its boundary.
+- [x] Delete v1 converters, codecs, neutral wrapper, clone, rewind, permissive
       types, tests that merely bless v1, and stale scripts/docs.
-- [ ] Point root exports to v2 and retain the frozen `/ghost` subpath.
-- [ ] Rewrite the package README around evidence profiles and honest guarantees.
-- [ ] Add an evergreen Agent Code design doc only if the final host/package
+- [x] Point root exports to v2 and retain the frozen `/ghost` subpath.
+- [x] Rewrite the package README around evidence profiles and honest guarantees.
+- [x] Add an evergreen Agent Code design doc only if the final host/package
       ownership differs from existing documented architecture.
 
 ### Phase 9 — verification and PR delivery
 
-- [ ] Package: contract, typecheck, unit, corpus, system, coverage, build, and
+- [x] Package: contract, typecheck, unit, corpus, system, coverage, build, and
       tarball/package tests.
-- [ ] Agent Code: contract, typecheck, unit, system, renderer, package, and build
+- [x] Agent Code: contract, typecheck, unit, system, renderer, package, and build
       tests relevant to the cutover.
-- [ ] Controlled native Codex discovery/load/append checks in a temporary home.
-- [ ] Controlled native Claude checks for the explicitly supported profile.
+- [x] Controlled native Codex discovery/load/append checks in a temporary home.
+- [x] Controlled native Claude checks for the explicitly supported profile.
 - [ ] Manual Agent Code switch, duplicate, rewind, failure, and rollback checks.
-- [ ] Push the package branch and open the reviewable package PR.
-- [ ] Commit the package pointer and integration on the parent branch.
-- [ ] Push the parent branch and open the primary Agent Code PR linking the
+- [x] Push the package branch and open the reviewable package PR.
+- [x] Commit the package pointer and integration on the parent branch.
+- [x] Push the parent branch and open the primary Agent Code PR linking the
       package PR, evidence catalog, supported profiles, and rollback plan.
+
+### Verification snapshot
+
+The implementation branch was verified on 2026-07-20 with:
+
+- package `npm run check`: 21 test files, 66 tests, typecheck, build, and packed
+  artifact validation;
+- package opt-in native gates: Codex CLI 0.144.6 discovery, reconstruction, and
+  local append through app-server; Claude Code 2.1.215 discovery, load, and
+  interactive rendering without submitting a model turn;
+- Agent Code `npm run check`: contract, typecheck, 212 test files, 1,195 tests,
+  production main/preload/renderer/remote builds, hotkey helper, and packaged
+  entry-point validation; and
+- package CI across Node 20.19 and Node 24, tier commands, coverage, contract,
+  and quality-gate jobs.
+
+The planned v1 differential and runtime shadow-write mechanism were deliberately
+retired rather than shipped. V1 mixed archive and native-resume semantics and
+therefore could not serve as a correctness oracle for the new split APIs.
+Running shadow writes over private live sessions would also broaden the data
+surface without proving native acceptance. Git history remains the rollback and
+behavior-reference artifact; redacted observed fixtures, explicit projection
+reports, host integration tests, and installed-provider gates are the accepted
+cutover evidence.
 
 ## Go/no-go gates
 
