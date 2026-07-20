@@ -31,6 +31,23 @@ export const QUOTE_SCOPE_ATTR = 'data-quote-scope'
  * palette, or anywhere in app chrome. Callers MUST treat null as "not a
  * quotable selection", never as an error.
  */
+// Monaco renders its own selection over a hidden textarea rather than
+// through the document selection. Its regions are therefore owned by the
+// Monaco bridge (see lib/code/CodeBlock.tsx), and the document-level
+// listener must DEFER inside them rather than acting on the misleading
+// document-selection events Monaco's internal focus juggling produces.
+//
+// Without this, clicking into a Monaco block fires a collapsed in-scope
+// `selectionchange` that would clear the very stash the bridge just set —
+// a race whose winner depends on event ordering.
+export function isInsideMonacoEditor(node: Node | null): boolean {
+  if (!node) return false
+  const element = node.nodeType === Node.ELEMENT_NODE
+    ? (node as Element)
+    : node.parentElement
+  return element?.closest('.monaco-editor') != null
+}
+
 export function resolveQuoteScope(node: Node | null): SessionId | null {
   if (!node) return null
 

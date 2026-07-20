@@ -212,6 +212,10 @@ Manual verification for this PR:
 5. Select, open palette, close it, reopen → command still there (§2.2).
 6. Select in Reader Mode → quote lands in that session's draft.
 7. Select inside the composer → command does **not** appear.
+8. Select inside a Monaco code block (a streaming fence in the feed, or any
+   fenced block in Reader Mode) → command arms with the code text.
+9. Select in pane A, then click in pane B → command disappears (it must not stay
+   armed pointing at A).
 
 Verification gate: `tsc` on both projects (the electron-vite build and vitest
 do not type-check).
@@ -285,21 +289,32 @@ fragment in the draft on the next invocation. Reachable by anyone using Agent
 Code to work on Agent Code, since feed code blocks render literally. Sealed in
 `wrapQuote` via the `<\/tag` convention, which fixes both halves at once.
 
-### 9.6 Known limitation: Monaco-backed code blocks (NOT fixed)
+### 9.6 Monaco-backed code blocks (fixed)
 
 `ReaderView.tsx:74` and `features/feed/ui/semantic/BlockRow.tsx:334` render code
-with `engine="monaco"`. Monaco maintains its own selection model over a hidden
-textarea rather than the document selection, so **drag-selecting inside those
-code blocks does not arm this command**. It fails closed (the command simply
-does not appear), so there is no corruption — but code is a prime quote target
-and this is a genuine gap.
+with `engine="monaco"`. Monaco maintains its selection in its own model over a
+hidden textarea; it never becomes a document `Selection`. The document-level
+listener was therefore structurally blind to text highlighted inside a code
+block — and code is one of the most valuable things to quote.
 
-Not fixed here because bridging it means threading a selection callback out of
-`CodeBlock`, a component shared by the feed, the reader, and the editor — that
-is its own change with its own blast radius, not a rider on this one. Partial
-mitigations that already exist: `CodeBlock` registers its exact source in
-`codeBlockRegistry`, and the **Copy Code Block…** command already covers
-"I want this code block's text". Worth a follow-up issue.
+Fixed with a **two-part ownership split**, because the naive fix races:
+
+1. `CodeBlock` subscribes to `editor.onDidChangeCursorSelection` and writes
+   straight to the stash, taking the session from `CodeRenderContext` (which
+   both the feed and Reader Mode already provide). Disposed with the editor via
+   the existing `cleanups` array.
+2. The document listener **defers entirely inside `.monaco-editor`**
+   (`isInsideMonacoEditor`). Without this, clicking into a Monaco block fires a
+   collapsed in-scope `selectionchange` describing the hidden textarea, which
+   would clear the very stash the bridge just set — a race whose winner depends
+   on event ordering.
+
+Blocks rendered outside a session (the standalone editor) have `sessionId === ''`
+and deliberately do not stash: there is no composer to quote into.
+
+Note that `CodeBlock` already imported `codeBlockRegistry` from a feature, so
+the `lib/` → `features/` direction here follows existing precedent rather than
+setting one.
 
 Also deliberately unfixed: `truncateQuote` splitting surrogate pairs and
 degenerating below the marker length were both real, and both **were** fixed;

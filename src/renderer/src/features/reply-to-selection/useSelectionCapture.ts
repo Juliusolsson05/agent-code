@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 
-import { resolveQuoteScope } from '@renderer/features/reply-to-selection/lib/quoteScope'
+import { isInsideMonacoEditor, resolveQuoteScope } from '@renderer/features/reply-to-selection/lib/quoteScope'
 import {
   clearPendingSelection,
   setPendingSelection,
@@ -53,6 +53,12 @@ export function useSelectionCapture(): void {
     function onSelectionChange(): void {
       const selection = document.getSelection()
       if (!selection) return
+
+      // Monaco owns its own regions — defer entirely. Its internal focus
+      // handling emits document-selection events that describe the hidden
+      // textarea, not what the user highlighted, so acting on them would
+      // clear a stash the Monaco bridge legitimately set.
+      if (isInsideMonacoEditor(selection.anchorNode)) return
 
       const anchorScope = resolveQuoteScope(selection.anchorNode)
 
