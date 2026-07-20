@@ -1192,7 +1192,21 @@ function OpenCommandPalette({
           ${
             mode === 'resume'
               ? 'w-[min(1180px,95vw)] max-h-[80vh]'
-              : mode === 'manage-prompt-template' ||
+              : // `prompt-template` joins the other template modes rather than
+                // sitting with the compact list modes. Two reasons, both from
+                // the preview panel:
+                //
+                // 1. The mode now renders a full prompt body, and the 60vh cap
+                //    was chosen for a list of one-line command rows. Capping
+                //    the surface that exists to show long prompts at 60vh
+                //    hides the feature behind a scrollbar.
+                // 2. Enter on a template WITH variables transitions
+                //    prompt-template -> fill-prompt-template. While the two
+                //    modes disagreed on size, that transition visibly jumped
+                //    the dialog from 900px/60vh to 1080px/82vh mid-interaction.
+                //    Sharing the geometry makes the step seamless.
+                mode === 'prompt-template' ||
+                  mode === 'manage-prompt-template' ||
                   mode === 'save-prompt-template' ||
                   mode === 'edit-prompt-template' ||
                   mode === 'fill-prompt-template'

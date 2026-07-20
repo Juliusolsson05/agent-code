@@ -60,8 +60,17 @@ export const PromptTemplatePreviewPanel = memo(function PromptTemplatePreviewPan
   return (
     <aside role="region" aria-label="Prompt template preview" className={PANEL_CLASS}>
       <div className="mb-3 border-b border-border pb-3">
+        {/*
+          `break-words` on every user-authored string in this panel, not just
+          the body: the editor imposes no length limit on titles, descriptions,
+          variable names, labels, or defaults, and this column is only ~220px
+          at its floor. A pasted URL, UUID, or absolute path in any of them
+          would otherwise paint over the scope badge or force the panel to
+          scroll horizontally. The <pre> already handles this via break-words;
+          these were the paths that did not.
+        */}
         <div className="flex items-start gap-2">
-          <div className="min-w-0 flex-1 text-[13px] text-ink">{template.title}</div>
+          <div className="min-w-0 flex-1 break-words text-[13px] text-ink">{template.title}</div>
           <span className="flex-shrink-0 text-[9px] uppercase tracking-wider text-muted">
             {template.scope}
           </span>
@@ -72,28 +81,44 @@ export const PromptTemplatePreviewPanel = memo(function PromptTemplatePreviewPan
       </div>
 
       {template.description && (
-        <p className="mb-3 text-[11px] leading-[1.55] text-ink-dim">{template.description}</p>
+        <p className="mb-3 break-words text-[11px] leading-[1.55] text-ink-dim">
+          {template.description}
+        </p>
       )}
 
       {/*
         WHY this note exists: `builtin:analyze-worktree-dump` and
         `builtin:active-tab-agent-transcripts` compute their real prompt through
-        an async `buildBody(context)` from live workspace state. Their static
-        `body` below is a one-line stand-in, NOT the full prompt.
+        an async `buildBody(context)`. Their static `body` below is a one-line
+        placeholder, NOT the full prompt.
+
+        WHY the wording is "placeholder" and not "the fixed part": `buildBody`
+        REPLACES the body outright — `executePromptTemplate` does
+        `template.buildBody ? await template.buildBody(...) : template.body`.
+        It does not append to it, and nothing requires the generated prompt to
+        contain the static body at all. `builtin:active-tab-agent-transcripts`
+        already proves the point: its generated prompt opens with a *different*
+        sentence than its static body and then adds ~15 lines of fixed "how to
+        read a JSONL transcript" guidance the placeholder never mentions. An
+        earlier draft of this note claimed the text below was "the fixed part
+        only", which was wrong twice over and is exactly the kind of confident
+        half-truth this panel exists to eliminate.
+
+        `PromptTemplateManagerPane` reached the same conclusion independently —
+        it calls this field "a one-line placeholder" and suppresses Duplicate
+        for these templates so the copy cannot "quietly underdeliver". Keep the
+        two descriptions in agreement.
 
         We deliberately do not resolve `buildBody` here. Doing so would turn
         every hover into async workspace I/O and transcript-path resolution
         inside the command palette, requiring debouncing, a stale-response guard
         keyed to the hovered template id, and loading/error states — a lot of
         machinery in a hot path to improve two built-in rows.
-
-        Showing the stand-in silently would be the actual bug: the user would
-        read one sentence and believe that is the whole prompt. So we say so.
       */}
       {template.buildBody && (
         <p className="mb-3 border border-border bg-surface px-2 py-1.5 text-[10px] leading-[1.5] text-muted">
-          Live workspace context is generated and added to this prompt when you
-          insert it. The text below is the fixed part only.
+          This prompt is generated from live workspace state when you insert it.
+          The text below is a placeholder — not the prompt you will get.
         </p>
       )}
 
@@ -103,15 +128,19 @@ export const PromptTemplatePreviewPanel = memo(function PromptTemplatePreviewPan
           <div className="flex flex-col gap-1.5">
             {template.variables.map(variable => (
               <div key={variable.name} className="text-[10px] leading-[1.5]">
-                <div className="flex items-center gap-1.5">
-                  <span className="font-code text-ink-dim">{`{{${variable.name}}}`}</span>
+                <div className="flex items-start gap-1.5">
+                  <span className="min-w-0 break-words font-code text-ink-dim">
+                    {`{{${variable.name}}}`}
+                  </span>
                   {variable.required && (
-                    <span className="uppercase tracking-wider text-muted">required</span>
+                    <span className="flex-shrink-0 uppercase tracking-wider text-muted">
+                      required
+                    </span>
                   )}
                 </div>
-                {variable.label && <div className="text-muted">{variable.label}</div>}
+                {variable.label && <div className="break-words text-muted">{variable.label}</div>}
                 {variable.defaultValue && (
-                  <div className="text-muted">Default: {variable.defaultValue}</div>
+                  <div className="break-words text-muted">Default: {variable.defaultValue}</div>
                 )}
               </div>
             ))}

@@ -81,8 +81,22 @@ for 3/5 built-ins and **100% of custom templates**, which are the ones that
 accumulate and the ones whose titles go stale.
 
 For the two dynamic templates we show the static body plus an explicit note that
-live context gets appended at insert time. That is honest about the gap rather
-than quietly showing a stand-in as if it were the whole prompt.
+the real prompt is generated at insert time and the text shown is a placeholder.
+That is honest about the gap rather than quietly showing a stand-in as if it
+were the whole prompt.
+
+**Correction after review.** The first implementation worded that note as "live
+workspace context is *added* to this prompt … the text below is the fixed part
+only." Both review agents independently caught that this is wrong twice over:
+`buildBody` **replaces** the body (`executePromptTemplate` picks one or the
+other, never both), and nothing requires the generated prompt to contain the
+static body — `builtin:active-tab-agent-transcripts` opens with a different
+sentence entirely and then adds fixed transcript-reading guidance the
+placeholder never mentions. `PromptTemplateManagerPane` had already reached the
+right conclusion, calling the same field "a one-line placeholder" and
+suppressing Duplicate for these templates. The panel now agrees with it. A panel
+whose entire purpose is "show what you actually get" must not be the thing
+making a confident false claim.
 
 Option 3 remains open as a follow-up; nothing here blocks it. It is deliberately
 not in this PR.
