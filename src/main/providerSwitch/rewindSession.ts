@@ -6,7 +6,7 @@ import type {
   RewindPrompt,
   RewindPromptAddress,
 } from '@shared/types/transcriptRewind.js'
-import { rewindConversation } from 'agent-transcript-parser/v2'
+import { rewindConversation } from 'agent-transcript-parser'
 
 import { getHostTranscriptAdapter } from '@main/providerSwitch/transcriptEngine.js'
 

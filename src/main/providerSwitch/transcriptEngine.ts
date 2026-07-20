@@ -16,14 +16,14 @@ import {
   decodeCodexConversation,
   decodeJsonl,
   resolveUserPrompt,
-} from 'agent-transcript-parser/v2'
+} from 'agent-transcript-parser'
 import type {
   ConversationContent,
   ConversationDocument,
   NativeResumeProjectionResult,
   PromptAddress,
   PromptReference,
-} from 'agent-transcript-parser/v2'
+} from 'agent-transcript-parser'
 
 import { readInstalledVersion } from '@main/setup/cliVersion.js'
 import { getToolPath } from '@main/setup/toolchain.js'

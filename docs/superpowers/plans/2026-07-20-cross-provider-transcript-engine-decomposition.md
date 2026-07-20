@@ -1,613 +1,254 @@
 # Cross-Provider Transcript Engine — Decomposition and Implementation Plan
 
-**Status:** Implementation complete; hands-on Agent Code smoke testing and final
-remote CI review remain. This file is the first artifact on the implementation
-branch; the branch carries the complete implementation and Agent Code cutover,
-not merely this plan.
+**Status:** Implementation complete. Hands-on Agent Code smoke testing and final
+remote CI review remain.
 
 **Date:** 2026-07-20
 
-**Primary branch:** `feat/agent-transcript-parser-v2`
-
-**Primary worktree:** `.worktrees/agent-transcript-parser-v2`
-
-**Package branch:** `feat/agent-transcript-parser-v2` in the
-`agent-transcript-parser` submodule
+**Implementation line:** linked feature branches in Agent Code and the
+`agent-transcript-parser` submodule. Branch and worktree names are development
+coordinates, not package architecture or public API.
 
 **Baseline:** Agent Code `origin/main` at `dd0005e3`; parser package
-`origin/main` at `dd7ff475`
+`origin/main` at `dd7ff475`.
 
 **Method:** [staged decomposition](https://github.com/Juliusolsson05/staged-decomposition).
-Every stage below names an artifact, an independent verification, the reason it
-cannot be collapsed into the next stage, and the real evidence it uses.
+Each stage has its own artifact, evidence source, and acceptance gate so a green
+downstream test cannot silently excuse a weak upstream assumption.
 
-## What this plan commits us to
+## Goal
 
-This is a ground-up replacement of the transcript parser, translator, clone,
-and rewind substrate. It is not a campaign to keep adding conditionals to
-`toClaude.ts` and `toCodex.ts`. The new implementation lives under `src/v2/`
-while it is developed and proven. Once Agent Code has cut over, the old
-converter, codec, permissive-type, neutral-wrapper, clone, rewind, and resume
-repair structures are deleted rather than retained as a second architecture.
+Replace the original pairwise transcript converter with one evidence-driven
+engine built around a provider-neutral conversation document:
 
-The provider-neutral conversation protocol is the hub of the architecture, not
-merely a temporary Claude/Codex interchange type. Each provider implements one
-inbound decoder and its own outbound archive and native-resume projectors. A
-cross-provider operation is always `source -> conversation -> target`; provider
-adapters never translate directly to one another. That changes growth from up
-to `N * (N - 1)` pairwise translators to a linear adapter family per provider,
-so adding a future provider does not require changing any existing adapter.
+```text
+Claude ─┐
+Codex  ─┼─> ConversationDocument ─> Claude / Codex / future provider
+Future ─┘
+```
 
-The exception is the ghost subsystem. Ghosts solve provisional-render ownership
-and journal recovery, not provider transcript translation. Their behavior is a
-production contract used across main, renderer, and remote-client processes.
-The existing `agent-transcript-parser/ghost` export is frozen and characterized;
-it is not semantically rewritten as part of v2.
+Every provider owns one inbound decoder and its archive/native-resume
+projectors. Provider adapters never translate directly to one another. Adding a
+provider therefore adds one adapter family rather than a new translator for
+every existing provider.
 
-The branch is complete only when:
+The replacement covers parsing, classification, graph analysis, archive
+projection, native-resume projection, translation, clone, rewind, and the Agent
+Code host integration. The displaced pairwise implementation is deleted rather
+than retained as a parallel architecture.
 
-1. the local real-transcript corpus has been structurally catalogued;
-2. privacy-reviewed fixtures trace to real observations or pinned upstream
-   source rules;
-3. v2 parses, classifies, analyzes, archives, translates, clones, and rewinds;
-4. native-resume projections are separate from archive translations;
-5. Agent Code uses v2 for every transcript operation;
-6. the confirmed Codex rewind-address mismatch is removed;
-7. the displaced v1 implementation is deleted;
-8. ghost behavior remains unchanged;
-9. package and Agent Code gates pass from built artifacts, not only source
-   aliases; and
-10. the package PR and the primary Agent Code PR are open with evidence and
-    rollback notes.
+Ghosts are the deliberate exception. They are a provisional-render ownership
+ledger used across main, renderer, and remote-client processes—not durable
+conversation semantics. Their existing behavior is frozen behind the explicit
+`agent-transcript-parser/ghost` export.
 
-## A — what exists and is trusted
+## Evidence population
 
-Trust is deliberately narrow. Existing behavior is evidence, not automatically
-correct behavior.
-
-- Agent Code's production consumer order and filesystem responsibilities:
-  `src/main/providerSwitch/**` and the renderer provider-switch actions.
-- The parser's existing behavior as a **compatibility oracle only**:
-  `packages/agent-transcript-parser/src/**` at `dd7ff475`.
-- The ghost API and journal behavior as a frozen production contract:
-  `packages/agent-transcript-parser/src/ghost.ts`,
-  `src/renderer/src/session-runtime/ghosts.ts`, and
-  `src/main/ghostJournal.ts`.
-- Codex persisted-record, discovery, and reconstruction behavior at vendored
-  upstream commit `8035cb03`, when a claim is explicitly pinned to that commit.
-- Real local transcript files as observations of what provider versions actually
-  wrote. They are not automatically proof of what every version accepts on
-  resume.
-- Existing synthetic fixtures and v1 outputs as regression/compatibility inputs,
-  never as independent proof of native correctness.
-
-### Real corpus available at plan time
-
-The earlier investigation intentionally did not inspect personal provider
-stores. A subsequent metadata-only census, explicitly authorized for this
-rewrite, established the actual scale:
+A metadata-only census established the discovery population without printing
+private transcript values:
 
 | Corpus | Files | Raw JSONL records | Bytes |
 |---|---:|---:|---:|
 | Claude main conversations | 309 | 18,733 | 546.8 MB |
 | Codex rollout conversations | 1,513 | 115,615 | 2.84 GB |
-| **Primary conversation corpus** | **1,822** | **134,348** | **3.39 GB** |
 | Claude subagent transcripts | 1,350 | 9,385 | 332.7 MB |
-| Other nested Claude JSONLs, not yet deduplicated | 139 | 19,714 | 557.7 MB |
-| **All locally available JSONL** | **3,311** | **163,447** | **4.28 GB** |
+| Other nested Claude JSONLs | 139 | 19,714 | 557.7 MB |
+| **Total local JSONL** | **3,311** | **163,447** | **4.28 GB** |
 
-Agent Code's durable worktree-activity index independently references 1,773
-currently existing main transcripts: 269 Claude and 1,504 Codex, containing
-216,694 extracted activity events. The difference from the live-directory count
-is expected because the index is filtered and updated asynchronously.
+Raw local transcripts can contain prompts, code, paths, secrets, and third-party
+material. They never enter Git. Checked-in fixtures are minimized,
+value-redacted structural observations with manifests that state exactly what
+each case proves.
 
-These files are the discovery population. They are **not** all destined for Git.
-They can contain prompts, source code, tool outputs, filesystem paths, secrets,
-and third-party material. Raw local transcripts never become committed fixtures.
+## Observable end state
 
-## D — observable end state
-
-The v2 package exposes a pure, browser-safe transcript engine with these
-observable properties:
-
-1. Raw JSONL decoding preserves ordering, unknown records, omitted-versus-null
-   distinctions, and malformed/partial-tail diagnostics.
-2. Claude and Codex classifiers emit honest discriminated record families with
-   an opaque escape hatch and evidence provenance for every rule.
-3. Provider graph analysis reports identity, topology, tool-pair, compaction,
-   replay-mutation, and continuation hazards without silently repairing them.
-4. Archive translation and native-resume projection are different APIs and
-   result types. A caller cannot accidentally mistake one for the other.
-5. Every drop, demotion, synthesis, identity rewrite, repair, and unknown record
+1. JSONL decoding preserves order, unknown records, null-versus-omitted fields,
+   and malformed/partial-tail diagnostics.
+2. Claude and Codex classify into honest discriminated families with opaque
+   fallbacks and evidence provenance.
+3. Provider analysis reports topology, identity, tool pairing, compaction,
+   mutation, and continuation hazards without mutating input.
+4. `ConversationDocument` is the only semantic interchange shape.
+5. Archive and native-resume projection are separate APIs and result types.
+6. Every drop, demotion, synthesis, repair, identity rewrite, and unknown record
    appears in a structured report.
-6. Clone and rewind operate on stable provider-native addresses produced by the
-   same enumeration layer that the UI consumes.
-7. Provider adapters do not import one another. Shared code cannot name a
-   provider wire type.
-   Adding a provider requires one decoder and its own output projectors, not
-   branches for every provider already installed.
-8. Filesystem paths, home directories, registries, IPC, pane replacement, and
-   drafts remain owned by Agent Code.
-9. Native claims name a provider/version/source profile and are verified at the
-   correct acceptance layer: discovery, load, reconstruction, rendering, and
-   append-after-resume are not conflated.
-10. The root package API is backed by v2. The old v1 implementation is absent.
-11. `agent-transcript-parser/ghost` retains its existing public and behavioral
-    contract.
+7. Clone and rewind use stable provider-native prompt addresses shared by the
+   UI enumerator and the operation resolver.
+8. Provider adapters do not import one another; neutral modules do not name
+   provider wire types.
+9. The package core is browser-safe and does not read homes, spawn CLIs, import
+   Electron, or own storage paths.
+10. Agent Code owns filesystem resolution, atomic writes, drafts, IPC, and pane
+    lifecycle.
+11. Native claims are tied to an upstream source coordinate or a controlled CLI
+    observation and are tested at the correct acceptance layer.
+12. The root package export is the canonical engine; `/ghost` is the only
+    specialized public subpath.
 
-## Non-negotiable rules
-
-1. **Enumerate before implementing semantics.** Corpus profiling and shape
-   cataloguing precede classifiers and translators.
-2. **Fixtures are causally independent.** Expected values may not be generated
-   from v1 or v2. V1 may produce a separately labeled differential report.
-3. **Unknown is data.** Unknown records remain opaque and reported; they are not
-   silently dropped or converted into plausible assistant speech.
-4. **Archive is not resume.** The two profiles have separate names, types,
-   reports, and tests.
-5. **Analysis is not repair.** Invariant detection precedes and is independent
-   from projection policy.
-6. **Provider isolation is structural.** Claude code never imports Codex code;
-   Codex code never imports Claude code.
-7. **Core is pure.** `src/v2/**` may not read files, inspect home directories,
-   spawn CLIs, import Electron, or know Agent Code storage paths.
-8. **Agent Code remains the host.** It plans paths and atomically commits files,
-   then manages pane/process lifecycle.
-9. **Ghost is frozen.** No transcript-v2 stage changes ghost lifecycle,
-   reconciliation, visibility, persistence, TTL, or UUID semantics.
-10. **No false version claims.** An observation from one Codex/Claude version is
-    not silently generalized to every supported version.
-11. **No raw personal data in Git or logs.** Structural profiling is value-free
-    by default; fixture extraction requires explicit redaction and review.
-12. **A failing real fixture is not weakened to make the suite green.** If the
-    fixture falsifies the design, revise this decomposition rather than patching
-    forward.
-
-## Isolation and target layout
-
-The hard part is provider-specific interpretation and projection. It is confined
-to `src/v2/` with a single public composition boundary. During migration, only
-the v2 entrypoint and explicit compatibility tests may reach both provider
-adapters.
+## Canonical package layout
 
 ```text
-packages/agent-transcript-parser/
-  src/
-    v2/
-      jsonl/                 raw line decoding/encoding and diagnostics
-      evidence/              provenance, profiles, and evidence labels
-      claude/
-        classify/            Claude-only record recognition
-        analyze/             Claude-only graph/invariant analysis
-        project/             Claude archive and resume output profiles
-      codex/
-        classify/            Codex-only record recognition
-        analyze/             Codex-only history/discovery analysis
-        project/             Codex archive and resume output profiles
-      conversation/          provider-neutral semantic protocol
-      translation/           composition through the semantic protocol
-      operations/            stable prompt addresses, clone, and rewind
-      report/                losses, repairs, unknowns, evidence, diagnostics
-      index.ts               the one public v2 composition surface
-    ghost.ts                 frozen existing subsystem
-    ghost-sidecar.ts         only the minimum sidecar shape ghosts require
-    index.ts                 final root exports backed by v2
-  fixtures/
-    v2/
-      synthetic/             old fixtures, honestly relabeled
-      observed/              minimized/redacted real structural cases
-      source-derived/        pinned upstream contract cases
-  testing/
-    corpus/                  manifests, catalog tests, and local profilers
-    contracts/               package and provider-profile tests
-    compatibility/           temporary v1 differential harness
+src/
+  claude/                 Claude classification, analysis, decoding, projection
+  codex/                  Codex classification, analysis, decoding, projection
+  conversation/           provider-neutral semantic protocol
+  evidence/               provenance and structural fingerprints
+  jsonl/                  exact transport and diagnostics
+  operations/             stable addresses, clone, rewind
+  projection/             shared projection contracts and bounded provenance
+  report/                 explicit change reports
+  translation/            neutral composition
+  index.ts                one public engine surface
+  ghost.ts                frozen provisional-render ledger
+  ghost-sidecar.ts        minimum ghost-only wire vocabulary
+fixtures/evidence/        reviewed evidence fixtures and manifests
+testing/engine/           engine contracts and native compatibility probes
+testing/corpus/           privacy-safe extraction and profiling tools
 ```
 
-### Forbidden imports
+Forbidden dependencies are executable test contracts:
 
-- `src/v2/claude/**` → `src/v2/codex/**`
-- `src/v2/codex/**` → `src/v2/claude/**`
-- provider-neutral directories → provider-specific wire types
-- `src/v2/**` → Node filesystem/process APIs, Electron, Agent Code, or ghost
-- Agent Code renderer → provider projectors or transcript internals
-- ghost modules → v2 translation, analysis, or projection
-- v2 production modules → v1 implementation
+- `src/claude/**` must not import `src/codex/**` and vice versa.
+- Neutral directories must not import provider-specific wire types.
+- Engine modules must not import Node host APIs, Electron, Agent Code, or ghost.
+- Agent Code renderer code must not import provider projectors.
+- Ghost modules must not import translation, analysis, or projection.
+- Production code must not import the displaced pairwise implementation.
 
-The compatibility test harness is the sole temporary exception to the last
-rule. An import-boundary test makes these constraints executable.
+## Evidence ladder
 
-## Evidence and oracle ladder
+A weaker rung cannot prove a stronger claim:
 
-Every manifest names which rung it occupies. A weaker rung cannot prove a
-stronger claim.
+1. privacy-reviewed observed wire evidence;
+2. pinned upstream source or schema;
+3. controlled native-provider observation;
+4. Agent Code consumer behavior;
+5. human-reviewed semantic expectation;
+6. synthetic regression case;
+7. displaced-implementation compatibility observation; and
+8. self-round-trip consistency.
 
-1. **Observed wire evidence:** a privacy-reviewed structural reduction of an
-   actual local provider transcript.
-2. **Pinned upstream source/schema:** a rule tied to a commit or schema version.
-3. **Controlled native observation:** a hermetic temporary provider home with
-   discovery/load/append results retained in a manifest.
-4. **Agent Code consumer behavior:** the current application's orchestration and
-   failure semantics.
-5. **Human-reviewed semantic expectation:** a product decision about an
-   inherently lossy cross-provider mapping.
-6. **Synthetic regression case:** useful for local edge mechanics, unable to
-   prove provider reality.
-7. **V1 compatibility observation:** describes migration impact only.
-8. **Self-round-trip:** useful for internal consistency only.
+## Staged decomposition
 
-## Stage decomposition
+### 1. Corpus and fixtures
 
-### Stage 0 — implementation line and decomposition
+Produce a read-only structural profiler, evidence manifests, redaction tooling,
+and reviewed fixtures. Verify deterministic counts and privacy rules before any
+classifier becomes the lens through which the corpus is seen.
 
-**Produces:** this plan; clean parent and package branches/worktree; recorded
-baseline commits and corpus census.
+### 2. JSONL transport
 
-**Verified by:** `git status`, submodule status, branch tracking, and review of
-this document against the investigation artifact.
+Build exact raw-line decoding/encoding and diagnostics. Syntax handling stays
+independent from provider meaning so unknown data cannot be erased early.
 
-**Why separate:** without an explicit baseline, later fixture and compatibility
-results cannot say which implementation or provider source they describe.
+### 3. Provider classification
 
-**Reality check:** current Git repositories, the completed nine-agent
-investigation, and the metadata-only local corpus census.
+Classify Claude and Codex records from observed families and pinned source
+contracts. Unknown records remain opaque; projection policy cannot influence
+what a record is.
 
-### Stage 1 — privacy-safe corpus index
+### 4. Analysis and stable addressing
 
-**Produces:** a read-only corpus profiler, manifest schema, provenance taxonomy,
-and an ignored local catalog of structural fingerprints/frequencies across all
-available transcripts.
+Build provider-specific graphs and prompt enumeration without repair. The
+prompt picker and rewind operation must resolve the same raw record address.
 
-**Verified by:** deterministic reruns, aggregate counts matching the filesystem
-census, no scalar transcript values in profiler output, and privacy leak tests.
+### 5. Archive projection
 
-**Why separate:** classifiers built first would determine which shapes the
-profiler can see, reproducing the original blind spot.
+Preserve provider-native data and bounded provenance with explicit reports.
+Archive output is not accepted as proof of native resumability.
 
-**Reality check:** the 3,311 local JSONLs and Agent Code's 1,773-entry activity
-index. No new recorder is needed.
+### 6. Native-resume projection
 
-### Stage 2 — reviewed fixture corpus
+Emit only the subset accepted by a named provider profile. Validate discovery,
+load/reconstruction, rendering, and local append independently.
 
-**Produces:** minimized/redacted observed fixtures, pinned source-derived cases,
-reclassified synthetic fixtures, and one manifest per case.
+### 7. Neutral translation, clone, and rewind
 
-**Verified by:** schema validation, provenance review, redaction scans,
-source-hash traceability, and confirmation that expected assertions were not
-generated by an implementation under test.
+Compose provider decoders and projectors through `ConversationDocument`. Apply
+shared stable-address and native-repair contracts without pairwise adapters.
 
-**Why separate:** tests written directly against private raw transcripts are not
-portable; invented checked-in fixtures are not independent evidence.
+### 8. Agent Code integration
 
-**Reality check:** representatives selected from Stage 1 clusters and rules read
-from pinned provider source/schema.
+Move switch, duplicate, prompt enumeration, and rewind into one main-process
+adapter. Preserve host-owned writes and failure-before-pane-replacement
+semantics.
 
-### Stage 3 — raw JSONL substrate
+### 9. Ghost freeze
 
-**Produces:** lossless raw-line model, decoder, encoder, partial-tail handling,
-and diagnostics.
+Characterize the existing ghost lifecycle, isolate its minimum sidecar types,
+and prove conversation decoding/projection excludes valid ghost records.
 
-**Verified by:** byte/line identity on observed fixtures, malformed-tail cases,
-unknown-record preservation, and property tests limited to syntax—not semantics.
+### 10. Destructive cutover
 
-**Why separate:** provider classification must not own line parsing or erase
-data before a record has been identified.
+Point the root export at the canonical engine, remove the displaced pairwise
+source/tests/scripts, flatten development-only directory conventions, update
+the package pointer, and verify both repositories from built artifacts.
 
-**Reality check:** actual line endings, malformed lines, large records, and
-partial tails found by Stages 1–2.
+## Completed implementation checklist
 
-### Stage 4 — provider classifiers and catalog
-
-**Produces:** Claude and Codex discriminated record unions, opaque records,
-evidence-labeled classification results, and catalog coverage reports.
-
-**Verified by:** every observed fixture classifies; every unknown stays opaque;
-frequency totals reconcile with Stage 1; source-derived Codex records match the
-pinned contract.
-
-**Why separate:** translation policy cannot be allowed to influence what a
-record *is*.
-
-**Reality check:** Stage 2 observed fixtures plus vendored Codex source. Claude
-claims remain observation-scoped where no authoritative source exists.
-
-### Stage 5 — graph and invariant analysis
-
-**Produces:** provider-specific identity/tool/compaction/mutation graphs,
-continuation diagnostics, and stable prompt-address enumeration.
-
-**Verified by:** independently reviewed expected graphs for real fixtures;
-address round trips; invariant reports that do not mutate inputs.
-
-**Why separate:** detecting an incomplete tool call is objective; deciding how
-to repair it for a target provider is policy.
-
-**Reality check:** real session topology, tool cycles, compactions, approvals,
-rollbacks, and duplicate event/response planes from the catalog.
-
-### Stage 6 — archive projections
-
-**Produces:** provider-specific archive/fidelity projections with bounded
-provenance and explicit loss/demotion reports.
-
-**Verified by:** observed semantic expectations, opaque preservation, bounded
-provenance tests, and same-provider identity where that is an archive contract.
-
-**Why separate:** archive output may preserve records that native resume must
-remove; combining them creates ambiguous correctness.
-
-**Reality check:** actual records without native equivalents and repeated-switch
-growth measured from observed fixtures.
-
-### Stage 7 — native-resume projections
-
-**Produces:** versioned Claude and Codex resume profiles, repair policies, fresh
-identity retargeting, and structured projection reports.
-
-**Verified by:** discovery, load/reconstruction, and append-after-resume at each
-claimed profile; source-backed Codex checks; controlled Claude observations.
-
-**Why separate:** a JSON file can parse, appear in Agent Code, or render while
-still being unusable by the native provider.
-
-**Reality check:** pinned provider source and hermetic provider homes populated
-from reviewed fixtures—not personal live homes.
-
-### Stage 8 — clone and rewind operations
-
-**Produces:** pure same-provider clone and rewind operations using stable prompt
-addresses, strict-prefix selection, draft recovery metadata, and repair reports.
-
-**Verified by:** enumeration and operation resolving the identical raw boundary;
-native resume gates; characterization of existing Agent Code behavior.
-
-**Why separate:** UI selection, prefix truncation, provider repair, identity
-retargeting, and filesystem commit are different failure planes.
-
-**Reality check:** real multi-message/image/compaction/tool fixtures and the
-confirmed Codex filtered-ordinal versus raw-user-ordinal mismatch.
-
-### Stage 9 — semantic cross-provider translation
-
-**Produces:** explicit Claude↔conversation and Codex↔conversation adapters,
-translation reports, archive compositions, and resume compositions.
-
-**Verified by:** human-reviewed semantic expectations from real fixtures,
-direction-specific native gates, and a v1 differential classified as preserved,
-corrected, intentionally dropped, or unresolved.
-
-**Why separate:** provider classification and native projection must be stable
-before inherently lossy mapping policy is introduced.
-
-**Reality check:** actual observed features and explicit product decisions,
-never plausible-looking invented records.
-
-### Stage 10 — Agent Code host integration
-
-**Produces:** one main-process transcript service wrapping v2; updated switch,
-duplicate, rewind, history, and prompt-address consumers; host-owned atomic
-writes and pane lifecycle.
-
-**Verified by:** adapter contract tests, failure-before-replacement tests,
-source-preservation tests, built-package tests, renderer integration tests, and
-direction-by-direction shadow comparisons.
-
-**Why separate:** package correctness must not absorb Electron/storage policy,
-and application behavior must remain rollbackable while v2 stabilizes.
-
-**Reality check:** current production consumer call sites and local sessions used
-through Agent Code.
-
-### Stage 11 — ghost freeze and compatibility proof
-
-**Produces:** explicit ghost import boundary, characterization tests, and proof
-that v2 projections neither translate nor persist ghost records.
-
-**Verified by:** lifecycle, reduction, reconciliation, journal, visibility, and
-package-export tests against the existing behavior.
-
-**Why separate:** ghost correctness is a separate ownership problem. Folding it
-into translation would multiply the cutover blast radius.
-
-**Reality check:** current renderer/main usage and production journal semantics.
-
-### Stage 12 — destructive cutover and v1 removal
-
-**Produces:** root exports backed by v2, deleted v1 implementation, updated docs
-and package metadata, no stale source aliases, and linked package/parent PRs.
-
-**Verified by:** no production imports of v1, no forbidden files/modules,
-package tarball tests, full package and Agent Code checks, clean clone/submodule
-checkout, and PR CI.
-
-**Why separate:** deletion before consumer and native gates would remove the
-rollback/reference path; deletion after the gates prevents permanent dual
-architecture.
-
-**Reality check:** every real Agent Code consumer has moved, shadow differences
-are classified, and the package works from its published artifact shape.
-
-## Detailed implementation checklist
-
-### Phase 1 — plan, manifests, and corpus discovery
-
-- [x] Add the fixture-manifest schema and evidence-strength taxonomy.
-- [x] Add a structural fingerprint that removes scalar values while retaining
-      key paths, JSON value kinds, low-cardinality discriminators, ordering
-      planes, and provider profile.
-- [x] Add a read-only local profiler that accepts explicit roots, never defaults
-      to or writes provider homes, and writes only to an explicit ignored output.
-- [x] Profile Claude main, Claude subagent, nested Claude, and Codex separately.
-- [x] Deduplicate exact structural signatures and identify likely duplicate
-      transcript files without exposing identifiers.
-- [x] Produce frequency-ranked catalogs and unknown-shape candidates.
-- [x] Select and manually review fixture candidates from every load-bearing and
-      rare-but-real cluster.
-
-### Phase 2 — real fixture corpus
-
-- [x] Retire the old synthetic v1 fixtures during destructive cutover rather
-      than presenting them as native evidence.
-- [x] Build the redaction/minimization tool as an explicit, review-required
-      workflow rather than an automatic truth generator.
-- [x] Add observed Claude fixtures covering every catalogued record/block family.
-- [x] Add observed Codex fixtures covering every catalogued rollout/item family.
-- [x] Add source-derived Codex discovery/reconstruction positive and negative
-      cases pinned to `8035cb03`.
-- [x] Add privacy tests that reject likely home paths, repository paths, secrets,
-      high-entropy tokens, unreviewed prompts, and missing provenance.
-
-### Phase 3 — v2 substrate and classification
-
-- [x] Implement raw line decode/encode and diagnostics test-first.
-- [x] Implement evidence/provenance primitives.
-- [x] Implement Claude classification from the catalog.
-- [x] Implement Codex classification from the catalog.
-- [x] Add opaque record handling and exhaustive reports.
-- [x] Add import-boundary and browser-safety tests.
-
-### Phase 4 — analysis and stable addressing
-
-- [x] Implement Claude identity/parent/tool/compaction analysis.
-- [x] Implement Codex metadata/event/response/tool/mutation analysis.
-- [x] Define provider-native prompt addresses that identify a raw record rather
-      than a UI-filtered ordinal.
-- [x] Make prompt enumeration return those addresses.
-- [x] Prove address resolution is stable across filtering and rendering.
-
-### Phase 5 — projections and operations
-
-- [x] Implement bounded archive provenance without recursive sidecar growth.
-- [x] Implement archive projections with explicit loss reports.
-- [x] Implement versioned Codex native-resume projection.
+- [x] Profile and structurally catalog the authorized local transcript corpus.
+- [x] Add redacted observed fixtures, manifests, and privacy gates.
+- [x] Implement exact JSONL transport and diagnostics.
+- [x] Implement evidence-backed Claude and Codex classification.
+- [x] Implement provider graph analysis and stable prompt addresses.
+- [x] Define the provider-neutral conversation protocol.
+- [x] Implement provider decoders without cross-provider imports.
+- [x] Implement bounded archive projectors and structured loss reports.
+- [x] Implement source-pinned Codex native-resume projection.
 - [x] Implement observation-scoped Claude native-resume projection.
-- [x] Consolidate provider repair policy so clone, rewind, and translated resume
-      use the same named invariants where they genuinely coincide.
-- [x] Implement clone for Codex, then Claude.
-- [x] Implement rewind for Codex, then Claude, using stable addresses.
+- [x] Implement same-provider clone and rewind using stable addresses.
+- [x] Implement cross-provider composition through the neutral protocol.
+- [x] Move Agent Code switch, duplicate, picker, and rewind to the engine.
+- [x] Characterize and isolate the frozen ghost subsystem.
+- [x] Delete the displaced pairwise implementation and stale artifacts.
+- [x] Make the replacement the canonical source/test/fixture/public layout.
+- [x] Run package and Agent Code contract, type, test, build, and package gates.
+- [x] Run installed Codex and Claude native-compatibility gates.
+- [x] Push linked package and Agent Code PR branches.
+- [ ] Complete hands-on Agent Code switch, duplicate, rewind, failure, and
+      rollback smoke testing.
+- [ ] Confirm final package and parent CI after the canonical-layout commit.
 
-### Phase 6 — semantic translation
+## Verification snapshot
 
-- [x] Define the provider-neutral conversation protocol from observed semantics.
-- [x] Implement Claude→conversation without importing Codex.
-- [x] Implement Codex→conversation without importing Claude.
-- [x] Implement conversation→provider archive projections.
-- [x] Implement conversation→provider resume projections.
-- [x] Require a report for every non-isomorphic mapping.
-- [x] Classify v1 as a compatibility observation only; do not force blanket
-      equality. Independent observed fixtures, structured loss reports, and
-      native-provider gates supersede v1 output as the cutover oracle.
-
-### Phase 7 — Agent Code cutover
-
-- [x] Add a single host adapter that owns parser invocation but no provider
-      semantics.
-- [x] Move provider switch to the v2 resume API one direction at a time.
-- [x] Move duplicate to v2 clone.
-- [x] Move prompt picker and rewind to shared stable addresses.
-- [x] Keep filesystem resolution and atomic writes in main.
-- [x] Preserve typed failure behavior so a failed projection never replaces a
-      live pane.
-- [x] Use pure structured projection reports plus host/native acceptance gates
-      instead of runtime shadow writes against private production sessions.
-
-### Phase 8 — ghost freeze, deletion, and documentation
-
-- [x] Characterize ghost public exports and behavior before moving any shared
-      sidecar code.
-- [x] Split the minimum ghost sidecar dependency from translation provenance.
-- [x] Prove v2 ignores ghost records at its boundary.
-- [x] Delete v1 converters, codecs, neutral wrapper, clone, rewind, permissive
-      types, tests that merely bless v1, and stale scripts/docs.
-- [x] Point root exports to v2 and retain the frozen `/ghost` subpath.
-- [x] Rewrite the package README around evidence profiles and honest guarantees.
-- [x] Add an evergreen Agent Code design doc only if the final host/package
-      ownership differs from existing documented architecture.
-
-### Phase 9 — verification and PR delivery
-
-- [x] Package: contract, typecheck, unit, corpus, system, coverage, build, and
-      tarball/package tests.
-- [x] Agent Code: contract, typecheck, unit, system, renderer, package, and build
-      tests relevant to the cutover.
-- [x] Controlled native Codex discovery/load/append checks in a temporary home.
-- [x] Controlled native Claude checks for the explicitly supported profile.
-- [ ] Manual Agent Code switch, duplicate, rewind, failure, and rollback checks.
-- [x] Push the package branch and open the reviewable package PR.
-- [x] Commit the package pointer and integration on the parent branch.
-- [x] Push the parent branch and open the primary Agent Code PR linking the
-      package PR, evidence catalog, supported profiles, and rollback plan.
-
-### Verification snapshot
-
-The implementation branch was verified on 2026-07-20 with:
+Verified locally on 2026-07-20:
 
 - package `npm run check`: 21 test files, 66 tests, typecheck, build, and packed
   artifact validation;
-- package opt-in native gates: Codex CLI 0.144.6 discovery, reconstruction, and
-  local append through app-server; Claude Code 2.1.215 discovery, load, and
-  interactive rendering without submitting a model turn;
+- installed Codex CLI 0.144.6: discovery, reconstruction, and local append
+  through app-server;
+- installed Claude Code 2.1.215: discovery, load, and interactive rendering of
+  projected history without submitting a model turn; and
 - Agent Code `npm run check`: contract, typecheck, 212 test files, 1,195 tests,
   production main/preload/renderer/remote builds, hotkey helper, and packaged
-  entry-point validation; and
-- package CI across Node 20.19 and Node 24, tier commands, coverage, contract,
-  and quality-gate jobs.
+  entry-point validation.
 
-The planned v1 differential and runtime shadow-write mechanism were deliberately
-retired rather than shipped. V1 mixed archive and native-resume semantics and
-therefore could not serve as a correctness oracle for the new split APIs.
-Running shadow writes over private live sessions would also broaden the data
-surface without proving native acceptance. Git history remains the rollback and
-behavior-reference artifact; redacted observed fixtures, explicit projection
-reports, host integration tests, and installed-provider gates are the accepted
-cutover evidence.
+The planned output differential and runtime shadow-write mechanism were retired
+rather than shipped. The displaced converter mixed archive and native-resume
+semantics, so its output could not be the correctness oracle for the split APIs.
+Shadow-writing private live sessions would broaden the data surface without
+proving provider acceptance. Git history remains the rollback/reference
+artifact; redacted evidence, projection reports, host tests, and installed CLI
+gates are the accepted cutover proof.
 
-## Go/no-go gates
+## Go/no-go rules
 
-- No classifier code until the corpus index exists and reconciles with the
-  filesystem census.
-- No semantic expected output generated by v1 or v2.
-- No provider-native rule without a versioned source or observation label.
-- No archive API accepted where a native-resume result is required.
-- No Codex rewind cutover until picker and operation share one address.
-- No Claude native-resume claim broader than the evidence profile.
-- No production cutover with unexplained shadow differences.
-- No v1 deletion until every Agent Code consumer is on v2 and rollback artifacts
-  exist.
+- No provider-native claim without a versioned source or observation profile.
+- No archive result where a native-resume result is required.
+- No Codex rewind cutover unless picker and operation share one address.
+- No Claude claim broader than the controlled observation.
+- No unexplained silent loss; every non-isomorphic mapping is reported.
 - No ghost semantic change in this branch.
-- No raw personal transcript, prompt, path, secret, or tool output committed.
+- No raw personal transcript, path, secret, prompt, or tool output in Git.
+- No merge until package and parent CI pass the canonical-layout commit.
 
-## Known unknowns and decisions that may stop a stage
+## Rollback and PR topology
 
-- Which exact Claude CLI versions the local observations span and which profile
-  Agent Code promises to support.
-- The minimum Claude resume envelope and whether provider rewrites preserve
-  unknown provenance fields.
-- Whether archive provenance stores complete redacted source records, hashes
-  plus external bundles, or only structured loss receipts.
-- Which non-isomorphic provider-control records should become visible semantic
-  content versus explicit omissions.
-- Whether native continuation checks may make networked next-turn calls or must
-  stop at local discovery/reconstruction.
-- Supported Codex version range and its relationship to vendored `8035cb03`.
-- Title behavior for clone/rewind and provider-native listing/index side effects.
-- The classification of the 139 nested Claude JSONLs and whether they are
-  independent evidence or duplicates/import artifacts.
+`agent-transcript-parser` is a Git submodule, so the complete review surface is
+necessarily two linked PRs: the package source PR and the Agent Code integration
+PR. Agent Code pins the reviewed package commit exactly.
 
-When one of these changes observable product semantics, implementation stops
-for a human decision. It is not inferred from v1 simply because v1 chose
-something.
-
-## PR topology
-
-`packages/agent-transcript-parser` is a Git submodule. GitHub cannot show its
-source diff inside the parent Agent Code PR; the parent diff contains only a
-gitlink change. Therefore the complete review surface necessarily consists of:
-
-1. a package PR in `Juliusolsson05/agent-transcript-parser` containing v2 and
-   the removal of v1; and
-2. the primary Agent Code PR in `Juliusolsson05/agent-code` containing this
-   plan, consumer integration, tests, documentation, and the reviewed package
-   commit pointer.
-
-The branch/worktree names describe the implementation, not this plan file. The
-plan is an execution artifact on that implementation line, exactly as requested.
+Rollback is the parent integration commit plus its submodule pointer. Reverting
+that pair restores the previous host/package combination. The removed pairwise
+implementation remains recoverable from package Git history; it is not kept in
+the shipped tree as a second architecture.
