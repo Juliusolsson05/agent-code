@@ -29,6 +29,14 @@ while it is developed and proven. Once Agent Code has cut over, the old
 converter, codec, permissive-type, neutral-wrapper, clone, rewind, and resume
 repair structures are deleted rather than retained as a second architecture.
 
+The provider-neutral conversation protocol is the hub of the architecture, not
+merely a temporary Claude/Codex interchange type. Each provider implements one
+inbound decoder and its own outbound archive and native-resume projectors. A
+cross-provider operation is always `source -> conversation -> target`; provider
+adapters never translate directly to one another. That changes growth from up
+to `N * (N - 1)` pairwise translators to a linear adapter family per provider,
+so adding a future provider does not require changing any existing adapter.
+
 The exception is the ghost subsystem. Ghosts solve provisional-render ownership
 and journal recovery, not provider transcript translation. Their behavior is a
 production contract used across main, renderer, and remote-client processes.
@@ -115,6 +123,8 @@ observable properties:
    same enumeration layer that the UI consumes.
 7. Provider adapters do not import one another. Shared code cannot name a
    provider wire type.
+   Adding a provider requires one decoder and its own output projectors, not
+   branches for every provider already installed.
 8. Filesystem paths, home directories, registries, IPC, pane replacement, and
    drafts remain owned by Agent Code.
 9. Native claims name a provider/version/source profile and are verified at the
@@ -572,4 +582,3 @@ gitlink change. Therefore the complete review surface necessarily consists of:
 
 The branch/worktree names describe the implementation, not this plan file. The
 plan is an execution artifact on that implementation line, exactly as requested.
-
