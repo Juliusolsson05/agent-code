@@ -1,36 +1,15 @@
-import type { AgentProviderKind } from '@shared/types/providerKind.js'
 import { randomUUID } from 'node:crypto'
 
-import {
-  ClaudeCodec,
-  CodexCodec,
-  cloneClaudeTranscript,
-  translateToClaude,
-  translateToCodex,
-} from 'agent-transcript-parser'
-import type { ClaudeEntry, CodexRolloutLine } from 'agent-transcript-parser'
-import { isRecord } from '@shared/lib/asRecord.js'
+import type { AgentProviderKind } from '@shared/types/providerKind.js'
 
-import { sanitizeClaudeEntriesForResume } from '@main/providerSwitch/claudeResumeSanitizer.js'
-import { sanitizeCodexRolloutForResume } from '@main/providerSwitch/codexResumeSanitizer.js'
-import {
-  findCodexRolloutPathBySessionId,
-  getClaudeSessionFilePath,
-  getCodexSessionId,
-  readJsonlFile,
-  writeClaudeSessionFile,
-  writeCodexRolloutFile,
-} from '@main/providerSwitch/shared.js'
+import { getHostTranscriptAdapter } from '@main/providerSwitch/transcriptEngine.js'
 
 export type SwitchProviderRequest = {
   sourceKind: AgentProviderKind
   /**
-   * EXPLICIT switch target (#394 phase 5a). Optional for exactly one
-   * release's worth of back-compat with renderer callers that predate
-   * the field; when omitted, the target is the historical "the other
-   * of the two" negation. New callers MUST pass it — the negation
-   * default dies when a third provider registers (it would be
-   * ambiguous), and the request will then hard-require the field.
+   * The target is explicit because provider switching is not a binary toggle.
+   * The optional fallback exists for one compatibility window with older
+   * renderer callers and can only infer the historical Claude/Codex pair.
    */
   targetKind?: AgentProviderKind
   sourceProviderSessionId: string
@@ -48,232 +27,48 @@ export type SwitchProviderResult = {
 export async function switchProvider(
   request: SwitchProviderRequest,
 ): Promise<SwitchProviderResult> {
-  // Explicit-target dispatch (#394 phase 5a): the old code switched by
-  // NEGATION (`sourceKind === 'claude' ? claudeToCodex : codexToClaude`)
-  // with no target parameter at all — the entire feature was
-  // structurally binary. The dispatch is now keyed on the
-  // (source, target) pair; today's two implementations cover the two
-  // shipped pairs, and an unknown pair fails LOUDLY instead of
-  // silently translating to the wrong provider. The generic N-way
-  // implementation lands with the neutral-hub engine migration
-  // (agent-transcript-parser#5) — the hub API
-  // (encode(target, decode(source, x))) is already merged and proven
-  // equivalent, but these flows also own file layout, sanitizers, and
-  // id policy, which move in their own slice.
-  const targetKind = request.targetKind ?? (request.sourceKind === 'claude' ? 'codex' : 'claude')
+  const targetKind = request.targetKind ?? inferLegacyTarget(request.sourceKind)
   if (targetKind === request.sourceKind) {
     throw new Error(
       `switchProvider: target kind ${targetKind} equals source kind — nothing to switch`,
     )
   }
-  if (request.sourceKind === 'claude' && targetKind === 'codex') {
-    return switchClaudeToCodex(request)
-  }
-  if (request.sourceKind === 'codex' && targetKind === 'claude') {
-    return switchCodexToClaude(request)
-  }
-  throw new Error(
-    `switchProvider: no translation path for ${request.sourceKind} → ${targetKind} yet (see agent-transcript-parser#5)`,
-  )
-}
 
-async function switchClaudeToCodex(
-  request: SwitchProviderRequest,
-): Promise<SwitchProviderResult> {
+  const source = getHostTranscriptAdapter(request.sourceKind)
+  const target = getHostTranscriptAdapter(targetKind)
   const sourceCwd = request.sourceCwd ?? request.cwd
-  const sourceFilePath = await getClaudeSessionFilePath(
+  const targetCwd = request.targetCwd ?? request.cwd
+
+  // WHY every switch passes through ConversationDocument: pairwise dispatch
+  // made each new provider require translators to every existing provider.
+  // Source and target adapters now know only their own formats. All decoding
+  // and projection completes before write(), so an unsupported record or
+  // failed profile cannot leave a partial target transcript on disk.
+  const conversation = await source.read(
     sourceCwd,
     request.sourceProviderSessionId,
   )
-  const sourceEntries = await readJsonlFile<ClaudeEntry>(sourceFilePath)
-  // `dropClaudeBootstrap` strips Claude's self-injected system-reminder
-  // burst (tool list, MCP instructions, skill/todo reminders) before the
-  // rollout reaches Codex. Without it, the very first lines the resumed
-  // Codex agent sees are a giant commentary block the user never wrote,
-  // which pollutes the conversation and Codex's title/listing heuristics.
-  //
-  // `sanitizeForResume` strips codex-origin sidecars carrying one-shot
-  // history mutations (thread_rolled_back, turn_aborted, compacted with
-  // a stale replacement_history). Without this, any codex-event that
-  // made it into the Claude JSONL via a prior Codex→Claude switch gets
-  // re-emitted into the new rollout, and codex's resume re-applies the
-  // mutation — observed as the user "jumping back N messages" after a
-  // switch (e.g. a past `/rollback 2` in a source codex session
-  // triggers drop_last_n_user_turns on every subsequent resume).
-  //
-  // Round-trip fidelity isn't a goal on provider-switch — the user has
-  // already committed to living inside Codex from here on.
-  // Translate over the neutral hub (#394 phase 5b). This routes through
-  // the codec seam (encode(target, decode(source, x))) instead of calling
-  // toCodex directly. It is BYTE-IDENTICAL to the old direct call:
-  // ClaudeCodec.decode wraps every source entry in the passthrough region
-  // losslessly, translateToCodex reconstructs that exact source array and
-  // runs the same legacy toCodex over it with the same options — the
-  // equivalence is pinned by atp's testing/translate-equivalence.ts
-  // (ClaudeCodec.encode(CodexCodec.decode(x)) ≡ toClaude(x) and the
-  // symmetric case). WHY do this if it's byte-identical: switchProvider
-  // becomes the first PRODUCTION consumer of the neutral hub, so when the
-  // atp engine migrates to true per-entry neutral translation (later
-  // slice), provider switching inherits it with no further edits — and a
-  // third provider's codec makes its switch pairs work here for free.
-  //
-  // The resume sanitizers (sanitizeClaudeEntriesForResume here,
-  // sanitizeCodexRolloutForResume below) and id/file-layout policy stay
-  // app-side for now; absorbing them into the codecs is the separate,
-  // more delicate slice this one deliberately isolates.
-  const translated = translateToCodex(
-    ClaudeCodec.decode(sanitizeClaudeEntriesForResume(sourceEntries)),
-    {
-      lossy: false,
-      dropClaudeBootstrap: true,
-      sanitizeForResume: true,
-      targetSessionId: randomUUID(),
-    },
-  ).lines
-  const targetProviderSessionId = getCodexSessionId(translated)
-  const targetFilePath = await writeCodexRolloutFile(
-    sanitizeCodexRolloutForResume(translated),
-  )
-
-  return {
-    targetKind: 'codex',
-    targetProviderSessionId,
-    targetFilePath,
-  }
-}
-
-async function switchCodexToClaude(
-  request: SwitchProviderRequest,
-): Promise<SwitchProviderResult> {
-  const sourceFilePath = await findCodexRolloutPathBySessionId(
-    request.sourceProviderSessionId,
-  )
-  if (!sourceFilePath) {
+  if (!conversation.entries.some(entry => entry.kind !== 'opaque')) {
     throw new Error(
-      `Codex rollout for session ${request.sourceProviderSessionId} was not found.`,
+      `switchProvider: ${request.sourceKind} transcript contained no projectable conversation entries`,
     )
   }
 
-  const sourceLines = await readJsonlFile<CodexRolloutLine>(sourceFilePath)
-  // Neutral-hub routed, byte-identical to toClaude(sourceLines, {lossy:false})
-  // — see the WHY block in switchClaudeToCodex above.
-  const translated = translateToClaude(CodexCodec.decode(sourceLines), {
-    lossy: false,
-  }).lines
-  // WHY retarget after translation instead of teaching `toClaude` to always
-  // allocate a new id:
-  // `toClaude` is also the byte-fidelity export/round-trip converter, where
-  // preserving the source identity is useful and already covered by fixtures.
-  // Provider switching is different: the output is a live Claude transcript
-  // that will be resumed immediately. Reusing the Codex thread id means the
-  // child can report the same inherited id as its parent and, worse, Claude is
-  // asked to resume a transcript whose identity belongs to another provider.
-  // Retargeting here keeps export semantics untouched while making the live
-  // transcript obey the provider-switch contract: new file, new provider id.
-  const { entries: retargeted, newSessionId: targetProviderSessionId } =
-    cloneClaudeTranscript(translated, {
-      newSessionId: randomUUID(),
-      titleSuffix: null,
-    })
-  const resumeSafeEntries = prepareTranslatedClaudeForResume(
-    retargeted,
-    targetProviderSessionId,
-  )
-  const targetFilePath = await writeClaudeSessionFile(
-    request.targetCwd ?? request.cwd,
-    sanitizeClaudeEntriesForResume(resumeSafeEntries),
-  )
+  const projection = await target.projectNativeResume(conversation, {
+    cwd: targetCwd,
+    targetSessionId: randomUUID(),
+    now: new Date().toISOString(),
+  })
+  const targetProviderSessionId = target.sessionId(projection.values)
+  const targetFilePath = await target.write(targetCwd, projection.values)
 
-  return {
-    targetKind: 'claude',
-    targetProviderSessionId,
-    targetFilePath,
-  }
+  return { targetKind, targetProviderSessionId, targetFilePath }
 }
 
-function prepareTranslatedClaudeForResume(
-  entries: readonly ClaudeEntry[],
-  sessionId: string,
-): ClaudeEntry[] {
-  // WHY provider-switch cannot write the raw `toClaude()` output:
-  // `toClaude()` is a fidelity converter. It emits Codex sidecar sentinels as
-  // Claude `system` records (`codex_session_meta`, `codex_turn_context`,
-  // `codex_event_msg`) so a later Claude->Codex export can round-trip bytes.
-  // Claude Code's own `--resume` loader is stricter than our transcript reader:
-  // it rejects those translated records and also expects assistant entries to
-  // carry a native Anthropic message envelope (`type`, `model`, `stop_reason`,
-  // `usage`, and a top-level `requestId`). Without this normalization the PTY
-  // exits immediately with only "Failed to resume session <id>", before prompt
-  // delivery has any chance to matter.
-  //
-  // Provider-switch/orchestration is a live-resume path, not an export path, so
-  // resumability wins over byte-fidelity here. Keep only real conversation
-  // turns, rethread them into one linear parent chain, synthesize Claude's
-  // lightweight resume metadata, and wrap assistant messages enough for the
-  // native loader to accept the file. The original Codex source remains
-  // untouched on disk, so lossy resume shaping here does not destroy history.
-  const conversation = entries
-    .filter(entry => entry.type === 'user' || entry.type === 'assistant')
-    .map((entry, index, arr): ClaudeEntry => {
-      const next: ClaudeEntry = {
-        ...entry,
-        sessionId,
-        parentUuid: index === 0 ? null : arr[index - 1]?.uuid ?? null,
-      }
-      if (next.type === 'assistant' && next.message) {
-        const message = next.message as Record<string, unknown>
-        const content = Array.isArray(message.content)
-          ? message.content
-          : [{ type: 'text', text: String(message.content ?? '') }]
-        next.requestId =
-          typeof next.requestId === 'string' && next.requestId.length > 0
-            ? next.requestId
-            : `req_${String(next.uuid ?? randomUUID()).replace(/-/g, '').slice(0, 24)}`
-        next.message = {
-          type: 'message',
-          model: typeof message.model === 'string' ? message.model : 'claude-opus-4-7',
-          id: typeof message.id === 'string' ? message.id : `msg_${String(next.uuid ?? randomUUID()).replace(/-/g, '')}`,
-          role: 'assistant',
-          content,
-          stop_reason: typeof message.stop_reason === 'string'
-            ? message.stop_reason
-            : 'end_turn',
-          stop_sequence: message.stop_sequence ?? null,
-          stop_details: message.stop_details ?? null,
-          usage: isRecord(message.usage)
-            ? message.usage
-            : {
-                input_tokens: 1,
-                output_tokens: 1,
-              },
-        } as ClaudeEntry['message']
-      }
-      return next
-    })
-
-  // The `as unknown as ClaudeEntry` casts below are deliberate, not sloppiness:
-  // Claude Code's native JSONL begins with lightweight header lines
-  // (`last-prompt`, `permission-mode`) that genuinely carry no uuid/parentUuid/
-  // timestamp, but agent-transcript-parser's ClaudeEntry declares those fields
-  // required (they are, for conversation entries). A single `as ClaudeEntry`
-  // does not compile because the shapes don't overlap enough. Widening
-  // ClaudeEntry in the parser package would weaken every real conversation
-  // entry to accommodate two synthetic header lines — the local double-cast is
-  // the smaller lie.
-  const leafUuid = conversation.at(-1)?.uuid
-  const prefix: ClaudeEntry[] = []
-  if (typeof leafUuid === 'string' && leafUuid.length > 0) {
-    prefix.push({
-      type: 'last-prompt',
-      leafUuid,
-      sessionId,
-    } as unknown as ClaudeEntry)
-  }
-  prefix.push({
-    type: 'permission-mode',
-    permissionMode: 'bypassPermissions',
-    sessionId,
-  } as unknown as ClaudeEntry)
-
-  return [...prefix, ...conversation]
+function inferLegacyTarget(source: AgentProviderKind): AgentProviderKind {
+  if (source === 'claude') return 'codex'
+  if (source === 'codex') return 'claude'
+  throw new Error(
+    `switchProvider: targetKind is required when switching from provider "${source}"`,
+  )
 }

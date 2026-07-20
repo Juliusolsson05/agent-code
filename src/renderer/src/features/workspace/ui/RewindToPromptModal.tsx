@@ -1,5 +1,6 @@
-import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
+import type { RewindPrompt } from '@shared/types/transcriptRewind'
+import { useEffect, useRef, useState } from 'react'
 
 import { Button } from '@renderer/components/ui/button'
 import {
@@ -10,9 +11,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
-import { extractAnchoredUserPrompts } from '@renderer/features/workspace/lib/latestUserPrompts'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { SessionId } from '@renderer/workspace/types'
+import { resumableProviderSessionId } from '@renderer/workspace/providerSessionIdentity'
 
 // RewindToPromptModal — picker for the rewind-to-prompt flow.
 //
@@ -37,11 +38,11 @@ import type { SessionId } from '@renderer/workspace/types'
 //      doesn't warrant special visual treatment; consistency with
 //      the surrounding modal family is the design budget.
 //
-// Paging: `extractAnchoredUserPrompts` only sees `runtime.entries`,
-// which for resumed Claude sessions is typically just the last
-// ~200 rows. If the user wants to rewind to an older prompt we
-// page older history via `workspace.loadOlderHistory(sessionId)`
-// while the modal is open, same pattern as `ViewPromptsModal`.
+// WHY the rows come from main instead of `runtime.entries`: the renderer feed
+// is intentionally lossy. It hides metadata and folds duplicate Codex event /
+// response planes. A list position in that view cannot safely identify a raw
+// source record. Main returns provider-native source addresses produced by the
+// same transcript analysis that rewind later consumes.
 
 type Props = {
   open: boolean
@@ -72,12 +73,46 @@ export function RewindToPromptModal({
 }: Props) {
   const scrollerRef = useRef<HTMLDivElement>(null)
   const meta = sessionId ? workspace.state.sessions[sessionId] ?? null : null
-  const runtime = sessionId ? workspace.getRuntime(sessionId) : null
+  const provider = meta?.kind ?? DEFAULT_PROVIDER
+  const providerSessionId = meta ? resumableProviderSessionId(meta) : null
+  const cwd = meta?.cwd ?? null
+  const [prompts, setPrompts] = useState<RewindPrompt[]>([])
+  const [loading, setLoading] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
 
-  const prompts = useMemo(() => {
-    if (!meta || !runtime) return []
-    return extractAnchoredUserPrompts(runtime.entries, meta.kind, PROMPT_LIMIT)
-  }, [meta, runtime])
+  useEffect(() => {
+    if (!open || !cwd) return
+    if (!isAgentProviderKind(provider) || !providerSessionId) {
+      setPrompts([])
+      setLoadError('This pane does not have a resumable provider transcript.')
+      return
+    }
+
+    let cancelled = false
+    setLoading(true)
+    setLoadError(null)
+    setPrompts([])
+    void window.api.listRewindPrompts({
+      provider,
+      sourceProviderSessionId: providerSessionId,
+      cwd,
+      limit: PROMPT_LIMIT,
+    }).then(next => {
+      if (!cancelled) setPrompts(next)
+    }).catch(error => {
+      if (cancelled) return
+      setLoadError(
+        error instanceof Error && error.message.length > 0
+          ? error.message
+          : 'Could not read rewind prompts.',
+      )
+    }).finally(() => {
+      if (!cancelled) setLoading(false)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [cwd, open, provider, providerSessionId])
 
   const [selectedIndex, setSelectedIndex] = useState(0)
   // Reset selection when the prompt list grows/shrinks under us.
@@ -91,18 +126,7 @@ export function RewindToPromptModal({
     }
   }, [prompts.length, selectedIndex])
 
-  // Paging — same pattern as ViewPromptsModal. Keep fetching older
-  // history until the list is full or the provider says there's
-  // nothing more on disk. The check is intentionally cheap; the
-  // load itself is debounced inside the workspace action.
-  useEffect(() => {
-    if (!open || !sessionId || !runtime) return
-    if (prompts.length >= PROMPT_LIMIT) return
-    if (!runtime.hasOlderHistory || runtime.loadingOlderHistory) return
-    void workspace.loadOlderHistory(sessionId)
-  }, [open, prompts.length, runtime, sessionId, workspace])
-
-  if (!meta || !runtime) return null
+  if (!meta) return null
 
   const cwdBase = meta.cwd.split('/').filter(Boolean).pop() ?? meta.cwd
   const selected = prompts[selectedIndex] ?? null
@@ -110,7 +134,7 @@ export function RewindToPromptModal({
   const confirm = async () => {
     if (!selected) return
     onClose()
-    await workspace.rewindFocusedToPrompt(selected.anchor)
+    await workspace.rewindFocusedToPrompt(selected.address)
   }
 
   return (
@@ -160,9 +184,9 @@ export function RewindToPromptModal({
         >
           {prompts.length === 0 ? (
             <div className="py-8 text-center text-[12px] text-muted">
-              {runtime.loadingOlderHistory
-                ? 'Loading older prompts…'
-                : 'No visible user prompts found for this session.'}
+              {loading
+                ? 'Reading transcript prompts…'
+                : loadError ?? 'No rewindable prompts found for this session.'}
             </div>
           ) : (
             <div className="flex flex-col gap-2">
@@ -201,8 +225,8 @@ export function RewindToPromptModal({
         <DialogFooter className="justify-between text-[11px] text-muted">
           <div className="flex flex-col gap-0.5">
             <span>
-              {runtime.loadingOlderHistory && prompts.length < PROMPT_LIMIT
-                ? 'Loading older prompts…'
+              {loading
+                ? 'Reading transcript prompts…'
                 : `Showing the latest ${Math.min(PROMPT_LIMIT, prompts.length)} prompt${prompts.length === 1 ? '' : 's'}`}
             </span>
             <span className="text-[10px] text-muted/70">

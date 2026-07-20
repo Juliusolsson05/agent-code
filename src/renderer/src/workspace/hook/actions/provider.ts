@@ -1,5 +1,6 @@
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
+import type { RewindPromptAddress } from '@shared/types/transcriptRewind'
 import { useCallback } from 'react'
 
 import type { SessionId } from '@renderer/workspace/types'
@@ -32,9 +33,7 @@ export function useProviderActions(
   switchFocusedProvider: () => Promise<void>
   reloadFocusedAgent: () => Promise<void>
   rewindFocusedToPrompt: (
-    anchor:
-      | { kind: 'claude'; uuid: string }
-      | { kind: 'codex'; userMessageIndex: number },
+    anchor: RewindPromptAddress,
   ) => Promise<void>
   undoLastRewind: () => Promise<void>
 } {
@@ -161,11 +160,7 @@ export function useProviderActions(
   //     exercises every race we have around the live-to-committed
   //     handoff at once; requiring idle is the safe path.
   const rewindFocusedToPrompt = useCallback(
-    async (
-      anchor:
-        | { kind: 'claude'; uuid: string }
-        | { kind: 'codex'; userMessageIndex: number },
-    ) => {
+    async (anchor: RewindPromptAddress) => {
       const current = refs.stateRef.current
       const sourceSessionId = commandTargetSessionIdForState(current)
       if (!sourceSessionId) return
@@ -185,10 +180,10 @@ export function useProviderActions(
         showPaneToast(sourceSessionId, 'Provider session id is not ready yet')
         return
       }
-      if (kind !== anchor.kind) {
+      if (kind !== anchor.provider) {
         showPaneToast(
           sourceSessionId,
-          `Anchor is ${anchor.kind} but focused pane is ${kind}`,
+          `Prompt address is for ${anchor.provider} but focused pane is ${kind}`,
         )
         return
       }
@@ -273,7 +268,7 @@ export function useProviderActions(
                 previousProviderSessionId,
                 rewoundProviderSessionId: result.newProviderSessionId,
                 rewoundPromptText: result.promptText,
-                rewoundPromptTimestamp: null,
+                rewoundPromptTimestamp: result.promptTimestamp,
                 previousDraftInput,
                 previousDraftImages: previousDraftImages.slice(),
                 builtInMcpDomains: meta.builtInMcpDomains,
