@@ -453,10 +453,22 @@ function FeedImpl({
         el.scrollTop = el.scrollHeight
         stickyBottomRef.current = true
         lastScrollTopRef.current = el.scrollTop
-        scrollPositions.set(sessionId, {
-          scrollTop: el.scrollTop,
-          stickyBottom: true,
-        })
+        // WHY tailing deliberately does NOT persist into scrollPositions:
+        // this branch runs on the scroll event that our own re-pin just caused,
+        // so writing here would overwrite the user's pre-tail reading position
+        // with {bottom, stickyBottom: true} — and only in the case where it
+        // mattered, since a pane already at the bottom emits no scroll event.
+        // The position then could not come back: the layout effect above reads
+        // this map when tail turns off, saw stickyBottom true, and re-pinned to
+        // the bottom with stickyBottomRef latched, so the feed kept following
+        // something the user had scrolled away from.
+        //
+        // Leaving the map untouched makes tail non-destructive: the pre-tail
+        // entry survives, and turning tail off takes the "restore exact
+        // position" branch, which also clears stickyBottomRef. Found reviewing
+        // Tail All (#579), which widened the blast radius of this from one pane
+        // to every visible pane at once, but the bug predates it and this fixes
+        // per-session Tail too.
         if (onScrollInfo) onScrollInfo({ fraction: 0 })
         return
       }
