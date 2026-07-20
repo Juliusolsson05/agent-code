@@ -729,6 +729,7 @@ export function TileLeaf({
       />
 
       <ComposerInput
+        sessionId={sessionId}
         inputRef={inputRef}
         input={input}
         focused={focused}

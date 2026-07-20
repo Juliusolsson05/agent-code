@@ -1,4 +1,4 @@
-import { memo, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { memo, useContext, useEffect, useId, useMemo, useRef, useState } from 'react'
 import hljs from 'highlight.js'
 
 import {
@@ -13,6 +13,11 @@ import {
   registerCodeBlock,
   unregisterCodeBlock,
 } from '@renderer/features/copy-code-block/lib/codeBlockRegistry'
+import { CodeRenderContext } from '@renderer/features/feed/context'
+import {
+  clearPendingSelection,
+  setPendingSelection,
+} from '@renderer/features/reply-to-selection/lib/selectionStash'
 import {
   boundedTextPage,
   collapsedTextPreview,
@@ -118,6 +123,11 @@ export const CodeBlock = memo(function CodeBlock({
     }
     return null
   }, [visibleCode, normalizedLanguage, allowAutoDetect, highlight, largeContentOpen, oversized])
+
+  // Session that owns this code block, for the "Reply to Selection"
+  // bridge in the Monaco effect below. Both the feed and Reader Mode
+  // already provide this context; it is '' outside a session.
+  const { sessionId: quoteSessionId } = useContext(CodeRenderContext)
 
   const containerRef = useRef<HTMLDivElement>(null)
   // INSTANT-PAINT LAYER (renderer rewrite PR #555; product-owner verdict
@@ -276,6 +286,41 @@ export const CodeBlock = memo(function CodeBlock({
       const sizeSub = editor.onDidContentSizeChange(syncHeight)
       cleanups.push(() => sizeSub.dispose())
 
+      // ── "Reply to Selection" bridge ──────────────────────────────────
+      // Monaco keeps its selection in its own model over a hidden
+      // textarea; it never becomes a document `Selection`. So the
+      // document-level `selectionchange` listener that powers quoting is
+      // structurally blind to text highlighted in here, and quoting code —
+      // one of the most valuable things to quote — silently did nothing.
+      //
+      // The listener defers inside `.monaco-editor` (see
+      // features/reply-to-selection/lib/quoteScope.ts) precisely so this
+      // bridge can own these regions without the two racing.
+      //
+      // `quoteSessionId` comes from CodeRenderContext, which both the feed
+      // and Reader Mode already provide. It is '' for code blocks rendered
+      // outside a session (the standalone editor), and we deliberately do
+      // not stash in that case — there is no composer to quote into.
+      if (quoteSessionId) {
+        const publishSelection = () => {
+          const selection = editor.getSelection()
+          if (!selection || selection.isEmpty()) {
+            // Collapsing inside Monaco is the user dismissing their own
+            // highlight — same meaning as an in-scope collapse in prose.
+            clearPendingSelection()
+            return
+          }
+          const text = model.getValueInRange(selection)
+          if (text.trim().length === 0) {
+            clearPendingSelection()
+            return
+          }
+          setPendingSelection(quoteSessionId, text)
+        }
+        const quoteSub = editor.onDidChangeCursorSelection(publishSelection)
+        cleanups.push(() => quoteSub.dispose())
+      }
+
       const onThemeChanged = () => {
         // Monaco only remeasures/repaints its text layer when options are
         // updated through the editor API. Mutating the CSS variable alone
@@ -353,7 +398,7 @@ export const CodeBlock = memo(function CodeBlock({
         }
       }
     }
-  }, [useMonaco, clientUri, visibleCode, engine, monacoBuild, normalizedLanguage, path, workspaceRoot])
+  }, [useMonaco, clientUri, visibleCode, engine, monacoBuild, normalizedLanguage, path, workspaceRoot, quoteSessionId])
 
   // Register only the currently materialized page in the code-block registry.
   //

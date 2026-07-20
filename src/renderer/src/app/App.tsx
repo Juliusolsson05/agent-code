@@ -12,6 +12,7 @@ import { useDebugAutosave } from '@renderer/features/debug/useDebugAutosave'
 import { useCaffeinateSync } from '@renderer/features/caffeinate/useCaffeinateSync'
 import { useDictationHotkeySync } from '@renderer/features/voice-dictation/useDictationHotkeySync'
 import { usePathPickerRequests } from '@renderer/features/path-picker/usePathPickerRequests'
+import { useSelectionCapture } from '@renderer/features/reply-to-selection/useSelectionCapture'
 import { GlobalModals } from '@renderer/app/surfaces/GlobalModals'
 import { GlobalOverlays } from '@renderer/app/surfaces/GlobalOverlays'
 import { SidePanels } from '@renderer/app/surfaces/SidePanels'
@@ -66,6 +67,12 @@ export default function App() {
   // sync hooks above — installing this in more than one place would
   // leak IPC listeners and double every state change.
   useCliUpdateSync()
+  // Captures feed text selections for "Reply to Selection". Mounted here
+  // for the same reason as the sync hooks above: `selectionchange` only
+  // fires on `document`, so one listener serves every pane and Reader
+  // Mode alike. Mounting it per-pane would mean N listeners filtering the
+  // same global event.
+  useSelectionCapture()
 
   const workspace = useWorkspace(dangerousAgentsEnabled, useProxyStreaming, defaultWorkspaceMode)
   useRenderedLeaseHygiene(workspace)

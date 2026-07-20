@@ -10,6 +10,7 @@ import type {
 } from '@renderer/session-runtime/state'
 import type { ComposerDictationController } from '@renderer/workspace/tile-tree/TileLeaf/useComposerDictation'
 import { PromptSuggestionChip } from '@renderer/workspace/tile-tree/TileLeaf/PromptSuggestionChip'
+import type { SessionId } from '@renderer/workspace/types'
 
 // Composer input — the textarea at the bottom of the pane plus its
 // two siblings: the Claude draft-images preview strip and the
@@ -31,6 +32,7 @@ import { PromptSuggestionChip } from '@renderer/workspace/tile-tree/TileLeaf/Pro
 //     the cycle when the new value differs from the currently-
 //     parked history slot.
 export function ComposerInput({
+  sessionId,
   inputRef,
   input,
   focused,
@@ -55,6 +57,7 @@ export function ComposerInput({
   promptDelivery,
   onResolveUncertainDelivery,
 }: {
+  sessionId: SessionId
   inputRef: MutableRefObject<HTMLTextAreaElement | null>
   input: string
   focused: boolean
@@ -186,6 +189,13 @@ export function ComposerInput({
             resize-none leading-[1.4]
             font-code
           `}
+          // Stable DOM hook for commands that rewrite the draft from
+          // outside the pane and then have to fix up the caret. The
+          // composer's own ref is local to TileLeaf and is not reachable
+          // from a command-palette `run()`, which has only the workspace
+          // object. See features/reply-to-selection/lib/parkComposerCaret.ts
+          // for why a prepending write MUST move the caret.
+          data-composer-input={sessionId}
           value={input}
           onChange={e => {
             onUserEngagement()

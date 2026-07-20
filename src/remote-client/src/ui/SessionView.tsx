@@ -396,6 +396,7 @@ export function SessionView({
             (Enter-to-send) doesn't need but a phone does. */}
         <div className="composer">
           <ComposerInput
+            sessionId={sessionId}
             inputRef={inputRef}
             input={draft}
             focused={true}

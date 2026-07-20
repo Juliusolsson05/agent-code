@@ -13,6 +13,7 @@ import { assistantUuidsWithText, extractAssistantByUuid } from '@renderer/lib/co
 import { resolveTabSessions } from '@renderer/workspace/queries'
 import { dispatchSessionIdsForTab } from '@renderer/workspace/dispatch/dispatchSelectors'
 import type { SessionId, Workspace } from '@renderer/workspace/workspaceStore'
+import { PaneToast } from '@renderer/workspace/tile-tree/TileLeaf/PaneToast'
 
 // ReaderView — single-message read mode for a focused session.
 //
@@ -345,11 +346,21 @@ function ReaderBody({
               that styles h1/h2/p/ul/li/strong/em/inline-code etc. Without
               it, ReactMarkdown still emits the right tags but the browser
               defaults render everything as a flat white paragraph run. */}
-          <article className="
-            prose-theme
-            mx-auto max-w-3xl px-8 py-10
-            text-ink text-[15px] leading-[1.7]
-          ">
+          {/* data-quote-scope: declares this subtree as quotable text for
+              "Reply to Selection". Stamped on the <article> and not the
+              scroller so the reader header (session tabs, pager) stays out
+              of scope. `sessionId` — not the grid's focused session — is
+              correct here: Reader Mode maintains its own selection via
+              setReaderModeSession, and the quote must land in the session
+              the user is actually reading. */}
+          <article
+            data-quote-scope={sessionId}
+            className="
+              prose-theme
+              mx-auto max-w-3xl px-8 py-10
+              text-ink text-[15px] leading-[1.7]
+            "
+          >
             <ReactMarkdown
               remarkPlugins={REMARK_PLUGINS}
               components={MARKDOWN_COMPONENTS}
@@ -363,6 +374,16 @@ function ReaderBody({
           no assistant message yet
         </div>
       )}
+      {/* Pane toast, rendered here as well as in TileLeaf.
+          WHY: Reader Mode is a full takeover — no TileLeaf is mounted, so
+          the toast TileLeaf normally paints never reaches the screen. That
+          left "Reply to Selection" with no feedback whatsoever in Reader
+          Mode: the draft is written to a composer the reader does not
+          show, the palette closes, and nothing visibly happens. Any
+          command that mutates a session from inside the reader has the
+          same problem, so this belongs to the reader frame rather than to
+          the quoting feature. */}
+      <PaneToast message={runtime.paneToast} />
     </CodeRenderContext.Provider>
   )
 }
