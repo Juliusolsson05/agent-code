@@ -424,7 +424,7 @@ export const paneCommands: CommandDef[] = [
     surface: 'app',
     title: 'Tail All',
     description:
-      '**What it does:** Toggles feed **auto-follow for every visible agent** at once.\n\n**Use when:** You are watching several agents work and want them all pinned to the bottom.\n\n**Notes:** Scopes to what is on screen — in **single dispatch** that is the one agent, in **tiled** every lane, in the **grid** the current tab\'s panes only. Panes you open afterward tail too, until you toggle it off. Terminals are never affected.',
+      '**What it does:** Toggles feed **auto-follow for every visible agent** at once.\n\n**Use when:** You are watching several agents work and want them all pinned to the bottom.\n\n**Notes:** Scopes to what is on screen — in **single dispatch** that is the one agent, in **tiled** every lane, in the **grid** the current tab\'s panes only. Panes you open afterward tail too, until you toggle it off. Terminals are never affected.\n\n**Caution:** A tailing feed cannot be scrolled up — this takes scrollback away from every visible pane at once, and turning it off does not restore where you were reading.',
     keywords: ['tail', 'all', 'follow', 'auto-scroll', 'bulk', 'every', 'watch'],
     // WHY no `renderedViewPolicy` even though per-session Tail has one: that
     // gate resolves ONE target session and checks whether it renders a feed.

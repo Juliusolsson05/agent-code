@@ -134,13 +134,41 @@ export function TileLeaf({
   // duplicate tiled lanes on one session, and grid leaves that render a related
   // detached child instead of their own session.
   //
-  // TileLeaf already *is* the visibility predicate: it mounts if and only if a
-  // pane is on screen. So every one of those cases resolves correctly for free,
-  // including layout modes that did not exist when this was written.
+  // TileLeaf is *effectively* the visibility predicate: with one exception below
+  // it mounts only for panes that are on screen. So every one of those cases
+  // resolves correctly for free, including layout modes that did not exist when
+  // this was written. Verified against the mount sites: TileTree renders it as
+  // the else-branch after TerminalLeaf and AgentTerminalLeaf (so terminals never
+  // reach it), Spotlight renders one leaf, Classic Dispatch renders the active
+  // row, Tiled Dispatch renders every lane, and TileTabs renders every tiled tab
+  // — all simultaneously visible.
+  //
+  // THE EXCEPTION, and do not delete this paragraph: Global Editor fullscreen
+  // keeps the whole workspace subtree mounted under `display: 'none'`
+  // (GlobalEditorShell.tsx, the `editorFullscreen ? { display: 'none' }` branch)
+  // so editor state survives. Every TileLeaf is therefore mounted-but-invisible
+  // there, and Tail All applies to panes the user cannot see. That is tolerable
+  // rather than correct: a display:none element has scrollHeight 0, so the pin
+  // is a no-op that self-corrects when the editor un-fullscreens. It is written
+  // down because the "if and only if" version of this claim is false, and the
+  // next person to extend this mechanism needs to know the predicate is
+  // "mounted", not "visible".
+  //
+  // The converse is not true either — a mounted TileLeaf does not always render
+  // a Feed to tail. Two known cases: a pane showing a workflow run swaps Feed
+  // for WorkflowRunView below, and Reader Mode is a full takeover (MainSurface
+  // renders ReaderView *instead of* the workspace shell) so no TileLeaf exists
+  // at all there; ReaderView owns an independent stickToBottom. The remote
+  // client mounts Feed directly (remote-client/src/ui/SessionView.tsx) and
+  // deliberately passes no tail props, so Tail All is desktop-only.
+  // In all of these Tail All is inert, not wrong — but the palette still reports
+  // "On", which is the honest cost of a workspace-level stance.
   //
   // The mask direction matters too: Tail All never writes `runtime.tailMode`,
-  // so switching it off restores whatever each session's own Tail said, with no
-  // snapshot to keep and nothing to reconcile between the two controls.
+  // so the per-session flag is untouched and reappears when Tail All goes off.
+  // Note that the *flag* restoring is not the same as the *scroll position*
+  // restoring — see the tail-mode guard in Feed's scroll listener for why the
+  // pre-tail position has to be protected for that promise to hold.
   const effectiveTailMode = runtime.tailMode || tailAllMode
   const dictationEnabled = useAppStore(state => state.settings.dictationEnabled)
   const dictationProvider = useAppStore(state => state.settings.dictationProvider)

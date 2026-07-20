@@ -125,9 +125,13 @@ export type UiShellState = {
    *  WHY there is no "which panes are visible" query behind this: there is no
    *  canonical visible-session selector in this codebase (`resolveTabSessions`
    *  answers membership, not visibility, and says so in its own header). The OR
-   *  is resolved inside `TileLeaf`, which mounts if and only if a pane is on
-   *  screen — so grid tab-scoping, dispatch lanes, duplicate tiled lanes, and
-   *  terminal exclusion all fall out of what React already mounts. See
+   *  is resolved inside `TileLeaf`, which with one exception mounts only for
+   *  on-screen panes — so grid tab-scoping, dispatch lanes, duplicate tiled
+   *  lanes, and terminal exclusion all fall out of what React already mounts.
+   *  The exception is Global Editor fullscreen, which keeps the workspace
+   *  mounted under `display: 'none'`; the full reasoning for why that is
+   *  tolerable lives at the OR site in TileLeaf.tsx. Reader Mode is a takeover
+   *  and mounts no TileLeaf at all, so Tail All is inert there. See
    *  docs/superpowers/plans/2026-07-20-tail-all.md before replacing this with an
    *  enumeration; the enumeration has at least four documented ways to be wrong.
    *
