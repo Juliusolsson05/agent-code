@@ -41,6 +41,7 @@ import {
 } from '@renderer/features/prompt-templates/ui/PromptTemplateEditorPane'
 import { PromptTemplateFillPane } from '@renderer/features/prompt-templates/ui/PromptTemplateFillPane'
 import { PromptTemplateManagerPane } from '@renderer/features/prompt-templates/ui/PromptTemplateManagerPane'
+import { PromptTemplatePreviewPanel } from '@renderer/features/prompt-templates/ui/PromptTemplatePreviewPanel'
 import type {
   PromptTemplate,
   PromptTemplateInsertMode,
@@ -1157,6 +1158,24 @@ function OpenCommandPalette({
     }
   })()
 
+  // The template preview panel mirrors the highlighted row for the same reason
+  // `resumePreviewTarget` does, and by the same mechanism: every row calls
+  // `onMouseEnter={() => setSelectedIndex(i)}`, so hover and keyboard (↑/↓)
+  // both write this one index. Deriving the previewed template from it means
+  // the panel follows hover AND arrow keys with no hover state of its own.
+  //
+  // WHY not a local `hoveredTemplate` state (the obvious implementation): it
+  // would be a second source of truth that keyboard navigation never updates,
+  // so arrowing down the list would leave the panel showing whatever the mouse
+  // last touched. It also needs onMouseLeave handling that this does not.
+  //
+  // `filteredPromptTemplates` is the array `selectedIndex` indexes into — the
+  // same one the keyboard handler and the rendered rows use. The cast mirrors
+  // `resumePreviewTarget` above and exists for noUncheckedIndexedAccess.
+  const selectedPromptTemplate: PromptTemplate | null = mode === 'prompt-template'
+    ? (filteredPromptTemplates[selectedIndex] as PromptTemplate | undefined) ?? null
+    : null
+
   return (
     <Dialog
       open
@@ -1173,7 +1192,21 @@ function OpenCommandPalette({
           ${
             mode === 'resume'
               ? 'w-[min(1180px,95vw)] max-h-[80vh]'
-              : mode === 'manage-prompt-template' ||
+              : // `prompt-template` joins the other template modes rather than
+                // sitting with the compact list modes. Two reasons, both from
+                // the preview panel:
+                //
+                // 1. The mode now renders a full prompt body, and the 60vh cap
+                //    was chosen for a list of one-line command rows. Capping
+                //    the surface that exists to show long prompts at 60vh
+                //    hides the feature behind a scrollbar.
+                // 2. Enter on a template WITH variables transitions
+                //    prompt-template -> fill-prompt-template. While the two
+                //    modes disagreed on size, that transition visibly jumped
+                //    the dialog from 900px/60vh to 1080px/82vh mid-interaction.
+                //    Sharing the geometry makes the step seamless.
+                mode === 'prompt-template' ||
+                  mode === 'manage-prompt-template' ||
                   mode === 'save-prompt-template' ||
                   mode === 'edit-prompt-template' ||
                   mode === 'fill-prompt-template'
@@ -1337,7 +1370,14 @@ function OpenCommandPalette({
             className={`
               min-h-0 py-1
               ${
-                mode === 'commands'
+                // `prompt-template` shares the commands geometry because it
+                // now has the same two-column shape: a list yielding 70% to a
+                // 30% detail panel, with the divider owned by the list. The
+                // `min-w-0` is what actually lets the panel claim its basis —
+                // without it the flex list refuses to shrink below its content
+                // width and squeezes the aside out. The bare `flex-1` fallback
+                // stays for the single-column modes (editor/manager/fill).
+                mode === 'commands' || mode === 'prompt-template'
                   ? 'flex-1 min-w-0 overflow-y-auto md:basis-[70%] md:border-r md:border-border'
                   : mode === 'resume'
                     ? 'flex-1 min-w-0 overflow-y-auto md:flex-none md:w-[42%] md:border-r md:border-border'
@@ -1718,6 +1758,13 @@ function OpenCommandPalette({
           </div>
 
           {mode === 'commands' && <CommandDescriptionPanel command={selectedCommand} />}
+
+          {/* Prompt-template mode — the full prompt body for the highlighted
+              template. Same breakpoint policy as the command description panel
+              (hidden below md) so the narrow layout stays list-only. */}
+          {mode === 'prompt-template' && (
+            <PromptTemplatePreviewPanel template={selectedPromptTemplate} />
+          )}
 
           {/* Resume mode — conversation preview for the highlighted
               session, rendered with the real feed rows. Hidden below
