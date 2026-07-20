@@ -106,6 +106,8 @@ export type CommandContext = {
     toggleProxyDebugPanel: () => void
     toggleHtmlDebugPanel: () => void
     toggleRenderingDebugMode: () => void
+    /** Flip workspace-wide feed auto-follow (every visible agent pane). */
+    toggleTailAllMode: () => void
     toggleDevDebugPanel: () => void
     openAgentStatusPanel: () => void
     closeAgentStatusPanel: () => void
@@ -170,6 +172,10 @@ export type CommandContext = {
     proxyDebugPanelOpen: boolean
     htmlDebugPanelOpen: boolean
     renderingDebugMode: boolean
+    /** Workspace-wide feed auto-follow is active. Read by BOTH `Tail All`
+     *  (its own on/off label) and per-session `Tail`, which must not report
+     *  "Off" while the pane it targets is visibly tailing because of this. */
+    tailAllMode: boolean
     devDebugEnabled: boolean
     /** The recording CAPABILITY is available (dev-debug on). Gates the
      *  Start/Stop Session Recording and Attach-Recording-Note commands (plan

@@ -379,11 +379,21 @@ export const paneCommands: CommandDef[] = [
     title: 'Tail',
     description: '**What it does:** Toggles feed **auto-follow** for the focused target.\n\n**Use when:** You want output to stay pinned to the bottom.\n\n**Notes:** Applies to the visible command target, including **Dispatch** selection.',
     renderedViewPolicy: { kind: 'requires-rendered-feed' },
-    getState: ({ workspace }) => {
+    getState: ({ workspace, flags }) => {
       const sessionId = commandTargetSessionId(workspace)
       const tailMode = sessionId
         ? workspace.getRuntime(sessionId).tailMode
         : false
+      // WHY this consults Tail All: the pane's actual behavior is
+      // `runtime.tailMode || tailAllMode` (see TileLeaf). Reporting the raw
+      // per-session flag would print "Off" next to a pane that is visibly
+      // pinned to the bottom, which reads as a broken command. The distinct
+      // 'On (all)' label says the state is real but not this session's to own —
+      // the toggle below still flips the session's own flag, which takes effect
+      // the moment Tail All goes off.
+      if (!tailMode && flags.tailAllMode) {
+        return { label: 'On (all)', tone: 'accent' }
+      }
       return {
         label: tailMode ? 'On' : 'Off',
         tone: tailMode ? 'accent' : 'neutral',
@@ -404,6 +414,32 @@ export const paneCommands: CommandDef[] = [
       if (!sessionId) return
       workspace.toggleTailMode(sessionId)
     },
+  },
+  {
+    id: 'toggle-tail-all',
+    // WHY 'app' and not 'session': this acts on the workspace, not on the
+    // resolved command target. Same reasoning recorded for
+    // `switch-agents-provider` — the user is acting across the workspace, not
+    // on the focused pane.
+    surface: 'app',
+    title: 'Tail All',
+    description:
+      '**What it does:** Toggles feed **auto-follow for every visible agent** at once.\n\n**Use when:** You are watching several agents work and want them all pinned to the bottom.\n\n**Notes:** Scopes to what is on screen — in **single dispatch** that is the one agent, in **tiled** every lane, in the **grid** the current tab\'s panes only. Panes you open afterward tail too, until you toggle it off. Terminals are never affected.',
+    keywords: ['tail', 'all', 'follow', 'auto-scroll', 'bulk', 'every', 'watch'],
+    // WHY no `renderedViewPolicy` even though per-session Tail has one: that
+    // gate resolves ONE target session and checks whether it renders a feed.
+    // Tail All has no single target — it is a stance that applies to whatever
+    // is mounted, now and later. Gating it on the currently focused pane would
+    // hide a workspace-level command because of one pane's view mode.
+    //
+    // WHY no `when` guard: it is meaningful in every layout mode, and with zero
+    // agent panes visible it is a harmless no-op rather than a command that
+    // disappears from the palette for reasons the user cannot see.
+    getState: ({ flags }) => ({
+      label: flags.tailAllMode ? 'On' : 'Off',
+      tone: flags.tailAllMode ? 'accent' : 'neutral',
+    }),
+    run: ({ ui }) => ui.toggleTailAllMode(),
   },
   {
     id: 'jump-latest-message',

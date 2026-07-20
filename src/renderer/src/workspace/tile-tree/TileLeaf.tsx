@@ -116,6 +116,32 @@ export function TileLeaf({
   // See src/shared/sessionFeed/SessionFeed.ts for the contract's WHY.
   const feed = useSessionFeed()
   const htmlDebugPanelOpen = useAppStore(state => state.htmlDebugPanelOpen)
+  const tailAllMode = useAppStore(state => state.tailAllMode)
+  // This one OR is the ENTIRE implementation of "Tail All" scoping, and it is
+  // load-bearing in a way that is easy to mistake for a shortcut.
+  //
+  // The feature asks for "tail every visible agent, scoped by layout mode":
+  // single dispatch = the one agent, tiled = every lane, grid = the current
+  // tab's panes only. The obvious implementation is to enumerate the visible
+  // sessions and write each one's `tailMode`. That enumeration does not exist
+  // and should not be written: there is no canonical visible-session selector
+  // here (`resolveTabSessions` answers membership, not visibility — see its
+  // header), and visibility is independently re-derived by MainSurface,
+  // DispatchLayout, TiledDispatchLayout, TileTabsView, SpotlightView,
+  // agentIndexNavigation, paneLabels, and useKeybinds. A ninth derivation would
+  // have to hand-encode the mode ladder, the fact that tileTabs/spotlight/
+  // readerMode live in a different store and can be non-null simultaneously,
+  // duplicate tiled lanes on one session, and grid leaves that render a related
+  // detached child instead of their own session.
+  //
+  // TileLeaf already *is* the visibility predicate: it mounts if and only if a
+  // pane is on screen. So every one of those cases resolves correctly for free,
+  // including layout modes that did not exist when this was written.
+  //
+  // The mask direction matters too: Tail All never writes `runtime.tailMode`,
+  // so switching it off restores whatever each session's own Tail said, with no
+  // snapshot to keep and nothing to reconcile between the two controls.
+  const effectiveTailMode = runtime.tailMode || tailAllMode
   const dictationEnabled = useAppStore(state => state.settings.dictationEnabled)
   const dictationProvider = useAppStore(state => state.settings.dictationProvider)
   const dictationShortcut = useAppStore(state => state.settings.dictationShortcut)
@@ -565,7 +591,7 @@ export function TileLeaf({
           // clears while the agent is working" failure.
             semanticHistory={runtime.semantic.history}
             semanticTurn={runtime.semantic.currentTurn}
-            tailMode={runtime.tailMode}
+            tailMode={effectiveTailMode}
             pickerSelectedUuid={runtime.assistantPicker?.selectedUuid ?? null}
             codeBlockSelectedId={runtime.codeBlockPicker?.selectedId ?? null}
             onScrollInfo={onScrollInfo}
@@ -655,7 +681,7 @@ export function TileLeaf({
         entryCount={runtime.entries.length}
         totalEntries={runtime.totalEntries}
         scrollFraction={scrollFraction}
-        tailMode={runtime.tailMode}
+        tailMode={effectiveTailMode}
         sessionKind={workspace.state.sessions[sessionId]?.kind}
         workContext={showWorktreeBadges ? runtime.workContext : null}
         workActivity={showWorktreeBadges ? runtime.workActivity : null}

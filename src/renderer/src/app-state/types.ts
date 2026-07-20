@@ -66,6 +66,10 @@ export type UiShellSlice = UiShellState & {
   toggleProxyDebugPanel: () => void
   toggleHtmlDebugPanel: () => void
   toggleRenderingDebugMode: () => void
+  /** Flip workspace-wide feed auto-follow. See `tailAllMode` in
+   *  app-state/uiShell/types.ts for why this is an OR-mask rather than a bulk
+   *  write over every session's `tailMode`. */
+  toggleTailAllMode: () => void
   toggleDevDebugPanel: () => void
   openAgentStatusPanel: () => void
   closeAgentStatusPanel: () => void

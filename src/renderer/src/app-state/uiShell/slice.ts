@@ -31,6 +31,7 @@ export const createUiShellSlice: StateCreator<
   proxyDebugPanelOpen: false,
   htmlDebugPanelOpen: false,
   renderingDebugMode: false,
+  tailAllMode: false,
   devDebugPanelOpen: false,
   agentStatusPanelOpen: false,
   performancePanelOpen: false,
@@ -167,6 +168,12 @@ export const createUiShellSlice: StateCreator<
       state => ({ renderingDebugMode: !state.renderingDebugMode }),
       false,
       'uiShell/toggleRenderingDebugMode',
+    ),
+  toggleTailAllMode: () =>
+    set(
+      state => ({ tailAllMode: !state.tailAllMode }),
+      false,
+      'uiShell/toggleTailAllMode',
     ),
   toggleDevDebugPanel: () =>
     set(

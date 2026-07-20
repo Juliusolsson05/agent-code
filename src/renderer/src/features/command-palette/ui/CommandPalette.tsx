@@ -200,6 +200,7 @@ function OpenCommandPalette({
   const toggleProxyDebugPanel = useAppStore(state => state.toggleProxyDebugPanel)
   const toggleHtmlDebugPanel = useAppStore(state => state.toggleHtmlDebugPanel)
   const toggleRenderingDebugMode = useAppStore(state => state.toggleRenderingDebugMode)
+  const toggleTailAllMode = useAppStore(state => state.toggleTailAllMode)
   const toggleDevDebugPanel = useAppStore(state => state.toggleDevDebugPanel)
   const openAgentStatusPanel = useAppStore(state => state.openAgentStatusPanel)
   const closeAgentStatusPanel = useAppStore(state => state.closeAgentStatusPanel)
@@ -258,6 +259,7 @@ function OpenCommandPalette({
   const proxyDebugPanelOpen = useAppStore(state => state.proxyDebugPanelOpen)
   const htmlDebugPanelOpen = useAppStore(state => state.htmlDebugPanelOpen)
   const renderingDebugMode = useAppStore(state => state.renderingDebugMode)
+  const tailAllMode = useAppStore(state => state.tailAllMode)
   const devDebugPanelOpen = useAppStore(state => state.devDebugPanelOpen)
   const agentStatusPanelOpen = useAppStore(state => state.agentStatusPanelOpen)
   const performancePanelOpen = useAppStore(state => state.performancePanelOpen)
@@ -491,6 +493,7 @@ function OpenCommandPalette({
         toggleProxyDebugPanel,
         toggleHtmlDebugPanel,
         toggleRenderingDebugMode,
+        toggleTailAllMode,
         toggleDevDebugPanel,
         openAgentStatusPanel,
         closeAgentStatusPanel,
@@ -538,6 +541,7 @@ function OpenCommandPalette({
         proxyDebugPanelOpen,
         htmlDebugPanelOpen,
         renderingDebugMode,
+        tailAllMode,
         devDebugEnabled,
         sessionRecordingEnabled,
         devDebugPanelOpen,
@@ -578,6 +582,7 @@ function OpenCommandPalette({
       toggleProxyDebugPanel,
       toggleHtmlDebugPanel,
       toggleRenderingDebugMode,
+      toggleTailAllMode,
       toggleDevDebugPanel,
       openAgentStatusPanel,
       closeAgentStatusPanel,
@@ -623,6 +628,7 @@ function OpenCommandPalette({
       proxyDebugPanelOpen,
       htmlDebugPanelOpen,
       renderingDebugMode,
+      tailAllMode,
       devDebugEnabled,
       sessionRecordingEnabled,
       devDebugPanelOpen,

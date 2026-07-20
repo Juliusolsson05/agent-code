@@ -110,6 +110,30 @@ export type UiShellState = {
    * leaving click interception active after restart would make the app appear
    * broken, and the captured inputs may contain developer-sensitive payloads. */
   renderingDebugMode: boolean
+  /** Workspace-wide feed auto-follow. While true, every *visible* agent pane
+   *  tails, and a pane that becomes visible later (a new lane selection, a tab
+   *  switch, a fresh split) is already tailing without the user re-running the
+   *  command. This is a stance on the workspace, not a batch operation.
+   *
+   *  WHY a single flag OR-ed into per-session `tailMode` rather than bulk-writing
+   *  every session's runtime flag: the OR needs no `setTailMode` primitive (only
+   *  a toggle exists — workspace/hook/helpers.ts), no snapshot of what each
+   *  session was before, and no policy for sessions created while it was on.
+   *  Turning it off simply reveals the per-session flags that were there all
+   *  along, so the two controls never have to be reconciled.
+   *
+   *  WHY there is no "which panes are visible" query behind this: there is no
+   *  canonical visible-session selector in this codebase (`resolveTabSessions`
+   *  answers membership, not visibility, and says so in its own header). The OR
+   *  is resolved inside `TileLeaf`, which mounts if and only if a pane is on
+   *  screen — so grid tab-scoping, dispatch lanes, duplicate tiled lanes, and
+   *  terminal exclusion all fall out of what React already mounts. See
+   *  docs/superpowers/plans/2026-07-20-tail-all.md before replacing this with an
+   *  enumeration; the enumeration has at least four documented ways to be wrong.
+   *
+   *  Deliberately NOT persisted, matching per-session `tailMode`: waking up to
+   *  every feed pinned to the bottom with no visible cause is confusing. */
+  tailAllMode: boolean
   /** When true, the .env-gated Dev Debug Panel is mounted. Unlike the
    *  stable debug panels above, this is a temporary module host for
    *  one-off investigations. Its modules are intentionally freeform:
