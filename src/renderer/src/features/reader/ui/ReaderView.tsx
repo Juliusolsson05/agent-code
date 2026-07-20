@@ -345,11 +345,21 @@ function ReaderBody({
               that styles h1/h2/p/ul/li/strong/em/inline-code etc. Without
               it, ReactMarkdown still emits the right tags but the browser
               defaults render everything as a flat white paragraph run. */}
-          <article className="
-            prose-theme
-            mx-auto max-w-3xl px-8 py-10
-            text-ink text-[15px] leading-[1.7]
-          ">
+          {/* data-quote-scope: declares this subtree as quotable text for
+              "Reply to Selection". Stamped on the <article> and not the
+              scroller so the reader header (session tabs, pager) stays out
+              of scope. `sessionId` — not the grid's focused session — is
+              correct here: Reader Mode maintains its own selection via
+              setReaderModeSession, and the quote must land in the session
+              the user is actually reading. */}
+          <article
+            data-quote-scope={sessionId}
+            className="
+              prose-theme
+              mx-auto max-w-3xl px-8 py-10
+              text-ink text-[15px] leading-[1.7]
+            "
+          >
             <ReactMarkdown
               remarkPlugins={REMARK_PLUGINS}
               components={MARKDOWN_COMPONENTS}

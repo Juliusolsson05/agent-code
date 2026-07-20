@@ -1077,6 +1077,14 @@ function FeedImpl({
                         <div
                           ref={scrollerRef}
                           data-render-debug-feed-root
+                          // Declares this subtree as quotable text owned by
+                          // this session, for "Reply to Selection". Anchored
+                          // here rather than on the pane root so the composer
+                          // and pane header stay OUT of scope — you should not
+                          // be able to quote your own half-typed prompt back
+                          // into itself. See features/reply-to-selection/lib/
+                          // quoteScope.ts for the full reasoning.
+                          data-quote-scope={sessionId}
                           className="h-full overflow-auto @container"
                           onWheel={() => {
                             onUserEngagement?.()
