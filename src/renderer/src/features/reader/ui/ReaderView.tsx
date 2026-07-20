@@ -13,6 +13,7 @@ import { assistantUuidsWithText, extractAssistantByUuid } from '@renderer/lib/co
 import { resolveTabSessions } from '@renderer/workspace/queries'
 import { dispatchSessionIdsForTab } from '@renderer/workspace/dispatch/dispatchSelectors'
 import type { SessionId, Workspace } from '@renderer/workspace/workspaceStore'
+import { PaneToast } from '@renderer/workspace/tile-tree/TileLeaf/PaneToast'
 
 // ReaderView — single-message read mode for a focused session.
 //
@@ -373,6 +374,16 @@ function ReaderBody({
           no assistant message yet
         </div>
       )}
+      {/* Pane toast, rendered here as well as in TileLeaf.
+          WHY: Reader Mode is a full takeover — no TileLeaf is mounted, so
+          the toast TileLeaf normally paints never reaches the screen. That
+          left "Reply to Selection" with no feedback whatsoever in Reader
+          Mode: the draft is written to a composer the reader does not
+          show, the palette closes, and nothing visibly happens. Any
+          command that mutates a session from inside the reader has the
+          same problem, so this belongs to the reader frame rather than to
+          the quoting feature. */}
+      <PaneToast message={runtime.paneToast} />
     </CodeRenderContext.Provider>
   )
 }

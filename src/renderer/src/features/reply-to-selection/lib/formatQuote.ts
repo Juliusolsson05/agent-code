@@ -23,10 +23,17 @@ const QUOTE_TAG = 'quoted-from-conversation'
 //   See MANIFESTO.md.
 const QUOTE_NOTE = 'The user selected this text from the conversation above and is replying to it.'
 
-// WHY 2000: long enough that quoting a full tool result or a stack trace
-// works unchanged, short enough that an accidental Cmd+A in a long
-// session cannot dump the entire transcript into the composer. The cap
-// is on the QUOTE only — the user's own draft is never truncated.
+// WHY 2000: long enough that quoting a stack trace or a normal tool
+// result works unchanged, short enough that dragging across a very long
+// message — a full file dump, a thousand-line diff — cannot push the
+// whole thing into the composer. The cap is on the QUOTE only; the
+// user's own draft is never truncated.
+//
+// (An earlier version of this comment justified the cap as protection
+// against an accidental Cmd+A. That reason does not hold: Cmd+A anchors
+// the selection in <body>, which resolves to no quote scope at all and
+// never reaches the stash. The cap earns its place on long single
+// messages, not on select-all.)
 export const MAX_QUOTE_CHARS = 2000
 
 const TRUNCATION_MARKER = '\n\n…[selection truncated]…\n\n'
@@ -42,17 +49,63 @@ const TRUNCATION_MARKER = '\n\n…[selection truncated]…\n\n'
 export function truncateQuote(text: string): { text: string, truncated: boolean } {
   if (text.length <= MAX_QUOTE_CHARS) return { text, truncated: false }
 
-  const keep = MAX_QUOTE_CHARS - TRUNCATION_MARKER.length
+  // Split on code points, not UTF-16 units. A raw `slice` at an
+  // arbitrary index can land between the two halves of a surrogate pair
+  // and leave a lone surrogate that renders as `�`. Feed text is full of
+  // emoji (agents use them in summaries), so this is reachable, not
+  // theoretical.
+  const units = Array.from(text)
+
+  // `Math.max(0, …)` keeps this total. The arithmetic below goes negative
+  // if MAX_QUOTE_CHARS is ever set below the marker length, and negative
+  // slice indices count from the END of the string — which would silently
+  // return MORE text than the cap, the exact opposite of the intent.
+  // Nothing can reach that today (the cap is a constant), but a guard is
+  // cheaper than the next person re-deriving why it must not be lowered.
+  const keep = Math.max(0, MAX_QUOTE_CHARS - TRUNCATION_MARKER.length)
   const head = Math.ceil(keep / 2)
   const tail = keep - head
+  const tailText = tail > 0 ? units.slice(units.length - tail).join('') : ''
   return {
-    text: `${text.slice(0, head)}${TRUNCATION_MARKER}${text.slice(text.length - tail)}`,
+    text: `${units.slice(0, head).join('')}${TRUNCATION_MARKER}${tailText}`,
     truncated: true,
   }
 }
 
+// Neutralize any closing tag inside the payload before wrapping.
+//
+// WHY THIS IS NOT OPTIONAL:
+//   Feed code blocks render literally, so a user working on THIS repo
+//   can select a line containing `</quoted-from-conversation>` — and
+//   dogfooding is how this repo gets built, so that is a normal Tuesday,
+//   not an adversarial input.
+//
+//   Two things break without it. First the model: an agent reading a
+//   quote whose body contains an early closing tag will treat everything
+//   after it as the user's own words, silently mis-attributing the
+//   quote. Second the draft: `stripLeadingQuoteBlock` matches lazily and
+//   would stop at that inner tag, so a second invocation leaves an
+//   orphaned `</quoted-from-conversation>` fragment stranded in the
+//   composer.
+//
+//   Sealing here rather than making the strip regex cleverer fixes both
+//   halves at once, and keeps the invariant simple: a block written by
+//   `wrapQuote` contains exactly one closing tag, its own.
+//
+// The `<\/` form is the long-established escape for this exact problem
+// (`<\/script>` inside inline JS). It stays readable to the model as the
+// literal text it came from.
+// `RegExp` + split/join rather than `String.replaceAll`: the web
+// tsconfig's lib target predates ES2021. QUOTE_TAG is a hyphenated
+// literal with no regex metacharacters, so it needs no escaping.
+const CLOSING_TAG_PATTERN = new RegExp(`</${QUOTE_TAG}`, 'g')
+
+function sealQuotePayload(text: string): string {
+  return text.replace(CLOSING_TAG_PATTERN, `<\\/${QUOTE_TAG}`)
+}
+
 export function wrapQuote(text: string): string {
-  return `<${QUOTE_TAG} note="${QUOTE_NOTE}">\n${text}\n</${QUOTE_TAG}>`
+  return `<${QUOTE_TAG} note="${QUOTE_NOTE}">\n${sealQuotePayload(text)}\n</${QUOTE_TAG}>`
 }
 
 // Matches a quote block ONLY at the very start of a draft, plus the

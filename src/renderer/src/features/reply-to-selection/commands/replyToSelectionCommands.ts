@@ -1,6 +1,7 @@
 import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
 import type { CommandDef } from '@renderer/features/command-palette/types'
 import { prefixDraftWithQuote, quoteSnippet } from '@renderer/features/reply-to-selection/lib/formatQuote'
+import { parkComposerCaretAtEnd } from '@renderer/features/reply-to-selection/lib/parkComposerCaret'
 import {
   peekPendingSelection,
   takePendingSelection,
@@ -39,11 +40,23 @@ export const replyToSelectionCommands: CommandDef[] = [
     title: 'Reply to Selection',
     description: '**What it does:** Prefixes the composer with the text you highlighted in the feed, wrapped in a tag that tells the agent you are replying to it.\n\n**Use when:** You want to respond to one specific line rather than the whole turn.\n\n**Notes:** Only appears when there is a highlighted selection. Your existing draft is kept below the quote; nothing is sent.',
     keywords: ['reply', 'quote', 'selection', 'highlight', 'respond', 'cite'],
-    // The user must have been able to see and select feed text for a
-    // stash to exist at all, so the rendered feed is already up — but
-    // declaring it keeps hard Terminal mode from listing a command whose
-    // capture layer cannot fire there.
-    renderedViewPolicy: { kind: 'requires-rendered-feed' },
+    // NO `renderedViewPolicy` — deliberately, and it is worth knowing why
+    // before adding one back.
+    //
+    // `renderedViewAvailable` in the registry evaluates the policy against
+    // `commandTargetSessionId`, i.e. GRID/DISPATCH focus. This command
+    // targets the session recorded in the stash instead, precisely because
+    // those two disagree in Reader Mode. Declaring a policy therefore gated
+    // visibility on a *different session* than the one being acted on:
+    // with Reader Mode open on B while the hidden grid focus sat on A in
+    // hard Terminal mode, the command vanished even though B rendered
+    // fine and the user had just highlighted text in it.
+    //
+    // No policy is needed anyway, because the gate is self-enforcing: a
+    // stash can only exist if the user selected text inside a rendered
+    // `[data-quote-scope]` region. A surface that never rendered cannot
+    // produce one. `validPendingSelection` covers the rest (session still
+    // open, not a terminal).
     when: ({ workspace }) => validPendingSelection(workspace) !== null,
     getState: ({ workspace }) => {
       const pending = validPendingSelection(workspace)
@@ -70,6 +83,12 @@ export const replyToSelectionCommands: CommandDef[] = [
       // Insertion stops at the draft boundary — same contract as prompt
       // template insertion. The user still presses Enter themselves.
       workspace.setDraftInput(pending.sessionId, draft)
+
+      // Prepending invalidates every caret offset into the old draft, so
+      // the caret has to be moved or the user's next keystroke lands
+      // inside the quote tag. See parkComposerCaret.ts.
+      parkComposerCaretAtEnd(pending.sessionId)
+
       workspace.showPaneToast(
         pending.sessionId,
         truncated ? 'Quoted selection (truncated)' : 'Quoted selection',

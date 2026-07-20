@@ -61,15 +61,28 @@ export function setPendingSelection(sessionId: SessionId, text: string): void {
 }
 
 /**
- * Clear, but only if the slot still belongs to `sessionId`.
+ * Clear the slot, whoever owns it.
  *
- * The ownership check matters because clears are driven by collapse
- * events: a click in pane A must not evict a selection the user just
- * made in pane B. Without the guard, a stray click anywhere with a stale
- * scope would silently disarm the command.
+ * WHY THERE IS NO OWNERSHIP CHECK (this was a bug, and the fix is
+ * counter-intuitive enough to be worth the paragraph):
+ *
+ *   An earlier version only cleared when the slot's `sessionId` matched
+ *   the scope the collapse happened in, reasoning that a click in pane B
+ *   should not evict a selection made in pane A. That is exactly wrong,
+ *   and it contradicts the single-slot invariant above.
+ *
+ *   There is ONE document selection. Selecting in A and then clicking in
+ *   B means A's highlight is already gone from the screen — the click in
+ *   B *is* what destroyed it. Keeping A's entry left the command armed
+ *   and pointed at A while the user was looking at B, so running it
+ *   edited a draft the user was not even looking at.
+ *
+ *   The slot mirrors the browser's selection. When that selection is
+ *   destroyed, the slot goes with it, regardless of which pane the
+ *   destroying event landed in.
  */
-export function clearPendingSelection(sessionId: SessionId): void {
-  if (pending?.sessionId === sessionId) pending = null
+export function clearPendingSelection(): void {
+  pending = null
 }
 
 /**

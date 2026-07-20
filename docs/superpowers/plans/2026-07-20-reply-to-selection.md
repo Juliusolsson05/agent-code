@@ -216,7 +216,97 @@ Manual verification for this PR:
 Verification gate: `tsc` on both projects (the electron-vite build and vitest
 do not type-check).
 
-## 9. Implementation order
+## 9. Review findings and what changed
+
+Two independent reviewers (one Claude, one Codex) reviewed the first
+implementation. They converged on four defects, all fixed in this PR. Recording
+them here because three were *design* errors, not typos — the kind that come
+back if only the code changes.
+
+### 9.1 The stash outlived the selection across panes (both reviewers)
+
+The original `clearPendingSelection(sessionId)` only cleared when the collapse
+happened in the *same* session's scope, reasoning that a click in pane B should
+not evict a selection made in pane A. **That was backwards.** There is one
+document selection: clicking in B is *what destroyed* A's highlight. The stash
+stayed armed and pointed at A while the user looked at B, so running the command
+edited a draft that was not on screen.
+
+The listener was restructured around one explicit rule:
+
+1. Valid in-scope non-empty selection → **stash**
+2. Collapsed selection **outside** every scope → **keep** (this is the palette
+   taking focus — the whole reason the feature works)
+3. Everything else → **clear**
+
+Rule 3 now also covers cases that previously returned early and silently kept a
+stale stash: a whitespace-only drag, a selection made outside any scope, and a
+drag whose ends land in different scopes (which had been leaving a *partial*
+stash holding less text than the user could see highlighted).
+
+### 9.2 `renderedViewPolicy` gated on the wrong session (both reviewers)
+
+`renderedViewAvailable` evaluates the policy against `commandTargetSessionId` —
+grid/Dispatch focus. This command deliberately targets the *stashed* session
+instead, because those two disagree in Reader Mode. Declaring
+`requires-rendered-feed` therefore reintroduced the exact mismatch §5 exists to
+avoid: with Reader Mode on session B and hidden grid focus on session A in hard
+Terminal mode, the command disappeared even though B rendered fine.
+
+The policy was **removed**, not retargeted. The gate is self-enforcing — a stash
+can only exist if the user selected text inside a rendered `[data-quote-scope]`
+region, so a surface that never rendered cannot produce one.
+
+### 9.3 The caret was left inside the quote block (Claude)
+
+`selectionStart` is an integer offset that is not recomputed when the value
+changes. Prompt-template insertion *appends*, so existing offsets stay valid —
+this command *prepends*, so every offset is short by the length of the quote.
+A user with the caret at the end of "hello" ended up 5 characters into
+`<quoted-from-conversation note="…`, and their next keystroke corrupted the tag.
+Fixed by `parkComposerCaret.ts`, following the rAF pattern (and the warning)
+already in `usePasteToFocus.ts`.
+
+### 9.4 Reader Mode had no feedback at all (both reviewers)
+
+`PaneToast` is rendered only by `TileLeaf`, which does not exist in Reader Mode.
+So quoting from the reader wrote a draft to a composer the reader does not show,
+closed the palette, and displayed *nothing*. `ReaderView` now renders the toast
+itself — placed there rather than in this feature because any command mutating a
+session from inside the reader has the same problem.
+
+### 9.5 Tag injection (found independently, before the reviews)
+
+`wrapQuote` did not neutralize the payload, so selecting text containing
+`</quoted-from-conversation>` produced an unbalanced block. Two consequences:
+the model mis-attributes everything after the inner tag as the user's own words,
+and `stripLeadingQuoteBlock`'s lazy match stops early, leaving an orphaned
+fragment in the draft on the next invocation. Reachable by anyone using Agent
+Code to work on Agent Code, since feed code blocks render literally. Sealed in
+`wrapQuote` via the `<\/tag` convention, which fixes both halves at once.
+
+### 9.6 Known limitation: Monaco-backed code blocks (NOT fixed)
+
+`ReaderView.tsx:74` and `features/feed/ui/semantic/BlockRow.tsx:334` render code
+with `engine="monaco"`. Monaco maintains its own selection model over a hidden
+textarea rather than the document selection, so **drag-selecting inside those
+code blocks does not arm this command**. It fails closed (the command simply
+does not appear), so there is no corruption — but code is a prime quote target
+and this is a genuine gap.
+
+Not fixed here because bridging it means threading a selection callback out of
+`CodeBlock`, a component shared by the feed, the reader, and the editor — that
+is its own change with its own blast radius, not a rider on this one. Partial
+mitigations that already exist: `CodeBlock` registers its exact source in
+`codeBlockRegistry`, and the **Copy Code Block…** command already covers
+"I want this code block's text". Worth a follow-up issue.
+
+Also deliberately unfixed: `truncateQuote` splitting surrogate pairs and
+degenerating below the marker length were both real, and both **were** fixed;
+the inaccurate Cmd+A justification in the cap comment was corrected rather than
+removed.
+
+## 10. Implementation order
 
 1. `lib/quoteScope.ts`, `lib/selectionStash.ts`, `lib/formatQuote.ts` — pure,
    no consumers yet.
