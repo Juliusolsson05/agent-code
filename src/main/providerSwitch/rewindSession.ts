@@ -1,51 +1,22 @@
+import { randomUUID } from 'node:crypto'
+
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
-// Rewind a live session on disk to "just before" a selected user prompt.
-//
-// Reads the source provider transcript, calls the parser-layer
-// `rewindClaudeTranscript` / `rewindCodexRollout` to produce a
-// truncated copy with a fresh provider session id, writes the
-// truncated copy next to the original, and returns the new id + the
-// anchored prompt text. The renderer passes the new id to
-// `replaceSession(...)` to swap the focused pane onto the rewound
-// conversation, then prefills the composer with `promptText` as a
-// draft (unsent).
-//
-// Layering mirrors `duplicateSession` / `switchProvider`: this file
-// owns fs IO and orchestration; the per-format slicing logic lives in
-// the `agent-transcript-parser` package so the parser stays
-// browser-buildable and has no Node dependencies.
-
-import { rewindClaudeTranscript, rewindCodexRollout } from 'agent-transcript-parser'
-import type { RewindClaudeAnchor, RewindCodexAnchor } from 'agent-transcript-parser'
 import type {
-  ClaudeEntry,
-  CodexRolloutLine,
-} from 'agent-transcript-parser'
+  ListRewindPromptsRequest,
+  RewindPrompt,
+  RewindPromptAddress,
+} from '@shared/types/transcriptRewind.js'
+import { rewindConversation } from 'agent-transcript-parser'
 
-import {
-  findCodexRolloutPathBySessionId,
-  getClaudeSessionFilePath,
-  readJsonlFile,
-  writeClaudeSessionFile,
-  writeCodexRolloutFile,
-} from '@main/providerSwitch/shared.js'
-
-export type RewindSessionAnchor =
-  | ({ kind: 'claude' } & RewindClaudeAnchor)
-  | ({ kind: 'codex' } & RewindCodexAnchor)
+import { getHostTranscriptAdapter } from '@main/providerSwitch/transcriptEngine.js'
 
 export type RewindSessionRequest = {
   provider: AgentProviderKind
   sourceProviderSessionId: string
-  /** Required for Claude — session files are scoped to a cwd.
-   *  Ignored for Codex since rollouts are discovered globally. */
   cwd: string
-  anchor: RewindSessionAnchor
+  anchor: RewindPromptAddress
 }
 
-/** Image block recovered from an anchored Claude user entry. Codex
- *  doesn't support pasted images in rollouts so this is always empty
- *  for codex responses. */
 export type RewindSessionImage = {
   mediaType: string
   data: string
@@ -54,151 +25,76 @@ export type RewindSessionImage = {
 export type RewindSessionResult = {
   provider: AgentProviderKind
   newProviderSessionId: string
-  /** Absolute path to the truncated transcript on disk. */
   newFilePath: string
-  /** Anchored prompt text, extracted from the source transcript.
-   *  Text is unwrapped to match Claude Code's `textForResubmit`
-   *  semantics — `<bash-input>` and `<command-name>/<command-args>`
-   *  envelopes are unwrapped, IDE-context tags are stripped.
-   *  The caller prefills this into the pane's composer as a draft
-   *  (`draftInput`); it is NOT written into the truncated file. */
   promptText: string
-  /** `'bash'` when the anchored prompt was a bash-input envelope;
-   *  otherwise `'prompt'`. Matches Claude Code's composer mode
-   *  enum. */
   promptMode: 'prompt' | 'bash'
-  /** Images pulled from the anchored user entry in document order.
-   *  The caller can restore these into the composer's `draftImages`
-   *  so rewinding preserves any pasted attachments. */
   promptImages: RewindSessionImage[]
+  promptTimestamp: string | null
+}
+
+export async function listRewindPrompts(
+  request: ListRewindPromptsRequest,
+): Promise<RewindPrompt[]> {
+  const adapter = getHostTranscriptAdapter(request.provider)
+  const prompts = await adapter.listPrompts(
+    request.cwd,
+    request.sourceProviderSessionId,
+  )
+  // The transcript analyzer returns document order. The picker wants newest
+  // first, and the cap belongs here so thousands of raw sessions never cross
+  // the Electron bridge merely to be discarded by the renderer.
+  const requestedLimit = request.limit ?? 30
+  const limit = Number.isFinite(requestedLimit)
+    ? Math.max(1, Math.min(200, Math.floor(requestedLimit)))
+    : 30
+  return prompts.slice(-limit).reverse()
 }
 
 export async function rewindSession(
   request: RewindSessionRequest,
 ): Promise<RewindSessionResult> {
-  // Explicit fail-loud dispatch — same rationale as `duplicateSession`. The
-  // rewind engine reads the source transcript in its provider-specific shape
-  // and writes a truncated clone in the same shape; running an OpenCode
-  // request through `rewindCodex` (the previous silent fallback) would
-  // treat the OpenCode server session id as a Codex rollout uuid and
-  // produce garbage output. Refuse cleanly until an OpenCode rewind
-  // implementation is written. The Rewind command's `when` predicate hides
-  // it from OpenCode panes at the UI level; this throw is the last-mile
-  // guard for programmatic callers (MCP, tests) that bypass the palette.
-  if (request.provider === 'claude') {
-    return rewindClaude(request)
-  }
-  if (request.provider === 'codex') {
-    return rewindCodex(request)
-  }
-  throw new Error(
-    `rewindSession: no rewind implementation for provider "${request.provider}" yet`,
-  )
-}
-
-async function rewindClaude(
-  request: RewindSessionRequest,
-): Promise<RewindSessionResult> {
-  if (request.anchor.kind !== 'claude') {
+  if (request.anchor.provider !== request.provider) {
     throw new Error(
-      `Claude rewind requires a claude-kind anchor, got ${request.anchor.kind}.`,
+      `Rewind address is for ${request.anchor.provider}, not ${request.provider}.`,
     )
   }
 
-  const sourceFilePath = await getClaudeSessionFilePath(
+  const adapter = getHostTranscriptAdapter(request.provider)
+  const conversation = await adapter.read(
     request.cwd,
     request.sourceProviderSessionId,
   )
-  // Snapshot the source at read time. If the session is live and
-  // being appended to, later writes don't land in the rewound copy —
-  // that's the whole point of the feature; rewinding locks the
-  // conversation to the chosen prompt.
-  const sourceEntries = await readJsonlFile<ClaudeEntry>(sourceFilePath)
-  if (sourceEntries.length === 0) {
-    throw new Error(
-      `Claude session ${request.sourceProviderSessionId} has no entries on disk.`,
-    )
+  const rewind = rewindConversation(conversation, request.anchor)
+  if (!rewind.conversation.entries.some(entry => entry.kind !== 'opaque')) {
+    // Provider-native loaders do not share a portable empty-history shape.
+    // Treat "before the first prompt" as a new-session operation rather than
+    // writing a file that only one current CLI happens to tolerate.
+    throw new Error('No resumable conversation remains before that prompt.')
   }
 
-  const { entries, newSessionId, promptText, promptMode, promptImages } =
-    rewindClaudeTranscript(sourceEntries, { uuid: request.anchor.uuid })
+  const projection = await adapter.projectNativeResume(rewind.conversation, {
+    cwd: request.cwd,
+    targetSessionId: randomUUID(),
+    now: new Date().toISOString(),
+  })
+  const newProviderSessionId = adapter.sessionId(projection.values)
+  const draft = adapter.draft(rewind.draft)
 
-  if (entries.length === 0) {
-    // Handing Claude a transcript with zero entries makes `--resume`
-    // choke on load. Fallback behavior: we currently reject at the
-    // main boundary and surface the message as a toast. The renderer
-    // treats an anchor at position 0 as a legitimate "start over"
-    // operation, but the shape required for that is a small
-    // bootstrap-only transcript, not an empty file. If we ever want
-    // to support that, we add synthetic bootstrap entries here — for
-    // now the renderer's picker filter already hides the very-first
-    // meta entries, so real anchors never produce an empty retained
-    // slice.
-    throw new Error(
-      'Rewound Claude transcript is empty — no entries remained before the anchor.',
-    )
-  }
-
-  const newFilePath = await writeClaudeSessionFile(request.cwd, entries)
-
+  // All resolution, truncation, cleanup, and projection happens before this
+  // single write. A stale address or incompatible target therefore cannot
+  // leave a half-created provider session on disk.
+  const newFilePath = await adapter.write(request.cwd, projection.values)
   return {
-    provider: 'claude',
-    newProviderSessionId: newSessionId,
+    provider: request.provider,
+    newProviderSessionId,
     newFilePath,
-    promptText,
-    promptMode,
-    promptImages,
-  }
-}
-
-async function rewindCodex(
-  request: RewindSessionRequest,
-): Promise<RewindSessionResult> {
-  if (request.anchor.kind !== 'codex') {
-    throw new Error(
-      `Codex rewind requires a codex-kind anchor, got ${request.anchor.kind}.`,
-    )
-  }
-
-  const sourceFilePath = await findCodexRolloutPathBySessionId(
-    request.sourceProviderSessionId,
-  )
-  if (!sourceFilePath) {
-    throw new Error(
-      `Codex rollout for session ${request.sourceProviderSessionId} was not found.`,
-    )
-  }
-
-  const sourceLines = await readJsonlFile<CodexRolloutLine>(sourceFilePath)
-  if (sourceLines.length === 0) {
-    throw new Error(
-      `Codex rollout ${sourceFilePath} is empty.`,
-    )
-  }
-
-  const { lines, newSessionId, promptText } = rewindCodexRollout(
-    sourceLines,
-    { userMessageIndex: request.anchor.userMessageIndex },
-  )
-
-  if (lines.length === 0) {
-    throw new Error(
-      'Rewound Codex rollout is empty — no lines remained before the anchor.',
-    )
-  }
-
-  const newFilePath = await writeCodexRolloutFile(lines)
-
-  return {
-    provider: 'codex',
-    newProviderSessionId: newSessionId,
-    newFilePath,
-    promptText,
-    // Codex rollouts don't carry pasted images; the composer image
-    // attachments that flow through `input_image` response_items are
-    // not the same as Claude's `image` block. We return 'prompt'
-    // mode + no images for codex anchors.
-    promptMode: 'prompt',
-    promptImages: [],
+    ...draft,
+    promptTimestamp: rewind.anchor.line >= 0
+      ? conversation.entries.find(entry => (
+        entry.kind === 'message' &&
+        entry.role === 'user' &&
+        entry.source.line === rewind.anchor.line
+      ))?.timestamp ?? null
+      : null,
   }
 }

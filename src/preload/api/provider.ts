@@ -1,11 +1,16 @@
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
+import type {
+  ListRewindPromptsRequest,
+  RewindPrompt,
+  RewindPromptAddress,
+} from '@shared/types/transcriptRewind.js'
 import { ipcRenderer } from 'electron'
 
 // Provider-level session transforms on the bridge.
 //
-// All three produce a NEW provider session id whose on-disk
-// transcript is a transformation of the source's. The source file is
-// never touched. The renderer hands the new id to `replaceSession`
+// Mutating methods produce a NEW provider session id whose on-disk transcript
+// is a transformation of the source's; prompt listing is read-only. The source
+// file is never touched. The renderer hands a returned id to `replaceSession`
 // so the focused pane re-homes onto the transformed conversation.
 //
 // Grouped separately from sessionApi because these are "write a new
@@ -73,16 +78,18 @@ export const providerApi = {
    *      draft — the rewound session opens in "continue from here
    *      with an editable prompt" mode, not "replay this prompt".
    *
-   * Anchor shape is provider-specific: a Claude user entry uuid, or
-   * a zero-based index among user-role Codex message response_items.
+   * The address is copied from main-process transcript analysis. It must never
+   * be reconstructed from the renderer's filtered feed rows.
    */
+  listRewindPrompts: (
+    params: ListRewindPromptsRequest,
+  ): Promise<RewindPrompt[]> => ipcRenderer.invoke('session:list-rewind-prompts', params),
+
   rewindToPrompt: (params: {
     provider: AgentProviderKind
     sourceProviderSessionId: string
     cwd: string
-    anchor:
-      | { kind: 'claude'; uuid: string }
-      | { kind: 'codex'; userMessageIndex: number }
+    anchor: RewindPromptAddress
   }): Promise<{
     provider: AgentProviderKind
     newProviderSessionId: string
@@ -100,5 +107,6 @@ export const providerApi = {
      *  Empty for codex responses since codex rollouts don't carry
      *  image blocks. */
     promptImages: Array<{ mediaType: string; data: string }>
+    promptTimestamp: string | null
   }> => ipcRenderer.invoke('session:rewind-to-prompt', params),
 }

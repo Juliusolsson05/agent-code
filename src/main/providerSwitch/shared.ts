@@ -8,10 +8,8 @@ import type { AgentProviderKind } from '@shared/types/providerKind.js'
 // keeps each feature file focused on its own translation / cloning
 // logic without re-implementing path math and jsonl IO.
 
-import { mkdir, readdir, readFile, stat, writeFile } from 'fs/promises'
+import { mkdir, readdir, stat, writeFile } from 'fs/promises'
 import { join } from 'path'
-
-import type { ClaudeEntry, CodexRolloutLine } from 'agent-transcript-parser'
 
 import { getProjectDirForCwd } from '@shared/runtime/projectDir.js'
 import { getCodexSessionsDir } from '@providers/codex/runtime/projectDir.js'
@@ -20,15 +18,6 @@ import { getMainProvider } from '@providers/registry.main.js'
 // ---------------------------------------------------------------------------
 // JSONL io
 // ---------------------------------------------------------------------------
-
-export async function readJsonlFile<T>(filePath: string): Promise<T[]> {
-  const text = await readFile(filePath, 'utf8')
-  return text
-    .split('\n')
-    .map(line => line.trim())
-    .filter(line => line.length > 0)
-    .map(line => JSON.parse(line) as T)
-}
 
 export function encodeJsonl(items: readonly unknown[]): string {
   // Append-oriented JSONL in both providers — trailing newline keeps
@@ -49,27 +38,16 @@ export async function getClaudeSessionFilePath(
   return join(projectDir, `${providerSessionId}.jsonl`)
 }
 
-export async function writeClaudeSessionFile(
+export async function writeProjectedClaudeSessionFile(
   cwd: string,
-  entries: readonly ClaudeEntry[],
+  values: readonly Record<string, unknown>[],
 ): Promise<string> {
-  const providerSessionId = getClaudeSessionId(entries)
+  const providerSessionId = projectedClaudeSessionId(values)
   const projectDir = await getProjectDirForCwd(cwd)
   await mkdir(projectDir, { recursive: true })
   const filePath = join(projectDir, `${providerSessionId}.jsonl`)
-  await writeFile(filePath, encodeJsonl(entries), 'utf8')
+  await writeFile(filePath, encodeJsonl(values), 'utf8')
   return filePath
-}
-
-export function getClaudeSessionId(entries: readonly ClaudeEntry[]): string {
-  const sessionId = entries.find(
-    (entry): entry is ClaudeEntry & { sessionId: string } =>
-      typeof entry.sessionId === 'string' && entry.sessionId.length > 0,
-  )?.sessionId
-  if (!sessionId) {
-    throw new Error('Claude transcript did not contain a sessionId.')
-  }
-  return sessionId
 }
 
 // ---------------------------------------------------------------------------
@@ -146,11 +124,11 @@ export async function walkCodexRollouts(
   }
 }
 
-export async function writeCodexRolloutFile(
-  lines: readonly CodexRolloutLine[],
+export async function writeProjectedCodexRolloutFile(
+  values: readonly Record<string, unknown>[],
 ): Promise<string> {
-  const sessionMeta = getCodexSessionMeta(lines)
-  const timestamp = resolveCodexRolloutTimestamp(sessionMeta.payload.timestamp)
+  const sessionMeta = projectedCodexSessionMeta(values)
+  const timestamp = resolveCodexRolloutTimestamp(sessionMeta.timestamp)
   const sessionsDir = getCodexSessionsDir()
   const dayDir = join(
     sessionsDir,
@@ -159,29 +137,31 @@ export async function writeCodexRolloutFile(
     pad2(timestamp.getUTCDate()),
   )
   await mkdir(dayDir, { recursive: true })
-  const filename = `rollout-${formatCodexRolloutTimestamp(timestamp)}-${sessionMeta.payload.id}.jsonl`
+  const filename = `rollout-${formatCodexRolloutTimestamp(timestamp)}-${sessionMeta.id}.jsonl`
   const filePath = join(dayDir, filename)
-  await writeFile(filePath, encodeJsonl(lines), 'utf8')
+  await writeFile(filePath, encodeJsonl(values), 'utf8')
   return filePath
 }
 
-export function getCodexSessionId(lines: readonly CodexRolloutLine[]): string {
-  return getCodexSessionMeta(lines).payload.id
+export function projectedClaudeSessionId(values: readonly Record<string, unknown>[]): string {
+  const sessionId = values.find(value => (
+    typeof value.sessionId === 'string' && value.sessionId.length > 0
+  ))?.sessionId
+  if (typeof sessionId !== 'string') {
+    throw new Error('Projected Claude transcript did not contain a sessionId.')
+  }
+  return sessionId
 }
 
-export function getCodexSessionMeta(
-  lines: readonly CodexRolloutLine[],
-): Extract<CodexRolloutLine, { type: 'session_meta' }> {
-  const line = lines.find(
-    (candidate): candidate is Extract<CodexRolloutLine, { type: 'session_meta' }> =>
-      candidate.type === 'session_meta' &&
-      typeof candidate.payload.id === 'string' &&
-      candidate.payload.id.length > 0,
-  )
-  if (!line) {
-    throw new Error('Codex rollout did not contain a valid session_meta line.')
+export function projectedCodexSessionMeta(
+  values: readonly Record<string, unknown>[],
+): { id: string; timestamp: string } {
+  for (const value of values) {
+    if (value.type !== 'session_meta' || !isRecord(value.payload)) continue
+    if (typeof value.payload.id !== 'string' || typeof value.payload.timestamp !== 'string') continue
+    return { id: value.payload.id, timestamp: value.payload.timestamp }
   }
-  return line
+  throw new Error('Projected Codex rollout did not contain valid session metadata.')
 }
 
 export function resolveCodexRolloutTimestamp(raw: string): Date {
@@ -198,4 +178,8 @@ export function formatCodexRolloutTimestamp(date: Date): string {
 
 export function pad2(value: number): string {
   return String(value).padStart(2, '0')
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
