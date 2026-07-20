@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
+import { useGlobalEditorStore } from '@renderer/features/global-editor/store'
 import { useGlobalToast } from '@renderer/ui/GlobalToast'
 import { Feed } from '@renderer/features/feed/ui/Feed'
 import type { ScrollInfo } from '@renderer/features/feed/ui/Feed'
@@ -116,6 +117,72 @@ export function TileLeaf({
   // See src/shared/sessionFeed/SessionFeed.ts for the contract's WHY.
   const feed = useSessionFeed()
   const htmlDebugPanelOpen = useAppStore(state => state.htmlDebugPanelOpen)
+  const tailAllMode = useAppStore(state => state.tailAllMode)
+  // The one place the "mounted ⇒ visible" shortcut genuinely breaks: Global
+  // Editor fullscreen hides the whole workspace subtree with `display: 'none'`
+  // (GlobalEditorShell) while deliberately keeping it mounted so editor state
+  // survives. Reading the flag here is what turns "mounted" back into
+  // "visible" — see the mask below.
+  const workspaceHiddenByEditor = useGlobalEditorStore(state => state.editorFullscreen)
+  // This one OR is the ENTIRE implementation of "Tail All" scoping, and it is
+  // load-bearing in a way that is easy to mistake for a shortcut.
+  //
+  // The feature asks for "tail every visible agent, scoped by layout mode":
+  // single dispatch = the one agent, tiled = every lane, grid = the current
+  // tab's panes only. The obvious implementation is to enumerate the visible
+  // sessions and write each one's `tailMode`. That enumeration does not exist
+  // and should not be written: there is no canonical visible-session selector
+  // here (`resolveTabSessions` answers membership, not visibility — see its
+  // header), and visibility is independently re-derived by MainSurface,
+  // DispatchLayout, TiledDispatchLayout, TileTabsView, SpotlightView,
+  // agentIndexNavigation, paneLabels, and useKeybinds. A ninth derivation would
+  // have to hand-encode the mode ladder, the fact that tileTabs/spotlight/
+  // readerMode live in a different store and can be non-null simultaneously,
+  // duplicate tiled lanes on one session, and grid leaves that render a related
+  // detached child instead of their own session.
+  //
+  // TileLeaf is *almost* the visibility predicate: it mounts only for panes that
+  // are on screen, with exactly one exception, which the `&& !hidden` term below
+  // corrects for. So every case resolves correctly for free, including layout
+  // modes that did not exist when this was written. Verified against the mount
+  // sites: TileTree renders it as the else-branch after TerminalLeaf and
+  // AgentTerminalLeaf (so terminals never reach it), Spotlight renders one leaf,
+  // Classic Dispatch renders the active row, Tiled Dispatch renders every lane,
+  // and TileTabs renders every tiled tab — all simultaneously visible.
+  //
+  // THE EXCEPTION, and do not delete this paragraph: Global Editor fullscreen
+  // keeps the whole workspace subtree mounted under `display: 'none'`
+  // (GlobalEditorShell.tsx, the `editorFullscreen ? { display: 'none' }` branch)
+  // so editor state survives. Reviewers found this — the original version of this
+  // comment claimed "mounts if and only if visible", which is false, and the
+  // whole design rests on the claim being true.
+  //
+  // WHY it is corrected rather than tolerated: while hidden the pin is a no-op
+  // anyway (a display:none element has scrollHeight 0), so the tempting move is
+  // to document it and move on. The problem is the RE-REVEAL. Feed's pin effect
+  // keys on [sessionId, tailMode]; if the mask stayed true throughout, neither
+  // dep changes when the workspace becomes visible again and an idle pane sits
+  // unpinned until its next append — silently not tailing while the palette says
+  // it is. Folding visibility into the mask makes un-fullscreening a genuine
+  // false→true transition, which re-runs that effect and re-pins. It also fixes
+  // the same latent hole for per-session Tail, which had it first.
+  //
+  // The converse is not true either — a mounted TileLeaf does not always render
+  // a Feed to tail. Two known cases: a pane showing a workflow run swaps Feed
+  // for WorkflowRunView below, and Reader Mode is a full takeover (MainSurface
+  // renders ReaderView *instead of* the workspace shell) so no TileLeaf exists
+  // at all there; ReaderView owns an independent stickToBottom. The remote
+  // client mounts Feed directly (remote-client/src/ui/SessionView.tsx) and
+  // deliberately passes no tail props, so Tail All is desktop-only.
+  // In all of these Tail All is inert, not wrong — but the palette still reports
+  // "On", which is the honest cost of a workspace-level stance.
+  //
+  // The mask direction matters too: Tail All never writes `runtime.tailMode`,
+  // so the per-session flag is untouched and reappears when Tail All goes off.
+  // Note that the *flag* restoring is not the same as the *scroll position*
+  // restoring — see the tail-mode guard in Feed's scroll listener for why the
+  // pre-tail position has to be protected for that promise to hold.
+  const effectiveTailMode = (runtime.tailMode || tailAllMode) && !workspaceHiddenByEditor
   const dictationEnabled = useAppStore(state => state.settings.dictationEnabled)
   const dictationProvider = useAppStore(state => state.settings.dictationProvider)
   const dictationShortcut = useAppStore(state => state.settings.dictationShortcut)
@@ -565,7 +632,7 @@ export function TileLeaf({
           // clears while the agent is working" failure.
             semanticHistory={runtime.semantic.history}
             semanticTurn={runtime.semantic.currentTurn}
-            tailMode={runtime.tailMode}
+            tailMode={effectiveTailMode}
             pickerSelectedUuid={runtime.assistantPicker?.selectedUuid ?? null}
             codeBlockSelectedId={runtime.codeBlockPicker?.selectedId ?? null}
             onScrollInfo={onScrollInfo}
@@ -655,7 +722,7 @@ export function TileLeaf({
         entryCount={runtime.entries.length}
         totalEntries={runtime.totalEntries}
         scrollFraction={scrollFraction}
-        tailMode={runtime.tailMode}
+        tailMode={effectiveTailMode}
         sessionKind={workspace.state.sessions[sessionId]?.kind}
         workContext={showWorktreeBadges ? runtime.workContext : null}
         workActivity={showWorktreeBadges ? runtime.workActivity : null}
