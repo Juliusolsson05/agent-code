@@ -1,7 +1,7 @@
 # Cross-Provider Transcript Engine — Decomposition and Implementation Plan
 
-**Status:** Implementation complete. Hands-on Agent Code smoke testing and final
-remote CI review remain.
+**Status:** Implementation and automated verification complete. Hands-on Agent
+Code smoke testing remains.
 
 **Date:** 2026-07-20
 
@@ -207,7 +207,7 @@ the package pointer, and verify both repositories from built artifacts.
 - [x] Push linked package and Agent Code PR branches.
 - [ ] Complete hands-on Agent Code switch, duplicate, rewind, failure, and
       rollback smoke testing.
-- [ ] Confirm final package and parent CI after the canonical-layout commit.
+- [x] Confirm final package and parent CI after the canonical-layout commit.
 
 ## Verification snapshot
 
