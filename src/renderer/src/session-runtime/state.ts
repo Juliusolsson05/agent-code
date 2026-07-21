@@ -311,6 +311,11 @@ export type StreamPhase =
   | 'tool-use'
   | 'awaiting-tool'
 
+export type ProviderSwitchRuntimeState = {
+  phase: 'preparing' | 'compacting' | 'summarizing' | 'projecting'
+  message: string
+}
+
 export type SessionRuntime = {
   screen: string
   screenMarkdown: string
@@ -371,6 +376,13 @@ export type SessionRuntime = {
    *  turn starts or the user applies/dismisses it. Never persisted, never
    *  part of the feed/history — that separation is the whole point of #174. */
   promptSuggestion: { text: string; receivedAt: number } | null
+  /**
+   * WHY this is pane runtime state rather than only a command-level Set: native
+   * compaction can run for minutes after the command starts. The composer must
+   * remain visibly disabled for that entire transaction or a user prompt can
+   * interleave with `/compact` and be mistaken for the portable handoff turn.
+   */
+  providerSwitch: ProviderSwitchRuntimeState | null
   /** One-shot recovery handle for Rewind to Prompt.
    *
    *  WHY runtime-only: rewind writes a new provider transcript and swaps the
@@ -671,6 +683,7 @@ export function emptyRuntime(): SessionRuntime {
     draftImages: [],
     promptDelivery: { kind: 'idle' },
     promptSuggestion: null,
+    providerSwitch: null,
     pendingRewindUndo: null,
     activityStatus: null,
     unreadSince: null,

@@ -38,8 +38,12 @@ already built and shipping. The research that informed this design:
   **translates** the agent's transcript into the target provider's format, writes a
   **new** transcript file with a **new** provider session id, and returns
   `{ targetKind, targetProviderSessionId, targetFilePath }`.
-- **The source transcript is never modified or deleted.** Switch is non-destructive
-  to the origin file; it always creates a fresh target file.
+- **The source transcript is never deleted.** The original implementation was
+  read-only to the origin file and always created a fresh target file.
+  Oversized-history handling now deliberately asks the live source provider to
+  append native compaction before creating that target. The evergreen contract
+  and provider-specific rationale live in
+  [`docs/design/provider-switching.md`](../../design/provider-switching.md).
 - `replaceSession(cwd, { kind, resumeSessionId, ... })` in
   `hook/actions/session.ts` spawns the target session in the same tile-tree slot and
   kills the old one. **This mints a new cc-shell `SessionId`** — the workspace-level

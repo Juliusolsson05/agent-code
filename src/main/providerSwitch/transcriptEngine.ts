@@ -1,4 +1,8 @@
+// See docs/design/provider-switching.md for the adapter boundary and the rule
+// that projection model metadata must match capacity planning metadata.
 import { readFile } from 'fs/promises'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
@@ -16,6 +20,8 @@ import {
   decodeClaudeConversation,
   decodeCodexConversation,
   decodeJsonl,
+  budgetCharactersForContextTokens,
+  resolveCodexTargetProfileFromSources,
   resolveUserPrompt,
 } from 'agent-transcript-parser'
 import type {
@@ -42,6 +48,13 @@ export interface TranscriptProjectionContext {
   cwd: string
   targetSessionId: string
   now: string
+  targetProfile?: TranscriptTargetProfile
+}
+
+export interface TranscriptTargetProfile {
+  model: string
+  modelProvider?: string
+  budgetCharacters: number
 }
 
 export interface RewindDraft {
@@ -60,6 +73,7 @@ export interface HostTranscriptAdapter {
   read(cwd: string, providerSessionId: string): Promise<ConversationDocument>
   listPrompts(cwd: string, providerSessionId: string): Promise<RewindPrompt[]>
   draft(content: readonly ConversationContent[]): RewindDraft
+  targetProfile(): Promise<TranscriptTargetProfile>
   projectNativeResume(
     conversation: ConversationDocument,
     context: TranscriptProjectionContext,
@@ -80,11 +94,13 @@ const claudeAdapter: HostTranscriptAdapter = {
     )
   },
   draft: claudeDraft,
+  targetProfile: resolveClaudeTargetProfile,
   async projectNativeResume(conversation, context) {
+    const targetProfile = context.targetProfile ?? await resolveClaudeTargetProfile()
     return claudeNativeResumeProjector.projectNativeResume(conversation, {
       ...context,
       version: await installedVersion('claude'),
-      model: 'claude-opus-4-7',
+      model: targetProfile.model,
     })
   },
   write: writeProjectedClaudeSessionFile,
@@ -103,12 +119,14 @@ const codexAdapter: HostTranscriptAdapter = {
     )
   },
   draft: plainDraft,
+  targetProfile: resolveCodexTargetProfile,
   async projectNativeResume(conversation, context) {
+    const targetProfile = context.targetProfile ?? await resolveCodexTargetProfile()
     return codexNativeResumeProjector.projectNativeResume(conversation, {
       ...context,
       cliVersion: await installedVersion('codex'),
-      modelProvider: 'openai',
-      model: 'gpt-5',
+      modelProvider: targetProfile.modelProvider ?? 'openai',
+      model: targetProfile.model,
     })
   },
   async write(_cwd, values) {
@@ -117,6 +135,41 @@ const codexAdapter: HostTranscriptAdapter = {
   sessionId(values) {
     return projectedCodexSessionMeta(values).id
   },
+}
+
+async function resolveClaudeTargetProfile(): Promise<TranscriptTargetProfile> {
+  const claudeHome = process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude')
+  const settings = await readFile(join(claudeHome, 'settings.json'), 'utf8')
+    .then(value => JSON.parse(value) as unknown)
+    .catch(() => null)
+  const configuredModel = isRecord(settings) && typeof settings.model === 'string'
+    ? settings.model
+    : null
+  const model = process.env.ANTHROPIC_MODEL ?? configuredModel ?? 'default'
+  const contextTokens = /\[1m\]/i.test(model) ? 1_000_000 : 200_000
+  return {
+    model,
+    // WHY 200k is the default rather than assuming an advertised long-context
+    // beta: Agent Code does not pass --model when it spawns Claude. Only an
+    // explicit settings/env model with the [1m] selector proves that larger
+    // window is active. A conservative plan may compact early; an optimistic
+    // 1m guess writes a resume that fails only after the source pane is gone.
+    budgetCharacters: budgetCharactersForContextTokens(contextTokens),
+  }
+}
+
+async function resolveCodexTargetProfile(): Promise<TranscriptTargetProfile> {
+  const codexHome = process.env.CODEX_HOME ?? join(homedir(), '.codex')
+  const config = await readFile(join(codexHome, 'config.toml'), 'utf8').catch(() => '')
+  const cache = await readFile(join(codexHome, 'models_cache.json'), 'utf8')
+    .then(value => JSON.parse(value) as unknown)
+    .catch(() => null)
+  const profile = resolveCodexTargetProfileFromSources(config, cache)
+  return {
+    model: profile.model,
+    modelProvider: profile.modelProvider,
+    budgetCharacters: profile.budgetCharacters,
+  }
 }
 
 // WHY a registry rather than source/target pair branches: each provider owns

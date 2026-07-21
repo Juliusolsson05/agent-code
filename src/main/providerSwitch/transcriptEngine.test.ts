@@ -36,6 +36,31 @@ describe('host transcript adapter registry', () => {
     )
   })
 
+  it('uses the configured Codex model and its cached context metadata', async () => {
+    mocks.readFile.mockImplementation(async (path: string) => {
+      if (path.endsWith('config.toml')) {
+        return 'model = "gpt-5.6-sol"\nmodel_provider = "openai"\n\n[projects."/tmp"]\ntrust_level = "trusted"\n'
+      }
+      if (path.endsWith('models_cache.json')) {
+        return JSON.stringify({
+          models: [{
+            slug: 'gpt-5.6-sol',
+            visibility: 'list',
+            context_window: 272_000,
+            effective_context_window_percent: 95,
+          }],
+        })
+      }
+      throw new Error(`Unexpected read: ${path}`)
+    })
+
+    await expect(getHostTranscriptAdapter('codex').targetProfile()).resolves.toEqual({
+      model: 'gpt-5.6-sol',
+      modelProvider: 'openai',
+      budgetCharacters: 581_400,
+    })
+  })
+
   it('returns exact Codex source addresses instead of renderer ordinals', async () => {
     mocks.readFile.mockResolvedValue([
       jsonl({ type: 'session_meta', payload: { id: 'session', timestamp: '2026-07-20T10:00:00.000Z' } }),
