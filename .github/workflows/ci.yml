@@ -37,7 +37,7 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           # All package submodules are public: anonymous HTTPS works with no
           # secrets. release.yml's SUBMODULE_PAT/SSH steps exist only for
@@ -45,7 +45,7 @@ jobs:
           submodules: recursive
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           # Keep the literal in sync with release.yml and .nvmrc (both 24).
           node-version: 24
@@ -93,7 +93,7 @@ jobs:
 
       - name: Upload coverage report
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: agent-code-coverage
           path: coverage/
