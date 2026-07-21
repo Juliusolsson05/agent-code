@@ -5,6 +5,7 @@ import type {
   RewindPromptAddress,
 } from '@shared/types/transcriptRewind.js'
 import { ipcRenderer } from 'electron'
+import { subscribe } from '@preload/api/ipc.js'
 
 // Provider-level session transforms on the bridge.
 //
@@ -34,11 +35,22 @@ export const providerApi = {
     cwd: string
     sourceCwd?: string
     targetCwd?: string
+    /** Agent Code's live routing id. Required when native compaction may be
+     *  needed before the persisted transcript can fit the target provider. */
+    sourceSessionId?: string
   }): Promise<{
     targetKind: AgentProviderKind
     targetProviderSessionId: string
     targetFilePath: string
+    compactedBeforeSwitch: boolean
+    truncatedBeforeSwitch: boolean
   }> => ipcRenderer.invoke('session:switch-provider', params),
+
+  onProviderSwitchProgress: (cb: (event: {
+    sourceSessionId: string
+    phase: 'compacting' | 'projecting'
+    message: string
+  }) => void): (() => void) => subscribe('session:provider-switch-progress', cb),
 
   /**
    * Duplicate a provider session on disk. Reads the source transcript,

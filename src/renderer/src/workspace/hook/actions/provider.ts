@@ -83,6 +83,7 @@ export function useProviderActions(
       refs,
       setRuntimes,
       sessionActions,
+      onProgress: event => showPaneToast(sourceSessionId, event.message, 185_000),
     })
 
     if (result.status === 'switched') {

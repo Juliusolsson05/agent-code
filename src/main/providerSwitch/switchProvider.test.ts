@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   targetProject: vi.fn(),
   targetWrite: vi.fn(),
   targetSessionId: vi.fn(),
+  targetProfile: vi.fn(),
 }))
 
 vi.mock('node:crypto', () => ({
@@ -29,6 +30,7 @@ vi.mock('@main/providerSwitch/transcriptEngine.js', () => ({
         projectNativeResume: mocks.targetProject,
         write: mocks.targetWrite,
         sessionId: mocks.targetSessionId,
+        targetProfile: mocks.targetProfile,
       }
     }
     throw new Error(`No transcript engine adapter is registered for provider "${provider}".`)
@@ -79,6 +81,11 @@ describe('switchProvider neutral hub integration', () => {
     mocks.targetProject.mockResolvedValue(projection)
     mocks.targetSessionId.mockReturnValue('target-session')
     mocks.targetWrite.mockResolvedValue('/target/rollout.jsonl')
+    mocks.targetProfile.mockResolvedValue({
+      model: 'gpt-current',
+      modelProvider: 'openai',
+      budgetCharacters: 1_000,
+    })
   })
 
   it('composes source and target adapters without selecting a provider pair translator', async () => {
@@ -104,7 +111,72 @@ describe('switchProvider neutral hub integration', () => {
       targetKind: 'codex',
       targetProviderSessionId: 'target-session',
       targetFilePath: '/target/rollout.jsonl',
+      compactedBeforeSwitch: false,
+      truncatedBeforeSwitch: false,
     })
+  })
+
+  it('runs native source compaction and retries planning before projection', async () => {
+    const oversized = {
+      ...conversation,
+      entries: [{
+        ...conversation.entries[0],
+        content: [{ kind: 'text' as const, text: 'large '.repeat(300) }],
+      }],
+    }
+    const compacted = {
+      ...conversation,
+      entries: [{
+        kind: 'compaction' as const,
+        summary: 'native summary',
+        timestamp: null,
+        source: { provider: 'claude', line: 10, raw: {}, evidence: [] },
+      }, conversation.entries[0]],
+    }
+    const compactSource = vi.fn(async () => undefined)
+    const onProgress = vi.fn()
+    mocks.sourceRead
+      .mockResolvedValueOnce(oversized)
+      .mockResolvedValueOnce(compacted)
+
+    const result = await switchProvider({
+      sourceKind: 'claude',
+      targetKind: 'codex',
+      sourceProviderSessionId: 'source-session',
+      sourceSessionId: 'local-session',
+      cwd: '/project',
+    }, { compactSource, onProgress })
+
+    expect(compactSource).toHaveBeenCalledOnce()
+    expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: 'compacting' }))
+    expect(mocks.targetProject).toHaveBeenCalledWith(
+      compacted,
+      expect.objectContaining({
+        targetProfile: expect.objectContaining({ model: 'gpt-current' }),
+      }),
+    )
+    expect(result.compactedBeforeSwitch).toBe(true)
+    expect(result.truncatedBeforeSwitch).toBe(false)
+  })
+
+  it('never truncates overflow unless the caller explicitly requests it', async () => {
+    mocks.sourceRead.mockResolvedValueOnce({
+      ...conversation,
+      entries: [{
+        ...conversation.entries[0],
+        content: [{ kind: 'text' as const, text: 'large '.repeat(300) }],
+      }],
+    })
+
+    await expect(switchProvider({
+      sourceKind: 'claude',
+      targetKind: 'codex',
+      sourceProviderSessionId: 'source-session',
+      cwd: '/project',
+      overflowPolicy: 'fail',
+    })).rejects.toThrow('requires compaction')
+    expect(mocks.targetProject).not.toHaveBeenCalled()
+    expect(mocks.targetWrite).not.toHaveBeenCalled()
   })
 
   it('does not write a target file when projection fails', async () => {

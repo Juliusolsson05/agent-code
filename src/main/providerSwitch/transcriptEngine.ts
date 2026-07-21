@@ -1,4 +1,6 @@
 import { readFile } from 'fs/promises'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
@@ -42,6 +44,13 @@ export interface TranscriptProjectionContext {
   cwd: string
   targetSessionId: string
   now: string
+  targetProfile?: TranscriptTargetProfile
+}
+
+export interface TranscriptTargetProfile {
+  model: string
+  modelProvider?: string
+  budgetCharacters: number
 }
 
 export interface RewindDraft {
@@ -60,6 +69,7 @@ export interface HostTranscriptAdapter {
   read(cwd: string, providerSessionId: string): Promise<ConversationDocument>
   listPrompts(cwd: string, providerSessionId: string): Promise<RewindPrompt[]>
   draft(content: readonly ConversationContent[]): RewindDraft
+  targetProfile(): Promise<TranscriptTargetProfile>
   projectNativeResume(
     conversation: ConversationDocument,
     context: TranscriptProjectionContext,
@@ -80,11 +90,13 @@ const claudeAdapter: HostTranscriptAdapter = {
     )
   },
   draft: claudeDraft,
+  targetProfile: resolveClaudeTargetProfile,
   async projectNativeResume(conversation, context) {
+    const targetProfile = context.targetProfile ?? await resolveClaudeTargetProfile()
     return claudeNativeResumeProjector.projectNativeResume(conversation, {
       ...context,
       version: await installedVersion('claude'),
-      model: 'claude-opus-4-7',
+      model: targetProfile.model,
     })
   },
   write: writeProjectedClaudeSessionFile,
@@ -103,12 +115,14 @@ const codexAdapter: HostTranscriptAdapter = {
     )
   },
   draft: plainDraft,
+  targetProfile: resolveCodexTargetProfile,
   async projectNativeResume(conversation, context) {
+    const targetProfile = context.targetProfile ?? await resolveCodexTargetProfile()
     return codexNativeResumeProjector.projectNativeResume(conversation, {
       ...context,
       cliVersion: await installedVersion('codex'),
-      modelProvider: 'openai',
-      model: 'gpt-5',
+      modelProvider: targetProfile.modelProvider ?? 'openai',
+      model: targetProfile.model,
     })
   },
   async write(_cwd, values) {
@@ -117,6 +131,67 @@ const codexAdapter: HostTranscriptAdapter = {
   sessionId(values) {
     return projectedCodexSessionMeta(values).id
   },
+}
+
+async function resolveClaudeTargetProfile(): Promise<TranscriptTargetProfile> {
+  return {
+    model: process.env.AGENT_CODE_PRIMARY_MODEL ?? 'claude-opus-4-8',
+    // Claude's current long-context models accept up to one million tokens.
+    // We reserve ten percent for provider-added system/tool material that is
+    // not represented in ConversationDocument, then use the same deliberately
+    // conservative character/token approximation as the Codex profile below.
+    budgetCharacters: Math.floor(1_000_000 * 0.9 * 2.5),
+  }
+}
+
+async function resolveCodexTargetProfile(): Promise<TranscriptTargetProfile> {
+  const codexHome = process.env.CODEX_HOME ?? join(homedir(), '.codex')
+  const config = await readFile(join(codexHome, 'config.toml'), 'utf8').catch(() => '')
+  const configuredModel = topLevelTomlString(config, 'model')
+  const modelProvider = topLevelTomlString(config, 'model_provider') ?? 'openai'
+  const cache = await readFile(join(codexHome, 'models_cache.json'), 'utf8')
+    .then(value => JSON.parse(value) as unknown)
+    .catch(() => null)
+  const models = isRecord(cache) && Array.isArray(cache.models) ? cache.models : []
+  const selected = models.find(candidate => (
+    isRecord(candidate) && candidate.slug === configuredModel
+  )) ?? models.find(candidate => isRecord(candidate) && candidate.visibility === 'list')
+  const selectedRecord = isRecord(selected) ? selected : null
+  const model = configuredModel ?? (
+    typeof selectedRecord?.slug === 'string' ? selectedRecord.slug : null
+  )
+  if (!model) {
+    throw new Error(
+      'Codex target model could not be resolved from config.toml or models_cache.json.',
+    )
+  }
+
+  const contextWindow = positiveNumber(selectedRecord?.context_window) ?? 200_000
+  const effectivePercent = positiveNumber(
+    selectedRecord?.effective_context_window_percent,
+  ) ?? 90
+  // WHY reserve another ten percent after Codex's own effective percentage:
+  // ConversationDocument estimates only translated conversation records. The
+  // resumed CLI adds its instructions, tool schemas, and environment envelope;
+  // filling the advertised window exactly would still overflow at submission.
+  const budgetCharacters = Math.floor(
+    contextWindow * (effectivePercent / 100) * 0.9 * 2.5,
+  )
+  return { model, modelProvider, budgetCharacters }
+}
+
+function topLevelTomlString(source: string, key: string): string | null {
+  const beforeFirstTable = source.split(/^\s*\[/m, 1)[0] ?? source
+  const match = beforeFirstTable.match(
+    new RegExp(`^\\s*${key}\\s*=\\s*["']([^"']+)["']\\s*(?:#.*)?$`, 'm'),
+  )
+  return match?.[1] ?? null
+}
+
+function positiveNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? value
+    : null
 }
 
 // WHY a registry rather than source/target pair branches: each provider owns

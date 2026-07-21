@@ -33,14 +33,24 @@ export type SwitchAgentProviderResult =
   | { status: 'skipped'; reason: string }
   | { status: 'failed'; message: string }
 
+// WHY this is module-scoped rather than React state: the lock guards an
+// imperative cross-process transaction and should become visible to a second
+// command invocation synchronously, without waiting for a render. Main holds a
+// matching lock as the authority; this one provides immediate pane feedback.
+const providerSwitchesInFlight = new Set<SessionId>()
+
 export async function switchAgentProvider(params: {
   sessionId: SessionId
   targetKind: AgentProviderKind
   refs: WorkspaceRefs
   setRuntimes: WorkspaceSetRuntimes
   sessionActions: SessionActions
+  onProgress?: (event: {
+    phase: 'compacting' | 'projecting'
+    message: string
+  }) => void
 }): Promise<SwitchAgentProviderResult> {
-  const { sessionId, targetKind, refs, setRuntimes, sessionActions } = params
+  const { sessionId, targetKind, refs, setRuntimes, sessionActions, onProgress } = params
 
   const meta = refs.stateRef.current.sessions[sessionId]
   if (!meta) return { status: 'skipped', reason: 'Session no longer exists' }
@@ -55,6 +65,15 @@ export async function switchAgentProvider(params: {
   if (sourceKind === targetKind) {
     return { status: 'skipped', reason: `Already on ${targetKind}` }
   }
+
+  const sourceRuntime = refs.latestRuntimesRef.current[sessionId]
+  if (sourceRuntime?.processActive || sourceRuntime?.semantic.currentTurn) {
+    return { status: 'failed', message: 'Wait for the current turn to finish before switching provider' }
+  }
+  if (providerSwitchesInFlight.has(sessionId)) {
+    return { status: 'failed', message: 'Provider switch already in progress' }
+  }
+  providerSwitchesInFlight.add(sessionId)
 
   try {
     const sourceProviderSessionId = resumableProviderSessionId(meta)
@@ -114,6 +133,10 @@ export async function switchAgentProvider(params: {
     // live pane. If translation fails, the current provider process should stay
     // untouched and the user should keep their running session instead of being
     // dropped into a dead pane.
+    const unsubscribeProgress = window.api.onProviderSwitchProgress(event => {
+      if (event.sourceSessionId !== sessionId) return
+      onProgress?.({ phase: event.phase, message: event.message })
+    })
     const result = await window.api.switchProvider({
       sourceKind,
       // Explicit target (#394 phase 5a). This helper always KNEW the
@@ -123,8 +146,9 @@ export async function switchAgentProvider(params: {
       // authoritative end-to-end.
       targetKind,
       sourceProviderSessionId,
+      sourceSessionId: sessionId,
       cwd: meta.cwd,
-    })
+    }).finally(unsubscribeProgress)
 
     const newSessionId = await sessionActions.replaceSession(meta.cwd, {
       kind: result.targetKind,
@@ -142,5 +166,7 @@ export async function switchAgentProvider(params: {
     const message =
       err instanceof Error && err.message.length > 0 ? err.message : 'Provider switch failed'
     return { status: 'failed', message }
+  } finally {
+    providerSwitchesInFlight.delete(sessionId)
   }
 }

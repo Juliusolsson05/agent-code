@@ -1,7 +1,9 @@
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
 import { ipcMain } from 'electron'
+import type { SessionManager } from '@main/sessionManager.js'
 
 import { switchProvider } from '@main/providerSwitch/switchProvider.js'
+import { compactSourceBeforeSwitch } from '@main/providerSwitch/compactBeforeSwitch.js'
 import { duplicateSession } from '@main/providerSwitch/duplicateSession.js'
 import {
   listRewindPrompts,
@@ -24,7 +26,8 @@ import type { ListRewindPromptsRequest } from '@shared/types/transcriptRewind.js
 // live under main/providerSwitch/. Grouping the IPC handlers here
 // keeps session.ts focused on lifecycle + I/O.
 
-export function registerProviderIpc(): void {
+export function registerProviderIpc(manager: SessionManager): void {
+  const switchesInFlight = new Set<string>()
   ipcMain.handle(
     'session:switch-provider',
     async (
@@ -36,9 +39,30 @@ export function registerProviderIpc(): void {
         cwd: string
         sourceCwd?: string
         targetCwd?: string
+        sourceSessionId?: string
       },
     ) => {
-      return await switchProvider(params)
+      const lockId = params.sourceSessionId ?? `${params.sourceKind}:${params.sourceProviderSessionId}`
+      if (switchesInFlight.has(lockId)) {
+        throw new Error('A provider switch is already in progress for this agent.')
+      }
+      switchesInFlight.add(lockId)
+      try {
+        return await switchProvider(params, {
+          compactSource: request => compactSourceBeforeSwitch(manager, request),
+          onProgress: progress => {
+            // WHY progress is pushed from the owning IPC request rather than
+            // inferred from processActive in the renderer: ordinary turns and
+            // native compaction both make the provider busy. Only this
+            // coordinator knows that the busy period is blocking a switch.
+            if (!_evt.sender.isDestroyed()) {
+              _evt.sender.send('session:provider-switch-progress', progress)
+            }
+          },
+        })
+      } finally {
+        switchesInFlight.delete(lockId)
+      }
     },
   )
 

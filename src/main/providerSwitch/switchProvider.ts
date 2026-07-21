@@ -1,6 +1,11 @@
 import { randomUUID } from 'node:crypto'
 
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
+import {
+  assessConversationContextBudget,
+  fitConversationToCharacterBudget,
+} from 'agent-transcript-parser'
+import type { ConversationDocument } from 'agent-transcript-parser'
 
 import { getHostTranscriptAdapter } from '@main/providerSwitch/transcriptEngine.js'
 
@@ -16,16 +21,32 @@ export type SwitchProviderRequest = {
   cwd: string
   sourceCwd?: string
   targetCwd?: string
+  sourceSessionId?: string
+  overflowPolicy?: 'compact' | 'fail' | 'truncate'
 }
 
 export type SwitchProviderResult = {
   targetKind: AgentProviderKind
   targetProviderSessionId: string
   targetFilePath: string
+  compactedBeforeSwitch: boolean
+  truncatedBeforeSwitch: boolean
+}
+
+export type ProviderSwitchProgress = {
+  sourceSessionId: string
+  phase: 'compacting' | 'projecting'
+  message: string
+}
+
+export interface SwitchProviderRuntime {
+  compactSource?: (request: SwitchProviderRequest) => Promise<void>
+  onProgress?: (progress: ProviderSwitchProgress) => void
 }
 
 export async function switchProvider(
   request: SwitchProviderRequest,
+  runtime: SwitchProviderRuntime = {},
 ): Promise<SwitchProviderResult> {
   const targetKind = request.targetKind ?? inferLegacyTarget(request.sourceKind)
   if (targetKind === request.sourceKind) {
@@ -44,7 +65,7 @@ export async function switchProvider(
   // Source and target adapters now know only their own formats. All decoding
   // and projection completes before write(), so an unsupported record or
   // failed profile cannot leave a partial target transcript on disk.
-  const conversation = await source.read(
+  let conversation = await source.read(
     sourceCwd,
     request.sourceProviderSessionId,
   )
@@ -54,15 +75,81 @@ export async function switchProvider(
     )
   }
 
+  const targetProfile = await target.targetProfile()
+  let assessment = assessConversationContextBudget(
+    conversation,
+    targetProfile.budgetCharacters,
+  )
+  let compactedBeforeSwitch = false
+  let truncatedBeforeSwitch = false
+  const overflowPolicy = request.overflowPolicy ?? 'compact'
+
+  if (assessment.requiresCompaction) {
+    if (overflowPolicy === 'truncate') {
+      const fitted = fitConversationToCharacterBudget(
+        assessment.conversation,
+        targetProfile.budgetCharacters,
+      )
+      conversation = fitted.conversation
+      truncatedBeforeSwitch = fitted.truncated
+    } else if (overflowPolicy === 'fail') {
+      throw contextOverflowError(assessment.estimatedCharacters, targetProfile.budgetCharacters)
+    } else {
+      if (!request.sourceSessionId || !runtime.compactSource) {
+        throw new Error(
+          'Provider switch requires native compaction, but no live source session is available.',
+        )
+      }
+      runtime.onProgress?.({
+        sourceSessionId: request.sourceSessionId,
+        phase: 'compacting',
+        message: `Conversation is too large for ${targetKind}. Compacting before switch…`,
+      })
+      await runtime.compactSource(request)
+      compactedBeforeSwitch = true
+      conversation = await source.read(sourceCwd, request.sourceProviderSessionId)
+      assessment = assessConversationContextBudget(
+        conversation,
+        targetProfile.budgetCharacters,
+      )
+      if (assessment.requiresCompaction) {
+        throw new Error(
+          `Native ${request.sourceKind} compaction completed, but the remaining context still exceeds the ${targetKind} target budget.`,
+        )
+      }
+    }
+  }
+
+  if (!truncatedBeforeSwitch) conversation = assessment.conversation
+  if (request.sourceSessionId) {
+    runtime.onProgress?.({
+      sourceSessionId: request.sourceSessionId,
+      phase: 'projecting',
+      message: `Preparing ${targetKind} resume…`,
+    })
+  }
   const projection = await target.projectNativeResume(conversation, {
     cwd: targetCwd,
     targetSessionId: randomUUID(),
     now: new Date().toISOString(),
+    targetProfile,
   })
   const targetProviderSessionId = target.sessionId(projection.values)
   const targetFilePath = await target.write(targetCwd, projection.values)
 
-  return { targetKind, targetProviderSessionId, targetFilePath }
+  return {
+    targetKind,
+    targetProviderSessionId,
+    targetFilePath,
+    compactedBeforeSwitch,
+    truncatedBeforeSwitch,
+  }
+}
+
+function contextOverflowError(estimated: number, budget: number): Error {
+  return new Error(
+    `Provider switch requires compaction: estimated context ${estimated} characters exceeds target budget ${budget}.`,
+  )
 }
 
 function inferLegacyTarget(source: AgentProviderKind): AgentProviderKind {
