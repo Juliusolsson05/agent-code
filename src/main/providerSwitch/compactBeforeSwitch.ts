@@ -2,6 +2,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { resolve } from 'node:path'
 
 import type { ConversationDocument } from 'agent-transcript-parser'
+import { conversationAfterLatestCompaction } from 'agent-transcript-parser'
 
 import type { SessionManager } from '@main/sessionManager.js'
 import { getHostTranscriptAdapter } from '@main/providerSwitch/transcriptEngine.js'
@@ -9,11 +10,17 @@ import type { SwitchProviderRequest } from '@main/providerSwitch/switchProvider.
 
 const COMPACTION_TIMEOUT_MS = 180_000
 const COMPACTION_POLL_MS = 250
+const PORTABLE_SUMMARY_PROMPT = [
+  'Read only. Do not use tools or modify files.',
+  'Write a detailed portable handoff summary of the conversation so another coding agent can continue the work.',
+  'Include completed work, decisions, files changed, validation, unresolved failures, and exact next steps.',
+  'Return only the handoff summary.',
+].join(' ')
 
 export async function compactSourceBeforeSwitch(
   manager: SessionManager,
   request: SwitchProviderRequest,
-): Promise<void> {
+): Promise<ConversationDocument> {
   const sourceSessionId = request.sourceSessionId
   if (!sourceSessionId) {
     throw new Error('Cannot compact before provider switch without a live source session id.')
@@ -35,6 +42,48 @@ export async function compactSourceBeforeSwitch(
     throw new Error(`Could not start native ${request.sourceKind} compaction: ${delivery.message}`)
   }
 
+  const compacted = await waitForNewCompaction(
+    manager,
+    request,
+    source,
+    sourceCwd,
+    beforeFingerprint,
+  )
+  if (request.sourceKind === 'claude') {
+    return conversationAfterLatestCompaction(compacted)
+  }
+
+  // WHY Codex needs a second, ordinary turn after native /compact: modern
+  // Codex persists its replacement history as provider-authenticated encrypted
+  // content. That record is useful when Codex resumes itself but deliberately
+  // cannot be decoded into Claude's plaintext compact-summary carrier. Asking
+  // the now-compacted source session for a read-only handoff lets Codex decrypt
+  // and summarize its own memory without Agent Code forging ciphertext.
+  const summaryBaselineLine = latestSourceLine(compacted)
+  const summaryDelivery = await manager.deliverPromptToAgent(
+    sourceSessionId,
+    PORTABLE_SUMMARY_PROMPT,
+  )
+  if (!summaryDelivery.ok) {
+    throw new Error(`Codex compacted successfully but could not create a portable handoff: ${summaryDelivery.message}`)
+  }
+  return await waitForPortableCodexSummary(
+    manager,
+    request,
+    source,
+    sourceCwd,
+    summaryBaselineLine,
+  )
+}
+
+async function waitForNewCompaction(
+  manager: SessionManager,
+  request: SwitchProviderRequest,
+  source: ReturnType<typeof getHostTranscriptAdapter>,
+  sourceCwd: string,
+  beforeFingerprint: string | null,
+): Promise<ConversationDocument> {
+  const sourceSessionId = request.sourceSessionId!
   const deadline = Date.now() + COMPACTION_TIMEOUT_MS
   let lastReadError: unknown = null
   while (Date.now() < deadline) {
@@ -44,7 +93,7 @@ export async function compactSourceBeforeSwitch(
     try {
       const current = await source.read(sourceCwd, request.sourceProviderSessionId)
       const fingerprint = latestCompactionFingerprint(current)
-      if (fingerprint && fingerprint !== beforeFingerprint) return
+      if (fingerprint && fingerprint !== beforeFingerprint) return current
       lastReadError = null
     } catch (error) {
       // WHY transient read errors are retried here: providers append JSONL while
@@ -59,16 +108,66 @@ export async function compactSourceBeforeSwitch(
 
   const detail = lastReadError instanceof Error ? ` Last read failed: ${lastReadError.message}` : ''
   throw new Error(
-    `Timed out waiting for ${request.sourceKind} to persist a native compaction summary.${detail}`,
+    `Timed out waiting for ${request.sourceKind} to persist a native compaction record.${detail}`,
   )
+}
+
+async function waitForPortableCodexSummary(
+  manager: SessionManager,
+  request: SwitchProviderRequest,
+  source: ReturnType<typeof getHostTranscriptAdapter>,
+  sourceCwd: string,
+  baselineLine: number,
+): Promise<ConversationDocument> {
+  const sourceSessionId = request.sourceSessionId!
+  const deadline = Date.now() + COMPACTION_TIMEOUT_MS
+  while (Date.now() < deadline) {
+    if (manager.getSessionKind(sourceSessionId) !== 'codex') {
+      throw new Error('The Codex source agent exited while creating its portable handoff.')
+    }
+    try {
+      const current = await source.read(sourceCwd, request.sourceProviderSessionId)
+      for (let index = current.entries.length - 1; index >= 0; index -= 1) {
+        const entry = current.entries[index]
+        if (!entry || entry.source.line <= baselineLine) break
+        if (entry.kind !== 'message' || entry.role !== 'assistant') continue
+        const summary = entry.content
+          .filter((item): item is Extract<typeof item, { kind: 'text' }> => item.kind === 'text')
+          .map(item => item.text)
+          .join('\n\n')
+          .trim()
+        if (summary.length === 0) continue
+        return {
+          ...current,
+          entries: [{
+            kind: 'compaction',
+            summary,
+            timestamp: entry.timestamp,
+            source: entry.source,
+          }],
+        }
+      }
+    } catch {
+      // Same append race as native compaction polling; retry to the deadline.
+    }
+    await delay(COMPACTION_POLL_MS)
+  }
+  throw new Error('Timed out waiting for compacted Codex to persist a portable handoff summary.')
 }
 
 function latestCompactionFingerprint(conversation: ConversationDocument): string | null {
   for (let index = conversation.entries.length - 1; index >= 0; index -= 1) {
     const entry = conversation.entries[index]
-    if (entry?.kind === 'compaction' && entry.summary.trim().length > 0) {
+    if (entry?.kind === 'compaction') {
       return `${entry.source.line}:${entry.summary}`
     }
   }
   return null
+}
+
+function latestSourceLine(conversation: ConversationDocument): number {
+  return conversation.entries.reduce(
+    (latest, entry) => Math.max(latest, entry.source.line),
+    -1,
+  )
 }

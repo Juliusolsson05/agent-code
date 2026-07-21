@@ -40,7 +40,7 @@ export type ProviderSwitchProgress = {
 }
 
 export interface SwitchProviderRuntime {
-  compactSource?: (request: SwitchProviderRequest) => Promise<void>
+  compactSource?: (request: SwitchProviderRequest) => Promise<ConversationDocument | void>
   onProgress?: (progress: ProviderSwitchProgress) => void
 }
 
@@ -105,9 +105,12 @@ export async function switchProvider(
         phase: 'compacting',
         message: `Conversation is too large for ${targetKind}. Compacting before switch…`,
       })
-      await runtime.compactSource(request)
+      const compactedConversation = await runtime.compactSource(request)
       compactedBeforeSwitch = true
-      conversation = await source.read(sourceCwd, request.sourceProviderSessionId)
+      conversation = compactedConversation ?? await source.read(
+        sourceCwd,
+        request.sourceProviderSessionId,
+      )
       assessment = assessConversationContextBudget(
         conversation,
         targetProfile.budgetCharacters,
