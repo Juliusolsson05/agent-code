@@ -145,6 +145,20 @@ export async function switchAgentProvider(params: {
       return { status: 'switched', newSessionId, targetKind }
     }
 
+    // WHY a durable pane is woken before main plans the transcript conversion:
+    // restored and Dispatch-detached panes intentionally outlive their provider
+    // process. Their SessionMeta still has everything needed to resume, so they
+    // look switchable in the UI, but main no longer has a registry entry under
+    // the pane id. That only becomes visible after transcript planning decides
+    // native compaction is required, where the old code failed with the opaque
+    // "source agent changed or exited" ownership guard. Recover under the SAME
+    // renderer id first. Besides making hibernated panes switchable, this keeps
+    // the compaction guard meaningful: any kind/cwd mismatch observed after
+    // recovery is a real mid-transaction ownership change, not ordinary pane
+    // hibernation. `ensureSessionLive` is idempotent for an already-live owner
+    // and main's recovery claim serializes concurrent wake attempts.
+    await sessionActions.ensureSessionLive(sessionId)
+
     // The translated target transcript must be created BEFORE we replace the
     // live pane. If translation fails, the current provider process should stay
     // untouched and the user should keep their running session instead of being

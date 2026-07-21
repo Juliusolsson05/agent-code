@@ -1,0 +1,138 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+import type { WorkspaceSetRuntimes } from '@renderer/workspace/hook/context'
+import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
+import type { SessionActions } from '@renderer/workspace/hook/actions/session'
+import { switchAgentProvider } from '@renderer/workspace/hook/actions/providerSwitchCore'
+
+const originalApiDescriptor = Object.getOwnPropertyDescriptor(window, 'api')
+
+beforeEach(() => {
+  vi.restoreAllMocks()
+})
+
+afterEach(() => {
+  if (originalApiDescriptor) {
+    Object.defineProperty(window, 'api', originalApiDescriptor)
+  } else {
+    Reflect.deleteProperty(window, 'api')
+  }
+})
+
+describe('switchAgentProvider', () => {
+  it('wakes a durable source pane before main can request native compaction', async () => {
+    const ensureSessionLive = vi.fn().mockResolvedValue('source-pane')
+    const switchProvider = vi.fn().mockResolvedValue({
+      targetKind: 'codex',
+      targetProviderSessionId: 'target-provider-session',
+      targetFilePath: '/project/target.jsonl',
+      compactedBeforeSwitch: true,
+      truncatedBeforeSwitch: false,
+    })
+    const replaceSession = vi.fn().mockResolvedValue('target-pane')
+    const unsubscribe = vi.fn()
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: {
+        onProviderSwitchProgress: vi.fn(() => unsubscribe),
+        switchProvider,
+      },
+    })
+
+    const refs = {
+      stateRef: {
+        current: {
+          sessions: {
+            'source-pane': {
+              cwd: '/project',
+              kind: 'claude',
+              providerSessionId: 'source-provider-session',
+            },
+          },
+        },
+      },
+      latestRuntimesRef: { current: {} },
+    } as unknown as WorkspaceRefs
+    const sessionActions = {
+      ensureSessionLive,
+      replaceSession,
+    } as unknown as SessionActions
+    // Runtime updates are irrelevant to this transaction-order regression. The
+    // real setter can legitimately find no runtime while a detached pane wakes,
+    // so preserving an empty map also exercises that supported shape.
+    let runtimes = {}
+    const setRuntimes = ((next: typeof runtimes | ((value: typeof runtimes) => typeof runtimes)) => {
+      runtimes = typeof next === 'function' ? next(runtimes) : next
+    }) as WorkspaceSetRuntimes
+
+    await expect(switchAgentProvider({
+      sessionId: 'source-pane',
+      targetKind: 'codex',
+      refs,
+      setRuntimes,
+      sessionActions,
+    })).resolves.toEqual({
+      status: 'switched',
+      newSessionId: 'target-pane',
+      targetKind: 'codex',
+    })
+
+    expect(ensureSessionLive).toHaveBeenCalledWith('source-pane')
+    expect(switchProvider).toHaveBeenCalledWith({
+      sourceKind: 'claude',
+      targetKind: 'codex',
+      sourceProviderSessionId: 'source-provider-session',
+      sourceSessionId: 'source-pane',
+      cwd: '/project',
+    })
+    expect(ensureSessionLive.mock.invocationCallOrder[0]).toBeLessThan(
+      switchProvider.mock.invocationCallOrder[0]!,
+    )
+    expect(replaceSession).toHaveBeenCalledWith('/project', {
+      kind: 'codex',
+      resumeSessionId: 'target-provider-session',
+      builtInMcpDomains: undefined,
+      targetSessionId: 'source-pane',
+    })
+    expect(unsubscribe).toHaveBeenCalledOnce()
+  })
+
+  it('does not enter provider-switch IPC when the dead source cannot be recovered', async () => {
+    const ensureSessionLive = vi.fn().mockRejectedValue(new Error('Claude could not resume'))
+    const switchProvider = vi.fn()
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: {
+        onProviderSwitchProgress: vi.fn(),
+        switchProvider,
+      },
+    })
+    const refs = {
+      stateRef: {
+        current: {
+          sessions: {
+            'source-pane': {
+              cwd: '/project',
+              kind: 'claude',
+              providerSessionId: 'source-provider-session',
+            },
+          },
+        },
+      },
+      latestRuntimesRef: { current: {} },
+    } as unknown as WorkspaceRefs
+
+    const result = await switchAgentProvider({
+      sessionId: 'source-pane',
+      targetKind: 'codex',
+      refs,
+      setRuntimes: vi.fn() as WorkspaceSetRuntimes,
+      sessionActions: {
+        ensureSessionLive,
+      } as unknown as SessionActions,
+    })
+
+    expect(result).toEqual({ status: 'failed', message: 'Claude could not resume' })
+    expect(switchProvider).not.toHaveBeenCalled()
+  })
+})
