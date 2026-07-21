@@ -56,6 +56,7 @@ export function ComposerInput({
   onDismissSuggestion,
   promptDelivery,
   onResolveUncertainDelivery,
+  providerSwitchMessage = null,
 }: {
   sessionId: SessionId
   inputRef: MutableRefObject<HTMLTextAreaElement | null>
@@ -85,6 +86,7 @@ export function ComposerInput({
   onDismissSuggestion: () => void
   promptDelivery: PromptDeliveryUiState
   onResolveUncertainDelivery: () => void
+  providerSwitchMessage?: string | null
 }) {
   const showDictationPlaceholder = dictation.enabled && dictation.busy && input.length === 0
   const showDictationActivity = dictation.enabled && dictation.busy
@@ -123,6 +125,12 @@ export function ComposerInput({
           >
             I verified the transcript — allow sending again
           </button>
+        </div>
+      ) : null}
+
+      {providerSwitchMessage ? (
+        <div className="mb-2 rounded border border-accent/40 bg-accent/10 p-2 text-[11px] text-ink">
+          {providerSwitchMessage} Input is locked until the switch finishes.
         </div>
       ) : null}
 
@@ -197,6 +205,7 @@ export function ComposerInput({
           // for why a prepending write MUST move the caret.
           data-composer-input={sessionId}
           value={input}
+          disabled={providerSwitchMessage !== null}
           onChange={e => {
             onUserEngagement()
             // In slash mode we manage the value ourselves via
@@ -236,7 +245,9 @@ export function ComposerInput({
           placeholder={
             slashMode
               ? undefined
-              : showDictationPlaceholder
+              : providerSwitchMessage
+                ? 'provider switch in progress…'
+                : showDictationPlaceholder
                 ? 'listening…'
                 : focused
                 ? 'type and press enter… (shift+enter for newline)'

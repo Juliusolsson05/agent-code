@@ -1,7 +1,8 @@
 // See docs/design/provider-switching.md for the progress and live-session lock
 // invariants owned by this IPC boundary.
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
-import { ipcMain } from 'electron'
+import { BrowserWindow, dialog, ipcMain } from 'electron'
+import type { MessageBoxOptions } from 'electron'
 import type { SessionManager } from '@main/sessionManager.js'
 
 import { switchProvider } from '@main/providerSwitch/switchProvider.js'
@@ -53,15 +54,36 @@ export function registerProviderIpc(manager: SessionManager): void {
       switchesInFlight.add(lockId)
       try {
         return await switchProvider(params, {
-          compactSource: request => compactSourceBeforeSwitch(manager, request, () => {
-            if (!_evt.sender.isDestroyed() && request.sourceSessionId) {
-              _evt.sender.send('session:provider-switch-progress', {
-                sourceSessionId: request.sourceSessionId,
-                phase: 'summarizing',
-                message: 'Codex compacted. Creating a portable handoff for Claude…',
-              })
+          compactSource: async (request, plan) => {
+            if (plan.kind === 'requires-compaction') {
+              const window = BrowserWindow.fromWebContents(_evt.sender)
+              const options: MessageBoxOptions = {
+                type: 'warning',
+                buttons: ['Compact and switch', 'Cancel'],
+                defaultId: 1,
+                cancelId: 1,
+                noLink: true,
+                title: 'Compact conversation before switching?',
+                message: `This conversation is too large for ${params.targetKind ?? 'the target provider'}.`,
+                detail: 'Switching requires the source provider to compact its live history first. This changes the current source session and cannot be undone.',
+              }
+              const confirmation = window
+                ? await dialog.showMessageBox(window, options)
+                : await dialog.showMessageBox(options)
+              if (confirmation.response !== 0) {
+                throw new Error('Provider switch cancelled before source compaction.')
+              }
             }
-          }),
+            return await compactSourceBeforeSwitch(manager, request, plan, () => {
+              if (!_evt.sender.isDestroyed() && request.sourceSessionId) {
+                _evt.sender.send('session:provider-switch-progress', {
+                  sourceSessionId: request.sourceSessionId,
+                  phase: 'summarizing',
+                  message: `Codex compacted. Creating a portable handoff for ${request.targetKind ?? 'the target provider'}…`,
+                })
+              }
+            })
+          },
           onProgress: progress => {
             // WHY progress is pushed from the owning IPC request rather than
             // inferred from processActive in the renderer: ordinary turns and

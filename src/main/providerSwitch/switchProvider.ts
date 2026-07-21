@@ -4,10 +4,13 @@ import { randomUUID } from 'node:crypto'
 
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
 import {
-  assessConversationContextBudget,
   fitConversationToCharacterBudget,
+  planConversationContext,
 } from 'agent-transcript-parser'
-import type { ConversationDocument } from 'agent-transcript-parser'
+import type {
+  ConversationContextPlan,
+  ConversationDocument,
+} from 'agent-transcript-parser'
 
 import { getHostTranscriptAdapter } from '@main/providerSwitch/transcriptEngine.js'
 
@@ -42,7 +45,12 @@ export type ProviderSwitchProgress = {
 }
 
 export interface SwitchProviderRuntime {
-  compactSource?: (request: SwitchProviderRequest) => Promise<ConversationDocument | void>
+  compactSource?: (
+    request: SwitchProviderRequest,
+    plan: Extract<ConversationContextPlan, {
+      kind: 'requires-compaction' | 'requires-portable-handoff'
+    }>,
+  ) => Promise<ConversationDocument | void>
   onProgress?: (progress: ProviderSwitchProgress) => void
 }
 
@@ -78,54 +86,74 @@ export async function switchProvider(
   }
 
   const targetProfile = await target.targetProfile()
-  let assessment = assessConversationContextBudget(
+  let plan = planConversationContext(
     conversation,
+    targetKind,
     targetProfile.budgetCharacters,
   )
   let compactedBeforeSwitch = false
   let truncatedBeforeSwitch = false
   const overflowPolicy = request.overflowPolicy ?? 'compact'
 
-  if (assessment.requiresCompaction) {
+  if (plan.kind === 'requires-compaction' || plan.kind === 'requires-portable-handoff') {
     if (overflowPolicy === 'truncate') {
+      if (plan.kind === 'requires-portable-handoff') {
+        throw new Error(
+          'Provider switch cannot truncate around encrypted Codex compaction; a plaintext handoff is required.',
+        )
+      }
       const fitted = fitConversationToCharacterBudget(
-        assessment.conversation,
+        plan.conversation,
         targetProfile.budgetCharacters,
       )
+      if (fitted.stillExceedsBudget) {
+        throw contextOverflowError(
+          fitted.estimatedCharactersAfter,
+          targetProfile.budgetCharacters,
+        )
+      }
       conversation = fitted.conversation
       truncatedBeforeSwitch = fitted.truncated
     } else if (overflowPolicy === 'fail') {
-      throw contextOverflowError(assessment.estimatedCharacters, targetProfile.budgetCharacters)
+      throw contextOverflowError(plan.estimatedCharacters, targetProfile.budgetCharacters)
     } else {
       if (!request.sourceSessionId || !runtime.compactSource) {
         throw new Error(
           'Provider switch requires native compaction, but no live source session is available.',
         )
       }
-      runtime.onProgress?.({
-        sourceSessionId: request.sourceSessionId,
-        phase: 'compacting',
-        message: `Conversation is too large for ${targetKind}. Compacting before switch…`,
-      })
-      const compactedConversation = await runtime.compactSource(request)
-      compactedBeforeSwitch = true
+      const requiresNativeCompaction = plan.kind === 'requires-compaction'
+      runtime.onProgress?.(requiresNativeCompaction
+        ? {
+            sourceSessionId: request.sourceSessionId,
+            phase: 'compacting',
+            message: `Conversation is too large for ${targetKind}. Compacting before switch…`,
+          }
+        : {
+            sourceSessionId: request.sourceSessionId,
+            phase: 'summarizing',
+            message: `Creating a portable handoff for ${targetKind}…`,
+          })
+      const compactedConversation = await runtime.compactSource(request, plan)
+      compactedBeforeSwitch = requiresNativeCompaction
       conversation = compactedConversation ?? await source.read(
         sourceCwd,
         request.sourceProviderSessionId,
       )
-      assessment = assessConversationContextBudget(
+      plan = planConversationContext(
         conversation,
+        targetKind,
         targetProfile.budgetCharacters,
       )
-      if (assessment.requiresCompaction) {
+      if (plan.kind === 'requires-compaction' || plan.kind === 'requires-portable-handoff') {
         throw new Error(
-          `Native ${request.sourceKind} compaction completed, but the remaining context still exceeds the ${targetKind} target budget.`,
+          `${request.sourceKind} context preparation completed, but the conversation is still not portable within the ${targetKind} target budget.`,
         )
       }
     }
   }
 
-  if (!truncatedBeforeSwitch) conversation = assessment.conversation
+  if (!truncatedBeforeSwitch) conversation = plan.conversation
   if (request.sourceSessionId) {
     runtime.onProgress?.({
       sourceSessionId: request.sourceSessionId,

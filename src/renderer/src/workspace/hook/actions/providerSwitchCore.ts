@@ -76,6 +76,20 @@ export async function switchAgentProvider(params: {
     return { status: 'failed', message: 'Provider switch already in progress' }
   }
   providerSwitchesInFlight.add(sessionId)
+  setRuntimes(prev => {
+    const runtime = prev[sessionId]
+    if (!runtime) return prev
+    return {
+      ...prev,
+      [sessionId]: {
+        ...runtime,
+        providerSwitch: {
+          phase: 'preparing',
+          message: `Preparing switch to ${targetKind}…`,
+        },
+      },
+    }
+  })
 
   try {
     const sourceProviderSessionId = resumableProviderSessionId(meta)
@@ -137,6 +151,20 @@ export async function switchAgentProvider(params: {
     // dropped into a dead pane.
     const unsubscribeProgress = window.api.onProviderSwitchProgress(event => {
       if (event.sourceSessionId !== sessionId) return
+      setRuntimes(prev => {
+        const runtime = prev[sessionId]
+        if (!runtime) return prev
+        return {
+          ...prev,
+          [sessionId]: {
+            ...runtime,
+            providerSwitch: {
+              phase: event.phase,
+              message: event.message,
+            },
+          },
+        }
+      })
       onProgress?.({ phase: event.phase, message: event.message })
     })
     const result = await window.api.switchProvider({
@@ -170,5 +198,13 @@ export async function switchAgentProvider(params: {
     return { status: 'failed', message }
   } finally {
     providerSwitchesInFlight.delete(sessionId)
+    setRuntimes(prev => {
+      const runtime = prev[sessionId]
+      if (!runtime || runtime.providerSwitch === null) return prev
+      return {
+        ...prev,
+        [sessionId]: { ...runtime, providerSwitch: null },
+      }
+    })
   }
 }

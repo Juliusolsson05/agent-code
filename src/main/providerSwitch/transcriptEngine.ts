@@ -20,6 +20,8 @@ import {
   decodeClaudeConversation,
   decodeCodexConversation,
   decodeJsonl,
+  budgetCharactersForContextTokens,
+  resolveCodexTargetProfileFromSources,
   resolveUserPrompt,
 } from 'agent-transcript-parser'
 import type {
@@ -136,64 +138,38 @@ const codexAdapter: HostTranscriptAdapter = {
 }
 
 async function resolveClaudeTargetProfile(): Promise<TranscriptTargetProfile> {
+  const claudeHome = process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude')
+  const settings = await readFile(join(claudeHome, 'settings.json'), 'utf8')
+    .then(value => JSON.parse(value) as unknown)
+    .catch(() => null)
+  const configuredModel = isRecord(settings) && typeof settings.model === 'string'
+    ? settings.model
+    : null
+  const model = process.env.ANTHROPIC_MODEL ?? configuredModel ?? 'default'
+  const contextTokens = /\[1m\]/i.test(model) ? 1_000_000 : 200_000
   return {
-    model: process.env.AGENT_CODE_PRIMARY_MODEL ?? 'claude-opus-4-8',
-    // Claude's current long-context models accept up to one million tokens.
-    // We reserve ten percent for provider-added system/tool material that is
-    // not represented in ConversationDocument, then use the same deliberately
-    // conservative character/token approximation as the Codex profile below.
-    budgetCharacters: Math.floor(1_000_000 * 0.9 * 2.5),
+    model,
+    // WHY 200k is the default rather than assuming an advertised long-context
+    // beta: Agent Code does not pass --model when it spawns Claude. Only an
+    // explicit settings/env model with the [1m] selector proves that larger
+    // window is active. A conservative plan may compact early; an optimistic
+    // 1m guess writes a resume that fails only after the source pane is gone.
+    budgetCharacters: budgetCharactersForContextTokens(contextTokens),
   }
 }
 
 async function resolveCodexTargetProfile(): Promise<TranscriptTargetProfile> {
   const codexHome = process.env.CODEX_HOME ?? join(homedir(), '.codex')
   const config = await readFile(join(codexHome, 'config.toml'), 'utf8').catch(() => '')
-  const configuredModel = topLevelTomlString(config, 'model')
-  const modelProvider = topLevelTomlString(config, 'model_provider') ?? 'openai'
   const cache = await readFile(join(codexHome, 'models_cache.json'), 'utf8')
     .then(value => JSON.parse(value) as unknown)
     .catch(() => null)
-  const models = isRecord(cache) && Array.isArray(cache.models) ? cache.models : []
-  const selected = models.find(candidate => (
-    isRecord(candidate) && candidate.slug === configuredModel
-  )) ?? models.find(candidate => isRecord(candidate) && candidate.visibility === 'list')
-  const selectedRecord = isRecord(selected) ? selected : null
-  const model = configuredModel ?? (
-    typeof selectedRecord?.slug === 'string' ? selectedRecord.slug : null
-  )
-  if (!model) {
-    throw new Error(
-      'Codex target model could not be resolved from config.toml or models_cache.json.',
-    )
+  const profile = resolveCodexTargetProfileFromSources(config, cache)
+  return {
+    model: profile.model,
+    modelProvider: profile.modelProvider,
+    budgetCharacters: profile.budgetCharacters,
   }
-
-  const contextWindow = positiveNumber(selectedRecord?.context_window) ?? 200_000
-  const effectivePercent = positiveNumber(
-    selectedRecord?.effective_context_window_percent,
-  ) ?? 90
-  // WHY reserve another ten percent after Codex's own effective percentage:
-  // ConversationDocument estimates only translated conversation records. The
-  // resumed CLI adds its instructions, tool schemas, and environment envelope;
-  // filling the advertised window exactly would still overflow at submission.
-  const budgetCharacters = Math.floor(
-    contextWindow * (effectivePercent / 100) * 0.9 * 2.5,
-  )
-  return { model, modelProvider, budgetCharacters }
-}
-
-function topLevelTomlString(source: string, key: string): string | null {
-  const beforeFirstTable = source.split(/^\s*\[/m, 1)[0] ?? source
-  const match = beforeFirstTable.match(
-    new RegExp(`^\\s*${key}\\s*=\\s*["']([^"']+)["']\\s*(?:#.*)?$`, 'm'),
-  )
-  return match?.[1] ?? null
-}
-
-function positiveNumber(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0
-    ? value
-    : null
 }
 
 // WHY a registry rather than source/target pair branches: each provider owns

@@ -4,7 +4,12 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { resolve } from 'node:path'
 
 import type { ConversationDocument } from 'agent-transcript-parser'
-import { conversationAfterLatestCompaction } from 'agent-transcript-parser'
+import type { ConversationContextPlan } from 'agent-transcript-parser'
+import {
+  conversationAfterLatestPortableCompaction,
+  describeLatestCompaction,
+  portableCodexHandoffAfterLine,
+} from 'agent-transcript-parser'
 
 import type { SessionManager } from '@main/sessionManager.js'
 import { getHostTranscriptAdapter } from '@main/providerSwitch/transcriptEngine.js'
@@ -22,6 +27,9 @@ const PORTABLE_SUMMARY_PROMPT = [
 export async function compactSourceBeforeSwitch(
   manager: SessionManager,
   request: SwitchProviderRequest,
+  plan: Extract<ConversationContextPlan, {
+    kind: 'requires-compaction' | 'requires-portable-handoff'
+  }>,
   onPortableSummary?: () => void,
 ): Promise<ConversationDocument> {
   const sourceSessionId = request.sourceSessionId
@@ -39,21 +47,25 @@ export async function compactSourceBeforeSwitch(
 
   const source = getHostTranscriptAdapter(request.sourceKind)
   const before = await source.read(sourceCwd, request.sourceProviderSessionId)
-  const beforeFingerprint = latestCompactionFingerprint(before)
-  const delivery = await manager.deliverPromptToAgent(sourceSessionId, '/compact')
-  if (!delivery.ok) {
-    throw new Error(`Could not start native ${request.sourceKind} compaction: ${delivery.message}`)
+  let compacted = before
+  if (plan.kind === 'requires-compaction') {
+    const beforeFingerprint = describeLatestCompaction(before)?.fingerprint ?? null
+    const delivery = await manager.deliverPromptToAgent(sourceSessionId, '/compact')
+    if (!delivery.ok) {
+      throw new Error(`Could not start native ${request.sourceKind} compaction: ${delivery.message}`)
+    }
+
+    compacted = await waitForNewCompaction(
+      manager,
+      request,
+      source,
+      sourceCwd,
+      beforeFingerprint,
+    )
   }
 
-  const compacted = await waitForNewCompaction(
-    manager,
-    request,
-    source,
-    sourceCwd,
-    beforeFingerprint,
-  )
   if (request.sourceKind === 'claude') {
-    return conversationAfterLatestCompaction(compacted)
+    return conversationAfterLatestPortableCompaction(compacted)
   }
 
   // WHY Codex needs a second, ordinary turn after native /compact: modern
@@ -96,8 +108,14 @@ async function waitForNewCompaction(
     }
     try {
       const current = await source.read(sourceCwd, request.sourceProviderSessionId)
-      const fingerprint = latestCompactionFingerprint(current)
-      if (fingerprint && fingerprint !== beforeFingerprint) return current
+      const latest = describeLatestCompaction(current)
+      if (
+        latest &&
+        latest.fingerprint !== beforeFingerprint &&
+        latest.availability !== 'incomplete'
+      ) {
+        return current
+      }
       lastReadError = null
     } catch (error) {
       // WHY transient read errors are retried here: providers append JSONL while
@@ -131,23 +149,16 @@ async function waitForPortableCodexSummary(
     }
     try {
       const current = await source.read(sourceCwd, request.sourceProviderSessionId)
-      for (let index = current.entries.length - 1; index >= 0; index -= 1) {
-        const entry = current.entries[index]
-        if (!entry || entry.source.line <= baselineLine) break
-        if (entry.kind !== 'message' || entry.role !== 'assistant') continue
-        const summary = entry.content
-          .filter((item): item is Extract<typeof item, { kind: 'text' }> => item.kind === 'text')
-          .map(item => item.text)
-          .join('\n\n')
-          .trim()
-        if (summary.length === 0) continue
+      const handoff = portableCodexHandoffAfterLine(current, baselineLine)
+      if (handoff) {
         return {
           ...current,
           entries: [{
             kind: 'compaction',
-            summary,
-            timestamp: entry.timestamp,
-            source: entry.source,
+            summary: handoff.summary,
+            summarySource: 'synthetic',
+            timestamp: handoff.message.timestamp,
+            source: handoff.message.source,
           }],
         }
       }
@@ -157,16 +168,6 @@ async function waitForPortableCodexSummary(
     await delay(COMPACTION_POLL_MS)
   }
   throw new Error('Timed out waiting for compacted Codex to persist a portable handoff summary.')
-}
-
-function latestCompactionFingerprint(conversation: ConversationDocument): string | null {
-  for (let index = conversation.entries.length - 1; index >= 0; index -= 1) {
-    const entry = conversation.entries[index]
-    if (entry?.kind === 'compaction') {
-      return `${entry.source.line}:${entry.summary}`
-    }
-  }
-  return null
 }
 
 function latestSourceLine(conversation: ConversationDocument): number {

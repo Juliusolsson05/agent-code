@@ -766,6 +766,7 @@ export function TileLeaf({
         onResolveUncertainDelivery={() =>
           workspace.updateRuntime(sessionId, { promptDelivery: { kind: 'idle' } })
         }
+        providerSwitchMessage={runtime.providerSwitch?.message ?? null}
       />
 
       {/* WHY navigation sits after the composer in DOM and visual order: a workflow is another

@@ -131,6 +131,10 @@ export function useComposerKeybinds({
     source: 'textarea-enter' | 'global-enter',
     hasModifier = false,
   ) => {
+    if (runtime.providerSwitch) {
+      workspace.showPaneToast(sessionId, 'Wait for the provider switch to finish before sending a prompt')
+      return
+    }
     const draftImages = runtime.draftImages
     const submittedImageIds = new Set(draftImages.map(image => image.id))
     if (draftImages.length === 0 && isLocalUsageCommand()) {
