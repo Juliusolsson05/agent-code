@@ -48,7 +48,7 @@ export const providerApi = {
 
   onProviderSwitchProgress: (cb: (event: {
     sourceSessionId: string
-    phase: 'compacting' | 'projecting'
+    phase: 'compacting' | 'summarizing' | 'projecting'
     message: string
   }) => void): (() => void) => subscribe('session:provider-switch-progress', cb),
 

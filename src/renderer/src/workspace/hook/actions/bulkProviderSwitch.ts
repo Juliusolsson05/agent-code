@@ -71,7 +71,7 @@ export function useBulkProviderSwitchActions(
           refs,
           setRuntimes,
           sessionActions,
-          onProgress: event => showToast(event.message, 185_000),
+          onProgress: event => showToast(event.message, 305_000),
         })
 
         if (result.status === 'switched' && meta && originalKind) {
@@ -143,7 +143,7 @@ export function useBulkProviderSwitchActions(
         refs,
         setRuntimes,
         sessionActions,
-        onProgress: event => showToast(event.message, 185_000),
+        onProgress: event => showToast(event.message, 305_000),
       })
       if (result.status === 'switched') returned += 1
       else if (result.status === 'failed') failed += 1

@@ -1,3 +1,5 @@
+// See docs/design/provider-switching.md for why Claude can transfer its native
+// summary directly while Codex needs a second plaintext handoff turn.
 import { setTimeout as delay } from 'node:timers/promises'
 import { resolve } from 'node:path'
 
@@ -8,7 +10,7 @@ import type { SessionManager } from '@main/sessionManager.js'
 import { getHostTranscriptAdapter } from '@main/providerSwitch/transcriptEngine.js'
 import type { SwitchProviderRequest } from '@main/providerSwitch/switchProvider.js'
 
-const COMPACTION_TIMEOUT_MS = 180_000
+const COMPACTION_TIMEOUT_MS = 300_000
 const COMPACTION_POLL_MS = 250
 const PORTABLE_SUMMARY_PROMPT = [
   'Read only. Do not use tools or modify files.',
@@ -20,6 +22,7 @@ const PORTABLE_SUMMARY_PROMPT = [
 export async function compactSourceBeforeSwitch(
   manager: SessionManager,
   request: SwitchProviderRequest,
+  onPortableSummary?: () => void,
 ): Promise<ConversationDocument> {
   const sourceSessionId = request.sourceSessionId
   if (!sourceSessionId) {
@@ -60,6 +63,7 @@ export async function compactSourceBeforeSwitch(
   // the now-compacted source session for a read-only handoff lets Codex decrypt
   // and summarize its own memory without Agent Code forging ciphertext.
   const summaryBaselineLine = latestSourceLine(compacted)
+  onPortableSummary?.()
   const summaryDelivery = await manager.deliverPromptToAgent(
     sourceSessionId,
     PORTABLE_SUMMARY_PROMPT,

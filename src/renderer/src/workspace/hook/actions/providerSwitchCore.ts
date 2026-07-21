@@ -1,3 +1,5 @@
+// See docs/design/provider-switching.md for the renderer/main transaction,
+// progress, and non-cancellable compaction lock invariants.
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import type { SessionId } from '@renderer/workspace/types'
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
@@ -46,7 +48,7 @@ export async function switchAgentProvider(params: {
   setRuntimes: WorkspaceSetRuntimes
   sessionActions: SessionActions
   onProgress?: (event: {
-    phase: 'compacting' | 'projecting'
+    phase: 'compacting' | 'summarizing' | 'projecting'
     message: string
   }) => void
 }): Promise<SwitchAgentProviderResult> {

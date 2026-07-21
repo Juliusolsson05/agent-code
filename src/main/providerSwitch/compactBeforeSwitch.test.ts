@@ -69,6 +69,7 @@ describe('compactSourceBeforeSwitch', () => {
       getSpawnCwd: vi.fn(() => '/project'),
       deliverPromptToAgent: vi.fn(async () => ({ ok: true })),
     }
+    const onPortableSummary = vi.fn()
 
     const result = await compactSourceBeforeSwitch(manager as never, {
       sourceKind: 'codex',
@@ -76,8 +77,9 @@ describe('compactSourceBeforeSwitch', () => {
       sourceProviderSessionId: 'provider-session',
       sourceSessionId: 'local-session',
       cwd: '/project',
-    })
+    }, onPortableSummary)
 
+    expect(onPortableSummary).toHaveBeenCalledOnce()
     expect(manager.deliverPromptToAgent).toHaveBeenCalledTimes(2)
     expect(manager.deliverPromptToAgent).toHaveBeenNthCalledWith(1, 'local-session', '/compact')
     expect(manager.deliverPromptToAgent).toHaveBeenNthCalledWith(

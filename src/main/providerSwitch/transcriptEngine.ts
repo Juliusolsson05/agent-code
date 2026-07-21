@@ -1,3 +1,5 @@
+// See docs/design/provider-switching.md for the adapter boundary and the rule
+// that projection model metadata must match capacity planning metadata.
 import { readFile } from 'fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'

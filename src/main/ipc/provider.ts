@@ -1,3 +1,5 @@
+// See docs/design/provider-switching.md for the progress and live-session lock
+// invariants owned by this IPC boundary.
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
 import { ipcMain } from 'electron'
 import type { SessionManager } from '@main/sessionManager.js'
@@ -14,12 +16,14 @@ import type { ListRewindPromptsRequest } from '@shared/types/transcriptRewind.js
 
 // Provider-level session transforms.
 //
-// The mutating handlers here write a NEW transcript to disk and return a
-// new providerSessionId; the source file is never modified. Prompt listing is
-// the read-only half of rewind and returns stable raw-record addresses. The
-// renderer passes the returned id to replaceSession(...) to swap a
-// pane onto the transformed conversation without tearing down the
-// tile tree.
+// The mutating handlers here write a NEW transcript to disk and return a new
+// providerSessionId. Duplicate and rewind never modify the source. Provider
+// switch also stays read-only when history fits, but an oversized switch asks
+// the live source provider to append its own native compaction before the new
+// target transcript is written. Prompt listing is the read-only half of rewind
+// and returns stable raw-record addresses. The renderer passes the returned id
+// to replaceSession(...) to swap a pane onto the transformed conversation
+// without tearing down the tile tree.
 //
 // Why a separate file: these share orchestration shape (read source →
 // transform → write clone → return id) but the transforms themselves
@@ -49,7 +53,15 @@ export function registerProviderIpc(manager: SessionManager): void {
       switchesInFlight.add(lockId)
       try {
         return await switchProvider(params, {
-          compactSource: request => compactSourceBeforeSwitch(manager, request),
+          compactSource: request => compactSourceBeforeSwitch(manager, request, () => {
+            if (!_evt.sender.isDestroyed() && request.sourceSessionId) {
+              _evt.sender.send('session:provider-switch-progress', {
+                sourceSessionId: request.sourceSessionId,
+                phase: 'summarizing',
+                message: 'Codex compacted. Creating a portable handoff for Claude…',
+              })
+            }
+          }),
           onProgress: progress => {
             // WHY progress is pushed from the owning IPC request rather than
             // inferred from processActive in the renderer: ordinary turns and

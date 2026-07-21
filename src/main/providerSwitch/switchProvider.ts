@@ -1,3 +1,5 @@
+// See docs/design/provider-switching.md for the cross-provider capacity and
+// native-compaction invariants coordinated by this transaction.
 import { randomUUID } from 'node:crypto'
 
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
@@ -35,7 +37,7 @@ export type SwitchProviderResult = {
 
 export type ProviderSwitchProgress = {
   sourceSessionId: string
-  phase: 'compacting' | 'projecting'
+  phase: 'compacting' | 'summarizing' | 'projecting'
   message: string
 }
 
