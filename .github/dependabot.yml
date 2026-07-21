@@ -1,0 +1,45 @@
+# Dependabot security updates remain eligible even when the corresponding fix is a
+# major release. The major-version ignore below applies only to routine version
+# updates, because unexpected breaking changes should stay a deliberate human task.
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Europe/Stockholm"
+    open-pull-requests-limit: 3
+    groups:
+      security-updates:
+        applies-to: "security-updates"
+        patterns:
+          - "*"
+      minor-and-patch:
+        applies-to: "version-updates"
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
+
+  # Submodule pointers intentionally stay outside Dependabot. They represent
+  # coordinated Agent Code releases, not ordinary dependencies, so updating one
+  # without its integration review could silently ship incompatible package code.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:30"
+      timezone: "Europe/Stockholm"
+    open-pull-requests-limit: 3
+    groups:
+      github-actions:
+        patterns:
+          - "*"
