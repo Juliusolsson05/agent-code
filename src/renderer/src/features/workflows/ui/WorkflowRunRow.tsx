@@ -112,7 +112,21 @@ export function WorkflowRunView({
     setAction('resume')
     setActionError(null)
     try {
-      const next = await client.resume({ ...scope, idempotencyKey: resumeKey.current })
+      let next: WorkflowRunReference
+      try {
+        next = await client.resume({ ...scope, idempotencyKey: resumeKey.current })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        const unconfirmedProvider = message.includes('unconfirmed provider execution')
+        if (!unconfirmedProvider || !window.confirm(
+          'A previous read-only workflow agent may still be alive. Continue from the durable results anyway? This can repeat any external tool call made by that agent.',
+        )) throw error
+        next = await client.resume({
+          ...scope,
+          idempotencyKey: resumeKey.current,
+          abandonUnconfirmedProvider: true,
+        })
+      }
       // Resume creates a new durable run instead of appending impossible post-terminal events to
       // the old run. The session shell retains this replacement against the original navigation
       // slot so switching to Main and back does not silently return to the terminal parent run.

@@ -367,6 +367,12 @@ export class WorkflowBridge {
 
   async resume(request: WorkflowResumeRequest): Promise<WorkflowResumeResult> {
     const { cwd, runId } = validateRunScope(request)
+    if (
+      request.abandonUnconfirmedProvider !== undefined &&
+      typeof request.abandonUnconfirmedProvider !== 'boolean'
+    ) {
+      throw new TypeError('abandonUnconfirmedProvider must be a boolean')
+    }
     const ownerSessionId = this.findSessionForRun(cwd, runId)
     const run = await this.service.resume({
       cwd,
@@ -379,6 +385,9 @@ export class WorkflowBridge {
       ...(request.idempotencyKey === undefined
         ? {}
         : { idempotencyKey: nonEmpty(request.idempotencyKey, 'idempotencyKey') }),
+      ...(request.abandonUnconfirmedProvider === undefined
+        ? {}
+        : { abandonUnconfirmedProvider: request.abandonUnconfirmedProvider }),
     })
     if (ownerSessionId) this.registerRun(ownerSessionId, cwd, run)
     return { ok: true, run: cloneStartResult(run) }
