@@ -81,10 +81,11 @@ export const codexTrustView = defineView<'codex.trust-dialog', CodexTrustDialogS
   layout: 'modal',
   // Trust → TRUST, matching selectors.ts (codex.trust-dialog → 'TRUST').
   attention: () => 'TRUST',
-  Component: ({ state, dispatch }) => (
+  Component: ({ state, actions, dispatch }) => (
     <CodexTrustDialogModal
       state={state?.visible ? { workspace: state.workspace } : null}
-      onSend={(data) => dispatch(raw(data))}
+      actions={actions}
+      dispatch={dispatch}
     />
   ),
 })
