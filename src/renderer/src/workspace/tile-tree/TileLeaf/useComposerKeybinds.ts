@@ -53,6 +53,17 @@ export type UseComposerKeybindsArgs = {
   input: string
   setInputText: (next: string) => void
   send: (data: string, pasteId?: string) => Promise<void>
+  /**
+   * Writes a keystroke that ANSWERS a live provider condition.
+   *
+   * Separate from `send` because `send` is readiness-gated and a live
+   * condition is the state that clears readiness — see TileLeaf's
+   * `sendConditionKey` for the full rationale. Routing condition keys through
+   * `send` meant `blockBackendWrite()` swallowed them and toasted "Agent is
+   * still starting", so the arrow keys that move a TUI picker's selection did
+   * nothing for exactly as long as the picker was up.
+   */
+  sendConditionKey: (data: string) => Promise<void>
   history: string[]
   historyIndex: number | null
   historyAnchor: string
@@ -70,6 +81,7 @@ export function useComposerKeybinds({
   input,
   setInputText,
   send,
+  sendConditionKey,
   history,
   historyIndex,
   historyAnchor,
@@ -577,9 +589,11 @@ export function useComposerKeybinds({
     if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
       const seq = e.key === 'ArrowUp' ? '\x1b[A' : '\x1b[B'
       if (hasBlockingCondition) {
+        // Deliberately NOT gated on backendReady: the condition itself is
+        // proof the provider is alive and painting, and readiness is false
+        // precisely BECAUSE the condition owns the screen.
         e.preventDefault()
-        if (!backendReady) { blockBackendWrite(); return }
-        await send(seq)
+        await sendConditionKey(seq)
         return
       }
       if (input === '' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {

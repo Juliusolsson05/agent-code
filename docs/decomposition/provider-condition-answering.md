@@ -412,9 +412,20 @@ if (!runtime.inputReady || runtime.processStatus !== 'started' || isSessionExite
 }
 ```
 
-A live provider condition is precisely the state that clears `inputReady`.
-Codex reports `blocked` whenever a modal owns the screen (`blockingCondition`,
-added by #574); Claude reports not-ready whenever a permission prompt is up.
+A live provider condition coincides with `inputReady` being false — by two
+different mechanisms, and review caught the first draft of this section
+attributing both to the wrong one:
+
+- **Claude** — `derivePromptGateState` reports `blocked` for ANY visible
+  condition, so `publishPromptGate` emits `ready:false` for as long as a
+  permission prompt or picker is up. Any condition clears readiness.
+- **Codex** — `blockingCondition()` feeds only the prompt-delivery poll and
+  never emits input-readiness. Codex readiness LATCHES true at
+  `markComposerReady` and clears only on exit. The trust dialog reaches the
+  broken state because it paints *before the composer ever appears*, so
+  readiness was never true to begin with. A mid-session approval modal does
+  NOT clear it, and was never gated.
+
 So every click on the trust modal took the wake path instead of writing a
 keystroke — and before #597 that wake adopted the live backend, waited 30s for
 a readiness that could not arrive while the unanswered modal held the screen,
@@ -433,7 +444,12 @@ this; both were looking below `sendInput`.
 1. `sendConditionKey` in `TileLeaf` — condition views no longer go through the
    composer's readiness gate. A visible condition is proof the backend is alive,
    so there is nothing to wake. A refused write now raises a toast instead of
-   being discarded.
+   being discarded, and the write is fenced on a live condition snapshot so a
+   quarantined pane cannot write into a backend it no longer owns.
+1b. The same gate applied to the KEYBOARD route (`useComposerKeybinds`), where
+   the arrow keys that move a TUI picker's selection were being swallowed by
+   `blockBackendWrite()` for exactly as long as the picker was up. Review
+   caught that the first cut fixed only the mouse route.
 2. Structural anchoring for the Codex trust dialog, killing the corpus-proven
    false positive.
 3. Deterministic trust keystrokes: accept `1` (not `\r`, which confirms
