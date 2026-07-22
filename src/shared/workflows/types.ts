@@ -89,6 +89,7 @@ export type WorkflowCancelResult = {
 
 export type WorkflowResumeRequest = WorkflowRunIpcScope & {
   idempotencyKey?: string
+  abandonUnconfirmedProvider?: boolean
 }
 
 export type WorkflowResumeResult = {

@@ -80,7 +80,10 @@ export interface WorkflowClient {
   acknowledge(request: WorkflowEventsAcknowledgement): void
   cancel(scope: WorkflowRunScope & { reason?: string }): Promise<void>
   resume(
-    scope: WorkflowRunScope & { idempotencyKey?: string },
+    scope: WorkflowRunScope & {
+      idempotencyKey?: string
+      abandonUnconfirmedProvider?: boolean
+    },
   ): Promise<WorkflowRunReference>
   listSessionRuns(scope: WorkflowSessionRunScope): Promise<WorkflowRunReference[]>
   subscribeSessionRuns(listener: (snapshot: WorkflowSessionRunsSnapshot) => void): () => void
