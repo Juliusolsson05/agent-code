@@ -443,30 +443,62 @@ this; both were looking below `sendInput`.
 
 1. `sendConditionKey` in `TileLeaf` — condition views no longer go through the
    composer's readiness gate. A visible condition is proof the backend is alive,
-   so there is nothing to wake. A refused write now raises a toast instead of
-   being discarded, and the write is fenced on a live condition snapshot so a
+   so there is nothing to wake. A refused write raises a toast instead of being
+   discarded, and the write is fenced on a live condition snapshot so a
    quarantined pane cannot write into a backend it no longer owns.
-1b. The same gate applied to the KEYBOARD route (`useComposerKeybinds`), where
-   the arrow keys that move a TUI picker's selection were being swallowed by
-   `blockBackendWrite()` for exactly as long as the picker was up. Review
-   caught that the first cut fixed only the mouse route.
-2. Structural anchoring for the Codex trust dialog, killing the corpus-proven
-   false positive.
-3. Deterministic trust keystrokes: accept `1` (not `\r`, which confirms
-   whatever is highlighted), decline `2` (not `2\r`, whose Enter leaked into the
-   next screen).
-4. Three AskUserQuestion answer-matching fixes: option number demoted to a hint,
-   wrapped labels rejoined, `sameQuestion` given an option-set fallback.
+2. The same gate on the KEYBOARD route (`useComposerKeybinds`), where the arrow
+   keys that move a TUI picker's selection were swallowed by
+   `blockBackendWrite()` for as long as the picker was up. Review caught that
+   the first cut fixed only the mouse route.
+3. Structural anchoring for the Codex trust dialog, killing the corpus-proven
+   false positive, pinned by tests built from a captured viewport.
+4. Deterministic trust keystrokes: accept `1` (not `\r`, which confirms whatever
+   is highlighted), decline `2` (not `2\r`, whose Enter leaked into the next
+   screen). Verified live from a fresh dialog and after arrow navigation.
+
+## What did NOT ship, and why that is the important part
+
+**All four AskUserQuestion changes were reverted.** A reviewer drove a live
+`claude` v2.1.217 picker — which I never did — and every one failed against
+real output:
+
+- The wrapped-label rule was a **regression**. Descriptions render at indent 2,
+  LEFT of the label column, exactly the condition the new branch treated as a
+  continuation. All options absorbed their descriptions and multi-select
+  answering, which worked before, died.
+- The rule never fired on its intended case: continuations render at *exactly*
+  `labelCol` and the test was strict `<`. Loosening to `<=` cannot fix it —
+  in single-select the continuation and description share a column, and in
+  multi-select the description is further left. **Plain text carries no
+  discriminator.** The parser holds the real xterm grid; cell attributes
+  (descriptions render dim) are the only signal that separates them. That is a
+  different design, not a tweak.
+- The `sameQuestion` option-set fallback answered the WRONG sibling question.
+  Two Yes/No questions in one call is the common shape; the fallback matched
+  and wrote a keystroke to whichever was on screen. The comment I deleted named
+  this exact hazard.
+- The number-hint fallthrough reopened the stale-picker hole it documents.
+  Number+label pairing *was* the guard.
+
+Those changes were built from a corpus capture and reasoning, with no live
+picker — **precisely the failure mode this document warned about, committed by
+its author.** The decomposition said fixtures must come from recordings of
+actual behaviour and that inventing them tests your imagination. I invented the
+indentation rule. The 51-test suite passed the whole time.
+
+The AUQ work returns to Stage 1, and the stage now has a concrete requirement
+it did not have before: the recorder must capture the xterm GRID, not just
+plain text, because the label/description distinction only exists in cell
+attributes.
 
 ## Unknowns that remain open
 
 - **Finding 2 is still unexplained.** 52 recordings contain no genuine trust
-  dialog. The root cause above explains the symptom without needing it, but the
-  observation gap is real and would still hide the next bug of this shape.
+  dialog. The root cause explains the symptom without it, but the observation
+  gap is real and would hide the next bug of this shape.
 - **The write log was not built.** The root cause was found by reading the send
-  path once the keystrokes were exonerated, so the instrumentation stage was
-  not needed to ship. It remains the right way to see this class of failure and
-  is the obvious follow-up.
-- The Claude AUQ fixes are verified by construction and the existing suite, not
-  against a live multi-question picker — the corpus capture was used as the
-  reference shape. A live AUQ probe is the natural next step.
+  path once the keystrokes were exonerated. It remains the right way to see this
+  class of failure.
+- **Codex trust detection has measured limits**: it fails below 46 columns and
+  at 7 rows or fewer. Inherited, not introduced, and now written down.
+- **AUQ answering is still broken** and now known to need grid attributes.
