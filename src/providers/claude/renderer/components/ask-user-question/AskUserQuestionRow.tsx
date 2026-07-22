@@ -6,12 +6,15 @@ import {
   CodeRenderContext,
 } from '@renderer/features/feed/context'
 import { useSessionFeed } from '@renderer/features/sessionFeed/SessionFeedContext'
+import { useGlobalToast } from '@renderer/ui/GlobalToast'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import type { ConditionCustomAction } from '@shared/types/providerConditions'
 import {
   readAskQuestions,
   type AskOption,
 } from '@providers/claude/renderer/adapters/questions'
+import { answersToPrompt } from '@providers/claude/renderer/components/ask-user-question/answerPrompt'
+import { deliverAnswersViaPrompt } from '@providers/claude/renderer/components/ask-user-question/deliverAnswersViaPrompt'
 
 // Native in-feed renderer for Claude Code's `AskUserQuestion` tool.
 //
@@ -96,6 +99,7 @@ export function AskUserQuestionRow({
   // this row is shared with the remote client, where the preload bridge
   // does not exist. See src/shared/sessionFeed/SessionFeed.ts.
   const feed = useSessionFeed()
+  const { showToast } = useGlobalToast()
 
   // Local "answering" latch. Once the user submits an answer we disable every
   // control, both to give feedback ("Answering…") and to guard against
@@ -288,7 +292,37 @@ export function AskUserQuestionRow({
         .filter((label): label is string => Boolean(label)),
       text: textByQuestion[qi]?.trim() || undefined,
     }))
-    dispatchAnswer(buildAction(answers))
+    answerViaMessage(answers)
+  }
+
+  // The "answer via message" path (the workaround): dismiss the picker with Esc
+  // and send the choices as a structured prompt, instead of keystroke-driving
+  // the TUI. Used for everything the keystroke driver can't reliably complete —
+  // multi-select, multi-question, and free-text. Single-select stays on
+  // `dispatchAnswer` (the driver's one robust case). See
+  // docs/decomposition/2026-07-23-auq-answer-via-prompt.md.
+  const answerViaMessage = (answers: Parameters<typeof buildAction>[0]) => {
+    if (submittedRef.current) return
+    if (answering) return
+    if (!sessionId) return
+    const prompt = answersToPrompt(answers)
+    if (!prompt) {
+      setResolveError('Select an option or type an answer first.')
+      return
+    }
+    submittedRef.current = true
+    setAnswering(true)
+    setResolveError(null)
+    // Detached: Esc cancels the tool and unmounts this row almost immediately,
+    // so the sequence must not touch this component's state after it starts.
+    // Failure is surfaced through the app-level toast (which survives the
+    // unmount) rather than `setResolveError`. On the happy path the row is gone
+    // before this resolves and there is nothing to clear.
+    void deliverAnswersViaPrompt(feed, sessionId, prompt).then(outcome => {
+      if (!outcome.ok) {
+        showToast(`Could not send your answer: ${outcome.reason}`)
+      }
+    })
   }
 
   const structuredReady = questions.every((q, qi) => {
