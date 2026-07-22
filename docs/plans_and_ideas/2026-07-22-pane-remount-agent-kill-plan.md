@@ -42,15 +42,22 @@ when the raw composer holds any text (`occupied`, `human-draft`).
 
 In terminal mode the user types straight into the Claude TUI and answers
 permission prompts there — so "draft present" is the *normal* state, not an
-edge case. `setInputReadiness` is edge-triggered (`sessionManager.ts:452`),
-so once the poll starts no further event arrives to unblock it. And because
-attach is chained behind the wake, the pane is blank for those 30 seconds,
-so the user cannot clear the draft or answer the prompt even if they
-realized they needed to. The timeout is **guaranteed**, not merely likely.
+edge case.
 
-This is Claude-specific: Codex latches `composerReady` true after the first
+The timeout is **guaranteed**, not merely likely — but for one reason only,
+and precision matters here because the tempting explanation is wrong.
+Readiness *does* get re-published: `publishPromptGate` emits on every
+transition into ready and `setInputReadiness` dedupes only unchanged values,
+so clearing the draft or answering the prompt unblocks the poll. What makes
+it unwinnable is that **attach is chained behind the wake**, so the pane is
+blank for the whole 30 seconds and the user can do neither. The blank pane is
+the bug; the edge-trigger is a red herring that sends you to the wrong file.
+
+This is Claude-specific. Codex latches `composerReady` true after the first
 composer sighting and never re-emits `ready: false` except on exit
-(`codexSession.ts:368`), so a warmed Codex agent skips the wait entirely.
+(`codexSession.ts:368`), and opencode behaves the same way (`ready:false` at
+start, `true` once the server is up, `false` again only on exit) — so a
+warmed agent on either provider skips the wait entirely.
 
 ### Provenance — a correct fix applied to the wrong caller
 
@@ -76,7 +83,7 @@ throws it away.
 | Settings page | Yes | On exit |
 | **Tab switching** | **Yes** | `MainSurface` renders only the active tab's tree — no focus surface involved |
 | Editor fullscreen | **No** | `GlobalEditorShell.tsx:1218` keeps children mounted under `display:none`; no remount, no wake |
-| Parsed-feed view mode | No | `TileLeaf` wakes only from `send()`, and only when already not-ready/failed |
+| Parsed-feed view mode | **Yes**, narrowly | `TileLeaf.send` wakes whenever `!runtime.inputReady` — exactly the blocked/drafted state. Pressing Send with a permission prompt showing took the same adopted → 30s → kill path. Usually dodged because a feed user can answer the condition in the UI |
 | Hybrid mode | Partly | Only via its terminal branch; a visible condition promotes the pane to the rendered surface |
 
 **The fullscreen-editor half of the report is misattribution.** Fullscreen
@@ -110,22 +117,72 @@ session non-destructive.
 
 ### 2. Don't wake what is already awake (`AgentTerminalLeaf.tsx`)
 
-Mirror what `TileLeaf.send` already does: only call `ensureSessionLive` when
-the runtime is not already started (or has exited/failed). A remount of a
-healthy agent becomes a pure re-attach.
+Only call `ensureSessionLive` when the runtime is not already started (or has
+exited/failed). A remount of a healthy agent becomes a pure re-attach.
+
+Close to `TileLeaf.send` but deliberately not identical: that one also wakes
+on `!runtime.inputReady`, which here would reinstate the bug outright. In
+terminal mode "not ready" is the ordinary state — the user is typing into the
+TUI or answering a prompt — so readiness says nothing about whether a backend
+exists.
 
 Independently worth doing even with fix 1 in place: it removes a full IPC
 recovery round trip and a `spawning → started` runtime flap from every pane
 remount, tab switch, and Spotlight toggle.
 
-### 3. Attach/detach refcount leak (same code path)
+### 2b. Attach FIRST, not behind the wake (`AgentTerminalLeaf.tsx`)
 
-`AgentTerminalLeaf`'s detach is fire-and-forget while attach is chained
-behind an `await`. A mount/unmount faster than the recovery round trip runs
-`detachAgentPty` at count 0 (key already deleted), and the late attach then
-pins the count at 1 forever — leaking `agent-pty-data` forwarding for a pane
-that no longer exists, plus a bogus `restoreSize`. The `disposed` flag is
-already there; it is just checked *after* the attach instead of before.
+Fix 1 disarms the timer on the *adopted* path. The *spawned* path — a
+restored agent lazy-woken on cold start — was still armed, and for terminal
+panes it was the same self-fulfilling trap: blank pane → user cannot answer
+the trust prompt holding readiness false → 30s → kill → Retry respawns into
+the same prompt → loop, with no way out but switching to feed mode.
+
+So attach is now attempted before and independently of the wake, and retried
+once the wake produces a backend. Attaching early is free: main returns
+`null` without taking a reference when no entry exists. Showing the TUI
+immediately is what breaks the circle — readiness resolves normally once the
+user can actually answer.
+
+### 4. Accepted cost — `lifecycle: 'live'` is not `healthy`
+
+`live` means a `RegistryEntry` exists, and `sessions.set()` runs before
+`await session.start()`. So a provider that registers and then wedges before
+its composer is now adopted and skipped rather than killed. Previously the
+timeout killed it and marked the pane `failed`, which is what surfaces the
+Retry button; now it sits at `started` + not-ready with no in-app retry short
+of closing the pane. The trade is deliberate — wrongly killing a busy healthy
+agent is far more common and far worse — but #548's self-heal no longer
+covers this class and nothing has replaced it. Stated here rather than
+discovered later.
+
+### 3. Attach/detach reference pairing (same code path)
+
+Two distinct problems, and the first draft of this plan described a third
+that never existed (the late attach was already guarded by `disposed`, so it
+could not pin the count — recorded here so nobody re-derives the wrong
+model):
+
+**Unmatched detach.** Cleanup detached unconditionally, including when no
+attach had been issued. This does NOT hurt the Spotlight remount case —
+React runs a deleted subtree's passive cleanups before the new subtree's
+passive effects, so the outgoing leaf always detaches before the incoming one
+attaches. It hurts a *concurrent second consumer*: the debug panel's inline
+terminal on the same session, or two panes rendering it through grid-related
+tabs. Count 1, the unmatched detach deletes the key, and the still-mounted
+consumer loses its byte forwarding while the restore-resize fires against a
+terminal the user is looking at — precisely the multi-consumer case the
+refcount exists for.
+
+**Unreleased reference.** Main takes the reference when its handler runs,
+which can be before this component unmounts — cleanup has then already run
+and cannot release it. A flag for cleanup to read does not help, because
+cleanup never runs again. So a late attach must release *itself*.
+
+Both need `attachAgentPty` to distinguish "no backend to attach to" from
+"attached, buffer happens to be empty"; it returned `''` for both. It now
+returns `null` for the former, which also turns the silent-blank-pane failure
+mode into a toast.
 
 ### 4. `TerminalLeaf` zero-dimension guard
 

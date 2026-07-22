@@ -1451,15 +1451,26 @@ export class SessionManager extends EventEmitter {
    * unmounted consumer from cutting off live bytes for another still-mounted
    * raw terminal.
    */
-  attachAgentPty(sessionId: string): string {
+  /**
+   * Returns the replay buffer on success, or NULL when there is nothing to
+   * attach to. The null/'' distinction is load-bearing: '' is a legitimate
+   * result (a freshly spawned agent that has not emitted a byte yet) and DOES
+   * hold a reference, while null means no reference was taken and the caller
+   * may safely attach again later. Returning '' for both made "the backend
+   * does not exist" indistinguishable from "it exists and is quiet", so a
+   * caller could neither retry (risking a double-increment and a leaked
+   * reference) nor report the failure — it just rendered a blank terminal
+   * that silently swallowed keystrokes.
+   */
+  attachAgentPty(sessionId: string): string | null {
     const entry = this.sessions.get(sessionId)
-    if (!entry) return ''
+    if (!entry) return null
     if (!isAgentProviderKind(entry.kind)) {
       console.warn(
         `[SessionManager] attachAgentPty called on non-agent session`,
         { sessionId, kind: entry.kind },
       )
-      return ''
+      return null
     }
     const buffer = this.agentPtyBuffers.get(sessionId) ?? ''
     const attachCount = this.agentPtyAttachCounts.get(sessionId) ?? 0

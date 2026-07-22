@@ -563,15 +563,29 @@ export function useSessionActions(
         // provider condition is on screen OR the raw composer holds any
         // text (`derivePromptGateState`, claudeSession.ts). In terminal
         // mode the user types straight into the TUI and answers permission
-        // prompts there, so "draft present" is the NORMAL state. Readiness
-        // is also edge-triggered in main (`setInputReadiness` returns early
-        // when unchanged), so once the poll starts nothing re-publishes to
-        // unblock it — and callers like AgentTerminalLeaf chain their
-        // attach behind this wake, leaving the pane blank so the user
-        // cannot clear the draft either. The 30s timeout was therefore
-        // GUARANTEED, and it ended in killSessionBackendIfOwned() below.
-        // That is issue #596: opening Spotlight (or switching tabs) killed
-        // a live, busy, perfectly healthy agent 30 seconds later.
+        // prompts there, so "draft present" is the NORMAL state.
+        //
+        // Note what the problem was NOT: readiness does get re-published.
+        // `publishPromptGate` emits on every transition into ready and
+        // `setInputReadiness` only dedupes unchanged values, so clearing the
+        // draft or answering the prompt unblocks the poll. The timeout was
+        // guaranteed for one reason only — the pane the user would have used
+        // to do either was BLANK, because AgentTerminalLeaf chained its
+        // attach behind this wake. (That chaining is gone now; the attach
+        // happens first.) Recording this because the edge-trigger theory is
+        // the tempting one and it sends you to the wrong file.
+        //
+        // Either way the wait is meaningless for a backend that was already
+        // running before this call, and it ended in
+        // killSessionBackendIfOwned() below. That is issue #596: opening
+        // Spotlight, or switching tabs, killed a live, busy, perfectly
+        // healthy agent 30 seconds later.
+        //
+        // The `lifecycle === 'live'` conjunct is redundant today — `adopted`
+        // is only returned when a RegistryEntry already existed, which is
+        // exactly what makes the snapshot 'live'. It is kept so the skip
+        // stays anchored to observed liveness rather than to a disposition
+        // label a future recover() might widen.
         const adoptedLiveBackend =
           recoveryDisposition === 'adopted' && recoverySnapshot?.lifecycle === 'live'
         if (!readyError && recoverySnapshot && !recoverySnapshot.input.ready && !adoptedLiveBackend) {
@@ -593,6 +607,20 @@ export function useSessionActions(
             // wait for adopted+live; this second check is deliberate belt
             // and braces, so a future caller that reaches the wait some
             // other way still cannot turn a timeout into a kill.
+            //
+            // ACCEPTED COST, stated plainly: `lifecycle: 'live'` means a
+            // RegistryEntry exists, not that the process is healthy — and
+            // `sessions.set()` runs before `await session.start()`. So a
+            // provider that registers and then wedges before its composer
+            // (hung MCP handshake, say) is now adopted and skipped rather
+            // than killed. Before this change the 30s timeout would have
+            // killed it and marked the pane `failed`, which is what surfaces
+            // the Retry button; now it sits at `started` + not-ready with no
+            // in-app retry short of closing the pane. That trade is
+            // deliberate — wrongly killing a busy healthy agent is far more
+            // common and far worse than a stuck pane on a wedged one — but
+            // it does mean #548's self-heal no longer covers this class, and
+            // nothing has replaced it.
             if (recoveryDisposition === 'spawned') {
               void killSessionBackendIfOwned(refs, sessionId).catch(() => undefined)
             }

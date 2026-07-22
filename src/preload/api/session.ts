@@ -93,7 +93,9 @@ export const sessionApi = {
    * normal agent panes continue to render from screen/jsonl/semantic
    * state and do not subscribe to this high-volume byte stream.
    */
-  attachAgentPty: (sessionId: string): Promise<string> =>
+  // Resolves null when no agent backend exists to attach to — see
+  // SessionManager.attachAgentPty for why that is distinct from ''.
+  attachAgentPty: (sessionId: string): Promise<string | null> =>
     ipcRenderer.invoke('session:agent-pty-attach', sessionId),
 
   detachAgentPty: (sessionId: string): Promise<void> =>
