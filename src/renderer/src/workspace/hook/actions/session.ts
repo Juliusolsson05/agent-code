@@ -486,6 +486,11 @@ export function useSessionActions(
         let ownershipProven = false
         let recoverySnapshot: Awaited<ReturnType<typeof window.api.getBackendSnapshot>> = null
         let recoveredTmuxName: string | undefined
+        // Did THIS call start the process, or did it adopt one that was
+        // already running? The distinction decides whether the readiness
+        // wait below is meaningful and whether the kill on its timeout is
+        // legitimate. Main already answers it; this used to be discarded.
+        let recoveryDisposition: 'adopted' | 'spawned' | null = null
         try {
           const recovery = await window.api.recoverSession({
             sessionId,
@@ -506,6 +511,7 @@ export function useSessionActions(
             ownershipProven = true
             recoverySnapshot = recovery.snapshot
             recoveredTmuxName = recovery.tmuxName
+            recoveryDisposition = recovery.disposition
             setRuntimes(prev => {
               const current = prev[sessionId]
               if (!current) return prev
@@ -550,7 +556,39 @@ export function useSessionActions(
           recoveryFailureCode = priorRecoveryFailureCode
         }
 
-        if (!readyError && recoverySnapshot && !recoverySnapshot.input.ready) {
+        // An ADOPTED live backend is already up. Waiting on its input
+        // readiness is not just pointless, it is actively destructive.
+        //
+        // `input.ready` is false for a healthy Claude agent whenever a
+        // provider condition is on screen OR the raw composer holds any
+        // text (`derivePromptGateState`, claudeSession.ts). In terminal
+        // mode the user types straight into the TUI and answers permission
+        // prompts there, so "draft present" is the NORMAL state.
+        //
+        // Note what the problem was NOT: readiness does get re-published.
+        // `publishPromptGate` emits on every transition into ready and
+        // `setInputReadiness` only dedupes unchanged values, so clearing the
+        // draft or answering the prompt unblocks the poll. The timeout was
+        // guaranteed for one reason only — the pane the user would have used
+        // to do either was BLANK, because AgentTerminalLeaf chained its
+        // attach behind this wake. (That chaining is gone now; the attach
+        // happens first.) Recording this because the edge-trigger theory is
+        // the tempting one and it sends you to the wrong file.
+        //
+        // Either way the wait is meaningless for a backend that was already
+        // running before this call, and it ended in
+        // killSessionBackendIfOwned() below. That is issue #596: opening
+        // Spotlight, or switching tabs, killed a live, busy, perfectly
+        // healthy agent 30 seconds later.
+        //
+        // The `lifecycle === 'live'` conjunct is redundant today — `adopted`
+        // is only returned when a RegistryEntry already existed, which is
+        // exactly what makes the snapshot 'live'. It is kept so the skip
+        // stays anchored to observed liveness rather than to a disposition
+        // label a future recover() might widen.
+        const adoptedLiveBackend =
+          recoveryDisposition === 'adopted' && recoverySnapshot?.lifecycle === 'live'
+        if (!readyError && recoverySnapshot && !recoverySnapshot.input.ready && !adoptedLiveBackend) {
           try {
             await waitForSessionInputReady(refs, sessionId)
           } catch (err) {
@@ -559,7 +597,33 @@ export function useSessionActions(
             // boundary must be replaced, not repeatedly re-adopted on Retry.
             // Main rechecks kind+cwd atomically, so a stale/conflicted pane
             // cannot use this timeout to stop another workspace's backend.
-            void killSessionBackendIfOwned(refs, sessionId).catch(() => undefined)
+            //
+            // SPAWNED ONLY. That reasoning (from #548) is about a process
+            // THIS call just started which never came up. Applied to an
+            // adopted backend it means "this agent is busy, so destroy it",
+            // and the kind+cwd ownership proof cannot catch that — it is
+            // the same entry we successfully adopted moments ago, so the
+            // proof passes trivially. The guard above already skips the
+            // wait for adopted+live; this second check is deliberate belt
+            // and braces, so a future caller that reaches the wait some
+            // other way still cannot turn a timeout into a kill.
+            //
+            // ACCEPTED COST, stated plainly: `lifecycle: 'live'` means a
+            // RegistryEntry exists, not that the process is healthy — and
+            // `sessions.set()` runs before `await session.start()`. So a
+            // provider that registers and then wedges before its composer
+            // (hung MCP handshake, say) is now adopted and skipped rather
+            // than killed. Before this change the 30s timeout would have
+            // killed it and marked the pane `failed`, which is what surfaces
+            // the Retry button; now it sits at `started` + not-ready with no
+            // in-app retry short of closing the pane. That trade is
+            // deliberate — wrongly killing a busy healthy agent is far more
+            // common and far worse than a stuck pane on a wedged one — but
+            // it does mean #548's self-heal no longer covers this class, and
+            // nothing has replaced it.
+            if (recoveryDisposition === 'spawned') {
+              void killSessionBackendIfOwned(refs, sessionId).catch(() => undefined)
+            }
           }
         }
 

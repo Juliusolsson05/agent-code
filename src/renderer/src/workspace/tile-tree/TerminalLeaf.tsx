@@ -153,6 +153,12 @@ export function TerminalLeaf({
       try {
         fit.fit()
         const { cols, rows } = term
+        // Matches AgentTerminalLeaf: a degenerate grid must never reach the
+        // PTY. FitAddon's own isNaN guard covers the display:none case, so
+        // this is belt-and-braces rather than a known live bug — but these
+        // two files are otherwise line-for-line parallel and the asymmetry
+        // reads as one of them being wrong.
+        if (cols <= 0 || rows <= 0) return
         // WHY guard by integer cols/rows: ResizeObserver can fire many times
         // during split drag while xterm's grid dimensions stay unchanged.
         // Sending every observer tick through IPC makes node-pty process a

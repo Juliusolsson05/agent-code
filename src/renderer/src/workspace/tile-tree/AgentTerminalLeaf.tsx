@@ -11,6 +11,7 @@ import { readXtermTheme, syncXtermTheme } from '@renderer/workspace/tile-tree/xt
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type { SessionId, SessionKind } from '@renderer/workspace/types'
+import { isSessionExited } from '@renderer/workspace/providerSessionIdentity'
 import { shortenCwd } from '@renderer/workspace/tile-tree/TileLeaf/labels'
 import { PaneToast } from '@renderer/workspace/tile-tree/TileLeaf/PaneToast'
 import { useComposerDictation } from '@renderer/workspace/tile-tree/TileLeaf/useComposerDictation'
@@ -57,6 +58,10 @@ export function AgentTerminalLeaf({
   acknowledgeSessionRef.current = acknowledgeSession
   const ensureSessionLiveRef = useRef(workspace.ensureSessionLive)
   ensureSessionLiveRef.current = workspace.ensureSessionLive
+  // The mount effect is keyed on sessionId alone (see its WHY comment), so it
+  // must read runtime state through a ref rather than closing over the prop.
+  const runtimeRef = useRef(runtime)
+  runtimeRef.current = runtime
   const showPaneToastRef = useRef(workspace.showPaneToast)
   showPaneToastRef.current = workspace.showPaneToast
 
@@ -85,6 +90,23 @@ export function AgentTerminalLeaf({
     let resizeObserver: ResizeObserver | null = null
     let resizeFrame: number | null = null
     let disposed = false
+    // Did this instance's attach actually land? `attachAgentPty` is
+    // refcounted in main, and the cleanup below used to detach
+    // unconditionally — including when no attach was ever issued because the
+    // wake was still in flight.
+    //
+    // That unmatched detach cannot hurt the Spotlight remount case: React
+    // runs a deleted subtree's passive cleanups BEFORE the new subtree's
+    // passive effects, so the outgoing leaf always detaches before the
+    // incoming one attaches. It hurts a CONCURRENT second consumer instead —
+    // the debug panel's inline terminal on the same session, or two panes
+    // rendering the same session through grid-related tabs. Count 1, an
+    // unmatched detach deletes the key, and the still-mounted consumer loses
+    // its agent-pty-data forwarding while the restore-resize fires against a
+    // terminal the user is actively looking at. That is precisely the
+    // multi-consumer case the refcount was introduced for (see
+    // SessionManager.attachAgentPty's doc comment).
+    let attached = false
     let attachedBackfillDone = false
     let lastCols = 0
     let lastRows = 0
@@ -187,30 +209,95 @@ export function AgentTerminalLeaf({
       // tear down the raw PTY view, lose scrollback, and re-run attach. The
       // session id is the actual attachment identity; refs keep the wake/toast
       // callbacks current without making them part of xterm's mount contract.
-      void ensureSessionLiveRef.current(sessionId)
-        .then(() => {
-          if (disposed || termRef.current !== term) return null
-          return window.api.attachAgentPty(sessionId)
-        })
-        .then(buffer => {
-          if (buffer === null) return
-          if (disposed || termRef.current !== term) return
-          const liveTerm = term
-          if (!liveTerm) return
-          if (buffer) liveTerm.write(buffer)
-          if (backlogQueue.length > 0) liveTerm.write(backlogQueue.join(''))
-          backlogQueue.length = 0
-          attachedBackfillDone = true
-          if (pendingResize) {
-            sendResizeIfChanged(pendingResize.cols, pendingResize.rows)
-            pendingResize = null
-          }
-          if (pendingInput.length > 0) {
-            void window.api.sendInput(sessionId, pendingInput.join(''))
-            pendingInput.length = 0
-          }
-          if (focusedRef.current) liveTerm.focus()
-        })
+      //
+      // WHY the wake is conditional (#596): this effect runs on every MOUNT,
+      // and this component is unmounted and remounted constantly — entering
+      // and leaving Spotlight/Reader/Settings (which render outside
+      // GlobalEditorShell, so the whole tile tree goes away), and on every tab
+      // switch. Waking unconditionally meant each of those round-tripped
+      // through recoverSession for an agent that was already running, flapped
+      // its runtime status spawning→started, and — until the companion fix in
+      // ensureSessionLive — armed a 30-second timer that KILLED the live
+      // process.
+      //
+      // This is close to TileLeaf.send but deliberately NOT identical: that
+      // one also wakes on `!runtime.inputReady`, which here would reinstate
+      // the bug outright. In terminal mode "not ready" is the ordinary state
+      // — the user is typing into the TUI or answering a permission prompt —
+      // so readiness says nothing about whether a backend exists.
+      //
+      // `runtimeRef` (not `runtime`) because this effect must stay keyed on
+      // sessionId alone.
+      const needsWake =
+        runtimeRef.current.processStatus !== 'started' || isSessionExited(runtimeRef.current)
+
+      // Attach is attempted FIRST, before and independently of the wake.
+      //
+      // It used to be chained behind it, and that ordering was the reason the
+      // 30s readiness timeout in ensureSessionLive was not merely possible but
+      // GUARANTEED: with the attach pending, this terminal showed nothing, so
+      // a user facing a trust or permission prompt could not answer the very
+      // prompt that was holding readiness false. The timer then killed the
+      // process, Retry respawned it into the same prompt, and the pane looped.
+      // Showing the TUI immediately is what breaks that circle — readiness
+      // does get re-published the moment the user answers (publishPromptGate
+      // emits on every transition into ready), so the wait resolves normally.
+      //
+      // Attaching before the backend exists is free and safe: main returns
+      // null without taking a reference, so we simply try again once the wake
+      // has produced one.
+      const tryAttach = async (): Promise<boolean> => {
+        if (disposed || termRef.current !== term) return false
+        const buffer = await window.api.attachAgentPty(sessionId)
+        if (buffer === null) return false
+        // Main took the reference the moment its handler ran, which may have
+        // been BEFORE this component unmounted — cleanup has then already
+        // come and gone and cannot release it. Setting a flag for cleanup to
+        // read is not enough for that ordering (it never re-runs), so a late
+        // attach releases itself. Without this the count stays pinned above
+        // zero for the life of the session and main keeps forwarding
+        // agent-pty-data to a renderer that is no longer listening.
+        if (disposed || termRef.current !== term) {
+          void window.api.detachAgentPty(sessionId)
+          return true
+        }
+        attached = true
+        const liveTerm = term
+        if (!liveTerm) {
+          attached = false
+          void window.api.detachAgentPty(sessionId)
+          return true
+        }
+        if (buffer) liveTerm.write(buffer)
+        if (backlogQueue.length > 0) liveTerm.write(backlogQueue.join(''))
+        backlogQueue.length = 0
+        attachedBackfillDone = true
+        if (pendingResize) {
+          sendResizeIfChanged(pendingResize.cols, pendingResize.rows)
+          pendingResize = null
+        }
+        if (pendingInput.length > 0) {
+          void window.api.sendInput(sessionId, pendingInput.join(''))
+          pendingInput.length = 0
+        }
+        if (focusedRef.current) liveTerm.focus()
+        return true
+      }
+
+      void (async () => {
+        if (await tryAttach()) {
+          // Already live and showing. Still wake if the runtime says the
+          // backend is gone — tryAttach only proves an entry existed.
+          if (needsWake) await ensureSessionLiveRef.current(sessionId)
+          return
+        }
+        if (needsWake) await ensureSessionLiveRef.current(sessionId)
+        if (await tryAttach()) return
+        if (disposed) return
+        // Wake reported success but there is still nothing to attach to. Say
+        // so instead of leaving a blank terminal that quietly eats keystrokes.
+        showPaneToastRef.current(sessionId, 'Agent backend is not available to attach')
+      })()
         .catch(err => {
           showPaneToastRef.current(
             sessionId,
@@ -240,7 +327,8 @@ export function AgentTerminalLeaf({
       if (onThemeChangedListener) {
         window.removeEventListener(THEME_CHANGED_EVENT, onThemeChangedListener)
       }
-      void window.api.detachAgentPty(sessionId)
+      // Only detach what we attached — see the `attached` declaration above.
+      if (attached) void window.api.detachAgentPty(sessionId)
       term?.dispose()
       termRef.current = null
     }
