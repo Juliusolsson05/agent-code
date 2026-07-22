@@ -1,3 +1,7 @@
+import {
+  CODEX_TRUST_DIALOG_ACCEPT_KEYS,
+  CODEX_TRUST_DIALOG_DECLINE_KEYS,
+} from 'codex-headless'
 import { Button } from '@renderer/components/ui/button'
 import {
   Dialog,
@@ -14,8 +18,13 @@ type Props = {
 export function CodexTrustDialogModal({ state, onSend }: Props) {
   if (!state) return null
 
-  const accept = () => { void onSend('\r') }
-  const decline = () => { void onSend('2\r') }
+  // Keystrokes are the provider's contract, not this component's opinion.
+  // They were '\r' and '2\r'; both were wrong. '\r' confirms whatever Codex
+  // currently HIGHLIGHTS, so any stray arrow key turned "trust directory" into
+  // "quit", and the trailing '\r' on decline leaked an Enter into the next
+  // screen. Verified against a live codex-cli 0.145.0 dialog.
+  const accept = () => { void onSend(CODEX_TRUST_DIALOG_ACCEPT_KEYS) }
+  const decline = () => { void onSend(CODEX_TRUST_DIALOG_DECLINE_KEYS) }
 
   return (
     <Dialog open onOpenChange={nextOpen => {

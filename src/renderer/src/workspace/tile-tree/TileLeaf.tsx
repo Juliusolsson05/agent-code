@@ -337,6 +337,39 @@ export function TileLeaf({
     }
   }
 
+  // Condition keystrokes do NOT go through `send`.
+  //
+  // This is the whole Codex trust-dialog bug (#596 follow-up). `send` opens
+  // with a readiness gate — `!runtime.inputReady || processStatus !== 'started'`
+  // → `ensureSessionLive`. That gate is right for the composer and exactly
+  // backwards for a condition, because a live provider condition is the state
+  // that CLEARS `inputReady`: Codex reports `blocked` whenever a modal owns the
+  // screen (codexSession.blockingCondition, added by #574), and Claude reports
+  // not-ready whenever a permission prompt is up.
+  //
+  // So every click on the trust modal took the wake path instead of writing a
+  // keystroke. Before #597 that wake adopted the live backend, waited 30s for a
+  // readiness that could not arrive while the unanswered modal held the screen,
+  // and then KILLED the process. The user-visible result was exactly the report:
+  // accept does nothing, cancel does nothing, and the modal never closes —
+  // because the one keystroke that would dismiss it was never written.
+  //
+  // A visible condition is itself proof the backend is alive and painting, so
+  // there is nothing to wake and nothing to wait for. Write the bytes, and
+  // surface a refusal instead of swallowing it: `sendInput` returns false when
+  // main declines (no entry, or a prompt delivery holds the write reservation),
+  // and that boolean was previously discarded by every condition view.
+  const sendConditionKey = useCallback(async (data: string) => {
+    acknowledgeSession()
+    const ok = await feed.sendInput(sessionId, data)
+    if (!ok) {
+      workspace.showPaneToast(
+        sessionId,
+        'Could not send that keystroke — the agent is busy. Try again.',
+      )
+    }
+  }, [acknowledgeSession, feed, sessionId, workspace.showPaneToast])
+
   const loadOlderHistory = useCallback(async () => {
     await workspace.loadOlderHistory(sessionId)
   }, [sessionId, workspace.loadOlderHistory])
@@ -711,7 +744,7 @@ export function TileLeaf({
       <ProviderConditionOutlet
         sessionId={sessionId}
         conditions={normalizedConditions}
-        onSend={send}
+        onSend={sendConditionKey}
         onResolveCustom={(action) => feed.resolveCondition(sessionId, action)}
         interactionActive={focused}
       />

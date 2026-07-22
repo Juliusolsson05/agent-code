@@ -371,3 +371,86 @@ Needs an explicit ruling before Stage 3.
 Stage 3 can ship on its own once Stages 1–2 are done, and should, because the
 false-positive finding is live in production today: any agent that prints
 those strings blocks its own pane behind a phantom trust modal.
+
+---
+
+# Outcome — what the experiments settled
+
+Written after implementation. The decomposition above is left as it was so
+the reasoning that led here stays legible; this section records which parts
+survived contact with a real PTY.
+
+## Method actually used
+
+A throwaway `node-pty` probe spawned real `codex-cli 0.145.0` in a fresh temp
+directory, fed bytes into an `@xterm/headless` grid, and reported both the
+parsed state and what happened after a keystroke. Run at 120/80/60/50
+columns. Scripts were temporary and are not committed; the captures they
+produced are what the fixes were built against.
+
+## Hypotheses killed by experiment
+
+- **Wrapped markers break detection.** DISPROVEN. Detection held at every
+  width down to 50 columns — the paragraph wraps *after* the opening phrase.
+  I would have "fixed" this without the probe.
+- **The keystrokes are wrong, so nothing happens.** DISPROVEN as the cause.
+  Against a real dialog, `\r`, `1`, `2` and ESC all did exactly what upstream
+  documents. The bytes were never the reason clicks did nothing — though two
+  of them were wrong for a different reason, see below.
+
+## The actual root cause — none of A/B/C/D
+
+The four candidates all assumed the write reached `sendInput` and was refused
+somewhere below it. It was not: **the write was never attempted.**
+
+`TileLeaf.send` — the callback wired to every condition view's `onSend` —
+opens with a readiness gate:
+
+```ts
+if (!runtime.inputReady || runtime.processStatus !== 'started' || isSessionExited(runtime)) {
+  await workspace.ensureSessionLive(sessionId)
+}
+```
+
+A live provider condition is precisely the state that clears `inputReady`.
+Codex reports `blocked` whenever a modal owns the screen (`blockingCondition`,
+added by #574); Claude reports not-ready whenever a permission prompt is up.
+So every click on the trust modal took the wake path instead of writing a
+keystroke — and before #597 that wake adopted the live backend, waited 30s for
+a readiness that could not arrive while the unanswered modal held the screen,
+then killed the process.
+
+That is the reported triple symptom exactly: accept does nothing, cancel does
+nothing, the modal never closes — because the one keystroke that would dismiss
+it was never written.
+
+**Condition keystrokes were routed through the composer's send path, gated on
+the very flag that conditions clear.** Neither #574 nor #597 could have found
+this; both were looking below `sendInput`.
+
+## What shipped
+
+1. `sendConditionKey` in `TileLeaf` — condition views no longer go through the
+   composer's readiness gate. A visible condition is proof the backend is alive,
+   so there is nothing to wake. A refused write now raises a toast instead of
+   being discarded.
+2. Structural anchoring for the Codex trust dialog, killing the corpus-proven
+   false positive.
+3. Deterministic trust keystrokes: accept `1` (not `\r`, which confirms
+   whatever is highlighted), decline `2` (not `2\r`, whose Enter leaked into the
+   next screen).
+4. Three AskUserQuestion answer-matching fixes: option number demoted to a hint,
+   wrapped labels rejoined, `sameQuestion` given an option-set fallback.
+
+## Unknowns that remain open
+
+- **Finding 2 is still unexplained.** 52 recordings contain no genuine trust
+  dialog. The root cause above explains the symptom without needing it, but the
+  observation gap is real and would still hide the next bug of this shape.
+- **The write log was not built.** The root cause was found by reading the send
+  path once the keystrokes were exonerated, so the instrumentation stage was
+  not needed to ship. It remains the right way to see this class of failure and
+  is the obvious follow-up.
+- The Claude AUQ fixes are verified by construction and the existing suite, not
+  against a live multi-question picker — the corpus capture was used as the
+  reference shape. A live AUQ probe is the natural next step.
