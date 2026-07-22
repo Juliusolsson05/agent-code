@@ -19,7 +19,13 @@ import {
   loadRecentHistory,
   recordCommandUse,
 } from '@renderer/features/command-palette/lib/recentCommandHistory'
-import { fuzzyMatch, rankCommands } from '@renderer/features/command-palette/lib/rankCommands'
+import { rankCommands } from '@renderer/features/command-palette/lib/rankCommands'
+import {
+  body,
+  primary,
+  rankEntries,
+  secondary,
+} from '@renderer/features/command-palette/lib/rankEntries'
 import type { CommandContext, ResolvedCommand } from '@renderer/features/command-palette/types'
 import {
   allPromptTemplates,
@@ -657,52 +663,84 @@ function OpenCommandPalette({
   )
 
   const queryText = query.trim()
+  // Every list below goes through `rankEntries`, the same relevance core
+  // `rankCommands` uses. They used to be boolean `.filter()`s with no
+  // scoring, which meant the rendered order was just the source-array
+  // order and match quality never entered into it. For prompt templates
+  // that source order is `[...custom, ...builtin]`, so a builtin could
+  // never outrank a custom one however much better it matched — typing
+  // "read this p" buried the builtin "Read This Project" under six
+  // unrelated custom templates. See
+  // docs/plans_and_ideas/2026-07-22-palette-search-relevance-plan.md.
+  //
+  // Field weights are the whole design decision at each call site: what
+  // the user is typing the name of is `primary`, short supporting text is
+  // `secondary`, and long prose is `body` — which `rankEntries` matches
+  // by literal substring only, never by subsequence.
   const filteredSessions = useMemo(
     () =>
-      queryText
-        ? sessions.filter(
-            s =>
-              fuzzyMatch(s.summary, queryText) ||
-              fuzzyMatch(s.firstPrompt ?? '', queryText) ||
-              fuzzyMatch(s.gitBranch ?? '', queryText),
-          )
-        : sessions,
+      rankEntries(sessions, queryText, s => [
+        // `summary` is `customTitle ?? lastPrompt ?? firstPrompt`
+        // (sessionList.ts) — so for any session the user never titled by
+        // hand, this "name" is really a prompt, and it is what the row
+        // displays. Keeping it `primary` is a deliberate compromise: it
+        // means prose can still claim tiers 4/5 and can still be
+        // subsequence-matched at tier 1, which is the very thing this
+        // module distrusts. The alternative is worse — demote it and the
+        // text the user is LOOKING AT becomes the hardest thing to search
+        // by. Matching must follow what is on screen. If session titling
+        // ever becomes mandatory, revisit this.
+        primary(s.summary),
+        secondary(s.gitBranch),
+        // Not unbounded: `extractFirstUserPrompt` caps this at 200 chars.
+        // Still `body` — it is a prompt, not a label, and it is usually
+        // hidden behind `summary` in the row.
+        body(s.firstPrompt),
+      ]),
     [sessions, queryText],
   )
   const filteredBuried = useMemo(
     () =>
-      queryText
-        ? buried.filter(
-            item =>
-              fuzzyMatch(item.label, queryText) ||
-              fuzzyMatch(item.description, queryText) ||
-              fuzzyMatch(item.note ?? '', queryText),
-          )
-        : buried,
+      rankEntries(buried, queryText, item => [
+        // `note` is the ONLY human-authored, row-distinguishing field
+        // here, so it is the primary one despite not being the row's
+        // headline. `label` is generated (`${kind} · ${cwdBase}`) and is
+        // byte-identical for every pane buried from the same repo — as
+        // primary it made tier 4 a mass tie that the note could never
+        // break, and let an unrelated repo's provider name outrank a note
+        // that literally started with the query.
+        primary(item.note),
+        secondary(item.label),
+        // `${sourceTabTitle} · ${cwd}` — contains an absolute path, so as
+        // a secondary field every buried pane matched "users",
+        // "development", and every other path segment at tier 3.
+        body(item.description),
+      ]),
     [buried, queryText],
   )
   const filteredPromptTemplates = useMemo(
     () =>
-      queryText
-        ? promptTemplates.filter(
-            template =>
-              fuzzyMatch(template.title, queryText) ||
-              fuzzyMatch(template.description, queryText) ||
-              fuzzyMatch(template.body, queryText),
-          )
-        : promptTemplates,
+      rankEntries(promptTemplates, queryText, template => [
+        primary(template.title),
+        secondary(template.description),
+        body(template.body),
+      ]),
     [promptTemplates, queryText],
   )
   const filteredAiWorkspaces = useMemo(
     () =>
-      queryText
-        ? aiWorkspaces.filter(
-            workspace =>
-              fuzzyMatch(workspace.name, queryText) ||
-              fuzzyMatch(workspace.description ?? '', queryText) ||
-              fuzzyMatch(workspace.workspaceId, queryText),
-          )
-        : aiWorkspaces,
+      rankEntries(aiWorkspaces, queryText, workspace => [
+        primary(workspace.name),
+        secondary(workspace.description),
+        // Ids are matched so a pasted id still finds its workspace, but
+        // they are never what a human types by hand — and they are UUIDs,
+        // never rendered in the row. As `secondary` they gave every
+        // hex-alphabet fragment ("de", "bea", "aaef") the same weight as
+        // a deliberate description match, so most of the list matched
+        // most queries for reasons invisible on screen. `body` keeps the
+        // paste-an-id path working while costing the user nothing.
+        body(workspace.workspaceId),
+      ]),
     [aiWorkspaces, queryText],
   )
   // Snapshot recent-command history once per mounted palette. The open-only
@@ -1348,6 +1386,17 @@ function OpenCommandPalette({
               } else {
                 setQuery(e.target.value)
               }
+              // Load-bearing, and more so since the lists became ranked:
+              // EVERY `setQuery` must be paired with `setSelectedIndex(0)`.
+              // The old boolean filters were monotone — typing another
+              // character could only remove rows, never reorder the
+              // survivors — so a stale index stayed on the same row.
+              // A ranked list can reorder at UNCHANGED length (add a
+              // character and a tier-1 row swaps with a tier-5 one), which
+              // the `Math.min(prev, filteredLength - 1)` clamp cannot
+              // catch because the length never changed. Dropping this line
+              // means Enter silently runs a different row than the one the
+              // user was looking at.
               setSelectedIndex(0)
             }}
             onKeyDown={onKeyDown}

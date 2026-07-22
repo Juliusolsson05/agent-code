@@ -138,16 +138,31 @@ function buildActiveTabTranscriptPrompt(
 export const builtinPromptTemplates: PromptTemplate[] = [
   // The first two built-ins are deliberately ordered ahead of the older
   // three. `allPromptTemplates` returns custom templates first and then
-  // this array verbatim, so array position is the only ranking signal the
-  // palette has — there is no usage-frequency sort. These two are the ones
-  // reached for constantly (every fresh agent, and as a follow-up to almost
-  // any long answer), so they get the top slots.
+  // this array verbatim, so array position is the palette's TIEBREAK
+  // ordering — what you see with an empty query, and what settles ties
+  // between equally-relevant matches. It is no longer the only signal:
+  // once the user types, `rankEntries` orders by match strength first
+  // (see `filteredPromptTemplates`). It used to be the only signal, which
+  // is exactly why searching "read this p" used to bury the entry below.
+  //
+  // Note what that tiebreak does NOT buy you: the index runs over the
+  // CONCATENATED array, so position here only settles ties among
+  // builtins. A custom template that matches exactly as well as a builtin
+  // still wins, because every custom index is lower than every builtin
+  // one. Ranking fixed "matched worse but shown first"; it did not make
+  // builtins competitive at equal match strength.
+  //
+  // These two are the ones reached for constantly (every fresh agent, and
+  // as a follow-up to almost any long answer), so they get the top slots.
   {
     id: 'builtin:context-bootstrap',
     // Titled for what the user would type, not for what the feature is
-    // called internally. The palette filters on title + description only
-    // (see `filteredPromptTemplates`), and nobody searching for this types
-    // "bootstrap" — they type "read" or "project".
+    // called internally: nobody searching for this types "bootstrap" —
+    // they type "read" or "project". The title is the `primary` match
+    // field, so typing it from the start earns the top tier — which is
+    // what rescues this row from the six unrelated templates that used to
+    // sit above it. It does not guarantee first place: a custom template
+    // whose title also starts with "read" ties on tier and wins on index.
     title: 'Read This Project',
     description: 'Bootstrap a fresh agent with what this project actually is.',
     scope: 'builtin',
