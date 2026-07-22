@@ -7,6 +7,7 @@ import {
   fromClaudeQuestionResult,
   type ClaudeQuestionModel,
 } from '@providers/claude/renderer/adapters/questions'
+import { useAnsweredViaMessageStore } from './answeredViaMessageStore'
 
 export function ClaudeLiveQuestionRow({ model }: { model: ClaudeQuestionModel }) {
   // WHY the interaction driver lives beside Claude admission even though it
@@ -14,7 +15,7 @@ export function ClaudeLiveQuestionRow({ model }: { model: ClaudeQuestionModel })
   // action names, and terminal navigation all belong to Claude's protocol.
   // Leaving the painter in the shared feed made a provider-specific component
   // look reusable and invited the shell to grow Claude vocabulary again.
-  return <AskUserQuestionRow input={model.input} />
+  return <AskUserQuestionRow input={model.input} operationId={model.operationId} />
 }
 
 export function ClaudeAnsweredQuestionRow({
@@ -24,8 +25,35 @@ export function ClaudeAnsweredQuestionRow({
   model: ClaudeQuestionModel
   result: ToolResultBlock | null
 }) {
+  // "Answered via message" — the workaround path: the picker was dismissed and
+  // the choices were sent as a prompt, so the transcript shows a generic
+  // decline. This marker (set by AskUserQuestionRow at send time, keyed by
+  // operationId) is the only signal that the decline is actually an answer.
+  const viaMessage = useAnsweredViaMessageStore(state => state.byOperationId[model.operationId])
   const answer = result ? fromClaudeQuestionResult(result, model) : null
   const answered = answer !== null
+
+  if (viaMessage && viaMessage.length > 0) {
+    return (
+      <MarkerRow marker="✓">
+        <div className="text-[13px] leading-[1.65]">
+          <span className="text-accent font-semibold">Question</span>
+          {model.questions.map((question, index) => (
+            <div key={index} className="mt-0.5">
+              <span className="text-[12px]">{question.question}</span>
+            </div>
+          ))}
+          <div className="mt-1 ml-4 border-l border-border/60 pl-3">
+            <div className="text-muted text-[10px] uppercase tracking-wider">Answered via message</div>
+            {viaMessage.map((line, i) => (
+              <div key={i} className="text-[12px]">{line}</div>
+            ))}
+          </div>
+        </div>
+      </MarkerRow>
+    )
+  }
+
   return (
     <MarkerRow marker={answered ? '✓' : result ? '◌' : '?'}>
       <div className="text-[13px] leading-[1.65]">

@@ -71,3 +71,20 @@ export function answersToPrompt(answers: AnswerForPrompt[]): string | null {
   if (blocks.length === 0) return null
   return `${FRAMING}\n\n<user-answers>\n${blocks.join('\n')}\n</user-answers>`
 }
+
+/**
+ * Human-readable one-liner per answered question, for the feed's "answered via
+ * message" card (NOT the prompt — that's the XML above). Skips questions with
+ * no selection and no text, matching `answersToPrompt`.
+ */
+export function answerSummaryLines(answers: AnswerForPrompt[]): string[] {
+  const lines: string[] = []
+  for (const answer of answers) {
+    const labels = chosenLabels(answer)
+    const text = answer.text?.trim() ?? ''
+    const chosen = [...labels, ...(text ? [text] : [])]
+    if (chosen.length === 0) continue
+    lines.push(`${answer.question} → ${chosen.join(', ')}`)
+  }
+  return lines
+}

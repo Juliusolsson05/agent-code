@@ -13,8 +13,9 @@ import {
   readAskQuestions,
   type AskOption,
 } from '@providers/claude/renderer/adapters/questions'
-import { answersToPrompt } from '@providers/claude/renderer/components/ask-user-question/answerPrompt'
+import { answersToPrompt, answerSummaryLines } from '@providers/claude/renderer/components/ask-user-question/answerPrompt'
 import { deliverAnswersViaPrompt } from '@providers/claude/renderer/components/ask-user-question/deliverAnswersViaPrompt'
+import { useAnsweredViaMessageStore } from '@providers/claude/renderer/components/ask-user-question/answeredViaMessageStore'
 
 // Native in-feed renderer for Claude Code's `AskUserQuestion` tool.
 //
@@ -84,8 +85,10 @@ function isFreeTextOption(option: AskOption): boolean {
 
 export function AskUserQuestionRow({
   input,
+  operationId,
 }: {
   input: Record<string, unknown> | undefined
+  operationId: string
 }) {
   // sessionId is obtained the SAME way every other feed row gets it: via
   // CodeRenderContext, which Feed.tsx wraps the entire render-item list
@@ -100,6 +103,7 @@ export function AskUserQuestionRow({
   // does not exist. See src/shared/sessionFeed/SessionFeed.ts.
   const feed = useSessionFeed()
   const { showToast } = useGlobalToast()
+  const markAnsweredViaMessage = useAnsweredViaMessageStore(state => state.mark)
 
   // Local "answering" latch. Once the user submits an answer we disable every
   // control, both to give feedback ("Answering…") and to guard against
@@ -313,6 +317,10 @@ export function AskUserQuestionRow({
     submittedRef.current = true
     setAnswering(true)
     setResolveError(null)
+    // Record the correlation marker BEFORE the send, so that whenever the
+    // decline result lands the answered row already knows this was answered,
+    // not abandoned. The transcript can't carry this (the decline is generic).
+    markAnsweredViaMessage(operationId, answerSummaryLines(answers))
     // Detached: Esc cancels the tool and unmounts this row almost immediately,
     // so the sequence must not touch this component's state after it starts.
     // Failure is surfaced through the app-level toast (which survives the

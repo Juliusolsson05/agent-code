@@ -134,7 +134,14 @@ export function fromClaudeQuestionResult(
   // evidence, not a durable selection. Declining keeps it in the generic error
   // row and prevents a green answered marker from manufacturing success.
   if (result.is_error === true) return null
-  if (typeof result.content === 'string') return result.content
+  // Blank content is NOT an answer. A live dismissal (Esc / interrupt) stamps a
+  // synthesized result with empty content and no is_error (foldEvent
+  // turn_stopped) to unmount the live picker; treating that '' as an answer
+  // renders a green ✓ over an empty body. Fall through to "no answer recorded"
+  // (or, for the workaround path, the answered-via-message marker takes over).
+  if (typeof result.content === 'string') {
+    return result.content.trim().length > 0 ? result.content : null
+  }
   if (!Array.isArray(result.content) || result.content.length !== 1) return null
   const item = asRecord(result.content[0])
   if (
