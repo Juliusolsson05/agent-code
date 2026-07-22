@@ -75,11 +75,10 @@ export interface SessionFeed {
    *  debug journal in main — omit for non-paste writes. */
   sendInput(sessionId: string, data: string, pasteId?: string): Promise<boolean>
 
-  /** Deliver a finished prompt to an API-transport agent (opencode) that
-   *  has no PTY to receive keystroke bytes. No desktop call site today —
-   *  it exists on the contract because the remote client MUST use it for
-   *  API-transport sessions, and the preload bridge already exposes it
-   *  for the MCP orchestration path. */
+  /** Deliver a finished, hardened prompt (paste-absorb → Enter → durable
+   *  acceptance). The desktop composer submit uses this for Claude, the remote
+   *  client MUST use it for API-transport sessions, and the AskUserQuestion
+   *  answer-via-message workaround delivers its XML through it. */
   deliverPrompt(
     sessionId: string,
     prompt: string,

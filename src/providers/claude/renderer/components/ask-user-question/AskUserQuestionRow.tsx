@@ -38,11 +38,17 @@ import { useAnsweredViaMessageStore } from '@providers/claude/renderer/component
 //   (which question is currently on screen, which number maps to which option,
 //   which multi-select boxes are toggled, whether Submit is focused).
 //
-//   This row therefore dispatches a structured custom action:
-//     semantic answer labels/text → main IPC → Claude headless resolver
-//   The resolver drives the real TUI one step at a time and reparses after each
-//   keystroke. That is why multi-select, free-text, and multi-question are now
-//   clickable without the renderer guessing terminal numbers from stale state.
+//   This row answers by TWO paths (see the workaround decomposition,
+//   docs/decomposition/2026-07-23-auq-answer-via-prompt.md):
+//   - Immediate SINGLE-SELECT single-question → a structured custom action
+//     (`dispatchAnswer` → `resolveCondition`) that the Claude headless resolver
+//     replays as one keystroke. This is the one case the keystroke driver
+//     completes reliably.
+//   - Everything else (multi-select, free-text, multi-question) → `answerViaMessage`:
+//     dismiss the picker with Esc and send the choices as a structured prompt.
+//     Keystroke-driving those was defeated by Claude's "Submit answers" review
+//     screen, wrapped checkboxes, and the free-text field, and re-broke every
+//     release. The prompt path is version-proof.
 //
 // WHY this is driven by `parsedInput`, not by parsing the screen:
 //   The semantic layer (foldEvent.ts) already parses the full tool input
