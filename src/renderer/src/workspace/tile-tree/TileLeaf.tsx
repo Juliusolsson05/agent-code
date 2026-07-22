@@ -337,6 +337,68 @@ export function TileLeaf({
     }
   }
 
+  // Condition keystrokes do NOT go through `send`.
+  //
+  // This is the Codex trust-dialog bug (#596 follow-up). `send` opens with a
+  // readiness gate — `!runtime.inputReady || processStatus !== 'started'` →
+  // `ensureSessionLive`. That gate is right for the composer and exactly
+  // backwards for a condition, because a live provider condition coincides
+  // with `inputReady` being false:
+  //
+  //   Claude — `derivePromptGateState` reports `blocked` for ANY visible
+  //     condition, so `publishPromptGate` emits `ready:false` for the whole
+  //     time a permission prompt or picker is up.
+  //   Codex — different mechanism, same result, and worth being exact about
+  //     because the obvious guess is wrong. `blockingCondition()` feeds only
+  //     the prompt-delivery poll; it never emits input-readiness. Codex's
+  //     readiness LATCHES true at `markComposerReady` and clears only on
+  //     exit. The trust dialog is reachable in the broken state because it
+  //     paints BEFORE the composer ever appears, so readiness was never true
+  //     to begin with. A mid-session approval modal does not clear it.
+  //
+  // So every click on the trust modal took the wake path instead of writing a
+  // keystroke. Before #597 that wake adopted the live backend, waited 30s for
+  // a readiness that could not arrive while the unanswered modal held the
+  // screen, and then KILLED the process. The user-visible result was exactly
+  // the report: accept does nothing, cancel does nothing, and the modal never
+  // closes — because the one keystroke that would dismiss it was never
+  // written.
+  //
+  // A visible condition is itself proof the backend is alive and painting, so
+  // there is nothing to wake and nothing to wait for. Write the bytes, and
+  // surface a refusal instead of swallowing it: `sendInput` returns false when
+  // main declines, and that boolean was previously discarded by every
+  // condition view.
+  //
+  // The snapshot check is NOT redundant. `send`'s readiness gate happened to
+  // fence one case this path would otherwise open: a QUARANTINED pane
+  // (ownership conflict) has its feed channels fenced — including
+  // `session:exit`, the sole caller of `clearConditionRuntimeState` — so its
+  // last condition snapshot stays frozen on screen while main's entry under
+  // that id may belong to someone else. Writing raw keystrokes there is
+  // precisely what the quarantine exists to prevent. Requiring a live
+  // snapshot mirrors what `RemoteServer.applyPermissionReply` already does
+  // before it writes.
+  const sendConditionKey = useCallback(async (data: string) => {
+    acknowledgeSession()
+    if (!runtime.conditions) {
+      workspace.showPaneToast(sessionId, 'That prompt is no longer live.')
+      return
+    }
+    const ok = await feed.sendInput(sessionId, data)
+    if (!ok) {
+      // main returns a bare boolean for two disjoint reasons — a prompt
+      // delivery holds the write reservation, or there is no backend at all.
+      // Only the first is worth retrying, and we cannot tell them apart from
+      // here; the message stays honest about that rather than promising a
+      // retry that can never work.
+      workspace.showPaneToast(
+        sessionId,
+        'That keystroke did not reach the agent. If it stays stuck, retry the pane.',
+      )
+    }
+  }, [acknowledgeSession, feed, runtime.conditions, sessionId, workspace.showPaneToast])
+
   const loadOlderHistory = useCallback(async () => {
     await workspace.loadOlderHistory(sessionId)
   }, [sessionId, workspace.loadOlderHistory])
@@ -435,6 +497,7 @@ export function TileLeaf({
     input,
     setInputText,
     send,
+    sendConditionKey,
     history,
     historyIndex,
     historyAnchor,
@@ -711,7 +774,7 @@ export function TileLeaf({
       <ProviderConditionOutlet
         sessionId={sessionId}
         conditions={normalizedConditions}
-        onSend={send}
+        onSend={sendConditionKey}
         onResolveCustom={(action) => feed.resolveCondition(sessionId, action)}
         interactionActive={focused}
       />
