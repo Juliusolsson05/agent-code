@@ -19,7 +19,13 @@ import {
   loadRecentHistory,
   recordCommandUse,
 } from '@renderer/features/command-palette/lib/recentCommandHistory'
-import { fuzzyMatch, rankCommands } from '@renderer/features/command-palette/lib/rankCommands'
+import { rankCommands } from '@renderer/features/command-palette/lib/rankCommands'
+import {
+  body,
+  primary,
+  rankEntries,
+  secondary,
+} from '@renderer/features/command-palette/lib/rankEntries'
 import type { CommandContext, ResolvedCommand } from '@renderer/features/command-palette/types'
 import {
   allPromptTemplates,
@@ -657,52 +663,58 @@ function OpenCommandPalette({
   )
 
   const queryText = query.trim()
+  // Every list below goes through `rankEntries`, the same relevance core
+  // `rankCommands` uses. They used to be boolean `.filter()`s with no
+  // scoring, which meant the rendered order was just the source-array
+  // order and match quality never entered into it. For prompt templates
+  // that source order is `[...custom, ...builtin]`, so a builtin could
+  // never outrank a custom one however much better it matched — typing
+  // "read this p" buried the builtin "Read This Project" under six
+  // unrelated custom templates. See
+  // docs/plans_and_ideas/2026-07-22-palette-search-relevance-plan.md.
+  //
+  // Field weights are the whole design decision at each call site: what
+  // the user is typing the name of is `primary`, short supporting text is
+  // `secondary`, and long prose is `body` — which `rankEntries` matches
+  // by literal substring only, never by subsequence.
   const filteredSessions = useMemo(
     () =>
-      queryText
-        ? sessions.filter(
-            s =>
-              fuzzyMatch(s.summary, queryText) ||
-              fuzzyMatch(s.firstPrompt ?? '', queryText) ||
-              fuzzyMatch(s.gitBranch ?? '', queryText),
-          )
-        : sessions,
+      rankEntries(sessions, queryText, s => [
+        primary(s.summary),
+        secondary(s.gitBranch),
+        // A first prompt is arbitrarily long free text and had the same
+        // "subsequence matches everything" problem as template bodies.
+        body(s.firstPrompt),
+      ]),
     [sessions, queryText],
   )
   const filteredBuried = useMemo(
     () =>
-      queryText
-        ? buried.filter(
-            item =>
-              fuzzyMatch(item.label, queryText) ||
-              fuzzyMatch(item.description, queryText) ||
-              fuzzyMatch(item.note ?? '', queryText),
-          )
-        : buried,
+      rankEntries(buried, queryText, item => [
+        primary(item.label),
+        secondary(item.description),
+        secondary(item.note),
+      ]),
     [buried, queryText],
   )
   const filteredPromptTemplates = useMemo(
     () =>
-      queryText
-        ? promptTemplates.filter(
-            template =>
-              fuzzyMatch(template.title, queryText) ||
-              fuzzyMatch(template.description, queryText) ||
-              fuzzyMatch(template.body, queryText),
-          )
-        : promptTemplates,
+      rankEntries(promptTemplates, queryText, template => [
+        primary(template.title),
+        secondary(template.description),
+        body(template.body),
+      ]),
     [promptTemplates, queryText],
   )
   const filteredAiWorkspaces = useMemo(
     () =>
-      queryText
-        ? aiWorkspaces.filter(
-            workspace =>
-              fuzzyMatch(workspace.name, queryText) ||
-              fuzzyMatch(workspace.description ?? '', queryText) ||
-              fuzzyMatch(workspace.workspaceId, queryText),
-          )
-        : aiWorkspaces,
+      rankEntries(aiWorkspaces, queryText, workspace => [
+        primary(workspace.name),
+        secondary(workspace.description),
+        // Ids are matched so a pasted id still finds its workspace, but
+        // they are never what a human is typing by hand.
+        secondary(workspace.workspaceId),
+      ]),
     [aiWorkspaces, queryText],
   )
   // Snapshot recent-command history once per mounted palette. The open-only

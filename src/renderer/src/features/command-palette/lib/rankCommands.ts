@@ -1,100 +1,49 @@
 import type { ResolvedCommand } from '@renderer/features/command-palette/types'
+import { primary, rankEntries, secondary } from '@renderer/features/command-palette/lib/rankEntries'
 
-// rankCommands — the single ordering function for the command-palette
-// command list. Pure on purpose: no React, no storage, no Date.now().
-// It takes the registry-ordered commands, the trimmed query, and a
-// precomputed history score map, and returns the list to render. Keeping
-// it pure means it's trivially testable in isolation and the palette
-// component stays a thin caller.
+// rankCommands — the ordering function for the command-palette's command
+// list specifically. The generic relevance machinery now lives in
+// `rankEntries`, which every palette list shares; this module is the thin
+// command-shaped adapter over it plus the recent-usage tiebreak.
 //
-// The cardinal design rule, encoded by sort-term ORDER below: a text
-// match always beats history. `textTier` is the FIRST sort key, so
-// history can ONLY reorder commands that already share the same tier —
-// it is a tiebreaker, never an override. A command the user typed a
-// clean prefix for can never be pushed down by some other command they
-// happen to run a lot. This is what keeps search feeling like search
-// and not "show me my favorites regardless of what I typed".
+// It used to own a private copy of the tier logic. That copy was the only
+// ranker in the palette — templates, sessions, buried tabs and workspaces
+// were left on a boolean filter with no scoring at all — and the
+// divergence is what produced the template-search inversion documented in
+// docs/plans_and_ideas/2026-07-22-palette-search-relevance-plan.md. One
+// definition of "relevance", one place to fix it.
+//
+// Field mapping: title is primary, keywords are secondary, commands have
+// no body field. Under `rankEntries`' tier table that reproduces the old
+// 4/3/2/1 tiers as 5/4/3/1 — the numbers shift, the ordering between any
+// two commands does not.
+//
+// The cardinal design rule still holds and is now enforced inside
+// `rankEntries`: a text match always beats history. History is passed as
+// the same-tier `extraTiebreak`, so it can only reorder commands that
+// already matched equally well. A command the user typed a clean prefix
+// for can never be pushed down by some other command they happen to run a
+// lot. That is what keeps search feeling like search rather than "show me
+// my favorites regardless of what I typed".
+//
+// Empty-query behavior (registry order, unchanged, no history reordering)
+// also lives in `rankEntries` now, for the same reason it did here: the
+// palette's resting state must not shuffle.
 
-// Subsequence fuzzy match — ported verbatim from the palette's original
-// inline helper so behavior is identical to before this change. Returns
-// true when every char of `query` appears in `text` in order (not
-// necessarily contiguous), case-insensitively. This is the weakest
-// (tier 1) match: it's what lets "spr" find "Split Pane Right".
-export function fuzzyMatch(text: string, query: string): boolean {
-  const lower = text.toLowerCase()
-  const q = query.toLowerCase()
-  let j = 0
-  for (let i = 0; i < lower.length && j < q.length; i++) {
-    if (lower[i] === q[j]) j++
-  }
-  return j === q.length
-}
-
-// Compute the strongest text-match tier for a command against the query.
-// Higher = better. Tiers are ranked by how confident we are the match is
-// what the user meant:
-//   4 — query is a case-insensitive PREFIX of the title (strongest: the
-//       user is clearly typing the command's name from the start).
-//   3 — query is a substring of the title (somewhere, just not the start).
-//   2 — query is a substring of ANY keyword (the alias surface).
-//   1 — subsequence fuzzy match on title or any keyword (the loosest
-//       net; matches scattered characters).
-//   0 — no match at all; these are dropped before sorting.
-// We early-return at the first (highest) tier that applies so each
-// command gets exactly one tier.
-function textTier(command: ResolvedCommand, query: string): number {
-  const title = command.title.toLowerCase()
-  const q = query.toLowerCase()
-
-  if (title.startsWith(q)) return 4
-  if (title.includes(q)) return 3
-  if (command.keywords.some(keyword => keyword.toLowerCase().includes(q))) return 2
-  if (
-    fuzzyMatch(command.title, query) ||
-    command.keywords.some(keyword => fuzzyMatch(keyword, query))
-  ) {
-    return 1
-  }
-  return 0
-}
+// Re-exported because the palette's other call sites import `fuzzyMatch`
+// from here. Its real definition — and the warning about never running it
+// over long prose — lives in `rankEntries`.
+export { fuzzyMatch } from '@renderer/features/command-palette/lib/rankEntries'
 
 export function rankCommands(
   commands: ResolvedCommand[],
   query: string,
   historyScore: Map<string, number>,
 ): ResolvedCommand[] {
-  // Empty query is the "browse the menu" case. We return the registry
-  // order UNCHANGED — history must NOT reorder the full list. Reordering
-  // here would make the palette's resting state shuffle around based on
-  // past usage, which is disorienting (the command you expect at the top
-  // moves) and undoes the registry's deliberate grouping. History only
-  // earns the right to reorder once the user has typed and we're already
-  // filtering.
-  if (query.length === 0) return commands
-
-  // Carry the original registry index so it can serve as the final,
-  // fully-deterministic tiebreak: equal text tier AND equal history
-  // score falls back to registry order, never to Array.sort's
-  // implementation-defined behavior.
-  const scored = commands
-    .map((command, registryIndex) => ({
-      command,
-      registryIndex,
-      tier: textTier(command, query),
-      history: historyScore.get(command.id) ?? 0,
-    }))
-    .filter(entry => entry.tier > 0)
-
-  scored.sort((a, b) => {
-    // 1) Text tier, DESC — strongest match wins. This being first is the
-    //    invariant that makes history a tiebreaker only.
-    if (a.tier !== b.tier) return b.tier - a.tier
-    // 2) History score, DESC — within an equal tier, nudge the
-    //    recently/frequently used command up.
-    if (a.history !== b.history) return b.history - a.history
-    // 3) Registry index, ASC — stable, deterministic final fallback.
-    return a.registryIndex - b.registryIndex
-  })
-
-  return scored.map(entry => entry.command)
+  return rankEntries(
+    commands,
+    query,
+    command => [primary(command.title), ...command.keywords.map(keyword => secondary(keyword))],
+    command => historyScore.get(command.id) ?? 0,
+  )
 }
