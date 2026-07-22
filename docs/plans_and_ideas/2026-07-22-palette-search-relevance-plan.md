@@ -71,7 +71,9 @@ absence of ranking guaranteed they all sorted above the correct answer
 screenshot.
 
 The same subsequence-over-prose mistake is present in the session filter
-(`fuzzyMatch(s.firstPrompt, …)` — first prompts are arbitrarily long).
+(`fuzzyMatch(s.firstPrompt, …)`). Note first prompts are *not* unbounded —
+`extractFirstUserPrompt` caps them at 200 chars — but 200 chars of prose
+is still far past the point where a subsequence test means anything.
 
 ### A stale comment that documents the drift
 
@@ -160,6 +162,64 @@ already reset on query change, so a reorder cannot strand the cursor.
 
 No new test files (see repo convention); the change is verified by `tsc`
 on both projects, the existing suite, and driving the real palette.
+
+## Round 2 — what the review changed
+
+Two orchestrated reviewers went over the first implementation. The
+correctness reviewer confirmed the `rankCommands` refactor equivalent by
+differential fuzzing (20k cases, 0 mismatches) and found no defects. The
+search-quality reviewer found six, all confirmed against real repo data,
+and five of them were regressions the first cut introduced. The fix as
+merged therefore also includes:
+
+**Whitespace normalization on both sides of every comparison.** All
+whitespace runs — including newlines — collapse to single spaces. This
+was the highest-value single line in the whole change: it fixed a stray
+double space ("read this  project") returning ZERO results, and it fixed
+template bodies being assembled with `lines.join('\n')`, which made any
+phrase spanning a line break permanently unmatchable even though the
+preview panel renders it as one continuous wrapped paragraph.
+
+**An out-of-order token pass** (`tokenTier`, capped at tier 4). The query
+was matched as one literal string at every tier, so "project read" — right
+words, wrong order — scored 0 where the old too-permissive filter had
+found the row. Every whitespace-separated token must now match the name or
+supporting text in any order; the row scores as its weakest token. Tokens
+deliberately do not match body fields: per-token body matching would let a
+one-character token hit every prose body in the list and re-admit exactly
+the noise this change exists to remove.
+
+Typo tolerance is NOT restored ("read this projekt" still returns
+nothing). The old filter only found it by subsequence-matching a body,
+which is the bug. Accepted as the price of precision.
+
+**Initialism promotion to tier 4.** "atat" for "Active Tab Agent
+Transcripts" landed in the flat tier-1 bucket and came 6th of 6, because
+tier 1 falls through to array index and every custom index beats every
+builtin one — the reported pathology, surviving inside the widest tier.
+Promoting word-initial matches removed the concrete cases without opening
+a general match-density scoring project. The residual within-tier-1
+custom-first bias is documented as a known limit at the tier table.
+
+**Three field-weight corrections.** Buried tabs: `note` (the only
+human-authored, row-distinguishing field) is now primary and the generated
+`${kind} · ${cwdBase}` label is secondary — previously the label's mass
+ties at tier 4 meant the note never decided anything, and the description
+(an absolute path) tier-3-matched every pane for "users" or "development".
+AI workspaces: `workspaceId` moved to `body`, because UUIDs at secondary
+gave every hex fragment ("de", "bea") the same weight as a deliberate
+description match on a field the row never renders.
+
+**Four comment-vs-code mismatches**, including one this PR introduced
+while advertising the fix of another. Most notably `templates.ts` claimed
+a title prefix match "wins outright" — it does not; it wins its tier and
+then loses to any custom template on index.
+
+Deliberately NOT changed, after review argued both ways: tier 3 above
+tier 2 (a description is authored to describe the row; a body mention is
+incidental — every real example supports it), and the empty-query resting
+order. The right fix for resting order is a usage-frequency signal via the
+existing `extraTiebreak` hook, not relevance ranking of an empty query.
 
 ## Verification
 

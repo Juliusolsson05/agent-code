@@ -680,10 +680,21 @@ function OpenCommandPalette({
   const filteredSessions = useMemo(
     () =>
       rankEntries(sessions, queryText, s => [
+        // `summary` is `customTitle ?? lastPrompt ?? firstPrompt`
+        // (sessionList.ts) — so for any session the user never titled by
+        // hand, this "name" is really a prompt, and it is what the row
+        // displays. Keeping it `primary` is a deliberate compromise: it
+        // means prose can still claim tiers 4/5 and can still be
+        // subsequence-matched at tier 1, which is the very thing this
+        // module distrusts. The alternative is worse — demote it and the
+        // text the user is LOOKING AT becomes the hardest thing to search
+        // by. Matching must follow what is on screen. If session titling
+        // ever becomes mandatory, revisit this.
         primary(s.summary),
         secondary(s.gitBranch),
-        // A first prompt is arbitrarily long free text and had the same
-        // "subsequence matches everything" problem as template bodies.
+        // Not unbounded: `extractFirstUserPrompt` caps this at 200 chars.
+        // Still `body` — it is a prompt, not a label, and it is usually
+        // hidden behind `summary` in the row.
         body(s.firstPrompt),
       ]),
     [sessions, queryText],
@@ -691,9 +702,19 @@ function OpenCommandPalette({
   const filteredBuried = useMemo(
     () =>
       rankEntries(buried, queryText, item => [
-        primary(item.label),
-        secondary(item.description),
-        secondary(item.note),
+        // `note` is the ONLY human-authored, row-distinguishing field
+        // here, so it is the primary one despite not being the row's
+        // headline. `label` is generated (`${kind} · ${cwdBase}`) and is
+        // byte-identical for every pane buried from the same repo — as
+        // primary it made tier 4 a mass tie that the note could never
+        // break, and let an unrelated repo's provider name outrank a note
+        // that literally started with the query.
+        primary(item.note),
+        secondary(item.label),
+        // `${sourceTabTitle} · ${cwd}` — contains an absolute path, so as
+        // a secondary field every buried pane matched "users",
+        // "development", and every other path segment at tier 3.
+        body(item.description),
       ]),
     [buried, queryText],
   )
@@ -712,8 +733,13 @@ function OpenCommandPalette({
         primary(workspace.name),
         secondary(workspace.description),
         // Ids are matched so a pasted id still finds its workspace, but
-        // they are never what a human is typing by hand.
-        secondary(workspace.workspaceId),
+        // they are never what a human types by hand — and they are UUIDs,
+        // never rendered in the row. As `secondary` they gave every
+        // hex-alphabet fragment ("de", "bea", "aaef") the same weight as
+        // a deliberate description match, so most of the list matched
+        // most queries for reasons invisible on screen. `body` keeps the
+        // paste-an-id path working while costing the user nothing.
+        body(workspace.workspaceId),
       ]),
     [aiWorkspaces, queryText],
   )
@@ -1360,6 +1386,17 @@ function OpenCommandPalette({
               } else {
                 setQuery(e.target.value)
               }
+              // Load-bearing, and more so since the lists became ranked:
+              // EVERY `setQuery` must be paired with `setSelectedIndex(0)`.
+              // The old boolean filters were monotone — typing another
+              // character could only remove rows, never reorder the
+              // survivors — so a stale index stayed on the same row.
+              // A ranked list can reorder at UNCHANGED length (add a
+              // character and a tier-1 row swaps with a tier-5 one), which
+              // the `Math.min(prev, filteredLength - 1)` clamp cannot
+              // catch because the length never changed. Dropping this line
+              // means Enter silently runs a different row than the one the
+              // user was looking at.
               setSelectedIndex(0)
             }}
             onKeyDown={onKeyDown}
