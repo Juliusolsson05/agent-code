@@ -11,6 +11,7 @@ import { readXtermTheme, syncXtermTheme } from '@renderer/workspace/tile-tree/xt
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type { SessionId, SessionKind } from '@renderer/workspace/types'
+import { isSessionExited } from '@renderer/workspace/providerSessionIdentity'
 import { shortenCwd } from '@renderer/workspace/tile-tree/TileLeaf/labels'
 import { PaneToast } from '@renderer/workspace/tile-tree/TileLeaf/PaneToast'
 import { useComposerDictation } from '@renderer/workspace/tile-tree/TileLeaf/useComposerDictation'
@@ -57,6 +58,10 @@ export function AgentTerminalLeaf({
   acknowledgeSessionRef.current = acknowledgeSession
   const ensureSessionLiveRef = useRef(workspace.ensureSessionLive)
   ensureSessionLiveRef.current = workspace.ensureSessionLive
+  // The mount effect is keyed on sessionId alone (see its WHY comment), so it
+  // must read runtime state through a ref rather than closing over the prop.
+  const runtimeRef = useRef(runtime)
+  runtimeRef.current = runtime
   const showPaneToastRef = useRef(workspace.showPaneToast)
   showPaneToastRef.current = workspace.showPaneToast
 
@@ -85,6 +90,16 @@ export function AgentTerminalLeaf({
     let resizeObserver: ResizeObserver | null = null
     let resizeFrame: number | null = null
     let disposed = false
+    // Did this instance's attach actually land? `attachAgentPty` is
+    // refcounted in main, and the cleanup below used to detach
+    // unconditionally — including when the wake was still in flight and no
+    // attach was ever issued. That unmatched detach does not decrement THIS
+    // leaf's (nonexistent) reference, it steals someone else's: entering
+    // Spotlight mounts a new leaf for the same session before the old one's
+    // cleanup runs, so the new leaf's count of 1 was taken to zero, killing
+    // its live agent-pty-data forwarding and firing the restore-resize
+    // against a terminal the user is actively looking at.
+    let attached = false
     let attachedBackfillDone = false
     let lastCols = 0
     let lastRows = 0
@@ -187,7 +202,25 @@ export function AgentTerminalLeaf({
       // tear down the raw PTY view, lose scrollback, and re-run attach. The
       // session id is the actual attachment identity; refs keep the wake/toast
       // callbacks current without making them part of xterm's mount contract.
-      void ensureSessionLiveRef.current(sessionId)
+      //
+      // WHY the wake is conditional (#596): this effect runs on every MOUNT,
+      // and this component is unmounted and remounted constantly — entering
+      // and leaving Spotlight/Reader/Settings (which render outside
+      // GlobalEditorShell, so the whole tile tree goes away), and on every tab
+      // switch. Waking unconditionally meant each of those round-tripped
+      // through recoverSession for an agent that was already running, flapped
+      // its runtime status spawning→started, and — until the companion fix in
+      // ensureSessionLive — armed a 30-second timer that KILLED the live
+      // process. Mirrors what TileLeaf.send already does: a healthy agent is
+      // re-attached, never re-woken. `runtimeRef` (not `runtime`) because this
+      // effect must stay keyed on sessionId alone.
+      const needsWake =
+        runtimeRef.current.processStatus !== 'started' || isSessionExited(runtimeRef.current)
+      const woken = needsWake
+        ? ensureSessionLiveRef.current(sessionId)
+        : Promise.resolve(sessionId)
+
+      void woken
         .then(() => {
           if (disposed || termRef.current !== term) return null
           return window.api.attachAgentPty(sessionId)
@@ -197,6 +230,7 @@ export function AgentTerminalLeaf({
           if (disposed || termRef.current !== term) return
           const liveTerm = term
           if (!liveTerm) return
+          attached = true
           if (buffer) liveTerm.write(buffer)
           if (backlogQueue.length > 0) liveTerm.write(backlogQueue.join(''))
           backlogQueue.length = 0
@@ -240,7 +274,8 @@ export function AgentTerminalLeaf({
       if (onThemeChangedListener) {
         window.removeEventListener(THEME_CHANGED_EVENT, onThemeChangedListener)
       }
-      void window.api.detachAgentPty(sessionId)
+      // Only detach what we attached — see the `attached` declaration above.
+      if (attached) void window.api.detachAgentPty(sessionId)
       term?.dispose()
       termRef.current = null
     }
