@@ -32,6 +32,29 @@ native Claude Code/Codex/OpenCode Agent Skills discovery mechanisms, Vitest.
 plan only. It becomes ready for review only after the implementation and all
 verification in this document land on the same branch.
 
+## Implementation Status — 2026-07-23
+
+The production implementation now lives on this feature branch and follows the
+architecture below:
+
+- [x] exhaustive provider discovery capabilities for Claude Code, Codex, and
+  OpenCode, including `CLAUDE_CONFIG_DIR` and physical-path deduplication;
+- [x] deterministic portable skill rendering, main-owned revisioned state,
+  write-ahead ownership, bounded reads, atomic writes, collision fingerprints,
+  symlink/non-regular rejection, reconciliation, safe disable, two-phase clear,
+  and explicit recovery;
+- [x] typed main/preload/renderer IPC, pre-session reconciliation, the Agents
+  Settings category, health-aware row, explicit-save editor, preview, warnings,
+  conflict replacement, abandonment, and stale-draft recovery;
+- [x] durable design documentation plus focused core/system/renderer regression
+  coverage;
+- [x] `npm run check` (contract, composite typecheck, 220 test files / 1,233
+  tests, production build, and packaged-entry verification).
+
+The live-provider acceptance matrix and Settings screenshots remain deliberately
+human-run. They are not implementation gaps, and no GUI or running Agent Code
+instance is automated as part of this branch verification.
+
 ## Product Contract
 
 The following behavior is part of the feature, not an implementation detail:
@@ -270,6 +293,7 @@ export type AgentCodeConventionsDocument = {
       kind: 'write' | 'delete'
       previousSha256: string | null
       desiredSha256: string | null
+      expectedConflictFingerprint?: string
     }
   >
 }
@@ -493,6 +517,7 @@ export type AgentCodeConventionsTargetStatus = {
   displayPath: string
   state: AgentCodeConventionsTargetState
   message?: string
+  canOverwrite?: boolean
   conflictFingerprint?: string
 }
 
