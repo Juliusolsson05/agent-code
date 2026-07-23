@@ -114,6 +114,20 @@ describe('editor file IO', () => {
     })
   })
 
+  it('treats a null version as create-only and never clobbers a concurrent creator', async () => {
+    const { path } = await tempFile('created after preflight')
+
+    const result = await atomicWriteTextFile({
+      absolutePath: path,
+      text: 'agent code write',
+      expectedVersion: null,
+      maxBytes: 100,
+    })
+
+    expect(result).toEqual({ ok: false, conflictKind: 'changed' })
+    await expect(readFile(path, 'utf8')).resolves.toBe('created after preflight')
+  })
+
   it('serializes mutations for the same physical path', async () => {
     const { path } = await tempFile()
     const order: string[] = []

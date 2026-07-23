@@ -1,6 +1,6 @@
 import { constants, type Stats } from 'fs'
 import { link, lstat, open, rename, unlink } from 'fs/promises'
-import { basename, dirname, join } from 'path'
+import { basename, dirname, join, resolve } from 'path'
 
 import type { EditorFsFileVersion } from '@shared/types/editorFs.js'
 
@@ -62,10 +62,25 @@ export async function readBoundedTextFile(
   stat: Stats
   version: EditorFsFileVersion
 }> {
+  // O_NOFOLLOW is unavailable on Windows. The lstat/open/lstat sandwich does
+  // not claim to be a kernel-level no-follow primitive, but it does reject the
+  // stable reparse-point case and detects a path swap around open. POSIX keeps
+  // O_NOFOLLOW as the stronger final guard.
+  const pathBefore = await lstat(absolutePath)
+  if (pathBefore.isSymbolicLink()) throw new Error('symbolic links are not supported')
+  if (!pathBefore.isFile()) throw new Error('not a file')
   const handle = await open(absolutePath, constants.O_RDONLY | NO_FOLLOW | NON_BLOCK)
   try {
     const before = await handle.stat()
     if (!before.isFile()) throw new Error('not a file')
+    const pathAfterOpen = await lstat(absolutePath)
+    if (pathAfterOpen.isSymbolicLink() || !pathAfterOpen.isFile()) {
+      throw new Error('file path changed while it was being opened')
+    }
+    if (editorFileVersion(pathBefore) !== editorFileVersion(pathAfterOpen)
+      || editorFileVersion(before) !== editorFileVersion(pathAfterOpen)) {
+      throw new Error('file changed while it was being opened')
+    }
     // Allocate the bound, not the pre-read stat size. A file can grow after
     // fstat; handle.readFile() would then allocate the unbounded new size before
     // our later consistency check got a chance to reject it.
@@ -125,11 +140,19 @@ export async function atomicWriteTextFile(params: {
   text: string
   expectedVersion?: EditorFsFileVersion | null
   maxBytes: number
+  mode?: number
+  temporaryPath?: string
 }): Promise<AtomicTextWriteResult> {
   const bytes = Buffer.from(params.text, 'utf8')
   if (bytes.byteLength > params.maxBytes) throw new Error('file is too large')
 
   const before = await existingRegularFile(params.absolutePath)
+  // `null` is an explicit create-only expectation used by deleted-buffer
+  // recreation and conventions publication. Treating it like `undefined`
+  // would let a file created after preflight be silently replaced.
+  if (before && params.expectedVersion === null) {
+    return { ok: false, conflictKind: 'changed' }
+  }
   if (!before && typeof params.expectedVersion === 'string') {
     return { ok: false, conflictKind: 'deleted' }
   }
@@ -142,18 +165,22 @@ export async function atomicWriteTextFile(params: {
     return { ok: false, conflictKind: 'changed' }
   }
 
-  const tempPath = join(
+  const tempPath = params.temporaryPath ?? join(
     dirname(params.absolutePath),
     `.${basename(params.absolutePath)}.agent-code-${process.pid}-${Date.now()}-${Math.random()
       .toString(36)
       .slice(2)}.tmp`,
   )
+  if (resolve(dirname(tempPath)) !== resolve(dirname(params.absolutePath))
+    || resolve(tempPath) === resolve(params.absolutePath)) {
+    throw new Error('temporary path must be a distinct sibling of the target')
+  }
   let tempExists = false
   try {
     const temp = await open(
       tempPath,
       constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL,
-      before?.mode ?? 0o600,
+      params.mode ?? before?.mode ?? 0o600,
     )
     tempExists = true
     try {
@@ -161,7 +188,8 @@ export async function atomicWriteTextFile(params: {
       // must not silently strip executable/group bits from the file it
       // replaces, so restore the observed permission bits explicitly on the
       // already-private temporary descriptor before publishing it.
-      if (before) await temp.chmod(before.mode)
+      if (params.mode !== undefined) await temp.chmod(params.mode)
+      else if (before) await temp.chmod(before.mode)
       await temp.writeFile(bytes)
       await temp.sync()
     } finally {
@@ -169,6 +197,9 @@ export async function atomicWriteTextFile(params: {
     }
 
     const current = await existingRegularFile(params.absolutePath)
+    if (params.expectedVersion === null && current) {
+      return { ok: false, conflictKind: 'changed' }
+    }
     if (typeof params.expectedVersion === 'string') {
       if (!current) return { ok: false, conflictKind: 'deleted' }
       if (editorFileVersion(current) !== params.expectedVersion) {

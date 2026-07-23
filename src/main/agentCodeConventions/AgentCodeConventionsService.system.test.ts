@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rename, rm, stat, symlink, writeFile } from 'fs/promises'
+import { mkdir, mkdtemp, readFile, realpath, rename, rm, stat, symlink, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -8,6 +8,7 @@ import {
   type AgentCodeConventionsDocument,
 } from '@shared/types/agentCodeConventions.js'
 import { renderAgentCodeConventionsSkill, sha256Text } from './renderSkill.js'
+import { journalTemporaryPath } from './skillPathSafety.js'
 import type {
   AgentCodeConventionsTarget,
   ResolvedAgentCodeConventionsTargets,
@@ -81,6 +82,17 @@ describe('AgentCodeConventionsService', () => {
     const disabled = await service.disable(2)
     expect(disabled).toMatchObject({ ok: true, snapshot: { revision: 3, enabled: false, markdown: '# Rules' } })
     await Promise.all(targets.map(value => expect(stat(value.skillFile)).rejects.toMatchObject({ code: 'ENOENT' })))
+  })
+
+  it('does not advance in-memory state when a disabled save cannot persist', async () => {
+    const { root, service } = await harness()
+    await rm(join(root, '.config'), { recursive: true })
+    await writeFile(join(root, '.config'), 'blocks the state directory')
+
+    const result = await service.save({ expectedRevision: 0, enabled: false, markdown: '# Rules' })
+
+    expect(result).toMatchObject({ ok: false, code: 'io-error', snapshot: { revision: 0 } })
+    expect(await service.getSnapshot()).toMatchObject({ revision: 0, markdown: '', enabled: false })
   })
 
   it('preflights every target before writing and binds overwrite to the reviewed fingerprint', async () => {
@@ -199,6 +211,78 @@ describe('AgentCodeConventionsService', () => {
     expect(await recovered.getSnapshot()).toMatchObject({ enabled: true, health: 'active' })
   })
 
+  it('removes a journal-only published write while disabled', async () => {
+    const root = await temporaryDirectory()
+    const currentTarget = target('agents-standard-personal-skills', join(root, '.agents', 'skills'), ['codex'])
+    const stateFilePath = join(root, 'state', 'conventions.json')
+    const rendered = renderAgentCodeConventionsSkill('# Rules')
+    await writeFileWithParents(currentTarget.skillFile, rendered)
+    const document: AgentCodeConventionsDocument = {
+      ...createEmptyAgentCodeConventionsDocument(),
+      pendingOperations: {
+        [currentTarget.id]: {
+          operationId: 'published-before-crash',
+          targetId: currentTarget.id,
+          path: currentTarget.skillFile,
+          kind: 'write',
+          previousSha256: null,
+          desiredSha256: sha256Text(rendered),
+          createdDirectory: true,
+        },
+      },
+    }
+    await writeFileWithParents(stateFilePath, `${JSON.stringify(document)}\n`)
+
+    const service = new AgentCodeConventionsService({
+      stateFilePath,
+      homeDirectory: root,
+      resolveTargets: async () => ({ targets: [currentTarget], unsupportedProviders: [] }),
+    })
+    await service.initialize()
+
+    expect(await service.getSnapshot()).toMatchObject({ enabled: false, health: 'disabled' })
+    await expect(stat(currentTarget.skillFile)).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(stat(currentTarget.skillDirectory)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('cleans only the operation-bound crash temp before retrying publication', async () => {
+    const root = await temporaryDirectory()
+    const currentTarget = target('agents-standard-personal-skills', join(root, '.agents', 'skills'), ['codex'])
+    const stateFilePath = join(root, 'state', 'conventions.json')
+    const markdown = '# Rules'
+    const rendered = renderAgentCodeConventionsSkill(markdown)
+    const operationId = 'crashed-temp-write'
+    const tempPath = journalTemporaryPath(currentTarget.skillFile, operationId)
+    await writeFileWithParents(tempPath, 'partially written bytes')
+    const document: AgentCodeConventionsDocument = {
+      ...createEmptyAgentCodeConventionsDocument(),
+      enabled: true,
+      markdown,
+      pendingOperations: {
+        [currentTarget.id]: {
+          operationId,
+          targetId: currentTarget.id,
+          path: currentTarget.skillFile,
+          kind: 'write',
+          previousSha256: null,
+          desiredSha256: sha256Text(rendered),
+        },
+      },
+    }
+    await writeFileWithParents(stateFilePath, `${JSON.stringify(document)}\n`)
+
+    const service = new AgentCodeConventionsService({
+      stateFilePath,
+      homeDirectory: root,
+      resolveTargets: async () => ({ targets: [currentTarget], unsupportedProviders: [] }),
+    })
+    await service.initialize()
+
+    expect(await service.getSnapshot()).toMatchObject({ enabled: true, health: 'active' })
+    expect(await readFile(currentTarget.skillFile, 'utf8')).toBe(rendered)
+    await expect(stat(tempPath)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
   it('repairs a missing owned copy during startup reconciliation', async () => {
     const { root, stateFilePath, targets, service } = await harness()
     await service.save({ expectedRevision: 0, enabled: true, markdown: '# Rules' })
@@ -215,6 +299,48 @@ describe('AgentCodeConventionsService', () => {
     expect(await readFile(targets[0]!.skillFile, 'utf8')).toBe(
       renderAgentCodeConventionsSkill('# Rules'),
     )
+  })
+
+  it('retires an external Claude root after it moves and remains active', async () => {
+    const root = await realpath(await temporaryDirectory())
+    const home = join(root, 'home')
+    const oldTarget = target('claude-personal-skills', join(root, 'claude-old', 'skills'), ['claude'])
+    const newTarget = target('claude-personal-skills', join(root, 'claude-new', 'skills'), ['claude'])
+    const stateFilePath = join(home, '.config', 'agent-code', 'conventions.json')
+    const original = new AgentCodeConventionsService({
+      stateFilePath,
+      homeDirectory: home,
+      resolveTargets: async () => ({ targets: [oldTarget], unsupportedProviders: [] }),
+    })
+    await original.initialize()
+    await expect(original.save({ expectedRevision: 0, enabled: true, markdown: '# Rules' }))
+      .resolves.toMatchObject({ ok: true })
+
+    const restarted = new AgentCodeConventionsService({
+      stateFilePath,
+      homeDirectory: home,
+      resolveTargets: async () => ({ targets: [newTarget], unsupportedProviders: [] }),
+    })
+    await restarted.initialize()
+
+    expect(await restarted.getSnapshot()).toMatchObject({ enabled: true, health: 'active' })
+    expect(await readFile(newTarget.skillFile, 'utf8')).toBe(
+      renderAgentCodeConventionsSkill('# Rules'),
+    )
+    await expect(stat(oldTarget.skillFile)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('does not retain directory ownership after an owned leaf is user-recreated', async () => {
+    const { targets, service } = await harness()
+    const currentTarget = targets[0]!
+    await service.save({ expectedRevision: 0, enabled: true, markdown: '# Rules' })
+    await rm(currentTarget.skillDirectory, { recursive: true })
+    await mkdir(currentTarget.skillDirectory)
+
+    expect(await service.getSnapshot({ audit: true })).toMatchObject({ health: 'active' })
+    await service.disable(1)
+
+    expect((await stat(currentTarget.skillDirectory)).isDirectory()).toBe(true)
   })
 
   it('blocks an all-provider enable when a registered provider is unsupported', async () => {
@@ -290,8 +416,8 @@ describe('AgentCodeConventionsService', () => {
   it('preserves syntactically valid state whose ownership path is unsafe', async () => {
     const root = await temporaryDirectory()
     const stateFilePath = join(root, 'state', 'conventions.json')
-    const unrelated = join(root, 'unrelated.txt')
-    await writeFile(unrelated, 'do not delete')
+    const unrelated = join(root, 'unrelated', 'skills', 'agent-code-conventions', 'SKILL.md')
+    await writeFileWithParents(unrelated, 'do not delete')
     const document: AgentCodeConventionsDocument = {
       ...createEmptyAgentCodeConventionsDocument(),
       materializations: {

@@ -46,6 +46,7 @@ function isPendingOperation(value: unknown): value is AgentCodeConventionsPendin
     && (value.desiredSha256 === null || (
       typeof value.desiredSha256 === 'string' && /^[a-f0-9]{64}$/.test(value.desiredSha256)
     ))
+    && (value.createdDirectory === undefined || typeof value.createdDirectory === 'boolean')
     && (value.expectedConflictFingerprint === undefined
       || (typeof value.expectedConflictFingerprint === 'string'
         && /^[a-f0-9]{64}$/.test(value.expectedConflictFingerprint)))
@@ -138,6 +139,10 @@ export async function writeAgentCodeConventionsState(
     absolutePath: stateFilePath,
     text: `${JSON.stringify(document, null, 2)}\n`,
     maxBytes: AGENT_CODE_CONVENTIONS_STATE_MAX_BYTES,
+    // Canonical conventions may contain sensitive working practices. Unlike
+    // editor saves, this app-owned state has a fixed private permission policy
+    // even when repairing a pre-existing permissive file.
+    mode: 0o600,
   })
   if (!result.ok) throw new Error('Conventions state changed during atomic write')
 }

@@ -44,6 +44,7 @@ export function AgentCodeConventionsEditorModal({
   const [enabled, setEnabled] = useState(snapshot.enabled)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [revisionConflict, setRevisionConflict] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const [preview, setPreview] = useState<string | null>(null)
   const [warnings, setWarnings] = useState(snapshot.warnings)
@@ -63,6 +64,7 @@ export function AgentCodeConventionsEditorModal({
     setMarkdown(snapshot.markdown)
     setEnabled(snapshot.enabled)
     setError(null)
+    setRevisionConflict(false)
     setNotice(null)
     setPreview(null)
     setWarnings(snapshot.warnings)
@@ -97,6 +99,7 @@ export function AgentCodeConventionsEditorModal({
       setWarnings(result.snapshot.warnings)
       onSnapshot(result.snapshot)
       setError(null)
+      setRevisionConflict(false)
       return true
     }
     if ('snapshot' in result) {
@@ -111,6 +114,7 @@ export function AgentCodeConventionsEditorModal({
       }
     }
     if ('warnings' in result && result.warnings) setWarnings(result.warnings)
+    setRevisionConflict(result.code === 'revision-conflict')
     setError(mutationMessage(result))
     return false
   }
@@ -118,6 +122,7 @@ export function AgentCodeConventionsEditorModal({
   const save = async (approvals = overwriteApprovals) => {
     setBusy(true)
     setError(null)
+    setRevisionConflict(false)
     setNotice(null)
     try {
       const result = await window.api.saveAgentCodeConventions({
@@ -145,6 +150,7 @@ export function AgentCodeConventionsEditorModal({
     if (!window.confirm(clearConfirmation)) return
     setBusy(true)
     setError(null)
+    setRevisionConflict(false)
     try {
       const result = await window.api.clearAgentCodeConventions({
         expectedRevision: base.revision,
@@ -161,6 +167,7 @@ export function AgentCodeConventionsEditorModal({
   const showPreview = async () => {
     setBusy(true)
     setError(null)
+    setRevisionConflict(false)
     try {
       const result = await window.api.previewAgentCodeConventions(markdown)
       if (result.ok) {
@@ -297,7 +304,7 @@ export function AgentCodeConventionsEditorModal({
           {error ? <div role="alert" className="border border-danger px-2 py-1 text-[11px] text-danger">{error}</div> : null}
           {notice ? <div role="status" className="border border-accent px-2 py-1 text-[11px] text-accent">{notice}</div> : null}
 
-          {error?.includes('newer saved version') ? (
+          {revisionConflict ? (
             <div className="flex gap-2">
               <button type="button" className="border border-control-border px-2 py-1 text-[11px]" onClick={() => {
                 // The conflict response is already the authoritative latest
@@ -310,6 +317,7 @@ export function AgentCodeConventionsEditorModal({
                 setWarnings(latest.warnings)
                 setConflictSnapshot(null)
                 setError(null)
+                setRevisionConflict(false)
               }}>Reload latest</button>
               <button type="button" className="border border-control-border px-2 py-1 text-[11px]" onClick={() => void navigator.clipboard.writeText(markdown)}>Copy draft</button>
             </div>

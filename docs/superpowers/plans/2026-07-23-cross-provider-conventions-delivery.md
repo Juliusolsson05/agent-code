@@ -48,7 +48,10 @@ architecture below:
   conflict replacement, abandonment, and stale-draft recovery;
 - [x] durable design documentation plus focused core/system/renderer regression
   coverage;
-- [x] `npm run check` (contract, composite typecheck, 220 test files / 1,233
+- [x] four-agent Claude/Codex review hardening: isolated filesystem safety,
+  create-only publication, journal-only cleanup, operation-bound crash temps,
+  external-root migration, private state permissions, and serialized snapshots;
+- [x] `npm run check` (contract, composite typecheck, 221 test files / 1,242
   tests, production build, and packaged-entry verification).
 
 The live-provider acceptance matrix and Settings screenshots remain deliberately

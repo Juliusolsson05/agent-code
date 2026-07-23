@@ -127,6 +127,12 @@ export type AgentCodeConventionsPendingOperation = {
   previousSha256: string | null
   desiredSha256: string | null
   /**
+   * Recorded after the exclusive leaf-directory mkdir result and persisted
+   * before publishing SKILL.md. This lets crash recovery retain precise
+   * directory ownership without guessing from whether the directory exists.
+   */
+  createdDirectory?: boolean
+  /**
    * An overwrite prompt approves one observed collision, not a pathname for
    * all time. Persisting the fingerprint keeps crash recovery from broadening
    * that one approval into permission to replace later external edits.

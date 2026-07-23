@@ -1,14 +1,8 @@
 import { randomUUID } from 'crypto'
-import type { Stats } from 'fs'
 import { homedir } from 'os'
-import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from 'path'
-import { lstat, mkdir, readdir, realpath, rmdir, unlink } from 'fs/promises'
+import { basename, dirname, isAbsolute, relative, resolve, sep } from 'path'
 
-import {
-  atomicWriteTextFile,
-  editorFileVersion,
-  readBoundedTextFile,
-} from '@main/editorFileIO.js'
+import { atomicWriteTextFile } from '@main/editorFileIO.js'
 import { AGENT_CODE_CONVENTIONS_STATE_FILE } from '@main/storage/paths.js'
 import {
   readAgentCodeConventionsState,
@@ -21,6 +15,11 @@ import {
   renderAgentCodeConventionsSkill,
   sha256Text,
 } from './renderSkill.js'
+import {
+  journalTemporaryPath,
+  SkillPathSafety,
+  type FileInspection,
+} from './skillPathSafety.js'
 import {
   resolveAgentCodeConventionsTargets,
   type AgentCodeConventionsTarget,
@@ -54,21 +53,6 @@ type ServiceOptions = {
   operationId?: () => string
 }
 
-type FileInspection =
-  | {
-      kind: 'missing'
-      directoryExists: boolean
-      directoryEmpty: boolean
-    }
-  | {
-      kind: 'file'
-      sha256: string | null
-      version: string
-      fingerprint: string
-      readError?: string
-    }
-  | { kind: 'conflict'; fingerprint: string; message: string }
-
 type PreflightTarget = {
   target: AgentCodeConventionsTarget
   inspection: FileInspection
@@ -92,6 +76,7 @@ export class AgentCodeConventionsService {
 
   private readonly stateFilePath: string
   private readonly homeDirectory: string
+  private readonly pathSafety: SkillPathSafety
   private readonly resolveTargetsImpl: () => Promise<ResolvedAgentCodeConventionsTargets>
   private readonly now: () => Date
   private readonly operationId: () => string
@@ -99,6 +84,7 @@ export class AgentCodeConventionsService {
   constructor(options: ServiceOptions = {}) {
     this.stateFilePath = options.stateFilePath ?? AGENT_CODE_CONVENTIONS_STATE_FILE
     this.homeDirectory = options.homeDirectory ?? homedir()
+    this.pathSafety = new SkillPathSafety(this.homeDirectory)
     this.resolveTargetsImpl = options.resolveTargets ?? (() => resolveAgentCodeConventionsTargets({
       homeDirectory: this.homeDirectory,
       environment: options.environment ?? process.env,
@@ -138,10 +124,15 @@ export class AgentCodeConventionsService {
     })
   }
 
-  async getSnapshot(options: { audit?: boolean } = {}): Promise<AgentCodeConventionsSnapshot> {
-    await this.initialize()
+  getSnapshot(options: { audit?: boolean } = {}): Promise<AgentCodeConventionsSnapshot> {
     if (options.audit) return this.audit()
-    return this.snapshot()
+    return this.serialize(async () => {
+      // Snapshot reads share the mutation queue. Without this, a renderer
+      // refresh could observe the new document with the previous operation's
+      // status list during an awaited provider write.
+      await this.ensureInitializedLocked()
+      return this.snapshot()
+    })
   }
 
   audit(): Promise<AgentCodeConventionsSnapshot> {
@@ -268,7 +259,7 @@ export class AgentCodeConventionsService {
       }
 
       const nextRevision = this.document.revision + 1
-      if (this.document.enabled || Object.keys(this.document.materializations).length > 0) {
+      if (this.document.enabled || this.hasTrackedArtifacts(this.document)) {
         const disabled = await this.disableLocked({
           revision: nextRevision,
           markdown: this.document.markdown,
@@ -276,6 +267,7 @@ export class AgentCodeConventionsService {
         if (!disabled.ok) return disabled
       }
 
+      const next = structuredClone(this.document)
       if (Object.keys(this.document.materializations).length > 0) {
         await this.inspectRemainingMaterializations()
         const approvals = new Map(
@@ -298,21 +290,22 @@ export class AgentCodeConventionsService {
         // hatch into the exact destructive behavior this feature forbids.
         for (const status of this.targetStatuses) {
           if (status.state === 'conflict' || status.state === 'retired') {
-            delete this.document.materializations[status.id]
-            delete this.document.pendingOperations[status.id]
+            delete next.materializations[status.id]
+            delete next.pendingOperations[status.id]
           }
         }
       }
 
-      this.document.enabled = false
-      this.document.markdown = ''
-      this.document.updatedAt = this.now().toISOString()
-      this.document.revision = Math.max(this.document.revision, nextRevision)
+      next.enabled = false
+      next.markdown = ''
+      next.updatedAt = this.now().toISOString()
+      next.revision = Math.max(next.revision, nextRevision)
       try {
-        await writeAgentCodeConventionsState(this.stateFilePath, this.document)
+        await writeAgentCodeConventionsState(this.stateFilePath, next)
       } catch (error) {
         return this.ioError(error)
       }
+      this.document = next
       this.targetStatuses = this.targets.targets.map(target => this.status(target, 'not-installed'))
       return { ok: true, snapshot: this.snapshot() }
     })
@@ -350,10 +343,10 @@ export class AgentCodeConventionsService {
     markdown: string,
     expectedRevision: number,
   ): Promise<AgentCodeConventionsMutationResult> {
-    if (this.document.enabled || Object.keys(this.document.materializations).length > 0) {
+    if (this.document.enabled || this.hasTrackedArtifacts(this.document)) {
       return this.disableLocked({ revision: expectedRevision + 1, markdown })
     }
-    this.document = {
+    const next = {
       ...this.document,
       revision: expectedRevision + 1,
       enabled: false,
@@ -361,10 +354,11 @@ export class AgentCodeConventionsService {
       updatedAt: this.now().toISOString(),
     }
     try {
-      await writeAgentCodeConventionsState(this.stateFilePath, this.document)
+      await writeAgentCodeConventionsState(this.stateFilePath, next)
     } catch (error) {
       return this.ioError(error)
     }
+    this.document = next
     this.targetStatuses = this.targets.targets.map(target => this.status(target, 'not-installed'))
     return { ok: true, snapshot: this.snapshot() }
   }
@@ -378,6 +372,7 @@ export class AgentCodeConventionsService {
     next.markdown = options.markdown
     next.updatedAt = this.now().toISOString()
     next.revision = options.revision
+    this.adoptPendingWritesForRemoval(next)
     for (const [key, record] of Object.entries(next.materializations)) {
       next.pendingOperations[key] = {
         operationId: this.operationId(),
@@ -410,6 +405,7 @@ export class AgentCodeConventionsService {
   }
 
   private async reconcileLocked(): Promise<void> {
+    await this.cleanupJournaledWriteTemps()
     this.rehomeMovedMaterializations()
     if (this.document.enabled) await this.reconcileEnabledLocked()
     else await this.reconcileDisabledLocked()
@@ -433,7 +429,7 @@ export class AgentCodeConventionsService {
     const statuses: AgentCodeConventionsTargetStatus[] = []
 
     for (const target of this.targets.targets) {
-      const inspection = await this.inspectTarget(target)
+      const inspection = await this.pathSafety.inspectTarget(target)
       const record = this.document.materializations[target.id]
       const pending = this.document.pendingOperations[target.id]
       if (inspection.kind === 'file' && inspection.sha256 === desiredHash) {
@@ -445,7 +441,7 @@ export class AgentCodeConventionsService {
           this.document.materializations[target.id] = {
             path: target.skillFile,
             sha256: desiredHash,
-            createdDirectory: record?.createdDirectory ?? false,
+            createdDirectory: pending?.createdDirectory ?? record?.createdDirectory ?? false,
           }
           delete this.document.pendingOperations[target.id]
           statuses.push(this.status(target, 'installed'))
@@ -486,7 +482,7 @@ export class AgentCodeConventionsService {
 
     for (const [key, record] of Object.entries(this.document.materializations)) {
       if (!key.startsWith(RETIRED_PREFIX)) continue
-      if (!this.document.pendingOperations[key]) {
+      if (this.document.pendingOperations[key]?.kind !== 'delete') {
         this.document.pendingOperations[key] = {
           operationId: this.operationId(),
           targetId: key,
@@ -497,7 +493,11 @@ export class AgentCodeConventionsService {
         }
         if (!await this.persistJournalBeforeExternalMutation(statuses)) continue
       }
-      statuses.push(await this.removeMaterialization(key, record))
+      const removed = await this.removeMaterialization(key, record)
+      // A retired target that was successfully removed is historical cleanup,
+      // not part of current deployment health. Reporting it as not-installed
+      // made an otherwise complete enabled reconciliation look degraded.
+      if (removed.state !== 'not-installed') statuses.push(removed)
     }
     this.targetStatuses = statuses
     await this.persistBestEffort(statuses)
@@ -505,8 +505,9 @@ export class AgentCodeConventionsService {
 
   private async reconcileDisabledLocked(): Promise<void> {
     const statuses: AgentCodeConventionsTargetStatus[] = []
+    this.adoptPendingWritesForRemoval(this.document)
     for (const [key, record] of Object.entries(this.document.materializations)) {
-      if (!this.document.pendingOperations[key]) {
+      if (this.document.pendingOperations[key]?.kind !== 'delete') {
         this.document.pendingOperations[key] = {
           operationId: this.operationId(),
           targetId: key,
@@ -535,7 +536,7 @@ export class AgentCodeConventionsService {
     for (const target of this.targets.targets) {
       result.push({
         target,
-        inspection: await this.inspectTarget(target),
+        inspection: await this.pathSafety.inspectTarget(target),
         existing: this.document.materializations[target.id],
         overwrite: resolutions.get(target.id),
       })
@@ -594,18 +595,60 @@ export class AgentCodeConventionsService {
     }
   }
 
+  private async cleanupJournaledWriteTemps(): Promise<void> {
+    for (const operation of Object.values(this.document.pendingOperations)) {
+      if (operation.kind !== 'write') continue
+      await this.pathSafety.cleanupJournaledTemporaryFile(
+        journalTemporaryPath(operation.path, operation.operationId),
+      )
+    }
+  }
+
+  private adoptPendingWritesForRemoval(document: AgentCodeConventionsDocument): void {
+    for (const [key, operation] of Object.entries(document.pendingOperations)) {
+      if (operation.kind !== 'write' || document.materializations[key]) continue
+      if (!operation.desiredSha256) continue
+      // A pending write is the durable proof for a provider copy that may have
+      // been published before the process died. Converting it to a normal
+      // ownership record lets the existing hash-checked removal path decide
+      // whether bytes exist; it never broadens authority beyond that journal.
+      document.materializations[key] = {
+        path: operation.path,
+        sha256: operation.desiredSha256,
+        createdDirectory: operation.createdDirectory ?? false,
+      }
+    }
+  }
+
+  private hasTrackedArtifacts(document: AgentCodeConventionsDocument): boolean {
+    return Object.keys(document.materializations).length > 0
+      || Object.keys(document.pendingOperations).length > 0
+  }
+
   private async publishTarget(
     item: PreflightTarget,
     rendered: string,
     desiredHash: string,
   ): Promise<AgentCodeConventionsTargetStatus> {
     try {
-      const createdDirectory = await this.ensureTargetDirectory(item.target)
+      const pending = this.document.pendingOperations[item.target.id]
+      if (!pending || pending.kind !== 'write') {
+        throw new Error('Missing write-ahead operation for conventions publication')
+      }
+      await this.pathSafety.cleanupJournaledTemporaryFile(
+        journalTemporaryPath(item.target.skillFile, pending.operationId),
+      )
+      const createdDirectory = await this.pathSafety.ensureTargetDirectory(item.target)
+      pending.createdDirectory = createdDirectory
+      // Directory ownership must be durable before SKILL.md publication. A
+      // crash after the atomic write can then adopt both the bytes and the
+      // correct leaf-directory ownership from the pending operation.
+      await writeAgentCodeConventionsState(this.stateFilePath, this.document)
       const expectedVersion = item.inspection.kind === 'file'
         ? item.inspection.version
         : null
       if (item.inspection.kind === 'conflict') {
-        const current = await this.inspectTarget(item.target)
+        const current = await this.pathSafety.inspectTarget(item.target)
         if (current.kind !== 'conflict'
           || current.fingerprint !== item.overwrite?.expectedConflictFingerprint) {
           delete this.document.pendingOperations[item.target.id]
@@ -619,10 +662,11 @@ export class AgentCodeConventionsService {
         text: rendered,
         expectedVersion,
         maxBytes: AGENT_CODE_CONVENTIONS_COLLISION_MAX_BYTES,
+        temporaryPath: journalTemporaryPath(item.target.skillFile, pending.operationId),
       })
       if (!result.ok) {
         delete this.document.pendingOperations[item.target.id]
-        const current = await this.inspectTarget(item.target)
+        const current = await this.pathSafety.inspectTarget(item.target)
         return current.kind === 'file'
           ? this.conflictStatus(item.target, current.fingerprint, 'The file changed while Agent Code was saving.')
           : this.status(item.target, 'conflict', 'The target changed while Agent Code was saving.')
@@ -630,7 +674,9 @@ export class AgentCodeConventionsService {
       this.document.materializations[item.target.id] = {
         path: item.target.skillFile,
         sha256: desiredHash,
-        createdDirectory: item.existing?.createdDirectory ?? createdDirectory,
+        createdDirectory: item.inspection.kind === 'missing'
+          ? createdDirectory
+          : item.existing?.createdDirectory ?? createdDirectory,
       }
       delete this.document.pendingOperations[item.target.id]
       return this.status(item.target, 'installed')
@@ -655,8 +701,11 @@ export class AgentCodeConventionsService {
             message,
           }
     try {
-      const inspected = await this.inspectExactFile(record.path)
+      const inspected = await this.pathSafety.inspectExactFile(record.path)
       if (inspected.kind === 'missing') {
+        if (record.createdDirectory) {
+          await this.pathSafety.removeEmptyOwnedDirectory(dirname(record.path))
+        }
         delete this.document.materializations[key]
         delete this.document.pendingOperations[key]
         return baseStatus('not-installed')
@@ -672,24 +721,17 @@ export class AgentCodeConventionsService {
           conflictFingerprint: fingerprint,
         }
       }
-      const current = await lstat(record.path)
-      if (current.isSymbolicLink() || !current.isFile()
-        || editorFileVersion(current) !== inspected.version) {
+      const removal = await this.pathSafety.unlinkOwnedRegularFile(record.path, inspected.version)
+      if (removal === 'changed') {
         delete this.document.pendingOperations[key]
         return {
           ...baseStatus('conflict', 'The file changed immediately before removal.'),
           conflictFingerprint: inspected.fingerprint,
         }
       }
-      // The exact file can remain regular while one of its parent directories
-      // is swapped for a symlink after inspection. Rechecking the directory
-      // chain immediately before unlink prevents a persisted hash from becoming
-      // authority to delete matching bytes reached through a different path.
-      await this.assertNoSymlinkComponents(dirname(record.path))
-      await unlink(record.path)
-      if (record.createdDirectory) await rmdir(dirname(record.path)).catch(error => {
-        if (!['ENOTEMPTY', 'ENOENT'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error
-      })
+      if (record.createdDirectory) {
+        await this.pathSafety.removeEmptyOwnedDirectory(dirname(record.path))
+      }
       delete this.document.materializations[key]
       delete this.document.pendingOperations[key]
       return baseStatus('not-installed')
@@ -699,183 +741,16 @@ export class AgentCodeConventionsService {
     }
   }
 
-  private async inspectTarget(target: AgentCodeConventionsTarget): Promise<FileInspection> {
-    try {
-      await this.assertNoSymlinkComponents(target.skillsDirectory)
-      const directory = await lstat(target.skillDirectory).catch(error => {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
-        throw error
-      })
-      if (!directory) return { kind: 'missing', directoryExists: false, directoryEmpty: true }
-      if (directory.isSymbolicLink() || !directory.isDirectory()) {
-        return this.pathConflict(target.skillDirectory, 'The skill path is not a regular directory.')
-      }
-      const entries = await readdir(target.skillDirectory)
-      const file = await lstat(target.skillFile).catch(error => {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
-        throw error
-      })
-      if (!file) {
-        if (entries.length > 0) {
-          return {
-            kind: 'conflict',
-            fingerprint: sha256Text(`${target.skillDirectory}\0${entries.sort().join('\0')}`),
-            message: 'The skill directory contains files Agent Code does not own.',
-          }
-        }
-        return { kind: 'missing', directoryExists: true, directoryEmpty: true }
-      }
-      return this.inspectRegularFile(target.skillFile, file)
-    } catch (error) {
-      return this.pathConflict(target.skillFile, safeErrorMessage(error))
-    }
-  }
-
-  private async inspectExactFile(path: string): Promise<FileInspection> {
-    if (!isAbsolute(path)) return this.pathConflict(path, 'Persisted ownership path is not absolute.')
-    try {
-      await this.assertNoSymlinkComponents(dirname(path))
-    } catch (error) {
-      return this.pathConflict(path, safeErrorMessage(error))
-    }
-    const file = await lstat(path).catch(error => {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
-      throw error
-    })
-    if (!file) return { kind: 'missing', directoryExists: false, directoryEmpty: true }
-    return this.inspectRegularFile(path, file)
-  }
-
-  private async inspectRegularFile(
-    path: string,
-    stat: Stats,
-  ): Promise<FileInspection> {
-    const version = editorFileVersion(stat)
-    const fingerprint = sha256Text(`${path}\0${version}`)
-    if (stat.isSymbolicLink() || !stat.isFile()) {
-      return { kind: 'conflict', fingerprint, message: 'The target is not a regular file.' }
-    }
-    try {
-      const read = await readBoundedTextFile(path, AGENT_CODE_CONVENTIONS_COLLISION_MAX_BYTES)
-      return {
-        kind: 'file',
-        sha256: sha256Text(read.text),
-        version: read.version,
-        fingerprint: sha256Text(`${path}\0${read.version}`),
-      }
-    } catch (error) {
-      return {
-        kind: 'file',
-        sha256: null,
-        version,
-        fingerprint,
-        readError: safeErrorMessage(error),
-      }
-    }
-  }
-
-  private pathConflict(path: string, message: string): FileInspection {
-    return {
-      kind: 'conflict',
-      fingerprint: sha256Text(`${path}\0${message}`),
-      message,
-    }
-  }
-
-  private async ensureTargetDirectory(target: AgentCodeConventionsTarget): Promise<boolean> {
-    await this.ensureDirectoryTreeNoSymlinks(target.skillsDirectory)
-    let created = false
-    try {
-      await mkdir(target.skillDirectory, { mode: 0o700 })
-      created = true
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-    }
-    await this.assertNoSymlinkComponents(target.skillDirectory)
-    const canonical = await realpath(target.skillDirectory)
-    const trustedHome = resolve(this.homeDirectory)
-    const fromHome = relative(trustedHome, resolve(target.skillDirectory))
-    const expectedCanonical = fromHome === ''
-      || (!fromHome.startsWith(`..${sep}`) && fromHome !== '..' && !isAbsolute(fromHome))
-      ? resolve(await realpath(trustedHome).catch(() => trustedHome), fromHome)
-      : resolve(target.skillDirectory)
-    if (resolve(canonical) !== expectedCanonical) {
-      throw new Error('Symbolic-link skill directories are not supported')
-    }
-    return created
-  }
-
-  private async ensureDirectoryTreeNoSymlinks(path: string): Promise<void> {
-    const { cursor: initialCursor, segments } = this.pathWalk(path)
-    let cursor = initialCursor
-    for (const segment of segments) {
-      cursor = join(cursor, segment)
-      let stat = await lstat(cursor).catch(error => {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
-        throw error
-      })
-      if (!stat) {
-        try {
-          // Creating one component at a time prevents mkdir({recursive:true})
-          // from silently following a symlink hidden in an otherwise missing
-          // provider path. EEXIST is a race signal, not success: re-lstat below.
-          await mkdir(cursor, { mode: 0o700 })
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-        }
-        stat = await lstat(cursor)
-      }
-      if (stat.isSymbolicLink()) {
-        throw new Error(`Symbolic-link path component is not supported: ${cursor}`)
-      }
-      if (!stat.isDirectory()) throw new Error(`Path component is not a directory: ${cursor}`)
-    }
-  }
-
-  private async assertNoSymlinkComponents(path: string): Promise<void> {
-    const { cursor: initialCursor, segments } = this.pathWalk(path)
-    let cursor = initialCursor
-    for (const segment of segments) {
-      cursor = join(cursor, segment)
-      const stat = await lstat(cursor).catch(error => {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
-        throw error
-      })
-      if (!stat) return
-      if (stat.isSymbolicLink()) throw new Error(`Symbolic-link path component is not supported: ${cursor}`)
-      if (!stat.isDirectory()) throw new Error(`Path component is not a directory: ${cursor}`)
-    }
-  }
-
-  private pathWalk(path: string): { cursor: string; segments: string[] } {
-    const absolute = resolve(path)
-    const trustedHome = resolve(this.homeDirectory)
-    const fromHome = relative(trustedHome, absolute)
-    if (fromHome === '' || (!fromHome.startsWith(`..${sep}`) && fromHome !== '..' && !isAbsolute(fromHome))) {
-      // The effective home is inherited from the same environment as provider
-      // processes, so it is the trust anchor. Rejecting symlinks above it would
-      // incorrectly reject macOS /var-backed temporary homes and user accounts
-      // reached through an administrator-chosen mount alias; provider-owned
-      // components below home remain fully checked.
-      return { cursor: trustedHome, segments: fromHome.split(sep).filter(Boolean) }
-    }
-    const root = parse(absolute).root
-    return {
-      cursor: root,
-      segments: absolute.slice(root.length).split(sep).filter(Boolean),
-    }
-  }
-
   private rehomeMovedMaterializations(): void {
     const currentTargets = new Map(this.targets.targets.map(target => [target.id, target]))
     for (const [key, record] of Object.entries(this.document.materializations)) {
       if (key.startsWith(RETIRED_PREFIX)) continue
       const target = currentTargets.get(key)
       if (target && resolve(record.path) === resolve(target.skillFile)) continue
-      // A provider removal and a provider root move are the same ownership
-      // problem: the old copy still exists, but it is no longer a current
-      // publish target. Retiring unknown ids as well as moved known ids keeps
-      // those artifacts visible and eligible for hash-proven cleanup.
+      // A provider root move leaves an old copy that is no longer a current
+      // publish target. Only ids still declared by the exhaustive registry can
+      // reach this point; unknown ids enter Recovery required before mutation
+      // so syntactically valid state cannot authorize arbitrary deletion.
       const retiredKey = `${RETIRED_PREFIX}${key}:${sha256Text(record.path).slice(0, 12)}`
       this.document.materializations[retiredKey] = record
       delete this.document.materializations[key]
@@ -903,16 +778,17 @@ export class AgentCodeConventionsService {
   private persistedOwnershipProblem(): string | null {
     const currentTargets = new Map(this.targets.targets.map(target => [target.id, target]))
     const currentPaths = new Set(this.targets.targets.map(target => resolve(target.skillFile)))
+    const currentTargetIds = new Set(currentTargets.keys())
 
     for (const [key, record] of Object.entries(this.document.materializations)) {
-      if (!this.isSafePersistedSkillPath(record.path, currentPaths)) {
+      if (!this.isSafePersistedSkillPath(key, record.path, currentPaths, currentTargetIds)) {
         return `materialization ${key} points outside an allowed skill path.`
       }
     }
 
     for (const [key, operation] of Object.entries(this.document.pendingOperations)) {
       if (operation.targetId !== key) return `pending operation ${key} has a mismatched target id.`
-      if (!this.isSafePersistedSkillPath(operation.path, currentPaths)) {
+      if (!this.isSafePersistedSkillPath(key, operation.path, currentPaths, currentTargetIds)) {
         return `pending operation ${key} points outside an allowed skill path.`
       }
       if (operation.kind === 'write') {
@@ -939,23 +815,46 @@ export class AgentCodeConventionsService {
     return null
   }
 
-  private isSafePersistedSkillPath(path: string, currentPaths: Set<string>): boolean {
+  private isSafePersistedSkillPath(
+    key: string,
+    path: string,
+    currentPaths: Set<string>,
+    currentTargetIds: Set<string>,
+  ): boolean {
     if (!isAbsolute(path) || resolve(path) !== path) return false
     if (basename(path) !== 'SKILL.md'
       || basename(dirname(path)) !== AGENT_CODE_CONVENTIONS_SKILL_NAME
       || basename(dirname(dirname(path))) !== 'skills') return false
 
+    const targetId = this.ownershipTargetId(key, currentTargetIds)
+    if (!targetId) return false
     const absolute = resolve(path)
     if (currentPaths.has(absolute)) return true
-    const fromHome = relative(resolve(this.homeDirectory), absolute)
-    return fromHome === ''
-      || (!fromHome.startsWith(`..${sep}`) && fromHome !== '..' && !isAbsolute(fromHome))
+    // A current stable location id is the persisted relation that permits an
+    // old root to be retired after CLAUDE_CONFIG_DIR moves outside home. The
+    // exact conventional suffix and known id are both required; the previous
+    // broad "$HOME/**/skills/..." rule made an unknown state key deletion
+    // authority over unrelated matching files.
+    return currentTargetIds.has(targetId)
+  }
+
+  private ownershipTargetId(key: string, currentTargetIds: Set<string>): string | null {
+    if (currentTargetIds.has(key)) return key
+    if (!key.startsWith(RETIRED_PREFIX)) return null
+    const retired = key.slice(RETIRED_PREFIX.length)
+    for (const targetId of [...currentTargetIds].sort((left, right) => right.length - left.length)) {
+      const prefix = `${targetId}:`
+      if (retired.startsWith(prefix) && /^[a-f0-9]{12}$/.test(retired.slice(prefix.length))) {
+        return targetId
+      }
+    }
+    return null
   }
 
   private async inspectRemainingMaterializations(): Promise<void> {
     const statuses: AgentCodeConventionsTargetStatus[] = []
     for (const [key, record] of Object.entries(this.document.materializations)) {
-      const inspection = await this.inspectExactFile(record.path)
+      const inspection = await this.pathSafety.inspectExactFile(record.path)
       const state = key.startsWith(RETIRED_PREFIX) ? 'retired' : 'conflict'
       const target = this.targets.targets.find(value => value.id === key)
       const status: AgentCodeConventionsTargetStatus = target

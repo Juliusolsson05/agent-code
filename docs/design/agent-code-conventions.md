@@ -25,6 +25,22 @@ The renderer receives paths and health through typed IPC. It never constructs
 provider paths or writes arbitrary files. Preview also runs in main so the
 product-owned wrapper has one implementation.
 
+## Isolation boundary
+
+`AgentCodeConventionsService` is the subsystem's single writer and the only
+production consumer of `persistence.ts` and `skillPathSafety.ts`. The latter
+owns bounded inspection, link rejection, directory creation, journal-temp
+cleanup, and hash-verified removal mechanics; it does not know providers or UI.
+The service consumes those mechanics and emits one typed snapshot.
+
+Production code outside `src/main/agentCodeConventions/` must not import those
+low-level modules, mutate conventions state, or arbitrate between provider
+roots. IPC may call the service, renderer code may consume snapshots, and the
+session manager may invoke the opaque pre-session reconciliation callback.
+Provider modules declare discovery capabilities only. This single-consumer
+shape is intentional: duplicating even one deletion or collision rule in a
+consumer would create a second source of ownership truth.
+
 ## Provider discovery capability
 
 Every entry in the exhaustive main provider registry declares whether it

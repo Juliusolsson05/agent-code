@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, symlink, writeFile } from 'fs/promises'
+import { chmod, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -32,6 +32,17 @@ describe('Agent Code conventions persistence', () => {
 
     expect(await readAgentCodeConventionsState(statePath)).toEqual({ kind: 'ok', document })
     expect((await readFile(statePath, 'utf8')).endsWith('\n')).toBe(true)
+  })
+
+  it('tightens an existing state file to private permissions', async () => {
+    const root = await temporaryDirectory()
+    const statePath = join(root, 'conventions.json')
+    await writeFile(statePath, '{}')
+    await chmod(statePath, 0o644)
+
+    await writeAgentCodeConventionsState(statePath, createEmptyAgentCodeConventionsDocument())
+
+    expect((await stat(statePath)).mode & 0o777).toBe(0o600)
   })
 
   it('preserves malformed and unsupported state as recovery-required', async () => {
