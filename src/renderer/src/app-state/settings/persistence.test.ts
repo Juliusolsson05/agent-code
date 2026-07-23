@@ -32,8 +32,9 @@ describe('coerceSettings agentViewMode', () => {
         'orchestration',
         'workflows',
         'not-a-domain',
+        'agent_management',
         12,
       ],
-    }).defaultBuiltInMcpDomains).toEqual(['workflows', 'orchestration'])
+    }).defaultBuiltInMcpDomains).toEqual(['workflows', 'orchestration', 'agent_management'])
   })
 })

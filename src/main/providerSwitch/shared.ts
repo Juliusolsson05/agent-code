@@ -73,6 +73,37 @@ export async function findCodexRolloutPathBySessionId(
   return matches[0]?.path ?? null
 }
 
+export async function findCodexRolloutPathsBySessionIds(
+  providerSessionIds: readonly string[],
+): Promise<Map<string, string>> {
+  const targets = [...new Set(providerSessionIds.filter(Boolean))]
+    .sort((a, b) => b.length - a.length)
+  const latest = new Map<string, { path: string; mtimeMs: number }>()
+  if (targets.length === 0) return new Map()
+
+  // WHY fleet lookup gets a dedicated one-walk helper: the provider registry's
+  // single-session resolver is the right primitive for resume, but calling it
+  // once per Agent Management row would rescan the entire date-bucketed Codex
+  // sessions tree N times. One walk with the same newest-mtime tie-break keeps
+  // canonical path semantics while making project inventory proportional to
+  // the transcript tree, not agents × transcript tree.
+  await walkCodexRollouts(getCodexSessionsDir(), async filePath => {
+    const providerSessionId = targets.find(id => filePath.endsWith(`-${id}.jsonl`))
+    if (!providerSessionId) return
+    try {
+      const fileStat = await stat(filePath)
+      const current = latest.get(providerSessionId)
+      if (!current || fileStat.mtimeMs > current.mtimeMs) {
+        latest.set(providerSessionId, { path: filePath, mtimeMs: fileStat.mtimeMs })
+      }
+    } catch {
+      // Match the single-session resolver: disappearing/unreadable candidates
+      // are absent rather than fatal to the rest of the project inventory.
+    }
+  })
+  return new Map([...latest].map(([id, value]) => [id, value.path]))
+}
+
 export async function resolveProviderTranscriptPath(params: {
   kind: AgentProviderKind
   cwd: string

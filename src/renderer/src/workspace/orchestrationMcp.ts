@@ -13,7 +13,7 @@ import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type { SessionId, SessionMeta, WorkspaceState } from '@renderer/workspace/types'
 
 type RuntimeMap = Record<SessionId, SessionRuntime>
-type VisibleMessageSummary = {
+export type VisibleMessageSummary = {
   messages: OrchestrationAgentMessage[]
   messageCount: number
   latestAssistantText?: string
@@ -412,12 +412,13 @@ function visibleMessages(
   return messages
 }
 
-function visibleMessageSummary(
+export function visibleMessageSummary(
   runtime: SessionRuntime | null,
   meta: SessionMeta | undefined,
   maxMessages: number,
   maxCharsPerMessage: number,
   maxCharsPerAgent: number,
+  entriesOverride?: SessionRuntime['entries'],
 ): VisibleMessageSummary {
   if (!runtime) {
     return {
@@ -478,8 +479,10 @@ function visibleMessageSummary(
       // excerpt, never to nothing. usedChars is always 0 here (nothing kept
       // yet), so the whole agent budget is available; boundedMaxCharsPerAgent
       // clamps it to >=100, which keeps a 76-char excerpt + marker even in the
-      // worst case. Older messages then fail the budget check above and drop
-      // as before.
+      // ordinary orchestration worst case. Agent Management's project-wide
+      // allocator may deliberately pass a smaller fair share; boundText keeps
+      // even that response within its exact allocation. Older messages then
+      // fail the budget check above and drop as before.
       bounded = boundText(rawText, maxCharsPerAgent)
       truncated = true
     }
@@ -506,7 +509,12 @@ function visibleMessageSummary(
     if (!pushed) totalChars += liveText.length
   }
 
-  const entries = orchestrationVisibleEntries(runtime, meta)
+  // Project-wide Agent Management reads the complete visible conversation,
+  // while orchestration must cut inherited parent context at the handoff. Keep
+  // one byte-budgeting implementation and make only the entry selection a
+  // caller decision; duplicating the tail scanner would eventually give the
+  // two MCP surfaces different truncation and lifecycle behavior.
+  const entries = entriesOverride ?? orchestrationVisibleEntries(runtime, meta)
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const entry = entries[index]!
     if (entry.type !== 'user' && entry.type !== 'assistant') continue
@@ -560,8 +568,17 @@ function boundText(text: string, maxChars: number): {
   if (text.length <= maxChars) {
     return { text, truncated: false, totalChars: text.length }
   }
+  const marker = '\n[truncated]'
+  if (maxChars <= marker.length) {
+    // Agent Management can divide one strict project budget across hundreds
+    // of agents, producing a fair share below orchestration's normal 100-char
+    // floor. A truncation marker longer than the allocation would violate the
+    // total cap; at this extreme, preserve exact boundedness and a tiny newest
+    // excerpt instead of spending unbudgeted marker bytes.
+    return { text: text.slice(0, maxChars), truncated: true, totalChars: text.length }
+  }
   return {
-    text: `${text.slice(0, Math.max(0, maxChars - 24))}\n[truncated]`,
+    text: `${text.slice(0, Math.max(0, maxChars - 24))}${marker}`,
     truncated: true,
     totalChars: text.length,
   }

@@ -16,6 +16,7 @@ import type {
 } from '@mcp/shared/orchestrationTypes.js'
 import { buildOrchestrationBootstrapPrompt } from '@mcp/shared/orchestrationPrompt.js'
 import type { BuiltInMcpDependencies } from '@mcp/runtime/BuiltInMcpHttpHost.js'
+import { BUILT_IN_MCP_DOMAINS } from '@mcp/shared/types.js'
 import type { BuiltInMcpDomain, McpSessionScope } from '@mcp/shared/types.js'
 import type { SessionKind } from '@main/sessionManager.js'
 import {
@@ -25,6 +26,8 @@ import {
 } from '@shared/types/providerKind.js'
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
 import { registerWorkflowMcpTools, WORKFLOW_MCP_INSTRUCTIONS } from 'workflow-mcp'
+
+export const AGENT_MANAGEMENT_MCP_INSTRUCTIONS = `Agent Management controls Agent Code sessions only in the caller's exact current project tab. Listing and reading are safe audit operations and do not wake parked agents; sending a prompt may wake the named target. For cleanup-review requests, use the inventory plus bulk transcript read, classify agents as active/do not close, uncertain/inspect first, or likely cleanup candidates, and cite lifecycle, transcript, relationship, condition, and activity evidence rather than treating age alone as proof. A missing or truncated transcript is not an empty transcript, and an unresolved latest user request or tool work without a final response belongs in inspect first. Transcript evidence cannot prove a worktree is clean unless that transcript or another tool actually checked it; state what remains unknown. Asking what is safe to clean up authorizes assessment only. Reading an agent or sending it a prompt never grants permission to close it. Never call agent_management_close_agent unless the user's current request explicitly asks you to close that specific agent. A request to inspect agents, identify stale agents, recommend cleanup, manage the project, or say what is safe to clean up is not authorization to close anything. Do not infer closure permission from age, completion state, transcript contents, or a prior request.`
 
 export function createBuiltInMcpServer(
   scope: McpSessionScope,
@@ -39,13 +42,12 @@ export function createBuiltInMcpServer(
       capabilities: {
         tools: {},
       },
-      // WHY the instructions travel in MCP initialization instead of Agent Code's chat prompt:
-      // workflow tools can be discovered lazily by Claude/Codex, and neither client should need
-      // implementation-repository context to know how to author, persist, poll, or resume a run.
-      // A session without the workflow domain must not be taught capabilities it cannot call.
-      ...(scope.domains.includes('workflows')
-        ? { instructions: WORKFLOW_MCP_INSTRUCTIONS }
-        : {}),
+      // WHY domain instructions travel in MCP initialization instead of Agent
+      // Code's chat prompt: tools can be discovered lazily, and a session must
+      // not be taught capabilities it cannot call. The close authorization
+      // rule is repeated in the destructive tool description below because
+      // clients differ in how prominently they surface server instructions.
+      ...(builtInInstructions(scope) ? { instructions: builtInInstructions(scope) } : {}),
     },
   )
 
@@ -80,6 +82,10 @@ export function createBuiltInMcpServer(
 
   if (scope.domains.includes('orchestration')) {
     registerOrchestrationTools(server, scope, dependencies)
+  }
+
+  if (scope.domains.includes('agent_management')) {
+    registerAgentManagementTools(server, scope, dependencies)
   }
 
   if (scope.domains.includes('ai_workspace')) {
@@ -117,6 +123,196 @@ export function createBuiltInMcpServer(
   }
 
   return server
+}
+
+function builtInInstructions(scope: McpSessionScope): string {
+  return [
+    ...(scope.domains.includes('workflows') ? [WORKFLOW_MCP_INSTRUCTIONS] : []),
+    ...(scope.domains.includes('agent_management') ? [AGENT_MANAGEMENT_MCP_INSTRUCTIONS] : []),
+  ].join('\n\n')
+}
+
+function registerAgentManagementTools(
+  server: McpServer,
+  scope: McpSessionScope,
+  dependencies: BuiltInMcpDependencies,
+): void {
+  const bridge = dependencies.agentManagementBridge
+  const response = async <T extends object>(operation: () => Promise<T>) => {
+    if (!bridge) {
+      return toolText({
+        ok: false,
+        error: 'agent_management_unavailable',
+        message: 'Agent Management is not available in this Agent Code process.',
+      })
+    }
+    try {
+      return toolText({ ok: true, ...await operation() })
+    } catch (error) {
+      const structured = error as {
+        code?: unknown
+        message?: unknown
+        details?: unknown
+      }
+      return toolText({
+        ok: false,
+        error: typeof structured.code === 'string' ? structured.code : 'request_failed',
+        message: typeof structured.message === 'string'
+          ? structured.message
+          : 'Agent management request failed.',
+        ...(structured.details && typeof structured.details === 'object'
+          ? structured.details as object
+          : {}),
+      })
+    }
+  }
+
+  server.registerTool(
+    'agent_management_list_agents',
+    {
+      title: 'List Project Agents',
+      description:
+        'Lists every Agent Code agent in the caller\'s exact project tab, including visible panes, detached Dispatch agents, and buried agents. Returns transcript paths/availability, backend and activity state, last activity, idle duration, conditions, and relationships. This read-only audit does not wake agents.',
+      inputSchema: {},
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+      },
+    },
+    async () => response(async () => await bridge!.listAgents({
+      callerSessionId: scope.sessionId,
+    })),
+  )
+
+  server.registerTool(
+    'agent_management_read_agent',
+    {
+      title: 'Read Project Agent',
+      description:
+        'Reads bounded visible user/assistant transcript output for one agent in the caller\'s project. It may hydrate durable history but never wakes a parked agent.',
+      inputSchema: {
+        sessionId: z.string(),
+        maxMessages: z.number().int().min(1).max(100).optional(),
+        maxCharsPerMessage: z.number().int().min(50).max(100_000).optional(),
+        maxCharsPerAgent: z.number().int().min(100).max(500_000).optional(),
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+      },
+    },
+    async args => response(async () => ({
+      output: await bridge!.readAgent({
+        callerSessionId: scope.sessionId,
+        sessionId: args.sessionId,
+        maxMessages: args.maxMessages,
+        maxCharsPerMessage: args.maxCharsPerMessage,
+        maxCharsPerAgent: args.maxCharsPerAgent,
+      }),
+    })),
+  )
+
+  server.registerTool(
+    'agent_management_read_agents',
+    {
+      title: 'Read Project Agents',
+      description:
+        'Bulk-reads bounded transcript output and inventory facts for selected agents, or all agents in the caller\'s project. Intended for questions such as “read all agents and tell me what looks safe to clean up.” This only recommends; it never closes or wakes agents.',
+      inputSchema: {
+        sessionIds: z.array(z.string()).max(200).optional(),
+        includeCaller: z.boolean().optional(),
+        maxMessagesPerAgent: z.number().int().min(1).max(100).optional(),
+        maxCharsPerMessage: z.number().int().min(50).max(100_000).optional(),
+        maxCharsPerAgent: z.number().int().min(100).max(500_000).optional(),
+        maxTotalChars: z.number().int().min(1_000).max(1_000_000).optional(),
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+      },
+    },
+    async args => response(async () => await bridge!.readAgents({
+      callerSessionId: scope.sessionId,
+      sessionIds: args.sessionIds,
+      includeCaller: args.includeCaller,
+      maxMessagesPerAgent: args.maxMessagesPerAgent,
+      maxCharsPerMessage: args.maxCharsPerMessage,
+      maxCharsPerAgent: args.maxCharsPerAgent,
+      maxTotalChars: args.maxTotalChars,
+    })),
+  )
+
+  server.registerTool(
+    'agent_management_send_prompt',
+    {
+      title: 'Send Prompt To Project Agent',
+      description:
+        'Sends a prompt to one other agent in the caller\'s project. This may wake a parked target; it cannot target the caller itself.',
+      inputSchema: {
+        sessionId: z.string(),
+        prompt: z.string().trim().min(1).max(500_000),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+      },
+    },
+    async args => response(async () => {
+      const delivery = await bridge!.sendPrompt({
+        callerSessionId: scope.sessionId,
+        sessionId: args.sessionId,
+        prompt: args.prompt,
+      })
+      if (!delivery.ok) {
+        // WHY a provider-declared failure is promoted to the tool's top level:
+        // models reliably branch on the outer `ok` field. Returning ok:true
+        // beside delivery.ok:false made uncertain post-write failures easy to
+        // skim as success and retry, even though the disposition was preserved.
+        const error = new Error(delivery.message) as Error & {
+          code: string
+          details: Record<string, unknown>
+        }
+        error.code = 'prompt_delivery_failed'
+        error.details = {
+          sessionId: args.sessionId,
+          retrySafe: delivery.retrySafe,
+          stage: delivery.stage,
+          code: delivery.code,
+          disposition: delivery.disposition,
+          promptWritten: delivery.promptWritten,
+          enterWritten: delivery.enterWritten,
+          promptSubmission: delivery.retrySafe ? 'not-submitted' : 'uncertain',
+        }
+        throw error
+      }
+      return { sessionId: args.sessionId, delivery }
+    }),
+  )
+
+  server.registerTool(
+    'agent_management_close_agent',
+    {
+      title: 'Close Project Agent',
+      description:
+        'Destructive. Call only when the current user explicitly asks to close this specific agent. Never infer close permission from task completion, inactivity, a request to assess what looks safe to clean up, an error, or permission to list/read/prompt agents. Closes exactly one other Agent Code agent in the caller\'s project and refuses self-close or any multi-session cascade.',
+      inputSchema: {
+        sessionId: z.string(),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+      },
+    },
+    async args => response(async () => await bridge!.closeAgent({
+      callerSessionId: scope.sessionId,
+      sessionId: args.sessionId,
+    })),
+  )
 }
 
 function registerAgentTranscriptTools(server: McpServer): void {
@@ -468,13 +664,10 @@ function registerOrchestrationTools(
             'Pass all required context in the prompt until the inheritance path is redesigned.',
           ].join(' '),
         ),
-        builtInMcpDomains: z.array(z.enum([
-          'ping',
-          'orchestration',
-          'ai_workspace',
-          'agent_transcripts',
-          'workflows',
-        ])).optional(),
+        // WHY derive this from the registry: child capability grants are an
+        // authority boundary. A hand-maintained schema can silently reject a
+        // newly registered domain or keep accepting one the runtime removed.
+        builtInMcpDomains: z.array(z.enum(BUILT_IN_MCP_DOMAINS)).optional(),
       },
     },
     async args => {

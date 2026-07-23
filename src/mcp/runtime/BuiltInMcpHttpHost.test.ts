@@ -37,6 +37,12 @@ describe('BuiltInMcpHttpHost', () => {
       providerKind: 'opencode',
       domains: ['orchestration'],
     })).toEqual([])
+    expect(host.registerSession({
+      sessionId: 'opencode-management',
+      cwd: '/tmp/project',
+      providerKind: 'opencode',
+      domains: ['agent_management'],
+    })).toEqual([])
     expect(host.sessionDomains('claude-workflow-only')).toEqual([])
     expect(host.sessionDomains('opencode-orchestration')).toEqual([])
   })
@@ -55,10 +61,10 @@ describe('BuiltInMcpHttpHost', () => {
       sessionId: 'claude-mixed',
       cwd: '/tmp/project',
       providerKind: 'claude',
-      domains: ['workflows', 'orchestration'],
+      domains: ['workflows', 'orchestration', 'agent_management'],
     })
     expect(config).toBeDefined()
-    expect(host.sessionDomains('claude-mixed')).toEqual(['orchestration'])
+    expect(host.sessionDomains('claude-mixed')).toEqual(['orchestration', 'agent_management'])
     const client = new Client({ name: 'provider-policy-client', version: '0.0.0' })
     const transport = new StreamableHTTPClientTransport(new URL(config!.url), {
       requestInit: { headers: requestHeaders(config!) },
@@ -68,7 +74,9 @@ describe('BuiltInMcpHttpHost', () => {
       await client.connect(transport)
       expect(observedScopes).not.toHaveLength(0)
       expect(observedScopes.every(scope => (
-        scope.domains.includes('orchestration') && !scope.domains.includes('workflows')
+        scope.domains.includes('orchestration') &&
+        scope.domains.includes('agent_management') &&
+        !scope.domains.includes('workflows')
       ))).toBe(true)
     } finally {
       await client.close()

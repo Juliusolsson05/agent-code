@@ -22,8 +22,8 @@ describe('session built-in MCP domain resolution', () => {
     expect(resolveSessionBuiltInMcpDomains({
       provider: 'codex',
       sessionDomains: undefined,
-      defaultDomains: ['orchestration', 'workflows'],
-    })).toEqual(['orchestration', 'workflows'])
+      defaultDomains: ['orchestration', 'workflows', 'agent_management'],
+    })).toEqual(['orchestration', 'workflows', 'agent_management'])
 
     expect(resolveSessionBuiltInMcpDomains({
       provider: 'codex',
@@ -47,7 +47,7 @@ describe('session built-in MCP domain resolution', () => {
     expect(resolveSessionBuiltInMcpDomains({
       provider: 'opencode',
       sessionDomains: undefined,
-      defaultDomains: ['orchestration'],
+      defaultDomains: ['orchestration', 'agent_management'],
     })).toEqual([])
   })
 })

@@ -140,6 +140,9 @@ describe('built-in MCP provider command policy', () => {
   const orchestrationCommand = sessionCommands.find(
     command => command.id === 'enable-orchestration-mcp',
   )
+  const agentManagementCommand = sessionCommands.find(
+    command => command.id === 'enable-agent-management-mcp',
+  )
 
   it('offers Workflow MCP only to Codex', () => {
     if (!workflowCommand) throw new Error('Workflow MCP command is missing')
@@ -174,5 +177,25 @@ describe('built-in MCP provider command policy', () => {
   it('does not advertise unsupported general MCP toggles to OpenCode', () => {
     if (!orchestrationCommand) throw new Error('Orchestration MCP command is missing')
     expect(orchestrationCommand.when?.(mcpCommandContext('opencode').context)).toBe(false)
+  })
+
+  it('offers Agent Management to Claude and Codex but not OpenCode', () => {
+    if (!agentManagementCommand) throw new Error('Agent Management MCP command is missing')
+    expect(agentManagementCommand.when?.(mcpCommandContext('claude').context)).toBe(true)
+    expect(agentManagementCommand.when?.(mcpCommandContext('codex').context)).toBe(true)
+    expect(agentManagementCommand.when?.(mcpCommandContext('opencode').context)).toBe(false)
+  })
+
+  it('toggles Agent Management for one existing session through replacement', async () => {
+    if (!agentManagementCommand) throw new Error('Agent Management MCP command is missing')
+    const { context, replaceSession } = mcpCommandContext('claude')
+
+    await agentManagementCommand.run(context)
+
+    expect(replaceSession).toHaveBeenCalledWith('/projects/mcp', {
+      kind: 'claude',
+      resumeSessionId: 'provider-session',
+      builtInMcpDomains: ['agent_management'],
+    })
   })
 })

@@ -495,6 +495,55 @@ export const sessionCommands: CommandDef[] = [
     },
   },
   {
+    id: 'enable-agent-management-mcp',
+    surface: 'session',
+    title: 'Agent Management MCP',
+    description: '**What it does:** Reloads the focused **Claude or Codex agent** with project-wide Agent Code management tools on or off.\n\n**Use when:** You want this agent to inventory, inspect, prompt, or—only after an explicit user request—close other agents in its project.\n\n**Notes:** Read operations include visible, detached, and buried agents without waking them. Closing has extra authorization and cascade guards.',
+    keywords: ['mcp', 'agent management', 'agents', 'project', 'transcripts', 'cleanup', 'prompt', 'close', 'enable', 'disable', 'reload', 'claude', 'codex'],
+    when: ({ workspace }) => {
+      return targetSupportsBuiltInMcpDomain(workspace, 'agent_management')
+    },
+    getState: ctx => builtInMcpDomainState(ctx, 'agent_management'),
+    run: async ({ workspace, ui }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return
+      const meta = workspace.state.sessions[sessionId]
+      const kind = meta?.kind ?? DEFAULT_PROVIDER
+      // Command visibility is advisory—the command can still be invoked by a
+      // keybinding or programmatic caller—so provider policy is repeated at the
+      // mutation boundary before we replace a live process.
+      if (
+        !isAgentProviderKind(kind) ||
+        !providerSupportsBuiltInMcpDomain(kind, 'agent_management') ||
+        !meta
+      ) return
+
+      ui.closePalette()
+      try {
+        const nextDomains = toggleBuiltInMcpDomain(meta.builtInMcpDomains, 'agent_management')
+        const newSessionId = await workspace.replaceSession(meta.cwd, {
+          kind,
+          resumeSessionId: meta.providerSessionId,
+          builtInMcpDomains: nextDomains,
+        })
+        if (newSessionId) {
+          workspace.showPaneToast(
+            newSessionId,
+            nextDomains.includes('agent_management')
+              ? 'Reloaded with Agent Management MCP'
+              : 'Reloaded without Agent Management MCP',
+          )
+        }
+      } catch (err) {
+        const message =
+          err instanceof Error && err.message.length > 0
+            ? err.message
+            : 'Agent Management MCP reload failed'
+        workspace.showPaneToast(sessionId, message)
+      }
+    },
+  },
+  {
     id: 'enable-workflow-mcp',
     surface: 'session',
     title: 'Workflow MCP',

@@ -51,6 +51,7 @@ import { CliUpdateOrchestrator } from '@main/setup/cliUpdateOrchestrator.js'
 import { WorktreeActivityIndex } from '@main/worktreeActivity/WorktreeActivityIndex.js'
 import { BuiltInMcpHttpHost } from '@mcp/runtime/BuiltInMcpHttpHost.js'
 import { OrchestrationBridge } from '@main/orchestration/OrchestrationBridge.js'
+import { AgentManagementBridge } from '@main/agentManagement/AgentManagementBridge.js'
 import { AiWorkspaceRegistry } from '@main/aiWorkspace/AiWorkspaceRegistry.js'
 import { RemoteController } from '@main/remote/RemoteController.js'
 import { CaffeinateController } from '@main/caffeinate/CaffeinateController.js'
@@ -644,6 +645,10 @@ async function startApp(): Promise<void> {
     appRunJournal,
     async () => { await agentCodeConventionsService.audit() },
   )
+  // Project ownership lives in renderer state, while backend/transcript facts
+  // live in SessionManager. Construct this bridge only after both the MCP host
+  // and manager exist so tool calls cannot observe a half-wired authority.
+  const agentManagementBridge = new AgentManagementBridge(manager, appRunJournal)
   // Remote mobile companion — constructed here (the isolation boundary's ONE
   // construction hole; see docs/superpowers/specs/2026-07-06-remote-mobile-
   // companion-design.md) but OFF until the user enables it from the Remote
@@ -686,6 +691,7 @@ async function startApp(): Promise<void> {
   }
   builtInMcpHost.setDependencies({
     orchestrationBridge,
+    agentManagementBridge,
     aiWorkspaceRegistry,
     openAiWorkspace: workspaceId => {
       // WHY this is a one-way UI request rather than a main-owned UI state:
@@ -736,6 +742,7 @@ async function startApp(): Promise<void> {
     sessionRecorders,
     worktreeActivityIndex,
     orchestrationBridge,
+    agentManagementBridge,
     aiWorkspaceRegistry,
     caffeinateController,
     appRunJournal,
