@@ -140,6 +140,7 @@ describe('SessionManager recover', () => {
     expect(manager.getBackendSnapshot('readiness-session')).toMatchObject({
       lifecycle: 'live',
       input: { ready: false, revision: 1, reason: 'starting' },
+      builtInMcpDomains: [],
     })
     session.emit('input-readiness', { ready: true, reason: 'ready' })
     expect(manager.getBackendSnapshot('readiness-session')).toMatchObject({
@@ -346,7 +347,13 @@ describe('SessionManager recover', () => {
 
   it('registers project-scoped MCP once on cold spawn and never during adoption', async () => {
     const { SessionManager } = await import('./sessionManager')
-    const registerSession = vi.fn(() => [])
+    const serverConfig = {
+      name: 'agent_code',
+      url: 'http://127.0.0.1:43210/mcp',
+      headers: {},
+      bearerToken: 'scoped-test-token',
+    }
+    const registerSession = vi.fn(() => [serverConfig])
     const revokeSession = vi.fn()
     const sessionDomains = vi.fn(() => ['orchestration'])
     const manager = new SessionManager(null, {
@@ -385,7 +392,36 @@ describe('SessionManager recover', () => {
       domains: ['orchestration'],
     })
     expect(sessionDomains).toHaveBeenCalledWith('mcp-session')
+    expect(createSession).toHaveBeenCalledWith(expect.objectContaining({
+      builtInMcpServers: [serverConfig],
+    }))
     expect(revokeSession).not.toHaveBeenCalled()
+  })
+
+  it('requires an MCP host only when the effective request is non-empty', async () => {
+    const { SessionManager } = await import('./sessionManager')
+    const manager = new SessionManager()
+
+    await expect(manager.recover({
+      sessionId: 'no-host-empty-scope',
+      kind: 'codex',
+      cwd: '/tmp/project',
+      builtInMcpDomains: [],
+    })).resolves.toMatchObject({
+      ok: true,
+      snapshot: { builtInMcpDomains: [] },
+    })
+    await expect(manager.recover({
+      sessionId: 'no-host-nonempty-scope',
+      kind: 'codex',
+      cwd: '/tmp/project',
+      builtInMcpDomains: ['orchestration'],
+    })).resolves.toMatchObject({
+      ok: false,
+      code: 'start-failed',
+    })
+
+    await manager.killAll()
   })
 
   it('adopts normally while prompt delivery is in flight on the owned backend', async () => {

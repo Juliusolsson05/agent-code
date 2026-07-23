@@ -167,8 +167,9 @@ describe('useSessionActions recovery retry', () => {
       refs,
     ))
 
+    let wakeResult: Awaited<ReturnType<typeof result.current.ensureSessionLive>> | undefined
     await act(async () => {
-      await result.current.ensureSessionLive(sessionId)
+      wakeResult = await result.current.ensureSessionLive(sessionId)
     })
 
     expect(recoverSession).toHaveBeenCalledTimes(1)
@@ -176,6 +177,7 @@ describe('useSessionActions recovery retry', () => {
       builtInMcpDomains: ['orchestration'],
     }))
     expect(state.sessions[sessionId]?.builtInMcpDomains).toEqual([])
+    expect(wakeResult).toEqual({ sessionId, builtInMcpDomains: [] })
     expect(runtimes[sessionId]).toMatchObject({
       processStatus: 'started',
       processError: null,
