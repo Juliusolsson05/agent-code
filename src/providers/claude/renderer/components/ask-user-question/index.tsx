@@ -82,7 +82,13 @@ export function ClaudeAnsweredQuestionRow({
         {!answered ? (
           <div className="text-[11px] text-ink-dim mt-0.5">
             {result
-              ? 'response received — the unrecognized or failed result remains visible below'
+              // The AskUserQuestion result is now fully absorbed by this row
+              // (dispatch.tsx no longer renders a generic result row), so there
+              // is nothing "below" to point at. A result with no extractable
+              // answer means the question was dismissed — via Esc, an
+              // interrupt, or the answer-via-message path before its delivery
+              // confirmed (which flips this to the ✓ branch on success).
+              ? 'no answer sent'
               // WHY committed history cannot claim the picker is still live:
               // a missing result can also mean a truncated/interrupted replay.
               // The semantic live row owns interaction when it actually exists.

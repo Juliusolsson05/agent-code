@@ -1,4 +1,4 @@
-import { useContext, useRef, useState } from 'react'
+import { useContext, useEffect, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 
 import {
@@ -132,6 +132,11 @@ export function AskUserQuestionRow({
   // top of the handler, before any IPC, so the second call in the same tick sees
   // `true` and bails. It is reset only for structured/rejected failures.
   const submittedRef = useRef(false)
+  // Tracks whether this row is still mounted, so the detached answer-via-message
+  // callback only touches state (latch/error reset) when there is a row to
+  // touch — on the happy path Esc has already unmounted it.
+  const mountedRef = useRef(true)
+  useEffect(() => () => { mountedRef.current = false }, [])
 
   const questions = readAskQuestions(input)
 
@@ -323,18 +328,28 @@ export function AskUserQuestionRow({
     submittedRef.current = true
     setAnswering(true)
     setResolveError(null)
-    // Record the correlation marker BEFORE the send, so that whenever the
-    // decline result lands the answered row already knows this was answered,
-    // not abandoned. The transcript can't carry this (the decline is generic).
-    markAnsweredViaMessage(operationId, answerSummaryLines(answers))
-    // Detached: Esc cancels the tool and unmounts this row almost immediately,
-    // so the sequence must not touch this component's state after it starts.
-    // Failure is surfaced through the app-level toast (which survives the
-    // unmount) rather than `setResolveError`. On the happy path the row is gone
-    // before this resolves and there is nothing to clear.
+    const summary = answerSummaryLines(answers)
+    // Detached: on success Esc has already unmounted this row, so the sequence
+    // must not assume it is still mounted. Two outcomes, both handled without a
+    // false claim:
+    //   ok   → NOW record the "answered via message" marker. Recording it
+    //          before delivery (an earlier cut did) painted a permanent green
+    //          "✓ answered" even when the prompt never reached Claude — the
+    //          exact dishonest render this path exists to avoid. Until this
+    //          fires, the answered row honestly shows "no answer sent".
+    //   !ok  → toast the reason (app-level, survives unmount) and, IF the row
+    //          is still mounted (e.g. Esc itself failed so nothing unmounted),
+    //          release the latch so the user can retry.
     void deliverAnswersViaPrompt(feed, sessionId, prompt).then(outcome => {
-      if (!outcome.ok) {
-        showToast(`Could not send your answer: ${outcome.reason}`)
+      if (outcome.ok) {
+        markAnsweredViaMessage(operationId, summary)
+        return
+      }
+      showToast(`Could not send your answer: ${outcome.reason}`)
+      if (mountedRef.current) {
+        submittedRef.current = false
+        setAnswering(false)
+        setResolveError(outcome.reason)
       }
     })
   }

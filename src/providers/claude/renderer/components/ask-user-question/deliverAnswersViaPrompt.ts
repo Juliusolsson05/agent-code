@@ -47,10 +47,18 @@ export async function deliverAnswersViaPrompt(
   prompt: string,
 ): Promise<DeliverOutcome> {
   // Esc first — while the picker owns the screen no prompt delivery is in
-  // flight, so this write is never gated. It must precede any delivery so the
-  // delivery is the session's first (and only) write reservation; never try to
-  // write the prompt "through" an active picker.
-  await feed.sendInput(sessionId, ESC)
+  // flight, so this write is never gated by the reservation. It must precede any
+  // delivery so the delivery is the session's first (and only) write
+  // reservation; never try to write the prompt "through" an active picker.
+  //
+  // If the Esc write itself is refused (returns false — session not writable),
+  // the picker is never dismissed, the tool is never declined, and the caller's
+  // row never unmounts. Fail out immediately so the caller re-enables its
+  // controls, rather than delivering into a picker that still owns the screen.
+  const escSent = await feed.sendInput(sessionId, ESC)
+  if (!escSent) {
+    return { ok: false, reason: 'Could not dismiss the prompt (the agent is not accepting input).' }
+  }
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     const result = await feed.deliverPrompt(sessionId, prompt)
