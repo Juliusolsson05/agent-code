@@ -34,17 +34,13 @@ export function ClaudeAnsweredQuestionRow({
   const answered = answer !== null
 
   if (viaMessage && viaMessage.length > 0) {
+    // The summary lines already read "question → choices", so we do NOT repeat
+    // the question list above them — that was doubling the question text.
     return (
       <MarkerRow marker="✓">
         <div className="text-[13px] leading-[1.65]">
-          <span className="text-accent font-semibold">Question</span>
-          {model.questions.map((question, index) => (
-            <div key={index} className="mt-0.5">
-              <span className="text-[12px]">{question.question}</span>
-            </div>
-          ))}
+          <span className="text-accent font-semibold">Answered via message</span>
           <div className="mt-1 ml-4 border-l border-border/60 pl-3">
-            <div className="text-muted text-[10px] uppercase tracking-wider">Answered via message</div>
             {viaMessage.map((line, i) => (
               <div key={i} className="text-[12px]">{line}</div>
             ))}
