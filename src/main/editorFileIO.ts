@@ -5,6 +5,10 @@ import { basename, dirname, join } from 'path'
 import type { EditorFsFileVersion } from '@shared/types/editorFs.js'
 
 const NO_FOLLOW = process.platform === 'win32' ? 0 : constants.O_NOFOLLOW
+// A malicious or accidental FIFO must not make an awaited startup read block
+// forever before fstat can reject it. O_NONBLOCK is inert for regular files and
+// gives every bounded-reader caller the same non-regular-file fail-closed rule.
+const NON_BLOCK = process.platform === 'win32' ? 0 : constants.O_NONBLOCK
 const pendingFileMutations = new Map<string, Promise<void>>()
 const utf8Decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
 
@@ -58,7 +62,7 @@ export async function readBoundedTextFile(
   stat: Stats
   version: EditorFsFileVersion
 }> {
-  const handle = await open(absolutePath, constants.O_RDONLY | NO_FOLLOW)
+  const handle = await open(absolutePath, constants.O_RDONLY | NO_FOLLOW | NON_BLOCK)
   try {
     const before = await handle.stat()
     if (!before.isFile()) throw new Error('not a file')

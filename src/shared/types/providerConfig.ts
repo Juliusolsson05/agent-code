@@ -311,10 +311,30 @@ export type RendererProviderConfig = {
  * Main-process config: Node-only imports (session factories, fs).
  * Imported by sessionManager, IPC handlers.
  */
+export type PersonalAgentSkillLocation = {
+  id: string
+  resolveDirectory: (context: {
+    homeDirectory: string
+    environment: Readonly<Record<string, string | undefined>>
+  }) => string
+}
+
 export type MainProviderConfig = {
   /** Provider identity — see RendererProviderConfig.id. */
   id: AgentProviderKind
   name: string
+  /**
+   * Provider-owned discovery capability for native personal Agent Skills.
+   *
+   * WHY paths live here while writes do not: providers own where their runtime
+   * discovers skills, but one app service must own collision checks, journaling,
+   * and deletion proof. Putting filesystem mutation callbacks on each provider
+   * would duplicate the safety state machine and make “all providers” an
+   * untestable set of side effects.
+   */
+  personalAgentSkills:
+    | { supported: true; locations: readonly PersonalAgentSkillLocation[] }
+    | { supported: false; reason: string }
   /**
    * Factory: create a new session instance for this provider.
    *
