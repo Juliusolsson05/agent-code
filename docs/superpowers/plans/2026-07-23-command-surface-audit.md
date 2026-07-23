@@ -88,7 +88,8 @@ collapsed into a boolean filter:
 | Execution | Add one command execution gateway with invocation source and a fresh admission check. | Picker, native menu, keybindings, and programmatic calls currently have different guarantees. |
 | Visibility | Make visibility strictly picker-only; classify developer commands as `debug` and niche supported operations as `advanced`. | The tiers already exist but are unused, and native-menu execution currently depends on them accidentally. |
 | State | Replace `{label, tone}` with semantic toggle/value/status states plus unavailable/loading/error and target identity. | Color and arbitrary text cannot distinguish boolean truth, values, inherited state, async work, or unsupported commands. |
-| Settings ownership | Remove `dangerous-agents` from Commands; keep Settings as the durable home for five benign quick preferences; preserve Settings-default + per-session-command for MCP and agent view. | Safety posture changes need Settings context and confirmation. Session overrides are intentionally different from global defaults. |
+| Settings ownership | Retire `toggle-status-mode`, `toggle-worktree-badges`, `usage.toggle-header`, `usage.cycle-header-level`, and `dangerous-agents` from Commands; keep their durable controls in Settings. Preserve Settings-default + per-session-command for MCP and agent view, preserve current-workspace layout commands, and keep only Aggressive Debug Persistence as a Settings-primary quick command. | A persisted preference with no meaningful momentary scope should have one product home. Session MCP/view overrides and current-workspace layout actions are intentionally different from global defaults. |
+| Dispatch project terminal | Remove the entire opt-in auto-created project-terminal side-column feature, including its Settings field, renderer/action plumbing, persistence shape, and stale migration comments. | It is not merely a misplaced command: the product behavior itself is being retired. Ordinary user-created terminals and their normal Dispatch rows remain unrelated and must keep working. |
 | Providers | Gate features by declared capability, not `isAgentProviderKind()`. | OpenCode currently receives Rewind, Duplicate, Resume, Switch Provider, and Copy Resume affordances that are empty, rejected, unsupported, or unverified. |
 | Targeting | Resolve and pin one target for state + execution, then revalidate identity/capability before mutation. | The shared grid/Dispatch resolver is sound, but repeated resolution can display state for A and mutate B after focus changes. |
 | Destructive actions | Confirm active/running or cascading closes, re-enumerate bulk-close targets at commit, and keep ownership checks in main. | Undo does not recover live terminal state, unsent drafts, or partial cascades. A stale preview must not authorize a later changed target set. |
@@ -110,9 +111,30 @@ collapsed into a boolean filter:
   it.
 - `reply-to-selection` is the strongest current example of revalidating its
   target-specific transient input at execution time.
-- The removed `toggle-dispatch-terminal` command is the correct precedent for
-  moving a durable preference into Settings when a transient command created
-  misleading persistence expectations.
+- User-created terminal sessions already participate in ordinary workspace and
+  Dispatch row rendering. That independent terminal behavior must survive the
+  removal of the auto-created project-terminal companion column.
+
+## Product decisions recorded after initial review
+
+These decisions supersede the corresponding recommendations in the initial
+audit:
+
+1. Retire these five built-in command IDs while retaining their canonical
+   Settings controls: `toggle-status-mode`, `toggle-worktree-badges`,
+   `usage.toggle-header`, `usage.cycle-header-level`, and `dangerous-agents`.
+   The two Usage IDs are both listed deliberately: the repeated Usage note in
+   review is treated as removing both the header toggle and the detail cycler.
+2. Keep `toggle-aggressive-debug-persistence` as the sole Settings-primary
+   quick preference command from this group, hidden in the debug tier.
+3. Keep every supported per-session MCP command. Settings chooses defaults for
+   future sessions; Commands changes the current session. Workflow MCP remains
+   Codex-only and blocked for Claude because Claude has the native equivalent.
+4. Keep Dispatch and Tiled Dispatch commands. Settings chooses a default
+   workspace mode; those commands act on the current workspace.
+5. Remove the complete **Attach Project Terminal to Dispatch** feature. This
+   means the opt-in, auto-created companion terminal and its dedicated Dispatch
+   side column—not user-created terminal sessions or ordinary terminal rows.
 
 ## Canonical source map
 
@@ -190,7 +212,7 @@ collapsed into a boolean filter:
 | `normalize-layout` — Normalize Layout | grid | none; — | Workspace layout rewrite | Layout & Dispatch · advanced · C | Repeat grid/active-tab admission at mutation. |
 | `hard-normalize-layout` — Hard Normalize Layout | grid | none; — | Strong workspace layout rewrite | Layout & Dispatch · advanced · C | Mark advanced; repeat grid/active-tab admission. |
 | `rotate-layout` — Rotate Layout | grid | none; — | Workspace layout rewrite | Layout & Dispatch · advanced · C | Repeat grid/active-tab admission. |
-| `toggle-status-mode` — Status Mode | app | none; `On`/`Off` | Persisted app preference | Preferences · default · B | Settings is durable primary home; keep fast command; semantic persisted boolean state. |
+| `toggle-status-mode` — Status Mode | app | none; `On`/`Off` | Persisted app preference | Preferences · remove · S | Retire the command and any visibility override for its built-in ID; retain Status Mode and `showStatusMode` in Settings as the only product control. |
 | `toggle-performance-panel` — Performance Stats | debug | none; `On`/`Off` | Transient diagnostic UI | Developer · debug · C | Default-hide as debug; add developer/runtime admission if production access is not intended. |
 | `toggle-caffeinate` — Caffeinate | app | none; `Off`/`On`/`Unsupported` | Main/OS process | Workspace Tools · default · C | Model loading/error/unsupported; disable or hide unsupported; main revalidates platform and single ownership. |
 | `toggle-global-editor` — Global Editor | app | none; `On`/`Off` | Transient surface | Editor & Files · default · C | Add declared shortcut metadata; require project only when opening if empty editor is invalid. |
@@ -239,7 +261,7 @@ collapsed into a boolean filter:
 | `open-settings` — Open Settings | app | none; — | Navigation | Preferences · default · C | Update stale category copy; picker visibility must not affect any future native Settings menu item. |
 | `toggle-aggressive-debug-persistence` — Persistent Aggressive Debug Logs | debug | none; `On`/`Off` | Persisted app preference + disk cost | Developer · debug · B | Settings is primary explanatory home; keep debug-tier quick override; require backend readiness and explicit persistence/cost copy. |
 | `toggle-worktrees-bar` — Worktrees | app | none; `Open`/`Closed` | Transient UI | Workspace Tools · default · C | Gate opening on repo/worktree capability; closing always allowed; rename Worktrees Panel if needed. |
-| `toggle-worktree-badges` — Worktree Badges | app | none; `On`/`Off` | Persisted app preference | Preferences · default · B | Settings primary; keep quick visual command; semantic persisted boolean state. |
+| `toggle-worktree-badges` — Worktree Badges | app | none; `On`/`Off` | Persisted app preference | Preferences · remove · S | Retire the command and any visibility override for its built-in ID; retain Worktree Badges and `showWorktreeBadges` in Settings as the only product control. |
 | `dangerous-agents` — Dangerous Agents | app | none; `On`/`Off` | Persisted safety posture + fleet reload / destructive | Preferences · remove · S | Remove command; Settings confirmation previews affected agents, pins desired value, and reports/rolls back partial reload. Fix contradictory copy. |
 | `copy-assistant-message` — Copy Assistant Message… | session | agent + rendered-feed lease; — | Clipboard/read | Session · advanced · C | Repeat provider/render policy before entering picker; pin target through selection. |
 | `copy-code-block` — Copy Code Block… | session | agent + rendered-feed lease; — | Clipboard/read | Session · advanced · C | Pin/revalidate target before resolving selected DOM block. |
@@ -250,8 +272,8 @@ collapsed into a boolean filter:
 | `show-agent-status` — Agent Status | session | agent target; `On`/`Off` | Transient contextual panel | Workspace Tools · default · C | Rename Show Agent Status for Focused Agent or treat panel as `Open`/`Closed`; tolerate/revalidate target loss. |
 | `toggle-remote-panel` — Remote Control | app | none; — | Transient panel; network config persists elsewhere | Workspace Tools · experimental · C | Add panel state; opening may be universal, but enable/listen/pair actions require explicit in-panel network disclosure and runtime readiness. |
 | `usage.open` — Usage | app | none; — | Read-only modal | Workspace Tools · default · C | Rename Open Usage; provider fetch failures remain isolated in modal. |
-| `usage.toggle-header` — Usage in Header | app | none; `On`/`Off` | Persisted app preference | Preferences · default · B | Settings primary; keep quick visual command; semantic persisted boolean state. |
-| `usage.cycle-header-level` — Usage Header Detail | app | none; raw lowercase level; also enables header | Persisted app preference | Preferences · advanced · B | Make command pure cycling to match Settings; show user-facing value and `Header off` detail instead of silently enabling. |
+| `usage.toggle-header` — Usage in Header | app | none; `On`/`Off` | Persisted app preference | Preferences · remove · S | Retire the command and any visibility override for its built-in ID; retain `usageHeaderEnabled` and its Settings toggle. |
+| `usage.cycle-header-level` — Usage Header Detail | app | none; raw lowercase level; also enables header | Persisted app preference | Preferences · remove · S | Retire the compound command instead of repairing it; retain `usageHeaderLevel` as a friendly Settings select that never implicitly enables the header. |
 
 ## Cross-cutting defects
 
@@ -283,7 +305,7 @@ effective/inherited truth, unavailable state, or async progress.
 | Effective state differs from owned state | Tail shows `On (all)` while invoking Tail cannot turn that effective state off | `mixed`/`inherited` with detail `On via Auto-follow All`; action description names the local setting it changes. |
 | Persisted preference leads runtime | Dangerous Agents says On before fleet replacement completes | Loading with affected count, Mixed on partial application, Error on failure, On only after policy is applied. |
 | Async replacement has no lifecycle | MCP toggles, reload, switch, duplicate, recording | Pending state begins before work; success/failure is observable after palette reopen; duplicate execution is single-flight or rejected. |
-| Unavailable is rendered as neutral value | Caffeinate `Unsupported`; Usage detail while header is off | First-class unavailable state and reason; inactive enum value includes `Header off` detail. |
+| Unavailable is rendered as neutral value | Caffeinate `Unsupported`; Usage detail command while header is off | First-class unavailable state and reason for surviving commands. Retiring `usage.cycle-header-level` removes the command-specific inconsistency; Settings still shows the selected detail without turning the header on. |
 | Target scope is invisible | Reader, Spotlight, Agent Status, MCP toggles, session view mode | Badge/detail names `This session` or carries target identity for exact execution binding. |
 
 Proposed state contract:
@@ -341,27 +363,35 @@ The placement rule is behavioral, not aesthetic:
 |---|---|
 | Immediate action, navigation, modal/workflow entry, or temporary view | Command. |
 | Persistent application preference with no useful momentary override | Settings only. |
-| Persistent benign preference users reasonably flip while working | Settings primary plus a quick command, sharing one setter/source of truth. |
+| Persistent preference with no distinct momentary scope | Settings only. A quick command is an explicit exception, not the default. |
 | Global default plus a meaningful per-session override | Both, with scope explicitly named. |
 | Safety posture, credentials, network exposure, or expensive persistent diagnostics | Settings with explanatory context and confirmation; a command exists only if its safety flow is equivalent. |
 
 | Settings control | Command | Decision | Required correction |
 |---|---|---|---|
-| Status Mode | `toggle-status-mode` | Both; Settings primary | Add scope metadata and semantic persisted state. |
-| Worktree Badges | `toggle-worktree-badges` | Both; Settings primary | Same. |
-| Usage in Header | `usage.toggle-header` | Both; Settings primary | Same. |
-| Usage Header Detail | `usage.cycle-header-level` | Both; Settings primary | Stop implicitly enabling the header; show friendly option label and inactive detail. |
+| Status Mode | `toggle-status-mode` | **Settings only** | Remove the command; retain the existing setting and canonical field. |
+| Worktree Badges | `toggle-worktree-badges` | **Settings only** | Remove the command; retain the existing setting and canonical field. |
+| Usage in Header | `usage.toggle-header` | **Settings only** | Remove the command; retain the existing setting and canonical field. |
+| Usage Header Detail | `usage.cycle-header-level` | **Settings only** | Remove the command; keep a friendly Settings select that does not implicitly enable the header. |
 | Persistent Aggressive Debug Logs | `toggle-aggressive-debug-persistence` | Both; Settings primary, command debug-hidden | Disclose persistence/disk cost and verify backend readiness. |
 | Dangerous Agents By Default | `dangerous-agents` | **Settings only** | Remove command; confirm enablement with affected-agent preview and explicit partial-failure behavior. |
 | Agent View Mode | `set-agent-view-mode` | Both with different scope | Settings = app default; command = this session. Rename the command to disclose that. |
 | Default built-in MCP rows | five configurable MCP commands | Both with different scope | Settings = new sessions; command = this session. Keep Workflow Codex-only. |
 | Default Workspace Mode | Dispatch/Tiled Dispatch commands | Not duplicates | Settings controls initial/default policy; commands control the current workspace. |
-| Attach Project Terminal to Dispatch | no command | Settings only, already correct | Preserve as the migration precedent. |
+| Attach Project Terminal to Dispatch | no command | **Remove feature** | Remove the Settings row, `dispatchProjectTerminal` field/default/coercion, auto-create action/export, dedicated Dispatch side column/effect/imports, and stale comments/tests. Preserve normal terminal creation and ordinary terminal rows. |
 
-No data migration is needed to remove `dangerous-agents`: its canonical Settings
-field remains. A stale `commandVisibilityOverrides['dangerous-agents']` entry is
-harmless, but the implementation should define an explicit retired-built-in ID
-policy instead of opportunistically deleting unknown extension/provider IDs.
+No Settings-value migration is needed for the five retired commands because
+their canonical fields remain. Their built-in IDs must be removed from
+`commandVisibilityOverrides` through an explicit retired-built-in ID policy;
+unknown extension/provider IDs must not be deleted opportunistically.
+
+Removing Attach Project Terminal is a persisted-shape change. Because
+`coerceSettings()` currently spreads the parsed object before applying explicit
+fields, simply deleting the typed property would allow an old
+`dispatchProjectTerminal` key to survive at runtime and be reserialized. The
+implementation must explicitly omit that retired key, increment the persisted
+store version, and prove with an idempotent migration test that old true/false
+values are ignored and do not return after the next save.
 
 Any new or changed persisted Settings field still requires:
 
@@ -681,29 +711,49 @@ Files:
 - `features/settings/commands/{settings,dangerous}Commands.ts`
 - `features/settings/lib/settingsRegistry.ts`
 - `features/usage/commands/usageCommands.ts`
+- `app-state/settings/{types,persistence}.ts` and store/settings migration tests
+- `workspace/dispatch/DispatchLayout.tsx`
+- `workspace/hook/actions/dispatch.ts` and `workspace/hook/index.ts`
+- stale project-terminal comments in workspace types, bootstrap, and layout
+  commands
 - `features/workspace/ui/CloseOldAgentsModal.tsx`
 - pane/tab/session mutation actions and confirmation UI
 - Agent Management MCP bridge/contracts if the adjacent grant fix is accepted
 
 Work:
 
-1. Remove `dangerous-agents` from the command catalog. Keep its canonical
-   Settings field and add an enable confirmation with the exact live reload set.
-2. Make dangerous-agent reload single-flight and expose success, Mixed partial
+1. Retire `toggle-status-mode`, `toggle-worktree-badges`,
+   `usage.toggle-header`, `usage.cycle-header-level`, and `dangerous-agents`
+   from the command catalog. Keep their five canonical Settings controls, and
+   explicitly clean only those retired built-in IDs from visibility overrides.
+2. Update the ordered catalog snapshot with an intentional five-ID retirement
+   delta. The current 102-command audit remains the before-state; any separately
+   approved new command ID is itemized rather than hidden inside the count.
+3. Add the dangerous-agent enable confirmation with the exact live reload set.
+   Make reload single-flight and expose success, Mixed partial
    application, failure, and rollback semantics. Correct contradictory copy.
-3. Keep Status Mode, Worktree Badges, Usage Header, Usage Detail, and Aggressive
-   Debug Persistence as Settings-primary quick commands; make Usage Detail a
-   pure cycle.
-4. Add running/cascade confirmation for tab/session close from every source,
+4. Keep only Aggressive Debug Persistence as a Settings-primary quick command
+   from this preference group and classify it as debug-hidden.
+5. Remove Attach Project Terminal to Dispatch end to end:
+   `dispatch-project-terminal` from the Settings registry;
+   `Settings.dispatchProjectTerminal`, its default and coercion; the
+   `DispatchLayout` auto-create effect and dedicated terminal column; and the
+   now-single-purpose `ensureDispatchTerminal` action, interface, hook export,
+   deduplication state, imports, and historical comments. Explicitly omit the
+   old key during versioned coercion so it cannot be spread back into storage.
+   Do not remove normal terminal creation, tile-tree rendering, or terminal rows
+   in Dispatch.
+6. Add running/cascade confirmation for tab/session close from every source,
    including buttons and shortcuts, with a target-bound grant.
-5. Re-enumerate Close Old Agents after confirmation and before every kill.
-6. Add a second confirmation for Kill Buried Session.
-7. If included in this PR, replace Agent Management MCP close's prose-only
+7. Re-enumerate Close Old Agents after confirmation and before every kill.
+8. Add a second confirmation for Kill Buried Session.
+9. If included in this PR, replace Agent Management MCP close's prose-only
    permission with an enforceable short-lived caller/target grant or renderer
    confirmation. Preserve its project/self/cascade checks.
 
-Rollback boundary: Settings ownership, ordinary close confirmation, bulk close,
-and MCP grants are separate commits because they affect different authorities.
+Rollback boundary: command retirement, project-terminal feature removal,
+ordinary close confirmation, bulk close, and MCP grants are separate commits
+because they affect different authorities and persistence shapes.
 
 ### Phase 7 — Naming, Settings information architecture, and cleanup
 
@@ -731,7 +781,9 @@ persistence changes.
 
 ### Catalog integrity
 
-- Exact ordered 102-ID snapshot and explicit count.
+- First characterize the exact ordered 102-ID before-state. After Phase 6,
+  update it with an explicit negative assertion for all five retired IDs and an
+  exact `102 - 5 + separately approved additions` count.
 - Unique IDs; required metadata; valid surface/category/tier/safety values.
 - Generated provider split parity.
 - Native-menu IDs are a subset of executable catalog IDs.
@@ -795,6 +847,12 @@ Assertions:
   partial failure/retry.
 - Settings coercion for absent, malformed, same-version-missing, unknown,
   renamed, and retired visibility keys.
+- The four ordinary preference values and Dangerous Agents remain Settings-
+  controlled and survive restart, while all five retired command IDs stay
+  absent from the catalog, search, and command-visibility Settings.
+- Legacy `dispatchProjectTerminal` true/false values are discarded
+  idempotently and are not reserialized; Dispatch never auto-creates or mounts
+  the companion side column; user-created terminals still render normally.
 - Defaults changing while explicit user overrides remain stable.
 - Reset behavior across renderer Settings versus main-owned setup/keychain/file
   state is explicit and tested.
@@ -803,13 +861,14 @@ Assertions:
 
 | Requirement | Acceptance evidence |
 |---|---|
-| Complete audit | Catalog test reports exactly 102 ordered static IDs and all appear in this document/Settings metadata. |
+| Complete audit | The characterization test records all 102 audited IDs; the final catalog snapshot shows the explicit five-ID retirement delta plus only separately approved additions. |
 | Visibility is not authorization | Hiding each native File-menu command does not disable its menu item; direct invocation still fails any real contextual/capability gate. |
 | Debug clutter is gated | Debug-tier commands are absent by default, revealable/overridable, and remain protected by live capability checks where required. |
 | Consistent state | No stateful command returns arbitrary tone semantics; panels, toggles, values, unavailable, loading, mixed, and error states render predictably and accessibly. |
 | Correct provider policy | Unsupported OpenCode operations do not appear as executable; Claude Workflow MCP remains blocked; provider additions require explicit capabilities. |
 | Stable target | State and mutation refer to the same pinned target across focus, Dispatch lane, provider, and lifecycle changes. |
-| Settings ownership | Dangerous Agents is Settings-only with confirmation; benign quick preferences share one source; MCP/view defaults and session overrides disclose scope. |
+| Settings ownership | Status Mode, Worktree Badges, both Usage preferences, and Dangerous Agents are Settings-only; their five command IDs are absent. Aggressive Debug Persistence remains debug-hidden. MCP/view defaults versus session overrides and workspace defaults versus current-workspace commands disclose their distinct scope. |
+| Project terminal retirement | Attach Project Terminal to Dispatch is absent from Settings, persisted state, action/hook contracts, and Dispatch rendering. Old persisted keys are dropped, while ordinary terminal sessions and rows still work. |
 | Destructive safety | Running/cascading closes and all bulk closes are target-bound, freshly validated, and expose partial failure without silent retargeting. |
 | Invocation parity | Palette, menu, shortcut, and programmatic paths share admission/error handling while retaining source-specific UI behavior. |
 | Migration safety | Persistence-version/coercion/alias tests pass; command IDs remain stable unless an explicit idempotent alias migration exists. |
@@ -839,31 +898,33 @@ Manual packaged-app checks must cover:
 5. debug reveal/override behavior;
 6. focus change while an MCP/reload/switch operation is pending;
 7. running and cascading close confirmation from button and shortcut paths;
-8. Settings restart persistence and new-session versus current-session scope;
-9. Claude does not receive Workflow MCP while Codex does; and
-10. assistive-technology text for every semantic badge state.
+8. the five retired commands are absent while their Settings controls still
+   persist and Aggressive Debug Persistence remains debug-only;
+9. old `dispatchProjectTerminal` storage does not create a terminal or side
+   column, while an ordinary user-created terminal still works in Dispatch;
+10. Settings restart persistence and new-session versus current-session scope;
+11. Claude does not receive Workflow MCP while Codex does; and
+12. assistive-technology text for every semantic badge state.
 
 ## Product decisions requested at review
 
 The source establishes the defects above, but these UX choices genuinely need
-product confirmation before implementation:
+product confirmation before implementation. Settings ownership and Dispatch
+project-terminal removal are recorded decisions above and are no longer open:
 
 1. **Unavailable presentation.** Recommendation: hide mode-irrelevant commands;
    show discovery-worthy unsupported commands disabled with a reason when the
    user searches for them.
-2. **Persistent quick preferences.** Recommendation: remove only Dangerous
-   Agents; keep Status Mode, Worktree Badges, Usage Header/Detail, and Aggressive
-   Debug Persistence as Settings-primary commands (the last one debug-hidden).
-3. **Close confirmation threshold.** Recommendation: confirm running/streaming
+2. **Close confirmation threshold.** Recommendation: confirm running/streaming
    targets and any cascade/multi-target close; keep an idle single close
    immediate and undoable.
-4. **Directional shortcuts in Dispatch.** Recommendation: one command ID must
+3. **Directional shortcuts in Dispatch.** Recommendation: one command ID must
    have one meaning. Dispatch keybindings should invoke a distinct direction-free
    creation/navigation command rather than bypassing a hidden grid command.
-5. **Remote Control maturity.** Recommendation: classify the panel
+4. **Remote Control maturity.** Recommendation: classify the panel
    `experimental` until packaged runtime/network readiness and disclosure are
    complete; keep actual enable/listen/pair actions separately authorized.
-6. **Agent Management MCP close grant.** Recommendation: include the enforceable
+5. **Agent Management MCP close grant.** Recommendation: include the enforceable
    explicit-user-intent grant in this governance PR because prose-only safety is
    not a real gate. It is listed separately because it is an MCP tool, not one
    of the 102 palette commands.
@@ -873,6 +934,10 @@ product confirmation before implementation:
 - Do not remove session-level MCP toggles; Settings owns defaults for new
   sessions, while commands intentionally own current-session overrides.
 - Do not enable Workflow MCP for Claude; it duplicates a native feature.
+- Do not remove Dispatch or Tiled Dispatch commands; they act on the current
+  workspace rather than duplicating the persisted default.
+- Do not remove normal terminal creation, terminal sessions, or terminal rows
+  when removing the auto-created Dispatch project-terminal companion feature.
 - Do not make picker visibility a security or capability boundary.
 - Do not replace main-process ownership checks with renderer-only confirmation.
 - Do not persist transient panels/layout stances merely because they have state
