@@ -660,9 +660,25 @@ export function useSessionActions(
           throw readyError
         }
 
+        const recoveredBuiltInMcpDomains =
+          isAgentProviderKind(kind)
+            ? resolveSessionBuiltInMcpDomains({
+                provider: kind,
+                // WHY the backend snapshot wins after successful recovery:
+                // `adopted` means main kept an already-running provider whose
+                // launch-time MCP token cannot be changed by this renderer
+                // request. Falling back preserves compatibility with an older
+                // or test recovery response that predates this observed fact.
+                sessionDomains:
+                  recoverySnapshot?.builtInMcpDomains ?? builtInMcpDomains,
+                defaultDomains: [],
+              })
+            : undefined
         const recoveredMeta: SessionMeta = {
           ...restoredMeta,
-          ...(builtInMcpDomains !== undefined ? { builtInMcpDomains } : {}),
+          ...(recoveredBuiltInMcpDomains !== undefined
+            ? { builtInMcpDomains: recoveredBuiltInMcpDomains }
+            : {}),
           ...(recoveredTmuxName ? { tmuxName: recoveredTmuxName } : {}),
         }
         setState(prev => {

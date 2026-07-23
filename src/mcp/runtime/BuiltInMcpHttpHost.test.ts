@@ -37,6 +37,8 @@ describe('BuiltInMcpHttpHost', () => {
       providerKind: 'opencode',
       domains: ['orchestration'],
     })).toEqual([])
+    expect(host.sessionDomains('claude-workflow-only')).toEqual([])
+    expect(host.sessionDomains('opencode-orchestration')).toEqual([])
   })
 
   it('narrows mixed Claude scopes before constructing the model-visible server', async () => {
@@ -56,6 +58,7 @@ describe('BuiltInMcpHttpHost', () => {
       domains: ['workflows', 'orchestration'],
     })
     expect(config).toBeDefined()
+    expect(host.sessionDomains('claude-mixed')).toEqual(['orchestration'])
     const client = new Client({ name: 'provider-policy-client', version: '0.0.0' })
     const transport = new StreamableHTTPClientTransport(new URL(config!.url), {
       requestInit: { headers: requestHeaders(config!) },
@@ -89,6 +92,7 @@ describe('BuiltInMcpHttpHost', () => {
       providerKind: 'codex',
       domains: ['workflows'],
     })
+    expect(host.sessionDomains('codex-workflow')).toEqual(['workflows'])
     const client = new Client({ name: 'codex-policy-client', version: '0.0.0' })
     const transport = new StreamableHTTPClientTransport(new URL(config!.url), {
       requestInit: { headers: requestHeaders(config!) },

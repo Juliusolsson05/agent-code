@@ -89,7 +89,7 @@ describe('useSessionActions recovery retry', () => {
     expect(state.sessions['codex-explicit-off']?.builtInMcpDomains).toEqual([])
   })
 
-  it('clears a retained failure and accepts an equal-revision readiness snapshot', async () => {
+  it('clears a retained failure and accepts equal-revision readiness and backend MCP facts', async () => {
     const sessionId = 'retry-session'
     let state = {
       tabs: [{
@@ -140,7 +140,7 @@ describe('useSessionActions recovery retry', () => {
     }
     const recoverSession = vi.fn(async () => ({
       ok: true as const,
-      disposition: 'spawned' as const,
+      disposition: 'adopted' as const,
       snapshot: {
         sessionId,
         kind: 'claude' as const,
@@ -150,6 +150,9 @@ describe('useSessionActions recovery retry', () => {
         // retry must restore its readiness even when the renderer already saw
         // this revision number on the abandoned generation.
         input: { ready: true, revision: 7, reason: 'ready' as const },
+        // Main adopted a process launched without MCP. The request below still
+        // carries current defaults, but it cannot retrofit that live process.
+        builtInMcpDomains: [],
       },
     }))
     Object.defineProperty(window, 'api', {
@@ -172,7 +175,7 @@ describe('useSessionActions recovery retry', () => {
     expect(recoverSession).toHaveBeenCalledWith(expect.objectContaining({
       builtInMcpDomains: ['orchestration'],
     }))
-    expect(state.sessions[sessionId]?.builtInMcpDomains).toEqual(['orchestration'])
+    expect(state.sessions[sessionId]?.builtInMcpDomains).toEqual([])
     expect(runtimes[sessionId]).toMatchObject({
       processStatus: 'started',
       processError: null,

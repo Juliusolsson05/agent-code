@@ -149,6 +149,10 @@ describe('rehydrateWorkspace backend reconciliation', () => {
         cwd: '/tmp/project',
         lifecycle: 'live' as const,
         input: { ready: true, revision: 4, reason: 'ready' as const },
+        // The live backend predates the renderer reload and remains the
+        // authority even though the persisted stale Workflow-only list was
+        // narrowed to [] for the recovery request.
+        builtInMcpDomains: ['orchestration' as const],
       },
     }))
     const spawnSession = vi.fn()
@@ -179,7 +183,9 @@ describe('rehydrateWorkspace backend reconciliation', () => {
       sessionId: 'stable-session',
     })
     expect(harness.state().pinnedSessionIds).toEqual(['stable-session'])
-    expect(harness.state().sessions['stable-session']?.builtInMcpDomains).toEqual([])
+    expect(harness.state().sessions['stable-session']?.builtInMcpDomains).toEqual([
+      'orchestration',
+    ])
     expect(harness.runtimes()['stable-session']).toMatchObject({
       draftInput: 'unfinished prompt',
       processStatus: 'started',

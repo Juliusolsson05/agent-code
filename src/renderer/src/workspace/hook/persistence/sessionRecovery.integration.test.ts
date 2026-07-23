@@ -165,7 +165,14 @@ describe('cross-layer session restart reconciliation', () => {
       .mockImplementationOnce(() => replacementProvider)
     const registerSession = vi.fn(() => [])
     const revokeSession = vi.fn()
-    const manager = new SessionManager(null, { registerSession, revokeSession } as never)
+    const sessionDomains = vi.fn(() => ['workflows'])
+    const manager = new SessionManager(null, {
+      registerSession,
+      revokeSession,
+      // This cross-layer harness mocks transport setup, so it must also expose
+      // the effective authorization fact a real BuiltInMcpHttpHost retains.
+      sessionDomains,
+    } as never)
     const persisted = makePersisted()
     const recoveryApi = {
       recoverSession: manager.recover.bind(manager),

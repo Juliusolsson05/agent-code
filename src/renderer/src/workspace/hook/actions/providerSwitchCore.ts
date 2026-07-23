@@ -8,6 +8,7 @@ import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import type { WorkspaceSetRuntimes } from '@renderer/workspace/hook/context'
 import type { SessionActions } from '@renderer/workspace/hook/actions/session'
 import { resumableProviderSessionId } from '@renderer/workspace/providerSessionIdentity'
+import { resolveSessionBuiltInMcpDomains } from '@renderer/workspace/mcpDomains'
 
 // Single-agent provider switch — the shared core.
 //
@@ -158,6 +159,7 @@ export async function switchAgentProvider(params: {
     // hibernation. `ensureSessionLive` is idempotent for an already-live owner
     // and main's recovery claim serializes concurrent wake attempts.
     await sessionActions.ensureSessionLive(sessionId)
+    const postWakeMeta = refs.stateRef.current.sessions[sessionId]
 
     // The translated target transcript must be created BEFORE we replace the
     // live pane. If translation fails, the current provider process should stay
@@ -194,10 +196,26 @@ export async function switchAgentProvider(params: {
       cwd: meta.cwd,
     }).finally(unsubscribeProgress)
 
+    // WHY target domains distinguish legacy `undefined` from an explicit list:
+    // waking initializes renderer metadata under the SOURCE provider. A legacy
+    // undefined Claude pane can therefore become `[]` merely because its
+    // configured default is Codex-only Workflow MCP; that must still seed the
+    // Codex target. Conversely, a stale explicit `['workflows']` is narrowed
+    // to `[]` during the Claude wake and must not be resurrected just because
+    // Codex supports it. Preserve original initialization provenance, but use
+    // the post-wake list for every session that already had an explicit policy.
+    const targetBuiltInMcpDomains = resolveSessionBuiltInMcpDomains({
+      provider: result.targetKind,
+      sessionDomains:
+        meta.builtInMcpDomains === undefined
+          ? undefined
+          : postWakeMeta?.builtInMcpDomains,
+      defaultDomains: refs.defaultBuiltInMcpDomainsRef.current,
+    })
     const newSessionId = await sessionActions.replaceSession(meta.cwd, {
       kind: result.targetKind,
       resumeSessionId: result.targetProviderSessionId,
-      builtInMcpDomains: meta.builtInMcpDomains,
+      builtInMcpDomains: targetBuiltInMcpDomains,
       // See the empty-pane branch above: pin to this agent so the bulk loop
       // replaces the right pane (not the focused one) and the single-pane
       // caller is immune to focus changing during the translate await.

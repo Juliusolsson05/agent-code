@@ -227,6 +227,19 @@ export class BuiltInMcpHttpHost {
     return [{ ...config, headers: { ...config.headers } }]
   }
 
+  sessionDomains(sessionId: string): BuiltInMcpDomain[] {
+    const token = this.tokensBySession.get(sessionId)
+    const registration = token === undefined ? undefined : this.registrations.get(token)
+    if (!registration || registration.revoked) return []
+    // WHY this reads the authorization registration instead of normalizing
+    // renderer metadata again: the registration is the capability set the
+    // running provider's bearer token can actually exercise. Recovery may
+    // adopt that provider after renderer state or Settings changed, so only
+    // this main-owned fact can keep the restored badge and later replacements
+    // honest about the live process.
+    return [...registration.scope.domains]
+  }
+
   revokeSession(sessionId: string): void {
     const token = this.tokensBySession.get(sessionId)
     if (!token) return
