@@ -2,6 +2,15 @@
 
 Status: Ready for implementation on the long-lived draft PR
 
+Availability correction (2026-07-23): the original blueprint below required
+both Claude and Codex parent sessions to receive Workflow MCP. That availability
+decision is superseded by
+`2026-07-23-built-in-mcp-defaults-rollout.md`. Workflow MCP is now Codex-only
+because it emulates a workflow feature Claude provides natively. The remaining
+service, durability, rendering, and Codex execution architecture in this
+document is unchanged; later references to Claude parent access record the
+original implementation target rather than current product policy.
+
 Date: 2026-07-14
 
 Agent Code branch: `feat/workflow-mcp-integration`

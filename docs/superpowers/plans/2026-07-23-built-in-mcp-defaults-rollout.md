@@ -1,7 +1,6 @@
 # Configurable Built-in MCP Defaults — Implementation Plan
 
-Status: Ready for review. Implementation is intentionally paused until this
-plan is approved.
+Status: Implemented on PR #604.
 
 Date: 2026-07-23
 
@@ -586,5 +585,14 @@ along these boundaries:
 5. lifecycle regression tests and documentation reconciliation.
 
 The PR is complete only when the code, focused tests, full repository gates,
-and manual provider checks agree. Until this plan is approved, no phase above
-will be implemented.
+and manual provider checks agree.
+
+Implementation verification completed on 2026-07-23:
+
+- `npm run test:contract`
+- `npm run typecheck`
+- `npm run test:core` — 982 tests
+- `npm run test:system` — 61 tests
+- `npm run test:renderer` — 234 tests
+- `npm run test:coverage` — 1,277 tests with coverage instrumentation
+- `npm run test:package` — production build and required entry-point check

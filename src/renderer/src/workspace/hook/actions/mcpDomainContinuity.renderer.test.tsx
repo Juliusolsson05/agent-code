@@ -44,6 +44,7 @@ function makeRefs(state: WorkspaceState): WorkspaceRefs {
     latestTileTabsRef: ref(null),
     dangerousAgentsRef: ref(false),
     useProxyStreamingRef: ref(false),
+    defaultBuiltInMcpDomainsRef: ref([]),
     seenUuidsRef: ref({}),
     latestScreenRef: ref({}),
     undoStackRef: ref(new UndoCloseStack()),
@@ -192,6 +193,48 @@ describe('built-in MCP continuity at session resurrection boundaries', () => {
       resumeSessionId: 'provider-old',
       recoverTmuxName: undefined,
       builtInMcpDomains: ['workflows'],
+    })
+    mounted.unmount()
+  })
+
+  it('restores an explicit all-off MCP selection instead of treating it as missing', async () => {
+    const state = makeState(null)
+    const refs = makeRefs(state)
+    refs.defaultBuiltInMcpDomainsRef.current = ['orchestration']
+    const writer = stateWriter(state, refs)
+    const spawn = vi.fn().mockResolvedValue('restored-pane')
+    refs.undoStackRef.current.push({
+      type: 'pane',
+      closedAt: Date.now(),
+      tabId: 'tab-parent',
+      sessionMeta: {
+        cwd: '/projects/related-child',
+        kind: 'codex',
+        providerSessionId: 'provider-old',
+        builtInMcpDomains: [],
+      },
+      direction: 'vertical',
+      ratio: 0.5,
+      side: 'a',
+      siblingLeafId: 'parent',
+    })
+    let actions!: ReturnType<typeof useUndoCloseAction>
+
+    function Harness(): React.JSX.Element {
+      actions = useUndoCloseAction(state, writer.setState, refs, sessionActionsWithSpawn(spawn))
+      return <div />
+    }
+
+    const mounted = render(<Harness />)
+    await act(async () => {
+      await actions.undoClose()
+    })
+
+    expect(spawn).toHaveBeenCalledWith('/projects/related-child', {
+      kind: 'codex',
+      resumeSessionId: 'provider-old',
+      recoverTmuxName: undefined,
+      builtInMcpDomains: [],
     })
     mounted.unmount()
   })

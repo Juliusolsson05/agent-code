@@ -5,7 +5,22 @@ import { runSaveDebugBundleCommand } from '@renderer/features/debug/saveDebugBun
 import { runAttachRecordingNoteCommand, runToggleSessionRecordingCommand } from '@renderer/features/debug/attachRecordingNote'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import { buildProviderResumeCommand } from '@renderer/workspace/providerResumeCommand'
+import { providerSupportsBuiltInMcpDomain } from '@mcp/shared/types'
 import type { BuiltInMcpDomain } from '@mcp/shared/types'
+
+function targetSupportsBuiltInMcpDomain(
+  workspace: CommandContext['workspace'],
+  domain: BuiltInMcpDomain,
+): boolean {
+  // Command visibility must describe the launcher's real capability, not the
+  // broad AgentProviderKind union. OpenCode is a valid agent provider but does
+  // not inject built-in MCP yet; Workflow MCP is narrower still because Claude
+  // owns the equivalent feature natively.
+  const sessionId = commandTargetSessionId(workspace)
+  if (!sessionId) return false
+  const kind = workspace.state.sessions[sessionId]?.kind ?? DEFAULT_PROVIDER
+  return isAgentProviderKind(kind) && providerSupportsBuiltInMcpDomain(kind, domain)
+}
 
 function builtInMcpDomainState(
   ctx: CommandContext,
@@ -293,11 +308,7 @@ export const sessionCommands: CommandDef[] = [
     keywords: ['mcp', 'server', 'built-in', 'ping', 'enable', 'disable', 'reload', 'agent', 'claude', 'codex'],
     when: ({ workspace, flags }) => {
       if (!flags.devDebugEnabled) return false
-      const sessionId = commandTargetSessionId(workspace)
-      if (!sessionId) return false
-      const meta = workspace.state.sessions[sessionId]
-      const kind = meta?.kind ?? DEFAULT_PROVIDER
-      return isAgentProviderKind(kind)
+      return targetSupportsBuiltInMcpDomain(workspace, 'ping')
     },
     getState: ctx => builtInMcpDomainState(ctx, 'ping'),
     run: async ({ workspace, ui }) => {
@@ -305,12 +316,14 @@ export const sessionCommands: CommandDef[] = [
       if (!sessionId) return
       const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? DEFAULT_PROVIDER
-      // Runtime narrow that mirrors the `when` predicate exactly (both use
-      // isAgentProviderKind). The old two-provider check silently dropped
-      // OpenCode panes even though `when` had already allowed the command to
-      // run — one of the last stale two-provider literals #394 phase 4
-      // couldn't finish (issue #394 §7).
-      if (!isAgentProviderKind(kind) || !meta) return
+      // `when` only controls picker visibility; commands remain callable from
+      // keybindings/programmatic sites, so the execution boundary repeats the
+      // provider capability check before replacing a process.
+      if (
+        !isAgentProviderKind(kind) ||
+        !providerSupportsBuiltInMcpDomain(kind, 'ping') ||
+        !meta
+      ) return
 
       ui.closePalette()
       try {
@@ -344,11 +357,7 @@ export const sessionCommands: CommandDef[] = [
     description: '**What it does:** Reloads the focused **Claude or Codex agent** with Agent Code AI Workspace MCP tools on or off.\n\n**Use when:** You want this agent to create curated cross-worktree file review workspaces.\n\n**Notes:** Orchestration agents can use this domain, but it remains a separate MCP capability.',
     keywords: ['mcp', 'ai workspace', 'workspace', 'review', 'files', 'worktree', 'enable', 'disable', 'reload', 'claude', 'codex'],
     when: ({ workspace }) => {
-      const sessionId = commandTargetSessionId(workspace)
-      if (!sessionId) return false
-      const meta = workspace.state.sessions[sessionId]
-      const kind = meta?.kind ?? DEFAULT_PROVIDER
-      return isAgentProviderKind(kind)
+      return targetSupportsBuiltInMcpDomain(workspace, 'ai_workspace')
     },
     getState: ctx => builtInMcpDomainState(ctx, 'ai_workspace'),
     run: async ({ workspace, ui }) => {
@@ -356,12 +365,13 @@ export const sessionCommands: CommandDef[] = [
       if (!sessionId) return
       const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? DEFAULT_PROVIDER
-      // Runtime narrow that mirrors the `when` predicate exactly (both use
-      // isAgentProviderKind). The old two-provider check silently dropped
-      // OpenCode panes even though `when` had already allowed the command to
-      // run — one of the last stale two-provider literals #394 phase 4
-      // couldn't finish (issue #394 §7).
-      if (!isAgentProviderKind(kind) || !meta) return
+      // See the ping command: hidden commands can still be invoked outside the
+      // picker, so execution must enforce the same provider policy.
+      if (
+        !isAgentProviderKind(kind) ||
+        !providerSupportsBuiltInMcpDomain(kind, 'ai_workspace') ||
+        !meta
+      ) return
 
       ui.closePalette()
       try {
@@ -395,11 +405,7 @@ export const sessionCommands: CommandDef[] = [
     description: '**What it does:** Reloads the focused **Claude or Codex agent** with Agent Code orchestration MCP tools on or off.\n\n**Use when:** You want this agent to create and coordinate distinct orchestration child agents.\n\n**Notes:** Orchestration agents are separate from manual Linked Agents.',
     keywords: ['mcp', 'orchestration', 'agents', 'workers', 'enable', 'disable', 'reload', 'claude', 'codex'],
     when: ({ workspace }) => {
-      const sessionId = commandTargetSessionId(workspace)
-      if (!sessionId) return false
-      const meta = workspace.state.sessions[sessionId]
-      const kind = meta?.kind ?? DEFAULT_PROVIDER
-      return isAgentProviderKind(kind)
+      return targetSupportsBuiltInMcpDomain(workspace, 'orchestration')
     },
     getState: ctx => builtInMcpDomainState(ctx, 'orchestration'),
     run: async ({ workspace, ui }) => {
@@ -407,12 +413,13 @@ export const sessionCommands: CommandDef[] = [
       if (!sessionId) return
       const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? DEFAULT_PROVIDER
-      // Runtime narrow that mirrors the `when` predicate exactly (both use
-      // isAgentProviderKind). The old two-provider check silently dropped
-      // OpenCode panes even though `when` had already allowed the command to
-      // run — one of the last stale two-provider literals #394 phase 4
-      // couldn't finish (issue #394 §7).
-      if (!isAgentProviderKind(kind) || !meta) return
+      // See the ping command: hidden commands can still be invoked outside the
+      // picker, so execution must enforce the same provider policy.
+      if (
+        !isAgentProviderKind(kind) ||
+        !providerSupportsBuiltInMcpDomain(kind, 'orchestration') ||
+        !meta
+      ) return
 
       ui.closePalette()
       try {
@@ -446,11 +453,7 @@ export const sessionCommands: CommandDef[] = [
     description: '**What it does:** Reloads the focused **Claude or Codex agent** with Agent Code transcript-consumption MCP tools on or off.\n\n**Use when:** You want this agent to read a specific Claude/Codex JSONL transcript file through filtered projections instead of manual shell parsing.\n\n**Notes:** The tool accepts an explicit file path and returns bounded normalized transcript context; it does not discover transcripts for the agent.',
     keywords: ['mcp', 'transcript', 'transcripts', 'agent context', 'handoff', 'review', 'enable', 'disable', 'reload', 'claude', 'codex'],
     when: ({ workspace }) => {
-      const sessionId = commandTargetSessionId(workspace)
-      if (!sessionId) return false
-      const meta = workspace.state.sessions[sessionId]
-      const kind = meta?.kind ?? DEFAULT_PROVIDER
-      return isAgentProviderKind(kind)
+      return targetSupportsBuiltInMcpDomain(workspace, 'agent_transcripts')
     },
     getState: ctx => builtInMcpDomainState(ctx, 'agent_transcripts'),
     run: async ({ workspace, ui }) => {
@@ -458,12 +461,13 @@ export const sessionCommands: CommandDef[] = [
       if (!sessionId) return
       const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? DEFAULT_PROVIDER
-      // Runtime narrow that mirrors the `when` predicate exactly (both use
-      // isAgentProviderKind). The old two-provider check silently dropped
-      // OpenCode panes even though `when` had already allowed the command to
-      // run — one of the last stale two-provider literals #394 phase 4
-      // couldn't finish (issue #394 §7).
-      if (!isAgentProviderKind(kind) || !meta) return
+      // See the ping command: hidden commands can still be invoked outside the
+      // picker, so execution must enforce the same provider policy.
+      if (
+        !isAgentProviderKind(kind) ||
+        !providerSupportsBuiltInMcpDomain(kind, 'agent_transcripts') ||
+        !meta
+      ) return
 
       ui.closePalette()
       try {
@@ -494,19 +498,10 @@ export const sessionCommands: CommandDef[] = [
     id: 'enable-workflow-mcp',
     surface: 'session',
     title: 'Workflow MCP',
-    description: '**What it does:** Reloads the focused **Claude or Codex agent** with Agent Code workflow MCP tools on or off.\n\n**Use when:** You want this agent to discover, start, inspect, cancel, or resume portable multi-agent workflows.\n\n**Notes:** Workflow execution is app-owned and survives renderer reloads; changing MCP capabilities still requires replacing the provider process.',
-    keywords: ['mcp', 'workflow', 'workflows', 'pipeline', 'agents', 'resume', 'enable', 'disable', 'reload', 'claude', 'codex'],
+    description: '**What it does:** Reloads the focused **Codex agent** with Agent Code workflow MCP tools on or off.\n\n**Use when:** You want Codex to discover, start, inspect, cancel, or resume portable multi-agent workflows.\n\n**Notes:** Claude is intentionally excluded because it has a native workflow feature. Workflow execution is app-owned and survives renderer reloads; changing MCP capabilities still requires replacing the provider process.',
+    keywords: ['mcp', 'workflow', 'workflows', 'pipeline', 'agents', 'resume', 'enable', 'disable', 'reload', 'codex', 'claude native'],
     when: ({ workspace }) => {
-      const sessionId = commandTargetSessionId(workspace)
-      if (!sessionId) return false
-      const meta = workspace.state.sessions[sessionId]
-      const kind = meta?.kind ?? DEFAULT_PROVIDER
-      // Workflow MCP is verified only through Claude's --mcp-config and
-      // Codex's mcp_servers launch configuration in this implementation.
-      // OpenCode is an agent provider too, but advertising a toggle before its
-      // runtime injects the built-in server would create a control that appears
-      // to work while the model never receives the tools.
-      return kind === 'claude' || kind === 'codex'
+      return targetSupportsBuiltInMcpDomain(workspace, 'workflows')
     },
     getState: ctx => builtInMcpDomainState(ctx, 'workflows'),
     run: async ({ workspace, ui }) => {
@@ -514,17 +509,20 @@ export const sessionCommands: CommandDef[] = [
       if (!sessionId) return
       const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? DEFAULT_PROVIDER
-      if ((kind !== 'claude' && kind !== 'codex') || !meta) return
+      if (
+        !isAgentProviderKind(kind) ||
+        !providerSupportsBuiltInMcpDomain(kind, 'workflows') ||
+        !meta
+      ) return
 
       ui.closePalette()
       try {
         const nextDomains = toggleBuiltInMcpDomain(meta.builtInMcpDomains, 'workflows')
         // WHY replace the agent instead of mutating the running registration:
-        // both Claude and Codex receive their MCP configuration at process
-        // launch. Updating renderer metadata alone would display an enabled
-        // toggle while the provider still had a cached tools/list response
-        // from the old scope. Replacement keeps the visible state and the
-        // actual model-visible capability atomic.
+        // Codex receives its MCP configuration at process launch. Updating
+        // renderer metadata alone would display an enabled toggle while the
+        // provider still had a cached tools/list response from the old scope.
+        // Replacement keeps visible state and actual capability atomic.
         const newSessionId = await workspace.replaceSession(meta.cwd, {
           kind,
           resumeSessionId: meta.providerSessionId,
