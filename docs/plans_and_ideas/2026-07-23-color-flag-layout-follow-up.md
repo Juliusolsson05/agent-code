@@ -109,5 +109,6 @@ Verification completed on 2026-07-23:
 
 - focused color-flag renderer coverage: 3/3;
 - complete renderer project: 230/230;
-- `npm run check`: test contract, typecheck, 1,258 deterministic tests,
-  application/remote-client build, and build-output verification all pass.
+- post-`main` integration `npm run check`: test contract, typecheck, 1,280
+  deterministic tests, application/remote-client build, and build-output
+  verification all pass.
