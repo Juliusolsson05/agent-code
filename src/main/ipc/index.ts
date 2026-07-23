@@ -5,6 +5,7 @@ import type { GhostJournalRegistry } from '@main/ghostJournal.js'
 import type { DictationDebugJournalRegistry } from '@main/dictationJournal.js'
 import type { PasteDebugJournalRegistry } from '@main/pasteDebugJournal.js'
 import type { SessionRecorderManager } from '@main/recording/SessionRecorderManager.js'
+import type { AgentCodeConventionsService } from '@main/agentCodeConventions/AgentCodeConventionsService.js'
 
 import { registerSessionIpc } from '@main/ipc/session.js'
 import { registerProviderIpc } from '@main/ipc/provider.js'
@@ -40,6 +41,7 @@ import { registerUsageIpc } from '@main/ipc/usage.js'
 import { registerCliUpdatesIpc } from '@main/ipc/cliUpdates.js'
 import type { CliUpdateOrchestrator } from '@main/setup/cliUpdateOrchestrator.js'
 import { registerWorkflowIpc } from '@main/ipc/workflows.js'
+import { registerAgentCodeConventionsIpc } from '@main/ipc/agentCodeConventions.js'
 import type { WorkflowBridge } from '@main/workflows/WorkflowBridge.js'
 
 // IPC registration aggregator.
@@ -69,6 +71,7 @@ export type IpcDeps = {
   appRunJournal: AppRunJournal
   cliUpdateOrchestrator: CliUpdateOrchestrator
   workflowBridge: WorkflowBridge
+  agentCodeConventionsService: AgentCodeConventionsService
 }
 
 export function registerAllIpc(deps: IpcDeps): void {
@@ -103,4 +106,5 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerUsageIpc()
   registerCliUpdatesIpc(deps.cliUpdateOrchestrator)
   registerWorkflowIpc(deps.workflowBridge)
+  registerAgentCodeConventionsIpc(deps.agentCodeConventionsService)
 }

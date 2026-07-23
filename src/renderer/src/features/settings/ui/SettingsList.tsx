@@ -8,6 +8,7 @@ import { HotkeyInput } from '@renderer/features/settings/ui/HotkeyInput'
 import { CliUpdateBehaviorRow } from '@renderer/features/cli-updates/CliUpdateBehaviorRow'
 import { DictationApiKeyRow } from '@renderer/features/voice-dictation/DictationApiKeyRow'
 import { ThemePickerRow } from '@renderer/features/settings/ui/ThemePickerRow'
+import { AgentCodeConventionsRow } from '@renderer/features/settings/ui/AgentCodeConventionsRow'
 
 type Props = {
   definitions: SettingDefinition[]
@@ -224,6 +225,8 @@ function SettingRow({
               safeStorage-backed main state, so the row owns the IPC
               round-trip. See features/voice-dictation/DictationApiKeyRow.tsx. */}
           {control.type === 'dictation-api-key' ? <DictationApiKeyRow /> : null}
+
+          {control.type === 'agent-code-conventions' ? <AgentCodeConventionsRow /> : null}
 
           {/* Theme grid — built-ins and saved themes in one list, with the
               create/edit/delete affordances the generic select can't carry.

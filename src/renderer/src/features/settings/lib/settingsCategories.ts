@@ -1,6 +1,7 @@
 export type SettingCategoryId =
   | 'appearance'
   | 'workspace'
+  | 'agents'
   | 'commands'
   | 'dictation'
   | 'experimental'
@@ -22,6 +23,11 @@ export const SETTING_CATEGORIES: SettingCategory[] = [
     id: 'workspace',
     label: 'Workspace',
     description: 'How the shell behaves during normal use.',
+  },
+  {
+    id: 'agents',
+    label: 'Agents',
+    description: 'Shared behavior and instructions for agent runtimes.',
   },
   {
     id: 'commands',

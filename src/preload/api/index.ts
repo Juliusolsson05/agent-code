@@ -25,6 +25,7 @@ import { remoteApi } from '@preload/api/remote.js'
 import { usageApi } from '@preload/api/usage.js'
 import { cliUpdatesApi } from '@preload/api/cliUpdates.js'
 import { workflowsApi } from '@preload/api/workflows.js'
+import { agentCodeConventionsApi } from '@preload/api/agentCodeConventions.js'
 
 // Composed preload API surface.
 //
@@ -69,6 +70,7 @@ export const api = {
   ...usageApi,
   ...cliUpdatesApi,
   ...workflowsApi,
+  ...agentCodeConventionsApi,
 }
 
 export type Api = typeof api
