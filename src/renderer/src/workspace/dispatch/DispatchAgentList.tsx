@@ -8,6 +8,7 @@ import { useShallow } from 'zustand/react/shallow'
 
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { useAppStore } from '@renderer/app-state/hooks'
+import { colorFlagById } from '@renderer/app-state/settings/dispatchColorFlags'
 import { WorktreeBadge } from '@renderer/workspace/tile-tree/TileLeaf/SessionBadges'
 import { extractLatestUserPrompt } from '@renderer/features/workspace/lib/latestUserPrompts'
 import { buildDispatchGroups } from '@renderer/workspace/dispatch/dispatchSelectors'
@@ -225,6 +226,11 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
     if (disabled) return
     focusSessionInTab(row.tabId, row.sessionId)
   }, [disabled, focusSessionInTab, row.sessionId, row.tabId])
+  // Color flag (set via the "Set color flag" command). A separate, cheap
+  // selector so only flagged/unflagged transitions of THIS row re-render it.
+  const colorFlag = useAppStore(state =>
+    colorFlagById(state.settings.dispatchColorFlags[row.sessionId]),
+  )
   const isTerminal = row.kind === 'terminal'
   const activity = dispatchActivity(runtime)
   const activityClasses = dispatchActivityClasses(activity, active)
@@ -317,6 +323,19 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
           )}
         </div>
       </div>
+      {/* Color flag strip — a 10px full-height band pinned to the right edge.
+          Absolutely positioned (not a real border-r) so it overlays the row's
+          existing pr-2.5 padding without stealing content width or shifting
+          any of the layout above. The row is `relative overflow-hidden`, so it
+          clips cleanly. aria-hidden: it is decoration; the flag is not (yet)
+          announced to screen readers. */}
+      {colorFlag && (
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute right-0 top-0 bottom-0 w-[10px]"
+          style={{ backgroundColor: colorFlag.color }}
+        />
+      )}
     </button>
   )
 })

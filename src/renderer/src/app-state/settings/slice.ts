@@ -34,6 +34,16 @@ export const createSettingsSlice: StateCreator<
       applyTheme(DEFAULT_SETTINGS)
       return { settings: DEFAULT_SETTINGS }
     }, false, 'settings/resetSettings'),
+  // Set or clear a per-agent Dispatch color flag. `null` deletes the key so the
+  // map only ever holds flagged sessions (no accumulation of explicit "none"s).
+  // No applyTheme — flags are per-session row chrome, not part of the theme.
+  setDispatchColorFlag: (sessionId, colorId) =>
+    set(state => {
+      const next = { ...state.settings.dispatchColorFlags }
+      if (colorId === null) delete next[sessionId]
+      else next[sessionId] = colorId
+      return { settings: { ...state.settings, dispatchColorFlags: next } }
+    }, false, 'settings/setDispatchColorFlag'),
   toggleStatusMode: () =>
     set(state => {
       const next = {

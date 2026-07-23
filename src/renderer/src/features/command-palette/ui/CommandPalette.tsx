@@ -199,6 +199,7 @@ function OpenCommandPalette({
   const openBulkProviderSwitch = useAppStore(state => state.openBulkProviderSwitch)
   const openRewindPrompt = useAppStore(state => state.openRewindPrompt)
   const openAgentViewModePicker = useAppStore(state => state.openAgentViewModePicker)
+  const openColorFlagPicker = useAppStore(state => state.openColorFlagPicker)
   const openUsageModal = useAppStore(state => state.openUsageModal)
   const toggleGitBar = useAppStore(state => state.toggleGitBar)
   const toggleWorktreesBar = useAppStore(state => state.toggleWorktreesBar)
@@ -492,6 +493,7 @@ function OpenCommandPalette({
         openBulkProviderSwitch,
         openRewindPrompt,
         openAgentViewModePicker,
+        openColorFlagPicker,
         openUsageModal,
         toggleGitBar,
         toggleWorktreesBar,

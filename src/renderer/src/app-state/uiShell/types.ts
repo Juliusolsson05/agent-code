@@ -217,6 +217,8 @@ export type UiShellState = {
    * session.
    */
   agentViewModePickerSessionId: SessionId | null
+  /** Session whose Dispatch color-flag picker modal is open, or null. */
+  colorFlagPickerSessionId: SessionId | null
   /** Splitter ratio between the dispatch agent list and the active
    *  agent pane in `DispatchLayout`. 0..1, where 0.25 means the list
    *  is 25% of the available width. Clamped to [0.15, 0.5] when the

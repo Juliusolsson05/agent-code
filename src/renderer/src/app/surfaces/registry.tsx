@@ -22,6 +22,7 @@ import { AgentActivitySurface } from '@renderer/features/workspace/surfaces/Agen
 import { CloseOldAgentsSurface } from '@renderer/features/workspace/surfaces/CloseOldAgentsSurface'
 import { BulkProviderSwitchSurface } from '@renderer/features/workspace/surfaces/BulkProviderSwitchSurface'
 import { AgentViewModePickerSurface } from '@renderer/features/workspace/surfaces/AgentViewModePickerSurface'
+import { ColorFlagPickerSurface } from '@renderer/features/workspace/surfaces/ColorFlagPickerSurface'
 import { RewindToPromptSurface } from '@renderer/features/workspace/surfaces/RewindToPromptSurface'
 
 // The surface registry (issue #494). Adding a surface = write a wrapper
@@ -71,6 +72,7 @@ export const modalSurfaces: SurfaceEntry[] = [
   { id: 'close-old-agents', Component: CloseOldAgentsSurface },
   { id: 'bulk-provider-switch', Component: BulkProviderSwitchSurface },
   { id: 'agent-view-mode-picker', Component: AgentViewModePickerSurface },
+  { id: 'color-flag-picker', Component: ColorFlagPickerSurface },
   { id: 'rewind-to-prompt', Component: RewindToPromptSurface },
   { id: 'usage', Component: UsageModalSurface },
 ]

@@ -24,6 +24,7 @@ import type {
   UsageHeaderLevel,
 } from '@renderer/app-state/settings/types'
 import { coerceCustomAppearanceJson } from '@renderer/app-state/settings/customAppearance'
+import { coerceDispatchColorFlags } from '@renderer/app-state/settings/dispatchColorFlags'
 import { coerceHotkeyBinding } from '@renderer/lib/hotkeyBinding'
 import { coerceSavedPromptTemplates } from '@renderer/features/prompt-templates/savedPromptTemplates'
 
@@ -47,6 +48,7 @@ export function coerceSettings(value: unknown): Settings {
     ...parsed,
     savedThemes,
     savedPromptTemplates,
+    dispatchColorFlags: coerceDispatchColorFlags(parsed.dispatchColorFlags),
     mode: resolvePersistedMode(parsed, savedThemes),
     contrast: parsed.contrast === true,
     accent: ACCENTS.some(a => a.id === parsed.accent)

@@ -9,10 +9,13 @@ import type {
   TileTabsState,
 } from '@renderer/workspace/types'
 
+import type { ColorFlagId } from '@renderer/app-state/settings/dispatchColorFlags'
+
 export type SettingsSlice = {
   settings: Settings
   setSettings: (patch: Partial<Settings>) => void
   resetSettings: () => void
+  setDispatchColorFlag: (sessionId: string, colorId: ColorFlagId | null) => void
   toggleStatusMode: () => void
   toggleWorktreeBadges: () => void
   toggleUsageHeader: () => void
@@ -94,6 +97,8 @@ export type UiShellSlice = UiShellState & {
   closeRewindPrompt: () => void
   openAgentViewModePicker: (sessionId: SessionId) => void
   closeAgentViewModePicker: () => void
+  openColorFlagPicker: (sessionId: SessionId) => void
+  closeColorFlagPicker: () => void
 }
 
 export type WorkspaceSlice = {
