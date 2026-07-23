@@ -1,6 +1,6 @@
 # Dispatch color-flag visual corrections
 
-Status: In progress
+Status: Complete
 Date: 2026-07-23
 
 ## Context
@@ -44,9 +44,12 @@ Both selector shapes must use the same flag-column component:
   0.
 - `DispatchMiniList` — the chips-only selector used beside tiled lanes 1+.
 
-The compact selector keeps its existing 36px label cell and becomes 46px wide:
-36px for the centered session label plus the real 10px flag column. The flag
-must not squeeze or off-center the label inside its established cell.
+The compact selector keeps its existing 36px selector footprint for the label
+side and becomes 46px wide by adding the real 10px flag column. The left border
+lives inside that border-box, so the label remains the flexible remainder
+rather than receiving a second hardcoded width; that preserves its exact prior
+center without creating a one-pixel overflow. The flag must not squeeze or
+off-center the label inside its established area.
 
 ### Centered picker
 
@@ -63,9 +66,10 @@ narrow viewports.
    drifting again.
 2. Replace `DispatchAgentList`'s conditional absolute overlay and compensating
    right padding with the shared trailing flex child.
-3. Render the same component from `DispatchMiniChip`. Split the mini button
-   into a 36px label cell plus the 10px strip, and widen the containing selector
-   in `TiledDispatchLayout` to 46px.
+3. Render the same component from `DispatchMiniChip`. Keep the label as the
+   flexible remainder beside the 10px strip, and widen the compact selector to
+   46px. `DispatchMiniList` owns that width so its parent cannot drift back to
+   the old 36px constraint.
 4. Add `justify-center` and dialog-consistent horizontal padding to the swatch
    group in `ColorFlagPickerModal`.
 
@@ -77,8 +81,8 @@ the entire component tree:
 - a valid persisted flag fills the shared strip with the palette color;
 - an unflagged session still renders the transparent 10px layout column;
 - the rich Dispatch row includes the layout-owned strip;
-- tiled mini chips include the same strip without moving the label out of its
-  36px cell, and the tiled selector wrapper reserves 46px;
+- tiled mini chips include the same strip without moving the label from its
+  established area, and the tiled selector reserves 46px;
 - the picker swatch group carries centering and horizontal-inset classes.
 
 Then run the repository's renderer tests, typecheck, full test suite, and build.
@@ -91,3 +95,19 @@ two lanes, including flagged and unflagged rows next to one another.
 - Adding custom colors, keybindings, or a row context menu.
 - Pruning flags when sessions close.
 - Changing which session the command palette targets.
+
+## Result
+
+The rich and compact selectors now share one always-mounted 10px flex column.
+Classic Dispatch and tiled lane 0 receive it through `DispatchAgentList`; every
+later tiled lane receives it through `DispatchMiniList`, whose selector grew
+from 36px to 46px without moving the label's established center. The picker
+swatches use the dialog's 16px horizontal inset and center within the remaining
+body width.
+
+Verification completed on 2026-07-23:
+
+- focused color-flag renderer coverage: 3/3;
+- complete renderer project: 230/230;
+- `npm run check`: test contract, typecheck, 1,258 deterministic tests,
+  application/remote-client build, and build-output verification all pass.
