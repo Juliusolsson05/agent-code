@@ -89,6 +89,7 @@ collapsed into a boolean filter:
 | Visibility | Make visibility strictly picker-only; classify developer commands as `debug` and niche supported operations as `advanced`. | The tiers already exist but are unused, and native-menu execution currently depends on them accidentally. |
 | State | Replace `{label, tone}` with semantic toggle/value/status states plus unavailable/loading/error and target identity. | Color and arbitrary text cannot distinguish boolean truth, values, inherited state, async work, or unsupported commands. |
 | Settings ownership | Retire `toggle-status-mode`, `toggle-worktree-badges`, `usage.toggle-header`, `usage.cycle-header-level`, and `dangerous-agents` from Commands; keep their durable controls in Settings. Preserve Settings-default + per-session-command for MCP and agent view, preserve current-workspace layout commands, and keep only Aggressive Debug Persistence as a Settings-primary quick command. | A persisted preference with no meaningful momentary scope should have one product home. Session MCP/view overrides and current-workspace layout actions are intentionally different from global defaults. |
+| Navigation command group | Put `next-tab`, `prev-tab`, and the four directional pane-focus commands in a closed **Navigation Commands** group that is off by default. Add a Settings-only **Enable Navigation Commands** toggle. | These relative-focus entries duplicate high-frequency shortcuts and add picker noise. The setting controls command-picker discoverability as a family; it must not turn off the underlying keyboard navigation actions. |
 | Dispatch project terminal | Remove the entire opt-in auto-created project-terminal side-column feature, including its Settings field, renderer/action plumbing, persistence shape, and stale migration comments. | It is not merely a misplaced command: the product behavior itself is being retired. Ordinary user-created terminals and their normal Dispatch rows remain unrelated and must keep working. |
 | Providers | Gate features by declared capability, not `isAgentProviderKind()`. | OpenCode currently receives Rewind, Duplicate, Resume, Switch Provider, and Copy Resume affordances that are empty, rejected, unsupported, or unverified. |
 | Targeting | Resolve and pin one target for state + execution, then revalidate identity/capability before mutation. | The shared grid/Dispatch resolver is sound, but repeated resolution can display state for A and mutate B after focus changes. |
@@ -135,6 +136,11 @@ audit:
 5. Remove the complete **Attach Project Terminal to Dispatch** feature. This
    means the opt-in, auto-created companion terminal and its dedicated Dispatch
    side column—not user-created terminal sessions or ordinary terminal rows.
+6. Add the Settings-only **Enable Navigation Commands** preference, default off.
+   Its membership is exactly `next-tab`, `prev-tab`, `nav-left`, `nav-right`,
+   `nav-up`, and `nav-down`. Off removes those six from the command picker; it
+   does not disable Command-[ / Command-], Option-H/J/K/L, arrow variants, or
+   their underlying workspace actions.
 
 ## Canonical source map
 
@@ -165,6 +171,10 @@ audit:
   different or Settings-primary scopes).
 - **Tier** is the proposed default picker visibility. A hidden tier remains
   runnable only through an invocation path that independently passes admission.
+- `default (group off)` means the definition uses the ordinary default tier
+  once **Enable Navigation Commands** is on, but the group gate hides it from
+  the picker on a fresh install. The group gate is discoverability only and
+  never substitutes for contextual admission.
 - `target` in a proposed gate means resolve a concrete target and carry that
   identity into execution; it does not mean “rerun whichever target is focused.”
 
@@ -174,8 +184,8 @@ audit:
 |---|---|---|---|---|---|
 | `new-tab` — New Tab | app | none; — | Workspace create / spawns agent | Create · default · C | Keep; native menu must resolve outside picker visibility; spawn boundary deduplicates/rate-limits. |
 | `close-tab` — Close Tab | app | none; — | Workspace + process teardown / destructive cascade | Layout & Dispatch · default · C | Require active tab; pin tab; confirm when running or cascade count >1; revalidate before close. |
-| `next-tab` — Next Tab | app | none; — | Focus only | Navigate · default · C | Gate/disable when fewer than two tabs; keep action no-op safe. |
-| `prev-tab` — Previous Tab | app | none; — | Focus only | Navigate · default · C | Same as `next-tab`. |
+| `next-tab` — Next Tab | app | none; — | Focus only | Navigate · default (group off) · C | Add to the closed Navigation Commands group; hide from picker until the group setting is enabled; gate/disable when fewer than two tabs; keep shortcut action independent and no-op safe. |
+| `prev-tab` — Previous Tab | app | none; — | Focus only | Navigate · default (group off) · C | Same group/default behavior and contextual admission as `next-tab`; preserve the direct shortcut. |
 | `reorder-tabs` — Reorder Tabs | app | more than one tab; — | Workspace order | Navigate · default · C | Recheck count and tab identities at modal commit; native menu ignores picker visibility. |
 | `resume-session` — Resume Session | app | none; — | Provider session create/replace | Session · default · C | Require focused CWD plus a provider with saved-session listing; use provider chooser/friendly unavailable state instead of OpenCode/terminal fallback. |
 | `new-agent` — New Agent… | app | active non-tiled tab; — | Workspace/process create | Create · default · C | Rename to New Pane… or stop offering Terminal; require at least one launchable provider/runtime and deduplicate commit. |
@@ -195,10 +205,10 @@ audit:
 | `codex-horizontal` — New Codex Below | grid | generated; — | Workspace/process create | Create · default · C | Same as `codex-vertical`. |
 | `opencode-vertical` — New OpenCode Right | grid | generated; — | Workspace/process create | Create · default · C | Require OpenCode setup/binary launchability; no invisible Dispatch behavior. |
 | `opencode-horizontal` — New OpenCode Below | grid | generated; — | Workspace/process create | Create · default · C | Same as `opencode-vertical`. |
-| `nav-left` — Focus Pane Left | grid | none; — | Focus only | Navigate · default · C | Keybinding and command share the grid-mode admission rule. |
-| `nav-right` — Focus Pane Right | grid | none; — | Focus only | Navigate · default · C | Same as `nav-left`. |
-| `nav-up` — Focus Pane Up | grid | none; — | Focus only | Navigate · default · C | Separate Dispatch-row navigation identity from grid command/shortcut. |
-| `nav-down` — Focus Pane Down | grid | none; — | Focus only | Navigate · default · C | Same as `nav-up`. |
+| `nav-left` — Focus Pane Left | grid | none; — | Focus only | Navigate · default (group off) · C | Add to Navigation Commands; hide from picker until enabled. Preserve shortcut navigation; command admission remains grid-only. |
+| `nav-right` — Focus Pane Right | grid | none; — | Focus only | Navigate · default (group off) · C | Same as `nav-left`. |
+| `nav-up` — Focus Pane Up | grid | none; — | Focus only | Navigate · default (group off) · C | Add to Navigation Commands; preserve direct Grid/Dispatch shortcut behavior while keeping the command itself grid-only. |
+| `nav-down` — Focus Pane Down | grid | none; — | Focus only | Navigate · default (group off) · C | Same as `nav-up`. |
 | `undo-close` — Undo Close | app | none; — | Bounded in-memory recovery → workspace/process | Session · default · C | Expose undo-stack availability/reason; pin the recorded entry and revalidate restore ownership. |
 | `revive-pane` — Revive Buried Pane | app | any buried session; — | Workspace/process wake | Layout & Dispatch · advanced · C | Rename Revive Buried Session…; gate from the same scoped list the picker displays. |
 | `kill-buried-pane` — Kill Buried Pane… | app | any buried session; — | Process teardown / destructive, no undo | Layout & Dispatch · advanced · C | Rename session; add second confirmation/running warning; validate selected record immediately before kill. |
@@ -378,6 +388,7 @@ The placement rule is behavioral, not aesthetic:
 | Agent View Mode | `set-agent-view-mode` | Both with different scope | Settings = app default; command = this session. Rename the command to disclose that. |
 | Default built-in MCP rows | five configurable MCP commands | Both with different scope | Settings = new sessions; command = this session. Keep Workflow Codex-only. |
 | Default Workspace Mode | Dispatch/Tiled Dispatch commands | Not duplicates | Settings controls initial/default policy; commands control the current workspace. |
+| Enable Navigation Commands | six-member Navigation Commands group | **Settings-only group gate, off by default** | Off hides the six relative-focus commands from the picker as a family. On makes them picker-eligible, after which normal applicability and per-command visibility overrides still apply. Shortcuts and workspace actions are unaffected. |
 | Attach Project Terminal to Dispatch | no command | **Remove feature** | Remove the Settings row, `dispatchProjectTerminal` field/default/coercion, auto-create action/export, dedicated Dispatch side column/effect/imports, and stale comments/tests. Preserve normal terminal creation and ordinary terminal rows. |
 
 No Settings-value migration is needed for the five retired commands because
@@ -392,6 +403,23 @@ fields, simply deleting the typed property would allow an old
 implementation must explicitly omit that retired key, increment the persisted
 store version, and prove with an idempotent migration test that old true/false
 values are ignored and do not return after the next save.
+
+`navigationCommandsEnabled` is a new persisted boolean with a strict
+`parsed.navigationCommandsEnabled === true` coercion so fresh installs,
+malformed values, and older stores are off. It is a family-level picker gate,
+not another `commandVisibilityOverrides` entry and not an execution permission.
+Precedence is deliberate:
+
+1. group off → all six members are absent from the picker;
+2. group on → surface/applicability checks run normally; then
+3. an explicit per-command visibility override may hide or show an individual
+   member relative to its declared default.
+
+The group remains present in the context-free catalog in both states, so native
+lookup, diagnostics, stable IDs, and catalog validation do not depend on a
+persisted UI preference. Direct command-ID execution still performs real
+contextual admission, and the existing keyboard handlers continue to call the
+navigation actions regardless of the group setting.
 
 Any new or changed persisted Settings field still requires:
 
@@ -489,6 +517,21 @@ the user-facing category. Add a required `category`:
 Destructive and experimental are metadata, not categories. The Settings
 information architecture should likewise separate functional ownership from
 maturity:
+
+`commandGroup` is a second, optional dimension for a closed family controlled
+as one product unit. The first group is:
+
+| Command group | Exact stable-ID membership | Default | Owner |
+|---|---|---|---|
+| Navigation Commands | `next-tab`, `prev-tab`, `nav-left`, `nav-right`, `nav-up`, `nav-down` | Disabled in picker | Settings → Commands & Shortcuts → Enable Navigation Commands |
+
+Do not infer group membership from the broad `Navigate` category: Jump to
+Latest Message, Spotlight, Reader Mode, Tiled Tabs, and Reorder Tabs remain
+ordinary commands. The closed ID list prevents a future navigation-adjacent
+feature from silently becoming default-hidden merely because its category was
+reused.
+
+The Settings category list remains:
 
 1. Appearance
 2. Workspace & Layout
@@ -612,7 +655,7 @@ Files:
 Work:
 
 1. Add required `category`, declared `pickerVisibility`, target kind, and safety
-   metadata to `CommandDef`.
+   metadata to `CommandDef`, plus optional closed `commandGroup` metadata.
 2. Add unavailable reasons with `hide` versus `disable` presentation.
 3. Add target-aware resolved invocations without making app/editor commands
    invent session targets.
@@ -629,8 +672,11 @@ high-risk command switches until its target/admission matrix test exists.
 Files:
 
 - all feature-owned command modules
+- `features/workspace/commands/{tab,pane}Commands.ts`
 - `features/settings/lib/settingsRegistry.ts`
 - `features/settings/ui/SettingsList.tsx`
+- `app-state/settings/{types,persistence}.ts`, the persisted store version, and
+  migration tests
 - command ranking/search metadata tests
 
 Work:
@@ -645,9 +691,19 @@ Work:
 5. Give dynamic-title commands a friendly stable catalog label rather than a
    raw ID.
 6. Preserve explicit user visibility overrides when declared defaults change.
+7. Declare the exact six-member Navigation Commands group and add the
+   Settings-only **Enable Navigation Commands** toggle with
+   `navigationCommandsEnabled: false` as the default. Resolve the group gate
+   before per-command picker visibility, but never feed it into execution
+   authority or keyboard handling.
+8. Show the group and its off-by-default explanation in Commands & Shortcuts.
+   When disabled, do not present six individually actionable switches that
+   appear able to override the parent; when enabled, expose their ordinary
+   per-command visibility controls.
 
-Rollback boundary: metadata-only commit; reverting restores the current flat,
-all-visible picker without touching execution authority.
+Rollback boundary: group metadata/taxonomy can land separately from the
+versioned Navigation Commands preference. Reverting the preference restores the
+current all-visible picker without touching navigation execution authority.
 
 ### Phase 4 — Make provider capability policy authoritative
 
@@ -786,9 +842,13 @@ persistence changes.
   exact `102 - 5 + separately approved additions` count.
 - Unique IDs; required metadata; valid surface/category/tier/safety values.
 - Generated provider split parity.
+- Navigation Commands has exactly the six recorded stable IDs; no other
+  `Navigate` command inherits group behavior by category.
 - Native-menu IDs are a subset of executable catalog IDs.
-- Settings command catalog equals the command catalog, excluding explicitly
-  retired IDs and transient agent-index destinations.
+- Settings command metadata derives from the same catalog, excluding explicitly
+  retired IDs and transient agent-index destinations; a disabled command group
+  may collapse its member controls behind the parent setting without forking the
+  source list.
 - Descriptions are validated before contextual filtering, including hidden
   commands.
 
@@ -803,6 +863,7 @@ Cross representative commands over:
 | Context predicate | absent, true, false. |
 | Declared tier | default, advanced, experimental, debug. |
 | User override | absent, true, false. |
+| Navigation Commands group | disabled, enabled. |
 | Reveal-all | false, true. |
 | Invocation source | picker, native menu, keybinding, programmatic. |
 | Render policy | Agent, Terminal, Hybrid with/without lease. |
@@ -811,6 +872,9 @@ Cross representative commands over:
 Assertions:
 
 - hidden affects picker only;
+- with Navigation Commands off, exactly the six group members are absent from
+  the picker while their shortcuts still navigate; with it on, applicability
+  and individual visibility overrides resume in the documented precedence;
 - native menu diagnoses unavailable versus unknown IDs;
 - keybindings cannot bypass capability/safety admission;
 - excluded commands do not evaluate state;
@@ -850,6 +914,9 @@ Assertions:
 - The four ordinary preference values and Dangerous Agents remain Settings-
   controlled and survive restart, while all five retired command IDs stay
   absent from the catalog, search, and command-visibility Settings.
+- `navigationCommandsEnabled` defaults/coerces to false for missing or malformed
+  data, persists true when chosen, resets to false, and never changes shortcut
+  behavior or direct action availability.
 - Legacy `dispatchProjectTerminal` true/false values are discarded
   idempotently and are not reserialized; Dispatch never auto-creates or mounts
   the companion side column; user-created terminals still render normally.
@@ -868,6 +935,7 @@ Assertions:
 | Correct provider policy | Unsupported OpenCode operations do not appear as executable; Claude Workflow MCP remains blocked; provider additions require explicit capabilities. |
 | Stable target | State and mutation refer to the same pinned target across focus, Dispatch lane, provider, and lifecycle changes. |
 | Settings ownership | Status Mode, Worktree Badges, both Usage preferences, and Dangerous Agents are Settings-only; their five command IDs are absent. Aggressive Debug Persistence remains debug-hidden. MCP/view defaults versus session overrides and workspace defaults versus current-workspace commands disclose their distinct scope. |
+| Navigation command group | Enable Navigation Commands is off by default and controls picker membership for exactly Next/Previous Tab plus Focus Pane Left/Right/Up/Down. Enabling restores normal per-command visibility; disabling never breaks their shortcuts or underlying actions. |
 | Project terminal retirement | Attach Project Terminal to Dispatch is absent from Settings, persisted state, action/hook contracts, and Dispatch rendering. Old persisted keys are dropped, while ordinary terminal sessions and rows still work. |
 | Destructive safety | Running/cascading closes and all bulk closes are target-bound, freshly validated, and expose partial failure without silent retargeting. |
 | Invocation parity | Palette, menu, shortcut, and programmatic paths share admission/error handling while retaining source-specific UI behavior. |
@@ -900,11 +968,14 @@ Manual packaged-app checks must cover:
 7. running and cascading close confirmation from button and shortcut paths;
 8. the five retired commands are absent while their Settings controls still
    persist and Aggressive Debug Persistence remains debug-only;
-9. old `dispatchProjectTerminal` storage does not create a terminal or side
+9. Navigation Commands are absent from the picker on a fresh/reset profile,
+   their shortcuts still work, and enabling the setting reveals only the six
+   recorded members subject to layout applicability;
+10. old `dispatchProjectTerminal` storage does not create a terminal or side
    column, while an ordinary user-created terminal still works in Dispatch;
-10. Settings restart persistence and new-session versus current-session scope;
-11. Claude does not receive Workflow MCP while Codex does; and
-12. assistive-technology text for every semantic badge state.
+11. Settings restart persistence and new-session versus current-session scope;
+12. Claude does not receive Workflow MCP while Codex does; and
+13. assistive-technology text for every semantic badge state.
 
 ## Product decisions requested at review
 
@@ -936,6 +1007,8 @@ project-terminal removal are recorded decisions above and are no longer open:
 - Do not enable Workflow MCP for Claude; it duplicates a native feature.
 - Do not remove Dispatch or Tiled Dispatch commands; they act on the current
   workspace rather than duplicating the persisted default.
+- Do not disable tab/pane keyboard navigation with Enable Navigation Commands;
+  the setting controls the six command-picker wrappers, not navigation itself.
 - Do not remove normal terminal creation, terminal sessions, or terminal rows
   when removing the auto-created Dispatch project-terminal companion feature.
 - Do not make picker visibility a security or capability boundary.
