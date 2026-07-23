@@ -90,7 +90,7 @@ function makePersisted(): PersistedWorkspace {
     sessions: {
       'stable-session': {
         cwd: '/tmp/project',
-        kind: 'claude',
+        kind: 'codex',
         providerSessionId: 'provider-history',
         providerSessionIdSource: 'resume-request',
         builtInMcpDomains: ['workflows'],
@@ -116,6 +116,7 @@ function makeRendererHarness() {
   const refs = {
     dangerousAgentsRef: ref(false),
     useProxyStreamingRef: ref(false),
+    defaultBuiltInMcpDomainsRef: ref([]),
     stateRef: ref(state),
     latestStateRef: ref(state),
     latestRuntimesRef: ref(runtimes),
@@ -200,6 +201,7 @@ describe('cross-layer session restart reconciliation', () => {
     expect(registerSession).toHaveBeenCalledWith({
       sessionId: 'stable-session',
       cwd: '/tmp/project',
+      providerKind: 'codex',
       domains: ['workflows'],
     })
     expect(createSession.mock.calls[0]?.[0]).toMatchObject({

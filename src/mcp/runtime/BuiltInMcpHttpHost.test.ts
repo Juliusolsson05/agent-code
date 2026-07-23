@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import type { McpSessionScope } from '@mcp/shared/types.js'
 
 vi.mock('@main/performance/PerformanceService.js', () => ({
   performanceService: {
@@ -19,6 +22,87 @@ function requestHeaders(config: { bearerToken?: string; headers: Record<string, 
 }
 
 describe('BuiltInMcpHttpHost', () => {
+  it('refuses Workflow MCP registrations for Claude and every domain for OpenCode', () => {
+    const host = new BuiltInMcpHttpHost()
+
+    expect(host.registerSession({
+      sessionId: 'claude-workflow-only',
+      cwd: '/tmp/project',
+      providerKind: 'claude',
+      domains: ['workflows'],
+    })).toEqual([])
+    expect(host.registerSession({
+      sessionId: 'opencode-orchestration',
+      cwd: '/tmp/project',
+      providerKind: 'opencode',
+      domains: ['orchestration'],
+    })).toEqual([])
+  })
+
+  it('narrows mixed Claude scopes before constructing the model-visible server', async () => {
+    const observedScopes: McpSessionScope[] = []
+    const host = new BuiltInMcpHttpHost(scope => {
+      observedScopes.push(scope)
+      return new McpServer(
+        { name: 'provider-policy-test', version: '0.0.0' },
+        { capabilities: { tools: {} } },
+      )
+    })
+    await host.start()
+    const [config] = host.registerSession({
+      sessionId: 'claude-mixed',
+      cwd: '/tmp/project',
+      providerKind: 'claude',
+      domains: ['workflows', 'orchestration'],
+    })
+    expect(config).toBeDefined()
+    const client = new Client({ name: 'provider-policy-client', version: '0.0.0' })
+    const transport = new StreamableHTTPClientTransport(new URL(config!.url), {
+      requestInit: { headers: requestHeaders(config!) },
+    })
+
+    try {
+      await client.connect(transport)
+      expect(observedScopes).not.toHaveLength(0)
+      expect(observedScopes.every(scope => (
+        scope.domains.includes('orchestration') && !scope.domains.includes('workflows')
+      ))).toBe(true)
+    } finally {
+      await client.close()
+      await host.stop()
+    }
+  })
+
+  it('keeps Workflow MCP in Codex scopes', async () => {
+    const observedScopes: McpSessionScope[] = []
+    const host = new BuiltInMcpHttpHost(scope => {
+      observedScopes.push(scope)
+      return new McpServer(
+        { name: 'codex-policy-test', version: '0.0.0' },
+        { capabilities: { tools: {} } },
+      )
+    })
+    await host.start()
+    const [config] = host.registerSession({
+      sessionId: 'codex-workflow',
+      cwd: '/tmp/project',
+      providerKind: 'codex',
+      domains: ['workflows'],
+    })
+    const client = new Client({ name: 'codex-policy-client', version: '0.0.0' })
+    const transport = new StreamableHTTPClientTransport(new URL(config!.url), {
+      requestInit: { headers: requestHeaders(config!) },
+    })
+
+    try {
+      await client.connect(transport)
+      expect(observedScopes.some(scope => scope.domains.includes('workflows'))).toBe(true)
+    } finally {
+      await client.close()
+      await host.stop()
+    }
+  })
+
   it('rejects browser origins outside the exact loopback endpoint', async () => {
     const host = new BuiltInMcpHttpHost(() => new McpServer(
       { name: 'origin-test', version: '0.0.0' },
@@ -29,6 +113,7 @@ describe('BuiltInMcpHttpHost', () => {
     const [config] = host.registerSession({
       sessionId: 'session-origin',
       cwd: '/tmp/project',
+      providerKind: 'codex',
       domains: ['orchestration'],
     })
     expect(config).toBeDefined()
@@ -68,6 +153,7 @@ describe('BuiltInMcpHttpHost', () => {
     const [config] = host.registerSession({
       sessionId: 'session-port',
       cwd: '/tmp/project',
+      providerKind: 'codex',
       domains: ['orchestration'],
     })
     try {
@@ -100,6 +186,7 @@ describe('BuiltInMcpHttpHost', () => {
     const [config] = host.registerSession({
       sessionId: 'session-1',
       cwd: '/tmp/project',
+      providerKind: 'codex',
       domains: ['orchestration'],
     })
     expect(config).toBeDefined()

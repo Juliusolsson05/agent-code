@@ -54,6 +54,9 @@ export default function App() {
   const dangerousAgentsEnabled = useAppStore(state => state.settings.dangerousAgentsEnabled)
   const useProxyStreaming = useAppStore(state => state.settings.useProxyStreaming)
   const defaultWorkspaceMode = useAppStore(state => state.settings.defaultWorkspaceMode)
+  const defaultBuiltInMcpDomains = useAppStore(
+    state => state.settings.defaultBuiltInMcpDomains,
+  )
   const toggleCommandPalette = useAppStore(state => state.toggleCommandPalette)
 
   useThemeSync()
@@ -74,7 +77,12 @@ export default function App() {
   // same global event.
   useSelectionCapture()
 
-  const workspace = useWorkspace(dangerousAgentsEnabled, useProxyStreaming, defaultWorkspaceMode)
+  const workspace = useWorkspace(
+    dangerousAgentsEnabled,
+    useProxyStreaming,
+    defaultWorkspaceMode,
+    defaultBuiltInMcpDomains,
+  )
   useRenderedLeaseHygiene(workspace)
   useDebugAutosave(workspace)
 

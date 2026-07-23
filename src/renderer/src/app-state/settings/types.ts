@@ -3,6 +3,7 @@ import type { SavedTheme } from '@renderer/app-state/settings/savedThemes'
 import type { PromptTemplate } from '@renderer/features/prompt-templates/types'
 import type { ColorFlagId } from '@renderer/app-state/settings/dispatchColorFlags'
 import type { DictationProvider } from '@shared/types/dictation'
+import type { ConfigurableBuiltInMcpDomain } from '@mcp/shared/types'
 
 // Built-in theme ids only. 'custom' used to live here as a sentinel that
 // rendered as a picker cell but acted as a button (it opened the JSON editor
@@ -298,6 +299,17 @@ export type Settings = {
    * split keeps app preference durable while feature lifetimes stay tied to
    * the UI state that actually requested them. */
   agentViewMode: AgentViewMode
+  /** Built-in MCP capabilities used to seed a new agent session when its
+   *  caller does not provide an explicit per-session list. This is a default,
+   *  not a fleet policy: after initialization the resolved array lives in
+   *  SessionMeta and command-palette toggles may change it independently.
+   *
+   *  `ping` is deliberately excluded from the type because it is a
+   *  development bridge probe, not a product capability. Provider-specific
+   *  restrictions (notably Workflow MCP being Codex-only) are applied at the
+   *  session and main-host boundaries rather than encoded as parallel
+   *  per-provider preference lists. */
+  defaultBuiltInMcpDomains: ConfigurableBuiltInMcpDomain[]
   /** When true, Claude sessions are spawned through a per-session
    *  mitmproxy that decrypts Anthropic `/v1/messages` SSE in real
    *  time and feeds structured per-block semantic events to the
@@ -426,6 +438,9 @@ export const DEFAULT_SETTINGS: Settings = {
   aggressiveDebugPersistence: false,
   defaultWorkspaceMode: 'grid',
   agentViewMode: 'agent',
+  // Preserve today's opt-in behavior. Users choose which capabilities become
+  // defaults; session commands remain available regardless of this empty seed.
+  defaultBuiltInMcpDomains: [],
   dispatchProjectTerminal: false,
   autoSendPromptSuggestion: true,
   fontFamily: 'jetbrains-mono',

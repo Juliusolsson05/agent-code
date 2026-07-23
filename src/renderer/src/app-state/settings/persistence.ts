@@ -27,6 +27,7 @@ import { coerceCustomAppearanceJson } from '@renderer/app-state/settings/customA
 import { coerceDispatchColorFlags } from '@renderer/app-state/settings/dispatchColorFlags'
 import { coerceHotkeyBinding } from '@renderer/lib/hotkeyBinding'
 import { coerceSavedPromptTemplates } from '@renderer/features/prompt-templates/savedPromptTemplates'
+import { normalizeConfigurableBuiltInMcpDomains } from '@mcp/shared/types'
 
 export function coerceSettings(value: unknown): Settings {
   const parsed = value && typeof value === 'object'
@@ -101,6 +102,13 @@ export function coerceSettings(value: unknown): Settings {
     agentViewMode: AGENT_VIEW_MODES.some(m => m.id === parsed.agentViewMode)
       ? (parsed.agentViewMode as Settings['agentViewMode'])
       : DEFAULT_SETTINGS.agentViewMode,
+    // WHY this is a closed configurable-domain normalizer instead of the
+    // broader session normalizer: persisted Settings must never promote the
+    // diagnostic `ping` domain into every future agent. Provider filtering is
+    // intentionally later, when the concrete new session kind is known.
+    defaultBuiltInMcpDomains: normalizeConfigurableBuiltInMcpDomains(
+      parsed.defaultBuiltInMcpDomains,
+    ),
     // Same membership-check pattern as accent/mode: garbage / typo / a
     // removed font id from a future migration falls back to the default
     // rather than crashing applyTheme with an undefined family string.

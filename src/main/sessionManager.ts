@@ -952,6 +952,7 @@ export class SessionManager extends EventEmitter {
         builtInMcpServers = this.builtInMcpHost.registerSession({
           sessionId,
           cwd: options.cwd,
+          providerKind: kind,
           domains: options.builtInMcpDomains,
         })
         mcpRegistered = true

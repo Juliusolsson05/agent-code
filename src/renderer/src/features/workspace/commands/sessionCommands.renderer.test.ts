@@ -98,3 +98,81 @@ describe('Rendering Debug Mode command', () => {
     expect(toggleRenderingDebugMode).toHaveBeenCalledOnce()
   })
 })
+
+function mcpCommandContext(kind: 'claude' | 'codex' | 'opencode'): {
+  context: CommandContext
+  replaceSession: ReturnType<typeof vi.fn>
+} {
+  const replaceSession = vi.fn().mockResolvedValue('replacement')
+  const workspace = {
+    state: {
+      activeTabId: 'tab-mcp',
+      dispatchMode: null,
+      sessions: {
+        agent: {
+          cwd: '/projects/mcp',
+          kind,
+          providerSessionId: 'provider-session',
+          builtInMcpDomains: [],
+        },
+      },
+      tabs: [{
+        id: 'tab-mcp',
+        focusedSessionId: 'agent',
+        root: { type: 'leaf', sessionId: 'agent' },
+      }],
+    },
+    replaceSession,
+    showPaneToast: vi.fn(),
+  } as unknown as Workspace
+  return {
+    context: {
+      workspace,
+      ui: { closePalette: vi.fn() },
+      flags: {},
+    } as unknown as CommandContext,
+    replaceSession,
+  }
+}
+
+describe('built-in MCP provider command policy', () => {
+  const workflowCommand = sessionCommands.find(command => command.id === 'enable-workflow-mcp')
+  const orchestrationCommand = sessionCommands.find(
+    command => command.id === 'enable-orchestration-mcp',
+  )
+
+  it('offers Workflow MCP only to Codex', () => {
+    if (!workflowCommand) throw new Error('Workflow MCP command is missing')
+
+    expect(workflowCommand.when?.(mcpCommandContext('codex').context)).toBe(true)
+    expect(workflowCommand.when?.(mcpCommandContext('claude').context)).toBe(false)
+    expect(workflowCommand.when?.(mcpCommandContext('opencode').context)).toBe(false)
+  })
+
+  it('keeps the Workflow runtime guard inert for Claude', async () => {
+    if (!workflowCommand) throw new Error('Workflow MCP command is missing')
+    const { context, replaceSession } = mcpCommandContext('claude')
+
+    await workflowCommand.run(context)
+
+    expect(replaceSession).not.toHaveBeenCalled()
+  })
+
+  it('still toggles Workflow MCP for a Codex session', async () => {
+    if (!workflowCommand) throw new Error('Workflow MCP command is missing')
+    const { context, replaceSession } = mcpCommandContext('codex')
+
+    await workflowCommand.run(context)
+
+    expect(replaceSession).toHaveBeenCalledWith('/projects/mcp', {
+      kind: 'codex',
+      resumeSessionId: 'provider-session',
+      builtInMcpDomains: ['workflows'],
+    })
+  })
+
+  it('does not advertise unsupported general MCP toggles to OpenCode', () => {
+    if (!orchestrationCommand) throw new Error('Orchestration MCP command is missing')
+    expect(orchestrationCommand.when?.(mcpCommandContext('opencode').context)).toBe(false)
+  })
+})

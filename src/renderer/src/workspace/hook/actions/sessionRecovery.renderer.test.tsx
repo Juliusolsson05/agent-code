@@ -24,6 +24,71 @@ function ref<T>(current: T): MutableRefObject<T> {
 }
 
 describe('useSessionActions recovery retry', () => {
+  it('seeds fresh sessions from Settings while an explicit empty list wins', async () => {
+    let state = {
+      tabs: [],
+      activeTabId: '',
+      sessions: {},
+      detachedSessions: {},
+      buried: [],
+      pinnedSessionIds: [],
+      dispatchMode: null,
+    } as unknown as WorkspaceState
+    let runtimes: Record<SessionId, SessionRuntime> = {}
+    const refs = {
+      stateRef: ref(state),
+      latestStateRef: ref(state),
+      latestRuntimesRef: ref(runtimes),
+      dangerousAgentsRef: ref(false),
+      useProxyStreamingRef: ref(false),
+      defaultBuiltInMcpDomainsRef: ref(['orchestration', 'workflows']),
+    } as unknown as WorkspaceRefs
+    const setState = (next: WorkspaceState | ((prev: WorkspaceState) => WorkspaceState)) => {
+      state = typeof next === 'function' ? next(state) : next
+      refs.stateRef.current = state
+      refs.latestStateRef.current = state
+    }
+    const setRuntimes = (
+      next: Record<SessionId, SessionRuntime> |
+        ((prev: Record<SessionId, SessionRuntime>) => Record<SessionId, SessionRuntime>),
+    ) => {
+      runtimes = typeof next === 'function' ? next(runtimes) : next
+      refs.latestRuntimesRef.current = runtimes
+    }
+    const spawnSession = vi.fn()
+      .mockResolvedValueOnce({ sessionId: 'claude-default' })
+      .mockResolvedValueOnce({ sessionId: 'codex-explicit-off' })
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: { spawnSession, ghostRead: vi.fn(async () => []) },
+    })
+    const { result } = renderHook(() => useSessionActions(
+      state,
+      setState,
+      setRuntimes,
+      refs,
+    ))
+
+    await act(async () => {
+      await result.current.spawn('/tmp/project', { kind: 'claude' })
+      await result.current.spawn('/tmp/project', {
+        kind: 'codex',
+        builtInMcpDomains: [],
+      })
+    })
+
+    expect(spawnSession).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      kind: 'claude',
+      builtInMcpDomains: ['orchestration'],
+    }))
+    expect(spawnSession).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      kind: 'codex',
+      builtInMcpDomains: [],
+    }))
+    expect(state.sessions['claude-default']?.builtInMcpDomains).toEqual(['orchestration'])
+    expect(state.sessions['codex-explicit-off']?.builtInMcpDomains).toEqual([])
+  })
+
   it('clears a retained failure and accepts an equal-revision readiness snapshot', async () => {
     const sessionId = 'retry-session'
     let state = {
@@ -59,6 +124,7 @@ describe('useSessionActions recovery retry', () => {
       latestRuntimesRef: ref(runtimes),
       dangerousAgentsRef: ref(false),
       useProxyStreamingRef: ref(false),
+      defaultBuiltInMcpDomainsRef: ref(['orchestration', 'workflows']),
     } as unknown as WorkspaceRefs
     const setState = (next: WorkspaceState | ((prev: WorkspaceState) => WorkspaceState)) => {
       state = typeof next === 'function' ? next(state) : next
@@ -88,7 +154,7 @@ describe('useSessionActions recovery retry', () => {
     }))
     Object.defineProperty(window, 'api', {
       configurable: true,
-      value: { recoverSession },
+      value: { recoverSession, ghostRead: vi.fn(async () => []) },
     })
 
     const { result } = renderHook(() => useSessionActions(
@@ -103,6 +169,10 @@ describe('useSessionActions recovery retry', () => {
     })
 
     expect(recoverSession).toHaveBeenCalledTimes(1)
+    expect(recoverSession).toHaveBeenCalledWith(expect.objectContaining({
+      builtInMcpDomains: ['orchestration'],
+    }))
+    expect(state.sessions[sessionId]?.builtInMcpDomains).toEqual(['orchestration'])
     expect(runtimes[sessionId]).toMatchObject({
       processStatus: 'started',
       processError: null,

@@ -69,6 +69,7 @@ function makeHarness() {
   const refs = {
     dangerousAgentsRef: ref(false),
     useProxyStreamingRef: ref(false),
+    defaultBuiltInMcpDomainsRef: ref([]),
     stateRef: ref(state),
     latestStateRef: ref(state),
     latestRuntimesRef: ref(runtimes),
@@ -100,6 +101,42 @@ function makeHarness() {
 }
 
 describe('rehydrateWorkspace backend reconciliation', () => {
+  it('does not reapply enabled defaults to a persisted explicit empty list', async () => {
+    const persisted = makePersisted()
+    persisted.sessions['stable-session']!.builtInMcpDomains = []
+    const harness = makeHarness()
+    harness.refs.defaultBuiltInMcpDomainsRef.current = ['orchestration']
+    const recoverSession = vi.fn(async () => ({
+      ok: true as const,
+      disposition: 'spawned' as const,
+      snapshot: {
+        sessionId: 'stable-session',
+        kind: 'claude' as const,
+        cwd: '/tmp/project',
+        lifecycle: 'live' as const,
+        input: { ready: true, revision: 1, reason: 'ready' as const },
+      },
+    }))
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: { recoverSession, defaultCwd: vi.fn() },
+    })
+
+    await rehydrateWorkspace(
+      persisted,
+      harness.refs,
+      harness.setState,
+      harness.setRuntimes,
+      harness.setTileTabs,
+      vi.fn(),
+    )
+
+    expect(recoverSession).toHaveBeenCalledWith(expect.objectContaining({
+      builtInMcpDomains: [],
+    }))
+    expect(harness.state().sessions['stable-session']?.builtInMcpDomains).toEqual([])
+  })
+
   it('adopts under the persisted local id without calling the fresh-spawn API', async () => {
     const persisted = makePersisted()
     const harness = makeHarness()
@@ -134,7 +171,7 @@ describe('rehydrateWorkspace backend reconciliation', () => {
       sessionId: 'stable-session',
       cwd: '/tmp/project',
       kind: 'claude',
-      builtInMcpDomains: ['workflows'],
+      builtInMcpDomains: [],
     }))
     expect(spawnSession).not.toHaveBeenCalled()
     expect(harness.state().tabs[0].root).toEqual({
@@ -142,6 +179,7 @@ describe('rehydrateWorkspace backend reconciliation', () => {
       sessionId: 'stable-session',
     })
     expect(harness.state().pinnedSessionIds).toEqual(['stable-session'])
+    expect(harness.state().sessions['stable-session']?.builtInMcpDomains).toEqual([])
     expect(harness.runtimes()['stable-session']).toMatchObject({
       draftInput: 'unfinished prompt',
       processStatus: 'started',

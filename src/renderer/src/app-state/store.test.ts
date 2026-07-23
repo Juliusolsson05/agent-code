@@ -61,4 +61,19 @@ describe('useAppStore prompt template migration', () => {
     expect(useAppStore.getState().settings.savedPromptTemplates).toHaveLength(1)
     expect(useAppStore.getState().settings.savedPromptTemplates[0]?.title).toBe('Legacy Prompt')
   })
+
+  it('backfills built-in MCP defaults when hydrating a version-7 settings blob', async () => {
+    const storage = createStorageMock({
+      [APP_STORE_STORAGE_KEY]: JSON.stringify({
+        state: { settings: {} },
+        version: 7,
+      }),
+    })
+    vi.stubGlobal('localStorage', storage)
+
+    const { useAppStore } = await import('@renderer/app-state/store')
+    await useAppStore.persist.rehydrate()
+
+    expect(useAppStore.getState().settings.defaultBuiltInMcpDomains).toEqual([])
+  })
 })
