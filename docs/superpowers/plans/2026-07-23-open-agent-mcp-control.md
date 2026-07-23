@@ -19,7 +19,8 @@ the other open agents in its own Agent Code project. The caller must be able to:
 
 - list every open agent assigned to the same project, regardless of whether it
   is in the grid, parked in Dispatch, or buried;
-- read a bounded, user-visible transcript for one of those agents;
+- read a bounded, user-visible transcript for one agent or every other agent
+  in the project as one budgeted cleanup-review snapshot;
 - send a follow-up prompt to one of those agents, waking a parked backend when
   necessary; and
 - close one of those agents only when the user explicitly asked for that close.
@@ -28,8 +29,9 @@ The finished provider-facing surface is:
 
 | Tool | Purpose |
 | --- | --- |
-| `agent_management_list_agents` | List all open agent sessions in the caller's project. |
+| `agent_management_list_agents` | List all open project agents with transcript locations, lifecycle, and last-activity evidence. |
 | `agent_management_read_agent` | Read a bounded clean transcript from one listed agent. |
+| `agent_management_read_agents` | Read bounded transcript tails across the project for review/cleanup recommendations. |
 | `agent_management_send_prompt` | Send a prompt to one listed agent through its native provider delivery path. |
 | `agent_management_close_agent` | Destructively close one explicitly named agent, subject to strict scope and cascade guards. |
 
@@ -63,6 +65,32 @@ Caller:
   -> target is woken if parked, then receives the prompt through its provider
 ```
 
+The primary fleet-cleanup interaction should not require an N-call manual loop:
+
+```text
+User: Read all the agents in this project and tell me what looks safe to clean up.
+
+Caller:
+  agent_management_list_agents
+  -> sees transcript path/availability, last meaningful activity, live state,
+     placement, and relationships for every open agent
+
+  agent_management_read_agents
+  -> receives bounded recent transcript output for every other project agent,
+     under one cross-agent character budget
+
+  -> reports evidence-based recommendations in three groups:
+       active / do not close
+       uncertain / inspect first
+       likely cleanup candidate
+  -> DOES NOT call close_agent
+```
+
+The list remains a cheap inventory rather than embedding transcript bodies. The
+bulk read exists so cleanup review gets the same project snapshot and bounded
+degradation behavior across a large fleet instead of issuing dozens of serial
+single-agent reads or overflowing the caller's context.
+
 Closing has a stronger policy:
 
 ```text
@@ -74,11 +102,13 @@ Caller:
      unnamed session
 ```
 
-“Clean up the agents,” “manage the project,” a completed task, inactivity, or a
-failed read is not permission to close anything. The close tool's initialization
-instructions and description must say that it is callable only when the current
-user request explicitly asks to close the named agent. The tool is annotated as
-destructive. List/read/send do not grant or imply close permission.
+“Tell me what is safe to clean up,” “review the agents,” “manage the project,” a
+completed task, inactivity, or a failed read is permission to assess and
+recommend only. It is not permission to close anything. The close tool's
+initialization instructions and description must say that it is callable only
+when the current user request explicitly asks to close the named agent. The tool
+is annotated as destructive. List/read/send/review do not grant or imply close
+permission.
 
 ## Definitions and scope
 
@@ -218,8 +248,13 @@ independent paragraphs. When `agent_management` is enabled, initialization must
 state:
 
 1. project-agent tools are limited to the caller's current Agent Code project;
-2. sending a prompt does not grant permission to close the target; and
-3. `agent_management_close_agent` may be called only when the current user
+2. cleanup-review requests should use the inventory plus bulk transcript read,
+   distinguish active/uncertain/likely candidates, and cite the evidence behind
+   each recommendation rather than treating age alone as proof;
+3. asking what is safe to clean up authorizes assessment only;
+4. reading or sending a prompt does not grant permission to close the target;
+   and
+5. `agent_management_close_agent` may be called only when the current user
    request explicitly asks to close that specific agent.
 
 Workflow instructions must remain unchanged when Workflow MCP is the only
@@ -255,7 +290,18 @@ type ManagedAgentRecord = {
   backendState: ManagedAgentBackendState
   activityState: 'running' | 'waiting' | 'completed' | 'failed' | 'unknown'
   statusSummary?: string
+  transcript: {
+    path: string | null
+    availability: 'available' | 'not_created' | 'provider_managed' | 'unavailable'
+    lastModifiedAt?: number
+  }
   lastActivityAt?: number
+  lastActivitySource?: 'transcript' | 'runtime' | 'backend'
+  idleForMs?: number
+  processActive: boolean
+  awaitingAssistant: boolean
+  requiresUserAction: boolean
+  conditionSummary?: string
   isCaller: boolean
   linkedParentId?: string
   orchestrationParentId?: string
@@ -265,8 +311,17 @@ type ManagedAgentRecord = {
 }
 ```
 
+The canonical transcript path is intentionally exposed because it is one of the
+main fleet-audit handles: the caller can identify exactly which durable session
+was reviewed and, when Agent Transcripts MCP is also enabled, use that path for
+a deeper projection. This domain never accepts an arbitrary path from the model.
+It resolves only the authorized target's provider transcript from main-owned
+observed state or durable `{kind, cwd, providerSessionId}` metadata. Return
+`path: null` with an honest availability reason when the provider has no durable
+file.
+
 Do not expose MCP bearer material, provider command lines, raw screen buffers,
-or arbitrary transcript paths.
+or a transcript path belonging to an agent outside the authorized project.
 
 ### `agent_management_list_agents`
 
@@ -278,6 +333,7 @@ Output:
 ```ts
 {
   ok: true
+  observedAt: number
   project: { tabId: string; title: string; index: number }
   agents: ManagedAgentRecord[]
 }
@@ -287,6 +343,29 @@ Ordering is deterministic: project placement order first (grid depth-first,
 Dispatch oldest-detached-first, buried order), with defensive de-duplication.
 The list path derives status without materializing transcript text, matching the
 existing orchestration polling optimization.
+
+Every record includes the canonical transcript path when one can be resolved,
+its availability/mtime, and last-activity evidence. `lastActivityAt` is the most
+recent meaningful timestamp among normalized transcript messages, runtime
+turn/phase changes, and main's observed backend activity; `lastActivitySource`
+states which signal won, and `idleForMs` is computed against one response-level
+`observedAt` timestamp so every row's age is comparable. The raw components must
+remain distinguishable internally and in tests: a screen repaint/heartbeat is
+weaker cleanup evidence than a recent user or assistant transcript message.
+Current provider conditions are summarized as `requiresUserAction` plus a safe
+condition label; an agent waiting on trust, permission, or a user answer must
+not look like an idle completed cleanup candidate.
+
+Transcript resolution follows this order:
+
+1. main's observed `SessionManager.resolveTranscriptFile` for a live session;
+2. the provider registry resolver using authorized durable session metadata;
+3. `null` plus `not_created`, `provider_managed`, or `unavailable`.
+
+Codex path discovery can scan a date-bucketed global rollout tree. Resolve in a
+bounded/coalesced batch keyed by provider session ID instead of starting one
+full tree walk per row. Listing a large fleet must not become N concurrent Codex
+filesystem scans.
 
 Annotations: `readOnlyHint: true`, `destructiveHint: false`,
 `idempotentHint: true`.
@@ -324,6 +403,88 @@ OpenCode session after its server-owned history disappeared—return a typed
 empty transcript is complete.
 
 Annotations: `readOnlyHint: true`, `destructiveHint: false`.
+
+### `agent_management_read_agents`
+
+This is the project-fleet review primitive behind “read all agents in this
+project and tell me what looks safe to clean up.” It is not a close or cleanup
+mutation.
+
+Input:
+
+```ts
+{
+  // Absent means every other open agent in the caller's project. An explicit
+  // subset is useful for re-reading only the uncertain candidates.
+  sessionIds?: string[]
+  includeCaller?: boolean       // default false; avoids echoing current context
+  maxMessagesPerAgent?: number // 1..100
+  maxCharsPerMessage?: number  // 50..100_000
+  maxCharsPerAgent?: number    // 100..500_000
+  maxTotalChars?: number       // 1_000..1_000_000
+}
+```
+
+The default all-project read excludes the caller's own transcript because that
+conversation is already in the caller's model context and cannot be a close
+target. The response still includes the caller's inventory record, explicitly
+marked `isCaller`, so the project census remains complete. `includeCaller: true`
+supports a literal archival “read every transcript” request. If `sessionIds` is
+provided, every ID must resolve to a current agent in the project; one
+cross-project or unknown ID fails the request instead of returning a partially
+authorized result. Including the caller in a read never grants self-prompt or
+self-close authority.
+
+Output:
+
+```ts
+{
+  ok: true
+  observedAt: number
+  project: { tabId: string; title: string; index: number }
+  agents: ManagedAgentRecord[] // complete census; never dropped for text budget
+  outputs: ManagedAgentTranscriptOutput[]
+  unavailable: Array<{
+    sessionId: string
+    reason: 'transcript_unavailable' | 'not_created'
+  }>
+  truncated: boolean
+  totalChars: number
+}
+```
+
+Apply per-message/per-agent caps first, then one cross-agent total budget using
+the same fairness rule as orchestration run reads: preserve a status record and
+short newest-assistant excerpt for every agent before spending remaining budget
+on fuller tails. A large early transcript must not consume the budget and make
+later agents disappear. Default to a review-sized tail (six messages per agent,
+`4_000` chars per message, `24_000` per agent, `200_000` total); callers can
+re-read one uncertain agent with `agent_management_read_agent`.
+
+History hydration is bounded and concurrency-limited. Durable hibernated agents
+are read without waking them. Agents with no durable readable transcript stay
+in `agents` and `unavailable` so missing evidence cannot be mistaken for an
+empty/completed conversation.
+
+The MCP initialization guidance should tell the caller how to reason from this
+response:
+
+- `running`, `processActive`, `awaitingAssistant`, `requiresUserAction`, a live
+  condition, or very recent transcript activity means do not recommend closing;
+- an old hibernated/completed agent whose recent transcript contains a clear
+  final handoff may be a likely cleanup candidate;
+- missing/truncated transcript, unresolved user requests, tool work without a
+  final response, uncertain delivery, or unknown activity belongs in an
+  “inspect first” group; and
+- transcript/lifecycle evidence cannot prove the worktree is clean unless the
+  transcript or another tool actually checked it. Say what is unknown.
+
+The model returns recommendations to the user with session ID/title, transcript
+path when present, last activity, and evidence. It must wait for a later explicit
+close instruction before calling `agent_management_close_agent`.
+
+Annotations: `readOnlyHint: true`, `destructiveHint: false`,
+`idempotentHint: true`.
 
 ### `agent_management_send_prompt`
 
@@ -370,7 +531,8 @@ The close description must begin with its policy, not bury it in notes:
 
 > Destructive. Call only when the current user explicitly asks to close this
 > specific agent. Never infer close permission from task completion, inactivity,
-> cleanup language, an error, or permission to list/read/prompt agents.
+> a request to assess what looks safe to clean up, an error, or permission to
+> list/read/prompt agents.
 
 Annotations: `readOnlyHint: false`, `destructiveHint: true`,
 `idempotentHint: false`.
@@ -422,8 +584,9 @@ explicit session close path. Closing never wakes a hibernated backend.
 
 - Add `agent_management` to the built-in and configurable domain lists.
 - Allow it for Claude and Codex; keep OpenCode unsupported as an MCP caller.
-- Define renderer request/response unions, public records, bounded transcript
-  output, delivery result, and typed errors.
+- Define renderer request/response unions, public records, transcript locator
+  and activity evidence, single/bulk bounded transcript outputs, delivery
+  result, and typed errors.
 - Update orchestration child-domain schema construction so an explicitly
   configured child may receive the new domain without another hand-maintained
   string union drifting from `BUILT_IN_MCP_DOMAINS`.
@@ -454,6 +617,8 @@ explicit session close path. Closing never wakes a hibernated backend.
   and caller identity without transcript scanning.
 - Extract/reuse bounded visible message projection while preserving
   orchestration-specific inherited-context behavior.
+- Build a fair cross-agent transcript budget that retains every agent's status
+  and newest useful excerpt before allocating fuller tails.
 - Add pure close-impact calculation so a single-agent tool can reject implicit
   tab/linked cascades before mutation.
 
@@ -465,7 +630,9 @@ explicit session close path. Closing never wakes a hibernated backend.
 - terminals and orphan metadata are excluded;
 - manual, linked, and orchestration agents are all visible;
 - caller row is marked but self send/close is denied;
-- transcript budgets/truncation match orchestration; and
+- transcript budgets/truncation match orchestration;
+- bulk reads do not let one large transcript erase later agents;
+- unavailable histories remain explicit rows rather than empty successes; and
 - every implicit cascade shape is detected before close.
 
 ### Phase 3 — Add a dedicated main/renderer bridge
@@ -491,6 +658,11 @@ explicit session close path. Closing never wakes a hibernated backend.
 - Wire renderer handlers through refs to current state, runtimes,
   `ensureSessionLive`, initial history hydration, prompt delivery, closeSession,
   and killBuried.
+- Resolve canonical transcript paths and mtimes through main-owned observed
+  session state/provider resolvers with bounded batching and per-request
+  de-duplication.
+- Stamp inventory/bulk responses with one `observedAt` and derive comparable
+  last-activity ages without treating backend repaint noise as transcript work.
 - Revalidate project membership after every await that can let workspace state
   change.
 - Journal timeouts and unexpected delivery failures without recording prompts,
@@ -503,6 +675,13 @@ explicit session close path. Closing never wakes a hibernated backend.
 - timeouts remove pending state and late responses no-op;
 - a moved/closed target fails the second authorization check;
 - hibernated read hydrates history without backend wake;
+- project-wide reads hydrate with bounded concurrency and preserve all status
+  rows under total-budget pressure;
+- live/durable/provider-managed transcript locators report honest paths and
+  availability states;
+- last activity uses the documented source precedence and one observation time;
+- pending provider conditions/user-action requirements prevent a false cleanup
+  recommendation;
 - hibernated send wakes before delivery;
 - provider delivery failures retain retry/uncertainty facts; and
 - close uses the correct placement action without waking.
@@ -520,7 +699,7 @@ explicit session close path. Closing never wakes a hibernated backend.
 **Changes:**
 
 - Inject `AgentManagementBridge` into the host before sessions register.
-- Register the four tools only when `scope.domains` contains
+- Register the five tools only when `scope.domains` contains
   `agent_management`.
 - Pass `scope.sessionId` as the caller authority internally; never accept a
   caller/project selector in tool input.
@@ -532,11 +711,14 @@ explicit session close path. Closing never wakes a hibernated backend.
 **Tests:**
 
 - absent domain means no management tools and no management instructions;
-- present domain exposes exactly four tools;
+- present domain exposes exactly five tools;
 - all bridge calls use the authenticated scope session ID;
 - cross-project/unknown/self targets surface typed safe errors;
-- read caps and prompt validation are enforced before bridge dispatch;
+- single/bulk read caps, subset authorization, total budget, and prompt
+  validation are enforced before bridge dispatch;
 - close metadata contains the explicit-user policy and destructive annotation;
+- initialization instructions distinguish cleanup recommendations from close
+  permission and teach the evidence/uncertainty buckets;
 - no confirm boolean exists; and
 - host registration filters the domain for unsupported caller providers.
 
@@ -555,8 +737,9 @@ explicit session close path. Closing never wakes a hibernated backend.
 - Add `Agent Management MCP for New Agents` under Agents settings.
 - Add `Agent Management MCP` as a per-session command using the existing
   replace-session toggle pattern.
-- Explain that it can inspect/prompt all agents in the current project and that
-  close remains explicit-user-only.
+- Explain that it can inventory transcript paths/activity, bulk-review recent
+  agent work, and prompt all agents in the current project, while close remains
+  explicit-user-only.
 - Preserve the domain through reload, recovery, provider switch, duplicate,
   rewind, undo-close, and orchestration-child creation using the existing
   explicit session snapshot rules.
@@ -606,12 +789,16 @@ quality gate before requesting review.
 
 | Scenario | Expected result |
 | --- | --- |
-| Caller lists a project with grid, Dispatch, and buried agents | Every owned agent appears once; terminals do not. |
+| Caller lists a project with grid, Dispatch, and buried agents | Every owned agent appears once with transcript availability/path and comparable last-activity evidence; terminals do not. |
 | Another tab uses the same cwd | Its agents do not appear and cannot be targeted. |
 | Same project contains a sibling worktree cwd | The agent appears because tab affinity, not cwd, is authoritative. |
 | Caller reads a live Claude/Codex/OpenCode agent | Bounded normalized visible transcript is returned. |
 | Caller reads a hibernated durable Claude/Codex agent | History hydrates from disk; no provider process starts. |
 | Caller reads a hibernated agent with no durable history | Typed `transcript_unavailable`; no wake. |
+| Caller asks to read all project agents | One bulk call returns the full census plus fair bounded tails for every readable non-caller agent by default; `includeCaller` supports a literal archival read. |
+| One early transcript exceeds the total budget | Later agents retain status and useful excerpts; response is marked truncated. |
+| Transcript has no durable file | List returns `path: null` plus a truthful availability reason. |
+| Caller asks what is safe to clean up | Agent reports active/uncertain/likely candidates with transcript path, age, and evidence; it does not close. |
 | Caller prompts a hibernated agent | Existing session ID wakes, scope revalidates, native delivery runs once. |
 | Delivery fails after possible write | Result is uncertain and does not encourage automatic retry. |
 | Caller targets itself for prompt/close | Rejected before mutation. |
@@ -629,8 +816,9 @@ quality gate before requesting review.
 - Managing terminals.
 - Managing agents across all Agent Code projects from one caller.
 - Discovering closed/historical sessions from provider storage.
-- Reading arbitrary transcript paths or replacing Agent Transcripts MCP's raw
-  projections/search tools.
+- Accepting arbitrary transcript paths or replacing Agent Transcripts MCP's raw
+  projections/search tools. Inventory may expose only each authorized session's
+  canonical resolved path.
 - Provider switching, rewind, duplicate, layout moves, permission answers, or
   arbitrary PTY input through the management server.
 - Inferring that a completed/failed/inactive agent should be closed.
@@ -663,6 +851,16 @@ are the sole non-destructive operation allowed to wake.
 Listing must not scan transcripts. Reads are bounded and requests serialize
 through main. Reuse the existing initial-history concurrency limiter and
 orchestration character caps rather than add unbounded per-agent extraction.
+Bulk reads add a cross-agent budget with fair degradation so a “read all” audit
+cannot multiply the per-agent maximum by an unbounded fleet size.
+
+### Transcript discovery and activity quality
+
+Codex transcript resolution can be much more expensive than a Claude path join,
+and backend activity can be noisier than meaningful conversation activity.
+Prefer observed live paths, coalesce durable provider lookups, bound concurrent
+filesystem work, expose which activity source won, and never present an mtime or
+screen event as proof that useful work is complete.
 
 ### Semantic close enforcement limit
 
@@ -683,7 +881,8 @@ budgeting helpers.
 
 1. Land shared domain/types and pure project-scope tests.
 2. Extract bounded visible transcript helpers with unchanged orchestration tests.
-3. Implement renderer inventory/read/impact logic and tests.
+3. Implement renderer inventory, transcript/activity enrichment, fair bulk
+   reads, and close-impact logic with tests.
 4. Add the dedicated bridge and IPC/preload plumbing.
 5. Register MCP tools/instructions and main composition.
 6. Add Settings and per-session command surfaces.
