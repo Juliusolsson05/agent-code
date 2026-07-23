@@ -43,5 +43,6 @@ If you are documenting *what is true today and is expected to stay true*, it bel
 
 ## Current files
 
+- [agent-code-conventions.md](agent-code-conventions.md) — Machine-wide personal development rules delivered as one deterministic native Agent Skill across registered providers, including provider discovery roots, write-ahead ownership, collision handling, safe uninstall, and recovery.
 - [ghost-system.md](ghost-system.md) — The provisional-record bridge between the proxy semantic stream and the durable JSONL transcript. Covers the five-rule render predicate, reconciliation, the orphan TTL, the sidecar shape filter, and the dual-owner relationship with `SemanticStreamingTurn`.
 - [provider-switching.md](provider-switching.md) — Cross-provider transcript capacity, native compaction orchestration, Claude plaintext summary carriers, Codex encrypted compaction, target model metadata, locking, and semantic live verification.

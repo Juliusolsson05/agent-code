@@ -41,6 +41,7 @@ import { SessionRecorderManager } from '@main/recording/SessionRecorderManager.j
 import { setOutboundObserver } from '@main/window/mainWindow.js'
 import { isSessionRecordingEnabled, isSessionRecordingAutoStart } from '@main/ipc/devDebug.js'
 import { registerAllIpc } from '@main/ipc/index.js'
+import { AgentCodeConventionsService } from '@main/agentCodeConventions/AgentCodeConventionsService.js'
 import { cleanupDictationIpcResources } from '@main/ipc/dictation.js'
 import { performanceService } from '@main/performance/PerformanceService.js'
 import { startMainHeapWatchdog, stopMainHeapWatchdog } from '@main/performance/heapWatchdog.js'
@@ -635,7 +636,14 @@ async function startApp(): Promise<void> {
     appRunJournal.recordError('mcp_host.error', err)
     throw err
   }
-  manager = new SessionManager(tmuxAvailable ? tmuxRegistry : null, builtInMcpHost, appRunJournal)
+  const agentCodeConventionsService = new AgentCodeConventionsService()
+  await agentCodeConventionsService.initialize()
+  manager = new SessionManager(
+    tmuxAvailable ? tmuxRegistry : null,
+    builtInMcpHost,
+    appRunJournal,
+    async () => { await agentCodeConventionsService.audit() },
+  )
   // Remote mobile companion — constructed here (the isolation boundary's ONE
   // construction hole; see docs/superpowers/specs/2026-07-06-remote-mobile-
   // companion-design.md) but OFF until the user enables it from the Remote
@@ -733,6 +741,7 @@ async function startApp(): Promise<void> {
     appRunJournal,
     cliUpdateOrchestrator,
     workflowBridge: activeWorkflowBridge,
+    agentCodeConventionsService,
   })
   // Boot probe runs after the IPC is wired so its first `state` push
   // has a live subscriber to receive it on the renderer side.

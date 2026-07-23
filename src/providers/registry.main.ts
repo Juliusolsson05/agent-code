@@ -6,7 +6,7 @@ import { join } from 'path'
 import { readdir, stat } from 'fs/promises'
 
 import type { MainProviderConfig } from '@shared/types/providerConfig'
-import { isAgentProviderKind } from '@shared/types/providerKind'
+import { AGENT_PROVIDER_KINDS, isAgentProviderKind } from '@shared/types/providerKind'
 import type { AgentProviderKind } from '@shared/types/providerKind'
 import { ClaudeSession } from '@providers/claude/runtime/claudeSession'
 import { listAllClaudeSessions } from '@providers/claude/runtime/sessionList'
@@ -87,6 +87,16 @@ async function collectCodexRolloutMatches(
 const claudeMain: MainProviderConfig = {
   id: 'claude',
   name: 'Claude Code',
+  personalAgentSkills: {
+    supported: true,
+    locations: [
+      {
+        id: 'claude-personal-skills',
+        resolveDirectory: ({ homeDirectory, environment }) =>
+          join(environment.CLAUDE_CONFIG_DIR ?? join(homeDirectory, '.claude'), 'skills'),
+      },
+    ],
+  },
   createSession: (opts) => new ClaudeSession(opts),
   listSessions: (cwd, limit) => listSessionsForCwd(cwd, { limit }),
   // Claude's package API is cwd-scoped today. Keep the app's global walker
@@ -102,6 +112,15 @@ const claudeMain: MainProviderConfig = {
 const codexMain: MainProviderConfig = {
   id: 'codex',
   name: 'Codex',
+  personalAgentSkills: {
+    supported: true,
+    locations: [
+      {
+        id: 'agents-standard-personal-skills',
+        resolveDirectory: ({ homeDirectory }) => join(homeDirectory, '.agents', 'skills'),
+      },
+    ],
+  },
   createSession: (opts) => new CodexSession(opts),
   // Pass cwd through so the resume picker only shows sessions
   // recorded in the user's current working directory. Without this
@@ -127,6 +146,23 @@ const codexMain: MainProviderConfig = {
 const opencodeMain: MainProviderConfig = {
   id: 'opencode',
   name: 'OpenCode',
+  personalAgentSkills: {
+    supported: true,
+    locations: [
+      {
+        id: 'agents-standard-personal-skills',
+        resolveDirectory: ({ homeDirectory }) => join(homeDirectory, '.agents', 'skills'),
+      },
+      {
+        // OpenCode documents Claude-compatible skill discovery as well as the
+        // shared .agents root. Listing both makes the unavoidable overlap
+        // visible in health/UI instead of pretending OpenCode sees one copy.
+        id: 'claude-personal-skills',
+        resolveDirectory: ({ homeDirectory, environment }) =>
+          join(environment.CLAUDE_CONFIG_DIR ?? join(homeDirectory, '.claude'), 'skills'),
+      },
+    ],
+  },
   createSession: (opts) => new OpencodeSession(opts),
   // No offline session listing yet: opencode stores sessions in
   // SQLite behind a server API (#406 blocker 1). Empty list = resume
@@ -163,4 +199,11 @@ const mainProviders: Record<AgentProviderKind, MainProviderConfig> = {
 export function getMainProvider(id: string): MainProviderConfig {
   if (!isAgentProviderKind(id)) throw new Error(`Unknown provider: ${id}`)
   return mainProviders[id]
+}
+
+export function listMainProviders(): readonly MainProviderConfig[] {
+  // Return a new array rather than the exhaustive record: callers may iterate
+  // capabilities, but they must not gain a mutable registry reference that can
+  // bypass the compile-time AgentProviderKind coverage check above.
+  return AGENT_PROVIDER_KINDS.map(kind => mainProviders[kind])
 }

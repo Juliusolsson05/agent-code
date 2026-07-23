@@ -373,6 +373,7 @@ export class SessionManager extends EventEmitter {
     // Always-on incident journal. Optional so tests / non-journaled callers
     // still construct cleanly; null-guarded at every use.
     private readonly journal: AppRunJournal | null = null,
+    private readonly beforeAgentSessionStart: (() => Promise<void>) | null = null,
   ) {
     super()
   }
@@ -956,6 +957,18 @@ export class SessionManager extends EventEmitter {
         mcpRegistered = true
       }
       this.throwIfRecoveryCancelled(recoveryClaim)
+      if (this.beforeAgentSessionStart) {
+        try {
+          // Conventions reconciliation is a best-effort compatibility boundary,
+          // never a reason to strand a requested agent launch. The service
+          // records degraded/conflict health for Settings; the manager preserves
+          // its older availability contract even if external storage is broken.
+          await this.beforeAgentSessionStart()
+        } catch (error) {
+          this.journal?.recordError('conventions.pre_spawn_reconcile.error', error)
+        }
+        this.throwIfRecoveryCancelled(recoveryClaim)
+      }
       const provider = getMainProvider(kind)
       const createStartedAt = performance.now()
       // `session` here structurally conforms to AgentSessionLike —

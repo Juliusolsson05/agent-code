@@ -141,6 +141,19 @@ export type SettingDefinition =
       title: string
       description: string
       keywords: string[]
+      // Main owns both the canonical document and the external deployment
+      // health. A marker row prevents renderer Settings from inventing a second
+      // boolean source of truth that could say Active after filesystem failure.
+      control: {
+        type: 'agent-code-conventions'
+      }
+    }
+  | {
+      id: string
+      category: SettingCategoryId
+      title: string
+      description: string
+      keywords: string[]
       control: {
         type: 'command-visibility'
         /** Full command catalog to render rows for. Carried as a value
@@ -420,6 +433,17 @@ export function getSettingsRegistry(): SettingDefinition[] {
         getValue: settings => settings.autoSendPromptSuggestion,
         onToggle: (ctx, value) => ctx.onChange({ autoSendPromptSuggestion: value }),
       },
+    },
+    {
+      id: 'agent-code-conventions',
+      category: 'agents',
+      title: 'Agent Code Conventions',
+      description: 'Apply personal development rules to every supported agent provider.',
+      keywords: [
+        'conventions', 'rules', 'instructions', 'agents', 'claude', 'codex',
+        'opencode', 'skills', 'commits', 'git', 'testing', 'development practices',
+      ],
+      control: { type: 'agent-code-conventions' },
     },
     {
       id: 'command-picker-visibility',

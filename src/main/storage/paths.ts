@@ -21,6 +21,11 @@ export const STATE_DIR = join(homedir(), '.config', APP_SLUG)
 // The renderer owns the JSON shape; main is a byte mover.
 export const STATE_FILE = join(STATE_DIR, 'workspace.json')
 
+// Main-owned desired state and ownership journal for the optional personal
+// conventions skill. Provider copies are integration surfaces, never the source
+// of truth; keeping this beside workspace state gives recovery one stable path.
+export const AGENT_CODE_CONVENTIONS_STATE_FILE = join(STATE_DIR, 'conventions.json')
+
 // Per-session feed-debug append-only logs, one JSONL file per session.
 // See storage/feedDebugLog.ts for the write-queue discipline.
 export const FEED_DEBUG_DIR = join(STATE_DIR, 'feed-debug')
