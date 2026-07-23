@@ -1,4 +1,4 @@
-import { useContext, useRef, useState } from 'react'
+import { useContext, useEffect, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 
 import {
@@ -6,12 +6,16 @@ import {
   CodeRenderContext,
 } from '@renderer/features/feed/context'
 import { useSessionFeed } from '@renderer/features/sessionFeed/SessionFeedContext'
+import { useGlobalToast } from '@renderer/ui/GlobalToast'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import type { ConditionCustomAction } from '@shared/types/providerConditions'
 import {
   readAskQuestions,
   type AskOption,
 } from '@providers/claude/renderer/adapters/questions'
+import { answersToPrompt, answerSummaryLines } from '@providers/claude/renderer/components/ask-user-question/answerPrompt'
+import { deliverAnswersViaPrompt } from '@providers/claude/renderer/components/ask-user-question/deliverAnswersViaPrompt'
+import { useAnsweredViaMessageStore } from '@providers/claude/renderer/components/ask-user-question/answeredViaMessageStore'
 
 // Native in-feed renderer for Claude Code's `AskUserQuestion` tool.
 //
@@ -34,11 +38,17 @@ import {
 //   (which question is currently on screen, which number maps to which option,
 //   which multi-select boxes are toggled, whether Submit is focused).
 //
-//   This row therefore dispatches a structured custom action:
-//     semantic answer labels/text → main IPC → Claude headless resolver
-//   The resolver drives the real TUI one step at a time and reparses after each
-//   keystroke. That is why multi-select, free-text, and multi-question are now
-//   clickable without the renderer guessing terminal numbers from stale state.
+//   This row answers by TWO paths (see the workaround decomposition,
+//   docs/decomposition/2026-07-23-auq-answer-via-prompt.md):
+//   - Immediate SINGLE-SELECT single-question → a structured custom action
+//     (`dispatchAnswer` → `resolveCondition`) that the Claude headless resolver
+//     replays as one keystroke. This is the one case the keystroke driver
+//     completes reliably.
+//   - Everything else (multi-select, free-text, multi-question) → `answerViaMessage`:
+//     dismiss the picker with Esc and send the choices as a structured prompt.
+//     Keystroke-driving those was defeated by Claude's "Submit answers" review
+//     screen, wrapped checkboxes, and the free-text field, and re-broke every
+//     release. The prompt path is version-proof.
 //
 // WHY this is driven by `parsedInput`, not by parsing the screen:
 //   The semantic layer (foldEvent.ts) already parses the full tool input
@@ -81,8 +91,10 @@ function isFreeTextOption(option: AskOption): boolean {
 
 export function AskUserQuestionRow({
   input,
+  operationId,
 }: {
   input: Record<string, unknown> | undefined
+  operationId: string
 }) {
   // sessionId is obtained the SAME way every other feed row gets it: via
   // CodeRenderContext, which Feed.tsx wraps the entire render-item list
@@ -96,6 +108,8 @@ export function AskUserQuestionRow({
   // this row is shared with the remote client, where the preload bridge
   // does not exist. See src/shared/sessionFeed/SessionFeed.ts.
   const feed = useSessionFeed()
+  const { showToast } = useGlobalToast()
+  const markAnsweredViaMessage = useAnsweredViaMessageStore(state => state.mark)
 
   // Local "answering" latch. Once the user submits an answer we disable every
   // control, both to give feedback ("Answering…") and to guard against
@@ -118,6 +132,11 @@ export function AskUserQuestionRow({
   // top of the handler, before any IPC, so the second call in the same tick sees
   // `true` and bails. It is reset only for structured/rejected failures.
   const submittedRef = useRef(false)
+  // Tracks whether this row is still mounted, so the detached answer-via-message
+  // callback only touches state (latch/error reset) when there is a row to
+  // touch — on the happy path Esc has already unmounted it.
+  const mountedRef = useRef(true)
+  useEffect(() => () => { mountedRef.current = false }, [])
 
   const questions = readAskQuestions(input)
 
@@ -288,7 +307,51 @@ export function AskUserQuestionRow({
         .filter((label): label is string => Boolean(label)),
       text: textByQuestion[qi]?.trim() || undefined,
     }))
-    dispatchAnswer(buildAction(answers))
+    answerViaMessage(answers)
+  }
+
+  // The "answer via message" path (the workaround): dismiss the picker with Esc
+  // and send the choices as a structured prompt, instead of keystroke-driving
+  // the TUI. Used for everything the keystroke driver can't reliably complete —
+  // multi-select, multi-question, and free-text. Single-select stays on
+  // `dispatchAnswer` (the driver's one robust case). See
+  // docs/decomposition/2026-07-23-auq-answer-via-prompt.md.
+  const answerViaMessage = (answers: Parameters<typeof buildAction>[0]) => {
+    if (submittedRef.current) return
+    if (answering) return
+    if (!sessionId) return
+    const prompt = answersToPrompt(answers)
+    if (!prompt) {
+      setResolveError('Select an option or type an answer first.')
+      return
+    }
+    submittedRef.current = true
+    setAnswering(true)
+    setResolveError(null)
+    const summary = answerSummaryLines(answers)
+    // Detached: on success Esc has already unmounted this row, so the sequence
+    // must not assume it is still mounted. Two outcomes, both handled without a
+    // false claim:
+    //   ok   → NOW record the "answered via message" marker. Recording it
+    //          before delivery (an earlier cut did) painted a permanent green
+    //          "✓ answered" even when the prompt never reached Claude — the
+    //          exact dishonest render this path exists to avoid. Until this
+    //          fires, the answered row honestly shows "no answer sent".
+    //   !ok  → toast the reason (app-level, survives unmount) and, IF the row
+    //          is still mounted (e.g. Esc itself failed so nothing unmounted),
+    //          release the latch so the user can retry.
+    void deliverAnswersViaPrompt(feed, sessionId, prompt).then(outcome => {
+      if (outcome.ok) {
+        markAnsweredViaMessage(operationId, summary)
+        return
+      }
+      showToast(`Could not send your answer: ${outcome.reason}`)
+      if (mountedRef.current) {
+        submittedRef.current = false
+        setAnswering(false)
+        setResolveError(outcome.reason)
+      }
+    })
   }
 
   const structuredReady = questions.every((q, qi) => {

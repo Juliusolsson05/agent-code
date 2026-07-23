@@ -112,12 +112,12 @@ export const sessionApi = {
   sendInput: (sessionId: string, data: string, pasteId?: string): Promise<boolean> =>
     ipcRenderer.invoke('session:input', sessionId, data, pasteId),
 
-  // Deliver a finished user prompt to an API-transport agent (opencode)
-  // that has no PTY to receive keystroke bytes via `sendInput`. Routes
-  // through SessionManager.deliverPromptToAgent → registry deliverPrompt
-  // → the provider's HTTP prompt(). Returns the delivery result so the
-  // composer can keep the draft visible on failure (mirrors how
-  // deliverPromptToAgent already serves the MCP orchestration path).
+  // Deliver a finished user prompt through SessionManager.deliverPromptToAgent
+  // → the provider's hardened delivery (Claude PTY paste→Enter→acceptance, or
+  // an API-transport provider's HTTP prompt()). Used by the desktop composer
+  // submit, the remote client, MCP orchestration, and the AskUserQuestion
+  // answer-via-message workaround. Returns the delivery result so callers can
+  // keep the draft / surface failure.
   deliverPrompt: (
     sessionId: string,
     prompt: string,

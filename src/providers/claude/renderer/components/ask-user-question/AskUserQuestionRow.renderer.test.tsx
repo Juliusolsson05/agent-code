@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 
 import { SessionFeedProvider } from '@renderer/features/sessionFeed/SessionFeedContext'
 import { createFakeSessionFeed } from '@renderer/features/sessionFeed/FakeSessionFeed'
@@ -34,7 +34,7 @@ function renderRow(fake = createFakeSessionFeed()) {
     <SessionFeedProvider value={fake}>
       <CodeRenderContext.Provider value={{ sessionId: 's1', workspaceRoot: null } as never}>
         <AskUserQuestionConditionContext.Provider value={live}>
-          <AskUserQuestionRow input={input} />
+          <AskUserQuestionRow input={input} operationId="op1" />
         </AskUserQuestionConditionContext.Provider>
       </CodeRenderContext.Provider>
     </SessionFeedProvider>,
@@ -54,7 +54,12 @@ describe('AskUserQuestionRow input routing', () => {
     })
   })
 
-  it('retains Submit when typed text is replaced by an option selection', () => {
+  it('answers a non-immediate Submit via Esc + prompt, not the keystroke driver', async () => {
+    // Submit (multi-select / free-text / multi-question, or single-select after
+    // a draft) takes the answer-via-message workaround: dismiss the picker with
+    // Esc, then deliver the choices as a structured prompt — never
+    // resolveCondition (the keystroke driver, kept only for immediate
+    // single-select).
     const fake = renderRow()
     const input = screen.getByPlaceholderText('Type something')
     fireEvent.change(input, { target: { value: 'A custom draft' } })
@@ -63,18 +68,22 @@ describe('AskUserQuestionRow input routing', () => {
     const submit = screen.getByRole('button', { name: 'Submit' })
     expect(submit).toBeEnabled()
     fireEvent.click(submit)
-    expect(fake.calls).toContainEqual(expect.objectContaining({
-      method: 'resolveCondition',
+
+    await waitFor(() =>
+      expect(fake.calls.some(c => c.method === 'deliverPrompt')).toBe(true),
+    )
+    // Esc first, and it is the escape character.
+    expect(fake.calls).toContainEqual({
+      method: 'sendInput',
       sessionId: 's1',
-      action: expect.objectContaining({
-        payload: {
-          answers: [expect.objectContaining({
-            selectedLabels: ['Option A'],
-            text: undefined,
-          })],
-        },
-      }),
-    }))
+      data: String.fromCharCode(27),
+      pasteId: undefined,
+    })
+    const delivered = fake.calls.find(c => c.method === 'deliverPrompt')
+    expect(delivered).toMatchObject({ method: 'deliverPrompt', sessionId: 's1' })
+    expect((delivered as { prompt: string }).prompt).toContain('<selected>Option A</selected>')
+    // The keystroke driver must NOT be used for this path.
+    expect(fake.calls.some(c => c.method === 'resolveCondition')).toBe(false)
   })
 
   it('does not append an absent resolver step to an error message', async () => {

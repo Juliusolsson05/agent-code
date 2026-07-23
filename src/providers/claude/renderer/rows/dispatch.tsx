@@ -57,7 +57,6 @@ import {
 } from '@providers/claude/renderer/adapters/tasks'
 import { ClaudeTaskActivityRow } from '@providers/claude/renderer/components/task-activity'
 import {
-  fromClaudeQuestionResult,
   fromClaudeQuestionUse,
 } from '@providers/claude/renderer/adapters/questions'
 import {
@@ -346,9 +345,13 @@ function renderClaudeToolResult(
   }
   const question = source ? fromClaudeQuestionUse(source) : null
   if (question) {
-    return fromClaudeQuestionResult(block, question) !== null
-      ? null
-      : undefined
+    // Absorb the AskUserQuestion result entirely — the question row is the sole
+    // renderer of its outcome (answered / answered-via-message / no answer). A
+    // decline result used to fall through (`undefined`) to a generic error row
+    // that dumped the raw "User doesn't want to proceed…" rejection text; for
+    // the answer-via-message workaround that row is noise over a real answer,
+    // and even for a genuine dismissal the question card already says so.
+    return null
   }
   if (source?.name === 'Agent') {
     // A validated Agent result is rendered inside the provider-owned spawn
