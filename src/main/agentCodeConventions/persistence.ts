@@ -31,6 +31,9 @@ function isMaterialization(value: unknown): value is AgentCodeConventionsMateria
     && typeof value.sha256 === 'string'
     && /^[a-f0-9]{64}$/.test(value.sha256)
     && typeof value.createdDirectory === 'boolean'
+    && (value.createdDirectoryIdentity === undefined
+      || (typeof value.createdDirectoryIdentity === 'string'
+        && /^\d+:\d+$/.test(value.createdDirectoryIdentity)))
 }
 
 function isPendingOperation(value: unknown): value is AgentCodeConventionsPendingOperation {
@@ -47,6 +50,9 @@ function isPendingOperation(value: unknown): value is AgentCodeConventionsPendin
       typeof value.desiredSha256 === 'string' && /^[a-f0-9]{64}$/.test(value.desiredSha256)
     ))
     && (value.createdDirectory === undefined || typeof value.createdDirectory === 'boolean')
+    && (value.createdDirectoryIdentity === undefined
+      || (typeof value.createdDirectoryIdentity === 'string'
+        && /^\d+:\d+$/.test(value.createdDirectoryIdentity)))
     && (value.expectedConflictFingerprint === undefined
       || (typeof value.expectedConflictFingerprint === 'string'
         && /^[a-f0-9]{64}$/.test(value.expectedConflictFingerprint)))

@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto'
 import { homedir } from 'os'
-import { basename, dirname, isAbsolute, relative, resolve, sep } from 'path'
+import { dirname, isAbsolute, relative, resolve, sep } from 'path'
 
 import { atomicWriteTextFile } from '@main/editorFileIO.js'
 import { AGENT_CODE_CONVENTIONS_STATE_FILE } from '@main/storage/paths.js'
@@ -21,13 +21,16 @@ import {
   type FileInspection,
 } from './skillPathSafety.js'
 import {
+  AgentCodeConventionsOwnershipPolicy,
+  RETIRED_CONVENTIONS_TARGET_PREFIX,
+} from './ownershipPolicy.js'
+import {
   resolveAgentCodeConventionsTargets,
   type AgentCodeConventionsTarget,
   type ResolvedAgentCodeConventionsTargets,
 } from './targets.js'
 import {
   AGENT_CODE_CONVENTIONS_COLLISION_MAX_BYTES,
-  AGENT_CODE_CONVENTIONS_SKILL_NAME,
   createEmptyAgentCodeConventionsDocument,
   type AgentCodeConventionsConflictResolution,
   type AgentCodeConventionsDocument,
@@ -60,8 +63,6 @@ type PreflightTarget = {
   overwrite?: AgentCodeConventionsConflictResolution
 }
 
-const RETIRED_PREFIX = 'retired:'
-
 export class AgentCodeConventionsService {
   private document = createEmptyAgentCodeConventionsDocument()
   private recovery: AgentCodeConventionsSnapshot['recovery']
@@ -77,6 +78,7 @@ export class AgentCodeConventionsService {
   private readonly stateFilePath: string
   private readonly homeDirectory: string
   private readonly pathSafety: SkillPathSafety
+  private readonly ownershipPolicy = new AgentCodeConventionsOwnershipPolicy()
   private readonly resolveTargetsImpl: () => Promise<ResolvedAgentCodeConventionsTargets>
   private readonly now: () => Date
   private readonly operationId: () => string
@@ -104,6 +106,7 @@ export class AgentCodeConventionsService {
         }
         const targetsResolved = await this.resolveTargetsSafely()
         if (!this.recovery && targetsResolved) {
+          this.ownershipPolicy.rehomeMovedMaterializations(this.document, this.targets)
           this.enterRecoveryForUnsafeOwnership()
           if (!this.recovery) await this.reconcileLocked()
         }
@@ -140,6 +143,7 @@ export class AgentCodeConventionsService {
       await this.ensureInitializedLocked()
       const targetsResolved = await this.resolveTargetsSafely()
       if (!this.recovery && targetsResolved) {
+        this.ownershipPolicy.rehomeMovedMaterializations(this.document, this.targets)
         this.enterRecoveryForUnsafeOwnership()
         if (!this.recovery) await this.reconcileLocked()
       }
@@ -176,6 +180,13 @@ export class AgentCodeConventionsService {
         return this.ioError(new Error(
           `Could not resolve provider skill targets: ${this.targetResolutionError ?? 'unknown error'}`,
         ))
+      }
+      if (targetsResolved) {
+        this.ownershipPolicy.rehomeMovedMaterializations(this.document, this.targets)
+        this.enterRecoveryForUnsafeOwnership()
+        if (this.recovery) {
+          return { ok: false, code: 'recovery-required', snapshot: this.snapshot() }
+        }
       }
       if (request.enabled && this.targets.unsupportedProviders.length > 0) {
         this.targetStatuses = this.unsupportedStatuses()
@@ -315,7 +326,10 @@ export class AgentCodeConventionsService {
     await this.initialize()
     const current = this.targets.targets.find(target => target.id === targetId)
     if (current) return current.skillFile
-    return this.document.materializations[targetId]?.path ?? null
+    const historical = this.document.materializations[targetId]
+    return historical && this.ownershipPolicy.isCurrentMutationPath(historical.path, this.targets)
+      ? historical.path
+      : null
   }
 
   async resolveRecoveryFile(): Promise<string | null> {
@@ -406,7 +420,6 @@ export class AgentCodeConventionsService {
 
   private async reconcileLocked(): Promise<void> {
     await this.cleanupJournaledWriteTemps()
-    this.rehomeMovedMaterializations()
     if (this.document.enabled) await this.reconcileEnabledLocked()
     else await this.reconcileDisabledLocked()
   }
@@ -438,10 +451,17 @@ export class AgentCodeConventionsService {
           && pending.path === target.skillFile
           && pending.desiredSha256 === desiredHash
         )) {
+          const currentDirectoryIdentity = await this.pathSafety.currentDirectoryIdentity(
+            target.skillDirectory,
+          )
+          const ownership = pending?.kind === 'write' ? pending : record
+          const createdDirectory = ownership?.createdDirectory === true
+            && ownership.createdDirectoryIdentity === currentDirectoryIdentity
           this.document.materializations[target.id] = {
             path: target.skillFile,
             sha256: desiredHash,
-            createdDirectory: pending?.createdDirectory ?? record?.createdDirectory ?? false,
+            createdDirectory,
+            createdDirectoryIdentity: createdDirectory ? currentDirectoryIdentity ?? undefined : undefined,
           }
           delete this.document.pendingOperations[target.id]
           statuses.push(this.status(target, 'installed'))
@@ -481,7 +501,7 @@ export class AgentCodeConventionsService {
     }
 
     for (const [key, record] of Object.entries(this.document.materializations)) {
-      if (!key.startsWith(RETIRED_PREFIX)) continue
+      if (!key.startsWith(RETIRED_CONVENTIONS_TARGET_PREFIX)) continue
       if (this.document.pendingOperations[key]?.kind !== 'delete') {
         this.document.pendingOperations[key] = {
           operationId: this.operationId(),
@@ -584,6 +604,9 @@ export class AgentCodeConventionsService {
     item: PreflightTarget,
     desiredHash: string,
   ): AgentCodeConventionsPendingOperation {
+    const previous = this.document.pendingOperations[item.target.id]
+    const preservesDirectoryOwnership = previous?.kind === 'write'
+      && previous.path === item.target.skillFile
     return {
       operationId: this.operationId(),
       targetId: item.target.id,
@@ -591,6 +614,10 @@ export class AgentCodeConventionsService {
       kind: 'write',
       previousSha256: item.existing?.sha256 ?? null,
       desiredSha256: desiredHash,
+      createdDirectory: preservesDirectoryOwnership ? previous.createdDirectory : undefined,
+      createdDirectoryIdentity: preservesDirectoryOwnership
+        ? previous.createdDirectoryIdentity
+        : undefined,
       expectedConflictFingerprint: item.overwrite?.expectedConflictFingerprint,
     }
   }
@@ -598,6 +625,7 @@ export class AgentCodeConventionsService {
   private async cleanupJournaledWriteTemps(): Promise<void> {
     for (const operation of Object.values(this.document.pendingOperations)) {
       if (operation.kind !== 'write') continue
+      if (!this.ownershipPolicy.isCurrentMutationPath(operation.path, this.targets)) continue
       await this.pathSafety.cleanupJournaledTemporaryFile(
         journalTemporaryPath(operation.path, operation.operationId),
       )
@@ -616,6 +644,7 @@ export class AgentCodeConventionsService {
         path: operation.path,
         sha256: operation.desiredSha256,
         createdDirectory: operation.createdDirectory ?? false,
+        createdDirectoryIdentity: operation.createdDirectoryIdentity,
       }
     }
   }
@@ -638,8 +667,14 @@ export class AgentCodeConventionsService {
       await this.pathSafety.cleanupJournaledTemporaryFile(
         journalTemporaryPath(item.target.skillFile, pending.operationId),
       )
-      const createdDirectory = await this.pathSafety.ensureTargetDirectory(item.target)
-      pending.createdDirectory = createdDirectory
+      const directory = await this.pathSafety.ensureTargetDirectory(item.target)
+      const existingOwnsDirectory = item.existing?.createdDirectory === true
+        && item.existing.createdDirectoryIdentity === directory.identity
+      const pendingOwnsDirectory = pending.createdDirectory === true
+        && pending.createdDirectoryIdentity === directory.identity
+      const ownsDirectory = directory.created || existingOwnsDirectory || pendingOwnsDirectory
+      pending.createdDirectory = ownsDirectory
+      pending.createdDirectoryIdentity = ownsDirectory ? directory.identity : undefined
       // Directory ownership must be durable before SKILL.md publication. A
       // crash after the atomic write can then adopt both the bytes and the
       // correct leaf-directory ownership from the pending operation.
@@ -674,9 +709,8 @@ export class AgentCodeConventionsService {
       this.document.materializations[item.target.id] = {
         path: item.target.skillFile,
         sha256: desiredHash,
-        createdDirectory: item.inspection.kind === 'missing'
-          ? createdDirectory
-          : item.existing?.createdDirectory ?? createdDirectory,
+        createdDirectory: ownsDirectory,
+        createdDirectoryIdentity: ownsDirectory ? directory.identity : undefined,
       }
       delete this.document.pendingOperations[item.target.id]
       return this.status(item.target, 'installed')
@@ -700,11 +734,48 @@ export class AgentCodeConventionsService {
             state,
             message,
           }
+    if (!this.ownershipPolicy.isCurrentMutationPath(record.path, this.targets)) {
+      delete this.document.pendingOperations[key]
+      return {
+        ...baseStatus(
+          'retired',
+          'This copy is outside every current provider root. Remove it manually or leave it when clearing.',
+        ),
+        conflictFingerprint: this.ownershipPolicy.retiredFingerprint(key, record),
+      }
+    }
     try {
+      const pending = this.document.pendingOperations[key]
+      if (!pending || pending.kind !== 'delete') {
+        throw new Error('Missing write-ahead operation for conventions removal')
+      }
+      const quarantinePath = journalTemporaryPath(record.path, pending.operationId)
+      const recovery = await this.pathSafety.recoverJournaledDelete(
+        record.path,
+        quarantinePath,
+        record.sha256,
+      )
+      if (recovery === 'conflict') {
+        return baseStatus('conflict', 'A journaled removal quarantine could not be restored safely.')
+      }
+      if (recovery === 'completed') {
+        if (record.createdDirectory) {
+          await this.pathSafety.removeEmptyOwnedDirectory(
+            dirname(record.path),
+            record.createdDirectoryIdentity,
+          )
+        }
+        delete this.document.materializations[key]
+        delete this.document.pendingOperations[key]
+        return baseStatus('not-installed')
+      }
       const inspected = await this.pathSafety.inspectExactFile(record.path)
       if (inspected.kind === 'missing') {
         if (record.createdDirectory) {
-          await this.pathSafety.removeEmptyOwnedDirectory(dirname(record.path))
+          await this.pathSafety.removeEmptyOwnedDirectory(
+            dirname(record.path),
+            record.createdDirectoryIdentity,
+          )
         }
         delete this.document.materializations[key]
         delete this.document.pendingOperations[key]
@@ -714,14 +785,19 @@ export class AgentCodeConventionsService {
         delete this.document.pendingOperations[key]
         const fingerprint = inspected.fingerprint
         return {
-          ...baseStatus(key.startsWith(RETIRED_PREFIX) ? 'retired' : 'conflict',
+          ...baseStatus(key.startsWith(RETIRED_CONVENTIONS_TARGET_PREFIX) ? 'retired' : 'conflict',
             inspected.kind === 'conflict'
               ? inspected.message
               : 'External changes were preserved; Agent Code did not delete this file.'),
           conflictFingerprint: fingerprint,
         }
       }
-      const removal = await this.pathSafety.unlinkOwnedRegularFile(record.path, inspected.version)
+      const removal = await this.pathSafety.unlinkOwnedRegularFile(
+        record.path,
+        inspected.version,
+        record.sha256,
+        quarantinePath,
+      )
       if (removal === 'changed') {
         delete this.document.pendingOperations[key]
         return {
@@ -730,40 +806,24 @@ export class AgentCodeConventionsService {
         }
       }
       if (record.createdDirectory) {
-        await this.pathSafety.removeEmptyOwnedDirectory(dirname(record.path))
+        await this.pathSafety.removeEmptyOwnedDirectory(
+          dirname(record.path),
+          record.createdDirectoryIdentity,
+        )
       }
       delete this.document.materializations[key]
       delete this.document.pendingOperations[key]
       return baseStatus('not-installed')
     } catch (error) {
-      delete this.document.pendingOperations[key]
+      // Keep the journal on unexpected failure. In particular, a crash-safe
+      // delete may have captured bytes in its operation-derived quarantine;
+      // dropping the pending id would make that exact sidecar unrecoverable.
       return baseStatus('error', safeErrorMessage(error))
     }
   }
 
-  private rehomeMovedMaterializations(): void {
-    const currentTargets = new Map(this.targets.targets.map(target => [target.id, target]))
-    for (const [key, record] of Object.entries(this.document.materializations)) {
-      if (key.startsWith(RETIRED_PREFIX)) continue
-      const target = currentTargets.get(key)
-      if (target && resolve(record.path) === resolve(target.skillFile)) continue
-      // A provider root move leaves an old copy that is no longer a current
-      // publish target. Only ids still declared by the exhaustive registry can
-      // reach this point; unknown ids enter Recovery required before mutation
-      // so syntactically valid state cannot authorize arbitrary deletion.
-      const retiredKey = `${RETIRED_PREFIX}${key}:${sha256Text(record.path).slice(0, 12)}`
-      this.document.materializations[retiredKey] = record
-      delete this.document.materializations[key]
-      const pending = this.document.pendingOperations[key]
-      if (pending) {
-        this.document.pendingOperations[retiredKey] = { ...pending, targetId: retiredKey }
-        delete this.document.pendingOperations[key]
-      }
-    }
-  }
-
   private enterRecoveryForUnsafeOwnership(): void {
-    const problem = this.persistedOwnershipProblem()
+    const problem = this.ownershipPolicy.persistedOwnershipProblem(this.document, this.targets)
     if (!problem) return
     // A syntactically valid state file can still contain a path that is too
     // broad to use as deletion authority. Treat it exactly like a newer schema:
@@ -775,87 +835,10 @@ export class AgentCodeConventionsService {
     }
   }
 
-  private persistedOwnershipProblem(): string | null {
-    const currentTargets = new Map(this.targets.targets.map(target => [target.id, target]))
-    const currentPaths = new Set(this.targets.targets.map(target => resolve(target.skillFile)))
-    const currentTargetIds = new Set(currentTargets.keys())
-
-    for (const [key, record] of Object.entries(this.document.materializations)) {
-      if (!this.isSafePersistedSkillPath(key, record.path, currentPaths, currentTargetIds)) {
-        return `materialization ${key} points outside an allowed skill path.`
-      }
-    }
-
-    for (const [key, operation] of Object.entries(this.document.pendingOperations)) {
-      if (operation.targetId !== key) return `pending operation ${key} has a mismatched target id.`
-      if (!this.isSafePersistedSkillPath(key, operation.path, currentPaths, currentTargetIds)) {
-        return `pending operation ${key} points outside an allowed skill path.`
-      }
-      if (operation.kind === 'write') {
-        const target = currentTargets.get(key)
-        const record = this.document.materializations[key]
-        const currentWrite = target
-          && resolve(operation.path) === resolve(target.skillFile)
-        const journaledHistoricalWrite = record
-          && resolve(record.path) === resolve(operation.path)
-          && operation.previousSha256 === record.sha256
-        if ((!currentWrite && !journaledHistoricalWrite) || operation.desiredSha256 === null) {
-          return `pending write ${key} does not match a current provider target.`
-        }
-        continue
-      }
-      const record = this.document.materializations[key]
-      if (!record
-        || resolve(record.path) !== resolve(operation.path)
-        || operation.previousSha256 !== record.sha256
-        || operation.desiredSha256 !== null) {
-        return `pending delete ${key} does not match its ownership record.`
-      }
-    }
-    return null
-  }
-
-  private isSafePersistedSkillPath(
-    key: string,
-    path: string,
-    currentPaths: Set<string>,
-    currentTargetIds: Set<string>,
-  ): boolean {
-    if (!isAbsolute(path) || resolve(path) !== path) return false
-    if (basename(path) !== 'SKILL.md'
-      || basename(dirname(path)) !== AGENT_CODE_CONVENTIONS_SKILL_NAME
-      || basename(dirname(dirname(path))) !== 'skills') return false
-
-    const targetId = this.ownershipTargetId(key, currentTargetIds)
-    if (!targetId) return false
-    const absolute = resolve(path)
-    if (currentPaths.has(absolute)) return true
-    // A current stable location id is the persisted relation that permits an
-    // old root to be retired after CLAUDE_CONFIG_DIR moves outside home. The
-    // exact conventional suffix and known id are both required; the previous
-    // broad "$HOME/**/skills/..." rule made an unknown state key deletion
-    // authority over unrelated matching files.
-    return currentTargetIds.has(targetId)
-  }
-
-  private ownershipTargetId(key: string, currentTargetIds: Set<string>): string | null {
-    if (currentTargetIds.has(key)) return key
-    if (!key.startsWith(RETIRED_PREFIX)) return null
-    const retired = key.slice(RETIRED_PREFIX.length)
-    for (const targetId of [...currentTargetIds].sort((left, right) => right.length - left.length)) {
-      const prefix = `${targetId}:`
-      if (retired.startsWith(prefix) && /^[a-f0-9]{12}$/.test(retired.slice(prefix.length))) {
-        return targetId
-      }
-    }
-    return null
-  }
-
   private async inspectRemainingMaterializations(): Promise<void> {
     const statuses: AgentCodeConventionsTargetStatus[] = []
     for (const [key, record] of Object.entries(this.document.materializations)) {
-      const inspection = await this.pathSafety.inspectExactFile(record.path)
-      const state = key.startsWith(RETIRED_PREFIX) ? 'retired' : 'conflict'
+      const state = key.startsWith(RETIRED_CONVENTIONS_TARGET_PREFIX) ? 'retired' : 'conflict'
       const target = this.targets.targets.find(value => value.id === key)
       const status: AgentCodeConventionsTargetStatus = target
         ? this.status(target, state, 'External changes remain on disk.')
@@ -866,8 +849,14 @@ export class AgentCodeConventionsService {
             state,
             message: 'External changes remain on disk.',
           }
-      if (inspection.kind === 'file' || inspection.kind === 'conflict') {
-        status.conflictFingerprint = inspection.fingerprint
+      if (!this.ownershipPolicy.isCurrentMutationPath(record.path, this.targets)) {
+        status.message = 'Historical provider-root copy was preserved and must be handled manually.'
+        status.conflictFingerprint = this.ownershipPolicy.retiredFingerprint(key, record)
+      } else {
+        const inspection = await this.pathSafety.inspectExactFile(record.path)
+        if (inspection.kind === 'file' || inspection.kind === 'conflict') {
+          status.conflictFingerprint = inspection.fingerprint
+        }
       }
       statuses.push(status)
     }
@@ -1036,6 +1025,7 @@ export class AgentCodeConventionsService {
     }
     const targetsResolved = await this.resolveTargetsSafely()
     if (!this.recovery && targetsResolved) {
+      this.ownershipPolicy.rehomeMovedMaterializations(this.document, this.targets)
       this.enterRecoveryForUnsafeOwnership()
       if (!this.recovery) await this.reconcileLocked()
     }

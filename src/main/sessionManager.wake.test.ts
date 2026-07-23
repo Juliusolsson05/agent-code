@@ -103,6 +103,36 @@ describe('SessionManager restart wake recovery', () => {
     expect(createSession).toHaveBeenCalledTimes(2)
   })
 
+  it('awaits the pre-agent reconciliation boundary before creating the provider session', async () => {
+    const { SessionManager } = await import('./sessionManager')
+    let releaseReconciliation!: () => void
+    const reconciliationGate = new Promise<void>(resolve => {
+      releaseReconciliation = resolve
+    })
+    const beforeAgentSessionStart = vi.fn(async () => await reconciliationGate)
+    const manager = new SessionManager(null, null, null, beforeAgentSessionStart)
+
+    const spawning = manager.spawn({ kind: 'claude', cwd: '/tmp/project' })
+    await vi.waitFor(() => expect(beforeAgentSessionStart).toHaveBeenCalledTimes(1))
+    expect(createSession).not.toHaveBeenCalled()
+    releaseReconciliation()
+    await spawning
+
+    expect(createSession).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps a rejected pre-agent reconciliation nonfatal to provider startup', async () => {
+    const { SessionManager } = await import('./sessionManager')
+    const beforeAgentSessionStart = vi.fn(async () => {
+      throw new Error('conventions storage unavailable')
+    })
+    const manager = new SessionManager(null, null, null, beforeAgentSessionStart)
+
+    await expect(manager.spawn({ kind: 'codex', cwd: '/tmp/project' }))
+      .resolves.toMatchObject({ sessionId: expect.any(String) })
+    expect(createSession).toHaveBeenCalledTimes(1)
+  })
+
   it('joins a second wake while the first backend recovery is still starting', async () => {
     const { SessionManager } = await import('./sessionManager')
     let releaseStart!: () => void

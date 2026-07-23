@@ -51,7 +51,7 @@ architecture below:
 - [x] four-agent Claude/Codex review hardening: isolated filesystem safety,
   create-only publication, journal-only cleanup, operation-bound crash temps,
   external-root migration, private state permissions, and serialized snapshots;
-- [x] `npm run check` (contract, composite typecheck, 221 test files / 1,242
+- [x] `npm run check` (contract, composite typecheck, 222 test files / 1,251
   tests, production build, and packaged-entry verification).
 
 The live-provider acceptance matrix and Settings screenshots remain deliberately
@@ -285,6 +285,7 @@ export type AgentCodeConventionsDocument = {
       path: string
       sha256: string
       createdDirectory: boolean
+      createdDirectoryIdentity?: string
     }
   >
   pendingOperations: Record<
@@ -296,6 +297,8 @@ export type AgentCodeConventionsDocument = {
       kind: 'write' | 'delete'
       previousSha256: string | null
       desiredSha256: string | null
+      createdDirectory?: boolean
+      createdDirectoryIdentity?: string
       expectedConflictFingerprint?: string
     }
   >
@@ -310,7 +313,9 @@ Rules:
 - `materializations` records only successful Agent Code writes. It is ownership
   evidence, not a target catalog; targets come from the provider registry.
   `createdDirectory` is true only when this operation created the leaf skill
-  directory; uninstall never removes a pre-existing directory.
+  directory, and its device/inode identity prevents that ownership bit from
+  transferring to a user-recreated directory. Uninstall never removes a
+  pre-existing or replaced directory.
 - `pendingOperations` is a write-ahead ownership journal. Persist an operation
   before touching a provider file, retain the previous materialization until
   publication succeeds, and remove the pending record only after the resulting
@@ -446,8 +451,10 @@ after a crash, boot reconciliation knows the intended state and can finish it.
 1. Enter mutation lock and check revision.
 2. Persist `enabled: false` and increment revision.
 3. Persist pending deletes while retaining the materialization records.
-4. For each materialization, unlink only if the current regular-file hash still
-   matches the recorded hash. A missing file finishes a journaled delete.
+4. For each materialization, atomically capture the target into an
+   operation-derived quarantine and unlink the capture only if its regular-file
+   hash still matches the record. Restore an unverified replacement without
+   clobbering. A missing file finishes a journaled delete.
 5. Remove the leaf skill directory with non-recursive `rmdir` only if it is
    empty **and** its materialization says Agent Code created it.
 6. Persist completed removals; preserve externally modified or unknown files
@@ -477,8 +484,10 @@ every error so conventions can never prevent Agent Code from opening:
 - Enabled + missing target: recreate.
 - Enabled + matching owned target: leave unchanged.
 - Enabled + newly registered provider target: install.
-- Persisted + retired/moved provider target: remove only by recorded hash and
-  directory-ownership proof; retain an unresolved tombstone on conflict.
+- Persisted + retired/moved provider target: install the new current target but
+  preserve the historical copy as a visible tombstone for manual cleanup or
+  explicit abandonment. Persisted history alone never authorizes mutation
+  outside a current provider root.
 - Enabled + modified/unmanaged target: preserve and report conflict.
 - Disabled + unchanged recorded materialization: remove.
 - Disabled + modified recorded materialization: preserve and report conflict.

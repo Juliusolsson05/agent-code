@@ -8,7 +8,7 @@ import {
   type AgentCodeConventionsDocument,
 } from '@shared/types/agentCodeConventions.js'
 import { renderAgentCodeConventionsSkill, sha256Text } from './renderSkill.js'
-import { journalTemporaryPath } from './skillPathSafety.js'
+import { journalTemporaryPath, SkillPathSafety } from './skillPathSafety.js'
 import type {
   AgentCodeConventionsTarget,
   ResolvedAgentCodeConventionsTargets,
@@ -217,6 +217,8 @@ describe('AgentCodeConventionsService', () => {
     const stateFilePath = join(root, 'state', 'conventions.json')
     const rendered = renderAgentCodeConventionsSkill('# Rules')
     await writeFileWithParents(currentTarget.skillFile, rendered)
+    const directoryIdentity = await new SkillPathSafety(root)
+      .currentDirectoryIdentity(currentTarget.skillDirectory)
     const document: AgentCodeConventionsDocument = {
       ...createEmptyAgentCodeConventionsDocument(),
       pendingOperations: {
@@ -228,6 +230,7 @@ describe('AgentCodeConventionsService', () => {
           previousSha256: null,
           desiredSha256: sha256Text(rendered),
           createdDirectory: true,
+          createdDirectoryIdentity: directoryIdentity ?? undefined,
         },
       },
     }
@@ -283,6 +286,45 @@ describe('AgentCodeConventionsService', () => {
     await expect(stat(tempPath)).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
+  it('retains created-directory ownership across a crash before publication', async () => {
+    const root = await temporaryDirectory()
+    const currentTarget = target('agents-standard-personal-skills', join(root, '.agents', 'skills'), ['codex'])
+    const stateFilePath = join(root, 'state', 'conventions.json')
+    const markdown = '# Rules'
+    const rendered = renderAgentCodeConventionsSkill(markdown)
+    const safety = new SkillPathSafety(root)
+    const directory = await safety.ensureTargetDirectory(currentTarget)
+    const document: AgentCodeConventionsDocument = {
+      ...createEmptyAgentCodeConventionsDocument(),
+      enabled: true,
+      markdown,
+      pendingOperations: {
+        [currentTarget.id]: {
+          operationId: 'crashed-before-publication',
+          targetId: currentTarget.id,
+          path: currentTarget.skillFile,
+          kind: 'write',
+          previousSha256: null,
+          desiredSha256: sha256Text(rendered),
+          createdDirectory: true,
+          createdDirectoryIdentity: directory.identity,
+        },
+      },
+    }
+    await writeFileWithParents(stateFilePath, `${JSON.stringify(document)}\n`)
+
+    const service = new AgentCodeConventionsService({
+      stateFilePath,
+      homeDirectory: root,
+      resolveTargets: async () => ({ targets: [currentTarget], unsupportedProviders: [] }),
+    })
+    await service.initialize()
+    const disabled = await service.disable(0)
+
+    expect(disabled).toMatchObject({ ok: true, snapshot: { health: 'disabled' } })
+    await expect(stat(currentTarget.skillDirectory)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
   it('repairs a missing owned copy during startup reconciliation', async () => {
     const { root, stateFilePath, targets, service } = await harness()
     await service.save({ expectedRevision: 0, enabled: true, markdown: '# Rules' })
@@ -301,7 +343,7 @@ describe('AgentCodeConventionsService', () => {
     )
   })
 
-  it('retires an external Claude root after it moves and remains active', async () => {
+  it('installs the new external Claude root but preserves the retired root for manual cleanup', async () => {
     const root = await realpath(await temporaryDirectory())
     const home = join(root, 'home')
     const oldTarget = target('claude-personal-skills', join(root, 'claude-old', 'skills'), ['claude'])
@@ -323,11 +365,55 @@ describe('AgentCodeConventionsService', () => {
     })
     await restarted.initialize()
 
-    expect(await restarted.getSnapshot()).toMatchObject({ enabled: true, health: 'active' })
+    expect(await restarted.getSnapshot()).toMatchObject({ enabled: true, health: 'conflict' })
     expect(await readFile(newTarget.skillFile, 'utf8')).toBe(
       renderAgentCodeConventionsSkill('# Rules'),
     )
-    await expect(stat(oldTarget.skillFile)).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(await readFile(oldTarget.skillFile, 'utf8')).toBe(
+      renderAgentCodeConventionsSkill('# Rules'),
+    )
+  })
+
+  it('preserves a journal-only copy when an external Claude root moves', async () => {
+    const root = await realpath(await temporaryDirectory())
+    const home = join(root, 'home')
+    const oldTarget = target('claude-personal-skills', join(root, 'claude-old', 'skills'), ['claude'])
+    const newTarget = target('claude-personal-skills', join(root, 'claude-new', 'skills'), ['claude'])
+    const stateFilePath = join(home, '.config', 'agent-code', 'conventions.json')
+    const markdown = '# Rules'
+    const rendered = renderAgentCodeConventionsSkill(markdown)
+    await writeFileWithParents(oldTarget.skillFile, rendered)
+    const document: AgentCodeConventionsDocument = {
+      ...createEmptyAgentCodeConventionsDocument(),
+      enabled: true,
+      markdown,
+      pendingOperations: {
+        [oldTarget.id]: {
+          operationId: 'published-at-old-root',
+          targetId: oldTarget.id,
+          path: oldTarget.skillFile,
+          kind: 'write',
+          previousSha256: null,
+          desiredSha256: sha256Text(rendered),
+        },
+      },
+    }
+    await writeFileWithParents(stateFilePath, `${JSON.stringify(document)}\n`)
+    const service = new AgentCodeConventionsService({
+      stateFilePath,
+      homeDirectory: home,
+      resolveTargets: async () => ({ targets: [newTarget], unsupportedProviders: [] }),
+    })
+
+    await service.initialize()
+
+    expect(await service.getSnapshot()).toMatchObject({
+      enabled: true,
+      health: 'conflict',
+      recovery: undefined,
+    })
+    expect(await readFile(oldTarget.skillFile, 'utf8')).toBe(rendered)
+    expect(await readFile(newTarget.skillFile, 'utf8')).toBe(rendered)
   })
 
   it('does not retain directory ownership after an owned leaf is user-recreated', async () => {
@@ -337,7 +423,6 @@ describe('AgentCodeConventionsService', () => {
     await rm(currentTarget.skillDirectory, { recursive: true })
     await mkdir(currentTarget.skillDirectory)
 
-    expect(await service.getSnapshot({ audit: true })).toMatchObject({ health: 'active' })
     await service.disable(1)
 
     expect((await stat(currentTarget.skillDirectory)).isDirectory()).toBe(true)
@@ -442,6 +527,36 @@ describe('AgentCodeConventionsService', () => {
       recovery: { stateFilePath },
     })
     expect(await readFile(unrelated, 'utf8')).toBe('do not delete')
+  })
+
+  it('never turns a known provider id into authority over a historical path', async () => {
+    const root = await temporaryDirectory()
+    const stateFilePath = join(root, 'state', 'conventions.json')
+    const currentTarget = target('claude-personal-skills', join(root, '.claude', 'skills'), ['claude'])
+    const unrelated = join(root, 'unrelated', 'skills', 'agent-code-conventions', 'SKILL.md')
+    const contents = 'do not delete'
+    await writeFileWithParents(unrelated, contents)
+    const document: AgentCodeConventionsDocument = {
+      ...createEmptyAgentCodeConventionsDocument(),
+      materializations: {
+        [currentTarget.id]: {
+          path: unrelated,
+          sha256: sha256Text(contents),
+          createdDirectory: false,
+        },
+      },
+    }
+    await writeFileWithParents(stateFilePath, `${JSON.stringify(document)}\n`)
+    const service = new AgentCodeConventionsService({
+      stateFilePath,
+      homeDirectory: root,
+      resolveTargets: async () => ({ targets: [currentTarget], unsupportedProviders: [] }),
+    })
+
+    await service.initialize()
+
+    expect(await service.getSnapshot()).toMatchObject({ health: 'conflict' })
+    expect(await readFile(unrelated, 'utf8')).toBe(contents)
   })
 
   it('refuses to enable when provider target discovery fails', async () => {

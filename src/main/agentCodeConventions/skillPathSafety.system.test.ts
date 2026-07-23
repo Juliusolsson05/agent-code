@@ -4,6 +4,7 @@ import { join } from 'path'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { journalTemporaryPath, SkillPathSafety } from './skillPathSafety.js'
+import { sha256Text } from './renderSkill.js'
 import type { AgentCodeConventionsTarget } from './targets.js'
 
 const temporaryDirectories: string[] = []
@@ -42,13 +43,19 @@ describe('SkillPathSafety', () => {
       kind: 'missing',
       directoryExists: false,
     })
-    await expect(safety.ensureTargetDirectory(target)).resolves.toBe(true)
+    const directory = await safety.ensureTargetDirectory(target)
+    expect(directory.created).toBe(true)
     await writeFile(target.skillFile, 'owned bytes')
     const inspected = await safety.inspectTarget(target)
     if (inspected.kind !== 'file') throw new Error('expected a regular file inspection')
 
-    await expect(safety.unlinkOwnedRegularFile(target.skillFile, inspected.version)).resolves.toBe('deleted')
-    await safety.removeEmptyOwnedDirectory(target.skillDirectory)
+    await expect(safety.unlinkOwnedRegularFile(
+      target.skillFile,
+      inspected.version,
+      sha256Text('owned bytes'),
+      journalTemporaryPath(target.skillFile, 'delete-owned-bytes'),
+    )).resolves.toBe('deleted')
+    await safety.removeEmptyOwnedDirectory(target.skillDirectory, directory.identity)
     await expect(stat(target.skillDirectory)).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
@@ -64,5 +71,28 @@ describe('SkillPathSafety', () => {
 
     await expect(stat(journaled)).rejects.toMatchObject({ code: 'ENOENT' })
     await expect(readFile(unrelated, 'utf8')).resolves.toBe('preserve')
+  })
+
+  it('finishes an owned delete quarantine but restores unverified captured bytes', async () => {
+    const { target, safety } = await fixture()
+    await safety.ensureTargetDirectory(target)
+    const quarantine = journalTemporaryPath(target.skillFile, 'delete-crash')
+    await writeFile(quarantine, 'owned bytes')
+
+    await expect(safety.recoverJournaledDelete(
+      target.skillFile,
+      quarantine,
+      sha256Text('owned bytes'),
+    )).resolves.toBe('completed')
+    await expect(stat(quarantine)).rejects.toMatchObject({ code: 'ENOENT' })
+
+    await writeFile(quarantine, 'external replacement')
+    await expect(safety.recoverJournaledDelete(
+      target.skillFile,
+      quarantine,
+      sha256Text('owned bytes'),
+    )).resolves.toBe('restored')
+    await expect(readFile(target.skillFile, 'utf8')).resolves.toBe('external replacement')
+    await expect(stat(quarantine)).rejects.toMatchObject({ code: 'ENOENT' })
   })
 })
