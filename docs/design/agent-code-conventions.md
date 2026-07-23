@@ -99,10 +99,11 @@ the version again immediately before publication.
 Disable persists `enabled: false` and pending deletes before touching provider
 files. Removal first renames the target into an operation-derived quarantine,
 then unlinks only the captured regular file whose hash still matches; an
-unverified replacement is restored with an atomic no-clobber link. It removes a
-leaf directory with non-recursive `rmdir` only when empty and its physical
-identity still matches the directory Agent Code created. Externally modified
-files remain conflicts.
+unverified replacement is restored with an atomic no-clobber link. It never
+removes the leaf directory. Portable filesystem APIs cannot atomically create a
+fixed-name directory and durably record who won that mkdir race, so retaining a
+harmless empty directory is safer than inventing deletion authority. Externally
+modified files remain conflicts.
 
 Historical paths are preservation evidence, not mutation authority. If a
 provider root such as `CLAUDE_CONFIG_DIR` moves, Agent Code installs the current

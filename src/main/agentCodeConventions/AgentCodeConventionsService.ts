@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto'
 import { homedir } from 'os'
-import { dirname, isAbsolute, relative, resolve, sep } from 'path'
+import { isAbsolute, relative, resolve, sep } from 'path'
 
 import { atomicWriteTextFile } from '@main/editorFileIO.js'
 import { AGENT_CODE_CONVENTIONS_STATE_FILE } from '@main/storage/paths.js'
@@ -451,17 +451,9 @@ export class AgentCodeConventionsService {
           && pending.path === target.skillFile
           && pending.desiredSha256 === desiredHash
         )) {
-          const currentDirectoryIdentity = await this.pathSafety.currentDirectoryIdentity(
-            target.skillDirectory,
-          )
-          const ownership = pending?.kind === 'write' ? pending : record
-          const createdDirectory = ownership?.createdDirectory === true
-            && ownership.createdDirectoryIdentity === currentDirectoryIdentity
           this.document.materializations[target.id] = {
             path: target.skillFile,
             sha256: desiredHash,
-            createdDirectory,
-            createdDirectoryIdentity: createdDirectory ? currentDirectoryIdentity ?? undefined : undefined,
           }
           delete this.document.pendingOperations[target.id]
           statuses.push(this.status(target, 'installed'))
@@ -604,9 +596,6 @@ export class AgentCodeConventionsService {
     item: PreflightTarget,
     desiredHash: string,
   ): AgentCodeConventionsPendingOperation {
-    const previous = this.document.pendingOperations[item.target.id]
-    const preservesDirectoryOwnership = previous?.kind === 'write'
-      && previous.path === item.target.skillFile
     return {
       operationId: this.operationId(),
       targetId: item.target.id,
@@ -614,10 +603,6 @@ export class AgentCodeConventionsService {
       kind: 'write',
       previousSha256: item.existing?.sha256 ?? null,
       desiredSha256: desiredHash,
-      createdDirectory: preservesDirectoryOwnership ? previous.createdDirectory : undefined,
-      createdDirectoryIdentity: preservesDirectoryOwnership
-        ? previous.createdDirectoryIdentity
-        : undefined,
       expectedConflictFingerprint: item.overwrite?.expectedConflictFingerprint,
     }
   }
@@ -643,8 +628,6 @@ export class AgentCodeConventionsService {
       document.materializations[key] = {
         path: operation.path,
         sha256: operation.desiredSha256,
-        createdDirectory: operation.createdDirectory ?? false,
-        createdDirectoryIdentity: operation.createdDirectoryIdentity,
       }
     }
   }
@@ -667,18 +650,7 @@ export class AgentCodeConventionsService {
       await this.pathSafety.cleanupJournaledTemporaryFile(
         journalTemporaryPath(item.target.skillFile, pending.operationId),
       )
-      const directory = await this.pathSafety.ensureTargetDirectory(item.target)
-      const existingOwnsDirectory = item.existing?.createdDirectory === true
-        && item.existing.createdDirectoryIdentity === directory.identity
-      const pendingOwnsDirectory = pending.createdDirectory === true
-        && pending.createdDirectoryIdentity === directory.identity
-      const ownsDirectory = directory.created || existingOwnsDirectory || pendingOwnsDirectory
-      pending.createdDirectory = ownsDirectory
-      pending.createdDirectoryIdentity = ownsDirectory ? directory.identity : undefined
-      // Directory ownership must be durable before SKILL.md publication. A
-      // crash after the atomic write can then adopt both the bytes and the
-      // correct leaf-directory ownership from the pending operation.
-      await writeAgentCodeConventionsState(this.stateFilePath, this.document)
+      await this.pathSafety.ensureTargetDirectory(item.target)
       const expectedVersion = item.inspection.kind === 'file'
         ? item.inspection.version
         : null
@@ -709,8 +681,6 @@ export class AgentCodeConventionsService {
       this.document.materializations[item.target.id] = {
         path: item.target.skillFile,
         sha256: desiredHash,
-        createdDirectory: ownsDirectory,
-        createdDirectoryIdentity: ownsDirectory ? directory.identity : undefined,
       }
       delete this.document.pendingOperations[item.target.id]
       return this.status(item.target, 'installed')
@@ -759,24 +729,12 @@ export class AgentCodeConventionsService {
         return baseStatus('conflict', 'A journaled removal quarantine could not be restored safely.')
       }
       if (recovery === 'completed') {
-        if (record.createdDirectory) {
-          await this.pathSafety.removeEmptyOwnedDirectory(
-            dirname(record.path),
-            record.createdDirectoryIdentity,
-          )
-        }
         delete this.document.materializations[key]
         delete this.document.pendingOperations[key]
         return baseStatus('not-installed')
       }
       const inspected = await this.pathSafety.inspectExactFile(record.path)
       if (inspected.kind === 'missing') {
-        if (record.createdDirectory) {
-          await this.pathSafety.removeEmptyOwnedDirectory(
-            dirname(record.path),
-            record.createdDirectoryIdentity,
-          )
-        }
         delete this.document.materializations[key]
         delete this.document.pendingOperations[key]
         return baseStatus('not-installed')
@@ -804,12 +762,6 @@ export class AgentCodeConventionsService {
           ...baseStatus('conflict', 'The file changed immediately before removal.'),
           conflictFingerprint: inspected.fingerprint,
         }
-      }
-      if (record.createdDirectory) {
-        await this.pathSafety.removeEmptyOwnedDirectory(
-          dirname(record.path),
-          record.createdDirectoryIdentity,
-        )
       }
       delete this.document.materializations[key]
       delete this.document.pendingOperations[key]

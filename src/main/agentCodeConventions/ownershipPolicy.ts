@@ -34,6 +34,24 @@ export class AgentCodeConventionsOwnershipPolicy {
         delete document.pendingOperations[key]
       }
     }
+    for (const target of targets.targets) {
+      if (document.materializations[target.id]) continue
+      const retiredPrefix = `${RETIRED_CONVENTIONS_TARGET_PREFIX}${target.id}:`
+      const returning = Object.entries(document.materializations).find(([key, record]) =>
+        key.startsWith(retiredPrefix) && resolve(record.path) === resolve(target.skillFile))
+      if (!returning) continue
+      const [retiredKey, record] = returning
+      // Provider roots can move A→B→A. The retired A record is still the exact
+      // ownership proof for the newly-current path; promote it before enabled
+      // reconciliation sees matching bytes as unmanaged or retired cleanup.
+      document.materializations[target.id] = record
+      delete document.materializations[retiredKey]
+      const pending = document.pendingOperations[retiredKey]
+      if (pending) {
+        document.pendingOperations[target.id] = { ...pending, targetId: target.id }
+        delete document.pendingOperations[retiredKey]
+      }
+    }
     for (const [key, pending] of Object.entries(document.pendingOperations)) {
       if (key.startsWith(RETIRED_CONVENTIONS_TARGET_PREFIX) || document.materializations[key]) {
         continue
@@ -48,8 +66,6 @@ export class AgentCodeConventionsOwnershipPolicy {
       document.materializations[retiredKey] = {
         path: pending.path,
         sha256: pending.desiredSha256,
-        createdDirectory: pending.createdDirectory ?? false,
-        createdDirectoryIdentity: pending.createdDirectoryIdentity,
       }
       document.pendingOperations[retiredKey] = { ...pending, targetId: retiredKey }
       delete document.pendingOperations[key]

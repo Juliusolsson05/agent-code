@@ -8,7 +8,7 @@ import {
   type AgentCodeConventionsDocument,
 } from '@shared/types/agentCodeConventions.js'
 import { renderAgentCodeConventionsSkill, sha256Text } from './renderSkill.js'
-import { journalTemporaryPath, SkillPathSafety } from './skillPathSafety.js'
+import { journalTemporaryPath } from './skillPathSafety.js'
 import type {
   AgentCodeConventionsTarget,
   ResolvedAgentCodeConventionsTargets,
@@ -217,8 +217,6 @@ describe('AgentCodeConventionsService', () => {
     const stateFilePath = join(root, 'state', 'conventions.json')
     const rendered = renderAgentCodeConventionsSkill('# Rules')
     await writeFileWithParents(currentTarget.skillFile, rendered)
-    const directoryIdentity = await new SkillPathSafety(root)
-      .currentDirectoryIdentity(currentTarget.skillDirectory)
     const document: AgentCodeConventionsDocument = {
       ...createEmptyAgentCodeConventionsDocument(),
       pendingOperations: {
@@ -229,8 +227,6 @@ describe('AgentCodeConventionsService', () => {
           kind: 'write',
           previousSha256: null,
           desiredSha256: sha256Text(rendered),
-          createdDirectory: true,
-          createdDirectoryIdentity: directoryIdentity ?? undefined,
         },
       },
     }
@@ -245,7 +241,7 @@ describe('AgentCodeConventionsService', () => {
 
     expect(await service.getSnapshot()).toMatchObject({ enabled: false, health: 'disabled' })
     await expect(stat(currentTarget.skillFile)).rejects.toMatchObject({ code: 'ENOENT' })
-    await expect(stat(currentTarget.skillDirectory)).rejects.toMatchObject({ code: 'ENOENT' })
+    expect((await stat(currentTarget.skillDirectory)).isDirectory()).toBe(true)
   })
 
   it('cleans only the operation-bound crash temp before retrying publication', async () => {
@@ -286,14 +282,13 @@ describe('AgentCodeConventionsService', () => {
     await expect(stat(tempPath)).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
-  it('retains created-directory ownership across a crash before publication', async () => {
+  it('treats the leaf directory as harmless residue across a crash before publication', async () => {
     const root = await temporaryDirectory()
     const currentTarget = target('agents-standard-personal-skills', join(root, '.agents', 'skills'), ['codex'])
     const stateFilePath = join(root, 'state', 'conventions.json')
     const markdown = '# Rules'
     const rendered = renderAgentCodeConventionsSkill(markdown)
-    const safety = new SkillPathSafety(root)
-    const directory = await safety.ensureTargetDirectory(currentTarget)
+    await mkdir(currentTarget.skillDirectory, { recursive: true })
     const document: AgentCodeConventionsDocument = {
       ...createEmptyAgentCodeConventionsDocument(),
       enabled: true,
@@ -306,8 +301,6 @@ describe('AgentCodeConventionsService', () => {
           kind: 'write',
           previousSha256: null,
           desiredSha256: sha256Text(rendered),
-          createdDirectory: true,
-          createdDirectoryIdentity: directory.identity,
         },
       },
     }
@@ -322,7 +315,8 @@ describe('AgentCodeConventionsService', () => {
     const disabled = await service.disable(0)
 
     expect(disabled).toMatchObject({ ok: true, snapshot: { health: 'disabled' } })
-    await expect(stat(currentTarget.skillDirectory)).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(stat(currentTarget.skillFile)).rejects.toMatchObject({ code: 'ENOENT' })
+    expect((await stat(currentTarget.skillDirectory)).isDirectory()).toBe(true)
   })
 
   it('repairs a missing owned copy during startup reconciliation', async () => {
@@ -416,12 +410,10 @@ describe('AgentCodeConventionsService', () => {
     expect(await readFile(newTarget.skillFile, 'utf8')).toBe(rendered)
   })
 
-  it('does not retain directory ownership after an owned leaf is user-recreated', async () => {
+  it('never removes the leaf directory after removing its generated file', async () => {
     const { targets, service } = await harness()
     const currentTarget = targets[0]!
     await service.save({ expectedRevision: 0, enabled: true, markdown: '# Rules' })
-    await rm(currentTarget.skillDirectory, { recursive: true })
-    await mkdir(currentTarget.skillDirectory)
 
     await service.disable(1)
 
@@ -509,7 +501,6 @@ describe('AgentCodeConventionsService', () => {
         arbitrary: {
           path: unrelated,
           sha256: sha256Text('do not delete'),
-          createdDirectory: false,
         },
       },
     }
@@ -542,7 +533,6 @@ describe('AgentCodeConventionsService', () => {
         [currentTarget.id]: {
           path: unrelated,
           sha256: sha256Text(contents),
-          createdDirectory: false,
         },
       },
     }

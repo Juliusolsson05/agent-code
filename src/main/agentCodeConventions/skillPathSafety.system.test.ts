@@ -37,14 +37,13 @@ async function fixture(): Promise<{
 }
 
 describe('SkillPathSafety', () => {
-  it('owns directory creation, bounded inspection, and version-checked removal', async () => {
+  it('owns bounded path creation, inspection, and version-checked file removal', async () => {
     const { target, safety } = await fixture()
     await expect(safety.inspectTarget(target)).resolves.toMatchObject({
       kind: 'missing',
       directoryExists: false,
     })
-    const directory = await safety.ensureTargetDirectory(target)
-    expect(directory.created).toBe(true)
+    await safety.ensureTargetDirectory(target)
     await writeFile(target.skillFile, 'owned bytes')
     const inspected = await safety.inspectTarget(target)
     if (inspected.kind !== 'file') throw new Error('expected a regular file inspection')
@@ -55,8 +54,10 @@ describe('SkillPathSafety', () => {
       sha256Text('owned bytes'),
       journalTemporaryPath(target.skillFile, 'delete-owned-bytes'),
     )).resolves.toBe('deleted')
-    await safety.removeEmptyOwnedDirectory(target.skillDirectory, directory.identity)
-    await expect(stat(target.skillDirectory)).rejects.toMatchObject({ code: 'ENOENT' })
+    // The leaf directory is intentionally retained. Portable filesystem APIs
+    // cannot atomically persist who won a fixed-name mkdir race, so treating
+    // an empty directory as owned would make crash recovery deletion-unsafe.
+    expect((await stat(target.skillDirectory)).isDirectory()).toBe(true)
   })
 
   it('cleans only the exact operation-derived temporary sibling', async () => {

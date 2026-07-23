@@ -51,7 +51,7 @@ architecture below:
 - [x] four-agent Claude/Codex review hardening: isolated filesystem safety,
   create-only publication, journal-only cleanup, operation-bound crash temps,
   external-root migration, private state permissions, and serialized snapshots;
-- [x] `npm run check` (contract, composite typecheck, 222 test files / 1,251
+- [x] `npm run check` (contract, composite typecheck, 222 test files / 1,252
   tests, production build, and packaged-entry verification).
 
 The live-provider acceptance matrix and Settings screenshots remain deliberately
@@ -284,8 +284,6 @@ export type AgentCodeConventionsDocument = {
     {
       path: string
       sha256: string
-      createdDirectory: boolean
-      createdDirectoryIdentity?: string
     }
   >
   pendingOperations: Record<
@@ -297,8 +295,6 @@ export type AgentCodeConventionsDocument = {
       kind: 'write' | 'delete'
       previousSha256: string | null
       desiredSha256: string | null
-      createdDirectory?: boolean
-      createdDirectoryIdentity?: string
       expectedConflictFingerprint?: string
     }
   >
@@ -311,11 +307,12 @@ Rules:
   mutation. IPC mutations include `expectedRevision`; stale saves return a typed
   revision conflict rather than replacing newer text.
 - `materializations` records only successful Agent Code writes. It is ownership
-  evidence, not a target catalog; targets come from the provider registry.
-  `createdDirectory` is true only when this operation created the leaf skill
-  directory, and its device/inode identity prevents that ownership bit from
-  transferring to a user-recreated directory. Uninstall never removes a
-  pre-existing or replaced directory.
+  evidence for the exact generated file, not a target catalog; targets come
+  from the provider registry. Agent Code never claims or removes the leaf skill
+  directory. Fixed-name directory creation and durable ownership recording are
+  not one portable atomic filesystem operation, so retaining an empty leaf is
+  the only policy that cannot transfer deletion authority across a crash or
+  concurrent user mkdir.
 - `pendingOperations` is a write-ahead ownership journal. Persist an operation
   before touching a provider file, retain the previous materialization until
   publication succeeds, and remove the pending record only after the resulting
@@ -387,10 +384,11 @@ For each deduplicated target:
    `O_NOFOLLOW` where available. Capture an opaque conflict fingerprint/version
    for every unmanaged file and revalidate it under the mutation lock directly
    before an authorized replacement.
-3. If neither the skill directory nor `SKILL.md` exists, it is writable and the
-   service records whether it creates the leaf directory.
-4. If the directory exists and is empty, it is writable but remains
-   user-created and is never removed by Agent Code.
+3. If neither the skill directory nor `SKILL.md` exists, it is writable. The
+   service may create the leaf directory but never treats that fact as removal
+   authority.
+4. If the directory exists and is empty, it is writable and is likewise never
+   removed by Agent Code.
 5. If `SKILL.md` matches the exact hash in the current materialization record,
    it is Agent Code-owned and writable/removable.
 6. If `SKILL.md` equals the desired bytes and matches a persisted pending write
@@ -438,9 +436,8 @@ and are repaired by retry/reconciliation rather than a fragile rollback.
    the previous ownership records intact, and pending writes for every target.
 6. Materialize targets independently, revalidating fingerprints, and collect
    results.
-7. Persist successful materialization hashes/directory ownership and clear
-   completed pending writes without incrementing the user
-   revision again.
+7. Persist successful materialization hashes and clear completed pending writes
+   without incrementing the user revision again.
 8. Return `active`, `degraded`, or `conflict` with per-target status.
 
 Persisting desired state before provider copies makes recovery deterministic:
@@ -455,8 +452,8 @@ after a crash, boot reconciliation knows the intended state and can finish it.
    operation-derived quarantine and unlink the capture only if its regular-file
    hash still matches the record. Restore an unverified replacement without
    clobbering. A missing file finishes a journaled delete.
-5. Remove the leaf skill directory with non-recursive `rmdir` only if it is
-   empty **and** its materialization says Agent Code created it.
+5. Retain the leaf skill directory even when it is empty; only the generated
+   `SKILL.md` has durable ownership proof.
 6. Persist completed removals; preserve externally modified or unknown files
    and their ownership tombstones and return conflict status.
 7. Retain the Markdown.
@@ -866,10 +863,11 @@ class AgentCodeConventionsService {
   conflict detection, fingerprint-bound overwrite approval, and per-target
   status.
 - [ ] Implement preflight-before-mutation collision blocking, desired-state plus
-  pending-write persistence, successful-materialization hash/directory ownership
-  persistence, and degraded post-preflight I/O failure.
-- [ ] Implement safe disable using exact hash proof, `unlink`, and non-recursive
-  empty-directory removal.
+  pending-write persistence, successful-materialization hash persistence, and
+  degraded post-preflight I/O failure.
+- [ ] Implement safe disable using exact hash proof and `unlink`, while always
+  retaining the leaf directory because its creation cannot be journaled
+  atomically with portable filesystem APIs.
 - [ ] Implement clear as a two-phase disable-first flow. Retain the body while a
   modified copy remains; clear only after safe removal or fingerprint-bound
   explicit abandonment that never deletes the external file.
@@ -886,8 +884,8 @@ class AgentCodeConventionsService {
   missing target repair; pending delete recovery; permission failures;
   symlink/FIFO rejection; one-target partial failure; newly registered and
   retired/moved targets; recovery-required state; and concurrent serialization.
-- [ ] Assert every delete in the implementation is exact-file `unlink` or empty
-  `rmdir`. No test or production path may call recursive removal on a provider
+- [ ] Assert every delete in the implementation is an exact-file `unlink`. No
+  test or production path may call `rmdir` or recursive removal on a provider
   target.
 
 **Verification:**

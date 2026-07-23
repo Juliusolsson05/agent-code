@@ -1,5 +1,5 @@
 import type { Stats } from 'fs'
-import { link, lstat, mkdir, readdir, realpath, rename, rmdir, unlink } from 'fs/promises'
+import { link, lstat, mkdir, readdir, realpath, rename, unlink } from 'fs/promises'
 import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from 'path'
 
 import {
@@ -29,13 +29,6 @@ export type FileInspection =
 
 export type OwnedUnlinkResult = 'deleted' | 'missing' | 'changed'
 export type DeleteQuarantineRecovery = 'none' | 'completed' | 'restored' | 'conflict'
-
-function directoryIdentity(stat: Stats): string {
-  // Directory mtime/ctime change when the generated file or temp sibling is
-  // published. Device+inode instead identifies replacement of the directory
-  // itself, which is the ownership question this token answers.
-  return `${stat.dev}:${stat.ino}`
-}
 
 export function journalTemporaryPath(filePath: string, operationId: string): string {
   // The operation id is hashed rather than interpolated. State is parsed from
@@ -104,15 +97,15 @@ export class SkillPathSafety {
     return this.inspectRegularFile(path, file)
   }
 
-  async ensureTargetDirectory(target: AgentCodeConventionsTarget): Promise<{
-    created: boolean
-    identity: string
-  }> {
+  async ensureTargetDirectory(target: AgentCodeConventionsTarget): Promise<void> {
     await this.ensureDirectoryTreeNoSymlinks(target.skillsDirectory)
-    let created = false
+    // Deliberately do not return or persist a "created by us" bit. Fixed-name
+    // mkdir and app-state persistence cannot be one portable atomic operation;
+    // a crash or competing user mkdir would make such a bit ambiguous. The
+    // service therefore owns only hash-proven SKILL.md bytes and always leaves
+    // this harmless leaf directory behind when those bytes are removed.
     try {
       await mkdir(target.skillDirectory, { mode: 0o700 })
-      created = true
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
     }
@@ -131,18 +124,6 @@ export class SkillPathSafety {
     if (directory.isSymbolicLink() || !directory.isDirectory()) {
       throw new Error('The skill path is not a regular directory')
     }
-    return { created, identity: directoryIdentity(directory) }
-  }
-
-  async currentDirectoryIdentity(path: string): Promise<string | null> {
-    await this.assertNoSymlinkComponents(dirname(path))
-    const stat = await lstat(path).catch(error => {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
-      throw error
-    })
-    if (!stat) return null
-    if (stat.isSymbolicLink() || !stat.isDirectory()) return null
-    return directoryIdentity(stat)
   }
 
   async cleanupJournaledTemporaryFile(path: string): Promise<void> {
@@ -219,26 +200,6 @@ export class SkillPathSafety {
     }
     await unlink(quarantinePath)
     return 'deleted'
-  }
-
-  async removeEmptyOwnedDirectory(path: string, expectedIdentity?: string): Promise<boolean> {
-    if (!expectedIdentity) return false
-    await this.assertNoSymlinkComponents(dirname(path))
-    const current = await lstat(path).catch(error => {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
-      throw error
-    })
-    if (!current) return true
-    if (current.isSymbolicLink() || !current.isDirectory()
-      || directoryIdentity(current) !== expectedIdentity) return false
-    try {
-      await rmdir(path)
-      return true
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true
-      if ((error as NodeJS.ErrnoException).code === 'ENOTEMPTY') return false
-      throw error
-    }
   }
 
   async assertNoSymlinkComponents(path: string): Promise<void> {

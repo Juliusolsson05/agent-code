@@ -116,8 +116,6 @@ export type AgentCodeConventionsTextCounts = {
 export type AgentCodeConventionsMaterialization = {
   path: string
   sha256: string
-  createdDirectory: boolean
-  createdDirectoryIdentity?: string
 }
 
 export type AgentCodeConventionsPendingOperation = {
@@ -127,13 +125,6 @@ export type AgentCodeConventionsPendingOperation = {
   kind: 'write' | 'delete'
   previousSha256: string | null
   desiredSha256: string | null
-  /**
-   * Recorded after the exclusive leaf-directory mkdir result and persisted
-   * before publishing SKILL.md. This lets crash recovery retain precise
-   * directory ownership without guessing from whether the directory exists.
-   */
-  createdDirectory?: boolean
-  createdDirectoryIdentity?: string
   /**
    * An overwrite prompt approves one observed collision, not a pathname for
    * all time. Persisting the fingerprint keeps crash recovery from broadening
