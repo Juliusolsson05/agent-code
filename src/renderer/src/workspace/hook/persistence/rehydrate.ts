@@ -697,9 +697,26 @@ export async function rehydrateWorkspace(
           // cause the session to degrade on the NEXT reload.
           // tmuxName is replaced with whatever main reported
           // (recovered name when alive, fresh name when respawned).
+          const recoveredBuiltInMcpDomains =
+            isAgentProviderKind(kind)
+              ? resolveSessionBuiltInMcpDomains({
+                  provider: kind,
+                  // WHY successful recovery uses main's effective scope:
+                  // an adopted provider keeps the MCP token it launched with.
+                  // Persisting today's requested defaults instead would make
+                  // renderer state claim tools are on/off without changing the
+                  // already-running model process. Older responses fall back
+                  // to the request so recovery remains tolerant at this seam.
+                  sessionDomains:
+                    recovery.snapshot.builtInMcpDomains ?? builtInMcpDomains,
+                  defaultDomains: [],
+                })
+              : undefined
           const recoveredMeta: SessionMeta = {
             ...restoredMeta,
-            ...(builtInMcpDomains !== undefined ? { builtInMcpDomains } : {}),
+            ...(recoveredBuiltInMcpDomains !== undefined
+              ? { builtInMcpDomains: recoveredBuiltInMcpDomains }
+              : {}),
             ...(recovery.tmuxName ? { tmuxName: recovery.tmuxName } : {}),
           }
           recoveryOutcomes.set(newId, {

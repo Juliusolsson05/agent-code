@@ -34,6 +34,10 @@ export type SessionBackendSnapshot = {
   cwd: string
   lifecycle: 'spawning' | 'live'
   input: SessionInputReadiness
+  /** Main's effective launch-time MCP scope for an agent backend. This is an
+   *  observed backend fact, not the renderer's requested policy. It is absent
+   *  for terminal sessions, which never receive built-in MCP configuration. */
+  builtInMcpDomains?: BuiltInMcpDomain[]
 }
 
 export type SessionRecoverOptions = {

@@ -1986,6 +1986,18 @@ export class SessionManager extends EventEmitter {
         revision: this.inputReadinessRevision,
         reason: 'starting',
       },
+      // WHY the snapshot carries EFFECTIVE domains instead of spawn options:
+      // BuiltInMcpHttpHost applies the final provider and environment policy
+      // before minting a token. When recovery adopts a still-live backend, the
+      // renderer's requested domains cannot change that already-launched
+      // process; reporting its token scope is the only way to avoid persisting
+      // a UI policy that disagrees with the tools the model actually has.
+      ...(isAgentProviderKind(kind)
+        ? {
+            builtInMcpDomains:
+              this.builtInMcpHost?.sessionDomains?.(sessionId) ?? [],
+          }
+        : {}),
     }
   }
 

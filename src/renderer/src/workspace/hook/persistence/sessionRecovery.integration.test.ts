@@ -101,6 +101,30 @@ function makePersisted(): PersistedWorkspace {
   }
 }
 
+const TEST_MCP_SERVER_CONFIG = {
+  name: 'agent_code',
+  url: 'http://127.0.0.1:43210/mcp',
+  headers: {},
+  bearerToken: 'scoped-test-token',
+}
+
+function makeMcpHost() {
+  let registered = false
+  return {
+    registerSession: vi.fn(() => {
+      registered = true
+      return [TEST_MCP_SERVER_CONFIG]
+    }),
+    revokeSession: vi.fn(() => {
+      registered = false
+    }),
+    // Keep the fake's reported authority coupled to whether it returned a
+    // provider configuration. This models the real host invariant closely
+    // enough that recovery cannot claim a token scope no process received.
+    sessionDomains: vi.fn(() => registered ? ['workflows'] : []),
+  }
+}
+
 function makeRendererHarness() {
   let state = {
     tabs: [],
@@ -163,9 +187,8 @@ describe('cross-layer session restart reconciliation', () => {
     createSession
       .mockImplementationOnce(() => firstProvider)
       .mockImplementationOnce(() => replacementProvider)
-    const registerSession = vi.fn(() => [])
-    const revokeSession = vi.fn()
-    const manager = new SessionManager(null, { registerSession, revokeSession } as never)
+    const mcpHost = makeMcpHost()
+    const manager = new SessionManager(null, mcpHost as never)
     const persisted = makePersisted()
     const recoveryApi = {
       recoverSession: manager.recover.bind(manager),
@@ -197,8 +220,8 @@ describe('cross-layer session restart reconciliation', () => {
     expect(firstResult).toEqual({ restoredSessions: 1, expectedSessions: 1, complete: true })
     expect(reloadResult).toEqual({ restoredSessions: 1, expectedSessions: 1, complete: true })
     expect(createSession).toHaveBeenCalledTimes(1)
-    expect(registerSession).toHaveBeenCalledTimes(1)
-    expect(registerSession).toHaveBeenCalledWith({
+    expect(mcpHost.registerSession).toHaveBeenCalledTimes(1)
+    expect(mcpHost.registerSession).toHaveBeenCalledWith({
       sessionId: 'stable-session',
       cwd: '/tmp/project',
       providerKind: 'codex',
@@ -208,6 +231,7 @@ describe('cross-layer session restart reconciliation', () => {
       cwd: '/tmp/project',
       resumeSessionId: 'provider-history',
       shellSessionId: 'stable-session',
+      builtInMcpServers: [TEST_MCP_SERVER_CONFIG],
     })
     expect(reloadedRenderer.state()).toMatchObject({
       activeTabId: 'tab-1',
@@ -243,8 +267,8 @@ describe('cross-layer session restart reconciliation', () => {
     )
 
     expect(createSession).toHaveBeenCalledTimes(2)
-    expect(registerSession).toHaveBeenCalledTimes(2)
-    expect(revokeSession).toHaveBeenCalledTimes(1)
+    expect(mcpHost.registerSession).toHaveBeenCalledTimes(2)
+    expect(mcpHost.revokeSession).toHaveBeenCalledTimes(1)
     expect(manager.list()).toEqual(['stable-session'])
     expect(restartedRenderer.runtimes()['stable-session']).toMatchObject({
       inputReady: false,
@@ -263,9 +287,8 @@ describe('cross-layer session restart reconciliation', () => {
         startError: new Error('provider unavailable'),
       }))
       .mockImplementationOnce(() => new FakeAgentSession({ ready: true }))
-    const registerSession = vi.fn(() => [])
-    const revokeSession = vi.fn()
-    const manager = new SessionManager(null, { registerSession, revokeSession } as never)
+    const mcpHost = makeMcpHost()
+    const manager = new SessionManager(null, mcpHost as never)
     const persisted = makePersisted()
     const recoveryApi = {
       recoverSession: manager.recover.bind(manager),
@@ -311,8 +334,14 @@ describe('cross-layer session restart reconciliation', () => {
 
     expect(retried).toEqual({ restoredSessions: 1, expectedSessions: 1, complete: true })
     expect(createSession).toHaveBeenCalledTimes(2)
-    expect(registerSession).toHaveBeenCalledTimes(2)
-    expect(revokeSession).toHaveBeenCalledTimes(1)
+    expect(mcpHost.registerSession).toHaveBeenCalledTimes(2)
+    expect(mcpHost.revokeSession).toHaveBeenCalledTimes(1)
+    expect(createSession.mock.calls[1]?.[0]).toMatchObject({
+      builtInMcpServers: [TEST_MCP_SERVER_CONFIG],
+    })
+    expect(retryRenderer.state().sessions['stable-session']?.builtInMcpDomains).toEqual([
+      'workflows',
+    ])
     expect(retryRenderer.runtimes()['stable-session']).toMatchObject({
       processStatus: 'started',
       processError: null,
@@ -329,9 +358,8 @@ describe('cross-layer session restart reconciliation', () => {
     const startGate = deferred<void>()
     const blockedProvider = new FakeAgentSession({ startGate: startGate.promise })
     createSession.mockImplementationOnce(() => blockedProvider)
-    const registerSession = vi.fn(() => [])
-    const revokeSession = vi.fn()
-    const manager = new SessionManager(null, { registerSession, revokeSession } as never)
+    const mcpHost = makeMcpHost()
+    const manager = new SessionManager(null, mcpHost as never)
     const persisted = makePersisted()
     const renderer = makeRendererHarness()
     const recoveryApi = {
@@ -359,7 +387,7 @@ describe('cross-layer session restart reconciliation', () => {
     })
 
     expect(blockedProvider.stop).toHaveBeenCalledTimes(2)
-    expect(revokeSession).toHaveBeenCalledTimes(1)
+    expect(mcpHost.revokeSession).toHaveBeenCalledTimes(1)
     expect(manager.getBackendSnapshot('stable-session')).toBeNull()
     expect(manager.list()).toEqual([])
     expect(renderer.state().tabs[0].root).toEqual({

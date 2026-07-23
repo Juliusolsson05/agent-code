@@ -21,7 +21,6 @@ afterEach(() => {
 
 describe('switchAgentProvider', () => {
   it('wakes a durable source pane before main can request native compaction', async () => {
-    const ensureSessionLive = vi.fn().mockResolvedValue('source-pane')
     const switchProvider = vi.fn().mockResolvedValue({
       targetKind: 'codex',
       targetProviderSessionId: 'target-provider-session',
@@ -52,7 +51,14 @@ describe('switchAgentProvider', () => {
         },
       },
       latestRuntimesRef: { current: {} },
+      defaultBuiltInMcpDomainsRef: { current: ['workflows'] },
     } as unknown as WorkspaceRefs
+    const ensureSessionLive = vi.fn(async () => {
+      // Waking under Claude filters the Codex-only default out of canonical
+      // source metadata. The original undefined provenance must nevertheless
+      // let the target Codex session seed that default.
+      return { sessionId: 'source-pane', builtInMcpDomains: [] }
+    })
     const sessionActions = {
       ensureSessionLive,
       replaceSession,
@@ -91,10 +97,108 @@ describe('switchAgentProvider', () => {
     expect(replaceSession).toHaveBeenCalledWith('/project', {
       kind: 'codex',
       resumeSessionId: 'target-provider-session',
-      builtInMcpDomains: undefined,
+      builtInMcpDomains: ['workflows'],
       targetSessionId: 'source-pane',
     })
     expect(unsubscribe).toHaveBeenCalledOnce()
+  })
+
+  it('filters explicit source domains before a transcript-less provider switch', async () => {
+    const replaceSession = vi.fn().mockResolvedValue('target-pane')
+    const ensureSessionLive = vi.fn()
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: {},
+    })
+    const refs = {
+      stateRef: {
+        current: {
+          sessions: {
+            'source-pane': {
+              cwd: '/project',
+              kind: 'claude',
+              // No providerSessionId: this takes the empty-pane branch.
+              builtInMcpDomains: ['workflows'],
+            },
+          },
+        },
+      },
+      latestRuntimesRef: { current: {} },
+      defaultBuiltInMcpDomainsRef: { current: ['workflows'] },
+    } as unknown as WorkspaceRefs
+
+    await expect(switchAgentProvider({
+      sessionId: 'source-pane',
+      targetKind: 'codex',
+      refs,
+      setRuntimes: vi.fn() as WorkspaceSetRuntimes,
+      sessionActions: {
+        ensureSessionLive,
+        replaceSession,
+      } as unknown as SessionActions,
+    })).resolves.toMatchObject({ status: 'switched' })
+
+    expect(ensureSessionLive).not.toHaveBeenCalled()
+    expect(replaceSession).toHaveBeenCalledWith('/project', {
+      kind: 'codex',
+      builtInMcpDomains: [],
+      targetSessionId: 'source-pane',
+    })
+  })
+
+  it('does not resurrect an explicit unsupported domain after waking the source', async () => {
+    const switchProvider = vi.fn().mockResolvedValue({
+      targetKind: 'codex',
+      targetProviderSessionId: 'target-provider-session',
+      targetFilePath: '/project/target.jsonl',
+      compactedBeforeSwitch: false,
+      truncatedBeforeSwitch: false,
+    })
+    const replaceSession = vi.fn().mockResolvedValue('target-pane')
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: {
+        onProviderSwitchProgress: vi.fn(() => vi.fn()),
+        switchProvider,
+      },
+    })
+    const refs = {
+      stateRef: {
+        current: {
+          sessions: {
+            'source-pane': {
+              cwd: '/project',
+              kind: 'claude',
+              providerSessionId: 'source-provider-session',
+              builtInMcpDomains: ['workflows'],
+            },
+          },
+        },
+      },
+      latestRuntimesRef: { current: {} },
+      defaultBuiltInMcpDomainsRef: { current: ['workflows'] },
+    } as unknown as WorkspaceRefs
+    const ensureSessionLive = vi.fn(async () => {
+      return { sessionId: 'source-pane', builtInMcpDomains: [] }
+    })
+
+    await expect(switchAgentProvider({
+      sessionId: 'source-pane',
+      targetKind: 'codex',
+      refs,
+      setRuntimes: vi.fn() as WorkspaceSetRuntimes,
+      sessionActions: {
+        ensureSessionLive,
+        replaceSession,
+      } as unknown as SessionActions,
+    })).resolves.toMatchObject({ status: 'switched' })
+
+    expect(replaceSession).toHaveBeenCalledWith('/project', {
+      kind: 'codex',
+      resumeSessionId: 'target-provider-session',
+      builtInMcpDomains: [],
+      targetSessionId: 'source-pane',
+    })
   })
 
   it('does not enter provider-switch IPC when the dead source cannot be recovered', async () => {
@@ -120,6 +224,7 @@ describe('switchAgentProvider', () => {
         },
       },
       latestRuntimesRef: { current: {} },
+      defaultBuiltInMcpDomainsRef: { current: [] },
     } as unknown as WorkspaceRefs
 
     const result = await switchAgentProvider({

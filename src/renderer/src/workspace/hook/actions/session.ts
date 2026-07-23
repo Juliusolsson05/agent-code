@@ -78,7 +78,7 @@ export type SessionActions = {
       builtInMcpDomains?: BuiltInMcpDomain[]
     },
   ) => Promise<SessionId>
-  ensureSessionLive: (sessionId: SessionId) => Promise<SessionId>
+  ensureSessionLive: (sessionId: SessionId) => Promise<SessionWakeResult>
   killSession: (sessionId: SessionId) => Promise<void>
   replaceSession: (
     cwd: string,
@@ -91,6 +91,11 @@ export type SessionActions = {
   ) => Promise<SessionId | undefined>
   reloadAgentSessions: (dangerousMode?: boolean) => Promise<void>
   softReloadAgentView: (sessionId?: SessionId) => Promise<SessionId | null>
+}
+
+export type SessionWakeResult = {
+  sessionId: SessionId
+  builtInMcpDomains: BuiltInMcpDomain[] | undefined
 }
 
 export async function killSessionBackendIfOwned(
@@ -226,7 +231,7 @@ export function useSessionActions(
   setRuntimes: WorkspaceSetRuntimes,
   refs: WorkspaceRefs,
 ): SessionActions {
-  const wakeInFlightRef = useRef(new Map<SessionId, Promise<SessionId>>())
+  const wakeInFlightRef = useRef(new Map<SessionId, Promise<SessionWakeResult>>())
 
   // spawn — wrapped so callers don't have to touch window.api
   // directly. Updates state.sessions synchronously after main
@@ -415,11 +420,11 @@ export function useSessionActions(
   )
 
   const ensureSessionLive = useCallback(
-    async (sessionId: SessionId): Promise<SessionId> => {
+    async (sessionId: SessionId): Promise<SessionWakeResult> => {
       const inFlight = wakeInFlightRef.current.get(sessionId)
       if (inFlight) return await inFlight
 
-      const wake = (async (): Promise<SessionId> => {
+      const wake = (async (): Promise<SessionWakeResult> => {
         const snapshot = refs.stateRef.current
         const meta = snapshot.sessions[sessionId]
         if (!meta) {
@@ -660,9 +665,25 @@ export function useSessionActions(
           throw readyError
         }
 
+        const recoveredBuiltInMcpDomains =
+          isAgentProviderKind(kind)
+            ? resolveSessionBuiltInMcpDomains({
+                provider: kind,
+                // WHY the backend snapshot wins after successful recovery:
+                // `adopted` means main kept an already-running provider whose
+                // launch-time MCP token cannot be changed by this renderer
+                // request. Falling back preserves compatibility with an older
+                // or test recovery response that predates this observed fact.
+                sessionDomains:
+                  recoverySnapshot?.builtInMcpDomains ?? builtInMcpDomains,
+                defaultDomains: [],
+              })
+            : undefined
         const recoveredMeta: SessionMeta = {
           ...restoredMeta,
-          ...(builtInMcpDomains !== undefined ? { builtInMcpDomains } : {}),
+          ...(recoveredBuiltInMcpDomains !== undefined
+            ? { builtInMcpDomains: recoveredBuiltInMcpDomains }
+            : {}),
           ...(recoveredTmuxName ? { tmuxName: recoveredTmuxName } : {}),
         }
         setState(prev => {
@@ -695,7 +716,16 @@ export function useSessionActions(
           })
         }
 
-        return sessionId
+        // WHY the authoritative scope travels in the return value instead of
+        // requiring callers to re-read stateRef: Zustand updates the store
+        // synchronously, but React may not refresh render-owned refs before an
+        // awaiting command continues. Provider switching is one such command;
+        // returning the recovery fact closes that batching window without
+        // making imperative callers depend on a render having happened.
+        return {
+          sessionId,
+          builtInMcpDomains: recoveredBuiltInMcpDomains,
+        }
       })()
 
       wakeInFlightRef.current.set(sessionId, wake)
