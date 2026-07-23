@@ -63,8 +63,8 @@ export function ColorFlagPickerModal({
                 onClick={() => choose(flag.id)}
                 className={`h-8 w-8 rounded-full transition-transform hover:scale-110 focus:outline-none ${
                   active
-                    ? 'ring-2 ring-offset-2 ring-offset-surface ring-ring'
-                    : 'focus-visible:ring-2 focus-visible:ring-ring'
+                    ? 'ring-2 ring-offset-2 ring-offset-surface ring-focus-ring'
+                    : 'focus-visible:ring-2 focus-visible:ring-focus-ring'
                 }`}
                 style={{ backgroundColor: flag.color }}
               />

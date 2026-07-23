@@ -263,7 +263,7 @@ export type Settings = {
    *  savedThemes/savedPromptTemplates — it rides the one persisted, coerced,
    *  phone-mirrored settings blob rather than inventing another store. Absent
    *  key = no flag. */
-  dispatchColorFlags: Record<string, ColorFlagId>
+  dispatchColorFlags: Partial<Record<string, ColorFlagId>>
   contrast: boolean
   accent: AccentId
   /** Raw JSON string for the Custom Appearance mode. It is stored as raw

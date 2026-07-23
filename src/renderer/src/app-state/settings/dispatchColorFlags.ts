@@ -17,18 +17,14 @@
 // in light and dark — a theme token would drift the hue per theme and break the
 // "always red" mental model. They are chosen to read on both surfaces.
 
-export type ColorFlag = {
-  /** Stable id persisted per session. Never change an existing id. */
-  id: string
-  /** Human label shown in the picker. */
-  label: string
-  /** The strip color painted on the Dispatch row's right edge, and the swatch
-   *  fill in the picker. */
-  color: string
-}
-
 // Ordered — this is the swatch order in the picker.
-export const DISPATCH_COLOR_FLAGS: readonly ColorFlag[] = [
+//
+// `as const` with NO explicit element-type annotation: annotating the array as
+// `readonly ColorFlag[]` (with `id: string`) would widen every `id` back to
+// `string` and collapse `ColorFlagId` to `string`, throwing away the literal
+// union that gives compile-time protection at every call site. The `ColorFlag`
+// shape is DERIVED from the const below instead, so the two can never drift.
+export const DISPATCH_COLOR_FLAGS = [
   { id: 'red', label: 'Red', color: '#ef4444' },
   { id: 'orange', label: 'Orange', color: '#f97316' },
   { id: 'yellow', label: 'Yellow', color: '#eab308' },
@@ -37,9 +33,16 @@ export const DISPATCH_COLOR_FLAGS: readonly ColorFlag[] = [
   { id: 'purple', label: 'Purple', color: '#a855f7' },
 ] as const
 
-export type ColorFlagId = (typeof DISPATCH_COLOR_FLAGS)[number]['id']
+/** A palette entry. `id` is the stable value persisted per session — never
+ *  change an existing id. `color` is the strip fill (Dispatch row + swatch). */
+export type ColorFlag = (typeof DISPATCH_COLOR_FLAGS)[number]
 
-const BY_ID = new Map(DISPATCH_COLOR_FLAGS.map(flag => [flag.id, flag]))
+/** The narrow literal union `'red' | 'orange' | …`, not `string`. */
+export type ColorFlagId = ColorFlag['id']
+
+// Keyed by `string` (not `ColorFlagId`) on purpose: the lookups below take
+// arbitrary/persisted strings and use the Map itself as the validity check.
+const BY_ID = new Map<string, ColorFlag>(DISPATCH_COLOR_FLAGS.map(flag => [flag.id, flag]))
 
 export function isColorFlagId(value: unknown): value is ColorFlagId {
   return typeof value === 'string' && BY_ID.has(value)
@@ -55,9 +58,12 @@ export function colorFlagById(id: string | undefined): ColorFlag | undefined {
  * blob degrades to "no flag" rather than throwing, matching how the rest of
  * `coerceSettings` treats unknown persisted data.
  */
-export function coerceDispatchColorFlags(value: unknown): Record<string, ColorFlagId> {
-  if (!value || typeof value !== 'object') return {}
-  const out: Record<string, ColorFlagId> = {}
+export function coerceDispatchColorFlags(value: unknown): Partial<Record<string, ColorFlagId>> {
+  // Reject non-objects AND arrays (a persisted array would otherwise be walked
+  // into {"0": …} numeric-string keys) — mirrors the sibling
+  // coerceCommandVisibilityOverrides guard.
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  const out: Partial<Record<string, ColorFlagId>> = {}
   for (const [sessionId, flagId] of Object.entries(value as Record<string, unknown>)) {
     if (isColorFlagId(flagId)) out[sessionId] = flagId
   }
