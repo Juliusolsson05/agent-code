@@ -24,6 +24,7 @@ describe('built-in MCP default settings', () => {
       'default-orchestration-mcp',
       'default-ai-workspace-mcp',
       'default-agent-transcripts-mcp',
+      'default-agent-management-mcp',
       'default-workflow-mcp',
     ]))
     expect(ids).not.toContain('default-ping-mcp')
@@ -62,5 +63,22 @@ describe('built-in MCP default settings', () => {
     const setting = defaultMcpToggle('default-workflow-mcp')
     expect(setting.description).toContain('Codex only')
     expect(setting.description).toContain('Claude uses its native workflow feature')
+  })
+
+  it('toggles the Agent Management default without disturbing sibling domains', async () => {
+    const setting = defaultMcpToggle('default-agent-management-mcp')
+    const onChange = vi.fn()
+    const context = {
+      settings: {
+        ...DEFAULT_SETTINGS,
+        defaultBuiltInMcpDomains: ['orchestration' as const],
+      },
+      onChange,
+    } as unknown as SettingActionContext
+
+    await setting.control.onToggle(context, true)
+    expect(onChange).toHaveBeenCalledWith({
+      defaultBuiltInMcpDomains: ['orchestration', 'agent_management'],
+    })
   })
 })

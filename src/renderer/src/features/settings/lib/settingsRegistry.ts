@@ -503,6 +503,19 @@ export function getSettingsRegistry(): SettingDefinition[] {
       },
     },
     {
+      id: 'default-agent-management-mcp',
+      category: 'agents',
+      title: 'Agent Management MCP for New Agents',
+      description:
+        'Start new Claude and Codex agents with project-wide agent inventory, transcript reading, prompting, and explicitly authorized close tools. Existing sessions remain unchanged and can override this default independently.',
+      keywords: ['mcp', 'agent management', 'agents', 'project', 'cleanup', 'default', 'new agents', 'claude', 'codex'],
+      control: {
+        type: 'toggle',
+        getValue: settings => settings.defaultBuiltInMcpDomains.includes('agent_management'),
+        onToggle: (ctx, value) => updateDefaultBuiltInMcpDomain(ctx, 'agent_management', value),
+      },
+    },
+    {
       id: 'default-workflow-mcp',
       category: 'agents',
       title: 'Workflow MCP for New Codex Agents',

@@ -9,6 +9,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { createBuiltInMcpServer } from '@mcp/runtime/createBuiltInMcpServer.js'
 import type { AiWorkspaceRegistry } from '@main/aiWorkspace/AiWorkspaceRegistry.js'
 import type { OrchestrationBridge } from '@main/orchestration/OrchestrationBridge.js'
+import type { AgentManagementBridge } from '@main/agentManagement/AgentManagementBridge.js'
 import type { SessionManager } from '@main/sessionManager.js'
 import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import type { WorkflowBridge } from '@main/workflows/WorkflowBridge.js'
@@ -35,6 +36,7 @@ type BuiltInMcpServerFactory = (
 
 export type BuiltInMcpDependencies = {
   orchestrationBridge?: OrchestrationBridge
+  agentManagementBridge?: AgentManagementBridge
   aiWorkspaceRegistry?: AiWorkspaceRegistry
   openAiWorkspace?: (workspaceId: string) => void
   sessionManager?: SessionManager

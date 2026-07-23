@@ -39,6 +39,7 @@ import {
 import { useIpcSubscriptions } from '@renderer/workspace/hook/ipc/useIpcSubscriptions'
 import { useSessionFeed } from '@renderer/features/sessionFeed/SessionFeedContext'
 import type { OrchestrationAgentRecord } from '@mcp/shared/orchestrationTypes'
+import type { AgentManagementRendererResponse } from '@mcp/shared/agentManagementTypes'
 import {
   closeOrchestrationAgent,
   closeOrchestrationRun,
@@ -47,6 +48,14 @@ import {
   readOrchestrationAgent,
   readOrchestrationRunOutputs,
 } from '@renderer/workspace/orchestrationMcp'
+import {
+  additionalCloseImpact,
+  assertManagedTarget,
+  listManagedAgentDescriptors,
+  readManagedAgentOutput,
+  readManagedAgentOutputs,
+} from '@renderer/workspace/agentManagementMcp'
+import { loadInitialHistoryForSession } from '@renderer/workspace/hook/actions/initialHistory'
 
 // -----------------------------------------------------------------------------
 // useWorkspace — the composer.
@@ -308,6 +317,8 @@ export function useWorkspace(
   createOrchestrationAgentRef.current = paneActions.createOrchestrationAgent
   const closeOrchestrationSessionRef = useRef(paneActions.closeSession)
   closeOrchestrationSessionRef.current = paneActions.closeSession
+  const killBuriedSessionRef = useRef(paneActions.killBuried)
+  killBuriedSessionRef.current = paneActions.killBuried
 
   useEffect(() => {
     const off = window.api.onOrchestrationRequest(async request => {
@@ -496,6 +507,208 @@ export function useWorkspace(
     })
     return off
   }, [refs.latestRuntimesRef, refs.stateRef, setState])
+
+  useEffect(() => {
+    const resolveFailure = async (
+      requestId: string,
+      type: AgentManagementRendererResponse['type'],
+      error: unknown,
+    ): Promise<void> => {
+      const candidate = error instanceof Error ? error.message : 'request_failed'
+      const knownCodes = new Set([
+        'caller_not_found',
+        'agent_not_found',
+        'agent_not_in_project',
+        'self_target_forbidden',
+        'transcript_unavailable',
+      ] as const)
+      const code = knownCodes.has(candidate as never)
+        ? candidate as Extract<AgentManagementRendererResponse, { ok: false }>['code']
+        : 'request_failed'
+      await window.api.resolveAgentManagementRequest({
+        requestId,
+        ok: false,
+        type,
+        code,
+        message: code === 'request_failed'
+          ? (error instanceof Error && error.message.length > 0
+              ? error.message
+              : 'Agent management request failed.')
+          : `Agent management request rejected: ${code}.`,
+      })
+    }
+
+    const hydrateTranscriptWithoutWaking = async (sessionId: string): Promise<void> => {
+      const meta = refs.stateRef.current.sessions[sessionId]
+      const runtime = refs.latestRuntimesRef.current[sessionId]
+      if (!meta || !runtime || runtime.transcriptStatus === 'ready') return
+      // WHY audit reads call the durable-history loader directly instead of
+      // ensureSessionLive: restored and buried agents remain valid project
+      // records even with no provider process. Transcript inspection must not
+      // wake them, mutate their backend lifetime, or consume a provider turn.
+      await loadInitialHistoryForSession({ sessionId, refs, setRuntimes, meta })
+    }
+
+    const off = window.api.onAgentManagementRequest(async request => {
+      const observedAt = Date.now()
+      try {
+        if (request.type === 'list-agents') {
+          const listed = listManagedAgentDescriptors({
+            state: refs.stateRef.current,
+            runtimes: refs.latestRuntimesRef.current,
+            callerSessionId: request.callerSessionId,
+          })
+          await window.api.resolveAgentManagementRequest({
+            requestId: request.requestId,
+            ok: true,
+            type: 'list-agents',
+            observedAt,
+            ...listed,
+          })
+          return
+        }
+
+        if (request.type === 'read-agent') {
+          assertManagedTarget({
+            state: refs.stateRef.current,
+            callerSessionId: request.callerSessionId,
+            sessionId: request.sessionId,
+            allowSelf: true,
+          })
+          await hydrateTranscriptWithoutWaking(request.sessionId)
+          const output = readManagedAgentOutput({
+            state: refs.stateRef.current,
+            runtimes: refs.latestRuntimesRef.current,
+            callerSessionId: request.callerSessionId,
+            sessionId: request.sessionId,
+            maxMessages: request.maxMessages,
+            maxCharsPerMessage: request.maxCharsPerMessage,
+            maxCharsPerAgent: request.maxCharsPerAgent,
+          })
+          await window.api.resolveAgentManagementRequest({
+            requestId: request.requestId,
+            ok: true,
+            type: 'read-agent',
+            observedAt,
+            output,
+          })
+          return
+        }
+
+        if (request.type === 'read-agents') {
+          const listed = listManagedAgentDescriptors({
+            state: refs.stateRef.current,
+            runtimes: refs.latestRuntimesRef.current,
+            callerSessionId: request.callerSessionId,
+          })
+          const listedIds = new Set(listed.agents.map(item => item.agent.sessionId))
+          const targetIds = request.sessionIds
+            ? [...new Set(request.sessionIds)]
+            : listed.agents
+                .filter(item => request.includeCaller === true || !item.agent.isCaller)
+                .map(item => item.agent.sessionId)
+          for (const sessionId of targetIds) {
+            if (!listedIds.has(sessionId)) throw new Error('agent_not_in_project')
+          }
+          // loadInitialHistoryForSession contains a two-slot limiter, so this
+          // preserves bulk-read latency without turning a large project audit
+          // into unbounded filesystem/IPC work.
+          await Promise.all(targetIds.map(hydrateTranscriptWithoutWaking))
+          const result = readManagedAgentOutputs({
+            state: refs.stateRef.current,
+            runtimes: refs.latestRuntimesRef.current,
+            callerSessionId: request.callerSessionId,
+            sessionIds: targetIds,
+            includeCaller: request.includeCaller,
+            maxMessagesPerAgent: request.maxMessagesPerAgent,
+            maxCharsPerMessage: request.maxCharsPerMessage,
+            maxCharsPerAgent: request.maxCharsPerAgent,
+            maxTotalChars: request.maxTotalChars,
+          })
+          await window.api.resolveAgentManagementRequest({
+            requestId: request.requestId,
+            ok: true,
+            type: 'read-agents',
+            observedAt,
+            ...result,
+            unavailable: [],
+          })
+          return
+        }
+
+        if (request.type === 'send-prompt') {
+          assertManagedTarget({
+            state: refs.stateRef.current,
+            callerSessionId: request.callerSessionId,
+            sessionId: request.sessionId,
+          })
+          // Sending is the one operation that intentionally wakes a parked
+          // target. Re-authorize after the await because the user can move or
+          // close a pane while the provider is starting.
+          await ensureSessionLiveRef.current(request.sessionId)
+          assertManagedTarget({
+            state: refs.stateRef.current,
+            callerSessionId: request.callerSessionId,
+            sessionId: request.sessionId,
+          })
+          const delivery = await window.api.deliverPrompt(request.sessionId, request.prompt)
+          await window.api.resolveAgentManagementRequest({
+            requestId: request.requestId,
+            ok: true,
+            type: 'send-prompt',
+            sessionId: request.sessionId,
+            delivery,
+          })
+          return
+        }
+
+        // Closing is structurally narrower than the UI close operation. The UI
+        // intentionally cascades linked children and can remove a whole tab;
+        // MCP must refuse those shapes so one named target never silently means
+        // several agents. The model-facing tool adds the separate requirement
+        // that the current user explicitly requested closure.
+        const affected = additionalCloseImpact({
+          state: refs.stateRef.current,
+          callerSessionId: request.callerSessionId,
+          sessionId: request.sessionId,
+        })
+        if (affected.length > 0) {
+          await window.api.resolveAgentManagementRequest({
+            requestId: request.requestId,
+            ok: false,
+            type: 'close-agent',
+            code: 'close_would_affect_additional_sessions',
+            message: 'Closing this target would also affect additional project sessions.',
+            sessionId: request.sessionId,
+            additionalAffectedSessionIds: affected,
+          })
+          return
+        }
+        const current = refs.stateRef.current
+        const placement = assertManagedTarget({
+          state: current,
+          callerSessionId: request.callerSessionId,
+          sessionId: request.sessionId,
+        })
+        if (placement.placement === 'buried') {
+          const buried = current.buried.find(item => item.sessionId === request.sessionId)
+          if (!buried) throw new Error('agent_not_found')
+          await killBuriedSessionRef.current(buried.id)
+        } else {
+          await closeOrchestrationSessionRef.current(request.sessionId)
+        }
+        await window.api.resolveAgentManagementRequest({
+          requestId: request.requestId,
+          ok: true,
+          type: 'close-agent',
+          closedSessionId: request.sessionId,
+        })
+      } catch (error) {
+        await resolveFailure(request.requestId, request.type, error)
+      }
+    })
+    return off
+  }, [refs, setRuntimes])
 
   const { switchFocusedProvider, reloadFocusedAgent, rewindFocusedToPrompt, undoLastRewind } =
     useProviderActions(refs, setRuntimes, showPaneToast, sessionActions)

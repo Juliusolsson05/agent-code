@@ -15,7 +15,8 @@ describe('built-in MCP provider policy', () => {
       42,
       'unknown',
       'workflows',
-    ])).toEqual(['orchestration', 'workflows'])
+      'agent_management',
+    ])).toEqual(['orchestration', 'workflows', 'agent_management'])
     expect(normalizeConfigurableBuiltInMcpDomains('orchestration')).toEqual([])
   })
 
@@ -23,6 +24,8 @@ describe('built-in MCP provider policy', () => {
     expect(providerSupportsBuiltInMcpDomain('codex', 'workflows')).toBe(true)
     expect(providerSupportsBuiltInMcpDomain('claude', 'workflows')).toBe(false)
     expect(providerSupportsBuiltInMcpDomain('claude', 'orchestration')).toBe(true)
+    expect(providerSupportsBuiltInMcpDomain('claude', 'agent_management')).toBe(true)
+    expect(providerSupportsBuiltInMcpDomain('codex', 'agent_management')).toBe(true)
     expect(providerSupportsBuiltInMcpDomain('opencode', 'orchestration')).toBe(false)
   })
 

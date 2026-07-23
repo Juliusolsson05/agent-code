@@ -5,6 +5,7 @@ export type BuiltInMcpDomain =
   | 'orchestration'
   | 'ai_workspace'
   | 'agent_transcripts'
+  | 'agent_management'
   | 'workflows'
 
 export const BUILT_IN_MCP_DOMAINS: readonly BuiltInMcpDomain[] = [
@@ -12,6 +13,7 @@ export const BUILT_IN_MCP_DOMAINS: readonly BuiltInMcpDomain[] = [
   'orchestration',
   'ai_workspace',
   'agent_transcripts',
+  'agent_management',
   'workflows',
 ] as const
 
@@ -28,6 +30,7 @@ export const CONFIGURABLE_BUILT_IN_MCP_DOMAINS = [
   'orchestration',
   'ai_workspace',
   'agent_transcripts',
+  'agent_management',
   'workflows',
 ] as const satisfies readonly BuiltInMcpDomain[]
 
@@ -50,7 +53,13 @@ export type ConfigurableBuiltInMcpDomain =
  * tools to the model.
  */
 const BUILT_IN_MCP_DOMAINS_BY_PROVIDER = {
-  claude: ['ping', 'orchestration', 'ai_workspace', 'agent_transcripts'],
+  claude: [
+    'ping',
+    'orchestration',
+    'ai_workspace',
+    'agent_transcripts',
+    'agent_management',
+  ],
   codex: [...BUILT_IN_MCP_DOMAINS],
   opencode: [],
 } as const satisfies Record<AgentProviderKind, readonly BuiltInMcpDomain[]>

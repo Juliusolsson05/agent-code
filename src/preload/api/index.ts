@@ -16,6 +16,7 @@ import { dictationDebugApi } from '@preload/api/dictationDebug.js'
 import { pasteDebugApi } from '@preload/api/pasteDebug.js'
 import { devDebugApi } from '@preload/api/devDebug.js'
 import { orchestrationApi } from '@preload/api/orchestration.js'
+import { agentManagementApi } from '@preload/api/agentManagement.js'
 import { aiWorkspaceApi } from '@preload/api/aiWorkspace.js'
 import { renderedContentApi } from '@preload/api/renderedContent.js'
 import { caffeinateApi } from '@preload/api/caffeinate.js'
@@ -61,6 +62,7 @@ export const api = {
   ...pasteDebugApi,
   ...devDebugApi,
   ...orchestrationApi,
+  ...agentManagementApi,
   ...aiWorkspaceApi,
   ...renderedContentApi,
   ...caffeinateApi,

@@ -27,11 +27,13 @@ import { registerDevDebugIpc } from '@main/ipc/devDebug.js'
 import { installPerformanceIpcInstrumentation } from '@main/performance/instrumentIpc.js'
 import type { WorktreeActivityIndex } from '@main/worktreeActivity/WorktreeActivityIndex.js'
 import { registerOrchestrationIpc } from '@main/ipc/orchestration.js'
+import { registerAgentManagementIpc } from '@main/ipc/agentManagement.js'
 import { registerAiWorkspaceIpc } from '@main/ipc/aiWorkspace.js'
 import { registerRenderedContentIpc } from '@main/ipc/renderedContent.js'
 import { registerCaffeinateIpc } from '@main/ipc/caffeinate.js'
 import { registerRemoteIpc } from '@main/ipc/remote.js'
 import type { OrchestrationBridge } from '@main/orchestration/OrchestrationBridge.js'
+import type { AgentManagementBridge } from '@main/agentManagement/AgentManagementBridge.js'
 import type { AiWorkspaceRegistry } from '@main/aiWorkspace/AiWorkspaceRegistry.js'
 import type { CaffeinateController } from '@main/caffeinate/CaffeinateController.js'
 import type { RemoteController } from '@main/remote/RemoteController.js'
@@ -65,6 +67,7 @@ export type IpcDeps = {
   sessionRecorders: SessionRecorderManager | null
   worktreeActivityIndex: WorktreeActivityIndex
   orchestrationBridge: OrchestrationBridge
+  agentManagementBridge: AgentManagementBridge
   aiWorkspaceRegistry: AiWorkspaceRegistry
   caffeinateController: CaffeinateController
   remoteController: RemoteController
@@ -98,6 +101,7 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerPasteDebugIpc({ pasteDebugJournals: deps.pasteDebugJournals })
   registerDevDebugIpc(deps.sessionRecorders)
   registerOrchestrationIpc(deps.orchestrationBridge)
+  registerAgentManagementIpc(deps.agentManagementBridge)
   registerAiWorkspaceIpc(deps.aiWorkspaceRegistry)
   registerRenderedContentIpc()
   registerCaffeinateIpc(deps.caffeinateController)

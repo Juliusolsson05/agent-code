@@ -78,8 +78,12 @@ a running session can move mid-task from Claude Code to Codex or back.
 - **Custom rendering** — React feed built from committed transcripts, semantic
   streams, tool calls, and provider conditions. The raw terminal stays available.
 - **Persistent terminals** — tmux-backed shells that survive UI reloads.
-- **Built-in MCP + orchestration** — a parent agent can create real Agent Code
-  child agents, prompt them, wait for them, and read their outputs.
+- **Built-in MCP + agent control** — orchestration lets a parent create and
+  coordinate real Agent Code children. The independently configurable Agent
+  Management MCP can inventory every grid, Dispatch, and buried agent in the
+  caller's project, expose transcript/activity evidence, read bounded outputs,
+  and send follow-ups. Destructive close is restricted to an explicit current
+  user request and refuses self-close or multi-session cascades.
 
   <p align="center">
     <img src="docs/screenshots/orchestration.png" alt="Agent Code Dispatch sidebar with orchestration MCP tool calls (send_prompt, wait_agents, read_agent, close_run) running in a live session" />

@@ -4,9 +4,10 @@ import { describe, expect, it, vi } from 'vitest'
 import type { WorkflowService } from 'workflow-mcp'
 
 import { createBuiltInMcpServer } from '@mcp/runtime/createBuiltInMcpServer.js'
+import type { BuiltInMcpDomain } from '@mcp/shared/types.js'
 import type { PromptDeliveryResult } from '@shared/types/providerConfig.js'
 
-async function toolNames(domains: Array<'workflows' | 'agent_transcripts'>): Promise<string[]> {
+async function toolNames(domains: BuiltInMcpDomain[]): Promise<string[]> {
   const server = createBuiltInMcpServer(
     { sessionId: 'session-1', cwd: '/tmp/project', domains },
     { workflowService: {} as WorkflowService },
@@ -18,6 +19,28 @@ async function toolNames(domains: Array<'workflows' | 'agent_transcripts'>): Pro
     await server.connect(serverTransport)
     await client.connect(clientTransport)
     return (await client.listTools()).tools.map(tool => tool.name)
+  } finally {
+    await client.close()
+    await server.close()
+  }
+}
+
+async function agentManagementSurface(): Promise<{
+  tools: Awaited<ReturnType<Client['listTools']>>['tools']
+  instructions: string | undefined
+}> {
+  const server = createBuiltInMcpServer(
+    { sessionId: 'session-1', cwd: '/tmp/project', domains: ['agent_management'] },
+  )
+  const client = new Client({ name: 'agent-management-domain-test', version: '0.0.0' })
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+  try {
+    await server.connect(serverTransport)
+    await client.connect(clientTransport)
+    return {
+      tools: (await client.listTools()).tools,
+      instructions: client.getInstructions(),
+    }
   } finally {
     await client.close()
     await server.close()
@@ -81,6 +104,58 @@ describe('createBuiltInMcpServer workflow domain', () => {
 
     const transcriptTools = await toolNames(['agent_transcripts'])
     expect(transcriptTools.some(name => name.startsWith('workflow_'))).toBe(false)
+  })
+})
+
+describe('createBuiltInMcpServer Agent Management domain', () => {
+  it('registers the five project-management tools only for the selected domain', async () => {
+    expect(await toolNames(['agent_management'])).toEqual([
+      'agent_management_list_agents',
+      'agent_management_read_agent',
+      'agent_management_read_agents',
+      'agent_management_send_prompt',
+      'agent_management_close_agent',
+    ])
+    expect((await toolNames(['agent_transcripts']))
+      .some(name => name.startsWith('agent_management_'))).toBe(false)
+  })
+
+  it('puts explicit current-user authorization on both server and destructive tool metadata', async () => {
+    const { tools, instructions } = await agentManagementSurface()
+    expect(instructions).toContain('current request explicitly asks')
+    expect(instructions).toContain('safe to clean up is not authorization')
+    const close = tools.find(tool => tool.name === 'agent_management_close_agent')
+    expect(close?.description).toContain('Call only when the current user explicitly asks')
+    expect((close?.inputSchema as { properties?: Record<string, unknown> })?.properties)
+      .not.toHaveProperty('confirmed')
+    expect(close?.annotations).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+    })
+  })
+
+  it('derives caller authority from the authenticated MCP scope', async () => {
+    const listAgents = vi.fn(async () => ({
+      observedAt: 10_000,
+      project: { tabId: 'tab-1', title: 'Project', index: 0 },
+      agents: [],
+    }))
+    const server = createBuiltInMcpServer(
+      { sessionId: 'authenticated-caller', cwd: '/tmp/project', domains: ['agent_management'] },
+      { agentManagementBridge: { listAgents } as never },
+    )
+    const client = new Client({ name: 'agent-management-scope-test', version: '0.0.0' })
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+    try {
+      await server.connect(serverTransport)
+      await client.connect(clientTransport)
+      await client.callTool({ name: 'agent_management_list_agents', arguments: {} })
+      expect(listAgents).toHaveBeenCalledWith({ callerSessionId: 'authenticated-caller' })
+    } finally {
+      await client.close()
+      await server.close()
+    }
   })
 })
 
