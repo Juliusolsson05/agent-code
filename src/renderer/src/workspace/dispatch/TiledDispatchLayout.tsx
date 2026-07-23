@@ -212,10 +212,14 @@ export function TiledDispatchLayout({
                   workspace={workspace}
                 />
               )}
-              {/* Chips-only selector for this lane — a thin w-9 strip the
-                  exact width of the index's chip cell. No title/dot/header. */}
+              {/* Chips-only selector for this lane. DispatchMiniList owns the
+                  46px width: the original w-9 selector footprint plus the real
+                  10px color-flag column. Its internal label keeps the old
+                  border-adjusted remainder. The wrapper must not pin the list
+                  back to w-9 or the flag will squeeze/overflow instead of
+                  taking space. */}
               {laneIndex > 0 && (
-                <div className="flex-shrink-0 w-9 min-h-0">
+                <div className="flex-shrink-0 min-h-0">
                   <DispatchMiniList
                     rows={rows}
                     selectedSessionId={lane.selectedSessionId}

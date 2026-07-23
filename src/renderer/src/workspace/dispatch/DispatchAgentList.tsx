@@ -8,11 +8,11 @@ import { useShallow } from 'zustand/react/shallow'
 
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { useAppStore } from '@renderer/app-state/hooks'
-import { colorFlagById } from '@renderer/app-state/settings/dispatchColorFlags'
 import { WorktreeBadge } from '@renderer/workspace/tile-tree/TileLeaf/SessionBadges'
 import { extractLatestUserPrompt } from '@renderer/features/workspace/lib/latestUserPrompts'
 import { buildDispatchGroups } from '@renderer/workspace/dispatch/dispatchSelectors'
 import type { DispatchAgentRow } from '@renderer/workspace/dispatch/dispatchSelectors'
+import { DispatchColorFlagStrip } from '@renderer/workspace/dispatch/DispatchColorFlagStrip'
 import { tabIndexLabel } from '@renderer/workspace/tile-tree/paneLabels'
 import type { SessionId, SessionKind, TabId } from '@renderer/workspace/types'
 import type { Entry } from '@shared/types/transcript'
@@ -226,11 +226,6 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
     if (disabled) return
     focusSessionInTab(row.tabId, row.sessionId)
   }, [disabled, focusSessionInTab, row.sessionId, row.tabId])
-  // Color flag (set via the "Set color flag" command). A separate, cheap
-  // selector so only flagged/unflagged transitions of THIS row re-render it.
-  const colorFlag = useAppStore(state =>
-    colorFlagById(state.settings.dispatchColorFlags[row.sessionId]),
-  )
   const isTerminal = row.kind === 'terminal'
   const activity = dispatchActivity(runtime)
   const activityClasses = dispatchActivityClasses(activity, active)
@@ -265,7 +260,7 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
       // marker covers every row in the index.
       data-dispatch-row="true"
       className={`
-        relative flex w-full items-stretch text-left pr-2.5 border-t border-border overflow-hidden [contain:layout_paint]
+        relative flex w-full items-stretch text-left border-t border-border overflow-hidden [contain:layout_paint]
         ${activityClasses.row}
         ${disabled ? 'opacity-40 cursor-not-allowed' : ''}
       `}
@@ -323,19 +318,12 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
           )}
         </div>
       </div>
-      {/* Color flag strip — a 10px full-height band pinned to the right edge.
-          Absolutely positioned (not a real border-r) so it overlays the row's
-          existing pr-2.5 padding without stealing content width or shifting
-          any of the layout above. The row is `relative overflow-hidden`, so it
-          clips cleanly. aria-hidden: it is decoration; the flag is not (yet)
-          announced to screen readers. */}
-      {colorFlag && (
-        <span
-          aria-hidden="true"
-          className="pointer-events-none absolute right-0 top-0 bottom-0 w-[10px]"
-          style={{ backgroundColor: colorFlag.color }}
-        />
-      )}
+      {/* WHY this column renders even when the row has no flag: a sparse,
+          conditional strip would make each row's title width depend on its
+          flag state and destroy the straight trailing edge users scan. The
+          shared component leaves unflagged rows transparent while preserving
+          the same real 10px flex allocation in both rich and tiled lists. */}
+      <DispatchColorFlagStrip sessionId={row.sessionId} />
     </button>
   )
 })

@@ -3,6 +3,7 @@ import { useShallow } from 'zustand/react/shallow'
 
 import { useAppStore } from '@renderer/app-state/hooks'
 import type { DispatchAgentRow } from '@renderer/workspace/dispatch/dispatchSelectors'
+import { DispatchColorFlagStrip } from '@renderer/workspace/dispatch/DispatchColorFlagStrip'
 import type { SessionId } from '@renderer/workspace/types'
 import {
   cachedLatestPromptTitle,
@@ -39,7 +40,7 @@ export const DispatchMiniList = memo(function DispatchMiniList({
   return (
     <div
       className={`
-        h-full w-full min-h-0 overflow-y-auto bg-surface [contain:layout_paint]
+        h-full w-[46px] min-h-0 overflow-y-auto bg-surface [contain:layout_paint]
         border-l ${focused ? 'border-accent/60' : 'border-border'}
       `}
     >
@@ -101,13 +102,22 @@ const DispatchMiniChip = memo(function DispatchMiniChip({
       // the classic list. See issue #236.
       data-dispatch-row="true"
       className={`
-        flex w-full items-center justify-center border-t border-border
-        py-1.5 text-[10px] font-semibold tabular-nums
+        flex w-full items-stretch border-t border-border
+        text-[10px] font-semibold tabular-nums
         hover:ring-1 hover:ring-inset hover:ring-accent/40
         ${chipClasses}
       `}
     >
-      {row.label}
+      {/* WHY the label is the flexible remainder instead of another hardcoded
+          36px: the selector's left border lives inside its border-box. A 36px
+          child plus the 10px flag inside w-[46px] would therefore overflow by
+          one pixel. The old w-9 selector already gave its label the 35px inner
+          remainder; adding 10px to the outer width and keeping flex-1 preserves
+          that exact center while the flag occupies only the newly-added space. */}
+      <span className="flex min-w-0 flex-1 items-center justify-center py-1.5">
+        {row.label}
+      </span>
+      <DispatchColorFlagStrip sessionId={row.sessionId} />
     </button>
   )
 })

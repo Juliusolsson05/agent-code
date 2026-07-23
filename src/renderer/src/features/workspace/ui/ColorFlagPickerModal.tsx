@@ -50,7 +50,15 @@ export function ColorFlagPickerModal({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex flex-wrap gap-3 py-2">
+        {/* WHY the choice group is centered instead of inheriting the dialog's
+            left edge: these swatches are one compact, peer-level choice—not a
+            form field aligned beneath a label. The dialog primitive has no
+            body padding of its own, so px-4 deliberately matches the header
+            and footer inset while justify-center balances the unused width. */}
+        <div
+          data-color-flag-swatches="true"
+          className="flex flex-wrap justify-center gap-3 px-4 py-2"
+        >
           {DISPATCH_COLOR_FLAGS.map(flag => {
             const active = flag.id === currentFlagId
             return (
