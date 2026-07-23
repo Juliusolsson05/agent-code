@@ -51,7 +51,7 @@ architecture below:
 - [x] four-agent Claude/Codex review hardening: isolated filesystem safety,
   create-only publication, journal-only cleanup, operation-bound crash temps,
   external-root migration, private state permissions, and serialized snapshots;
-- [x] `npm run check` (contract, composite typecheck, 222 test files / 1,252
+- [x] `npm run check` (contract, composite typecheck, 222 test files / 1,253
   tests, production build, and packaged-entry verification).
 
 The live-provider acceptance matrix and Settings screenshots remain deliberately

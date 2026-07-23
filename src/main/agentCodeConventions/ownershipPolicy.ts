@@ -34,6 +34,25 @@ export class AgentCodeConventionsOwnershipPolicy {
         delete document.pendingOperations[key]
       }
     }
+    for (const [key, pending] of Object.entries(document.pendingOperations)) {
+      if (key.startsWith(RETIRED_CONVENTIONS_TARGET_PREFIX) || document.materializations[key]) {
+        continue
+      }
+      const target = currentTargets.get(key)
+      if (!target || resolve(pending.path) === resolve(target.skillFile)) continue
+      if (pending.kind !== 'write' || !pending.desiredSha256) continue
+      // Retire orphaned journals before promoting a returning root. Otherwise
+      // an A tombstone plus a crash-left current-key write for B would promote
+      // A first, make B look paired with A's record, and force recovery even
+      // though both pieces of ownership evidence are individually sound.
+      const retiredKey = this.retiredKey(key, pending.path)
+      document.materializations[retiredKey] = {
+        path: pending.path,
+        sha256: pending.desiredSha256,
+      }
+      document.pendingOperations[retiredKey] = { ...pending, targetId: retiredKey }
+      delete document.pendingOperations[key]
+    }
     for (const target of targets.targets) {
       if (document.materializations[target.id]) continue
       const retiredPrefix = `${RETIRED_CONVENTIONS_TARGET_PREFIX}${target.id}:`
@@ -51,24 +70,6 @@ export class AgentCodeConventionsOwnershipPolicy {
         document.pendingOperations[target.id] = { ...pending, targetId: target.id }
         delete document.pendingOperations[retiredKey]
       }
-    }
-    for (const [key, pending] of Object.entries(document.pendingOperations)) {
-      if (key.startsWith(RETIRED_CONVENTIONS_TARGET_PREFIX) || document.materializations[key]) {
-        continue
-      }
-      const target = currentTargets.get(key)
-      if (!target || resolve(pending.path) === resolve(target.skillFile)) continue
-      if (pending.kind !== 'write' || !pending.desiredSha256) continue
-      // A published-but-unfinalized write has no materialization yet. Turning
-      // its journal into a retired tombstone preserves crash evidence across a
-      // root move without ever making the historical path mutable.
-      const retiredKey = this.retiredKey(key, pending.path)
-      document.materializations[retiredKey] = {
-        path: pending.path,
-        sha256: pending.desiredSha256,
-      }
-      document.pendingOperations[retiredKey] = { ...pending, targetId: retiredKey }
-      delete document.pendingOperations[key]
     }
   }
 
