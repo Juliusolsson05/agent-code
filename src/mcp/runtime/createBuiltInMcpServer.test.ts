@@ -88,6 +88,32 @@ async function createAgentWithDelivery(delivery: PromptDeliveryResult): Promise<
   }
 }
 
+async function sendManagedPromptWithDelivery(delivery: PromptDeliveryResult): Promise<Record<string, unknown>> {
+  const server = createBuiltInMcpServer(
+    { sessionId: 'session-1', cwd: '/tmp/project', domains: ['agent_management'] },
+    {
+      agentManagementBridge: {
+        sendPrompt: vi.fn(async () => delivery),
+      } as never,
+    },
+  )
+  const client = new Client({ name: 'agent-management-delivery-test', version: '0.0.0' })
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+  try {
+    await server.connect(serverTransport)
+    await client.connect(clientTransport)
+    const result = await client.callTool({
+      name: 'agent_management_send_prompt',
+      arguments: { sessionId: 'agent-1', prompt: 'Run this once' },
+    })
+    const text = (result.content as Array<{ type: string; text?: string }>)[0]?.text ?? '{}'
+    return JSON.parse(text) as Record<string, unknown>
+  } finally {
+    await client.close()
+    await server.close()
+  }
+}
+
 describe('createBuiltInMcpServer workflow domain', () => {
   it('registers workflow tools only for sessions carrying the workflows domain', async () => {
     const workflowTools = await toolNames(['workflows'])
@@ -124,6 +150,9 @@ describe('createBuiltInMcpServer Agent Management domain', () => {
     const { tools, instructions } = await agentManagementSurface()
     expect(instructions).toContain('current request explicitly asks')
     expect(instructions).toContain('safe to clean up is not authorization')
+    expect(instructions).toContain('missing or truncated transcript is not an empty transcript')
+    expect(instructions).toContain('unresolved latest user request')
+    expect(instructions).toContain('cannot prove a worktree is clean')
     const close = tools.find(tool => tool.name === 'agent_management_close_agent')
     expect(close?.description).toContain('Call only when the current user explicitly asks')
     expect((close?.inputSchema as { properties?: Record<string, unknown> })?.properties)
@@ -156,6 +185,28 @@ describe('createBuiltInMcpServer Agent Management domain', () => {
       await client.close()
       await server.close()
     }
+  })
+
+  it('promotes provider delivery uncertainty to a top-level tool failure', async () => {
+    const value = await sendManagedPromptWithDelivery({
+      ok: false,
+      stage: 'after-enter',
+      code: 'acceptance-timeout',
+      message: 'Prompt may already have been submitted',
+      retrySafe: false,
+      disposition: 'do-not-retry',
+      promptWritten: true,
+      enterWritten: true,
+    })
+
+    expect(value).toMatchObject({
+      ok: false,
+      error: 'prompt_delivery_failed',
+      sessionId: 'agent-1',
+      retrySafe: false,
+      disposition: 'do-not-retry',
+      promptSubmission: 'uncertain',
+    })
   })
 })
 

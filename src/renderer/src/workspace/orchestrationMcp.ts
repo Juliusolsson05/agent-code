@@ -444,8 +444,8 @@ export function visibleMessageSummary(
   // newest -> oldest, "budget exhausted" naturally drops the OLDEST messages
   // first, mirroring the transcript reader's boundItems budget semantics.
   // The NEWEST message is exempt from dropping: it is truncated down to the
-      // agent budget instead (see the floor inside pushTail), so a starved budget
-      // still returns a non-empty tail.
+  // agent budget instead (see the floor inside pushTail), so a starved budget
+  // still returns a non-empty tail.
   // totalChars only sums the ORIGINAL sizes of texts we actually extracted:
   // whole-transcript totals would require the full extraction this fast path
   // exists to avoid.

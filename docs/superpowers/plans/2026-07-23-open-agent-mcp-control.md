@@ -653,8 +653,13 @@ explicit session close path. Closing never wakes a hibernated backend.
 - Add correlated typed main-to-renderer requests and renderer-to-main responses.
 - Serialize management requests so reads and destructive workspace mutations do
   not race each other through stale snapshots.
-- Apply bounded queue/pending state and a 30-second renderer-response timeout;
-  ignore late/unknown responses.
+- Apply bounded queue/pending state, with a 30-second renderer-response timeout
+  for single-agent/mutation calls and a 120-second window for concurrency-limited
+  project history hydration. A timeout rejects the caller but retains the active serialization slot until
+  the renderer's correlated late response proves the operation stopped; while
+  that outcome is unknown, reject later management requests without dispatching
+  them. A timed-out prompt reports retry-unsafe uncertainty so a model cannot
+  duplicate a write that completed just after main stopped waiting.
 - Wire renderer handlers through refs to current state, runtimes,
   `ensureSessionLive`, initial history hydration, prompt delivery, closeSession,
   and killBuried.
@@ -672,7 +677,9 @@ explicit session close path. Closing never wakes a hibernated backend.
 
 - responses correlate by request ID;
 - requests serialize and drain after success/failure;
-- timeouts remove pending state and late responses no-op;
+- timeouts reject callers without letting later mutations overlap; a late
+  correlated response releases the serialization slot, while unknown responses
+  remain no-ops;
 - a moved/closed target fails the second authorization check;
 - hibernated read hydrates history without backend wake;
 - project-wide reads hydrate with bounded concurrency and preserve all status
@@ -794,6 +801,7 @@ quality gate before requesting review.
 | Same project contains a sibling worktree cwd | The agent appears because tab affinity, not cwd, is authoritative. |
 | Caller reads a live Claude/Codex/OpenCode agent | Bounded normalized visible transcript is returned. |
 | Caller reads a hibernated durable Claude/Codex agent | History hydrates from disk; no provider process starts. |
+| Durable history hydration fails or a provisional provider id cannot be read | Typed `transcript_unavailable`; partial/empty evidence is never presented as complete. |
 | Caller reads a hibernated agent with no durable history | Typed `transcript_unavailable`; no wake. |
 | Caller asks to read all project agents | One bulk call returns the full census plus fair bounded tails for every readable non-caller agent by default; `includeCaller` supports a literal archival read. |
 | One early transcript exceeds the total budget | Later agents retain status and useful excerpts; response is marked truncated. |
@@ -801,6 +809,7 @@ quality gate before requesting review.
 | Caller asks what is safe to clean up | Agent reports active/uncertain/likely candidates with transcript path, age, and evidence; it does not close. |
 | Caller prompts a hibernated agent | Existing session ID wakes, scope revalidates, native delivery runs once. |
 | Delivery fails after possible write | Result is uncertain and does not encourage automatic retry. |
+| Main times out after dispatching a prompt | Result is retry-unsafe uncertainty; later management mutations remain blocked until renderer completion is acknowledged. |
 | Caller targets itself for prompt/close | Rejected before mutation. |
 | Caller targets another project | Rejected on every tool, even with matching cwd. |
 | Close target has linked children or would tear down a tab | Rejected with additional affected session IDs. |

@@ -8,14 +8,14 @@ export type BuiltInMcpDomain =
   | 'agent_management'
   | 'workflows'
 
-export const BUILT_IN_MCP_DOMAINS: readonly BuiltInMcpDomain[] = [
+export const BUILT_IN_MCP_DOMAINS = [
   'ping',
   'orchestration',
   'ai_workspace',
   'agent_transcripts',
   'agent_management',
   'workflows',
-] as const
+] as const satisfies readonly BuiltInMcpDomain[]
 
 /**
  * Product capabilities a user may enable by default for new agent sessions.

@@ -181,6 +181,28 @@ describe('AgentManagementBridge', () => {
     })
   })
 
+  it('returns an honest empty transcript for a live agent that has not spoken yet', async () => {
+    const bridge = new AgentManagementBridge(managerFixture() as never)
+    const reading = bridge.readAgent({ callerSessionId: 'caller', sessionId: 'agent-1' })
+    const request = sentRendererRequests[0] as { requestId: string }
+    const descriptor = rendererDescriptor()
+    delete descriptor.providerSessionId
+    bridge.resolve({
+      requestId: request.requestId,
+      ok: true,
+      type: 'read-agent',
+      observedAt: 10_000,
+      output: {
+        output: { agent: descriptor.agent, messages: [] },
+      },
+    })
+
+    await expect(reading).resolves.toMatchObject({
+      agent: { sessionId: 'agent-1', backendState: 'live' },
+      messages: [],
+    })
+  })
+
   it('keeps unavailable bulk histories as explicit census rows', async () => {
     const bridge = new AgentManagementBridge(managerFixture() as never)
     const reading = bridge.readAgents({ callerSessionId: 'caller' })
@@ -208,15 +230,57 @@ describe('AgentManagementBridge', () => {
     })
   })
 
-  it('removes timed-out requests and ignores their late responses', async () => {
+  it('preserves renderer hydration failures without mislabeling budget-starved rows', async () => {
+    const bridge = new AgentManagementBridge(managerFixture() as never)
+    const reading = bridge.readAgents({ callerSessionId: 'caller' })
+    const request = sentRendererRequests[0] as { requestId: string }
+    const unavailableDescriptor = rendererDescriptor()
+    unavailableDescriptor.agent.sessionId = 'unavailable-agent'
+    const starvedDescriptor = rendererDescriptor()
+    starvedDescriptor.agent.sessionId = 'starved-agent'
+    starvedDescriptor.agent.kind = 'opencode'
+    delete starvedDescriptor.providerSessionId
+    bridge.resolve({
+      requestId: request.requestId,
+      ok: true,
+      type: 'read-agents',
+      observedAt: 10_000,
+      project: unavailableDescriptor.agent.project,
+      agents: [unavailableDescriptor, starvedDescriptor],
+      outputs: [
+        { output: { agent: unavailableDescriptor.agent, messages: [] } },
+        { output: { agent: starvedDescriptor.agent, messages: [], truncated: true } },
+      ],
+      unavailable: [{
+        sessionId: 'unavailable-agent',
+        reason: 'transcript_unavailable',
+      }],
+      truncated: true,
+      totalChars: 0,
+    })
+
+    await expect(reading).resolves.toMatchObject({
+      unavailable: [{
+        sessionId: 'unavailable-agent',
+        reason: 'transcript_unavailable',
+      }],
+    })
+  })
+
+  it('holds serialization after timeout until the renderer acknowledges completion', async () => {
     vi.useFakeTimers()
     const bridge = new AgentManagementBridge(managerFixture() as never)
     const listing = bridge.listAgents({ callerSessionId: 'caller' })
     const request = sentRendererRequests[0] as { requestId: string }
+    const closing = bridge.closeAgent({ callerSessionId: 'caller', sessionId: 'agent-1' })
     const rejected = expect(listing).rejects.toThrow('timed out')
+    const blocked = expect(closing).rejects.toMatchObject({ code: 'renderer_unresponsive' })
 
     await vi.advanceTimersByTimeAsync(30_000)
-    await rejected
+    await Promise.all([rejected, blocked])
+    expect(sentRendererRequests).toHaveLength(1)
+    expect((bridge as unknown as { pending: Map<string, unknown> }).pending.size).toBe(1)
+
     bridge.resolve({
       requestId: request.requestId,
       ok: true,
@@ -226,5 +290,73 @@ describe('AgentManagementBridge', () => {
       agents: [],
     })
     expect((bridge as unknown as { pending: Map<string, unknown> }).pending.size).toBe(0)
+
+    const recovered = bridge.listAgents({ callerSessionId: 'caller' })
+    expect(sentRendererRequests).toHaveLength(2)
+    const recoveredRequest = sentRendererRequests[1] as { requestId: string }
+    bridge.resolve({
+      requestId: recoveredRequest.requestId,
+      ok: true,
+      type: 'list-agents',
+      observedAt: 10_000,
+      project: { tabId: 'tab-1', title: 'Project', index: 0 },
+      agents: [],
+    })
+    await expect(recovered).resolves.toMatchObject({ agents: [] })
+  })
+
+  it('allows bounded cold fleet hydration longer than single-agent operations', async () => {
+    vi.useFakeTimers()
+    const bridge = new AgentManagementBridge(managerFixture() as never)
+    const reading = bridge.readAgents({ callerSessionId: 'caller' })
+    let settled = false
+    void reading.finally(() => { settled = true })
+    const request = sentRendererRequests[0] as { requestId: string }
+
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(settled).toBe(false)
+    bridge.resolve({
+      requestId: request.requestId,
+      ok: true,
+      type: 'read-agents',
+      observedAt: 10_000,
+      project: { tabId: 'tab-1', title: 'Project', index: 0 },
+      agents: [],
+      outputs: [],
+      unavailable: [],
+      truncated: false,
+      totalChars: 0,
+    })
+    await expect(reading).resolves.toMatchObject({ agents: [] })
+  })
+
+  it('marks a dispatched prompt timeout as retry-unsafe uncertainty', async () => {
+    vi.useFakeTimers()
+    const bridge = new AgentManagementBridge(managerFixture() as never)
+    const sending = bridge.sendPrompt({
+      callerSessionId: 'caller',
+      sessionId: 'agent-1',
+      prompt: 'Do the work once',
+    })
+    const request = sentRendererRequests[0] as { requestId: string }
+    const rejected = expect(sending).rejects.toMatchObject({
+      code: 'prompt_delivery_uncertain',
+      details: {
+        sessionId: 'agent-1',
+        retrySafe: false,
+        disposition: 'outcome-unknown',
+        promptSubmission: 'uncertain',
+      },
+    })
+
+    await vi.advanceTimersByTimeAsync(30_000)
+    await rejected
+    bridge.resolve({
+      requestId: request.requestId,
+      ok: true,
+      type: 'send-prompt',
+      sessionId: 'agent-1',
+      delivery: { ok: true, acceptance: { kind: 'user', acceptedAt: 10_000 } },
+    })
   })
 })

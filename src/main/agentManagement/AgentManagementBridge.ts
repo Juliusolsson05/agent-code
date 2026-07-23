@@ -20,8 +20,9 @@ import type {
 
 type PendingRequest = {
   resolve: (response: AgentManagementRendererResponse) => void
-  reject: (error: Error) => void
   timer: NodeJS.Timeout
+  timedOut: boolean
+  release: () => void
 }
 
 type QueuedRequest = {
@@ -46,14 +47,24 @@ export type ManagedAgentBulkReadResult = ManagedAgentListResult & {
   totalChars: number
 }
 
+type AgentManagementBridgeErrorCode =
+  | Extract<AgentManagementRendererResponse, { ok: false }>['code']
+  | 'prompt_delivery_uncertain'
+  | 'renderer_unresponsive'
+
+type AgentManagementBridgeErrorDetails = {
+  sessionId?: string
+  additionalAffectedSessionIds?: string[]
+  retrySafe?: boolean
+  disposition?: 'not-submitted' | 'outcome-unknown'
+  promptSubmission?: 'not-submitted' | 'uncertain'
+}
+
 export class AgentManagementBridgeError extends Error {
   constructor(
-    readonly code: Extract<AgentManagementRendererResponse, { ok: false }>['code'],
+    readonly code: AgentManagementBridgeErrorCode,
     message: string,
-    readonly details: {
-      sessionId?: string
-      additionalAffectedSessionIds?: string[]
-    } = {},
+    readonly details: AgentManagementBridgeErrorDetails = {},
   ) {
     super(message)
     this.name = 'AgentManagementBridgeError'
@@ -61,11 +72,13 @@ export class AgentManagementBridgeError extends Error {
 }
 
 const REQUEST_TIMEOUT_MS = 30_000
+const BULK_READ_TIMEOUT_MS = 120_000
 
 export class AgentManagementBridge {
   private readonly pending = new Map<string, PendingRequest>()
   private readonly queue: QueuedRequest[] = []
   private activeRequests = 0
+  private timedOutRequestId: string | null = null
 
   constructor(
     private readonly manager: SessionManager,
@@ -97,10 +110,15 @@ export class AgentManagementBridge {
     })
     this.assertOk(response, 'read-agent')
     const output = await this.enrichOutput(response.output, response.observedAt)
-    if (output.messages.length === 0 && output.agent.transcript.availability !== 'available') {
+    if (
+      output.messages.length === 0 &&
+      output.agent.backendState !== 'live' &&
+      output.agent.backendState !== 'spawning' &&
+      output.agent.transcript.availability !== 'available'
+    ) {
       throw new AgentManagementBridgeError(
         'transcript_unavailable',
-        'The target has no durable readable transcript; it was not woken.',
+        'No readable transcript evidence is currently available for the target.',
         { sessionId: params.sessionId },
       )
     }
@@ -135,23 +153,34 @@ export class AgentManagementBridge {
       if (known) return { ...item.output, agent: known }
       return await this.enrichOutput(item, response.observedAt)
     }))
-    const unavailable = outputs.flatMap(output => {
-      if (output.messages.length > 0 || output.agent.transcript.availability === 'available') {
-        return []
-      }
-      return [{
+    const unavailableById = new Map(response.unavailable.map(item => [item.sessionId, item]))
+    for (const output of outputs) {
+      if (
+        unavailableById.has(output.agent.sessionId) ||
+        output.messages.length > 0 ||
+        output.truncated ||
+        output.agent.backendState === 'live' ||
+        output.agent.backendState === 'spawning' ||
+        output.agent.transcript.availability === 'available'
+      ) continue
+      // WHY an empty transcript row is not enough by itself to prove missing
+      // history: a live, newly created process can truthfully have no messages,
+      // and a budget-starved row is deliberately empty with truncated=true.
+      // Only a parked empty row with no readable durable source is inferred
+      // here; renderer-observed hydration failures arrive explicitly above.
+      unavailableById.set(output.agent.sessionId, {
         sessionId: output.agent.sessionId,
         reason: output.agent.transcript.availability === 'not_created'
-          ? 'not_created' as const
-          : 'transcript_unavailable' as const,
-      }]
-    })
+          ? 'not_created'
+          : 'transcript_unavailable',
+      })
+    }
     return {
       observedAt: response.observedAt,
       project: response.project,
       agents,
       outputs,
-      unavailable,
+      unavailable: [...unavailableById.values()],
       truncated: response.truncated,
       totalChars: response.totalChars,
     }
@@ -214,7 +243,21 @@ export class AgentManagementBridge {
     if (!pending) return
     clearTimeout(pending.timer)
     this.pending.delete(response.requestId)
-    pending.resolve(response)
+    if (pending.timedOut) {
+      // WHY a late response is useful even though its caller already received
+      // an uncertainty error: it is the renderer's acknowledgement that the
+      // serialized operation has actually stopped. Only now is it safe to let
+      // a later close/send cross the same workspace mutation boundary.
+      this.timedOutRequestId = null
+      this.journal?.record({
+        area: 'mcp.agent_management',
+        name: 'renderer_request.recovered_after_timeout',
+        data: { type: response.type },
+      })
+    } else {
+      pending.resolve(response)
+    }
+    pending.release()
   }
 
   private assertOk<T extends AgentManagementRendererResponse['type']>(
@@ -237,6 +280,9 @@ export class AgentManagementBridge {
   private request(
     request: AgentManagementRendererRequest,
   ): Promise<AgentManagementRendererResponse> {
+    if (this.timedOutRequestId) {
+      return Promise.reject(this.notDispatchedWhileRendererUnresponsive(request))
+    }
     return new Promise((resolve, reject) => {
       this.queue.push({ request, resolve, reject })
       this.pump()
@@ -248,32 +294,105 @@ export class AgentManagementBridge {
     const queued = this.queue.shift()
     if (!queued) return
     this.activeRequests += 1
-    this.dispatch(queued.request).then(queued.resolve, queued.reject).finally(() => {
-      this.activeRequests -= 1
-      this.pump()
-    })
+    this.dispatch(queued)
   }
 
-  private dispatch(
-    request: AgentManagementRendererRequest,
-  ): Promise<AgentManagementRendererResponse> {
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(request.requestId)
-        this.journal?.record({
-          area: 'mcp.agent_management',
-          name: 'renderer_request.timeout',
-          data: { type: request.type },
-        })
-        reject(new Error(`Agent-management renderer request timed out: ${request.type}`))
-      }, REQUEST_TIMEOUT_MS)
-      this.pending.set(request.requestId, { resolve, reject, timer })
+  private dispatch(queued: QueuedRequest): void {
+    const { request } = queued
+    // WHY fleet reads get a wider response window: their renderer operation
+    // intentionally hydrates cold durable histories through a two-slot limiter.
+    // Thirty seconds remains appropriate for one target and every mutation,
+    // but it would turn a healthy large-project audit into a false renderer
+    // outage merely because bounded I/O was doing exactly what we asked.
+    const timeoutMs = request.type === 'read-agents' ? BULK_READ_TIMEOUT_MS : REQUEST_TIMEOUT_MS
+    let released = false
+    const release = (): void => {
+      if (released) return
+      released = true
+      this.activeRequests -= 1
+      this.pump()
+    }
+    const timer = setTimeout(() => {
+      const pending = this.pending.get(request.requestId)
+      if (!pending) return
+      pending.timedOut = true
+      this.timedOutRequestId = request.requestId
+      this.journal?.record({
+        area: 'mcp.agent_management',
+        name: 'renderer_request.timeout',
+        data: { type: request.type },
+      })
+      queued.reject(this.rendererTimeoutError(request))
+
+      // WHY queued calls fail immediately but the active slot remains held:
+      // timing out only proves that main stopped waiting; it does not prove the
+      // renderer stopped hydrating, waking, writing, or closing. Dispatching a
+      // queued mutation now would break the bridge's serialization guarantee.
+      // The late correlated response releases the slot. If it never arrives,
+      // management stays fail-closed until the app recreates this bridge.
+      for (const blocked of this.queue.splice(0)) {
+        blocked.reject(this.notDispatchedWhileRendererUnresponsive(blocked.request))
+      }
+    }, timeoutMs)
+    this.pending.set(request.requestId, {
+      resolve: queued.resolve,
+      timer,
+      timedOut: false,
+      release,
+    })
+    try {
       // WHY all requests are serialized even though list/read are logically
       // read-only: each crosses React's renderer-owned workspace model and bulk
       // reads may page durable history. Backpressure here prevents an MCP burst
       // from racing workspace mutations or starving the renderer event loop.
       sendToMainWindow('agent-management:request', request)
-    })
+    } catch (error) {
+      clearTimeout(timer)
+      this.pending.delete(request.requestId)
+      queued.reject(error instanceof Error ? error : new Error(String(error)))
+      release()
+    }
+  }
+
+  private rendererTimeoutError(request: AgentManagementRendererRequest): Error {
+    if (request.type === 'send-prompt') {
+      return new AgentManagementBridgeError(
+        'prompt_delivery_uncertain',
+        'Prompt delivery timed out after dispatch. The outcome is unknown; do not retry automatically.',
+        {
+          sessionId: request.sessionId,
+          retrySafe: false,
+          disposition: 'outcome-unknown',
+          promptSubmission: 'uncertain',
+        },
+      )
+    }
+    return new AgentManagementBridgeError(
+      'renderer_unresponsive',
+      `Agent-management renderer request timed out: ${request.type}`,
+      'sessionId' in request ? { sessionId: request.sessionId } : {},
+    )
+  }
+
+  private notDispatchedWhileRendererUnresponsive(
+    request: AgentManagementRendererRequest,
+  ): AgentManagementBridgeError {
+    return new AgentManagementBridgeError(
+      'renderer_unresponsive',
+      'Agent Management is waiting for a timed-out renderer operation to finish; this request was not dispatched.',
+      'sessionId' in request
+        ? {
+            sessionId: request.sessionId,
+            ...(request.type === 'send-prompt'
+              ? {
+                  retrySafe: true,
+                  disposition: 'not-submitted' as const,
+                  promptSubmission: 'not-submitted' as const,
+                }
+              : {}),
+          }
+        : {},
+    )
   }
 
   private async enrichDescriptors(

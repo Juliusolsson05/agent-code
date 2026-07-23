@@ -7,6 +7,7 @@ import {
   additionalCloseImpact,
   assertManagedTarget,
   listManagedAgentDescriptors,
+  managedTranscriptUnavailableReason,
   readManagedAgentOutputs,
 } from '@renderer/workspace/agentManagementMcp'
 
@@ -123,6 +124,45 @@ describe('Agent Management project authority', () => {
       callerSessionId: 'caller',
     })
     expect(listed.agents.map(item => item.agent.sessionId)).not.toContain('grid-agent')
+  })
+
+  it('treats a trailing unresolved user turn as waiting after restart', () => {
+    const runtime = {
+      ...emptyRuntime(),
+      entries: [
+        {
+          type: 'assistant',
+          timestamp: '2026-07-23T10:00:00.000Z',
+          message: { role: 'assistant', content: [{ type: 'text', text: 'Earlier answer' }] },
+        },
+        {
+          type: 'user',
+          timestamp: '2026-07-23T10:01:00.000Z',
+          message: { role: 'user', content: [{ type: 'text', text: 'Please do one more thing' }] },
+        },
+      ],
+    } as SessionRuntime
+    const listed = listManagedAgentDescriptors({
+      state: stateFixture(),
+      runtimes: { 'grid-agent': runtime },
+      callerSessionId: 'caller',
+    })
+
+    expect(listed.agents.find(item => item.agent.sessionId === 'grid-agent')?.agent)
+      .toMatchObject({ activityState: 'waiting', awaitingAssistant: true })
+  })
+
+  it('marks loader errors and provisional disconnects as missing transcript evidence', () => {
+    const meta = stateFixture().sessions['grid-agent']
+    expect(managedTranscriptUnavailableReason({
+      ...emptyRuntime(),
+      transcriptStatus: 'error',
+      transcriptError: 'read failed',
+    }, meta)).toBe('transcript_unavailable')
+    expect(managedTranscriptUnavailableReason({
+      ...emptyRuntime(),
+      transcriptStatus: 'disconnected',
+    }, meta)).toBe('transcript_unavailable')
   })
 
   it('reports linked descendants that the canonical UI close would cascade', () => {

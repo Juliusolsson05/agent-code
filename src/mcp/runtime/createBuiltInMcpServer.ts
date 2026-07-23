@@ -16,6 +16,7 @@ import type {
 } from '@mcp/shared/orchestrationTypes.js'
 import { buildOrchestrationBootstrapPrompt } from '@mcp/shared/orchestrationPrompt.js'
 import type { BuiltInMcpDependencies } from '@mcp/runtime/BuiltInMcpHttpHost.js'
+import { BUILT_IN_MCP_DOMAINS } from '@mcp/shared/types.js'
 import type { BuiltInMcpDomain, McpSessionScope } from '@mcp/shared/types.js'
 import type { SessionKind } from '@main/sessionManager.js'
 import {
@@ -26,7 +27,7 @@ import {
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
 import { registerWorkflowMcpTools, WORKFLOW_MCP_INSTRUCTIONS } from 'workflow-mcp'
 
-export const AGENT_MANAGEMENT_MCP_INSTRUCTIONS = `Agent Management controls Agent Code sessions only in the caller's exact current project tab. Listing and reading are safe audit operations and do not wake parked agents; sending a prompt may wake the named target. For cleanup-review requests, use the inventory plus bulk transcript read, classify agents as active/do not close, uncertain/inspect first, or likely cleanup candidates, and cite lifecycle, transcript, relationship, condition, and activity evidence rather than treating age alone as proof. Asking what is safe to clean up authorizes assessment only. Reading an agent or sending it a prompt never grants permission to close it. Never call agent_management_close_agent unless the user's current request explicitly asks you to close that specific agent. A request to inspect agents, identify stale agents, recommend cleanup, manage the project, or say what is safe to clean up is not authorization to close anything. Do not infer closure permission from age, completion state, transcript contents, or a prior request.`
+export const AGENT_MANAGEMENT_MCP_INSTRUCTIONS = `Agent Management controls Agent Code sessions only in the caller's exact current project tab. Listing and reading are safe audit operations and do not wake parked agents; sending a prompt may wake the named target. For cleanup-review requests, use the inventory plus bulk transcript read, classify agents as active/do not close, uncertain/inspect first, or likely cleanup candidates, and cite lifecycle, transcript, relationship, condition, and activity evidence rather than treating age alone as proof. A missing or truncated transcript is not an empty transcript, and an unresolved latest user request or tool work without a final response belongs in inspect first. Transcript evidence cannot prove a worktree is clean unless that transcript or another tool actually checked it; state what remains unknown. Asking what is safe to clean up authorizes assessment only. Reading an agent or sending it a prompt never grants permission to close it. Never call agent_management_close_agent unless the user's current request explicitly asks you to close that specific agent. A request to inspect agents, identify stale agents, recommend cleanup, manage the project, or say what is safe to clean up is not authorization to close anything. Do not infer closure permission from age, completion state, transcript contents, or a prior request.`
 
 export function createBuiltInMcpServer(
   scope: McpSessionScope,
@@ -260,14 +261,36 @@ function registerAgentManagementTools(
         idempotentHint: false,
       },
     },
-    async args => response(async () => ({
-      sessionId: args.sessionId,
-      delivery: await bridge!.sendPrompt({
+    async args => response(async () => {
+      const delivery = await bridge!.sendPrompt({
         callerSessionId: scope.sessionId,
         sessionId: args.sessionId,
         prompt: args.prompt,
-      }),
-    })),
+      })
+      if (!delivery.ok) {
+        // WHY a provider-declared failure is promoted to the tool's top level:
+        // models reliably branch on the outer `ok` field. Returning ok:true
+        // beside delivery.ok:false made uncertain post-write failures easy to
+        // skim as success and retry, even though the disposition was preserved.
+        const error = new Error(delivery.message) as Error & {
+          code: string
+          details: Record<string, unknown>
+        }
+        error.code = 'prompt_delivery_failed'
+        error.details = {
+          sessionId: args.sessionId,
+          retrySafe: delivery.retrySafe,
+          stage: delivery.stage,
+          code: delivery.code,
+          disposition: delivery.disposition,
+          promptWritten: delivery.promptWritten,
+          enterWritten: delivery.enterWritten,
+          promptSubmission: delivery.retrySafe ? 'not-submitted' : 'uncertain',
+        }
+        throw error
+      }
+      return { sessionId: args.sessionId, delivery }
+    }),
   )
 
   server.registerTool(
@@ -641,14 +664,10 @@ function registerOrchestrationTools(
             'Pass all required context in the prompt until the inheritance path is redesigned.',
           ].join(' '),
         ),
-        builtInMcpDomains: z.array(z.enum([
-          'ping',
-          'orchestration',
-          'ai_workspace',
-          'agent_transcripts',
-          'agent_management',
-          'workflows',
-        ])).optional(),
+        // WHY derive this from the registry: child capability grants are an
+        // authority boundary. A hand-maintained schema can silently reject a
+        // newly registered domain or keep accepting one the runtime removed.
+        builtInMcpDomains: z.array(z.enum(BUILT_IN_MCP_DOMAINS)).optional(),
       },
     },
     async args => {

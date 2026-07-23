@@ -100,6 +100,39 @@ function runtimeActivityAt(runtime: SessionRuntime | undefined): number | undefi
   return values.length > 0 ? Math.max(...values) : undefined
 }
 
+function latestVisibleConversationRole(
+  runtime: SessionRuntime | undefined,
+): 'user' | 'assistant' | null {
+  if (!runtime) return null
+  for (let index = runtime.entries.length - 1; index >= 0; index -= 1) {
+    const entry = runtime.entries[index]!
+    if (entry.type !== 'user' && entry.type !== 'assistant') continue
+    const text = entryTextContent(entry)
+    if (text?.trim()) return entry.type
+  }
+  return null
+}
+
+function hasUnansweredUserTurn(runtime: SessionRuntime | undefined): boolean {
+  return latestVisibleConversationRole(runtime) === 'user'
+}
+
+export function managedTranscriptUnavailableReason(
+  runtime: SessionRuntime | undefined,
+  meta: SessionMeta | undefined,
+): 'transcript_unavailable' | 'not_created' | null {
+  if (!runtime) return meta?.providerSessionId ? 'transcript_unavailable' : 'not_created'
+  // WHY an error/disconnected status remains authoritative even if a few
+  // optimistic or previously cached entries survived: callers asked for the
+  // durable transcript, and returning a partial tail as if hydration succeeded
+  // would make missing evidence indistinguishable from a complete conversation.
+  if (runtime.transcriptStatus === 'error' || runtime.transcriptStatus === 'disconnected') {
+    return 'transcript_unavailable'
+  }
+  if (runtime.transcriptStatus === 'loading') return 'transcript_unavailable'
+  return null
+}
+
 function activityState(runtime: SessionRuntime | undefined): ManagedAgentRecord['activityState'] {
   if (!runtime) return 'unknown'
   if (runtime.processStatus === 'failed' || runtime.processError) return 'failed'
@@ -109,7 +142,13 @@ function activityState(runtime: SessionRuntime | undefined): ManagedAgentRecord[
     runtime.awaitingAssistant ||
     runtime.streamPhase !== 'idle'
   ) return 'running'
-  if (runtime.entries.some(entry => entry.type === 'assistant')) return 'completed'
+  // WHY completion follows the newest visible conversational turn rather than
+  // the existence of any historical assistant message: a restored transcript
+  // can contain many old answers and still end with a newer unanswered user
+  // request. Labeling that shape completed would make it look safe to clean up.
+  const latestRole = latestVisibleConversationRole(runtime)
+  if (latestRole === 'user') return 'waiting'
+  if (latestRole === 'assistant') return 'completed'
   if (runtime.inputReady || runtime.processStatus === 'started') return 'waiting'
   return 'unknown'
 }
@@ -143,6 +182,7 @@ function descriptorForSession(params: {
   const runtime = params.runtimes[params.sessionId]
   const runtimeAt = runtimeActivityAt(runtime)
   const transcriptAt = runtime?.lastJsonlEntryAt ?? latestVisibleTimestamp(runtime)
+  const summary = statusSummary(runtime)
   return {
     agent: {
       sessionId: params.sessionId,
@@ -153,7 +193,7 @@ function descriptorForSession(params: {
       placement: params.membership.placement,
       backendState: backendState(runtime),
       activityState: activityState(runtime),
-      ...(statusSummary(runtime) ? { statusSummary: statusSummary(runtime) } : {}),
+      ...(summary ? { statusSummary: summary } : {}),
       transcript: {
         path: null,
         availability: meta.providerSessionId
@@ -161,7 +201,10 @@ function descriptorForSession(params: {
           : 'not_created',
       },
       processActive: runtime?.processActive === true,
-      awaitingAssistant: runtime?.awaitingAssistant === true,
+      // A hibernated runtime does not persist the transient awaitingAssistant
+      // bit. Derive it from a trailing user turn as well so the inventory and
+      // activityState cannot contradict the transcript evidence after restart.
+      awaitingAssistant: runtime?.awaitingAssistant === true || hasUnansweredUserTurn(runtime),
       ...conditionSummary(runtime),
       isCaller: params.sessionId === params.callerSessionId,
       ...(meta.linkedParentId ? { linkedParentId: meta.linkedParentId } : {}),

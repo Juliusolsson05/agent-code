@@ -52,6 +52,7 @@ import {
   additionalCloseImpact,
   assertManagedTarget,
   listManagedAgentDescriptors,
+  managedTranscriptUnavailableReason,
   readManagedAgentOutput,
   readManagedAgentOutputs,
 } from '@renderer/workspace/agentManagementMcp'
@@ -513,6 +514,7 @@ export function useWorkspace(
       requestId: string,
       type: AgentManagementRendererResponse['type'],
       error: unknown,
+      sessionId?: string,
     ): Promise<void> => {
       const candidate = error instanceof Error ? error.message : 'request_failed'
       const knownCodes = new Set([
@@ -535,22 +537,36 @@ export function useWorkspace(
               ? error.message
               : 'Agent management request failed.')
           : `Agent management request rejected: ${code}.`,
+        ...(sessionId ? { sessionId } : {}),
       })
     }
 
-    const hydrateTranscriptWithoutWaking = async (sessionId: string): Promise<void> => {
-      const meta = refs.stateRef.current.sessions[sessionId]
-      const runtime = refs.latestRuntimesRef.current[sessionId]
-      if (!meta || !runtime || runtime.transcriptStatus === 'ready') return
+    const hydrateTranscriptWithoutWaking = async (
+      sessionId: string,
+    ): Promise<'transcript_unavailable' | 'not_created' | null> => {
+      const before = useAppStore.getState()
+      const meta = before.workspaceState.sessions[sessionId]
+      const runtime = before.workspaceRuntimes[sessionId]
+      if (!meta || !runtime || runtime.transcriptStatus === 'ready') {
+        return managedTranscriptUnavailableReason(runtime, meta)
+      }
       // WHY audit reads call the durable-history loader directly instead of
       // ensureSessionLive: restored and buried agents remain valid project
       // records even with no provider process. Transcript inspection must not
       // wake them, mutate their backend lifetime, or consume a provider turn.
       await loadInitialHistoryForSession({ sessionId, refs, setRuntimes, meta })
+      // Zustand updates synchronously, while the React render that refreshes
+      // latestRuntimesRef may happen after this promise continuation. Reading
+      // the store directly prevents a successful/error hydration from being
+      // mistaken for the stale pre-load runtime in the same MCP request.
+      const after = useAppStore.getState()
+      return managedTranscriptUnavailableReason(
+        after.workspaceRuntimes[sessionId],
+        after.workspaceState.sessions[sessionId],
+      )
     }
 
     const off = window.api.onAgentManagementRequest(async request => {
-      const observedAt = Date.now()
       try {
         if (request.type === 'list-agents') {
           const listed = listManagedAgentDescriptors({
@@ -562,7 +578,7 @@ export function useWorkspace(
             requestId: request.requestId,
             ok: true,
             type: 'list-agents',
-            observedAt,
+            observedAt: Date.now(),
             ...listed,
           })
           return
@@ -575,10 +591,12 @@ export function useWorkspace(
             sessionId: request.sessionId,
             allowSelf: true,
           })
-          await hydrateTranscriptWithoutWaking(request.sessionId)
+          const unavailable = await hydrateTranscriptWithoutWaking(request.sessionId)
+          if (unavailable) throw new Error('transcript_unavailable')
+          const current = useAppStore.getState()
           const output = readManagedAgentOutput({
-            state: refs.stateRef.current,
-            runtimes: refs.latestRuntimesRef.current,
+            state: current.workspaceState,
+            runtimes: current.workspaceRuntimes,
             callerSessionId: request.callerSessionId,
             sessionId: request.sessionId,
             maxMessages: request.maxMessages,
@@ -589,7 +607,7 @@ export function useWorkspace(
             requestId: request.requestId,
             ok: true,
             type: 'read-agent',
-            observedAt,
+            observedAt: Date.now(),
             output,
           })
           return
@@ -602,7 +620,7 @@ export function useWorkspace(
             callerSessionId: request.callerSessionId,
           })
           const listedIds = new Set(listed.agents.map(item => item.agent.sessionId))
-          const targetIds = request.sessionIds
+          let targetIds = request.sessionIds
             ? [...new Set(request.sessionIds)]
             : listed.agents
                 .filter(item => request.includeCaller === true || !item.agent.isCaller)
@@ -613,10 +631,38 @@ export function useWorkspace(
           // loadInitialHistoryForSession contains a two-slot limiter, so this
           // preserves bulk-read latency without turning a large project audit
           // into unbounded filesystem/IPC work.
-          await Promise.all(targetIds.map(hydrateTranscriptWithoutWaking))
+          const unavailableById = new Map(
+            (await Promise.all(targetIds.map(async sessionId => ({
+              sessionId,
+              reason: await hydrateTranscriptWithoutWaking(sessionId),
+            }))))
+              .filter((item): item is {
+                sessionId: string
+                reason: 'transcript_unavailable' | 'not_created'
+              } => item.reason !== null)
+              .map(item => [item.sessionId, item] as const),
+          )
+          const current = useAppStore.getState()
+          if (!request.sessionIds) {
+            const originalIds = new Set(targetIds)
+            const fresh = listManagedAgentDescriptors({
+              state: current.workspaceState,
+              runtimes: current.workspaceRuntimes,
+              callerSessionId: request.callerSessionId,
+            })
+            // WHY the implicit fleet read tolerates departures while an
+            // explicit subset remains strict: "read all" describes a census,
+            // not a transaction over identities the caller selected. Keep the
+            // original observation boundary, drop agents the user closed during
+            // hydration, and let the fresh inventory still reveal new arrivals.
+            targetIds = fresh.agents
+              .filter(item => originalIds.has(item.agent.sessionId))
+              .filter(item => request.includeCaller === true || !item.agent.isCaller)
+              .map(item => item.agent.sessionId)
+          }
           const result = readManagedAgentOutputs({
-            state: refs.stateRef.current,
-            runtimes: refs.latestRuntimesRef.current,
+            state: current.workspaceState,
+            runtimes: current.workspaceRuntimes,
             callerSessionId: request.callerSessionId,
             sessionIds: targetIds,
             includeCaller: request.includeCaller,
@@ -629,9 +675,12 @@ export function useWorkspace(
             requestId: request.requestId,
             ok: true,
             type: 'read-agents',
-            observedAt,
+            observedAt: Date.now(),
             ...result,
-            unavailable: [],
+            unavailable: targetIds.flatMap(sessionId => {
+              const item = unavailableById.get(sessionId)
+              return item ? [item] : []
+            }),
           })
           return
         }
@@ -704,7 +753,12 @@ export function useWorkspace(
           closedSessionId: request.sessionId,
         })
       } catch (error) {
-        await resolveFailure(request.requestId, request.type, error)
+        await resolveFailure(
+          request.requestId,
+          request.type,
+          error,
+          'sessionId' in request ? request.sessionId : undefined,
+        )
       }
     })
     return off
