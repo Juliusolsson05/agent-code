@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAppStore } from '@renderer/app-state/hooks'
 import { useGlobalToast } from '@renderer/ui/GlobalToast'
 import type { WorkspaceModeId } from '@renderer/app-state/settings/types'
+import type { ConfigurableBuiltInMcpDomain } from '@mcp/shared/types'
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import type { AgentViewModeOverride, SessionId } from '@renderer/workspace/types'
 
@@ -72,6 +73,7 @@ export function useWorkspace(
   // is intentional, the setting only seeds initial state on a fresh
   // install (no workspace.json yet).
   defaultWorkspaceMode: WorkspaceModeId = 'grid',
+  defaultBuiltInMcpDomains: ConfigurableBuiltInMcpDomain[] = [],
 ) {
   // ---- Zustand subscriptions (these drive re-renders) ----
   const { showToast } = useGlobalToast()
@@ -98,6 +100,7 @@ export function useWorkspace(
     tileTabs,
     dangerousAgentsEnabled,
     useProxyStreaming,
+    defaultBuiltInMcpDomains,
   )
 
   // ---- Keep refs in sync with live values on every render ----
@@ -107,6 +110,7 @@ export function useWorkspace(
   refs.latestTileTabsRef.current = tileTabs
   refs.dangerousAgentsRef.current = dangerousAgentsEnabled
   refs.useProxyStreamingRef.current = useProxyStreaming
+  refs.defaultBuiltInMcpDomainsRef.current = defaultBuiltInMcpDomains
 
   // ---- Draft version counter (React state because the save effect
   //      reads it as a dep) ----

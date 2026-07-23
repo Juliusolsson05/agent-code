@@ -1,4 +1,8 @@
-import { DEFAULT_PROVIDER, isSessionKind } from '@shared/types/providerKind'
+import {
+  DEFAULT_PROVIDER,
+  isAgentProviderKind,
+  isSessionKind,
+} from '@shared/types/providerKind'
 import type {
   SessionBackendSnapshot,
   SessionRecoverFailureCode,
@@ -37,7 +41,7 @@ import type {
   WorkspaceSetTileTabs,
 } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
-import { normalizeSessionBuiltInMcpDomains } from '@renderer/workspace/mcpDomains'
+import { resolveSessionBuiltInMcpDomains } from '@renderer/workspace/mcpDomains'
 import * as perf from '@renderer/performance/client'
 import { loadInitialHistoryForSession } from '@renderer/workspace/hook/actions/initialHistory'
 import {
@@ -628,8 +632,12 @@ export async function rehydrateWorkspace(
           }
           const kind: SessionKind = meta.kind ?? DEFAULT_PROVIDER
           const builtInMcpDomains =
-            kind !== 'terminal'
-              ? normalizeSessionBuiltInMcpDomains(meta.builtInMcpDomains)
+            isAgentProviderKind(kind)
+              ? resolveSessionBuiltInMcpDomains({
+                  provider: kind,
+                  sessionDomains: meta.builtInMcpDomains,
+                  defaultDomains: refs.defaultBuiltInMcpDomainsRef.current,
+                })
               : undefined
           // For terminal sessions with a persisted tmuxName, pass it
           // as recoverTmuxName so main re-attaches the alive tmux
@@ -659,7 +667,7 @@ export async function rehydrateWorkspace(
               status: 'failed',
               meta: {
                 ...restoredMeta,
-                ...(builtInMcpDomains ? { builtInMcpDomains } : {}),
+                ...(builtInMcpDomains !== undefined ? { builtInMcpDomains } : {}),
               },
               message: recovery.message,
               code: recovery.code,
@@ -691,7 +699,7 @@ export async function rehydrateWorkspace(
           // (recovered name when alive, fresh name when respawned).
           const recoveredMeta: SessionMeta = {
             ...restoredMeta,
-            ...(builtInMcpDomains ? { builtInMcpDomains } : {}),
+            ...(builtInMcpDomains !== undefined ? { builtInMcpDomains } : {}),
             ...(recovery.tmuxName ? { tmuxName: recovery.tmuxName } : {}),
           }
           recoveryOutcomes.set(newId, {

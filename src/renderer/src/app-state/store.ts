@@ -55,7 +55,12 @@ export const useAppStore = create<AppStore>()(
         // v6 adds `settings.savedPromptTemplates`. v7 adds
         // `settings.dispatchColorFlags`. Existing users must re-run coercion so
         // the new keys are always present in hydrated state.
-        version: 7,
+        //
+        // v8 adds `settings.defaultBuiltInMcpDomains`. The empty array is a
+        // real product default and downstream session initialization reads it
+        // synchronously, so older blobs must be backfilled before workspace
+        // bootstrap can create or recover an agent.
+        version: 8,
         storage: createJSONStorage(() => localStorage),
         partialize: state => ({ settings: state.settings }),
         merge: (persisted, current) => {

@@ -9,6 +9,7 @@ import type {
   TileTabsState,
 } from '@renderer/workspace/types'
 import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
+import type { ConfigurableBuiltInMcpDomain } from '@mcp/shared/types'
 
 // -----------------------------------------------------------------------------
 // Ref factory for the workspace hook.
@@ -31,6 +32,7 @@ export type WorkspaceRefs = {
   latestTileTabsRef: MutableRefObject<TileTabsState | null>
   dangerousAgentsRef: MutableRefObject<boolean>
   useProxyStreamingRef: MutableRefObject<boolean>
+  defaultBuiltInMcpDomainsRef: MutableRefObject<ConfigurableBuiltInMcpDomain[]>
   seenUuidsRef: MutableRefObject<Record<SessionId, Set<string>>>
   latestScreenRef: MutableRefObject<Record<SessionId, string>>
   undoStackRef: MutableRefObject<UndoCloseStack>
@@ -48,6 +50,7 @@ export function useWorkspaceRefs(
   initialTileTabs: TileTabsState | null,
   dangerousAgentsEnabled: boolean,
   useProxyStreaming: boolean,
+  defaultBuiltInMcpDomains: ConfigurableBuiltInMcpDomain[],
 ): WorkspaceRefs {
   // Each `useRef(...)` already hands back a stable ref OBJECT across
   // renders. But the surrounding `{ ... }` literal does NOT — without
@@ -79,6 +82,7 @@ export function useWorkspaceRefs(
   const latestTileTabsRef = useRef(initialTileTabs)
   const dangerousAgentsRef = useRef(dangerousAgentsEnabled)
   const useProxyStreamingRef = useRef(useProxyStreaming)
+  const defaultBuiltInMcpDomainsRef = useRef(defaultBuiltInMcpDomains)
   const seenUuidsRef = useRef<Record<SessionId, Set<string>>>({})
   const latestScreenRef = useRef<Record<SessionId, string>>({})
   const undoStackRef = useRef(new UndoCloseStack())
@@ -108,6 +112,10 @@ export function useWorkspaceRefs(
     // the live value without having to subscribe per-call.
     dangerousAgentsRef,
     useProxyStreamingRef,
+    // This ref carries only the live default seed. Each initialized session
+    // stores its own explicit array, so later Settings changes do not mutate or
+    // restart a running agent behind the user's back.
+    defaultBuiltInMcpDomainsRef,
 
     // Seen uuids per session, for JSONL dedup. Refs because we never
     // render against them — they're bookkeeping.

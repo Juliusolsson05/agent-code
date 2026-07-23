@@ -51,6 +51,7 @@ function makeRefs(state: WorkspaceState): WorkspaceRefs {
     latestTileTabsRef: ref(null),
     dangerousAgentsRef: ref(false),
     useProxyStreamingRef: ref(false),
+    defaultBuiltInMcpDomainsRef: ref([]),
     seenUuidsRef: ref({}),
     latestScreenRef: ref({}),
     undoStackRef: ref(new UndoCloseStack()),

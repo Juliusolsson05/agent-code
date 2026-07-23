@@ -19,4 +19,21 @@ describe('coerceSettings agentViewMode', () => {
   it('defaults missing savedPromptTemplates to an empty list', () => {
     expect(coerceSettings({}).savedPromptTemplates).toEqual([])
   })
+
+  it('defaults missing built-in MCP defaults to an empty list', () => {
+    expect(coerceSettings({}).defaultBuiltInMcpDomains).toEqual([])
+  })
+
+  it('keeps only configurable built-in MCP defaults in first-seen order', () => {
+    expect(coerceSettings({
+      defaultBuiltInMcpDomains: [
+        'workflows',
+        'ping',
+        'orchestration',
+        'workflows',
+        'not-a-domain',
+        12,
+      ],
+    }).defaultBuiltInMcpDomains).toEqual(['workflows', 'orchestration'])
+  })
 })

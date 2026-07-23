@@ -363,6 +363,7 @@ describe('SessionManager recover', () => {
     expect(registerSession).toHaveBeenCalledWith({
       sessionId: 'mcp-session',
       cwd: '/tmp/project',
+      providerKind: 'claude',
       domains: ['workflows'],
     })
     expect(revokeSession).not.toHaveBeenCalled()

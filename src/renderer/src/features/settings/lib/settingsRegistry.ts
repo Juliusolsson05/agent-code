@@ -16,6 +16,7 @@ import { SETTING_CATEGORIES } from '@renderer/features/settings/lib/settingsCate
 import type { SettingCategoryId } from '@renderer/features/settings/lib/settingsCategories'
 import { listPickerCommandMeta } from '@renderer/features/command-palette/registry'
 import type { PickerCommandMeta } from '@renderer/features/command-palette/registry'
+import type { ConfigurableBuiltInMcpDomain } from '@mcp/shared/types'
 
 export type SettingActionContext = {
   workspace: Workspace
@@ -235,6 +236,23 @@ function resolveCommandVisible(settings: Settings, command: PickerCommandMeta): 
   return command.pickerVisibility === 'default'
 }
 
+function updateDefaultBuiltInMcpDomain(
+  ctx: SettingActionContext,
+  domain: ConfigurableBuiltInMcpDomain,
+  enabled: boolean,
+): void {
+  const current = ctx.settings.defaultBuiltInMcpDomains
+  // WHY each row rewrites one shared ordered set instead of storing four
+  // booleans: the session launch contract already speaks domain arrays, and a
+  // single persisted list makes adding a future domain a one-field migration.
+  // Filtering before append also makes the helper safe against a same-value UI
+  // event without allowing duplicates into the in-memory store.
+  const next = enabled
+    ? [...current.filter(candidate => candidate !== domain), domain]
+    : current.filter(candidate => candidate !== domain)
+  ctx.onChange({ defaultBuiltInMcpDomains: next })
+}
+
 export function getSettingsRegistry(): SettingDefinition[] {
   // Resolved once per registry build. The command catalog is static for
   // the lifetime of the app (it's the flat `commandDefs` array), so
@@ -444,6 +462,58 @@ export function getSettingsRegistry(): SettingDefinition[] {
         'opencode', 'skills', 'commits', 'git', 'testing', 'development practices',
       ],
       control: { type: 'agent-code-conventions' },
+    },
+    {
+      id: 'default-orchestration-mcp',
+      category: 'agents',
+      title: 'Orchestration MCP for New Agents',
+      description:
+        'Start new Claude and Codex agents with Agent Code orchestration tools. Existing sessions are unchanged and can still toggle this capability independently from the command picker.',
+      keywords: ['mcp', 'orchestration', 'default', 'new agents', 'claude', 'codex'],
+      control: {
+        type: 'toggle',
+        getValue: settings => settings.defaultBuiltInMcpDomains.includes('orchestration'),
+        onToggle: (ctx, value) => updateDefaultBuiltInMcpDomain(ctx, 'orchestration', value),
+      },
+    },
+    {
+      id: 'default-ai-workspace-mcp',
+      category: 'agents',
+      title: 'AI Workspace MCP for New Agents',
+      description:
+        'Start new Claude and Codex agents with tools for curating cross-worktree review workspaces. Existing sessions keep their own command-picker selection.',
+      keywords: ['mcp', 'ai workspace', 'review', 'default', 'new agents', 'claude', 'codex'],
+      control: {
+        type: 'toggle',
+        getValue: settings => settings.defaultBuiltInMcpDomains.includes('ai_workspace'),
+        onToggle: (ctx, value) => updateDefaultBuiltInMcpDomain(ctx, 'ai_workspace', value),
+      },
+    },
+    {
+      id: 'default-agent-transcripts-mcp',
+      category: 'agents',
+      title: 'Agent Transcripts MCP for New Agents',
+      description:
+        'Start new Claude and Codex agents with bounded transcript file tools. Existing sessions remain unchanged and can override this default independently.',
+      keywords: ['mcp', 'transcript', 'transcripts', 'default', 'new agents', 'claude', 'codex'],
+      control: {
+        type: 'toggle',
+        getValue: settings => settings.defaultBuiltInMcpDomains.includes('agent_transcripts'),
+        onToggle: (ctx, value) => updateDefaultBuiltInMcpDomain(ctx, 'agent_transcripts', value),
+      },
+    },
+    {
+      id: 'default-workflow-mcp',
+      category: 'agents',
+      title: 'Workflow MCP for New Codex Agents',
+      description:
+        'Codex only. Claude uses its native workflow feature, so Agent Code never injects Workflow MCP into Claude sessions. Existing Codex sessions keep their own command-picker selection.',
+      keywords: ['mcp', 'workflow', 'workflows', 'codex', 'default', 'new agents', 'claude native'],
+      control: {
+        type: 'toggle',
+        getValue: settings => settings.defaultBuiltInMcpDomains.includes('workflows'),
+        onToggle: (ctx, value) => updateDefaultBuiltInMcpDomain(ctx, 'workflows', value),
+      },
     },
     {
       id: 'command-picker-visibility',

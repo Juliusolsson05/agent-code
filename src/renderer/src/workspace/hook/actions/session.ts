@@ -11,7 +11,7 @@ import type { SessionRuntime } from '@renderer/session-runtime/state'
 import { clearLiveEntryWindowSession } from '@renderer/session-runtime/liveEntryWindow'
 import type { SessionId, SessionKind, SessionMeta, TileNode } from '@renderer/workspace/types'
 import type { BuiltInMcpDomain } from '@mcp/shared/types'
-import { normalizeSessionBuiltInMcpDomains } from '@renderer/workspace/mcpDomains'
+import { resolveSessionBuiltInMcpDomains } from '@renderer/workspace/mcpDomains'
 import {
   clearTiledLaneSessions,
   remapTiledLanes,
@@ -259,8 +259,12 @@ export function useSessionActions(
       const useProxy =
         kind !== 'terminal' ? refs.useProxyStreamingRef.current : undefined
       const builtInMcpDomains =
-        kind !== 'terminal'
-          ? normalizeSessionBuiltInMcpDomains(opts?.builtInMcpDomains)
+        isAgentProviderKind(kind)
+          ? resolveSessionBuiltInMcpDomains({
+              provider: kind,
+              sessionDomains: opts?.builtInMcpDomains,
+              defaultDomains: refs.defaultBuiltInMcpDomainsRef.current,
+            })
           : undefined
       let sessionId: SessionId
       let tmuxName: string | undefined
@@ -291,7 +295,7 @@ export function useSessionActions(
               providerSessionIdSource: 'resume-request' as const,
             }
           : {}),
-        ...(kind !== 'terminal' && builtInMcpDomains
+        ...(isAgentProviderKind(kind) && builtInMcpDomains !== undefined
           ? { builtInMcpDomains }
           : {}),
       }
@@ -442,7 +446,13 @@ export function useSessionActions(
         const kind: SessionKind = meta.kind ?? DEFAULT_PROVIDER
 
         const builtInMcpDomains =
-          kind !== 'terminal' ? normalizeSessionBuiltInMcpDomains(meta.builtInMcpDomains) : undefined
+          isAgentProviderKind(kind)
+            ? resolveSessionBuiltInMcpDomains({
+                provider: kind,
+                sessionDomains: meta.builtInMcpDomains,
+                defaultDomains: refs.defaultBuiltInMcpDomainsRef.current,
+              })
+            : undefined
         const resumeSessionId = kind !== 'terminal' ? resumableProviderSessionId(meta) : undefined
         const restoredMeta = withoutProvisionalProviderSession(meta)
         const priorRecoveryFailureCode =
@@ -652,7 +662,7 @@ export function useSessionActions(
 
         const recoveredMeta: SessionMeta = {
           ...restoredMeta,
-          ...(builtInMcpDomains ? { builtInMcpDomains } : {}),
+          ...(builtInMcpDomains !== undefined ? { builtInMcpDomains } : {}),
           ...(recoveredTmuxName ? { tmuxName: recoveredTmuxName } : {}),
         }
         setState(prev => {
@@ -801,15 +811,17 @@ export function useSessionActions(
       // keeps MCP enablement a durable property of the agent pane instead of a
       // transient spawn flag that disappears on the next routine reload.
       const builtInMcpDomains =
-        nextKind !== 'terminal'
-          ? normalizeSessionBuiltInMcpDomains(
-            spawnOpts.builtInMcpDomains ?? oldMeta?.builtInMcpDomains,
-          )
+        isAgentProviderKind(nextKind)
+          ? resolveSessionBuiltInMcpDomains({
+              provider: nextKind,
+              sessionDomains: spawnOpts.builtInMcpDomains ?? oldMeta?.builtInMcpDomains,
+              defaultDomains: refs.defaultBuiltInMcpDomainsRef.current,
+            })
           : undefined
       const oldDraft = refs.latestRuntimesRef.current[oldId]?.draftInput ?? ''
       const newId = await spawn(cwd, {
         ...spawnOpts,
-        ...(builtInMcpDomains ? { builtInMcpDomains } : {}),
+        ...(builtInMcpDomains !== undefined ? { builtInMcpDomains } : {}),
       })
       setRuntimes(prev => ({
         ...prev,
@@ -860,7 +872,7 @@ export function useSessionActions(
                 providerSessionIdSource: 'resume-request' as const,
               }
             : {}),
-          ...(builtInMcpDomains ? { builtInMcpDomains } : {}),
+          ...(builtInMcpDomains !== undefined ? { builtInMcpDomains } : {}),
         }
         const detachedSessions = { ...prev.detachedSessions }
         const detached = detachedSessions[oldId]
@@ -980,8 +992,12 @@ export function useSessionActions(
         try {
           const kind: SessionKind = meta.kind ?? DEFAULT_PROVIDER
           const builtInMcpDomains =
-            kind !== 'terminal'
-              ? normalizeSessionBuiltInMcpDomains(meta.builtInMcpDomains)
+            isAgentProviderKind(kind)
+              ? resolveSessionBuiltInMcpDomains({
+                  provider: kind,
+                  sessionDomains: meta.builtInMcpDomains,
+                  defaultDomains: refs.defaultBuiltInMcpDomainsRef.current,
+                })
               : undefined
           const resumeSessionId = resumableProviderSessionId(meta)
           const restoredMeta = withoutProvisionalProviderSession(meta)
@@ -996,7 +1012,7 @@ export function useSessionActions(
           idMap.set(oldId, newId)
           freshSessions[newId] = {
             ...restoredMeta,
-            ...(builtInMcpDomains ? { builtInMcpDomains } : {}),
+            ...(builtInMcpDomains !== undefined ? { builtInMcpDomains } : {}),
           }
         } catch {
           failedIds.add(oldId)

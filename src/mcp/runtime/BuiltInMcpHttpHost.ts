@@ -14,12 +14,13 @@ import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import type { WorkflowBridge } from '@main/workflows/WorkflowBridge.js'
 import type { WorkflowService } from 'workflow-mcp'
 import { performanceService } from '@main/performance/PerformanceService.js'
-import { normalizeBuiltInMcpDomains } from '@mcp/shared/types.js'
+import { filterBuiltInMcpDomainsForProvider } from '@mcp/shared/types.js'
 import type {
   BuiltInMcpDomain,
   BuiltInMcpServerConfig,
   McpSessionScope,
 } from '@mcp/shared/types.js'
+import type { AgentProviderKind } from '@shared/types/providerKind.js'
 
 type SessionRegistration = {
   token: string
@@ -157,9 +158,18 @@ export class BuiltInMcpHttpHost {
   registerSession(scope: {
     sessionId: string
     cwd: string
+    providerKind: AgentProviderKind
     domains: readonly BuiltInMcpDomain[] | undefined
   }): BuiltInMcpServerConfig[] {
-    const domains = normalizeBuiltInMcpDomains(scope.domains).filter(domain => {
+    // WHY provider filtering is repeated at this main-owned boundary even
+    // though the renderer resolves the same policy: session metadata and IPC
+    // payloads are inputs, not authority. In particular, stale persisted data
+    // must never inject Agent Code's emulated Workflow MCP into Claude, whose
+    // native workflow feature is the sole workflow control plane.
+    const domains = filterBuiltInMcpDomainsForProvider(
+      scope.providerKind,
+      scope.domains,
+    ).filter(domain => {
       if (domain !== 'ping') return true
       // WHY ping is environment-gated instead of being a normal MCP domain:
       //
@@ -171,7 +181,14 @@ export class BuiltInMcpHttpHost {
       // silently drop it unless a developer opted in for bridge testing.
       return envFlag('AGENT_CODE_MCP_PING') || envFlag('AGENT_CODE_DEV_DEBUG')
     })
-    if (domains.length === 0) return []
+    if (domains.length === 0) {
+      // A recovery can reuse a renderer session id after its old provider
+      // process died. If policy narrowing removes every requested domain,
+      // revoke any token left under that id rather than letting the stale
+      // registration outlive the now-capability-free replacement.
+      this.revokeSession(scope.sessionId)
+      return []
+    }
     if (!this.server || this.port === null) {
       throw new Error('Built-in MCP host must be started before registering a session')
     }
