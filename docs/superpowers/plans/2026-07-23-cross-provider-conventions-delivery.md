@@ -1214,8 +1214,8 @@ Test convention:
   fingerprint is rejected; then resolve only the newly reviewed target.
 - [ ] Create an unmanaged collision on a clean target and verify enable is
   blocked before any other new target is written.
-- [ ] Disable and verify unchanged managed copies are removed, directories are
-  removed only when empty and Agent Code-created, and saved body remains visible.
+- [ ] Disable and verify unchanged managed `SKILL.md` copies are removed, empty
+  leaf directories are retained, and the saved body remains visible.
 - [ ] Clear with a modified remnant and verify the body is retained. Then verify
   both safe retry and separately confirmed **Leave external file and clear**;
   the latter must preserve external bytes while clearing canonical state.
