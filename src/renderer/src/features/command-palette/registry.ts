@@ -12,6 +12,7 @@ import { copyCodeBlockCommands } from '@renderer/features/copy-code-block/comman
 import { promptTemplateCommands } from '@renderer/features/prompt-templates/commands/promptTemplateCommands'
 import { replyToSelectionCommands } from '@renderer/features/reply-to-selection/commands/replyToSelectionCommands'
 import { agentStatusCommands } from '@renderer/features/agent-status/commands/agentStatusCommands'
+import { dispatchColorFlagCommands } from '@renderer/features/workspace/commands/dispatchColorFlagCommands'
 import { remoteCommands } from '@renderer/features/remote/commands/remoteCommands'
 import { usageCommands } from '@renderer/features/usage/commands/usageCommands'
 import { commandAllowedByRenderedViewPolicy } from '@renderer/workspace/agentDisplayMode'
@@ -34,6 +35,7 @@ const commandDefs: CommandDef[] = [
   // regressions to users who navigate by position.
   ...globalEditorCommands,
   ...sessionCommands,
+  ...dispatchColorFlagCommands,
   ...spotlightCommands,
   ...readerCommands,
   ...tileTabsCommands,

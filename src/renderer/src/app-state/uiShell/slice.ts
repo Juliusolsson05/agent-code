@@ -44,6 +44,7 @@ export const createUiShellSlice: StateCreator<
   usageModalOpen: false,
   rewindPromptSessionId: null,
   agentViewModePickerSessionId: null,
+  colorFlagPickerSessionId: null,
   // Default keeps the dispatch list at 25% (matching the
   // previous-hardcoded `basis-1/4`) so the migration is visually a
   // no-op. The clamp range in setDispatchListRatio is what enforces
@@ -271,4 +272,9 @@ export const createUiShellSlice: StateCreator<
       false,
       'uiShell/closeAgentViewModePicker',
     ),
+
+  openColorFlagPicker: sessionId =>
+    set({ colorFlagPickerSessionId: sessionId }, false, 'uiShell/openColorFlagPicker'),
+  closeColorFlagPicker: () =>
+    set({ colorFlagPickerSessionId: null }, false, 'uiShell/closeColorFlagPicker'),
 })

@@ -1,6 +1,7 @@
 import { DEFAULT_CUSTOM_APPEARANCE_JSON } from '@renderer/app-state/settings/customAppearance'
 import type { SavedTheme } from '@renderer/app-state/settings/savedThemes'
 import type { PromptTemplate } from '@renderer/features/prompt-templates/types'
+import type { ColorFlagId } from '@renderer/app-state/settings/dispatchColorFlags'
 import type { DictationProvider } from '@shared/types/dictation'
 
 // Built-in theme ids only. 'custom' used to live here as a sentinel that
@@ -257,6 +258,12 @@ export type Settings = {
    *  surface sees the same template catalog, and migrations can move older
    *  local-only shapes forward without inventing another storage authority. */
   savedPromptTemplates: PromptTemplate[]
+  /** Per-agent Dispatch color flags: sessionId → color id (see
+   *  dispatchColorFlags.ts). Lives in Settings for the same reason as
+   *  savedThemes/savedPromptTemplates — it rides the one persisted, coerced,
+   *  phone-mirrored settings blob rather than inventing another store. Absent
+   *  key = no flag. */
+  dispatchColorFlags: Record<string, ColorFlagId>
   contrast: boolean
   accent: AccentId
   /** Raw JSON string for the Custom Appearance mode. It is stored as raw
@@ -390,6 +397,7 @@ export const DEFAULT_SETTINGS: Settings = {
   mode: 'dark',
   savedThemes: [],
   savedPromptTemplates: [],
+  dispatchColorFlags: {},
   contrast: false,
   accent: 'lime',
   customAppearanceJson: DEFAULT_CUSTOM_APPEARANCE_JSON,

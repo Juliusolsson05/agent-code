@@ -98,6 +98,8 @@ export type CommandContext = {
     openBulkProviderSwitch: () => void
     openRewindPrompt: (sessionId: string) => void
     openAgentViewModePicker: (sessionId: string) => void
+    /** Open the Dispatch color-flag swatch picker for a session. */
+    openColorFlagPicker: (sessionId: string) => void
     openUsageModal: () => void
     toggleGitBar: () => void
     toggleWorktreesBar: () => void

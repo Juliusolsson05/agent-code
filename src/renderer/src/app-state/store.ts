@@ -52,9 +52,10 @@ export const useAppStore = create<AppStore>()(
         // longer resolves to anything, and boot to Dark with their custom
         // palette silently orphaned inside customAppearanceJson.
         //
-        // v6 adds `settings.savedPromptTemplates`. Existing users must re-run
-        // coercion so the new array is always present in hydrated state.
-        version: 6,
+        // v6 adds `settings.savedPromptTemplates`. v7 adds
+        // `settings.dispatchColorFlags`. Existing users must re-run coercion so
+        // the new keys are always present in hydrated state.
+        version: 7,
         storage: createJSONStorage(() => localStorage),
         partialize: state => ({ settings: state.settings }),
         merge: (persisted, current) => {
