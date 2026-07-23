@@ -41,8 +41,12 @@ describe('AgentCodeConventionsOwnershipPolicy', () => {
     const [retiredKey] = Object.keys(document.materializations)
     expect(retiredKey).toMatch(new RegExp(`^${RETIRED_CONVENTIONS_TARGET_PREFIX}`))
     expect(policy.persistedOwnershipProblem(document, current)).toBeNull()
-    expect(policy.isCurrentMutationPath(oldPath, current)).toBe(false)
-    expect(policy.isCurrentMutationPath(current.targets[0]!.skillFile, current)).toBe(true)
+    expect(policy.isCurrentMutationPath('claude-personal-skills', oldPath, current)).toBe(false)
+    expect(policy.isCurrentMutationPath(
+      'claude-personal-skills',
+      current.targets[0]!.skillFile,
+      current,
+    )).toBe(true)
   })
 
   it('turns a moved journal-only write into a retained retired tombstone', () => {
@@ -121,6 +125,24 @@ describe('AgentCodeConventionsOwnershipPolicy', () => {
       path: rootB.targets[0]!.skillFile,
     })
     expect(policy.persistedOwnershipProblem(document, rootA)).toBeNull()
+  })
+
+  it('does not transfer retired authority to another target id at the same path', () => {
+    const policy = new AgentCodeConventionsOwnershipPolicy()
+    const current = targetsAt(resolve('fixture-shared', 'skills'))
+    current.targets[0]!.id = 'agents-standard-personal-skills'
+    const currentPath = current.targets[0]!.skillFile
+
+    expect(policy.isCurrentMutationPath(
+      `${RETIRED_CONVENTIONS_TARGET_PREFIX}claude-personal-skills:${'a'.repeat(12)}`,
+      currentPath,
+      current,
+    )).toBe(false)
+    expect(policy.isCurrentMutationPath(
+      'agents-standard-personal-skills',
+      currentPath,
+      current,
+    )).toBe(true)
   })
 
   it('rejects a historical path whose state key has no live registry relation', () => {

@@ -327,7 +327,11 @@ export class AgentCodeConventionsService {
     const current = this.targets.targets.find(target => target.id === targetId)
     if (current) return current.skillFile
     const historical = this.document.materializations[targetId]
-    return historical && this.ownershipPolicy.isCurrentMutationPath(historical.path, this.targets)
+    return historical && this.ownershipPolicy.isCurrentMutationPath(
+      targetId,
+      historical.path,
+      this.targets,
+    )
       ? historical.path
       : null
   }
@@ -608,9 +612,9 @@ export class AgentCodeConventionsService {
   }
 
   private async cleanupJournaledWriteTemps(): Promise<void> {
-    for (const operation of Object.values(this.document.pendingOperations)) {
+    for (const [key, operation] of Object.entries(this.document.pendingOperations)) {
       if (operation.kind !== 'write') continue
-      if (!this.ownershipPolicy.isCurrentMutationPath(operation.path, this.targets)) continue
+      if (!this.ownershipPolicy.isCurrentMutationPath(key, operation.path, this.targets)) continue
       await this.pathSafety.cleanupJournaledTemporaryFile(
         journalTemporaryPath(operation.path, operation.operationId),
       )
@@ -704,12 +708,12 @@ export class AgentCodeConventionsService {
             state,
             message,
           }
-    if (!this.ownershipPolicy.isCurrentMutationPath(record.path, this.targets)) {
+    if (!this.ownershipPolicy.isCurrentMutationPath(key, record.path, this.targets)) {
       delete this.document.pendingOperations[key]
       return {
         ...baseStatus(
           'retired',
-          'This copy is outside every current provider root. Remove it manually or leave it when clearing.',
+          'This copy is not owned by its current provider target. Remove it manually or leave it when clearing.',
         ),
         conflictFingerprint: this.ownershipPolicy.retiredFingerprint(key, record),
       }
@@ -801,7 +805,7 @@ export class AgentCodeConventionsService {
             state,
             message: 'External changes remain on disk.',
           }
-      if (!this.ownershipPolicy.isCurrentMutationPath(record.path, this.targets)) {
+      if (!this.ownershipPolicy.isCurrentMutationPath(key, record.path, this.targets)) {
         status.message = 'Historical provider-root copy was preserved and must be handled manually.'
         status.conflictFingerprint = this.ownershipPolicy.retiredFingerprint(key, record)
       } else {

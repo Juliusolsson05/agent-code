@@ -111,7 +111,9 @@ provider root such as `CLAUDE_CONFIG_DIR` moves, Agent Code installs the current
 target and reports the old copy as Retired for manual cleanup or explicit
 state abandonment. It does not read, reveal, overwrite, or delete a path merely
 because app state names a known provider id; automatic filesystem mutation is
-limited to exact current registry targets.
+limited to records whose stable target id and exact path both match the current
+registry target. A path becoming current under a different provider id does not
+transfer authority from a retired record.
 
 Clear is two-phase. Modified remnants keep the canonical body until the user
 repairs them or explicitly chooses “Leave external file and clear.” Abandonment

@@ -8,6 +8,7 @@ import {
   type AgentCodeConventionsDocument,
 } from '@shared/types/agentCodeConventions.js'
 import { renderAgentCodeConventionsSkill, sha256Text } from './renderSkill.js'
+import { RETIRED_CONVENTIONS_TARGET_PREFIX } from './ownershipPolicy.js'
 import { journalTemporaryPath } from './skillPathSafety.js'
 import type {
   AgentCodeConventionsTarget,
@@ -547,6 +548,60 @@ describe('AgentCodeConventionsService', () => {
 
     expect(await service.getSnapshot()).toMatchObject({ health: 'conflict' })
     expect(await readFile(unrelated, 'utf8')).toBe(contents)
+  })
+
+  it('does not delete a retired copy that is current under another target id', async () => {
+    const root = await temporaryDirectory()
+    const stateFilePath = join(root, 'state', 'conventions.json')
+    const claudeAtA = target(
+      'claude-personal-skills',
+      join(root, 'claude-a', 'skills'),
+      ['claude'],
+    )
+    const agentsAtB = target(
+      'agents-standard-personal-skills',
+      join(root, 'shared-b', 'skills'),
+      ['codex'],
+    )
+    const markdown = '# Rules'
+    const rendered = renderAgentCodeConventionsSkill(markdown)
+    const retiredKey = `${RETIRED_CONVENTIONS_TARGET_PREFIX}claude-personal-skills:${'a'.repeat(12)}`
+    await writeFileWithParents(agentsAtB.skillFile, rendered)
+    const document: AgentCodeConventionsDocument = {
+      ...createEmptyAgentCodeConventionsDocument(),
+      enabled: true,
+      markdown,
+      materializations: {
+        [retiredKey]: {
+          path: agentsAtB.skillFile,
+          sha256: sha256Text(rendered),
+        },
+      },
+      pendingOperations: {
+        [retiredKey]: {
+          operationId: 'crash-left-write-at-b',
+          targetId: retiredKey,
+          path: agentsAtB.skillFile,
+          kind: 'write',
+          previousSha256: null,
+          desiredSha256: sha256Text(rendered),
+        },
+      },
+    }
+    await writeFileWithParents(stateFilePath, `${JSON.stringify(document)}\n`)
+    const service = new AgentCodeConventionsService({
+      stateFilePath,
+      homeDirectory: root,
+      resolveTargets: async () => ({
+        targets: [claudeAtA, agentsAtB],
+        unsupportedProviders: [],
+      }),
+    })
+
+    await service.initialize()
+
+    expect(await service.getSnapshot()).toMatchObject({ health: 'conflict' })
+    expect(await readFile(agentsAtB.skillFile, 'utf8')).toBe(rendered)
   })
 
   it('refuses to enable when provider target discovery fails', async () => {

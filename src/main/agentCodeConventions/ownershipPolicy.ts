@@ -117,11 +117,16 @@ export class AgentCodeConventionsOwnershipPolicy {
   }
 
   isCurrentMutationPath(
+    key: string,
     path: string,
     targets: ResolvedAgentCodeConventionsTargets,
   ): boolean {
-    const absolute = resolve(path)
-    return targets.targets.some(target => resolve(target.skillFile) === absolute)
+    if (key.startsWith(RETIRED_CONVENTIONS_TARGET_PREFIX)) return false
+    const target = targets.targets.find(candidate => candidate.id === key)
+    // A pathname becoming current under some other provider identity does not
+    // transfer authority from this record. Both the stable target id and exact
+    // registry path must agree; retired evidence has to be promoted first.
+    return target !== undefined && resolve(target.skillFile) === resolve(path)
   }
 
   retiredFingerprint(key: string, record: AgentCodeConventionsMaterialization): string {
@@ -150,7 +155,8 @@ export class AgentCodeConventionsOwnershipPolicy {
     if (currentPaths.has(resolve(path))) return true
     // Historical paths may be preserved only when tied to a currently known
     // stable location id. This recognition never authorizes I/O; callers must
-    // separately require `isCurrentMutationPath` before touching disk.
+    // separately require `isCurrentMutationPath` with this record's key before
+    // touching disk.
     return currentTargetIds.has(targetId)
   }
 
