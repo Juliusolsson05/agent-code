@@ -2,6 +2,7 @@ import { AGENT_PROVIDER_KINDS, DEFAULT_PROVIDER, isAgentProviderKind } from '@sh
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { extractLastAssistantText } from '@renderer/lib/copyAssistant'
 import type { CommandContext, CommandDef } from '@renderer/features/command-palette/types'
+import { toggle } from '@renderer/features/command-palette/commandState'
 import {
   commandTargetSessionId,
   commandTargetSessionIdForState,
@@ -417,12 +418,17 @@ export const paneCommands: CommandDef[] = [
       // the toggle below still flips the session's own flag, which takes effect
       // the moment Tail All goes off.
       if (!tailMode && flags.tailAllMode) {
-        return { label: 'On (all)', tone: 'accent' }
+        // EFFECTIVE, not owned. Auto-follow is on because Tail All turned it
+        // on, and invoking Tail cannot turn that off — only Tail All can. The
+        // old "On (all)" label rendered through the same chip as a plain On,
+        // so the user could not tell the difference and got no explanation of
+        // why toggling did nothing.
+        return toggle(true, {
+          truth: 'effective',
+          detail: 'On via Auto-follow All Visible Agents',
+        })
       }
-      return {
-        label: tailMode ? 'On' : 'Off',
-        tone: tailMode ? 'accent' : 'neutral',
-      }
+      return toggle(Boolean(tailMode))
     },
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
@@ -462,10 +468,7 @@ export const paneCommands: CommandDef[] = [
     // WHY no `when` guard: it is meaningful in every layout mode, and with zero
     // agent panes visible it is a harmless no-op rather than a command that
     // disappears from the palette for reasons the user cannot see.
-    getState: ({ flags }) => ({
-      label: flags.tailAllMode ? 'On' : 'Off',
-      tone: flags.tailAllMode ? 'accent' : 'neutral',
-    }),
+    getState: ({ flags }) => toggle(flags.tailAllMode),
     run: ({ ui }) => ui.toggleTailAllMode(),
   },
   {

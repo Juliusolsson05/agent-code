@@ -1,3 +1,4 @@
+import { value } from '@renderer/features/command-palette/commandState'
 import type { ResolvedCommand } from '@renderer/features/command-palette/types'
 import type { AgentPaneLabelTarget } from '@renderer/workspace/tile-tree/paneLabels'
 
@@ -20,7 +21,10 @@ export function buildAgentIndexCommand(
     surface: 'app',
     keywords: [],
     keepPaletteOpen: false,
-    state: { label: target.kind, tone: 'accent' },
+    // The provider kind is CONTEXT about the destination, not an enabled
+    // state — the same correction applied to the provider badges on Reload and
+    // Switch Provider.
+    state: value(target.kind),
     run: async () => {
       // Resolve by the visible coordinate again inside the workspace action.
       // The palette result is only a preview; the action is the authority that

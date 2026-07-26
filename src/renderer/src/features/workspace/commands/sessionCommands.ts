@@ -1,7 +1,12 @@
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { getProviderFeatures } from '@providers/shared/featureCapabilities'
-import type { CommandContext, CommandDef } from '@renderer/features/command-palette/types'
+import { status, toggle, value } from '@renderer/features/command-palette/commandState'
+import type {
+  CommandContext,
+  CommandDef,
+  CommandState,
+} from '@renderer/features/command-palette/types'
 import { runSaveDebugBundleCommand } from '@renderer/features/debug/saveDebugBundle'
 import { runAttachRecordingNoteCommand, runToggleSessionRecordingCommand } from '@renderer/features/debug/attachRecordingNote'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
@@ -26,14 +31,11 @@ function targetSupportsBuiltInMcpDomain(
 function builtInMcpDomainState(
   ctx: CommandContext,
   domain: BuiltInMcpDomain,
-): { label: string; tone: 'neutral' | 'accent' } {
+): CommandState {
   const sessionId = commandTargetSessionId(ctx.workspace)
   const meta = sessionId ? ctx.workspace.state.sessions[sessionId] : null
   const enabled = Boolean(meta?.builtInMcpDomains?.includes(domain))
-  return {
-    label: enabled ? 'On' : 'Off',
-    tone: enabled ? 'accent' : 'neutral',
-  }
+  return toggle(enabled, { truth: 'runtime' })
 }
 
 function toggleBuiltInMcpDomain(
@@ -637,10 +639,12 @@ export const sessionCommands: CommandDef[] = [
       const sessionId = commandTargetSessionId(workspace)
       const meta = sessionId ? workspace.state.sessions[sessionId] : null
       const kind = meta?.kind ?? DEFAULT_PROVIDER
-      return {
-        label: getRendererProviderCapabilities(isAgentProviderKind(kind) ? kind : DEFAULT_PROVIDER).shortLabel,
-        tone: 'neutral',
-      }
+      // The provider name is CONTEXT — which provider this command would act on —
+      // not an enabled state. Styled with accent tone it read as a live toggle.
+      return value(
+        getRendererProviderCapabilities(isAgentProviderKind(kind) ? kind : DEFAULT_PROVIDER)
+          .shortLabel,
+      )
     },
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
@@ -682,10 +686,12 @@ export const sessionCommands: CommandDef[] = [
       const sessionId = commandTargetSessionId(workspace)
       const meta = sessionId ? workspace.state.sessions[sessionId] : null
       const kind = meta?.kind ?? DEFAULT_PROVIDER
-      return {
-        label: getRendererProviderCapabilities(isAgentProviderKind(kind) ? kind : DEFAULT_PROVIDER).shortLabel,
-        tone: 'neutral',
-      }
+      // The provider name is CONTEXT — which provider this command would act on —
+      // not an enabled state. Styled with accent tone it read as a live toggle.
+      return value(
+        getRendererProviderCapabilities(isAgentProviderKind(kind) ? kind : DEFAULT_PROVIDER)
+          .shortLabel,
+      )
     },
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
@@ -711,10 +717,12 @@ export const sessionCommands: CommandDef[] = [
     getState: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       const meta = sessionId ? workspace.state.sessions[sessionId] : null
-      return {
-        label: agentViewOverrideLabel(meta?.agentViewModeOverride),
-        tone: meta?.agentViewModeOverride ? 'accent' : 'neutral',
-      }
+      // A selected option out of Default/Agent/Terminal, and a PERSISTED one —
+      // it survives with the session. Not a toggle: "Default" is a real third
+      // choice, not the absence of a state.
+      return value(agentViewOverrideLabel(meta?.agentViewModeOverride), {
+        truth: 'persisted',
+      })
     },
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
@@ -741,10 +749,12 @@ export const sessionCommands: CommandDef[] = [
       const sessionId = commandTargetSessionId(workspace)
       const meta = sessionId ? workspace.state.sessions[sessionId] : null
       const kind = meta?.kind ?? DEFAULT_PROVIDER
-      return {
-        label: getRendererProviderCapabilities(isAgentProviderKind(kind) ? kind : DEFAULT_PROVIDER).shortLabel,
-        tone: 'neutral',
-      }
+      // The provider name is CONTEXT — which provider this command would act on —
+      // not an enabled state. Styled with accent tone it read as a live toggle.
+      return value(
+        getRendererProviderCapabilities(isAgentProviderKind(kind) ? kind : DEFAULT_PROVIDER)
+          .shortLabel,
+      )
     },
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
@@ -869,10 +879,12 @@ export const sessionCommands: CommandDef[] = [
       const sessionId = commandTargetSessionId(workspace)
       const meta = sessionId ? workspace.state.sessions[sessionId] : null
       const kind = meta?.kind ?? DEFAULT_PROVIDER
-      return {
-        label: getRendererProviderCapabilities(isAgentProviderKind(kind) ? kind : DEFAULT_PROVIDER).shortLabel,
-        tone: 'neutral',
-      }
+      // The provider name is CONTEXT — which provider this command would act on —
+      // not an enabled state. Styled with accent tone it read as a live toggle.
+      return value(
+        getRendererProviderCapabilities(isAgentProviderKind(kind) ? kind : DEFAULT_PROVIDER)
+          .shortLabel,
+      )
     },
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
@@ -890,10 +902,7 @@ export const sessionCommands: CommandDef[] = [
     surface: 'app',
     title: 'Git Bar',
     description: '**What it does:** Shows or hides the **Git** side panel.\n\n**Use when:** You want repository status for the focused project.\n\n**Notes:** Uses the focused command target’s working directory.',
-    getState: ({ flags }) => ({
-      label: flags.gitBarOpen ? 'On' : 'Off',
-      tone: flags.gitBarOpen ? 'accent' : 'neutral',
-    }),
+    getState: ({ flags }) => toggle(flags.gitBarOpen),
     run: ({ ui }) => ui.toggleGitBar(),
   },
   {
@@ -903,10 +912,7 @@ export const sessionCommands: CommandDef[] = [
     surface: 'debug',
     title: 'Debug Panel',
     description: '**What it does:** Shows or hides the focused pane’s **debug panel**.\n\n**Use when:** You need low-level pane or runtime state.\n\n**Notes:** Developer-oriented.',
-    getState: ({ flags }) => ({
-      label: flags.debugPanelOpen ? 'On' : 'Off',
-      tone: flags.debugPanelOpen ? 'accent' : 'neutral',
-    }),
+    getState: ({ flags }) => toggle(flags.debugPanelOpen),
     run: ({ ui }) => ui.toggleDebugPanel(),
   },
   {
@@ -917,10 +923,7 @@ export const sessionCommands: CommandDef[] = [
     title: 'Feed Debug Panel',
     description: '**What it does:** Shows or hides the **feed debug log** panel.\n\n**Use when:** You want render and feed timeline logs.\n\n**Notes:** Developer-oriented.',
     keywords: ['debug', 'logs', 'feed', 'render', 'rows', 'timeline', 'panel'],
-    getState: ({ flags }) => ({
-      label: flags.feedDebugPanelOpen ? 'On' : 'Off',
-      tone: flags.feedDebugPanelOpen ? 'accent' : 'neutral',
-    }),
+    getState: ({ flags }) => toggle(flags.feedDebugPanelOpen),
     run: ({ ui }) => ui.toggleFeedDebugPanel(),
   },
   {
@@ -931,10 +934,7 @@ export const sessionCommands: CommandDef[] = [
     title: 'Proxy Debug Panel',
     description: '**What it does:** Shows or hides **proxy/SSE debug** details.\n\n**Use when:** You are debugging streamed provider events.\n\n**Notes:** Most useful when proxy streaming is enabled.',
     keywords: ['proxy', 'sse', 'stream', 'semantic', 'anthropic', 'debug'],
-    getState: ({ flags }) => ({
-      label: flags.proxyDebugPanelOpen ? 'On' : 'Off',
-      tone: flags.proxyDebugPanelOpen ? 'accent' : 'neutral',
-    }),
+    getState: ({ flags }) => toggle(flags.proxyDebugPanelOpen),
     run: ({ ui }) => ui.toggleProxyDebugPanel(),
   },
   {
@@ -1057,10 +1057,16 @@ export const sessionCommands: CommandDef[] = [
     title: 'Rendering Debug Mode',
     description: '**What it does:** Lets you click rendered feed elements to inspect their exact input, routing provenance, and HTML.\n\n**Use when:** A row is missing, duplicated, misleading, or formatted incorrectly.\n\n**Notes:** Clicks are intercepted while active; toggle the mode off to restore normal interaction.',
     keywords: ['rendering', 'renderer', 'inspect', 'element', 'html', 'input', 'receipt', 'routing', 'provenance', 'debug'],
-    getState: ({ flags }) => ({
-      label: flags.renderingDebugMode ? 'On' : 'Off',
-      tone: flags.renderingDebugMode ? 'danger' : 'neutral',
-    }),
+    // Danger tone is no longer authored here. This mode intercepts every click
+    // in the feed, so it IS worth flagging — but tone is derived from meaning,
+    // and the meaning is "on". The detail carries the warning instead, which is
+    // both more informative and impossible to drift from the actual state.
+    getState: ({ flags }) =>
+      toggle(flags.renderingDebugMode, {
+        detail: flags.renderingDebugMode
+          ? 'Feed clicks are intercepted while this is on'
+          : undefined,
+      }),
     run: ({ ui }) => ui.toggleRenderingDebugMode(),
   },
   {
@@ -1075,10 +1081,7 @@ export const sessionCommands: CommandDef[] = [
     // The feature is niche enough that users won't remember its exact
     // title, but they'll remember what they want to do with it.
     keywords: ['html', 'dom', 'outerhtml', 'markup', 'inspect', 'copy', 'pane', 'render', 'debug'],
-    getState: ({ flags }) => ({
-      label: flags.htmlDebugPanelOpen ? 'On' : 'Off',
-      tone: flags.htmlDebugPanelOpen ? 'accent' : 'neutral',
-    }),
+    getState: ({ flags }) => toggle(flags.htmlDebugPanelOpen),
     run: ({ ui }) => ui.toggleHtmlDebugPanel(),
   },
   {
@@ -1090,10 +1093,7 @@ export const sessionCommands: CommandDef[] = [
     description: '**What it does:** Shows or hides the temporary **Dev Debug Panel** module host.\n\n**Use when:** You need a bug-specific workbench for focused runtime state, regex probes, IPC experiments, or other short-lived diagnostics.\n\n**Notes:** Only appears when `AGENT_CODE_DEV_DEBUG=1` is set.',
     keywords: ['dev', 'debug', 'module', 'probe', 'regex', 'headless', 'snapshot', 'temporary'],
     when: ({ flags }) => flags.devDebugEnabled,
-    getState: ({ flags }) => ({
-      label: flags.devDebugPanelOpen ? 'On' : 'Off',
-      tone: flags.devDebugPanelOpen ? 'accent' : 'neutral',
-    }),
+    getState: ({ flags }) => toggle(flags.devDebugPanelOpen),
     run: ({ ui }) => ui.toggleDevDebugPanel(),
   },
 ]

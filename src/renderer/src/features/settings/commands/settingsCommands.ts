@@ -1,4 +1,5 @@
 import type { CommandDef } from '@renderer/features/command-palette/types'
+import { panel, toggle, value } from '@renderer/features/command-palette/commandState'
 
 export const settingsCommands: CommandDef[] = [
   {
@@ -32,10 +33,7 @@ export const settingsCommands: CommandDef[] = [
       'trace',
       'all agents',
     ],
-    getState: ({ flags }) => ({
-      label: flags.aggressiveDebugPersistenceEnabled ? 'On' : 'Off',
-      tone: flags.aggressiveDebugPersistenceEnabled ? 'accent' : 'neutral',
-    }),
+    getState: ({ flags }) => toggle(flags.aggressiveDebugPersistenceEnabled),
     run: ({ flags, ui }) =>
       ui.setAggressiveDebugPersistence(!flags.aggressiveDebugPersistenceEnabled),
   },
@@ -46,10 +44,7 @@ export const settingsCommands: CommandDef[] = [
     title: 'Worktrees',
     description: '**What it does:** Shows or hides the **Worktrees** panel.\n\n**Use when:** You want branch and worktree activity for the focused project.\n\n**Notes:** Useful for multi-agent git cleanup.',
     keywords: ['worktree', 'worktrees', 'branch', 'git', 'activity', 'agents', 'cleanup'],
-    getState: ({ flags }) => ({
-      label: flags.worktreesBarOpen ? 'Open' : 'Closed',
-      tone: flags.worktreesBarOpen ? 'accent' : 'neutral',
-    }),
+    getState: ({ flags }) => panel(flags.worktreesBarOpen),
     run: ({ ui }) => ui.toggleWorktreesBar(),
   },
   // RETIRED: `toggle-worktree-badges`. Same reasoning as Status Mode — a

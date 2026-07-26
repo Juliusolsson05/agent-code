@@ -6,6 +6,7 @@ import {
   resolveCommandTarget,
   targetStillValid,
 } from '@renderer/features/command-palette/resolveInvocation'
+import { toggle } from '@renderer/features/command-palette/commandState'
 import { makeTestCommandContext } from '@renderer/features/command-palette/testing/commandContextHarness'
 import type { CommandDef } from '@renderer/features/command-palette/types'
 
@@ -119,7 +120,7 @@ describe('resolveCommandInvocation', () => {
     const command: CommandDef = {
       ...base,
       surface: 'session',
-      getState: () => ({ label: 'On' }),
+      getState: () => toggle(true),
     }
     const ctx = makeTestCommandContext({ focusedSessionId: 's1' })
     const invocation = resolveCommandInvocation(command, ctx)
@@ -127,7 +128,7 @@ describe('resolveCommandInvocation', () => {
     expect(invocation.commandId).toBe('x.test')
     expect(invocation.target).toEqual({ kind: 'session', id: 's1' })
     expect(invocation.availability).toEqual({ available: true })
-    expect(invocation.state).toEqual({ label: 'On' })
+    expect(invocation.state).toEqual(toggle(true))
   })
 
   it('does not evaluate state for an unavailable command', () => {
@@ -139,7 +140,7 @@ describe('resolveCommandInvocation', () => {
       when: () => false,
       getState: () => {
         evaluated = true
-        return { label: 'x' }
+        return toggle(true)
       },
     }
     const invocation = resolveCommandInvocation(command, makeTestCommandContext())

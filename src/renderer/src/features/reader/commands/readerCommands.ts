@@ -1,6 +1,7 @@
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import type { CommandDef } from '@renderer/features/command-palette/types'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
+import { toggle } from '@renderer/features/command-palette/commandState'
 
 export const readerCommands: CommandDef[] = [
   {
@@ -10,10 +11,7 @@ export const readerCommands: CommandDef[] = [
     title: 'Reader Mode',
     description: '**What it does:** Toggles a cleaner **reading view** for the current agent.\n\n**Use when:** You want to read long agent output comfortably.\n\n**Notes:** Uses the focused command target.',
     keywords: ['reader', 'read', 'focus', 'plan', 'response', 'zen'],
-    getState: ({ workspace }) => ({
-      label: workspace.readerMode ? 'On' : 'Off',
-      tone: workspace.readerMode ? 'accent' : 'neutral',
-    }),
+    getState: ({ workspace }) => toggle(Boolean(workspace.readerMode)),
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return false

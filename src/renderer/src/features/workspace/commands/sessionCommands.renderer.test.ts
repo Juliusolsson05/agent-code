@@ -93,7 +93,15 @@ describe('Rendering Debug Mode command', () => {
     // The red On badge is a safety signal, not decoration: while active the
     // mode captures clicks before ordinary controls. A stale palette state
     // would leave users thinking the app itself had stopped responding.
-    expect(command.getState?.(context)).toEqual({ label: 'On', tone: 'danger' })
+    expect(command.getState?.(context)).toEqual({
+      kind: 'toggle',
+      value: 'on',
+      truth: 'runtime',
+      // Tone is no longer authored. This mode intercepts every feed click, so
+      // the warning moved from a `danger` colour into a detail string — which
+      // says more and cannot drift from the actual state.
+      detail: 'Feed clicks are intercepted while this is on',
+    })
     command.run(context)
     expect(toggleRenderingDebugMode).toHaveBeenCalledOnce()
   })

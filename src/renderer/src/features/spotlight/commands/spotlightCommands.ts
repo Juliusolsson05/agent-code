@@ -1,4 +1,5 @@
 import type { CommandDef } from '@renderer/features/command-palette/types'
+import { toggle } from '@renderer/features/command-palette/commandState'
 
 export const spotlightCommands: CommandDef[] = [
   {
@@ -10,10 +11,7 @@ export const spotlightCommands: CommandDef[] = [
     surface: 'app',
     title: 'Spotlight',
     description: '**What it does:** Toggles a focused **single-pane view**.\n\n**Use when:** You want one session large without changing the grid layout.\n\n**Notes:** Press **Esc** to exit.',
-    getState: ({ workspace }) => ({
-      label: workspace.spotlight ? 'On' : 'Off',
-      tone: workspace.spotlight ? 'accent' : 'neutral',
-    }),
+    getState: ({ workspace }) => toggle(Boolean(workspace.spotlight)),
     run: ({ workspace }) => workspace.toggleSpotlight(),
   },
 ]

@@ -1,6 +1,7 @@
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import type { CommandContext, CommandDef } from '@renderer/features/command-palette/types'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
+import { panel, toggle, value } from '@renderer/features/command-palette/commandState'
 
 function focusedAgentSessionId(ctx: CommandContext): string | null {
   const sessionId = commandTargetSessionId(ctx.workspace)
@@ -20,10 +21,7 @@ export const agentStatusCommands: CommandDef[] = [
     description: '**What it does:** Shows or hides a compact **Agent Status** panel for the focused Claude or Codex agent.\n\n**Use when:** You need identity, placement, runtime status, MCP domains, or orchestration/link metadata without opening raw debug panels.\n\n**Notes:** Follows the current command target, including focused Dispatch rows.',
     keywords: ['agent', 'status', 'show', 'state', 'inspect', 'runtime', 'session', 'mcp', 'orchestration', 'linked'],
     when: ctx => focusedAgentSessionId(ctx) !== null,
-    getState: ({ flags }) => ({
-      label: flags.agentStatusPanelOpen ? 'On' : 'Off',
-      tone: flags.agentStatusPanelOpen ? 'accent' : 'neutral',
-    }),
+    getState: ({ flags }) => toggle(flags.agentStatusPanelOpen),
     run: ({ ui }) => {
       ui.closePalette()
       ui.toggleAgentStatusPanel()

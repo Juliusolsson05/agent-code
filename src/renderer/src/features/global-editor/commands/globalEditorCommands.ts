@@ -1,5 +1,6 @@
 import type { CommandDef } from '@renderer/features/command-palette/types'
 import { useGlobalEditorStore } from '@renderer/features/global-editor/store'
+import { panel, toggle } from '@renderer/features/command-palette/commandState'
 import {
   requestSaveActiveEditorFile,
   requestSaveAllEditorFiles,
@@ -34,10 +35,7 @@ export const globalEditorCommands: CommandDef[] = [
     description:
       "**What it does:** Splits the screen in half — file tree + code editor on the left, the normal workspace UI (dispatch / tile / spotlight / whatever) on the right.\n\n**Use when:** You want to read or edit project files alongside the focused agent without leaving the current mode.\n\n**Notes:** The editor's workspace tracks the *active tab*'s project — switching tabs to a different project flips the file tree. Switching panes within the same tab does NOT change the editor (the editor was deliberately decoupled from per-pane focus so reading code doesn't blow up when you move between agents in the same project). Open tabs are remembered per project and restored across app restarts (file contents are re-read from disk; unsaved edits are not persisted).\n\n**Shortcut:** ⌘⇧E.",
     keywords: ['editor', 'code', 'files', 'global', 'workspace', 'monaco'],
-    getState: ({ flags }) => ({
-      label: flags.globalEditorOpen ? 'On' : 'Off',
-      tone: flags.globalEditorOpen ? 'accent' : 'neutral',
-    }),
+    getState: ({ flags }) => toggle(flags.globalEditorOpen),
     run: ({ ui, flags }) => {
       ui.toggleGlobalEditor()
     },
@@ -117,10 +115,7 @@ export const globalEditorCommands: CommandDef[] = [
       '**What it does:** Expands the **Global Editor** to fill the whole workspace area. The normal workspace stays alive underneath (hidden, not unmounted — terminals and feeds keep running).\n\n**Use when:** You want maximum reading/editing room for a while.\n\n**Notes:** Esc exits fullscreen; the previous split ratio is restored.\n\n**Shortcut:** ⌥⌘E.',
     keywords: ['fullscreen', 'maximize', 'editor', 'zen', 'focus'],
     when: ({ flags }) => flags.globalEditorOpen,
-    getState: ({ flags }) => ({
-      label: flags.editorFullscreen ? 'On' : 'Off',
-      tone: flags.editorFullscreen ? 'accent' : 'neutral',
-    }),
+    getState: ({ flags }) => toggle(flags.editorFullscreen),
     run: () => useGlobalEditorStore.getState().toggleEditorFullscreen(),
   },
   {
@@ -185,10 +180,7 @@ export const globalEditorCommands: CommandDef[] = [
       '**What it does:** Shows or hides the file tree inside the **Global Editor** overlay.\n\n**Use when:** You want more horizontal room for the code area, or you prefer to open files via tabs / search rather than browsing.\n\n**Notes:** Only available while **Global Editor** is on. The choice is global (not per-project) — once hidden, the tree stays hidden across every project until you turn it back on.',
     keywords: ['file tree', 'explorer', 'sidebar', 'editor', 'tree'],
     when: ({ flags }) => flags.globalEditorOpen,
-    getState: ({ flags }) => ({
-      label: flags.fileTreeVisible ? 'On' : 'Off',
-      tone: flags.fileTreeVisible ? 'accent' : 'neutral',
-    }),
+    getState: ({ flags }) => toggle(flags.fileTreeVisible),
     run: ({ ui }) => ui.toggleFileTreeVisible(),
   },
 ]

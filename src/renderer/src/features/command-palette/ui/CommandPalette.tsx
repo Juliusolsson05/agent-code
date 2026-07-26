@@ -28,7 +28,12 @@ import {
   rankEntries,
   secondary,
 } from '@renderer/features/command-palette/lib/rankEntries'
-import type { CommandContext, ResolvedCommand } from '@renderer/features/command-palette/types'
+import { describeCommandState } from '@renderer/features/command-palette/commandState'
+import type {
+  CommandContext,
+  CommandState,
+  ResolvedCommand,
+} from '@renderer/features/command-palette/types'
 import type { PendingCommandInvocation } from '@renderer/app-state/uiShell/types'
 import {
   allPromptTemplates,
@@ -117,6 +122,38 @@ type PromptTemplateFillState = {
 // mechanism only. A future "show hidden commands" affordance can flip
 // this to reveal the full list in one shot.
 const SHOW_HIDDEN_COMMANDS = false
+
+/**
+ * The ONE place a semantic command state becomes pixels.
+ *
+ * Both the palette row and the details pane render through this, so a state
+ * cannot be coloured one way in the list and another in the preview — which is
+ * what happened when each surface carried its own copy of the tone ternary.
+ * Tone, label and muting all come from `describeCommandState`; nothing here
+ * decides appearance from the state's contents directly.
+ */
+function CommandStateBadge({ state }: { state: CommandState }) {
+  const presentation = describeCommandState(state)
+  const tone =
+    presentation.tone === 'danger'
+      ? 'border-danger-border bg-danger-soft text-danger'
+      : presentation.tone === 'accent'
+        ? 'border-accent/30 bg-row-selected-bg text-accent'
+        : 'border-panel-border bg-panel-elevated-bg text-muted'
+  return (
+    <span
+      // `detail` carries the explanation the old flat label could not — the
+      // reason Tail says On when this command cannot turn it off, or why
+      // Caffeinate is unavailable on this platform.
+      title={presentation.detail}
+      className={`rounded border px-1.5 py-0.5 text-[10px] uppercase tracking-wider ${tone}${
+        presentation.muted ? ' opacity-60' : ''
+      }`}
+    >
+      {presentation.label}
+    </span>
+  )
+}
 
 export function CommandPalette() {
   const open = useAppStore(state => state.commandPaletteOpen)
@@ -1582,19 +1619,7 @@ function OpenCommandPalette({
                   >
                     <div className="min-w-0 flex items-center gap-2">
                       <span>{command.title}</span>
-                      {command.state && (
-                        <span
-                          className={
-                            command.state.tone === 'danger'
-                              ? 'rounded border border-danger-border bg-danger-soft px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-danger'
-                              : command.state.tone === 'accent'
-                                ? 'rounded border border-accent/30 bg-row-selected-bg px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-accent'
-                                : 'rounded border border-panel-border bg-panel-elevated-bg px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-muted'
-                          }
-                        >
-                          {command.state.label}
-                        </span>
-                      )}
+                      {command.state && <CommandStateBadge state={command.state} />}
                     </div>
                     {command.shortcut && (
                       <span className="ml-3 flex-shrink-0 text-[11px] text-muted">
@@ -1923,19 +1948,7 @@ const CommandDescriptionPanel = memo(function CommandDescriptionPanel({
         <div className="text-[13px] text-ink">{command.title}</div>
         <div className="mt-1 flex items-center gap-2 text-[10px] text-muted">
           {command.shortcut && <span>{command.shortcut}</span>}
-          {command.state && (
-            <span
-              className={
-                command.state.tone === 'danger'
-                  ? 'border border-danger-border bg-danger-soft px-1.5 py-0.5 uppercase tracking-wider text-danger'
-                  : command.state.tone === 'accent'
-                    ? 'border border-accent/30 bg-row-selected-bg px-1.5 py-0.5 uppercase tracking-wider text-accent'
-                    : 'border border-panel-border bg-panel-elevated-bg px-1.5 py-0.5 uppercase tracking-wider text-muted'
-              }
-            >
-              {command.state.label}
-            </span>
-          )}
+          {command.state && <CommandStateBadge state={command.state} />}
         </div>
       </div>
       <div>

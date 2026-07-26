@@ -3,10 +3,38 @@ import type { AgentViewMode, UsageHeaderLevel } from '@renderer/app-state/settin
 import type { RenderedViewPolicy } from '@renderer/workspace/agentDisplayMode'
 import type { DispatchAttachIntent } from '@renderer/app-state/uiShell/types'
 
-export type CommandState = {
-  label: string
-  tone?: 'neutral' | 'accent' | 'danger'
-}
+/**
+ * What a command's badge MEANS, not how it looks.
+ *
+ * The old shape was `{label: string; tone?}` and the renderer uppercased every
+ * label into one chip, so a boolean, a selected value, contextual information,
+ * an unsupported capability and async progress were indistinguishable. See
+ * `commandState.ts` for the six concrete defects that produced, and for the
+ * constructors — `toggle`, `panel`, `value`, `status` — that build these.
+ *
+ * TONE IS NOT PART OF THIS TYPE. It is derived by `describeCommandState`, so a
+ * caller cannot colour a state independently of what it means.
+ */
+export type CommandState =
+  | {
+      kind: 'toggle'
+      value: 'on' | 'off' | 'mixed'
+      truth: 'persisted' | 'runtime' | 'effective'
+      /** Open/Closed instead of On/Off, for panels. */
+      vocabulary?: 'open-closed'
+      detail?: string
+    }
+  | {
+      kind: 'value'
+      label: string
+      truth: 'persisted' | 'runtime' | 'effective'
+      detail?: string
+    }
+  | {
+      kind: 'status'
+      value: 'loading' | 'unavailable' | 'error'
+      detail: string
+    }
 
 /**
  * The user-facing grouping of a command.
