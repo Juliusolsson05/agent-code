@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { createCloseGrantStore } from '@mcp/shared/closeGrant.js'
 import { stat } from 'node:fs/promises'
 
 import { sendToMainWindow } from '@main/window/mainWindow.js'
@@ -225,10 +226,56 @@ export class AgentManagementBridge {
     return response.delivery
   }
 
+  /**
+   * Grant store for user-authorized closes.
+   *
+   * Lives on the bridge because the bridge is the single mutation boundary for
+   * every close request — a grant checked anywhere earlier could be bypassed by
+   * a caller that reached the bridge another way.
+   */
+  private readonly closeGrants = createCloseGrantStore()
+
+  /** Record that the user explicitly authorized this caller to close this
+   *  target. Issued from a user action, never from a model request. */
+  issueCloseGrant(callerSessionId: string, sessionId: string): void {
+    this.closeGrants.issue(callerSessionId, sessionId)
+  }
+
+  /** Drop outstanding grants for a session that has gone away. */
+  revokeCloseGrantsForSession(sessionId: string): void {
+    this.closeGrants.revokeForSession(sessionId)
+  }
+
   async closeAgent(params: {
     callerSessionId: string
     sessionId: string
   }): Promise<{ closedSessionId: string }> {
+    // ENFORCEABLE AUTHORIZATION, checked at the mutation boundary.
+    //
+    // The tool's permission rule used to live entirely in its description and
+    // the domain instructions — several sentences telling the model never to
+    // close an agent unless the user's current request named that specific
+    // agent. That is a request to a language model, not a check: it cannot fail
+    // closed, cannot be tested, and a model that reads "clean up this project"
+    // as authorization produces an irreversible kill.
+    //
+    // The grant is single-use and short-lived, so authorization the user gave
+    // once for one agent cannot be replayed for another, or reused in a later
+    // turn after they have moved on. Default is DENY.
+    if (!this.closeGrants.consume(params.callerSessionId, params.sessionId)) {
+      this.journal?.record({
+        area: 'mcp.agent_management',
+        name: 'close_agent.denied_no_grant',
+        data: { callerSessionId: params.callerSessionId, sessionId: params.sessionId },
+      })
+      throw new Error(
+        'close_agent refused: no user authorization for this agent. Closing an agent '
+        + 'requires the user to explicitly ask for that specific agent to be closed; '
+        + 'inspecting, reading, or being asked what is safe to clean up does not '
+        + 'authorize it.',
+      )
+    }
+
     const response = await this.request({
       requestId: randomUUID(),
       type: 'close-agent',
