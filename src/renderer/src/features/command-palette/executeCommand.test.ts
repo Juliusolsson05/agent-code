@@ -19,6 +19,7 @@ import {
 } from '@renderer/features/command-palette/executeCommand'
 import { buildCommandRegistry } from '@renderer/features/command-palette/registry'
 import { recordCommandUse } from '@renderer/features/command-palette/lib/recentCommandHistory'
+import { makeTestCommandContext } from '@renderer/features/command-palette/testing/commandContextHarness'
 import type { CommandContext } from '@renderer/features/command-palette/types'
 
 // ---------------------------------------------------------------------------
@@ -35,87 +36,10 @@ import type { CommandContext } from '@renderer/features/command-palette/types'
 /** Which ui callback a command reached for. */
 let uiCalls: string[] = []
 
-/**
- * Narrow test harness for `CommandContext`.
- *
- * WHY the ui bag is a Proxy rather than ~50 explicit stubs: none of those
- * callbacks' identities affect admission or dispatch policy, which is what
- * this file tests. What DOES matter is whether a command's `run` was reached
- * at all, so the proxy records the name and no-ops. Writing them out would add
- * fifty lines of noise that must be maintained every time a command is added,
- * and would still assert nothing extra.
- *
- * `flags`, by contrast, are written out explicitly: individual flags are real
- * inputs to the admission decision, so a default that drifts silently would
- * change what these tests mean.
- */
-function makeContext(overrides?: {
-  flags?: Partial<CommandContext['flags']>
-  workspace?: Partial<CommandContext['workspace']>
-}): CommandContext {
-  const ui = new Proxy({} as CommandContext['ui'], {
-    get: (_target, prop: string) => (..._args: unknown[]) => {
-      uiCalls.push(prop)
-    },
-  })
-
-  const workspace = {
-    // An empty workspace: no tabs, no dispatch mode, no sessions. This makes
-    // `commandTargetSessionId` return null, which short-circuits the
-    // rendered-view gate — deliberate, so these tests isolate the surface/when
-    // half of admission rather than re-testing render policy.
-    state: {
-      tabs: [],
-      activeTabId: null,
-      sessions: {},
-      dispatchMode: null,
-      detachedSessions: {},
-      buried: [],
-      pinnedSessionIds: [],
-    },
-    getRuntime: () => undefined,
-    runtimes: {},
-    activeTab: undefined,
-    ...overrides?.workspace,
-  } as unknown as CommandContext['workspace']
-
-  return {
-    workspace,
-    ui,
-    flags: {
-      statusModeEnabled: true,
-      worktreeBadgesEnabled: true,
-      usageHeaderEnabled: true,
-      usageHeaderLevel: 'all',
-      dangerousAgentsEnabled: false,
-      aggressiveDebugPersistenceEnabled: false,
-      gitBarOpen: false,
-      worktreesBarOpen: false,
-      debugPanelOpen: false,
-      feedDebugPanelOpen: false,
-      proxyDebugPanelOpen: false,
-      htmlDebugPanelOpen: false,
-      renderingDebugMode: false,
-      tailAllMode: false,
-      devDebugEnabled: false,
-      sessionRecordingEnabled: false,
-      devDebugPanelOpen: false,
-      agentStatusPanelOpen: false,
-      performancePanelOpen: false,
-      caffeinateActive: false,
-      caffeinateSupported: true,
-      globalEditorOpen: false,
-      focusedCwd: null,
-      fileTreeVisible: false,
-      editorFullscreen: false,
-      dispatchModeEnabled: false,
-      globalDispatchEnabled: false,
-      agentViewMode: 'agent',
-      commandVisibilityOverrides: {},
-      showHiddenCommands: false,
-      ...overrides?.flags,
-    },
-  } as CommandContext
+/** Thin wrapper over the shared harness so every test in this file records
+ *  into the same `uiCalls` array without repeating the wiring. */
+function makeContext(overrides?: { flags?: Partial<CommandContext['flags']> }): CommandContext {
+  return makeTestCommandContext({ flags: overrides?.flags, uiCalls })
 }
 
 beforeEach(() => {

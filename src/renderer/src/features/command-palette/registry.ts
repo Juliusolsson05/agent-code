@@ -102,6 +102,19 @@ export function commandApplicable(command: CommandDef, ctx: CommandContext): boo
 }
 
 /**
+ * Just the mode half of admission, exposed so the availability resolver can
+ * tell a MODE MISMATCH apart from a capability refusal.
+ *
+ * They get different presentations — mode mismatch hides, capability refusal
+ * can explain itself — so the two must be distinguishable. Collapsing them
+ * into one boolean is what forced every refusal to look identical (and
+ * therefore silent) before Phase 2.
+ */
+export function surfaceApplicable(command: CommandDef, ctx: CommandContext): boolean {
+  return surfaceAvailable(command.surface, ctx)
+}
+
+/**
  * Picker-visibility gate, applied AFTER admission (so a hidden command that
  * wouldn't apply anyway never reaches this check — order keeps the cheap
  * mode/data filters first and the policy decision last).

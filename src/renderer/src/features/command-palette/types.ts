@@ -9,6 +9,114 @@ export type CommandState = {
 }
 
 /**
+ * The user-facing grouping of a command.
+ *
+ * WHY this is separate from `surface`: `surface` is a MACHINE applicability
+ * dimension — it answers "does this concept exist in the current layout" and
+ * drives mode gating. It was also being read as a category by the Settings
+ * list, which conflated two unrelated questions: `debug` is simultaneously "a
+ * kind of tooling" and "hidden in Dispatch? no". Once one field means both, you
+ * cannot reclassify a command's presentation without changing when it applies.
+ *
+ * The categories below are defined by an OBJECTIVE rule, not by vibes, so two
+ * people classifying the same command land in the same place:
+ */
+export type CommandCategory =
+  /** Creates a tab, pane, session, terminal, agent, or durable template. */
+  | 'create'
+  /** Changes focus, or opens a transient reading/navigation surface. */
+  | 'navigate'
+  /** Acts on exactly one resolved agent/session. */
+  | 'session'
+  /** Changes placement, arrangement, membership, pins, or Dispatch scope. */
+  | 'layout-dispatch'
+  /** Primarily acts on a document, file, editor, or AI Workspace reference. */
+  | 'editor-files'
+  /** Opens project/workspace inspection and management tools. */
+  | 'workspace-tools'
+  /** Mirrors a persisted app preference, or opens Settings. */
+  | 'preferences'
+  /** Diagnostics, recording, raw inspection, or support artifacts. */
+  | 'developer'
+
+/**
+ * A closed family of commands controlled as ONE product unit.
+ *
+ * Deliberately not inferred from `category`: the Navigation Commands group is
+ * exactly six ids, while the `navigate` category also contains Jump to Latest
+ * Message, Spotlight, Reader Mode, Tiled Tabs and Reorder Tabs, which stay
+ * ordinary commands. Deriving membership from the category would make a future
+ * navigation-adjacent feature silently default-hidden just for reusing a label.
+ */
+export type CommandGroup = 'navigation'
+
+/**
+ * What a command acts on, resolved to a CONCRETE identity at invocation time.
+ *
+ * WHY identity and not just a kind: the audit found target-sensitive commands
+ * independently resolving the focused session in `when`, in `getState`, and
+ * again in `run`. Between the palette rendering a row and the user pressing
+ * Enter, focus can move — so the badge could describe session A while the
+ * mutation landed on session B. Pinning one identity per invocation is what
+ * makes "the thing I saw is the thing I changed" true.
+ */
+export type CommandTarget =
+  /** Needs no target (and must not invent one). */
+  | { kind: 'none' }
+  /** Acts on the application as a whole. */
+  | { kind: 'app' }
+  | { kind: 'project'; id: string }
+  | { kind: 'session'; id: string }
+  | { kind: 'document'; id: string }
+
+/** What a command declares it needs, before resolution finds a concrete one. */
+export type CommandTargetKind = CommandTarget['kind']
+
+/**
+ * Whether an invocation may proceed, and how to present a refusal.
+ *
+ * The `presentation` split is a product decision, recorded here because it is
+ * not self-evident: a command that is IRRELEVANT to the current mode should
+ * vanish (a grid-spatial "Focus Pane Left" in Dispatch points at nothing the
+ * user can see), while a command that is relevant but UNSUPPORTED should stay
+ * visible and disabled with its reason. Hiding the second kind is what makes
+ * users ask "why is Rewind missing on OpenCode" and find no answer anywhere;
+ * a greyed row that says so teaches them the thing they actually wanted to
+ * know.
+ */
+export type CommandAvailability =
+  | { available: true }
+  | { available: false; reason: string; presentation: 'hide' | 'disable' }
+
+/**
+ * Risk classification. Metadata, NOT a category — a destructive command still
+ * belongs to Session or Layout for grouping purposes, and folding risk into
+ * the category axis would force a "Destructive" bucket that cuts across every
+ * functional group and helps nobody find anything.
+ */
+export type CommandRisk =
+  /** Reversible, or has no side effect beyond view state. */
+  | 'safe'
+  /** Ends processes, deletes data, or cascades. Requires confirmation policy. */
+  | 'destructive'
+
+/**
+ * One invocation, resolved: what it will act on, whether it may proceed, what
+ * to display, and how to run it — all derived from a SINGLE read of state.
+ *
+ * The whole point is that these four facts cannot disagree with each other,
+ * because they were computed together rather than by four independent lookups
+ * at four different moments.
+ */
+export type ResolvedCommandInvocation = {
+  commandId: string
+  target: CommandTarget
+  availability: CommandAvailability
+  state: CommandState | null
+  execute: () => void | Promise<void>
+}
+
+/**
  * Which workspace surface a command belongs to.
  *
  * WHY this exists: the command registry used to be one flat list where
@@ -265,12 +373,51 @@ export type CommandDef = {
    * that depend on rendered feed DOM or feed scroll ownership, while Hybrid can
    * allow feature commands that acquire a temporary rendered-view lease. */
   renderedViewPolicy?: RenderedViewPolicy
+  /**
+   * User-facing grouping. Optional during the governance migration and made
+   * REQUIRED once every command declares one (Phase 3) — flipping it to
+   * required before the 102 assignments exist would break the build between
+   * two commits that are each meant to be independently revertable.
+   */
+  category?: CommandCategory
+  /** Closed family this command belongs to, controlled as one product unit. */
+  commandGroup?: CommandGroup
+  /**
+   * What this command acts on. Absent means `'none'`.
+   *
+   * Declaring it is what lets the resolver pin ONE identity per invocation
+   * instead of letting `when`, `getState` and `run` each resolve the focused
+   * session independently and potentially disagree. App- and editor-scoped
+   * commands must NOT declare a session target merely because a session
+   * happens to be focused — inventing a target is how a global panel toggle
+   * starts looking session-scoped.
+   */
+  targetKind?: CommandTargetKind
+  /** Risk classification, used by confirmation policy. Absent means `'safe'`. */
+  risk?: CommandRisk
+  /**
+   * Why this command cannot run right now, when that is worth SAYING rather
+   * than silently hiding.
+   *
+   * Returning `null` means "no objection" and lets ordinary admission decide.
+   * A command only needs this when the refusal is worth explaining: an
+   * unsupported provider capability, an empty undo stack, an unsupported
+   * platform. Mode-irrelevance never needs it — the surface gate already hides
+   * those, and explaining them would add noise to every mode switch.
+   */
+  unavailableReason?: (ctx: CommandContext) => CommandUnavailable | null
   shortcut?: string
   keywords?: string[]
   keepPaletteOpen?: boolean
   when?: (ctx: CommandContext) => boolean
   getState?: (ctx: CommandContext) => CommandState | null
   run: (ctx: CommandContext) => void | Promise<void>
+}
+
+/** The unavailable half of `CommandAvailability`, as a command declares it. */
+export type CommandUnavailable = {
+  reason: string
+  presentation: 'hide' | 'disable'
 }
 
 export type ResolvedCommand = {
