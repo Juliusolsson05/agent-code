@@ -217,6 +217,13 @@ export type UiShellState = {
    * threshold inputs, project scoping, and a computed preview. Keeping the
    * flags separate lets either surface evolve without inheriting the other
    * surface's keyboard model or confirmation semantics. */
+  /** When true, the read-only Keyboard Shortcuts reference is open.
+   *
+   * WHY a separate flag rather than a tab inside the Settings modal: this is
+   * consulted MID-TASK ("what was the chord for Reader Mode?") and closed two
+   * seconds later. Routing it through Settings would put a mutable editor with
+   * live key capture between the user and a one-line answer. */
+  keyboardShortcutsOpen: boolean
   closeOldAgentsOpen: boolean
   /** When true, the Switch Agents (bulk provider switch) modal is open.
    *

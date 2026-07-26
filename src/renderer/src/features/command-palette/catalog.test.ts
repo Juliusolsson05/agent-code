@@ -9,7 +9,7 @@ import type { CommandDef } from '@renderer/features/command-palette/types'
 // Phase 0 of the command-governance plan (docs/superpowers/plans/
 // 2026-07-23-command-surface-audit.md): CHARACTERIZE THE CURRENT CATALOG.
 //
-// This file pinned the exact 102-id before-state, and now pins the 98-id
+// This file pinned the exact 102-id before-state, and now pins the 99-id
 // after-state: five durable preferences retired to Settings, one approved
 // addition (open-command-palette). Keeping ONE snapshot that moved — rather
 // than a "baseline" file and an "after" file — is what makes the plan's
@@ -120,8 +120,10 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   'toggle-spotlight',
   'toggle-reader-mode',
   'tiled-tabs',
-  // settingsCommands (3, was 5: worktree-badges + dangerous-agents retired)
+  // settingsCommands (4, was 5: worktree-badges + dangerous-agents retired,
+  // open-keyboard-shortcuts added)
   'open-settings',
+  'open-keyboard-shortcuts',
   'toggle-aggressive-debug-persistence',
   'toggle-worktrees-bar',
   // copy-assistant / copy-code-block (2)
@@ -168,16 +170,20 @@ const NAVIGATION_COMMAND_GROUP: readonly string[] = [
 const ids = (): string[] => builtInCommandCatalog.map(c => c.id)
 
 describe('built-in command catalog — baseline characterization', () => {
-  it('contains exactly the 98 governed commands in registration order', () => {
+  it('contains exactly the 99 governed commands in registration order', () => {
     // Order matters: this is the palette's empty-query browse order.
     expect(ids()).toEqual([...BASELINE_COMMAND_IDS])
   })
 
-  it('has exactly 98 commands', () => {
-    // Stated separately from the order assertion because the plan's headline
-    // number is the thing later phases move (102 → 98), and a bare count
-    // failure is a clearer signal than a 102-line array diff.
-    expect(builtInCommandCatalog).toHaveLength(98)
+  it('has exactly 99 commands', () => {
+    // Stated separately from the order assertion because this number is the
+    // thing that moves, and a bare count failure is a clearer signal than a
+    // 99-line array diff.
+    //
+    // 102 baseline → 98 after governance (5 retirements, 1 addition) → 99 with
+    // `open-keyboard-shortcuts`. Each step of that arithmetic was a deliberate
+    // edit to this line, which is the entire point of pinning it.
+    expect(builtInCommandCatalog).toHaveLength(99)
   })
 
   it('reports no structural defects', () => {
@@ -194,7 +200,7 @@ describe('built-in command catalog — baseline characterization', () => {
 })
 
 describe('generated per-provider split commands', () => {
-  // The plan's arithmetic is 98 literal ids + 4 generated = 102. If a provider
+  // The arithmetic is 95 literal ids + 4 generated = 99. If a provider
   // is ever added to AGENT_PROVIDER_KINDS, this invariant is what tells the
   // author that the catalog count moved for a legitimate reason, and forces the
   // baseline snapshot above to be updated deliberately.
@@ -208,10 +214,11 @@ describe('generated per-provider split commands', () => {
   })
 
   it('accounts for the difference between literal and total command count', () => {
-    // 98 total - 4 generated = 94 literal `id:` fields across the command
-    // modules. At the baseline this read 102 - 4 = 98; both numbers moved by
-    // exactly the five retirements minus the one addition.
-    expect(builtInCommandCatalog.length - nonDefaultProviders.length * 2).toBe(94)
+    // 99 total - 4 generated = 95 literal `id:` fields across the command
+    // modules. At the original baseline this read 102 - 4 = 98; it moved by the
+    // five retirements, then by the two additions (open-command-palette,
+    // open-keyboard-shortcuts).
+    expect(builtInCommandCatalog.length - nonDefaultProviders.length * 2).toBe(95)
   })
 
   it('emits both directions for every non-default provider', () => {
@@ -310,10 +317,12 @@ describe('governance targets', () => {
   })
 
   it('lands on the arithmetic the plan predicted', () => {
-    // 102 baseline - 5 retirements + 1 addition = 98, checked against the real
-    // catalog rather than trusted as prose.
-    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 1).toBe(102)
-    expect(builtInCommandCatalog).toHaveLength(98)
+    // 102 baseline - 5 retirements + 2 additions = 99, checked against the
+    // real catalog rather than trusted as prose. The additions are
+    // `open-command-palette` (governance: the palette could not be rebound
+    // because it had no command id) and `open-keyboard-shortcuts`.
+    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 2).toBe(102)
+    expect(builtInCommandCatalog).toHaveLength(99)
   })
 })
 

@@ -24,6 +24,7 @@ import { CloseOldAgentsSurface } from '@renderer/features/workspace/surfaces/Clo
 import { BulkProviderSwitchSurface } from '@renderer/features/workspace/surfaces/BulkProviderSwitchSurface'
 import { AgentViewModePickerSurface } from '@renderer/features/workspace/surfaces/AgentViewModePickerSurface'
 import { ColorFlagPickerSurface } from '@renderer/features/workspace/surfaces/ColorFlagPickerSurface'
+import { KeyboardShortcutsSurface } from '@renderer/features/settings/surfaces/KeyboardShortcutsSurface'
 import { RewindToPromptSurface } from '@renderer/features/workspace/surfaces/RewindToPromptSurface'
 
 // The surface registry (issue #494). Adding a surface = write a wrapper
@@ -61,6 +62,7 @@ export const modalSurfaces: SurfaceEntry[] = [
   // Grouping by semantic kind is NOT safe here; group by paint order.
   { id: 'tiled-dispatch-count', Component: TiledDispatchCountSurface },
   { id: 'caffeinate-toast', Component: CaffeinateToastSurface },
+  { id: 'keyboard-shortcuts', Component: KeyboardShortcutsSurface },
   { id: 'tile-tabs', Component: TileTabsModalSurface },
   { id: 'reorder-tabs', Component: ReorderTabsSurface },
   { id: 'pin-agents', Component: PinAgentsSurface },

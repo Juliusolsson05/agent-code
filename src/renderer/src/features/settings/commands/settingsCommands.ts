@@ -11,6 +11,41 @@ export const settingsCommands: CommandDef[] = [
     run: ({ ui }) => ui.openSettings(),
   },
   {
+    // The reference sheet, deliberately SEPARATE from Settings → Keybindings.
+    //
+    // Settings answers "how do I change this chord". This answers "what was
+    // the chord" — asked mid-task, by someone who is not trying to change
+    // anything, and who would be worse off landing on a screen with live key
+    // capture that can rebind something if they fumble a keystroke.
+    //
+    // `category: 'preferences'` beside Open Settings, because that is the
+    // drawer people open when they are thinking about configuration. It is
+    // NOT 'developer' — forgetting a shortcut is the most ordinary thing a
+    // user does, and burying it in the debug tier would defeat the point.
+    id: 'open-keyboard-shortcuts',
+    category: 'preferences',
+    surface: 'app',
+    title: 'Keyboard Shortcuts',
+    description: '**What it does:** Opens a searchable list of **every keyboard shortcut** currently bound.\n\n**Use when:** You cannot remember a chord — or cannot remember what a chord does.\n\n**Notes:** Read-only, and shows YOUR bindings including any you customized. Change them in Settings → Keybindings.',
+    keywords: [
+      'keyboard',
+      'shortcuts',
+      'shortcut',
+      'keybind',
+      'keybinds',
+      'keybinding',
+      'keybindings',
+      'chord',
+      'hotkey',
+      'hotkeys',
+      'keys',
+      'cheat sheet',
+      'reference',
+      'help',
+    ],
+    run: ({ ui }) => ui.openKeyboardShortcuts(),
+  },
+  {
     // Persistent Aggressive Debug Logs — developer-mode switch for
     // interval snapshots. This intentionally reuses the Save Debug
     // Logs bundle path instead of streaming extra render logs all
