@@ -121,7 +121,7 @@ export const layoutCommands: CommandDef[] = [
     // that is merely off — and stayed fully executable.
     getState: ({ flags }) =>
       flags.caffeinateSupported
-        ? toggle(flags.caffeinateActive, { truth: 'runtime' })
+        ? toggle(flags.caffeinateActive)
         : status('unavailable', 'caffeinate is only available on macOS'),
     run: ({ ui }) => ui.toggleCaffeinate(),
   },

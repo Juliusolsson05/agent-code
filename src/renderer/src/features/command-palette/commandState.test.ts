@@ -36,7 +36,7 @@ describe('tone is derived, never authored', () => {
     // Provider badges on Reload/Switch/Copy Resume are context, not enabled
     // state. Accent tone made them read as live toggles.
     expect(describeCommandState(value('Claude')).tone).toBe('neutral')
-    expect(describeCommandState(value('Codex', { truth: 'persisted' })).tone).toBe('neutral')
+    expect(describeCommandState(value('Codex', {})).tone).toBe('neutral')
   })
 })
 
@@ -50,16 +50,15 @@ describe('vocabularies', () => {
   })
 })
 
-describe('effective versus owned truth', () => {
+describe('states this command cannot change', () => {
   it('carries the explanation for a state this command cannot change', () => {
     // Tail's motivating case: auto-follow is on because Tail All turned it on,
     // and invoking Tail cannot turn it off. The old flat "On (all)" label went
-    // through the same chip as a plain On and explained nothing.
-    const state = toggle(true, {
-      truth: 'effective',
-      detail: 'On via Auto-follow All Visible Agents',
-    })
-    expect(state).toMatchObject({ kind: 'toggle', value: 'on', truth: 'effective' })
+    // through the same chip as a plain On and explained nothing. `detail` is
+    // what conveys it — a parallel `truth: 'effective'` marker was carried for
+    // a while and no surface ever read it.
+    const state = toggle(true, { detail: 'On via Auto-follow All Visible Agents' })
+    expect(state).toMatchObject({ kind: 'toggle', value: 'on' })
     expect(describeCommandState(state).detail).toBe('On via Auto-follow All Visible Agents')
   })
 

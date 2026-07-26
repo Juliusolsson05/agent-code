@@ -4,6 +4,7 @@ import { useAppStore } from '@renderer/app-state/hooks'
 import { builtInCommandCatalog } from '@renderer/features/command-palette/catalog'
 import { PALETTE_SELF_EXCLUDED_COMMAND_IDS } from '@renderer/features/command-palette/commands/paletteCommands'
 import { buildDefaultKeybindings } from '@renderer/features/command-keybindings/defaults'
+import type { BindingContext } from '@renderer/features/command-keybindings/defaults'
 import {
   displayKeybinding,
   keybindingFromEvent,
@@ -46,16 +47,28 @@ const CATEGORY_LABELS: Record<CommandCategory, string> = {
   developer: 'Developer',
 }
 
-const CATEGORY_ORDER: CommandCategory[] = [
-  'create',
-  'navigate',
-  'session',
-  'layout-dispatch',
-  'editor-files',
-  'workspace-tools',
-  'preferences',
-  'developer',
-]
+/**
+ * Display order. EXHAUSTIVE by type, deliberately.
+ *
+ * It was a plain `CommandCategory[]`, and grouping filtered to it — so a
+ * command in a category nobody remembered to list here would not appear in
+ * Settings at all, and therefore could not be rebound. A silent omission with
+ * no error anywhere. `Record<CommandCategory, number>` makes adding a category
+ * a compile error until it has a position.
+ */
+const CATEGORY_RANK: Record<CommandCategory, number> = {
+  create: 0,
+  navigate: 1,
+  session: 2,
+  'layout-dispatch': 3,
+  'editor-files': 4,
+  'workspace-tools': 5,
+  preferences: 6,
+  developer: 7,
+}
+
+const CATEGORY_ORDER = (Object.keys(CATEGORY_RANK) as CommandCategory[])
+  .sort((a, b) => CATEGORY_RANK[a] - CATEGORY_RANK[b])
 
 type PendingConflict = {
   commandId: string
@@ -64,6 +77,16 @@ type PendingConflict = {
   owners: string[]
   /** Command ids whose bindings an explicit Replace would remove. */
   replaceableCommandIds: string[]
+  /**
+   * True when at least one owner is a RESERVED interaction.
+   *
+   * Kept separate from `replaceableCommandIds` because the two are not
+   * complementary: a chord can be held by both a command and Escape. Offering
+   * Replace there stripped the command's binding and installed the user's —
+   * and the chord still would not fire, because the reserved owner still had
+   * it. A destructive edit that does not achieve the thing it was for.
+   */
+  hasReservedOwner: boolean
 }
 
 export function CommandKeybindingsRow() {
@@ -73,7 +96,6 @@ export function CommandKeybindingsRow() {
   const [query, setQuery] = useState('')
   const [capturingFor, setCapturingFor] = useState<string | null>(null)
   const [conflict, setConflict] = useState<PendingConflict | null>(null)
-  const [syntaxError, setSyntaxError] = useState<string | null>(null)
 
   const overrides = settings.commandKeybindingOverrides
   const defaults = useMemo(() => buildDefaultKeybindings(), [])
@@ -148,6 +170,15 @@ export function CommandKeybindingsRow() {
     [overrides, defaults, setSettings],
   )
 
+  // A command's declared binding context, from the shipped defaults table —
+  // the same source `effectiveAsDefaults` is derived from, so the conflict
+  // check and the router agree about which contexts a chord lives in.
+  const contextForCommandId = useCallback(
+    (commandId: string): BindingContext =>
+      effectiveAsDefaults.find(entry => entry.commandId === commandId)?.context ?? 'global',
+    [effectiveAsDefaults],
+  )
+
   const captureRef = useRef<string | null>(null)
   captureRef.current = capturingFor
 
@@ -164,7 +195,6 @@ export function CommandKeybindingsRow() {
 
       if (event.key === 'Escape') {
         setCapturingFor(null)
-        setSyntaxError(null)
         return
       }
 
@@ -178,7 +208,16 @@ export function CommandKeybindingsRow() {
 
       const owners = findBindingOwners({
         binding,
-        context: 'global',
+        // The command's OWN declared context, not 'global'.
+        //
+        // Hardcoding 'global' made every check maximally pessimistic: 'global'
+        // overlaps everything, so binding a grid-only chord reported a conflict
+        // with a dispatch-only command that can never be live at the same time.
+        // That is precisely the distinction the context system and its disjoint
+        // -pair matrix exist to draw, and the one call site that needed it threw
+        // it away. Unknown commands fall back to 'global', which errs toward
+        // reporting a conflict rather than silently allowing a real one.
+        context: contextForCommandId(commandId),
         commandDefaults: effectiveAsDefaults,
         dictationBinding: settings.dictationShortcut,
         excludeCommandId: commandId,
@@ -198,6 +237,7 @@ export function CommandKeybindingsRow() {
           replaceableCommandIds: owners
             .filter(owner => owner.kind === 'command')
             .map(owner => owner.id),
+          hasReservedOwner: owners.some(owner => owner.kind === 'reserved'),
         })
         return
       }
@@ -205,12 +245,11 @@ export function CommandKeybindingsRow() {
       const current = effective.get(commandId) ?? []
       if (!current.includes(binding)) commit(commandId, [...current, binding])
       setCapturingFor(null)
-      setSyntaxError(null)
     }
 
     window.addEventListener('keydown', onKeyDown, true)
     return () => window.removeEventListener('keydown', onKeyDown, true)
-  }, [capturingFor, effective, effectiveAsDefaults, settings.dictationShortcut, commit])
+  }, [capturingFor, contextForCommandId, effective, effectiveAsDefaults, settings.dictationShortcut, commit])
 
   /**
    * The ONLY override path. Removes the binding from every command that owns
@@ -250,7 +289,7 @@ export function CommandKeybindingsRow() {
             is already used by {conflict.owners.join(', ')}.
           </div>
           <div className="mt-1 flex gap-2">
-            {conflict.replaceableCommandIds.length > 0 ? (
+            {conflict.replaceableCommandIds.length > 0 && !conflict.hasReservedOwner ? (
               <button
                 onClick={applyReplace}
                 className="border border-border px-1.5 py-0.5 hover:bg-surface"
@@ -270,10 +309,6 @@ export function CommandKeybindingsRow() {
             </button>
           </div>
         </div>
-      ) : null}
-
-      {syntaxError ? (
-        <div className="border border-danger/50 px-2 py-1 text-xs text-danger">{syntaxError}</div>
       ) : null}
 
       <div className="flex max-h-[420px] flex-col gap-2 overflow-auto">

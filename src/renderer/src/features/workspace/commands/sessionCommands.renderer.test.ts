@@ -96,7 +96,6 @@ describe('Rendering Debug Mode command', () => {
     expect(command.getState?.(context)).toEqual({
       kind: 'toggle',
       value: 'on',
-      truth: 'runtime',
       // Tone is no longer authored. This mode intercepts every feed click, so
       // the warning moved from a `danger` colour into a detail string — which
       // says more and cannot drift from the actual state.

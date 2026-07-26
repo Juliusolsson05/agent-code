@@ -1,5 +1,5 @@
 import { builtInCommandCatalog } from '@renderer/features/command-palette/catalog'
-import { commandApplicable } from '@renderer/features/command-palette/registry'
+import { resolveCommandAvailability } from '@renderer/features/command-palette/resolveInvocation'
 import { recordCommandUse } from '@renderer/features/command-palette/lib/recentCommandHistory'
 import type { CommandContext, CommandDef } from '@renderer/features/command-palette/types'
 
@@ -62,8 +62,9 @@ export type CommandDispatchOutcome =
   | { status: 'ran'; id: string; source: CommandInvocationSource }
   /** No command with this id exists in the catalog. A menu/caller bug. */
   | { status: 'unknown'; id: string; source: CommandInvocationSource }
-  /** The command exists but does not apply right now. */
-  | { status: 'unavailable'; id: string; source: CommandInvocationSource }
+  /** The command exists but does not apply right now. `reason` is the resolver's
+   *  explanation, so a caller can SAY why instead of clicking into nothing. */
+  | { status: 'unavailable'; id: string; source: CommandInvocationSource; reason: string }
   /** The command threw synchronously or its promise rejected. */
   | { status: 'failed'; id: string; source: CommandInvocationSource; error: unknown }
   /** An identical invocation was already in flight; this one was dropped. */
@@ -143,8 +144,16 @@ export async function dispatchCommand(
   // Fresh admission, evaluated now rather than when a list was last rendered.
   // The palette's rows can be a frame stale, a menu click arrives arbitrarily
   // late, and a chord bypassed these checks entirely before this existed.
-  if (!commandApplicable(command, ctx)) {
-    return { status: 'unavailable', id, source }
+  //
+  // Through `resolveCommandAvailability`, not the raw `commandApplicable`
+  // predicate: that resolver is the one place that also honours an explicit
+  // `unavailableReason` and a `getState` reporting `status('unavailable')`.
+  // Calling the predicate directly here is what let a row rendered greyed and
+  // labelled "Unavailable" execute normally on Enter — the state said the
+  // capability was missing and admission never asked.
+  const availability = resolveCommandAvailability(command, ctx)
+  if (!availability.available) {
+    return { status: 'unavailable', id, source, reason: availability.reason }
   }
 
   return runGuarded({
@@ -182,8 +191,11 @@ export async function dispatchResolvedRow(options: {
   const { row, source, ctx, reportError } = options
   const command = findCommand(row.id)
 
-  if (command && !commandApplicable(command, ctx)) {
-    return { status: 'unavailable', id: row.id, source }
+  if (command) {
+    const availability = resolveCommandAvailability(command, ctx)
+    if (!availability.available) {
+      return { status: 'unavailable', id: row.id, source, reason: availability.reason }
+    }
   }
 
   return runGuarded({
@@ -264,7 +276,7 @@ function isTransientRowId(id: string): boolean {
  */
 export function canDispatchCommand(id: string, ctx: CommandContext): boolean {
   const command = findCommand(id)
-  return command ? commandApplicable(command, ctx) : false
+  return command ? resolveCommandAvailability(command, ctx).available : false
 }
 
 function findCommand(id: string): CommandDef | undefined {

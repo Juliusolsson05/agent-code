@@ -129,6 +129,24 @@ export const RESERVED_INTERACTIONS: readonly ReservedInteraction[] = [
     owner: 'Tiled tab resize (after numbered selection)',
   },
   {
+    // The agent pane IS a terminal, and these go to the process, not to us.
+    //
+    // `useKeybinds` bails whenever a terminal owns input, so a command bound to
+    // Ctrl+C would render in Settings with a chord and then never fire in the
+    // one place users spend their time. That is the same "appears bound, does
+    // nothing" failure the native-menu roles above are listed to prevent, and
+    // it belongs in the same table for the same reason: the conflict checker
+    // can only warn about owners it has been told exist.
+    //
+    // 'global' rather than a terminal context because there is no such context
+    // — and inventing one would be worse than this slight over-reservation:
+    // these chords have universal terminal meanings, and handing one to an app
+    // command would be surprising even where it technically could fire.
+    bindings: ['Ctrl+C', 'Ctrl+D', 'Ctrl+Z', 'Ctrl+A', 'Ctrl+E', 'Ctrl+U', 'Ctrl+W'],
+    context: 'global',
+    owner: 'Terminal / agent process (SIGINT, EOF, and readline editing)',
+  },
+  {
     // Feed picker navigation. While the Copy Assistant or Copy Code Block
     // picker owns input, these four keys move/confirm/cancel the selection.
     bindings: ['Up', 'Down', 'Enter'],

@@ -427,10 +427,11 @@ export const paneCommands: CommandDef[] = [
         // old "On (all)" label rendered through the same chip as a plain On,
         // so the user could not tell the difference and got no explanation of
         // why toggling did nothing.
-        return toggle(true, {
-          truth: 'effective',
-          detail: 'On via Auto-follow All Visible Agents',
-        })
+        // `detail` is what actually reaches the user — it renders in the row's
+        // explanation. A `truth: 'effective'` marker rode alongside it for a
+        // while and was never read by any surface, so the sentence was always
+        // doing the whole job.
+        return toggle(true, { detail: 'On via Auto-follow All Visible Agents' })
       }
       return toggle(Boolean(tailMode))
     },

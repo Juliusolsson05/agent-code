@@ -5,9 +5,9 @@ import type { CommandState } from '@renderer/features/command-palette/types'
 //
 // The old shape was `{ label: string; tone?: 'neutral'|'accent'|'danger' }`,
 // and the renderer uppercased every label into one chip. That cannot express
-// whether the text is a boolean, a selected value, contextual information,
-// EFFECTIVE-versus-owned truth, an unavailable capability, or async progress —
-// so the audit found all six being rendered identically:
+// whether the text is a boolean, a selected value, contextual information, an
+// unavailable capability, or async progress — so the audit found all of them
+// rendered identically:
 //
 //   - Tail showed "On (all)", a state invoking Tail cannot turn off, because
 //     it is owned by Tail All.
@@ -25,26 +25,23 @@ import type { CommandState } from '@renderer/features/command-palette/types'
 // what it means, so colour and meaning cannot drift apart.
 // ---------------------------------------------------------------------------
 
-/**
- * Where a state's truth comes from.
- *
- * `persisted` — a stored preference. `runtime` — live process/session state.
- * `effective` — what the user actually experiences, which may be produced by
- * something OTHER than this command. Tail is the motivating case: it reports
- * `effective` on, because Tail All is what turned it on and only Tail All can
- * turn it off.
- */
-export type CommandStateTruth = 'persisted' | 'runtime' | 'effective'
+// NOTE: there was a `CommandStateTruth` here ('persisted' | 'runtime' |
+// 'effective'), threaded through `toggle` and `value` and stored on every
+// state. Nothing ever read it — not `describeCommandState`, not the palette
+// row, not Settings. Its motivating case (Tail reporting `effective` on,
+// because only Tail All can turn it off) is real, but it is carried by the
+// `detail` string, which IS rendered. A field that only ever gets written is
+// not a distinction the app makes; it is a distinction someone intended to
+// make. Removed until a surface actually renders differently for it.
 
 /** A boolean capability or preference. */
 export function toggle(
   value: boolean | 'mixed',
-  options: { truth?: CommandStateTruth; detail?: string } = {},
+  options: { detail?: string } = {},
 ): CommandState {
   return {
     kind: 'toggle',
     value: value === 'mixed' ? 'mixed' : value ? 'on' : 'off',
-    truth: options.truth ?? 'runtime',
     ...(options.detail ? { detail: options.detail } : {}),
   }
 }
@@ -63,7 +60,6 @@ export function panel(
   return {
     kind: 'toggle',
     value: open ? 'on' : 'off',
-    truth: 'runtime',
     vocabulary: 'open-closed',
     ...(options.detail ? { detail: options.detail } : {}),
   }
@@ -77,12 +73,11 @@ export function panel(
  */
 export function value(
   label: string,
-  options: { truth?: CommandStateTruth; detail?: string } = {},
+  options: { detail?: string } = {},
 ): CommandState {
   return {
     kind: 'value',
     label,
-    truth: options.truth ?? 'runtime',
     ...(options.detail ? { detail: options.detail } : {}),
   }
 }
@@ -120,10 +115,12 @@ export type CommandStatePresentation = {
 export function describeCommandState(state: CommandState): CommandStatePresentation {
   switch (state.kind) {
     case 'toggle': {
-      const openClosed = state.vocabulary === 'open-closed'
       if (state.value === 'mixed') {
         return {
-          label: openClosed ? 'Mixed' : 'Mixed',
+          // Same word in both vocabularies. It was written as a ternary with
+          // identical branches, which reads as a deliberate distinction and is
+          // not one — "Mixed" is right for both On/Off and Open/Closed.
+          label: 'Mixed',
           // Accent, not neutral: mixed means SOMETHING is on, and rendering it
           // like off would tell the user the opposite of what is happening.
           tone: 'accent',
@@ -132,6 +129,7 @@ export function describeCommandState(state: CommandState): CommandStatePresentat
         }
       }
       const on = state.value === 'on'
+      const openClosed = state.vocabulary === 'open-closed'
       return {
         label: openClosed ? (on ? 'Open' : 'Closed') : on ? 'On' : 'Off',
         tone: on ? 'accent' : 'neutral',

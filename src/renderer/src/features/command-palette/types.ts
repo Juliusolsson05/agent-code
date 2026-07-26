@@ -19,7 +19,6 @@ export type CommandState =
   | {
       kind: 'toggle'
       value: 'on' | 'off' | 'mixed'
-      truth: 'persisted' | 'runtime' | 'effective'
       /** Open/Closed instead of On/Off, for panels. */
       vocabulary?: 'open-closed'
       detail?: string
@@ -27,7 +26,6 @@ export type CommandState =
   | {
       kind: 'value'
       label: string
-      truth: 'persisted' | 'runtime' | 'effective'
       detail?: string
     }
   | {
@@ -78,27 +76,7 @@ export type CommandCategory =
  */
 export type CommandGroup = 'navigation'
 
-/**
- * What a command acts on, resolved to a CONCRETE identity at invocation time.
- *
- * WHY identity and not just a kind: the audit found target-sensitive commands
- * independently resolving the focused session in `when`, in `getState`, and
- * again in `run`. Between the palette rendering a row and the user pressing
- * Enter, focus can move — so the badge could describe session A while the
- * mutation landed on session B. Pinning one identity per invocation is what
- * makes "the thing I saw is the thing I changed" true.
- */
-export type CommandTarget =
-  /** Needs no target (and must not invent one). */
-  | { kind: 'none' }
-  /** Acts on the application as a whole. */
-  | { kind: 'app' }
-  | { kind: 'project'; id: string }
-  | { kind: 'session'; id: string }
-  | { kind: 'document'; id: string }
-
 /** What a command declares it needs, before resolution finds a concrete one. */
-export type CommandTargetKind = CommandTarget['kind']
 
 /**
  * Whether an invocation may proceed, and how to present a refusal.
@@ -128,21 +106,6 @@ export type CommandRisk =
   /** Ends processes, deletes data, or cascades. Requires confirmation policy. */
   | 'destructive'
 
-/**
- * One invocation, resolved: what it will act on, whether it may proceed, what
- * to display, and how to run it — all derived from a SINGLE read of state.
- *
- * The whole point is that these four facts cannot disagree with each other,
- * because they were computed together rather than by four independent lookups
- * at four different moments.
- */
-export type ResolvedCommandInvocation = {
-  commandId: string
-  target: CommandTarget
-  availability: CommandAvailability
-  state: CommandState | null
-  execute: () => void | Promise<void>
-}
 
 /**
  * Which workspace surface a command belongs to.
@@ -429,17 +392,6 @@ export type CommandDef = {
   category?: CommandCategory
   /** Closed family this command belongs to, controlled as one product unit. */
   commandGroup?: CommandGroup
-  /**
-   * What this command acts on. Absent means `'none'`.
-   *
-   * Declaring it is what lets the resolver pin ONE identity per invocation
-   * instead of letting `when`, `getState` and `run` each resolve the focused
-   * session independently and potentially disagree. App- and editor-scoped
-   * commands must NOT declare a session target merely because a session
-   * happens to be focused — inventing a target is how a global panel toggle
-   * starts looking session-scoped.
-   */
-  targetKind?: CommandTargetKind
   /** Risk classification, used by confirmation policy. Absent means `'safe'`. */
   risk?: CommandRisk
   /**

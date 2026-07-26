@@ -35,7 +35,7 @@ function builtInMcpDomainState(
   const sessionId = commandTargetSessionId(ctx.workspace)
   const meta = sessionId ? ctx.workspace.state.sessions[sessionId] : null
   const enabled = Boolean(meta?.builtInMcpDomains?.includes(domain))
-  return toggle(enabled, { truth: 'runtime' })
+  return toggle(enabled)
 }
 
 function toggleBuiltInMcpDomain(
@@ -722,12 +722,9 @@ export const sessionCommands: CommandDef[] = [
     getState: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       const meta = sessionId ? workspace.state.sessions[sessionId] : null
-      // A selected option out of Default/Agent/Terminal, and a PERSISTED one —
-      // it survives with the session. Not a toggle: "Default" is a real third
-      // choice, not the absence of a state.
-      return value(agentViewOverrideLabel(meta?.agentViewModeOverride), {
-        truth: 'persisted',
-      })
+      // A selected option out of Default/Agent/Terminal. Not a toggle:
+      // "Default" is a real third choice, not the absence of a state.
+      return value(agentViewOverrideLabel(meta?.agentViewModeOverride))
     },
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
