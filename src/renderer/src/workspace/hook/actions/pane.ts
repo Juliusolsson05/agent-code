@@ -1,4 +1,9 @@
 import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
+import {
+  closeConfirmationFor,
+  expandSessionCloseTargets,
+} from '@renderer/workspace/closeConfirmation'
+import { requestCloseConfirmation } from '@renderer/workspace/closeConfirmationBroker'
 import { useCallback, useRef } from 'react'
 
 import type {
@@ -1082,6 +1087,30 @@ export function usePaneActions(
     const dispatchTargetId = snapshot.dispatchMode
       ? commandTargetSessionIdForState(snapshot)
       : null
+
+    // CONFIRMATION GATE. Runs before ANY mutation, and before the branch
+    // below picks a close path — the user's answer must cover the whole
+    // operation, not one arm of it.
+    //
+    // The target set is EXPANDED first (parent plus linked descendants,
+    // transitively), because the whole point is that closing one visible pane
+    // can end four sessions. An unexpanded set would ask about one and kill
+    // four, which is the failure this gate exists to prevent.
+    //
+    // An idle single close returns `required: false` and falls straight
+    // through, so the common case pays nothing.
+    const confirmTargetId = dispatchTargetId
+      ?? commandTargetSessionIdForState(snapshot)
+      ?? snapshot.tabs.find(tab => tab.id === snapshot.activeTabId)?.focusedSessionId
+    if (confirmTargetId) {
+      const confirmation = closeConfirmationFor(
+        expandSessionCloseTargets(snapshot, refs.latestRuntimesRef.current, confirmTargetId),
+      )
+      if (confirmation.required) {
+        const confirmed = await requestCloseConfirmation(confirmation)
+        if (!confirmed) return
+      }
+    }
     if (dispatchTargetId) {
       // WHY Dispatch Mode delegates by the visible row's explicit id:
       //
