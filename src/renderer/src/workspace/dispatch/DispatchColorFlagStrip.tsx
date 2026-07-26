@@ -1,7 +1,6 @@
 import { memo } from 'react'
 
-import { useAppStore } from '@renderer/app-state/hooks'
-import { colorFlagById } from '@renderer/app-state/settings/dispatchColorFlags'
+import { useColorFlag } from '@renderer/app-state/settings/useColorFlag'
 import type { SessionId } from '@renderer/workspace/types'
 
 // WHY this is a real, always-mounted flex child rather than conditional
@@ -13,14 +12,16 @@ import type { SessionId } from '@renderer/workspace/types'
 // which made the rich list look correct in isolation but gave Tiled Dispatch no
 // reusable width contract at all. Keeping the settings lookup and the geometry
 // in one component makes every Dispatch selector opt into the same invariant.
+//
+// The settings lookup itself now lives in `useColorFlag` because the pane
+// header reads the same state with different geometry; only the geometry below
+// is Dispatch-specific.
 export const DispatchColorFlagStrip = memo(function DispatchColorFlagStrip({
   sessionId,
 }: {
   sessionId: SessionId
 }) {
-  const colorFlag = useAppStore(state =>
-    colorFlagById(state.settings.dispatchColorFlags[sessionId]),
-  )
+  const colorFlag = useColorFlag(sessionId)
 
   return (
     <span
