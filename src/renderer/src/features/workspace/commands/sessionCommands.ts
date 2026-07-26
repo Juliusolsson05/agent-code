@@ -1,8 +1,6 @@
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
-import {
-  getProviderFeatures,
-  getRendererProviderCapabilities,
-} from '@providers/registry.renderer.capabilities'
+import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
+import { getProviderFeatures } from '@providers/shared/featureCapabilities'
 import type { CommandContext, CommandDef } from '@renderer/features/command-palette/types'
 import { runSaveDebugBundleCommand } from '@renderer/features/debug/saveDebugBundle'
 import { runAttachRecordingNoteCommand, runToggleSessionRecordingCommand } from '@renderer/features/debug/attachRecordingNote'

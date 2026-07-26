@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { AGENT_PROVIDER_KINDS } from '@shared/types/providerKind'
-import { getProviderFeatures } from '@providers/registry.renderer.capabilities'
+import { getProviderFeatures } from '@providers/shared/featureCapabilities'
 
 // ---------------------------------------------------------------------------
 // Phase 5: provider capability policy.

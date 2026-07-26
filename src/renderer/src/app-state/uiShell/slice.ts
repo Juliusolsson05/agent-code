@@ -1,6 +1,7 @@
 import type { StateCreator } from 'zustand'
 
 import type { AppStore, UiShellSlice } from '@renderer/app-state/types'
+import type { PendingCommandInvocation } from '@renderer/app-state/uiShell/types'
 
 export const createUiShellSlice: StateCreator<
   AppStore,
@@ -50,6 +51,19 @@ export const createUiShellSlice: StateCreator<
   // no-op. The clamp range in setDispatchListRatio is what enforces
   // sane bounds when the user actually drags the splitter.
   dispatchListRatio: 0.25,
+  pendingCommandInvocation: null,
+
+  // Records the request and opens the palette when it is closed, because the
+  // palette component is what owns the live CommandContext. `closeAfterRun`
+  // remembers that it was opened only to service this invocation, so a chord
+  // does not leave the palette on screen.
+  requestCommandInvocation: (id: string, source: PendingCommandInvocation['source']) =>
+    set(state => ({
+      pendingCommandInvocation: { id, source, closeAfterRun: !state.commandPaletteOpen },
+      commandPaletteOpen: true,
+    }), false, 'uiShell/requestCommandInvocation'),
+  clearCommandInvocation: () =>
+    set({ pendingCommandInvocation: null }, false, 'uiShell/clearCommandInvocation'),
 
   openCommandPalette: () =>
     set({ commandPaletteOpen: true }, false, 'uiShell/openCommandPalette'),

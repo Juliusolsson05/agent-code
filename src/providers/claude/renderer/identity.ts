@@ -26,16 +26,4 @@ export const CLAUDE_IDENTITY = {
    */
   resumeCommand: (quotedSessionId: string) => `claude --resume ${quotedSessionId}`,
 
-  /**
-   * Feature capabilities (governance plan Phase 5). Claude has a saved-session
-   * index, a transcript adapter used by both rewind and duplicate, a verified
-   * `claude --resume` form, and a translation edge to Codex.
-   */
-  features: {
-    savedSessionListing: true,
-    transcriptRewind: true,
-    transcriptDuplicate: true,
-    switchTargets: ['codex'],
-    verifiedExternalResumeCommand: true,
-  },
 } as const
