@@ -5,6 +5,7 @@ import type {
 } from '@renderer/features/settings/lib/settingsRegistry'
 import { SETTING_CATEGORIES } from '@renderer/features/settings/lib/settingsCategories'
 import { HotkeyInput } from '@renderer/features/settings/ui/HotkeyInput'
+import { CommandKeybindingsRow } from '@renderer/features/settings/ui/CommandKeybindingsRow'
 import { CliUpdateBehaviorRow } from '@renderer/features/cli-updates/CliUpdateBehaviorRow'
 import { DictationApiKeyRow } from '@renderer/features/voice-dictation/DictationApiKeyRow'
 import { ThemePickerRow } from '@renderer/features/settings/ui/ThemePickerRow'
@@ -218,6 +219,8 @@ function SettingRow({
               because the value lives in setup.json (main-owned), not
               in the renderer Settings store. See
               features/cli-updates/CliUpdateBehaviorRow.tsx. */}
+          {control.type === 'command-keybindings' ? <CommandKeybindingsRow /> : null}
+
           {control.type === 'cli-update-behavior' ? <CliUpdateBehaviorRow /> : null}
 
           {/* Voice-dictation API key — same self-subscribing marker-row

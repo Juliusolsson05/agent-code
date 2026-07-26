@@ -156,6 +156,20 @@ export type SettingDefinition =
       title: string
       description: string
       keywords: string[]
+      // Marker for the built-in keybinding editor. Self-subscribing for the
+      // same reason as cli-update-behavior: the row needs the live effective
+      // binding set plus conflict lookup, and hoisting all of that into the
+      // registry would make every Settings render recompute it.
+      control: {
+        type: 'command-keybindings'
+      }
+    }
+  | {
+      id: string
+      category: SettingCategoryId
+      title: string
+      description: string
+      keywords: string[]
       control: {
         type: 'command-visibility'
         /** Full command catalog to render rows for. Carried as a value
@@ -550,6 +564,24 @@ export function getSettingsRegistry(): SettingDefinition[] {
         getValue: settings => settings.defaultBuiltInMcpDomains.includes('workflows'),
         onToggle: (ctx, value) => updateDefaultBuiltInMcpDomain(ctx, 'workflows', value),
       },
+    },
+    {
+      id: 'command-keybindings',
+      category: 'commands',
+      title: 'Keyboard Shortcuts',
+      description:
+        'Assign, add, or remove keyboard shortcuts for built-in commands. A command may have several bindings or none. Conflicts are blocked and name the command or app interaction that already owns the chord.',
+      keywords: [
+        'keybinding',
+        'keyboard',
+        'shortcut',
+        'chord',
+        'bind',
+        'rebind',
+        'hotkey',
+        'conflict',
+      ],
+      control: { type: 'command-keybindings' },
     },
     {
       id: 'navigation-commands',
