@@ -130,9 +130,108 @@ export function buildDefaultKeybindings(): CommandBindingDefault[] {
     { commandId: 'jump-latest-message', bindings: ['End'], context: 'feed' },
 
     // --- Preferences --------------------------------------------------------
-    // The one genuinely NEW default. ⌘, is the macOS convention for Settings
-    // and was unclaimed.
+    // ⌘, is the macOS convention for Settings and was unclaimed.
     { commandId: 'open-settings', bindings: ['Cmd+,'], context: 'global' },
+
+    // ========================================================================
+    // USAGE-DERIVED DEFAULTS
+    //
+    // Everything above this line is a chord that ALREADY RAN before the
+    // governance work — the table was kept deliberately scarce so upgrading
+    // users lost no muscle memory, and the governance plan explicitly refused
+    // to mint defaults from palette-usage counts, on the grounds that history
+    // "came from one development profile" and proves a command is USEFUL, not
+    // that it deserves a scarce global chord.
+    //
+    // This block is a considered departure from that, not an oversight. What
+    // changed is the evidence: the recent-command cache now covers 2,674
+    // recorded invocations, and the thirteen commands below account for 1,703
+    // of them — roughly 64% of everything invoked — while having no chord at
+    // all. "Scarce" was protecting against speculative bindings. These are the
+    // opposite: the most-used surface in the app, reachable only by opening a
+    // palette and typing.
+    //
+    // The caveat that keeps this honest: until the execution gateway landed,
+    // ONLY the palette recorded a use. So these counts are palette selections,
+    // which systematically UNDER-counts anything already bound (close-pane
+    // shows 1). That biases the data in the safe direction here — every
+    // command below is unbound, so its count is complete, and no bound command
+    // was displaced on the strength of a number that undercounts it.
+    //
+    // THE FAMILIES. Assigned so the set is learnable rather than memorized;
+    // a thirteen-chord dump with no scheme is thirteen things to forget.
+    //
+    //   ⌘  + letter  — layout and app-level panels, beside ⌘T/⌘W/⌘P
+    //   ⌘⌥ + letter  — developer tooling, beside Electron's ⌘⌥I devtools
+    //   ⌥  + letter  — pane and session verbs, beside ⌥D/⌥T/⌥C splits
+    //   ⌥⇧ + letter  — the HEAVIER sibling of the ⌥ verb below it
+    //
+    // The ⌥/⌥⇧ pairing is the part worth preserving when this list grows:
+    // ⌥A soft-reloads an agent, ⌥⇧A hard-reloads it; ⌥P opens the template
+    // picker, ⌥⇧P opens the prompt history. Shift means "more of the same
+    // thing", never "an unrelated command that happened to fit".
+
+    // --- Layout modes (⌘) ---------------------------------------------------
+    // These two SHOULD have been ⌘D → ⌘⇧D, base → tiled variant, matching the
+    // shift-means-more rule used everywhere else in this block. They are not,
+    // because ⌘⇧D is the voice dictation hotkey (DEFAULT_SETTINGS
+    // .dictationShortcut) and `check:keybindings` rejected the pairing.
+    //
+    // Worth recording HOW that was caught, because it nearly was not: the
+    // chords in this block were probed against `findBindingOwners` before
+    // being written, and that probe passed — it omitted `dictationBinding`,
+    // which is optional on the options object. The check script passes it. So
+    // the gate caught a real collision that a hand-rolled call to the very
+    // same function had missed. If you are adding chords here, run
+    // `npm run check:keybindings`; do not trust a bespoke probe.
+    //
+    // Given the constraint, the higher-usage command takes the better chord:
+    // Tiled Dispatch (164) gets bare ⌘D, Dispatch Mode (52) gets ⌘⇧M for Mode.
+    // The pair is less elegant than ⌘D/⌘⇧D would have been, and that is the
+    // correct trade — an elegant scheme that shadows dictation is not elegant.
+    { commandId: 'tiled-dispatch', bindings: ['Cmd+D'], context: 'global' },
+    { commandId: 'dispatch-mode', bindings: ['Cmd+Shift+M'], context: 'global' },
+    // `dispatch` context, not global: Dispatch Scope only means anything while
+    // Dispatch owns the layout, and scoping it here leaves ⌘⇧G free for a grid
+    // command later. The overlap matrix proves grid and dispatch are disjoint.
+    { commandId: 'global-dispatch', bindings: ['Cmd+Shift+G'], context: 'dispatch' },
+
+    // --- App panels (⌘⇧) ----------------------------------------------------
+    { commandId: 'usage.open', bindings: ['Cmd+Shift+U'], context: 'global' },
+
+    // --- Developer tooling (⌘⌥) ---------------------------------------------
+    // The single most-invoked command in the cache (352), and it sits on ⌘⌥
+    // rather than ⌘⇧ deliberately: that is where Electron already puts
+    // devtools (⌘⌥I), so the debug surface stays in one modifier family
+    // instead of competing with product panels for ⌘⇧ letters.
+    { commandId: 'toggle-debug-panel', bindings: ['Cmd+Alt+D'], context: 'global' },
+
+    // --- Pane and session verbs (⌥) -----------------------------------------
+    // Reader Mode is the strongest single case in this whole block. Escape
+    // already CLOSES it (useKeybinds' one-key dismiss), but nothing opened it
+    // — an asymmetry that cost 156 palette round-trips for a toggle.
+    { commandId: 'toggle-reader-mode', bindings: ['Alt+R'], context: 'global' },
+    { commandId: 'toggle-spotlight', bindings: ['Alt+S'], context: 'global' },
+    // ⌥F, leaving ⌥⇧F open for Auto-follow ALL Visible Agents — the same
+    // soft/heavy pairing, and the command that OWNS the effective state when
+    // both are on (see the `detail` on toggle-tail's state).
+    { commandId: 'toggle-tail', bindings: ['Alt+F'], context: 'global' },
+    // ⌥V and ⌥P open pickers rather than acting directly, so the chord saves
+    // the palette search and not the decision. They are here on volume alone
+    // (315 and 121). If `set-agent-view-mode` is ever split into three direct
+    // commands — Agent / Terminal / Default — ⌥V should follow the one that
+    // gets used, and this entry should go.
+    { commandId: 'set-agent-view-mode', bindings: ['Alt+V'], context: 'global' },
+    { commandId: 'prompt-template', bindings: ['Alt+P'], context: 'global' },
+
+    // --- Heavier siblings (⌥⇧) ----------------------------------------------
+    // Soft reload is the lighter action and takes the lighter chord. Note the
+    // counts run the other way (136 hard vs 62 soft): the modifier tracks
+    // BLAST RADIUS, not frequency, because the cost of hitting the wrong one
+    // is asymmetric.
+    { commandId: 'soft-reload-agent', bindings: ['Alt+A'], context: 'global' },
+    { commandId: 'reload-agent', bindings: ['Alt+Shift+A'], context: 'global' },
+    { commandId: 'view-prompts', bindings: ['Alt+Shift+P'], context: 'global' },
   ]
 
   // Per-provider split chords, derived from the SAME provider identity
