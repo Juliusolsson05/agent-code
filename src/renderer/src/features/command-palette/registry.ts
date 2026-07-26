@@ -1,6 +1,8 @@
 import { builtInCommandCatalog } from '@renderer/features/command-palette/catalog'
 import { PALETTE_SELF_EXCLUDED_COMMAND_IDS } from '@renderer/features/command-palette/commands/paletteCommands'
 import { declaredTier, isVisibleInPicker } from '@renderer/features/command-palette/pickerVisibility'
+import { displayKeybinding } from '@renderer/features/command-keybindings/normalize'
+import { resolveEffectiveKeybindings } from '@renderer/features/command-keybindings/resolve'
 import { commandAllowedByRenderedViewPolicy } from '@renderer/workspace/agentDisplayMode'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import type {
@@ -149,6 +151,14 @@ function renderedViewAvailable(command: CommandDef, ctx: CommandContext): boolea
 }
 
 export function buildCommandRegistry(ctx: CommandContext): ResolvedCommand[] {
+  // Built once per registry pass rather than per command: resolving the
+  // effective set walks every default, so doing it inside the map would be
+  // O(commands x defaults) on every palette keystroke.
+  const effective = new Map(
+    resolveEffectiveKeybindings(ctx.flags.commandKeybindingOverrides).map(
+      entry => [entry.commandId, entry.bindings],
+    ),
+  )
   return commandDefs
     .filter(command => !PALETTE_SELF_EXCLUDED_COMMAND_IDS.has(command.id))
     .filter(command => commandApplicable(command, ctx) && commandVisible(command, ctx))
@@ -162,7 +172,11 @@ export function buildCommandRegistry(ctx: CommandContext): ResolvedCommand[] {
         title: typeof command.title === 'function' ? command.title(ctx) : command.title,
         description,
         surface: command.surface,
-        shortcut: command.shortcut,
+        // The FIRST effective binding, in display form. A command may have
+        // several (Close Pane has Cmd+W and Alt+W); the row shows one, and the
+        // first is the primary by declaration order. Undefined when the command
+        // has no chord, which is most of the catalog.
+        shortcut: displayBinding(effective.get(command.id)),
         keywords: command.keywords ?? [],
         keepPaletteOpen: command.keepPaletteOpen === true,
         state: command.getState ? command.getState(ctx) : null,
@@ -216,4 +230,10 @@ export function listPickerCommandMeta(): PickerCommandMeta[] {
       pickerVisibility: declaredTier(command),
       ...(command.commandGroup ? { commandGroup: command.commandGroup } : {}),
     }))
+}
+
+/** First effective binding as a display chord, or undefined when unbound. */
+function displayBinding(bindings: readonly string[] | undefined): string | undefined {
+  const first = bindings?.[0]
+  return first ? displayKeybinding(first) : undefined
 }

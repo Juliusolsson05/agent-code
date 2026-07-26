@@ -53,7 +53,6 @@ export const paneCommands: CommandDef[] = [
     surface: 'grid',
     title: 'Split Pane Right',
     description: '**What it does:** Creates a **new agent pane on the right**.\n\n**Use when:** You want side-by-side work in the grid.\n\n**Notes:** In **Dispatch**, this creates a detached agent instead.',
-    shortcut: '⌥D',
     run: ({ workspace }) => void workspace.splitFocused('vertical'),
   },
   {
@@ -62,7 +61,6 @@ export const paneCommands: CommandDef[] = [
     surface: 'grid',
     title: 'Split Pane Down',
     description: '**What it does:** Creates a **new agent pane below**.\n\n**Use when:** You want a stacked grid layout.\n\n**Notes:** In **Dispatch**, this creates a detached agent instead.',
-    shortcut: '⌥⇧D',
     run: ({ workspace }) => void workspace.splitFocused('horizontal'),
   },
   {
@@ -74,7 +72,6 @@ export const paneCommands: CommandDef[] = [
     surface: 'session',
     title: 'Close Pane',
     description: '**What it does:** Closes the **currently targeted pane or Dispatch row**.\n\n**Use when:** You are done with the current target.\n\n**Notes:** In **Dispatch**, the highlighted row is the close target.',
-    shortcut: '⌘W',
     run: ({ workspace }) => void workspace.closeFocused(),
   },
   {
@@ -277,7 +274,6 @@ export const paneCommands: CommandDef[] = [
     surface: 'grid',
     title: 'New Terminal Right',
     description: '**What it does:** Opens a **terminal on the right**.\n\n**Use when:** You need a shell beside the current pane.\n\n**Notes:** From **Dispatch**, the terminal attaches to the focused row or lane’s project grid.',
-    shortcut: '⌥T',
     run: ({ workspace }) => void workspace.splitFocused('vertical', 'terminal'),
   },
   {
@@ -286,7 +282,6 @@ export const paneCommands: CommandDef[] = [
     surface: 'grid',
     title: 'New Terminal Below',
     description: '**What it does:** Opens a **terminal below**.\n\n**Use when:** You need a shell under the current pane.\n\n**Notes:** From **Dispatch**, the terminal attaches to the focused row or lane’s project grid.',
-    shortcut: '⌥⇧T',
     run: ({ workspace }) => void workspace.splitFocused('horizontal', 'terminal'),
   },
   // Per-provider split commands, generated for every registered agent
@@ -310,7 +305,6 @@ export const paneCommands: CommandDef[] = [
         category: 'create' as const,
         title: `New ${caps.shortLabel} Right`,
         description: `**What it does:** Opens a **${caps.shortLabel} agent on the right**.\n\n**Use when:** You want ${caps.shortLabel} beside the current agent.\n\n**Notes:** In **Dispatch**, this creates a detached ${caps.shortLabel} agent instead.`,
-        ...(chord ? { shortcut: `⌥${chord}` } : {}),
         run: ({ workspace }: CommandContext) =>
           void workspace.splitFocused('vertical', kind),
       },
@@ -320,7 +314,6 @@ export const paneCommands: CommandDef[] = [
         category: 'create' as const,
         title: `New ${caps.shortLabel} Below`,
         description: `**What it does:** Opens a **${caps.shortLabel} agent below**.\n\n**Use when:** You want ${caps.shortLabel} in a stacked layout.\n\n**Notes:** In **Dispatch**, this creates a detached ${caps.shortLabel} agent instead.`,
-        ...(chord ? { shortcut: `⌥⇧${chord}` } : {}),
         run: ({ workspace }: CommandContext) =>
           void workspace.splitFocused('horizontal', kind),
       },
@@ -341,7 +334,6 @@ export const paneCommands: CommandDef[] = [
     surface: 'grid',
     title: 'Focus Pane Left',
     description: '**What it does:** Focuses the pane to the **left**.\n\n**Use when:** You want keyboard pane navigation.\n\n**Notes:** Uses the current grid layout.',
-    shortcut: '⌥H',
     run: ({ workspace }) => workspace.navigate('left'),
   },
   {
@@ -351,7 +343,6 @@ export const paneCommands: CommandDef[] = [
     surface: 'grid',
     title: 'Focus Pane Right',
     description: '**What it does:** Focuses the pane to the **right**.\n\n**Use when:** You want keyboard pane navigation.\n\n**Notes:** Uses the current grid layout.',
-    shortcut: '⌥L',
     run: ({ workspace }) => workspace.navigate('right'),
   },
   {
@@ -361,7 +352,6 @@ export const paneCommands: CommandDef[] = [
     surface: 'grid',
     title: 'Focus Pane Up',
     description: '**What it does:** Focuses the pane **above**.\n\n**Use when:** You want keyboard pane navigation.\n\n**Notes:** Uses the current grid layout.',
-    shortcut: '⌥K',
     run: ({ workspace }) => workspace.navigate('up'),
   },
   {
@@ -371,7 +361,6 @@ export const paneCommands: CommandDef[] = [
     surface: 'grid',
     title: 'Focus Pane Down',
     description: '**What it does:** Focuses the pane **below**.\n\n**Use when:** You want keyboard pane navigation.\n\n**Notes:** Uses the current grid layout.',
-    shortcut: '⌥J',
     run: ({ workspace }) => workspace.navigate('down'),
   },
   {
@@ -380,7 +369,6 @@ export const paneCommands: CommandDef[] = [
     surface: 'app',
     title: 'Undo Close',
     description: '**What it does:** Restores the most recent closed **pane or tab** from a small recent-close history.\n\n**Use when:** You closed something by mistake, or repeat it to walk back through earlier closes.\n\n**Notes:** Also restores detached **Dispatch** agents captured with a closed tab.',
-    shortcut: '⌘⇧T',
     run: ({ workspace }) => void workspace.undoClose(),
   },
   {
@@ -486,7 +474,6 @@ export const paneCommands: CommandDef[] = [
     surface: 'session',
     title: 'Jump to Latest Message',
     description: '**What it does:** Scrolls to the **latest agent message**.\n\n**Use when:** You are far up in the feed and want to return to the bottom.\n\n**Notes:** Agent panes only.',
-    shortcut: 'End',
     renderedViewPolicy: { kind: 'requires-rendered-feed' },
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)

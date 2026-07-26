@@ -132,6 +132,7 @@ export function makeTestCommandContext(
       // default that differs from production. Group behavior has its own tests
       // that set this explicitly.
       navigationCommandsEnabled: true,
+      commandKeybindingOverrides: {},
       showHiddenCommands: false,
       ...options.flags,
     },

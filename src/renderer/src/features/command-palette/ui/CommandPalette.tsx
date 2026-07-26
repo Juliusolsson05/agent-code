@@ -264,6 +264,7 @@ function OpenCommandPalette({
   const agentViewMode = settings.agentViewMode
   const commandVisibilityOverrides = settings.commandVisibilityOverrides
   const navigationCommandsEnabled = settings.navigationCommandsEnabled
+  const commandKeybindingOverrides = settings.commandKeybindingOverrides
   const showHiddenCommands = SHOW_HIDDEN_COMMANDS
   const statusModeEnabled = settings.showStatusMode
   const worktreeBadgesEnabled = settings.showWorktreeBadges
@@ -583,6 +584,7 @@ function OpenCommandPalette({
         agentViewMode,
         commandVisibilityOverrides,
         navigationCommandsEnabled,
+        commandKeybindingOverrides,
         showHiddenCommands,
       },
     }),
@@ -671,6 +673,7 @@ function OpenCommandPalette({
       agentViewMode,
       commandVisibilityOverrides,
       navigationCommandsEnabled,
+      commandKeybindingOverrides,
       showHiddenCommands,
     ],
   )

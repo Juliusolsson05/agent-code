@@ -50,7 +50,6 @@ export const globalEditorCommands: CommandDef[] = [
     description:
       '**What it does:** Saves the active file in the visible Global Editor or AI Workspace.\n\n**Use when:** You edited a file and want to persist it without leaving the command palette.\n\n**Notes:** Conflict checks and recovery are owned by the active editor surface.\n\n**Shortcut:** ⌘S.',
     keywords: ['save', 'write', 'editor', 'file'],
-    shortcut: '⌘S',
     when: ({ flags }) => flags.globalEditorOpen,
     run: requestSaveActiveEditorFile,
   },
@@ -73,7 +72,6 @@ export const globalEditorCommands: CommandDef[] = [
     description:
       "**What it does:** Fuzzy-finds a file by name in the focused agent's project and opens it in the **Global Editor**.\n\n**Use when:** You know (roughly) the file name and don't want to click through the tree.\n\n**Notes:** Opens the editor overlay if it isn't already open. The index skips junk directories (node_modules, build output, VCS internals) and caps at 20k files.\n\n**Shortcut:** ⌘P.",
     keywords: ['quick open', 'go to file', 'find file', 'fuzzy', 'open file'],
-    shortcut: '⌘P',
     when: ({ flags }) => Boolean(useGlobalEditorStore.getState().activeCwd ?? flags.focusedCwd),
     run: ({ ui, flags }) => {
       const editor = useGlobalEditorStore.getState()
@@ -96,7 +94,6 @@ export const globalEditorCommands: CommandDef[] = [
     description:
       "**What it does:** Searches file contents across the focused agent's project and opens matches in the **Global Editor** at the matched line.\n\n**Use when:** You're hunting a string or identifier across the project.\n\n**Notes:** Bounded scan (skips >1MB files and junk dirs; caps at 500 matches / 20k files). Case-sensitivity toggle lives in the overlay.\n\n**Shortcut:** ⌘⇧F.",
     keywords: ['search', 'grep', 'find in files', 'content search', 'ripgrep'],
-    shortcut: '⌘⇧F',
     when: ({ flags }) => Boolean(useGlobalEditorStore.getState().activeCwd ?? flags.focusedCwd),
     run: ({ ui, flags }) => {
       const editor = useGlobalEditorStore.getState()
@@ -119,7 +116,6 @@ export const globalEditorCommands: CommandDef[] = [
     description:
       '**What it does:** Expands the **Global Editor** to fill the whole workspace area. The normal workspace stays alive underneath (hidden, not unmounted — terminals and feeds keep running).\n\n**Use when:** You want maximum reading/editing room for a while.\n\n**Notes:** Esc exits fullscreen; the previous split ratio is restored.\n\n**Shortcut:** ⌥⌘E.',
     keywords: ['fullscreen', 'maximize', 'editor', 'zen', 'focus'],
-    shortcut: '⌥⌘E',
     when: ({ flags }) => flags.globalEditorOpen,
     getState: ({ flags }) => ({
       label: flags.editorFullscreen ? 'On' : 'Off',

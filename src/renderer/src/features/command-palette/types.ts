@@ -343,6 +343,12 @@ export type CommandContext = {
      */
     navigationCommandsEnabled: boolean
     /**
+     * The user's persisted per-command binding overrides. Threaded through
+     * flags so the registry can render EFFECTIVE bindings — the chord that
+     * will actually run — rather than a static authored string.
+     */
+    commandKeybindingOverrides: Record<string, string[]>
+    /**
      * Global escape hatch: when true, the picker shows EVERY applicable
      * command regardless of declared visibility or per-command override.
      * Lets a "show hidden commands" affordance reveal the full list in
@@ -419,7 +425,6 @@ export type CommandDef = {
    * those, and explaining them would add noise to every mode switch.
    */
   unavailableReason?: (ctx: CommandContext) => CommandUnavailable | null
-  shortcut?: string
   keywords?: string[]
   keepPaletteOpen?: boolean
   when?: (ctx: CommandContext) => boolean
@@ -440,6 +445,15 @@ export type ResolvedCommand = {
   /** Carried through from CommandDef so palette/menu consumers can
    *  group or label by surface without re-importing the raw defs. */
   surface: CommandSurface
+  /**
+   * The chord this command will actually run, in display form, or undefined
+   * when it has none.
+   *
+   * DERIVED at resolve time from the effective binding set, never authored.
+   * It used to be a hand-written `CommandDef.shortcut` string with no
+   * relationship to the code that ran, so the palette could advertise a chord
+   * the editor implemented and a user's Settings edit changed nothing.
+   */
   shortcut?: string
   keywords: string[]
   keepPaletteOpen: boolean

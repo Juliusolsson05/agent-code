@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { builtInCommandCatalog } from '@renderer/features/command-palette/catalog'
+import { resolveEffectiveKeybindings } from '@renderer/features/command-keybindings/resolve'
 
 // ---------------------------------------------------------------------------
 // Phase 0 characterization: THE SHORTCUT AUTHORITY SPLIT.
@@ -277,41 +278,65 @@ describe('shortcut metadata baseline', () => {
   })
 
   it('records the declared shortcut of every command that has one', () => {
-    // THE LOAD-BEARING ASSERTION. The declared column is derived from the real
-    // catalog, so adding, removing, or editing a `shortcut:` field in any
-    // command module fails here and forces the drift table to be updated in the
-    // same commit. Without this the table would be a comment that rots.
+    // THE LOAD-BEARING ASSERTION, now inverted.
     //
-    // Compared sorted by id, NOT in registration order: the table above is
-    // grouped by theme (tabs, panes, navigation, editor) because that is what
-    // makes the drift readable, while the catalog is in palette-browse order.
-    // Registration order is already pinned by catalog.test.ts, so re-asserting
-    // it here would only couple this table's layout to an unrelated concern.
-    const byId = (a: { commandId: string }, b: { commandId: string }) =>
-      a.commandId < b.commandId ? -1 : a.commandId > b.commandId ? 1 : 0
+    // At the baseline this compared the table's `declared` column against
+    // `CommandDef.shortcut`, so editing an authored string forced the drift
+    // table to be updated. That field NO LONGER EXISTS — the migration
+    // deleted it — so the assertion now checks the thing that replaced it:
+    // every chord the table recorded as REALLY RUNNING is present in the
+    // effective binding set the router and the palette both consume.
+    //
+    // That is the migration's core claim, checked rather than asserted in
+    // prose: the behaviour did not change, only its source of truth. A chord
+    // that silently stopped working would fail here.
+    const effective = new Map(
+      resolveEffectiveKeybindings({}).map(e => [e.commandId, e.bindings]),
+    )
 
-    const declaredInCatalog = builtInCommandCatalog
-      .filter(c => c.shortcut !== undefined)
-      .map(c => ({ commandId: c.id, declared: c.shortcut ?? null }))
-      .sort(byId)
-
-    const declaredInBaseline = BINDING_BASELINE
-      .filter(e => e.declared !== null)
-      .map(e => ({ commandId: e.commandId, declared: e.declared }))
-      .sort(byId)
-
-    expect(declaredInBaseline).toEqual(declaredInCatalog)
+    const missing: string[] = []
+    for (const entry of BINDING_BASELINE) {
+      // Save is editor-owned and still implemented by Monaco/EditorWorkbench
+      // rather than routed, so it has a default but its runtime path is
+      // unchanged. Excluded here and tracked separately below.
+      if (entry.owner !== 'useKeybinds') continue
+      const now = effective.get(entry.commandId) ?? []
+      for (const chord of entry.effective) {
+        const canonical = DISPLAY_TO_CANONICAL[chord]
+        if (!canonical) continue
+        if (!now.includes(canonical)) missing.push(`${entry.commandId}:${chord}`)
+      }
+    }
+    expect(missing).toEqual([])
   })
 
-  it('counts 22 commands declaring display-only shortcut metadata', () => {
-    // 80 of the 102 commands ship no chord at all. Scarcity is deliberate and
-    // the plan preserves it: defaults are muscle memory, not an allocation of
-    // every free chord.
-    expect(builtInCommandCatalog.filter(c => c.shortcut !== undefined)).toHaveLength(22)
+  it('no longer carries any authored display-only shortcut metadata', () => {
+    // The audit's core keybinding finding was that `CommandDef.shortcut` was a
+    // display string with no relationship to the code that ran. It is gone:
+    // `ResolvedCommand.shortcut` is now DERIVED from effective bindings at
+    // resolve time, so the chord the palette shows is the chord that runs.
+    for (const command of builtInCommandCatalog) {
+      expect('shortcut' in command).toBe(false)
+    }
   })
 })
 
-describe('recorded authority drift', () => {
+/** Display chords in the baseline table, mapped to the canonical grammar. */
+const DISPLAY_TO_CANONICAL: Record<string, string> = {
+  '⌘T': 'Cmd+T', '⌘⇧W': 'Cmd+Shift+W', '⌘]': 'Cmd+]', '⌘[': 'Cmd+[',
+  '⌘⇧R': 'Cmd+Shift+R', '⌘⇧T': 'Cmd+Shift+T', '⌘W': 'Cmd+W', '⌥W': 'Alt+W',
+  '⌥D': 'Alt+D', '⌥⇧D': 'Alt+Shift+D', '⌥T': 'Alt+T', '⌥⇧T': 'Alt+Shift+T',
+  '⌥C': 'Alt+C', '⌥⇧C': 'Alt+Shift+C',
+  '⌥H': 'Alt+H', '⌥←': 'Alt+Left', '⌥L': 'Alt+L', '⌥→': 'Alt+Right',
+  '⌥K': 'Alt+K', '⌥↑': 'Alt+Up', '⌥J': 'Alt+J', '⌥↓': 'Alt+Down',
+  'End': 'End', '⌘⇧E': 'Cmd+Shift+E', '⌥⌘E': 'Cmd+Alt+E',
+  '⌘P': 'Cmd+P', '⌘⇧F': 'Cmd+Shift+F',
+}
+
+// HISTORICAL: these describe the state BEFORE the migration. The table is
+// kept because it is the evidence for what the defaults had to preserve, and
+// the assertions still hold over the table itself.
+describe('recorded authority drift (pre-migration history)', () => {
   it('lists exactly the six commands whose real chords exceed their metadata', () => {
     // Undeclared aliases: the palette under-reports what the keyboard does.
     const underReported = BINDING_BASELINE.filter(

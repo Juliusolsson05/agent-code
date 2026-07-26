@@ -122,17 +122,24 @@ for (const approved of listApprovedOverlaps()) {
 
 // --- 7. Display metadata must not come back ---------------------------------
 // The audit's core keybinding finding was that `CommandDef.shortcut` was a
-// display string with no relationship to the code that ran. Once the migration
-// removes it, a reintroduced `shortcut` would rebuild exactly that drift, so
-// the check is structural rather than advisory.
+// display string with no relationship to the code that ran, so the palette
+// could advertise a chord the editor implemented and a user's Settings edit
+// would change nothing.
 //
-// Until the migration completes, this reports the remaining count instead of
-// failing — a hard failure here would block the very commits that remove them.
-const withLegacyShortcut = builtInCommandCatalog.filter(command => command.shortcut !== undefined)
-if (withLegacyShortcut.length > 0) {
-  console.log(
-    `note: ${withLegacyShortcut.length} command(s) still declare display-only \`shortcut\` metadata. `
-    + 'These are superseded by defaultKeybindings and are removed as the migration completes.',
+// The migration deleted the field; `ResolvedCommand.shortcut` is now DERIVED
+// from effective bindings at resolve time. This was a soft note while the 22
+// legacy strings still existed (a hard failure would have blocked the very
+// commits that removed them). Now that they are gone it is a hard failure,
+// because reintroducing an authored `shortcut` would rebuild exactly the drift
+// this whole phase existed to eliminate.
+const withLegacyShortcut = builtInCommandCatalog.filter(
+  command => 'shortcut' in command,
+)
+for (const command of withLegacyShortcut) {
+  fail(
+    `${command.id}: declares an authored \`shortcut\` field. Display chords are `
+    + 'derived from defaultKeybindings — an authored string is a second source of '
+    + 'truth that cannot stay in sync with the router.',
   )
 }
 
