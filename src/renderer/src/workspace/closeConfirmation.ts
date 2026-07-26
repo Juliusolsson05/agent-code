@@ -169,6 +169,16 @@ export type CloseExpansionRuntimes = Record<
   { sessionStatus?: string; streamPhase?: string | null } | undefined
 >
 
+/** Exported so paths that judge ONE session (Kill Buried) use the same
+ *  liveness rule as expansion and as the bulk preview. Three copies of
+ *  "is this busy" is how a preview and a confirmation come to disagree. */
+export function isSessionLiveForClose(
+  runtimes: CloseExpansionRuntimes,
+  sessionId: string,
+): boolean {
+  return isLive(runtimes, sessionId)
+}
+
 function isLive(runtimes: CloseExpansionRuntimes, sessionId: string): boolean {
   const runtime = runtimes[sessionId]
   if (!runtime) return false

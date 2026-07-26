@@ -2,6 +2,11 @@ import { useCallback } from 'react'
 
 import type { DetachedSessionRecord, SessionId, SessionKind, SessionMeta, Tab, TabId } from '@renderer/workspace/types'
 import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
+import {
+  closeConfirmationFor,
+  expandTabCloseTargets,
+} from '@renderer/workspace/closeConfirmation'
+import { requestCloseConfirmation } from '@renderer/workspace/closeConfirmationBroker'
 import { clearLiveEntryWindowSession } from '@renderer/session-runtime/liveEntryWindow'
 import { clearTiledLaneSessions } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import { sanitizeTileTabsState, titleFromCwd } from '@renderer/workspace/layout/helpers'
@@ -90,6 +95,21 @@ export function useTabActions(
       const detachedRecords = Object.values(state.detachedSessions)
         .filter(entry => entry.projectTabId === tabId)
       const detachedIds = detachedRecords.map(entry => entry.sessionId)
+
+      // CONFIRMATION GATE, before any kill.
+      //
+      // A tab close is almost always multi-target, and the DETACHED sessions
+      // are the ones people forget: they have no tile in the tab on screen, so
+      // closing what looks like a two-pane tab can end eight agents. Expanding
+      // grid leaves AND detached records — each through its linked descendants
+      // — is what makes the count in the dialog the real one.
+      const confirmation = closeConfirmationFor(
+        expandTabCloseTargets(state, refs.latestRuntimesRef.current, ids, detachedIds),
+      )
+      if (confirmation.required) {
+        const confirmed = await requestCloseConfirmation(confirmation)
+        if (!confirmed) return
+      }
       const idsToKill = [...ids, ...detachedIds]
       const allMetas: Record<SessionId, SessionMeta> = {}
       for (const id of ids) {

@@ -2,6 +2,7 @@ import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
 import {
   closeConfirmationFor,
   expandSessionCloseTargets,
+  isSessionLiveForClose,
 } from '@renderer/workspace/closeConfirmation'
 import { requestCloseConfirmation } from '@renderer/workspace/closeConfirmationBroker'
 import { useCallback, useRef } from 'react'
@@ -1758,6 +1759,26 @@ export function usePaneActions(
       const snapshot = refs.stateRef.current
       const entry = snapshot.buried.find(item => item.id === buriedId)
       if (!entry) return
+
+      // SECOND CONFIRMATION. The buried picker is already an explicit,
+      // deliberate selection — but this is the one close in the app with NO
+      // undo at all: a buried session is not on the undo-close stack, so the
+      // kill is final. The picker's own selection is not consent to that.
+      //
+      // Confirmation is unconditional, unlike the ordinary close paths. There
+      // is no cheap idle case to protect here, because there is no recovery
+      // even when the session is idle.
+      const buriedConfirmed = await requestCloseConfirmation({
+        required: true,
+        reason: 'running',
+        targets: [{
+          sessionId: entry.sessionId,
+          title: snapshot.sessions[entry.sessionId]?.title ?? entry.sessionId,
+          live: isSessionLiveForClose(refs.latestRuntimesRef.current, entry.sessionId),
+        }],
+        summary: 'Killing a buried session is permanent — Undo Close cannot restore it.',
+      })
+      if (!buriedConfirmed) return
 
       // Buried panes are live sessions removed from every visible tab
       // tree. `closeSession` intentionally only handles visible panes

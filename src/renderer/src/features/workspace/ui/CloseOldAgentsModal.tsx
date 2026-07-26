@@ -1,6 +1,16 @@
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import type { AgentProviderKind } from '@shared/types/providerKind'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  describePartialClose,
+  isSessionLiveForClose,
+  narrowGrantToCurrent,
+} from '@renderer/workspace/closeConfirmation'
+import type {
+  CloseTargetSnapshot,
+  PartialCloseOutcome,
+} from '@renderer/workspace/closeConfirmation'
+import { useGlobalToast } from '@renderer/ui/GlobalToast'
 
 import {
   Dialog,
@@ -91,6 +101,7 @@ function formatDuration(ms: number): string {
 }
 
 export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
+  const { showToast } = useGlobalToast()
   const [thresholdValue, setThresholdValue] = useState(String(DEFAULT_THRESHOLD_VALUE))
   const [thresholdUnit, setThresholdUnit] = useState<ThresholdUnit>(DEFAULT_THRESHOLD_UNIT)
   const [scopeMode, setScopeMode] = useState<ScopeMode>('all')
@@ -262,6 +273,16 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
     setSelectedProjects(new Set())
   }, [])
 
+  /** Freshly re-read liveness for every agent session, in the shape the grant
+   *  comparison expects. Deliberately re-derived rather than reusing the
+   *  memoized preview rows: the whole point is to see what changed SINCE. */
+  const buildCloseTargets = useCallback((ws: typeof workspace): CloseTargetSnapshot[] =>
+    Object.keys(ws.state.sessions).map(sessionId => ({
+      sessionId,
+      title: ws.state.sessions[sessionId]?.title ?? sessionId,
+      live: isSessionLiveForClose(ws.runtimes, sessionId),
+    })), [])
+
   const closeMatchingAgents = useCallback(async () => {
     if (matchingRows.length === 0 || closing) return
     setClosing(true)
@@ -271,14 +292,50 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
       // children. Firing N closes concurrently would make each call read a
       // slightly stale snapshot and could drop layout/undo bookkeeping. Batch
       // cleanup is rare enough that predictable mutation beats raw speed.
-      for (const row of matchingRows) {
-        await workspace.closeSession(row.sessionId)
+      // THE GRANT. What the user saw and approved, captured at click time.
+      const granted = matchingRows.map(row => ({
+        sessionId: row.sessionId,
+        title: `${row.tabTitle} · ${row.cwdBase}`,
+        live: row.isLive,
+      }))
+
+      const outcome: PartialCloseOutcome = { closed: [], failed: [], skipped: [] }
+
+      for (const target of granted) {
+        // RE-ENUMERATE BEFORE EVERY KILL, not once after confirmation.
+        //
+        // The audit's finding: a preview the user approved goes stale. Between
+        // clicking and the tenth kill, agents finish, new ones spawn, and one
+        // of the idle agents in the list can wake up and start working. A grant
+        // checked once at the top would authorize killing it.
+        //
+        // Re-reading per iteration is affordable because the loop is already
+        // sequential (closeSession mutates the tree, so concurrency would make
+        // each call read a stale snapshot) and bulk cleanup is rare.
+        const current = buildCloseTargets(workspace)
+        const stillGranted = narrowGrantToCurrent([target], current)
+        if (stillGranted.length === 0) {
+          outcome.skipped.push(target.sessionId)
+          continue
+        }
+        try {
+          await workspace.closeSession(target.sessionId)
+          outcome.closed.push(target.sessionId)
+        } catch (error) {
+          // One backend refusing must not abandon the rest of the batch — the
+          // user asked for twelve agents closed, and nine succeeding is a
+          // better outcome than stopping at the first failure with no report.
+          outcome.failed.push({ sessionId: target.sessionId, error })
+        }
       }
+
+      const report = describePartialClose(outcome)
+      if (report) showToast(report, 6000)
       onClose()
     } finally {
       setClosing(false)
     }
-  }, [closing, matchingRows, onClose, workspace])
+  }, [closing, matchingRows, onClose, workspace, showToast])
 
   return (
     <Dialog
