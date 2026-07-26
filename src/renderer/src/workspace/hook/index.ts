@@ -932,7 +932,6 @@ export function useWorkspace(
     enterDispatchMode: dispatchActions.enterDispatchMode,
     exitDispatchMode: dispatchActions.exitDispatchMode,
     setDispatchScope: dispatchActions.setDispatchScope,
-    ensureDispatchTerminal: dispatchActions.ensureDispatchTerminal,
     focusDispatchSession: dispatchActions.focusDispatchSession,
     pinSession: dispatchActions.pinSession,
     unpinSession: dispatchActions.unpinSession,

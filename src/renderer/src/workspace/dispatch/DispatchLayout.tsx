@@ -75,12 +75,6 @@ function ClassicDispatchLayout({
     : workspace.activeTab
   const terminalSessionId = findTerminalSessionInTab(activeTab, workspace.state)
   // Source of truth for whether the project terminal mounts is now the
-  // global setting, not the ephemeral `dispatchMode.terminalVisible` we
-  // used to keep on workspace state. The setting defaults to OFF —
-  // matches the user's "off by default, opt in" intent and removes the
-  // "I turned it off but it came back" failure mode that the per-session
-  // flag suffered from. Toggle is in Settings → Workspace.
-  const terminalVisible = useAppStore(state => state.settings.dispatchProjectTerminal)
 
   // Resizable list/active-agent split. The ratio is owned by uiShell
   // (see UiShellState.dispatchListRatio) so it survives mode toggles
@@ -132,18 +126,6 @@ function ClassicDispatchLayout({
     workspace.focusDispatchSession,
     workspace.state.dispatchMode?.focusedSessionId,
   ])
-
-  useEffect(() => {
-    // Spawn the terminal lazily when the user opts in. This is the ONLY
-    // entry point that calls ensureDispatchTerminal — the dispatch
-    // actions (enter/setScope) deliberately no longer do, so flipping
-    // the setting OFF and re-entering Dispatch will NOT silently spawn
-    // a fresh terminal in the background. The existing terminal in a
-    // tab that was spawned earlier stays as a tile-tree leaf; if the
-    // user wants to remove it, they close it like any other pane.
-    if (!terminalVisible || !activeTab) return
-    void workspace.ensureDispatchTerminal(activeTab.id)
-  }, [activeTab?.id, terminalVisible, workspace.ensureDispatchTerminal])
 
   // List width is the ratio * row width. Active-agent pane absorbs
   // the remainder via `flex-1`. When the project terminal is on, we
@@ -204,39 +186,6 @@ function ClassicDispatchLayout({
         )}
       </div>
 
-      {terminalVisible && activeRow?.sessionId !== terminalSessionId && (
-        <div className="basis-1/4 min-w-0 min-h-0 flex-shrink-0">
-          {activeTab && terminalSessionId ? (
-            <TerminalLeaf
-              sessionId={terminalSessionId}
-              paneLabel={paneLabelForSession(
-                workspace.state,
-                activeTab.id,
-                terminalSessionId,
-              )}
-              focused={false}
-              // WHY this focuses the terminal in Dispatch instead of being a
-              // no-op: every Dispatch command (Close, Reload, View Prompts,
-              // provider switch, …) targets dispatchMode.focusedSessionId via
-              // commandTargetSessionId. The project terminal lives in its own
-              // side column OUTSIDE the active-row mechanism, so when its
-              // onFocusRequest did nothing, clicking into the terminal to use
-              // it never updated the dispatch focus — focus stayed on the last
-              // agent (or a stale id that resolved to rows[0]), and running
-              // Close from the terminal killed a random AGENT instead of the
-              // terminal. The terminal is already a real dispatch row
-              // (terminals are in buildVisibleDispatchRows), so making it the
-              // focus is the same promotion that selecting its list row does:
-              // it becomes the active row, the command target follows it, and
-              // Close closes the terminal.
-              onFocusRequest={() => workspace.focusDispatchSession(activeTab.id, terminalSessionId)}
-              workspace={workspace}
-            />
-          ) : (
-            <DispatchEmpty message="creating project terminal..." />
-          )}
-        </div>
-      )}
     </div>
   )
 }

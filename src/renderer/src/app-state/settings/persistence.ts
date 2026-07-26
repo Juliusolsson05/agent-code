@@ -47,7 +47,13 @@ export function coerceSettings(value: unknown): Settings {
 
   return {
     ...DEFAULT_SETTINGS,
-    ...parsed,
+    // WHY `parsed` is spread through a filter rather than directly: deleting a
+    // field from the `Settings` TYPE does not delete it from a user's stored
+    // blob. `...parsed` copies every key it finds, so a retired key survives
+    // coercion, gets written back on the next save, and lives forever in
+    // localStorage — invisible to TypeScript and impossible to reason about.
+    // The plan calls this out explicitly for dispatchProjectTerminal.
+    ...omitRetiredSettingsKeys(parsed),
     savedThemes,
     savedPromptTemplates,
     dispatchColorFlags: coerceDispatchColorFlags(parsed.dispatchColorFlags),
@@ -71,11 +77,6 @@ export function coerceSettings(value: unknown): Settings {
     // non-strings so a corrupt localStorage blob cannot break settings boot.
     dictationShortcut: coerceHotkeyBinding(parsed.dictationShortcut),
     aggressiveDebugPersistence: parsed.aggressiveDebugPersistence === true,
-    // Strict `=== true` so missing OR malformed values default to off —
-    // matches the "off by default, opt in" semantics promised in the
-    // setting's docstring. Anything looser (e.g. `!== false`) would
-    // flip the default to ON for fresh installs.
-    dispatchProjectTerminal: parsed.dispatchProjectTerminal === true,
     // `!== false` so the default is ON — only an explicit persisted `false`
     // turns autosend off. Fresh installs / older workspace.json blobs (no
     // such key) get the on-by-default behavior.
@@ -231,6 +232,31 @@ const RETIRED_BUILT_IN_COMMAND_IDS: ReadonlySet<string> = new Set([
   'usage.cycle-header-level',
   'dangerous-agents',
 ])
+
+/**
+ * Persisted Settings keys this release removed.
+ *
+ * Listing them is what makes a removal real. A key absent from the type but
+ * present in storage is worse than one that is merely unused: it round-trips
+ * through every save, so the blob keeps growing and a future field with the
+ * same name would silently inherit a stale value.
+ *
+ * Removed in the command-governance change: `dispatchProjectTerminal`, the
+ * opt-in auto-created Dispatch project terminal. The whole feature is gone —
+ * the Settings row, the auto-create effect, the dedicated side column and the
+ * ensureDispatchTerminal action — so the preference has nothing left to
+ * control.
+ */
+const RETIRED_SETTINGS_KEYS: readonly string[] = ['dispatchProjectTerminal']
+
+function omitRetiredSettingsKeys(parsed: Partial<Settings>): Partial<Settings> {
+  const result: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(parsed)) {
+    if (RETIRED_SETTINGS_KEYS.includes(key)) continue
+    result[key] = value
+  }
+  return result as Partial<Settings>
+}
 
 function coerceCommandVisibilityOverrides(value: unknown): Record<string, boolean> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {}

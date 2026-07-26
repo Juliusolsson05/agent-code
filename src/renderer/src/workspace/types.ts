@@ -319,12 +319,11 @@ export type DispatchModeState = {
    * survive reloads for free. Absent => classic Dispatch (unchanged).
    */
   tiled?: TiledDispatchState
-  // HISTORICAL: a `terminalVisible: boolean` flag used to live here. It
-  // was replaced by the global `settings.dispatchProjectTerminal` toggle
-  // because the per-session flag re-defaulted to ON every time dispatch
-  // was re-entered, producing the "I turned it off but it's back" bug.
-  // Old workspace.json files may still carry the field; it is now ignored
-  // (TypeScript drops unknown properties at runtime on shape coercion).
+  // HISTORICAL: a `terminalVisible: boolean` flag used to live here, then a
+  // global `settings.dispatchProjectTerminal` toggle replaced it. Both are
+  // gone — the auto-created Dispatch project terminal was retired entirely.
+  // Ordinary user-created terminals are unaffected: they are normal sessions
+  // and normal Dispatch rows.
 }
 
 export type WorkspaceState = {

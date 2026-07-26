@@ -27,7 +27,6 @@ export function useDispatchActions(
   enterDispatchMode: (scope?: DispatchModeState['scope']) => Promise<void>
   exitDispatchMode: () => void
   setDispatchScope: (scope: DispatchModeState['scope']) => Promise<void>
-  ensureDispatchTerminal: (tabId?: TabId) => Promise<SessionId | null>
   focusDispatchSession: (tabId: TabId, sessionId: SessionId) => void
   pinSession: (sessionId: SessionId) => void
   unpinSession: (sessionId: SessionId) => void
@@ -42,88 +41,6 @@ export function useDispatchActions(
 } {
   const pendingTerminalByTabRef = useRef(new Map<TabId, Promise<SessionId | null>>())
 
-  const ensureDispatchTerminal = useCallback(
-    async (tabId = refs.stateRef.current.activeTabId): Promise<SessionId | null> => {
-      const snapshot = refs.stateRef.current
-      const tab = snapshot.tabs.find(item => item.id === tabId)
-      if (!tab) return null
-
-      const leafIds = collectLeaves(tab.root)
-      const existing = findTerminalSessionInTab(tab, snapshot)
-      if (existing) return existing
-
-      // Anchor the terminal's cwd to the session the user is actually focused
-      // on. In Tiled Dispatch that's the focused lane's agent — tab.focusedSessionId
-      // is stale grid focus there and would spawn the terminal in the wrong
-      // project. Fall back to grid focus, then any leaf cwd of the tab.
-      const anchorId = dispatchFocusedSessionId(snapshot.dispatchMode) ?? tab.focusedSessionId
-      const cwd = (anchorId ? snapshot.sessions[anchorId]?.cwd : undefined)
-        ?? leafIds.map(id => snapshot.sessions[id]?.cwd).find(Boolean)
-      if (!cwd) {
-        showToast('Could not create dispatch terminal: no project directory found')
-        return null
-      }
-
-      const pending = pendingTerminalByTabRef.current.get(tabId)
-      if (pending) return pending
-
-      const created = (async () => {
-        const latest = refs.stateRef.current
-        const latestTab = latest.tabs.find(item => item.id === tabId)
-        const latestTerminal = findTerminalSessionInTab(latestTab ?? null, latest)
-        if (latestTerminal) return latestTerminal
-
-        let terminalId: SessionId
-        try {
-          terminalId = await sessionActions.spawn(cwd, { kind: 'terminal' })
-        } catch (err) {
-          showToast(
-            err instanceof Error && err.message.length > 0
-              ? err.message
-              : 'Failed to create dispatch terminal',
-          )
-          return null
-        }
-
-        let inserted = false
-        setState(prev => {
-          const tabs = prev.tabs.map(currentTab => {
-            if (currentTab.id !== tabId) return currentTab
-            if (findTerminalSessionInTab(currentTab, prev)) {
-              return currentTab
-            }
-            inserted = true
-            // Dispatch renders the terminal outside the grid, but the
-            // session still needs to be a normal leaf so existing lifetime,
-            // tmux recovery, persistence, and IPC routing keep working.
-            // Preserving focusedSessionId keeps terminal creation invisible
-            // to the agent the user was actively commanding.
-            return {
-              ...currentTab,
-              root: wrapRootWithLeaf(currentTab.root, 'vertical', 'b', terminalId),
-              focusedSessionId: currentTab.focusedSessionId,
-            }
-          })
-          return { ...prev, tabs }
-        })
-        if (!inserted) {
-          // A terminal can appear after spawn but before the leaf insert
-          // (for example from another caller using the normal split path).
-          // `spawn()` already registered this terminal in state.sessions, so
-          // leaving it unattached would leak both renderer state and a PTY.
-          await sessionActions.killSession(terminalId)
-          return findTerminalInLatestTab(refs, tabId)
-        }
-        return terminalId
-      })().finally(() => {
-        pendingTerminalByTabRef.current.delete(tabId)
-      })
-      pendingTerminalByTabRef.current.set(tabId, created)
-      return created
-    },
-    [refs.stateRef, sessionActions, setState, showToast],
-  )
-
   const enterDispatchMode = useCallback(
     async (scope: DispatchModeState['scope'] = state.dispatchMode?.scope ?? 'project') => {
       closeNewAgentPlacement()
@@ -135,12 +52,6 @@ export function useDispatchActions(
         },
       }))
       setTileTabs(null)
-      // Terminal mount is now gated by `settings.dispatchProjectTerminal`,
-      // which lives outside this action's reach (settings live in the
-      // settings store, dispatch state lives in workspace state).
-      // DispatchLayout's useEffect reads the setting and calls
-      // ensureDispatchTerminal itself when appropriate — meaning we
-      // deliberately do NOT unconditionally fire it here anymore. Doing so
       // would spawn a terminal even with the setting OFF, which is the
       // exact bug shape we're fixing.
     },
@@ -405,7 +316,6 @@ export function useDispatchActions(
     enterDispatchMode,
     exitDispatchMode,
     setDispatchScope,
-    ensureDispatchTerminal,
     focusDispatchSession,
     pinSession,
     unpinSession,

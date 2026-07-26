@@ -353,8 +353,6 @@ export type Settings = {
    *  entered dispatch defaulted the flag to ON. Moving the gate to a
   *  global setting collapses the toggle surface to one place the user
   *  controls and removes the "terminal always mounted even when turned
-  *  off" failure mode. */
-  dispatchProjectTerminal: boolean
   /** When on (default), clicking a prompt-suggestion chip immediately SENDS
    *  that suggestion as the next prompt; when off, clicking only prefills the
    *  composer draft so the user can edit before submitting. The chip is an
@@ -481,7 +479,6 @@ export const DEFAULT_SETTINGS: Settings = {
   // Preserve today's opt-in behavior. Users choose which capabilities become
   // defaults; session commands remain available regardless of this empty seed.
   defaultBuiltInMcpDomains: [],
-  dispatchProjectTerminal: false,
   autoSendPromptSuggestion: true,
   fontFamily: 'jetbrains-mono',
   // Empty by default: nothing is hidden until the user opts in per

@@ -54,13 +54,10 @@ export const layoutCommands: CommandDef[] = [
     keywords: ['tiled dispatch', 'multi agent', 'lanes', 'split dispatch', 'cockpit', 'parallel agents', 'grid of agents'],
     run: ({ ui }) => ui.openTiledDispatchPrompt(),
   },
-  // REMOVED: 'toggle-dispatch-terminal' command. The dispatch project
-  // terminal is now controlled by `settings.dispatchProjectTerminal`
-  // (default OFF) rather than a per-session command-palette toggle. The
-  // old command sat on top of an ephemeral `dispatchMode.terminalVisible`
-  // flag that re-defaulted to ON every time dispatch was re-entered,
-  // producing the "I turned it off but it came back" failure mode.
-  // Search settings → "Attach Project Terminal to Dispatch" to toggle.
+  // REMOVED: the 'toggle-dispatch-terminal' command, then its replacement
+  // `settings.dispatchProjectTerminal`, and now the feature itself. The
+  // opt-in auto-created companion terminal and its dedicated Dispatch side
+  // column are gone; user-created terminals still work exactly as before.
   {
     id: 'normalize-layout',
     category: 'layout-dispatch',

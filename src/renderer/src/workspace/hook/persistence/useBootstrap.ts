@@ -95,17 +95,9 @@ export function useBootstrap(
             finalStatus = 'fresh'
             // WHY apply the default mode here, after newTab resolves:
             //
-            // `enterDispatchMode` triggers `ensureDispatchTerminal`, which
-            // looks up the active tab via `refs.stateRef.current.activeTabId`
-            // and inserts a terminal leaf into that tab's tree. If we called
-            // it before newTab finished, there'd be no tab yet → no terminal
-            // gets attached → the spawned PTY leaks. Sequencing it after
-            // newTab guarantees a tab+focused session exist.
-            //
-            // We deliberately do NOT touch the rehydrate path: existing
-            // workspaces already have `dispatchMode: null` (or a real value)
-            // persisted, so honoring the persisted value is what users
-            // expect. This setting is "first launch only" by design.
+            // `enterDispatchMode` no longer spawns anything: the auto-created
+            // project terminal was retired, so entering Dispatch is now purely
+            // a layout change.
             if (defaultWorkspaceMode === 'dispatch') {
               try {
                 await enterDispatchMode('project')

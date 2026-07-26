@@ -60,7 +60,7 @@ export const useAppStore = create<AppStore>()(
         // real product default and downstream session initialization reads it
         // synchronously, so older blobs must be backfilled before workspace
         // bootstrap can create or recover an agent.
-        version: 9,
+        version: 10,
         storage: createJSONStorage(() => localStorage),
         partialize: state => ({ settings: state.settings }),
         merge: (persisted, current) => {
