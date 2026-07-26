@@ -1,5 +1,6 @@
 import { contextsOverlap } from '@renderer/features/command-keybindings/defaults'
 import type { BindingContext, CommandBindingDefault } from '@renderer/features/command-keybindings/defaults'
+import { tryNormalizeKeybinding } from '@renderer/features/command-keybindings/normalize'
 import type { Keybinding } from '@renderer/features/command-keybindings/normalize'
 
 // ---------------------------------------------------------------------------
@@ -80,24 +81,78 @@ export const RESERVED_INTERACTIONS: readonly ReservedInteraction[] = [
     // Standard Electron menu roles. Assigning a command on top of one of these
     // does not merely conflict — the native menu wins, so the command would
     // appear bound and simply never fire.
-    bindings: ['Cmd+Q', 'Cmd+H', 'Cmd+M', 'Cmd+R', 'Cmd+0', 'Cmd+Alt+I'],
+    //
+    // These are the accelerators Electron installs IMPLICITLY from a role.
+    // `appMenu.ts` only names roles (`appMenu`, `editMenu`, `close`,
+    // `forceReload`, `togglefullscreen`, `windowMenu`), so the chords never
+    // appear as literals anywhere in this repository and have to be
+    // transcribed from Electron's role table. An earlier version of this list
+    // was transcribed from the visible source instead and was therefore
+    // materially short — it reported Cmd+- and Cmd+Shift+R as free.
+    bindings: [
+      'Cmd+Q', 'Cmd+H', 'Cmd+M', 'Cmd+R', 'Cmd+0', 'Cmd+Alt+I',
+      // role: 'close' — Close Window. Note this makes Cmd+W THREE-way owned
+      // (close-pane, editor-native close file, Close Window), which the
+      // approved-overlap entry below now records explicitly.
+      'Cmd+W',
+      // role: 'forceReload'
+      'Cmd+Shift+R',
+      // role: 'appMenu' → Hide Others
+      'Cmd+Alt+H',
+      // role: 'togglefullscreen'
+      'Cmd+Ctrl+F',
+      // Explicit zoom accelerators in appMenu.ts's View submenu. Electron
+      // spells zoom-in 'CommandOrControl+Plus'; the physical key is '=', which
+      // is the token this grammar uses.
+      'Cmd+=', 'Cmd+-',
+    ],
     context: 'global',
     owner: 'Native application menu',
   },
   {
-    bindings: ['Cmd+C', 'Cmd+V', 'Cmd+X', 'Cmd+A', 'Cmd+Z', 'Cmd+Shift+Z'],
+    bindings: [
+      'Cmd+C', 'Cmd+V', 'Cmd+X', 'Cmd+A', 'Cmd+Z', 'Cmd+Shift+Z',
+      // role: 'editMenu' → Paste and Match Style
+      'Cmd+Alt+Shift+V',
+    ],
     context: 'global',
     owner: 'Native editing commands',
   },
   {
-    // Monaco owns Cmd+W for closing a file tab while editor chrome has focus.
-    // Note Cmd+W is ALSO a close-pane command binding in 'global' context —
-    // those contexts overlap, so this is a real conflict that the app resolves
-    // by precedence today. Declared so the checker reports it rather than
-    // pretending the chord is free.
-    bindings: ['Cmd+W'],
+    // Tiled-tab resize CONTINUATION. After Cmd+N focuses a tiled tab, arrows
+    // held under Cmd resize it (useKeybinds' pendingTiledResizeIndex). Stateful
+    // and therefore easy to miss when transcribing owners: the chord only does
+    // anything in the window between Cmd+N and releasing Cmd, but during that
+    // window it beats anything else bound to the same keys.
+    bindings: ['Cmd+Left', 'Cmd+Right', 'Cmd+Up', 'Cmd+Down'],
+    context: 'global',
+    owner: 'Tiled tab resize (after numbered selection)',
+  },
+  {
+    // Feed picker navigation. While the Copy Assistant or Copy Code Block
+    // picker owns input, these four keys move/confirm/cancel the selection.
+    bindings: ['Up', 'Down', 'Enter'],
+    context: 'feed',
+    owner: 'Assistant / code-block picker navigation',
+  },
+  {
+    // Editor chrome owns all FOUR of these while focus is inside
+    // [data-global-editor-input-owner] — useKeybinds bails for
+    // ['s','w','[',']'] there. Only Cmd+W was declared originally, which left
+    // Cmd+[ / Cmd+] (Monaco outdent/indent) reported as free the moment a user
+    // rebound next-tab/prev-tab away from them. Binding a global command to a
+    // freed bracket would produce a chord that silently does nothing whenever
+    // the editor has focus — the exact silent-conflict failure this file's
+    // docstring warns about.
+    bindings: ['Cmd+W', 'Cmd+[', 'Cmd+]'],
     context: 'editor',
-    owner: 'Editor-native close file',
+    owner: 'Editor-native close file and indentation',
+  },
+  {
+    // Editor file-tab strip: Delete closes, arrows/Home/End move between tabs.
+    bindings: ['Delete', 'Left', 'Right', 'Home', 'End'],
+    context: 'editor',
+    owner: 'Editor file-tab navigation',
   },
 ]
 
@@ -129,7 +184,7 @@ const APPROVED_OVERLAPS: ReadonlyArray<{
 }> = [
   {
     binding: 'Cmd+W',
-    owners: ['close-pane', 'Editor-native close file'],
+    owners: ['close-pane', 'Editor-native close file and indentation', 'Native application menu'],
     // Resolved by focus, deterministically and before either owner runs:
     // useKeybinds returns early for cmd+s/w/[/] whenever the event target is
     // inside [data-global-editor-input-owner], so the workspace's close-pane
@@ -141,8 +196,50 @@ const APPROVED_OVERLAPS: ReadonlyArray<{
     // unhandled chord and closes the whole window.
     reason:
       'Editor chrome consumes Cmd+W before the workspace router sees it '
-      + '(useKeybinds bails out for editor-owned targets), so exactly one owner '
-      + 'is ever live for a given focus.',
+      + '(useKeybinds bails out for editor-owned targets), and the renderer '
+      + 'preventDefaults it so Electron\'s Close Window role never receives it. '
+      + 'Exactly one owner is live for a given focus.',
+  },
+  {
+    binding: 'Cmd+[',
+    owners: ['prev-tab', 'Editor-native close file and indentation'],
+    reason:
+      'useKeybinds returns early for Cmd+[ whenever the event target sits '
+      + 'inside [data-global-editor-input-owner], so Monaco outdent and tab '
+      + 'navigation are never both live for one focus.',
+  },
+  {
+    binding: 'Cmd+]',
+    owners: ['next-tab', 'Editor-native close file and indentation'],
+    reason:
+      'useKeybinds returns early for Cmd+] whenever the event target sits '
+      + 'inside [data-global-editor-input-owner], so Monaco indent and tab '
+      + 'navigation are never both live for one focus.',
+  },
+  {
+    binding: 'End',
+    owners: ['jump-latest-message', 'Editor file-tab navigation'],
+    reason:
+      'Jump to Latest Message requires a focused rendered feed and a target '
+      + 'that is not text-editing, while editor tab navigation requires focus '
+      + 'inside editor chrome. The two preconditions cannot hold at once.',
+  },
+  {
+    binding: 'Cmd+Shift+R',
+    owners: ['resume-session', 'Native application menu'],
+    // Pre-existing in the app, not introduced here: resume-session has shipped
+    // on Cmd+Shift+R for a long time, and appMenu's `forceReload` role carries
+    // the same accelerator implicitly. The renderer's capture-phase handler
+    // calls preventDefault before the menu's accelerator path runs, so Force
+    // Reload is effectively shadowed rather than racing.
+    //
+    // Recorded rather than silently tolerated because it is exactly the kind
+    // of overlap that looks fine until someone unbinds resume-session and
+    // discovers Cmd+Shift+R now force-reloads the app mid-session.
+    reason:
+      'The renderer capture handler preventDefaults Cmd+Shift+R before '
+      + 'Electron\'s forceReload role accelerator can fire, so the command '
+      + 'shadows the native role deterministically rather than racing it.',
   },
 ]
 
@@ -203,8 +300,9 @@ export function findBindingCollisions(options: {
       claim(binding, { kind: 'reserved', id: entry.owner, context: entry.context })
     }
   }
-  if (options.dictationBinding) {
-    claim(options.dictationBinding, {
+  const dictation = normalizeDictationBinding(options.dictationBinding)
+  if (dictation) {
+    claim(dictation, {
       kind: 'reserved',
       id: 'Voice dictation hotkey',
       context: 'global',
@@ -263,9 +361,30 @@ export function findBindingOwners(options: {
     owners.push({ kind: 'reserved', id: entry.owner, context: entry.context })
   }
 
-  if (options.dictationBinding === options.binding) {
+  if (normalizeDictationBinding(options.dictationBinding) === options.binding) {
     owners.push({ kind: 'reserved', id: 'Voice dictation hotkey', context: 'global' })
   }
 
   return owners
+}
+
+/**
+ * Bring a dictation hotkey into the command grammar before comparing it.
+ *
+ * WHY this is not a raw string compare: dictation captures and persists its own
+ * notation, and `hotkeyBinding.ts` deliberately rewrites `Alt` to `Option` for
+ * display — so a user who binds Option-D has `"Option+D"` in settings while the
+ * command grammar canonicalizes the identical physical chord to `"Alt+D"`.
+ * Comparing raw strings found no collision between two bindings that register
+ * the SAME key, which is precisely the clash this engine exists to catch. Once
+ * runtime routing lands, that would mean pressing Option-D starts dictation and
+ * runs a command.
+ *
+ * The normalizer already accepts `option` as an alias for Alt, so this is just
+ * a matter of running it. Returns null for an unparseable value rather than
+ * throwing: an exotic dictation binding must not be able to break collision
+ * checking for every other chord.
+ */
+function normalizeDictationBinding(binding: Keybinding | null | undefined): Keybinding | null {
+  return binding ? tryNormalizeKeybinding(binding) : null
 }

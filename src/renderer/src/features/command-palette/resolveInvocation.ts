@@ -132,10 +132,22 @@ export function resolveCommandAvailability(
 /**
  * Resolve everything about one invocation at once.
  *
- * `execute` closes over the TARGET RESOLVED HERE, not over "whatever is
- * focused when you call me". That closure is the mechanism that makes the
- * pinning real — a later focus change cannot retarget an invocation that
- * already captured its identity.
+ * SCOPE — read before relying on this. It resolves target, availability and
+ * state together, from one read, so those three cannot disagree. What it does
+ * NOT yet do is enforce the target during execution: `CommandDef.run` takes
+ * only a context and has no target parameter, so `execute` calls `run(ctx)` and
+ * every session command still resolves its own target internally.
+ *
+ * The pinned identity is therefore currently useful for DISPLAY (the badge and
+ * the row describe a known session) and for `targetStillValid` at a mutation
+ * boundary — but a command that re-resolves inside `run` can still act on
+ * something else. `close-pane`, for instance, reaches `closeFocused`, which
+ * reads a live ref rather than this snapshot.
+ *
+ * Closing that gap means threading the resolved target into `run`, which
+ * touches every session command and belongs with the Phase 7 destructive work.
+ * Until then, do not describe this module as preventing retargeting; it
+ * provides the identity that a later phase will enforce.
  */
 export function resolveCommandInvocation(
   command: CommandDef,

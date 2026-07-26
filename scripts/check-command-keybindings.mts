@@ -15,7 +15,10 @@
  *
  * Run: npx tsx --tsconfig tsconfig.web.json scripts/check-command-keybindings.mts
  */
-import { builtInCommandCatalog } from '../src/renderer/src/features/command-palette/catalog'
+import {
+  builtInCommandCatalog,
+  findCatalogDefects,
+} from '../src/renderer/src/features/command-palette/catalog'
 import {
   buildDefaultKeybindings,
   contextsOverlap,
@@ -75,12 +78,18 @@ for (const [commandId, count] of entriesByCommand) {
 // never discover — and, worse, one that silently reserves the key against
 // every other command.
 for (const entry of defaults) {
-  // `open-command-palette` is the one approved catalog addition and is expected
-  // to be absent until its command lands; it is checked separately below.
-  if (entry.commandId === 'open-command-palette') continue
   if (!catalogIds.has(entry.commandId)) {
     fail(`${entry.commandId}: has a shipped binding but is not in the command catalog`)
   }
+}
+
+// --- 4b. Catalog integrity -------------------------------------------------
+// Delegated to the shared validator rather than reimplemented. Without it this
+// gate happily passed a catalog with duplicate ids, which makes command lookup
+// ambiguous — and a binding pointing at an ambiguous id is worse than one
+// pointing at nothing.
+for (const defect of findCatalogDefects(builtInCommandCatalog)) {
+  fail(`catalog: ${defect}`)
 }
 
 // --- 5. Collisions ----------------------------------------------------------

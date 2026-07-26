@@ -15,6 +15,7 @@ import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { SETTING_CATEGORIES } from '@renderer/features/settings/lib/settingsCategories'
 import type { SettingCategoryId } from '@renderer/features/settings/lib/settingsCategories'
 import { listPickerCommandMeta } from '@renderer/features/command-palette/registry'
+import { isVisibleInPicker } from '@renderer/features/command-palette/pickerVisibility'
 import type { PickerCommandMeta } from '@renderer/features/command-palette/registry'
 import type { ConfigurableBuiltInMcpDomain } from '@mcp/shared/types'
 
@@ -222,18 +223,40 @@ const DICTATION_PROVIDER_OPTIONS: ChoiceOption<Settings['dictationProvider']>[] 
 // Resolve a command's effective picker visibility from settings alone.
 // Mirrors `commandVisible` in the command registry, minus the live
 // `showHiddenCommands` escape hatch (the settings UI always edits the
-// underlying preference, never the transient reveal-all state): an
-// explicit override wins, else the declared default ('default' shows,
-// everything else is hidden). Kept here rather than imported so the
-// settings layer doesn't depend on the registry's CommandContext-typed
-// internals — it only needs the static rule.
+// underlying preference, never the transient reveal-all state).
+//
+// This now delegates to the SHARED resolver rather than re-implementing the
+// rule. It used to be a private second copy, justified by "the settings layer
+// shouldn't depend on the registry's CommandContext-typed internals" — a real
+// concern that `pickerVisibility.ts` removed by taking a context-free policy
+// struct instead of a CommandContext.
+//
+// Keeping the copy after that was an active defect, not just duplication: the
+// copy knew about overrides and the declared tier only, so it never learned
+// about the Navigation Commands group. On a fresh install Settings rendered
+// all six navigation switches ON (they declare no tier, so the copy said
+// "visible") while the palette omitted them — Settings stating the opposite of
+// what the user could see. Toggling one wrote an override and still changed
+// nothing, because the group gate deliberately outranks per-command overrides.
+// That is exactly the "switches that appear able to override their parent"
+// shape the precedence rule exists to prevent.
+//
+// `showHiddenCommands: false` is passed deliberately: Settings shows the
+// PERSISTED preference, not the transient reveal-all state, so a user reading
+// this list sees what their profile actually does.
 function resolveCommandVisible(settings: Settings, command: PickerCommandMeta): boolean {
-  // Defensive optional-chain for the same reason as commandVisible in the
-  // registry: never let a missing override map (pre-#249 persisted settings)
-  // crash the Settings page render. Degrade to declared default.
-  const override = settings.commandVisibilityOverrides?.[command.id]
-  if (typeof override === 'boolean') return override
-  return command.pickerVisibility === 'default'
+  return isVisibleInPicker(
+    {
+      id: command.id,
+      pickerVisibility: command.pickerVisibility,
+      commandGroup: command.commandGroup,
+    },
+    {
+      overrides: settings.commandVisibilityOverrides,
+      showHiddenCommands: false,
+      navigationCommandsEnabled: settings.navigationCommandsEnabled,
+    },
+  )
 }
 
 function updateDefaultBuiltInMcpDomain(

@@ -52,10 +52,21 @@ export function coerceCommandKeybindingOverrides(value: unknown): CommandKeybind
       if (!bindings.includes(normalized)) bindings.push(normalized)
     }
 
-    // An array that contained ONLY malformed values becomes `[]`, which means
-    // "explicitly unbound". That is the conservative reading: we know the user
-    // edited this command, and silently restoring the shipped chord would
-    // re-add a binding they had removed.
+    // A NON-EMPTY array whose entries all failed to parse is corruption, not
+    // intent, so the key is dropped entirely and the command inherits again.
+    //
+    // The earlier policy collapsed it to `[]` — "explicitly unbound" — on the
+    // reasoning that the user had clearly edited this command. That reasoning
+    // is self-defeating: a deliberate unbind already writes `[]`, which
+    // round-trips identically under either policy, so the rule only ever fired
+    // on values the user did NOT author in that shape. It made corruption
+    // permanent and unrecoverable: run an older build whose parser lacks a key
+    // token the newer one added, and the binding degrades to `[]`, which then
+    // outranks the shipped default forever — Settings shows "Not assigned" for
+    // a command nobody touched, and re-upgrading does not bring it back. The
+    // same happened to any externally-authored value in display notation
+    // (`['⌘T']`), which is exactly the form displayKeybinding emits.
+    if (entry.length > 0 && bindings.length === 0) continue
     result[commandId] = bindings
   }
   return result
@@ -82,6 +93,18 @@ export type EffectiveBinding = {
 export function resolveEffectiveKeybindings(
   overrides: CommandKeybindingOverrides,
   defaults: readonly CommandBindingDefault[] = buildDefaultKeybindings(),
+  /**
+   * Context for a command that ships no default, INJECTED rather than looked
+   * up here.
+   *
+   * WHY injected: deriving it needs the command catalog, and importing the
+   * catalog into this module creates a real initialization cycle —
+   * catalog → paneCommands → the provider capability registry → back here —
+   * which fails at module load with a TDZ error rather than at a call site.
+   * Callers that already hold the catalog (Settings, the runtime router) pass
+   * a resolver; everything else gets the strict 'global' default.
+   */
+  contextForCommand: (commandId: string) => CommandBindingDefault['context'] = () => 'global',
 ): EffectiveBinding[] {
   const byCommand = new Map<string, EffectiveBinding>()
 
@@ -96,13 +119,24 @@ export function resolveEffectiveKeybindings(
   }
 
   // A user can bind a command that ships with NO default — most of the catalog.
-  // Those have no entry to start from, so they are added here. Context defaults
-  // to 'global' because a command with no declared default also has no declared
-  // context, and global is the strictest choice for collision purposes: it
-  // overlaps everything, so the checker will flag any clash rather than miss one.
+  // Those have no default entry to inherit a context from, so it is derived
+  // from the command's SURFACE instead of defaulting to 'global'.
+  //
+  // WHY not just 'global': global overlaps every context, so it is the
+  // strictest choice for collision purposes — but strictest is not the same as
+  // correct, and here it forbids legitimate customization the context matrix
+  // explicitly promises. Concretely: unbind nav-up, then assign Alt+K to the
+  // grid-only rotate-layout. Grid and Dispatch are mutually exclusive, so
+  // reusing Dispatch's Alt+K is safe and the matrix says so — but a 'global'
+  // context reports it as overlapping Dispatch and rejects the binding.
   for (const [commandId, bindings] of Object.entries(overrides)) {
     if (byCommand.has(commandId)) continue
-    byCommand.set(commandId, { commandId, bindings, context: 'global', customized: true })
+    byCommand.set(commandId, {
+      commandId,
+      bindings,
+      context: contextForCommand(commandId),
+      customized: true,
+    })
   }
 
   return [...byCommand.values()]
@@ -121,12 +155,21 @@ export function effectiveBindingsFor(
 }
 
 /**
- * Apply a Settings edit, keeping the map sparse.
+ * Apply a Settings edit.
  *
- * Writing an override that equals the shipped default REMOVES the entry rather
- * than storing a redundant copy — otherwise a user who toggled a binding off
- * and back on would be silently pinned to this release's default forever,
- * which is the same bug the absent/empty distinction exists to prevent.
+ * An explicit edit is RECORDED even when its value happens to equal today's
+ * shipped default. An earlier version deleted the entry in that case, to avoid
+ * pinning a user who toggled a binding off and straight back on.
+ *
+ * That optimization contradicts the plan's stated acceptance criterion —
+ * "preserves explicit choices when a later release changes shipped defaults" —
+ * and the criterion wins, because the failure it prevents is worse. Concretely:
+ * a user deliberately keeps open-settings on Cmd+, using the editor; the entry
+ * is deleted as redundant; a later release moves the default to Cmd+Alt+, and
+ * the user's explicit choice is silently overwritten by a chord they never
+ * chose. The cost of the other direction is only that an off/on round trip
+ * leaves a harmless entry recording a real decision — and `resetCommandKeybindings`
+ * is the documented way to go back to inheriting.
  */
 export function setCommandKeybindings(
   overrides: CommandKeybindingOverrides,
@@ -135,11 +178,7 @@ export function setCommandKeybindings(
   defaults: readonly CommandBindingDefault[] = buildDefaultKeybindings(),
 ): CommandKeybindingOverrides {
   const next = { ...overrides }
-  const shipped = defaults.find(entry => entry.commandId === commandId)?.bindings ?? []
-
-  if (sameBindings(shipped, bindings)) delete next[commandId]
-  else next[commandId] = [...bindings]
-
+  next[commandId] = [...bindings]
   return next
 }
 
@@ -153,7 +192,3 @@ export function resetCommandKeybindings(
   return next
 }
 
-/** Order matters: two bindings for one command are an ordered display list. */
-function sameBindings(a: readonly Keybinding[], b: readonly Keybinding[]): boolean {
-  return a.length === b.length && a.every((binding, index) => binding === b[index])
-}

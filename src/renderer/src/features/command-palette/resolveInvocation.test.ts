@@ -147,26 +147,57 @@ describe('resolveCommandInvocation', () => {
     expect(evaluated).toBe(false)
   })
 
-  it('pins the target so a later focus change cannot retarget it', () => {
-    // THE point of the phase. `execute` closes over the context the target was
-    // resolved from, so moving focus afterwards cannot redirect the mutation.
-    const seen: string[] = []
+  it('keeps the resolved target stable when focus moves after resolution', () => {
+    // Focus really moves between resolve and execute: the workspace state the
+    // context points at is MUTATED, which is what a Dispatch selection change
+    // does to the live store.
+    //
+    // An earlier version of this test constructed a second context and threw it
+    // away (`void laterCtx`), so nothing changed and the assertion only proved
+    // that `execute()` forwards the object it was handed — it would have passed
+    // for `() => command.run(whateverIsFocusedNow)` too.
+    const command: CommandDef = { ...base, surface: 'session', run: () => {} }
+    const ctx = makeTestCommandContext({ focusedSessionId: 's1', activeTabId: 'tab-a' })
+
+    const invocation = resolveCommandInvocation(command, ctx)
+    expect(invocation.target).toEqual({ kind: 'session', id: 's1' })
+
+    // Simulate the user moving the Dispatch selection to another session.
+    const state = ctx.workspace.state as unknown as {
+      sessions: Record<string, unknown>
+      tabs: { focusedSessionId: string }[]
+    }
+    state.sessions.s2 = { kind: 'claude', cwd: '/repo' }
+    state.tabs[0].focusedSessionId = 's2'
+
+    // Re-resolving now yields s2 — proving the state change is real and visible.
+    expect(resolveCommandTarget(command, ctx)).toEqual({ kind: 'session', id: 's2' })
+    // The already-resolved invocation still names s1.
+    expect(invocation.target).toEqual({ kind: 'session', id: 's1' })
+  })
+
+  it('is honest about what execute() currently carries', () => {
+    // SCOPE NOTE, deliberately asserted rather than left to a comment:
+    // `CommandDef.run` takes only a context — it has no target parameter — so
+    // the pinned target is NOT yet threaded into execution. `execute()` calls
+    // `run(ctx)`, and every session command still resolves its own target
+    // inside `run`.
+    //
+    // So this module currently provides the pinned IDENTITY (for state display
+    // and for `targetStillValid` at a mutation boundary) but does not yet
+    // enforce it. Closing that gap requires giving `run` the resolved target,
+    // which is Phase 7 work and touches every session command.
+    let receivedArgs = -1
     const command: CommandDef = {
       ...base,
       surface: 'session',
-      run: c => {
-        seen.push(String(c.workspace.state.activeTabId))
+      run: (...args: unknown[]) => {
+        receivedArgs = args.length
       },
     }
-    const ctx = makeTestCommandContext({ focusedSessionId: 's1', activeTabId: 'tab-a' })
-    const invocation = resolveCommandInvocation(command, ctx)
-
-    // Focus moves after resolution but before execution.
-    const laterCtx = makeTestCommandContext({ focusedSessionId: 's2', activeTabId: 'tab-b' })
-    void laterCtx
-
-    void invocation.execute()
-    expect(seen).toEqual(['tab-a'])
+    const ctx = makeTestCommandContext({ focusedSessionId: 's1' })
+    void resolveCommandInvocation(command, ctx).execute()
+    expect(receivedArgs).toBe(1)
   })
 })
 

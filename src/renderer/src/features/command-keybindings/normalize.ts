@@ -106,12 +106,14 @@ export function parseKeybinding(input: string): ParsedKeybinding {
     )
   }
 
-  // Split on '+' but keep a trailing literal '+' usable as a key: "Cmd++".
+  // WHY a trailing '+' is NOT rescued as a literal key: an earlier version
+  // accepted "Cmd++" so a user could bind the plus key. Nothing can ever fire
+  // it. Pressing plus on a normal keyboard emits code 'Equal' with shiftKey,
+  // which this grammar canonicalizes to 'Cmd+Shift+=' — so "Cmd++" was a
+  // binding the Settings UI would happily store and display while the runtime
+  // could never match it. That is the same class of defect the multi-step
+  // rejection above exists to prevent, so it is rejected the same way.
   const parts = raw.split('+')
-  if (parts.length > 1 && parts[parts.length - 1] === '') {
-    parts.pop()
-    parts[parts.length - 1] = '+'
-  }
 
   const modifiers: Modifier[] = []
   let key: string | null = null
@@ -151,7 +153,6 @@ function canonicalKey(part: string, raw: string): string {
   if (/^[0-9]$/.test(part)) return part
   if (/^[fF](?:[1-9]|1[0-9]|20)$/.test(part)) return `F${part.slice(1)}`
   if (part in PUNCTUATION_CODES) return part
-  if (part === '+') return '+'
 
   const named = Object.keys(NAMED_KEYS).find(name => name.toLowerCase() === part.toLowerCase())
   if (named) return named
@@ -225,6 +226,14 @@ function keyTokenFromEvent(event: KeyboardEvent): string | null {
   for (const [name, punctuationCode] of Object.entries(PUNCTUATION_CODES)) {
     if (code === punctuationCode) return name
   }
+
+  // The named-key fallback reads `event.key`, which is where numpad keys leak
+  // in: NumpadEnter reports key 'Enter', and Numpad1 with NumLock off reports
+  // 'End'. Both would collapse onto the main-keyboard token and fire a binding
+  // the user assigned to a different physical key — the exact conflation the
+  // Digit/Numpad separation above exists to prevent. Codes are authoritative,
+  // so anything explicitly on the numpad is refused before the fallback runs.
+  if (code.startsWith('Numpad')) return null
 
   for (const [name, domKey] of Object.entries(NAMED_KEYS)) {
     if (event.key === domKey) return name

@@ -6,6 +6,7 @@ import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/comma
 import type {
   CommandContext,
   CommandDef,
+  CommandGroup,
   CommandPickerVisibility,
   CommandSurface,
   ResolvedCommand,
@@ -177,6 +178,10 @@ export type PickerCommandMeta = {
   id: string
   title: string
   pickerVisibility: CommandPickerVisibility
+  /** Carried so Settings can apply the SAME group gate the picker applies.
+   *  Omitting it was what let the Settings list claim the six Navigation
+   *  Commands were visible while the palette hid them. */
+  commandGroup?: CommandGroup
 }
 
 /**
@@ -198,9 +203,17 @@ export type PickerCommandMeta = {
  * inventing a dummy context purely for a display string.
  */
 export function listPickerCommandMeta(): PickerCommandMeta[] {
-  return commandDefs.map(command => ({
-    id: command.id,
-    title: typeof command.title === 'function' ? command.id : command.title,
-    pickerVisibility: declaredTier(command),
-  }))
+  return commandDefs
+    // Commands the palette structurally never renders must not appear here
+    // either. `open-command-palette` was getting a Settings switch that could
+    // never change anything — buildCommandRegistry filters it out BEFORE any
+    // visibility logic runs — while still persisting an override when toggled.
+    // A control that visibly does nothing is worse than an absent one.
+    .filter(command => !PALETTE_SELF_EXCLUDED_COMMAND_IDS.has(command.id))
+    .map(command => ({
+      id: command.id,
+      title: typeof command.title === 'function' ? command.id : command.title,
+      pickerVisibility: declaredTier(command),
+      ...(command.commandGroup ? { commandGroup: command.commandGroup } : {}),
+    }))
 }

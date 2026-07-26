@@ -63,11 +63,20 @@ describe('setCommandKeybindings', () => {
     expect(setCommandKeybindings({}, 'a', [], DEFAULTS)).toEqual({ a: [] })
   })
 
-  it('removes the entry when the value equals the shipped default', () => {
-    // Otherwise a user who toggled a binding off and back on would be pinned to
-    // this release's default forever — the same bug the absent/empty
-    // distinction exists to prevent.
-    expect(setCommandKeybindings({ a: [] }, 'a', ['Cmd+A'], DEFAULTS)).toEqual({})
+  it('records an explicit edit even when it equals the shipped default', () => {
+    // The plan's acceptance criterion is "preserves explicit choices when a
+    // later release changes shipped defaults". Deleting the entry as redundant
+    // breaks exactly that: a user who deliberately keeps a command on today's
+    // chord would have it silently moved when a future release changes the
+    // default. resetCommandKeybindings is the documented way back to
+    // inheriting; an equal-to-default edit is still a decision.
+    expect(setCommandKeybindings({ a: [] }, 'a', ['Cmd+A'], DEFAULTS)).toEqual({ a: ['Cmd+A'] })
+  })
+
+  it('keeps a recorded choice pinned when the shipped default later moves', () => {
+    const chosen = setCommandKeybindings({}, 'a', ['Cmd+A'], DEFAULTS)
+    const nextRelease = [{ commandId: 'a', bindings: ['Cmd+Alt+A'], context: 'global' as const }]
+    expect(effectiveBindingsFor('a', chosen, nextRelease)).toEqual(['Cmd+A'])
   })
 
   it('treats binding order as significant', () => {
@@ -115,10 +124,23 @@ describe('coerceCommandKeybindingOverrides', () => {
     })
   })
 
-  it('collapses an all-malformed array to an explicit unbind', () => {
-    // Conservative reading: we know the user edited this command, so silently
-    // restoring the shipped chord could re-add a binding they had removed.
-    expect(coerceCommandKeybindingOverrides({ a: ['nonsense'] })).toEqual({ a: [] })
+  it('drops an all-malformed array so the command inherits again', () => {
+    // Corruption, not intent. Collapsing it to `[]` made the damage permanent:
+    // `[]` means "explicitly unbound" and outranks the shipped default forever,
+    // so a value mangled by an older build's parser would leave the command
+    // showing "Not assigned" with no way back.
+    expect(coerceCommandKeybindingOverrides({ a: ['nonsense'] })).toEqual({})
+  })
+
+  it('still honours a genuine explicit unbind', () => {
+    // The distinction the rule above must not damage: a real unbind writes an
+    // EMPTY array, which has nothing to fail parsing and round-trips intact.
+    expect(coerceCommandKeybindingOverrides({ a: [] })).toEqual({ a: [] })
+  })
+
+  it('recovers a command whose binding an older build could not parse', () => {
+    const settings = coerceCommandKeybindingOverrides({ a: ['SomeFutureKey'] })
+    expect(effectiveBindingsFor('a', settings, DEFAULTS)).toEqual(['Cmd+A'])
   })
 
   it('preserves unknown command ids', () => {
