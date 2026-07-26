@@ -1,5 +1,5 @@
 import type { CommandDef } from '@renderer/features/command-palette/types'
-import { panel, toggle, value } from '@renderer/features/command-palette/commandState'
+import { panel, toggle } from '@renderer/features/command-palette/commandState'
 
 export const settingsCommands: CommandDef[] = [
   {

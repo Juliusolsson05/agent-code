@@ -186,7 +186,6 @@ export type CommandContext = {
   workspace: Workspace
   ui: {
     openNewTabPicker: () => void
-    openResumePicker: (defaultCwd: string) => void
     openTileTabs: () => void
     openReorderTabs: () => void
     openSettings: () => void
@@ -215,12 +214,15 @@ export type CommandContext = {
     /** Flip workspace-wide feed auto-follow (every visible agent pane). */
     toggleTailAllMode: () => void
     toggleDevDebugPanel: () => void
-    openAgentStatusPanel: () => void
-    closeAgentStatusPanel: () => void
     toggleAgentStatusPanel: () => void
     togglePerformancePanel: () => void
     toggleRemotePanel: () => void
     toggleCaffeinate: () => Promise<void> | void
+    /** Idempotent open. Prefer this over `toggleGlobalEditor` whenever the
+     *  intent is "make sure the editor is up" — a toggle driven by a
+     *  snapshotted flag closes the editor when the snapshot is stale. */
+    openGlobalEditor: () => void
+    closeGlobalEditor: () => void
     toggleGlobalEditor: () => void
     /** Toggle visibility of the Global Editor's in-editor file tree.
      *  Only meaningful when the overlay is open — the command's
@@ -247,11 +249,6 @@ export type CommandContext = {
      *  transient flag — the draft selection state is owned by the
      *  modal itself, not the store. */
     openPinAgents: () => void
-    toggleStatusMode: () => void
-    toggleWorktreeBadges: () => void
-    toggleUsageHeader: () => void
-    cycleUsageHeaderLevel: () => void
-    setDangerousAgentsEnabled: (enabled: boolean) => void
     setAggressiveDebugPersistence: (enabled: boolean) => void
     enterResumeMode: () => void
     enterBuriedMode: () => void

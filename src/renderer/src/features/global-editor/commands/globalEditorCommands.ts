@@ -1,6 +1,6 @@
 import type { CommandDef } from '@renderer/features/command-palette/types'
 import { useGlobalEditorStore } from '@renderer/features/global-editor/store'
-import { panel, toggle } from '@renderer/features/command-palette/commandState'
+import { toggle } from '@renderer/features/command-palette/commandState'
 import {
   requestSaveActiveEditorFile,
   requestSaveAllEditorFiles,
@@ -48,12 +48,18 @@ export const globalEditorCommands: CommandDef[] = [
     description:
       '**What it does:** Saves the active file in the visible Global Editor or AI Workspace.\n\n**Use when:** You edited a file and want to persist it without leaving the command palette.\n\n**Notes:** Conflict checks and recovery are owned by the active editor surface.\n\n**Shortcut:** ⌘S.',
     keywords: ['save', 'write', 'editor', 'file'],
-    // Requires a project, NOT an open editor. The ⌘⌥E chord has always meant
-    // "give me a big editor" as ONE gesture — it opens the editor straight into
-    // fullscreen when closed. That behaviour used to live in a hard-coded
-    // keybind branch; now that the chord routes through this command, the
-    // command has to own it, or routing would silently drop half the feature.
-    when: ({ flags }) => Boolean(flags.globalEditorOpen || flags.focusedCwd),
+    // Requires an OPEN editor, not merely a project.
+    //
+    // `requestSaveActiveEditorFile` dispatches a window event whose only
+    // listener is EditorWorkbench, which does not mount until the editor is
+    // open. Admitting on `focusedCwd` therefore produced a File → Save menu
+    // item that was enabled and did nothing.
+    //
+    // That looser predicate arrived here by accident, carrying the ⌘⌥E comment
+    // now sitting on `toggle-editor-fullscreen` — the two commands' `when`
+    // clauses were transposed, and each broke in its own direction: this one
+    // admitted a no-op, and fullscreen refused the state it exists to handle.
+    when: ({ flags }) => flags.globalEditorOpen,
     run: requestSaveActiveEditorFile,
   },
   {
@@ -85,7 +91,11 @@ export const globalEditorCommands: CommandDef[] = [
       if (editor.activeCwd !== targetCwd) cancelAllPendingGlobalEditorFileOpens()
       editor.setActiveCwd(targetCwd)
       editor.showProjectEditor()
-      if (!flags.globalEditorOpen) ui.toggleGlobalEditor()
+      // `openGlobalEditor`, not a read-then-toggle against `flags`. That flag
+      // is snapshotted when the CommandContext memo is built, so a stale `true`
+      // used to CLOSE the editor the user just asked to open. An idempotent
+      // open cannot express the wrong intent.
+      ui.openGlobalEditor()
       editor.setQuickOpenOpen(true)
     },
   },
@@ -107,7 +117,7 @@ export const globalEditorCommands: CommandDef[] = [
       if (editor.activeCwd !== targetCwd) cancelAllPendingGlobalEditorFileOpens()
       editor.setActiveCwd(targetCwd)
       editor.showProjectEditor()
-      if (!flags.globalEditorOpen) ui.toggleGlobalEditor()
+      ui.openGlobalEditor()
       editor.setContentSearchOpen(true)
     },
   },
@@ -119,14 +129,24 @@ export const globalEditorCommands: CommandDef[] = [
     description:
       '**What it does:** Expands the **Global Editor** to fill the whole workspace area. The normal workspace stays alive underneath (hidden, not unmounted — terminals and feeds keep running).\n\n**Use when:** You want maximum reading/editing room for a while.\n\n**Notes:** Esc exits fullscreen; the previous split ratio is restored.\n\n**Shortcut:** ⌥⌘E.',
     keywords: ['fullscreen', 'maximize', 'editor', 'zen', 'focus'],
-    when: ({ flags }) => flags.globalEditorOpen,
+    // NO `when`. The ⌘⌥E chord has always meant "give me a big editor" as ONE
+    // gesture — it opens the editor straight into fullscreen when closed. That
+    // behaviour used to live in a hard-coded keybind branch; now that the chord
+    // routes through this command, the command has to own it, or routing
+    // silently drops half the feature.
+    //
+    // Routing did drop it. A `when: flags.globalEditorOpen` sat here and runs
+    // during ADMISSION, before `run` — so the closed-editor branch below was
+    // unreachable from all four invocation sources, and ⌘⌥E with the editor
+    // closed was a silent no-op. The guard belonged on `save-editor-file`,
+    // where it now is.
     getState: ({ flags }) => toggle(flags.editorFullscreen),
     run: ({ ui, flags }) => {
       const editor = useGlobalEditorStore.getState()
       if (!flags.globalEditorOpen) {
         // Closed → open it already fullscreen, rather than opening windowed and
         // making the user press again.
-        ui.toggleGlobalEditor()
+        ui.openGlobalEditor()
         editor.setEditorFullscreen(true)
         return
       }

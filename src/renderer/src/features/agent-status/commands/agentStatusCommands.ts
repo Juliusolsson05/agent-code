@@ -1,7 +1,7 @@
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import type { CommandContext, CommandDef } from '@renderer/features/command-palette/types'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
-import { panel, toggle, value } from '@renderer/features/command-palette/commandState'
+import { toggle } from '@renderer/features/command-palette/commandState'
 
 function focusedAgentSessionId(ctx: CommandContext): string | null {
   const sessionId = commandTargetSessionId(ctx.workspace)

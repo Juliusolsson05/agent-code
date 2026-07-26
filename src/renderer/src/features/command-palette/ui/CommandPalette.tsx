@@ -269,20 +269,16 @@ function OpenCommandPalette({
   const toggleRenderingDebugMode = useAppStore(state => state.toggleRenderingDebugMode)
   const toggleTailAllMode = useAppStore(state => state.toggleTailAllMode)
   const toggleDevDebugPanel = useAppStore(state => state.toggleDevDebugPanel)
-  const openAgentStatusPanel = useAppStore(state => state.openAgentStatusPanel)
-  const closeAgentStatusPanel = useAppStore(state => state.closeAgentStatusPanel)
   const toggleAgentStatusPanel = useAppStore(state => state.toggleAgentStatusPanel)
   const togglePerformancePanel = useAppStore(state => state.togglePerformancePanel)
   const toggleRemotePanel = useAppStore(state => state.toggleRemotePanel)
+  const openGlobalEditorAction = useAppStore(state => state.openGlobalEditor)
+  const closeGlobalEditorAction = useAppStore(state => state.closeGlobalEditor)
   const toggleGlobalEditor = useAppStore(state => state.toggleGlobalEditor)
   const openTiledDispatchPrompt = useAppStore(state => state.openTiledDispatchPrompt)
   const openDispatchAttach = useAppStore(state => state.openDispatchAttach)
   const openLinkedAgent = useAppStore(state => state.openLinkedAgent)
   const openPinAgents = useAppStore(state => state.openPinAgents)
-  const toggleStatusMode = useAppStore(state => state.toggleStatusMode)
-  const toggleWorktreeBadges = useAppStore(state => state.toggleWorktreeBadges)
-  const toggleUsageHeader = useAppStore(state => state.toggleUsageHeader)
-  const cycleUsageHeaderLevel = useAppStore(state => state.cycleUsageHeaderLevel)
   const toggleCaffeinate = useCaffeinateStore(state => state.toggle)
   const caffeinateStatus = useCaffeinateStore(state => state.status)
   const devDebugEnabled = useDevDebugConfig(state => state.enabled)
@@ -300,10 +296,6 @@ function OpenCommandPalette({
     () =>
       workspace.setDispatchScope(workspace.dispatchMode?.scope === 'global' ? 'project' : 'global'),
     [workspace],
-  )
-  const setDangerousAgentsEnabled = useCallback(
-    (enabled: boolean) => setSettings({ dangerousAgentsEnabled: enabled }),
-    [setSettings],
   )
   const setAggressiveDebugPersistence = useCallback(
     (enabled: boolean) => setSettings({ aggressiveDebugPersistence: enabled }),
@@ -557,7 +549,6 @@ function OpenCommandPalette({
       workspace,
       ui: {
         openNewTabPicker: onNewTabRequest,
-        openResumePicker: onResumeRequest,
         openTileTabs: onTileTabsRequest,
         openReorderTabs: onReorderTabsRequest,
         openSettings: onSettingsRequest,
@@ -585,12 +576,12 @@ function OpenCommandPalette({
         toggleRenderingDebugMode,
         toggleTailAllMode,
         toggleDevDebugPanel,
-        openAgentStatusPanel,
-        closeAgentStatusPanel,
         toggleAgentStatusPanel,
         togglePerformancePanel,
         toggleRemotePanel,
         toggleCaffeinate,
+        openGlobalEditor: openGlobalEditorAction,
+        closeGlobalEditor: closeGlobalEditorAction,
         toggleGlobalEditor,
         toggleFileTreeVisible,
         enterDispatchMode,
@@ -600,11 +591,6 @@ function OpenCommandPalette({
         openDispatchAttach,
         openLinkedAgent,
         openPinAgents,
-        toggleStatusMode,
-        toggleWorktreeBadges,
-        toggleUsageHeader,
-        cycleUsageHeaderLevel,
-        setDangerousAgentsEnabled,
         setAggressiveDebugPersistence,
         enterResumeMode,
         enterBuriedMode,
@@ -676,12 +662,12 @@ function OpenCommandPalette({
       toggleRenderingDebugMode,
       toggleTailAllMode,
       toggleDevDebugPanel,
-      openAgentStatusPanel,
-      closeAgentStatusPanel,
       toggleAgentStatusPanel,
       togglePerformancePanel,
       toggleRemotePanel,
       toggleCaffeinate,
+      openGlobalEditorAction,
+      closeGlobalEditorAction,
       toggleGlobalEditor,
       toggleFileTreeVisible,
       enterDispatchMode,
@@ -691,11 +677,6 @@ function OpenCommandPalette({
       openDispatchAttach,
       openLinkedAgent,
       openPinAgents,
-      toggleStatusMode,
-      toggleWorktreeBadges,
-      toggleUsageHeader,
-      cycleUsageHeaderLevel,
-      setDangerousAgentsEnabled,
       setAggressiveDebugPersistence,
       enterResumeMode,
       enterBuriedMode,
@@ -1110,7 +1091,8 @@ function OpenCommandPalette({
   const openAiWorkspace = useCallback(
     (workspaceId: string) => {
       useGlobalEditorStore.getState().openAiWorkspace(workspaceId)
-      if (!globalEditorOpen) toggleGlobalEditor()
+      // Idempotent open — see the note on `ui.openGlobalEditor`.
+    openGlobalEditorAction()
       onClose()
     },
     [globalEditorOpen, onClose, toggleGlobalEditor],

@@ -17,6 +17,20 @@ import { resolveDispatchAttachTarget } from '@renderer/workspace/dispatch/dispat
 import { dispatchFocusedSessionId } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 
+/**
+ * Buried panes visible from the CURRENT tab.
+ *
+ * The buried picker is deliberately tab-scoped (see the note in
+ * CommandPalette's `buried` memo: a buried Codex agent from project A listed
+ * beside a buried Claude agent from project B mixes contexts and invites
+ * revive-into-the-wrong-tab). Admission has to use the same scope, or the row
+ * appears for a tab with nothing to revive.
+ */
+function buriedInActiveTab(workspace: CommandContext['workspace']): number {
+  const activeTabId = workspace.state.activeTabId
+  return workspace.state.buried.filter(entry => entry.sourceTabId === activeTabId).length
+}
+
 export const paneCommands: CommandDef[] = [
   {
     id: 'new-agent',
@@ -386,7 +400,14 @@ export const paneCommands: CommandDef[] = [
     keywords: ['pane'],
     description: '**What it does:** Restores a **buried live pane**.\n\n**Use when:** You parked a session and want it back.\n\n**Notes:** Opens a picker when multiple buried panes exist.',
     keepPaletteOpen: true,
-    when: ({ workspace }) => workspace.state.buried.length > 0,
+    // Scoped to the ACTIVE TAB, matching the list the picker actually renders.
+    //
+    // This read `state.buried.length > 0` — the whole workspace — while the
+    // picker filters by `sourceTabId`, so both buried commands could be
+    // admitted from a tab with nothing buried and land the user on an empty
+    // list. Admission has to agree with what the command will show, or the
+    // command is advertising something it cannot deliver.
+    when: ({ workspace }) => buriedInActiveTab(workspace) > 0,
     run: ({ ui }) => ui.enterBuriedMode(),
   },
   {
@@ -398,7 +419,7 @@ export const paneCommands: CommandDef[] = [
     description: '**What it does:** Permanently kills a **buried session**.\n\n**Use when:** You no longer need hidden background work.\n\n**Notes:** This is destructive.',
     keywords: ['kill', 'buried', 'hidden', 'pane', 'session', 'pane'],
     keepPaletteOpen: true,
-    when: ({ workspace }) => workspace.state.buried.length > 0,
+    when: ({ workspace }) => buriedInActiveTab(workspace) > 0,
     run: ({ ui }) => ui.enterKillBuriedMode(),
   },
   {
