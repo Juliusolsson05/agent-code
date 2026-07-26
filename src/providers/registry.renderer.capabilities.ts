@@ -1,3 +1,4 @@
+import type { ProviderFeatureCapabilities } from '@providers/shared/featureCapabilities'
 import type { ConditionView } from '@shared/conditions-core/view'
 import type { Entry, ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 import type { ProviderConditionSnapshot } from '@shared/types/providerConditions'
@@ -83,6 +84,14 @@ export type RendererProviderCapabilities = {
    * a scarce resource, palette entries aren't.
    */
   splitShortcutKey?: string
+  /**
+   * Declared feature capabilities. REQUIRED — there is deliberately no default.
+   * A provider added without answering these questions must fail the build
+   * rather than silently inherit every agent feature, which is exactly how
+   * OpenCode ended up offering Resume, Rewind, Duplicate, Switch and Copy
+   * Resume with nothing behind them.
+   */
+  features: ProviderFeatureCapabilities
   conditionViews: Record<string, ConditionView>
   normalizeConditions?: (input: {
     snapshot: ProviderConditionSnapshot | null
@@ -352,4 +361,25 @@ export function providerDurableEntryKind(
   provider: AgentProviderKind,
 ): ProviderDurableEntryKind | null {
   return getRendererProviderCapabilities(provider).classifyDurableEntry(entry)
+}
+
+/**
+ * Feature capabilities for a provider kind, or the closed-off defaults for a
+ * value that is not an agent provider at all (a terminal).
+ *
+ * Command `when` guards call THIS rather than `isAgentProviderKind`, which is
+ * the whole point of Phase 5: membership in AGENT_PROVIDER_KINDS distinguishes
+ * agents from terminals and grants nothing.
+ */
+export function getProviderFeatures(kind: string | undefined): ProviderFeatureCapabilities {
+  if (!kind || !isAgentProviderKind(kind)) {
+    return {
+      savedSessionListing: false,
+      transcriptRewind: false,
+      transcriptDuplicate: false,
+      switchTargets: [],
+      verifiedExternalResumeCommand: false,
+    }
+  }
+  return getRendererProviderCapabilities(kind).features
 }

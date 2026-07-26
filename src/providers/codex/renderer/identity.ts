@@ -15,4 +15,17 @@ export const CODEX_IDENTITY = {
    *  split chords instead; additional providers without a key get
    *  palette-only split commands. */
   splitShortcutKey: 'C',
+
+  /**
+   * Feature capabilities (governance plan Phase 5). Mirrors Claude: saved
+   * sessions, a transcript adapter, a verified `codex resume` form, and the
+   * reverse translation edge.
+   */
+  features: {
+    savedSessionListing: true,
+    transcriptRewind: true,
+    transcriptDuplicate: true,
+    switchTargets: ['claude'],
+    verifiedExternalResumeCommand: true,
+  },
 } as const

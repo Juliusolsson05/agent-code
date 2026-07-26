@@ -1,5 +1,8 @@
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
-import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
+import {
+  getProviderFeatures,
+  getRendererProviderCapabilities,
+} from '@providers/registry.renderer.capabilities'
 import type { CommandContext, CommandDef } from '@renderer/features/command-palette/types'
 import { runSaveDebugBundleCommand } from '@renderer/features/debug/saveDebugBundle'
 import { runAttachRecordingNoteCommand, runToggleSessionRecordingCommand } from '@renderer/features/debug/attachRecordingNote'
@@ -76,7 +79,10 @@ export const sessionCommands: CommandDef[] = [
       if (!sessionId) return false
       const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? DEFAULT_PROVIDER
-      return isAgentProviderKind(kind)
+      // Driven by the explicit switch EDGE list, not by agent-hood. "Can
+      // switch" is meaningless without a destination, and translation is
+      // directional — OpenCode has no edge in either direction today.
+      return getProviderFeatures(kind).switchTargets.length > 0
     },
     run: ({ workspace, ui }) => {
       const sessionId = commandTargetSessionId(workspace)
@@ -123,8 +129,12 @@ export const sessionCommands: CommandDef[] = [
       if (!sessionId) return false
       const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? DEFAULT_PROVIDER
+      // Rewind REWRITES session history, so it needs a real transcript
+      // adapter — not merely an agent provider. isAgentProviderKind passed for
+      // OpenCode, which has no adapter, so the command appeared enabled and
+      // then did nothing.
       return (
-        isAgentProviderKind(kind) &&
+        getProviderFeatures(kind).transcriptRewind &&
         Boolean(meta?.providerSessionId)
       )
     },
@@ -639,7 +649,13 @@ export const sessionCommands: CommandDef[] = [
       if (!sessionId) return false
       const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? DEFAULT_PROVIDER
-      return isAgentProviderKind(kind) && Boolean(meta?.providerSessionId)
+      // Requires a VERIFIED external resume form. An unverified template hands
+      // the user a shell command that may not work, which is worse than not
+      // offering it — they paste it into a terminal and blame their setup.
+      return (
+        getProviderFeatures(kind).verifiedExternalResumeCommand &&
+        Boolean(meta?.providerSessionId)
+      )
     },
     run: ({ workspace }) => void workspace.reloadFocusedAgent(),
   },
@@ -771,14 +787,15 @@ export const sessionCommands: CommandDef[] = [
     description: '**What it does:** Clones the focused **agent session** into a new pane.\n\n**Use when:** You want a parallel branch of the same conversation.\n\n**Notes:** In **Dispatch**, the clone is created as a detached agent.',
     keywords: ['duplicate', 'clone', 'fork', 'copy', 'session', 'agent'],
     when: ({ workspace }) => {
-      // Needs a focused agent session that has a providerSessionId
-      // — without that id there's nothing on disk to duplicate.
+      // Needs a providerSessionId (something on disk to duplicate) AND a
+      // transcript adapter able to project it into a new session. Agent-hood
+      // alone proves neither.
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return false
       const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? DEFAULT_PROVIDER
       return (
-        isAgentProviderKind(kind) &&
+        getProviderFeatures(kind).transcriptDuplicate &&
         Boolean(meta?.providerSessionId)
       )
     },
