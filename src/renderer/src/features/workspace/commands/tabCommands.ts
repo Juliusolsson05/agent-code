@@ -1,3 +1,4 @@
+import { panel } from '@renderer/features/command-palette/commandState'
 import type { CommandDef } from '@renderer/features/command-palette/types'
 
 export const tabCommands: CommandDef[] = [
@@ -7,7 +8,14 @@ export const tabCommands: CommandDef[] = [
     surface: 'app',
     title: 'New Tab',
     description: '**What it does:** Creates a **new tab** from a folder you choose.\n\n**Use when:** You want a separate project or workspace context.\n\n**Notes:** Starts a fresh agent in that folder.',
-    run: ({ ui }) => ui.openNewTabPicker(),
+    getState: ({ flags }) => panel(flags.pathPickerOpen),
+    run: ({ ui, flags }) => {
+      if (flags.pathPickerOpen) {
+        ui.closePathPicker()
+        return
+      }
+      ui.openNewTabPicker()
+    },
   },
   {
     id: 'close-tab',
@@ -44,7 +52,14 @@ export const tabCommands: CommandDef[] = [
     description: '**What it does:** Opens a picker to rearrange **tab order**.\n\n**Use when:** Your tabs are in the wrong order.\n\n**Notes:** Changes apply after you confirm the modal.',
     keywords: ['move tabs', 'arrange tabs', 'tab order'],
     when: ({ workspace }) => workspace.state.tabs.length > 1,
-    run: ({ ui }) => ui.openReorderTabs(),
+    getState: ({ flags }) => panel(flags.reorderTabsOpen),
+    run: ({ ui, flags }) => {
+      if (flags.reorderTabsOpen) {
+        ui.closeReorderTabs()
+        return
+      }
+      ui.openReorderTabs()
+    },
   },
   {
     id: 'resume-session',

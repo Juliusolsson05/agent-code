@@ -259,6 +259,22 @@ export type CommandContext = {
     enterAiWorkspaceOpenMode: () => void
     enterAiWorkspaceCreateMode: () => void
     enterAiWorkspaceClearMode: () => void
+    /**
+     * Dismissal for the surfaces above.
+     *
+     * These actions all existed on the store already; they simply were not
+     * reachable from a command, so every one of those surfaces was open-only.
+     * `closePalette` and nothing else used to be here.
+     */
+    closeUsageModal: () => void
+    closeKeyboardShortcuts: () => void
+    closeAgentActivity: () => void
+    closeCloseOldAgents: () => void
+    closeBulkProviderSwitch: () => void
+    closePromptSearch: () => void
+    closeReorderTabs: () => void
+    closePinAgents: () => void
+    closePathPicker: () => void
     closePalette: () => void
   }
   flags: {
@@ -268,6 +284,40 @@ export type CommandContext = {
     usageHeaderLevel: UsageHeaderLevel
     dangerousAgentsEnabled: boolean
     aggressiveDebugPersistenceEnabled: boolean
+    /**
+     * Visibility of the surfaces a command can dismiss.
+     *
+     * These exist so a command can ask "am I already open?" and branch, which
+     * is what makes a chord round-trip instead of only ever opening. Without
+     * them a command literally cannot tell — which is why every one of these
+     * surfaces used to be open-only.
+     *
+     * Kept as plain booleans deliberately. The per-TARGET surfaces (View
+     * Prompts, Rewind, Agent View, Colour Flag) are NOT here: their store field
+     * is a `SessionId | null`, and collapsing that to a boolean would lose the
+     * case that matters — pressing the chord while the surface is open for a
+     * DIFFERENT session must re-target, not close.
+     */
+    /** The Usage modal is on screen. */
+    usageModalOpen: boolean
+    /** The Keyboard Shortcuts reference is on screen. */
+    keyboardShortcutsOpen: boolean
+    /** The Agent Activity modal is on screen. */
+    agentActivityOpen: boolean
+    /** The Close Old Agents modal is on screen. */
+    closeOldAgentsOpen: boolean
+    /** The Switch Agents modal is on screen. */
+    bulkProviderSwitchOpen: boolean
+    /** The Prompt Search modal is on screen. */
+    promptSearchOpen: boolean
+    /** The Remote Control panel is on screen. */
+    remotePanelOpen: boolean
+    /** The Reorder Tabs modal is on screen. */
+    reorderTabsOpen: boolean
+    /** The Pin Agents modal is on screen. */
+    pinAgentsOpen: boolean
+    /** The path picker (New Tab / Resume) is on screen. */
+    pathPickerOpen: boolean
     gitBarOpen: boolean
     worktreesBarOpen: boolean
     debugPanelOpen: boolean

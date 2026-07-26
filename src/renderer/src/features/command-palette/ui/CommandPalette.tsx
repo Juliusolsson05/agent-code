@@ -245,6 +245,15 @@ function OpenCommandPalette({
   const openRewindPrompt = useAppStore(state => state.openRewindPrompt)
   const openAgentViewModePicker = useAppStore(state => state.openAgentViewModePicker)
   const openColorFlagPicker = useAppStore(state => state.openColorFlagPicker)
+  const closeUsageModal = useAppStore(state => state.closeUsageModal)
+  const closeKeyboardShortcuts = useAppStore(state => state.closeKeyboardShortcuts)
+  const closeAgentActivity = useAppStore(state => state.closeAgentActivity)
+  const closeCloseOldAgents = useAppStore(state => state.closeCloseOldAgents)
+  const closeBulkProviderSwitch = useAppStore(state => state.closeBulkProviderSwitch)
+  const closePromptSearch = useAppStore(state => state.closePromptSearch)
+  const closeReorderTabs = useAppStore(state => state.closeReorderTabs)
+  const closePinAgents = useAppStore(state => state.closePinAgents)
+  const closePathPicker = useAppStore(state => state.closePathPicker)
   const openUsageModal = useAppStore(state => state.openUsageModal)
   const toggleGitBar = useAppStore(state => state.toggleGitBar)
   const toggleWorktreesBar = useAppStore(state => state.toggleWorktreesBar)
@@ -299,6 +308,16 @@ function OpenCommandPalette({
   const usageHeaderLevel = settings.usageHeaderLevel
   const dangerousAgentsEnabled = settings.dangerousAgentsEnabled
   const aggressiveDebugPersistenceEnabled = settings.aggressiveDebugPersistence
+  const usageModalOpen = useAppStore(state => state.usageModalOpen)
+  const keyboardShortcutsOpen = useAppStore(state => state.keyboardShortcutsOpen)
+  const agentActivityOpen = useAppStore(state => state.agentActivityOpen)
+  const closeOldAgentsOpen = useAppStore(state => state.closeOldAgentsOpen)
+  const bulkProviderSwitchOpen = useAppStore(state => state.bulkProviderSwitchOpen)
+  const promptSearchOpen = useAppStore(state => state.promptSearchOpen)
+  const remotePanelOpen = useAppStore(state => state.remotePanelOpen)
+  const reorderTabsOpen = useAppStore(state => state.reorderTabsOpen)
+  const pinAgentsOpen = useAppStore(state => state.pinAgentsOpen)
+  const pathPickerOpen = useAppStore(state => state.pathPickerOpen)
   const gitBarOpen = useAppStore(state => state.gitBarOpen)
   const worktreesBarOpen = useAppStore(state => state.worktreesBarOpen)
   const debugPanelOpen = useAppStore(state => state.debugPanelOpen)
@@ -556,6 +575,15 @@ function OpenCommandPalette({
         openRewindPrompt,
         openAgentViewModePicker,
         openColorFlagPicker,
+        closeUsageModal,
+        closeKeyboardShortcuts,
+        closeAgentActivity,
+        closeCloseOldAgents,
+        closeBulkProviderSwitch,
+        closePromptSearch,
+        closeReorderTabs,
+        closePinAgents,
+        closePathPicker,
         openUsageModal,
         toggleGitBar,
         toggleWorktreesBar,
@@ -600,6 +628,16 @@ function OpenCommandPalette({
         usageHeaderLevel,
         dangerousAgentsEnabled,
         aggressiveDebugPersistenceEnabled,
+        usageModalOpen,
+        keyboardShortcutsOpen,
+        agentActivityOpen,
+        closeOldAgentsOpen,
+        bulkProviderSwitchOpen,
+        promptSearchOpen,
+        remotePanelOpen,
+        reorderTabsOpen,
+        pinAgentsOpen,
+        pathPickerOpen,
         gitBarOpen,
         worktreesBarOpen,
         debugPanelOpen,
@@ -642,6 +680,15 @@ function OpenCommandPalette({
       openBulkProviderSwitch,
       openRewindPrompt,
       openAgentViewModePicker,
+      closeUsageModal,
+      closeKeyboardShortcuts,
+      closeAgentActivity,
+      closeCloseOldAgents,
+      closeBulkProviderSwitch,
+      closePromptSearch,
+      closeReorderTabs,
+      closePinAgents,
+      closePathPicker,
       openUsageModal,
       toggleGitBar,
       toggleWorktreesBar,
@@ -684,6 +731,16 @@ function OpenCommandPalette({
       usageHeaderLevel,
       dangerousAgentsEnabled,
       aggressiveDebugPersistenceEnabled,
+      usageModalOpen,
+      keyboardShortcutsOpen,
+      agentActivityOpen,
+      closeOldAgentsOpen,
+      bulkProviderSwitchOpen,
+      promptSearchOpen,
+      remotePanelOpen,
+      reorderTabsOpen,
+      pinAgentsOpen,
+      pathPickerOpen,
       gitBarOpen,
       worktreesBarOpen,
       debugPanelOpen,

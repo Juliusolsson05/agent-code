@@ -2,7 +2,7 @@ import { AGENT_PROVIDER_KINDS, DEFAULT_PROVIDER, isAgentProviderKind } from '@sh
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { extractLastAssistantText } from '@renderer/lib/copyAssistant'
 import type { CommandContext, CommandDef } from '@renderer/features/command-palette/types'
-import { toggle } from '@renderer/features/command-palette/commandState'
+import { panel, toggle } from '@renderer/features/command-palette/commandState'
 import {
   commandTargetSessionId,
   commandTargetSessionIdForState,
@@ -176,7 +176,14 @@ export const paneCommands: CommandDef[] = [
     title: 'Pin Agents…',
     description: '**What it does:** Opens the multi-select Pin modal to choose which **Dispatch** agents stay pinned at the top of the agent list.\n\n**Use when:** You want a few favorite agents to always be one keystroke away regardless of project or scope.\n\n**Notes:** Space toggles, Enter commits, Esc cancels. The order you Space through the rows is the order pins render in. Pins survive project↔global scope toggles.',
     keywords: ['pin', 'pins', 'pinned', 'favorite', 'star', 'top', 'dispatch'],
-    run: ({ ui }) => ui.openPinAgents(),
+    getState: ({ flags }) => panel(flags.pinAgentsOpen),
+    run: ({ ui, flags }) => {
+      if (flags.pinAgentsOpen) {
+        ui.closePinAgents()
+        return
+      }
+      ui.openPinAgents()
+    },
   },
   {
     // Quick-remove counterpart to pin-agents. Targets the currently

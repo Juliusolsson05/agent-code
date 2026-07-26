@@ -43,7 +43,14 @@ export const settingsCommands: CommandDef[] = [
       'reference',
       'help',
     ],
-    run: ({ ui }) => ui.openKeyboardShortcuts(),
+    getState: ({ flags }) => panel(flags.keyboardShortcutsOpen),
+    run: ({ ui, flags }) => {
+      if (flags.keyboardShortcutsOpen) {
+        ui.closeKeyboardShortcuts()
+        return
+      }
+      ui.openKeyboardShortcuts()
+    },
   },
   {
     // Persistent Aggressive Debug Logs — developer-mode switch for

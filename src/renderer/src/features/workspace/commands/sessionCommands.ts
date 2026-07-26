@@ -1,7 +1,7 @@
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { getProviderFeatures } from '@providers/shared/featureCapabilities'
-import { status, toggle, value } from '@renderer/features/command-palette/commandState'
+import { panel, status, toggle, value } from '@renderer/features/command-palette/commandState'
 import type {
   CommandContext,
   CommandDef,
@@ -217,7 +217,12 @@ export const sessionCommands: CommandDef[] = [
       'idle',
       'overview',
     ],
-    run: ({ ui }) => {
+    getState: ({ flags }) => panel(flags.agentActivityOpen),
+    run: ({ ui, flags }) => {
+      if (flags.agentActivityOpen) {
+        ui.closeAgentActivity()
+        return
+      }
       ui.openAgentActivity()
       ui.closePalette()
     },
@@ -249,7 +254,12 @@ export const sessionCommands: CommandDef[] = [
       'batch',
       'kill',
     ],
-    run: ({ ui }) => {
+    getState: ({ flags }) => panel(flags.closeOldAgentsOpen),
+    run: ({ ui, flags }) => {
+      if (flags.closeOldAgentsOpen) {
+        ui.closeCloseOldAgents()
+        return
+      }
       ui.openCloseOldAgents()
       ui.closePalette()
     },
@@ -287,7 +297,12 @@ export const sessionCommands: CommandDef[] = [
       'return',
       'all',
     ],
-    run: ({ ui }) => {
+    getState: ({ flags }) => panel(flags.bulkProviderSwitchOpen),
+    run: ({ ui, flags }) => {
+      if (flags.bulkProviderSwitchOpen) {
+        ui.closeBulkProviderSwitch()
+        return
+      }
       ui.openBulkProviderSwitch()
       ui.closePalette()
     },
@@ -316,7 +331,12 @@ export const sessionCommands: CommandDef[] = [
       'recent',
       'history',
     ],
-    run: ({ ui }) => {
+    getState: ({ flags }) => panel(flags.promptSearchOpen),
+    run: ({ ui, flags }) => {
+      if (flags.promptSearchOpen) {
+        ui.closePromptSearch()
+        return
+      }
       ui.openPromptSearch()
       ui.closePalette()
     },

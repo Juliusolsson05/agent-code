@@ -428,6 +428,18 @@ describe('surface ownership', () => {
     expect(commandOwnsOpenSurface('split-vertical', { usageModalOpen: true } as never)).toBe(false)
   })
 
+  it('gives every listed command a state badge that reports its surface', () => {
+    // The two halves of the round-trip have to agree. The table lets the chord
+    // CROSS the interaction gate; the command's own state and run are what
+    // dismiss once it does. A command listed here without a `getState` is one
+    // whose second press reaches a `run` that may still only open — the chord
+    // would look like it does nothing, which is exactly the reported bug.
+    for (const commandId of Object.keys(SURFACE_OWNER_FLAGS)) {
+      const command = builtInCommandCatalog.find(candidate => candidate.id === commandId)
+      expect(command?.getState, `${commandId} has no getState`).toBeDefined()
+    }
+  })
+
   it('excludes surfaces where a second press must not mean dismiss', () => {
     // Recorded as a decision, not an omission. Per-target pickers should
     // RE-TARGET on a second press; Save Debug Logs and Attach Recording Note
