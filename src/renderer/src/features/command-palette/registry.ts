@@ -1,20 +1,4 @@
-import { layoutCommands } from '@renderer/features/workspace/commands/layoutCommands'
-import { globalEditorCommands } from '@renderer/features/global-editor/commands/globalEditorCommands'
-import { paneCommands } from '@renderer/features/workspace/commands/paneCommands'
-import { sessionCommands } from '@renderer/features/workspace/commands/sessionCommands'
-import { tabCommands } from '@renderer/features/workspace/commands/tabCommands'
-import { settingsCommands } from '@renderer/features/settings/commands/settingsCommands'
-import { spotlightCommands } from '@renderer/features/spotlight/commands/spotlightCommands'
-import { tileTabsCommands } from '@renderer/features/tile-tabs/commands/tileTabsCommands'
-import { readerCommands } from '@renderer/features/reader/commands/readerCommands'
-import { copyAssistantCommands } from '@renderer/features/copy-assistant/commands/copyAssistantCommands'
-import { copyCodeBlockCommands } from '@renderer/features/copy-code-block/commands/copyCodeBlockCommands'
-import { promptTemplateCommands } from '@renderer/features/prompt-templates/commands/promptTemplateCommands'
-import { replyToSelectionCommands } from '@renderer/features/reply-to-selection/commands/replyToSelectionCommands'
-import { agentStatusCommands } from '@renderer/features/agent-status/commands/agentStatusCommands'
-import { dispatchColorFlagCommands } from '@renderer/features/workspace/commands/dispatchColorFlagCommands'
-import { remoteCommands } from '@renderer/features/remote/commands/remoteCommands'
-import { usageCommands } from '@renderer/features/usage/commands/usageCommands'
+import { builtInCommandCatalog } from '@renderer/features/command-palette/catalog'
 import { commandAllowedByRenderedViewPolicy } from '@renderer/workspace/agentDisplayMode'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import type {
@@ -25,32 +9,10 @@ import type {
   ResolvedCommand,
 } from '@renderer/features/command-palette/types'
 
-const commandDefs: CommandDef[] = [
-  ...tabCommands,
-  ...paneCommands,
-  ...layoutCommands,
-  // Registered right after layoutCommands so the moved editor commands
-  // keep (approximately) their old registry order — registry order is the
-  // palette's empty-query browse order, and gratuitous reshuffles read as
-  // regressions to users who navigate by position.
-  ...globalEditorCommands,
-  ...sessionCommands,
-  ...dispatchColorFlagCommands,
-  ...spotlightCommands,
-  ...readerCommands,
-  ...tileTabsCommands,
-  ...settingsCommands,
-  ...copyAssistantCommands,
-  ...copyCodeBlockCommands,
-  ...promptTemplateCommands,
-  // Grouped with the prompt-template commands because it is the other
-  // composer-insertion command — registry order is the palette's
-  // empty-query browse order, so like things stay adjacent.
-  ...replyToSelectionCommands,
-  ...agentStatusCommands,
-  ...remoteCommands,
-  ...usageCommands,
-]
+// The ordered command list now lives in `catalog.ts`, which is context-free by
+// contract. This module keeps only the question that NEEDS a context: what
+// should the picker show right now. See catalog.ts for why the split exists.
+const commandDefs: readonly CommandDef[] = builtInCommandCatalog
 
 /**
  * Mode gate applied BEFORE each command's own `when`.
