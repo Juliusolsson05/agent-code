@@ -21,9 +21,9 @@ runtime command exports.
 
 Audit every command that Agent Code registers, decide which commands need
 context/capability/safety gates, normalize command-state badges, decide whether
-each behavior belongs in Commands, Settings, or both, and establish an
-implementation sequence that can be shipped without changing all invocation
-paths in one flag day.
+each behavior belongs in Commands, Settings, or both, make every built-in
+command's keybindings configurable from Settings, and establish an
+implementation sequence with explicit rollback boundaries.
 
 This commit is deliberately the review checkpoint. It contains the audit and
 implementation plan only. The branch is intended to hold the eventual full
@@ -86,6 +86,9 @@ collapsed into a boolean filter:
 |---|---|---|
 | Catalog | Create a context-free, validated command catalog and preserve its ordered 102-ID snapshot. | Registration order is user-visible, while duplicate IDs, omitted modules, generated commands, and native-menu IDs are currently unchecked. |
 | Execution | Add one command execution gateway with invocation source and a fresh admission check. | Picker, native menu, keybindings, and programmatic calls currently have different guarantees. |
+| Keybindings | Give every built-in command a Settings row with zero, one, or multiple configurable bindings; replace display-only shortcut strings and hard-coded command handlers with one canonical effective-binding map. | The palette currently displays metadata that is independent from the keyboard code that actually runs, so the two can drift and user edits would otherwise be cosmetic. |
+| Binding conflicts | Use one normalizer/collision engine in Settings and `npm run check:keybindings`; reject overlapping bindings and offer only an explicit atomic Replace action. | Registration order must never decide which command wins, and a repository script that disagrees with runtime validation would create a false guarantee. |
+| Default bindings | Preserve the existing command-backed muscle-memory set and add conventional Command-, for Settings; leave all other commands assignable but unbound. | Raw personalized history measures palette selection only and overweights this development setup, so it is evidence for usefulness but not a safe allocator of scarce global chords. |
 | Visibility | Make visibility strictly picker-only; classify developer commands as `debug` and niche supported operations as `advanced`. | The tiers already exist but are unused, and native-menu execution currently depends on them accidentally. |
 | State | Replace `{label, tone}` with semantic toggle/value/status states plus unavailable/loading/error and target identity. | Color and arbitrary text cannot distinguish boolean truth, values, inherited state, async work, or unsupported commands. |
 | Settings ownership | Retire `toggle-status-mode`, `toggle-worktree-badges`, `usage.toggle-header`, `usage.cycle-header-level`, and `dangerous-agents` from Commands; keep their durable controls in Settings. Preserve Settings-default + per-session-command for MCP and agent view, preserve current-workspace layout commands, and keep only Aggressive Debug Persistence as a Settings-primary quick command. | A persisted preference with no meaningful momentary scope should have one product home. Session MCP/view overrides and current-workspace layout actions are intentionally different from global defaults. |
@@ -94,7 +97,7 @@ collapsed into a boolean filter:
 | Providers | Gate features by declared capability, not `isAgentProviderKind()`. | OpenCode currently receives Rewind, Duplicate, Resume, Switch Provider, and Copy Resume affordances that are empty, rejected, unsupported, or unverified. |
 | Targeting | Resolve and pin one target for state + execution, then revalidate identity/capability before mutation. | The shared grid/Dispatch resolver is sound, but repeated resolution can display state for A and mutate B after focus changes. |
 | Destructive actions | Confirm active/running or cascading closes, re-enumerate bulk-close targets at commit, and keep ownership checks in main. | Undo does not recover live terminal state, unsent drafts, or partial cascades. A stale preview must not authorize a later changed target set. |
-| Rollout | Characterize first, then separate catalog/admission, then migrate high-risk families, then change UX defaults. | Structural changes and behavior changes need independent rollback boundaries. |
+| Rollout | Characterize first, separate catalog/admission, establish the final built-in catalog, centralize configurable bindings, then migrate high-risk families and UX defaults. | Structural changes and behavior changes need independent rollback boundaries. |
 
 ## What is already correct and must be preserved
 
@@ -141,6 +144,24 @@ audit:
    `nav-up`, and `nav-down`. Off removes those six from the command picker; it
    does not disable Command-[ / Command-], Option-H/J/K/L, arrow variants, or
    their underlying workspace actions.
+7. Add built-in command keybinding control to Settings. Support multiple
+   bindings per command, explicit unbinding, per-command reset, and reset-all.
+   Shipped defaults are the current command-backed shortcuts plus Command-, for
+   Settings; do not assign new defaults merely from personalized picker counts.
+8. Keep bindings single-step in this implementation. Multi-step sequences are
+   a follow-up, not an implicit parser feature.
+9. Record successful admitted command executions from picker, keybinding, and
+   native-menu sources with the source attached. The existing picker-only
+   history is retained/migrated but must no longer be described as total
+   command usage.
+10. Exclude extension-contributed commands and keybindings from this audit and
+    implementation. In particular, Timer commands belong to an extension and
+    do not affect the built-in command count, default set, Settings controls,
+    or static collision script.
+11. Keep Dispatch row/lane arrow and Vim gestures as contextual reserved
+    interactions, not extra Navigation Commands. The Navigation Commands group
+    remains exactly the six approved IDs; mutually exclusive Grid/Dispatch
+    ownership is explicit in the binding-context matrix.
 
 ## Canonical source map
 
@@ -184,8 +205,8 @@ audit:
 |---|---|---|---|---|---|
 | `new-tab` — New Tab | app | none; — | Workspace create / spawns agent | Create · default · C | Keep; native menu must resolve outside picker visibility; spawn boundary deduplicates/rate-limits. |
 | `close-tab` — Close Tab | app | none; — | Workspace + process teardown / destructive cascade | Layout & Dispatch · default · C | Require active tab; pin tab; confirm when running or cascade count >1; revalidate before close. |
-| `next-tab` — Next Tab | app | none; — | Focus only | Navigate · default (group off) · C | Add to the closed Navigation Commands group; hide from picker until the group setting is enabled; gate/disable when fewer than two tabs; keep shortcut action independent and no-op safe. |
-| `prev-tab` — Previous Tab | app | none; — | Focus only | Navigate · default (group off) · C | Same group/default behavior and contextual admission as `next-tab`; preserve the direct shortcut. |
+| `next-tab` — Next Tab | app | none; — | Focus only | Navigate · default (group off) · C | Add to the closed Navigation Commands group; hide from picker until the group setting is enabled; gate/disable when fewer than two tabs; keep its effective binding independent from picker visibility and no-op safe. |
+| `prev-tab` — Previous Tab | app | none; — | Focus only | Navigate · default (group off) · C | Same group/default behavior and contextual admission as `next-tab`; preserve its shipped binding through the configurable router. |
 | `reorder-tabs` — Reorder Tabs | app | more than one tab; — | Workspace order | Navigate · default · C | Recheck count and tab identities at modal commit; native menu ignores picker visibility. |
 | `resume-session` — Resume Session | app | none; — | Provider session create/replace | Session · default · C | Require focused CWD plus a provider with saved-session listing; use provider chooser/friendly unavailable state instead of OpenCode/terminal fallback. |
 | `new-agent` — New Agent… | app | active non-tiled tab; — | Workspace/process create | Create · default · C | Rename to New Pane… or stop offering Terminal; require at least one launchable provider/runtime and deduplicate commit. |
@@ -205,9 +226,9 @@ audit:
 | `codex-horizontal` — New Codex Below | grid | generated; — | Workspace/process create | Create · default · C | Same as `codex-vertical`. |
 | `opencode-vertical` — New OpenCode Right | grid | generated; — | Workspace/process create | Create · default · C | Require OpenCode setup/binary launchability; no invisible Dispatch behavior. |
 | `opencode-horizontal` — New OpenCode Below | grid | generated; — | Workspace/process create | Create · default · C | Same as `opencode-vertical`. |
-| `nav-left` — Focus Pane Left | grid | none; — | Focus only | Navigate · default (group off) · C | Add to Navigation Commands; hide from picker until enabled. Preserve shortcut navigation; command admission remains grid-only. |
+| `nav-left` — Focus Pane Left | grid | none; — | Focus only | Navigate · default (group off) · C | Add to Navigation Commands; hide from picker until enabled. Preserve effective binding navigation; command admission remains grid-only. |
 | `nav-right` — Focus Pane Right | grid | none; — | Focus only | Navigate · default (group off) · C | Same as `nav-left`. |
-| `nav-up` — Focus Pane Up | grid | none; — | Focus only | Navigate · default (group off) · C | Add to Navigation Commands; preserve direct Grid/Dispatch shortcut behavior while keeping the command itself grid-only. |
+| `nav-up` — Focus Pane Up | grid | none; — | Focus only | Navigate · default (group off) · C | Add to Navigation Commands; keep the command grid-only and model the same physical Dispatch gesture as a mutually exclusive reserved interaction. |
 | `nav-down` — Focus Pane Down | grid | none; — | Focus only | Navigate · default (group off) · C | Same as `nav-up`. |
 | `undo-close` — Undo Close | app | none; — | Bounded in-memory recovery → workspace/process | Session · default · C | Expose undo-stack availability/reason; pin the recorded entry and revalidate restore ownership. |
 | `revive-pane` — Revive Buried Pane | app | any buried session; — | Workspace/process wake | Layout & Dispatch · advanced · C | Rename Revive Buried Session…; gate from the same scoped list the picker displays. |
@@ -225,7 +246,7 @@ audit:
 | `toggle-status-mode` — Status Mode | app | none; `On`/`Off` | Persisted app preference | Preferences · remove · S | Retire the command and any visibility override for its built-in ID; retain Status Mode and `showStatusMode` in Settings as the only product control. |
 | `toggle-performance-panel` — Performance Stats | debug | none; `On`/`Off` | Transient diagnostic UI | Developer · debug · C | Default-hide as debug; add developer/runtime admission if production access is not intended. |
 | `toggle-caffeinate` — Caffeinate | app | none; `Off`/`On`/`Unsupported` | Main/OS process | Workspace Tools · default · C | Model loading/error/unsupported; disable or hide unsupported; main revalidates platform and single ownership. |
-| `toggle-global-editor` — Global Editor | app | none; `On`/`Off` | Transient surface | Editor & Files · default · C | Add declared shortcut metadata; require project only when opening if empty editor is invalid. |
+| `toggle-global-editor` — Global Editor | app | none; `On`/`Off` | Transient surface | Editor & Files · default · C | Add the existing Command-Shift-E behavior to canonical `defaultKeybindings`; require project only when opening if empty editor is invalid. |
 | `save-editor-file` — Save Editor File | editor | editor open; — | Filesystem write | Editor & Files · default · C | Native menu bypasses picker visibility; receiving editor revalidates visible document, dirty/version state, root and path containment. |
 | `save-all-editor-files` — Save All Editor Files | editor | editor open; — | Batch filesystem write | Editor & Files · default · C | Same as save, plus partial-result contract; disable when no dirty files. |
 | `quick-open-file` — Quick Open File | editor | focused CWD; — | Read/navigation | Editor & Files · default · C | Keep; revalidate root/CWD when selection opens. |
@@ -268,7 +289,7 @@ audit:
 | `toggle-spotlight` — Spotlight | app | none; `On`/`Off` | Workspace view | Navigate · default · C | Require target only when entering; allow exit unconditionally; include target identity if state is target-specific. |
 | `toggle-reader-mode` — Reader Mode | session | agent provider; `On`/`Off` | Workspace view | Navigate · default · C | Repeat provider/render target admission; clarify whether `On` belongs to current target or any open reader. |
 | `tiled-tabs` — Tiled Tabs | app | none; `On`/`Off` | Workspace view | Navigate · default · C | Require enough selectable tabs when entering; allow closing unconditionally. |
-| `open-settings` — Open Settings | app | none; — | Navigation | Preferences · default · C | Update stale category copy; picker visibility must not affect any future native Settings menu item. |
+| `open-settings` — Open Settings | app | none; — | Navigation | Preferences · default · C | Add conventional Command-, to canonical defaults; update stale category copy; picker visibility must not affect any future native Settings menu item. |
 | `toggle-aggressive-debug-persistence` — Persistent Aggressive Debug Logs | debug | none; `On`/`Off` | Persisted app preference + disk cost | Developer · debug · B | Settings is primary explanatory home; keep debug-tier quick override; require backend readiness and explicit persistence/cost copy. |
 | `toggle-worktrees-bar` — Worktrees | app | none; `Open`/`Closed` | Transient UI | Workspace Tools · default · C | Gate opening on repo/worktree capability; closing always allowed; rename Worktrees Panel if needed. |
 | `toggle-worktree-badges` — Worktree Badges | app | none; `On`/`Off` | Persisted app preference | Preferences · remove · S | Retire the command and any visibility override for its built-in ID; retain Worktree Badges and `showWorktreeBadges` in Settings as the only product control. |
@@ -574,9 +595,219 @@ files.
 
 The command-visibility Settings row must stop being a flat title-only catalog.
 It should group by command category and make nested command titles, descriptions,
-keywords, shortcuts, tier, scope, and risk searchable. It must disclose when a
+keywords, effective bindings, tier, scope, and risk searchable. It must disclose when a
 hidden command has no shortcut or alternate UI; “still executable” is not the
 same as practically discoverable.
+
+## Built-in command keybinding design
+
+### Scope boundary
+
+This work owns **first-party built-in commands only**. Timer is an extension,
+so its commands and any other extension-contributed commands are deliberately
+absent from:
+
+- the 102-command before-state audit and final built-in catalog count;
+- the shipped default-binding set;
+- the built-in command controls in Settings; and
+- the repository's static built-in collision check.
+
+Extension keybinding contribution and override UX is a later extension-platform
+concern. That later work must compose extension bindings after first-party and
+reserved bindings so an extension can never shadow an Agent Code command, but
+this PR must not invent or partially ship that policy.
+
+“Keybind control of all commands” means every surviving built-in command has a
+Settings row and may have zero, one, or multiple bindings. It does **not** mean
+turning every keyboard interaction into a command. Escape dismissal, modal and
+picker navigation, composer editing/history, numbered tab/Dispatch selection,
+split resizing, and editor-native file-tab behavior remain contextual
+interactions. They still enter the shared reservation/collision model so a user
+cannot accidentally assign a command on top of them.
+
+### Canonical source of truth and persistence
+
+The current `CommandDef.shortcut?: string` is presentation-only while
+`useKeybinds.ts` separately implements the real behavior. Replace that split
+authority with canonical machine-readable defaults:
+
+```ts
+type Keybinding = string // normalized single-step grammar, e.g. Cmd+Shift+P
+
+type CommandDef = {
+  // existing command metadata
+  defaultKeybindings?: readonly Keybinding[]
+}
+
+type Settings = {
+  commandKeybindingOverrides: Record<string, Keybinding[]>
+}
+```
+
+The persisted map is sparse:
+
+- absent command ID means “inherit shipped defaults”;
+- an empty array means “explicitly unbound”;
+- a nonempty array completely replaces that command's shipped defaults; and
+- Reset removes the override rather than copying today's default into storage.
+
+This distinction lets a future release improve untouched defaults without
+overwriting a user's deliberate binding or unbinding. Coercion normalizes,
+deduplicates, and rejects malformed entries without deleting unknown IDs
+indiscriminately; an extension/provider may be temporarily absent. Retired
+first-party IDs are pruned only through an explicit idempotent migration.
+
+The palette, Settings, search metadata, accessibility text, and runtime router
+all derive from the **effective** binding set. Delete independent display-only
+shortcut strings once parity tests prove the migration. A shortcut shown in the
+palette must therefore be the shortcut the current profile will actually run.
+
+Bindings are single-step in this PR. The parser must reject sequence syntax
+rather than accept a value the runtime cannot execute. Multi-step chords such
+as Command-K then R require a future prefix/timeout/accessibility design.
+
+### Settings interaction
+
+Commands & Shortcuts becomes a searchable, category-grouped built-in catalog.
+Every row shows the stable command title, effective bindings, picker visibility,
+scope/tier/safety metadata, and one of these binding states:
+
+- one or more binding chips with Remove;
+- **Not assigned** when the effective array is empty;
+- Add/Edit binding through keyboard capture;
+- Reset this command; and
+- a page-level Reset All Bindings.
+
+The existing dictation hotkey capture code can supply physical-key
+normalization and capture behavior, but the command editor needs a generic
+multi-binding control. It must not inherit dictation-specific defaults,
+modifier-only policy, or native helper semantics.
+
+When a captured binding overlaps another owner, saving is blocked and the UI
+names the command or reserved interaction that owns it. The only override path
+is an explicit **Replace** action that atomically removes the old command
+binding and installs the new one. Registration order, last-write-wins, and
+silent precedence are forbidden.
+
+Picker visibility remains independent. A hidden/default-off Navigation Command
+can still have and execute a binding; an unbound command remains executable
+from the picker/menu/programmatic path if admission allows it.
+
+### Shipped default set
+
+Defaults are intentionally scarce. Preserve the current command-backed muscle
+memory, fill metadata gaps for bindings that already execute, and add only the
+conventional Settings binding. Personalized history is currently palette-only
+and development-profile-specific, so high counts do not automatically claim a
+global chord. The table uses user-facing macOS notation; the normalizer owns the
+canonical persisted token spelling.
+
+| Group | Built-in command | Shipped binding(s) |
+|---|---|---|
+| Command access | New host command `open-command-palette` | Command-Shift-P |
+| Tabs | `new-tab` | Command-T |
+| Tabs | `close-tab` | Command-Shift-W |
+| Tabs | `undo-close` | Command-Shift-T |
+| Tabs | `resume-session` | Command-Shift-R |
+| Tabs | `prev-tab` / `next-tab` | Command-[ / Command-] |
+| Pane lifecycle | `close-pane` | Command-W; Option-W |
+| Creation | `split-vertical` / `split-horizontal` | Option-D / Option-Shift-D |
+| Creation | `terminal-horizontal` / `terminal-vertical` | Option-T / Option-Shift-T |
+| Creation | generated non-default-provider right/below commands | Preserve each provider's declared Option-key pair. |
+| Navigation | `nav-left` | Option-H; Option-Left |
+| Navigation | `nav-right` | Option-L; Option-Right |
+| Navigation | `nav-up` | Option-K; Option-Up |
+| Navigation | `nav-down` | Option-J; Option-Down |
+| Editor | `toggle-global-editor` | Command-Shift-E |
+| Editor | `quick-open-file` | Command-P |
+| Editor | `search-in-files` | Command-Shift-F |
+| Editor | `toggle-editor-fullscreen` | Command-Option-E |
+| Editor | `save-editor-file` | Command-S in editor context |
+| Feed | `jump-latest-message` | End outside text editing |
+| Preferences | `open-settings` | Command-, |
+
+`open-command-palette` is a first-party host command so its binding is no
+longer special hard-coded state. It appears in keybinding Settings but is
+structurally omitted from its own picker results. This is one separately
+approved new ID: after retiring the five recorded preference commands, the
+expected built-in catalog count is `102 - 5 + 1 = 98`, absent another explicit
+addition approved during implementation.
+
+Commands not listed above ship unbound but remain assignable. In particular,
+Debug Panel's high personalized count does not make it a universal default,
+and Usage, Dispatch, Reload Agent, and provider operations receive no invented
+shortcut in this PR.
+
+### Collision and reservation authority
+
+Add one context-free normalization/collision library consumed by Settings,
+runtime routing, tests, and `scripts/check-command-keybindings.mts`. Each
+binding owner declares a closed binding context so validation can distinguish
+genuinely disjoint behavior from accidental duplication. User assignments do
+not choose their own context; the command contract supplies it.
+
+Ordinary command bindings must be unique across overlapping contexts. Reuse is
+allowed only when the closed overlap matrix proves the contexts mutually
+exclusive and the pair is explicitly characterized—for example, Option-K can
+focus a grid pane while the same physical gesture moves the Dispatch selection.
+There is no generic “different surface means safe” escape hatch because editor
+focus and app-wide commands overlap grid/Dispatch surfaces.
+
+The reservation registry includes at least:
+
+- Command-1…9 and Command-Option-1…9 indexed tab/Dispatch behavior;
+- Dispatch's two-digit selection grammar and tiled-resize continuation;
+- Option-based split resizing and Fn-translated directional resizing;
+- Escape, modal/picker/composer ownership, and other interaction-local keys;
+- Electron native roles and app-menu accelerators, including reload, zoom,
+  fullscreen, and standard editing roles;
+- editor-native file-tab close behavior and any remaining Monaco-owned keys;
+- the current user-configured dictation binding; and
+- all effective built-in command bindings.
+
+The static script checks shipped defaults and the default dictation binding.
+Settings/runtime validation additionally checks the current profile's
+dictation binding and overrides. Command-backed editor shortcuts such as Save
+must derive from the effective command binding; leaving a hard-coded Monaco
+Command-S behind after the user rebinds Save would violate the feature.
+
+`npm run check:keybindings`, included in `npm run check`, fails on:
+
+- invalid/non-normalized single-step syntax;
+- duplicate bindings within one command;
+- duplicate built-in command IDs or bindings for missing/retired IDs;
+- overlapping default-command bindings;
+- unapproved overlap with reserved/native/editor/dictation gestures;
+- defaults that lack an executable built-in command; and
+- reintroduction of independent shortcut-display metadata.
+
+Normalization tests must use physical `KeyboardEvent.code` for Option-letter
+bindings on macOS, where `event.key` is a produced symbol, and must cover the
+supported Cmd/Ctrl/Option/Shift, named-key, punctuation, and function-key
+grammar.
+
+### Runtime routing and history
+
+Preserve the capture-phase interaction-ownership gates before any configurable
+command lookup: app-owned modals, editor inputs, composer surfaces, and
+fullscreen ownership must still receive or suppress the same keys. After that
+gate, resolve an effective binding to a stable command ID and invoke it through
+the command execution gateway. The gateway repeats admission, pins/revalidates
+targets, applies confirmations, reports async errors, and tags the invocation
+source as `keybinding`.
+
+All command-backed cases currently duplicated in `useKeybinds.ts`, Monaco, or
+special UI callbacks move to this route. Contextual interactions listed above
+remain in a smaller interaction router backed by the reservation registry; they
+do not become misleading picker commands merely to make the file shorter.
+
+Personalized command history records successful, admitted user invocations
+from picker, keybinding, and native menu with the source attached. Rejected,
+unavailable, canceled-confirmation, and failed async invocations do not count.
+Legacy history remains usable as picker-origin data, but the product must stop
+describing its current counts as all command usage. Programmatic/background
+dispatch does not influence personalized ranking unless it carries an explicit
+user-invocation source.
 
 ## Phased implementation plan
 
@@ -593,6 +824,8 @@ Files:
   export of the current ordered definitions;
 - add `src/renderer/src/features/command-palette/catalog.test.ts` and an ordered
   catalog snapshot;
+- add characterization tests around `workspace/tile-tree/useKeybinds.ts`,
+  Monaco-owned command shortcuts, dictation capture, and native accelerators;
 - add/expand `src/main/menu/appMenu.test.ts`;
 - expand Settings persistence/registry tests.
 
@@ -606,8 +839,15 @@ Work:
    invariant `(providers - default) × {vertical, horizontal}`.
 4. Assert every native-menu ID exists in the executable catalog and every
    catalog ID appears in command-visibility Settings.
-5. Capture the current shortcut metadata and dynamic-title fallback so later UX
-   changes are explicit snapshot updates.
+5. Capture both shortcut metadata and **actual** command-backed handlers,
+   including aliases missing from metadata (Option-Arrows and Option-W),
+   metadata gaps (Global Editor), and editor-owned Save.
+6. Inventory contextual/reserved interactions separately: modal/composer keys,
+   Escape, numbered selection, tiled/resize continuations, Electron roles,
+   editor-native actions, and dictation. Record their overlap contexts before
+   moving any handler.
+7. Capture the dynamic-title fallback so later UX changes are explicit snapshot
+   updates.
 
 Rollback boundary: delete the new catalog API/tests and restore the existing
 array; no product behavior will have changed.
@@ -634,10 +874,12 @@ Work:
    and deliberately skip picker visibility.
 4. Introduce `dispatchCommand({source, id})` for `palette`, `native-menu`,
    `keybinding`, and `programmatic` sources. Centralize fresh admission,
-   promise rejection/error reporting, history policy, and single-flight hooks.
-5. Route picker and native menu through it first. Keep legacy direct keybinding
-   actions temporarily, covered by parity tests, rather than claiming a false
-   flag-day migration.
+   promise rejection/error reporting, successful-completion outcomes, history
+   policy, and single-flight hooks.
+5. Route picker and native menu through it first. Record successful user
+   invocations with their source; do not count unavailable, canceled, rejected,
+   or failed runs. Keep legacy direct keybinding actions temporarily behind
+   parity tests until Phase 4 migrates all command-backed cases.
 
 Rollback boundary: the old `buildCommandRegistry` remains available behind an
 adapter until menu/picker parity tests pass.
@@ -687,7 +929,8 @@ Work:
 2. Populate the required command categories from the exhaustive table.
 3. Group command-visibility Settings by category and search nested command
    metadata, not merely the parent setting row.
-4. Display title, description, shortcut, tier, target/scope, and safety status.
+4. Display title, description, effective bindings, tier, target/scope, and
+   safety status.
 5. Give dynamic-title commands a friendly stable catalog label rather than a
    raw ID.
 6. Preserve explicit user visibility overrides when declared defaults change.
@@ -705,7 +948,69 @@ Rollback boundary: group metadata/taxonomy can land separately from the
 versioned Navigation Commands preference. Reverting the preference restores the
 current all-visible picker without touching navigation execution authority.
 
-### Phase 4 — Make provider capability policy authoritative
+### Phase 4 — Centralize and configure built-in command keybindings
+
+Files:
+
+- `features/command-palette/{types,catalog,executeCommand}.ts`
+- new `features/command-keybindings/{types,normalize,defaults,reservations,resolve}.ts`
+- `features/settings/lib/settingsRegistry.ts`
+- `features/settings/ui/SettingsList.tsx` and a generic multi-binding capture UI
+- `app-state/settings/{types,persistence}.ts` and store-version migrations
+- `workspace/tile-tree/useKeybinds.ts`
+- `features/global-editor/commands/globalEditorCommands.ts`
+- `features/settings/commands/{settings,dangerous}Commands.ts`
+- `features/usage/commands/usageCommands.ts`
+- `features/editor/ui/MonacoFileEditor.tsx`
+- command modules that currently declare `shortcut`
+- command palette shortcut rendering/search and invocation-history storage
+- new `scripts/check-command-keybindings.mts` and `package.json`
+
+Work:
+
+1. Add the canonical single-step `Keybinding` grammar, physical-key
+   normalization, closed binding contexts, and shared overlap checker.
+2. Establish the final binding catalog before generating Settings rows: retire
+   the five approved Settings-owned command IDs, prune only their explicit
+   built-in visibility/binding override keys, add `open-command-palette`, and
+   snapshot the expected 98 built-in IDs.
+3. Replace `CommandDef.shortcut` with `defaultKeybindings`; preserve every
+   characterized command-backed default/alias, add Command-, to `open-settings`,
+   and add the `open-command-palette` host command with Command-Shift-P,
+   structurally omitted from its own picker results.
+4. Add sparse `commandKeybindingOverrides` persistence: absence inherits,
+   `[]` explicitly unbinds, and a nonempty array replaces defaults. Add
+   malformed/legacy/unknown/retired-ID coercion tests and Reset semantics.
+5. Build the searchable Settings editor for every surviving built-in command:
+   multiple bindings, Not assigned, Add/Edit/Remove, per-command Reset, Reset
+   All, named conflict errors, and explicit atomic Replace.
+6. Declare contextual/native/editor/dictation reservations and validate both
+   shipped defaults and current-profile effective bindings with the same
+   library. Do not expose binding contexts as a user-controlled loophole.
+7. Preserve capture-phase interaction ownership, then route every
+   command-backed handler through the execution gateway. Remove duplicated
+   hard-coded command cases from `useKeybinds`, Monaco, and special callbacks
+   only after parity tests pass. Keep non-command interactions in the smaller
+   reserved interaction router.
+8. Derive palette display/search/accessibility text from effective bindings;
+   delete independent shortcut labels and assert they cannot return.
+9. Expand personalized history to successful picker, native-menu, and
+   keybinding invocations with source metadata. Preserve legacy picker counts
+   without pretending they include shortcut use.
+10. Add `npm run check:keybindings`, include it in `npm run check`, and fail on
+   invalid grammar, duplicate/overlapping defaults, stale IDs, reserved/native
+   collisions, missing command owners, and display-authority drift.
+11. Assert that Timer and every extension-contributed command remain outside
+    the catalog controls, shipped defaults, and static built-in validator.
+
+Rollback boundary: the five retirements plus one addition, normalization/default
+declarations, Settings persistence, Settings UI, runtime migration, history
+expansion, and the repository script land as separate commits. The legacy
+handler remains behind characterization tests until the effective router has
+parity; once all command-backed cases have migrated, remove it rather than
+preserving two authorities indefinitely.
+
+### Phase 5 — Make provider capability policy authoritative
 
 Files:
 
@@ -734,7 +1039,7 @@ Work:
 Rollback boundary: capability declarations land with characterization tests;
 each command family switches to them in a separate commit.
 
-### Phase 5 — Replace arbitrary badge text with semantic state
+### Phase 6 — Replace arbitrary badge text with semantic state
 
 Files:
 
@@ -760,7 +1065,7 @@ Work:
 Rollback boundary: keep a temporary adapter from old `{label, tone}` states;
 remove it only after every `getState` definition is migrated and snapshot-tested.
 
-### Phase 6 — Move ownership and harden destructive flows
+### Phase 7 — Move ownership and harden destructive flows
 
 Files:
 
@@ -778,19 +1083,13 @@ Files:
 
 Work:
 
-1. Retire `toggle-status-mode`, `toggle-worktree-badges`,
-   `usage.toggle-header`, `usage.cycle-header-level`, and `dangerous-agents`
-   from the command catalog. Keep their five canonical Settings controls, and
-   explicitly clean only those retired built-in IDs from visibility overrides.
-2. Update the ordered catalog snapshot with an intentional five-ID retirement
-   delta. The current 102-command audit remains the before-state; any separately
-   approved new command ID is itemized rather than hidden inside the count.
-3. Add the dangerous-agent enable confirmation with the exact live reload set.
+1. Keep the five retired preferences in their canonical Settings controls and
+   add the dangerous-agent enable confirmation with the exact live reload set.
    Make reload single-flight and expose success, Mixed partial
    application, failure, and rollback semantics. Correct contradictory copy.
-4. Keep only Aggressive Debug Persistence as a Settings-primary quick command
+2. Keep only Aggressive Debug Persistence as a Settings-primary quick command
    from this preference group and classify it as debug-hidden.
-5. Remove Attach Project Terminal to Dispatch end to end:
+3. Remove Attach Project Terminal to Dispatch end to end:
    `dispatch-project-terminal` from the Settings registry;
    `Settings.dispatchProjectTerminal`, its default and coercion; the
    `DispatchLayout` auto-create effect and dedicated terminal column; and the
@@ -799,11 +1098,11 @@ Work:
    old key during versioned coercion so it cannot be spread back into storage.
    Do not remove normal terminal creation, tile-tree rendering, or terminal rows
    in Dispatch.
-6. Add running/cascade confirmation for tab/session close from every source,
+4. Add running/cascade confirmation for tab/session close from every source,
    including buttons and shortcuts, with a target-bound grant.
-7. Re-enumerate Close Old Agents after confirmation and before every kill.
-8. Add a second confirmation for Kill Buried Session.
-9. If included in this PR, replace Agent Management MCP close's prose-only
+5. Re-enumerate Close Old Agents after confirmation and before every kill.
+6. Add a second confirmation for Kill Buried Session.
+7. If included in this PR, replace Agent Management MCP close's prose-only
    permission with an enforceable short-lived caller/target grant or renderer
    confirmation. Preserve its project/self/cascade checks.
 
@@ -811,7 +1110,7 @@ Rollback boundary: command retirement, project-terminal feature removal,
 ordinary close confirmation, bulk close, and MCP grants are separate commits
 because they affect different authorities and persistence shapes.
 
-### Phase 7 — Naming, Settings information architecture, and cleanup
+### Phase 8 — Naming, Settings information architecture, and cleanup
 
 Files:
 
@@ -837,9 +1136,10 @@ persistence changes.
 
 ### Catalog integrity
 
-- First characterize the exact ordered 102-ID before-state. After Phase 6,
-  update it with an explicit negative assertion for all five retired IDs and an
-  exact `102 - 5 + separately approved additions` count.
+- First characterize the exact ordered 102-ID before-state. During Phase 4,
+  update it with an explicit negative assertion for all five retired IDs, a
+  positive assertion for `open-command-palette`, and the expected exact count
+  `102 - 5 + 1 = 98` unless another addition is separately approved.
 - Unique IDs; required metadata; valid surface/category/tier/safety values.
 - Generated provider split parity.
 - Navigation Commands has exactly the six recorded stable IDs; no other
@@ -881,6 +1181,41 @@ Assertions:
 - async rejection is user-visible and never unhandled; and
 - registry/picker order stays stable.
 
+### Keybinding configuration
+
+- Settings lists every surviving built-in command exactly once, including
+  commands with no shipped binding and `open-command-palette`, while excluding
+  transient agent-index rows and all extension commands such as Timer.
+- The exact shipped-default snapshot matches the approved table: existing
+  command-backed defaults/aliases plus Command-, for Settings, with every other
+  command unbound.
+- Missing override inherits defaults; `[]` stays explicitly unbound; one or
+  multiple custom bindings replace defaults; per-command Reset and Reset All
+  remove sparse overrides.
+- Malformed bindings are rejected/coerced deterministically; unknown keys are
+  preserved defensively; only explicitly retired built-in IDs are pruned.
+- Duplicate bindings within one command, overlapping command defaults, and
+  reserved/native/editor/dictation collisions fail with the owning action
+  named. Explicit Replace updates both affected commands atomically.
+- The repository script and Settings/runtime validator consume the same
+  normalizer, reservation registry, and overlap matrix.
+- Option-letter matching uses physical codes on macOS; punctuation, named keys,
+  Cmd/Ctrl/Option/Shift, and function keys round-trip through capture,
+  persistence, matching, and display.
+- Effective bindings, not shipped defaults, render in the palette and Settings.
+  Hiding a command from the picker never disables its binding, and unbinding it
+  never disables palette/menu execution.
+- Capture-phase modal/editor/composer ownership remains intact. Contextual
+  interactions still win only in their declared contexts and never cause a
+  command to execute twice.
+- Rebinding editor Save removes the old command-backed Monaco binding; no stale
+  Command-S path survives. Editor-native close remains a declared reservation.
+- Successful picker, native-menu, and keybinding invocations increment history
+  under the correct source. Unavailable, canceled, rejected, failed, and
+  background/programmatic work does not inflate personalized ranking.
+- The system accepts only single-step bindings; sequence/prefix syntax is
+  rejected with an actionable message.
+
 ### Provider/capability
 
 - Claude/Codex/OpenCode/Terminal matrix exactly matches the table above.
@@ -917,6 +1252,9 @@ Assertions:
 - `navigationCommandsEnabled` defaults/coerces to false for missing or malformed
   data, persists true when chosen, resets to false, and never changes shortcut
   behavior or direct action availability.
+- `commandKeybindingOverrides` distinguishes missing from explicit empty,
+  survives restart, resets sparsely, rejects malformed bindings, and preserves
+  explicit choices when a later release changes shipped defaults.
 - Legacy `dispatchProjectTerminal` true/false values are discarded
   idempotently and are not reserialized; Dispatch never auto-creates or mounts
   the companion side column; user-created terminals still render normally.
@@ -928,7 +1266,7 @@ Assertions:
 
 | Requirement | Acceptance evidence |
 |---|---|
-| Complete audit | The characterization test records all 102 audited IDs; the final catalog snapshot shows the explicit five-ID retirement delta plus only separately approved additions. |
+| Complete audit | The characterization test records all 102 audited before-state IDs; the final catalog snapshot proves five explicit retirements, the approved `open-command-palette` addition, and the expected 98-ID result unless another addition is separately approved. |
 | Visibility is not authorization | Hiding each native File-menu command does not disable its menu item; direct invocation still fails any real contextual/capability gate. |
 | Debug clutter is gated | Debug-tier commands are absent by default, revealable/overridable, and remain protected by live capability checks where required. |
 | Consistent state | No stateful command returns arbitrary tone semantics; panels, toggles, values, unavailable, loading, mixed, and error states render predictably and accessibly. |
@@ -936,11 +1274,15 @@ Assertions:
 | Stable target | State and mutation refer to the same pinned target across focus, Dispatch lane, provider, and lifecycle changes. |
 | Settings ownership | Status Mode, Worktree Badges, both Usage preferences, and Dangerous Agents are Settings-only; their five command IDs are absent. Aggressive Debug Persistence remains debug-hidden. MCP/view defaults versus session overrides and workspace defaults versus current-workspace commands disclose their distinct scope. |
 | Navigation command group | Enable Navigation Commands is off by default and controls picker membership for exactly Next/Previous Tab plus Focus Pane Left/Right/Up/Down. Enabling restores normal per-command visibility; disabling never breaks their shortcuts or underlying actions. |
+| Built-in binding control | Every surviving built-in command appears in Settings with zero/one/multiple bindings, explicit unbinding, per-command Reset, and Reset All. Timer and all other extension commands are absent. |
+| Binding integrity | Settings and `npm run check:keybindings` share one normalizer/reservation authority; overlapping bindings are blocked with a named owner and only explicit atomic Replace can move a binding. No display-only shortcut metadata remains. |
+| Curated defaults | The shipped snapshot preserves the characterized command bindings and aliases, adds Command-, for Settings, leaves all other commands unbound, and supports single-step bindings only. |
 | Project terminal retirement | Attach Project Terminal to Dispatch is absent from Settings, persisted state, action/hook contracts, and Dispatch rendering. Old persisted keys are dropped, while ordinary terminal sessions and rows still work. |
 | Destructive safety | Running/cascading closes and all bulk closes are target-bound, freshly validated, and expose partial failure without silent retargeting. |
 | Invocation parity | Palette, menu, shortcut, and programmatic paths share admission/error handling while retaining source-specific UI behavior. |
 | Migration safety | Persistence-version/coercion/alias tests pass; command IDs remain stable unless an explicit idempotent alias migration exists. |
-| Discoverability | Command Settings is grouped and searchable by nested titles, keywords, description, shortcut, tier, scope, and risk. |
+| Discoverability | Command Settings is grouped and searchable by nested titles, keywords, description, effective bindings, tier, scope, and risk. |
+| Representative history | Successful picker, menu, and keybinding executions are recorded with source; rejected/failed/background work is excluded and legacy counts are identified as picker-origin. |
 
 ## Validation commands
 
@@ -954,6 +1296,7 @@ npm run test:system
 npm run typecheck
 npm test
 npm run test:package
+npm run check:keybindings
 npm run check
 ```
 
@@ -974,14 +1317,24 @@ Manual packaged-app checks must cover:
 10. old `dispatchProjectTerminal` storage does not create a terminal or side
    column, while an ordinary user-created terminal still works in Dispatch;
 11. Settings restart persistence and new-session versus current-session scope;
-12. Claude does not receive Workflow MCP while Codex does; and
-13. assistive-technology text for every semantic badge state.
+12. Claude does not receive Workflow MCP while Codex does;
+13. every built-in command can be assigned, multiply bound, unbound, and reset;
+14. conflict capture names command, contextual, native, editor, and current
+    dictation owners, with explicit Replace as the only override path;
+15. rebinding navigation, Global Editor, Save, command palette, and Settings
+    changes actual behavior and the displayed effective binding without leaving
+    the former chord active;
+16. Timer/extension commands do not appear in built-in binding Settings or
+    defaults; and
+17. assistive-technology text for every semantic badge and binding state.
 
 ## Product decisions requested at review
 
 The source establishes the defects above, but these UX choices genuinely need
-product confirmation before implementation. Settings ownership and Dispatch
-project-terminal removal are recorded decisions above and are no longer open:
+product confirmation before implementation. Settings ownership, Dispatch
+project-terminal removal, Navigation membership/contextual gestures, and the
+built-in keybinding product shape are recorded decisions above and are no
+longer open:
 
 1. **Unavailable presentation.** Recommendation: hide mode-irrelevant commands;
    show discovery-worthy unsupported commands disabled with a reason when the
@@ -989,13 +1342,10 @@ project-terminal removal are recorded decisions above and are no longer open:
 2. **Close confirmation threshold.** Recommendation: confirm running/streaming
    targets and any cascade/multi-target close; keep an idle single close
    immediate and undoable.
-3. **Directional shortcuts in Dispatch.** Recommendation: one command ID must
-   have one meaning. Dispatch keybindings should invoke a distinct direction-free
-   creation/navigation command rather than bypassing a hidden grid command.
-4. **Remote Control maturity.** Recommendation: classify the panel
+3. **Remote Control maturity.** Recommendation: classify the panel
    `experimental` until packaged runtime/network readiness and disclosure are
    complete; keep actual enable/listen/pair actions separately authorized.
-5. **Agent Management MCP close grant.** Recommendation: include the enforceable
+4. **Agent Management MCP close grant.** Recommendation: include the enforceable
    explicit-user-intent grant in this governance PR because prose-only safety is
    not a real gate. It is listed separately because it is an MCP tool, not one
    of the 102 palette commands.
@@ -1015,8 +1365,13 @@ project-terminal removal are recorded decisions above and are no longer open:
 - Do not replace main-process ownership checks with renderer-only confirmation.
 - Do not persist transient panels/layout stances merely because they have state
   badges.
-- Do not force every keybinding through the new gateway in one change; migrate
-  high-risk bindings first with parity tests.
+- Do not turn Escape, modal/picker/composer input, numbered selection, resize,
+  or editor-native file-tab actions into fake commands. Declare them as
+  contextual reservations while routing every actual built-in command binding
+  through the gateway.
+- Do not add multi-step key sequences in this PR.
+- Do not include Timer or any other extension-contributed command in built-in
+  binding Settings, defaults, catalog counts, or the static validator.
 - Do not delete unknown command visibility keys indiscriminately; future
   extension/provider commands may be temporarily absent.
 - Do not implement any item in this document before the review checkpoint is
