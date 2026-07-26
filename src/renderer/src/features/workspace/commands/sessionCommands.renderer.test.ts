@@ -207,3 +207,127 @@ describe('built-in MCP provider command policy', () => {
     })
   })
 })
+
+// ---------------------------------------------------------------------------
+// Which capability gates which command.
+//
+// The provider matrix test pins the DATA. It cannot catch a consumer reading
+// the wrong row, and the nine-agent review found four that did: View Prompts
+// read the switch edge list, Reload Agent read the verified-shell-command flag,
+// and Switch Provider and Copy Resume Command still asked plain agent-hood.
+//
+// None of it showed up in behaviour, which is the whole problem. Claude and
+// Codex have every capability and OpenCode had none, so a transposed pair
+// produced identical answers for all three providers. It would have started
+// lying the first time a provider declared one capability without the other —
+// exactly what happened when `inAppResume` was added and OpenCode turned out to
+// support it.
+//
+// So this drives the capabilities INDEPENDENTLY: enable one, assert exactly one
+// command turns on. A transposition fails here even when it is invisible
+// against the real matrix.
+// ---------------------------------------------------------------------------
+
+const capabilityOverride = vi.hoisted(() => ({ current: null as Record<string, unknown> | null }))
+
+vi.mock('@providers/shared/featureCapabilities', async importOriginal => {
+  const actual = await importOriginal<typeof import('@providers/shared/featureCapabilities')>()
+  return {
+    ...actual,
+    getProviderFeatures: (kind: string | undefined) =>
+      capabilityOverride.current
+        ? { ...actual.NO_PROVIDER_FEATURES, ...capabilityOverride.current }
+        : actual.getProviderFeatures(kind),
+  }
+})
+
+describe('capability gates', () => {
+  afterEach(() => {
+    capabilityOverride.current = null
+  })
+
+  function contextWithAgent(): CommandContext {
+    return {
+      workspace: {
+        state: {
+          activeTabId: 'tab',
+          dispatchMode: null,
+          sessions: {
+            agent: {
+              cwd: '/projects/app',
+              kind: 'claude',
+              providerSessionId: 'provider-abc',
+            },
+          },
+          tabs: [{
+            id: 'tab',
+            focusedSessionId: 'agent',
+            root: { type: 'leaf', sessionId: 'agent' },
+          }],
+        },
+      } as unknown as Workspace,
+      ui: {},
+      flags: {},
+    } as unknown as CommandContext
+  }
+
+  /** Every command whose availability is supposed to depend on a capability. */
+  const GATED = [
+    'view-prompts',
+    'rewind-to-prompt',
+    'reload-agent',
+    'copy-resume-command',
+    'duplicate-agent',
+    'switch-provider',
+  ] as const
+
+  function availableUnder(features: Record<string, unknown>): string[] {
+    capabilityOverride.current = features
+    const ctx = contextWithAgent()
+    return GATED.filter(id => {
+      const command = sessionCommands.find(candidate => candidate.id === id)
+      if (!command) throw new Error(`command ${id} is missing`)
+      return command.when ? command.when(ctx) : true
+    })
+  }
+
+  it.each([
+    ['promptHistoryExtraction', true, ['view-prompts']],
+    ['transcriptRewind', true, ['rewind-to-prompt']],
+    ['inAppResume', true, ['reload-agent']],
+    ['verifiedExternalResumeCommand', true, ['copy-resume-command']],
+    ['transcriptDuplicate', true, ['duplicate-agent']],
+    ['switchTargets', ['codex'], ['switch-provider']],
+  ])('%s enables exactly %s', (capability, value, expected) => {
+    expect(availableUnder({ [capability as string]: value })).toEqual(expected)
+  })
+
+  it('offers nothing to a provider that declares nothing', () => {
+    // The OpenCode-before-`inAppResume` case, and the reason agent-hood was the
+    // wrong predicate: it was true here and turned all six on.
+    expect(availableUnder({})).toEqual([])
+  })
+
+  it('keeps run() as strict as when() for the destructive-ish ones', async () => {
+    // `when` only controls the picker ROW. A keybinding, a native menu item or
+    // a programmatic dispatch reaches `run` directly, so a `run` that re-checks
+    // something weaker than its `when` is a real hole rather than a style
+    // point. Duplicate Agent's did exactly that — `when` asked for a transcript
+    // adapter, `run` asked for agent-hood.
+    capabilityOverride.current = {}
+    const duplicateSession = vi.fn()
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: { duplicateSession },
+    })
+    const command = sessionCommands.find(candidate => candidate.id === 'duplicate-agent')
+    if (!command) throw new Error('Duplicate Agent command is missing')
+
+    await command.run({
+      ...contextWithAgent(),
+      ui: { closePalette: vi.fn() },
+    } as unknown as CommandContext)
+
+    expect(duplicateSession).not.toHaveBeenCalled()
+  })
+})

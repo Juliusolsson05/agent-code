@@ -12,6 +12,14 @@ import { getProviderFeatures } from '@providers/shared/featureCapabilities'
 // Rewind, Duplicate, Switch Provider and Copy Resume — all empty, rejected,
 // unsupported or unverified for it. This file pins the matrix so a provider
 // cannot inherit a feature by joining AGENT_PROVIDER_KINDS.
+//
+// The follow-up review found the first cut had the right idea and the wrong
+// wiring: two guards were transposed (View Prompts read the switch edge list,
+// Reload Agent read the shell-command flag), two commands still asked
+// agent-hood, and `savedSessionListing` had no reader at all. So the matrix
+// alone is not the invariant — a capability with no consumer, or a consumer
+// reading someone else's capability, passes every test in this file. The
+// consumers are pinned in the command-catalog tests.
 // ---------------------------------------------------------------------------
 
 describe('provider feature matrix', () => {
@@ -24,6 +32,8 @@ describe('provider feature matrix', () => {
         savedSessionListing: true,
         transcriptRewind: true,
         transcriptDuplicate: true,
+        promptHistoryExtraction: true,
+        inAppResume: true,
         switchTargets: ['codex'],
         verifiedExternalResumeCommand: true,
       },
@@ -31,6 +41,8 @@ describe('provider feature matrix', () => {
         savedSessionListing: true,
         transcriptRewind: true,
         transcriptDuplicate: true,
+        promptHistoryExtraction: true,
+        inAppResume: true,
         switchTargets: ['claude'],
         verifiedExternalResumeCommand: true,
       },
@@ -38,6 +50,12 @@ describe('provider feature matrix', () => {
         savedSessionListing: false,
         transcriptRewind: false,
         transcriptDuplicate: false,
+        promptHistoryExtraction: false,
+        // The one capability OpenCode HAS. Pinned explicitly because Reload
+        // Agent was hidden for it by a guard reading the unrelated
+        // shell-command flag, and this row is what makes that regression
+        // visible if anyone re-conflates the two.
+        inAppResume: true,
         switchTargets: [],
         verifiedExternalResumeCommand: false,
       },
@@ -50,6 +68,8 @@ describe('provider feature matrix', () => {
       savedSessionListing: false,
       transcriptRewind: false,
       transcriptDuplicate: false,
+      promptHistoryExtraction: false,
+      inAppResume: false,
       switchTargets: [],
       verifiedExternalResumeCommand: false,
     })
@@ -68,8 +88,12 @@ describe('provider feature matrix', () => {
     expect(opencode.savedSessionListing).toBe(false)
     expect(opencode.transcriptRewind).toBe(false)
     expect(opencode.transcriptDuplicate).toBe(false)
+    expect(opencode.promptHistoryExtraction).toBe(false)
     expect(opencode.verifiedExternalResumeCommand).toBe(false)
     expect(opencode.switchTargets).toEqual([])
+    // NOT in the list above: in-app resume genuinely works for OpenCode.
+    // Grouping it with the rest is the exact mistake that hid Reload Agent.
+    expect(opencode.inAppResume).toBe(true)
   })
 
   it('keeps switch edges directional and symmetric only where declared', () => {
@@ -82,13 +106,15 @@ describe('provider feature matrix', () => {
     }
   })
 
-  it('requires every agent provider to declare all five capabilities', () => {
+  it('requires every agent provider to declare every capability', () => {
     // Adding a provider must fail here until it answers each question, rather
     // than silently inheriting broad agent powers.
     const required = [
       'savedSessionListing',
       'transcriptRewind',
       'transcriptDuplicate',
+      'promptHistoryExtraction',
+      'inAppResume',
       'switchTargets',
       'verifiedExternalResumeCommand',
     ]

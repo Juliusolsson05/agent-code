@@ -79,10 +79,13 @@ export const sessionCommands: CommandDef[] = [
       if (!sessionId) return false
       const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? DEFAULT_PROVIDER
-      // Driven by the explicit switch EDGE list, not by agent-hood. "Can
-      // switch" is meaningless without a destination, and translation is
-      // directional — OpenCode has no edge in either direction today.
-      return getProviderFeatures(kind).switchTargets.length > 0
+      // Needs the transcript parser to RECOGNIZE this provider's user prompts.
+      // This guard was `switchTargets.length > 0` — the Switch Provider
+      // predicate, transposed here. It happened to hide the same providers, so
+      // nothing looked wrong; it would have started reporting the wrong answer
+      // the moment a switch edge was added for a provider whose prompts we
+      // cannot parse, or an adapter for one with no switch edge.
+      return getProviderFeatures(kind).promptHistoryExtraction
     },
     run: ({ workspace, ui }) => {
       const sessionId = commandTargetSessionId(workspace)
@@ -651,11 +654,13 @@ export const sessionCommands: CommandDef[] = [
       if (!sessionId) return false
       const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? DEFAULT_PROVIDER
-      // Requires a VERIFIED external resume form. An unverified template hands
-      // the user a shell command that may not work, which is worse than not
-      // offering it — they paste it into a terminal and blame their setup.
+      // Reload respawns the session THROUGH US with a resume id; it never
+      // hands the user a shell string. Gating it on
+      // `verifiedExternalResumeCommand` was the wrong flag in the direction
+      // that costs a working feature: OpenCode replays history on resume just
+      // fine, and this guard hid the command for it anyway.
       return (
-        getProviderFeatures(kind).verifiedExternalResumeCommand &&
+        getProviderFeatures(kind).inAppResume &&
         Boolean(meta?.providerSessionId)
       )
     },
@@ -761,18 +766,24 @@ export const sessionCommands: CommandDef[] = [
       if (!sessionId) return false
       const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? DEFAULT_PROVIDER
-      return isAgentProviderKind(kind) && Boolean(meta?.providerSessionId)
+      // The ONE command the verified-template flag is actually about: this
+      // produces a string the user pastes into their own terminal. An
+      // unverified template is worse than an absent command, because it fails
+      // in their shell and they blame their setup. Agent-hood proved nothing
+      // here — it is what offered OpenCode a guessed `opencode --resume` form.
+      return (
+        getProviderFeatures(kind).verifiedExternalResumeCommand &&
+        Boolean(meta?.providerSessionId)
+      )
     },
     run: async ({ workspace, ui }) => {
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return
       const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? DEFAULT_PROVIDER
-      // Registry-driven runtime narrow — must match the `when` predicate
-      // above so a command that visibly enabled doesn't silently no-op on
-      // OpenCode. `buildProviderResumeCommand` already accepts any
-      // AgentProviderKind and pulls the CLI shape from the registry identity
-      // descriptor (#394 phase 2c-2), so no downstream change is needed.
+      // Runtime narrow mirroring the `when` predicate exactly, so a command
+      // that renders enabled cannot silently no-op.
+      if (!getProviderFeatures(kind).verifiedExternalResumeCommand) return
       if (!isAgentProviderKind(kind) || !meta?.providerSessionId) return
 
       const command = buildProviderResumeCommand(kind, meta.cwd, meta.providerSessionId)
@@ -812,12 +823,13 @@ export const sessionCommands: CommandDef[] = [
       if (!sessionId) return
       const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? DEFAULT_PROVIDER
-      // Registry-driven runtime narrow — mirrors the `when` predicate. The old
-      // two-provider literal here was the exact reason "Duplicate Agent"
-      // silently no-op'd on OpenCode panes even after Phase 7 landed the
-      // provider. `duplicateSession`'s preload/main handler already takes
-      // `provider: AgentProviderKind` (src/preload/api/provider.ts:50), so the
-      // downstream path fans out through the registry — nothing else changes.
+      // Runtime narrow mirroring the `when` predicate EXACTLY. It previously
+      // re-checked agent-hood while `when` checked `transcriptDuplicate`, so
+      // the two disagreed for any agent provider without an adapter: `when`
+      // correctly hid the row, but a programmatic dispatch or a stale
+      // keybinding reaching `run` sailed past this weaker check and called
+      // `duplicateSession` on a transcript nothing can project.
+      if (!getProviderFeatures(kind).transcriptDuplicate) return
       if (!isAgentProviderKind(kind) || !meta?.providerSessionId) return
       try {
         const { newProviderSessionId } = await window.api.duplicateSession({
@@ -892,7 +904,12 @@ export const sessionCommands: CommandDef[] = [
       const meta = workspace.state.sessions[sessionId]
       if (!meta) return false
       const kind = meta?.kind ?? DEFAULT_PROVIDER
-      return isAgentProviderKind(kind)
+      // The explicit switch EDGE list, not agent-hood. "Can switch" is
+      // meaningless without naming a destination, and translation is
+      // directional — a Claude→Codex adapter is not automatically the reverse.
+      // OpenCode has no edge either way, so agent-hood offered it a switch
+      // that the main-side translator rejects.
+      return getProviderFeatures(kind).switchTargets.length > 0
     },
     run: ({ workspace }) => workspace.switchFocusedProvider(),
   },

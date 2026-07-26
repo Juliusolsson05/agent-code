@@ -42,6 +42,28 @@ export type ProviderFeatureCapabilities = {
    */
   switchTargets: readonly AgentProviderKind[]
   /**
+   * The transcript parser can pull USER PROMPTS out of this provider's entries.
+   *
+   * Distinct from `transcriptRewind`, which needs a full adapter able to
+   * rewrite history — this is only the read side, and it is what View Prompts
+   * and the Rewind picker list. `extractLatestUserPrompts` currently keys off
+   * Claude's `permissionMode` field (with an explicit Codex exception), so a
+   * provider whose entries lack it yields an empty list and the modal opens
+   * blank.
+   */
+  promptHistoryExtraction: boolean
+  /**
+   * The session manager can respawn this provider with a `resumeSessionId` and
+   * have it replay history — what Reload Agent does.
+   *
+   * NOT the same capability as `verifiedExternalResumeCommand`, and conflating
+   * the two got Reload Agent hidden for OpenCode, which supports in-app resume
+   * perfectly well (`opencodeSession.ts` passes the id through as `sessionID`
+   * and replays). One is about a shell string we hand the user; this one is
+   * about our own spawn path. A provider can have either without the other.
+   */
+  inAppResume: boolean
+  /**
    * `resumeCommand` has been VERIFIED against the real CLI. False means the
    * template is a plausible guess, and Copy Resume Command would hand the user
    * a shell command that may not work — worse than not offering it, because
@@ -60,6 +82,8 @@ export const NO_PROVIDER_FEATURES: ProviderFeatureCapabilities = {
   savedSessionListing: false,
   transcriptRewind: false,
   transcriptDuplicate: false,
+  promptHistoryExtraction: false,
+  inAppResume: false,
   switchTargets: [],
   verifiedExternalResumeCommand: false,
 }
@@ -87,6 +111,8 @@ const FEATURES_BY_KIND: Record<AgentProviderKind, ProviderFeatureCapabilities> =
     savedSessionListing: true,
     transcriptRewind: true,
     transcriptDuplicate: true,
+    promptHistoryExtraction: true,
+    inAppResume: true,
     switchTargets: ['codex'],
     verifiedExternalResumeCommand: true,
   },
@@ -95,21 +121,32 @@ const FEATURES_BY_KIND: Record<AgentProviderKind, ProviderFeatureCapabilities> =
     savedSessionListing: true,
     transcriptRewind: true,
     transcriptDuplicate: true,
+    promptHistoryExtraction: true,
+    inAppResume: true,
     switchTargets: ['claude'],
     verifiedExternalResumeCommand: true,
   },
-  // Everything false, and that is the correction rather than a slight.
+  // Almost everything false, and that is the correction rather than a slight.
   // OpenCode has no saved-session listing in main, no transcript adapter for
   // rewind or duplicate to operate on, no switch edge in either direction, and
   // its resumeCommand template is an unverified guess (see the note in its
-  // identity descriptor). Agent-hood previously granted all five implicitly, so
-  // the commands appeared enabled and then did nothing.
+  // identity descriptor). Agent-hood previously granted all of it implicitly,
+  // so the commands appeared enabled and then did nothing.
   //
   // Flip these individually as each adapter becomes real; never as a group.
   opencode: {
     savedSessionListing: false,
     transcriptRewind: false,
     transcriptDuplicate: false,
+    // `extractLatestUserPrompts` filters on Claude's `permissionMode` field
+    // unless the kind is codex, so OpenCode entries all fall through and View
+    // Prompts opens empty.
+    promptHistoryExtraction: false,
+    // TRUE, and the one place OpenCode is not behind. `opencodeSession`
+    // accepts a resume id and replays the session's messages, so Reload Agent
+    // works — it was only hidden because the guard read the flag for the
+    // unrelated shell-command feature.
+    inAppResume: true,
     switchTargets: [],
     verifiedExternalResumeCommand: false,
   },
