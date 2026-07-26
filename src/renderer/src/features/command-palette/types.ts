@@ -196,6 +196,8 @@ export type CommandContext = {
     openViewPrompts: (sessionId: string) => void
     openPromptSearch: () => void
     openAgentActivity: () => void
+    /** Open the read-only Keyboard Shortcuts reference. */
+    openKeyboardShortcuts: () => void
     openCloseOldAgents: () => void
     openBulkProviderSwitch: () => void
     openRewindPrompt: (sessionId: string) => void

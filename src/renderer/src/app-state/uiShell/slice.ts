@@ -40,6 +40,7 @@ export const createUiShellSlice: StateCreator<
   globalEditorOpen: false,
   promptSearchOpen: false,
   agentActivityOpen: false,
+  keyboardShortcutsOpen: false,
   closeOldAgentsOpen: false,
   bulkProviderSwitchOpen: false,
   usageModalOpen: false,
@@ -258,6 +259,10 @@ export const createUiShellSlice: StateCreator<
     set({ agentActivityOpen: true }, false, 'uiShell/openAgentActivity'),
   closeAgentActivity: () =>
     set({ agentActivityOpen: false }, false, 'uiShell/closeAgentActivity'),
+  openKeyboardShortcuts: () =>
+    set({ keyboardShortcutsOpen: true }, false, 'uiShell/openKeyboardShortcuts'),
+  closeKeyboardShortcuts: () =>
+    set({ keyboardShortcutsOpen: false }, false, 'uiShell/closeKeyboardShortcuts'),
   openCloseOldAgents: () =>
     set({ closeOldAgentsOpen: true }, false, 'uiShell/openCloseOldAgents'),
   closeCloseOldAgents: () =>

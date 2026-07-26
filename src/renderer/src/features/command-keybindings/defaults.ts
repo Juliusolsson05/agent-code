@@ -232,6 +232,19 @@ export function buildDefaultKeybindings(): CommandBindingDefault[] {
     { commandId: 'soft-reload-agent', bindings: ['Alt+A'], context: 'global' },
     { commandId: 'reload-agent', bindings: ['Alt+Shift+A'], context: 'global' },
     { commandId: 'view-prompts', bindings: ['Alt+Shift+P'], context: 'global' },
+
+    // --- The reference sheet ------------------------------------------------
+    // ⌘⇧/ is ⌘? on a US layout, the long-standing platform chord for "show me
+    // the shortcuts". Slack, GitHub and Gmail all land on ? for the same
+    // reason, and macOS puts Help search on ⌘⇧/ system-wide.
+    //
+    // This one is NOT usage-derived — the command did not exist when the cache
+    // was recorded. It is bound on a different argument: a shortcut list that
+    // can only be reached by remembering a shortcut is a joke, and reached by
+    // opening the palette and typing "keyboard" is nearly as bad, because the
+    // palette is exactly what a user falls back to WHEN they have forgotten the
+    // chord. The sheet has to be the one chord worth memorizing.
+    { commandId: 'open-keyboard-shortcuts', bindings: ['Cmd+Shift+/'], context: 'global' },
   ]
 
   // Per-provider split chords, derived from the SAME provider identity
