@@ -3,6 +3,9 @@ import { getRendererProviderCapabilities } from '@providers/registry.renderer.ca
 import { useEffect } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
+import { buildDefaultKeybindings } from '@renderer/features/command-keybindings/defaults'
+import { keybindingFromEvent } from '@renderer/features/command-keybindings/normalize'
+import { resolveEffectiveKeybindings } from '@renderer/features/command-keybindings/resolve'
 import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { getEffectiveAgentSurface, isAgentKind } from '@renderer/workspace/agentDisplayMode'
@@ -156,6 +159,73 @@ function renderedAgentSurfaceIsVisible(
   )
 }
 
+/**
+ * Command chords this router hands to the execution gateway instead of calling
+ * a workspace action directly.
+ *
+ * WHY only these, and not every branch in the handler below: the rest are
+ * CONTEXTUAL INTERACTIONS, not commands — Escape dismissal, picker
+ * navigation, numbered tab/Dispatch selection, split resizing, the tiled
+ * resize continuation. They have no meaningful palette row, and inventing one
+ * for each would produce dozens of fake commands whose only purpose is to
+ * shorten this file. They stay here and are declared in the reservation
+ * registry so a user cannot bind a command on top of them.
+ *
+ * WHY routing at all: before this, a chord called `workspace.splitFocused()`
+ * directly, evaluating none of the surface/when/renderedView predicates the
+ * palette applied to the same command. A keyboard user could reach a command
+ * the palette would have refused. Routing through the gateway gives every
+ * source one admission check, one error path, and one history policy — and is
+ * what makes a user-configured binding actually run the command it names.
+ */
+const ROUTED_COMMAND_IDS: ReadonlySet<string> = new Set([
+  'open-command-palette',
+  'new-tab',
+  'close-tab',
+  'next-tab',
+  'prev-tab',
+  'resume-session',
+  'undo-close',
+  'close-pane',
+  'split-vertical',
+  'split-horizontal',
+  'terminal-horizontal',
+  'terminal-vertical',
+  'codex-vertical',
+  'codex-horizontal',
+  'nav-left',
+  'nav-right',
+  'nav-up',
+  'nav-down',
+  'toggle-global-editor',
+  'quick-open-file',
+  'search-in-files',
+  'toggle-editor-fullscreen',
+  'jump-latest-message',
+  'open-settings',
+])
+
+/**
+ * The command id a keyboard event should invoke, or null.
+ *
+ * Built from EFFECTIVE bindings (shipped defaults overlaid with the user's
+ * overrides), which is the whole point: the chord the palette displays and the
+ * chord that runs are now the same fact, and a Settings edit changes real
+ * behavior rather than a label.
+ */
+function routedCommandForEvent(
+  event: KeyboardEvent,
+  overrides: Record<string, string[]>,
+): string | null {
+  const binding = keybindingFromEvent(event)
+  if (!binding) return null
+  for (const entry of resolveEffectiveKeybindings(overrides, buildDefaultKeybindings())) {
+    if (!ROUTED_COMMAND_IDS.has(entry.commandId)) continue
+    if (entry.bindings.includes(binding)) return entry.commandId
+  }
+  return null
+}
+
 export function useKeybinds(
   workspace: Workspace,
   onNewTabRequest: NewTabRequester,
@@ -163,6 +233,10 @@ export function useKeybinds(
   onCommandPalette?: CommandPaletteToggle,
 ): void {
   const settingsPageOpen = useAppStore(state => state.settingsPageOpen)
+  const requestCommandInvocation = useAppStore(state => state.requestCommandInvocation)
+  const commandKeybindingOverrides = useAppStore(
+    state => state.settings.commandKeybindingOverrides,
+  )
   const agentViewMode = useAppStore(state => state.settings.agentViewMode)
   const closeSettingsPage = useAppStore(state => state.closeSettingsPage)
   const buryPromptSessionId = useAppStore(state => state.buryPromptSessionId)
@@ -277,24 +351,20 @@ export function useKeybinds(
         return
       }
 
-      // --- CMD: command palette ---
-      if (cmd && shift && k.toLowerCase() === 'p' && !alt) {
-        e.preventDefault()
-        onCommandPalette?.()
-        return
-      }
-
-      // --- Cmd+Shift+E: Global Editor toggle ---
+      // --- Configured command bindings ---
       //
-      // WHY this specific chord: ⌘E is taken by tile-resize, ⌘⇧E was
-      // unused, and it mirrors VS Code's "Explorer" muscle memory for
-      // users coming from an IDE. The toggle is global — no `when`
-      // guard, no mode dependence — because Global Editor is
-      // orthogonal to dispatch / tile / spotlight (it WRAPS them
-      // rather than replacing them).
-      if (cmd && shift && k.toLowerCase() === 'e' && !alt) {
+      // Placed AFTER the app-modal and placement-overlay bailouts above, so a
+      // dialog still owns the interaction turn, and BEFORE every hardcoded
+      // branch below, so a user's rebinding wins over the legacy chord it
+      // replaces. Editor-owned targets are handled further down and never
+      // reach here for the chords the editor claims.
+      //
+      // The gateway re-checks admission, so a chord can no longer reach a
+      // command the palette would have refused.
+      const routedCommandId = routedCommandForEvent(e, commandKeybindingOverrides)
+      if (routedCommandId) {
         e.preventDefault()
-        toggleGlobalEditor()
+        requestCommandInvocation(routedCommandId, 'keybinding')
         return
       }
 
@@ -536,16 +606,6 @@ export function useKeybinds(
       if (k === 'Escape' && buryPromptSessionId) {
         e.preventDefault()
         closeBuryPrompt()
-        return
-      }
-
-      // --- CMD: undo close (⌘⇧T) ---
-      // Same shortcut as Chrome's "reopen closed tab". Pops the most
-      // recent entry from the undo-close stack and restores it — either
-      // re-splitting a pane in place or re-inserting a whole tab.
-      if (cmd && shift && k.toLowerCase() === 't' && !alt) {
-        e.preventDefault()
-        void workspace.undoClose()
         return
       }
 

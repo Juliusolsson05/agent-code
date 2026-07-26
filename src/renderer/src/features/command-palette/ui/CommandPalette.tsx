@@ -14,6 +14,7 @@ import {
   dispatchCommand,
   dispatchResolvedRow,
 } from '@renderer/features/command-palette/executeCommand'
+import { PALETTE_SELF_EXCLUDED_COMMAND_IDS } from '@renderer/features/command-palette/commands/paletteCommands'
 import { buildAgentIndexCommand } from '@renderer/features/command-palette/lib/agentIndexCommand'
 import {
   buildHistoryScoreMap,
@@ -28,6 +29,7 @@ import {
   secondary,
 } from '@renderer/features/command-palette/lib/rankEntries'
 import type { CommandContext, ResolvedCommand } from '@renderer/features/command-palette/types'
+import type { PendingCommandInvocation } from '@renderer/app-state/uiShell/types'
 import {
   allPromptTemplates,
 } from '@renderer/features/prompt-templates/templates'
@@ -118,11 +120,16 @@ const SHOW_HIDDEN_COMMANDS = false
 
 export function CommandPalette() {
   const open = useAppStore(state => state.commandPaletteOpen)
-  const openPalette = useAppStore(state => state.openCommandPalette)
-  const [pendingMenuCommand, setPendingMenuCommand] = useState<{
-    id: string
-    closeAfterRun: boolean
-  } | null>(null)
+  // The pending invocation now lives in the STORE rather than in local state
+  // here, because it no longer belongs only to the native menu. The keybinding
+  // router is mounted in the workspace tree and needs the same channel: it also
+  // cannot cheaply build a CommandContext (assembling ~76 workspace actions and
+  // flags is precisely the cost this component avoids paying while closed,
+  // #494), so a chord takes the route a menu click already took. One channel,
+  // one dispatch path — rather than a second one growing beside it.
+  const pendingCommandInvocation = useAppStore(state => state.pendingCommandInvocation)
+  const requestCommandInvocation = useAppStore(state => state.requestCommandInvocation)
+  const clearCommandInvocation = useAppStore(state => state.clearCommandInvocation)
 
   useEffect(
     () =>
@@ -136,30 +143,27 @@ export function CommandPalette() {
         // this marker, so menu commands wait instead of competing with its current
         // search/navigation turn.
         if (hasAppInteractionOwner()) return
-        // WHY a native menu command temporarily mounts the open implementation:
-        // command definitions need live workspace actions, but keeping that entire
-        // registry subscribed while the palette is closed made every session delta
-        // rebuild an invisible feature. A menu click is rare and intentional, so it
-        // may pay the one-time registry cost. useLayoutEffect below runs it and
-        // closes before paint, avoiding a palette flash for menu-only execution.
-        setPendingMenuCommand({ id: commandId, closeAfterRun: !open })
-        if (!open) openPalette()
+        // WHY this temporarily mounts the open implementation: command
+        // definitions need live workspace actions, but keeping that registry
+        // subscribed while the palette is closed made every session delta
+        // rebuild an invisible feature. A menu click is rare and intentional, so
+        // it may pay the one-time registry cost. useLayoutEffect below runs it
+        // and closes before paint, avoiding a palette flash.
+        requestCommandInvocation(commandId, 'native-menu')
       }),
-    [open, openPalette],
+    [requestCommandInvocation],
   )
-
-  const clearPendingMenuCommand = useCallback(() => setPendingMenuCommand(null), [])
 
   // WHY the workspace-heavy component does not exist while closed: returning
   // null at the bottom of the old monolith was too late. Hooks had already read
   // the monolithic workspace context, assembled ~76 command dependencies, and
-  // built the registry. This outer gate subscribes to one boolean plus the
-  // native bridge; ordinary agent traffic cannot fan into the hidden palette.
+  // built the registry. This outer gate subscribes to two store fields;
+  // ordinary agent traffic cannot fan into the hidden palette.
   if (!open) return null
   return (
     <OpenCommandPalette
-      pendingMenuCommand={pendingMenuCommand}
-      onMenuCommandHandled={clearPendingMenuCommand}
+      pendingMenuCommand={pendingCommandInvocation}
+      onMenuCommandHandled={clearCommandInvocation}
     />
   )
 }
@@ -168,7 +172,7 @@ function OpenCommandPalette({
   pendingMenuCommand,
   onMenuCommandHandled,
 }: {
-  pendingMenuCommand: { id: string; closeAfterRun: boolean } | null
+  pendingMenuCommand: PendingCommandInvocation | null
   onMenuCommandHandled: () => void
 }) {
   // #494: the palette used to receive ~76 props whose only purpose was
@@ -896,13 +900,25 @@ function OpenCommandPalette({
   useLayoutEffect(() => {
     if (!pendingMenuCommand) return
     void dispatchCommand({
+      // The SOURCE travels with the request, so a chord is recorded as a
+      // keybinding invocation and a File-menu click as a native-menu one. A
+      // hardcoded source here would have made every keyboard invocation look
+      // like a menu click in personalized history.
       id: pendingMenuCommand.id,
-      source: 'native-menu',
+      source: pendingMenuCommand.source,
       ctx: commandContext,
       reportError: message => showToast(message, 6000),
     })
     onMenuCommandHandled()
-    if (pendingMenuCommand.closeAfterRun) onClose()
+    // A command whose whole purpose IS the palette must not be closed by the
+    // "return to where you were" rule. Cmd+Shift+P arrives here with
+    // closeAfterRun=true (the palette was shut when the chord fired), so
+    // honouring it blindly would open the palette and shut it in the same
+    // frame — the chord would look broken.
+    if (pendingMenuCommand.closeAfterRun
+      && !PALETTE_SELF_EXCLUDED_COMMAND_IDS.has(pendingMenuCommand.id)) {
+      onClose()
+    }
   }, [commandContext, onClose, onMenuCommandHandled, pendingMenuCommand, showToast])
 
   const executeResume = useCallback(
