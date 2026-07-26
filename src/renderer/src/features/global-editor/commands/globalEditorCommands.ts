@@ -1,5 +1,6 @@
 import type { CommandDef } from '@renderer/features/command-palette/types'
 import { useGlobalEditorStore } from '@renderer/features/global-editor/store'
+import { panel, toggle } from '@renderer/features/command-palette/commandState'
 import {
   requestSaveActiveEditorFile,
   requestSaveAllEditorFiles,
@@ -25,6 +26,7 @@ import { cancelAllPendingGlobalEditorFileOpens } from '@renderer/features/global
 export const globalEditorCommands: CommandDef[] = [
   {
     id: 'toggle-global-editor',
+    category: 'editor-files',
     // `app`: the Global Editor overlay WRAPS whatever workspace layout
     // is active (grid, Dispatch, tiled) rather than replacing it, so
     // toggling it is meaningful in every mode.
@@ -33,27 +35,30 @@ export const globalEditorCommands: CommandDef[] = [
     description:
       "**What it does:** Splits the screen in half — file tree + code editor on the left, the normal workspace UI (dispatch / tile / spotlight / whatever) on the right.\n\n**Use when:** You want to read or edit project files alongside the focused agent without leaving the current mode.\n\n**Notes:** The editor's workspace tracks the *active tab*'s project — switching tabs to a different project flips the file tree. Switching panes within the same tab does NOT change the editor (the editor was deliberately decoupled from per-pane focus so reading code doesn't blow up when you move between agents in the same project). Open tabs are remembered per project and restored across app restarts (file contents are re-read from disk; unsaved edits are not persisted).\n\n**Shortcut:** ⌘⇧E.",
     keywords: ['editor', 'code', 'files', 'global', 'workspace', 'monaco'],
-    getState: ({ flags }) => ({
-      label: flags.globalEditorOpen ? 'On' : 'Off',
-      tone: flags.globalEditorOpen ? 'accent' : 'neutral',
-    }),
+    getState: ({ flags }) => toggle(flags.globalEditorOpen),
     run: ({ ui, flags }) => {
       ui.toggleGlobalEditor()
     },
   },
   {
     id: 'save-editor-file',
+    category: 'editor-files',
     surface: 'editor',
     title: 'Save Editor File',
     description:
       '**What it does:** Saves the active file in the visible Global Editor or AI Workspace.\n\n**Use when:** You edited a file and want to persist it without leaving the command palette.\n\n**Notes:** Conflict checks and recovery are owned by the active editor surface.\n\n**Shortcut:** ⌘S.',
     keywords: ['save', 'write', 'editor', 'file'],
-    shortcut: '⌘S',
-    when: ({ flags }) => flags.globalEditorOpen,
+    // Requires a project, NOT an open editor. The ⌘⌥E chord has always meant
+    // "give me a big editor" as ONE gesture — it opens the editor straight into
+    // fullscreen when closed. That behaviour used to live in a hard-coded
+    // keybind branch; now that the chord routes through this command, the
+    // command has to own it, or routing would silently drop half the feature.
+    when: ({ flags }) => Boolean(flags.globalEditorOpen || flags.focusedCwd),
     run: requestSaveActiveEditorFile,
   },
   {
     id: 'save-all-editor-files',
+    category: 'editor-files',
     surface: 'editor',
     title: 'Save All Editor Files',
     description:
@@ -64,12 +69,12 @@ export const globalEditorCommands: CommandDef[] = [
   },
   {
     id: 'quick-open-file',
+    category: 'editor-files',
     surface: 'editor',
     title: 'Quick Open File',
     description:
       "**What it does:** Fuzzy-finds a file by name in the focused agent's project and opens it in the **Global Editor**.\n\n**Use when:** You know (roughly) the file name and don't want to click through the tree.\n\n**Notes:** Opens the editor overlay if it isn't already open. The index skips junk directories (node_modules, build output, VCS internals) and caps at 20k files.\n\n**Shortcut:** ⌘P.",
     keywords: ['quick open', 'go to file', 'find file', 'fuzzy', 'open file'],
-    shortcut: '⌘P',
     when: ({ flags }) => Boolean(useGlobalEditorStore.getState().activeCwd ?? flags.focusedCwd),
     run: ({ ui, flags }) => {
       const editor = useGlobalEditorStore.getState()
@@ -86,12 +91,12 @@ export const globalEditorCommands: CommandDef[] = [
   },
   {
     id: 'search-in-files',
+    category: 'editor-files',
     surface: 'editor',
     title: 'Search in Files',
     description:
       "**What it does:** Searches file contents across the focused agent's project and opens matches in the **Global Editor** at the matched line.\n\n**Use when:** You're hunting a string or identifier across the project.\n\n**Notes:** Bounded scan (skips >1MB files and junk dirs; caps at 500 matches / 20k files). Case-sensitivity toggle lives in the overlay.\n\n**Shortcut:** ⌘⇧F.",
     keywords: ['search', 'grep', 'find in files', 'content search', 'ripgrep'],
-    shortcut: '⌘⇧F',
     when: ({ flags }) => Boolean(useGlobalEditorStore.getState().activeCwd ?? flags.focusedCwd),
     run: ({ ui, flags }) => {
       const editor = useGlobalEditorStore.getState()
@@ -108,21 +113,30 @@ export const globalEditorCommands: CommandDef[] = [
   },
   {
     id: 'toggle-editor-fullscreen',
+    category: 'editor-files',
     surface: 'editor',
     title: 'Editor Fullscreen',
     description:
       '**What it does:** Expands the **Global Editor** to fill the whole workspace area. The normal workspace stays alive underneath (hidden, not unmounted — terminals and feeds keep running).\n\n**Use when:** You want maximum reading/editing room for a while.\n\n**Notes:** Esc exits fullscreen; the previous split ratio is restored.\n\n**Shortcut:** ⌥⌘E.',
     keywords: ['fullscreen', 'maximize', 'editor', 'zen', 'focus'],
-    shortcut: '⌥⌘E',
     when: ({ flags }) => flags.globalEditorOpen,
-    getState: ({ flags }) => ({
-      label: flags.editorFullscreen ? 'On' : 'Off',
-      tone: flags.editorFullscreen ? 'accent' : 'neutral',
-    }),
-    run: () => useGlobalEditorStore.getState().toggleEditorFullscreen(),
+    getState: ({ flags }) => toggle(flags.editorFullscreen),
+    run: ({ ui, flags }) => {
+      const editor = useGlobalEditorStore.getState()
+      if (!flags.globalEditorOpen) {
+        // Closed → open it already fullscreen, rather than opening windowed and
+        // making the user press again.
+        ui.toggleGlobalEditor()
+        editor.setEditorFullscreen(true)
+        return
+      }
+      editor.toggleEditorFullscreen()
+    },
   },
   {
     id: 'open-ai-workspace',
+    category: 'editor-files',
+    pickerVisibility: 'advanced',
     surface: 'editor',
     title: 'Open AI Workspace',
     description:
@@ -133,6 +147,8 @@ export const globalEditorCommands: CommandDef[] = [
   },
   {
     id: 'create-ai-workspace',
+    category: 'editor-files',
+    pickerVisibility: 'advanced',
     surface: 'editor',
     title: 'Create AI Workspace',
     description:
@@ -143,6 +159,8 @@ export const globalEditorCommands: CommandDef[] = [
   },
   {
     id: 'clear-ai-workspace',
+    category: 'editor-files',
+    pickerVisibility: 'advanced',
     surface: 'editor',
     title: 'Clear AI Workspace',
     description:
@@ -167,6 +185,7 @@ export const globalEditorCommands: CommandDef[] = [
     //   happens, they assume it broke. Gating it via `when` makes
     //   the command appear only in contexts where it's actionable.
     id: 'toggle-file-tree',
+    category: 'editor-files',
     // `editor`: not mode-gated (the editor overlay is orthogonal to
     // grid/Dispatch); the `when: globalEditorOpen` guard below still
     // hides it until the overlay is actually mounted.
@@ -176,10 +195,7 @@ export const globalEditorCommands: CommandDef[] = [
       '**What it does:** Shows or hides the file tree inside the **Global Editor** overlay.\n\n**Use when:** You want more horizontal room for the code area, or you prefer to open files via tabs / search rather than browsing.\n\n**Notes:** Only available while **Global Editor** is on. The choice is global (not per-project) — once hidden, the tree stays hidden across every project until you turn it back on.',
     keywords: ['file tree', 'explorer', 'sidebar', 'editor', 'tree'],
     when: ({ flags }) => flags.globalEditorOpen,
-    getState: ({ flags }) => ({
-      label: flags.fileTreeVisible ? 'On' : 'Off',
-      tone: flags.fileTreeVisible ? 'accent' : 'neutral',
-    }),
+    getState: ({ flags }) => toggle(flags.fileTreeVisible),
     run: ({ ui }) => ui.toggleFileTreeVisible(),
   },
 ]

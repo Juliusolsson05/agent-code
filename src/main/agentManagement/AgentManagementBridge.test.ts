@@ -136,6 +136,10 @@ describe('AgentManagementBridge', () => {
 
   it('preserves structured cascade refusal details', async () => {
     const bridge = new AgentManagementBridge(managerFixture() as never)
+    // A close now requires an explicit user grant at the mutation boundary.
+    // Issuing it here is what makes this a test of CASCADE REFUSAL rather than
+    // of authorization — without it the bridge refuses earlier, for a different
+    // and less interesting reason.
     const closing = bridge.closeAgent({ callerSessionId: 'caller', sessionId: 'parent' })
     const request = sentRendererRequests[0] as { requestId: string }
     bridge.resolve({

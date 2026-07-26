@@ -341,20 +341,6 @@ export type Settings = {
    *  DOM, semantic, and feed-debug snapshots, so they are interval-
    *  based rather than emitted on every render. */
   aggressiveDebugPersistence: boolean
-  /** When true, Dispatch Mode mounts a project terminal pane beside the
-   *  agent list. The terminal is auto-spawned on first entry to Dispatch
-   *  and lives as a normal leaf in the tile tree (so tmux recovery and
-   *  IPC routing keep working unchanged).
-   *
-   *  Off by default. The previous design kept a per-session
-   *  `dispatchMode.terminalVisible` flag in workspace state, which made
-   *  the "I turned it off but it came back" symptom hard to reason
-   *  about: fresh workspaces, new tabs, and any code path that re-
-   *  entered dispatch defaulted the flag to ON. Moving the gate to a
-  *  global setting collapses the toggle surface to one place the user
-  *  controls and removes the "terminal always mounted even when turned
-  *  off" failure mode. */
-  dispatchProjectTerminal: boolean
   /** When on (default), clicking a prompt-suggestion chip immediately SENDS
    *  that suggestion as the next prompt; when off, clicking only prefills the
    *  composer draft so the user can edit before submitting. The chip is an
@@ -392,6 +378,46 @@ export type Settings = {
    *  registry, the single picker-list chokepoint. It NEVER affects
    *  `run()` or keybindings — hiding is list-only. */
   commandVisibilityOverrides: Record<string, boolean>
+  /**
+   * Whether the closed **Navigation Commands** family appears in the command
+   * picker. Off by default.
+   *
+   * Membership is exactly six ids — Next/Previous Tab and Focus Pane
+   * Left/Right/Up/Down — declared on the commands themselves via
+   * `commandGroup: 'navigation'`. They duplicate chords most users already
+   * have in muscle memory (Cmd+[ / Cmd+], Option+HJKL and the arrow variants),
+   * so six picker rows earn their space for almost nobody while adding noise
+   * to every fuzzy search for "tab" or "pane".
+   *
+   * CRITICAL, and the reason this is not just another
+   * `commandVisibilityOverrides` entry: this is a DISCOVERABILITY gate over a
+   * whole family, not an execution permission. Turning it off removes six rows
+   * from a list. It does not disable Cmd+[, Option+K, the arrow variants, or
+   * the underlying workspace navigation actions, and it does not stop the ids
+   * being dispatched by keybinding, native menu, or programmatic call. A
+   * setting that silently disabled keyboard navigation would be a functional
+   * regression wearing a preference's clothes.
+   *
+   * The group also stays present in the context-free catalog in BOTH states,
+   * so catalog validation, native lookup, diagnostics and stable ids never
+   * depend on a persisted UI preference.
+   */
+  navigationCommandsEnabled: boolean
+  /**
+   * Per-command keyboard binding overrides, keyed by stable command id.
+   *
+   * SPARSE, with three meaningful states — absent inherits the shipped
+   * defaults, `[]` is an explicit unbind, and a non-empty array replaces the
+   * defaults entirely. See `command-keybindings/resolve.ts` for why absent and
+   * empty must not collapse into one thing (briefly: a future release may
+   * improve an untouched default, but must not resurrect a chord the user
+   * deliberately removed).
+   *
+   * Unknown ids are preserved rather than pruned: an id that names nothing in
+   * this build may belong to an extension that is temporarily uninstalled or a
+   * command a downgrade removed.
+   */
+  commandKeybindingOverrides: Record<string, string[]>
   /** Ambient provider-quota indicator in the SettingsBar header row.
    *  On by default: quota headroom is a planning input for dispatching
    *  agent fleets, and the whole point of the feature is ambient
@@ -441,13 +467,20 @@ export const DEFAULT_SETTINGS: Settings = {
   // Preserve today's opt-in behavior. Users choose which capabilities become
   // defaults; session commands remain available regardless of this empty seed.
   defaultBuiltInMcpDomains: [],
-  dispatchProjectTerminal: false,
   autoSendPromptSuggestion: true,
   fontFamily: 'jetbrains-mono',
   // Empty by default: nothing is hidden until the user opts in per
   // command. This keeps the whole feature purely additive — fresh
   // installs and existing users see the exact same picker they do today.
   commandVisibilityOverrides: {},
+  // Off on a fresh install: the six members duplicate shortcuts users already
+  // have, so the default that costs nothing is the one that keeps them out of
+  // the picker. Their keyboard behavior is unaffected either way.
+  navigationCommandsEnabled: false,
+  // Empty: every command inherits its shipped default until the user edits one.
+  // Seeding this with today's defaults would pin every command to this
+  // release's chords and make future default improvements invisible.
+  commandKeybindingOverrides: {},
   usageHeaderEnabled: true,
   usageHeaderLevel: 'all',
 }

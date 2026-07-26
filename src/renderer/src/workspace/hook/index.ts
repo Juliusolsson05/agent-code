@@ -744,7 +744,28 @@ export function useWorkspace(
           if (!buried) throw new Error('agent_not_found')
           await killBuriedSessionRef.current(buried.id)
         } else {
-          await closeOrchestrationSessionRef.current(request.sessionId)
+          // THE authorization check for the Agent Management close tool.
+          //
+          // The tool's rule used to be prose in its description ("never close
+          // an agent unless the user's current request named that specific
+          // agent"), which is a request to a language model, not a check. The
+          // first fix put a single-use grant store in main — right instinct,
+          // wrong layer: a grant is issued by a USER ACTION, and main has no
+          // user action meaning "the user asked this agent to close that one".
+          // Nothing ever issued one, so every close_agent call was denied and
+          // the tool was dead in a way no test noticed.
+          //
+          // Here, at the line that actually mutates, we CAN ask. Forced, so an
+          // idle target does not slip through the human-ergonomics exemption
+          // the policy grants ⌘W. Declining rejects the tool call.
+          const caller = current.sessions[request.callerSessionId]?.title
+          await closeOrchestrationSessionRef.current(request.sessionId, {
+            requireConfirmation: {
+              headline: caller
+                ? `Agent “${caller}” is asking to close this agent.`
+                : 'An agent is asking to close this agent.',
+            },
+          })
         }
         await window.api.resolveAgentManagementRequest({
           requestId: request.requestId,
@@ -932,7 +953,6 @@ export function useWorkspace(
     enterDispatchMode: dispatchActions.enterDispatchMode,
     exitDispatchMode: dispatchActions.exitDispatchMode,
     setDispatchScope: dispatchActions.setDispatchScope,
-    ensureDispatchTerminal: dispatchActions.ensureDispatchTerminal,
     focusDispatchSession: dispatchActions.focusDispatchSession,
     pinSession: dispatchActions.pinSession,
     unpinSession: dispatchActions.unpinSession,

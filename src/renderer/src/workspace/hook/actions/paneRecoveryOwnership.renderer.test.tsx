@@ -8,12 +8,18 @@ import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import type { SessionActions } from '@renderer/workspace/hook/actions/session'
 import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
+import {
+  __resetCloseConfirmationForTests,
+  currentCloseConfirmation,
+  resolveCloseConfirmation,
+} from '@renderer/workspace/closeConfirmationBroker'
 
 import { usePaneActions } from './pane'
 
 const originalApiDescriptor = Object.getOwnPropertyDescriptor(window, 'api')
 
 afterEach(() => {
+  __resetCloseConfirmationForTests()
   if (originalApiDescriptor) {
     Object.defineProperty(window, 'api', originalApiDescriptor)
   } else {
@@ -207,8 +213,21 @@ describe('pane recovery ownership', () => {
       [detachedId]: emptyRuntime(),
     })
 
+    // Closing the tab's last pane also kills its detached child, so this is a
+    // two-session close and the gate must ask. Answering it here is not test
+    // ceremony — it is the assertion that the dialog names BOTH sessions.
+    // Before the gate counted detached children, this close reported one target
+    // and silently took two.
+    let closing: Promise<void> | undefined
     await act(async () => {
-      await harness.result.current.closeSession(paneId)
+      closing = harness.result.current.closeSession(paneId)
+      await Promise.resolve()
+    })
+    expect(currentCloseConfirmation()?.request.targets.map(t => t.sessionId).sort())
+      .toEqual([detachedId, paneId].sort())
+    await act(async () => {
+      resolveCloseConfirmation(true)
+      await closing
     })
 
     // WHY this assertion covers more than renderer cleanup: once the final tab

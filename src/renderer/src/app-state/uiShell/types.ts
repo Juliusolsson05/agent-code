@@ -5,8 +5,41 @@ export type DispatchAttachIntent = {
   targetTabId: TabId
 }
 
+/**
+ * A command waiting to be dispatched through the shared execution gateway.
+ *
+ * `source` mirrors the user-driven members of `CommandInvocationSource`.
+ * Duplicated as a literal union rather than imported so this store slice does
+ * not take a dependency on the command-execution layer, which imports the
+ * catalog and would create a cycle through the store.
+ */
+export type PendingCommandInvocation = {
+  id: string
+  source: 'native-menu' | 'keybinding'
+  /** Close the palette again once the command has run. True when the palette
+   *  was not already open, so a menu click or chord does not leave it visible. */
+  closeAfterRun: boolean
+}
+
 export type UiShellState = {
   commandPaletteOpen: boolean
+  /**
+   * A command id waiting to be dispatched, with the source that asked for it.
+   *
+   * WHY this channel exists: `dispatchCommand` needs a live `CommandContext`,
+   * and building one is expensive — assembling the ~76 workspace actions and
+   * flags is exactly the cost `CommandPalette` avoids paying while closed
+   * (#494). The keybinding router is mounted in the workspace tree and cannot
+   * cheaply build a context on every keydown.
+   *
+   * The native menu already solved this: main emits a bare id, and the palette
+   * mounts its heavy implementation just long enough to resolve and run it. A
+   * keypress is equally rare and equally intentional, so it pays the same
+   * one-time cost by the same route. Generalizing the menu's private
+   * `pendingMenuCommand` into a store field means keybinding and menu
+   * invocations share ONE dispatch path rather than growing a second one.
+   */
+  pendingCommandInvocation: PendingCommandInvocation | null
   pathPickerOpen: boolean
   pathPickerDefault: string
   tileTabsModalOpen: boolean

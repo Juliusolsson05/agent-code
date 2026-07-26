@@ -15,8 +15,56 @@ import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { SETTING_CATEGORIES } from '@renderer/features/settings/lib/settingsCategories'
 import type { SettingCategoryId } from '@renderer/features/settings/lib/settingsCategories'
 import { listPickerCommandMeta } from '@renderer/features/command-palette/registry'
+import { isVisibleInPicker } from '@renderer/features/command-palette/pickerVisibility'
 import type { PickerCommandMeta } from '@renderer/features/command-palette/registry'
 import type { ConfigurableBuiltInMcpDomain } from '@mcp/shared/types'
+
+/**
+ * Machine-readable facts about what a setting actually DOES, rendered as small
+ * badges beside its row.
+ *
+ * WHY this exists: the audit found Settings copy that was misleading in ways
+ * prose alone kept reproducing — an "Application defaults" umbrella covering
+ * rows with four different scopes, MCP rows that look global but only affect
+ * NEW sessions, and Dangerous Agents which claims existing agents are
+ * unaffected while enabling it reloads the whole fleet. A user cannot tell
+ * these apart by reading, because every row looks the same.
+ *
+ * Making the difference structured rather than prose means the row itself
+ * carries the answer, and a new setting has to state its scope instead of
+ * inheriting a paragraph written for something else.
+ */
+export type SettingMetadata = {
+  /** Whose behaviour this changes. */
+  scope: 'app' | 'project' | 'session-default' | 'fresh-install'
+  /** When the change takes effect. */
+  apply: 'immediate' | 'new-session' | 'reload-live-sessions' | 'restart-required'
+  /** Where the value actually lives. Not always renderer Settings — some rows
+   *  front main-owned setup state, the keychain, or files on disk, which is
+   *  what makes "Reset Settings" ambiguous today. */
+  storage: 'settings' | 'workspace' | 'setup' | 'keychain' | 'external-files'
+  /** Maturity or risk, when it is not ordinary. */
+  status?: 'experimental' | 'dangerous' | 'developer'
+}
+
+/**
+ * The common case, applied when a row does not declare otherwise: an app-wide
+ * preference stored in renderer Settings that takes effect at once.
+ *
+ * Defaulting rather than requiring all ~40 rows to repeat it keeps the
+ * exceptions visible — a row carrying explicit metadata is one where the
+ * obvious reading would have been WRONG, which is exactly the set a reader
+ * needs to notice.
+ */
+export const DEFAULT_SETTING_METADATA: SettingMetadata = {
+  scope: 'app',
+  apply: 'immediate',
+  storage: 'settings',
+}
+
+export function settingMetadata(definition: { metadata?: SettingMetadata }): SettingMetadata {
+  return definition.metadata ?? DEFAULT_SETTING_METADATA
+}
 
 export type SettingActionContext = {
   workspace: Workspace
@@ -45,6 +93,7 @@ export type SettingDefinition =
       title: string
       description: string
       keywords: string[]
+      metadata?: SettingMetadata
       control: {
         type: 'toggle'
         getValue: (settings: Settings) => boolean
@@ -57,6 +106,7 @@ export type SettingDefinition =
       title: string
       description: string
       keywords: string[]
+      metadata?: SettingMetadata
       control: {
         type: 'select'
         getValue: (settings: Settings) => string
@@ -71,6 +121,7 @@ export type SettingDefinition =
       title: string
       description: string
       keywords: string[]
+      metadata?: SettingMetadata
       control: {
         type: 'hotkey'
         getValue: (settings: Settings) => string
@@ -83,6 +134,7 @@ export type SettingDefinition =
       title: string
       description: string
       keywords: string[]
+      metadata?: SettingMetadata
       control: {
         type: 'action'
         label: string
@@ -96,6 +148,7 @@ export type SettingDefinition =
       title: string
       description: string
       keywords: string[]
+      metadata?: SettingMetadata
       // Marker for the CLI auto-update three-way (Automatic / Notify /
       // Off). The row is rendered by its own self-subscribing component
       // in <SettingsList> — the value lives in setup.json (main-owned),
@@ -111,6 +164,7 @@ export type SettingDefinition =
       title: string
       description: string
       keywords: string[]
+      metadata?: SettingMetadata
       // Marker for the theme grid. The generic `select` control renders
       // uniform value cells; this row needs per-cell Edit/Delete affordances
       // on saved themes plus a trailing "+ New theme…" cell that is an action
@@ -126,6 +180,7 @@ export type SettingDefinition =
       title: string
       description: string
       keywords: string[]
+      metadata?: SettingMetadata
       // Marker for the voice-dictation Deepgram API-key row. Same
       // rationale as cli-update-behavior above — the value lives in
       // safeStorage-backed main state (see src/main/dictation/
@@ -142,6 +197,7 @@ export type SettingDefinition =
       title: string
       description: string
       keywords: string[]
+      metadata?: SettingMetadata
       // Main owns both the canonical document and the external deployment
       // health. A marker row prevents renderer Settings from inventing a second
       // boolean source of truth that could say Active after filesystem failure.
@@ -155,6 +211,22 @@ export type SettingDefinition =
       title: string
       description: string
       keywords: string[]
+      metadata?: SettingMetadata
+      // Marker for the built-in keybinding editor. Self-subscribing for the
+      // same reason as cli-update-behavior: the row needs the live effective
+      // binding set plus conflict lookup, and hoisting all of that into the
+      // registry would make every Settings render recompute it.
+      control: {
+        type: 'command-keybindings'
+      }
+    }
+  | {
+      id: string
+      category: SettingCategoryId
+      title: string
+      description: string
+      keywords: string[]
+      metadata?: SettingMetadata
       control: {
         type: 'command-visibility'
         /** Full command catalog to render rows for. Carried as a value
@@ -222,18 +294,40 @@ const DICTATION_PROVIDER_OPTIONS: ChoiceOption<Settings['dictationProvider']>[] 
 // Resolve a command's effective picker visibility from settings alone.
 // Mirrors `commandVisible` in the command registry, minus the live
 // `showHiddenCommands` escape hatch (the settings UI always edits the
-// underlying preference, never the transient reveal-all state): an
-// explicit override wins, else the declared default ('default' shows,
-// everything else is hidden). Kept here rather than imported so the
-// settings layer doesn't depend on the registry's CommandContext-typed
-// internals — it only needs the static rule.
+// underlying preference, never the transient reveal-all state).
+//
+// This now delegates to the SHARED resolver rather than re-implementing the
+// rule. It used to be a private second copy, justified by "the settings layer
+// shouldn't depend on the registry's CommandContext-typed internals" — a real
+// concern that `pickerVisibility.ts` removed by taking a context-free policy
+// struct instead of a CommandContext.
+//
+// Keeping the copy after that was an active defect, not just duplication: the
+// copy knew about overrides and the declared tier only, so it never learned
+// about the Navigation Commands group. On a fresh install Settings rendered
+// all six navigation switches ON (they declare no tier, so the copy said
+// "visible") while the palette omitted them — Settings stating the opposite of
+// what the user could see. Toggling one wrote an override and still changed
+// nothing, because the group gate deliberately outranks per-command overrides.
+// That is exactly the "switches that appear able to override their parent"
+// shape the precedence rule exists to prevent.
+//
+// `showHiddenCommands: false` is passed deliberately: Settings shows the
+// PERSISTED preference, not the transient reveal-all state, so a user reading
+// this list sees what their profile actually does.
 function resolveCommandVisible(settings: Settings, command: PickerCommandMeta): boolean {
-  // Defensive optional-chain for the same reason as commandVisible in the
-  // registry: never let a missing override map (pre-#249 persisted settings)
-  // crash the Settings page render. Degrade to declared default.
-  const override = settings.commandVisibilityOverrides?.[command.id]
-  if (typeof override === 'boolean') return override
-  return command.pickerVisibility === 'default'
+  return isVisibleInPicker(
+    {
+      id: command.id,
+      pickerVisibility: command.pickerVisibility,
+      commandGroup: command.commandGroup,
+    },
+    {
+      overrides: settings.commandVisibilityOverrides,
+      showHiddenCommands: false,
+      navigationCommandsEnabled: settings.navigationCommandsEnabled,
+    },
+  )
 }
 
 function updateDefaultBuiltInMcpDomain(
@@ -328,6 +422,9 @@ export function getSettingsRegistry(): SettingDefinition[] {
       description:
         'Mode the app opens in on first launch. Existing workspaces keep their last-used mode — flipping this later only affects a fresh install.',
       keywords: ['default', 'mode', 'dispatch', 'grid', 'startup', 'launch', 'workspace'],
+      // Only affects a fresh install — existing workspaces keep their last-used
+      // mode, which the description says but the row could not show.
+      metadata: { scope: 'fresh-install', apply: 'new-session', storage: 'settings' },
       control: {
         type: 'select',
         getValue: settings => settings.defaultWorkspaceMode,
@@ -349,6 +446,7 @@ export function getSettingsRegistry(): SettingDefinition[] {
       description:
         'Choose whether Claude and Codex panes show Agent Code rendering, the provider terminal, or terminal-first Hybrid mode that renders only while a feature needs the feed.',
       keywords: ['agent', 'view', 'mode', 'terminal', 'raw', 'hybrid', 'renderer', 'feed', 'tui'],
+      metadata: { scope: 'app', apply: 'new-session', storage: 'settings' },
       control: {
         type: 'select',
         getValue: settings => settings.agentViewMode,
@@ -421,25 +519,6 @@ export function getSettingsRegistry(): SettingDefinition[] {
       },
     },
     {
-      // Replaces the old "Dispatch Terminal" command-palette toggle. The
-      // command sat on a per-session `dispatchMode.terminalVisible` flag
-      // that re-defaulted to ON every time dispatch was re-entered, which
-      // produced the "I turned it off but it's back" failure mode. The
-      // settings entry is the single source of truth: off → never mount,
-      // on → mount and live as a normal tile-tree leaf.
-      id: 'dispatch-project-terminal',
-      category: 'workspace',
-      title: 'Attach Project Terminal to Dispatch',
-      description:
-        'When on, Dispatch Mode mounts a project terminal beside the agent list. Off by default.',
-      keywords: ['dispatch', 'terminal', 'project', 'attach', 'shell', 'pane'],
-      control: {
-        type: 'toggle',
-        getValue: settings => settings.dispatchProjectTerminal,
-        onToggle: (ctx, value) => ctx.onChange({ dispatchProjectTerminal: value }),
-      },
-    },
-    {
       id: 'auto-send-prompt-suggestion',
       category: 'workspace',
       title: 'Auto-send Prompt Suggestions',
@@ -461,6 +540,8 @@ export function getSettingsRegistry(): SettingDefinition[] {
         'conventions', 'rules', 'instructions', 'agents', 'claude', 'codex',
         'opencode', 'skills', 'commits', 'git', 'testing', 'development practices',
       ],
+      // Deploys a file into the project on disk.
+      metadata: { scope: 'project', apply: 'immediate', storage: 'external-files' },
       control: { type: 'agent-code-conventions' },
     },
     {
@@ -529,6 +610,53 @@ export function getSettingsRegistry(): SettingDefinition[] {
       },
     },
     {
+      id: 'command-keybindings',
+      category: 'commands',
+      title: 'Keyboard Shortcuts',
+      description:
+        'Assign, add, or remove keyboard shortcuts for built-in commands. A command may have several bindings or none. Conflicts are blocked and name the command or app interaction that already owns the chord.',
+      keywords: [
+        'keybinding',
+        'keyboard',
+        'shortcut',
+        'chord',
+        'bind',
+        'rebind',
+        'hotkey',
+        'conflict',
+      ],
+      metadata: { scope: 'app', apply: 'immediate', storage: 'settings' },
+      control: { type: 'command-keybindings' },
+    },
+    {
+      id: 'navigation-commands',
+      category: 'commands',
+      title: 'Navigation Commands',
+      description:
+        'Show Next/Previous Tab and Focus Pane Left/Right/Up/Down in the command picker. Their keyboard shortcuts always work, whether this is on or off.',
+      keywords: [
+        'navigation',
+        'nav',
+        'focus',
+        'pane',
+        'tab',
+        'next',
+        'previous',
+        'group',
+      ],
+      metadata: { scope: 'app', apply: 'immediate', storage: 'settings' },
+      control: {
+        type: 'toggle',
+        // Deliberately phrased as "show in the picker", not "enable
+        // navigation". The audit's naming rule is that a control must name what
+        // it actually changes: this one adds or removes six rows from a list,
+        // and a user who read it as "turn navigation off" would be wrong in a
+        // way that costs them their arrow keys.
+        getValue: settings => settings.navigationCommandsEnabled,
+        onToggle: (ctx, value) => ctx.onChange({ navigationCommandsEnabled: value }),
+      },
+    },
+    {
       id: 'command-picker-visibility',
       category: 'commands',
       title: 'Command Picker Visibility',
@@ -544,6 +672,7 @@ export function getSettingsRegistry(): SettingDefinition[] {
         'advanced',
         'debug',
       ],
+      metadata: { scope: 'app', apply: 'immediate', storage: 'settings' },
       control: {
         type: 'command-visibility',
         commands: pickerCommands,
@@ -575,6 +704,9 @@ export function getSettingsRegistry(): SettingDefinition[] {
       description:
         'Periodically save full debug bundles for active agent panes, plus a best-effort final bundle on close. Expensive, intended for Agent Code development.',
       keywords: ['debug', 'logs', 'persistent', 'aggressive', 'autosave', 'render', 'trace'],
+      // Writes continuously to disk. 'developer' is the honest maturity label for
+      // a setting whose real cost is storage the user never sees.
+      metadata: { scope: 'app', apply: 'immediate', storage: 'settings', status: 'developer' },
       control: {
         type: 'toggle',
         getValue: settings => settings.aggressiveDebugPersistence,
@@ -642,6 +774,9 @@ export function getSettingsRegistry(): SettingDefinition[] {
         'secret',
         'token',
       ],
+      // Lives in safeStorage-backed main state, NOT renderer Settings — which is
+      // why 'Reset Settings' does not clear it.
+      metadata: { scope: 'app', apply: 'immediate', storage: 'keychain' },
       control: { type: 'dictation-api-key' },
     },
     {
@@ -664,6 +799,9 @@ export function getSettingsRegistry(): SettingDefinition[] {
       description:
         'Start Claude and Codex sessions with the bypass flags enabled. Existing live agent sessions are reloaded when this changes.',
       keywords: ['dangerous', 'bypass', 'agents', 'reload', 'safety'],
+      // The audit's sharpest copy defect: this row said existing agents were
+      // unaffected while enabling it RELOADS the whole fleet.
+      metadata: { scope: 'app', apply: 'reload-live-sessions', storage: 'settings', status: 'dangerous' },
       control: {
         type: 'toggle',
         getValue: settings => settings.dangerousAgentsEnabled,
@@ -698,6 +836,8 @@ export function getSettingsRegistry(): SettingDefinition[] {
         'homebrew',
         'winget',
       ],
+      // Owned by main's setup.json, not renderer Settings.
+      metadata: { scope: 'app', apply: 'immediate', storage: 'setup' },
       control: { type: 'cli-update-behavior' },
     },
     {

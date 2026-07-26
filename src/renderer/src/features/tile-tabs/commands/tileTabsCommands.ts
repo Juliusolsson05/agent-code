@@ -1,18 +1,17 @@
 import type { CommandDef } from '@renderer/features/command-palette/types'
+import { toggle } from '@renderer/features/command-palette/commandState'
 
 export const tileTabsCommands: CommandDef[] = [
   {
     id: 'tiled-tabs',
+    category: 'navigate',
     // `app`: Tiled Tabs is a top-level layout mode. Entering it clears
     // dispatchMode (they are mutually exclusive), so the command must
     // stay reachable from inside Dispatch to switch away from it.
     surface: 'app',
     title: 'Tiled Tabs',
     description: '**What it does:** Opens a modal to choose tabs for a **tiled tab view**.\n\n**Use when:** You want multiple tabs visible at once.\n\n**Notes:** If tiled tabs are already open, this command closes the tiled view.',
-    getState: ({ workspace }) => ({
-      label: workspace.tileTabs ? 'On' : 'Off',
-      tone: workspace.tileTabs ? 'accent' : 'neutral',
-    }),
+    getState: ({ workspace }) => toggle(Boolean(workspace.tileTabs)),
     run: ({ workspace, ui }) => {
       if (workspace.tileTabs) {
         workspace.closeTileTabs()

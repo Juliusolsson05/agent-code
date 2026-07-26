@@ -1,6 +1,12 @@
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
-import type { CommandContext, CommandDef } from '@renderer/features/command-palette/types'
+import { getProviderFeatures } from '@providers/shared/featureCapabilities'
+import { status, toggle, value } from '@renderer/features/command-palette/commandState'
+import type {
+  CommandContext,
+  CommandDef,
+  CommandState,
+} from '@renderer/features/command-palette/types'
 import { runSaveDebugBundleCommand } from '@renderer/features/debug/saveDebugBundle'
 import { runAttachRecordingNoteCommand, runToggleSessionRecordingCommand } from '@renderer/features/debug/attachRecordingNote'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
@@ -25,14 +31,11 @@ function targetSupportsBuiltInMcpDomain(
 function builtInMcpDomainState(
   ctx: CommandContext,
   domain: BuiltInMcpDomain,
-): { label: string; tone: 'neutral' | 'accent' } {
+): CommandState {
   const sessionId = commandTargetSessionId(ctx.workspace)
   const meta = sessionId ? ctx.workspace.state.sessions[sessionId] : null
   const enabled = Boolean(meta?.builtInMcpDomains?.includes(domain))
-  return {
-    label: enabled ? 'On' : 'Off',
-    tone: enabled ? 'accent' : 'neutral',
-  }
+  return toggle(enabled)
 }
 
 function toggleBuiltInMcpDomain(
@@ -66,6 +69,7 @@ function agentViewOverrideLabel(
 export const sessionCommands: CommandDef[] = [
   {
     id: 'view-prompts',
+    category: 'session',
     surface: 'session',
     title: 'View Prompts',
     description: '**What it does:** Opens prompt history for the focused **agent**.\n\n**Use when:** You want to inspect previous user prompts.\n\n**Notes:** Claude and Codex agents only.',
@@ -75,7 +79,13 @@ export const sessionCommands: CommandDef[] = [
       if (!sessionId) return false
       const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? DEFAULT_PROVIDER
-      return isAgentProviderKind(kind)
+      // Needs the transcript parser to RECOGNIZE this provider's user prompts.
+      // This guard was `switchTargets.length > 0` — the Switch Provider
+      // predicate, transposed here. It happened to hide the same providers, so
+      // nothing looked wrong; it would have started reporting the wrong answer
+      // the moment a switch edge was added for a provider whose prompts we
+      // cannot parse, or an adapter for one with no switch edge.
+      return getProviderFeatures(kind).promptHistoryExtraction
     },
     run: ({ workspace, ui }) => {
       const sessionId = commandTargetSessionId(workspace)
@@ -98,6 +108,8 @@ export const sessionCommands: CommandDef[] = [
     // itself re-checks and surfaces a toast if the pane is
     // mid-stream.
     id: 'rewind-to-prompt',
+    category: 'session',
+    pickerVisibility: 'advanced',
     surface: 'session',
     title: 'Rewind to Prompt…',
     description: '**What it does:** Rewinds the focused **agent session** to an earlier prompt.\n\n**Use when:** You want to branch from a previous point.\n\n**Notes:** The original transcript file is not edited.',
@@ -120,8 +132,12 @@ export const sessionCommands: CommandDef[] = [
       if (!sessionId) return false
       const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? DEFAULT_PROVIDER
+      // Rewind REWRITES session history, so it needs a real transcript
+      // adapter — not merely an agent provider. isAgentProviderKind passed for
+      // OpenCode, which has no adapter, so the command appeared enabled and
+      // then did nothing.
       return (
-        isAgentProviderKind(kind) &&
+        getProviderFeatures(kind).transcriptRewind &&
         Boolean(meta?.providerSessionId)
       )
     },
@@ -141,6 +157,8 @@ export const sessionCommands: CommandDef[] = [
     // points at the rewound provider id; submit-start clearing removes it before
     // the user can create branch work that an undo would hide.
     id: 'undo-rewind',
+    category: 'session',
+    pickerVisibility: 'advanced',
     surface: 'session',
     title: 'Undo Rewind',
     description: '**What it does:** Restores the focused **agent session** to the provider transcript it used before the last rewind.\n\n**Use when:** You rewound to the wrong prompt and have not submitted new work from the rewound branch.\n\n**Notes:** Runtime-only. Available until the next submit, pane close, or reload.',
@@ -183,8 +201,9 @@ export const sessionCommands: CommandDef[] = [
     // derives "last active" from existing transcript data, so it
     // needs nothing to be focused.
     id: 'open-agent-activity',
+    category: 'workspace-tools',
     surface: 'app',
-    title: 'Agent Activity…',
+    title: 'Open Agent Activity…',
     description: '**What it does:** Opens an overview of **agent activity** across the workspace.\n\n**Use when:** You want to triage active, idle, or stale agents.\n\n**Notes:** Useful for cleanup during long multi-agent sessions.',
     keywords: [
       'agent',
@@ -213,6 +232,8 @@ export const sessionCommands: CommandDef[] = [
     // "cleanup the mess from anywhere" use case harder. The modal itself
     // handles the empty workspace case with a preview empty state.
     id: 'close-old-agents',
+    category: 'workspace-tools',
+    pickerVisibility: 'advanced',
     surface: 'app',
     title: 'Close Old Agents…',
     description: '**What it does:** Opens a batch cleanup modal for **Claude and Codex agents** inactive longer than a chosen time.\n\n**Use when:** You want to close stale agents across all projects or selected projects.\n\n**Notes:** Defaults to 4 hours and excludes currently-running agents unless you opt in.',
@@ -246,6 +267,8 @@ export const sessionCommands: CommandDef[] = [
     // deliberately no command for the return and no keybind: it's a low-
     // frequency operation, and a second command/keybind would be clutter.
     id: 'switch-agents-provider',
+    category: 'session',
+    pickerVisibility: 'advanced',
     surface: 'app',
     title: 'Switch Agents to Another Provider…',
     description: '**What it does:** Opens a modal to move a batch of **Claude/Codex agents** to the other provider at once, and to return the most recent batch.\n\n**Use when:** You hit a usage limit on one provider and want to move agents to the other (then back later).\n\n**Notes:** History is translated; the most recent batch is remembered so you can send it back from the same modal.',
@@ -277,6 +300,8 @@ export const sessionCommands: CommandDef[] = [
     // the whole point is to find a session when you don't know which
     // pane to focus first.
     id: 'search-conversation-prompts',
+    category: 'workspace-tools',
+    pickerVisibility: 'advanced',
     surface: 'app',
     title: 'Search Conversation Prompts',
     description: '**What it does:** Searches saved conversations by **prompt text**.\n\n**Use when:** You remember what you asked, but not where it was.\n\n**Notes:** Searches sessions on disk, not only visible panes.',
@@ -298,6 +323,8 @@ export const sessionCommands: CommandDef[] = [
   },
   {
     id: 'enable-built-in-mcp-ping',
+    category: 'developer',
+    pickerVisibility: 'debug',
     // `session`, not `debug`: Ping is diagnostic, but the command still
     // reloads the focused Claude/Codex session and must follow Dispatch
     // row focus exactly like the other built-in MCP toggles. The
@@ -352,6 +379,8 @@ export const sessionCommands: CommandDef[] = [
   },
   {
     id: 'enable-ai-workspace-mcp',
+    category: 'session',
+    pickerVisibility: 'advanced',
     surface: 'session',
     title: 'AI Workspace MCP',
     description: '**What it does:** Reloads the focused **Claude or Codex agent** with Agent Code AI Workspace MCP tools on or off.\n\n**Use when:** You want this agent to create curated cross-worktree file review workspaces.\n\n**Notes:** Orchestration agents can use this domain, but it remains a separate MCP capability.',
@@ -400,6 +429,8 @@ export const sessionCommands: CommandDef[] = [
   },
   {
     id: 'enable-orchestration-mcp',
+    category: 'session',
+    pickerVisibility: 'advanced',
     surface: 'session',
     title: 'Orchestration MCP',
     description: '**What it does:** Reloads the focused **Claude or Codex agent** with Agent Code orchestration MCP tools on or off.\n\n**Use when:** You want this agent to create and coordinate distinct orchestration child agents.\n\n**Notes:** Orchestration agents are separate from manual Linked Agents.',
@@ -448,6 +479,8 @@ export const sessionCommands: CommandDef[] = [
   },
   {
     id: 'enable-agent-transcripts-mcp',
+    category: 'session',
+    pickerVisibility: 'advanced',
     surface: 'session',
     title: 'Agent Transcripts MCP',
     description: '**What it does:** Reloads the focused **Claude or Codex agent** with Agent Code transcript-consumption MCP tools on or off.\n\n**Use when:** You want this agent to read a specific Claude/Codex JSONL transcript file through filtered projections instead of manual shell parsing.\n\n**Notes:** The tool accepts an explicit file path and returns bounded normalized transcript context; it does not discover transcripts for the agent.',
@@ -496,9 +529,11 @@ export const sessionCommands: CommandDef[] = [
   },
   {
     id: 'enable-agent-management-mcp',
+    category: 'session',
+    pickerVisibility: 'advanced',
     surface: 'session',
     title: 'Agent Management MCP',
-    description: '**What it does:** Reloads the focused **Claude or Codex agent** with project-wide Agent Code management tools on or off.\n\n**Use when:** You want this agent to inventory, inspect, prompt, or—only after an explicit user request—close other agents in its project.\n\n**Notes:** Read operations include visible, detached, and buried agents without waking them. Closing has extra authorization and cascade guards.',
+    description: '**What it does:** Reloads the focused **Claude or Codex agent** with project-wide Agent Code management tools on or off.\n\n**Use when:** You want this agent to inventory, inspect, prompt, or close other agents in its project.\n\n**Notes:** Read operations include visible, detached, and buried agents without waking them. Every close it attempts asks **you** to confirm first, and cascades are refused outright.',
     keywords: ['mcp', 'agent management', 'agents', 'project', 'transcripts', 'cleanup', 'prompt', 'close', 'enable', 'disable', 'reload', 'claude', 'codex'],
     when: ({ workspace }) => {
       return targetSupportsBuiltInMcpDomain(workspace, 'agent_management')
@@ -545,6 +580,8 @@ export const sessionCommands: CommandDef[] = [
   },
   {
     id: 'enable-workflow-mcp',
+    category: 'session',
+    pickerVisibility: 'advanced',
     surface: 'session',
     title: 'Workflow MCP',
     description: '**What it does:** Reloads the focused **Codex agent** with Agent Code workflow MCP tools on or off.\n\n**Use when:** You want Codex to discover, start, inspect, cancel, or resume portable multi-agent workflows.\n\n**Notes:** Claude is intentionally excluded because it has a native workflow feature. Workflow execution is app-owned and survives renderer reloads; changing MCP capabilities still requires replacing the provider process.',
@@ -596,6 +633,7 @@ export const sessionCommands: CommandDef[] = [
   },
   {
     id: 'reload-agent',
+    category: 'session',
     surface: 'session',
     title: 'Reload Agent',
     description: '**What it does:** Restarts the focused **Claude or Codex agent**.\n\n**Use when:** The agent is stuck, exited, or needs reconnecting.\n\n**Notes:** Requires a resumable provider session.',
@@ -604,22 +642,34 @@ export const sessionCommands: CommandDef[] = [
       const sessionId = commandTargetSessionId(workspace)
       const meta = sessionId ? workspace.state.sessions[sessionId] : null
       const kind = meta?.kind ?? DEFAULT_PROVIDER
-      return {
-        label: getRendererProviderCapabilities(isAgentProviderKind(kind) ? kind : DEFAULT_PROVIDER).shortLabel,
-        tone: 'neutral',
-      }
+      // The provider name is CONTEXT — which provider this command would act on —
+      // not an enabled state. Styled with accent tone it read as a live toggle.
+      return value(
+        getRendererProviderCapabilities(isAgentProviderKind(kind) ? kind : DEFAULT_PROVIDER)
+          .shortLabel,
+      )
     },
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return false
       const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? DEFAULT_PROVIDER
-      return isAgentProviderKind(kind) && Boolean(meta?.providerSessionId)
+      // Reload respawns the session THROUGH US with a resume id; it never
+      // hands the user a shell string. Gating it on
+      // `verifiedExternalResumeCommand` was the wrong flag in the direction
+      // that costs a working feature: OpenCode replays history on resume just
+      // fine, and this guard hid the command for it anyway.
+      return (
+        getProviderFeatures(kind).inAppResume &&
+        Boolean(meta?.providerSessionId)
+      )
     },
-    run: ({ workspace }) => void workspace.reloadFocusedAgent(),
+    run: ({ workspace }) => workspace.reloadFocusedAgent(),
   },
   {
     id: 'soft-reload-agent',
+    category: 'session',
+    pickerVisibility: 'advanced',
     surface: 'session',
     title: 'Soft Reload Agent',
     description: '**What it does:** Refreshes the focused **agent view** without restarting its backend process.\n\n**Use when:** The feed or rendering state looks stale, duplicated, or corrupted while the agent is still working.\n\n**Notes:** Keeps the same session, draft, pane placement, and running process.',
@@ -641,10 +691,12 @@ export const sessionCommands: CommandDef[] = [
       const sessionId = commandTargetSessionId(workspace)
       const meta = sessionId ? workspace.state.sessions[sessionId] : null
       const kind = meta?.kind ?? DEFAULT_PROVIDER
-      return {
-        label: getRendererProviderCapabilities(isAgentProviderKind(kind) ? kind : DEFAULT_PROVIDER).shortLabel,
-        tone: 'neutral',
-      }
+      // The provider name is CONTEXT — which provider this command would act on —
+      // not an enabled state. Styled with accent tone it read as a live toggle.
+      return value(
+        getRendererProviderCapabilities(isAgentProviderKind(kind) ? kind : DEFAULT_PROVIDER)
+          .shortLabel,
+      )
     },
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
@@ -661,17 +713,18 @@ export const sessionCommands: CommandDef[] = [
   },
   {
     id: 'set-agent-view-mode',
+    category: 'session',
+    pickerVisibility: 'advanced',
     surface: 'session',
-    title: 'Set Agent View Mode...',
+    title: 'Agent View for This Session…',
     description: '**What it does:** Overrides the focused agent pane to use Agent rendering, Terminal rendering, or the global default.\n\n**Use when:** One session needs the raw provider terminal while the rest of the app keeps its normal view mode.\n\n**Notes:** Persists with the session. Hybrid remains a global/default setting, not a per-session override.',
-    keywords: ['agent', 'view', 'mode', 'terminal', 'rendering', 'raw', 'override', 'default'],
+    keywords: ['agent', 'view', 'mode', 'terminal', 'rendering', 'raw', 'override', 'default', 'set agent view mode'],
     getState: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       const meta = sessionId ? workspace.state.sessions[sessionId] : null
-      return {
-        label: agentViewOverrideLabel(meta?.agentViewModeOverride),
-        tone: meta?.agentViewModeOverride ? 'accent' : 'neutral',
-      }
+      // A selected option out of Default/Agent/Terminal. Not a toggle:
+      // "Default" is a real third choice, not the absence of a state.
+      return value(agentViewOverrideLabel(meta?.agentViewModeOverride))
     },
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
@@ -688,6 +741,8 @@ export const sessionCommands: CommandDef[] = [
   },
   {
     id: 'copy-resume-command',
+    category: 'session',
+    pickerVisibility: 'advanced',
     surface: 'session',
     title: 'Copy Resume Command',
     description: '**What it does:** Copies a shell command to **resume this session**.\n\n**Use when:** You want to continue the agent outside the app.\n\n**Notes:** Produces a Claude or Codex CLI command.',
@@ -696,28 +751,36 @@ export const sessionCommands: CommandDef[] = [
       const sessionId = commandTargetSessionId(workspace)
       const meta = sessionId ? workspace.state.sessions[sessionId] : null
       const kind = meta?.kind ?? DEFAULT_PROVIDER
-      return {
-        label: getRendererProviderCapabilities(isAgentProviderKind(kind) ? kind : DEFAULT_PROVIDER).shortLabel,
-        tone: 'neutral',
-      }
+      // The provider name is CONTEXT — which provider this command would act on —
+      // not an enabled state. Styled with accent tone it read as a live toggle.
+      return value(
+        getRendererProviderCapabilities(isAgentProviderKind(kind) ? kind : DEFAULT_PROVIDER)
+          .shortLabel,
+      )
     },
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return false
       const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? DEFAULT_PROVIDER
-      return isAgentProviderKind(kind) && Boolean(meta?.providerSessionId)
+      // The ONE command the verified-template flag is actually about: this
+      // produces a string the user pastes into their own terminal. An
+      // unverified template is worse than an absent command, because it fails
+      // in their shell and they blame their setup. Agent-hood proved nothing
+      // here — it is what offered OpenCode a guessed `opencode --resume` form.
+      return (
+        getProviderFeatures(kind).verifiedExternalResumeCommand &&
+        Boolean(meta?.providerSessionId)
+      )
     },
     run: async ({ workspace, ui }) => {
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return
       const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? DEFAULT_PROVIDER
-      // Registry-driven runtime narrow — must match the `when` predicate
-      // above so a command that visibly enabled doesn't silently no-op on
-      // OpenCode. `buildProviderResumeCommand` already accepts any
-      // AgentProviderKind and pulls the CLI shape from the registry identity
-      // descriptor (#394 phase 2c-2), so no downstream change is needed.
+      // Runtime narrow mirroring the `when` predicate exactly, so a command
+      // that renders enabled cannot silently no-op.
+      if (!getProviderFeatures(kind).verifiedExternalResumeCommand) return
       if (!isAgentProviderKind(kind) || !meta?.providerSessionId) return
 
       const command = buildProviderResumeCommand(kind, meta.cwd, meta.providerSessionId)
@@ -733,19 +796,22 @@ export const sessionCommands: CommandDef[] = [
   },
   {
     id: 'duplicate-agent',
+    category: 'create',
+    pickerVisibility: 'advanced',
     surface: 'session',
     title: 'Duplicate Agent',
     description: '**What it does:** Clones the focused **agent session** into a new pane.\n\n**Use when:** You want a parallel branch of the same conversation.\n\n**Notes:** In **Dispatch**, the clone is created as a detached agent.',
     keywords: ['duplicate', 'clone', 'fork', 'copy', 'session', 'agent'],
     when: ({ workspace }) => {
-      // Needs a focused agent session that has a providerSessionId
-      // — without that id there's nothing on disk to duplicate.
+      // Needs a providerSessionId (something on disk to duplicate) AND a
+      // transcript adapter able to project it into a new session. Agent-hood
+      // alone proves neither.
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return false
       const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? DEFAULT_PROVIDER
       return (
-        isAgentProviderKind(kind) &&
+        getProviderFeatures(kind).transcriptDuplicate &&
         Boolean(meta?.providerSessionId)
       )
     },
@@ -754,12 +820,13 @@ export const sessionCommands: CommandDef[] = [
       if (!sessionId) return
       const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? DEFAULT_PROVIDER
-      // Registry-driven runtime narrow — mirrors the `when` predicate. The old
-      // two-provider literal here was the exact reason "Duplicate Agent"
-      // silently no-op'd on OpenCode panes even after Phase 7 landed the
-      // provider. `duplicateSession`'s preload/main handler already takes
-      // `provider: AgentProviderKind` (src/preload/api/provider.ts:50), so the
-      // downstream path fans out through the registry — nothing else changes.
+      // Runtime narrow mirroring the `when` predicate EXACTLY. It previously
+      // re-checked agent-hood while `when` checked `transcriptDuplicate`, so
+      // the two disagreed for any agent provider without an adapter: `when`
+      // correctly hid the row, but a programmatic dispatch or a stale
+      // keybinding reaching `run` sailed past this weaker check and called
+      // `duplicateSession` on a transcript nothing can project.
+      if (!getProviderFeatures(kind).transcriptDuplicate) return
       if (!isAgentProviderKind(kind) || !meta?.providerSessionId) return
       try {
         const { newProviderSessionId } = await window.api.duplicateSession({
@@ -811,6 +878,8 @@ export const sessionCommands: CommandDef[] = [
   },
   {
     id: 'switch-provider',
+    category: 'session',
+    pickerVisibility: 'advanced',
     surface: 'session',
     title: 'Switch Provider',
     description: '**What it does:** Switches the focused agent between **Claude** and **Codex**.\n\n**Use when:** You want to continue the same work with another provider.\n\n**Notes:** Saved sessions are translated; empty panes are replaced with a fresh pane of the other provider.',
@@ -819,10 +888,12 @@ export const sessionCommands: CommandDef[] = [
       const sessionId = commandTargetSessionId(workspace)
       const meta = sessionId ? workspace.state.sessions[sessionId] : null
       const kind = meta?.kind ?? DEFAULT_PROVIDER
-      return {
-        label: getRendererProviderCapabilities(isAgentProviderKind(kind) ? kind : DEFAULT_PROVIDER).shortLabel,
-        tone: 'neutral',
-      }
+      // The provider name is CONTEXT — which provider this command would act on —
+      // not an enabled state. Styled with accent tone it read as a live toggle.
+      return value(
+        getRendererProviderCapabilities(isAgentProviderKind(kind) ? kind : DEFAULT_PROVIDER)
+          .shortLabel,
+      )
     },
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
@@ -830,54 +901,54 @@ export const sessionCommands: CommandDef[] = [
       const meta = workspace.state.sessions[sessionId]
       if (!meta) return false
       const kind = meta?.kind ?? DEFAULT_PROVIDER
-      return isAgentProviderKind(kind)
+      // The explicit switch EDGE list, not agent-hood. "Can switch" is
+      // meaningless without naming a destination, and translation is
+      // directional — a Claude→Codex adapter is not automatically the reverse.
+      // OpenCode has no edge either way, so agent-hood offered it a switch
+      // that the main-side translator rejects.
+      return getProviderFeatures(kind).switchTargets.length > 0
     },
-    run: ({ workspace }) => void workspace.switchFocusedProvider(),
+    run: ({ workspace }) => workspace.switchFocusedProvider(),
   },
   {
     id: 'toggle-git-bar',
+    category: 'workspace-tools',
     surface: 'app',
     title: 'Git Bar',
     description: '**What it does:** Shows or hides the **Git** side panel.\n\n**Use when:** You want repository status for the focused project.\n\n**Notes:** Uses the focused command target’s working directory.',
-    getState: ({ flags }) => ({
-      label: flags.gitBarOpen ? 'On' : 'Off',
-      tone: flags.gitBarOpen ? 'accent' : 'neutral',
-    }),
+    getState: ({ flags }) => toggle(flags.gitBarOpen),
     run: ({ ui }) => ui.toggleGitBar(),
   },
   {
     id: 'toggle-debug-panel',
+    category: 'developer',
+    pickerVisibility: 'debug',
     surface: 'debug',
     title: 'Debug Panel',
     description: '**What it does:** Shows or hides the focused pane’s **debug panel**.\n\n**Use when:** You need low-level pane or runtime state.\n\n**Notes:** Developer-oriented.',
-    getState: ({ flags }) => ({
-      label: flags.debugPanelOpen ? 'On' : 'Off',
-      tone: flags.debugPanelOpen ? 'accent' : 'neutral',
-    }),
+    getState: ({ flags }) => toggle(flags.debugPanelOpen),
     run: ({ ui }) => ui.toggleDebugPanel(),
   },
   {
     id: 'toggle-feed-debug-panel',
+    category: 'developer',
+    pickerVisibility: 'debug',
     surface: 'debug',
     title: 'Feed Debug Panel',
     description: '**What it does:** Shows or hides the **feed debug log** panel.\n\n**Use when:** You want render and feed timeline logs.\n\n**Notes:** Developer-oriented.',
     keywords: ['debug', 'logs', 'feed', 'render', 'rows', 'timeline', 'panel'],
-    getState: ({ flags }) => ({
-      label: flags.feedDebugPanelOpen ? 'On' : 'Off',
-      tone: flags.feedDebugPanelOpen ? 'accent' : 'neutral',
-    }),
+    getState: ({ flags }) => toggle(flags.feedDebugPanelOpen),
     run: ({ ui }) => ui.toggleFeedDebugPanel(),
   },
   {
     id: 'toggle-proxy-debug-panel',
+    category: 'developer',
+    pickerVisibility: 'debug',
     surface: 'debug',
     title: 'Proxy Debug Panel',
     description: '**What it does:** Shows or hides **proxy/SSE debug** details.\n\n**Use when:** You are debugging streamed provider events.\n\n**Notes:** Most useful when proxy streaming is enabled.',
     keywords: ['proxy', 'sse', 'stream', 'semantic', 'anthropic', 'debug'],
-    getState: ({ flags }) => ({
-      label: flags.proxyDebugPanelOpen ? 'On' : 'Off',
-      tone: flags.proxyDebugPanelOpen ? 'accent' : 'neutral',
-    }),
+    getState: ({ flags }) => toggle(flags.proxyDebugPanelOpen),
     run: ({ ui }) => ui.toggleProxyDebugPanel(),
   },
   {
@@ -893,6 +964,8 @@ export const sessionCommands: CommandDef[] = [
     // Wide keyword net because the user might remember "save", "dump",
     // "export", "snapshot", or the name of any one panel.
     id: 'save-debug-logs',
+    category: 'developer',
+    pickerVisibility: 'debug',
     surface: 'debug',
     title: 'Save Debug Logs',
     description: '**What it does:** Saves a **debug bundle** for the focused pane.\n\n**Use when:** You need a snapshot to inspect or share later.\n\n**Notes:** Copies the saved bundle path after writing it.',
@@ -914,7 +987,7 @@ export const sessionCommands: CommandDef[] = [
       // closePalette immediately so the toast (which lands in the
       // pane, not the palette) is visible right after trigger.
       ui.closePalette()
-      void runSaveDebugBundleCommand(workspace)
+      return runSaveDebugBundleCommand(workspace)
     },
   },
   {
@@ -933,8 +1006,10 @@ export const sessionCommands: CommandDef[] = [
     // whenever the feature is available; the agent-kind guard below keeps it off
     // terminal panes the recorder can't capture.
     id: 'toggle-session-recording',
+    category: 'developer',
+    pickerVisibility: 'debug',
     surface: 'debug',
-    title: 'Toggle Session Recording',
+    title: 'Session Recording',
     description: '**What it does:** Starts or stops **continuous recording** of the focused pane\'s rendering-input stream (replayable in the test suite).\n\n**Use when:** Right before reproducing a rendering bug you want captured as a fixture.\n\n**Notes:** Command-driven — nothing records until you start it. Each recording is its own folder under `session-recordings/`.',
     keywords: ['recording', 'record', 'start', 'stop', 'capture', 'session', 'soak', 'fixture', 'debug'],
     when: ({ flags, workspace }) => {
@@ -950,7 +1025,7 @@ export const sessionCommands: CommandDef[] = [
     },
     run: ({ workspace, ui }) => {
       ui.closePalette()
-      void runToggleSessionRecordingCommand(workspace)
+      return runToggleSessionRecordingCommand(workspace)
     },
   },
   {
@@ -967,8 +1042,10 @@ export const sessionCommands: CommandDef[] = [
     // toasts "no active recording" rather than pre-computing per-session
     // recorder state into the palette flags on every keystroke.
     id: 'attach-recording-note',
+    category: 'developer',
+    pickerVisibility: 'debug',
     surface: 'debug',
-    title: 'Attach Recording Note',
+    title: 'Attach Recording Note…',
     description: '**What it does:** Drops a **timestamped note** into the focused pane\'s live session recording.\n\n**Use when:** You see a rendering bug during a recorded soak and want to mark the exact moment.\n\n**Notes:** Reserves the tick instantly, then prompts for text. Only available when session recording is enabled.',
     keywords: ['recording', 'note', 'mark', 'bookmark', 'annotate', 'soak', 'session', 'record', 'tick', 'debug'],
     when: ({ flags, workspace }) => {
@@ -983,23 +1060,33 @@ export const sessionCommands: CommandDef[] = [
     },
     run: ({ workspace, ui }) => {
       ui.closePalette()
-      void runAttachRecordingNoteCommand(workspace)
+      return runAttachRecordingNoteCommand(workspace)
     },
   },
   {
     id: 'toggle-rendering-debug-mode',
+    category: 'developer',
+    pickerVisibility: 'debug',
     surface: 'debug',
     title: 'Rendering Debug Mode',
     description: '**What it does:** Lets you click rendered feed elements to inspect their exact input, routing provenance, and HTML.\n\n**Use when:** A row is missing, duplicated, misleading, or formatted incorrectly.\n\n**Notes:** Clicks are intercepted while active; toggle the mode off to restore normal interaction.',
     keywords: ['rendering', 'renderer', 'inspect', 'element', 'html', 'input', 'receipt', 'routing', 'provenance', 'debug'],
-    getState: ({ flags }) => ({
-      label: flags.renderingDebugMode ? 'On' : 'Off',
-      tone: flags.renderingDebugMode ? 'danger' : 'neutral',
-    }),
+    // Danger tone is no longer authored here. This mode intercepts every click
+    // in the feed, so it IS worth flagging — but tone is derived from meaning,
+    // and the meaning is "on". The detail carries the warning instead, which is
+    // both more informative and impossible to drift from the actual state.
+    getState: ({ flags }) =>
+      toggle(flags.renderingDebugMode, {
+        detail: flags.renderingDebugMode
+          ? 'Feed clicks are intercepted while this is on'
+          : undefined,
+      }),
     run: ({ ui }) => ui.toggleRenderingDebugMode(),
   },
   {
     id: 'toggle-html-debug-panel',
+    category: 'developer',
+    pickerVisibility: 'debug',
     surface: 'debug',
     title: 'HTML Debug Panel',
     description: '**What it does:** Shows or hides rendered **HTML/DOM** inspection.\n\n**Use when:** You need to inspect the exact pane markup.\n\n**Notes:** Developer-oriented.',
@@ -1008,23 +1095,19 @@ export const sessionCommands: CommandDef[] = [
     // The feature is niche enough that users won't remember its exact
     // title, but they'll remember what they want to do with it.
     keywords: ['html', 'dom', 'outerhtml', 'markup', 'inspect', 'copy', 'pane', 'render', 'debug'],
-    getState: ({ flags }) => ({
-      label: flags.htmlDebugPanelOpen ? 'On' : 'Off',
-      tone: flags.htmlDebugPanelOpen ? 'accent' : 'neutral',
-    }),
+    getState: ({ flags }) => toggle(flags.htmlDebugPanelOpen),
     run: ({ ui }) => ui.toggleHtmlDebugPanel(),
   },
   {
     id: 'toggle-dev-debug-panel',
+    category: 'developer',
+    pickerVisibility: 'debug',
     surface: 'debug',
     title: 'Dev Debug Panel',
     description: '**What it does:** Shows or hides the temporary **Dev Debug Panel** module host.\n\n**Use when:** You need a bug-specific workbench for focused runtime state, regex probes, IPC experiments, or other short-lived diagnostics.\n\n**Notes:** Only appears when `AGENT_CODE_DEV_DEBUG=1` is set.',
     keywords: ['dev', 'debug', 'module', 'probe', 'regex', 'headless', 'snapshot', 'temporary'],
     when: ({ flags }) => flags.devDebugEnabled,
-    getState: ({ flags }) => ({
-      label: flags.devDebugPanelOpen ? 'On' : 'Off',
-      tone: flags.devDebugPanelOpen ? 'accent' : 'neutral',
-    }),
+    getState: ({ flags }) => toggle(flags.devDebugPanelOpen),
     run: ({ ui }) => ui.toggleDevDebugPanel(),
   },
 ]

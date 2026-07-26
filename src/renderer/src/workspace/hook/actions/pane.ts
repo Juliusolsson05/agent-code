@@ -1,4 +1,12 @@
 import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
+import {
+  expandSessionCloseTargets,
+  expandTabCloseTargets,
+  isSessionLiveForClose,
+  runCloseConfirmationGate,
+} from '@renderer/workspace/closeConfirmation'
+import type { CloseExpansionRuntimes, CloseTargetSnapshot } from '@renderer/workspace/closeConfirmation'
+import { requestCloseConfirmation } from '@renderer/workspace/closeConfirmationBroker'
 import { useCallback, useRef } from 'react'
 
 import type {
@@ -81,6 +89,43 @@ function forgetClosedSessionDebugState(refs: WorkspaceRefs, sessionId: SessionId
   forgetDebugTrace(sessionId)
 }
 
+/**
+ * The one way to skip `closeSession`'s confirmation gate.
+ *
+ * Setting `preConfirmed` is an ASSERTION, and it has a precise meaning: the
+ * caller has already put the full expanded target set in front of the user,
+ * received an explicit approval, and re-validated that set against live state
+ * immediately before this call. Three callers qualify today —
+ * `closeLinkedChildren` (cascade children, already named in the parent's
+ * dialog), `closeFocused` (delegating a target it just gated), and the Close
+ * Old Agents modal (whose whole UI is a preview-and-approve surface, and which
+ * re-runs its eligibility predicate before every kill).
+ *
+ * It is deliberately NOT a convenience for "this close feels safe". The default
+ * — omit it — is the gated path, and the Agent Activity modal's Close button is
+ * exactly the case that must keep paying for it: a single button in a list, no
+ * preview of the cascade it triggers.
+ */
+export type CloseSessionOptions = {
+  preConfirmed?: boolean
+  /**
+   * Confirm even when the policy would let this through silently.
+   *
+   * For closes a MODEL initiated. `headline` names the requester, so the dialog
+   * explains why it appeared — the user did not ask to close anything, and a
+   * bare "Close these sessions?" would be a riddle.
+   *
+   * This is what makes the Agent Management close tool's authorization
+   * enforceable. The first attempt put a single-use grant store in main and
+   * checked it at the bridge, which was the right instinct in the wrong place:
+   * a grant is issued by a USER ACTION, and there is no user action in main
+   * that corresponds to "the user asked this agent to close that agent". So
+   * nothing ever issued one, every `close_agent` call was denied, and the
+   * feature was dead. The renderer CAN ask, at the exact line that mutates.
+   */
+  requireConfirmation?: { headline: string }
+}
+
 type DetachedTabChildren = {
   records: DetachedSessionRecord[]
   ids: SessionId[]
@@ -105,6 +150,69 @@ function detachedTabChildren(state: WorkspaceState, tabId: string): DetachedTabC
     }),
   }
 }
+
+/**
+ * Every session a PANE close will actually end.
+ *
+ * Deliberately not just `expandSessionCloseTargets`. Both grid close paths take
+ * the tab's DETACHED children with them when the closing pane is the tab's last
+ * one — see `detachedTabChildren`, and the `!parentInfo` branches below that
+ * build `closedSessionIds` from it. Those sessions have no tile anywhere, so a
+ * cascade-only enumeration reported "1 session" for a close that killed seven,
+ * which is the exact class of surprise the confirmation exists to prevent.
+ *
+ * The rule this encodes: the gate must count what the mutation counts. When
+ * that stops being true the dialog becomes a lie, and a dialog nobody can trust
+ * is worse than no dialog at all — it trains the user to click through.
+ */
+function paneCloseTargets(
+  state: WorkspaceState,
+  runtimes: CloseExpansionRuntimes,
+  targetId: SessionId,
+): CloseTargetSnapshot[] {
+  const owningTab = state.tabs.find(tab => collectLeaves(tab.root).includes(targetId))
+  // A detached target, or a pane inside a split: the tab survives, so only the
+  // linked cascade dies.
+  if (!owningTab || findParentSplitInfo(owningTab.root, targetId)) {
+    return expandSessionCloseTargets(state, runtimes, targetId)
+  }
+  return expandTabCloseTargets(
+    state,
+    runtimes,
+    [targetId],
+    detachedTabChildren(state, owningTab.id).ids,
+  )
+}
+
+/**
+ * Resolve which session `closeFocused` would act on, from a given state.
+ *
+ * Extracted so the SAME derivation runs before the dialog and again after it.
+ * The pre-dialog answer is what the user approved; if re-running it against the
+ * post-dialog workspace yields a different session, focus moved while they were
+ * reading and closing now would kill something they never saw.
+ */
+function resolveFocusedCloseTarget(state: WorkspaceState): {
+  dispatchTargetId: SessionId | null
+  targetId: SessionId | undefined
+} {
+  const dispatchTargetId = state.dispatchMode
+    ? commandTargetSessionIdForState(state)
+    : null
+  const targetId = dispatchTargetId
+    ?? commandTargetSessionIdForState(state)
+    ?? state.tabs.find(tab => tab.id === state.activeTabId)?.focusedSessionId
+  return { dispatchTargetId, targetId }
+}
+
+/**
+ * Why a close stopped, phrased for a toast.
+ *
+ * A silent no-op after the user clicked "Close" is indistinguishable from a
+ * broken button. 'declined' is the user's own choice and needs no message.
+ */
+const CLOSE_CHANGED_TOAST =
+  'Close cancelled — these sessions changed while the dialog was open. Try again.'
 
 function dispatchModeAfterSessionRemovals(
   dispatchMode: DispatchModeState | null,
@@ -198,7 +306,7 @@ export function usePaneActions(
   attachAllDetachedForTab: (tabId: string) => Promise<void>
   detachFocusedToDispatch: () => void
   closeFocused: () => Promise<void>
-  closeSession: (targetId: SessionId) => Promise<void>
+  closeSession: (targetId: SessionId, options?: CloseSessionOptions) => Promise<void>
   requestBuryFocused: () => void
   buryFocused: (note?: string, targetSessionId?: SessionId) => void
   reviveBuried: (buriedId: string) => Promise<void>
@@ -207,7 +315,9 @@ export function usePaneActions(
   focusSessionInTab: (tabId: string, sessionId: SessionId) => void
   navigate: (direction: 'left' | 'right' | 'up' | 'down') => void
 } {
-  const closeSessionRef = useRef<((targetId: SessionId) => Promise<void>) | null>(null)
+  const closeSessionRef = useRef<
+    ((targetId: SessionId, options?: CloseSessionOptions) => Promise<void>) | null
+  >(null)
 
   // Spawns a new session in the parent pane's cwd, inserts a new
   // leaf under a fresh split node, makes the new pane focused.
@@ -743,7 +853,13 @@ export function usePaneActions(
       id => sessions[id]?.linkedParentId === parentId,
     )
     for (const childId of childIds) {
-      await closeSessionRef.current?.(childId)
+      // preConfirmed: the caller's gate expanded the cascade TRANSITIVELY, so
+      // every id reached here was already named in the dialog the user
+      // approved. Re-prompting per child would ask N times about one decision,
+      // and — worse — each re-prompt would re-enumerate a workspace the
+      // preceding kills had already changed, so a long cascade would abort
+      // itself halfway through with "these sessions changed".
+      await closeSessionRef.current?.(childId, { preConfirmed: true })
     }
   }, [refs.stateRef])
 
@@ -1078,10 +1194,43 @@ export function usePaneActions(
   // onto the undo-close stack so the user can restore the pane (or
   // tab) with a single command within the next 2 minutes.
   const closeFocused = useCallback(async () => {
+    // CONFIRMATION GATE. Runs before ANY mutation, and before the branch below
+    // picks a close path — the user's answer must cover the whole operation,
+    // not one arm of it.
+    //
+    // The gate expands the target set to everything the mutation will actually
+    // remove (`paneCloseTargets`) and re-checks it after the dialog, so an idle
+    // single close still falls straight through with no dialog and no re-work.
+    const approved = resolveFocusedCloseTarget(refs.stateRef.current)
+    if (approved.targetId) {
+      const targetId = approved.targetId
+      const gate = await runCloseConfirmationGate({
+        enumerate: () =>
+          paneCloseTargets(refs.stateRef.current, refs.latestRuntimesRef.current, targetId),
+        ask: requestCloseConfirmation,
+      })
+      if (!gate.ok) {
+        if (gate.reason === 'changed') showToast(CLOSE_CHANGED_TOAST)
+        return
+      }
+    }
+
+    // Re-read AFTER the gate. When nothing was prompted this is the same state
+    // the gate just read; when a dialog was shown it may be seconds old, and
+    // every derivation below — the owning tab, the undo entry, the detached
+    // children — was previously taken from the pre-dialog snapshot. That is how
+    // a confirmed close came to remove a leaf that had already gone and leave
+    // detached children pointing at a `projectTabId` with no tab behind it.
     const snapshot = refs.stateRef.current
-    const dispatchTargetId = snapshot.dispatchMode
-      ? commandTargetSessionIdForState(snapshot)
-      : null
+    const resolved = resolveFocusedCloseTarget(snapshot)
+    if (resolved.targetId !== approved.targetId) {
+      // Focus moved under the dialog. The approved target is not the target any
+      // more, and closing "whatever is focused now" is precisely the bug the
+      // gate exists to stop.
+      showToast(CLOSE_CHANGED_TOAST)
+      return
+    }
+    const dispatchTargetId = resolved.dispatchTargetId
     if (dispatchTargetId) {
       // WHY Dispatch Mode delegates by the visible row's explicit id:
       //
@@ -1099,7 +1248,7 @@ export function usePaneActions(
       // back to grid focus and then the first visible row in that case, so close
       // must use the same row-derived target or the highlighted pane and the
       // destructive target diverge again.
-      await closeSessionRef.current?.(dispatchTargetId)
+      await closeSessionRef.current?.(dispatchTargetId, { preConfirmed: true })
       return
     }
     if (snapshot.dispatchMode) return
@@ -1115,7 +1264,7 @@ export function usePaneActions(
       // through the normal grid close path would remove the parent tile and,
       // for linked children, cascade-kill the very child the user intended to
       // close. closeSession already owns detached explicit-id semantics.
-      await closeSessionRef.current?.(commandTargetId)
+      await closeSessionRef.current?.(commandTargetId, { preConfirmed: true })
       return
     }
     const targetId = tab.focusedSessionId
@@ -1232,6 +1381,7 @@ export function usePaneActions(
     })
   }, [
     closeLinkedChildren,
+    refs.latestRuntimesRef,
     refs.latestScreenRef,
     refs.seenUuidsRef,
     refs.stateRef,
@@ -1251,7 +1401,40 @@ export function usePaneActions(
   // Uses stateRef.current for the same reason buryFocused does: the
   // caller's action isn't bound to whatever happens to be active.
   const closeSession = useCallback(
-    async (targetId: SessionId) => {
+    async (targetId: SessionId, options?: CloseSessionOptions) => {
+      // Cheap existence check first, so we never open a dialog about a session
+      // that has already gone.
+      const initial = refs.stateRef.current
+      if (
+        !initial.tabs.some(t => collectLeaves(t.root).includes(targetId)) &&
+        !initial.detachedSessions[targetId]
+      ) {
+        return
+      }
+
+      // CONFIRMATION GATE. This path was previously ungated entirely, which
+      // made it the way around the policy rather than an implementation of it:
+      // the Agent Activity modal's Close button and every MCP-driven close ran
+      // straight through, cascade and all, with no dialog. `closeFocused`
+      // delegates here for its Dispatch and detached-child arms and passes
+      // preConfirmed, so those still ask exactly once.
+      if (!options?.preConfirmed) {
+        const gate = await runCloseConfirmationGate({
+          enumerate: () =>
+            paneCloseTargets(refs.stateRef.current, refs.latestRuntimesRef.current, targetId),
+          ask: requestCloseConfirmation,
+          force: options?.requireConfirmation,
+        })
+        if (!gate.ok) {
+          if (gate.reason === 'changed') showToast(CLOSE_CHANGED_TOAST)
+          return
+        }
+      }
+
+      // Read AFTER the gate, for the same reason closeFocused does: a dialog is
+      // an await, and the undo entry, the detached-children list and the
+      // session metadata below must describe the workspace we are about to
+      // mutate, not the one that existed when the user was asked.
       const snapshot = refs.stateRef.current
       const owningTab = snapshot.tabs.find(t => collectLeaves(t.root).includes(targetId))
       const sessionMeta = snapshot.sessions[targetId]
@@ -1404,6 +1587,7 @@ export function usePaneActions(
     },
     [
       closeLinkedChildren,
+      refs.latestRuntimesRef,
       refs.latestScreenRef,
       refs.seenUuidsRef,
       refs.stateRef,
@@ -1729,6 +1913,30 @@ export function usePaneActions(
       const snapshot = refs.stateRef.current
       const entry = snapshot.buried.find(item => item.id === buriedId)
       if (!entry) return
+
+      // SECOND CONFIRMATION. The buried picker is already an explicit,
+      // deliberate selection — but this is the one close in the app with NO
+      // undo at all: a buried session is not on the undo-close stack, so the
+      // kill is final. The picker's own selection is not consent to that.
+      //
+      // Confirmation is unconditional, unlike the ordinary close paths. There
+      // is no cheap idle case to protect here, because there is no recovery
+      // even when the session is idle.
+      const buriedConfirmed = await requestCloseConfirmation({
+        required: true,
+        // Its OWN reason. Borrowing 'running' made the dialog title an idle
+        // buried session "Close a working agent?", contradicting both its body
+        // and the actual state — on the one close with no undo, where the
+        // dialog's credibility is the entire mechanism.
+        reason: 'irreversible',
+        targets: [{
+          sessionId: entry.sessionId,
+          title: snapshot.sessions[entry.sessionId]?.title ?? entry.sessionId,
+          live: isSessionLiveForClose(refs.latestRuntimesRef.current, entry.sessionId),
+        }],
+        summary: 'Killing a buried session is permanent — Undo Close cannot restore it.',
+      })
+      if (!buriedConfirmed) return
 
       // Buried panes are live sessions removed from every visible tab
       // tree. `closeSession` intentionally only handles visible panes

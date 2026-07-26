@@ -1,9 +1,10 @@
 import type { CommandDef } from '@renderer/features/command-palette/types'
-import { dangerousCommands } from '@renderer/features/settings/commands/dangerousCommands'
+import { panel, toggle, value } from '@renderer/features/command-palette/commandState'
 
 export const settingsCommands: CommandDef[] = [
   {
     id: 'open-settings',
+    category: 'preferences',
     surface: 'app',
     title: 'Open Settings',
     description: '**What it does:** Opens **Settings**.\n\n**Use when:** You want to change app preferences.\n\n**Notes:** Includes appearance, workspace, dictation, experimental, and safety settings.',
@@ -16,6 +17,8 @@ export const settingsCommands: CommandDef[] = [
     // day: the user wants crash/close breadcrumbs and complete
     // bundles, not per-frame debug overhead.
     id: 'toggle-aggressive-debug-persistence',
+    category: 'developer',
+    pickerVisibility: 'debug',
     surface: 'debug',
     title: 'Persistent Aggressive Debug Logs',
     description: '**What it does:** Periodically saves **debug bundles** for active agents.\n\n**Use when:** You are chasing crashes or disappearing state.\n\n**Notes:** Can create many or large debug files.',
@@ -30,36 +33,29 @@ export const settingsCommands: CommandDef[] = [
       'trace',
       'all agents',
     ],
-    getState: ({ flags }) => ({
-      label: flags.aggressiveDebugPersistenceEnabled ? 'On' : 'Off',
-      tone: flags.aggressiveDebugPersistenceEnabled ? 'accent' : 'neutral',
-    }),
+    getState: ({ flags }) => toggle(flags.aggressiveDebugPersistenceEnabled),
     run: ({ flags, ui }) =>
       ui.setAggressiveDebugPersistence(!flags.aggressiveDebugPersistenceEnabled),
   },
   {
     id: 'toggle-worktrees-bar',
+    category: 'workspace-tools',
     surface: 'app',
     title: 'Worktrees',
     description: '**What it does:** Shows or hides the **Worktrees** panel.\n\n**Use when:** You want branch and worktree activity for the focused project.\n\n**Notes:** Useful for multi-agent git cleanup.',
     keywords: ['worktree', 'worktrees', 'branch', 'git', 'activity', 'agents', 'cleanup'],
-    getState: ({ flags }) => ({
-      label: flags.worktreesBarOpen ? 'Open' : 'Closed',
-      tone: flags.worktreesBarOpen ? 'accent' : 'neutral',
-    }),
+    getState: ({ flags }) => panel(flags.worktreesBarOpen),
     run: ({ ui }) => ui.toggleWorktreesBar(),
   },
-  {
-    id: 'toggle-worktree-badges',
-    surface: 'app',
-    title: 'Worktree Badges',
-    description: '**What it does:** Toggles **worktree badges** on agent rows.\n\n**Use when:** You want branch context visible in panes and **Dispatch**.\n\n**Notes:** Visual-only setting.',
-    keywords: ['branch', 'git', 'worktree', 'badge', 'agent'],
-    getState: ({ flags }) => ({
-      label: flags.worktreeBadgesEnabled ? 'On' : 'Off',
-      tone: flags.worktreeBadgesEnabled ? 'accent' : 'neutral',
-    }),
-    run: ({ ui }) => ui.toggleWorktreeBadges(),
-  },
-  ...dangerousCommands,
+  // RETIRED: `toggle-worktree-badges`. Same reasoning as Status Mode — a
+  // durable visual preference with no momentary scope belongs in Settings
+  // only (Interface → Worktree Badges, backed by `showWorktreeBadges`).
+  //
+  // RETIRED: `dangerous-agents`, which used to arrive here via
+  // `...dangerousCommands`. That one is not merely a duplicated preference: it
+  // is a SAFETY POSTURE whose enablement reloads every live agent. A palette
+  // row that flips it with one keystroke and no preview is the wrong affordance
+  // for that, and its old copy even claimed existing agents were unaffected
+  // while the runner reloaded them. Settings owns it, where a confirmation can
+  // show the exact set of agents about to be replaced.
 ]

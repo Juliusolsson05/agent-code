@@ -2,6 +2,7 @@ import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
 import type { CommandDef } from '@renderer/features/command-palette/types'
 import { prefixDraftWithQuote, quoteSnippet } from '@renderer/features/reply-to-selection/lib/formatQuote'
 import { parkComposerCaretAtEnd } from '@renderer/features/reply-to-selection/lib/parkComposerCaret'
+import { value } from '@renderer/features/command-palette/commandState'
 import {
   peekPendingSelection,
   takePendingSelection,
@@ -33,6 +34,7 @@ function validPendingSelection(workspace: Workspace): PendingSelection | null {
 export const replyToSelectionCommands: CommandDef[] = [
   {
     id: 'reply-to-selection',
+    category: 'session',
     surface: 'session',
     // Stable noun phrase per docs/command-style.md rule 1 — the captured
     // text is surfaced through `getState` as a badge (rule 3), not baked
@@ -64,7 +66,9 @@ export const replyToSelectionCommands: CommandDef[] = [
       // The snippet is what stops this being a blind action: availability
       // comes from the stash, not from a highlight that is still visible
       // (opening the palette collapses it). See selectionStash.ts.
-      return { label: `"${quoteSnippet(pending.text, 40)}"`, tone: 'accent' }
+      // The stashed snippet is CONTEXT — it says what the command would quote.
+      // Rendered with accent tone it read as "this toggle is on".
+      return value(`"${quoteSnippet(pending.text, 40)}"`)
     },
     run: ({ workspace }) => {
       // Re-validate before consuming: `when` ran when the palette built

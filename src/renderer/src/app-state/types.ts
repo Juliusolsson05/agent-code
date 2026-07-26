@@ -1,5 +1,9 @@
 import type { Settings } from '@renderer/app-state/settings/types'
-import type { DispatchAttachIntent, UiShellState } from '@renderer/app-state/uiShell/types'
+import type {
+  DispatchAttachIntent,
+  PendingCommandInvocation,
+  UiShellState,
+} from '@renderer/app-state/uiShell/types'
 import type { SessionId, TabId } from '@renderer/workspace/types'
 import type { WorkspaceState } from '@renderer/workspace/types'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
@@ -23,6 +27,15 @@ export type SettingsSlice = {
 }
 
 export type UiShellSlice = UiShellState & {
+  /**
+   * Ask for a command to run through the shared execution gateway.
+   *
+   * Used by the native-menu bridge and the keybinding router. Both need a live
+   * CommandContext they cannot cheaply build themselves, so they record the id
+   * here and the palette — which owns the context — dispatches it.
+   */
+  requestCommandInvocation: (id: string, source: PendingCommandInvocation['source']) => void
+  clearCommandInvocation: () => void
   openCommandPalette: () => void
   closeCommandPalette: () => void
   toggleCommandPalette: () => void

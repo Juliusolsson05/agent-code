@@ -21,6 +21,9 @@ import {
   deactivateEditorTheme,
 } from '@renderer/features/editor/lib/monacoEditorTheme'
 import type { EditorFileBuffer } from '@renderer/features/editor/types'
+import { useAppStore } from '@renderer/app-state/hooks'
+import { toMonacoChord } from '@renderer/features/command-keybindings/normalize'
+import { effectiveBindingsFor } from '@renderer/features/command-keybindings/resolve'
 import { THEME_CHANGED_EVENT, getActiveAppFontFamily } from '@renderer/app-state/settings/theme'
 
 // Language servers keep a second full-text copy and every didChange crosses
@@ -84,6 +87,12 @@ export function MonacoFileEditor({
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null)
   const fileRef = useRef(file)
   const onChangeRef = useRef(onChange)
+  // Read through a ref for the same reason as onSave: the mount effect must not
+  // re-run (and re-create the model) merely because a binding changed.
+  const saveBinding = useAppStore(
+    state => effectiveBindingsFor('save-editor-file', state.settings.commandKeybindingOverrides)[0],
+  )
+  const saveBindingRef = useRef(saveBinding)
   const onSaveRef = useRef(onSave)
   const onCloseRef = useRef(onClose)
   const onSelectionRevealedRef = useRef(onSelectionRevealed)
@@ -91,6 +100,7 @@ export function MonacoFileEditor({
   fileRef.current = file
   onChangeRef.current = onChange
   onSaveRef.current = onSave
+  saveBindingRef.current = saveBinding
   onCloseRef.current = onClose
   onSelectionRevealedRef.current = onSelectionRevealed
   onFocusRequestHandledRef.current = onFocusRequestHandled
@@ -233,13 +243,29 @@ export function MonacoFileEditor({
       // addCommand installs an undisposable global keybinding in standalone
       // Monaco. addAction scopes the precondition to this editor id and gives
       // us a real disposable, so tab switches cannot accumulate stale saves.
-      const saveAction = editor.addAction({
-        id: `agent-code.save.${mountedOwner}.${encodeURIComponent(mountedPath)}`,
-        label: 'Save File',
-        keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS],
-        run: () => onSaveRef.current(),
-      })
-      cleanups.push(() => saveAction.dispose())
+      // Save's chord is DERIVED from the effective binding for
+      // `save-editor-file`, not hard-coded. It used to be
+      // `CtrlCmd | KeyCode.KeyS` here and again in EditorWorkbench, so
+      // rebinding Save in Settings changed the displayed chord and nothing
+      // else — the palette advertised one key while two hard-coded handlers
+      // ran another.
+      //
+      // An unbound or untranslatable value registers NOTHING rather than
+      // falling back to ⌘S: a silently-wrong editor binding is worse than an
+      // absent one, and "Not assigned" in Settings has to mean it.
+      const saveChord = monacoChordFor(saveBindingRef.current)
+      if (saveChord) {
+        const saveAction = editor.addAction({
+          id: `agent-code.save.${mountedOwner}.${encodeURIComponent(mountedPath)}`,
+          label: 'Save File',
+          keybindings: [saveChord(monaco)],
+          run: () => onSaveRef.current(),
+        })
+        cleanups.push(() => saveAction.dispose())
+      }
+      // Close stays hard-coded on purpose: editor-native file close is a
+      // RESERVED INTERACTION, not a command. It has no palette row and no
+      // Settings binding, so there is nothing to derive it from.
       const closeAction = editor.addAction({
         id: `agent-code.close.${mountedOwner}.${encodeURIComponent(mountedPath)}`,
         label: 'Close File',
@@ -495,4 +521,27 @@ export function MonacoFileEditor({
       </div>
     </div>
   )
+}
+
+/**
+ * The effective Save chord as a Monaco bitmask factory, or null when Save is
+ * unbound or uses a chord Monaco cannot express.
+ *
+ * Returns a factory rather than a number so the translation stays free of a
+ * `monaco` import — the keybinding modules are consumed by node-side tooling
+ * that must not pull in the editor bundle.
+ */
+function monacoChordFor(binding: string | undefined) {
+  if (!binding) return null
+  const chord = toMonacoChord(binding)
+  if (!chord) return null
+  return (monaco: typeof import('monaco-editor')) => {
+    let mask = 0
+    if (chord.ctrlCmd) mask |= monaco.KeyMod.CtrlCmd
+    if (chord.shift) mask |= monaco.KeyMod.Shift
+    if (chord.alt) mask |= monaco.KeyMod.Alt
+    const code = (monaco.KeyCode as unknown as Record<string, number>)[chord.keyCode]
+    if (code === undefined) return mask
+    return mask | code
+  }
 }

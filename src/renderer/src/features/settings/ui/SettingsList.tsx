@@ -5,6 +5,8 @@ import type {
 } from '@renderer/features/settings/lib/settingsRegistry'
 import { SETTING_CATEGORIES } from '@renderer/features/settings/lib/settingsCategories'
 import { HotkeyInput } from '@renderer/features/settings/ui/HotkeyInput'
+import { CommandKeybindingsRow } from '@renderer/features/settings/ui/CommandKeybindingsRow'
+import { settingMetadata } from '@renderer/features/settings/lib/settingsRegistry'
 import { CliUpdateBehaviorRow } from '@renderer/features/cli-updates/CliUpdateBehaviorRow'
 import { DictationApiKeyRow } from '@renderer/features/voice-dictation/DictationApiKeyRow'
 import { ThemePickerRow } from '@renderer/features/settings/ui/ThemePickerRow'
@@ -98,6 +100,8 @@ function SettingRow({
         </div>
 
         <div className="w-full max-w-[420px] shrink-0">
+          <SettingMetadataBadges definition={definition} />
+
           {control.type === 'toggle' ? (
             <button
               type="button"
@@ -218,6 +222,8 @@ function SettingRow({
               because the value lives in setup.json (main-owned), not
               in the renderer Settings store. See
               features/cli-updates/CliUpdateBehaviorRow.tsx. */}
+          {control.type === 'command-keybindings' ? <CommandKeybindingsRow /> : null}
+
           {control.type === 'cli-update-behavior' ? <CliUpdateBehaviorRow /> : null}
 
           {/* Voice-dictation API key — same self-subscribing marker-row
@@ -245,3 +251,63 @@ function SettingRow({
     </div>
   )
 }
+
+/**
+ * Small badges stating what a setting actually changes and when.
+ *
+ * Only the NON-DEFAULT facts are rendered. Showing "app / immediate /
+ * settings" on the thirty rows where that is already the obvious reading
+ * would bury the handful where it is not — and those are the whole point:
+ * the row that reloads live agents, the one that only affects a fresh
+ * install, the one whose value lives in the keychain and survives Reset
+ * Settings.
+ */
+function SettingMetadataBadges({ definition }: { definition: SettingDefinition }) {
+  const meta = settingMetadata(definition)
+  const badges: string[] = []
+  if (meta.scope !== 'app') badges.push(SCOPE_LABELS[meta.scope])
+  if (meta.apply !== 'immediate') badges.push(APPLY_LABELS[meta.apply])
+  if (meta.storage !== 'settings') badges.push(STORAGE_LABELS[meta.storage])
+  if (meta.status) badges.push(STATUS_LABELS[meta.status])
+  if (badges.length === 0) return null
+  return (
+    <div className="mt-1 flex flex-wrap gap-1">
+      {badges.map(badge => (
+        <span
+          key={badge}
+          className="border border-panel-border bg-panel-elevated-bg px-1 py-0.5 text-[9px] uppercase tracking-wider text-muted"
+        >
+          {badge}
+        </span>
+      ))}
+    </div>
+  )
+}
+
+const SCOPE_LABELS = {
+  app: 'App',
+  project: 'Project',
+  'session-default': 'New sessions',
+  'fresh-install': 'Fresh install only',
+} as const
+
+const APPLY_LABELS = {
+  immediate: 'Immediate',
+  'new-session': 'Next session',
+  'reload-live-sessions': 'Reloads live agents',
+  'restart-required': 'Restart required',
+} as const
+
+const STORAGE_LABELS = {
+  settings: 'Settings',
+  workspace: 'Workspace',
+  setup: 'App setup',
+  keychain: 'Keychain',
+  'external-files': 'Files on disk',
+} as const
+
+const STATUS_LABELS = {
+  experimental: 'Experimental',
+  dangerous: 'Dangerous',
+  developer: 'Developer',
+} as const

@@ -25,6 +25,7 @@ import type {
 } from '@renderer/app-state/settings/types'
 import { coerceCustomAppearanceJson } from '@renderer/app-state/settings/customAppearance'
 import { coerceDispatchColorFlags } from '@renderer/app-state/settings/dispatchColorFlags'
+import { coerceCommandKeybindingOverrides } from '@renderer/features/command-keybindings/resolve'
 import { coerceHotkeyBinding } from '@renderer/lib/hotkeyBinding'
 import { coerceSavedPromptTemplates } from '@renderer/features/prompt-templates/savedPromptTemplates'
 import { normalizeConfigurableBuiltInMcpDomains } from '@mcp/shared/types'
@@ -46,7 +47,13 @@ export function coerceSettings(value: unknown): Settings {
 
   return {
     ...DEFAULT_SETTINGS,
-    ...parsed,
+    // WHY `parsed` is spread through a filter rather than directly: deleting a
+    // field from the `Settings` TYPE does not delete it from a user's stored
+    // blob. `...parsed` copies every key it finds, so a retired key survives
+    // coercion, gets written back on the next save, and lives forever in
+    // localStorage — invisible to TypeScript and impossible to reason about.
+    // The plan calls this out explicitly for dispatchProjectTerminal.
+    ...omitRetiredSettingsKeys(parsed),
     savedThemes,
     savedPromptTemplates,
     dispatchColorFlags: coerceDispatchColorFlags(parsed.dispatchColorFlags),
@@ -70,11 +77,6 @@ export function coerceSettings(value: unknown): Settings {
     // non-strings so a corrupt localStorage blob cannot break settings boot.
     dictationShortcut: coerceHotkeyBinding(parsed.dictationShortcut),
     aggressiveDebugPersistence: parsed.aggressiveDebugPersistence === true,
-    // Strict `=== true` so missing OR malformed values default to off —
-    // matches the "off by default, opt in" semantics promised in the
-    // setting's docstring. Anything looser (e.g. `!== false`) would
-    // flip the default to ON for fresh installs.
-    dispatchProjectTerminal: parsed.dispatchProjectTerminal === true,
     // `!== false` so the default is ON — only an explicit persisted `false`
     // turns autosend off. Fresh installs / older workspace.json blobs (no
     // such key) get the on-by-default behavior.
@@ -126,6 +128,16 @@ export function coerceSettings(value: unknown): Settings {
     // matching the "absent ≡ declared default" semantic.
     commandVisibilityOverrides: coerceCommandVisibilityOverrides(
       parsed.commandVisibilityOverrides,
+    ),
+    // Strict `=== true` so a fresh install, a malformed value, and any store
+    // written before this field existed all resolve to OFF. Anything looser
+    // (`!== false`) would flip the default on for every existing user, which
+    // is the opposite of the intent: the group is hidden because six extra
+    // rows help almost nobody, and silently revealing them on upgrade would
+    // be a regression nobody asked for.
+    navigationCommandsEnabled: parsed.navigationCommandsEnabled === true,
+    commandKeybindingOverrides: pruneRetiredKeybindingOverrides(
+      coerceCommandKeybindingOverrides(parsed.commandKeybindingOverrides),
     ),
   }
 }
@@ -194,11 +206,76 @@ function resolvePersistedMode(
   return DEFAULT_SETTINGS.mode
 }
 
+/**
+ * First-party command ids this release deliberately removed.
+ *
+ * Their persisted preference entries are pruned so a stale visibility override
+ * or keybinding cannot linger forever against an id nothing will ever resolve.
+ *
+ * WHY an explicit list instead of "delete any id not in the catalog": an id
+ * that names nothing TODAY is not necessarily dead. It may belong to an
+ * extension that is temporarily uninstalled, a provider whose commands this
+ * build does not generate, or a command a downgrade removed. Pruning by
+ * absence would silently discard a user's deliberate settings the first time
+ * they ran an older build or disabled an extension. Only ids we KNOW are gone
+ * for good are removed, and adding one is a deliberate act recorded here.
+ *
+ * Retired in the command-governance change: five durable preferences that had
+ * both a command and a Settings control. The Settings controls (and their
+ * canonical fields) are untouched, so no value migration is needed — only the
+ * now-meaningless per-command preference entries go.
+ */
+const RETIRED_BUILT_IN_COMMAND_IDS: ReadonlySet<string> = new Set([
+  'toggle-status-mode',
+  'toggle-worktree-badges',
+  'usage.toggle-header',
+  'usage.cycle-header-level',
+  'dangerous-agents',
+])
+
+/**
+ * Persisted Settings keys this release removed.
+ *
+ * Listing them is what makes a removal real. A key absent from the type but
+ * present in storage is worse than one that is merely unused: it round-trips
+ * through every save, so the blob keeps growing and a future field with the
+ * same name would silently inherit a stale value.
+ *
+ * Removed in the command-governance change: `dispatchProjectTerminal`, the
+ * opt-in auto-created Dispatch project terminal. The whole feature is gone —
+ * the Settings row, the auto-create effect, the dedicated side column and the
+ * ensureDispatchTerminal action — so the preference has nothing left to
+ * control.
+ */
+const RETIRED_SETTINGS_KEYS: readonly string[] = ['dispatchProjectTerminal']
+
+function omitRetiredSettingsKeys(parsed: Partial<Settings>): Partial<Settings> {
+  const result: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(parsed)) {
+    if (RETIRED_SETTINGS_KEYS.includes(key)) continue
+    result[key] = value
+  }
+  return result as Partial<Settings>
+}
+
 function coerceCommandVisibilityOverrides(value: unknown): Record<string, boolean> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
   const result: Record<string, boolean> = {}
   for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (RETIRED_BUILT_IN_COMMAND_IDS.has(key)) continue
     if (typeof entry === 'boolean') result[key] = entry
+  }
+  return result
+}
+
+/** Same retired-id policy, applied to persisted keybinding overrides. */
+function pruneRetiredKeybindingOverrides(
+  overrides: Record<string, string[]>,
+): Record<string, string[]> {
+  const result: Record<string, string[]> = {}
+  for (const [commandId, bindings] of Object.entries(overrides)) {
+    if (RETIRED_BUILT_IN_COMMAND_IDS.has(commandId)) continue
+    result[commandId] = bindings
   }
   return result
 }

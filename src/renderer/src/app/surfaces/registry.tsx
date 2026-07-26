@@ -16,6 +16,7 @@ import { TileTabsModalSurface } from '@renderer/features/workspace/surfaces/Tile
 import { ReorderTabsSurface } from '@renderer/features/workspace/surfaces/ReorderTabsSurface'
 import { PinAgentsSurface } from '@renderer/features/dispatch-pin/surfaces/PinAgentsSurface'
 import { BuryPanePromptSurface } from '@renderer/features/workspace/surfaces/BuryPanePromptSurface'
+import { CloseConfirmationSurface } from '@renderer/features/workspace/surfaces/CloseConfirmationSurface'
 import { ViewPromptsSurface } from '@renderer/features/workspace/surfaces/ViewPromptsSurface'
 import { PromptSearchSurface } from '@renderer/features/workspace/surfaces/PromptSearchSurface'
 import { AgentActivitySurface } from '@renderer/features/workspace/surfaces/AgentActivitySurface'
@@ -64,6 +65,7 @@ export const modalSurfaces: SurfaceEntry[] = [
   { id: 'reorder-tabs', Component: ReorderTabsSurface },
   { id: 'pin-agents', Component: PinAgentsSurface },
   { id: 'bury-pane', Component: BuryPanePromptSurface },
+  { id: 'close-confirmation', Component: CloseConfirmationSurface },
   { id: 'debug-bundle-note', Component: DebugBundleNoteSurface },
   { id: 'recording-note', Component: RecordingNoteSurface },
   { id: 'view-prompts', Component: ViewPromptsSurface },

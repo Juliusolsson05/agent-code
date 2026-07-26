@@ -1,5 +1,6 @@
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import type { AgentProviderKind } from '@shared/types/providerKind'
+import { getProviderFeatures } from '@providers/shared/featureCapabilities'
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 
@@ -11,14 +12,16 @@ import {
 } from '@renderer/components/ui/dialog'
 import { buildCommandRegistry } from '@renderer/features/command-palette/registry'
 import {
-  buildAgentIndexCommand,
-  isAgentIndexCommand,
-} from '@renderer/features/command-palette/lib/agentIndexCommand'
+  dispatchCommand,
+  dispatchResolvedRow,
+} from '@renderer/features/command-palette/executeCommand'
+import { PALETTE_SELF_EXCLUDED_COMMAND_IDS } from '@renderer/features/command-palette/commands/paletteCommands'
+import { buildAgentIndexCommand } from '@renderer/features/command-palette/lib/agentIndexCommand'
 import {
   buildHistoryScoreMap,
   loadRecentHistory,
-  recordCommandUse,
 } from '@renderer/features/command-palette/lib/recentCommandHistory'
+import { useGlobalToast } from '@renderer/ui/GlobalToast'
 import { rankCommands } from '@renderer/features/command-palette/lib/rankCommands'
 import {
   body,
@@ -26,7 +29,13 @@ import {
   rankEntries,
   secondary,
 } from '@renderer/features/command-palette/lib/rankEntries'
-import type { CommandContext, ResolvedCommand } from '@renderer/features/command-palette/types'
+import { describeCommandState } from '@renderer/features/command-palette/commandState'
+import type {
+  CommandContext,
+  CommandState,
+  ResolvedCommand,
+} from '@renderer/features/command-palette/types'
+import type { PendingCommandInvocation } from '@renderer/app-state/uiShell/types'
 import {
   allPromptTemplates,
 } from '@renderer/features/prompt-templates/templates'
@@ -115,13 +124,50 @@ type PromptTemplateFillState = {
 // this to reveal the full list in one shot.
 const SHOW_HIDDEN_COMMANDS = false
 
+/**
+ * The ONE place a semantic command state becomes pixels.
+ *
+ * Both the palette row and the details pane render through this, so a state
+ * cannot be coloured one way in the list and another in the preview — which is
+ * what happened when each surface carried its own copy of the tone ternary.
+ * Tone, label and muting all come from `describeCommandState`; nothing here
+ * decides appearance from the state's contents directly.
+ */
+function CommandStateBadge({ state }: { state: CommandState }) {
+  const presentation = describeCommandState(state)
+  const tone =
+    presentation.tone === 'danger'
+      ? 'border-danger-border bg-danger-soft text-danger'
+      : presentation.tone === 'accent'
+        ? 'border-accent/30 bg-row-selected-bg text-accent'
+        : 'border-panel-border bg-panel-elevated-bg text-muted'
+  return (
+    <span
+      // `detail` carries the explanation the old flat label could not — the
+      // reason Tail says On when this command cannot turn it off, or why
+      // Caffeinate is unavailable on this platform.
+      title={presentation.detail}
+      className={`rounded border px-1.5 py-0.5 text-[10px] uppercase tracking-wider ${tone}${
+        presentation.muted ? ' opacity-60' : ''
+      }`}
+    >
+      {presentation.label}
+    </span>
+  )
+}
+
 export function CommandPalette() {
   const open = useAppStore(state => state.commandPaletteOpen)
-  const openPalette = useAppStore(state => state.openCommandPalette)
-  const [pendingMenuCommand, setPendingMenuCommand] = useState<{
-    id: string
-    closeAfterRun: boolean
-  } | null>(null)
+  // The pending invocation now lives in the STORE rather than in local state
+  // here, because it no longer belongs only to the native menu. The keybinding
+  // router is mounted in the workspace tree and needs the same channel: it also
+  // cannot cheaply build a CommandContext (assembling ~76 workspace actions and
+  // flags is precisely the cost this component avoids paying while closed,
+  // #494), so a chord takes the route a menu click already took. One channel,
+  // one dispatch path — rather than a second one growing beside it.
+  const pendingCommandInvocation = useAppStore(state => state.pendingCommandInvocation)
+  const requestCommandInvocation = useAppStore(state => state.requestCommandInvocation)
+  const clearCommandInvocation = useAppStore(state => state.clearCommandInvocation)
 
   useEffect(
     () =>
@@ -135,39 +181,46 @@ export function CommandPalette() {
         // this marker, so menu commands wait instead of competing with its current
         // search/navigation turn.
         if (hasAppInteractionOwner()) return
-        // WHY a native menu command temporarily mounts the open implementation:
-        // command definitions need live workspace actions, but keeping that entire
-        // registry subscribed while the palette is closed made every session delta
-        // rebuild an invisible feature. A menu click is rare and intentional, so it
-        // may pay the one-time registry cost. useLayoutEffect below runs it and
-        // closes before paint, avoiding a palette flash for menu-only execution.
-        setPendingMenuCommand({ id: commandId, closeAfterRun: !open })
-        if (!open) openPalette()
+        // WHY this temporarily mounts the open implementation: command
+        // definitions need live workspace actions, but keeping that registry
+        // subscribed while the palette is closed made every session delta
+        // rebuild an invisible feature. A menu click is rare and intentional, so
+        // it may pay the one-time registry cost. useLayoutEffect below runs it
+        // and closes before paint, avoiding a palette flash.
+        requestCommandInvocation(commandId, 'native-menu')
       }),
-    [open, openPalette],
+    [requestCommandInvocation],
   )
-
-  const clearPendingMenuCommand = useCallback(() => setPendingMenuCommand(null), [])
 
   // WHY the workspace-heavy component does not exist while closed: returning
   // null at the bottom of the old monolith was too late. Hooks had already read
   // the monolithic workspace context, assembled ~76 command dependencies, and
-  // built the registry. This outer gate subscribes to one boolean plus the
-  // native bridge; ordinary agent traffic cannot fan into the hidden palette.
-  if (!open) return null
+  // built the registry. This outer gate subscribes to two store fields;
+  // ordinary agent traffic cannot fan into the hidden palette.
+  // Mount for a pending invocation too, but WITHOUT making the palette visible.
+  // Previously `requestCommandInvocation` set `commandPaletteOpen: true`, so
+  // every routed chord — including ⌥H/⌥J pane focus, the most repeated gesture
+  // in the app — flashed the palette open and shut. Separating "the host is
+  // mounted" from "the user can see it" keeps the #494 cost model (build the
+  // context only when something actually needs it) without the flash.
+  if (!open && !pendingCommandInvocation) return null
   return (
     <OpenCommandPalette
-      pendingMenuCommand={pendingMenuCommand}
-      onMenuCommandHandled={clearPendingMenuCommand}
+      visible={open}
+      pendingMenuCommand={pendingCommandInvocation}
+      onMenuCommandHandled={clearCommandInvocation}
     />
   )
 }
 
 function OpenCommandPalette({
+  visible,
   pendingMenuCommand,
   onMenuCommandHandled,
 }: {
-  pendingMenuCommand: { id: string; closeAfterRun: boolean } | null
+  /** False when mounted purely to service a keybinding or menu invocation. */
+  visible: boolean
+  pendingMenuCommand: PendingCommandInvocation | null
   onMenuCommandHandled: () => void
 }) {
   // #494: the palette used to receive ~76 props whose only purpose was
@@ -179,6 +232,10 @@ function OpenCommandPalette({
   // are untouched, and the future provider-enumeration rewrite (#394 §7)
   // rebuilds command CONTENT, not this assembly.
   const workspace = useWorkspaceContext()
+  // Injected into the execution gateway so an async command failure is
+  // visible. Before the gateway, every call site was `void command.run(ctx)`
+  // and a rejected promise vanished with no user-facing signal at all.
+  const { showToast } = useGlobalToast()
   const onClose = useAppStore(state => state.closeCommandPalette)
   const settings = useAppStore(state => state.settings)
   const setSettings = useAppStore(state => state.setSettings)
@@ -192,6 +249,7 @@ function OpenCommandPalette({
   }, [openTileTabsModal, workspace.activeTab, workspace.tileTabs])
   const onReorderTabsRequest = useAppStore(state => state.openReorderTabs)
   const onSettingsRequest = useAppStore(state => state.openSettingsPage)
+  const openPaletteAction = useAppStore(state => state.openCommandPalette)
   const openViewPrompts = useAppStore(state => state.openViewPrompts)
   const openPromptSearch = useAppStore(state => state.openPromptSearch)
   const openAgentActivity = useAppStore(state => state.openAgentActivity)
@@ -253,6 +311,8 @@ function OpenCommandPalette({
 
   const agentViewMode = settings.agentViewMode
   const commandVisibilityOverrides = settings.commandVisibilityOverrides
+  const navigationCommandsEnabled = settings.navigationCommandsEnabled
+  const commandKeybindingOverrides = settings.commandKeybindingOverrides
   const showHiddenCommands = SHOW_HIDDEN_COMMANDS
   const statusModeEnabled = settings.showStatusMode
   const worktreeBadgesEnabled = settings.showWorktreeBadges
@@ -313,9 +373,23 @@ function OpenCommandPalette({
   // resume picker list Claude sessions and spawn a Claude pane, even though
   // the picker header already displayed "resume opencode". Terminal / unknown
   // kinds have no resume story, so fall back to the default provider.
-  const resumeProvider: AgentProviderKind = isAgentProviderKind(focusedProvider)
-    ? focusedProvider
-    : DEFAULT_PROVIDER
+  // Which provider's saved sessions the Resume picker lists.
+  //
+  // The focused pane's provider, but ONLY if main can actually enumerate saved
+  // sessions for it. `listSessionsForCwd` has no index for OpenCode, so
+  // focusing an OpenCode pane and hitting Resume opened a picker that would
+  // always be empty — a dead end presented as a working feature, and the reason
+  // `savedSessionListing` existed with nothing reading it.
+  //
+  // Falling back to the default provider rather than hiding Resume entirely:
+  // the user's saved Claude sessions in this cwd are still there and still what
+  // they most likely want. Hiding the command would take a working action away
+  // because an unrelated pane happens to be focused.
+  const resumeProvider: AgentProviderKind =
+    isAgentProviderKind(focusedProvider) &&
+    getProviderFeatures(focusedProvider).savedSessionListing
+      ? focusedProvider
+      : DEFAULT_PROVIDER
 
   const enterResumeMode = useCallback(async () => {
     if (!focusedCwd) return
@@ -330,7 +404,7 @@ function OpenCommandPalette({
       setSessions([])
     }
     setSessionsLoading(false)
-  }, [focusedCwd, focusedProvider])
+  }, [focusedCwd, resumeProvider])
 
   // Buried panes are scoped to the ACTIVE TAB. The natural temptation
   // is to show every buried pane in the workspace ("they're paused
@@ -486,6 +560,11 @@ function OpenCommandPalette({
         openTileTabs: onTileTabsRequest,
         openReorderTabs: onReorderTabsRequest,
         openSettings: onSettingsRequest,
+        // Reachable through the gateway (keybinding, native menu, programmatic)
+        // but never rendered as a palette row — see
+        // PALETTE_SELF_EXCLUDED_COMMAND_IDS for why that exclusion is
+        // structural rather than a visibility tier.
+        openCommandPalette: openPaletteAction,
         openViewPrompts,
         openPromptSearch,
         openAgentActivity,
@@ -566,6 +645,8 @@ function OpenCommandPalette({
         globalDispatchEnabled,
         agentViewMode,
         commandVisibilityOverrides,
+        navigationCommandsEnabled,
+        commandKeybindingOverrides,
         showHiddenCommands,
       },
     }),
@@ -653,6 +734,8 @@ function OpenCommandPalette({
       globalDispatchEnabled,
       agentViewMode,
       commandVisibilityOverrides,
+      navigationCommandsEnabled,
+      commandKeybindingOverrides,
       showHiddenCommands,
     ],
   )
@@ -840,23 +923,28 @@ function OpenCommandPalette({
 
   const executeCommand = useCallback(
     (command: ResolvedCommand) => {
-      // Record the use BEFORE running. This is the single funnel every
-      // command execution passes through (keyboard Enter and click both
-      // route here), so it's the one correct place to update history.
-      // recordCommandUse never throws, so it can't block command.run.
-      // Agent coordinates are transient workspace destinations, not reusable
-      // registry commands. Recording `agent-index:<sessionId>` would fill the
-      // recent-command history with launch-local ids that can never rank a
-      // future palette open, while crowding out real commands the user repeats.
-      if (!isAgentIndexCommand(command)) recordCommandUse(command.id)
+      // Every palette execution — keyboard Enter and click alike — funnels
+      // through the shared gateway. History is no longer recorded here: the
+      // gateway records it AFTER a successful run, so a command that turns out
+      // to be unavailable or that throws no longer climbs the user's ranking
+      // for failing. It also owns transient-row exclusion, single-flight, and
+      // surfacing async failures the old `void command.run(...)` swallowed.
+      const dispatch = () =>
+        void dispatchResolvedRow({
+          row: command,
+          source: 'palette',
+          ctx: commandContext,
+          reportError: message => showToast(message, 6000),
+        })
+
       if (command.keepPaletteOpen) {
-        void command.run(commandContext)
+        dispatch()
         return
       }
       onClose()
-      void command.run(commandContext)
+      dispatch()
     },
-    [commandContext, onClose],
+    [commandContext, onClose, showToast],
   )
 
   // Native menu → command dispatch (issue #148).
@@ -864,19 +952,39 @@ function OpenCommandPalette({
   // The macOS File menu lives in main, but its actions are renderer commands
   // that need the live CommandContext (workspace store + UI callbacks) to run.
   // Main can't run them; it only knows the command's string id. So main emits
-  // the id over `menu:command` and we resolve + run it here, where `commands`
-  // (the resolved registry) and `commandContext` are in scope.
+  // the id over `menu:command` and we resolve + run it here.
   //
-  // The lightweight outer bridge owns the always-on IPC listener. It mounts
-  // this implementation only long enough to resolve against the SAME registry
-  // the visible palette uses, so native and palette execution cannot drift.
+  // WHY this resolves through the gateway instead of `commands.find(...)`:
+  // `commands` is the PICKER-FILTERED registry. Looking an id up there meant a
+  // cosmetic `commandVisibilityOverrides[id] = false` — a "don't clutter my
+  // palette" preference — made the File-menu item resolve to undefined and do
+  // nothing. Silently. That is the plan's highest-severity finding: picker
+  // visibility was acting as an authorization boundary it explicitly must not
+  // be. The gateway resolves from the full catalog and applies contextual
+  // admission only, so hiding a command can no longer disable its menu item.
   useLayoutEffect(() => {
     if (!pendingMenuCommand) return
-    const command = commands.find(candidate => candidate.id === pendingMenuCommand.id)
-    if (command) void command.run(commandContext)
+    void dispatchCommand({
+      // The SOURCE travels with the request, so a chord is recorded as a
+      // keybinding invocation and a File-menu click as a native-menu one. A
+      // hardcoded source here would have made every keyboard invocation look
+      // like a menu click in personalized history.
+      id: pendingMenuCommand.id,
+      source: pendingMenuCommand.source,
+      ctx: commandContext,
+      reportError: message => showToast(message, 6000),
+    })
     onMenuCommandHandled()
-    if (pendingMenuCommand.closeAfterRun) onClose()
-  }, [commandContext, commands, onClose, onMenuCommandHandled, pendingMenuCommand])
+    // A command whose whole purpose IS the palette must not be closed by the
+    // "return to where you were" rule. Cmd+Shift+P arrives here with
+    // closeAfterRun=true (the palette was shut when the chord fired), so
+    // honouring it blindly would open the palette and shut it in the same
+    // frame — the chord would look broken.
+    if (pendingMenuCommand.closeAfterRun
+      && !PALETTE_SELF_EXCLUDED_COMMAND_IDS.has(pendingMenuCommand.id)) {
+      onClose()
+    }
+  }, [commandContext, onClose, onMenuCommandHandled, pendingMenuCommand, showToast])
 
   const executeResume = useCallback(
     (session: SessionInfo) => {
@@ -1224,7 +1332,12 @@ function OpenCommandPalette({
 
   return (
     <Dialog
-      open
+      // `visible` is false when this component was mounted only to service a
+      // keybinding or native-menu invocation. The host still needs to exist —
+      // it owns the CommandContext the gateway dispatches against — but Radix
+      // must not portal a modal, trap focus, or mark the background inert for a
+      // chord the user pressed to do something else entirely.
+      open={visible}
       onOpenChange={nextOpen => {
         if (!nextOpen) onClose()
       }}
@@ -1536,19 +1649,7 @@ function OpenCommandPalette({
                   >
                     <div className="min-w-0 flex items-center gap-2">
                       <span>{command.title}</span>
-                      {command.state && (
-                        <span
-                          className={
-                            command.state.tone === 'danger'
-                              ? 'rounded border border-danger-border bg-danger-soft px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-danger'
-                              : command.state.tone === 'accent'
-                                ? 'rounded border border-accent/30 bg-row-selected-bg px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-accent'
-                                : 'rounded border border-panel-border bg-panel-elevated-bg px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-muted'
-                          }
-                        >
-                          {command.state.label}
-                        </span>
-                      )}
+                      {command.state && <CommandStateBadge state={command.state} />}
                     </div>
                     {command.shortcut && (
                       <span className="ml-3 flex-shrink-0 text-[11px] text-muted">
@@ -1877,19 +1978,7 @@ const CommandDescriptionPanel = memo(function CommandDescriptionPanel({
         <div className="text-[13px] text-ink">{command.title}</div>
         <div className="mt-1 flex items-center gap-2 text-[10px] text-muted">
           {command.shortcut && <span>{command.shortcut}</span>}
-          {command.state && (
-            <span
-              className={
-                command.state.tone === 'danger'
-                  ? 'border border-danger-border bg-danger-soft px-1.5 py-0.5 uppercase tracking-wider text-danger'
-                  : command.state.tone === 'accent'
-                    ? 'border border-accent/30 bg-row-selected-bg px-1.5 py-0.5 uppercase tracking-wider text-accent'
-                    : 'border border-panel-border bg-panel-elevated-bg px-1.5 py-0.5 uppercase tracking-wider text-muted'
-              }
-            >
-              {command.state.label}
-            </span>
-          )}
+          {command.state && <CommandStateBadge state={command.state} />}
         </div>
       </div>
       <div>

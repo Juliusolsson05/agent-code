@@ -20,7 +20,32 @@ export type RecentCommandEntry = {
   id: string
   count: number
   lastUsedAt: number
+  /**
+   * Which invocation source last recorded this entry.
+   *
+   * WHY it was added: until the execution gateway existed, ONLY the palette
+   * could record a use — keybindings called workspace actions directly and
+   * never reached this module. So the stored counts were never "command
+   * usage"; they were "palette selections", and describing them as the former
+   * overstated what the data means. Now that menu and keybinding invocations
+   * also record, the entry has to say which kind it was, or the two eras of
+   * data become indistinguishable.
+   *
+   * Optional on purpose: every entry written before this field existed is
+   * picker-origin by definition, so absence is meaningful rather than missing.
+   * `normalizeEntries` leaves it undefined instead of inventing 'palette', to
+   * keep "we know this was the palette" distinguishable from "this predates
+   * the question".
+   */
+  lastSource?: RecentCommandSource
 }
+
+/** Mirrors CommandInvocationSource's user-driven members. Duplicated as a
+ *  literal union rather than imported so this disposable local cache does not
+ *  take a dependency on the command-execution layer. */
+export type RecentCommandSource = 'palette' | 'native-menu' | 'keybinding'
+
+const RECENT_COMMAND_SOURCES: readonly string[] = ['palette', 'native-menu', 'keybinding']
 
 // Bound 1: how many entries we keep. The palette has on the order of
 // tens of commands, so 50 comfortably covers "everything the user
@@ -62,6 +87,15 @@ function normalizeEntries(value: unknown): RecentCommandEntry[] {
       id: record.id,
       count: record.count,
       lastUsedAt: record.lastUsedAt,
+      // Same normalize-on-read policy as the numeric fields: an unrecognized
+      // source is dropped to undefined rather than preserved, so a
+      // hand-edited or future-version value can never reach a consumer that
+      // switches on the union. Dropping it costs nothing — the field is a
+      // provenance label, not part of the ranking maths.
+      ...(typeof record.lastSource === 'string'
+        && RECENT_COMMAND_SOURCES.includes(record.lastSource)
+        ? { lastSource: record.lastSource as RecentCommandSource }
+        : {}),
     }]
   })
 }
@@ -99,12 +133,21 @@ function saveRecentHistory(entries: RecentCommandEntry[]): void {
   }
 }
 
-export function recordCommandUse(id: string): void {
+export function recordCommandUse(id: string, source: RecentCommandSource = 'palette'): void {
   // Read-modify-write. This is deliberately fire-and-forget from the
-  // caller's perspective: executeCommand calls this right before
-  // command.run(), so any throw here would block the actual command.
-  // The whole body is wrapped so even an unexpected failure (e.g.
-  // JSON.stringify on something exotic) can't propagate.
+  // caller's perspective, and the whole body is wrapped so even an unexpected
+  // failure (e.g. JSON.stringify on something exotic) can't propagate.
+  // History is a nicety; command execution is not.
+  //
+  // The gateway (executeCommand.ts) owns WHEN this is called — after a
+  // successful, admitted, user-driven run only. It is deliberately no longer
+  // called before `run`, as it was when the palette was the sole caller: a
+  // command that turned out to be unavailable, or that threw, would otherwise
+  // climb the user's ranking for failing.
+  //
+  // `source` defaults to 'palette' so the one legacy call shape stays valid,
+  // and because the palette was historically the only thing that could reach
+  // this function at all.
   try {
     const entries = loadRecentHistory()
     const now = Date.now()
@@ -112,13 +155,13 @@ export function recordCommandUse(id: string): void {
     if (existing) {
       existing.count += 1
       existing.lastUsedAt = now
+      existing.lastSource = source
     } else {
-      entries.push({ id, count: 1, lastUsedAt: now })
+      entries.push({ id, count: 1, lastUsedAt: now, lastSource: source })
     }
     saveRecentHistory(pruneEntries(entries))
   } catch {
-    // Swallow — see WHY above. History is a nicety, command execution
-    // is not.
+    // Swallow — see WHY above.
   }
 }
 

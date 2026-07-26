@@ -3,10 +3,109 @@ import type { AgentViewMode, UsageHeaderLevel } from '@renderer/app-state/settin
 import type { RenderedViewPolicy } from '@renderer/workspace/agentDisplayMode'
 import type { DispatchAttachIntent } from '@renderer/app-state/uiShell/types'
 
-export type CommandState = {
-  label: string
-  tone?: 'neutral' | 'accent' | 'danger'
-}
+/**
+ * What a command's badge MEANS, not how it looks.
+ *
+ * The old shape was `{label: string; tone?}` and the renderer uppercased every
+ * label into one chip, so a boolean, a selected value, contextual information,
+ * an unsupported capability and async progress were indistinguishable. See
+ * `commandState.ts` for the six concrete defects that produced, and for the
+ * constructors — `toggle`, `panel`, `value`, `status` — that build these.
+ *
+ * TONE IS NOT PART OF THIS TYPE. It is derived by `describeCommandState`, so a
+ * caller cannot colour a state independently of what it means.
+ */
+export type CommandState =
+  | {
+      kind: 'toggle'
+      value: 'on' | 'off' | 'mixed'
+      /** Open/Closed instead of On/Off, for panels. */
+      vocabulary?: 'open-closed'
+      detail?: string
+    }
+  | {
+      kind: 'value'
+      label: string
+      detail?: string
+    }
+  | {
+      kind: 'status'
+      value: 'loading' | 'unavailable' | 'error'
+      detail: string
+    }
+
+/**
+ * The user-facing grouping of a command.
+ *
+ * WHY this is separate from `surface`: `surface` is a MACHINE applicability
+ * dimension — it answers "does this concept exist in the current layout" and
+ * drives mode gating. It was also being read as a category by the Settings
+ * list, which conflated two unrelated questions: `debug` is simultaneously "a
+ * kind of tooling" and "hidden in Dispatch? no". Once one field means both, you
+ * cannot reclassify a command's presentation without changing when it applies.
+ *
+ * The categories below are defined by an OBJECTIVE rule, not by vibes, so two
+ * people classifying the same command land in the same place:
+ */
+export type CommandCategory =
+  /** Creates a tab, pane, session, terminal, agent, or durable template. */
+  | 'create'
+  /** Changes focus, or opens a transient reading/navigation surface. */
+  | 'navigate'
+  /** Acts on exactly one resolved agent/session. */
+  | 'session'
+  /** Changes placement, arrangement, membership, pins, or Dispatch scope. */
+  | 'layout-dispatch'
+  /** Primarily acts on a document, file, editor, or AI Workspace reference. */
+  | 'editor-files'
+  /** Opens project/workspace inspection and management tools. */
+  | 'workspace-tools'
+  /** Mirrors a persisted app preference, or opens Settings. */
+  | 'preferences'
+  /** Diagnostics, recording, raw inspection, or support artifacts. */
+  | 'developer'
+
+/**
+ * A closed family of commands controlled as ONE product unit.
+ *
+ * Deliberately not inferred from `category`: the Navigation Commands group is
+ * exactly six ids, while the `navigate` category also contains Jump to Latest
+ * Message, Spotlight, Reader Mode, Tiled Tabs and Reorder Tabs, which stay
+ * ordinary commands. Deriving membership from the category would make a future
+ * navigation-adjacent feature silently default-hidden just for reusing a label.
+ */
+export type CommandGroup = 'navigation'
+
+/** What a command declares it needs, before resolution finds a concrete one. */
+
+/**
+ * Whether an invocation may proceed, and how to present a refusal.
+ *
+ * The `presentation` split is a product decision, recorded here because it is
+ * not self-evident: a command that is IRRELEVANT to the current mode should
+ * vanish (a grid-spatial "Focus Pane Left" in Dispatch points at nothing the
+ * user can see), while a command that is relevant but UNSUPPORTED should stay
+ * visible and disabled with its reason. Hiding the second kind is what makes
+ * users ask "why is Rewind missing on OpenCode" and find no answer anywhere;
+ * a greyed row that says so teaches them the thing they actually wanted to
+ * know.
+ */
+export type CommandAvailability =
+  | { available: true }
+  | { available: false; reason: string; presentation: 'hide' | 'disable' }
+
+/**
+ * Risk classification. Metadata, NOT a category — a destructive command still
+ * belongs to Session or Layout for grouping purposes, and folding risk into
+ * the category axis would force a "Destructive" bucket that cuts across every
+ * functional group and helps nobody find anything.
+ */
+export type CommandRisk =
+  /** Reversible, or has no side effect beyond view state. */
+  | 'safe'
+  /** Ends processes, deletes data, or cascades. Requires confirmation policy. */
+  | 'destructive'
+
 
 /**
  * Which workspace surface a command belongs to.
@@ -91,6 +190,9 @@ export type CommandContext = {
     openTileTabs: () => void
     openReorderTabs: () => void
     openSettings: () => void
+    /** Open the command palette. Exists so ⌘⇧P has a command to name instead
+     *  of a hard-coded callback that nothing could rebind or collision-check. */
+    openCommandPalette: () => void
     openViewPrompts: (sessionId: string) => void
     openPromptSearch: () => void
     openAgentActivity: () => void
@@ -222,6 +324,22 @@ export type CommandContext = {
      */
     commandVisibilityOverrides: Record<string, boolean>
     /**
+     * Whether the closed Navigation Commands family is picker-eligible.
+     * Mirrors `Settings.navigationCommandsEnabled`.
+     *
+     * Threaded through flags like the override map so the registry's single
+     * visibility chokepoint can consult it without importing the settings
+     * store. It is a DISCOVERABILITY gate only — see the setting's docstring
+     * for why it must never reach execution or keyboard handling.
+     */
+    navigationCommandsEnabled: boolean
+    /**
+     * The user's persisted per-command binding overrides. Threaded through
+     * flags so the registry can render EFFECTIVE bindings — the chord that
+     * will actually run — rather than a static authored string.
+     */
+    commandKeybindingOverrides: Record<string, string[]>
+    /**
      * Global escape hatch: when true, the picker shows EVERY applicable
      * command regardless of declared visibility or per-command override.
      * Lets a "show hidden commands" affordance reveal the full list in
@@ -265,12 +383,39 @@ export type CommandDef = {
    * that depend on rendered feed DOM or feed scroll ownership, while Hybrid can
    * allow feature commands that acquire a temporary rendered-view lease. */
   renderedViewPolicy?: RenderedViewPolicy
-  shortcut?: string
+  /**
+   * User-facing grouping. Optional during the governance migration and made
+   * REQUIRED once every command declares one (Phase 3) — flipping it to
+   * required before the 102 assignments exist would break the build between
+   * two commits that are each meant to be independently revertable.
+   */
+  category?: CommandCategory
+  /** Closed family this command belongs to, controlled as one product unit. */
+  commandGroup?: CommandGroup
+  /** Risk classification, used by confirmation policy. Absent means `'safe'`. */
+  risk?: CommandRisk
+  /**
+   * Why this command cannot run right now, when that is worth SAYING rather
+   * than silently hiding.
+   *
+   * Returning `null` means "no objection" and lets ordinary admission decide.
+   * A command only needs this when the refusal is worth explaining: an
+   * unsupported provider capability, an empty undo stack, an unsupported
+   * platform. Mode-irrelevance never needs it — the surface gate already hides
+   * those, and explaining them would add noise to every mode switch.
+   */
+  unavailableReason?: (ctx: CommandContext) => CommandUnavailable | null
   keywords?: string[]
   keepPaletteOpen?: boolean
   when?: (ctx: CommandContext) => boolean
   getState?: (ctx: CommandContext) => CommandState | null
   run: (ctx: CommandContext) => void | Promise<void>
+}
+
+/** The unavailable half of `CommandAvailability`, as a command declares it. */
+export type CommandUnavailable = {
+  reason: string
+  presentation: 'hide' | 'disable'
 }
 
 export type ResolvedCommand = {
@@ -280,6 +425,15 @@ export type ResolvedCommand = {
   /** Carried through from CommandDef so palette/menu consumers can
    *  group or label by surface without re-importing the raw defs. */
   surface: CommandSurface
+  /**
+   * The chord this command will actually run, in display form, or undefined
+   * when it has none.
+   *
+   * DERIVED at resolve time from the effective binding set, never authored.
+   * It used to be a hand-written `CommandDef.shortcut` string with no
+   * relationship to the code that ran, so the palette could advertise a chord
+   * the editor implemented and a user's Settings edit changed nothing.
+   */
   shortcut?: string
   keywords: string[]
   keepPaletteOpen: boolean

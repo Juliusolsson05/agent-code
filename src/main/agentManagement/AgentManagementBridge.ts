@@ -229,6 +229,27 @@ export class AgentManagementBridge {
     callerSessionId: string
     sessionId: string
   }): Promise<{ closedSessionId: string }> {
+    // AUTHORIZATION LIVES IN THE RENDERER, at the line that mutates.
+    //
+    // The rule used to be prose in this tool's description — several sentences
+    // telling the model never to close an agent unless the user's current
+    // request named that specific agent. That is a request to a language model,
+    // not a check: it cannot fail closed and cannot be tested.
+    //
+    // The first replacement was a single-use grant store here on the bridge.
+    // Right instinct, wrong layer. A grant has to be ISSUED by a user action,
+    // and main has no user action that means "the user asked this agent to
+    // close that agent" — so nothing ever called `issueCloseGrant`, every
+    // close_agent was denied, and the tool was dead in a way the green build
+    // hid completely.
+    //
+    // The renderer's close gate CAN ask, because the user is there. The
+    // close-agent handler passes `requireConfirmation`, which overrides the
+    // idle-single exemption the policy grants a human pressing ⌘W — that
+    // exemption is about someone aiming at a pane they can see, and none of it
+    // transfers to a close a model decided to make. A declined dialog rejects
+    // the request, and that rejection arrives here as a failed response.
+
     const response = await this.request({
       requestId: randomUUID(),
       type: 'close-agent',

@@ -2,6 +2,7 @@ import { Menu } from 'electron'
 import type { MenuItemConstructorOptions } from 'electron'
 
 import { sendToMainWindow, zoomMainWindow } from '@main/window/mainWindow.js'
+import type { NativeMenuCommandId } from '@shared/commands/nativeMenuCommandIds.js'
 
 // macOS application menu (issue #148).
 //
@@ -36,8 +37,13 @@ import { sendToMainWindow, zoomMainWindow } from '@main/window/mainWindow.js'
 // is mouse-driven discoverability, not a second keybinding surface.
 
 /** Emit a renderer command id over the menu:command channel. The renderer's
- *  live CommandContext resolves and runs it. */
-function dispatchCommand(commandId: string): void {
+ *  live CommandContext resolves and runs it.
+ *
+ *  Typed to `NativeMenuCommandId` rather than `string` so a typo or a retired
+ *  command fails the build here, instead of shipping a menu item that clicks
+ *  into nothing. The id list is shared with the renderer, where
+ *  `catalog.test.ts` proves every entry still names a real command. */
+function dispatchCommand(commandId: NativeMenuCommandId): void {
   sendToMainWindow('menu:command', commandId)
 }
 

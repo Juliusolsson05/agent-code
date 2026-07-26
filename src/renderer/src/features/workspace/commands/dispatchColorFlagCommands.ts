@@ -32,6 +32,23 @@ import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/comma
 export const dispatchColorFlagCommands: CommandDef[] = [
   {
     id: 'dispatch.color-flag.set',
+    // `session`, NOT `layout-dispatch`, and `default`, NOT `advanced`.
+    //
+    // Both were set on this branch while the flag was a Dispatch-list
+    // affordance, and #609 (session header color flags) invalidated both: the
+    // flag now renders as a chunk of the pane's session header, so it is
+    // visible — and worth changing — to a user who never opens Dispatch.
+    //
+    // Filing it under Layout & Dispatch would put it in the one category a
+    // grid-only user has no reason to browse, and `advanced` would keep it out
+    // of their palette entirely. Someone who just noticed a coloured header and
+    // wants to change it would find nothing. The category matches what the
+    // command ACTS on (a session), which is also what `surface: 'session'`
+    // already says.
+    //
+    // The `dispatch.` id prefix stays for the persistence reason above; it is
+    // not evidence about where this belongs in the picker.
+    category: 'session',
     surface: 'session',
     // Title case + ellipsis per docs/command-style.md rules 8 and 9: `run`
     // always opens the swatch picker, so the command needs more input after
