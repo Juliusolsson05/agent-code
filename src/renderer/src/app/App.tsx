@@ -86,8 +86,13 @@ export default function App() {
   useRenderedLeaseHygiene(workspace)
   useDebugAutosave(workspace)
 
-  const { onNewTabRequest, onResumeRequest } = usePathPickerRequests()
-  useKeybinds(workspace, onNewTabRequest, onResumeRequest, toggleCommandPalette)
+  // New Tab, Resume Session and the palette toggle are ordinary commands now,
+  // dispatched through the gateway by their configured bindings — the hook no
+  // longer needs callbacks for them.
+  // TabBar's "+" button and the empty-workspace surface still need the picker
+  // callback; only the keyboard path became a routed command.
+  const { onNewTabRequest } = usePathPickerRequests()
+  useKeybinds(workspace)
 
   return (
     <WorkspaceProvider workspace={workspace}>

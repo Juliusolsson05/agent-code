@@ -57,10 +57,12 @@ export const createUiShellSlice: StateCreator<
   // palette component is what owns the live CommandContext. `closeAfterRun`
   // remembers that it was opened only to service this invocation, so a chord
   // does not leave the palette on screen.
+  // Deliberately does NOT open the palette. The command host mounts itself when
+  // an invocation is pending (see CommandPalette), so the context gets built
+  // without the palette becoming visible — a chord must not flash a modal.
   requestCommandInvocation: (id: string, source: PendingCommandInvocation['source']) =>
     set(state => ({
       pendingCommandInvocation: { id, source, closeAfterRun: !state.commandPaletteOpen },
-      commandPaletteOpen: true,
     }), false, 'uiShell/requestCommandInvocation'),
   clearCommandInvocation: () =>
     set({ pendingCommandInvocation: null }, false, 'uiShell/clearCommandInvocation'),

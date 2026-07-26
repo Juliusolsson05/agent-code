@@ -1,4 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { useAppStore } from '@renderer/app-state/hooks'
+import { eventMatchesKeybinding } from '@renderer/features/command-keybindings/normalize'
+import { effectiveBindingsFor } from '@renderer/features/command-keybindings/resolve'
 
 import type { EditorFileBuffer } from '@renderer/features/editor/types'
 import { basename } from '@renderer/features/editor/lib/path'
@@ -90,6 +93,9 @@ export function EditorWorkbench({
   titleForPath,
   toolbarActions,
 }: EditorWorkbenchProps) {
+  const saveBinding = useAppStore(
+    state => effectiveBindingsFor('save-editor-file', state.settings.commandKeybindingOverrides)[0],
+  )
   const [pendingClose, setPendingClose] = useState<{
     path: string
     generation: number
@@ -235,7 +241,11 @@ export function EditorWorkbench({
         // Cmd+W handler through would terminate the underlying agent pane.
         if ((event.target as Element | null)?.closest('[data-global-editor-monaco]')) return
         const key = event.key.toLowerCase()
-        if (key === 's') {
+        // Save's chord is derived from the effective binding, so rebinding it
+        // in Settings moves this handler and Monaco's action together. The
+        // previous hard-coded 's' meant a rebind changed the displayed chord
+        // and nothing else.
+        if (saveBinding && eventMatchesKeybinding(event.nativeEvent, saveBinding)) {
           event.preventDefault()
           onSave()
         } else if (key === 'w') {

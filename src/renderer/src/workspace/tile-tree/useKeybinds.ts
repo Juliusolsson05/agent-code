@@ -1,9 +1,8 @@
-import { AGENT_PROVIDER_KINDS, DEFAULT_PROVIDER } from '@shared/types/providerKind'
-import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
-import { useEffect } from 'react'
+import { useEffect, useMemo } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
 import { buildDefaultKeybindings } from '@renderer/features/command-keybindings/defaults'
+import type { BindingContext } from '@renderer/features/command-keybindings/defaults'
 import { keybindingFromEvent } from '@renderer/features/command-keybindings/normalize'
 import { resolveEffectiveKeybindings } from '@renderer/features/command-keybindings/resolve'
 import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
@@ -75,9 +74,6 @@ import { useGlobalEditorStore } from '@renderer/features/global-editor/store'
 //                   system meaning, and we never have to touch the
 //                   actual Fn modifier (which isn't exposed to JS).
 
-type NewTabRequester = () => Promise<void> | void
-type ResumeRequester = (defaultCwd: string) => Promise<void> | void
-type CommandPaletteToggle = () => void
 
 function isTextEditingTarget(target: EventTarget | null): boolean {
   const el = target instanceof HTMLElement ? target : null
@@ -160,77 +156,97 @@ function renderedAgentSurfaceIsVisible(
 }
 
 /**
- * Command chords this router hands to the execution gateway instead of calling
- * a workspace action directly.
+ * Commands whose chord is owned by a surface OTHER than this router, and which
+ * must therefore never be dispatched from here.
  *
- * WHY only these, and not every branch in the handler below: the rest are
- * CONTEXTUAL INTERACTIONS, not commands — Escape dismissal, picker
- * navigation, numbered tab/Dispatch selection, split resizing, the tiled
- * resize continuation. They have no meaningful palette row, and inventing one
- * for each would produce dozens of fake commands whose only purpose is to
- * shorten this file. They stay here and are declared in the reservation
- * registry so a user cannot bind a command on top of them.
+ * This is a DENY-list, not an allow-list, and the difference is the whole
+ * lesson of the first attempt. That version enumerated 24 routable ids while
+ * Settings offered bindings for all 98 commands, so 74 rows persisted a chord,
+ * displayed it, reserved it against every other command in the collision
+ * checker — and did nothing when pressed. A hand-maintained allow-list cannot
+ * stay in step with a growing catalog, and it silently disagreed with the
+ * generated provider commands too.
  *
- * WHY routing at all: before this, a chord called `workspace.splitFocused()`
- * directly, evaluating none of the surface/when/renderedView predicates the
- * palette applied to the same command. A keyboard user could reach a command
- * the palette would have refused. Routing through the gateway gives every
- * source one admission check, one error path, and one history policy — and is
- * what makes a user-configured binding actually run the command it names.
+ * Deny-listing inverts the failure: forget an entry here and a chord is routed
+ * that should have been left to the editor, which is visible immediately,
+ * rather than a binding that quietly never fires.
  */
-const ROUTED_COMMAND_IDS: ReadonlySet<string> = new Set([
-  'open-command-palette',
-  'new-tab',
-  'close-tab',
-  'next-tab',
-  'prev-tab',
-  'resume-session',
-  'undo-close',
-  'close-pane',
-  'split-vertical',
-  'split-horizontal',
-  'terminal-horizontal',
-  'terminal-vertical',
-  'codex-vertical',
-  'codex-horizontal',
-  'nav-left',
-  'nav-right',
-  'nav-up',
-  'nav-down',
-  'toggle-global-editor',
-  'quick-open-file',
-  'search-in-files',
-  'toggle-editor-fullscreen',
-  'jump-latest-message',
-  'open-settings',
+const SURFACE_OWNED_COMMAND_IDS: ReadonlySet<string> = new Set([
+  // Monaco and the EditorWorkbench own ⌘S inside editor chrome, where the
+  // routed path never runs (the editor guard returns before routing). Listing
+  // it is belt-and-braces so a future guard change cannot hand Save to the
+  // workspace router.
+  'save-editor-file',
 ])
+
+/**
+ * Which binding contexts are live for THIS event.
+ *
+ * The first attempt matched on chord alone and ignored `BindingContext`
+ * entirely, which killed Dispatch navigation: ⌥J resolved to the grid-context
+ * `nav-down`, got preventDefault-ed, and was then refused by admission — so the
+ * Dispatch handler below never ran and the selection never moved.
+ *
+ * Returning a SET rather than a single context is what makes that correct:
+ * several contexts are genuinely live at once ('global' always, plus exactly
+ * one of grid/dispatch, plus 'feed' only when a rendered feed is focused and
+ * the user is not typing).
+ */
+function activeBindingContexts(input: {
+  dispatchMode: boolean
+  editorOwnsTarget: boolean
+  feedFocused: boolean
+}): ReadonlySet<BindingContext> {
+  const contexts = new Set<BindingContext>(['global'])
+  contexts.add(input.dispatchMode ? 'dispatch' : 'grid')
+  if (input.editorOwnsTarget) contexts.add('editor')
+  if (input.feedFocused) contexts.add('feed')
+  return contexts
+}
 
 /**
  * The command id a keyboard event should invoke, or null.
  *
  * Built from EFFECTIVE bindings (shipped defaults overlaid with the user's
- * overrides), which is the whole point: the chord the palette displays and the
- * chord that runs are now the same fact, and a Settings edit changes real
- * behavior rather than a label.
+ * overrides), so the chord the palette displays and the chord that runs are the
+ * same fact and a Settings edit changes real behaviour.
+ *
+ * `bindingIndex` is precomputed by the caller: resolving it here meant
+ * rebuilding the default table and re-normalizing ~30 strings on EVERY keydown,
+ * including ordinary typing.
  */
 function routedCommandForEvent(
   event: KeyboardEvent,
-  overrides: Record<string, string[]>,
+  bindingIndex: ReadonlyMap<string, { commandId: string; context: BindingContext }[]>,
+  activeContexts: ReadonlySet<BindingContext>,
 ): string | null {
   const binding = keybindingFromEvent(event)
   if (!binding) return null
-  for (const entry of resolveEffectiveKeybindings(overrides, buildDefaultKeybindings())) {
-    if (!ROUTED_COMMAND_IDS.has(entry.commandId)) continue
-    if (entry.bindings.includes(binding)) return entry.commandId
+  for (const entry of bindingIndex.get(binding) ?? []) {
+    if (SURFACE_OWNED_COMMAND_IDS.has(entry.commandId)) continue
+    if (!activeContexts.has(entry.context)) continue
+    return entry.commandId
   }
   return null
 }
 
+/** Chord -> candidate commands, built once per override change. */
+function buildBindingIndex(
+  overrides: Record<string, string[]>,
+): Map<string, { commandId: string; context: BindingContext }[]> {
+  const index = new Map<string, { commandId: string; context: BindingContext }[]>()
+  for (const entry of resolveEffectiveKeybindings(overrides, buildDefaultKeybindings())) {
+    for (const binding of entry.bindings) {
+      const list = index.get(binding) ?? []
+      list.push({ commandId: entry.commandId, context: entry.context })
+      index.set(binding, list)
+    }
+  }
+  return index
+}
+
 export function useKeybinds(
   workspace: Workspace,
-  onNewTabRequest: NewTabRequester,
-  onResumeRequest: ResumeRequester,
-  onCommandPalette?: CommandPaletteToggle,
 ): void {
   const settingsPageOpen = useAppStore(state => state.settingsPageOpen)
   const requestCommandInvocation = useAppStore(state => state.requestCommandInvocation)
@@ -243,7 +259,6 @@ export function useKeybinds(
   const closeBuryPrompt = useAppStore(state => state.closeBuryPrompt)
   const newAgentPlacementOpen = useAppStore(state => state.newAgentPlacementOpen)
   const closeNewAgentPlacement = useAppStore(state => state.closeNewAgentPlacement)
-  const toggleGlobalEditor = useAppStore(state => state.toggleGlobalEditor)
   // The placement overlay is opened from TWO independent flows:
   // - newAgentPlacementOpen: the cmd+T / new-agent-placement flow
   // - dispatchAttachIntent: attach-detached-to-grid
@@ -269,6 +284,14 @@ export function useKeybinds(
   const closeReorderTabs = useAppStore(state => state.closeReorderTabs)
   const pinAgentsOpen = useAppStore(state => state.pinAgentsOpen)
   const closePinAgents = useAppStore(state => state.closePinAgents)
+
+  // Built once per override change, not per keystroke. Resolving inside the
+  // handler meant rebuilding the default table and re-normalizing ~30 strings
+  // on every keydown, including ordinary typing.
+  const bindingIndex = useMemo(
+    () => buildBindingIndex(commandKeybindingOverrides),
+    [commandKeybindingOverrides],
+  )
 
   useEffect(() => {
     let pendingTiledResizeIndex: number | null = null
@@ -351,92 +374,6 @@ export function useKeybinds(
         return
       }
 
-      // --- Configured command bindings ---
-      //
-      // Placed AFTER the app-modal and placement-overlay bailouts above, so a
-      // dialog still owns the interaction turn, and BEFORE every hardcoded
-      // branch below, so a user's rebinding wins over the legacy chord it
-      // replaces. Editor-owned targets are handled further down and never
-      // reach here for the chords the editor claims.
-      //
-      // The gateway re-checks admission, so a chord can no longer reach a
-      // command the palette would have refused.
-      const routedCommandId = routedCommandForEvent(e, commandKeybindingOverrides)
-      if (routedCommandId) {
-        e.preventDefault()
-        requestCommandInvocation(routedCommandId, 'keybinding')
-        return
-      }
-
-      // --- Alt+Cmd+E: Global Editor fullscreen ---
-      //
-      // Chord picked for adjacency to ⌘⇧E (same key, different
-      // modifier = same feature family). When the editor is closed,
-      // this opens it straight into fullscreen — "give me a big
-      // editor" is one gesture, not two. Esc exits (handled in
-      // GlobalEditorShell so it can defer to open overlays).
-      if (cmd && alt && !shift && e.code === 'KeyE') {
-        e.preventDefault()
-        const editorStore = useGlobalEditorStore.getState()
-        if (!useAppStore.getState().globalEditorOpen) {
-          toggleGlobalEditor()
-          editorStore.setEditorFullscreen(true)
-        } else {
-          editorStore.toggleEditorFullscreen()
-        }
-        return
-      }
-
-      // --- Cmd+P: Quick Open file (Global Editor) ---
-      //
-      // Opens the editor first when it's closed: quick-open with
-      // nowhere to show the file would be a dead command. Plain ⌘P is
-      // free (⌘⇧P above is the command palette), and it matches the
-      // VS Code muscle memory quick-open trained into everyone.
-      if (cmd && !shift && !alt && k.toLowerCase() === 'p') {
-        e.preventDefault()
-        const editorStore = useGlobalEditorStore.getState()
-        const editorOpen = useAppStore.getState().globalEditorOpen
-        const targetSessionId = commandTargetSessionId(workspace)
-        const focusedCwd = targetSessionId ? workspace.state.sessions[targetSessionId]?.cwd : null
-        const targetCwd = editorOpen
-          ? (editorStore.activeCwd ?? focusedCwd)
-          : (focusedCwd ?? editorStore.activeCwd)
-        if (!targetCwd) return
-        editorStore.setActiveCwd(targetCwd)
-        editorStore.showProjectEditor()
-        if (!editorOpen) toggleGlobalEditor()
-        editorStore.setQuickOpenOpen(true)
-        return
-      }
-
-      // --- Cmd+Shift+F: Search in files (Global Editor) ---
-      //
-      // Same open-editor-first behavior as ⌘P, same VS Code muscle
-      // memory. Verified unbound before claiming (only ⌘⇧P / ⌘⇧E
-      // shared the cmd+shift namespace here).
-      if (cmd && shift && !alt && k.toLowerCase() === 'f') {
-        e.preventDefault()
-        const editorStore = useGlobalEditorStore.getState()
-        const editorOpen = useAppStore.getState().globalEditorOpen
-        const targetSessionId = commandTargetSessionId(workspace)
-        const focusedCwd = targetSessionId ? workspace.state.sessions[targetSessionId]?.cwd : null
-        const targetCwd = editorOpen
-          ? (editorStore.activeCwd ?? focusedCwd)
-          : (focusedCwd ?? editorStore.activeCwd)
-        if (!targetCwd) return
-        editorStore.setActiveCwd(targetCwd)
-        editorStore.showProjectEditor()
-        if (!editorOpen) toggleGlobalEditor()
-        editorStore.setContentSearchOpen(true)
-        return
-      }
-
-      // Editor chrome owns only the chords that collide with text/tab editing.
-      // A blanket early return here also disabled true application commands
-      // such as Cmd+T, Cmd+Shift+T, Cmd+R, and numbered tab activation whenever
-      // focus happened to be in the Explorer. Keep those commands global while
-      // preventing workspace navigation from stealing editor-native turns.
       const eventElement = e.target instanceof Element ? e.target : null
       const editorOwnsTarget = Boolean(eventElement?.closest('[data-global-editor-input-owner]'))
       if (editorOwnsTarget) {
@@ -609,6 +546,43 @@ export function useKeybinds(
         return
       }
 
+      // --- Configured command bindings ---
+      //
+      // POSITION IS THE FIX. This used to sit near the top of the handler,
+      // above the editor-ownership guard and above every legacy chord branch,
+      // which produced three regressions at once: ⌘W inside Monaco killed the
+      // agent pane behind the editor, bare End in a composer scrolled the feed
+      // instead of moving the caret, and ⌘[ / ⌘] stole Monaco's indent.
+      //
+      // Everything that OWNS an interaction now runs first — app modals,
+      // placement overlays, editor chrome, the assistant/code-block pickers,
+      // and Escape. Only then do configured bindings get a look.
+      //
+      // What remains BELOW is contextual interaction that is deliberately not a
+      // command: numbered tab/Dispatch selection, the tiled-resize
+      // continuation, Dispatch row/lane movement, and split resizing. Those are
+      // reached because the context filter refuses to match a grid-context
+      // binding while Dispatch owns the layout, so ⌥J falls through to the
+      // Dispatch handler instead of being swallowed and refused.
+      const activeContexts = activeBindingContexts({
+        dispatchMode: Boolean(workspace.dispatchMode),
+        editorOwnsTarget,
+        // 'feed' is live only when a rendered feed is focused AND the user is
+        // not typing — which is what keeps bare End as a caret key in every
+        // composer while still jumping the feed elsewhere.
+        feedFocused: Boolean(
+          focusedSessionId
+          && renderedAgentSurfaceIsVisible(workspace, agentViewMode, focusedSessionId)
+          && !isTextEditingTarget(e.target),
+        ),
+      })
+      const routedCommandId = routedCommandForEvent(e, bindingIndex, activeContexts)
+      if (routedCommandId) {
+        e.preventDefault()
+        requestCommandInvocation(routedCommandId, 'keybinding')
+        return
+      }
+
       // --- CMD: tab management ---
       if (cmd && alt && !shift) {
         const digit = digitFromKeyboardEvent(e)
@@ -644,48 +618,6 @@ export function useKeybinds(
               return
             }
           }
-        }
-        if (k === 't' && !shift) {
-          e.preventDefault()
-          void onNewTabRequest()
-          return
-        }
-        // Resume: ⌘⇧R opens the path modal pre-filled with the
-        // focused tab's cwd. Same modal as ⌘T but biased toward
-        // picking an existing session in the same directory the user
-        // is already in — which is the common "continue where I left
-        // off" flow.
-        if (k.toLowerCase() === 'r' && shift) {
-          e.preventDefault()
-          const tab = workspace.activeTab
-          const targetSessionId = commandTargetSessionId(workspace)
-          if (tab && targetSessionId) {
-            const cwd = workspace.state.sessions[targetSessionId]?.cwd
-            void onResumeRequest(cwd ?? '')
-          } else {
-            void onResumeRequest('')
-          }
-          return
-        }
-        if (k.toLowerCase() === 'w' && shift) {
-          e.preventDefault()
-          if (workspace.activeTab) void workspace.closeTab(workspace.activeTab.id)
-          return
-        }
-        if (k.toLowerCase() === 'w' && !shift) {
-          e.preventDefault()
-          void workspace.closeFocused()
-          return
-        }
-        if (k === '[') {
-          e.preventDefault()
-          workspace.prevTab()
-          return
-        }
-        if (k === ']') {
-          e.preventDefault()
-          workspace.nextTab()
-          return
         }
         // In Dispatch Mode, the numbered command grammar moves from
         // "tab N" to "session row N" because the left list is the primary
@@ -840,81 +772,7 @@ export function useKeybinds(
           return
         }
 
-        if (code === 'KeyD' && !shift) {
-          e.preventDefault()
-          void workspace.splitFocused('vertical')
-          return
-        }
-        if (code === 'KeyD' && shift) {
-          e.preventDefault()
-          void workspace.splitFocused('horizontal')
-          return
-        }
-        // --- Terminal split: alt-t / alt-shift-t ---
-        //
-        // Keep the same grammar as the generic split bindings above:
-        // no shift = vertical/right, shift = horizontal/down.
-        //
-        // The 't' detection uses e.code === 'KeyT' (not e.key)
-        // because on macOS alt+t produces the Unicode dagger '†',
-        // and holding shift produces 'Ê'. Both are invisible to
-        // key-string matching but show up fine as KeyT via the
-        // physical-key code. See the note on alt-h/j/k/l above.
-        if (code === 'KeyT' && !shift) {
-          e.preventDefault()
-          void workspace.splitFocused('vertical', 'terminal')
-          return
-        }
-        if (code === 'KeyT' && shift) {
-          e.preventDefault()
-          void workspace.splitFocused('horizontal', 'terminal')
-          return
-        }
-        // --- Per-provider splits: alt-<key> / alt-shift-<key> ---
-        //
-        // Derived from each registered provider's identity descriptor
-        // (#394 phase 4; codex declares 'C' → ⌥C/⌥⇧C, matching the
-        // old hardcoded chord). Same grammar as the generic split
-        // bindings above: no shift = vertical/right, shift =
-        // horizontal/down. Matches on e.code (physical key) for the
-        // same macOS alt-letter reason as the others — alt+letter
-        // produces Unicode glyphs invisible to key-string matching.
-        // The DEFAULT_PROVIDER has no per-provider chord; it's what
-        // the generic ⌥D split spawns.
-        for (const providerKind of AGENT_PROVIDER_KINDS) {
-          if (providerKind === DEFAULT_PROVIDER) continue
-          const chordKey = getRendererProviderCapabilities(providerKind).splitShortcutKey
-          if (!chordKey || code !== `Key${chordKey}`) continue
-          e.preventDefault()
-          void workspace.splitFocused(shift ? 'horizontal' : 'vertical', providerKind)
-          return
-        }
-        if (code === 'KeyW') {
-          e.preventDefault()
-          void workspace.closeFocused()
-          return
-        }
         // Vim navigation (e.code) + arrow keys (e.key)
-        if (code === 'KeyH' || k === 'ArrowLeft') {
-          e.preventDefault()
-          workspace.navigate('left')
-          return
-        }
-        if (code === 'KeyL' || k === 'ArrowRight') {
-          e.preventDefault()
-          workspace.navigate('right')
-          return
-        }
-        if (code === 'KeyK' || k === 'ArrowUp') {
-          e.preventDefault()
-          workspace.navigate('up')
-          return
-        }
-        if (code === 'KeyJ' || k === 'ArrowDown') {
-          e.preventDefault()
-          workspace.navigate('down')
-          return
-        }
         // Resize — use physical codes for punctuation too
         if (code === 'Equal' || k === '=' || k === '+') {
           e.preventDefault()
@@ -928,15 +786,6 @@ export function useKeybinds(
         }
       }
 
-      if (!cmd && !alt && !shift && k === 'End' && !isTextEditingTarget(e.target)) {
-        const sessionId = commandTargetSessionId(workspace)
-        if (!sessionId || !renderedAgentSurfaceIsVisible(workspace, agentViewMode, sessionId)) {
-          return
-        }
-        e.preventDefault()
-        workspace.scrollFocusedToLatest()
-        return
-      }
     }
 
     const onKeyUp = (e: KeyboardEvent) => {
@@ -972,9 +821,6 @@ export function useKeybinds(
     closeLinkedAgent,
     closeReorderTabs,
     closePinAgents,
-    onCommandPalette,
-    onNewTabRequest,
-    onResumeRequest,
     buryPromptSessionId,
     dispatchAttachIntent,
     linkedAgentParentId,
@@ -982,7 +828,6 @@ export function useKeybinds(
     pinAgentsOpen,
     reorderTabsOpen,
     settingsPageOpen,
-    toggleGlobalEditor,
     workspace,
   ])
 }

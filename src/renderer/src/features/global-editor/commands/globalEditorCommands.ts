@@ -48,7 +48,12 @@ export const globalEditorCommands: CommandDef[] = [
     description:
       '**What it does:** Saves the active file in the visible Global Editor or AI Workspace.\n\n**Use when:** You edited a file and want to persist it without leaving the command palette.\n\n**Notes:** Conflict checks and recovery are owned by the active editor surface.\n\n**Shortcut:** ⌘S.',
     keywords: ['save', 'write', 'editor', 'file'],
-    when: ({ flags }) => flags.globalEditorOpen,
+    // Requires a project, NOT an open editor. The ⌘⌥E chord has always meant
+    // "give me a big editor" as ONE gesture — it opens the editor straight into
+    // fullscreen when closed. That behaviour used to live in a hard-coded
+    // keybind branch; now that the chord routes through this command, the
+    // command has to own it, or routing would silently drop half the feature.
+    when: ({ flags }) => Boolean(flags.globalEditorOpen || flags.focusedCwd),
     run: requestSaveActiveEditorFile,
   },
   {
@@ -116,7 +121,17 @@ export const globalEditorCommands: CommandDef[] = [
     keywords: ['fullscreen', 'maximize', 'editor', 'zen', 'focus'],
     when: ({ flags }) => flags.globalEditorOpen,
     getState: ({ flags }) => toggle(flags.editorFullscreen),
-    run: () => useGlobalEditorStore.getState().toggleEditorFullscreen(),
+    run: ({ ui, flags }) => {
+      const editor = useGlobalEditorStore.getState()
+      if (!flags.globalEditorOpen) {
+        // Closed → open it already fullscreen, rather than opening windowed and
+        // making the user press again.
+        ui.toggleGlobalEditor()
+        editor.setEditorFullscreen(true)
+        return
+      }
+      editor.toggleEditorFullscreen()
+    },
   },
   {
     id: 'open-ai-workspace',

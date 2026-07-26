@@ -286,3 +286,68 @@ export function displayKeybinding(binding: Keybinding): string {
   const modifiers = parsed.modifiers.map(m => DISPLAY_MODIFIERS[m]).join('')
   return `${modifiers}${DISPLAY_KEYS[parsed.key] ?? parsed.key}`
 }
+
+/**
+ * Monaco keybinding constants, as a provider-agnostic description.
+ *
+ * WHY this returns a description rather than a Monaco number: this module is
+ * imported by the node-side repository script and by pure tests, and pulling
+ * `monaco-editor` in would drag the whole editor bundle into both. The caller
+ * — which already has `monaco` in scope — assembles the final bitmask.
+ */
+export type MonacoChord = {
+  ctrlCmd: boolean
+  shift: boolean
+  alt: boolean
+  /** `KeyCode` member name, e.g. `KeyS`, `Digit1`, `Enter`. */
+  keyCode: string
+}
+
+const MONACO_NAMED_KEYS: Record<string, string> = {
+  Left: 'LeftArrow', Right: 'RightArrow', Up: 'UpArrow', Down: 'DownArrow',
+  Enter: 'Enter', Escape: 'Escape', Space: 'Space', Tab: 'Tab',
+  Backspace: 'Backspace', Delete: 'Delete',
+  Home: 'Home', End: 'End', PageUp: 'PageUp', PageDown: 'PageDown',
+}
+
+const MONACO_PUNCTUATION: Record<string, string> = {
+  '[': 'BracketLeft', ']': 'BracketRight', '-': 'Minus', '=': 'Equal',
+  ',': 'Comma', '.': 'Period', '/': 'Slash', '\\': 'Backslash',
+  ';': 'Semicolon', "'": 'Quote', '`': 'Backquote',
+}
+
+/**
+ * Translate a canonical binding for Monaco's keybinding service.
+ *
+ * Returns null for anything Monaco cannot express, so a caller registers
+ * nothing rather than registering the wrong chord — a silently-wrong editor
+ * binding is worse than an absent one.
+ *
+ * Ctrl maps to Monaco's WinCtrl and is deliberately unsupported here: none of
+ * the shipped editor defaults use it, and conflating it with CtrlCmd would make
+ * ⌃S behave as ⌘S on macOS.
+ */
+export function toMonacoChord(binding: Keybinding): MonacoChord | null {
+  let parsed: ParsedKeybinding
+  try {
+    parsed = parseKeybinding(binding)
+  } catch {
+    return null
+  }
+  if (parsed.modifiers.includes('Ctrl')) return null
+
+  const key = parsed.key
+  const keyCode =
+    /^[A-Z]$/.test(key) ? `Key${key}`
+      : /^[0-9]$/.test(key) ? `Digit${key}`
+        : /^F([1-9]|1[0-9]|20)$/.test(key) ? key
+          : MONACO_NAMED_KEYS[key] ?? MONACO_PUNCTUATION[key] ?? null
+  if (!keyCode) return null
+
+  return {
+    ctrlCmd: parsed.modifiers.includes('Cmd'),
+    shift: parsed.modifiers.includes('Shift'),
+    alt: parsed.modifiers.includes('Alt'),
+    keyCode,
+  }
+}

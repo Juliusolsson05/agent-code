@@ -196,9 +196,16 @@ export function CommandPalette() {
   // the monolithic workspace context, assembled ~76 command dependencies, and
   // built the registry. This outer gate subscribes to two store fields;
   // ordinary agent traffic cannot fan into the hidden palette.
-  if (!open) return null
+  // Mount for a pending invocation too, but WITHOUT making the palette visible.
+  // Previously `requestCommandInvocation` set `commandPaletteOpen: true`, so
+  // every routed chord — including ⌥H/⌥J pane focus, the most repeated gesture
+  // in the app — flashed the palette open and shut. Separating "the host is
+  // mounted" from "the user can see it" keeps the #494 cost model (build the
+  // context only when something actually needs it) without the flash.
+  if (!open && !pendingCommandInvocation) return null
   return (
     <OpenCommandPalette
+      visible={open}
       pendingMenuCommand={pendingCommandInvocation}
       onMenuCommandHandled={clearCommandInvocation}
     />
@@ -206,9 +213,12 @@ export function CommandPalette() {
 }
 
 function OpenCommandPalette({
+  visible,
   pendingMenuCommand,
   onMenuCommandHandled,
 }: {
+  /** False when mounted purely to service a keybinding or menu invocation. */
+  visible: boolean
   pendingMenuCommand: PendingCommandInvocation | null
   onMenuCommandHandled: () => void
 }) {
@@ -1307,7 +1317,12 @@ function OpenCommandPalette({
 
   return (
     <Dialog
-      open
+      // `visible` is false when this component was mounted only to service a
+      // keybinding or native-menu invocation. The host still needs to exist —
+      // it owns the CommandContext the gateway dispatches against — but Radix
+      // must not portal a modal, trap focus, or mark the background inert for a
+      // chord the user pressed to do something else entirely.
+      open={visible}
       onOpenChange={nextOpen => {
         if (!nextOpen) onClose()
       }}
