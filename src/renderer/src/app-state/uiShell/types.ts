@@ -1,3 +1,4 @@
+import type { PaletteMode } from '@renderer/features/command-palette/paletteMode'
 import type { TabId, SessionId } from '@renderer/workspace/types'
 
 export type DispatchAttachIntent = {
@@ -23,6 +24,24 @@ export type PendingCommandInvocation = {
 
 export type UiShellState = {
   commandPaletteOpen: boolean
+  /**
+   * The palette's active sub-mode (Resume list, Prompt Templates, …).
+   *
+   * WHY this is store state and not `useState` on the palette component, where
+   * it lived until now: a chord never opens the palette. It sets
+   * `pendingCommandInvocation`, which mounts the palette INVISIBLY, runs the
+   * command, and unmounts it in the same commit. A mode set with the local
+   * `setMode` was therefore written to a component already invisible and about
+   * to be destroyed, and a second mechanism finished the job — the mount-time
+   * reset effect runs as a passive effect, i.e. AFTER the layout effect that
+   * dispatched, so it queued 'commands' last and won regardless.
+   *
+   * The result was nine commands that did nothing from any source but the
+   * palette, two of them shipping default chords (Cmd+Shift+R, Alt+P).
+   *
+   * Store state has no component lifecycle, so neither mechanism can reach it.
+   */
+  paletteMode: PaletteMode
   /**
    * A command id waiting to be dispatched, with the source that asked for it.
    *

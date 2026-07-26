@@ -15,7 +15,6 @@ import {
   dispatchCommand,
   dispatchResolvedRow,
 } from '@renderer/features/command-palette/executeCommand'
-import { PALETTE_SELF_EXCLUDED_COMMAND_IDS } from '@renderer/features/command-palette/commands/paletteCommands'
 import { buildAgentIndexCommand } from '@renderer/features/command-palette/lib/agentIndexCommand'
 import {
   buildHistoryScoreMap,
@@ -65,6 +64,7 @@ import type {
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import { resolveAgentPaneLabel } from '@renderer/workspace/tile-tree/paneLabels'
 import { useWorkspaceContext } from '@renderer/workspace/WorkspaceContext'
+import type { PaletteMode } from '@renderer/features/command-palette/paletteMode'
 import { useAppStore } from '@renderer/app-state/hooks'
 import { useCaffeinateStore } from '@renderer/features/caffeinate/store'
 import { useDevDebugConfig } from '@renderer/features/debug/devDebugConfig'
@@ -97,20 +97,6 @@ type BuriedPaneInfo = {
   note?: string
   buriedAt: number
 }
-
-type PaletteMode =
-  | 'commands'
-  | 'resume'
-  | 'buried'
-  | 'kill-buried'
-  | 'prompt-template'
-  | 'manage-prompt-template'
-  | 'fill-prompt-template'
-  | 'save-prompt-template'
-  | 'edit-prompt-template'
-  | 'ai-workspace-open'
-  | 'ai-workspace-create'
-  | 'ai-workspace-clear'
 
 type PromptTemplateFillState = {
   template: PromptTemplate
@@ -332,7 +318,11 @@ function OpenCommandPalette({
 
   const [query, setQuery] = useState('')
   const [selectedIndex, setSelectedIndex] = useState(0)
-  const [mode, setMode] = useState<PaletteMode>('commands')
+  // Store-backed, not `useState` — see the note on `uiShell.paletteMode`. The
+  // local version could not survive a chord invocation, which mounts this
+  // component invisibly and destroys it in the same commit.
+  const mode = useAppStore(state => state.paletteMode)
+  const setMode = useAppStore(state => state.setPaletteMode)
   const [sessions, setSessions] = useState<SessionInfo[]>([])
   const [sessionsLoading, setSessionsLoading] = useState(false)
   const [aiWorkspaces, setAiWorkspaces] = useState<AiWorkspaceSummary[]>([])
@@ -862,10 +852,20 @@ function OpenCommandPalette({
     return paletteCommands[selectedIndex] ?? null
   }, [mode, paletteCommands, selectedIndex])
 
+  // Mount reset. Deliberately SKIPPED when this mount was caused by a pending
+  // command invocation: a chord mounts this component in order to run a
+  // command, and that command may have just seeded the mode (store) and the
+  // template form (local) synchronously inside the layout effect above. This
+  // effect is passive, so it runs AFTER that — resetting here would wipe the
+  // very state the invocation existed to produce.
+  //
+  // `mode` is no longer reset here at all; `closeCommandPalette` owns that, so
+  // reopening starts clean without this effect racing a mode-entering command.
+  const mountedForPendingCommand = useRef(pendingMenuCommand !== null)
   useEffect(() => {
+    if (mountedForPendingCommand.current) return
     setQuery('')
     setSelectedIndex(0)
-    setMode('commands')
     setSessions([])
     setSessionsLoading(false)
     setAiWorkspaces([])
@@ -958,13 +958,19 @@ function OpenCommandPalette({
       reportError: message => showToast(message, 6000),
     })
     onMenuCommandHandled()
-    // A command whose whole purpose IS the palette must not be closed by the
-    // "return to where you were" rule. Cmd+Shift+P arrives here with
-    // closeAfterRun=true (the palette was shut when the chord fired), so
-    // honouring it blindly would open the palette and shut it in the same
-    // frame — the chord would look broken.
-    if (pendingMenuCommand.closeAfterRun
-      && !PALETTE_SELF_EXCLUDED_COMMAND_IDS.has(pendingMenuCommand.id)) {
+    // A command that OPENED the palette must not be closed by the "return to
+    // where you were" rule. `closeAfterRun` records that the palette was shut
+    // when the invocation was requested; honouring it blindly would open the
+    // palette and shut it in the same frame, and the chord would look broken.
+    //
+    // The test is the LIVE flag, read after `run`, rather than a hardcoded id
+    // list. That list held only `open-command-palette`, and it could only ever
+    // have held ids someone remembered to add — it would not have covered the
+    // nine mode-entering commands, which need exactly the same exemption for
+    // exactly the same reason. "Did this command turn the palette on?" answers
+    // for all of them, and for anything added later, without an enumeration to
+    // keep in sync.
+    if (pendingMenuCommand.closeAfterRun && !useAppStore.getState().commandPaletteOpen) {
       onClose()
     }
   }, [commandContext, onClose, onMenuCommandHandled, pendingMenuCommand, showToast])
