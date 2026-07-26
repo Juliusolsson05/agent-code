@@ -215,3 +215,68 @@ toggle action exists.
 5. **The seven discrete bugs.**
 
 Phase 5 is independent and can land first. Phases 2 and 4 are useless apart.
+
+---
+
+## Outcome (2026-07-26)
+
+All five phases landed. Commits `1319dbba`, `34c600c2`, `f342a6fd`, `8ac304b3`
+on top of this plan.
+
+Verification: `tsc -b` clean on both projects after `rm -rf .tsc-out`,
+`check:keybindings` OK (39 binding sets, 13 reserved, 5 approved overlaps),
+246/246 vitest files.
+
+### Decisions taken during implementation
+
+**Phase 1 chose store-backed mode over the three-edit patch**, as planned. Worth
+recording why the alternative kept looking attractive: it touches fewer files.
+It also has three parts that must all be present, and its correctness argument
+is "passive effects run after layout effects". The store version has no ordering
+argument at all, which is the entire reason to prefer it.
+
+**Phase 2 used a table, not a derived predicate.** Asking the command
+(`getState(ctx)?.value === 'on'`) would be impossible to drift, and was
+rejected anyway: building a `CommandContext` assembles ~76 workspace actions,
+and deferring that is why the router forwards an id instead of dispatching
+inline (#494). Paying it on every keystroke that lands while a dialog is open
+trades a real regression for a keyboard nicety. Drift is bounded by
+`keyof UiShellState` instead.
+
+**The close-after-run exemption became a live-flag read** rather than a longer
+id list. `PALETTE_SELF_EXCLUDED_COMMAND_IDS` held only `open-command-palette`
+and would have needed all nine mode-entering commands added to it — an
+enumeration someone has to remember. "Did this command turn the palette on?"
+answers for all of them and for anything added later. The set survives for its
+original, separate purpose: keeping "Command Palette" out of its own list.
+
+### What the tests actually pin
+
+The store tests drive `setPaletteMode` / `closeCommandPalette` /
+`requestCommandInvocation` rather than rendering the palette, deliberately: the
+bug was never a rendering bug, it was state carrying a component lifecycle it
+should not have had. Verified by sabotage — removing the `commandPaletteOpen`
+coupling from `setPaletteMode` fails two cases.
+
+The surface-ownership test asserts every listed command has a `getState`. It
+failed on its first run and caught `usage.open` toggling with no badge, which
+is the failure mode worth guarding: the table lets a chord cross the
+interaction gate, and the command's state and run are what dismiss once it
+does. Listed-but-not-toggling is the reported bug wearing a different hat.
+
+### Not done, and why
+
+`RemotePanel` still renders a Radix `Dialog` while being registered as a side
+panel, unlike its sibling `AgentStatusPanel` (`<aside>`). Phase 2's exemption
+makes its chord round-trip regardless, so the inconsistency is now cosmetic
+rather than functional — but it is still the wrong component for a non-modal
+panel, and worth its own change.
+
+Escape does not dismiss the Settings page: `useKeybinds.ts:537-541` is dead code
+behind the ownership gate, and the only exit is the Close button. Left alone
+because Settings is deliberately excluded from the toggle set, so fixing it is
+about Escape rather than about activation semantics.
+
+`save-editor-file`'s `when` is now correct, but the underlying design — a window
+event with a listener that exists only while the editor is mounted — is still
+the reason the guard has to be so precise.
