@@ -34,10 +34,13 @@ export const layoutCommands: CommandDef[] = [
     // guard — the registry's surface gate already hides this whenever
     // Dispatch is off, so the explicit `when` was redundant.
     surface: 'dispatch',
-    title: 'Global Dispatch',
+    title: 'Dispatch Scope',
     description: '**What it does:** Switches **Dispatch** between project scope and all-tabs scope.\n\n**Use when:** You want one command center for agents across every tab.\n\n**Notes:** Only appears while **Dispatch Mode** is enabled.',
-    keywords: ['dispatch all tabs', 'agent list'],
-    getState: ({ flags }) => toggle(flags.globalDispatchEnabled),
+    keywords: ['dispatch all tabs', 'agent list', 'global dispatch'],
+    // A SCOPE, not a boolean. "Global Dispatch: On" told the user nothing
+    // about what Off meant — the alternative is Project scope, not "no
+    // dispatch". Naming both ends is the whole correction.
+    getState: ({ flags }) => value(flags.globalDispatchEnabled ? 'Global' : 'Project'),
     run: async ({ ui }) => {
       await ui.enterGlobalDispatch()
     },

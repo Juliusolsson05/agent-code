@@ -20,7 +20,7 @@ export const dispatchColorFlagCommands: CommandDef[] = [
     category: 'layout-dispatch',
     pickerVisibility: 'advanced',
     surface: 'session',
-    title: 'Set color flag',
+    title: 'Set Color Flag…',
     description:
       '**What it does:** Marks the focused agent with a colored strip on the ' +
       'right edge of its **Dispatch row**, so you can spot it in a long list.\n\n' +

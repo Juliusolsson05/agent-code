@@ -71,7 +71,8 @@ export const paneCommands: CommandDef[] = [
     // Dispatch-aware path, so this closes a grid pane in the grid and
     // the highlighted row in Dispatch — meaningful in both modes.
     surface: 'session',
-    title: 'Close Pane',
+    title: 'Close Focused Session',
+    keywords: ['pane', 'close pane'],
     description: '**What it does:** Closes the **currently targeted pane or Dispatch row**.\n\n**Use when:** You are done with the current target.\n\n**Notes:** In **Dispatch**, the highlighted row is the close target.',
     run: ({ workspace }) => void workspace.closeFocused(),
   },
@@ -80,7 +81,8 @@ export const paneCommands: CommandDef[] = [
     category: 'layout-dispatch',
     pickerVisibility: 'advanced',
     surface: 'session',
-    title: 'Bury Pane',
+    title: 'Bury Session',
+    keywords: ['pane'],
     description: '**What it does:** Hides the pane but keeps the **session alive**.\n\n**Use when:** You want it out of the layout without killing it.\n\n**Notes:** Buried panes can be revived later.',
     run: ({ workspace }) => workspace.requestBuryFocused(),
   },
@@ -380,7 +382,8 @@ export const paneCommands: CommandDef[] = [
     // session re-enters the grid tree — which also makes it a Dispatch
     // row — so the command is meaningful from either mode.
     surface: 'app',
-    title: 'Revive Buried Pane',
+    title: 'Revive Buried Session…',
+    keywords: ['pane'],
     description: '**What it does:** Restores a **buried live pane**.\n\n**Use when:** You parked a session and want it back.\n\n**Notes:** Opens a picker when multiple buried panes exist.',
     keepPaletteOpen: true,
     when: ({ workspace }) => workspace.state.buried.length > 0,
@@ -391,9 +394,9 @@ export const paneCommands: CommandDef[] = [
     category: 'layout-dispatch',
     pickerVisibility: 'advanced',
     surface: 'app',
-    title: 'Kill Buried Pane…',
+    title: 'Kill Buried Session…',
     description: '**What it does:** Permanently kills a **buried session**.\n\n**Use when:** You no longer need hidden background work.\n\n**Notes:** This is destructive.',
-    keywords: ['kill', 'buried', 'hidden', 'pane', 'session'],
+    keywords: ['kill', 'buried', 'hidden', 'pane', 'session', 'pane'],
     keepPaletteOpen: true,
     when: ({ workspace }) => workspace.state.buried.length > 0,
     run: ({ ui }) => ui.enterKillBuriedMode(),
@@ -402,7 +405,8 @@ export const paneCommands: CommandDef[] = [
     id: 'toggle-tail',
     category: 'session',
     surface: 'session',
-    title: 'Tail',
+    title: 'Auto-follow Focused Agent',
+    keywords: ['tail'],
     description: '**What it does:** Toggles feed **auto-follow** for the focused target.\n\n**Use when:** You want output to stay pinned to the bottom.\n\n**Notes:** Applies to the visible command target, including **Dispatch** selection.',
     renderedViewPolicy: { kind: 'requires-rendered-feed' },
     getState: ({ workspace, flags }) => {
@@ -455,10 +459,10 @@ export const paneCommands: CommandDef[] = [
     // `switch-agents-provider` — the user is acting across the workspace, not
     // on the focused pane.
     surface: 'app',
-    title: 'Tail All',
+    title: 'Auto-follow All Visible Agents',
     description:
       '**What it does:** Toggles feed **auto-follow for every visible agent** at once.\n\n**Use when:** You are watching several agents work and want them all pinned to the bottom.\n\n**Notes:** Scopes to what is on screen — in **single dispatch** that is the one agent, in **tiled** every lane, in the **grid** the current tab\'s panes only. Panes you open afterward tail too, until you toggle it off. Terminals are never affected.\n\n**Caution:** A tailing feed cannot be scrolled up — this takes scrollback away from every visible pane at once, and turning it off does not restore where you were reading.',
-    keywords: ['tail', 'all', 'follow', 'auto-scroll', 'bulk', 'every', 'watch'],
+    keywords: ['tail', 'all', 'follow', 'auto-scroll', 'bulk', 'every', 'watch', 'tail all', 'tail'],
     // WHY no `renderedViewPolicy` even though per-session Tail has one: that
     // gate resolves ONE target session and checks whether it renders a feed.
     // Tail All has no single target — it is a stance that applies to whatever

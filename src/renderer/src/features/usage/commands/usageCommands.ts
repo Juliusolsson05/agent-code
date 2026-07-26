@@ -4,10 +4,10 @@ export const usageCommands: CommandDef[] = [
   {
     id: 'usage.open',
     category: 'workspace-tools',
-    title: 'Usage',
+    title: 'Open Usage',
     description: 'Open provider usage for Claude and Codex.',
     surface: 'app',
-    keywords: ['quota', 'tokens', 'limits', 'claude', 'codex'],
+    keywords: ['quota', 'tokens', 'limits', 'claude', 'codex', 'usage'],
     run: ({ ui }) => {
       ui.openUsageModal()
       ui.closePalette()

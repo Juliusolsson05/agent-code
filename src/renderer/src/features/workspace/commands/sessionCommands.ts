@@ -200,7 +200,7 @@ export const sessionCommands: CommandDef[] = [
     id: 'open-agent-activity',
     category: 'workspace-tools',
     surface: 'app',
-    title: 'Agent Activity…',
+    title: 'Open Agent Activity…',
     description: '**What it does:** Opens an overview of **agent activity** across the workspace.\n\n**Use when:** You want to triage active, idle, or stale agents.\n\n**Notes:** Useful for cleanup during long multi-agent sessions.',
     keywords: [
       'agent',
@@ -711,9 +711,9 @@ export const sessionCommands: CommandDef[] = [
     category: 'session',
     pickerVisibility: 'advanced',
     surface: 'session',
-    title: 'Set Agent View Mode...',
+    title: 'Agent View for This Session…',
     description: '**What it does:** Overrides the focused agent pane to use Agent rendering, Terminal rendering, or the global default.\n\n**Use when:** One session needs the raw provider terminal while the rest of the app keeps its normal view mode.\n\n**Notes:** Persists with the session. Hybrid remains a global/default setting, not a per-session override.',
-    keywords: ['agent', 'view', 'mode', 'terminal', 'rendering', 'raw', 'override', 'default'],
+    keywords: ['agent', 'view', 'mode', 'terminal', 'rendering', 'raw', 'override', 'default', 'set agent view mode'],
     getState: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       const meta = sessionId ? workspace.state.sessions[sessionId] : null
@@ -995,7 +995,7 @@ export const sessionCommands: CommandDef[] = [
     category: 'developer',
     pickerVisibility: 'debug',
     surface: 'debug',
-    title: 'Toggle Session Recording',
+    title: 'Session Recording',
     description: '**What it does:** Starts or stops **continuous recording** of the focused pane\'s rendering-input stream (replayable in the test suite).\n\n**Use when:** Right before reproducing a rendering bug you want captured as a fixture.\n\n**Notes:** Command-driven — nothing records until you start it. Each recording is its own folder under `session-recordings/`.',
     keywords: ['recording', 'record', 'start', 'stop', 'capture', 'session', 'soak', 'fixture', 'debug'],
     when: ({ flags, workspace }) => {
@@ -1031,7 +1031,7 @@ export const sessionCommands: CommandDef[] = [
     category: 'developer',
     pickerVisibility: 'debug',
     surface: 'debug',
-    title: 'Attach Recording Note',
+    title: 'Attach Recording Note…',
     description: '**What it does:** Drops a **timestamped note** into the focused pane\'s live session recording.\n\n**Use when:** You see a rendering bug during a recorded soak and want to mark the exact moment.\n\n**Notes:** Reserves the tick instantly, then prompts for text. Only available when session recording is enabled.',
     keywords: ['recording', 'note', 'mark', 'bookmark', 'annotate', 'soak', 'session', 'record', 'tick', 'debug'],
     when: ({ flags, workspace }) => {
