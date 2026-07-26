@@ -4,6 +4,7 @@ import { useAppStore } from '@renderer/app-state/hooks'
 import { buildDefaultKeybindings } from '@renderer/features/command-keybindings/defaults'
 import type { BindingContext } from '@renderer/features/command-keybindings/defaults'
 import { keybindingFromEvent } from '@renderer/features/command-keybindings/normalize'
+import { commandOwnsOpenSurface } from '@renderer/features/command-palette/surfaceOwnership'
 import { resolveEffectiveKeybindings } from '@renderer/features/command-keybindings/resolve'
 import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
@@ -230,6 +231,10 @@ function routedCommandForEvent(
   return null
 }
 
+/** The only context a chord may fire in while a surface owns the interaction.
+ *  See the exemption in the handler for why this is not the live context set. */
+const GLOBAL_CONTEXT_ONLY: ReadonlySet<BindingContext> = new Set<BindingContext>(['global'])
+
 /** Chord -> candidate commands, built once per override change. */
 function buildBindingIndex(
   overrides: Record<string, string[]>,
@@ -331,6 +336,28 @@ export function useKeybinds(
       // defaults for chords that Agent Code itself claims (Cmd+W is the
       // important one — otherwise macOS closes the window after we return).
       if (hasAppInteractionOwner()) {
+        // ONE exemption: the chord that owns the surface currently holding the
+        // interaction. Pressing ⌘⇧U while Usage is up is unambiguously "dismiss
+        // Usage" — it cannot be a stray shortcut leaking into a modal, because
+        // the modal is the thing this command controls.
+        //
+        // Without this, every toggle written in a command body is unreachable
+        // by keyboard: the second press never gets past this gate, so the
+        // command's `run` is never called. That is why ⌥R Reader and ⌥S
+        // Spotlight round-trip today while ⌘⇧U does not — the former render
+        // inline and stamp no owner marker, the latter is a Radix dialog. The
+        // difference was never in the commands.
+        //
+        // Context is deliberately 'global' only. A surface owns the screen, so
+        // a grid- or dispatch-scoped binding has no business firing underneath
+        // it; only an app-wide chord can mean "dismiss the thing in front of
+        // me".
+        const dismissCommandId = routedCommandForEvent(e, bindingIndex, GLOBAL_CONTEXT_ONLY)
+        if (dismissCommandId && commandOwnsOpenSurface(dismissCommandId, useAppStore.getState())) {
+          e.preventDefault()
+          requestCommandInvocation(dismissCommandId, 'keybinding')
+          return
+        }
         if (shouldPreventOwnedApplicationShortcut(e)) e.preventDefault()
         return
       }

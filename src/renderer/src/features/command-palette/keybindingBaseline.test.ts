@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
+import { SURFACE_OWNER_FLAGS, commandOwnsOpenSurface } from '@renderer/features/command-palette/surfaceOwnership'
 import { builtInCommandCatalog } from '@renderer/features/command-palette/catalog'
 import { resolveEffectiveKeybindings } from '@renderer/features/command-keybindings/resolve'
 
@@ -386,5 +387,63 @@ describe('recorded authority drift (pre-migration history)', () => {
     // command), the undisclosed ⌥W close, and the four arrow aliases.
     const undisclosed = [...effectiveChords].filter(c => !declaredChords.has(c)).sort()
     expect(undisclosed).toEqual(['⌘⇧E', '⌘⇧P', '⌥W', '⌥←', '⌥↑', '⌥→', '⌥↓'])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Surface ownership — the narrow exemption to the interaction-owner gate.
+//
+// `useKeybinds` bails out of the whole key handler while any Radix dialog is
+// mounted, which is correct (⌘W must not close a pane behind a confirmation)
+// but means a dialog-based surface makes its own chord unreachable. That is the
+// entire reason ⌘⇧U could open Usage and never dismiss it, while ⌥R Reader
+// round-tripped fine — Reader renders inline and stamps no owner marker.
+//
+// The exemption lets a chord cross the gate when it maps to the command that
+// owns the surface currently in front of the user. These cases pin the two
+// properties that keep it narrow: the table names real commands, and the
+// predicate only ever answers for those.
+// ---------------------------------------------------------------------------
+describe('surface ownership', () => {
+  const catalogIds = new Set(builtInCommandCatalog.map(command => command.id))
+
+  it('names only commands that exist', () => {
+    // A stale id here is worse than useless: the chord silently stops being
+    // exempt and the surface becomes undismissable again, with nothing failing.
+    for (const commandId of Object.keys(SURFACE_OWNER_FLAGS)) {
+      expect(catalogIds.has(commandId)).toBe(true)
+    }
+  })
+
+  it('reports ownership only when that command’s own surface is open', () => {
+    expect(commandOwnsOpenSurface('usage.open', { usageModalOpen: true } as never)).toBe(true)
+    expect(commandOwnsOpenSurface('usage.open', { usageModalOpen: false } as never)).toBe(false)
+  })
+
+  it('refuses every command not in the table', () => {
+    // The gate's default is still "bail". Only a listed command may cross it,
+    // so an unrelated chord cannot reach a workspace action while a modal owns
+    // the screen — which is the bug the gate exists to prevent.
+    expect(commandOwnsOpenSurface('close-pane', { usageModalOpen: true } as never)).toBe(false)
+    expect(commandOwnsOpenSurface('split-vertical', { usageModalOpen: true } as never)).toBe(false)
+  })
+
+  it('excludes surfaces where a second press must not mean dismiss', () => {
+    // Recorded as a decision, not an omission. Per-target pickers should
+    // RE-TARGET on a second press; Save Debug Logs and Attach Recording Note
+    // each write something on the way in, so a second press legitimately writes
+    // a second one; Settings is a destination, not a peek.
+    for (const excluded of [
+      'view-prompts',
+      'rewind-to-prompt',
+      'set-agent-view-mode',
+      'dispatch.color-flag.set',
+      'save-debug-logs',
+      'attach-recording-note',
+      'open-settings',
+      'open-command-palette',
+    ]) {
+      expect(Object.keys(SURFACE_OWNER_FLAGS)).not.toContain(excluded)
+    }
   })
 })
