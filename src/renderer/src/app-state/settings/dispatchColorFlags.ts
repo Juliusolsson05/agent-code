@@ -1,9 +1,13 @@
 // Dispatch color flags — the fixed swatch palette + coercion.
 //
 // A "color flag" is a per-agent marker the user sets from the "Set color flag"
-// command to paint a thick strip on the right edge of that agent's Dispatch
-// row, so a flagged agent is instantly spottable when scanning many running
-// workflows. See docs/plans_and_ideas/2026-07-23-dispatch-color-flags.md.
+// command, so a flagged agent is instantly spottable when scanning many running
+// workflows. It renders in two places: a thick strip on the right edge of that
+// agent's Dispatch row, and a chunk of the right end of its pane's session
+// header in the grid. See docs/plans_and_ideas/2026-07-23-dispatch-color-flags.md
+// for the original feature and
+// docs/superpowers/plans/2026-07-26-session-header-color-flag.md for the header
+// surface. `useColorFlag` is the shared reader both surfaces go through.
 //
 // WHY a fixed palette rather than a free RGB/hex picker: the whole point is
 // fast visual triage of a list, and a small set of high-contrast, distinct
