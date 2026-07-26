@@ -92,18 +92,12 @@ export const layoutCommands: CommandDef[] = [
     description: '**What it does:** Rotates split directions in the current layout.\n\n**Use when:** The same panes would work better in a different orientation.\n\n**Notes:** Keeps the sessions, changes the arrangement.',
     run: ({ workspace }) => workspace.rotateLayout(),
   },
-  {
-    id: 'toggle-status-mode',
-    category: 'preferences',
-    surface: 'app',
-    title: 'Status Mode',
-    description: '**What it does:** Toggles status coloring for active agents.\n\n**Use when:** You want running or working agents to stand out.\n\n**Notes:** This is a visual setting only.',
-    getState: ({ flags }) => ({
-      label: flags.statusModeEnabled ? 'On' : 'Off',
-      tone: flags.statusModeEnabled ? 'accent' : 'neutral',
-    }),
-    run: ({ ui }) => ui.toggleStatusMode(),
-  },
+  // RETIRED: `toggle-status-mode`. Status Mode is a persisted app preference
+  // with no meaningful momentary scope — there is no "just for this session"
+  // version of it — so it has one product home, and that home is Settings
+  // (Appearance → Status Mode, backed by `showStatusMode`). A command that
+  // duplicates a durable preference gives the same setting two owners and two
+  // places to look when it is wrong.
   {
     id: 'toggle-performance-panel',
     category: 'developer',

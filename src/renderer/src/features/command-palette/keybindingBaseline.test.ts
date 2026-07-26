@@ -336,9 +336,14 @@ describe('recorded authority drift', () => {
     expect(editorOwned.map(e => e.commandId)).toEqual(['save-editor-file'])
   })
 
-  it('records the palette chord as having no command owner', () => {
+  it('records the palette chord that used to have no command owner', () => {
+    // At the baseline ⌘⇧P ran through a hard-coded `onCommandPalette?.()`
+    // callback and named no command, which is precisely why it could not be
+    // rebound, listed in Settings, or collision-checked.
     expect(UNOWNED_COMMAND_CHORDS.map(c => c.chord)).toEqual(['⌘⇧P'])
-    expect(builtInCommandCatalog.map(c => c.id)).not.toContain('open-command-palette')
+    // It has an owner now. The assertion is inverted rather than deleted so the
+    // before-state stays legible: this is the defect, and this is the fix.
+    expect(builtInCommandCatalog.map(c => c.id)).toContain('open-command-palette')
   })
 
   it('proves declared metadata is not sufficient to know what a key does', () => {

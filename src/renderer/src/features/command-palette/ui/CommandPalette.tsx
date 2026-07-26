@@ -197,6 +197,7 @@ function OpenCommandPalette({
   }, [openTileTabsModal, workspace.activeTab, workspace.tileTabs])
   const onReorderTabsRequest = useAppStore(state => state.openReorderTabs)
   const onSettingsRequest = useAppStore(state => state.openSettingsPage)
+  const openPaletteAction = useAppStore(state => state.openCommandPalette)
   const openViewPrompts = useAppStore(state => state.openViewPrompts)
   const openPromptSearch = useAppStore(state => state.openPromptSearch)
   const openAgentActivity = useAppStore(state => state.openAgentActivity)
@@ -492,6 +493,11 @@ function OpenCommandPalette({
         openTileTabs: onTileTabsRequest,
         openReorderTabs: onReorderTabsRequest,
         openSettings: onSettingsRequest,
+        // Reachable through the gateway (keybinding, native menu, programmatic)
+        // but never rendered as a palette row — see
+        // PALETTE_SELF_EXCLUDED_COMMAND_IDS for why that exclusion is
+        // structural rather than a visibility tier.
+        openCommandPalette: openPaletteAction,
         openViewPrompts,
         openPromptSearch,
         openAgentActivity,

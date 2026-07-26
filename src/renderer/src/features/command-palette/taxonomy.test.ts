@@ -214,3 +214,93 @@ describe('navigationCommandsEnabled persistence', () => {
     expect(coerceSettings(coerceSettings({})).navigationCommandsEnabled).toBe(false)
   })
 })
+
+describe('retired preference commands', () => {
+  // Recorded product decision: five durable preferences with no meaningful
+  // momentary scope move to a single product home. The commands go; the
+  // Settings controls and their canonical fields stay, which is why no
+  // value migration is needed.
+  const RETIRED = [
+    'toggle-status-mode',
+    'toggle-worktree-badges',
+    'usage.toggle-header',
+    'usage.cycle-header-level',
+    'dangerous-agents',
+  ]
+
+  it('removes all five from the catalog', () => {
+    const ids = new Set(builtInCommandCatalog.map(c => c.id))
+    for (const id of RETIRED) expect(ids.has(id)).toBe(false)
+  })
+
+  it('keeps every canonical settings field intact', () => {
+    // The whole justification for "no migration needed". If any of these
+    // stopped surviving coercion, retiring the command would silently reset a
+    // user's preference — which would make this a data-loss change rather than
+    // an information-architecture one.
+    const settings = coerceSettings({
+      showStatusMode: false,
+      showWorktreeBadges: false,
+      usageHeaderEnabled: false,
+      usageHeaderLevel: 'minimal',
+      dangerousAgentsEnabled: true,
+    })
+    expect(settings.showStatusMode).toBe(false)
+    expect(settings.showWorktreeBadges).toBe(false)
+    expect(settings.usageHeaderEnabled).toBe(false)
+    expect(settings.usageHeaderLevel).toBe('minimal')
+    expect(settings.dangerousAgentsEnabled).toBe(true)
+  })
+
+  it('prunes stale visibility overrides for the retired ids', () => {
+    const settings = coerceSettings({
+      commandVisibilityOverrides: { 'dangerous-agents': false, 'new-tab': false },
+    })
+    expect(settings.commandVisibilityOverrides).toEqual({ 'new-tab': false })
+  })
+
+  it('prunes stale keybinding overrides for the retired ids', () => {
+    const settings = coerceSettings({
+      commandKeybindingOverrides: { 'toggle-status-mode': ['Cmd+9'], 'new-tab': ['Cmd+9'] },
+    })
+    expect(settings.commandKeybindingOverrides).toEqual({ 'new-tab': ['Cmd+9'] })
+  })
+
+  it('does not prune an id merely because it is absent from this build', () => {
+    // An id naming nothing today may belong to an uninstalled extension or a
+    // command a downgrade removed. Pruning by absence would discard a user's
+    // deliberate settings the first time they ran an older build.
+    const settings = coerceSettings({
+      commandVisibilityOverrides: { 'ext.timer.start': false },
+      commandKeybindingOverrides: { 'ext.timer.start': ['Cmd+9'] },
+    })
+    expect(settings.commandVisibilityOverrides).toEqual({ 'ext.timer.start': false })
+    expect(settings.commandKeybindingOverrides).toEqual({ 'ext.timer.start': ['Cmd+9'] })
+  })
+})
+
+describe('open-command-palette', () => {
+  it('is in the catalog so it can be bound and collision-checked', () => {
+    expect(builtInCommandCatalog.map(c => c.id)).toContain('open-command-palette')
+  })
+
+  it('never renders as a palette row', () => {
+    // Structural, not a visibility tier: no user override should be able to put
+    // "open the palette" inside the palette, where it is at best noise and at
+    // worst a way to close the surface by accident.
+    const ctx = makeTestCommandContext()
+    expect(buildCommandRegistry(ctx).map(c => c.id)).not.toContain('open-command-palette')
+  })
+
+  it('stays hidden from palette rows even with reveal-all on', () => {
+    const ctx = makeTestCommandContext({ flags: { showHiddenCommands: true } })
+    expect(buildCommandRegistry(ctx).map(c => c.id)).not.toContain('open-command-palette')
+  })
+
+  it('stays hidden from palette rows even with an explicit visibility override', () => {
+    const ctx = makeTestCommandContext({
+      flags: { commandVisibilityOverrides: { 'open-command-palette': true } },
+    })
+    expect(buildCommandRegistry(ctx).map(c => c.id)).not.toContain('open-command-palette')
+  })
+})

@@ -1,4 +1,5 @@
 import { builtInCommandCatalog } from '@renderer/features/command-palette/catalog'
+import { PALETTE_SELF_EXCLUDED_COMMAND_IDS } from '@renderer/features/command-palette/commands/paletteCommands'
 import { declaredTier, isVisibleInPicker } from '@renderer/features/command-palette/pickerVisibility'
 import { commandAllowedByRenderedViewPolicy } from '@renderer/workspace/agentDisplayMode'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
@@ -148,6 +149,7 @@ function renderedViewAvailable(command: CommandDef, ctx: CommandContext): boolea
 
 export function buildCommandRegistry(ctx: CommandContext): ResolvedCommand[] {
   return commandDefs
+    .filter(command => !PALETTE_SELF_EXCLUDED_COMMAND_IDS.has(command.id))
     .filter(command => commandApplicable(command, ctx) && commandVisible(command, ctx))
     .map(command => {
       const description = command.description.trim()

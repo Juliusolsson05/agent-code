@@ -135,8 +135,8 @@ export function coerceSettings(value: unknown): Settings {
     // rows help almost nobody, and silently revealing them on upgrade would
     // be a regression nobody asked for.
     navigationCommandsEnabled: parsed.navigationCommandsEnabled === true,
-    commandKeybindingOverrides: coerceCommandKeybindingOverrides(
-      parsed.commandKeybindingOverrides,
+    commandKeybindingOverrides: pruneRetiredKeybindingOverrides(
+      coerceCommandKeybindingOverrides(parsed.commandKeybindingOverrides),
     ),
   }
 }
@@ -205,11 +205,51 @@ function resolvePersistedMode(
   return DEFAULT_SETTINGS.mode
 }
 
+/**
+ * First-party command ids this release deliberately removed.
+ *
+ * Their persisted preference entries are pruned so a stale visibility override
+ * or keybinding cannot linger forever against an id nothing will ever resolve.
+ *
+ * WHY an explicit list instead of "delete any id not in the catalog": an id
+ * that names nothing TODAY is not necessarily dead. It may belong to an
+ * extension that is temporarily uninstalled, a provider whose commands this
+ * build does not generate, or a command a downgrade removed. Pruning by
+ * absence would silently discard a user's deliberate settings the first time
+ * they ran an older build or disabled an extension. Only ids we KNOW are gone
+ * for good are removed, and adding one is a deliberate act recorded here.
+ *
+ * Retired in the command-governance change: five durable preferences that had
+ * both a command and a Settings control. The Settings controls (and their
+ * canonical fields) are untouched, so no value migration is needed — only the
+ * now-meaningless per-command preference entries go.
+ */
+const RETIRED_BUILT_IN_COMMAND_IDS: ReadonlySet<string> = new Set([
+  'toggle-status-mode',
+  'toggle-worktree-badges',
+  'usage.toggle-header',
+  'usage.cycle-header-level',
+  'dangerous-agents',
+])
+
 function coerceCommandVisibilityOverrides(value: unknown): Record<string, boolean> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
   const result: Record<string, boolean> = {}
   for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (RETIRED_BUILT_IN_COMMAND_IDS.has(key)) continue
     if (typeof entry === 'boolean') result[key] = entry
+  }
+  return result
+}
+
+/** Same retired-id policy, applied to persisted keybinding overrides. */
+function pruneRetiredKeybindingOverrides(
+  overrides: Record<string, string[]>,
+): Record<string, string[]> {
+  const result: Record<string, string[]> = {}
+  for (const [commandId, bindings] of Object.entries(overrides)) {
+    if (RETIRED_BUILT_IN_COMMAND_IDS.has(commandId)) continue
+    result[commandId] = bindings
   }
   return result
 }

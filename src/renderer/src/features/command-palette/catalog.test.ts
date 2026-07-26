@@ -9,12 +9,12 @@ import type { CommandDef } from '@renderer/features/command-palette/types'
 // Phase 0 of the command-governance plan (docs/superpowers/plans/
 // 2026-07-23-command-surface-audit.md): CHARACTERIZE THE CURRENT CATALOG.
 //
-// Everything here describes what the catalog is TODAY, before any governance
-// behavior changes. That is the whole point: the later phases retire five
-// commands, add one, reclassify tiers, and rewire how ids resolve. Without a
-// pinned before-state, "did we change exactly what we meant to change" is
-// unanswerable, and the plan's central count (102 → 98) is an assertion nobody
-// can check.
+// This file pinned the exact 102-id before-state, and now pins the 98-id
+// after-state: five durable preferences retired to Settings, one approved
+// addition (open-command-palette). Keeping ONE snapshot that moved — rather
+// than a "baseline" file and an "after" file — is what makes the plan's
+// headline count an assertion anyone can check against running code instead of
+// prose.
 //
 // WHY a literal ordered snapshot rather than just a count: registration order
 // is the palette's empty-query browse order, and users navigate that list by
@@ -26,7 +26,7 @@ import type { CommandDef } from '@renderer/features/command-palette/types'
 // never as a follow-up "fix the test" commit.
 // ---------------------------------------------------------------------------
 
-/** The exact ordered catalog as of the governance baseline (main @ 670f4c2d). */
+/** The exact ordered catalog after governance (was 102 at main @ 670f4c2d). */
 const BASELINE_COMMAND_IDS: readonly string[] = [
   // tabCommands (6)
   'new-tab',
@@ -64,14 +64,13 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   'toggle-tail-all',
   'jump-latest-message',
   'copy-last-assistant',
-  // layoutCommands (9)
+  // layoutCommands (8, was 9: toggle-status-mode retired)
   'dispatch-mode',
   'global-dispatch',
   'tiled-dispatch',
   'normalize-layout',
   'hard-normalize-layout',
   'rotate-layout',
-  'toggle-status-mode',
   'toggle-performance-panel',
   'toggle-caffeinate',
   // globalEditorCommands (10)
@@ -121,12 +120,10 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   'toggle-spotlight',
   'toggle-reader-mode',
   'tiled-tabs',
-  // settingsCommands + dangerousCommands (5)
+  // settingsCommands (3, was 5: worktree-badges + dangerous-agents retired)
   'open-settings',
   'toggle-aggressive-debug-persistence',
   'toggle-worktrees-bar',
-  'toggle-worktree-badges',
-  'dangerous-agents',
   // copy-assistant / copy-code-block (2)
   'copy-assistant-message',
   'copy-code-block',
@@ -138,15 +135,16 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   // agent status / remote (2)
   'show-agent-status',
   'toggle-remote-panel',
-  // usage (3)
+  // usage (1, was 3: both header preferences retired)
   'usage.open',
-  'usage.toggle-header',
-  'usage.cycle-header-level',
+  // paletteCommands (1) — the single approved addition
+  'open-command-palette',
 ]
 
-/** The five ids the plan retires in Phase 4, kept here so the retirement is a
- *  one-line diff against a named list rather than five scattered edits. */
-const PLANNED_RETIREMENTS: readonly string[] = [
+/** The five durable preferences retired from Commands to Settings. Their
+ *  canonical settings fields are untouched, so no value migration is needed —
+ *  only the now-meaningless per-command preference entries are pruned. */
+const RETIRED_COMMAND_IDS: readonly string[] = [
   'toggle-status-mode',
   'toggle-worktree-badges',
   'usage.toggle-header',
@@ -170,16 +168,16 @@ const NAVIGATION_COMMAND_GROUP: readonly string[] = [
 const ids = (): string[] => builtInCommandCatalog.map(c => c.id)
 
 describe('built-in command catalog — baseline characterization', () => {
-  it('contains exactly the 102 baseline commands in registration order', () => {
+  it('contains exactly the 98 governed commands in registration order', () => {
     // Order matters: this is the palette's empty-query browse order.
     expect(ids()).toEqual([...BASELINE_COMMAND_IDS])
   })
 
-  it('has exactly 102 commands', () => {
+  it('has exactly 98 commands', () => {
     // Stated separately from the order assertion because the plan's headline
     // number is the thing later phases move (102 → 98), and a bare count
     // failure is a clearer signal than a 102-line array diff.
-    expect(builtInCommandCatalog).toHaveLength(102)
+    expect(builtInCommandCatalog).toHaveLength(98)
   })
 
   it('reports no structural defects', () => {
@@ -210,10 +208,10 @@ describe('generated per-provider split commands', () => {
   })
 
   it('accounts for the difference between literal and total command count', () => {
-    // 102 total - 4 generated = 98 literal `id:` fields in the command modules.
-    // This is the exact reconciliation the plan performs, asserted rather than
-    // asserted-in-prose.
-    expect(builtInCommandCatalog.length - nonDefaultProviders.length * 2).toBe(98)
+    // 98 total - 4 generated = 94 literal `id:` fields across the command
+    // modules. At the baseline this read 102 - 4 = 98; both numbers moved by
+    // exactly the five retirements minus the one addition.
+    expect(builtInCommandCatalog.length - nonDefaultProviders.length * 2).toBe(94)
   })
 
   it('emits both directions for every non-default provider', () => {
@@ -286,23 +284,22 @@ describe('native menu contract', () => {
   })
 })
 
-describe('planned governance targets still exist in the baseline', () => {
-  // These assertions exist so the later phases have something to invert. If a
-  // retirement lands, the corresponding line here flips to `not.toContain` in
-  // the same commit — making the retirement visible in the test diff instead of
-  // only in the implementation diff.
+describe('governance targets', () => {
+  // These assertions were written inverted at the baseline ("still contains",
+  // "does not yet contain") so the retirement would be visible in the TEST
+  // diff, not only in the implementation diff. This is that flip.
 
-  it('still contains all five commands planned for retirement', () => {
+  it('no longer contains any of the five retired commands', () => {
     const catalogIds = new Set(ids())
-    for (const id of PLANNED_RETIREMENTS) {
-      expect(catalogIds.has(id)).toBe(true)
+    for (const id of RETIRED_COMMAND_IDS) {
+      expect(catalogIds.has(id)).toBe(false)
     }
   })
 
-  it('does not yet contain the planned open-command-palette command', () => {
-    // Cmd+Shift+P is hard-coded in useKeybinds today and is not a command at
-    // all, which is why its binding cannot be configured. Phase 4 adds it.
-    expect(ids()).not.toContain('open-command-palette')
+  it('contains the one approved addition', () => {
+    // Cmd+Shift+P was hard-coded in useKeybinds and named no command at all,
+    // which is exactly why it could not be rebound or collision-checked.
+    expect(ids()).toContain('open-command-palette')
   })
 
   it('contains every member of the closed Navigation Commands group', () => {
@@ -312,10 +309,11 @@ describe('planned governance targets still exist in the baseline', () => {
     }
   })
 
-  it('projects the post-Phase-4 catalog size as 98', () => {
-    // 102 - 5 retirements + 1 addition = 98. Encoded so the plan's headline
-    // arithmetic is checked against the real catalog rather than trusted.
-    expect(builtInCommandCatalog.length - PLANNED_RETIREMENTS.length + 1).toBe(98)
+  it('lands on the arithmetic the plan predicted', () => {
+    // 102 baseline - 5 retirements + 1 addition = 98, checked against the real
+    // catalog rather than trusted as prose.
+    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 1).toBe(102)
+    expect(builtInCommandCatalog).toHaveLength(98)
   })
 })
 

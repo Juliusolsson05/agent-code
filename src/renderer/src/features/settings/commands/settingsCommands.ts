@@ -1,5 +1,4 @@
 import type { CommandDef } from '@renderer/features/command-palette/types'
-import { dangerousCommands } from '@renderer/features/settings/commands/dangerousCommands'
 
 export const settingsCommands: CommandDef[] = [
   {
@@ -53,18 +52,15 @@ export const settingsCommands: CommandDef[] = [
     }),
     run: ({ ui }) => ui.toggleWorktreesBar(),
   },
-  {
-    id: 'toggle-worktree-badges',
-    category: 'preferences',
-    surface: 'app',
-    title: 'Worktree Badges',
-    description: '**What it does:** Toggles **worktree badges** on agent rows.\n\n**Use when:** You want branch context visible in panes and **Dispatch**.\n\n**Notes:** Visual-only setting.',
-    keywords: ['branch', 'git', 'worktree', 'badge', 'agent'],
-    getState: ({ flags }) => ({
-      label: flags.worktreeBadgesEnabled ? 'On' : 'Off',
-      tone: flags.worktreeBadgesEnabled ? 'accent' : 'neutral',
-    }),
-    run: ({ ui }) => ui.toggleWorktreeBadges(),
-  },
-  ...dangerousCommands,
+  // RETIRED: `toggle-worktree-badges`. Same reasoning as Status Mode — a
+  // durable visual preference with no momentary scope belongs in Settings
+  // only (Interface → Worktree Badges, backed by `showWorktreeBadges`).
+  //
+  // RETIRED: `dangerous-agents`, which used to arrive here via
+  // `...dangerousCommands`. That one is not merely a duplicated preference: it
+  // is a SAFETY POSTURE whose enablement reloads every live agent. A palette
+  // row that flips it with one keystroke and no preview is the wrong affordance
+  // for that, and its old copy even claimed existing agents were unaffected
+  // while the runner reloaded them. Settings owns it, where a confirmation can
+  // show the exact set of agents about to be replaced.
 ]

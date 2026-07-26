@@ -13,32 +13,18 @@ export const usageCommands: CommandDef[] = [
       ui.closePalette()
     },
   },
-  {
-    id: 'usage.toggle-header',
-    category: 'preferences',
-    surface: 'app',
-    title: 'Usage in Header',
-    description:
-      '**What it does:** Shows or hides **provider usage** in the header bar.\n\n**Use when:** You want quota headroom visible while planning agent work.\n\n**Notes:** Click the header indicator to open the full Usage modal.',
-    keywords: ['usage', 'quota', 'header', 'limits', 'tokens', 'claude', 'codex'],
-    getState: ({ flags }) => ({
-      label: flags.usageHeaderEnabled ? 'On' : 'Off',
-      tone: flags.usageHeaderEnabled ? 'accent' : 'neutral',
-    }),
-    run: ({ ui }) => ui.toggleUsageHeader(),
-  },
-  {
-    id: 'usage.cycle-header-level',
-    category: 'preferences',
-    surface: 'app',
-    title: 'Usage Header Detail',
-    description:
-      '**What it does:** Cycles the header usage indicator through **minimal → providers → all → detailed**.\n\n**Use when:** You want more or less quota detail in the header.\n\n**Notes:** Also enables the header indicator if it is currently hidden.',
-    keywords: ['usage', 'quota', 'level', 'detail', 'cycle', 'header'],
-    getState: ({ flags }) => ({
-      label: flags.usageHeaderLevel,
-      tone: flags.usageHeaderEnabled ? 'accent' : 'neutral',
-    }),
-    run: ({ ui }) => ui.cycleUsageHeaderLevel(),
-  },
+  // RETIRED: `usage.toggle-header` and `usage.cycle-header-level`.
+  //
+  // Both were durable app preferences with no momentary scope, so Settings is
+  // their single home (`usageHeaderEnabled` and `usageHeaderLevel`).
+  //
+  // The detail cycler is worth recording separately, because it was retired
+  // rather than repaired. It had three defects at once: it rendered the RAW
+  // lowercase enum value as its badge ("providers"), it cycled forward through
+  // four states with no way back, and — the real problem — it IMPLICITLY
+  // ENABLED the header as a side effect of changing the detail level. A user
+  // who had deliberately hidden the header could not adjust its detail without
+  // silently un-hiding it. That is one command doing two things, one of them
+  // undisclosed. Settings shows a labelled select that changes exactly the
+  // level and never touches the enabled flag.
 ]

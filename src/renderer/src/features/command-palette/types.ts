@@ -199,6 +199,9 @@ export type CommandContext = {
     openTileTabs: () => void
     openReorderTabs: () => void
     openSettings: () => void
+    /** Open the command palette. Exists so ⌘⇧P has a command to name instead
+     *  of a hard-coded callback that nothing could rebind or collision-check. */
+    openCommandPalette: () => void
     openViewPrompts: (sessionId: string) => void
     openPromptSearch: () => void
     openAgentActivity: () => void

@@ -15,6 +15,7 @@ import { agentStatusCommands } from '@renderer/features/agent-status/commands/ag
 import { dispatchColorFlagCommands } from '@renderer/features/workspace/commands/dispatchColorFlagCommands'
 import { remoteCommands } from '@renderer/features/remote/commands/remoteCommands'
 import { usageCommands } from '@renderer/features/usage/commands/usageCommands'
+import { paletteCommands } from '@renderer/features/command-palette/commands/paletteCommands'
 import type { CommandDef } from '@renderer/features/command-palette/types'
 
 /**
@@ -78,6 +79,10 @@ export const builtInCommandCatalog: readonly CommandDef[] = Object.freeze([
   ...agentStatusCommands,
   ...remoteCommands,
   ...usageCommands,
+  // Last: it is never rendered as a palette row (see
+  // PALETTE_SELF_EXCLUDED_COMMAND_IDS), so its position cannot shift anything
+  // the user browses. Appending also keeps every existing row's index stable.
+  ...paletteCommands,
 ])
 
 /**
