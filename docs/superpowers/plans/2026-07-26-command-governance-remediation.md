@@ -385,3 +385,53 @@ The suite's failure here was structural, so the additions are specific:
   `--maxWorkers=4` is reliably green. That points at machine contention rather
   than a defect in this work, but it has NOT been reproduced on `main` and so
   is not proven pre-existing. Worth a separate investigation.
+
+
+---
+
+## Outcome (2026-07-26)
+
+All six batches landed. Commits `9e826490`, `23c3ba48`, `ed6f5781`,
+`350bb785`, `be8be812`, on top of R1's `50686573`.
+
+Verification: `tsc -b` clean on both projects (after `rm -rf .tsc-out`),
+`check:keybindings` OK (25 binding sets, 13 reserved, 5 approved overlaps),
+246/246 vitest files passing.
+
+### Findings that did NOT survive investigation
+
+Recorded so a later reader does not re-open them:
+
+- **"`migrate` on downgrade destroys keybindings."** No mechanism. `partialize`
+  persists only `settings`, `merge` reconstructs everything else from current
+  defaults regardless of version, and `coerceSettings` preserves unknown keys
+  through `...omitRetiredSettingsKeys(parsed)`. A downgrade re-coerces; it does
+  not prune.
+- **"`effectiveBindingsFor` is a dead export."** It has two consumers
+  (`MonacoFileEditor`, `EditorWorkbench`) — wired in R1, so the report was
+  reading a pre-R1 tree.
+- **"`VALID_SURFACES` / `VALID_TIERS` are guards that cannot fire."** True
+  against the current catalog and deliberate anyway: the catalog is the
+  boundary an extension-contributed command crosses, and those arrive as
+  strings TypeScript cannot check at construction. The existing comment already
+  says so.
+
+### The pattern worth remembering
+
+Every blocking defect in this round had the same shape: **a mechanism that
+computes a correct answer, and nothing that consults it.**
+
+- The close gate expanded the wrong set and re-read a stale snapshot.
+- Four capability guards read each other's flags; a fifth capability had no
+  reader at all.
+- The MCP close grant had no issuer, so the tool was refused 100% of the time.
+- `status('unavailable')` greyed a row that still executed.
+- Target pinning pinned a target that `run` never received.
+- `CommandState.truth` was written onto every state and read by nothing.
+
+None of it was catchable by the build, and most of it was not catchable by the
+tests either — because the tests exercised the mechanism, which worked, rather
+than the path from a real caller, which did not. Where a test was added this
+round it drives the consumer, not the helper: the capability test flips one
+flag and asserts exactly one command turns on; the close-gate test answers a
+dialog from a real close.
