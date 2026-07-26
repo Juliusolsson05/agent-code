@@ -11,9 +11,14 @@ const cmd = (id: string, tier?: CommandPickerVisibility) => ({ id, pickerVisibil
 const policy = (overrides?: {
   overrides?: Record<string, boolean> | undefined
   showHiddenCommands?: boolean
+  navigationCommandsEnabled?: boolean
 }) => ({
   overrides: overrides?.overrides ?? {},
   showHiddenCommands: overrides?.showHiddenCommands ?? false,
+  // Defaults ON here, opposite to the product default, so the group gate never
+  // silently participates in a test that is about tiers or overrides. Group
+  // behavior gets its own describe block below, where the flag is explicit.
+  navigationCommandsEnabled: overrides?.navigationCommandsEnabled ?? true,
 })
 
 describe('declaredTier', () => {

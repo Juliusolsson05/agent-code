@@ -127,6 +127,13 @@ export function coerceSettings(value: unknown): Settings {
     commandVisibilityOverrides: coerceCommandVisibilityOverrides(
       parsed.commandVisibilityOverrides,
     ),
+    // Strict `=== true` so a fresh install, a malformed value, and any store
+    // written before this field existed all resolve to OFF. Anything looser
+    // (`!== false`) would flip the default on for every existing user, which
+    // is the opposite of the intent: the group is hidden because six extra
+    // rows help almost nobody, and silently revealing them on upgrade would
+    // be a regression nobody asked for.
+    navigationCommandsEnabled: parsed.navigationCommandsEnabled === true,
   }
 }
 

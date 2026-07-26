@@ -3,6 +3,7 @@ import type { CommandDef } from '@renderer/features/command-palette/types'
 export const usageCommands: CommandDef[] = [
   {
     id: 'usage.open',
+    category: 'workspace-tools',
     title: 'Usage',
     description: 'Open provider usage for Claude and Codex.',
     surface: 'app',
@@ -14,6 +15,7 @@ export const usageCommands: CommandDef[] = [
   },
   {
     id: 'usage.toggle-header',
+    category: 'preferences',
     surface: 'app',
     title: 'Usage in Header',
     description:
@@ -27,6 +29,7 @@ export const usageCommands: CommandDef[] = [
   },
   {
     id: 'usage.cycle-header-level',
+    category: 'preferences',
     surface: 'app',
     title: 'Usage Header Detail',
     description:

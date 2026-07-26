@@ -125,6 +125,13 @@ export function makeTestCommandContext(
       globalDispatchEnabled: false,
       agentViewMode: 'agent',
       commandVisibilityOverrides: {},
+      // ON by default here, opposite to the product default. The harness serves
+      // suites about admission, targeting and dispatch; leaving the group gate
+      // off would make six real commands invisible in tests that never mention
+      // it, and a test failing for a reason it does not name is worse than a
+      // default that differs from production. Group behavior has its own tests
+      // that set this explicitly.
+      navigationCommandsEnabled: true,
       showHiddenCommands: false,
       ...options.flags,
     },

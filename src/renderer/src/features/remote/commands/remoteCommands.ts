@@ -3,6 +3,8 @@ import type { CommandDef } from '@renderer/features/command-palette/types'
 export const remoteCommands: CommandDef[] = [
   {
     id: 'toggle-remote-panel',
+    category: 'workspace-tools',
+    pickerVisibility: 'experimental',
     surface: 'app',
     title: 'Remote Control',
     description:

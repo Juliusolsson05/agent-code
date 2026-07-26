@@ -3,6 +3,7 @@ import type { CommandDef } from '@renderer/features/command-palette/types'
 export const tileTabsCommands: CommandDef[] = [
   {
     id: 'tiled-tabs',
+    category: 'navigate',
     // `app`: Tiled Tabs is a top-level layout mode. Entering it clears
     // dispatchMode (they are mutually exclusive), so the command must
     // stay reachable from inside Dispatch to switch away from it.

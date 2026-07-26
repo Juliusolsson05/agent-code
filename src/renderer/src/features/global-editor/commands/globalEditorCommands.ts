@@ -25,6 +25,7 @@ import { cancelAllPendingGlobalEditorFileOpens } from '@renderer/features/global
 export const globalEditorCommands: CommandDef[] = [
   {
     id: 'toggle-global-editor',
+    category: 'editor-files',
     // `app`: the Global Editor overlay WRAPS whatever workspace layout
     // is active (grid, Dispatch, tiled) rather than replacing it, so
     // toggling it is meaningful in every mode.
@@ -43,6 +44,7 @@ export const globalEditorCommands: CommandDef[] = [
   },
   {
     id: 'save-editor-file',
+    category: 'editor-files',
     surface: 'editor',
     title: 'Save Editor File',
     description:
@@ -54,6 +56,7 @@ export const globalEditorCommands: CommandDef[] = [
   },
   {
     id: 'save-all-editor-files',
+    category: 'editor-files',
     surface: 'editor',
     title: 'Save All Editor Files',
     description:
@@ -64,6 +67,7 @@ export const globalEditorCommands: CommandDef[] = [
   },
   {
     id: 'quick-open-file',
+    category: 'editor-files',
     surface: 'editor',
     title: 'Quick Open File',
     description:
@@ -86,6 +90,7 @@ export const globalEditorCommands: CommandDef[] = [
   },
   {
     id: 'search-in-files',
+    category: 'editor-files',
     surface: 'editor',
     title: 'Search in Files',
     description:
@@ -108,6 +113,7 @@ export const globalEditorCommands: CommandDef[] = [
   },
   {
     id: 'toggle-editor-fullscreen',
+    category: 'editor-files',
     surface: 'editor',
     title: 'Editor Fullscreen',
     description:
@@ -123,6 +129,8 @@ export const globalEditorCommands: CommandDef[] = [
   },
   {
     id: 'open-ai-workspace',
+    category: 'editor-files',
+    pickerVisibility: 'advanced',
     surface: 'editor',
     title: 'Open AI Workspace',
     description:
@@ -133,6 +141,8 @@ export const globalEditorCommands: CommandDef[] = [
   },
   {
     id: 'create-ai-workspace',
+    category: 'editor-files',
+    pickerVisibility: 'advanced',
     surface: 'editor',
     title: 'Create AI Workspace',
     description:
@@ -143,6 +153,8 @@ export const globalEditorCommands: CommandDef[] = [
   },
   {
     id: 'clear-ai-workspace',
+    category: 'editor-files',
+    pickerVisibility: 'advanced',
     surface: 'editor',
     title: 'Clear AI Workspace',
     description:
@@ -167,6 +179,7 @@ export const globalEditorCommands: CommandDef[] = [
     //   happens, they assume it broke. Gating it via `when` makes
     //   the command appear only in contexts where it's actionable.
     id: 'toggle-file-tree',
+    category: 'editor-files',
     // `editor`: not mode-gated (the editor overlay is orthogonal to
     // grid/Dispatch); the `when: globalEditorOpen` guard below still
     // hides it until the overlay is actually mounted.

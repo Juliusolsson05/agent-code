@@ -129,6 +129,7 @@ function commandVisible(command: CommandDef, ctx: CommandContext): boolean {
   return isVisibleInPicker(command, {
     overrides: ctx.flags.commandVisibilityOverrides,
     showHiddenCommands: ctx.flags.showHiddenCommands,
+    navigationCommandsEnabled: ctx.flags.navigationCommandsEnabled,
   })
 }
 

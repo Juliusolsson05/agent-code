@@ -15,6 +15,8 @@ export type PickerVisibilityPolicy = {
   overrides: Record<string, boolean> | undefined
   /** Global "reveal everything" escape hatch. */
   showHiddenCommands: boolean
+  /** Mirrors `Settings.navigationCommandsEnabled`. */
+  navigationCommandsEnabled: boolean
 }
 
 /**
@@ -40,15 +42,26 @@ export type PickerVisibilityPolicy = {
  *
  * Resolution order (most specific wins):
  *   1. `showHiddenCommands` → everything visible (global escape hatch);
- *   2. an explicit per-command override (`true`/`false`) → that value;
- *   3. otherwise the declared tier, where absence means `'default'`. Only
+ *   2. a disabled command GROUP → every member absent, as a family;
+ *   3. an explicit per-command override (`true`/`false`) → that value;
+ *   4. otherwise the declared tier, where absence means `'default'`. Only
  *      `'default'` is shown; `advanced`/`experimental`/`debug` are hidden.
+ *
+ * WHY the group gate outranks the per-command override (step 2 before 3): the
+ * group is a single product switch over a closed family. If an override could
+ * pull one member back into the picker while the family is off, Settings would
+ * be showing six individually actionable switches that appear able to
+ * contradict their own parent — the classic "disabled parent, enabled child"
+ * UI that leaves users unable to predict what they will get. Turning the group
+ * on restores ordinary per-command control immediately.
  */
 export function isVisibleInPicker(
-  command: Pick<CommandDef, 'id' | 'pickerVisibility'>,
+  command: Pick<CommandDef, 'id' | 'pickerVisibility' | 'commandGroup'>,
   policy: PickerVisibilityPolicy,
 ): boolean {
   if (policy.showHiddenCommands) return true
+
+  if (command.commandGroup === 'navigation' && !policy.navigationCommandsEnabled) return false
 
   // Optional-chain defensively: this runs inside the palette's first-render
   // useMemo, so if `overrides` is ever undefined (a persisted-settings shape

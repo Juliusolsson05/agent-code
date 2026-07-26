@@ -17,6 +17,8 @@ import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/comma
 export const dispatchColorFlagCommands: CommandDef[] = [
   {
     id: 'dispatch.color-flag.set',
+    category: 'layout-dispatch',
+    pickerVisibility: 'advanced',
     surface: 'session',
     title: 'Set color flag',
     description:

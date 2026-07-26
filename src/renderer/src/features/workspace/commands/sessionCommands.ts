@@ -66,6 +66,7 @@ function agentViewOverrideLabel(
 export const sessionCommands: CommandDef[] = [
   {
     id: 'view-prompts',
+    category: 'session',
     surface: 'session',
     title: 'View Prompts',
     description: '**What it does:** Opens prompt history for the focused **agent**.\n\n**Use when:** You want to inspect previous user prompts.\n\n**Notes:** Claude and Codex agents only.',
@@ -98,6 +99,8 @@ export const sessionCommands: CommandDef[] = [
     // itself re-checks and surfaces a toast if the pane is
     // mid-stream.
     id: 'rewind-to-prompt',
+    category: 'session',
+    pickerVisibility: 'advanced',
     surface: 'session',
     title: 'Rewind to Prompt…',
     description: '**What it does:** Rewinds the focused **agent session** to an earlier prompt.\n\n**Use when:** You want to branch from a previous point.\n\n**Notes:** The original transcript file is not edited.',
@@ -141,6 +144,8 @@ export const sessionCommands: CommandDef[] = [
     // points at the rewound provider id; submit-start clearing removes it before
     // the user can create branch work that an undo would hide.
     id: 'undo-rewind',
+    category: 'session',
+    pickerVisibility: 'advanced',
     surface: 'session',
     title: 'Undo Rewind',
     description: '**What it does:** Restores the focused **agent session** to the provider transcript it used before the last rewind.\n\n**Use when:** You rewound to the wrong prompt and have not submitted new work from the rewound branch.\n\n**Notes:** Runtime-only. Available until the next submit, pane close, or reload.',
@@ -183,6 +188,7 @@ export const sessionCommands: CommandDef[] = [
     // derives "last active" from existing transcript data, so it
     // needs nothing to be focused.
     id: 'open-agent-activity',
+    category: 'workspace-tools',
     surface: 'app',
     title: 'Agent Activity…',
     description: '**What it does:** Opens an overview of **agent activity** across the workspace.\n\n**Use when:** You want to triage active, idle, or stale agents.\n\n**Notes:** Useful for cleanup during long multi-agent sessions.',
@@ -213,6 +219,8 @@ export const sessionCommands: CommandDef[] = [
     // "cleanup the mess from anywhere" use case harder. The modal itself
     // handles the empty workspace case with a preview empty state.
     id: 'close-old-agents',
+    category: 'workspace-tools',
+    pickerVisibility: 'advanced',
     surface: 'app',
     title: 'Close Old Agents…',
     description: '**What it does:** Opens a batch cleanup modal for **Claude and Codex agents** inactive longer than a chosen time.\n\n**Use when:** You want to close stale agents across all projects or selected projects.\n\n**Notes:** Defaults to 4 hours and excludes currently-running agents unless you opt in.',
@@ -246,6 +254,8 @@ export const sessionCommands: CommandDef[] = [
     // deliberately no command for the return and no keybind: it's a low-
     // frequency operation, and a second command/keybind would be clutter.
     id: 'switch-agents-provider',
+    category: 'session',
+    pickerVisibility: 'advanced',
     surface: 'app',
     title: 'Switch Agents to Another Provider…',
     description: '**What it does:** Opens a modal to move a batch of **Claude/Codex agents** to the other provider at once, and to return the most recent batch.\n\n**Use when:** You hit a usage limit on one provider and want to move agents to the other (then back later).\n\n**Notes:** History is translated; the most recent batch is remembered so you can send it back from the same modal.',
@@ -277,6 +287,8 @@ export const sessionCommands: CommandDef[] = [
     // the whole point is to find a session when you don't know which
     // pane to focus first.
     id: 'search-conversation-prompts',
+    category: 'workspace-tools',
+    pickerVisibility: 'advanced',
     surface: 'app',
     title: 'Search Conversation Prompts',
     description: '**What it does:** Searches saved conversations by **prompt text**.\n\n**Use when:** You remember what you asked, but not where it was.\n\n**Notes:** Searches sessions on disk, not only visible panes.',
@@ -298,6 +310,8 @@ export const sessionCommands: CommandDef[] = [
   },
   {
     id: 'enable-built-in-mcp-ping',
+    category: 'developer',
+    pickerVisibility: 'debug',
     // `session`, not `debug`: Ping is diagnostic, but the command still
     // reloads the focused Claude/Codex session and must follow Dispatch
     // row focus exactly like the other built-in MCP toggles. The
@@ -352,6 +366,8 @@ export const sessionCommands: CommandDef[] = [
   },
   {
     id: 'enable-ai-workspace-mcp',
+    category: 'session',
+    pickerVisibility: 'advanced',
     surface: 'session',
     title: 'AI Workspace MCP',
     description: '**What it does:** Reloads the focused **Claude or Codex agent** with Agent Code AI Workspace MCP tools on or off.\n\n**Use when:** You want this agent to create curated cross-worktree file review workspaces.\n\n**Notes:** Orchestration agents can use this domain, but it remains a separate MCP capability.',
@@ -400,6 +416,8 @@ export const sessionCommands: CommandDef[] = [
   },
   {
     id: 'enable-orchestration-mcp',
+    category: 'session',
+    pickerVisibility: 'advanced',
     surface: 'session',
     title: 'Orchestration MCP',
     description: '**What it does:** Reloads the focused **Claude or Codex agent** with Agent Code orchestration MCP tools on or off.\n\n**Use when:** You want this agent to create and coordinate distinct orchestration child agents.\n\n**Notes:** Orchestration agents are separate from manual Linked Agents.',
@@ -448,6 +466,8 @@ export const sessionCommands: CommandDef[] = [
   },
   {
     id: 'enable-agent-transcripts-mcp',
+    category: 'session',
+    pickerVisibility: 'advanced',
     surface: 'session',
     title: 'Agent Transcripts MCP',
     description: '**What it does:** Reloads the focused **Claude or Codex agent** with Agent Code transcript-consumption MCP tools on or off.\n\n**Use when:** You want this agent to read a specific Claude/Codex JSONL transcript file through filtered projections instead of manual shell parsing.\n\n**Notes:** The tool accepts an explicit file path and returns bounded normalized transcript context; it does not discover transcripts for the agent.',
@@ -496,6 +516,8 @@ export const sessionCommands: CommandDef[] = [
   },
   {
     id: 'enable-agent-management-mcp',
+    category: 'session',
+    pickerVisibility: 'advanced',
     surface: 'session',
     title: 'Agent Management MCP',
     description: '**What it does:** Reloads the focused **Claude or Codex agent** with project-wide Agent Code management tools on or off.\n\n**Use when:** You want this agent to inventory, inspect, prompt, or—only after an explicit user request—close other agents in its project.\n\n**Notes:** Read operations include visible, detached, and buried agents without waking them. Closing has extra authorization and cascade guards.',
@@ -545,6 +567,8 @@ export const sessionCommands: CommandDef[] = [
   },
   {
     id: 'enable-workflow-mcp',
+    category: 'session',
+    pickerVisibility: 'advanced',
     surface: 'session',
     title: 'Workflow MCP',
     description: '**What it does:** Reloads the focused **Codex agent** with Agent Code workflow MCP tools on or off.\n\n**Use when:** You want Codex to discover, start, inspect, cancel, or resume portable multi-agent workflows.\n\n**Notes:** Claude is intentionally excluded because it has a native workflow feature. Workflow execution is app-owned and survives renderer reloads; changing MCP capabilities still requires replacing the provider process.',
@@ -596,6 +620,7 @@ export const sessionCommands: CommandDef[] = [
   },
   {
     id: 'reload-agent',
+    category: 'session',
     surface: 'session',
     title: 'Reload Agent',
     description: '**What it does:** Restarts the focused **Claude or Codex agent**.\n\n**Use when:** The agent is stuck, exited, or needs reconnecting.\n\n**Notes:** Requires a resumable provider session.',
@@ -620,6 +645,8 @@ export const sessionCommands: CommandDef[] = [
   },
   {
     id: 'soft-reload-agent',
+    category: 'session',
+    pickerVisibility: 'advanced',
     surface: 'session',
     title: 'Soft Reload Agent',
     description: '**What it does:** Refreshes the focused **agent view** without restarting its backend process.\n\n**Use when:** The feed or rendering state looks stale, duplicated, or corrupted while the agent is still working.\n\n**Notes:** Keeps the same session, draft, pane placement, and running process.',
@@ -661,6 +688,8 @@ export const sessionCommands: CommandDef[] = [
   },
   {
     id: 'set-agent-view-mode',
+    category: 'session',
+    pickerVisibility: 'advanced',
     surface: 'session',
     title: 'Set Agent View Mode...',
     description: '**What it does:** Overrides the focused agent pane to use Agent rendering, Terminal rendering, or the global default.\n\n**Use when:** One session needs the raw provider terminal while the rest of the app keeps its normal view mode.\n\n**Notes:** Persists with the session. Hybrid remains a global/default setting, not a per-session override.',
@@ -688,6 +717,8 @@ export const sessionCommands: CommandDef[] = [
   },
   {
     id: 'copy-resume-command',
+    category: 'session',
+    pickerVisibility: 'advanced',
     surface: 'session',
     title: 'Copy Resume Command',
     description: '**What it does:** Copies a shell command to **resume this session**.\n\n**Use when:** You want to continue the agent outside the app.\n\n**Notes:** Produces a Claude or Codex CLI command.',
@@ -733,6 +764,8 @@ export const sessionCommands: CommandDef[] = [
   },
   {
     id: 'duplicate-agent',
+    category: 'create',
+    pickerVisibility: 'advanced',
     surface: 'session',
     title: 'Duplicate Agent',
     description: '**What it does:** Clones the focused **agent session** into a new pane.\n\n**Use when:** You want a parallel branch of the same conversation.\n\n**Notes:** In **Dispatch**, the clone is created as a detached agent.',
@@ -811,6 +844,8 @@ export const sessionCommands: CommandDef[] = [
   },
   {
     id: 'switch-provider',
+    category: 'session',
+    pickerVisibility: 'advanced',
     surface: 'session',
     title: 'Switch Provider',
     description: '**What it does:** Switches the focused agent between **Claude** and **Codex**.\n\n**Use when:** You want to continue the same work with another provider.\n\n**Notes:** Saved sessions are translated; empty panes are replaced with a fresh pane of the other provider.',
@@ -836,6 +871,7 @@ export const sessionCommands: CommandDef[] = [
   },
   {
     id: 'toggle-git-bar',
+    category: 'workspace-tools',
     surface: 'app',
     title: 'Git Bar',
     description: '**What it does:** Shows or hides the **Git** side panel.\n\n**Use when:** You want repository status for the focused project.\n\n**Notes:** Uses the focused command target’s working directory.',
@@ -847,6 +883,8 @@ export const sessionCommands: CommandDef[] = [
   },
   {
     id: 'toggle-debug-panel',
+    category: 'developer',
+    pickerVisibility: 'debug',
     surface: 'debug',
     title: 'Debug Panel',
     description: '**What it does:** Shows or hides the focused pane’s **debug panel**.\n\n**Use when:** You need low-level pane or runtime state.\n\n**Notes:** Developer-oriented.',
@@ -858,6 +896,8 @@ export const sessionCommands: CommandDef[] = [
   },
   {
     id: 'toggle-feed-debug-panel',
+    category: 'developer',
+    pickerVisibility: 'debug',
     surface: 'debug',
     title: 'Feed Debug Panel',
     description: '**What it does:** Shows or hides the **feed debug log** panel.\n\n**Use when:** You want render and feed timeline logs.\n\n**Notes:** Developer-oriented.',
@@ -870,6 +910,8 @@ export const sessionCommands: CommandDef[] = [
   },
   {
     id: 'toggle-proxy-debug-panel',
+    category: 'developer',
+    pickerVisibility: 'debug',
     surface: 'debug',
     title: 'Proxy Debug Panel',
     description: '**What it does:** Shows or hides **proxy/SSE debug** details.\n\n**Use when:** You are debugging streamed provider events.\n\n**Notes:** Most useful when proxy streaming is enabled.',
@@ -893,6 +935,8 @@ export const sessionCommands: CommandDef[] = [
     // Wide keyword net because the user might remember "save", "dump",
     // "export", "snapshot", or the name of any one panel.
     id: 'save-debug-logs',
+    category: 'developer',
+    pickerVisibility: 'debug',
     surface: 'debug',
     title: 'Save Debug Logs',
     description: '**What it does:** Saves a **debug bundle** for the focused pane.\n\n**Use when:** You need a snapshot to inspect or share later.\n\n**Notes:** Copies the saved bundle path after writing it.',
@@ -933,6 +977,8 @@ export const sessionCommands: CommandDef[] = [
     // whenever the feature is available; the agent-kind guard below keeps it off
     // terminal panes the recorder can't capture.
     id: 'toggle-session-recording',
+    category: 'developer',
+    pickerVisibility: 'debug',
     surface: 'debug',
     title: 'Toggle Session Recording',
     description: '**What it does:** Starts or stops **continuous recording** of the focused pane\'s rendering-input stream (replayable in the test suite).\n\n**Use when:** Right before reproducing a rendering bug you want captured as a fixture.\n\n**Notes:** Command-driven — nothing records until you start it. Each recording is its own folder under `session-recordings/`.',
@@ -967,6 +1013,8 @@ export const sessionCommands: CommandDef[] = [
     // toasts "no active recording" rather than pre-computing per-session
     // recorder state into the palette flags on every keystroke.
     id: 'attach-recording-note',
+    category: 'developer',
+    pickerVisibility: 'debug',
     surface: 'debug',
     title: 'Attach Recording Note',
     description: '**What it does:** Drops a **timestamped note** into the focused pane\'s live session recording.\n\n**Use when:** You see a rendering bug during a recorded soak and want to mark the exact moment.\n\n**Notes:** Reserves the tick instantly, then prompts for text. Only available when session recording is enabled.',
@@ -988,6 +1036,8 @@ export const sessionCommands: CommandDef[] = [
   },
   {
     id: 'toggle-rendering-debug-mode',
+    category: 'developer',
+    pickerVisibility: 'debug',
     surface: 'debug',
     title: 'Rendering Debug Mode',
     description: '**What it does:** Lets you click rendered feed elements to inspect their exact input, routing provenance, and HTML.\n\n**Use when:** A row is missing, duplicated, misleading, or formatted incorrectly.\n\n**Notes:** Clicks are intercepted while active; toggle the mode off to restore normal interaction.',
@@ -1000,6 +1050,8 @@ export const sessionCommands: CommandDef[] = [
   },
   {
     id: 'toggle-html-debug-panel',
+    category: 'developer',
+    pickerVisibility: 'debug',
     surface: 'debug',
     title: 'HTML Debug Panel',
     description: '**What it does:** Shows or hides rendered **HTML/DOM** inspection.\n\n**Use when:** You need to inspect the exact pane markup.\n\n**Notes:** Developer-oriented.',
@@ -1016,6 +1068,8 @@ export const sessionCommands: CommandDef[] = [
   },
   {
     id: 'toggle-dev-debug-panel',
+    category: 'developer',
+    pickerVisibility: 'debug',
     surface: 'debug',
     title: 'Dev Debug Panel',
     description: '**What it does:** Shows or hides the temporary **Dev Debug Panel** module host.\n\n**Use when:** You need a bug-specific workbench for focused runtime state, regex probes, IPC experiments, or other short-lived diagnostics.\n\n**Notes:** Only appears when `AGENT_CODE_DEV_DEBUG=1` is set.',

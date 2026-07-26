@@ -231,17 +231,35 @@ describe('generated per-provider split commands', () => {
   })
 })
 
-describe('picker visibility baseline', () => {
-  it('resolves every command to the default tier today', () => {
-    // The plan's most consequential finding: `advanced`/`experimental`/`debug`
-    // all EXIST in the type and NONE are used, so debug tooling, destructive
-    // maintenance and daily navigation enter the picker at the same tier.
+describe('picker visibility', () => {
+  it('uses more than one tier', () => {
+    // HISTORICAL NOTE, kept because the inversion is the evidence:
+    // at the Phase 0 baseline this assertion read `toEqual(new Set(['default']))`
+    // — all 102 commands resolved to one tier, so debug tooling, destructive
+    // maintenance and daily navigation entered the picker at the same level,
+    // even though `advanced`/`experimental`/`debug` already existed in the type
+    // and went unused.
     //
-    // This assertion is expected to FAIL in Phase 3, which is the point — it is
-    // the tripwire proving tier classification actually landed rather than
-    // being declared in a doc.
+    // Phase 3 classified them. Inverting the assertion here rather than
+    // deleting it keeps the before-state legible in the diff: the tripwire
+    // fired exactly once, on purpose.
     const tiers = builtInCommandCatalog.map(c => c.pickerVisibility ?? 'default')
-    expect(new Set(tiers)).toEqual(new Set(['default']))
+    expect(new Set(tiers).size).toBeGreaterThan(1)
+  })
+
+  it('keeps the tier distribution deliberate rather than incidental', () => {
+    // Detailed per-tier rules live in taxonomy.test.ts. This one guards the
+    // shape: every tier that is used must have a real population, so a typo
+    // cannot create a tier with a single accidental member.
+    const counts = new Map<string, number>()
+    for (const command of builtInCommandCatalog) {
+      const tier = command.pickerVisibility ?? 'default'
+      counts.set(tier, (counts.get(tier) ?? 0) + 1)
+    }
+    expect(counts.get('default')).toBeGreaterThan(20)
+    expect(counts.get('advanced')).toBeGreaterThan(10)
+    expect(counts.get('debug')).toBeGreaterThan(5)
+    expect(counts.get('experimental')).toBe(1)
   })
 })
 

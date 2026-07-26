@@ -33,6 +33,7 @@ function validPendingSelection(workspace: Workspace): PendingSelection | null {
 export const replyToSelectionCommands: CommandDef[] = [
   {
     id: 'reply-to-selection',
+    category: 'session',
     surface: 'session',
     // Stable noun phrase per docs/command-style.md rule 1 — the captured
     // text is surfaced through `getState` as a badge (rule 3), not baked

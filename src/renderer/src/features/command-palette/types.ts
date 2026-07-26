@@ -330,6 +330,16 @@ export type CommandContext = {
      */
     commandVisibilityOverrides: Record<string, boolean>
     /**
+     * Whether the closed Navigation Commands family is picker-eligible.
+     * Mirrors `Settings.navigationCommandsEnabled`.
+     *
+     * Threaded through flags like the override map so the registry's single
+     * visibility chokepoint can consult it without importing the settings
+     * store. It is a DISCOVERABILITY gate only — see the setting's docstring
+     * for why it must never reach execution or keyboard handling.
+     */
+    navigationCommandsEnabled: boolean
+    /**
      * Global escape hatch: when true, the picker shows EVERY applicable
      * command regardless of declared visibility or per-command override.
      * Lets a "show hidden commands" affordance reveal the full list in

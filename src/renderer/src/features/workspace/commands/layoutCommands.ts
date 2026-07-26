@@ -3,6 +3,7 @@ import type { CommandDef } from '@renderer/features/command-palette/types'
 export const layoutCommands: CommandDef[] = [
   {
     id: 'dispatch-mode',
+    category: 'layout-dispatch',
     // `app`, not `dispatch`: this is the toggle that ENTERS and EXITS
     // Dispatch, so it must be visible in both modes — surface-gating it
     // to `dispatch` would make it impossible to turn Dispatch on.
@@ -26,6 +27,7 @@ export const layoutCommands: CommandDef[] = [
   },
   {
     id: 'global-dispatch',
+    category: 'layout-dispatch',
     // `dispatch` surface replaces the old `when: dispatchModeEnabled`
     // guard — the registry's surface gate already hides this whenever
     // Dispatch is off, so the explicit `when` was redundant.
@@ -43,6 +45,7 @@ export const layoutCommands: CommandDef[] = [
   },
   {
     id: 'tiled-dispatch',
+    category: 'layout-dispatch',
     // `app`, like the Dispatch toggle: Tiled Dispatch enters (and is the
     // adjust-count path for) the multi-lane Dispatch layout, so it should be
     // reachable from the grid as well as from Dispatch.
@@ -61,6 +64,8 @@ export const layoutCommands: CommandDef[] = [
   // Search settings → "Attach Project Terminal to Dispatch" to toggle.
   {
     id: 'normalize-layout',
+    category: 'layout-dispatch',
+    pickerVisibility: 'advanced',
     // `grid`: this rebalances `tab.root` split ratios. Dispatch does not
     // render the grid, so in Dispatch this was a silent no-op (issue
     // #228). Surface-gating hides it there instead of running invisibly.
@@ -71,6 +76,8 @@ export const layoutCommands: CommandDef[] = [
   },
   {
     id: 'hard-normalize-layout',
+    category: 'layout-dispatch',
+    pickerVisibility: 'advanced',
     surface: 'grid',
     title: 'Hard Normalize Layout',
     description: '**What it does:** Rebuilds pane sizing into a cleaner even layout.\n\n**Use when:** The layout is messy and needs a stronger reset.\n\n**Notes:** More aggressive than **Normalize Layout**.',
@@ -78,6 +85,8 @@ export const layoutCommands: CommandDef[] = [
   },
   {
     id: 'rotate-layout',
+    category: 'layout-dispatch',
+    pickerVisibility: 'advanced',
     surface: 'grid',
     title: 'Rotate Layout',
     description: '**What it does:** Rotates split directions in the current layout.\n\n**Use when:** The same panes would work better in a different orientation.\n\n**Notes:** Keeps the sessions, changes the arrangement.',
@@ -85,6 +94,7 @@ export const layoutCommands: CommandDef[] = [
   },
   {
     id: 'toggle-status-mode',
+    category: 'preferences',
     surface: 'app',
     title: 'Status Mode',
     description: '**What it does:** Toggles status coloring for active agents.\n\n**Use when:** You want running or working agents to stand out.\n\n**Notes:** This is a visual setting only.',
@@ -96,6 +106,8 @@ export const layoutCommands: CommandDef[] = [
   },
   {
     id: 'toggle-performance-panel',
+    category: 'developer',
+    pickerVisibility: 'debug',
     surface: 'debug',
     title: 'Performance Stats',
     description: '**What it does:** Shows or hides the performance stats panel.\n\n**Use when:** You want render, pane, or runtime performance details.\n\n**Notes:** Mostly useful while debugging the app.',
@@ -108,6 +120,7 @@ export const layoutCommands: CommandDef[] = [
   },
   {
     id: 'toggle-caffeinate',
+    category: 'workspace-tools',
     surface: 'app',
     title: 'Caffeinate',
     description: '**What it does:** Toggles a macOS `caffeinate` process so long-running agent work can prevent idle/system sleep.\n\n**Use when:** You want Agent Code to keep the machine awake while agents run.\n\n**Notes:** macOS lid-close behavior is hardware and power-state dependent; this command does not guarantee work keeps running after the lid is closed.',

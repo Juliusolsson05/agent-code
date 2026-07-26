@@ -529,6 +529,33 @@ export function getSettingsRegistry(): SettingDefinition[] {
       },
     },
     {
+      id: 'navigation-commands',
+      category: 'commands',
+      title: 'Navigation Commands',
+      description:
+        'Show Next/Previous Tab and Focus Pane Left/Right/Up/Down in the command picker. Their keyboard shortcuts always work, whether this is on or off.',
+      keywords: [
+        'navigation',
+        'nav',
+        'focus',
+        'pane',
+        'tab',
+        'next',
+        'previous',
+        'group',
+      ],
+      control: {
+        type: 'toggle',
+        // Deliberately phrased as "show in the picker", not "enable
+        // navigation". The audit's naming rule is that a control must name what
+        // it actually changes: this one adds or removes six rows from a list,
+        // and a user who read it as "turn navigation off" would be wrong in a
+        // way that costs them their arrow keys.
+        getValue: settings => settings.navigationCommandsEnabled,
+        onToggle: (ctx, value) => ctx.onChange({ navigationCommandsEnabled: value }),
+      },
+    },
+    {
       id: 'command-picker-visibility',
       category: 'commands',
       title: 'Command Picker Visibility',
