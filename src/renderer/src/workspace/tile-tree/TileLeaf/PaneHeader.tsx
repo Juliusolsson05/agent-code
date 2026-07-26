@@ -1,6 +1,8 @@
 import { shortenCwd } from '@renderer/workspace/tile-tree/TileLeaf/labels'
+import { PaneHeaderColorFlag } from '@renderer/workspace/tile-tree/TileLeaf/PaneHeaderColorFlag'
 import type { GridRelatedAgentTab } from '@renderer/workspace/gridRelatedAgents'
 import { dispatchAttentionLabelFromConditions } from '@renderer/workspace/conditions/selectors'
+import type { SessionId } from '@renderer/workspace/types'
 import type { SessionRuntime } from '@renderer/workspace/workspaceStore'
 
 // Pane header: compact status strip.
@@ -10,7 +12,14 @@ import type { SessionRuntime } from '@renderer/workspace/workspaceStore'
 // signal, so a glance across the grid highlights only the
 // panes that still want attention. Previous design used
 // green/red, but red read as "error" for merely idle panes.
+//
+// The right quarter of the strip is owned by the session's color flag when one
+// is set (PaneHeaderColorFlag). The two signals are deliberately allowed to
+// overlap: liveness is automatic and transient, the flag is manual and sticky,
+// so a user who flagged a pane red wants that red regardless of whether the
+// agent happens to be running right now. The flag always wins its slice.
 export function PaneHeader({
+  sessionId,
   paneLabel,
   projectDir,
   statusMode,
@@ -21,6 +30,7 @@ export function PaneHeader({
   ownerSessionId,
   onSelectRelatedSession,
 }: {
+  sessionId: SessionId
   paneLabel?: string
   projectDir: string | null
   statusMode: boolean
@@ -34,15 +44,28 @@ export function PaneHeader({
   return (
     <div className="border-b border-border bg-surface text-muted font-code select-none">
       <div
-        className={`flex items-center justify-between px-3 text-[10px] ${
+        data-pane-header-row="true"
+        className={`flex items-center justify-between pl-3 text-[10px] ${
           statusMode
             ? isSessionLive
               ? 'bg-accent text-accent-fg'
               : 'bg-surface text-muted'
             : 'bg-surface text-muted'
-        } ${statusMode ? 'py-0 min-h-[5px]' : 'py-1'}`}
+        } ${statusMode ? 'min-h-[5px]' : ''}`}
       >
-        <div className="flex items-center gap-2 min-w-0">
+        {/* WHY the vertical padding sits on this group instead of on the row:
+            the color-flag chunk uses `self-stretch`, which fills the row's
+            CONTENT box — with `py-1` on the row the chunk would float with a
+            4px gap above and below and read as a floating pill rather than a
+            slice of the header. Pushing the padding one level down keeps the
+            header's rendered height byte-for-byte identical (the same 4px still
+            exists, just inside this child) while letting the chunk bleed from
+            the top edge of the header to the bottom. The row also drops its
+            right padding — `px-3` became `pl-3` — so the chunk reaches the pane
+            edge without an absolute overlay or a negative margin, per the
+            layout contract in
+            docs/plans_and_ideas/2026-07-23-color-flag-layout-follow-up.md. */}
+        <div className={`flex items-center gap-2 min-w-0 ${statusMode ? 'py-0' : 'py-1'}`}>
           {paneLabel && (
             <span className="flex-shrink-0 rounded-[3px] border border-current/30 px-1 leading-[14px] text-[9px] font-semibold tabular-nums">
               {paneLabel}
@@ -52,6 +75,7 @@ export function PaneHeader({
             {shortenCwd(projectDir)}
           </span>
         </div>
+        <PaneHeaderColorFlag sessionId={sessionId} />
       </div>
       {relatedAgentTabs.length > 0 && (
         <div className="flex items-center gap-1 overflow-x-auto border-t border-border/70 px-2 py-1 text-[10px]">

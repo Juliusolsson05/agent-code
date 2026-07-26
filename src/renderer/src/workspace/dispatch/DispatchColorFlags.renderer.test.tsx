@@ -8,6 +8,7 @@ import type {
   DispatchAgentRow,
   DispatchTabGroup,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
+import { PaneHeader } from '@renderer/workspace/tile-tree/TileLeaf/PaneHeader'
 
 const appState = vi.hoisted(() => ({
   settings: {
@@ -139,5 +140,59 @@ describe('Dispatch color-flag layout', () => {
     expect(swatches).toHaveClass('flex-wrap', 'justify-center', 'px-4')
     expect(screen.getByRole('button', { name: 'Green' })).toHaveAttribute('aria-pressed', 'true')
     expect(screen.getByRole('button', { name: 'Purple' })).toHaveAttribute('aria-pressed', 'false')
+  })
+})
+
+// WHY the pane-header cases live in this file rather than a new one: this file
+// is the color-flag feature's coverage, not the Dispatch list's. The flag is
+// one piece of state with several renderers, and keeping every renderer's
+// contract in one place is what caught the tiled-lane gap that #605 had to fix.
+describe('Session header color flag', () => {
+  function renderHeader(sessionId: string, statusMode: boolean) {
+    return render(
+      <PaneHeader
+        sessionId={sessionId}
+        paneLabel="A2"
+        projectDir="/Users/dev/agent-code"
+        statusMode={statusMode}
+        isSessionLive
+      />,
+    )
+  }
+
+  it('paints a trailing chunk of the flag color over the status strip', () => {
+    setColorFlags({ [FLAGGED_SESSION_ID]: 'red' })
+    const { container } = renderHeader(FLAGGED_SESSION_ID, true)
+
+    const chunk = container.querySelector<HTMLElement>('[data-pane-color-flag]')
+    expect(chunk).toHaveAttribute('data-pane-color-flag', 'red')
+    expect(chunk).toHaveClass('w-1/4', 'flex-none', 'self-stretch')
+    expect(chunk).not.toHaveClass('absolute')
+    expect(chunk).toHaveStyle({ backgroundColor: '#ef4444' })
+  })
+
+  it('renders no chunk at all for an unflagged session', () => {
+    setColorFlags({ [FLAGGED_SESSION_ID]: 'red' })
+    const { container } = renderHeader(UNFLAGGED_SESSION_ID, true)
+
+    // WHY absence rather than a transparent placeholder — the deliberate
+    // difference from the Dispatch column. Nothing sits to the right of this
+    // chunk, so there is no cross-row alignment to preserve, and reserving a
+    // quarter of every header would permanently squeeze the project dir for a
+    // signal that is switched off.
+    expect(container.querySelector('[data-pane-color-flag]')).toBeNull()
+  })
+
+  it('keeps the row padding on the label group so the chunk can bleed to the pane edge', () => {
+    setColorFlags({ [FLAGGED_SESSION_ID]: 'purple' })
+    const { container } = renderHeader(FLAGGED_SESSION_ID, false)
+
+    const row = container.querySelector<HTMLElement>('[data-pane-header-row="true"]')
+    expect(row).toHaveClass('pl-3')
+    expect(row).not.toHaveClass('px-3')
+    expect(row).not.toHaveClass('py-1')
+    // The vertical padding still exists — it moved one level down, so the
+    // header's rendered height is unchanged while the chunk stretches full-bleed.
+    expect(row?.firstElementChild).toHaveClass('py-1')
   })
 })
