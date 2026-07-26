@@ -618,6 +618,7 @@ export function TileLeaf({
       onMouseDown={onFocusRequest}
     >
       <PaneHeader
+        sessionId={sessionId}
         paneLabel={paneLabel}
         projectDir={runtime.projectDir}
         statusMode={showStatusMode}

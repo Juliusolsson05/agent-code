@@ -296,8 +296,18 @@ export function SessionView({
             phone's Back/conn nav — on desktop this IS the pane's top bar.
             statusMode off (a multi-pane-grid glance affordance, meaningless on
             a single phone screen) and related-agent chips empty (the v1 wire
-            emits no sub-agent data). */}
+            emits no sub-agent data).
+
+            sessionId feeds the header's color-flag chunk. On the phone that
+            always resolves to "no flag": the store is the frozen
+            DEFAULT_SETTINGS snapshot from src/stubs/appStateHooks, whose
+            dispatchColorFlags is `{}`, and the v1 wire carries no settings.
+            It is still passed honestly rather than stubbed out, so that if the
+            phone ever syncs real settings the flag appears with no edit here —
+            and so a reader does not have to wonder which sessionId the header
+            would have used. */}
         <PaneHeader
+          sessionId={sessionId}
           paneLabel={provider}
           projectDir={cwd}
           statusMode={false}

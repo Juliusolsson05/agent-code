@@ -14,10 +14,11 @@ import {
 } from '@renderer/app-state/settings/dispatchColorFlags'
 import type { SessionId } from '@renderer/workspace/types'
 
-// The swatch picker for Dispatch color flags. Picking a swatch sets the flag and
-// closes; "Clear flag" removes it. The strip itself renders on the Dispatch row
-// (see DispatchAgentList). Kept intentionally tiny — this is a one-tap triage
-// affordance, not a color editor.
+// The swatch picker for color flags. Picking a swatch sets the flag and closes;
+// "Clear flag" removes it. The flag itself renders in two places: the Dispatch
+// row's trailing strip (see DispatchColorFlagStrip) and the pane's session
+// header (see PaneHeaderColorFlag). Kept intentionally tiny — this is a one-tap
+// triage affordance, not a color editor.
 export function ColorFlagPickerModal({
   open,
   sessionId,
