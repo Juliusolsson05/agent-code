@@ -1,8 +1,9 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import {
   closeConfirmationFor,
   describePartialClose,
+  runCloseConfirmationGate,
   grantStillMatches,
   expandSessionCloseTargets,
   expandTabCloseTargets,
@@ -197,5 +198,77 @@ describe('target expansion', () => {
     const result = closeConfirmationFor(targets)
     expect(result.required).toBe(true)
     if (result.required) expect(result.summary).toContain('3 sessions')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Forced confirmation, for closes a MODEL initiated.
+//
+// This is what replaced the main-side close-grant store. That store was the
+// right idea in the wrong layer: a grant must be issued by a user action, main
+// has no user action meaning "the user asked this agent to close that agent",
+// so nothing ever issued one and every close_agent call was denied. The tool
+// was 100% broken and every test passed, because the tests only ever exercised
+// the store — never the fact that nobody fed it.
+//
+// The lesson these cases pin: an authorization mechanism has to be tested
+// end-to-end from a real caller, or it tests only itself.
+// ---------------------------------------------------------------------------
+describe('forced close confirmation', () => {
+  const idleSingle = [{ sessionId: 's1', title: 'Reviewer', live: false }]
+
+  it('asks about an idle single close that the policy would wave through', async () => {
+    // The idle-single exemption is about a human aiming at a pane they can see,
+    // with Undo Close behind them. None of that is true when a model decides.
+    expect(closeConfirmationFor(idleSingle).required).toBe(false)
+
+    const ask = vi.fn().mockResolvedValue(true)
+    const outcome = await runCloseConfirmationGate({
+      enumerate: () => [...idleSingle],
+      ask,
+      force: { headline: 'Agent “Coordinator” is asking to close this agent.' },
+    })
+
+    expect(ask).toHaveBeenCalledTimes(1)
+    expect(ask.mock.calls[0][0]).toMatchObject({
+      required: true,
+      reason: 'irreversible',
+    })
+    // The headline is not decoration. A dialog the user did not summon has to
+    // say who summoned it, or it is unanswerable.
+    expect(ask.mock.calls[0][0].summary).toContain('Coordinator')
+    expect(outcome).toMatchObject({ ok: true, prompted: true })
+  })
+
+  it('refuses when the user declines', async () => {
+    const outcome = await runCloseConfirmationGate({
+      enumerate: () => [...idleSingle],
+      ask: vi.fn().mockResolvedValue(false),
+      force: { headline: 'An agent is asking to close this agent.' },
+    })
+    expect(outcome).toEqual({ ok: false, reason: 'declined' })
+  })
+
+  it('still re-validates the approved set', async () => {
+    // Forcing the prompt must not skip the second enumeration — a model-driven
+    // close is the case where the workspace is LEAST likely to be holding still.
+    let call = 0
+    const outcome = await runCloseConfirmationGate({
+      enumerate: () => (call++ === 0 ? [...idleSingle] : [{ sessionId: 'other', title: 'X', live: false }]),
+      ask: vi.fn().mockResolvedValue(true),
+      force: { headline: 'An agent is asking to close this agent.' },
+    })
+    expect(outcome).toEqual({ ok: false, reason: 'changed' })
+  })
+
+  it('does not invent a dialog when there is nothing to close', async () => {
+    const ask = vi.fn()
+    const outcome = await runCloseConfirmationGate({
+      enumerate: () => [],
+      ask,
+      force: { headline: 'An agent is asking to close this agent.' },
+    })
+    expect(ask).not.toHaveBeenCalled()
+    expect(outcome).toMatchObject({ ok: true, prompted: false })
   })
 })

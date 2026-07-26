@@ -114,17 +114,39 @@ export function readOrchestrationRunOutputs(params: {
     .filter((output): output is OrchestrationAgentOutput => output !== null)
 }
 
+/**
+ * How `closeSession` is called from the orchestration MCP surface.
+ *
+ * Typed here rather than inlined so the options — specifically
+ * `requireConfirmation` — cannot be dropped by a caller that copies the older
+ * one-argument shape.
+ */
+export type OrchestrationCloseSession = (
+  sessionId: SessionId,
+  options?: { preConfirmed?: boolean; requireConfirmation?: { headline: string } },
+) => Promise<void>
+
+/** "Agent “Reviewer” is asking to close an agent it started." — the sentence
+ *  that tells the user why a dialog they did not summon just appeared. */
+function closeRequestHeadline(state: WorkspaceState, parentSessionId: string): string {
+  const title = state.sessions[parentSessionId]?.title
+  const who = title ? `Agent “${title}”` : 'An agent'
+  return `${who} is asking to close an agent it started.`
+}
+
 export async function closeOrchestrationAgent(params: {
   state: WorkspaceState
   parentSessionId: string
   sessionId: string
-  closeSession: (sessionId: SessionId) => Promise<void>
+  closeSession: OrchestrationCloseSession
 }): Promise<OrchestrationCloseResult> {
   const meta = params.state.sessions[params.sessionId]
   if (!meta || !isVisibleToOrchestrationParent(meta, params.parentSessionId)) {
     throw new Error('Orchestration agent not found for this parent session.')
   }
-  await params.closeSession(params.sessionId)
+  await params.closeSession(params.sessionId, {
+    requireConfirmation: { headline: closeRequestHeadline(params.state, params.parentSessionId) },
+  })
   return { closedSessionIds: [params.sessionId] }
 }
 
@@ -132,7 +154,7 @@ export async function closeOrchestrationRun(params: {
   state: WorkspaceState
   parentSessionId: string
   runId?: string
-  closeSession: (sessionId: SessionId) => Promise<void>
+  closeSession: OrchestrationCloseSession
 }): Promise<OrchestrationCloseResult> {
   const sessionIds = matchingOrchestrationSessionIds(
     params.state,
@@ -141,9 +163,21 @@ export async function closeOrchestrationRun(params: {
   )
   const closedSessionIds: string[] = []
   const skippedSessionIds: string[] = []
-  for (const sessionId of sessionIds) {
+  const headline = closeRequestHeadline(params.state, params.parentSessionId)
+  for (const [index, sessionId] of sessionIds.entries()) {
     try {
-      await params.closeSession(sessionId)
+      // Confirm ONCE, on the first agent, and let the rest ride that answer.
+      //
+      // Forcing per-agent confirmation on a run of twelve would produce twelve
+      // dialogs, and a user clicking through twelve dialogs is not confirming
+      // anything — it is the reason "are you sure?" stopped meaning anything.
+      // The first dialog names the run's requester; declining it throws, which
+      // the catch below turns into a skip, and the remaining agents then hit
+      // the same declined gate rather than dying silently.
+      await params.closeSession(sessionId, {
+        requireConfirmation: index === 0 ? { headline } : undefined,
+        preConfirmed: index > 0,
+      })
       closedSessionIds.push(sessionId)
     } catch {
       skippedSessionIds.push(sessionId)

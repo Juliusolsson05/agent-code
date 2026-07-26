@@ -106,7 +106,25 @@ function forgetClosedSessionDebugState(refs: WorkspaceRefs, sessionId: SessionId
  * exactly the case that must keep paying for it: a single button in a list, no
  * preview of the cascade it triggers.
  */
-export type CloseSessionOptions = { preConfirmed?: boolean }
+export type CloseSessionOptions = {
+  preConfirmed?: boolean
+  /**
+   * Confirm even when the policy would let this through silently.
+   *
+   * For closes a MODEL initiated. `headline` names the requester, so the dialog
+   * explains why it appeared — the user did not ask to close anything, and a
+   * bare "Close these sessions?" would be a riddle.
+   *
+   * This is what makes the Agent Management close tool's authorization
+   * enforceable. The first attempt put a single-use grant store in main and
+   * checked it at the bridge, which was the right instinct in the wrong place:
+   * a grant is issued by a USER ACTION, and there is no user action in main
+   * that corresponds to "the user asked this agent to close that agent". So
+   * nothing ever issued one, every `close_agent` call was denied, and the
+   * feature was dead. The renderer CAN ask, at the exact line that mutates.
+   */
+  requireConfirmation?: { headline: string }
+}
 
 type DetachedTabChildren = {
   records: DetachedSessionRecord[]
@@ -1405,6 +1423,7 @@ export function usePaneActions(
           enumerate: () =>
             paneCloseTargets(refs.stateRef.current, refs.latestRuntimesRef.current, targetId),
           ask: requestCloseConfirmation,
+          force: options?.requireConfirmation,
         })
         if (!gate.ok) {
           if (gate.reason === 'changed') showToast(CLOSE_CHANGED_TOAST)

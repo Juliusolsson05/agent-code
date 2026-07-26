@@ -44,6 +44,18 @@ export type CloseConfirmationRequest =
       summary: string
     }
 
+/** The count-and-liveness sentence, shared by the judged and forced paths so
+ *  the two never describe the same set differently. */
+export function summarizeCloseTargets(targets: readonly CloseTargetSnapshot[]): string {
+  const live = targets.filter(target => target.live)
+  if (targets.length === 1) {
+    const only = targets[0]
+    return only.live ? `${only.title} is still working.` : `This closes ${only.title}.`
+  }
+  const liveNote = live.length > 0 ? `, ${live.length} still working` : ''
+  return `This closes ${targets.length} sessions${liveNote}.`
+}
+
 /**
  * Does this close need the user to confirm, and what should it say?
  *
@@ -58,8 +70,6 @@ export function closeConfirmationFor(
 ): CloseConfirmationRequest {
   if (targets.length === 0) return { required: false }
 
-  const live = targets.filter(target => target.live)
-
   if (targets.length === 1) {
     const only = targets[0]
     if (!only.live) {
@@ -70,7 +80,7 @@ export function closeConfirmationFor(
       required: true,
       reason: 'running',
       targets,
-      summary: `${only.title} is still working. Close it anyway?`,
+      summary: `${summarizeCloseTargets(targets)} Close it anyway?`,
     }
   }
 
@@ -82,12 +92,11 @@ export function closeConfirmationFor(
   // working" from "several things die", and the live count is carried in the
   // summary. The earlier split derived 'cascade' vs 'bulk' from liveness rather
   // than from origin, so the value was both wrong and unread.
-  const liveNote = live.length > 0 ? `, ${live.length} still working` : ''
   return {
     required: true,
     reason: 'multi',
     targets,
-    summary: `This closes ${targets.length} sessions${liveNote}.`,
+    summary: summarizeCloseTargets(targets),
   }
 }
 
@@ -151,10 +160,36 @@ export async function runCloseConfirmationGate(input: {
   ask: (
     request: Extract<CloseConfirmationRequest, { required: true }>,
   ) => Promise<boolean>
+  /**
+   * Ask even when the policy would not.
+   *
+   * The idle-single exemption is a statement about a HUMAN pressing ⌘W: they
+   * aimed at a pane, they can see it, and Undo Close covers the mistake. None
+   * of that transfers to a close a MODEL decided to make. There is no aim, the
+   * user may not be looking, and "it's undoable" is doing far more work when
+   * nobody knows it happened.
+   *
+   * `headline` names who is asking. A dialog that says "Close these sessions?"
+   * when the user did not ask to close anything is not a confirmation, it is a
+   * riddle.
+   */
+  force?: { headline: string }
 }): Promise<CloseGateOutcome> {
   const granted = input.enumerate()
-  const request = closeConfirmationFor(granted)
-  if (!request.required) return { ok: true, targets: granted, prompted: false }
+  if (granted.length === 0) return { ok: true, targets: granted, prompted: false }
+  const judged = closeConfirmationFor(granted)
+  const request: Extract<CloseConfirmationRequest, { required: true }> | null =
+    input.force
+      ? {
+          required: true,
+          reason: 'irreversible',
+          targets: granted,
+          summary: `${input.force.headline} ${summarizeCloseTargets(granted)}`,
+        }
+      : judged.required
+        ? judged
+        : null
+  if (!request) return { ok: true, targets: granted, prompted: false }
 
   const confirmed = await input.ask(request)
   if (!confirmed) return { ok: false, reason: 'declined' }

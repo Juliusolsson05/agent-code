@@ -140,7 +140,6 @@ describe('AgentManagementBridge', () => {
     // Issuing it here is what makes this a test of CASCADE REFUSAL rather than
     // of authorization — without it the bridge refuses earlier, for a different
     // and less interesting reason.
-    bridge.issueCloseGrant('caller', 'parent')
     const closing = bridge.closeAgent({ callerSessionId: 'caller', sessionId: 'parent' })
     const request = sentRendererRequests[0] as { requestId: string }
     bridge.resolve({
@@ -277,7 +276,6 @@ describe('AgentManagementBridge', () => {
     const bridge = new AgentManagementBridge(managerFixture() as never)
     const listing = bridge.listAgents({ callerSessionId: 'caller' })
     const request = sentRendererRequests[0] as { requestId: string }
-    bridge.issueCloseGrant('caller', 'agent-1')
     const closing = bridge.closeAgent({ callerSessionId: 'caller', sessionId: 'agent-1' })
     const rejected = expect(listing).rejects.toThrow('timed out')
     const blocked = expect(closing).rejects.toMatchObject({ code: 'renderer_unresponsive' })
@@ -364,52 +362,5 @@ describe('AgentManagementBridge', () => {
       sessionId: 'agent-1',
       delivery: { ok: true, acceptance: { kind: 'user', acceptedAt: 10_000 } },
     })
-  })
-})
-
-describe('AgentManagementBridge close authorization', () => {
-  beforeEach(() => {
-    sentRendererRequests.length = 0
-  })
-
-  const newBridge = () => new AgentManagementBridge(managerFixture() as never)
-
-  it('refuses a close with no user grant', async () => {
-    // THE point of the change. The permission rule used to live entirely in the
-    // tool description — sentences telling the model not to close without an
-    // explicit user request. That cannot fail closed; this can.
-    const bridge = newBridge()
-    await expect(
-      bridge.closeAgent({ callerSessionId: 'caller', sessionId: 'victim' }),
-    ).rejects.toThrow(/no user authorization/)
-  })
-
-  it('refuses a second close on one grant', async () => {
-    // Single-use: "the user asked me to close agent X" is true about one
-    // moment, not for every later turn.
-    const bridge = newBridge()
-    bridge.issueCloseGrant('caller', 'victim')
-    const first = bridge.closeAgent({ callerSessionId: 'caller', sessionId: 'victim' })
-    const request = sentRendererRequests[0] as { requestId: string }
-    bridge.resolve({
-      requestId: request.requestId,
-      type: 'close-agent',
-      ok: true,
-      closedSessionId: 'victim',
-    } as never)
-    await first
-    await expect(
-      bridge.closeAgent({ callerSessionId: 'caller', sessionId: 'victim' }),
-    ).rejects.toThrow(/no user authorization/)
-  })
-
-  it('does not let a grant for one agent authorize another', async () => {
-    // The failure prose could not prevent: a model told to close X deciding Y
-    // also looks stale.
-    const bridge = newBridge()
-    bridge.issueCloseGrant('caller', 'agent-x')
-    await expect(
-      bridge.closeAgent({ callerSessionId: 'caller', sessionId: 'agent-y' }),
-    ).rejects.toThrow(/no user authorization/)
   })
 })
