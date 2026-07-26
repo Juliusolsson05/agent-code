@@ -417,6 +417,21 @@ export type Settings = {
    * depend on a persisted UI preference.
    */
   navigationCommandsEnabled: boolean
+  /**
+   * Per-command keyboard binding overrides, keyed by stable command id.
+   *
+   * SPARSE, with three meaningful states — absent inherits the shipped
+   * defaults, `[]` is an explicit unbind, and a non-empty array replaces the
+   * defaults entirely. See `command-keybindings/resolve.ts` for why absent and
+   * empty must not collapse into one thing (briefly: a future release may
+   * improve an untouched default, but must not resurrect a chord the user
+   * deliberately removed).
+   *
+   * Unknown ids are preserved rather than pruned: an id that names nothing in
+   * this build may belong to an extension that is temporarily uninstalled or a
+   * command a downgrade removed.
+   */
+  commandKeybindingOverrides: Record<string, string[]>
   /** Ambient provider-quota indicator in the SettingsBar header row.
    *  On by default: quota headroom is a planning input for dispatching
    *  agent fleets, and the whole point of the feature is ambient
@@ -477,6 +492,10 @@ export const DEFAULT_SETTINGS: Settings = {
   // have, so the default that costs nothing is the one that keeps them out of
   // the picker. Their keyboard behavior is unaffected either way.
   navigationCommandsEnabled: false,
+  // Empty: every command inherits its shipped default until the user edits one.
+  // Seeding this with today's defaults would pin every command to this
+  // release's chords and make future default improvements invisible.
+  commandKeybindingOverrides: {},
   usageHeaderEnabled: true,
   usageHeaderLevel: 'all',
 }

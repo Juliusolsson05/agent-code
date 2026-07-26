@@ -25,6 +25,7 @@ import type {
 } from '@renderer/app-state/settings/types'
 import { coerceCustomAppearanceJson } from '@renderer/app-state/settings/customAppearance'
 import { coerceDispatchColorFlags } from '@renderer/app-state/settings/dispatchColorFlags'
+import { coerceCommandKeybindingOverrides } from '@renderer/features/command-keybindings/resolve'
 import { coerceHotkeyBinding } from '@renderer/lib/hotkeyBinding'
 import { coerceSavedPromptTemplates } from '@renderer/features/prompt-templates/savedPromptTemplates'
 import { normalizeConfigurableBuiltInMcpDomains } from '@mcp/shared/types'
@@ -134,6 +135,9 @@ export function coerceSettings(value: unknown): Settings {
     // rows help almost nobody, and silently revealing them on upgrade would
     // be a regression nobody asked for.
     navigationCommandsEnabled: parsed.navigationCommandsEnabled === true,
+    commandKeybindingOverrides: coerceCommandKeybindingOverrides(
+      parsed.commandKeybindingOverrides,
+    ),
   }
 }
 
