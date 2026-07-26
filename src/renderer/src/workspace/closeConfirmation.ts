@@ -1,5 +1,6 @@
 import type { SessionId } from '@renderer/workspace/types'
 
+
 // ---------------------------------------------------------------------------
 // Close confirmation policy (governance plan, Phase 7).
 //
@@ -145,4 +146,102 @@ export function describePartialClose(outcome: PartialCloseOutcome): string | nul
   if (outcome.failed.length > 0) parts.push(`${outcome.failed.length} failed`)
   if (outcome.skipped.length > 0) parts.push(`${outcome.skipped.length} skipped (changed)`)
   return `${parts.join(', ')}.`
+}
+
+// ---------------------------------------------------------------------------
+// Target expansion.
+//
+// The policy above judges an EXPANDED set. Expansion is separate because
+// getting it wrong is the actual danger: an unexpanded set silently downgrades
+// a cascade to a single close, and the user confirms one thing while four die.
+// ---------------------------------------------------------------------------
+
+/** The slice of workspace state expansion needs. Narrowed so these functions
+ *  stay pure and testable without constructing a whole store. */
+export type CloseExpansionState = {
+  sessions: Record<string, { title?: string; kind?: string; linkedParentId?: string } | undefined>
+}
+
+/** The slice of runtime state that decides "is this session live". Mirrors what
+ *  CloseOldAgentsModal already uses, so preview and confirmation agree. */
+export type CloseExpansionRuntimes = Record<
+  string,
+  { sessionStatus?: string; streamPhase?: string | null } | undefined
+>
+
+function isLive(runtimes: CloseExpansionRuntimes, sessionId: string): boolean {
+  const runtime = runtimes[sessionId]
+  if (!runtime) return false
+  const running = runtime.sessionStatus === 'running'
+  const streaming = runtime.streamPhase != null && runtime.streamPhase !== 'idle'
+  return Boolean(running || streaming)
+}
+
+function snapshot(
+  state: CloseExpansionState,
+  runtimes: CloseExpansionRuntimes,
+  sessionId: string,
+): CloseTargetSnapshot {
+  return {
+    sessionId,
+    title: state.sessions[sessionId]?.title ?? sessionId,
+    live: isLive(runtimes, sessionId),
+  }
+}
+
+/**
+ * Every session that closing `rootId` will end: the root plus its linked
+ * descendants, TRANSITIVELY.
+ *
+ * Transitive matters — a linked child can itself have linked children, and
+ * stopping at one level would under-report the cascade in exactly the deep case
+ * where the user most needs the count. The visited set guards against a
+ * malformed parent cycle rather than trusting the data to be a clean tree.
+ */
+export function expandSessionCloseTargets(
+  state: CloseExpansionState,
+  runtimes: CloseExpansionRuntimes,
+  rootId: string,
+): CloseTargetSnapshot[] {
+  const out: CloseTargetSnapshot[] = []
+  const visited = new Set<string>()
+  const queue = [rootId]
+
+  while (queue.length > 0) {
+    const id = queue.shift() as string
+    if (visited.has(id)) continue
+    visited.add(id)
+    if (!state.sessions[id]) continue
+    out.push(snapshot(state, runtimes, id))
+    for (const [childId, meta] of Object.entries(state.sessions)) {
+      if (meta?.linkedParentId === id) queue.push(childId)
+    }
+  }
+  return out
+}
+
+/**
+ * Every session a TAB close will end: each grid leaf expanded through its
+ * linked descendants, plus the tab's detached Dispatch sessions.
+ *
+ * Detached sessions are the ones people forget. They have no tile in the tab
+ * the user is looking at, so a tab close that silently takes six background
+ * agents with it looks like closing an empty tab.
+ */
+export function expandTabCloseTargets(
+  state: CloseExpansionState,
+  runtimes: CloseExpansionRuntimes,
+  gridSessionIds: readonly string[],
+  detachedSessionIds: readonly string[],
+): CloseTargetSnapshot[] {
+  const seen = new Set<string>()
+  const out: CloseTargetSnapshot[] = []
+  for (const id of [...gridSessionIds, ...detachedSessionIds]) {
+    for (const target of expandSessionCloseTargets(state, runtimes, id)) {
+      if (seen.has(target.sessionId)) continue
+      seen.add(target.sessionId)
+      out.push(target)
+    }
+  }
+  return out
 }

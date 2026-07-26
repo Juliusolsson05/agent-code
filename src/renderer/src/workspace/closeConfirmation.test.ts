@@ -4,6 +4,8 @@ import {
   closeConfirmationFor,
   describePartialClose,
   grantStillMatches,
+  expandSessionCloseTargets,
+  expandTabCloseTargets,
   narrowGrantToCurrent,
 } from '@renderer/workspace/closeConfirmation'
 import type { CloseTargetSnapshot } from '@renderer/workspace/closeConfirmation'
@@ -117,5 +119,83 @@ describe('partial close reporting', () => {
     expect(message).toContain('Closed 1')
     expect(message).toContain('1 failed')
     expect(message).toContain('1 skipped')
+  })
+})
+
+describe('target expansion', () => {
+  const state = {
+    sessions: {
+      parent: { title: 'Parent' },
+      child: { title: 'Child', linkedParentId: 'parent' },
+      grandchild: { title: 'Grandchild', linkedParentId: 'child' },
+      unrelated: { title: 'Unrelated' },
+      detached: { title: 'Detached' },
+    },
+  }
+
+  it('expands linked descendants transitively', () => {
+    // A linked child can itself have linked children. Stopping at one level
+    // would under-report the cascade in exactly the deep case where the count
+    // matters most.
+    const ids = expandSessionCloseTargets(state, {}, 'parent').map(t => t.sessionId)
+    expect(ids.sort()).toEqual(['child', 'grandchild', 'parent'])
+  })
+
+  it('does not sweep in unrelated sessions', () => {
+    const ids = expandSessionCloseTargets(state, {}, 'parent').map(t => t.sessionId)
+    expect(ids).not.toContain('unrelated')
+  })
+
+  it('survives a malformed parent cycle instead of hanging', () => {
+    // Guarding with a visited set rather than trusting the data to be a tree:
+    // an infinite loop here would freeze the app on a close.
+    const cyclic = {
+      sessions: {
+        a: { title: 'A', linkedParentId: 'b' },
+        b: { title: 'B', linkedParentId: 'a' },
+      },
+    }
+    const ids = expandSessionCloseTargets(cyclic, {}, 'a').map(t => t.sessionId)
+    expect(ids.sort()).toEqual(['a', 'b'])
+  })
+
+  it('marks a running session live', () => {
+    const runtimes = { parent: { sessionStatus: 'running' } }
+    expect(expandSessionCloseTargets(state, runtimes, 'parent')[0].live).toBe(true)
+  })
+
+  it('marks a mid-stream session live even when not running', () => {
+    // Both signals matter, and they are the SAME pair CloseOldAgentsModal uses
+    // — so its preview and this confirmation cannot disagree about who is busy.
+    const runtimes = { parent: { streamPhase: 'delta' } }
+    expect(expandSessionCloseTargets(state, runtimes, 'parent')[0].live).toBe(true)
+  })
+
+  it('treats an idle stream phase as not live', () => {
+    const runtimes = { parent: { sessionStatus: 'idle', streamPhase: 'idle' } }
+    expect(expandSessionCloseTargets(state, runtimes, 'parent')[0].live).toBe(false)
+  })
+
+  it('includes a tab detached sessions alongside its grid leaves', () => {
+    // The ones people forget: a detached session has no tile in the tab the
+    // user is looking at, so a tab close that takes six background agents with
+    // it looks like closing an empty tab.
+    const targets = expandTabCloseTargets(state, {}, ['parent'], ['detached'])
+    expect(targets.map(t => t.sessionId).sort()).toEqual([
+      'child', 'detached', 'grandchild', 'parent',
+    ])
+  })
+
+  it('does not double-count a session reachable two ways', () => {
+    const targets = expandTabCloseTargets(state, {}, ['parent', 'child'], [])
+    expect(targets).toHaveLength(3)
+  })
+
+  it('turns a cascade into a confirmation that names the count', () => {
+    // The end-to-end point of expansion: closing ONE pane confirms as three.
+    const targets = expandSessionCloseTargets(state, {}, 'parent')
+    const result = closeConfirmationFor(targets)
+    expect(result.required).toBe(true)
+    if (result.required) expect(result.summary).toContain('3 sessions')
   })
 })
