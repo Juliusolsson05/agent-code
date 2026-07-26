@@ -16,6 +16,17 @@ import type { SessionId } from '@renderer/workspace/types'
 // The settings lookup itself now lives in `useColorFlag` because the pane
 // header reads the same state with different geometry; only the geometry below
 // is Dispatch-specific.
+//
+// WHY this one keeps `pointer-events-none` and gets no `title`, while its pane
+// header counterpart takes the opposite choice: this strip sits INSIDE the
+// Dispatch row's <button>, which already carries a richer tooltip (the agent
+// label, title, and detached state — DispatchAgentList.tsx / DispatchMiniList.tsx).
+// A `title` here would not add information, it would REPLACE that tooltip for
+// the 10px the strip covers, so hovering the right edge of a row would tell you
+// less than hovering anywhere else in it. Swallowing pointer events keeps the
+// row's own hover and tooltip intact across its full width. The pane header has
+// no such competing tooltip on its right edge, which is why the chunk there can
+// afford one.
 export const DispatchColorFlagStrip = memo(function DispatchColorFlagStrip({
   sessionId,
 }: {

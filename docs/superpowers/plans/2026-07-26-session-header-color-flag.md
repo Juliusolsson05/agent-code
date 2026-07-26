@@ -1,5 +1,10 @@
 # Session Header Color Flag Implementation Plan
 
+> **Status: SHIPPED**, with corrections from a two-agent review — see
+> "Review outcome" at the bottom. Where a task body below disagrees with that
+> section, that section is what the code does. In particular Task 2's `pl-3`
+> is wrong: **all** the row's padding moved onto the label group.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** A color-flagged agent shows that color as a chunk on the right end of its pane's session header, overlapping the status strip, so a flagged agent is spottable in the grid and not only in the Dispatch list.
@@ -487,3 +492,86 @@ Run: `npm run dev`. Then:
 **Placeholders:** none — every code step carries the literal code.
 
 **Type consistency:** `useColorFlag(sessionId: SessionId): ColorFlag | undefined` is defined in Task 1 and consumed with that exact signature in Task 2. `SessionId` is `string` (`src/renderer/src/workspace/types.ts:27`), so the existing tests' plain string session ids type-check against the new `PaneHeader` prop. The DOM hooks `data-pane-color-flag` and `data-pane-header-row` are asserted in Task 2 Step 1 and emitted in Steps 3-4 under the same names.
+
+---
+
+## Review outcome
+
+Two orchestrated reviewers went over the branch: one on correctness and
+regression risk, one on design and repo conventions. Six findings were accepted
+and fixed; two were declined with reasons. This section is the record of what
+the code actually does, since several corrections contradict the task bodies
+above.
+
+### Accepted and fixed
+
+1. **The `pl-3` was a real bug.** Moving only the vertical padding and changing
+   `px-3` → `pl-3` deleted the header's right inset for *unflagged* panes,
+   because the chunk that was supposed to stand in for it doesn't mount when
+   there's no flag. Measured in Chromium at a 100px pane width: the truncated
+   project dir sat 12px off the pane edge before, 0px after. Flagged panes were
+   affected too — the text butted against the chunk with a 0.83px gap at 180px.
+   **Fix:** the row is now bare and the label group carries `px-3 py-*`. The
+   inset survives with or without a flag, and as a side effect the chunk's
+   `w-1/4` became a true quarter (percentages resolve against the row's content
+   box, so `pl-3` had been making it 25% of `W − 12px` — 20% at a 60px pane).
+
+2. **The tests were near-tautological.** Two mutations passed green against the
+   original three cases: deleting `justify-between` (chunk renders mid-header
+   instead of at the right edge) and making the group's padding an
+   unconditional `py-1` (Status Mode's 5px strip grows to a 24px bar). Both are
+   now covered, plus a stale-persisted-id case for `useColorFlag`'s headline
+   justification, which had no coverage at either surface. All three mutations
+   were re-run against the fixed tests and each fails exactly one case.
+
+3. **Accent/flag hue collision.** The flag colors are raw hex; the strip behind
+   them is `bg-accent`, a *user-chosen* token. Every shipped accent preset
+   shares a hue family with at least one flag color (coral/red, gold/yellow,
+   amber/orange, sky/blue, lavender/purple, lime/green), so a user whose accent
+   matched their flag got no signal at all on a live pane — the exact moment the
+   flag matters most. **Fix:** a 1px `border-l border-canvas` seam, which
+   separates the chunk from both the accent fill and `bg-surface` in either
+   theme and costs no layout width.
+
+4. **Color was the only channel.** `aria-hidden` + `pointer-events-none` + no
+   tooltip meant a deuteranope could not separate red from green from orange,
+   with no recovery short of reopening the picker. **Fix:** the header chunk
+   drops `pointer-events-none` (a tooltip needs hover; click-to-focus still
+   works, the mousedown bubbles to the pane container) and gains
+   `title="<Label> flag"`. `aria-hidden` stays, now with a stated reason.
+
+5. **The idle-pane contradiction.** The "flag always wins its slice" paragraph
+   justified the overlap for live panes but left a red chunk sitting on idle
+   panes — exactly the false-error read that `PaneHeader`'s own comment, four
+   lines earlier, says the green/red design was abandoned for. The comment now
+   names the idle case and grounds the difference in authorship (a flag is
+   user-set, the old red was automatic), and states what would expire that
+   reasoning: flags ever being assigned automatically.
+
+6. **Command-style violations.** `Set color flag` broke `docs/command-style.md`
+   rule 9 (title case) and rule 8 (ellipsis when the command needs more input —
+   `run` always opens the picker). Now `Set Color Flag…`. Pre-existing, fixed
+   here because this PR was already rewriting the command's copy.
+
+### Declined, with reasons
+
+- **`max-w-[96px]` cap on the chunk.** The design reviewer argued 25% of a
+  maximized 2000px header is a 500px slab rather than a peripheral marker, and
+  recommended capping it. The proportional width is what the product owner
+  specified from a mock, so changing it is their call, not a defect fix — it is
+  flagged for them rather than applied. (The same finding claimed the WHY
+  comment states its rationale backwards; it does not. A *fixed* chunk really
+  is proportionally huge in a narrow lane and negligible in a wide one, which
+  is what the comment says.)
+- **Tooltip on `DispatchColorFlagStrip`.** Recommended for parity with the
+  header chunk. Declined: that strip sits inside the Dispatch row's `<button>`,
+  which already carries a richer tooltip (agent label, title, detached state).
+  A `title` there would *replace* it for the 10px the strip covers, so hovering
+  the row's right edge would tell you less than hovering anywhere else. The
+  divergence is now documented in both components.
+
+### Not this PR
+
+`dispatchColorFlags` entries are never deleted when a session closes, so the
+persisted map accumulates dead session ids forever. Pre-existing, outside this
+diff, worth its own issue.

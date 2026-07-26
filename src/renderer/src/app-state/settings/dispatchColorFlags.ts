@@ -9,6 +9,15 @@
 // docs/superpowers/plans/2026-07-26-session-header-color-flag.md for the header
 // surface. `useColorFlag` is the shared reader both surfaces go through.
 //
+// DO NOT RENAME the `Settings.dispatchColorFlags` key to drop the now-misleading
+// "dispatch" prefix. The key name is itself persisted — it is what the flags are
+// stored under in the zustand-persisted settings blob — so renaming it silently
+// orphans every flag a user has already set unless it comes with a
+// PERSIST_VERSION bump and a migration. The prefix is historical (the feature
+// shipped in Dispatch first) and is not a claim about where the flag renders;
+// the same applies to the `dispatch.color-flag.set` command id, which keys
+// `Settings.commandVisibilityOverrides`.
+//
 // WHY a fixed palette rather than a free RGB/hex picker: the whole point is
 // fast visual triage of a list, and a small set of high-contrast, distinct
 // hues is both quicker to pick and easier to tell apart at a 10px strip than
