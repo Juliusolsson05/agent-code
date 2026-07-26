@@ -54,7 +54,7 @@ export const paneCommands: CommandDef[] = [
     surface: 'grid',
     title: 'Split Pane Right',
     description: '**What it does:** Creates a **new agent pane on the right**.\n\n**Use when:** You want side-by-side work in the grid.\n\n**Notes:** In **Dispatch**, this creates a detached agent instead.',
-    run: ({ workspace }) => void workspace.splitFocused('vertical'),
+    run: ({ workspace }) => workspace.splitFocused('vertical'),
   },
   {
     id: 'split-horizontal',
@@ -62,7 +62,7 @@ export const paneCommands: CommandDef[] = [
     surface: 'grid',
     title: 'Split Pane Down',
     description: '**What it does:** Creates a **new agent pane below**.\n\n**Use when:** You want a stacked grid layout.\n\n**Notes:** In **Dispatch**, this creates a detached agent instead.',
-    run: ({ workspace }) => void workspace.splitFocused('horizontal'),
+    run: ({ workspace }) => workspace.splitFocused('horizontal'),
   },
   {
     id: 'close-pane',
@@ -74,7 +74,7 @@ export const paneCommands: CommandDef[] = [
     title: 'Close Focused Session',
     keywords: ['pane', 'close pane'],
     description: '**What it does:** Closes the **currently targeted pane or Dispatch row**.\n\n**Use when:** You are done with the current target.\n\n**Notes:** In **Dispatch**, the highlighted row is the close target.',
-    run: ({ workspace }) => void workspace.closeFocused(),
+    run: ({ workspace }) => workspace.closeFocused(),
   },
   {
     id: 'bury-pane',
@@ -227,7 +227,7 @@ export const paneCommands: CommandDef[] = [
     run: ({ workspace }) => {
       const tabId = attachAllCommandTabId(workspace)
       if (!tabId) return
-      void workspace.attachAllDetachedForTab(tabId)
+      return workspace.attachAllDetachedForTab(tabId)
     },
   },
   {
@@ -277,7 +277,7 @@ export const paneCommands: CommandDef[] = [
     surface: 'grid',
     title: 'New Terminal Right',
     description: '**What it does:** Opens a **terminal on the right**.\n\n**Use when:** You need a shell beside the current pane.\n\n**Notes:** From **Dispatch**, the terminal attaches to the focused row or lane’s project grid.',
-    run: ({ workspace }) => void workspace.splitFocused('vertical', 'terminal'),
+    run: ({ workspace }) => workspace.splitFocused('vertical', 'terminal'),
   },
   {
     id: 'terminal-vertical',
@@ -285,7 +285,7 @@ export const paneCommands: CommandDef[] = [
     surface: 'grid',
     title: 'New Terminal Below',
     description: '**What it does:** Opens a **terminal below**.\n\n**Use when:** You need a shell under the current pane.\n\n**Notes:** From **Dispatch**, the terminal attaches to the focused row or lane’s project grid.',
-    run: ({ workspace }) => void workspace.splitFocused('horizontal', 'terminal'),
+    run: ({ workspace }) => workspace.splitFocused('horizontal', 'terminal'),
   },
   // Per-provider split commands, generated for every registered agent
   // provider EXCEPT the default (#394 phase 4). The default provider
@@ -309,7 +309,7 @@ export const paneCommands: CommandDef[] = [
         title: `New ${caps.shortLabel} Right`,
         description: `**What it does:** Opens a **${caps.shortLabel} agent on the right**.\n\n**Use when:** You want ${caps.shortLabel} beside the current agent.\n\n**Notes:** In **Dispatch**, this creates a detached ${caps.shortLabel} agent instead.`,
         run: ({ workspace }: CommandContext) =>
-          void workspace.splitFocused('vertical', kind),
+          workspace.splitFocused('vertical', kind),
       },
       {
         id: `${kind}-horizontal`,
@@ -318,7 +318,7 @@ export const paneCommands: CommandDef[] = [
         title: `New ${caps.shortLabel} Below`,
         description: `**What it does:** Opens a **${caps.shortLabel} agent below**.\n\n**Use when:** You want ${caps.shortLabel} in a stacked layout.\n\n**Notes:** In **Dispatch**, this creates a detached ${caps.shortLabel} agent instead.`,
         run: ({ workspace }: CommandContext) =>
-          void workspace.splitFocused('horizontal', kind),
+          workspace.splitFocused('horizontal', kind),
       },
     ]
   }),
@@ -372,7 +372,7 @@ export const paneCommands: CommandDef[] = [
     surface: 'app',
     title: 'Undo Close',
     description: '**What it does:** Restores the most recent closed **pane or tab** from a small recent-close history.\n\n**Use when:** You closed something by mistake, or repeat it to walk back through earlier closes.\n\n**Notes:** Also restores detached **Dispatch** agents captured with a closed tab.',
-    run: ({ workspace }) => void workspace.undoClose(),
+    run: ({ workspace }) => workspace.undoClose(),
   },
   {
     id: 'revive-pane',

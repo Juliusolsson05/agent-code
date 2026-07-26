@@ -15,9 +15,8 @@ export const tabCommands: CommandDef[] = [
     surface: 'app',
     title: 'Close Tab',
     description: '**What it does:** Closes the **current tab** and its sessions.\n\n**Use when:** You are done with a whole project tab.\n\n**Notes:** Use **Undo Close** if you closed it by mistake.',
-    run: ({ workspace }) => {
-      if (workspace.activeTab) void workspace.closeTab(workspace.activeTab.id)
-    },
+    run: ({ workspace }) =>
+      workspace.activeTab ? workspace.closeTab(workspace.activeTab.id) : undefined,
   },
   {
     id: 'next-tab',

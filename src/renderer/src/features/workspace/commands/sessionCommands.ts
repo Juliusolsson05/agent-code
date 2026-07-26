@@ -659,7 +659,7 @@ export const sessionCommands: CommandDef[] = [
         Boolean(meta?.providerSessionId)
       )
     },
-    run: ({ workspace }) => void workspace.reloadFocusedAgent(),
+    run: ({ workspace }) => workspace.reloadFocusedAgent(),
   },
   {
     id: 'soft-reload-agent',
@@ -894,7 +894,7 @@ export const sessionCommands: CommandDef[] = [
       const kind = meta?.kind ?? DEFAULT_PROVIDER
       return isAgentProviderKind(kind)
     },
-    run: ({ workspace }) => void workspace.switchFocusedProvider(),
+    run: ({ workspace }) => workspace.switchFocusedProvider(),
   },
   {
     id: 'toggle-git-bar',
@@ -973,7 +973,7 @@ export const sessionCommands: CommandDef[] = [
       // closePalette immediately so the toast (which lands in the
       // pane, not the palette) is visible right after trigger.
       ui.closePalette()
-      void runSaveDebugBundleCommand(workspace)
+      return runSaveDebugBundleCommand(workspace)
     },
   },
   {
@@ -1011,7 +1011,7 @@ export const sessionCommands: CommandDef[] = [
     },
     run: ({ workspace, ui }) => {
       ui.closePalette()
-      void runToggleSessionRecordingCommand(workspace)
+      return runToggleSessionRecordingCommand(workspace)
     },
   },
   {
@@ -1046,7 +1046,7 @@ export const sessionCommands: CommandDef[] = [
     },
     run: ({ workspace, ui }) => {
       ui.closePalette()
-      void runAttachRecordingNoteCommand(workspace)
+      return runAttachRecordingNoteCommand(workspace)
     },
   },
   {

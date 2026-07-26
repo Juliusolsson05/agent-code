@@ -54,6 +54,93 @@ type ProjectRow = {
   matching: number
 }
 
+/**
+ * Build the preview rows from a workspace snapshot.
+ *
+ * Module-level and snapshot-in / rows-out so the SAME derivation runs in the
+ * render memo and again inside the close loop's per-kill revalidation. The
+ * revalidation previously re-read only `sessions` + liveness, which meant it
+ * could not see the two criteria that actually put a row in the list — its age
+ * and its project. An agent that received a message after the preview and went
+ * idle again passed a liveness check while no longer being an OLD agent.
+ */
+function buildAgentRows(
+  state: Workspace['state'],
+  runtimes: Workspace['runtimes'],
+  now: number,
+): AgentRow[] {
+  const rows: AgentRow[] = []
+  const seen = new Set<SessionId>()
+
+  state.tabs.forEach((tab: Tab, tabIndex: number) => {
+    for (const sessionId of resolveTabSessions(state, tab.id)) {
+      if (seen.has(sessionId)) continue
+      seen.add(sessionId)
+
+      const meta = state.sessions[sessionId]
+      if (!meta) continue
+      const kind = meta.kind ?? DEFAULT_PROVIDER
+      // Registry-driven: the modal shows every agent provider so a user in
+      // a big multi-provider session can bulk-close inactive agents across
+      // Claude, Codex, and OpenCode alike. Skipping OpenCode here would
+      // silently hide those agents from the modal (and the bulk-close
+      // preview counter would report the wrong number).
+      if (!isAgentProviderKind(kind)) continue
+
+      const runtime = runtimes[sessionId]
+      const lastActiveAt = runtime
+        ? extractLatestEntryTs(runtime.entries) ?? runtime.turnStartedAt ?? null
+        : null
+
+      rows.push({
+        sessionId,
+        tabId: tab.id,
+        tabTitle: tab.title,
+        tabIndex,
+        kind,
+        cwd: meta.cwd,
+        cwdBase: cwdBasename(meta.cwd),
+        // Shared with every other close path (expansion, the confirmation
+        // dialog, Kill Buried). Three private copies of "is this busy" is how a
+        // preview and a confirmation come to disagree about the same session.
+        isLive: isSessionLiveForClose(runtimes, sessionId),
+        lastActiveAt,
+        ageMs: lastActiveAt == null ? null : Math.max(0, now - lastActiveAt),
+      })
+    }
+  })
+
+  rows.sort((a, b) => {
+    const at = a.ageMs ?? -1
+    const bt = b.ageMs ?? -1
+    if (at !== bt) return bt - at
+    if (a.cwdBase !== b.cwdBase) return a.cwdBase.localeCompare(b.cwdBase)
+    return a.tabIndex - b.tabIndex
+  })
+  return rows
+}
+
+function filterEligibleRows(
+  rows: readonly AgentRow[],
+  criteria: { thresholdMs: number | null; includeLive: boolean },
+): AgentRow[] {
+  if (criteria.thresholdMs == null) return []
+  const thresholdMs = criteria.thresholdMs
+  return rows.filter(row => {
+    if (row.ageMs == null || row.ageMs < thresholdMs) return false
+    if (!criteria.includeLive && row.isLive) return false
+    return true
+  })
+}
+
+function filterMatchingRows(
+  rows: readonly AgentRow[],
+  criteria: { scopeMode: ScopeMode; selectedProjects: ReadonlySet<string> },
+): AgentRow[] {
+  if (criteria.scopeMode === 'all') return [...rows]
+  return rows.filter(row => criteria.selectedProjects.has(row.cwd))
+}
+
 const DEFAULT_THRESHOLD_VALUE = 4
 const DEFAULT_THRESHOLD_UNIT: ThresholdUnit = 'hours'
 
@@ -141,56 +228,7 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
 
   const agentRows = useMemo<AgentRow[]>(() => {
     void nowTick
-    const now = Date.now()
-    const rows: AgentRow[] = []
-    const seen = new Set<SessionId>()
-
-    workspace.state.tabs.forEach((tab: Tab, tabIndex: number) => {
-      for (const sessionId of resolveTabSessions(workspace.state, tab.id)) {
-        if (seen.has(sessionId)) continue
-        seen.add(sessionId)
-
-        const meta = workspace.state.sessions[sessionId]
-        if (!meta) continue
-        const kind = meta.kind ?? DEFAULT_PROVIDER
-        // Registry-driven: the modal shows every agent provider so a user in
-        // a big multi-provider session can bulk-close inactive agents across
-        // Claude, Codex, and OpenCode alike. Skipping OpenCode here would
-        // silently hide those agents from the modal (and the bulk-close
-        // preview counter would report the wrong number).
-        if (!isAgentProviderKind(kind)) continue
-
-        const runtime = workspace.runtimes[sessionId]
-        const running = runtime?.sessionStatus === 'running'
-        const streaming = runtime?.streamPhase != null && runtime.streamPhase !== 'idle'
-        const isLive = Boolean(running || streaming)
-        const lastActiveAt = runtime
-          ? extractLatestEntryTs(runtime.entries) ?? runtime.turnStartedAt ?? null
-          : null
-
-        rows.push({
-          sessionId,
-          tabId: tab.id,
-          tabTitle: tab.title,
-          tabIndex,
-          kind,
-          cwd: meta.cwd,
-          cwdBase: cwdBasename(meta.cwd),
-          isLive,
-          lastActiveAt,
-          ageMs: lastActiveAt == null ? null : Math.max(0, now - lastActiveAt),
-        })
-      }
-    })
-
-    rows.sort((a, b) => {
-      const at = a.ageMs ?? -1
-      const bt = b.ageMs ?? -1
-      if (at !== bt) return bt - at
-      if (a.cwdBase !== b.cwdBase) return a.cwdBase.localeCompare(b.cwdBase)
-      return a.tabIndex - b.tabIndex
-    })
-    return rows
+    return buildAgentRows(workspace.state, workspace.runtimes, Date.now())
   }, [workspace.runtimes, workspace.state, nowTick])
 
   const selectedProjectSet = useMemo(
@@ -198,19 +236,15 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
     [selectedProjects],
   )
 
-  const eligibleRows = useMemo(() => {
-    if (thresholdMs == null) return []
-    return agentRows.filter(row => {
-      if (row.ageMs == null || row.ageMs < thresholdMs) return false
-      if (!includeLive && row.isLive) return false
-      return true
-    })
-  }, [agentRows, includeLive, thresholdMs])
+  const eligibleRows = useMemo(
+    () => filterEligibleRows(agentRows, { thresholdMs, includeLive }),
+    [agentRows, includeLive, thresholdMs],
+  )
 
-  const matchingRows = useMemo(() => {
-    if (scopeMode === 'all') return eligibleRows
-    return eligibleRows.filter(row => selectedProjectSet.has(row.cwd))
-  }, [eligibleRows, scopeMode, selectedProjectSet])
+  const matchingRows = useMemo(
+    () => filterMatchingRows(eligibleRows, { scopeMode, selectedProjects: selectedProjectSet }),
+    [eligibleRows, scopeMode, selectedProjectSet],
+  )
 
   const projects = useMemo<ProjectRow[]>(() => {
     const matchingByProject = new Map<string, number>()
@@ -273,15 +307,32 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
     setSelectedProjects(new Set())
   }, [])
 
-  /** Freshly re-read liveness for every agent session, in the shape the grant
-   *  comparison expects. Deliberately re-derived rather than reusing the
-   *  memoized preview rows: the whole point is to see what changed SINCE. */
-  const buildCloseTargets = useCallback((ws: typeof workspace): CloseTargetSnapshot[] =>
-    Object.keys(ws.state.sessions).map(sessionId => ({
-      sessionId,
-      title: ws.state.sessions[sessionId]?.title ?? sessionId,
-      live: isSessionLiveForClose(ws.runtimes, sessionId),
-    })), [])
+  // A LIVE handle on the workspace, updated on every render.
+  //
+  // The revalidation below used to read the `workspace` captured by
+  // `closeMatchingAgents`'s closure. That object is the value from the render
+  // in which the callback was created and never changes during the loop — so
+  // "re-enumerate before every kill" re-derived the identical answer twelve
+  // times and could not detect anything. React re-renders this modal as each
+  // close mutates workspace state, which is what keeps this ref current.
+  const workspaceRef = useRef(workspace)
+  workspaceRef.current = workspace
+
+  /** Re-run the FULL eligibility predicate against live state, in the shape the
+   *  grant comparison expects. Not just liveness: age and project scope are
+   *  what put a row in the list, so they are what a stale grant must be
+   *  re-checked against. */
+  const buildCloseTargets = useCallback((): CloseTargetSnapshot[] => {
+    const ws = workspaceRef.current
+    const rows = buildAgentRows(ws.state, ws.runtimes, Date.now())
+    const eligible = filterEligibleRows(rows, { thresholdMs, includeLive })
+    return filterMatchingRows(eligible, { scopeMode, selectedProjects: selectedProjectSet })
+      .map(row => ({
+        sessionId: row.sessionId,
+        title: `${row.tabTitle} · ${row.cwdBase}`,
+        live: row.isLive,
+      }))
+  }, [thresholdMs, includeLive, scopeMode, selectedProjectSet])
 
   const closeMatchingAgents = useCallback(async () => {
     if (matchingRows.length === 0 || closing) return
@@ -312,14 +363,20 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
         // Re-reading per iteration is affordable because the loop is already
         // sequential (closeSession mutates the tree, so concurrency would make
         // each call read a stale snapshot) and bulk cleanup is rare.
-        const current = buildCloseTargets(workspace)
+        const current = buildCloseTargets()
         const stillGranted = narrowGrantToCurrent([target], current)
         if (stillGranted.length === 0) {
           outcome.skipped.push(target.sessionId)
           continue
         }
         try {
-          await workspace.closeSession(target.sessionId)
+          // preConfirmed: this modal IS the confirmation surface. It shows the
+          // exact list, the count, and the live count, and requires an explicit
+          // click — a strictly stronger grant than the generic dialog, which
+          // would otherwise fire once per agent and turn a twelve-agent cleanup
+          // into twelve modals. The per-kill revalidation above is what keeps
+          // that grant honest.
+          await workspaceRef.current.closeSession(target.sessionId, { preConfirmed: true })
           outcome.closed.push(target.sessionId)
         } catch (error) {
           // One backend refusing must not abandon the rest of the batch — the
@@ -335,7 +392,7 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
     } finally {
       setClosing(false)
     }
-  }, [closing, matchingRows, onClose, workspace, showToast])
+  }, [buildCloseTargets, closing, matchingRows, onClose, showToast])
 
   return (
     <Dialog

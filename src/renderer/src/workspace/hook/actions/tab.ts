@@ -1,10 +1,10 @@
 import { useCallback } from 'react'
 
-import type { DetachedSessionRecord, SessionId, SessionKind, SessionMeta, Tab, TabId } from '@renderer/workspace/types'
+import type { DetachedSessionRecord, SessionId, SessionKind, SessionMeta, Tab, TabId, WorkspaceState } from '@renderer/workspace/types'
 import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 import {
-  closeConfirmationFor,
   expandTabCloseTargets,
+  runCloseConfirmationGate,
 } from '@renderer/workspace/closeConfirmation'
 import { requestCloseConfirmation } from '@renderer/workspace/closeConfirmationBroker'
 import { clearLiveEntryWindowSession } from '@renderer/session-runtime/liveEntryWindow'
@@ -84,32 +84,66 @@ export function useTabActions(
     [sessionActions, setState, showToast],
   )
 
+  // Enumerate everything closing `tabId` will end, from a given snapshot.
+  //
+  // Both the gate and the kill list derive from this ONE function, so they
+  // cannot drift: the detached records that feed the undo entry are the same
+  // records the dialog counted. Detached sessions are the ones people forget —
+  // they have no tile in the tab on screen, so closing what looks like a
+  // two-pane tab can end eight agents.
+  const enumerateTabClose = useCallback((snapshot: WorkspaceState, tabId: TabId) => {
+    const tab = snapshot.tabs.find(t => t.id === tabId)
+    if (!tab) return null
+    const detachedRecords = Object.values(snapshot.detachedSessions)
+      .filter(entry => entry.projectTabId === tabId)
+    return {
+      tab,
+      tabIdx: snapshot.tabs.findIndex(t => t.id === tabId),
+      ids: collectLeaves(tab.root),
+      detachedRecords,
+      detachedIds: detachedRecords.map(entry => entry.sessionId),
+    }
+  }, [])
+
   const closeTab = useCallback(
     async (tabId: TabId) => {
-      const tab = state.tabs.find(t => t.id === tabId)
-      if (!tab) return
-
-      // Capture undo info before killing anything.
-      const tabIdx = state.tabs.findIndex(t => t.id === tabId)
-      const ids = collectLeaves(tab.root)
-      const detachedRecords = Object.values(state.detachedSessions)
-        .filter(entry => entry.projectTabId === tabId)
-      const detachedIds = detachedRecords.map(entry => entry.sessionId)
-
       // CONFIRMATION GATE, before any kill.
       //
-      // A tab close is almost always multi-target, and the DETACHED sessions
-      // are the ones people forget: they have no tile in the tab on screen, so
-      // closing what looks like a two-pane tab can end eight agents. Expanding
-      // grid leaves AND detached records — each through its linked descendants
-      // — is what makes the count in the dialog the real one.
-      const confirmation = closeConfirmationFor(
-        expandTabCloseTargets(state, refs.latestRuntimesRef.current, ids, detachedIds),
-      )
-      if (confirmation.required) {
-        const confirmed = await requestCloseConfirmation(confirmation)
-        if (!confirmed) return
+      // Reads through `stateRef`, not the `state` prop. The prop is the value
+      // from the render that built this callback: already one render behind
+      // when a burst of closes queues up, and definitively stale once the gate
+      // has awaited a dialog. Every derivation below — the undo entry, the kill
+      // list, the detached metas — came from that captured value, so a
+      // confirmed tab close could resurrect sessions the intervening state had
+      // already removed.
+      const gate = await runCloseConfirmationGate({
+        enumerate: () => {
+          const snapshot = refs.stateRef.current
+          const plan = enumerateTabClose(snapshot, tabId)
+          if (!plan) return []
+          return expandTabCloseTargets(
+            snapshot,
+            refs.latestRuntimesRef.current,
+            plan.ids,
+            plan.detachedIds,
+          )
+        },
+        ask: requestCloseConfirmation,
+      })
+      if (!gate.ok) {
+        if (gate.reason === 'changed') {
+          showToast('Close cancelled — this tab changed while the dialog was open. Try again.')
+        }
+        return
       }
+
+      // Re-read for the mutation itself. When nothing was prompted this is the
+      // same snapshot the gate just enumerated from.
+      const state = refs.stateRef.current
+      const plan = enumerateTabClose(state, tabId)
+      if (!plan) return
+      const { tab, tabIdx, ids, detachedRecords, detachedIds } = plan
+
       const idsToKill = [...ids, ...detachedIds]
       const allMetas: Record<SessionId, SessionMeta> = {}
       for (const id of ids) {
@@ -196,9 +230,16 @@ export function useTabActions(
       setSpotlight(prev => (prev?.tabId === tabId ? null : prev))
       setReaderMode(prev => (prev?.tabId === tabId ? null : prev))
     },
+    // No `state.*` deps any more: this callback reads through refs, which is
+    // the point. Depending on the state slices used to churn a new closure on
+    // every workspace mutation while STILL capturing a stale value inside it —
+    // the worst of both.
     [
+      enumerateTabClose,
+      refs.latestRuntimesRef,
       refs.latestScreenRef,
       refs.seenUuidsRef,
+      refs.stateRef,
       refs.undoStackRef,
       sessionActions,
       setReaderMode,
@@ -207,9 +248,6 @@ export function useTabActions(
       setState,
       setTileTabs,
       showToast,
-      state.detachedSessions,
-      state.sessions,
-      state.tabs,
     ],
   )
 

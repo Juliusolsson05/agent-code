@@ -112,6 +112,63 @@ export function grantStillMatches(
   return granted.every(target => currentIds.has(target.sessionId))
 }
 
+export type CloseGateOutcome =
+  | {
+      ok: true
+      /** The set the caller is authorized to close. */
+      targets: readonly CloseTargetSnapshot[]
+      /** Whether a dialog was actually shown — i.e. whether time passed. */
+      prompted: boolean
+    }
+  | { ok: false; reason: 'declined' | 'changed' }
+
+/**
+ * The whole gate: enumerate, judge, ask, and RE-ENUMERATE before granting.
+ *
+ * WHY re-enumeration lives in here and not at the call sites: every close path
+ * has an await in the middle of it — the dialog — and the workspace does not
+ * hold still while the user reads. Agents finish, new ones spawn, a cascade
+ * elsewhere removes a child. The pre-dialog snapshot every caller had already
+ * captured was therefore a description of a workspace that no longer exists by
+ * the time the answer arrives, and acting on it kills whatever now occupies
+ * those ids.
+ *
+ * Each of the five close entry points had its own copy of "expand, ask,
+ * proceed", and every copy proceeded from the stale snapshot. Folding the
+ * re-check into the gate is the only version where a new close path cannot
+ * forget it: there is no way to get a `true` out of this function without the
+ * second enumeration having agreed.
+ *
+ * `enumerate` MUST read live state on every call — passing a captured array
+ * defeats the entire mechanism.
+ *
+ * Note `prompted`. When nothing was asked, no time passed, and callers can skip
+ * their own post-await revalidation instead of paying for a re-derivation on
+ * the common idle-single close.
+ */
+export async function runCloseConfirmationGate(input: {
+  enumerate: () => CloseTargetSnapshot[]
+  ask: (
+    request: Extract<CloseConfirmationRequest, { required: true }>,
+  ) => Promise<boolean>
+}): Promise<CloseGateOutcome> {
+  const granted = input.enumerate()
+  const request = closeConfirmationFor(granted)
+  if (!request.required) return { ok: true, targets: granted, prompted: false }
+
+  const confirmed = await input.ask(request)
+  if (!confirmed) return { ok: false, reason: 'declined' }
+
+  // The user approved a specific LIST. Re-derive it and insist on the same ids.
+  // Refusing outright (rather than closing the intersection) is deliberate for
+  // single-pane closes: there is one target, so "it changed" means the thing
+  // they approved is not the thing that would die. Bulk flows that should
+  // salvage the unchanged majority use `narrowGrantToCurrent` instead.
+  const current = input.enumerate()
+  if (!grantStillMatches(granted, current)) return { ok: false, reason: 'changed' }
+  return { ok: true, targets: current, prompted: true }
+}
+
 /**
  * The subset of a grant that is still present, for a bulk flow that should
  * proceed with what survives rather than abandoning everything.
