@@ -11,14 +11,15 @@ import {
 } from '@renderer/components/ui/dialog'
 import { buildCommandRegistry } from '@renderer/features/command-palette/registry'
 import {
-  buildAgentIndexCommand,
-  isAgentIndexCommand,
-} from '@renderer/features/command-palette/lib/agentIndexCommand'
+  dispatchCommand,
+  dispatchResolvedRow,
+} from '@renderer/features/command-palette/executeCommand'
+import { buildAgentIndexCommand } from '@renderer/features/command-palette/lib/agentIndexCommand'
 import {
   buildHistoryScoreMap,
   loadRecentHistory,
-  recordCommandUse,
 } from '@renderer/features/command-palette/lib/recentCommandHistory'
+import { useGlobalToast } from '@renderer/ui/GlobalToast'
 import { rankCommands } from '@renderer/features/command-palette/lib/rankCommands'
 import {
   body,
@@ -179,6 +180,10 @@ function OpenCommandPalette({
   // are untouched, and the future provider-enumeration rewrite (#394 §7)
   // rebuilds command CONTENT, not this assembly.
   const workspace = useWorkspaceContext()
+  // Injected into the execution gateway so an async command failure is
+  // visible. Before the gateway, every call site was `void command.run(ctx)`
+  // and a rejected promise vanished with no user-facing signal at all.
+  const { showToast } = useGlobalToast()
   const onClose = useAppStore(state => state.closeCommandPalette)
   const settings = useAppStore(state => state.settings)
   const setSettings = useAppStore(state => state.setSettings)
@@ -840,23 +845,28 @@ function OpenCommandPalette({
 
   const executeCommand = useCallback(
     (command: ResolvedCommand) => {
-      // Record the use BEFORE running. This is the single funnel every
-      // command execution passes through (keyboard Enter and click both
-      // route here), so it's the one correct place to update history.
-      // recordCommandUse never throws, so it can't block command.run.
-      // Agent coordinates are transient workspace destinations, not reusable
-      // registry commands. Recording `agent-index:<sessionId>` would fill the
-      // recent-command history with launch-local ids that can never rank a
-      // future palette open, while crowding out real commands the user repeats.
-      if (!isAgentIndexCommand(command)) recordCommandUse(command.id)
+      // Every palette execution — keyboard Enter and click alike — funnels
+      // through the shared gateway. History is no longer recorded here: the
+      // gateway records it AFTER a successful run, so a command that turns out
+      // to be unavailable or that throws no longer climbs the user's ranking
+      // for failing. It also owns transient-row exclusion, single-flight, and
+      // surfacing async failures the old `void command.run(...)` swallowed.
+      const dispatch = () =>
+        void dispatchResolvedRow({
+          row: command,
+          source: 'palette',
+          ctx: commandContext,
+          reportError: message => showToast(message, 6000),
+        })
+
       if (command.keepPaletteOpen) {
-        void command.run(commandContext)
+        dispatch()
         return
       }
       onClose()
-      void command.run(commandContext)
+      dispatch()
     },
-    [commandContext, onClose],
+    [commandContext, onClose, showToast],
   )
 
   // Native menu → command dispatch (issue #148).
@@ -864,19 +874,27 @@ function OpenCommandPalette({
   // The macOS File menu lives in main, but its actions are renderer commands
   // that need the live CommandContext (workspace store + UI callbacks) to run.
   // Main can't run them; it only knows the command's string id. So main emits
-  // the id over `menu:command` and we resolve + run it here, where `commands`
-  // (the resolved registry) and `commandContext` are in scope.
+  // the id over `menu:command` and we resolve + run it here.
   //
-  // The lightweight outer bridge owns the always-on IPC listener. It mounts
-  // this implementation only long enough to resolve against the SAME registry
-  // the visible palette uses, so native and palette execution cannot drift.
+  // WHY this resolves through the gateway instead of `commands.find(...)`:
+  // `commands` is the PICKER-FILTERED registry. Looking an id up there meant a
+  // cosmetic `commandVisibilityOverrides[id] = false` — a "don't clutter my
+  // palette" preference — made the File-menu item resolve to undefined and do
+  // nothing. Silently. That is the plan's highest-severity finding: picker
+  // visibility was acting as an authorization boundary it explicitly must not
+  // be. The gateway resolves from the full catalog and applies contextual
+  // admission only, so hiding a command can no longer disable its menu item.
   useLayoutEffect(() => {
     if (!pendingMenuCommand) return
-    const command = commands.find(candidate => candidate.id === pendingMenuCommand.id)
-    if (command) void command.run(commandContext)
+    void dispatchCommand({
+      id: pendingMenuCommand.id,
+      source: 'native-menu',
+      ctx: commandContext,
+      reportError: message => showToast(message, 6000),
+    })
     onMenuCommandHandled()
     if (pendingMenuCommand.closeAfterRun) onClose()
-  }, [commandContext, commands, onClose, onMenuCommandHandled, pendingMenuCommand])
+  }, [commandContext, onClose, onMenuCommandHandled, pendingMenuCommand, showToast])
 
   const executeResume = useCallback(
     (session: SessionInfo) => {

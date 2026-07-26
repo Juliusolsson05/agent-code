@@ -1,4 +1,5 @@
 import { builtInCommandCatalog } from '@renderer/features/command-palette/catalog'
+import { declaredTier, isVisibleInPicker } from '@renderer/features/command-palette/pickerVisibility'
 import { commandAllowedByRenderedViewPolicy } from '@renderer/workspace/agentDisplayMode'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import type {
@@ -27,47 +28,95 @@ const commandDefs: readonly CommandDef[] = builtInCommandCatalog
  * point of issue #228: a command's module no longer has to remember to
  * re-implement "...and hide me in the wrong mode." It declares a
  * surface; the registry enforces it uniformly.
+ *
+ * WHY an exhaustive switch instead of the two ifs plus `return true` this
+ * replaces: the fallthrough silently classified any UNKNOWN surface as
+ * "available everywhere". That is the permissive direction — a new surface
+ * added to the union but forgotten here would not fail the build, it would
+ * quietly show its commands in every mode, which is precisely the #228 bug
+ * class the surface field was introduced to kill. With `assertNever`, adding
+ * a surface without deciding its mode policy is a compile error.
  */
 function surfaceAvailable(surface: CommandSurface, ctx: CommandContext): boolean {
-  if (surface === 'grid') return !ctx.flags.dispatchModeEnabled
-  if (surface === 'dispatch') return ctx.flags.dispatchModeEnabled
-  return true
+  switch (surface) {
+    case 'grid':
+      return !ctx.flags.dispatchModeEnabled
+    case 'dispatch':
+      return ctx.flags.dispatchModeEnabled
+    case 'app':
+    case 'session':
+    case 'editor':
+    case 'debug':
+      // Mode-independent by design. `editor` and `debug` carry their own
+      // `when` guards for overlay-open / feature-enabled checks; listing them
+      // explicitly rather than defaulting keeps that a stated decision.
+      return true
+    default:
+      return assertNever(surface)
+  }
 }
 
 /**
- * Picker-visibility gate, applied AFTER `surfaceAvailable` and the
- * command's own `when` (so a hidden command that wouldn't apply anyway
- * never reaches this check — order keeps the cheap mode/data filters
- * first and the policy decision last).
+ * Exhaustiveness guard. Returns `false` at runtime rather than throwing:
+ * a surface this build does not understand should hide the command, not take
+ * down the palette. The compile error is the real enforcement; this is the
+ * belt-and-braces behavior for a value that reached us across a boundary
+ * TypeScript could not check (a persisted blob, a generated command).
+ */
+function assertNever(value: never): false {
+  void value
+  return false
+}
+
+/**
+ * CONTEXTUAL ADMISSION: may this command run right now, given the workspace?
  *
- * CRUCIAL: this gate affects ONLY whether a command appears in the
- * command-picker list. It does NOT touch `command.run()` and is NOT
- * consulted by any keybinding or programmatic invocation path. A
- * command hidden here is still fully executable by its shortcut — issue
- * #249 is about list noise, not capability. Wiring keybindings to this
- * function would be a regression, not a feature.
+ * This is the predicate every invocation source must agree on — palette,
+ * native menu, keybinding, and programmatic dispatch alike. It deliberately
+ * combines exactly three things and excludes a fourth:
  *
- * Effective visibility resolution (most specific wins):
- *   1. `showHiddenCommands` → everything visible (global escape hatch).
- *   2. an explicit per-command override (`true`/`false`) → that value.
- *   3. otherwise the command's declared `pickerVisibility`, where the
- *      field's absence means `'default'`. Only `'default'` is shown;
- *      every other tier (`advanced`/`experimental`/`debug`) is hidden
- *      unless an override or the escape hatch says otherwise.
+ *   ✓ surface       — does the concept apply to this layout at all
+ *   ✓ when          — is the data it needs actually present
+ *   ✓ renderedView  — does the target's view mode support it
+ *   ✗ pickerVisibility — PRESENTATION ONLY. Never consulted here.
+ *
+ * That last exclusion is the whole point of splitting this out. The audit
+ * found the native menu resolving ids from the picker-filtered registry, which
+ * made a cosmetic "hide from my palette" preference disable a File-menu
+ * action. Admission and discoverability are now different functions with
+ * different inputs, so it is no longer possible to accidentally spend one as
+ * the other.
+ *
+ * NOTE this is necessary, not sufficient. It answers "is this invocation
+ * sensible now", evaluated at dispatch time against fresh state. It does NOT
+ * replace the checks a destructive command must make at its own mutation
+ * boundary — a target can still disappear between admission and commit. Those
+ * per-command revalidations are Phase 2/7 work.
+ */
+export function commandApplicable(command: CommandDef, ctx: CommandContext): boolean {
+  return (
+    surfaceAvailable(command.surface, ctx) &&
+    (command.when ? command.when(ctx) : true) &&
+    renderedViewAvailable(command, ctx)
+  )
+}
+
+/**
+ * Picker-visibility gate, applied AFTER admission (so a hidden command that
+ * wouldn't apply anyway never reaches this check — order keeps the cheap
+ * mode/data filters first and the policy decision last).
+ *
+ * The resolution rules themselves now live in `pickerVisibility.ts`, shared
+ * verbatim with the Settings screen. This wrapper only adapts the live
+ * `CommandContext` into that module's context-free policy struct: Settings has
+ * no context to offer, and giving it a synthetic one is how presentation logic
+ * starts depending on workspace state it should not read.
  */
 function commandVisible(command: CommandDef, ctx: CommandContext): boolean {
-  if (ctx.flags.showHiddenCommands) return true
-
-  // Optional-chain defensively: this gate runs inside the first render's
-  // useMemo, so if `commandVisibilityOverrides` is ever undefined (e.g. a
-  // persisted-settings shape that predates the field and slipped past
-  // coercion), a bare `[id]` index throws and takes the WHOLE app to a black
-  // screen — exactly the #249 launch regression. A missing override map must
-  // degrade to "no per-command override", never crash the registry build.
-  const override = ctx.flags.commandVisibilityOverrides?.[command.id]
-  if (typeof override === 'boolean') return override
-
-  return (command.pickerVisibility ?? 'default') === 'default'
+  return isVisibleInPicker(command, {
+    overrides: ctx.flags.commandVisibilityOverrides,
+    showHiddenCommands: ctx.flags.showHiddenCommands,
+  })
 }
 
 function renderedViewAvailable(command: CommandDef, ctx: CommandContext): boolean {
@@ -85,13 +134,7 @@ function renderedViewAvailable(command: CommandDef, ctx: CommandContext): boolea
 
 export function buildCommandRegistry(ctx: CommandContext): ResolvedCommand[] {
   return commandDefs
-    .filter(
-      command =>
-        surfaceAvailable(command.surface, ctx) &&
-        (command.when ? command.when(ctx) : true) &&
-        renderedViewAvailable(command, ctx) &&
-        commandVisible(command, ctx),
-    )
+    .filter(command => commandApplicable(command, ctx) && commandVisible(command, ctx))
     .map(command => {
       const description = command.description.trim()
       if (!description) {
@@ -142,6 +185,6 @@ export function listPickerCommandMeta(): PickerCommandMeta[] {
   return commandDefs.map(command => ({
     id: command.id,
     title: typeof command.title === 'function' ? command.id : command.title,
-    pickerVisibility: command.pickerVisibility ?? 'default',
+    pickerVisibility: declaredTier(command),
   }))
 }
