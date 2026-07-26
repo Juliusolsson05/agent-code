@@ -44,7 +44,7 @@ describe('close confirmation policy', () => {
     const result = closeConfirmationFor([target('a', true), target('b'), target('c', true)])
     expect(result.required).toBe(true)
     if (result.required) {
-      expect(result.reason).toBe('cascade')
+      expect(result.reason).toBe('multi')
       expect(result.summary).toContain('2 still working')
     }
   })

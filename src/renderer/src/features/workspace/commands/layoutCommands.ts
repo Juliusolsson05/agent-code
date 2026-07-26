@@ -10,7 +10,7 @@ export const layoutCommands: CommandDef[] = [
     // to `dispatch` would make it impossible to turn Dispatch on.
     surface: 'app',
     title: 'Dispatch Mode',
-    description: '**What it does:** Toggles the **Dispatch** command-center layout.\n\n**Use when:** You want to scan and command agents from a compact list.\n\n**Notes:** Shows the selected agent, the agent list, and an optional project terminal. Run again to return to the normal grid.',
+    description: '**What it does:** Toggles the **Dispatch** command-center layout.\n\n**Use when:** You want to scan and command agents from a compact list.\n\n**Notes:** Shows the selected agent alongside the agent list. Run again to return to the normal grid.',
     keywords: ['agent list', 'focused agent', 'command center', 'exit dispatch', 'grid mode', 'normal layout'],
     // An ENUM, not a boolean: Dispatch is off, project-scoped, or global. The
     // old shape rendered "Global"/"Project"/"Off" through the same chip as

@@ -25,5 +25,4 @@ export const CLAUDE_IDENTITY = {
    * that used to be a hand-written ternary in providerResumeCommand.
    */
   resumeCommand: (quotedSessionId: string) => `claude --resume ${quotedSessionId}`,
-
 } as const

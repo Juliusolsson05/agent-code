@@ -15,5 +15,4 @@ export const CODEX_IDENTITY = {
    *  split chords instead; additional providers without a key get
    *  palette-only split commands. */
   splitShortcutKey: 'C',
-
 } as const

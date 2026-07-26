@@ -47,7 +47,11 @@ export function CloseConfirmationDialog() {
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle>
-            {request?.reason === 'running' ? 'Close a working agent?' : 'Close these sessions?'}
+            {request?.reason === 'running'
+              ? 'Close a working agent?'
+              : request?.reason === 'irreversible'
+                ? 'Kill this session permanently?'
+                : 'Close these sessions?'}
           </DialogTitle>
           <DialogDescription>{request?.summary}</DialogDescription>
         </DialogHeader>

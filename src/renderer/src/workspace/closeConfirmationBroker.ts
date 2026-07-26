@@ -55,11 +55,20 @@ export function currentCloseConfirmation(): PendingCloseConfirmation | null {
 export function requestCloseConfirmation(
   request: PendingCloseConfirmation['request'],
 ): Promise<boolean> {
-  resolver?.(false)
-  pending = { request }
-  emit()
+  // Resolve the superseded request BEFORE clearing the slot, then install the
+  // new resolver BEFORE notifying listeners. The earlier order emitted while
+  // `resolver` still pointed at the already-resolved function, so a listener
+  // that resolved synchronously during emit() would have hung the new promise.
+  // Only a React setState listens today, which cannot — but the ordering should
+  // not depend on that.
+  const previous = resolver
+  resolver = null
+  previous?.(false)
+
   return new Promise<boolean>(resolve => {
     resolver = resolve
+    pending = { request }
+    emit()
   })
 }
 

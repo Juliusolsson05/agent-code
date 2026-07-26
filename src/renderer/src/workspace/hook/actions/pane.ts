@@ -1770,7 +1770,11 @@ export function usePaneActions(
       // even when the session is idle.
       const buriedConfirmed = await requestCloseConfirmation({
         required: true,
-        reason: 'running',
+        // Its OWN reason. Borrowing 'running' made the dialog title an idle
+        // buried session "Close a working agent?", contradicting both its body
+        // and the actual state — on the one close with no undo, where the
+        // dialog's credibility is the entire mechanism.
+        reason: 'irreversible',
         targets: [{
           sessionId: entry.sessionId,
           title: snapshot.sessions[entry.sessionId]?.title ?? entry.sessionId,

@@ -341,18 +341,6 @@ export type Settings = {
    *  DOM, semantic, and feed-debug snapshots, so they are interval-
    *  based rather than emitted on every render. */
   aggressiveDebugPersistence: boolean
-  /** When true, Dispatch Mode mounts a project terminal pane beside the
-   *  agent list. The terminal is auto-spawned on first entry to Dispatch
-   *  and lives as a normal leaf in the tile tree (so tmux recovery and
-   *  IPC routing keep working unchanged).
-   *
-   *  Off by default. The previous design kept a per-session
-   *  `dispatchMode.terminalVisible` flag in workspace state, which made
-   *  the "I turned it off but it came back" symptom hard to reason
-   *  about: fresh workspaces, new tabs, and any code path that re-
-   *  entered dispatch defaulted the flag to ON. Moving the gate to a
-  *  global setting collapses the toggle surface to one place the user
-  *  controls and removes the "terminal always mounted even when turned
   /** When on (default), clicking a prompt-suggestion chip immediately SENDS
    *  that suggestion as the next prompt; when off, clicking only prefills the
    *  composer draft so the user can edit before submitting. The chip is an

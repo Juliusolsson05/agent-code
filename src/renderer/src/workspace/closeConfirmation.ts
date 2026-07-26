@@ -37,7 +37,7 @@ export type CloseConfirmationRequest =
   | { required: false }
   | {
       required: true
-      reason: 'running' | 'cascade' | 'bulk'
+      reason: 'running' | 'multi' | 'irreversible'
       /** Every session this close will end, expanded. */
       targets: readonly CloseTargetSnapshot[]
       /** One-line summary naming the exact count. */
@@ -78,11 +78,14 @@ export function closeConfirmationFor(
   // linked children) or a bulk selection, the user must see the COUNT — the
   // audit's finding was that a close expanding from one row to four looked
   // identical to closing one.
-  const reason = targets.length > 1 && live.length > 0 ? 'cascade' : 'bulk'
+  // 'multi' regardless of liveness: the dialog distinguishes "one agent is
+  // working" from "several things die", and the live count is carried in the
+  // summary. The earlier split derived 'cascade' vs 'bulk' from liveness rather
+  // than from origin, so the value was both wrong and unread.
   const liveNote = live.length > 0 ? `, ${live.length} still working` : ''
   return {
     required: true,
-    reason,
+    reason: 'multi',
     targets,
     summary: `This closes ${targets.length} sessions${liveNote}.`,
   }

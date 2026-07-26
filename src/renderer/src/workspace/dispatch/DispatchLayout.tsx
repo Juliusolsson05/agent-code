@@ -12,7 +12,6 @@ import {
   buildDispatchGroups,
   buildPinnedDispatchRows,
   buildVisibleDispatchRows,
-  findTerminalSessionInTab,
   selectVisibleDispatchRow,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
 import {
@@ -73,9 +72,6 @@ function ClassicDispatchLayout({
   const activeTab = activeRow
     ? workspace.state.tabs.find(tab => tab.id === activeRow.tabId) ?? null
     : workspace.activeTab
-  const terminalSessionId = findTerminalSessionInTab(activeTab, workspace.state)
-  // Source of truth for whether the project terminal mounts is now the
-
   // Resizable list/active-agent split. The ratio is owned by uiShell
   // (see UiShellState.dispatchListRatio) so it survives mode toggles
   // without being re-derived from workspace state. We measure against

@@ -13,5 +13,4 @@ export const OPENCODE_IDENTITY = {
   resumeCommand: (quotedSessionId: string) => `opencode --session ${quotedSessionId}`,
   // No splitShortcutKey: chords are scarce; palette split commands
   // derive automatically (#394 phase 4).
-
 } as const

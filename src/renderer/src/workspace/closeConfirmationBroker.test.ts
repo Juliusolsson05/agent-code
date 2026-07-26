@@ -10,7 +10,7 @@ import {
 
 const request = {
   required: true as const,
-  reason: 'cascade' as const,
+  reason: 'multi' as const,
   targets: [
     { sessionId: 'a', title: 'A', live: false },
     { sessionId: 'b', title: 'B', live: true },
