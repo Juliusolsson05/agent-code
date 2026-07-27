@@ -26,7 +26,15 @@ export type ToolUseBlock = {
 export type ToolResultBlock = {
   type: 'tool_result'
   tool_use_id: string
-  content: string | Array<{ type: string; text?: string }>
+  // WHY the index signature: this was `Array<{ type: string; text?: string }>`,
+  // which was a lie the type system told. Real tool results carry image parts
+  // (`{type:'image', source:{type:'base64', media_type, data}}`) — 81 recorded
+  // occurrences in Claude transcripts alone, plus every Codex `exec` result that
+  // returns an image. Because the type admitted only `text`, no consumer could
+  // read an image part without casting, so every consumer instead flattened the
+  // whole array to a string and the payload was pretty-printed into the feed.
+  // See docs/decomposition/image-read-base64-dump.md.
+  content: string | Array<{ type: string; text?: string; [key: string]: unknown }>
   is_error?: boolean
   codex?: Record<string, unknown>
 }

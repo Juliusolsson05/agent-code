@@ -1,0 +1,44 @@
+{
+  "$fixture": {
+    "id": "codex-user-attachment-no-detail",
+    "censusRows": [
+      19
+    ],
+    "source": "/Users/juliusolsson/.codex/sessions/2026/03/04/rollout-2026-03-04T15-04-08-019cb929-c760-7891-8b63-7e357be4ca30.jsonl:2061",
+    "proves": "payload.content[] user attachment. Two-key variant with NO `detail` sibling — proves the recognizer must not require `detail`. Today this shape is dropped entirely by rollout.ts (the vanish bug).",
+    "substitutions": [
+      {
+        "path": "payload.content[1].image_url",
+        "originalChars": 265906,
+        "mime": "image/png"
+      }
+    ],
+    "totalOriginalPayloadChars": 265906
+  },
+  "entry": {
+    "timestamp": "2026-03-04T18:09:36.149Z",
+    "type": "response_item",
+    "payload": {
+      "type": "message",
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "<image name=[Image #1]>"
+        },
+        {
+          "type": "input_image",
+          "image_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+        },
+        {
+          "type": "input_text",
+          "text": "</image>"
+        },
+        {
+          "type": "input_text",
+          "text": "[Image #1] we have some weird bottom bar that is unused? we need to be better with stories UI and UX for map, give me a plan and figure out this god damn bottom bar."
+        }
+      ]
+    }
+  }
+}

@@ -481,6 +481,73 @@ and a rendering fix with no corpus guard is exactly the shape
 
 ---
 
+## Outcome (rev 3, implemented 2026-07-27)
+
+All seven stages shipped. `npm run typecheck` clean on both projects;
+**1,668 tests / 248 files green**, including the bundle and recording corpora with no
+untriaged divergence.
+
+| Stage | Artifact | Status |
+|---|---|---|
+| B | `scripts/extract-image-shapes.mts` → `evidence/image-reads/shape-census.md` | 27 shapes from 1,915 Claude + 1,581 Codex files |
+| C | `scripts/extract-image-fixtures.mts` → `testing/fixtures/image-reads/` | 7 fixtures, 32 KB (from 80.86 MB of observed payload) |
+| D | `protocols/media/imageAttachment.test.ts` | 17 tests, red before E existed |
+| E | `protocols/media/imageAttachment.ts` | `recognizeResultParts` / `recognizeImageNode` / `sidecarImageMetadata` |
+| F | `codex/renderer/transcript/{entries,rollout}.ts`, `ToolResultRow.tsx`, `toolResultContent.ts` | mapping + ordered painting |
+| G | `codex/renderer/transcript/imageResults.test.ts` | 11 tests incl. the escape guard |
+
+### What the census changed about the plan
+
+The 27 placements collapse to **four distinct node shapes**, which is why the recognizer is
+placement-agnostic rather than plane-keyed: `claude-native`, `codex-data-url`,
+`claude-sidecar`, and the sidecar's `{type:'image', file:{…}}` wrapper. Row 12 of the census
+is a **false positive kept deliberately** — Codex's `exec` tool JSON-Schema declares its
+output item type as `{image_url, name, path, text, type}`. It describes an image; it is not
+one. The recognizer's `base64`-payload guard rejects it, and there is a test pinning that.
+
+### Three things the process caught that a direct fix would not have
+
+1. **`tsc` caught a vanish bug I introduced.** Adding image blocks to Codex message content
+   made the synthetic-user filter (`rollout.ts:176`) call `isCodexSyntheticUserBlockText`
+   with `undefined` for an image-only message — which would have dropped it. Fixing the
+   dump bug by creating a vanish bug for users who attach one image and no text is precisely
+   the whack-a-mole the decomposition exists to prevent.
+2. **A pre-existing test caught an incomplete label.** `toolResultContent.test.ts` asserts
+   the text projection still names the MIME. My first label only read the nested
+   `source.media_type` spelling and returned `[image]` for the flat
+   `{type, mimeType, data}` envelope. The test was right and the code was wrong; the fix
+   was to accept both spellings, and to let a payload-free image envelope fall through to
+   the bounded projector so an unknown future schema stays inspectable.
+3. **The escape guard was decorative when first written, and is not now.** Deliberately
+   disabling the recognizer's `codex-data-url` branch turned the structural tests red while
+   the base64-escape assertion stayed green — because the committed fixtures carry a ~100
+   character 1×1 PNG, below the guard's 200-character threshold. The guard now re-inflates
+   each payload to its recorded original length in memory before projecting. Re-verified:
+   regressing the recognizer produces 6 failures naming `279883-char base64 run reached
+   feed text from …rollout-2026-07-23…:68`. **A guard that cannot fail is worse than no
+   guard, because it reads as coverage.**
+
+### Known gap, recorded and not fixed
+
+**Images lost across a provider switch are still lost.** Fixture
+`atp-codex-image-inside-claude-transcript.json` is the proof: the Claude-side
+`message.content` for that entry is a single text block reading *"Script completed / Wall
+time 0.0 seconds / Output:"* — the image survives **only** under `_atp.source`. The reverse
+direction (`atp-claude-image-inside-codex-rollout.json`) shows the Codex-side content
+reduced to `"[Image #4] [Image #5] [Image #6]"`.
+
+The recognizer already handles both — there are passing tests proving it recognizes those
+nodes — but nothing in the renderer currently *reads* `_atp.source`, and adding that is a
+new data path rather than a fix to this one. It belongs in `agent-transcript-parser`'s
+translation, not in the renderer. Fixtures and tests are in place for whoever takes it.
+
+Also unshipped: `sidecarImageMetadata` is implemented and tested but not yet wired to the
+painter, because `ToolResultRow` receives a block and not its entry, so `toolUseResult`
+would need plumbing through the ledger. The payload path does not depend on it — it only
+costs the dimensions/original-size caption on Claude image reads.
+
+---
+
 ## What I have deliberately not done
 
 No implementation code. No modification to `entries.ts:69`, which is a one-line change I

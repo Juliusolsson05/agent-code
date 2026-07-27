@@ -1,0 +1,99 @@
+{
+  "$fixture": {
+    "id": "atp-claude-image-inside-codex-rollout",
+    "censusRows": [
+      11,
+      14
+    ],
+    "source": "/Users/juliusolsson/.codex/sessions/2026/04/13/rollout-2026-04-13T19-21-14-f5795fee-ec3b-49c4-8432-1c8c7e6f0ebf.jsonl:30",
+    "proves": "Cross-provider carriage: a Claude-shaped image block living inside a Codex rollout under _atp.source, because the session was switched providers mid-task. Any fix scoped to \"Codex shapes in Codex files\" misses this.",
+    "substitutions": [
+      {
+        "path": "_atp.source.message.content[1].source.data",
+        "originalChars": 101316,
+        "mime": "image/png"
+      },
+      {
+        "path": "_atp.source.message.content[2].source.data",
+        "originalChars": 116664,
+        "mime": "image/png"
+      },
+      {
+        "path": "_atp.source.message.content[3].source.data",
+        "originalChars": 110044,
+        "mime": "image/png"
+      }
+    ],
+    "totalOriginalPayloadChars": 328024
+  },
+  "entry": {
+    "timestamp": "2026-04-09T06:18:16.307Z",
+    "type": "response_item",
+    "payload": {
+      "type": "message",
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": " [Image #4] [Image #5] [Image #6]"
+        }
+      ]
+    },
+    "_atp": {
+      "origin": "claude",
+      "source": {
+        "parentUuid": "b3a8d651-22dc-45c1-aa89-4375fe60d96d",
+        "isSidechain": false,
+        "promptId": "4c9cce70-eb84-41b6-87f8-20132d683f93",
+        "type": "user",
+        "message": {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": " [Image #4] [Image #5] [Image #6]"
+            },
+            {
+              "type": "image",
+              "source": {
+                "type": "base64",
+                "media_type": "image/png",
+                "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+              }
+            },
+            {
+              "type": "image",
+              "source": {
+                "type": "base64",
+                "media_type": "image/png",
+                "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+              }
+            },
+            {
+              "type": "image",
+              "source": {
+                "type": "base64",
+                "media_type": "image/png",
+                "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+              }
+            }
+          ]
+        },
+        "uuid": "3917b34c-52e7-4751-8577-a5ab0da67f20",
+        "timestamp": "2026-04-09T06:18:16.307Z",
+        "imagePasteIds": [
+          4,
+          5,
+          6
+        ],
+        "permissionMode": "bypassPermissions",
+        "userType": "external",
+        "entrypoint": "cli",
+        "cwd": "/Users/juliusolsson/Desktop/Development/senea",
+        "sessionId": "b21e03f6-f046-4cc4-8af7-548c23031432",
+        "version": "2.1.97",
+        "gitBranch": "main"
+      }
+    }
+  }
+}

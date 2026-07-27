@@ -1,5 +1,9 @@
-import type { Entry } from '@shared/types/transcript'
+import type { Entry, ToolResultBlock } from '@shared/types/transcript'
 import { asRecord } from '@shared/lib/asRecord'
+import {
+  recognizeResultParts,
+  type ResultPart,
+} from '@providers/shared/renderer/protocols/media/imageAttachment'
 
 // Codex rollout primitives + conversion helpers.
 //
@@ -66,11 +70,57 @@ export function codexOutputText(output: unknown): string {
       .map(item => {
         if (typeof item === 'string') return item
         const rec = item as Record<string, unknown>
-        return typeof rec.text === 'string' ? rec.text : JSON.stringify(item, null, 2)
+        if (typeof rec.text === 'string') return rec.text
+        // WHY this branch is no longer `JSON.stringify(item, null, 2)`:
+        // that line WAS the reported bug. An `exec` image part is
+        // `{type:'input_image', image_url:'data:image/jpeg;base64,…'}` with no
+        // `.text`, so it fell here and the entire data URL was pretty-printed
+        // into feed text with no bound at all — one recorded row carried
+        // 2,408,700 characters across three images.
+        //
+        // Callers that can render structure use codexResultContent() below and
+        // never reach this function with an image. This remains as the text
+        // projection for the paths that genuinely need a string, and it must
+        // stay bytes-free: `[image/jpeg]`, never a slice of the payload.
+        const image = recognizeResultParts([item])?.find(part => part.kind === 'image')
+        if (image?.kind === 'image') return `[${image.image.mimeType}]`
+        return JSON.stringify(item, null, 2)
       })
       .join('\n')
   }
   return JSON.stringify(output ?? '', null, 2)
+}
+
+/**
+ * Build tool-result content from a Codex `output` payload, preserving images.
+ *
+ * Returns a **string** when the output is plain text — the overwhelmingly common
+ * case, and byte-identical to what `codexOutputText` produced before, so every
+ * existing consumer and every corpus fixture is unaffected. Returns an ordered
+ * **block array** only when an image is actually present.
+ *
+ * WHY the neutral `image` block shape rather than a Codex-specific one: it is
+ * the same shape `codexImageGenerationEntry` already emits and that
+ * `ImageBlockRow` → `Base64MediaView` already paint, with the same bounded,
+ * disclosure-gated media policy. Adding a second image representation would mean
+ * two painters to keep in agreement.
+ */
+export function codexResultContent(output: unknown): ToolResultBlock['content'] {
+  const parts = recognizeResultParts(output)
+  if (!parts) return codexOutputText(output)
+  return parts.map(partToBlock)
+}
+
+function partToBlock(part: ResultPart): { type: string; text?: string; [key: string]: unknown } {
+  if (part.kind === 'text') return { type: 'text', text: part.text }
+  return {
+    type: 'image',
+    source: {
+      type: 'base64',
+      media_type: part.image.mimeType,
+      data: part.image.data,
+    },
+  }
 }
 
 /** Codex's `exec_command_end` wraps its output in a "Chunk ID: …\nOutput:\n<real output>"
@@ -197,7 +247,14 @@ export function codexToolResultEntry(
   uuid: string,
   timestamp: string | undefined,
   toolUseId: string,
-  content: string,
+  // WHY this accepts blocks as well as a string: Codex's `exec` returns a
+  // heterogeneous, INTERLEAVED array — text(path), image, text(path), image —
+  // where the text parts are the filenames labelling each image. A `string`
+  // parameter forced the caller to flatten before this point, which is what
+  // spliced megabytes of base64 into feed text and destroyed the pairing.
+  // Callers pass blocks only when an image is present; the plain-text path is
+  // unchanged. See docs/decomposition/image-read-base64-dump.md.
+  content: ToolResultBlock['content'],
   isError = false,
   codex?: Record<string, unknown>,
 ): Entry {

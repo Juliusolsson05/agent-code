@@ -1,0 +1,57 @@
+{
+  "$fixture": {
+    "id": "claude-user-attachment",
+    "censusRows": [
+      9
+    ],
+    "source": "/Users/juliusolsson/.claude/projects/-Users-juliusolsson-Desktop-Development-agent-code/17dcbb2f-b55e-46c0-ad4c-a939a6eeb08f.jsonl:253",
+    "proves": "Top-level message content image — the ONE placement that already renders correctly today. Present as a regression guard: the fix must not disturb it.",
+    "substitutions": [
+      {
+        "path": "message.content[1].source.data",
+        "originalChars": 39768,
+        "mime": "image/png"
+      }
+    ],
+    "totalOriginalPayloadChars": 39768
+  },
+  "entry": {
+    "parentUuid": "4a04bf64-8363-417c-ac4a-71631a7d96b3",
+    "isSidechain": false,
+    "promptId": "356a6d2e-7c03-46f1-955c-04041323cb19",
+    "type": "user",
+    "message": {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "verfiy all of this with a PTY session in a temp folder to confirm the failure case. , upon inspecting the PTY processs i can see something that is annoying as fuck nad that is that the prompt suggestions are shown with less opacity in the coposer, fooling our system in to that there is a claude propmts  ✻ Crunched for 3m 33s\n\n────────────────────────────────────────────────────────\n❯ yes do both in worktrees, fix and the corpus test\n────────────────────────────────────────────────────────\n  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← fo…   annyoing thing to solve for , experiemnt a lot and figure out a solution for this and tell me the plan whne we get thehre [Image #2]"
+        },
+        {
+          "type": "image",
+          "source": {
+            "type": "base64",
+            "media_type": "image/png",
+            "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+          }
+        }
+      ]
+    },
+    "uuid": "cbe24764-3b5e-4b87-8e4b-b55151883f4e",
+    "timestamp": "2026-07-19T10:54:11.542Z",
+    "imagePasteIds": [
+      2
+    ],
+    "permissionMode": "bypassPermissions",
+    "origin": {
+      "kind": "human"
+    },
+    "promptSource": "typed",
+    "userType": "external",
+    "entrypoint": "claude-desktop",
+    "cwd": "/Users/juliusolsson/Desktop/Development/agent-code",
+    "sessionId": "17dcbb2f-b55e-46c0-ad4c-a939a6eeb08f",
+    "version": "2.1.215",
+    "gitBranch": "main"
+  }
+}

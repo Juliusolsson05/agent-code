@@ -1,6 +1,8 @@
 import { memo, useMemo } from 'react'
 
-import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
+import type { ContentBlock, ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
+
+import { ImageBlockRow } from '@renderer/features/feed/ui/rows/ImageBlockRow'
 
 import { JsonResultSlab } from '@providers/shared/renderer/rows/JsonResultSlab'
 import { tryExtractJson } from '@providers/shared/renderer/rows/jsonToolPresentation'
@@ -82,6 +84,63 @@ const GenericToolResultPresentation = memo(function GenericToolResultPresentatio
  * a more specific grammar. It may format JSON, MCP content, structured text,
  * or bounded plain output, but it must never branch on provider tool names.
  */
+/**
+ * True when the mapping boundary already decided this result contains media.
+ *
+ * WHY this is a structural check and not a call to `recognizeImageNode`: the
+ * recognizer has exactly one consumer — the transcript-mapping boundary — and
+ * feed components are on its forbidden-importer list
+ * (docs/decomposition/image-read-base64-dump.md). By the time content reaches a
+ * painter it has already been normalized to the neutral `image` block, so
+ * dispatching on the discriminator here is *reading* an ownership decision
+ * rather than making a second one. Re-recognizing in the painter is how the
+ * distributed-ownership bug class grows back.
+ */
+function hasMediaParts(
+  content: ToolResultBlock['content'],
+): content is Array<{ type: string; text?: string; [key: string]: unknown }> {
+  return Array.isArray(content) && content.some(part => part?.type === 'image')
+}
+
+/**
+ * Render a heterogeneous result as ordered parts.
+ *
+ * The ordering is the whole point. Codex `exec` returns text(path), image,
+ * text(path), image — the text parts are the filenames labelling each image, so
+ * rendering images in a separate group below the text (or flattening to a
+ * string) leaves orphaned paths above unlabelled pictures.
+ */
+const ToolResultParts = memo(function ToolResultParts({
+  parts,
+  isError,
+}: {
+  parts: Array<{ type: string; text?: string; [key: string]: unknown }>
+  isError: boolean
+}) {
+  return (
+    <div className="min-w-0 space-y-1">
+      {parts.map((part, index) => {
+        if (part.type === 'image') {
+          return (
+            <ImageBlockRow
+              // Index keys are correct here and only here: a committed tool
+              // result is immutable once written, so a part can never be
+              // reordered, inserted, or removed within it. There is no stabler
+              // identity available — the wire parts carry no id.
+              key={`image-${index}`}
+              block={part as ContentBlock}
+              role="assistant"
+            />
+          )
+        }
+        const text = typeof part.text === 'string' ? part.text : ''
+        if (!text.trim()) return null
+        return <TruncatedOutputRow key={`text-${index}`} content={text} isError={isError} />
+      })}
+    </div>
+  )
+})
+
 export const ToolResultRow = memo(function ToolResultRow({
   block,
   sourceTool,
@@ -89,6 +148,14 @@ export const ToolResultRow = memo(function ToolResultRow({
   block: ToolResultBlock
   sourceTool?: ToolUseBlock | null
 }) {
+  // Checked before flattening. `toolResultContentText` now projects an image to
+  // a bytes-free `[image/jpeg]` label rather than 512 characters of base64, so
+  // reaching the text path is no longer a correctness bug — but it would still
+  // throw away the picture the user asked to see.
+  if (hasMediaParts(block.content)) {
+    return <ToolResultParts parts={block.content} isError={block.is_error === true} />
+  }
+
   const text = toolResultContentText(block.content)
 
   const isError = block.is_error === true

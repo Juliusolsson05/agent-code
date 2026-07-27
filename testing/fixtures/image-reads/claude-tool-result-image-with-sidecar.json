@@ -1,0 +1,74 @@
+{
+  "$fixture": {
+    "id": "claude-tool-result-image-with-sidecar",
+    "censusRows": [
+      2,
+      5,
+      7
+    ],
+    "source": "/Users/juliusolsson/.claude/projects/-Users-juliusolsson-Desktop-Development-agent-code/606c672f-83dc-4e9d-a577-242273c3e508.jsonl:762",
+    "proves": "The dual-source case in one record: the same image appears BOTH as a tool_result content block (source.media_type/source.data) AND in the toolUseResult.file sidecar (base64/dimensions/originalSize). This is the fixture that pins which source wins and where metadata comes from.",
+    "substitutions": [
+      {
+        "path": "message.content[0].content[0].source.data",
+        "originalChars": 585712,
+        "mime": "image/jpeg"
+      },
+      {
+        "path": "toolUseResult.file.base64",
+        "originalChars": 585712,
+        "mime": "image/jpeg"
+      }
+    ],
+    "totalOriginalPayloadChars": 1171424
+  },
+  "entry": {
+    "parentUuid": "ca410b48-516f-4f34-ada0-6baf00a06bf4",
+    "isSidechain": false,
+    "promptId": "ba4a5abe-ccc6-439f-a0e9-73dac3399dc2",
+    "type": "user",
+    "message": {
+      "role": "user",
+      "content": [
+        {
+          "tool_use_id": "toolu_014qMkp1sJ2pruKAzUwqUdXx",
+          "type": "tool_result",
+          "content": [
+            {
+              "type": "image",
+              "source": {
+                "type": "base64",
+                "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+                "media_type": "image/jpeg"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "uuid": "e094a71c-cd65-4272-86a1-494a3ec1d1a9",
+    "timestamp": "2026-07-03T08:19:36.737Z",
+    "toolUseResult": {
+      "type": "image",
+      "file": {
+        "base64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+        "type": "image/jpeg",
+        "originalSize": 874018,
+        "dimensions": {
+          "originalWidth": 2940,
+          "originalHeight": 1858,
+          "displayWidth": 2000,
+          "displayHeight": 1264
+        }
+      }
+    },
+    "sourceToolAssistantUUID": "ca410b48-516f-4f34-ada0-6baf00a06bf4",
+    "session_id": "606c672f-83dc-4e9d-a577-242273c3e508",
+    "userType": "external",
+    "entrypoint": "claude-desktop",
+    "cwd": "/Users/juliusolsson/Desktop/Development/agent-code/.worktrees/remove-readme-ai-slop",
+    "sessionId": "606c672f-83dc-4e9d-a577-242273c3e508",
+    "version": "2.1.199",
+    "gitBranch": "docs/remove-readme-ai-slop"
+  }
+}
