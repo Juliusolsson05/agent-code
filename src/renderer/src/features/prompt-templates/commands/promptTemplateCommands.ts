@@ -20,7 +20,16 @@ export const promptTemplateCommands: CommandDef[] = [
     description: '**What it does:** Opens the **prompt template manager** for creating, editing, duplicating, and deleting reusable prompts.\n\n**Use when:** You want to organize or author custom templates.\n\n**Notes:** Built-ins stay read-only; duplicate them to customize.',
     keywords: ['prompt', 'template', 'manage', 'custom', 'variables', 'snippets'],
     keepPaletteOpen: true,
-    run: ({ ui }) => ui.enterManagePromptTemplateMode(),
+    run: ({ ui, flags }) => {
+      // Already showing this mode? Dismiss. A mode-entering command whose
+      // second press re-enters the mode it is already in reads as a dead key,
+      // which is the same complaint that started this whole change.
+      if (flags.paletteMode === 'manage-prompt-template') {
+        ui.closePalette()
+        return
+      }
+      ui.enterManagePromptTemplateMode()
+    },
   },
   {
     id: 'prompt-template',
@@ -32,7 +41,16 @@ export const promptTemplateCommands: CommandDef[] = [
     keepPaletteOpen: true,
     renderedViewPolicy: { kind: 'opens-rendered-feed' },
     when: ({ workspace }) => focusedAgentSessionId(workspace) !== null,
-    run: ({ ui }) => ui.enterPromptTemplateMode(),
+    run: ({ ui, flags }) => {
+      // Already showing this mode? Dismiss. A mode-entering command whose
+      // second press re-enters the mode it is already in reads as a dead key,
+      // which is the same complaint that started this whole change.
+      if (flags.paletteMode === 'prompt-template') {
+        ui.closePalette()
+        return
+      }
+      ui.enterPromptTemplateMode()
+    },
   },
   {
     id: 'save-composer-as-prompt-template',
@@ -49,7 +67,14 @@ export const promptTemplateCommands: CommandDef[] = [
       if (!sessionId) return false
       return workspace.getRuntime(sessionId).draftInput.trim().length > 0
     },
-    run: ({ workspace, ui }) => {
+    run: ({ workspace, ui, flags }) => {
+      // Already showing this mode? Dismiss. A mode-entering command whose
+      // second press re-enters the mode it is already in reads as a dead key,
+      // which is the same complaint that started this whole change.
+      if (flags.paletteMode === 'save-prompt-template') {
+        ui.closePalette()
+        return
+      }
       const sessionId = focusedAgentSessionId(workspace)
       if (!sessionId) return
       ui.enterSavePromptTemplateMode()

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
+import { PALETTE_MODE_COMMANDS, SURFACE_OWNER_FLAGS, commandOwnsOpenSurface } from '@renderer/features/command-palette/surfaceOwnership'
 import { builtInCommandCatalog } from '@renderer/features/command-palette/catalog'
 import { resolveEffectiveKeybindings } from '@renderer/features/command-keybindings/resolve'
 
@@ -386,5 +387,129 @@ describe('recorded authority drift (pre-migration history)', () => {
     // command), the undisclosed ⌥W close, and the four arrow aliases.
     const undisclosed = [...effectiveChords].filter(c => !declaredChords.has(c)).sort()
     expect(undisclosed).toEqual(['⌘⇧E', '⌘⇧P', '⌥W', '⌥←', '⌥↑', '⌥→', '⌥↓'])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Surface ownership — the narrow exemption to the interaction-owner gate.
+//
+// `useKeybinds` bails out of the whole key handler while any Radix dialog is
+// mounted, which is correct (⌘W must not close a pane behind a confirmation)
+// but means a dialog-based surface makes its own chord unreachable. That is the
+// entire reason ⌘⇧U could open Usage and never dismiss it, while ⌥R Reader
+// round-tripped fine — Reader renders inline and stamps no owner marker.
+//
+// The exemption lets a chord cross the gate when it maps to the command that
+// owns the surface currently in front of the user. These cases pin the two
+// properties that keep it narrow: the table names real commands, and the
+// predicate only ever answers for those.
+// ---------------------------------------------------------------------------
+describe('surface ownership', () => {
+  const catalogIds = new Set(builtInCommandCatalog.map(command => command.id))
+
+  it('names only commands that exist', () => {
+    for (const commandId of Object.keys(PALETTE_MODE_COMMANDS)) {
+      expect(catalogIds.has(commandId)).toBe(true)
+    }
+    // A stale id here is worse than useless: the chord silently stops being
+    // exempt and the surface becomes undismissable again, with nothing failing.
+    for (const commandId of Object.keys(SURFACE_OWNER_FLAGS)) {
+      expect(catalogIds.has(commandId)).toBe(true)
+    }
+  })
+
+  it('reports ownership only when that command’s own surface is open', () => {
+    expect(commandOwnsOpenSurface('usage.open', { usageModalOpen: true } as never)).toBe(true)
+    expect(commandOwnsOpenSurface('usage.open', { usageModalOpen: false } as never)).toBe(false)
+  })
+
+  it('refuses every command not in the table', () => {
+    // The gate's default is still "bail". Only a listed command may cross it,
+    // so an unrelated chord cannot reach a workspace action while a modal owns
+    // the screen — which is the bug the gate exists to prevent.
+    expect(commandOwnsOpenSurface('close-pane', { usageModalOpen: true } as never)).toBe(false)
+    expect(commandOwnsOpenSurface('split-vertical', { usageModalOpen: true } as never)).toBe(false)
+  })
+
+  it('lets a palette-mode command through whenever the palette is open', () => {
+    // Wider than strict dismissal on purpose: pressing ⌥P while the palette
+    // sits in Resume mode should SWITCH to prompt templates, not be swallowed.
+    // The command compares flags.paletteMode and decides; the table only
+    // decides whether it gets the chance.
+    expect(commandOwnsOpenSurface('prompt-template', { commandPaletteOpen: true } as never)).toBe(true)
+    expect(commandOwnsOpenSurface('prompt-template', { commandPaletteOpen: false } as never)).toBe(false)
+  })
+
+  it('gives every flag-backed command a state badge that reports its surface', () => {
+    // The two halves of the round-trip have to agree. The table lets the chord
+    // CROSS the interaction gate; the command's own state and run are what
+    // dismiss once it does. A command listed here without a `getState` is one
+    // whose second press reaches a `run` that may still only open — the chord
+    // would look like it does nothing, which is exactly the reported bug.
+    // Scoped to SURFACE_OWNER_FLAGS. Palette-mode commands are deliberately
+    // excluded: they dismiss by comparing `flags.paletteMode`, and an
+    // Open/Closed badge on Resume Session would report a property of the
+    // palette rather than of the command. Merging the two tables made this
+    // assertion demand exactly that, which is how the split was found.
+    for (const commandId of Object.keys(SURFACE_OWNER_FLAGS)) {
+      const command = builtInCommandCatalog.find(candidate => candidate.id === commandId)
+      expect(command?.getState, `${commandId} has no getState`).toBeDefined()
+    }
+  })
+
+  it('actually calls the matching close action when its surface is open', () => {
+    // The assertion that was missing, and the one a copy-paste defeats: a
+    // `getState` proving a command CAN see its surface says nothing about the
+    // `run` closing the RIGHT one. Driving each run with its own flag true and
+    // asserting the matching `close*` fired — and that no other one did — is
+    // what pins the pairing.
+    for (const [commandId, flag] of Object.entries(SURFACE_OWNER_FLAGS)) {
+      const command = builtInCommandCatalog.find(candidate => candidate.id === commandId)
+      if (!command) throw new Error(`${commandId} is not in the catalog`)
+
+      const calls: string[] = []
+      const ui = new Proxy({}, {
+        get: (_target, prop: string) => () => calls.push(prop),
+      })
+      command.run({
+        ui,
+        flags: { [flag]: true },
+        workspace: { state: { sessions: {}, tabs: [], activeTabId: '' } },
+      } as never)
+
+      // Two legitimate shapes, and the distinction is real rather than
+      // cosmetic: most of these surfaces have separate open/close actions and
+      // the command must branch, but Remote Panel has a genuine `toggle*` that
+      // is already correct in both directions. Both dismiss when the flag is
+      // true; only "opened anyway" is a defect.
+      const dismissed = calls.filter(name =>
+        (name.startsWith('close') && name !== 'closePalette') || name.startsWith('toggle'),
+      )
+      expect(dismissed, `${commandId} (flag ${flag}) did not dismiss`).toHaveLength(1)
+      expect(
+        calls.some(name => name.startsWith('open')),
+        `${commandId} opened its surface while it was already open`,
+      ).toBe(false)
+    }
+  })
+
+  it('excludes surfaces where a second press must not mean dismiss', () => {
+    // Recorded as a decision, not an omission. Per-target pickers should
+    // RE-TARGET on a second press; Save Debug Logs and Attach Recording Note
+    // each write something on the way in, so a second press legitimately writes
+    // a second one; Settings is a destination, not a peek.
+    for (const excluded of [
+      'view-prompts',
+      'rewind-to-prompt',
+      'set-agent-view-mode',
+      'dispatch.color-flag.set',
+      'save-debug-logs',
+      'attach-recording-note',
+      'open-settings',
+      'open-command-palette',
+    ]) {
+      expect(Object.keys(SURFACE_OWNER_FLAGS)).not.toContain(excluded)
+      expect(Object.keys(PALETTE_MODE_COMMANDS)).not.toContain(excluded)
+    }
   })
 })

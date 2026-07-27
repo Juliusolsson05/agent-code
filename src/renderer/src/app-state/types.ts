@@ -1,3 +1,4 @@
+import type { PaletteMode } from '@renderer/features/command-palette/paletteMode'
 import type { Settings } from '@renderer/app-state/settings/types'
 import type {
   DispatchAttachIntent,
@@ -38,7 +39,8 @@ export type UiShellSlice = UiShellState & {
   clearCommandInvocation: () => void
   openCommandPalette: () => void
   closeCommandPalette: () => void
-  toggleCommandPalette: () => void
+  /** Enter a palette sub-mode and make the palette visible. */
+  setPaletteMode: (mode: PaletteMode) => void
   openPathPicker: (defaultValue?: string) => void
   closePathPicker: () => void
   setPathPickerDefault: (value: string) => void

@@ -1,3 +1,4 @@
+import type { PaletteMode } from '@renderer/features/command-palette/paletteMode'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { AgentViewMode, UsageHeaderLevel } from '@renderer/app-state/settings/types'
 import type { RenderedViewPolicy } from '@renderer/workspace/agentDisplayMode'
@@ -186,7 +187,6 @@ export type CommandContext = {
   workspace: Workspace
   ui: {
     openNewTabPicker: () => void
-    openResumePicker: (defaultCwd: string) => void
     openTileTabs: () => void
     openReorderTabs: () => void
     openSettings: () => void
@@ -215,12 +215,15 @@ export type CommandContext = {
     /** Flip workspace-wide feed auto-follow (every visible agent pane). */
     toggleTailAllMode: () => void
     toggleDevDebugPanel: () => void
-    openAgentStatusPanel: () => void
-    closeAgentStatusPanel: () => void
     toggleAgentStatusPanel: () => void
     togglePerformancePanel: () => void
     toggleRemotePanel: () => void
     toggleCaffeinate: () => Promise<void> | void
+    /** Idempotent open. Prefer this over `toggleGlobalEditor` whenever the
+     *  intent is "make sure the editor is up" — a toggle driven by a
+     *  snapshotted flag closes the editor when the snapshot is stale. */
+    openGlobalEditor: () => void
+    closeGlobalEditor: () => void
     toggleGlobalEditor: () => void
     /** Toggle visibility of the Global Editor's in-editor file tree.
      *  Only meaningful when the overlay is open — the command's
@@ -247,11 +250,6 @@ export type CommandContext = {
      *  transient flag — the draft selection state is owned by the
      *  modal itself, not the store. */
     openPinAgents: () => void
-    toggleStatusMode: () => void
-    toggleWorktreeBadges: () => void
-    toggleUsageHeader: () => void
-    cycleUsageHeaderLevel: () => void
-    setDangerousAgentsEnabled: (enabled: boolean) => void
     setAggressiveDebugPersistence: (enabled: boolean) => void
     enterResumeMode: () => void
     enterBuriedMode: () => void
@@ -262,6 +260,22 @@ export type CommandContext = {
     enterAiWorkspaceOpenMode: () => void
     enterAiWorkspaceCreateMode: () => void
     enterAiWorkspaceClearMode: () => void
+    /**
+     * Dismissal for the surfaces above.
+     *
+     * These actions all existed on the store already; they simply were not
+     * reachable from a command, so every one of those surfaces was open-only.
+     * `closePalette` and nothing else used to be here.
+     */
+    closeUsageModal: () => void
+    closeKeyboardShortcuts: () => void
+    closeAgentActivity: () => void
+    closeCloseOldAgents: () => void
+    closeBulkProviderSwitch: () => void
+    closePromptSearch: () => void
+    closeReorderTabs: () => void
+    closePinAgents: () => void
+    closePathPicker: () => void
     closePalette: () => void
   }
   flags: {
@@ -271,6 +285,51 @@ export type CommandContext = {
     usageHeaderLevel: UsageHeaderLevel
     dangerousAgentsEnabled: boolean
     aggressiveDebugPersistenceEnabled: boolean
+    /**
+     * Visibility of the surfaces a command can dismiss.
+     *
+     * These exist so a command can ask "am I already open?" and branch, which
+     * is what makes a chord round-trip instead of only ever opening. Without
+     * them a command literally cannot tell — which is why every one of these
+     * surfaces used to be open-only.
+     *
+     * Kept as plain booleans deliberately. The per-TARGET surfaces (View
+     * Prompts, Rewind, Agent View, Colour Flag) are NOT here: their store field
+     * is a `SessionId | null`, and collapsing that to a boolean would lose the
+     * case that matters — pressing the chord while the surface is open for a
+     * DIFFERENT session must re-target, not close.
+     */
+    /** The palette is on screen. */
+    commandPaletteOpen: boolean
+    /**
+     * The palette's active sub-mode.
+     *
+     * Exposed so a mode-entering command can tell "open me" from "I am already
+     * the thing on screen" and dismiss instead. Without it those nine commands
+     * could only ever re-enter the mode they were already in, which reads as a
+     * dead key.
+     */
+    paletteMode: PaletteMode
+    /** The Usage modal is on screen. */
+    usageModalOpen: boolean
+    /** The Keyboard Shortcuts reference is on screen. */
+    keyboardShortcutsOpen: boolean
+    /** The Agent Activity modal is on screen. */
+    agentActivityOpen: boolean
+    /** The Close Old Agents modal is on screen. */
+    closeOldAgentsOpen: boolean
+    /** The Switch Agents modal is on screen. */
+    bulkProviderSwitchOpen: boolean
+    /** The Prompt Search modal is on screen. */
+    promptSearchOpen: boolean
+    /** The Remote Control panel is on screen. */
+    remotePanelOpen: boolean
+    /** The Reorder Tabs modal is on screen. */
+    reorderTabsOpen: boolean
+    /** The Pin Agents modal is on screen. */
+    pinAgentsOpen: boolean
+    /** The path picker (New Tab / Resume) is on screen. */
+    pathPickerOpen: boolean
     gitBarOpen: boolean
     worktreesBarOpen: boolean
     debugPanelOpen: boolean

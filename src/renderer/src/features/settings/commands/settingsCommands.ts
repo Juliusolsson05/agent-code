@@ -1,5 +1,5 @@
 import type { CommandDef } from '@renderer/features/command-palette/types'
-import { panel, toggle, value } from '@renderer/features/command-palette/commandState'
+import { panel, toggle } from '@renderer/features/command-palette/commandState'
 
 export const settingsCommands: CommandDef[] = [
   {
@@ -43,7 +43,14 @@ export const settingsCommands: CommandDef[] = [
       'reference',
       'help',
     ],
-    run: ({ ui }) => ui.openKeyboardShortcuts(),
+    getState: ({ flags }) => panel(flags.keyboardShortcutsOpen),
+    run: ({ ui, flags }) => {
+      if (flags.keyboardShortcutsOpen) {
+        ui.closeKeyboardShortcuts()
+        return
+      }
+      ui.openKeyboardShortcuts()
+    },
   },
   {
     // Persistent Aggressive Debug Logs — developer-mode switch for

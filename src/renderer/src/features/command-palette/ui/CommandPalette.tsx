@@ -15,7 +15,6 @@ import {
   dispatchCommand,
   dispatchResolvedRow,
 } from '@renderer/features/command-palette/executeCommand'
-import { PALETTE_SELF_EXCLUDED_COMMAND_IDS } from '@renderer/features/command-palette/commands/paletteCommands'
 import { buildAgentIndexCommand } from '@renderer/features/command-palette/lib/agentIndexCommand'
 import {
   buildHistoryScoreMap,
@@ -65,6 +64,8 @@ import type {
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import { resolveAgentPaneLabel } from '@renderer/workspace/tile-tree/paneLabels'
 import { useWorkspaceContext } from '@renderer/workspace/WorkspaceContext'
+import type { PaletteMode } from '@renderer/features/command-palette/paletteMode'
+import { commandOwnsOpenSurface } from '@renderer/features/command-palette/surfaceOwnership'
 import { useAppStore } from '@renderer/app-state/hooks'
 import { useCaffeinateStore } from '@renderer/features/caffeinate/store'
 import { useDevDebugConfig } from '@renderer/features/debug/devDebugConfig'
@@ -97,20 +98,6 @@ type BuriedPaneInfo = {
   note?: string
   buriedAt: number
 }
-
-type PaletteMode =
-  | 'commands'
-  | 'resume'
-  | 'buried'
-  | 'kill-buried'
-  | 'prompt-template'
-  | 'manage-prompt-template'
-  | 'fill-prompt-template'
-  | 'save-prompt-template'
-  | 'edit-prompt-template'
-  | 'ai-workspace-open'
-  | 'ai-workspace-create'
-  | 'ai-workspace-clear'
 
 type PromptTemplateFillState = {
   template: PromptTemplate
@@ -180,7 +167,17 @@ export function CommandPalette() {
         // correctly blocked. When the command palette itself is open it also owns
         // this marker, so menu commands wait instead of competing with its current
         // search/navigation turn.
-        if (hasAppInteractionOwner()) return
+        // ONE exemption, matching the keybinding router: the command that owns
+        // the surface currently holding the interaction may dismiss it. Without
+        // this, File → New Tab twice left the path picker up, and the rule this
+        // change exists to establish — "invoking again dismisses it, from every
+        // invocation source" — was true for chords and false for the menu.
+        if (
+          hasAppInteractionOwner()
+          && !commandOwnsOpenSurface(commandId, useAppStore.getState())
+        ) {
+          return
+        }
         // WHY this temporarily mounts the open implementation: command
         // definitions need live workspace actions, but keeping that registry
         // subscribed while the palette is closed made every session delta
@@ -239,7 +236,7 @@ function OpenCommandPalette({
   const onClose = useAppStore(state => state.closeCommandPalette)
   const settings = useAppStore(state => state.settings)
   const setSettings = useAppStore(state => state.setSettings)
-  const { onNewTabRequest, onResumeRequest } = usePathPickerRequests()
+  const { onNewTabRequest } = usePathPickerRequests()
 
   const openTileTabsModal = useAppStore(state => state.openTileTabsModal)
   const onTileTabsRequest = useCallback(() => {
@@ -259,6 +256,15 @@ function OpenCommandPalette({
   const openRewindPrompt = useAppStore(state => state.openRewindPrompt)
   const openAgentViewModePicker = useAppStore(state => state.openAgentViewModePicker)
   const openColorFlagPicker = useAppStore(state => state.openColorFlagPicker)
+  const closeUsageModal = useAppStore(state => state.closeUsageModal)
+  const closeKeyboardShortcuts = useAppStore(state => state.closeKeyboardShortcuts)
+  const closeAgentActivity = useAppStore(state => state.closeAgentActivity)
+  const closeCloseOldAgents = useAppStore(state => state.closeCloseOldAgents)
+  const closeBulkProviderSwitch = useAppStore(state => state.closeBulkProviderSwitch)
+  const closePromptSearch = useAppStore(state => state.closePromptSearch)
+  const closeReorderTabs = useAppStore(state => state.closeReorderTabs)
+  const closePinAgents = useAppStore(state => state.closePinAgents)
+  const closePathPicker = useAppStore(state => state.closePathPicker)
   const openUsageModal = useAppStore(state => state.openUsageModal)
   const toggleGitBar = useAppStore(state => state.toggleGitBar)
   const toggleWorktreesBar = useAppStore(state => state.toggleWorktreesBar)
@@ -269,20 +275,16 @@ function OpenCommandPalette({
   const toggleRenderingDebugMode = useAppStore(state => state.toggleRenderingDebugMode)
   const toggleTailAllMode = useAppStore(state => state.toggleTailAllMode)
   const toggleDevDebugPanel = useAppStore(state => state.toggleDevDebugPanel)
-  const openAgentStatusPanel = useAppStore(state => state.openAgentStatusPanel)
-  const closeAgentStatusPanel = useAppStore(state => state.closeAgentStatusPanel)
   const toggleAgentStatusPanel = useAppStore(state => state.toggleAgentStatusPanel)
   const togglePerformancePanel = useAppStore(state => state.togglePerformancePanel)
   const toggleRemotePanel = useAppStore(state => state.toggleRemotePanel)
+  const openGlobalEditorAction = useAppStore(state => state.openGlobalEditor)
+  const closeGlobalEditorAction = useAppStore(state => state.closeGlobalEditor)
   const toggleGlobalEditor = useAppStore(state => state.toggleGlobalEditor)
   const openTiledDispatchPrompt = useAppStore(state => state.openTiledDispatchPrompt)
   const openDispatchAttach = useAppStore(state => state.openDispatchAttach)
   const openLinkedAgent = useAppStore(state => state.openLinkedAgent)
   const openPinAgents = useAppStore(state => state.openPinAgents)
-  const toggleStatusMode = useAppStore(state => state.toggleStatusMode)
-  const toggleWorktreeBadges = useAppStore(state => state.toggleWorktreeBadges)
-  const toggleUsageHeader = useAppStore(state => state.toggleUsageHeader)
-  const cycleUsageHeaderLevel = useAppStore(state => state.cycleUsageHeaderLevel)
   const toggleCaffeinate = useCaffeinateStore(state => state.toggle)
   const caffeinateStatus = useCaffeinateStore(state => state.status)
   const devDebugEnabled = useDevDebugConfig(state => state.enabled)
@@ -301,10 +303,6 @@ function OpenCommandPalette({
       workspace.setDispatchScope(workspace.dispatchMode?.scope === 'global' ? 'project' : 'global'),
     [workspace],
   )
-  const setDangerousAgentsEnabled = useCallback(
-    (enabled: boolean) => setSettings({ dangerousAgentsEnabled: enabled }),
-    [setSettings],
-  )
   const setAggressiveDebugPersistence = useCallback(
     (enabled: boolean) => setSettings({ aggressiveDebugPersistence: enabled }),
     [setSettings],
@@ -321,6 +319,17 @@ function OpenCommandPalette({
   const usageHeaderLevel = settings.usageHeaderLevel
   const dangerousAgentsEnabled = settings.dangerousAgentsEnabled
   const aggressiveDebugPersistenceEnabled = settings.aggressiveDebugPersistence
+  const commandPaletteOpenFlag = useAppStore(state => state.commandPaletteOpen)
+  const usageModalOpen = useAppStore(state => state.usageModalOpen)
+  const keyboardShortcutsOpen = useAppStore(state => state.keyboardShortcutsOpen)
+  const agentActivityOpen = useAppStore(state => state.agentActivityOpen)
+  const closeOldAgentsOpen = useAppStore(state => state.closeOldAgentsOpen)
+  const bulkProviderSwitchOpen = useAppStore(state => state.bulkProviderSwitchOpen)
+  const promptSearchOpen = useAppStore(state => state.promptSearchOpen)
+  const remotePanelOpen = useAppStore(state => state.remotePanelOpen)
+  const reorderTabsOpen = useAppStore(state => state.reorderTabsOpen)
+  const pinAgentsOpen = useAppStore(state => state.pinAgentsOpen)
+  const pathPickerOpen = useAppStore(state => state.pathPickerOpen)
   const gitBarOpen = useAppStore(state => state.gitBarOpen)
   const worktreesBarOpen = useAppStore(state => state.worktreesBarOpen)
   const debugPanelOpen = useAppStore(state => state.debugPanelOpen)
@@ -340,7 +349,11 @@ function OpenCommandPalette({
 
   const [query, setQuery] = useState('')
   const [selectedIndex, setSelectedIndex] = useState(0)
-  const [mode, setMode] = useState<PaletteMode>('commands')
+  // Store-backed, not `useState` — see the note on `uiShell.paletteMode`. The
+  // local version could not survive a chord invocation, which mounts this
+  // component invisibly and destroys it in the same commit.
+  const mode = useAppStore(state => state.paletteMode)
+  const setMode = useAppStore(state => state.setPaletteMode)
   const [sessions, setSessions] = useState<SessionInfo[]>([])
   const [sessionsLoading, setSessionsLoading] = useState(false)
   const [aiWorkspaces, setAiWorkspaces] = useState<AiWorkspaceSummary[]>([])
@@ -557,7 +570,6 @@ function OpenCommandPalette({
       workspace,
       ui: {
         openNewTabPicker: onNewTabRequest,
-        openResumePicker: onResumeRequest,
         openTileTabs: onTileTabsRequest,
         openReorderTabs: onReorderTabsRequest,
         openSettings: onSettingsRequest,
@@ -575,6 +587,15 @@ function OpenCommandPalette({
         openRewindPrompt,
         openAgentViewModePicker,
         openColorFlagPicker,
+        closeUsageModal,
+        closeKeyboardShortcuts,
+        closeAgentActivity,
+        closeCloseOldAgents,
+        closeBulkProviderSwitch,
+        closePromptSearch,
+        closeReorderTabs,
+        closePinAgents,
+        closePathPicker,
         openUsageModal,
         toggleGitBar,
         toggleWorktreesBar,
@@ -585,12 +606,12 @@ function OpenCommandPalette({
         toggleRenderingDebugMode,
         toggleTailAllMode,
         toggleDevDebugPanel,
-        openAgentStatusPanel,
-        closeAgentStatusPanel,
         toggleAgentStatusPanel,
         togglePerformancePanel,
         toggleRemotePanel,
         toggleCaffeinate,
+        openGlobalEditor: openGlobalEditorAction,
+        closeGlobalEditor: closeGlobalEditorAction,
         toggleGlobalEditor,
         toggleFileTreeVisible,
         enterDispatchMode,
@@ -600,11 +621,6 @@ function OpenCommandPalette({
         openDispatchAttach,
         openLinkedAgent,
         openPinAgents,
-        toggleStatusMode,
-        toggleWorktreeBadges,
-        toggleUsageHeader,
-        cycleUsageHeaderLevel,
-        setDangerousAgentsEnabled,
         setAggressiveDebugPersistence,
         enterResumeMode,
         enterBuriedMode,
@@ -624,6 +640,18 @@ function OpenCommandPalette({
         usageHeaderLevel,
         dangerousAgentsEnabled,
         aggressiveDebugPersistenceEnabled,
+        commandPaletteOpen: commandPaletteOpenFlag,
+        paletteMode: mode,
+        usageModalOpen,
+        keyboardShortcutsOpen,
+        agentActivityOpen,
+        closeOldAgentsOpen,
+        bulkProviderSwitchOpen,
+        promptSearchOpen,
+        remotePanelOpen,
+        reorderTabsOpen,
+        pinAgentsOpen,
+        pathPickerOpen,
         gitBarOpen,
         worktreesBarOpen,
         debugPanelOpen,
@@ -655,7 +683,6 @@ function OpenCommandPalette({
     [
       workspace,
       onNewTabRequest,
-      onResumeRequest,
       onTileTabsRequest,
       onReorderTabsRequest,
       onSettingsRequest,
@@ -666,6 +693,15 @@ function OpenCommandPalette({
       openBulkProviderSwitch,
       openRewindPrompt,
       openAgentViewModePicker,
+      closeUsageModal,
+      closeKeyboardShortcuts,
+      closeAgentActivity,
+      closeCloseOldAgents,
+      closeBulkProviderSwitch,
+      closePromptSearch,
+      closeReorderTabs,
+      closePinAgents,
+      closePathPicker,
       openUsageModal,
       toggleGitBar,
       toggleWorktreesBar,
@@ -676,12 +712,12 @@ function OpenCommandPalette({
       toggleRenderingDebugMode,
       toggleTailAllMode,
       toggleDevDebugPanel,
-      openAgentStatusPanel,
-      closeAgentStatusPanel,
       toggleAgentStatusPanel,
       togglePerformancePanel,
       toggleRemotePanel,
       toggleCaffeinate,
+      openGlobalEditorAction,
+      closeGlobalEditorAction,
       toggleGlobalEditor,
       toggleFileTreeVisible,
       enterDispatchMode,
@@ -691,11 +727,6 @@ function OpenCommandPalette({
       openDispatchAttach,
       openLinkedAgent,
       openPinAgents,
-      toggleStatusMode,
-      toggleWorktreeBadges,
-      toggleUsageHeader,
-      cycleUsageHeaderLevel,
-      setDangerousAgentsEnabled,
       setAggressiveDebugPersistence,
       enterResumeMode,
       enterBuriedMode,
@@ -713,6 +744,18 @@ function OpenCommandPalette({
       usageHeaderLevel,
       dangerousAgentsEnabled,
       aggressiveDebugPersistenceEnabled,
+      commandPaletteOpenFlag,
+      mode,
+      usageModalOpen,
+      keyboardShortcutsOpen,
+      agentActivityOpen,
+      closeOldAgentsOpen,
+      bulkProviderSwitchOpen,
+      promptSearchOpen,
+      remotePanelOpen,
+      reorderTabsOpen,
+      pinAgentsOpen,
+      pathPickerOpen,
       gitBarOpen,
       worktreesBarOpen,
       debugPanelOpen,
@@ -881,28 +924,26 @@ function OpenCommandPalette({
     return paletteCommands[selectedIndex] ?? null
   }, [mode, paletteCommands, selectedIndex])
 
+  // Focus the search input whenever the palette becomes VISIBLE.
+  //
+  // This replaced a mount-time reset effect that also did the focusing. That
+  // effect had a `mountedForPendingCommand` guard which, on inspection, is never
+  // false: `openCommandPalette` has exactly one caller — the
+  // `open-command-palette` command — and commands only run from inside this
+  // host, which is already mounted when they do. So every mount carries a
+  // pending invocation, the guard always returned early, and the focus call
+  // went with it. A comment described a distinction with no other branch.
+  //
+  // The state resets it also performed were redundant on a fresh mount (the
+  // `useState` initializers already give those values) and are gone. Focus is
+  // not redundant, so it moves here, keyed on `visible` rather than on mount —
+  // which is the moment it actually matters, and is correct for both paths:
+  // opened directly, or opened into a sub-mode by a chord.
   useEffect(() => {
-    setQuery('')
-    setSelectedIndex(0)
-    setMode('commands')
-    setSessions([])
-    setSessionsLoading(false)
-    setAiWorkspaces([])
-    setAiWorkspacesLoading(false)
-    setAiWorkspaceError(null)
-    setAiWorkspacePending(null)
-    setArmedAiWorkspaceClearId(null)
-    setPromptTemplateForm({
-      id: null,
-      title: '',
-      description: '',
-      body: '',
-      insertMode: 'replace',
-      variables: [],
-    })
-    setPromptTemplateFillState(null)
-    requestAnimationFrame(() => inputRef.current?.focus())
-  }, [])
+    if (!visible) return
+    const frame = requestAnimationFrame(() => inputRef.current?.focus())
+    return () => cancelAnimationFrame(frame)
+  }, [visible])
 
   useEffect(() => {
     setSelectedIndex(prev => Math.min(prev, Math.max(0, filteredLength - 1)))
@@ -977,13 +1018,27 @@ function OpenCommandPalette({
       reportError: message => showToast(message, 6000),
     })
     onMenuCommandHandled()
-    // A command whose whole purpose IS the palette must not be closed by the
-    // "return to where you were" rule. Cmd+Shift+P arrives here with
-    // closeAfterRun=true (the palette was shut when the chord fired), so
-    // honouring it blindly would open the palette and shut it in the same
-    // frame — the chord would look broken.
-    if (pendingMenuCommand.closeAfterRun
-      && !PALETTE_SELF_EXCLUDED_COMMAND_IDS.has(pendingMenuCommand.id)) {
+    // A command that OPENED the palette must not be closed by the "return to
+    // where you were" rule. `closeAfterRun` records that the palette was shut
+    // when the invocation was requested; honouring it blindly would open the
+    // palette and shut it in the same frame, and the chord would look broken.
+    //
+    // CAVEAT, because the rule is not unconditional: `dispatchCommand` is not
+    // awaited, so this reads the flag at the first `await` inside `run`. A
+    // command that opens the palette only AFTER an await would be closed in the
+    // same frame. All nine mode-entering commands set the mode in their
+    // synchronous prefix (`enterResumeMode` sets 'resume' before its await), so
+    // the property holds today — but a future command must open the palette
+    // before its first await for it to keep holding.
+    //
+    // The test is the LIVE flag, read after `run`, rather than a hardcoded id
+    // list. That list held only `open-command-palette`, and it could only ever
+    // have held ids someone remembered to add — it would not have covered the
+    // nine mode-entering commands, which need exactly the same exemption for
+    // exactly the same reason. "Did this command turn the palette on?" answers
+    // for all of them, and for anything added later, without an enumeration to
+    // keep in sync.
+    if (pendingMenuCommand.closeAfterRun && !useAppStore.getState().commandPaletteOpen) {
       onClose()
     }
   }, [commandContext, onClose, onMenuCommandHandled, pendingMenuCommand, showToast])
@@ -1110,10 +1165,11 @@ function OpenCommandPalette({
   const openAiWorkspace = useCallback(
     (workspaceId: string) => {
       useGlobalEditorStore.getState().openAiWorkspace(workspaceId)
-      if (!globalEditorOpen) toggleGlobalEditor()
+      // Idempotent open — see the note on `ui.openGlobalEditor`.
+      openGlobalEditorAction()
       onClose()
     },
-    [globalEditorOpen, onClose, toggleGlobalEditor],
+    [onClose, openGlobalEditorAction],
   )
 
   const createAiWorkspace = useCallback(async () => {

@@ -1,3 +1,5 @@
+import { DEFAULT_PALETTE_MODE } from '@renderer/features/command-palette/paletteMode'
+import type { PaletteMode } from '@renderer/features/command-palette/paletteMode'
 import type { StateCreator } from 'zustand'
 
 import type { AppStore, UiShellSlice } from '@renderer/app-state/types'
@@ -10,6 +12,7 @@ export const createUiShellSlice: StateCreator<
   UiShellSlice
 > = set => ({
   commandPaletteOpen: false,
+  paletteMode: DEFAULT_PALETTE_MODE,
   pathPickerOpen: false,
   pathPickerDefault: '',
   tileTabsModalOpen: false,
@@ -68,12 +71,24 @@ export const createUiShellSlice: StateCreator<
   clearCommandInvocation: () =>
     set({ pendingCommandInvocation: null }, false, 'uiShell/clearCommandInvocation'),
 
+  // Opening always lands in the command list. Reopening should never resume a
+  // half-finished sub-flow the user abandoned.
   openCommandPalette: () =>
-    set({ commandPaletteOpen: true }, false, 'uiShell/openCommandPalette'),
+    set({ commandPaletteOpen: true, paletteMode: DEFAULT_PALETTE_MODE }, false, 'uiShell/openCommandPalette'),
   closeCommandPalette: () =>
-    set({ commandPaletteOpen: false }, false, 'uiShell/closeCommandPalette'),
-  toggleCommandPalette: () =>
-    set(state => ({ commandPaletteOpen: !state.commandPaletteOpen }), false, 'uiShell/toggleCommandPalette'),
+    set({ commandPaletteOpen: false, paletteMode: DEFAULT_PALETTE_MODE }, false, 'uiShell/closeCommandPalette'),
+  /**
+   * Enter a sub-mode, MAKING THE PALETTE VISIBLE.
+   *
+   * The open is not a convenience — it is the correctness fix. A sub-mode is
+   * only meaningful rendered, so every caller wanted the palette up; the ones
+   * invoked from a chord simply had no way to say so, because `setMode` was
+   * component-local and the host they were mutating was invisible.
+   *
+   * Coupling the two here means a future mode-entry point cannot forget it.
+   */
+  setPaletteMode: (mode: PaletteMode) =>
+    set({ paletteMode: mode, commandPaletteOpen: true }, false, 'uiShell/setPaletteMode'),
 
   openPathPicker: (defaultValue = '') =>
     set({

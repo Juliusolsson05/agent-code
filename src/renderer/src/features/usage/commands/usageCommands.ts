@@ -1,3 +1,4 @@
+import { panel } from '@renderer/features/command-palette/commandState'
 import type { CommandDef } from '@renderer/features/command-palette/types'
 
 export const usageCommands: CommandDef[] = [
@@ -8,7 +9,17 @@ export const usageCommands: CommandDef[] = [
     description: 'Open provider usage for Claude and Codex.',
     surface: 'app',
     keywords: ['quota', 'tokens', 'limits', 'claude', 'codex', 'usage'],
-    run: ({ ui }) => {
+    getState: ({ flags }) => panel(flags.usageModalOpen),
+    run: ({ ui, flags }) => {
+      // Round-trips. Everything below this line follows the same shape, and
+      // it is the `tiled-tabs` pattern: read the flag, branch, call the
+      // one-directional action. These surfaces have no toggle action of their
+      // own — open and close are separate store actions — so the command is
+      // where the decision has to live.
+      if (flags.usageModalOpen) {
+        ui.closeUsageModal()
+        return
+      }
       ui.openUsageModal()
       ui.closePalette()
     },

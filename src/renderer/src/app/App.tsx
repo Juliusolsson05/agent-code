@@ -57,7 +57,6 @@ export default function App() {
   const defaultBuiltInMcpDomains = useAppStore(
     state => state.settings.defaultBuiltInMcpDomains,
   )
-  const toggleCommandPalette = useAppStore(state => state.toggleCommandPalette)
 
   useThemeSync()
   useAiWorkspaceOpenRequests()

@@ -2,7 +2,7 @@ import { AGENT_PROVIDER_KINDS, DEFAULT_PROVIDER, isAgentProviderKind } from '@sh
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { extractLastAssistantText } from '@renderer/lib/copyAssistant'
 import type { CommandContext, CommandDef } from '@renderer/features/command-palette/types'
-import { toggle } from '@renderer/features/command-palette/commandState'
+import { panel, toggle } from '@renderer/features/command-palette/commandState'
 import {
   commandTargetSessionId,
   commandTargetSessionIdForState,
@@ -16,6 +16,20 @@ import {
 import { resolveDispatchAttachTarget } from '@renderer/workspace/dispatch/dispatchTarget'
 import { dispatchFocusedSessionId } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
+
+/**
+ * Buried panes visible from the CURRENT tab.
+ *
+ * The buried picker is deliberately tab-scoped (see the note in
+ * CommandPalette's `buried` memo: a buried Codex agent from project A listed
+ * beside a buried Claude agent from project B mixes contexts and invites
+ * revive-into-the-wrong-tab). Admission has to use the same scope, or the row
+ * appears for a tab with nothing to revive.
+ */
+function buriedInActiveTab(workspace: CommandContext['workspace']): number {
+  const activeTabId = workspace.state.activeTabId
+  return workspace.state.buried.filter(entry => entry.sourceTabId === activeTabId).length
+}
 
 export const paneCommands: CommandDef[] = [
   {
@@ -162,7 +176,14 @@ export const paneCommands: CommandDef[] = [
     title: 'Pin Agents…',
     description: '**What it does:** Opens the multi-select Pin modal to choose which **Dispatch** agents stay pinned at the top of the agent list.\n\n**Use when:** You want a few favorite agents to always be one keystroke away regardless of project or scope.\n\n**Notes:** Space toggles, Enter commits, Esc cancels. The order you Space through the rows is the order pins render in. Pins survive project↔global scope toggles.',
     keywords: ['pin', 'pins', 'pinned', 'favorite', 'star', 'top', 'dispatch'],
-    run: ({ ui }) => ui.openPinAgents(),
+    getState: ({ flags }) => panel(flags.pinAgentsOpen),
+    run: ({ ui, flags }) => {
+      if (flags.pinAgentsOpen) {
+        ui.closePinAgents()
+        return
+      }
+      ui.openPinAgents()
+    },
   },
   {
     // Quick-remove counterpart to pin-agents. Targets the currently
@@ -386,8 +407,24 @@ export const paneCommands: CommandDef[] = [
     keywords: ['pane'],
     description: '**What it does:** Restores a **buried live pane**.\n\n**Use when:** You parked a session and want it back.\n\n**Notes:** Opens a picker when multiple buried panes exist.',
     keepPaletteOpen: true,
-    when: ({ workspace }) => workspace.state.buried.length > 0,
-    run: ({ ui }) => ui.enterBuriedMode(),
+    // Scoped to the ACTIVE TAB, matching the list the picker actually renders.
+    //
+    // This read `state.buried.length > 0` — the whole workspace — while the
+    // picker filters by `sourceTabId`, so both buried commands could be
+    // admitted from a tab with nothing buried and land the user on an empty
+    // list. Admission has to agree with what the command will show, or the
+    // command is advertising something it cannot deliver.
+    when: ({ workspace }) => buriedInActiveTab(workspace) > 0,
+    run: ({ ui, flags }) => {
+      // Already showing this mode? Dismiss. A mode-entering command whose
+      // second press re-enters the mode it is already in reads as a dead key,
+      // which is the same complaint that started this whole change.
+      if (flags.paletteMode === 'buried') {
+        ui.closePalette()
+        return
+      }
+      ui.enterBuriedMode()
+    },
   },
   {
     id: 'kill-buried-pane',
@@ -398,8 +435,17 @@ export const paneCommands: CommandDef[] = [
     description: '**What it does:** Permanently kills a **buried session**.\n\n**Use when:** You no longer need hidden background work.\n\n**Notes:** This is destructive.',
     keywords: ['kill', 'buried', 'hidden', 'pane', 'session', 'pane'],
     keepPaletteOpen: true,
-    when: ({ workspace }) => workspace.state.buried.length > 0,
-    run: ({ ui }) => ui.enterKillBuriedMode(),
+    when: ({ workspace }) => buriedInActiveTab(workspace) > 0,
+    run: ({ ui, flags }) => {
+      // Already showing this mode? Dismiss. A mode-entering command whose
+      // second press re-enters the mode it is already in reads as a dead key,
+      // which is the same complaint that started this whole change.
+      if (flags.paletteMode === 'kill-buried') {
+        ui.closePalette()
+        return
+      }
+      ui.enterKillBuriedMode()
+    },
   },
   {
     id: 'toggle-tail',
