@@ -60,56 +60,103 @@ function fixtures(): Fixture[] {
  * for that question the bytes are irrelevant but the LENGTH is the whole point.
  */
 function inflate(fixture: Fixture): Fixture {
-  const sizes = fixture.$fixture.substitutions.map(s => s.originalChars)
-  let index = 0
-  const grow = (value: unknown): unknown => {
-    if (Array.isArray(value)) return value.map(grow)
+  // Keyed by the RECORDED path, not by traversal order. The first version
+  // matched positionally against a flat list of sizes and accepted any `data`
+  // string longer than 32 chars, while the extractor only substitutes above
+  // 256 — so an unrelated short `data` field earlier in the record could
+  // consume the only recorded size and leave the real payload uninflated,
+  // silently disarming this whole file. Review found that; path-keying removes
+  // the class rather than retuning the threshold.
+  const bySize = new Map(fixture.$fixture.substitutions.map(s => [s.path, s.originalChars]))
+
+  const grow = (value: unknown, path: string): unknown => {
+    if (Array.isArray(value)) return value.map((child, i) => grow(child, `${path}[${i}]`))
     if (typeof value !== 'object' || value === null) return value
     const out: Record<string, unknown> = {}
     for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-      const isPayload =
-        (key === 'image_url' && typeof child === 'string' && child.startsWith('data:')) ||
-        ((key === 'data' || key === 'base64') && typeof child === 'string' && child.length > 32)
-      if (isPayload && index < sizes.length) {
-        const size = sizes[index]
-        index += 1
+      const childPath = path ? `${path}.${key}` : key
+      const size = bySize.get(childPath)
+      if (size !== undefined && typeof child === 'string') {
         const filler = 'A'.repeat(Math.max(size, 1))
         out[key] = key === 'image_url'
-          ? `${(child as string).slice(0, (child as string).indexOf(',') + 1)}${filler}`
+          ? `${child.slice(0, child.indexOf(',') + 1)}${filler}`
           : filler
         continue
       }
-      out[key] = grow(child)
+      out[key] = grow(child, childPath)
     }
     return out
   }
-  return { ...fixture, entry: grow(fixture.entry) as Record<string, unknown> }
-}
+  const inflated = { ...fixture, entry: grow(fixture.entry, '') as Record<string, unknown> }
 
-/** Every string a fixture could put in front of a user, from every text path. */
-function textProjections(fixture: Fixture): string[] {
-  const out: string[] = []
-  const payload = fixture.entry.payload as Record<string, unknown> | undefined
-
-  if (payload?.output !== undefined) {
-    out.push(codexOutputText(payload.output))
-    const content = codexResultContent(payload.output)
-    out.push(typeof content === 'string' ? content : toolResultContentText(content))
-  }
-  if (payload?.content !== undefined) {
-    const content = codexResultContent(payload.content)
-    out.push(typeof content === 'string' ? content : toolResultContentText(content))
-  }
-
-  // Claude-shaped: run every tool_result block through the shared flattener.
-  const message = fixture.entry.message as Record<string, unknown> | undefined
-  const blocks = Array.isArray(message?.content) ? message.content : []
-  for (const block of blocks) {
-    const record = block as Record<string, unknown>
-    if (record?.type === 'tool_result') {
-      out.push(toolResultContentText(record.content as never))
+  // Every recorded substitution must have been found. A fixture whose paths no
+  // longer resolve (because the extractor changed, or the record was edited by
+  // hand) would inflate nothing and pass vacuously.
+  const serialized = JSON.stringify(inflated.entry)
+  for (const [path, size] of bySize) {
+    if (!serialized.includes('A'.repeat(Math.min(size, 300)))) {
+      throw new Error(`inflate(): substitution path ${path} did not resolve in ${fixture.$fixture.id}`)
     }
   }
+  return inflated
+}
+
+/**
+ * Every string a fixture could put in front of a user, from every text path.
+ *
+ * WHY this walks `_atp.source` and the sidecar too: the first version projected
+ * only the top-level `payload`/`message`, so three of the seven fixtures
+ * produced ZERO projections and their generated tests asserted nothing at all —
+ * they passed because the loop body never ran. Review found that. Any fixture
+ * whose payload bytes live somewhere this function does not look is a fixture
+ * this guard silently ignores, which is the failure mode the guard exists to
+ * prevent, one level up.
+ */
+function textProjections(fixture: Fixture): string[] {
+  const out: string[] = []
+
+  const fromPayload = (payload: Record<string, unknown> | undefined): void => {
+    if (!payload) return
+    for (const key of ['output', 'content'] as const) {
+      if (payload[key] === undefined) continue
+      out.push(codexOutputText(payload[key]))
+      const content = codexResultContent(payload[key])
+      out.push(typeof content === 'string' ? content : toolResultContentText(content))
+    }
+  }
+
+  const fromMessage = (message: Record<string, unknown> | undefined): void => {
+    const blocks = Array.isArray(message?.content) ? message.content : []
+    for (const block of blocks) {
+      const record = block as Record<string, unknown>
+      if (record?.type === 'tool_result') out.push(toolResultContentText(record.content as never))
+      // A bare image block in message content is itself a projection candidate:
+      // anything that flattens a message renders it through the same helper.
+      if (record?.type === 'image') out.push(toolResultContentText([record] as never))
+    }
+  }
+
+  const entry = fixture.entry
+  fromPayload(entry.payload as Record<string, unknown> | undefined)
+  fromMessage(entry.message as Record<string, unknown> | undefined)
+
+  // Claude's structured sidecar. Its payload is inflated by inflate() and was
+  // previously never projected anywhere.
+  const sidecar = entry.toolUseResult as Record<string, unknown> | undefined
+  if (sidecar) out.push(toolResultContentText([sidecar] as never))
+
+  // Cross-provider carriage. For the _atp fixtures ALL of the payload bytes
+  // live under `_atp.source` — the visible top-level content is a placeholder
+  // like "[Image #4] [Image #5]" — so without this the guard inspects nothing.
+  const atp = entry._atp as Record<string, unknown> | undefined
+  const source = atp?.source as Record<string, unknown> | undefined
+  if (source) {
+    fromPayload(source.payload as Record<string, unknown> | undefined)
+    fromMessage(source.message as Record<string, unknown> | undefined)
+    const carriedSidecar = source.toolUseResult as Record<string, unknown> | undefined
+    if (carriedSidecar) out.push(toolResultContentText([carriedSidecar] as never))
+  }
+
   return out
 }
 
@@ -118,7 +165,17 @@ describe('no base64 escapes into feed text', () => {
     it(`${fixture.$fixture.id}: every text projection is payload-free`, () => {
       // Inflated to real recorded sizes — see inflate() for why the committed
       // 1×1 payloads cannot exercise this assertion.
-      for (const projection of textProjections(inflate(fixture))) {
+      const projections = textProjections(inflate(fixture))
+
+      // The assertion that makes the loop below meaningful. Three fixtures
+      // previously yielded zero projections, so their tests passed without
+      // asserting anything. A guard that can pass vacuously is not a guard.
+      expect(
+        projections.length,
+        `${fixture.$fixture.id} produced no text projections — the guard would pass vacuously`,
+      ).toBeGreaterThan(0)
+
+      for (const projection of projections) {
         const leak = BASE64_RUN.exec(projection)
         expect(
           leak === null,

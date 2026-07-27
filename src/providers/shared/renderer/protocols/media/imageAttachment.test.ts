@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
@@ -11,13 +11,18 @@ import {
 
 // Stage D of docs/decomposition/image-read-base64-dump.md.
 //
-// WHY every input here is loaded from disk instead of written inline: these
-// assertions were written BEFORE imageAttachment.ts existed, against records
-// captured verbatim from real sessions (see testing/fixtures/image-reads/MANIFEST.md).
-// A test whose input is a literal someone typed proves only that the code does
-// what its author imagined; it cannot fail for a shape the author did not think
-// of. Each fixture below is a shape that actually occurred, cited back to the
-// census row and the source session that produced it.
+// WHY the POSITIVE assertions all load their input from disk: they were written
+// BEFORE imageAttachment.ts existed, against records captured verbatim from real
+// sessions (see testing/fixtures/image-reads/MANIFEST.md). A test whose input is
+// a literal someone typed proves only that the code does what its author
+// imagined; it cannot fail for a shape the author did not think of. Each fixture
+// is a shape that actually occurred, cited back to its census row.
+//
+// The NEGATIVE assertions ("what must not be recognized") are deliberately
+// handwritten literals, and that is not a lapse: they describe inputs the
+// recognizer must REJECT, which by definition are not in a corpus of things it
+// accepted. One of them — the tool-schema node — is transcribed from census row
+// 12, which is a real recorded false positive.
 //
 // If one of these fails, the fixture is right and the code is wrong. Do not
 // adjust an expectation to match new behaviour without first confirming against
@@ -256,8 +261,19 @@ describe('corpus-wide invariants', () => {
   it('every fixture is traceable to a census row and a real session', () => {
     for (const f of allFixtures()) {
       expect(f.$fixture.censusRows.length).toBeGreaterThan(0)
-      expect(f.$fixture.source).toMatch(/\.jsonl:\d+$/)
       expect(f.$fixture.proves.length).toBeGreaterThan(0)
+
+      // WHY this opens the cited file instead of regex-matching the string:
+      // the first version asserted only /\.jsonl:\d+$/, which any plausible
+      // literal satisfies — it proved the citation was well-FORMED, not that it
+      // pointed at anything. "Traceable to a real session" has to mean the
+      // session is there.
+      const [path, line] = [
+        f.$fixture.source.slice(0, f.$fixture.source.lastIndexOf(':')),
+        Number(f.$fixture.source.slice(f.$fixture.source.lastIndexOf(':') + 1)),
+      ]
+      expect(existsSync(path), `${f.$fixture.id} cites a missing session: ${path}`).toBe(true)
+      expect(line).toBeGreaterThan(0)
     }
   })
 

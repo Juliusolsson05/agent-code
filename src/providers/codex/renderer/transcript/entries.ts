@@ -4,6 +4,7 @@ import {
   recognizeResultParts,
   type ResultPart,
 } from '@providers/shared/renderer/protocols/media/imageAttachment'
+import { boundedJsonPreview } from '@renderer/lib/text/boundedJson'
 
 // Codex rollout primitives + conversion helpers.
 //
@@ -84,11 +85,17 @@ export function codexOutputText(output: unknown): string {
         // stay bytes-free: `[image/jpeg]`, never a slice of the payload.
         const image = recognizeResultParts([item])?.find(part => part.kind === 'image')
         if (image?.kind === 'image') return `[${image.image.mimeType}]`
-        return JSON.stringify(item, null, 2)
+        // WHY bounded rather than `JSON.stringify(item, null, 2)`: review
+        // proved the raw call was still reachable. An envelope the recognizer
+        // does not know — `{type:'future_image', image_url:'data:…;base64,…'}`
+        // — fell through here and reproduced the original defect exactly, at
+        // 1,000,069 characters in one string. Recognizing four shapes fixes
+        // four shapes; bounding the fallback fixes the ones nobody has seen.
+        return boundedJsonPreview(item) ?? String(item)
       })
       .join('\n')
   }
-  return JSON.stringify(output ?? '', null, 2)
+  return boundedJsonPreview(output ?? '') ?? ''
 }
 
 /**

@@ -527,6 +527,67 @@ one. The recognizer's `base64`-payload guard rejects it, and there is a test pin
    feed text from …rollout-2026-07-23…:68`. **A guard that cannot fail is worse than no
    guard, because it reads as coverage.**
 
+## Review round (rev 4, 2026-07-27)
+
+Two orchestrated reviewers — one on correctness/blast-radius (Claude), one adversarial
+(Codex) — audited the branch independently. **They found the same blocking defect, and it
+invalidated this document's central claim.**
+
+### The half-fix, and why the suite could not see it
+
+Rev 3 asserted "Codex image results render as images." **False.** The new painter lived in
+the generic `ToolResultRow`, but `renderCodexToolResult` (`codex/renderer/rows/dispatch.tsx:459-474`)
+claims every result whose correlated call is named `exec` and whose envelope is
+`custom_tool_call_output` — which is precisely how Codex returns an image-bearing shell
+result. Those went to `CodexToolResultRow`, which flattened them straight back to
+`[image/jpeg]` labels via `toolResultContentText`.
+
+So the megabyte dump was genuinely gone, and **no image ever appeared** — on the exact path
+that produced the screenshot in the bug report. The fix landed on `view_image` (6
+occurrences in one file corpus-wide) and on Claude `Read`, and missed the carrier the census
+identified as dominant.
+
+The suite stayed green because `imageResults.test.ts` was named "the reported bug end to
+end" while asserting only that the *mapped block* carried image parts. **It stopped one
+layer above routing.** An assertion about an intermediate representation is not an assertion
+about what the user sees — and naming it "end to end" is how that gap stayed invisible.
+
+Fixed by extracting `ResultParts` (`providers/shared/renderer/rows/ResultParts.tsx`), used
+by both painters, plus `imagePainting.renderer.test.tsx` which renders the real component
+and looks for media. Verified to fail on the half-fix (2 of 3 tests red) before passing.
+
+### Other findings, all fixed
+
+| Finding | Fix |
+|---|---|
+| `hasMediaParts` matched bare `type === 'image'`, stealing flat MCP `ImageContent` from `McpContentView` and dropping its `isError`/`structuredContent`/`_meta` siblings | `hasRenderableMedia` now requires a base64 `source` envelope |
+| Unrecognized envelopes still dumped unbounded base64 — `{type:'future_image', image_url:'data:…'}` reproduced the original defect at 1,000,069 chars | `codexOutputText` fallbacks route through `boundedJsonPreview`; **long encoded runs are now elided in the projector itself**, which covers every caller instead of one |
+| `toolResultContentText`'s label was defeatable three ways (unnormalized `input_image`, `{type:'future_media', data}`, payload nested at `source.payload.data`) — 490–512 char runs | Same projector-level elision. Guarding shapes one at a time was the enumerate-and-patch loop this document exists to end |
+| `inflate()` matched substitutions positionally with a `>32` threshold vs the extractor's `>256`, so an unrelated short `data` field could consume the recorded size and disarm the guard | Keyed by recorded path, with a hard failure if any path does not resolve |
+| Three fixtures produced **zero** projections — their guard tests asserted nothing and passed vacuously | `textProjections` now walks `_atp.source` and the Claude sidecar; an explicit assertion fails a fixture that yields no projections |
+| Header claimed "every input here is loaded from disk" while the negative tests use literals | Comment corrected to state why negative cases are necessarily handwritten |
+| "traceable to a real session" only regex-matched the citation string | Now opens the cited file |
+| `ImageBlockRow` stamped the assistant marker `⏺`, reading as `⎿ path / ⏺ image` | `ResultParts` uses `Base64MediaView` directly, no marker |
+
+**Also caught during the fix, by tsc:** the first version of the `CodexToolResultRow` branch
+early-returned *before* that component's `useMemo`, which would have changed the hook count
+between renders and crashed React's dispatcher.
+
+### What the reviewers confirmed
+
+- `isError: false` in the structured branch is **not** a regression — independently verified
+  against all 43 image-bearing `custom_tool_call_output` records: every one has array output,
+  none carries a parseable JSON envelope, so the old code computed `exitCode = 0` identically.
+- The isolation contract holds: only the two Codex transcript-mapping files import the
+  recognizer.
+- `tool_search_output` still flattens, but no bytes escape and the census records no image
+  on that payload type.
+
+### Standing caveat
+
+The one claim still unverified by any test: **that this looks right in a running app.**
+Everything above is corpus replay and component rendering under happy-dom.
+
 ### Known gap, recorded and not fixed
 
 **Images lost across a provider switch are still lost.** Fixture
