@@ -1,0 +1,40 @@
+{
+  "$fixture": {
+    "id": "codex-exec-single-image",
+    "censusRows": [
+      4
+    ],
+    "source": "/Users/juliusolsson/.codex/sessions/2026/07/23/rollout-2026-07-23T19-31-13-019f9008-09b5-7793-8222-307a8700791a.jsonl:287",
+    "proves": "Minimal exec case: one leading text part then one image. The common shape.",
+    "substitutions": [
+      {
+        "path": "payload.output[1].image_url",
+        "originalChars": 441543,
+        "mime": "image/jpeg"
+      }
+    ],
+    "totalOriginalPayloadChars": 441543
+  },
+  "entry": {
+    "timestamp": "2026-07-23T17:50:48.698Z",
+    "type": "response_item",
+    "payload": {
+      "type": "custom_tool_call_output",
+      "call_id": "call_2TrOP71QUg4duElbbfNXLwmK",
+      "output": [
+        {
+          "type": "input_text",
+          "text": "Script completed\nWall time 0.0 seconds\nOutput:\n"
+        },
+        {
+          "type": "input_image",
+          "image_url": "data:image/jpeg;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+          "detail": "high"
+        }
+      ],
+      "internal_chat_message_metadata_passthrough": {
+        "turn_id": "019f9017-9a9e-7df1-aa7c-77230dff10db"
+      }
+    }
+  }
+}

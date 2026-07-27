@@ -4,6 +4,7 @@ import { asRecord } from '@shared/lib/asRecord'
 import {
   codexAssistantTextEntry,
   codexImageGenerationEntry,
+  codexResultContent,
   codexToolResultEntry,
   codexToolUseEntry,
   codexOutputText,
@@ -11,6 +12,14 @@ import {
   parseCodexJson,
   stripCodexExecWrapper,
 } from '@providers/codex/renderer/transcript/entries'
+import { recognizeImageNode } from '@providers/shared/renderer/protocols/media/imageAttachment'
+
+/** A mapped Codex message block: text, or the provider-neutral image block that
+ *  ImageBlockRow already paints. Named because the filter predicate below needs
+ *  to narrow to it and an inline union there reads as noise. */
+type CodexMessageBlock =
+  | { type: 'text'; text: string }
+  | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } }
 
 // Codex rollout → feed entry mapping.
 //
@@ -128,9 +137,26 @@ function codexConversationEntryFromMessageItem(
               ? { type: 'text' as const, text: `(refused) ${refusal}` }
               : null
           }
+          // Attached images. Before this, `input_image` hit the `return null`
+          // below and was filtered out, so a user who attached an image to a
+          // Codex prompt saw nothing at all — the vanish failure, distinct from
+          // the base64-dump failure but living in the same mapper and found by
+          // the same census (row 19). Note the shape here has NO `detail`
+          // sibling, which is why the recognizer must not require one.
+          const image = recognizeImageNode(item)
+          if (image) {
+            return {
+              type: 'image' as const,
+              source: {
+                type: 'base64' as const,
+                media_type: image.mimeType,
+                data: image.data,
+              },
+            }
+          }
           return null
         })
-        .filter((block): block is { type: 'text'; text: string } => block !== null)
+        .filter((block): block is CodexMessageBlock => block !== null)
     : []
 
   if (content.length === 0) return null
@@ -146,9 +172,15 @@ function codexConversationEntryFromMessageItem(
   // The check requires EVERY block to be synthetic-shaped so a real user prompt
   // that quotes either marker still survives. Only messages whose whole content
   // is runtime bookkeeping are dropped.
+  // An image block can never be runtime bookkeeping — it is content the user
+  // attached or a tool produced. Requiring `type === 'text'` here is load-bearing
+  // now that images reach this filter: without it an image-only message would
+  // take `undefined` down the synthetic-text predicate and get dropped, which
+  // would replace the base64-dump bug with the vanish bug for exactly the users
+  // who attach an image and nothing else.
   if (
     role === 'user' &&
-    content.every(block => isCodexSyntheticUserBlockText(block.text))
+    content.every(block => block.type === 'text' && isCodexSyntheticUserBlockText(block.text))
   ) {
     return null
   }
@@ -390,18 +422,45 @@ export function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): En
   }
 
   if (payload.type === 'function_call_output' && typeof payload.call_id === 'string') {
-    const output = stripCodexExecWrapper(codexOutputText(payload.output))
-    if (!output.trim() || isCodexExecWrapperOutput(codexOutputText(payload.output))) {
+    // Same treatment as custom_tool_call_output: images short-circuit to
+    // structured content. `view_image` lands here (census rows 4/8 also occur on
+    // this payload type), and the wrapper-stripping below is a text operation
+    // that would have nothing to strip from a block array anyway.
+    const structured = codexResultContent(payload.output)
+    if (typeof structured !== 'string') {
+      return [codexToolResultEntry(uuid, timestamp, payload.call_id, structured)]
+    }
+    const output = stripCodexExecWrapper(structured)
+    if (!output.trim() || isCodexExecWrapperOutput(structured)) {
       return []
     }
     return [codexToolResultEntry(uuid, timestamp, payload.call_id, output)]
   }
 
   if (payload.type === 'custom_tool_call_output' && typeof payload.call_id === 'string') {
-    const output = codexOutputText(payload.output)
-    const parsed = parseCodexJson(output)
+    // THE reported bug's path. Codex's `exec` tool returns its result here, and
+    // when the script emitted images the output array is
+    // text(header), text(path), image, text(path), image — interleaved, with the
+    // text parts labelling the images. Structured content is built FIRST so the
+    // payload never becomes a string; the JSON-envelope unwrapping below only
+    // applies to the plain-text form, which is the only form that can carry one.
+    const structured = codexResultContent(payload.output)
+    if (typeof structured !== 'string') {
+      return [
+        codexToolResultEntry(
+          uuid,
+          timestamp,
+          payload.call_id,
+          structured,
+          false,
+          { kind: 'custom_tool_call_output' },
+        ),
+      ]
+    }
+
+    const parsed = parseCodexJson(structured)
     const normalized =
-      typeof parsed?.output === 'string' ? parsed.output : output
+      typeof parsed?.output === 'string' ? parsed.output : structured
     const metadata = parsed?.metadata
     const exitCode = numberField(asRecord(metadata), 'exit_code') ?? 0
     if (

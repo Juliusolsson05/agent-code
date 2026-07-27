@@ -27,6 +27,7 @@ import {
 import { asRecord } from '@shared/lib/asRecord'
 import { boundedTextLineCount } from '@renderer/lib/text/boundedText'
 import { toolResultContentText } from '@providers/shared/renderer/rows/toolResultContent'
+import { ResultParts, hasRenderableMedia } from '@providers/shared/renderer/rows/ResultParts'
 
 // WHY asRecord (the shared helper) and not a local cast: the local copy this
 // replaced did NOT exclude arrays — it returned `value as Record<...>` for
@@ -133,6 +134,22 @@ export const CodexToolResultRow = memo(function CodexToolResultRow({
   sourceTool?: ToolUseBlock | null
 }) {
   const codeContext = useContext(CodeRenderContext)
+
+  // THE reported bug's painter. `renderCodexToolResult` (../rows/dispatch.tsx)
+  // claims every result whose correlated call is named `exec` and whose
+  // envelope is `custom_tool_call_output` — which is exactly how Codex returns
+  // an image-bearing shell result. Without this branch the mapping boundary
+  // correctly produces text,image,text,image blocks and then this component
+  // flattens them straight back to labels, so the base64 dump is gone but no
+  // image ever paints. The first version of this change shipped precisely that
+  // half-fix; review caught it.
+  //
+  // WHY the decision is computed here but ACTED ON below the hooks: this
+  // component calls useMemo further down, so returning here would change the
+  // hook count between renders and crash React's dispatcher. The first draft of
+  // this fix did exactly that.
+  const mediaParts = hasRenderableMedia(block.content) ? block.content : null
+
   const materializedText = toolResultContentText(block.content)
   const text = materializedText.length <= 16 * 1024
     ? materializedText.replace(/\s+$/, '')
@@ -161,6 +178,30 @@ export const CodexToolResultRow = memo(function CodexToolResultRow({
         : parseStructuredOutput(payloadText),
     }
   }, [payloadText])
+
+  // THE reported bug's painter. `renderCodexToolResult` (../rows/dispatch.tsx)
+  // claims every result whose correlated call is named `exec` and whose envelope
+  // is `custom_tool_call_output` — exactly how Codex returns an image-bearing
+  // shell result — so this component, not the generic ToolResultRow, is what
+  // paints the screenshot in the bug report. Without this branch the mapping
+  // boundary correctly produces text,image,text,image blocks and then
+  // `toolResultContentText` above flattens them straight back to labels: the
+  // megabyte dump is gone but no image ever appears. The first version of this
+  // change shipped precisely that half-fix; review caught it.
+  //
+  // First of the result-family branches because a structured block array can
+  // carry neither Codex's transport envelope nor a serialized JSON payload, so
+  // every branch below it is inapplicable by construction.
+  if (mediaParts) {
+    return (
+      <ResultParts
+        parts={mediaParts}
+        renderText={(partText, key) => (
+          <OutputWell key={key} text={partText} isError={isError} />
+        )}
+      />
+    )
+  }
 
   if (kind === 'exec_command_end') {
     const parsed = parsedCommand(meta)

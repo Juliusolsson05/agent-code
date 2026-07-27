@@ -9,10 +9,40 @@ type ProjectionBudget = {
   seen: WeakSet<object>
 }
 
+// A long run of base64-alphabet characters, optionally introduced by a data-URL
+// header. 200 is above any incidental run in real payloads (uuids, call ids,
+// git object names, hashes) and far below the smallest recorded image (22,124
+// chars).
+const ENCODED_PAYLOAD = /(?:data:[a-z0-9.+-]+\/[a-z0-9.+-]+;base64,)?[A-Za-z0-9+/=]{200,}/gi
+
+function elideEncodedPayloads(value: string): string {
+  // WHY this lives in the projector rather than in each caller: clamping alone
+  // is not enough. `MAX_STRING_CHARS` bounds the COST of a payload but not its
+  // uselessness — 512 characters of base64 is still an unreadable wall, and it
+  // was still exactly what the user reported seeing. Review then proved the
+  // per-caller label added upstream was defeatable three different ways: an
+  // `input_image` reaching this function before normalization, a
+  // `{type:'future_media', data}` envelope nobody has enumerated, and a payload
+  // nested one level deeper than the label looked (`source.payload.data`).
+  //
+  // Each of those is a different shape, and guarding shapes one at a time is
+  // the enumerate-and-patch loop this change exists to end. The invariant that
+  // actually holds is about the STRING, not the schema: no long encoded run
+  // belongs in a human-readable preview, whatever envelope carried it. Enforcing
+  // that here covers every current caller and every future one for free.
+  if (value.length < 200) return value
+  // The marker keeps the ellipsis that `clampString` has always used, because
+  // eliding IS truncation and every existing consumer — and one existing test —
+  // reads `…` as "there was more here". Dropping it would have silently changed
+  // what a bounded preview means everywhere, to save one character.
+  return value.replace(ENCODED_PAYLOAD, match => `⟨${match.length} chars elided…⟩`)
+}
+
 function clampString(value: string): string {
-  return value.length > MAX_STRING_CHARS
-    ? `${value.slice(0, MAX_STRING_CHARS)}…`
-    : value
+  const elided = elideEncodedPayloads(value)
+  return elided.length > MAX_STRING_CHARS
+    ? `${elided.slice(0, MAX_STRING_CHARS)}…`
+    : elided
 }
 
 function projectJsonValue(

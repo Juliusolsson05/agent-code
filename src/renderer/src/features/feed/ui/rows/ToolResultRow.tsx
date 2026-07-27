@@ -2,6 +2,8 @@ import { memo, useMemo } from 'react'
 
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 
+import { ResultParts, hasRenderableMedia } from '@providers/shared/renderer/rows/ResultParts'
+
 import { JsonResultSlab } from '@providers/shared/renderer/rows/JsonResultSlab'
 import { tryExtractJson } from '@providers/shared/renderer/rows/jsonToolPresentation'
 import { StructuredOutputView } from '@providers/shared/renderer/protocols/structured-output/StructuredOutputView'
@@ -89,6 +91,25 @@ export const ToolResultRow = memo(function ToolResultRow({
   block: ToolResultBlock
   sourceTool?: ToolUseBlock | null
 }) {
+  // Checked before flattening. `toolResultContentText` projects an image to a
+  // bytes-free label rather than base64, so reaching the text path is not a
+  // correctness bug — but it would still throw away the picture.
+  //
+  // `hasRenderableMedia` deliberately requires a base64 `source` envelope: a
+  // bare `type === 'image'` test also matched MCP's flat ImageContent and stole
+  // those results from McpContentView below. See ResultParts.tsx.
+  if (hasRenderableMedia(block.content)) {
+    const isError = block.is_error === true
+    return (
+      <ResultParts
+        parts={block.content}
+        renderText={(text, key) => (
+          <TruncatedOutputRow key={key} content={text} isError={isError} />
+        )}
+      />
+    )
+  }
+
   const text = toolResultContentText(block.content)
 
   const isError = block.is_error === true

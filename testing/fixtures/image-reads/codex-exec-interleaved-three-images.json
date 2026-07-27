@@ -1,0 +1,73 @@
+{
+  "$fixture": {
+    "id": "codex-exec-interleaved-three-images",
+    "censusRows": [
+      4,
+      8
+    ],
+    "source": "/Users/juliusolsson/.codex/sessions/2026/07/23/rollout-2026-07-23T19-31-13-019f9008-09b5-7793-8222-307a8700791a.jsonl:68",
+    "proves": "THE reported bug. custom_tool_call_output from `exec` carrying text,image,text,image,text,image — the input_text parts are the filenames labelling each image, so flattening to one string destroys the pairing. 2,408,700 chars of base64 in a single feed row.",
+    "substitutions": [
+      {
+        "path": "payload.output[2].image_url",
+        "originalChars": 279883,
+        "mime": "image/jpeg"
+      },
+      {
+        "path": "payload.output[4].image_url",
+        "originalChars": 351791,
+        "mime": "image/jpeg"
+      },
+      {
+        "path": "payload.output[6].image_url",
+        "originalChars": 1777026,
+        "mime": "image/png"
+      }
+    ],
+    "totalOriginalPayloadChars": 2408700
+  },
+  "entry": {
+    "timestamp": "2026-07-23T17:33:03.846Z",
+    "type": "response_item",
+    "payload": {
+      "type": "custom_tool_call_output",
+      "call_id": "call_9CDLf3VpcLtsMgjHUGL7LlAq",
+      "output": [
+        {
+          "type": "input_text",
+          "text": "Script completed\nWall time 0.0 seconds\nOutput:\n"
+        },
+        {
+          "type": "input_text",
+          "text": "/Users/juliusolsson/Desktop/general/project-hamngatan/assets/photos/skandiahuset/Fotou.nr_0_295.jpg"
+        },
+        {
+          "type": "input_image",
+          "image_url": "data:image/jpeg;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+          "detail": "high"
+        },
+        {
+          "type": "input_text",
+          "text": "/Users/juliusolsson/Desktop/general/project-hamngatan/assets/photos/skandiahuset/GhmPK_1007.jpg"
+        },
+        {
+          "type": "input_image",
+          "image_url": "data:image/jpeg;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+          "detail": "high"
+        },
+        {
+          "type": "input_text",
+          "text": "/Users/juliusolsson/Desktop/general/project-hamngatan/03-project/vision-material/vision-the-crown-annotated.png"
+        },
+        {
+          "type": "input_image",
+          "image_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+          "detail": "high"
+        }
+      ],
+      "internal_chat_message_metadata_passthrough": {
+        "turn_id": "019f9008-2616-7933-ae5c-a8841c9583c6"
+      }
+    }
+  }
+}
