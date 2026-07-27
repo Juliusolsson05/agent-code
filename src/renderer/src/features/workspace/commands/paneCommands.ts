@@ -65,7 +65,19 @@ export const paneCommands: CommandDef[] = [
     // misleading palette rows are gated.
     id: 'split-vertical',
     category: 'create',
-    surface: 'grid',
+    // `app`, NOT `grid`. `splitFocused` has a full Dispatch branch that spawns a
+    // DETACHED agent (see the `dispatchSnapshot.dispatchMode` path), which is
+    // what this command's own description promises. `grid` made
+    // `surfaceAvailable` return false in Dispatch, so admission refused a mode
+    // the action implements.
+    //
+    // That was invisible until keybinds started routing through the gateway.
+    // Before, ⌥D was a hard-coded branch in useKeybinds that bypassed admission
+    // entirely and fired in both modes; the surface only hid the palette row.
+    // Routing the chord through admission fused "don't show this row here" with
+    // "refuse to run this here" — the exact split the governance plan exists to
+    // maintain — and ⌥D silently stopped working in Dispatch.
+    surface: 'app',
     title: 'Split Pane Right',
     description: '**What it does:** Creates a **new agent pane on the right**.\n\n**Use when:** You want side-by-side work in the grid.\n\n**Notes:** In **Dispatch**, this creates a detached agent instead.',
     run: ({ workspace }) => workspace.splitFocused('vertical'),
@@ -73,7 +85,7 @@ export const paneCommands: CommandDef[] = [
   {
     id: 'split-horizontal',
     category: 'create',
-    surface: 'grid',
+    surface: 'app',
     title: 'Split Pane Down',
     description: '**What it does:** Creates a **new agent pane below**.\n\n**Use when:** You want a stacked grid layout.\n\n**Notes:** In **Dispatch**, this creates a detached agent instead.',
     run: ({ workspace }) => workspace.splitFocused('horizontal'),
@@ -288,14 +300,20 @@ export const paneCommands: CommandDef[] = [
   {
     id: 'terminal-horizontal',
     category: 'create',
-    // `grid`: unlike split-vertical, a terminal split DOES still insert
-    // into a grid tree from Dispatch, but splitFocused now resolves the target
-    // from the focused Dispatch row/lane before inserting (#366). The result
-    // still lands in a grid the Dispatch user cannot see immediately, and the
-    // "Right" label still points at nothing visible — so the palette row is
-    // hidden in Dispatch all the same. Power-user keybinds and New Agent…
-    // Terminal still work because they route through splitFocused.
-    surface: 'grid',
+    // `app`. A terminal split from Dispatch lands in a grid the user cannot see
+    // immediately and the "Right" label points at nothing visible, which is why
+    // this was `grid` — the intent was to hide the palette ROW while, as the
+    // old comment here put it, "power-user keybinds still work because they
+    // route through splitFocused".
+    //
+    // They stopped working. Keybinds now route through the execution gateway,
+    // which applies `surfaceAvailable`, so `grid` refused ⌥T in Dispatch as well
+    // as hiding it. Between a slightly odd palette row and a dead chord the user
+    // has muscle memory for, the row is the cheaper cost — and `surface` is an
+    // APPLICABILITY declaration, which this command genuinely satisfies in both
+    // modes. Mode-conditional row hiding, if it is still wanted, needs its own
+    // mechanism rather than borrowing this one.
+    surface: 'app',
     title: 'New Terminal Right',
     description: '**What it does:** Opens a **terminal on the right**.\n\n**Use when:** You need a shell beside the current pane.\n\n**Notes:** From **Dispatch**, the terminal attaches to the focused row or lane’s project grid.',
     run: ({ workspace }) => workspace.splitFocused('vertical', 'terminal'),
@@ -303,7 +321,7 @@ export const paneCommands: CommandDef[] = [
   {
     id: 'terminal-vertical',
     category: 'create',
-    surface: 'grid',
+    surface: 'app',
     title: 'New Terminal Below',
     description: '**What it does:** Opens a **terminal below**.\n\n**Use when:** You need a shell under the current pane.\n\n**Notes:** From **Dispatch**, the terminal attaches to the focused row or lane’s project grid.',
     run: ({ workspace }) => workspace.splitFocused('horizontal', 'terminal'),
@@ -322,7 +340,9 @@ export const paneCommands: CommandDef[] = [
     return [
       {
         id: `${kind}-vertical`,
-        surface: 'grid' as const,
+        // `app` for the same reason as split-vertical: splitFocused spawns a
+        // detached agent in Dispatch, so the command applies in both modes.
+        surface: 'app' as const,
         // Same category/tier as the generic and terminal splits they sit
         // beside: creating a named-provider pane is not a more advanced act
         // than creating a default one, it just names the provider.
@@ -334,7 +354,9 @@ export const paneCommands: CommandDef[] = [
       },
       {
         id: `${kind}-horizontal`,
-        surface: 'grid' as const,
+        // `app` for the same reason as split-vertical: splitFocused spawns a
+        // detached agent in Dispatch, so the command applies in both modes.
+        surface: 'app' as const,
         category: 'create' as const,
         title: `New ${caps.shortLabel} Below`,
         description: `**What it does:** Opens a **${caps.shortLabel} agent below**.\n\n**Use when:** You want ${caps.shortLabel} in a stacked layout.\n\n**Notes:** In **Dispatch**, this creates a detached ${caps.shortLabel} agent instead.`,

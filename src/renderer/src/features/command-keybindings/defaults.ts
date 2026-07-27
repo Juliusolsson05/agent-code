@@ -96,10 +96,19 @@ export function buildDefaultKeybindings(): CommandBindingDefault[] {
     { commandId: 'close-pane', bindings: ['Cmd+W', 'Alt+W'], context: 'global' },
 
     // --- Creation -----------------------------------------------------------
-    { commandId: 'split-vertical', bindings: ['Alt+D'], context: 'grid' },
-    { commandId: 'split-horizontal', bindings: ['Alt+Shift+D'], context: 'grid' },
-    { commandId: 'terminal-horizontal', bindings: ['Alt+T'], context: 'grid' },
-    { commandId: 'terminal-vertical', bindings: ['Alt+Shift+T'], context: 'grid' },
+    // 'global', NOT 'grid'. These create commands work in BOTH modes —
+    // splitFocused spawns a detached agent in Dispatch — and a 'grid' context
+    // meant the chord did not even resolve there. Before keybinds routed through
+    // the binding table these were hard-coded branches that the Dispatch handler
+    // fell through to, so ⌥D/⌥T fired in Dispatch for the entire life of the
+    // app until that routing landed. This restores it.
+    //
+    // Safe against the Dispatch reservations: those claim ⌥ arrows and ⌥HJKL
+    // only, and check:keybindings enforces that.
+    { commandId: 'split-vertical', bindings: ['Alt+D'], context: 'global' },
+    { commandId: 'split-horizontal', bindings: ['Alt+Shift+D'], context: 'global' },
+    { commandId: 'terminal-horizontal', bindings: ['Alt+T'], context: 'global' },
+    { commandId: 'terminal-vertical', bindings: ['Alt+Shift+T'], context: 'global' },
 
     // --- Navigation ---------------------------------------------------------
     // The four ⌥Arrow aliases were live and undeclared. Note these are `grid`
@@ -259,8 +268,9 @@ export function buildDefaultKeybindings(): CommandBindingDefault[] {
     const chord = getRendererProviderCapabilities(kind).splitShortcutKey
     if (!chord) continue
     defaults.push(
-      { commandId: `${kind}-vertical`, bindings: [`Alt+${chord}`], context: 'grid' },
-      { commandId: `${kind}-horizontal`, bindings: [`Alt+Shift+${chord}`], context: 'grid' },
+      // 'global' for the same reason as the generic splits above.
+      { commandId: `${kind}-vertical`, bindings: [`Alt+${chord}`], context: 'global' },
+      { commandId: `${kind}-horizontal`, bindings: [`Alt+Shift+${chord}`], context: 'global' },
     )
   }
 
