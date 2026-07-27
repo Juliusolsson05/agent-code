@@ -103,16 +103,24 @@ describe('admission cannot be bypassed by source', () => {
   })
 
   it('refuses a grid command while Dispatch Mode owns the layout', async () => {
-    // The #228 class: `split-vertical` is surface 'grid' and is a silent no-op
-    // in Dispatch. Silent no-ops are what the explicit outcome replaces.
+    // The #228 class: a grid-only command is a silent no-op in Dispatch, and
+    // the explicit outcome is what replaces the silence.
+    //
+    // `nav-left`, not `split-vertical`. This case used the latter until the
+    // create commands were found to work in BOTH modes — `splitFocused` spawns
+    // a detached agent in Dispatch — and their `surface: 'grid'` was refusing a
+    // mode their own action implements. `nav-left` is genuinely grid-only:
+    // Dispatch focus is `dispatchMode.focusedSessionId` while grid navigation
+    // walks the tile tree, so asking the grid for a neighbour of a detached
+    // session really does nothing.
     const ctx = makeContext({ flags: { dispatchModeEnabled: true } })
-    const outcome = await dispatchCommand({ id: 'split-vertical', source: 'keybinding', ctx })
+    const outcome = await dispatchCommand({ id: 'nav-left', source: 'keybinding', ctx })
     expect(outcome.status).toBe('unavailable')
   })
 
   it('admits that same grid command outside Dispatch Mode', async () => {
     const ctx = makeContext({ flags: { dispatchModeEnabled: false } })
-    expect(canDispatchCommand('split-vertical', ctx)).toBe(true)
+    expect(canDispatchCommand('nav-left', ctx)).toBe(true)
   })
 
   it('distinguishes an unknown id from an unavailable one', async () => {
@@ -303,5 +311,43 @@ describe('dispatchResolvedRow admission', () => {
     })
     expect(outcome.status).toBe('ran')
     expect(uiCalls).toContain('ran')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Create commands apply in BOTH layout modes.
+//
+// ⌥D / ⌥C / ⌥T spawned an agent or terminal from Grid AND Dispatch for the whole
+// life of the app — the old hard-coded router put them below a Dispatch block
+// that only consumed arrows and HJKL, so they fell through. Routing chords
+// through the command layer gated them twice, on `surface: 'grid'` and on a
+// 'grid' binding context, and both had to be wrong for the chord to die.
+//
+// `splitFocused` has always had a Dispatch branch that spawns a DETACHED agent,
+// which is what these commands' own descriptions promise. This pins that
+// admission agrees with the action.
+// ---------------------------------------------------------------------------
+describe('create commands in Dispatch Mode', () => {
+  const CREATE_IDS = [
+    'split-vertical',
+    'split-horizontal',
+    'terminal-horizontal',
+    'terminal-vertical',
+    'codex-vertical',
+    'codex-horizontal',
+  ]
+
+  it('admits every create command while Dispatch owns the layout', () => {
+    const ctx = makeContext({ flags: { dispatchModeEnabled: true } })
+    for (const id of CREATE_IDS) {
+      expect(canDispatchCommand(id, ctx), `${id} refused in Dispatch`).toBe(true)
+    }
+  })
+
+  it('still admits them in the grid', () => {
+    const ctx = makeContext({ flags: { dispatchModeEnabled: false } })
+    for (const id of CREATE_IDS) {
+      expect(canDispatchCommand(id, ctx), `${id} refused in the grid`).toBe(true)
+    }
   })
 })
