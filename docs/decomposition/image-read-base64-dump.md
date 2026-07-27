@@ -583,6 +583,25 @@ between renders and crashed React's dispatcher.
 - `tool_search_output` still flattens, but no bytes escape and the census records no image
   on that payload type.
 
+### A fix that was worse than the flaw (rev 5)
+
+Review objected that "traceable to a real session" only regex-matched the citation string.
+Correct. The repair — `existsSync` on the cited path — was **wrong**, and CI caught it: the
+source corpora are the developer's own `~/.claude/projects` and `~/.codex/sessions`, which
+are machine-local by nature and cannot exist on a runner. A portable test became one that
+passed on exactly one laptop, and the local suite could not see it because the files were
+right there.
+
+The resolution is to be honest about where provenance is actually enforced: **at generation,
+not at assertion.** A fixture cannot exist unless `extract-image-fixtures.mts` opened that
+exact file at that exact line and read a parseable record. The test now asserts
+well-formedness always, and existence only when a corpus root is present — a second opinion
+where the evidence is reachable, and silence where it is not.
+
+Verified by re-running the whole suite under a `HOME` with no corpora, which is the
+condition CI runs in. That check is now the standard before pushing anything that touches
+these fixtures.
+
 ### Standing caveat
 
 The one claim still unverified by any test: **that this looks right in a running app.**

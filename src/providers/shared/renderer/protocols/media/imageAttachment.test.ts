@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
@@ -29,6 +30,13 @@ import {
 // the source record named in the fixture's `$fixture.source`.
 
 const FIXTURE_DIR = join(process.cwd(), 'testing/fixtures/image-reads')
+
+// The developer-local corpora the fixtures were extracted from. Absent on CI by
+// definition — see the provenance note below.
+const CORPUS_ROOTS = {
+  claude: join(homedir(), '.claude', 'projects'),
+  codex: join(homedir(), '.codex', 'sessions'),
+}
 
 type Fixture = {
   $fixture: {
@@ -263,17 +271,34 @@ describe('corpus-wide invariants', () => {
       expect(f.$fixture.censusRows.length).toBeGreaterThan(0)
       expect(f.$fixture.proves.length).toBeGreaterThan(0)
 
-      // WHY this opens the cited file instead of regex-matching the string:
-      // the first version asserted only /\.jsonl:\d+$/, which any plausible
-      // literal satisfies — it proved the citation was well-FORMED, not that it
-      // pointed at anything. "Traceable to a real session" has to mean the
-      // session is there.
-      const [path, line] = [
-        f.$fixture.source.slice(0, f.$fixture.source.lastIndexOf(':')),
-        Number(f.$fixture.source.slice(f.$fixture.source.lastIndexOf(':') + 1)),
-      ]
-      expect(existsSync(path), `${f.$fixture.id} cites a missing session: ${path}`).toBe(true)
+      const path = f.$fixture.source.slice(0, f.$fixture.source.lastIndexOf(':'))
+      const line = Number(f.$fixture.source.slice(f.$fixture.source.lastIndexOf(':') + 1))
+      expect(path).toMatch(/\.jsonl$/)
       expect(line).toBeGreaterThan(0)
+
+      // WHY provenance is only asserted when the corpus is present:
+      //
+      // Review correctly objected that the original check — a regex on the
+      // citation string — proved the citation was well-FORMED, not that it
+      // pointed at anything. The obvious repair was to `existsSync` the cited
+      // file. That repair was wrong, and CI caught it: the source corpora are
+      // the developer's own `~/.claude/projects` and `~/.codex/sessions`. They
+      // are machine-local by nature and cannot exist on a runner, so asserting
+      // their presence turned a portable test into one that only passed on one
+      // laptop.
+      //
+      // The real provenance gate is GENERATION, not assertion: a fixture cannot
+      // exist unless scripts/extract-image-fixtures.mts opened that exact file
+      // at that exact line and read a parseable record. This check adds a second
+      // opinion where the evidence is available, and says nothing where it is
+      // not — which is honest, rather than pretending to verify what it cannot
+      // reach.
+      if (existsSync(CORPUS_ROOTS.claude) || existsSync(CORPUS_ROOTS.codex)) {
+        const rooted = path.startsWith(CORPUS_ROOTS.claude) || path.startsWith(CORPUS_ROOTS.codex)
+        if (rooted) {
+          expect(existsSync(path), `${f.$fixture.id} cites a missing session: ${path}`).toBe(true)
+        }
+      }
     }
   })
 
