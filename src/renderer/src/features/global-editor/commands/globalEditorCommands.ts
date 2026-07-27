@@ -163,7 +163,16 @@ export const globalEditorCommands: CommandDef[] = [
       '**What it does:** Opens a curated **AI Workspace** file set in the Global Editor surface.\n\n**Use when:** An agent has attached plans, notes, or review artifacts from multiple worktrees and you want one focused review view.\n\n**Notes:** If more than one AI Workspace exists, you choose which one to open.',
     keywords: ['ai workspace', 'mcp', 'workspace', 'files', 'review', 'worktree', 'global editor'],
     keepPaletteOpen: true,
-    run: ({ ui }) => ui.enterAiWorkspaceOpenMode(),
+    run: ({ ui, flags }) => {
+      // Already showing this mode? Dismiss. A mode-entering command whose
+      // second press re-enters the mode it is already in reads as a dead key,
+      // which is the same complaint that started this whole change.
+      if (flags.paletteMode === 'ai-workspace-open') {
+        ui.closePalette()
+        return
+      }
+      ui.enterAiWorkspaceOpenMode()
+    },
   },
   {
     id: 'create-ai-workspace',
@@ -175,7 +184,16 @@ export const globalEditorCommands: CommandDef[] = [
       '**What it does:** Creates an empty named **AI Workspace** and opens it in the Global Editor surface.\n\n**Use when:** You want a curated file set ready before an agent starts attaching files.\n\n**Notes:** Agents can also create AI Workspaces through MCP.',
     keywords: ['ai workspace', 'mcp', 'create', 'workspace', 'review'],
     keepPaletteOpen: true,
-    run: ({ ui }) => ui.enterAiWorkspaceCreateMode(),
+    run: ({ ui, flags }) => {
+      // Already showing this mode? Dismiss. A mode-entering command whose
+      // second press re-enters the mode it is already in reads as a dead key,
+      // which is the same complaint that started this whole change.
+      if (flags.paletteMode === 'ai-workspace-create') {
+        ui.closePalette()
+        return
+      }
+      ui.enterAiWorkspaceCreateMode()
+    },
   },
   {
     id: 'clear-ai-workspace',
@@ -187,7 +205,16 @@ export const globalEditorCommands: CommandDef[] = [
       '**What it does:** Removes every file reference from an **AI Workspace** without deleting files from disk.\n\n**Use when:** A curated review set is stale but you want to keep the workspace itself.\n\n**Notes:** This only clears Agent Code metadata.',
     keywords: ['ai workspace', 'mcp', 'clear', 'delete', 'files'],
     keepPaletteOpen: true,
-    run: ({ ui }) => ui.enterAiWorkspaceClearMode(),
+    run: ({ ui, flags }) => {
+      // Already showing this mode? Dismiss. A mode-entering command whose
+      // second press re-enters the mode it is already in reads as a dead key,
+      // which is the same complaint that started this whole change.
+      if (flags.paletteMode === 'ai-workspace-clear') {
+        ui.closePalette()
+        return
+      }
+      ui.enterAiWorkspaceClearMode()
+    },
   },
   {
     // WHY a dedicated command rather than a setting:

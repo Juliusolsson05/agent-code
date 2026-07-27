@@ -8,14 +8,10 @@ export const tabCommands: CommandDef[] = [
     surface: 'app',
     title: 'New Tab',
     description: '**What it does:** Creates a **new tab** from a folder you choose.\n\n**Use when:** You want a separate project or workspace context.\n\n**Notes:** Starts a fresh agent in that folder.',
-    getState: ({ flags }) => panel(flags.pathPickerOpen),
-    run: ({ ui, flags }) => {
-      if (flags.pathPickerOpen) {
-        ui.closePathPicker()
-        return
-      }
-      ui.openNewTabPicker()
-    },
+    // NOT a toggle. `pathPickerOpen` is the SHARED path modal, not "the new-tab
+    // picker" — the resume flow opens the same one with a pre-filled cwd — so a
+    // boolean cannot say which request put it there. Escape dismisses it.
+    run: ({ ui }) => ui.openNewTabPicker(),
   },
   {
     id: 'close-tab',
@@ -68,6 +64,15 @@ export const tabCommands: CommandDef[] = [
     title: 'Resume Session',
     description: '**What it does:** Opens the **resume session** flow.\n\n**Use when:** You want to continue an old Claude or Codex session.\n\n**Notes:** Uses the focused project folder as the default.',
     keepPaletteOpen: true,
-    run: ({ ui }) => ui.enterResumeMode(),
+    run: ({ ui, flags }) => {
+      // Already showing this mode? Dismiss. A mode-entering command whose
+      // second press re-enters the mode it is already in reads as a dead key,
+      // which is the same complaint that started this whole change.
+      if (flags.paletteMode === 'resume') {
+        ui.closePalette()
+        return
+      }
+      ui.enterResumeMode()
+    },
   },
 ]

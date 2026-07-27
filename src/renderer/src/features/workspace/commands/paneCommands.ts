@@ -415,7 +415,16 @@ export const paneCommands: CommandDef[] = [
     // list. Admission has to agree with what the command will show, or the
     // command is advertising something it cannot deliver.
     when: ({ workspace }) => buriedInActiveTab(workspace) > 0,
-    run: ({ ui }) => ui.enterBuriedMode(),
+    run: ({ ui, flags }) => {
+      // Already showing this mode? Dismiss. A mode-entering command whose
+      // second press re-enters the mode it is already in reads as a dead key,
+      // which is the same complaint that started this whole change.
+      if (flags.paletteMode === 'buried') {
+        ui.closePalette()
+        return
+      }
+      ui.enterBuriedMode()
+    },
   },
   {
     id: 'kill-buried-pane',
@@ -427,7 +436,16 @@ export const paneCommands: CommandDef[] = [
     keywords: ['kill', 'buried', 'hidden', 'pane', 'session', 'pane'],
     keepPaletteOpen: true,
     when: ({ workspace }) => buriedInActiveTab(workspace) > 0,
-    run: ({ ui }) => ui.enterKillBuriedMode(),
+    run: ({ ui, flags }) => {
+      // Already showing this mode? Dismiss. A mode-entering command whose
+      // second press re-enters the mode it is already in reads as a dead key,
+      // which is the same complaint that started this whole change.
+      if (flags.paletteMode === 'kill-buried') {
+        ui.closePalette()
+        return
+      }
+      ui.enterKillBuriedMode()
+    },
   },
   {
     id: 'toggle-tail',

@@ -1,3 +1,4 @@
+import type { PaletteMode } from '@renderer/features/command-palette/paletteMode'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { AgentViewMode, UsageHeaderLevel } from '@renderer/app-state/settings/types'
 import type { RenderedViewPolicy } from '@renderer/workspace/agentDisplayMode'
@@ -298,6 +299,17 @@ export type CommandContext = {
      * case that matters — pressing the chord while the surface is open for a
      * DIFFERENT session must re-target, not close.
      */
+    /** The palette is on screen. */
+    commandPaletteOpen: boolean
+    /**
+     * The palette's active sub-mode.
+     *
+     * Exposed so a mode-entering command can tell "open me" from "I am already
+     * the thing on screen" and dismiss instead. Without it those nine commands
+     * could only ever re-enter the mode they were already in, which reads as a
+     * dead key.
+     */
+    paletteMode: PaletteMode
     /** The Usage modal is on screen. */
     usageModalOpen: boolean
     /** The Keyboard Shortcuts reference is on screen. */

@@ -65,6 +65,7 @@ import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/comma
 import { resolveAgentPaneLabel } from '@renderer/workspace/tile-tree/paneLabels'
 import { useWorkspaceContext } from '@renderer/workspace/WorkspaceContext'
 import type { PaletteMode } from '@renderer/features/command-palette/paletteMode'
+import { commandOwnsOpenSurface } from '@renderer/features/command-palette/surfaceOwnership'
 import { useAppStore } from '@renderer/app-state/hooks'
 import { useCaffeinateStore } from '@renderer/features/caffeinate/store'
 import { useDevDebugConfig } from '@renderer/features/debug/devDebugConfig'
@@ -166,7 +167,17 @@ export function CommandPalette() {
         // correctly blocked. When the command palette itself is open it also owns
         // this marker, so menu commands wait instead of competing with its current
         // search/navigation turn.
-        if (hasAppInteractionOwner()) return
+        // ONE exemption, matching the keybinding router: the command that owns
+        // the surface currently holding the interaction may dismiss it. Without
+        // this, File → New Tab twice left the path picker up, and the rule this
+        // change exists to establish — "invoking again dismisses it, from every
+        // invocation source" — was true for chords and false for the menu.
+        if (
+          hasAppInteractionOwner()
+          && !commandOwnsOpenSurface(commandId, useAppStore.getState())
+        ) {
+          return
+        }
         // WHY this temporarily mounts the open implementation: command
         // definitions need live workspace actions, but keeping that registry
         // subscribed while the palette is closed made every session delta
@@ -225,7 +236,7 @@ function OpenCommandPalette({
   const onClose = useAppStore(state => state.closeCommandPalette)
   const settings = useAppStore(state => state.settings)
   const setSettings = useAppStore(state => state.setSettings)
-  const { onNewTabRequest, onResumeRequest } = usePathPickerRequests()
+  const { onNewTabRequest } = usePathPickerRequests()
 
   const openTileTabsModal = useAppStore(state => state.openTileTabsModal)
   const onTileTabsRequest = useCallback(() => {
@@ -308,6 +319,7 @@ function OpenCommandPalette({
   const usageHeaderLevel = settings.usageHeaderLevel
   const dangerousAgentsEnabled = settings.dangerousAgentsEnabled
   const aggressiveDebugPersistenceEnabled = settings.aggressiveDebugPersistence
+  const commandPaletteOpenFlag = useAppStore(state => state.commandPaletteOpen)
   const usageModalOpen = useAppStore(state => state.usageModalOpen)
   const keyboardShortcutsOpen = useAppStore(state => state.keyboardShortcutsOpen)
   const agentActivityOpen = useAppStore(state => state.agentActivityOpen)
@@ -628,6 +640,8 @@ function OpenCommandPalette({
         usageHeaderLevel,
         dangerousAgentsEnabled,
         aggressiveDebugPersistenceEnabled,
+        commandPaletteOpen: commandPaletteOpenFlag,
+        paletteMode: mode,
         usageModalOpen,
         keyboardShortcutsOpen,
         agentActivityOpen,
@@ -669,7 +683,6 @@ function OpenCommandPalette({
     [
       workspace,
       onNewTabRequest,
-      onResumeRequest,
       onTileTabsRequest,
       onReorderTabsRequest,
       onSettingsRequest,
@@ -731,6 +744,8 @@ function OpenCommandPalette({
       usageHeaderLevel,
       dangerousAgentsEnabled,
       aggressiveDebugPersistenceEnabled,
+      commandPaletteOpenFlag,
+      mode,
       usageModalOpen,
       keyboardShortcutsOpen,
       agentActivityOpen,
@@ -909,38 +924,26 @@ function OpenCommandPalette({
     return paletteCommands[selectedIndex] ?? null
   }, [mode, paletteCommands, selectedIndex])
 
-  // Mount reset. Deliberately SKIPPED when this mount was caused by a pending
-  // command invocation: a chord mounts this component in order to run a
-  // command, and that command may have just seeded the mode (store) and the
-  // template form (local) synchronously inside the layout effect above. This
-  // effect is passive, so it runs AFTER that — resetting here would wipe the
-  // very state the invocation existed to produce.
+  // Focus the search input whenever the palette becomes VISIBLE.
   //
-  // `mode` is no longer reset here at all; `closeCommandPalette` owns that, so
-  // reopening starts clean without this effect racing a mode-entering command.
-  const mountedForPendingCommand = useRef(pendingMenuCommand !== null)
+  // This replaced a mount-time reset effect that also did the focusing. That
+  // effect had a `mountedForPendingCommand` guard which, on inspection, is never
+  // false: `openCommandPalette` has exactly one caller — the
+  // `open-command-palette` command — and commands only run from inside this
+  // host, which is already mounted when they do. So every mount carries a
+  // pending invocation, the guard always returned early, and the focus call
+  // went with it. A comment described a distinction with no other branch.
+  //
+  // The state resets it also performed were redundant on a fresh mount (the
+  // `useState` initializers already give those values) and are gone. Focus is
+  // not redundant, so it moves here, keyed on `visible` rather than on mount —
+  // which is the moment it actually matters, and is correct for both paths:
+  // opened directly, or opened into a sub-mode by a chord.
   useEffect(() => {
-    if (mountedForPendingCommand.current) return
-    setQuery('')
-    setSelectedIndex(0)
-    setSessions([])
-    setSessionsLoading(false)
-    setAiWorkspaces([])
-    setAiWorkspacesLoading(false)
-    setAiWorkspaceError(null)
-    setAiWorkspacePending(null)
-    setArmedAiWorkspaceClearId(null)
-    setPromptTemplateForm({
-      id: null,
-      title: '',
-      description: '',
-      body: '',
-      insertMode: 'replace',
-      variables: [],
-    })
-    setPromptTemplateFillState(null)
-    requestAnimationFrame(() => inputRef.current?.focus())
-  }, [])
+    if (!visible) return
+    const frame = requestAnimationFrame(() => inputRef.current?.focus())
+    return () => cancelAnimationFrame(frame)
+  }, [visible])
 
   useEffect(() => {
     setSelectedIndex(prev => Math.min(prev, Math.max(0, filteredLength - 1)))
@@ -1019,6 +1022,14 @@ function OpenCommandPalette({
     // where you were" rule. `closeAfterRun` records that the palette was shut
     // when the invocation was requested; honouring it blindly would open the
     // palette and shut it in the same frame, and the chord would look broken.
+    //
+    // CAVEAT, because the rule is not unconditional: `dispatchCommand` is not
+    // awaited, so this reads the flag at the first `await` inside `run`. A
+    // command that opens the palette only AFTER an await would be closed in the
+    // same frame. All nine mode-entering commands set the mode in their
+    // synchronous prefix (`enterResumeMode` sets 'resume' before its await), so
+    // the property holds today — but a future command must open the palette
+    // before its first await for it to keep holding.
     //
     // The test is the LIVE flag, read after `run`, rather than a hardcoded id
     // list. That list held only `open-command-palette`, and it could only ever
@@ -1155,10 +1166,10 @@ function OpenCommandPalette({
     (workspaceId: string) => {
       useGlobalEditorStore.getState().openAiWorkspace(workspaceId)
       // Idempotent open — see the note on `ui.openGlobalEditor`.
-    openGlobalEditorAction()
+      openGlobalEditorAction()
       onClose()
     },
-    [globalEditorOpen, onClose, toggleGlobalEditor],
+    [onClose, openGlobalEditorAction],
   )
 
   const createAiWorkspace = useCallback(async () => {

@@ -77,12 +77,6 @@ export const createUiShellSlice: StateCreator<
     set({ commandPaletteOpen: true, paletteMode: DEFAULT_PALETTE_MODE }, false, 'uiShell/openCommandPalette'),
   closeCommandPalette: () =>
     set({ commandPaletteOpen: false, paletteMode: DEFAULT_PALETTE_MODE }, false, 'uiShell/closeCommandPalette'),
-  toggleCommandPalette: () =>
-    set(state => ({
-      commandPaletteOpen: !state.commandPaletteOpen,
-      paletteMode: DEFAULT_PALETTE_MODE,
-    }), false, 'uiShell/toggleCommandPalette'),
-
   /**
    * Enter a sub-mode, MAKING THE PALETTE VISIBLE.
    *

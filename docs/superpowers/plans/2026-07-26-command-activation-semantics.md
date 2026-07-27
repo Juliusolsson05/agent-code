@@ -280,3 +280,75 @@ about Escape rather than about activation semantics.
 `save-editor-file`'s `when` is now correct, but the underlying design — a window
 event with a listener that exists only while the editor is mounted — is still
 the reason the guard has to be so precise.
+
+
+---
+
+## Review round (2026-07-27)
+
+Two orchestrated reviewers (Claude + Codex) read the branch independently.
+Codex: 0 critical, 2 high. Claude: 10 findings, none breaking types or tests.
+Both ran `tsc -b` (Claude also `--force`), `check:keybindings` and the full
+suite, all exit 0. Every finding was judged valid and fixed.
+
+### The two that mattered
+
+**The headline rule was delivered for half the bug report.** Phase 1 turned ⌥P
+and ⌘⇧R from *nothing* into *opens*; the second press still did nothing, because
+the palette is itself a dialog and no palette-mode command was in the ownership
+table. Worse, ⌥P's second press typed `π` into the query — Alt chords over a
+text target are not preventDefault-ed, so the keystroke composed. The nine
+commands now compare `flags.paletteMode` and dismiss, via a SECOND table
+(`PALETTE_MODE_COMMANDS`).
+
+That split was itself found by a failing test. Merging the two kinds of
+ownership into one map type-checked and was wrong: it implied Resume Session
+should carry an Open/Closed badge, when "the palette is open" is not a property
+of Resume Session. These commands do not own a surface with its own flag — they
+own a MODE of one shared surface.
+
+**Phase 2 only exempted keybindings.** The native-menu handler had its own copy
+of the ownership bail, so File → New Tab twice left the picker up. "Every
+invocation source" was false for the menu — in a PR whose title is that phrase.
+
+### The rest
+
+- The table's `keyof UiShellState` accepted any of ~40 keys, including the nine
+  `SessionId | null` ones where `=== true` is permanently false — silent, and
+  exactly the failure its own test claimed to guard. Narrowed to boolean-valued
+  keys only; verified by sabotage that a nullable flag now fails to compile.
+- The mount-reset effect was UNREACHABLE (`mountedForPendingCommand` is never
+  false, because `openCommandPalette`'s only caller is a command, and commands
+  run from inside an already-mounted host). Its state resets were redundant, but
+  its `requestAnimationFrame` focus call was not — focus now keys on `visible`.
+- `new-tab` was REMOVED from the toggle set. `pathPickerOpen` means "the shared
+  path modal is open", not "the new-tab picker is open" — the same
+  boolean-loses-information problem the session-scoped surfaces were kept out
+  for. Live consequences: ⌘T dismissed the picker mid-submit during a slow
+  spawn, and a create action had started rendering an Open/Closed badge.
+- `toggleCommandPalette` was deleted. Phase 5 removed its only reader and Phase 1
+  then added new behavior to it — mechanism-with-no-consumer, in the sweep whose
+  whole purpose is finding that shape.
+- `openResumePicker`'s removal had left `onResumeRequest` destructured and in a
+  memo dep array.
+- The live-flag close rule holds only for a command that opens the palette in its
+  SYNCHRONOUS prefix; the comment asserted it unconditionally. Now stated.
+- One dep array was wrong and misindented — in the commit whose stated
+  discipline is that missing a dep is a silent staleness bug.
+
+### Test added
+
+Nothing proved a toggle's `run` closed the RIGHT surface — a copy-paste closing
+someone else's would have passed. The new case drives every listed command with
+its own flag true and asserts exactly one dismissal and no open. It caught a real
+distinction on first run (Remote Panel legitimately uses a `toggle*` rather than
+a `close*`), and is sabotage-verified.
+
+### Accepted, not fixed
+
+`executePromptTemplate` sets its mode after an `await`, so a dismissal during
+that window could resurrect the palette into a mode whose component-local data
+is gone. Unreachable today — both built-in templates declare `variables: []`, so
+the awaiting branch cannot be entered. It is the structural cost of Phase 1 that
+this plan did not name: the mode is store state while everything the mode needs
+is still component state. Recorded here rather than papered over.
