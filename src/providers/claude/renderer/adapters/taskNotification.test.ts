@@ -35,6 +35,30 @@ describe('parseTaskNotification', () => {
     expect(taskNotificationStatusKind(n!)).toBe('error')
   })
 
+  it('classifies the statusless stall watchdog as attention, not success', () => {
+    // LocalShellTask.startStallWatchdog emits NO <status> on purpose (print.ts
+    // treats <status> as terminal and would falsely close the task). Callers
+    // rendered `error ? '✗' : '✓'`, so a background command BLOCKED on an
+    // interactive prompt showed a green check — the most misleading state this
+    // surface can paint, since the watchdog exists to ask for a human.
+    const n = parseTaskNotification(`<task-notification>
+<task-id>t-99</task-id>
+<output-file>/tmp/t-99</output-file>
+<summary>Background command "migrate" appears to be waiting for interactive input</summary>
+</task-notification>`)
+    expect(n?.status).toBeNull()
+    expect(taskNotificationStatusKind(n!)).toBe('attention')
+  })
+
+  it('keeps an unrecognised status distinct from attention', () => {
+    // 'other' means "a status we do not recognise", which is not a call for
+    // attention. Collapsing the two would put the ⏸ glyph on ordinary states.
+    const n = parseTaskNotification(
+      `<task-notification><status>queued</status><summary>x</summary></task-notification>`,
+    )
+    expect(taskNotificationStatusKind(n!)).toBe('other')
+  })
+
   it('bounds status and usage before they become joined headline text', () => {
     const n = parseTaskNotification(`<task-notification>
       <tool-use-id>exact-correlation-id</tool-use-id>

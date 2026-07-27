@@ -1,0 +1,767 @@
+{
+  "source": "~/.claude/projects/~user-Desktop-Development-agent-code/4d4c8b1a-5263-4bdc-8e24-14fc7c2bd543.jsonl",
+  "note": "Ground truth for the dequeue/remove asymmetry: `dequeue` is followed by a user entry carrying the notification verbatim; `remove` is followed by nothing, because the mid-turn attachment drain is never written to the transcript.",
+  "events": [
+    {
+      "kind": "op",
+      "op": "enqueue",
+      "content": "synthetic queued prompt 000 — recorded operator text removed, structure preserved",
+      "timestamp": "2026-07-04T08:50:56.831Z"
+    },
+    {
+      "kind": "op",
+      "op": "remove",
+      "timestamp": "2026-07-04T08:51:09.623Z"
+    },
+    {
+      "kind": "user",
+      "uuid": "fea68740-07d8-499e-bc6e-d1183d5cfe98",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "op",
+      "op": "enqueue",
+      "content": "<task-notification>\n<task-id>b2hxf024k</task-id>\n<tool-use-id>toolu_01GEi1Zy39TXWLr3R32rg9L4</tool-use-id>\n<output-file>/private/tmp/claude-501/~user-Desktop-Development-agent-code/4d4c8b1a-5263-4bdc-8e24-14fc7c2bd543/tasks/b2hxf024k.output</output-file>\n<status>completed</status>\n<summary>Background command \"Log top processes every 6s for ~4 minutes\" completed (exit code 0)</summary>\n</task-notification>",
+      "timestamp": "2026-07-04T08:54:22.663Z"
+    },
+    {
+      "kind": "op",
+      "op": "remove",
+      "timestamp": "2026-07-04T08:54:32.963Z"
+    },
+    {
+      "kind": "user",
+      "uuid": "7b9f7f9a-ef78-4102-b0a5-0b467827886a",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "user",
+      "uuid": "c0399fe4-e29c-4106-be32-a255274e423d",
+      "text": "synthetic queued prompt 009 — recorded operator text removed, structure preserved"
+    },
+    {
+      "kind": "user",
+      "uuid": "7f743317-e231-486c-9163-556863525eb4",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "user",
+      "uuid": "85093c30-726f-479d-9192-3b08d654f447",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "user",
+      "uuid": "9d8c60e8-e160-4d74-aa94-74ea4ee12303",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "user",
+      "uuid": "6e0c81db-52ee-4fa2-998f-482e12067cef",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "user",
+      "uuid": "133accc2-6b5c-4f62-bfe8-2bb7f7dc209f",
+      "text": "synthetic queued prompt 009 — recorded operator text removed, structure preserved"
+    },
+    {
+      "kind": "user",
+      "uuid": "65ac9f56-8a9d-4d47-bde2-8b170aa4fc19",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "user",
+      "uuid": "f9e29d09-8d05-4358-b3cf-be0577889ac9",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "user",
+      "uuid": "12ac686b-09ee-4031-b856-044ca412f032",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "user",
+      "uuid": "c2e9093c-9fd4-4c0a-b074-c729a107bb31",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "user",
+      "uuid": "00fb78a8-c067-49d2-9b10-9525c942e804",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "user",
+      "uuid": "c1915697-6933-484d-a1c0-eab0be59a0be",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "user",
+      "uuid": "34ce4cdf-a64d-4acc-bc76-8d17f436fb19",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "user",
+      "uuid": "ca2022fa-93b6-4374-8d48-f97b13ebe5e6",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "op",
+      "op": "enqueue",
+      "content": "<task-notification>\n<task-id>aeadc3a98eee4130b</task-id>\n<tool-use-id>toolu_019XxFvsJkxhDT4eZ95ZAJk2</tool-use-id>\n<output-file>/private/tmp/claude-501/~user-Desktop-Development-agent-code/3eff7f99-cda8-4e09-9dfa-98509a78ee3d/tasks/aeadc3a98eee4130b.output</output-file>\n<status>completed</status>\n<summary>Agent \"Persistence provider assumptions audit\" finished</summary>\n<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>\n<result>⟨result body removed — not read by the reconciler⟩</result>\n<usage><subagent_tokens>102868</subagent_tokens><tool_uses>27</tool_uses><duration_ms>175120</duration_ms></usage>\n</task-notification>",
+      "timestamp": "2026-07-04T12:49:52.881Z"
+    },
+    {
+      "kind": "op",
+      "op": "remove",
+      "timestamp": "2026-07-04T12:49:52.885Z"
+    },
+    {
+      "kind": "op",
+      "op": "enqueue",
+      "content": "<task-notification>\n<task-id>a9696b1d79d1ddeea</task-id>\n<tool-use-id>toolu_01Nv13bDZUduJKfvWewhhpVn</tool-use-id>\n<output-file>/private/tmp/claude-501/~user-Desktop-Development-agent-code/3eff7f99-cda8-4e09-9dfa-98509a78ee3d/tasks/a9696b1d79d1ddeea.output</output-file>\n<status>completed</status>\n<summary>Agent \"Resume/transcript identity audit\" finished</summary>\n<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>\n<result>⟨result body removed — not read by the reconciler⟩</result>\n<usage><subagent_tokens>125086</subagent_tokens><tool_uses>37</tool_uses><duration_ms>186201</duration_ms></usage>\n</task-notification>",
+      "timestamp": "2026-07-04T12:50:12.453Z"
+    },
+    {
+      "kind": "op",
+      "op": "remove",
+      "timestamp": "2026-07-04T12:50:12.457Z"
+    },
+    {
+      "kind": "op",
+      "op": "enqueue",
+      "content": "<task-notification>\n<task-id>a5d29207968102e33</task-id>\n<tool-use-id>toolu_01FWFuMCzH9wiJHpwvUxPUyX</tool-use-id>\n<output-file>/private/tmp/claude-501/~user-Desktop-Development-agent-code/3eff7f99-cda8-4e09-9dfa-98509a78ee3d/tasks/a5d29207968102e33.output</output-file>\n<status>completed</status>\n<summary>Agent \"Map main-process provider coupling\" finished</summary>\n<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>\n<result>⟨result body removed — not read by the reconciler⟩</result>\n<usage><subagent_tokens>153727</subagent_tokens><tool_uses>39</tool_uses><duration_ms>299242</duration_ms></usage>\n</task-notification>",
+      "timestamp": "2026-07-04T12:50:54.722Z"
+    },
+    {
+      "kind": "op",
+      "op": "dequeue",
+      "timestamp": "2026-07-04T12:50:54.727Z"
+    },
+    {
+      "kind": "user",
+      "uuid": "dcda1725-0de6-4374-a4a4-39e22bb07a4e",
+      "text": "<task-notification>\n<task-id>a5d29207968102e33</task-id>\n<tool-use-id>toolu_01FWFuMCzH9wiJHpwvUxPUyX</tool-use-id>\n<output-file>/private/tmp/claude-501/~user-Desktop-Development-agent-code/3eff7f99-cda8-4e09-9dfa-98509a78ee3d/tasks/a5d29207968102e33.output</output-file>\n<status>completed</status>\n<summary>Agent \"Map main-process provider coupling\" finished</summary>\n<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>\n<result>⟨result body removed — not read by the reconciler⟩</result>\n<usage><subagent_tokens>153727</subagent_tokens><tool_uses>39</tool_uses><duration_ms>299242</duration_ms></usage>\n</task-notification>"
+    },
+    {
+      "kind": "op",
+      "op": "enqueue",
+      "content": "<task-notification>\n<task-id>a74a3e1d481d5e28f</task-id>\n<tool-use-id>toolu_01MZG6vQd9uyuKJqDxvtrn6c</tool-use-id>\n<output-file>/private/tmp/claude-501/~user-Desktop-Development-agent-code/3eff7f99-cda8-4e09-9dfa-98509a78ee3d/tasks/a74a3e1d481d5e28f.output</output-file>\n<status>completed</status>\n<summary>Agent \"Proxy/debug infra provider audit\" finished</summary>\n<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>\n<result>⟨result body removed — not read by the reconciler⟩</result>\n<usage><subagent_tokens>102623</subagent_tokens><tool_uses>32</tool_uses><duration_ms>213944</duration_ms></usage>\n</task-notification>",
+      "timestamp": "2026-07-04T12:50:57.136Z"
+    },
+    {
+      "kind": "op",
+      "op": "remove",
+      "timestamp": "2026-07-04T12:50:57.139Z"
+    },
+    {
+      "kind": "op",
+      "op": "enqueue",
+      "content": "<task-notification>\n<task-id>a7abded6f155fb238</task-id>\n<tool-use-id>toolu_01FqHfQTgCUJwC8vXMmgeBKf</tool-use-id>\n<output-file>/private/tmp/claude-501/~user-Desktop-Development-agent-code/3eff7f99-cda8-4e09-9dfa-98509a78ee3d/tasks/a7abded6f155fb238.output</output-file>\n<status>completed</status>\n<summary>Agent \"Orchestration/MCP provider audit\" finished</summary>\n<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>\n<result>⟨result body removed — not read by the reconciler⟩</result>\n<usage><subagent_tokens>104270</subagent_tokens><tool_uses>37</tool_uses><duration_ms>233475</duration_ms></usage>\n</task-notification>",
+      "timestamp": "2026-07-04T12:51:08.680Z"
+    },
+    {
+      "kind": "op",
+      "op": "remove",
+      "timestamp": "2026-07-04T12:51:08.682Z"
+    },
+    {
+      "kind": "op",
+      "op": "enqueue",
+      "content": "<task-notification>\n<task-id>a40f7495e52735111</task-id>\n<tool-use-id>toolu_01DXh36zqeUoGAkE94KNwHiy</tool-use-id>\n<output-file>/private/tmp/claude-501/~user-Desktop-Development-agent-code/3eff7f99-cda8-4e09-9dfa-98509a78ee3d/tasks/a40f7495e52735111.output</output-file>\n<status>completed</status>\n<summary>Agent \"Conditions/toolchain/settings audit\" finished</summary>\n<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>\n<result>⟨result body removed — not read by the reconciler⟩</result>\n<usage><subagent_tokens>87557</subagent_tokens><tool_uses>43</tool_uses><duration_ms>254076</duration_ms></usage>\n</task-notification>",
+      "timestamp": "2026-07-04T12:51:45.751Z"
+    },
+    {
+      "kind": "op",
+      "op": "remove",
+      "timestamp": "2026-07-04T12:51:45.754Z"
+    },
+    {
+      "kind": "op",
+      "op": "enqueue",
+      "content": "<task-notification>\n<task-id>a49916ea3de1db4ee</task-id>\n<tool-use-id>toolu_01Ww8RnGfhn5n4E5Szd18rVS</tool-use-id>\n<output-file>/private/tmp/claude-501/~user-Desktop-Development-agent-code/3eff7f99-cda8-4e09-9dfa-98509a78ee3d/tasks/a49916ea3de1db4ee.output</output-file>\n<status>completed</status>\n<summary>Agent \"Diff headless package contracts\" finished</summary>\n<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>\n<result>⟨result body removed — not read by the reconciler⟩</result>\n<usage><subagent_tokens>222373</subagent_tokens><tool_uses>41</tool_uses><duration_ms>421576</duration_ms></usage>\n</task-notification>",
+      "timestamp": "2026-07-04T12:53:09.977Z"
+    },
+    {
+      "kind": "op",
+      "op": "dequeue",
+      "timestamp": "2026-07-04T12:53:09.982Z"
+    },
+    {
+      "kind": "user",
+      "uuid": "a8badf96-338a-4d0b-953d-da3ea458cdb0",
+      "text": "<task-notification>\n<task-id>a49916ea3de1db4ee</task-id>\n<tool-use-id>toolu_01Ww8RnGfhn5n4E5Szd18rVS</tool-use-id>\n<output-file>/private/tmp/claude-501/~user-Desktop-Development-agent-code/3eff7f99-cda8-4e09-9dfa-98509a78ee3d/tasks/a49916ea3de1db4ee.output</output-file>\n<status>completed</status>\n<summary>Agent \"Diff headless package contracts\" finished</summary>\n<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>\n<result>⟨result body removed — not read by the reconciler⟩</result>\n<usage><subagent_tokens>222373</subagent_tokens><tool_uses>41</tool_uses><duration_ms>421576</duration_ms></usage>\n</task-notification>"
+    },
+    {
+      "kind": "op",
+      "op": "enqueue",
+      "content": "<task-notification>\n<task-id>a46daa76de24ef42e</task-id>\n<output-file>/private/tmp/claude-501/~user-Desktop-Development-agent-code/3eff7f99-cda8-4e09-9dfa-98509a78ee3d/tasks/a46daa76de24ef42e.output</output-file>\n<status>completed</status>\n<summary>Agent \"Map cross-cutting provider assumptions\" finished</summary>\n<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>\n<result>⟨result body removed — not read by the reconciler⟩</result>\n<usage><subagent_tokens>81652</subagent_tokens><tool_uses>20</tool_uses><duration_ms>425365</duration_ms></usage>\n</task-notification>",
+      "timestamp": "2026-07-04T12:53:24.187Z"
+    },
+    {
+      "kind": "op",
+      "op": "dequeue",
+      "timestamp": "2026-07-04T12:53:24.197Z"
+    },
+    {
+      "kind": "user",
+      "uuid": "2cc8de7c-e6cb-46a8-a260-98cc1b4e2564",
+      "text": "<task-notification>\n<task-id>a46daa76de24ef42e</task-id>\n<output-file>/private/tmp/claude-501/~user-Desktop-Development-agent-code/3eff7f99-cda8-4e09-9dfa-98509a78ee3d/tasks/a46daa76de24ef42e.output</output-file>\n<status>completed</status>\n<summary>Agent \"Map cross-cutting provider assumptions\" finished</summary>\n<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>\n<result>⟨result body removed — not read by the reconciler⟩</result>\n<usage><subagent_tokens>81652</subagent_tokens><tool_uses>20</tool_uses><duration_ms>425365</duration_ms></usage>\n</task-notification>"
+    },
+    {
+      "kind": "op",
+      "op": "enqueue",
+      "content": "<task-notification>\n<task-id>aa3f15ebb60de4452</task-id>\n<tool-use-id>toolu_012cMdwnevdYAgxU6wTMTNDP</tool-use-id>\n<output-file>/private/tmp/claude-501/~user-Desktop-Development-agent-code/3eff7f99-cda8-4e09-9dfa-98509a78ee3d/tasks/aa3f15ebb60de4452.output</output-file>\n<status>completed</status>\n<summary>Agent \"Map renderer provider coupling\" finished</summary>\n<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>\n<result>⟨result body removed — not read by the reconciler⟩</result>\n<usage><subagent_tokens>154909</subagent_tokens><tool_uses>56</tool_uses><duration_ms>461882</duration_ms></usage>\n</task-notification>",
+      "timestamp": "2026-07-04T12:53:42.278Z"
+    },
+    {
+      "kind": "op",
+      "op": "dequeue",
+      "timestamp": "2026-07-04T12:53:42.282Z"
+    },
+    {
+      "kind": "user",
+      "uuid": "71118882-dee4-4a3d-a039-c650fdcc6c74",
+      "text": "<task-notification>\n<task-id>aa3f15ebb60de4452</task-id>\n<tool-use-id>toolu_012cMdwnevdYAgxU6wTMTNDP</tool-use-id>\n<output-file>/private/tmp/claude-501/~user-Desktop-Development-agent-code/3eff7f99-cda8-4e09-9dfa-98509a78ee3d/tasks/aa3f15ebb60de4452.output</output-file>\n<status>completed</status>\n<summary>Agent \"Map renderer provider coupling\" finished</summary>\n<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>\n<result>⟨result body removed — not read by the reconciler⟩</result>\n<usage><subagent_tokens>154909</subagent_tokens><tool_uses>56</tool_uses><duration_ms>461882</duration_ms></usage>\n</task-notification>"
+    },
+    {
+      "kind": "op",
+      "op": "enqueue",
+      "content": "synthetic queued prompt 001 — recorded operator text removed, structure preserved",
+      "timestamp": "2026-07-04T12:53:52.612Z"
+    },
+    {
+      "kind": "op",
+      "op": "remove",
+      "timestamp": "2026-07-04T12:54:04.562Z"
+    },
+    {
+      "kind": "user",
+      "uuid": "679484e8-a7bb-4017-bdb4-08cd84e81a93",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "user",
+      "uuid": "038f00d3-de74-4f61-b8dc-cd016e5bb1bb",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "op",
+      "op": "enqueue",
+      "content": "<task-notification>\n<task-id>a51126b30b270e808</task-id>\n<tool-use-id>toolu_018M9YtW7sxskr5uGhWZoncf</tool-use-id>\n<output-file>/private/tmp/claude-501/~user-Desktop-Development-agent-code/3eff7f99-cda8-4e09-9dfa-98509a78ee3d/tasks/a51126b30b270e808.output</output-file>\n<status>completed</status>\n<summary>Agent \"Deep-read transcript parser internals\" finished</summary>\n<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>\n<result>⟨result body removed — not read by the reconciler⟩</result>\n<usage><subagent_tokens>144341</subagent_tokens><tool_uses>26</tool_uses><duration_ms>410308</duration_ms></usage>\n</task-notification>",
+      "timestamp": "2026-07-04T13:09:35.964Z"
+    },
+    {
+      "kind": "op",
+      "op": "remove",
+      "timestamp": "2026-07-04T13:09:36.845Z"
+    },
+    {
+      "kind": "user",
+      "uuid": "6d86588e-1efe-47b6-832a-ba4c88499114",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "op",
+      "op": "enqueue",
+      "content": "synthetic queued prompt 002 — recorded operator text removed, structure preserved",
+      "timestamp": "2026-07-04T17:12:36.175Z"
+    },
+    {
+      "kind": "op",
+      "op": "remove",
+      "timestamp": "2026-07-04T17:12:42.187Z"
+    },
+    {
+      "kind": "user",
+      "uuid": "4c261c32-d07b-410d-90f0-1d440acc1901",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "op",
+      "op": "enqueue",
+      "content": "synthetic queued prompt 003 — recorded operator text removed, structure preserved",
+      "timestamp": "2026-07-06T11:07:41.913Z"
+    },
+    {
+      "kind": "op",
+      "op": "remove",
+      "timestamp": "2026-07-06T11:07:56.066Z"
+    },
+    {
+      "kind": "user",
+      "uuid": "09f83fc8-9709-48fc-a280-7abfeaa4a413",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "user",
+      "uuid": "755f042a-2e0e-4734-b603-f5cd3079918e",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "user",
+      "uuid": "c918bb39-031e-482e-868a-ced0eb122e5f",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "user",
+      "uuid": "d03ed3b9-d163-44f0-a601-a87a29d79cb6",
+      "text": "synthetic queued prompt 009 — recorded operator text removed, structure preserved"
+    },
+    {
+      "kind": "user",
+      "uuid": "95ee019b-44a6-4430-9d5f-07b444932b32",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "user",
+      "uuid": "7785af9c-8d58-4fc7-9a08-ae8ce1f243aa",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "op",
+      "op": "enqueue",
+      "content": "synthetic queued prompt 004 — recorded operator text removed, structure preserved",
+      "timestamp": "2026-07-06T11:18:06.661Z"
+    },
+    {
+      "kind": "op",
+      "op": "remove",
+      "timestamp": "2026-07-06T11:18:28.505Z"
+    },
+    {
+      "kind": "user",
+      "uuid": "8adbd85e-0abe-4dbc-b1de-0112dcbac5d3",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "user",
+      "uuid": "58b023ed-2a83-409a-95df-e0534be1d19b",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "op",
+      "op": "enqueue",
+      "content": "<task-notification>\n<task-id>booy1tw9u</task-id>\n<tool-use-id>toolu_014BDjXCMdEhcWHSUA7NSGcy</tool-use-id>\n<output-file>/private/tmp/claude-501/~user-Desktop-Development-agent-code/b000c232-4747-4252-bec3-eab48551deee/tasks/booy1tw9u.output</output-file>\n<status>completed</status>\n<summary>Background command \"Prep phase 2b worktree deps\" completed (exit code 0)</summary>\n</task-notification>",
+      "timestamp": "2026-07-06T11:30:22.408Z"
+    },
+    {
+      "kind": "op",
+      "op": "dequeue",
+      "timestamp": "2026-07-06T11:30:27.582Z"
+    },
+    {
+      "kind": "user",
+      "uuid": "2b2598e2-c625-42f3-be89-76dd3e2c1903",
+      "text": "<task-notification>\n<task-id>booy1tw9u</task-id>\n<tool-use-id>toolu_014BDjXCMdEhcWHSUA7NSGcy</tool-use-id>\n<output-file>/private/tmp/claude-501/~user-Desktop-Development-agent-code/b000c232-4747-4252-bec3-eab48551deee/tasks/booy1tw9u.output</output-file>\n<status>completed</status>\n<summary>Background command \"Prep phase 2b worktree deps\" completed (exit code 0)</summary>\n</task-notification>"
+    },
+    {
+      "kind": "user",
+      "uuid": "dbdb7f6f-c92d-4c5e-9e6a-7f7872d6f6b4",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "op",
+      "op": "enqueue",
+      "content": "<task-notification>\n<task-id>a3a3563ff464bdc3e</task-id>\n<tool-use-id>toolu_01FSLufEghbAZvUnqRJ4Gxea</tool-use-id>\n<output-file>/private/tmp/claude-501/~user-Desktop-Development-agent-code/b000c232-4747-4252-bec3-eab48551deee/tasks/a3a3563ff464bdc3e.output</output-file>\n<status>completed</status>\n<summary>Agent \"Map transcript-entry fork sites\" finished</summary>\n<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>\n<result>⟨result body removed — not read by the reconciler⟩</result>\n<usage><subagent_tokens>79565</subagent_tokens><tool_uses>25</tool_uses><duration_ms>223584</duration_ms></usage>\n</task-notification>",
+      "timestamp": "2026-07-06T11:33:45.543Z"
+    },
+    {
+      "kind": "op",
+      "op": "dequeue",
+      "timestamp": "2026-07-06T11:33:45.550Z"
+    },
+    {
+      "kind": "user",
+      "uuid": "15f48982-cf8a-4dc4-8e82-86fff447b193",
+      "text": "<task-notification>\n<task-id>a3a3563ff464bdc3e</task-id>\n<tool-use-id>toolu_01FSLufEghbAZvUnqRJ4Gxea</tool-use-id>\n<output-file>/private/tmp/claude-501/~user-Desktop-Development-agent-code/b000c232-4747-4252-bec3-eab48551deee/tasks/a3a3563ff464bdc3e.output</output-file>\n<status>completed</status>\n<summary>Agent \"Map transcript-entry fork sites\" finished</summary>\n<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>\n<result>⟨result body removed — not read by the reconciler⟩</result>\n<usage><subagent_tokens>79565</subagent_tokens><tool_uses>25</tool_uses><duration_ms>223584</duration_ms></usage>\n</task-notification>"
+    },
+    {
+      "kind": "user",
+      "uuid": "7e9aa92d-b71c-4587-815f-799bb632fb0d",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "user",
+      "uuid": "95ba3d6f-e0a2-4af1-bc5a-7cdae94f85d8",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "user",
+      "uuid": "90f9cc59-d1d9-4a5c-af7b-ea6518362742",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "user",
+      "uuid": "d49da3e8-ac57-4d9c-ac9b-8338b098e6a0",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "user",
+      "uuid": "ffa17c9c-fee7-4ed9-b976-540b5c57456b",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "user",
+      "uuid": "90449bd8-fca0-4fec-9429-035c3ddb7790",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "op",
+      "op": "enqueue",
+      "content": "<task-notification>\n<task-id>b580oaiqj</task-id>\n<tool-use-id>toolu_01QqeFwLxhjVRos1kALzQEfc</tool-use-id>\n<output-file>/private/tmp/claude-501/~user-Desktop-Development-agent-code/b000c232-4747-4252-bec3-eab48551deee/tasks/b580oaiqj.output</output-file>\n<status>completed</status>\n<summary>Background command \"Prep phase 3 worktree in background\" completed (exit code 0)</summary>\n</task-notification>",
+      "timestamp": "2026-07-06T12:24:44.897Z"
+    },
+    {
+      "kind": "op",
+      "op": "dequeue",
+      "timestamp": "2026-07-06T12:24:44.900Z"
+    },
+    {
+      "kind": "user",
+      "uuid": "dfb35987-ee9c-4ff5-b7c6-96891b75277a",
+      "text": "<task-notification>\n<task-id>b580oaiqj</task-id>\n<tool-use-id>toolu_01QqeFwLxhjVRos1kALzQEfc</tool-use-id>\n<output-file>/private/tmp/claude-501/~user-Desktop-Development-agent-code/b000c232-4747-4252-bec3-eab48551deee/tasks/b580oaiqj.output</output-file>\n<status>completed</status>\n<summary>Background command \"Prep phase 3 worktree in background\" completed (exit code 0)</summary>\n</task-notification>"
+    },
+    {
+      "kind": "op",
+      "op": "enqueue",
+      "content": "<task-notification>\n<task-id>afd01a088fbf90615</task-id>\n<tool-use-id>toolu_01Qyz44xMjuBtXoTCtf9wEUz</tool-use-id>\n<output-file>/private/tmp/claude-501/~user-Desktop-Development-agent-code/b000c232-4747-4252-bec3-eab48551deee/tasks/afd01a088fbf90615.output</output-file>\n<status>completed</status>\n<summary>Agent \"Map conditions system surface\" finished</summary>\n<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>\n<result>⟨result body removed — not read by the reconciler⟩</result>\n<usage><subagent_tokens>103069</subagent_tokens><tool_uses>45</tool_uses><duration_ms>369014</duration_ms></usage>\n</task-notification>",
+      "timestamp": "2026-07-06T12:30:21.693Z"
+    },
+    {
+      "kind": "op",
+      "op": "dequeue",
+      "timestamp": "2026-07-06T12:30:21.697Z"
+    },
+    {
+      "kind": "user",
+      "uuid": "44dc9ce5-6299-4067-8cfe-f66180f8bae5",
+      "text": "<task-notification>\n<task-id>afd01a088fbf90615</task-id>\n<tool-use-id>toolu_01Qyz44xMjuBtXoTCtf9wEUz</tool-use-id>\n<output-file>/private/tmp/claude-501/~user-Desktop-Development-agent-code/b000c232-4747-4252-bec3-eab48551deee/tasks/afd01a088fbf90615.output</output-file>\n<status>completed</status>\n<summary>Agent \"Map conditions system surface\" finished</summary>\n<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>\n<result>⟨result body removed — not read by the reconciler⟩</result>\n<usage><subagent_tokens>103069</subagent_tokens><tool_uses>45</tool_uses><duration_ms>369014</duration_ms></usage>\n</task-notification>"
+    },
+    {
+      "kind": "op",
+      "op": "enqueue",
+      "content": "synthetic queued prompt 005 — recorded operator text removed, structure preserved",
+      "timestamp": "2026-07-06T12:41:00.840Z"
+    },
+    {
+      "kind": "op",
+      "op": "dequeue",
+      "timestamp": "2026-07-06T12:41:00.863Z"
+    },
+    {
+      "kind": "user",
+      "uuid": "00648215-1968-454d-9a67-9f1f166cd8f2",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "user",
+      "uuid": "b7c13aad-575c-4187-aa4b-8aed6247b735",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "op",
+      "op": "enqueue",
+      "content": "synthetic queued prompt 005 — recorded operator text removed, structure preserved",
+      "timestamp": "2026-07-06T12:51:00.106Z"
+    },
+    {
+      "kind": "op",
+      "op": "dequeue",
+      "timestamp": "2026-07-06T12:51:00.138Z"
+    },
+    {
+      "kind": "user",
+      "uuid": "d8dfda7f-aacd-407e-807c-f626af1c7c3f",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "user",
+      "uuid": "c6719503-b2e8-4557-818d-6b2eea844f93",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "op",
+      "op": "enqueue",
+      "content": "synthetic queued prompt 005 — recorded operator text removed, structure preserved",
+      "timestamp": "2026-07-06T12:59:00.225Z"
+    },
+    {
+      "kind": "op",
+      "op": "dequeue",
+      "timestamp": "2026-07-06T12:59:00.263Z"
+    },
+    {
+      "kind": "user",
+      "uuid": "402f9dd5-c1d0-4ad5-a2e5-960e9f6fecc1",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "user",
+      "uuid": "1182f253-025c-4a12-9f35-a13ce79f9a68",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "op",
+      "op": "enqueue",
+      "content": "synthetic queued prompt 005 — recorded operator text removed, structure preserved",
+      "timestamp": "2026-07-06T13:06:00.150Z"
+    },
+    {
+      "kind": "op",
+      "op": "dequeue",
+      "timestamp": "2026-07-06T13:06:00.180Z"
+    },
+    {
+      "kind": "user",
+      "uuid": "a98a3527-eedb-400a-93ad-070f4e51f081",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "user",
+      "uuid": "781ee068-97b1-4bbb-9cbd-a94fb703827a",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "op",
+      "op": "enqueue",
+      "content": "<task-notification>\n<task-id>a240d85eee6566d38</task-id>\n<tool-use-id>toolu_01HSVCUjqNidP6jyvyv5J3r1</tool-use-id>\n<output-file>/private/tmp/claude-501/~user-Desktop-Development-agent-code/b000c232-4747-4252-bec3-eab48551deee/tasks/a240d85eee6566d38.output</output-file>\n<status>completed</status>\n<summary>Agent \"Gap-analyze opencode vs contract\" finished</summary>\n<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>\n<result>⟨result body removed — not read by the reconciler⟩</result>\n<usage><subagent_tokens>181493</subagent_tokens><tool_uses>56</tool_uses><duration_ms>569325</duration_ms></usage>\n</task-notification>",
+      "timestamp": "2026-07-06T13:20:25.432Z"
+    },
+    {
+      "kind": "op",
+      "op": "dequeue",
+      "timestamp": "2026-07-06T13:20:25.441Z"
+    },
+    {
+      "kind": "user",
+      "uuid": "9fd0cecc-5067-4ebc-89fc-6b54f9bb8783",
+      "text": "<task-notification>\n<task-id>a240d85eee6566d38</task-id>\n<tool-use-id>toolu_01HSVCUjqNidP6jyvyv5J3r1</tool-use-id>\n<output-file>/private/tmp/claude-501/~user-Desktop-Development-agent-code/b000c232-4747-4252-bec3-eab48551deee/tasks/a240d85eee6566d38.output</output-file>\n<status>completed</status>\n<summary>Agent \"Gap-analyze opencode vs contract\" finished</summary>\n<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>\n<result>⟨result body removed — not read by the reconciler⟩</result>\n<usage><subagent_tokens>181493</subagent_tokens><tool_uses>56</tool_uses><duration_ms>569325</duration_ms></usage>\n</task-notification>"
+    },
+    {
+      "kind": "op",
+      "op": "enqueue",
+      "content": "synthetic queued prompt 005 — recorded operator text removed, structure preserved",
+      "timestamp": "2026-07-06T13:29:32.710Z"
+    },
+    {
+      "kind": "op",
+      "op": "dequeue",
+      "timestamp": "2026-07-06T13:29:32.732Z"
+    },
+    {
+      "kind": "user",
+      "uuid": "ed8f1747-2824-482f-8588-e592b90c5fff",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "user",
+      "uuid": "69be7b17-9be7-4357-be28-be861c2288ba",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "user",
+      "uuid": "313df737-8000-4551-a028-f08cef4d19aa",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "op",
+      "op": "enqueue",
+      "content": "synthetic queued prompt 005 — recorded operator text removed, structure preserved",
+      "timestamp": "2026-07-06T13:48:00.244Z"
+    },
+    {
+      "kind": "op",
+      "op": "dequeue",
+      "timestamp": "2026-07-06T13:48:00.266Z"
+    },
+    {
+      "kind": "user",
+      "uuid": "062df267-a9a2-4214-af95-4c79482be919",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "user",
+      "uuid": "7554e8db-1663-4f4b-bd51-8f1dea80c27f",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "op",
+      "op": "enqueue",
+      "content": "synthetic queued prompt 005 — recorded operator text removed, structure preserved",
+      "timestamp": "2026-07-06T13:59:00.122Z"
+    },
+    {
+      "kind": "op",
+      "op": "dequeue",
+      "timestamp": "2026-07-06T13:59:00.158Z"
+    },
+    {
+      "kind": "user",
+      "uuid": "9a16e394-8052-4e44-a973-fd509ab921dd",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "user",
+      "uuid": "fb3e6828-a0dd-45db-97d4-e118c0ae76c9",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "op",
+      "op": "enqueue",
+      "content": "synthetic queued prompt 005 — recorded operator text removed, structure preserved",
+      "timestamp": "2026-07-06T14:06:00.381Z"
+    },
+    {
+      "kind": "op",
+      "op": "dequeue",
+      "timestamp": "2026-07-06T14:06:00.415Z"
+    },
+    {
+      "kind": "user",
+      "uuid": "33053394-4013-4ae3-9234-fc0e8311b16a",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "user",
+      "uuid": "05a9ab07-f58d-4dcd-b574-fefb8aff4d45",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "op",
+      "op": "enqueue",
+      "content": "synthetic queued prompt 005 — recorded operator text removed, structure preserved",
+      "timestamp": "2026-07-06T14:20:00.920Z"
+    },
+    {
+      "kind": "op",
+      "op": "dequeue",
+      "timestamp": "2026-07-06T14:20:00.955Z"
+    },
+    {
+      "kind": "user",
+      "uuid": "d9b2d4af-fbe6-4889-af76-a5a19c607c7b",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "user",
+      "uuid": "66b4ecee-8ce8-40d1-8738-e41fc4938e3c",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "op",
+      "op": "enqueue",
+      "content": "synthetic queued prompt 005 — recorded operator text removed, structure preserved",
+      "timestamp": "2026-07-06T14:48:00.934Z"
+    },
+    {
+      "kind": "op",
+      "op": "dequeue",
+      "timestamp": "2026-07-06T14:48:00.969Z"
+    },
+    {
+      "kind": "user",
+      "uuid": "871d55c2-2592-4b56-9072-6fcdd7c7cdfd",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "user",
+      "uuid": "b10f8ce3-3729-4d24-be99-25659134f7f6",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "user",
+      "uuid": "dbe94974-e5d3-462d-9940-0ea4a0bcfc93",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "op",
+      "op": "enqueue",
+      "content": "synthetic queued prompt 005 — recorded operator text removed, structure preserved",
+      "timestamp": "2026-07-06T15:15:42.880Z"
+    },
+    {
+      "kind": "op",
+      "op": "dequeue",
+      "timestamp": "2026-07-06T15:15:42.890Z"
+    },
+    {
+      "kind": "user",
+      "uuid": "9792cc01-b614-40b8-845d-e76bebe3943a",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "user",
+      "uuid": "32e6a937-5757-4113-86b1-2f3b6df90c09",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "op",
+      "op": "enqueue",
+      "content": "synthetic queued prompt 006 — recorded operator text removed, structure preserved",
+      "timestamp": "2026-07-06T15:16:43.074Z"
+    },
+    {
+      "kind": "op",
+      "op": "enqueue",
+      "content": "synthetic queued prompt 007 — recorded operator text removed, structure preserved",
+      "timestamp": "2026-07-06T15:16:57.708Z"
+    },
+    {
+      "kind": "op",
+      "op": "remove",
+      "timestamp": "2026-07-06T15:17:07.278Z"
+    },
+    {
+      "kind": "op",
+      "op": "remove",
+      "timestamp": "2026-07-06T15:17:07.278Z"
+    },
+    {
+      "kind": "op",
+      "op": "enqueue",
+      "content": "synthetic queued prompt 008 — recorded operator text removed, structure preserved",
+      "timestamp": "2026-07-06T15:18:48.091Z"
+    },
+    {
+      "kind": "op",
+      "op": "remove",
+      "timestamp": "2026-07-06T15:18:49.088Z"
+    },
+    {
+      "kind": "op",
+      "op": "enqueue",
+      "content": "synthetic queued prompt 009 — recorded operator text removed, structure preserved",
+      "timestamp": "2026-07-06T15:18:49.372Z"
+    },
+    {
+      "kind": "user",
+      "uuid": "1a0d2311-c7e4-4ea0-ab35-d49ea9ee325b",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "op",
+      "op": "dequeue",
+      "timestamp": "2026-07-06T15:23:38.368Z"
+    },
+    {
+      "kind": "user",
+      "uuid": "a603a0f6-4b16-4e66-bb9b-1ba2d57ff989",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "user",
+      "uuid": "9aecec1f-f8d1-468e-bf67-58fccfc29793",
+      "text": "⟨unrelated turn — text removed⟩"
+    },
+    {
+      "kind": "user",
+      "uuid": "a5d30e8f-e883-4ffb-8c47-dbb04bebc48b",
+      "text": "synthetic queued prompt 009 — recorded operator text removed, structure preserved"
+    },
+    {
+      "kind": "user",
+      "uuid": "31307206-2133-4e24-9f2e-4065bf1b41c6",
+      "text": "⟨unrelated turn — text removed⟩"
+    }
+  ]
+}

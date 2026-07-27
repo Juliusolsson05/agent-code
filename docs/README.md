@@ -17,6 +17,11 @@ live.
 - **`superpowers/`** — dated planning space: `plans/` (feature/fix plans) and
   `specs/` (design specs). Accumulates by date; a plan carries a `Status:` header
   once it ships or is superseded.
+- **`decomposition/`** — stage decompositions written *before* implementation for
+  work where the case set is not yet enumerated (`staged-decomposition`). One
+  file per subsystem, named for the subsystem rather than a date, because the
+  document is revised in place when a stage disproves it — unlike `superpowers/`
+  plans, which are executed once and then frozen with a `Status:` header.
 - **`command-style.md`** — command-authoring conventions.
 - **`screenshots/`** — README assets.
 
