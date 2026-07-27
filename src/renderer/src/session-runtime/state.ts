@@ -51,6 +51,20 @@ export type SlashPickerState = {
 export type QueuedMessage = {
   content: string
   timestamp: string
+  /**
+   * Set when no departure ever attributed this item and the session went idle.
+   *
+   * Claude's queue is provider-owned and `clearCommandQueue()` (ctrl+x ctrl+k)
+   * empties it while logging NOTHING, so a residue exists that no reconciler
+   * can attribute even in principle. Deleting on a heuristic is the
+   * irreversible #159/#290 class; leaving it silently pending is a false claim
+   * that work is still queued. Marking is the only option that is neither.
+   *
+   * Owned exclusively by session-runtime/claudeQueue — the strip renders it and
+   * never sets it. Optional because codex/opencode placeholder rows never carry
+   * it (their queue is cleared on idle by shouldClearIdleQueuedMessages).
+   */
+  stale?: boolean
 }
 
 export type RenderedViewLeaseFeature =

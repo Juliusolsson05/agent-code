@@ -117,6 +117,10 @@ export function QueueStrip({
       preview: notification ? null : queuedPromptPreview(message.content),
     }
   }), [provider, queuedMessages])
+  const staleCount = useMemo(
+    () => queuedMessages.reduce((n, m) => (m.stale ? n + 1 : n), 0),
+    [queuedMessages],
+  )
 
   const selectedIndex = selectedPrompt === null
     ? -1
@@ -151,7 +155,17 @@ export function QueueStrip({
           aria-expanded={!collapsed}
           onClick={() => setCollapsed(current => !current)}
         >
-          <span className="min-w-0 truncate">{queuedMessages.length} queued</span>
+          {/*
+            The stale count is surfaced in the collapsed header on purpose: the
+            lane collapses, and a residue nobody can see is indistinguishable
+            from the silent-permanent-drift bug this whole surface was rebuilt
+            to end. `stale` is set exclusively by session-runtime/claudeQueue —
+            this component reports it and never decides it.
+          */}
+          <span className="min-w-0 truncate">
+            {queuedMessages.length} queued
+            {staleCount > 0 ? ` · ${staleCount} unconfirmed` : ''}
+          </span>
           <span className="shrink-0 normal-case tracking-normal" aria-hidden="true">
             {collapsed ? '▴ show' : '▾ hide'}
           </span>
@@ -176,7 +190,13 @@ export function QueueStrip({
                     className="flex min-w-0 items-start gap-2 py-0.5 text-[12px] leading-[1.5] text-ink-dim"
                   >
                     <span className="flex-shrink-0 select-none opacity-60" aria-hidden="true">
-                      {kind === 'error' ? '✗' : '✓'}
+                      {/*
+                        Three states, not two. The old `error ? '✗' : '✓'` painted
+                        a green check on the stall-watchdog notification — a
+                        background command BLOCKED on an interactive prompt,
+                        reported as success. See taskNotificationStatusKind.
+                      */}
+                      {kind === 'error' ? '✗' : kind === 'attention' ? '⏸' : '✓'}
                     </span>
                     <span className="min-w-0 flex-1 truncate">
                       {/*
@@ -189,8 +209,10 @@ export function QueueStrip({
                         taskNotificationStatusKind) already carries the outcome, so
                         the summary alone is the human-readable line.
                       */}
-                      {notification.summary ?? notification.taskId ?? 'background task'} —
-                      delivering to agent…
+                      {notification.summary ?? notification.taskId ?? 'background task'} —{' '}
+                      {q.stale
+                        ? 'no longer tracked by the agent'
+                        : 'delivering to agent…'}
                     </span>
                   </li>
                 )

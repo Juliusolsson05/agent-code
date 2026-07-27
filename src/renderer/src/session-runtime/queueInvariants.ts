@@ -43,7 +43,12 @@ export function shouldClearIdleQueuedMessages({
   // WHY this invariant is capability-gated instead of `provider === 'codex'`:
   // Claude has explicit `queue-operation` transcript records, so a
   // queued prompt item can represent provider-owned queue state that needs to
-  // drain through dequeue/remove events. Codex and opencode queue rows are
+  // drain through dequeue/remove events. That draining is reconciled in
+  // session-runtime/claudeQueue/, which attributes each departure from
+  // evidence and marks whatever it cannot attribute as `stale` — so Claude's
+  // residue is handled by MARKING there, never by clearing here. Reaching in
+  // from this predicate would delete items the reconciler still holds a
+  // dequeue debt against, which is the drift it exists to prevent. Codex and opencode queue rows are
   // local UI placeholders for prompts submitted while semantic output is
   // still live; they clear when the matching committed user row is ingested.
   // If that committed tail goes stale, the matching row may exist on disk /

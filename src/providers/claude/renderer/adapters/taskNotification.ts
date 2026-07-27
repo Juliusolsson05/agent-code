@@ -90,9 +90,24 @@ export function collectClaudeTaskNotifications(
 
 export function taskNotificationStatusKind(
   n: TaskNotification,
-): 'done' | 'error' | 'other' {
+): 'done' | 'error' | 'attention' | 'other' {
   const s = (n.status ?? '').toLowerCase()
   if (s.includes('fail') || s.includes('error')) return 'error'
   if (s.includes('complete') || s.includes('done') || s.includes('success')) return 'done'
+
+  // A notification with NO <status> at all is the stall watchdog
+  // (LocalShellTask.startStallWatchdog): a background command that stopped
+  // producing output and whose tail looks like an interactive prompt. Upstream
+  // omits <status> deliberately — print.ts treats it as a terminal signal and
+  // an unknown value would falsely close the task for SDK consumers.
+  //
+  // WHY this needs its own kind: callers rendered `kind === 'error' ? '✗' : '✓'`,
+  // so a command STUCK waiting for input showed a green check — the single most
+  // misleading state this surface can paint, because the whole point of the
+  // watchdog is to tell you something needs a human. 'other' could not be
+  // reused for it: 'other' also covers a status we simply do not recognise,
+  // which is not a call for attention.
+  if (n.status === null) return 'attention'
+
   return 'other'
 }

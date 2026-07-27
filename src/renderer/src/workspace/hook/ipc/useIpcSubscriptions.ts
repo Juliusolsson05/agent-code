@@ -58,7 +58,13 @@ import {
 import {
   codexPromptsMatchForOwnership,
 } from '@renderer/workspace/hook/actions/streaming'
-import { applyClaudeQueueDequeue } from '@renderer/session-runtime/claudeQueueReconstruction'
+import {
+  applyCommittedUserEntry,
+  applyQueueOperation,
+  createClaudeQueueState,
+  markStaleWhenIdle,
+  type ClaudeQueueState,
+} from '@renderer/session-runtime/claudeQueue'
 import { shouldClearIdleQueuedMessages } from '@renderer/session-runtime/queueInvariants'
 import type { StreamPhase } from '@renderer/session-runtime/state'
 import { conditionStateByKind } from '@shared/types/providerConditions'
@@ -106,6 +112,54 @@ import { SemanticEventBackpressureQueue } from '@renderer/workspace/hook/ipc/sem
 // entries, not to the parser cursor we happened to need while reading JSONL.
 // Terminal Codex events and session exit clear the cursor so a new task cannot
 // inherit the previous task's turn id.
+/**
+ * Text of a raw Claude `user` entry, or null if it carries none.
+ *
+ * Deliberately narrow: only the first text block participates. A queued item is
+ * delivered as plain text, so tool_result/image blocks can only add noise that
+ * might make an unrelated turn look like a delivery — and a false delivery
+ * removes a still-pending item, which nothing repairs.
+ */
+function claudeUserEntryText(raw: unknown): string | null {
+  const message = (raw as { message?: { role?: string; content?: unknown } }).message
+  if (message?.role !== 'user') return null
+  const content = message.content
+  if (typeof content === 'string') return content
+  if (Array.isArray(content)) {
+    const block = content.find(b => (b as { type?: string } | null)?.type === 'text') as
+      | { text?: string }
+      | undefined
+    return typeof block?.text === 'string' ? block.text : null
+  }
+  return null
+}
+
+// Claude's reconstructed queue, per session.
+//
+// WHY module-level rather than a field on the runtime slice: the reconciler
+// keeps attribution bookkeeping (an outstanding `dequeue` debt, the insertion
+// counter, the append-only decision log) that the UI never renders and that
+// must NOT participate in the runtime's structural sharing — a debt is
+// in-flight state, not painted state. The runtime keeps the derived
+// `queuedMessages` array, which is the only part the strip reads. Cleared in
+// onSessionExit alongside the other per-session maps.
+//
+// WHY IT IS NEVER WRITTEN INSIDE A setRuntimes UPDATER — this is load-bearing
+// and was a real defect, not a hypothetical. React invokes a state updater
+// more than once for the same input: StrictMode double-invokes in dev
+// (main.tsx), and the eager-state path re-invokes during render in prod when
+// the fiber has no pending lanes. Purity of the reconciler does NOT make that
+// safe, because pass 2 does not see the same input — pass 1 already replaced
+// it. The observed failure: one `dequeue` burst applied twice produced
+// `debt.count = 2`, so a later entry retired a SECOND item that was never
+// delivered, and recorded it as `delivered-inferred` — a deletion wearing a
+// proof-shaped reason.
+//
+// So updaters compute a candidate state locally and return it; the single
+// commit happens here, after setRuntimes has returned, where it runs exactly
+// once per burst.
+const claudeQueueBySession = new Map<SessionId, ClaudeQueueState>()
+
 const codexCurrentTurnIdBySession = new Map<SessionId, string>()
 const jsonlProviderStreamBySession = new Map<SessionId, JsonlProviderStreamState>()
 
@@ -752,6 +806,7 @@ export function useIpcSubscriptions(
       if (quarantinesSessionFeed(sessionId)) return
       flushSemanticEventQueue()
       recentWorkContextRawBySession.delete(sessionId)
+      claudeQueueBySession.delete(sessionId)
       codexCurrentTurnIdBySession.delete(sessionId)
       jsonlProviderStreamBySession.delete(sessionId)
       setRuntimes(prev => {
@@ -931,6 +986,8 @@ export function useIpcSubscriptions(
         })
         return
       }
+      // Captured by the updater, committed after setRuntimes returns.
+      let pendingStaleQueue: ClaudeQueueState | null = null
       setRuntimes(prev => {
         const current = prev[sessionId] ?? emptyRuntime()
         // WHY `?? DEFAULT_PROVIDER` default: Claude is the pre-fix
@@ -1055,12 +1112,39 @@ export function useIpcSubscriptions(
           queuedMessagesLength: current.queuedMessages.length,
           streamPhase,
         })
+
+        // Claude's counterpart to the idle CLEAR above: mark, never delete.
+        // The optimistic-echo providers own their queue rows locally, so
+        // clearing is safe for them; Claude's queue is provider-owned and its
+        // unattributable residue (chiefly the unlogged `clearCommandQueue()`)
+        // can only be surfaced, not resolved. Same idle signal, opposite and
+        // deliberately weaker action.
+        //
+        // Only marks an EXISTING reconciler state. A session with no map entry
+        // has no queue to mark, and an earlier version defaulted to a freshly
+        // created state and compared it against `undefined` — which read as
+        // "changed" on every idle event, wiping queuedMessages to the empty
+        // pending list and defeating the no-op bail below.
+        const existingQueue = claudeQueueBySession.get(sessionId)
+        const claudeQueueIdle =
+          sessionKind === 'claude' &&
+          existingQueue !== undefined &&
+          !current.processActive &&
+          streamPhase === 'idle' &&
+          !nextAwaitingAssistant
+        const markedQueue =
+          claudeQueueIdle && existingQueue ? markStaleWhenIdle(existingQueue, true) : null
+        // markStaleWhenIdle is reference-stable, so identity is the change test.
+        const staleChanged = markedQueue !== null && markedQueue !== existingQueue
+        if (staleChanged) pendingStaleQueue = markedQueue
+
         if (
           semanticUnchanged &&
           phaseUnchanged &&
           ghostsUnchanged &&
           awaitingUnchanged &&
-          !shouldClearIdleQueue
+          !shouldClearIdleQueue &&
+          !staleChanged
         ) {
           closeSpan({
             sessionId,
@@ -1077,7 +1161,9 @@ export function useIpcSubscriptions(
               awaitingAssistant: nextAwaitingAssistant,
               queuedMessages: shouldClearIdleQueue
                 ? []
-                : current.queuedMessages,
+                : staleChanged && markedQueue
+                  ? markedQueue.pending
+                  : current.queuedMessages,
               // A suggestion is an offer about the NEXT input; once a new
               // turn begins it is stale, so clear it on turn_started. The
               // chip's apply/dismiss/submit paths clear it directly too.
@@ -1126,6 +1212,16 @@ export function useIpcSubscriptions(
           [sessionId]: nextCurrentWithUnread,
         }
       })
+      // Same rule as the burst path: the map is committed after setRuntimes
+      // returns, never from inside it. Writing the stale marks inside the
+      // updater meant a re-invocation read its own write, computed
+      // staleChanged=false, and hit the `return prev` bail — silently
+      // discarding that event's ENTIRE semantic update (fold, stream phase,
+      // ghosts) while the map recorded the items as already marked, so no
+      // later tick re-marked them.
+      if (pendingStaleQueue !== null) {
+        claudeQueueBySession.set(sessionId, pendingStaleQueue)
+      }
       closeSpan({
         sessionId,
         eventType: typeof semanticEvent.type === 'string' ? semanticEvent.type : 'semantic',
@@ -1393,12 +1489,19 @@ export function useIpcSubscriptions(
       }
 
       // ---- Pass B: runtime mutations ----
+      // Captured by the updater, committed to claudeQueueBySession after
+      // setRuntimes returns. Never written from inside the updater — React may
+      // run it twice and the map is the updater's own input.
+      let pendingClaudeQueue: ClaudeQueueState | null = null
       setRuntimes(prev => {
         const current = prev[sessionId] ?? emptyRuntime()
         const seen = (refs.seenUuidsRef.current[sessionId] ??= new Set())
         const appended: Entry[] = []
         let oldestMarker: string | null = current.historyOldestMarker
         let queuedMessages = current.queuedMessages
+        // Attribution bookkeeping is keyed by session and survives bursts; the
+        // runtime keeps only the derived `pending` list it paints.
+        let claudeQueue = claudeQueueBySession.get(sessionId) ?? createClaudeQueueState()
         let awaitingAssistant = current.awaitingAssistant
         let workActivity = current.workActivity
         let workContext = current.workContext
@@ -1487,49 +1590,50 @@ export function useIpcSubscriptions(
           // them) but carry side effects on queuedMessages /
           // awaitingAssistant that only exist at this live site. The
           // raw-type check is provider-safe — codex rollout lines
-          // never carry type 'queue-operation'. See
-          // claude-code-src/utils/messageQueueManager.ts for the emit
-          // sites; 'dequeue'/'remove' collapse to "drop head" because
-          // we don't have identity info to do better.
+          // never carry type 'queue-operation'.
+          //
+          // All attribution lives in session-runtime/claudeQueue/. This site
+          // only forwards evidence to it and reads back the derived list; it
+          // must never decide membership itself. See
+          // docs/decomposition/claude-queue-reconciliation.md.
           const entryType = (raw as { type?: string }).type
           if (entryType === 'queue-operation') {
-            const op = raw as {
-              operation?: 'enqueue' | 'dequeue' | 'remove'
-              content?: string
-              timestamp?: string
-            }
-            if (op.operation === 'enqueue' && typeof op.content === 'string') {
-              const ts = op.timestamp ?? String(Date.now())
-              const already = queuedMessages.some(
-                q => q.timestamp === ts && q.content === op.content,
-              )
-              if (!already) {
-                queuedMessages = [
-                  ...queuedMessages,
-                  { content: op.content, timestamp: ts },
-                ]
-              }
-            } else if (op.operation === 'dequeue' || op.operation === 'remove') {
-              // Mirror Claude's PRIORITY dequeue instead of dropping the head.
-              // Claude delivers a queued user prompt ('next') ahead of any
-              // completed-agent <task-notification> ('later') regardless of
-              // insertion order, so a blind slice(1) removed the wrong logical
-              // item whenever the queue mixed priorities — permanently
-              // desyncing this reconstruction from Claude's provider-owned
-              // queue (which the idle-clear invariant deliberately never
-              // touches). That drift is the shared root cause of the
-              // 2026-07-07 soak bundles: stale task-notifications stuck in the
-              // QueueStrip ("completed agents render as queued") AND the user's
-              // own queued prompt vanishing ("queued prompt did not get
-              // shown"). See claudeQueueReconstruction.ts for the priority
-              // inference; it collapses to slice(1) for a homogeneous queue.
-              queuedMessages = applyClaudeQueueDequeue(queuedMessages)
-            }
+            const op = raw as { operation?: string; content?: string; timestamp?: string }
+            claudeQueue = applyQueueOperation(claudeQueue, {
+              operation: op.operation ?? '',
+              content: op.content,
+              // Producer clock only. A local Date.now() fallback would make an
+              // op record compare unequal to itself on redelivery and defeat
+              // the enqueue idempotence guard.
+              timestamp: op.timestamp,
+            })
+            queuedMessages = claudeQueue.pending
             // Force the streaming flag on whenever the queue has
             // items so the streaming card doesn't disappear
             // between turns while CC is draining queued work.
             if (queuedMessages.length > 0) awaitingAssistant = true
             continue
+          }
+
+          // ---- Claude queue identity pass ----
+          // A committed `user` entry is how a `dequeue` delivery becomes
+          // PROVABLE: 98.5% of them carry the queued item verbatim (measured,
+          // testing/fixtures/queue-operations/catalog.md). Feeding them in is
+          // what separates this from the guesswork it replaces — without it
+          // every dequeue would fall back to the cohort rule.
+          //
+          // Runs for every provider's entries but is a no-op unless a Claude
+          // dequeue debt is outstanding, so there is no codex/opencode cost and
+          // no provider branch to keep in sync.
+          if (entryType === 'user' && claudeQueue.debt !== null) {
+            const text = claudeUserEntryText(raw)
+            if (text !== null) {
+              claudeQueue = applyCommittedUserEntry(claudeQueue, {
+                uuid: (raw as { uuid?: string }).uuid,
+                text,
+              })
+              queuedMessages = claudeQueue.pending
+            }
           }
 
           // ---- Unified mapper routing ----
@@ -1871,6 +1975,8 @@ export function useIpcSubscriptions(
           }
         }
 
+        pendingClaudeQueue = claudeQueue
+
         const nextRuntimeBase = withDerivedSessionStatus(
           appendFeedDebugLog(
             {
@@ -2014,6 +2120,15 @@ export function useIpcSubscriptions(
           [sessionId]: nextRuntime,
         }
       })
+
+      // Commit the queue attribution AFTER setRuntimes returns, exactly once
+      // per burst. Doing it inside the updater made the map both the input and
+      // the output of a function React may invoke twice, so a re-invocation
+      // read its own previous write and double-counted the dequeue debt —
+      // retiring an item that was never delivered. See claudeQueueBySession.
+      if (pendingClaudeQueue !== null) {
+        claudeQueueBySession.set(sessionId, pendingClaudeQueue)
+      }
 
       // Schedule the bootstrap flip. Each burst resets the debounce
       // timer — the phase ends after ~150ms of quiet (long enough
