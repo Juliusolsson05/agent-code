@@ -43,6 +43,7 @@ import type {
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import { resolveSessionBuiltInMcpDomains } from '@renderer/workspace/mcpDomains'
 import * as perf from '@renderer/performance/client'
+import { reportLifecycle } from '@renderer/lifecycle/report'
 import { loadInitialHistoryForSession } from '@renderer/workspace/hook/actions/initialHistory'
 import {
   resumableProviderSessionId,
@@ -135,6 +136,19 @@ export async function rehydrateWorkspace(
     detachedSessions: Object.keys(persisted.detachedSessions ?? {}).length,
     buried: persisted.buried?.length ?? 0,
   })
+  // The always-on twin of the perf mark above. The perf channel is gated behind
+  // AGENT_CODE_PERF and is off by default, which is exactly why no cold boot has
+  // ever been measured. Shape matters here: #258's fork bomb (49 persisted, 9
+  // visible, 40 detached → 40 claude + 40 mitmdump, loadavg 906) is a specific
+  // ratio between these counts, and this is the first record of that ratio at
+  // the moment restore begins.
+  reportLifecycle('rehydrate.start', undefined, {
+    tabs: persisted.tabs.length,
+    leaves: Object.keys(persisted.sessions).length,
+    detached: Object.keys(persisted.detachedSessions ?? {}).length,
+    buried: persisted.buried?.length ?? 0,
+  })
+  const rehydrateStartedAt = Date.now()
   const idMap = new Map<SessionId, SessionId>()
   const freshSessions: Record<SessionId, SessionMeta> = {}
   const ownedIds = collectOwnedSessionIds(persisted)
@@ -790,6 +804,17 @@ export async function rehydrateWorkspace(
     restoredSessions,
     expectedSessions,
     hibernatedSessions: ownedIds.size - liveProcessIds.size,
+  })
+  // `ok` is the load-bearing field: restore is "complete" when every visible
+  // leaf received an OUTCOME, including a retained failure — not when every
+  // provider started. A run whose rehydrate.start has no matching complete is a
+  // restore that never resolved, which pins autosave off and is invisible today
+  // apart from a console.warn.
+  reportLifecycle('rehydrate.complete', undefined, {
+    expectedCount: expectedSessions,
+    resolvedCount: resolvedIds.size,
+    ok: resolvedIds.size === expectedSessions,
+    durationMs: Date.now() - rehydrateStartedAt,
   })
   return {
     restoredSessions,

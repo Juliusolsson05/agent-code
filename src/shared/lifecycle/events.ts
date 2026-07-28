@@ -102,6 +102,15 @@ export const SESSION_LIFECYCLE_EVENT_NAMES = [
 
   // "Did something kill this backend, and who?"
   'kill.request',
+
+  // "Is this recording complete, or did I lose events?"
+  //
+  // Its own name rather than folding the count onto a nearby lifecycle event:
+  // a reader reconstructing a ladder must be able to tell "this pane emitted
+  // nothing" from "this pane's events were dropped". Attaching the count to,
+  // say, `rehydrate.complete` would silently corrupt exactly the analysis this
+  // stream exists to support.
+  'report.suppressed',
 ] as const
 
 export type SessionLifecycleEventName = (typeof SESSION_LIFECYCLE_EVENT_NAMES)[number]
@@ -120,18 +129,37 @@ export function isSessionLifecycleEventName(value: unknown): value is SessionLif
  * strings drift (`'TileLeaf'` vs `'tileleaf-send'`) and a drifted tag silently
  * splits one shape into two, which is worse than no tag at all.
  */
+// Enumerated by making `caller` a REQUIRED parameter of `ensureSessionLive` and
+// letting the compiler find every call site. That forcing function turned up
+// **13**, not the nine a grep had suggested — which is itself a small lesson
+// about why this instrumentation exists at all.
 export const WAKE_CALLERS = [
+  // TileLeaf.send: the composer path. Wakes when the pane is not started/ready
+  // or a raw write bounced. This is the site whose `!inputReady` gate caused
+  // #598 — a live provider condition is *precisely* the state that clears
+  // inputReady, so every click on a trust modal took the wake path.
   'tile-leaf.send',
+  'tile-leaf.send-retry',
+  // The Retry affordance under a failed pane's readiness banner.
   'tile-leaf.retry',
+  // Mount-time wake. Unconditional until #597; the site that made every
+  // Spotlight/Reader/Settings/tab-switch remount arm a 30s kill timer.
   'agent-terminal-leaf.mount',
+  'agent-terminal-leaf.attach-retry',
   'terminal-leaf.mount',
-  'composer-actions.retry',
-  'pane.attach',
-  'pane.focus',
+  // Dispatch → grid placement, one per attached session.
+  'pane.attach-detached',
+  'pane.attach-all-detached',
+  // Buried pane revival.
+  'pane.revive-buried',
   'agent-index.navigate',
+  // Wake the source pane before provider-switch compaction (#590).
   'provider-switch.wake-source',
-  'undo-close.revive',
-  'orchestration.request',
+  // MCP-driven: reading a child agent, and sending it a prompt. The only wake
+  // callers that are not a direct human gesture — worth separating, because a
+  // storm here means an orchestration loop rather than a UI remount.
+  'orchestration.read-agent',
+  'orchestration.send-prompt',
 ] as const
 
 export type WakeCaller = (typeof WAKE_CALLERS)[number]
@@ -271,6 +299,10 @@ const SEVERITY_BY_NAME: Partial<Record<SessionLifecycleEventName, 'warn'>> = {
   'recover.failed': 'warn',
   'delivery.reject': 'warn',
   'submit.unwound': 'warn',
+  // Not a session failure, but a gap in the recording — which for a stream
+  // whose entire purpose is reconstructing what happened is worth surfacing at
+  // the same level as one.
+  'report.suppressed': 'warn',
 }
 
 export function severityForLifecycleEvent(name: SessionLifecycleEventName): 'info' | 'warn' {

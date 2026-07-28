@@ -22,6 +22,7 @@ import { useAppStore } from '@renderer/app-state/hooks'
 import { useSessionFeed } from '@renderer/features/sessionFeed/SessionFeedContext'
 import type { PromptDeliveryResult } from '@shared/types/providerConfig'
 import { draftAfterAcceptance, imagesAfterAcceptance } from './promptDeliveryDraft'
+import { reportLifecycle } from '@renderer/lifecycle/report'
 
 // The big onKeyDown handler for the composer textarea.
 //
@@ -220,6 +221,17 @@ export function useComposerKeybinds({
       : DEFAULT_PROVIDER
     const caps = getRendererProviderCapabilities(submitProvider)
     const baseline = extractAssistantInProgress(screen, submitProvider)
+    // Emitted BEFORE the optimistic streaming state is set, so a recorded
+    // ladder shows the exact ordering that produces the stuck-`Sending` bug:
+    // submit.begin → (optimistic streamPhase 'submitting') → submit.result
+    // ok:false. Today nothing follows that, and the pane counts up forever.
+    const submitStartedAt = Date.now()
+    reportLifecycle('submit.begin', sessionId, {
+      provider: submitProvider,
+      // Image attachments take a different provider protocol; worth separating
+      // in the corpus because their absorption path is the slower one.
+      ok: draftImages.length > 0,
+    })
     workspace.setStreamingBaseline(sessionId, baseline)
     if (caps.usesOptimisticUserEcho) {
       // Codex does not reliably give us a structured user
@@ -276,6 +288,11 @@ export function useComposerKeybinds({
         layer: 'OUTCOME',
         event: 'submit:returned',
       })
+      reportLifecycle('submit.result', sessionId, {
+        provider: submitProvider,
+        ok: true,
+        durationMs: Date.now() - submitStartedAt,
+      })
     } catch (err) {
       // Keep the draft visible if main no longer has a live
       // session for this pane. Clearing the composer on a
@@ -286,6 +303,24 @@ export function useComposerKeybinds({
       }
       const delivery = (err as { promptDeliveryResult?: PromptDeliveryResult })
         .promptDeliveryResult
+      // `bodyWritten`/`enterWritten` are the fields that decide whether this
+      // failure is recoverable. NOTE the rename: the journal's redactor drops
+      // any key matching /prompt|content|text|env|token|secret|key/i, so a
+      // field called `promptWritten` would record NOTHING while looking correct
+      // in review. See the trap comment in @shared/lifecycle/events.
+      // Narrowed once: PromptDeliveryResult is a union and the write-evidence
+      // fields exist only on the failure branch.
+      const failed = delivery && !delivery.ok ? delivery : null
+      reportLifecycle('submit.result', sessionId, {
+        provider: submitProvider,
+        ok: false,
+        code: failed ? failed.code : 'threw',
+        stage: failed ? failed.stage : null,
+        bodyWritten: failed ? failed.promptWritten : null,
+        enterWritten: failed ? failed.enterWritten : null,
+        retryable: failed ? failed.retrySafe : null,
+        durationMs: Date.now() - submitStartedAt,
+      })
       workspace.updateRuntime(sessionId, {
         promptDelivery: delivery && !delivery.ok && !delivery.retrySafe
           ? {

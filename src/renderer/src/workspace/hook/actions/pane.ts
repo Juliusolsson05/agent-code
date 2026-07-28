@@ -909,7 +909,7 @@ export function usePaneActions(
   const attachDetachedToGrid = useCallback(
     async (sessionId: SessionId, targetTabId: string, target: PlacementTarget) => {
       try {
-        await sessionActions.ensureSessionLive(sessionId)
+        await sessionActions.ensureSessionLive(sessionId, 'pane.attach-detached')
       } catch (err) {
         showToast(
           err instanceof Error && err.message.length > 0
@@ -996,7 +996,7 @@ export function usePaneActions(
       const liveIds: SessionId[] = []
       for (const sessionId of detachedIds) {
         try {
-          await sessionActions.ensureSessionLive(sessionId)
+          await sessionActions.ensureSessionLive(sessionId, 'pane.attach-all-detached')
           liveIds.push(sessionId)
         } catch (err) {
           console.warn('[workspace] failed to wake detached session before bulk attach:', err)
@@ -1797,7 +1797,7 @@ export function usePaneActions(
       const initialEntry = refs.stateRef.current.buried.find(item => item.id === buriedId)
       if (!initialEntry) return
       try {
-        await sessionActions.ensureSessionLive(initialEntry.sessionId)
+        await sessionActions.ensureSessionLive(initialEntry.sessionId, 'pane.revive-buried')
       } catch (err) {
         showToast(
           err instanceof Error && err.message.length > 0

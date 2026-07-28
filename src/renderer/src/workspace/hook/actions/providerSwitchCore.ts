@@ -187,7 +187,7 @@ export async function switchAgentProvider(params: {
     // recovery is a real mid-transaction ownership change, not ordinary pane
     // hibernation. `ensureSessionLive` is idempotent for an already-live owner
     // and main's recovery claim serializes concurrent wake attempts.
-    const wakeResult = await sessionActions.ensureSessionLive(sessionId)
+    const wakeResult = await sessionActions.ensureSessionLive(sessionId, 'provider-switch.wake-source')
 
     // The translated target transcript must be created BEFORE we replace the
     // live pane. If translation fails, the current provider process should stay

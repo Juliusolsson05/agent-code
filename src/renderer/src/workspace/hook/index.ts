@@ -439,7 +439,7 @@ export function useWorkspace(
             sessionId: request.sessionId,
             maxMessages: 1,
           })
-          await ensureSessionLiveRef.current(request.sessionId)
+          await ensureSessionLiveRef.current(request.sessionId, 'orchestration.read-agent')
           const agent = readOrchestrationAgent({
             state: refs.stateRef.current,
             runtimes: refs.latestRuntimesRef.current,
@@ -694,7 +694,7 @@ export function useWorkspace(
           // Sending is the one operation that intentionally wakes a parked
           // target. Re-authorize after the await because the user can move or
           // close a pane while the provider is starting.
-          await ensureSessionLiveRef.current(request.sessionId)
+          await ensureSessionLiveRef.current(request.sessionId, 'orchestration.send-prompt')
           assertManagedTarget({
             state: refs.stateRef.current,
             callerSessionId: request.callerSessionId,

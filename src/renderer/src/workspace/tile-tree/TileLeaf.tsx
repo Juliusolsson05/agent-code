@@ -298,7 +298,7 @@ export function TileLeaf({
       // recovery protocol is explicitly retryable. The draft stays intact
       // while ensureSessionLive replaces only the backend generation.
       try {
-        await workspace.ensureSessionLive(sessionId)
+        await workspace.ensureSessionLive(sessionId, 'tile-leaf.send')
       } catch (err) {
         const message = err instanceof Error && err.message.length > 0
           ? err.message
@@ -310,7 +310,7 @@ export function TileLeaf({
     let ok = await feed.sendInput(sessionId, data, pasteId)
     if (!ok) {
       try {
-        await workspace.ensureSessionLive(sessionId)
+        await workspace.ensureSessionLive(sessionId, 'tile-leaf.send-retry')
         ok = await feed.sendInput(sessionId, data, pasteId)
       } catch (err) {
         workspace.showPaneToast(
@@ -758,7 +758,7 @@ export function TileLeaf({
               type="button"
               className="flex-shrink-0 text-accent hover:underline"
               onClick={() => {
-                void workspace.ensureSessionLive(sessionId).catch(err => {
+                void workspace.ensureSessionLive(sessionId, 'tile-leaf.retry').catch(err => {
                   workspace.showPaneToast(
                     sessionId,
                     err instanceof Error && err.message.length > 0

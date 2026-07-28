@@ -39,6 +39,7 @@ import type { CaffeinateController } from '@main/caffeinate/CaffeinateController
 import type { RemoteController } from '@main/remote/RemoteController.js'
 import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import { registerIncidentIpc } from '@main/ipc/incident.js'
+import { registerLifecycleIpc } from '@main/ipc/lifecycle.js'
 import { registerUsageIpc } from '@main/ipc/usage.js'
 import { registerCliUpdatesIpc } from '@main/ipc/cliUpdates.js'
 import type { CliUpdateOrchestrator } from '@main/setup/cliUpdateOrchestrator.js'
@@ -107,6 +108,7 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerCaffeinateIpc(deps.caffeinateController)
   registerRemoteIpc(deps.remoteController)
   registerIncidentIpc(deps.appRunJournal)
+  registerLifecycleIpc(deps.appRunJournal)
   registerUsageIpc()
   registerCliUpdatesIpc(deps.cliUpdateOrchestrator)
   registerWorkflowIpc(deps.workflowBridge)

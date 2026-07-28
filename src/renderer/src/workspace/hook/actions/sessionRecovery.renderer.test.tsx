@@ -169,7 +169,7 @@ describe('useSessionActions recovery retry', () => {
 
     let wakeResult: Awaited<ReturnType<typeof result.current.ensureSessionLive>> | undefined
     await act(async () => {
-      wakeResult = await result.current.ensureSessionLive(sessionId)
+      wakeResult = await result.current.ensureSessionLive(sessionId, 'tile-leaf.send')
     })
 
     expect(recoverSession).toHaveBeenCalledTimes(1)

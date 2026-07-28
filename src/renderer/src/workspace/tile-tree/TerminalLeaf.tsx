@@ -295,7 +295,7 @@ export function TerminalLeaf({
       // for helper identity churn would destroy scrollback and re-open the
       // attach race that the subscribe/attach/drain sequence below exists to
       // avoid.
-      void ensureSessionLiveRef.current(sessionId)
+      void ensureSessionLiveRef.current(sessionId, 'terminal-leaf.mount')
         .then(() => {
           if (disposed || termRef.current !== term) return null
           return window.api.attachTerminal(sessionId)
