@@ -70,6 +70,10 @@ export type UiShellSlice = UiShellState & {
   openViewPrompts: (sessionId: SessionId) => void
   closeViewPrompts: () => void
   openNewAgentPlacement: () => void
+  /** Open the placement overlay pre-targeted at a specific project. Used by
+   *  the Dispatch header "+"; see `newAgentProjectIntent` for why the target
+   *  is captured here rather than resolved at commit time. */
+  openNewAgentForProject: (tabId: TabId, anchorSessionId: SessionId) => void
   closeNewAgentPlacement: () => void
   openTiledDispatchPrompt: () => void
   closeTiledDispatchPrompt: () => void

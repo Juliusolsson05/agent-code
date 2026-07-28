@@ -113,12 +113,19 @@ describe('app interaction ownership at composer ingress', () => {
     const stop = vi.fn(() => {
       active = false
     })
+    // Discards rather than completes. This test only exercises the ownership
+    // gate, so cancel never fires here — it exists to satisfy the handle
+    // contract that the mouse arbiter's chord-cancel path depends on.
+    const cancel = vi.fn(() => {
+      active = false
+    })
     const unregister = registerDictationTarget({
       enabled: true,
       focused: true,
       lastFocusedAt: Date.now(),
       start,
       stop,
+      cancel,
       isStarting: () => false,
       isActive: () => active,
     })

@@ -9,7 +9,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
-import { Input } from '@renderer/components/ui/input'
+import { NumberInput } from '@renderer/components/ui/number-input'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import {
   clampTileCount,
@@ -42,13 +42,14 @@ export function TiledDispatchCountOverlay({ workspace, onClose }: Props) {
   // layout, otherwise the standard default. Lets the user nudge the count
   // without re-typing it from scratch.
   const existingCount = workspace.state.dispatchMode?.tiled?.lanes.length
-  const [value, setValue] = useState<string>(
-    String(existingCount ?? DEFAULT_DISPATCH_TILES),
-  )
+  // Numeric state rather than the previous string: NumberInput owns parsing
+  // and clamping, so keeping a string here would mean two places deciding what
+  // "not a number yet" means.
+  const [value, setValue] = useState<number>(existingCount ?? DEFAULT_DISPATCH_TILES)
   const inputRef = useRef<HTMLInputElement | null>(null)
 
   const commit = useCallback(() => {
-    const count = clampTileCount(Number(value))
+    const count = clampTileCount(value)
     if (workspace.state.dispatchMode?.tiled) {
       workspace.setTiledLaneCount(count)
     } else {
@@ -73,6 +74,11 @@ export function TiledDispatchCountOverlay({ workspace, onClose }: Props) {
     }}>
       <DialogContent
         className="w-[320px]"
+        // Radix's FocusScope runs focusFirst() on the first TABBABLE node after
+        // mount — which is now the "−" stepper, not the field — and it runs
+        // after any child autoFocus/ref, so a child cannot win this race.
+        // Without taking the mount focus back here, typing goes nowhere and
+        // Enter activates the stepper instead of committing.
         onOpenAutoFocus={event => {
           event.preventDefault()
           inputRef.current?.focus()
@@ -86,17 +92,21 @@ export function TiledDispatchCountOverlay({ workspace, onClose }: Props) {
             full agent index; each other lane gets its own selector.
           </DialogDescription>
         </DialogHeader>
-        <Input
-          id="tiled-dispatch-count"
-          ref={inputRef}
-          type="number"
-          min={MIN_DISPATCH_TILES}
-          max={MAX_DISPATCH_TILES}
-          value={value}
-          onChange={e => setValue(e.target.value)}
-          onKeyDown={onKeyDown}
-          className="mx-4 my-4 w-auto bg-canvas text-[13px] tabular-nums"
-        />
+        {/* Was a bare <Input type="number"> relying on Chromium's native
+            spinner arrows — ~8px, hover-only, stacked, and platform-dependent,
+            which made "pick a lane count" a keyboard task for no reason other
+            than the control. NumberInput gives it real +/- targets. */}
+        <div className="mx-4 my-4" onKeyDown={onKeyDown}>
+          <NumberInput
+            id="tiled-dispatch-count"
+            aria-label="Dispatch tile count"
+            min={MIN_DISPATCH_TILES}
+            max={MAX_DISPATCH_TILES}
+            value={value}
+            onChange={setValue}
+            inputRef={inputRef}
+          />
+        </div>
         <DialogFooter>
           <Button
             type="button"

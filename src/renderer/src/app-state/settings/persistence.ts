@@ -27,7 +27,7 @@ import { coerceCustomAppearanceJson } from '@renderer/app-state/settings/customA
 import { coerceDispatchColorFlags } from '@renderer/app-state/settings/dispatchColorFlags'
 import { coerceCommandKeybindingOverrides } from '@renderer/features/command-keybindings/resolve'
 import { coerceHotkeyBinding } from '@renderer/lib/hotkeyBinding'
-import { coerceMouseButtonBinding } from '@renderer/lib/mouseBinding'
+import { coerceMouseButtonBinding, coerceMouseChordBinding } from '@renderer/lib/mouseBinding'
 import { coerceSavedPromptTemplates } from '@renderer/features/prompt-templates/savedPromptTemplates'
 import { normalizeConfigurableBuiltInMcpDomains } from '@mcp/shared/types'
 
@@ -83,6 +83,10 @@ export function coerceSettings(value: unknown): Settings {
     // that set must fall back to off rather than arm a listener that
     // preventDefaults a button we have no contract for.
     dictationMouseButton: coerceMouseButtonBinding(parsed.dictationMouseButton),
+    // Closed enum, same reasoning as the button binding above: an unknown
+    // chord would arm a listener that suppresses buttons we have no contract
+    // for, so anything outside the set falls back to off.
+    paletteMouseChord: coerceMouseChordBinding(parsed.paletteMouseChord),
     aggressiveDebugPersistence: parsed.aggressiveDebugPersistence === true,
     // `!== false` so the default is ON — only an explicit persisted `false`
     // turns autosend off. Fresh installs / older workspace.json blobs (no
@@ -133,6 +137,8 @@ export function coerceSettings(value: unknown): Settings {
     // registry's `typeof override === 'boolean'` check can trust the
     // shape. A garbage value collapses to `{}` (nothing overridden),
     // matching the "absent ≡ declared default" semantic.
+    commandStarred: coerceCommandStarred(parsed.commandStarred),
+    mouseModeEnabled: parsed.mouseModeEnabled === true,
     commandVisibilityOverrides: coerceCommandVisibilityOverrides(
       parsed.commandVisibilityOverrides,
     ),
@@ -263,6 +269,24 @@ function omitRetiredSettingsKeys(parsed: Partial<Settings>): Partial<Settings> {
     result[key] = value
   }
   return result as Partial<Settings>
+}
+
+/**
+ * Starred commands. Same shape and same retired-id hazard as
+ * `coerceCommandVisibilityOverrides` below, with one deliberate difference: a
+ * persisted `false` is DROPPED rather than stored. For stars the default is
+ * always false, so `false` carries no information — keeping it would let the
+ * map grow without bound while meaning nothing, and it would break the
+ * absent-means-default invariant the visibility map documents.
+ */
+function coerceCommandStarred(value: unknown): Record<string, boolean> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  const result: Record<string, boolean> = {}
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (RETIRED_BUILT_IN_COMMAND_IDS.has(key)) continue
+    if (entry === true) result[key] = true
+  }
+  return result
 }
 
 function coerceCommandVisibilityOverrides(value: unknown): Record<string, boolean> {

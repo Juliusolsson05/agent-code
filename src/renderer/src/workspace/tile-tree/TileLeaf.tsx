@@ -23,6 +23,7 @@ import { QueueStrip } from '@renderer/workspace/tile-tree/TileLeaf/QueueStrip'
 import { PaneToast } from '@renderer/workspace/tile-tree/TileLeaf/PaneToast'
 import { ScrollIndicator } from '@renderer/workspace/tile-tree/TileLeaf/ScrollIndicator'
 import { ComposerInput } from '@renderer/workspace/tile-tree/TileLeaf/ComposerInput'
+import { ComposerActions } from '@renderer/workspace/tile-tree/TileLeaf/ComposerActions'
 import { useComposerAutoGrow } from '@renderer/workspace/tile-tree/TileLeaf/useComposerAutoGrow'
 import { useComposerKeybinds } from '@renderer/workspace/tile-tree/TileLeaf/useComposerKeybinds'
 import { useComposerDictation } from '@renderer/workspace/tile-tree/TileLeaf/useComposerDictation'
@@ -187,6 +188,7 @@ export function TileLeaf({
   const dictationProvider = useAppStore(state => state.settings.dictationProvider)
   const dictationShortcut = useAppStore(state => state.settings.dictationShortcut)
   const autoSendPromptSuggestion = useAppStore(state => state.settings.autoSendPromptSuggestion)
+  const mouseModeEnabled = useAppStore(state => state.settings.mouseModeEnabled)
   // When a prompt-suggestion chip is clicked with autosend on, we prefill the
   // draft (setInputText) and stash the text here; the effect below fires the
   // real submit ONCE the draft has committed to runtime.draftInput, so
@@ -832,6 +834,34 @@ export function TileLeaf({
         }
         providerSwitchMessage={runtime.providerSwitch?.message ?? null}
       />
+
+      {/* Mouse Mode only. Rendered as a sibling BELOW the composer rather than
+          inside ComposerInput, because that component is shared with the phone
+          client, which already draws its own Send. */}
+      {mouseModeEnabled ? (
+        <ComposerActions
+          input={input}
+          hasDraftImages={runtime.draftImages.length > 0}
+          sending={runtime.promptDelivery.kind === 'sending'}
+          deliveryUncertain={runtime.promptDelivery.kind === 'uncertain'}
+          providerSwitching={runtime.providerSwitch !== null}
+          slashMode={slashMode}
+          // Same predicate the Dispatch list uses for its running count. NOT
+          // `streamPhase !== 'idle'` alone: between clicking Send and the first
+          // token, streamPhase is still idle while the session is already
+          // running, so a stream-only test hid Stop during precisely the
+          // interval where "I just sent the wrong thing" is most likely.
+          working={
+            runtime.sessionStatus === 'running' || runtime.streamPhase !== 'idle'
+          }
+          dictationStatus={dictation.status}
+          onSend={() => void submitCurrentDraft('button')}
+          // Same escape byte the keyboard interrupt sends, and the same one the
+          // phone's Stop uses. Deliberately raw input rather than a lifecycle
+          // action: interrupting is the provider's own protocol, not ours.
+          onStop={() => void send('\x1b')}
+        />
+      ) : null}
 
       {/* WHY navigation sits after the composer in DOM and visual order: a workflow is another
           view of this same agent session, not a feed row and not a detached panel. Keeping the

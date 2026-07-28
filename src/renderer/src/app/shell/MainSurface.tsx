@@ -102,6 +102,7 @@ export function MainSurface({ onNewTabRequest }: { onNewTabRequest: () => void }
                 onClose={placement.close}
                 attachIntent={placement.attachIntent}
                 linkedAgentParentId={placement.linkedAgentParentId}
+                projectIntent={placement.projectIntent}
               />
             </div>
           ) : activeTab ? (
@@ -121,6 +122,7 @@ export function MainSurface({ onNewTabRequest }: { onNewTabRequest: () => void }
                 onClose={placement.close}
                 attachIntent={placement.attachIntent}
                 linkedAgentParentId={placement.linkedAgentParentId}
+                projectIntent={placement.projectIntent}
               />
             </div>
           ) : (

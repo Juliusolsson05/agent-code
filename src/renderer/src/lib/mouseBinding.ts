@@ -73,6 +73,46 @@ export const MOUSE_BUTTON_MASKS: Record<Exclude<MouseButtonBinding, ''>, number>
   Forward: 16,
 }
 
+/**
+ * A two-button chord, identified by name and resolved to a `buttons` bitmask.
+ *
+ * WHY chords are a CLOSED union rather than an arbitrary pair of buttons:
+ * `MOUSE_BUTTON_BINDINGS` above deliberately excludes left and right so a
+ * single binding can never swallow ordinary clicking. A chord relaxes that —
+ * `Middle+Right` genuinely does claim the right button — but only for as long
+ * as middle is already held, which is a bounded, escapable window the user
+ * entered on purpose. Keeping the vocabulary closed is what keeps "right is
+ * never bindable ALONE" structurally true instead of a rule someone has to
+ * remember. Do not replace this with a generic two-button picker.
+ */
+export type MouseChordBinding = '' | 'Middle+Right'
+
+export const MOUSE_CHORD_MASKS: Record<Exclude<MouseChordBinding, ''>, number> = {
+  // 4 (middle) | 2 (right) = 6. Verified against hardware: the chord shows up
+  // as `mousedown button=1 buttons=6` / `button=2 buttons=6`.
+  'Middle+Right': MOUSE_BUTTON_MASKS.Middle | 2,
+}
+
+/** The button a chord "starts" on — the one whose press arms the chord and
+ *  whose hold defines the window in which the second press counts. Middle is
+ *  the anchor because it is the one with no default job on macOS; right is the
+ *  completer because it is the one we refuse to claim on its own. */
+export const MOUSE_CHORD_ANCHOR_MASKS: Record<Exclude<MouseChordBinding, ''>, number> = {
+  'Middle+Right': MOUSE_BUTTON_MASKS.Middle,
+}
+
+export function coerceMouseChordBinding(value: unknown): MouseChordBinding {
+  if (typeof value !== 'string') return ''
+  if (Object.prototype.hasOwnProperty.call(MOUSE_CHORD_MASKS, value)) {
+    return value as MouseChordBinding
+  }
+  return ''
+}
+
+export function formatMouseChordForDisplay(value: MouseChordBinding): string {
+  return value === 'Middle+Right' ? 'Middle + Right' : ''
+}
+
 /** Resolve a DOM `MouseEvent.button` to a bindable name, or null when the
  *  button is one we refuse to bind (left/right) or don't recognise. */
 export function mouseButtonBindingFromButton(button: number): MouseButtonBinding | null {

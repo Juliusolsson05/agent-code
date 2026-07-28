@@ -275,6 +275,7 @@ export function useComposerDictation({
   const focusedRef = useRef(focused)
   const startRef = useRef<() => Promise<void>>(async () => {})
   const stopRef = useRef<() => Promise<void>>(async () => {})
+  const cancelRecordingRef = useRef<(recording: ActiveRecording) => void>(() => {})
   const pendingStopRef = useRef(false)
   const pendingDiscardRef = useRef(false)
   const hotkeyDownAtRef = useRef(0)
@@ -1135,6 +1136,9 @@ export function useComposerDictation({
   useEffect(() => {
     startRef.current = start
     stopRef.current = stop
+    // Same reason as start/stop: the registered handle is created once per
+    // `enabled` change and must not close over a stale callback identity.
+    cancelRecordingRef.current = cancelRecording
   }, [start, stop])
 
   const renderTranscriptPreviewRef = useRef(renderTranscriptPreview)
@@ -1219,6 +1223,25 @@ export function useComposerDictation({
       },
       stop: () => {
         if (activeRef.current || statusRef.current === 'starting') void stopRef.current()
+      },
+      cancel: () => {
+        // Discard, never finalize. `cancelRecording` is the same path the
+        // sub-180ms accidental-tap discard uses: it tears down the recorder
+        // and restores the composer's pre-dictation text without asking the
+        // provider for a transcript. Deliberately NOT stopRef — that would
+        // ship the audio and paste the result.
+        const recording = activeRef.current
+        if (recording) {
+          cancelRecordingRef.current(recording)
+          return
+        }
+        // Still inside start()'s getUserMedia await: there is no recording
+        // object to tear down yet, so mark the pending stop as a discard the
+        // way a too-short hold does. start() checks these on resume.
+        if (statusRef.current === 'starting') {
+          pendingStopRef.current = true
+          pendingDiscardRef.current = true
+        }
       },
       isStarting: () => statusRef.current === 'starting',
       isActive: () => activeRef.current !== null,

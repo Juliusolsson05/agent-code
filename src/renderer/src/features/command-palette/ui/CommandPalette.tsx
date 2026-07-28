@@ -15,7 +15,10 @@ import {
   dispatchCommand,
   dispatchResolvedRow,
 } from '@renderer/features/command-palette/executeCommand'
-import { buildAgentIndexCommand } from '@renderer/features/command-palette/lib/agentIndexCommand'
+import {
+  buildAgentIndexCommand,
+  isAgentIndexCommand,
+} from '@renderer/features/command-palette/lib/agentIndexCommand'
 import {
   buildHistoryScoreMap,
   loadRecentHistory,
@@ -883,9 +886,29 @@ function OpenCommandPalette({
   // order unchanged). Everything downstream of this is index-based and
   // unaware that ordering changed, so this is the only line that needs
   // to swap from the old boolean filter to the ranked list.
+  // `commandStarred` is read here and threaded straight into ranking —
+  // deliberately NOT into `commandContext.flags` the way
+  // `commandVisibilityOverrides` is. Visibility has to live in flags because
+  // `commandVisible` runs inside `buildCommandRegistry`; starring is applied
+  // after the registry is built. Putting it in flags would add it to the
+  // context memo's deps and rebuild all 99 commands — every function title,
+  // every getState call, resolveEffectiveKeybindings — on every star toggle.
+  const commandStarred = settings.commandStarred
+  const handleToggleStar = useCallback(
+    (commandId: string) => {
+      const next = { ...commandStarred }
+      // Prune rather than store `false`. The map holds deliberate stars only,
+      // which is what makes "absent means not starred" total — the same rule
+      // the visibility map follows when a value returns to its default.
+      if (next[commandId]) delete next[commandId]
+      else next[commandId] = true
+      setSettings({ commandStarred: next })
+    },
+    [commandStarred, setSettings],
+  )
   const filteredCommands = useMemo(
-    () => rankCommands(commands, queryText, historyScoreMap),
-    [commands, queryText, historyScoreMap],
+    () => rankCommands(commands, queryText, historyScoreMap, commandStarred),
+    [commands, queryText, historyScoreMap, commandStarred],
   )
   const directAgentTarget = useMemo(
     () => resolveAgentPaneLabel(workspace.state, queryText, workspace.tileTabs),
@@ -1973,7 +1996,13 @@ function OpenCommandPalette({
               ))}
           </div>
 
-          {mode === 'commands' && <CommandDescriptionPanel command={selectedCommand} />}
+          {mode === 'commands' && (
+            <CommandDescriptionPanel
+              command={selectedCommand}
+              starred={selectedCommand ? commandStarred[selectedCommand.id] === true : false}
+              onToggleStar={handleToggleStar}
+            />
+          )}
 
           {/* Prompt-template mode — the full prompt body for the highlighted
               template. Same breakpoint policy as the command description panel
@@ -2011,8 +2040,16 @@ const COMMAND_DESCRIPTION_COMPONENTS: import('react-markdown').Options['componen
 
 const CommandDescriptionPanel = memo(function CommandDescriptionPanel({
   command,
+  starred,
+  onToggleStar,
 }: {
   command: ResolvedCommand | null
+  starred: boolean
+  // MUST be useCallback-stable in the parent. This component is memo'd on a
+  // tiny prop set precisely because the palette re-renders on every keystroke;
+  // an inline arrow here would defeat that and re-render the markdown body of
+  // the description on every character typed.
+  onToggleStar: (commandId: string) => void
 }) {
   if (!command) {
     return (
@@ -2032,12 +2069,33 @@ const CommandDescriptionPanel = memo(function CommandDescriptionPanel({
       aria-label="Command details"
       className="hidden basis-[30%] min-w-[220px] overflow-y-auto bg-canvas px-4 py-4 md:block"
     >
-      <div className="mb-3 border-b border-border pb-3">
-        <div className="text-[13px] text-ink">{command.title}</div>
-        <div className="mt-1 flex items-center gap-2 text-[10px] text-muted">
-          {command.shortcut && <span>{command.shortcut}</span>}
-          {command.state && <CommandStateBadge state={command.state} />}
+      <div className="mb-3 flex items-start justify-between gap-2 border-b border-border pb-3">
+        <div className="min-w-0">
+          <div className="text-[13px] text-ink">{command.title}</div>
+          <div className="mt-1 flex items-center gap-2 text-[10px] text-muted">
+            {command.shortcut && <span>{command.shortcut}</span>}
+            {command.state && <CommandStateBadge state={command.state} />}
+          </div>
         </div>
+        {/* Suppressed for the synthetic agent-index row: its id is per-session
+            and per-query (`agent-index:<sessionId>`), so starring one would
+            write a permanently dead key into settings that can never match
+            anything again and that the retired-id prune cannot recognise. The
+            history recorder skips these rows for the same reason. */}
+        {!isAgentIndexCommand(command) ? (
+          <button
+            type="button"
+            aria-pressed={starred}
+            aria-label={starred ? 'Unstar command' : 'Star command'}
+            title={starred ? 'Unstar command' : 'Star command'}
+            onClick={() => onToggleStar(command.id)}
+            className={`shrink-0 px-1 text-[13px] leading-none ${
+              starred ? 'text-accent' : 'text-muted hover:text-ink'
+            }`}
+          >
+            {starred ? '★' : '☆'}
+          </button>
+        ) : null}
       </div>
       <div>
         <ReactMarkdown components={COMMAND_DESCRIPTION_COMPONENTS}>

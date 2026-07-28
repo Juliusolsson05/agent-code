@@ -13,7 +13,7 @@ import {
   placementTargetIdForArrow,
 } from '@renderer/features/workspace/lib/newAgentPlacement'
 import type { PlacementTarget } from '@renderer/features/workspace/lib/newAgentPlacement'
-import type { SessionId, SessionKind } from '@renderer/workspace/types'
+import type { SessionId, SessionKind, TabId } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { DispatchAttachIntent } from '@renderer/app-state/uiShell/types'
 
@@ -43,6 +43,13 @@ type Props = {
    * uiShell-level intent passed in, so App.tsx owns the close path.
    */
   linkedAgentParentId: SessionId | null
+  /**
+   * Non-null = the Dispatch project header's "+" opened this, and the new
+   * agent must land in that project rather than the focused one. Carries a
+   * session from the clicked group as a cwd anchor — see the field's WHY in
+   * uiShell/types.ts for why both halves are needed.
+   */
+  projectIntent: { tabId: TabId; anchorSessionId: SessionId } | null
 }
 
 // Registry-derived agent options (#394 phase 2c-2) + the one
@@ -70,6 +77,7 @@ export function NewAgentPlacementOverlay({
   onClose,
   attachIntent,
   linkedAgentParentId,
+  projectIntent,
 }: Props) {
   // Attach mode is "user wants to move this existing detached session
   // into the grid." The overlay still does placement, just no spawn.
@@ -164,7 +172,12 @@ export function NewAgentPlacementOverlay({
       // Dispatch Mode creates a detached provider agent on the focused
       // Dispatch project; there is intentionally no placement step.
       // createDetachedDispatchAgent owns its own overlay close.
-      void workspace.createDetachedDispatchAgent(kind)
+      //
+      // When the project header's "+" opened this, the target is explicit and
+      // must override focus-based resolution — the whole reason that intent
+      // exists is that focus does NOT identify the clicked project in Tiled
+      // Dispatch.
+      void workspace.createDetachedDispatchAgent(kind, projectIntent ?? undefined)
       return
     }
     setSelectedKind(kind)
@@ -385,6 +398,20 @@ export function NewAgentPlacementOverlay({
       ref={overlayRef}
       data-agent-code-interaction-owner="app"
       className="absolute inset-0 z-40 bg-black/20"
+      // WHY the backdrop is now clickable: during the placement step this
+      // overlay rendered ZERO interactive elements — the preview rect is
+      // pointer-events-none, targets move on arrows, commit is Enter, and
+      // cancel was Escape. A mouse-only user who picked an agent kind was
+      // trapped in a modal they could neither commit nor dismiss. This does
+      // not make placement itself clickable (see the WHY further up on why
+      // clickable target rectangles were removed and should stay removed) —
+      // it just guarantees a way out, which is the part that was harmful.
+      onClick={event => {
+        // Only a click on the backdrop ITSELF. A click that bubbled up from
+        // the kind picker must not also dismiss the overlay.
+        if (event.target !== event.currentTarget) return
+        onClose()
+      }}
     >
       {selectedKind && placementTarget && (
         <div
@@ -425,11 +452,34 @@ export function NewAgentPlacementOverlay({
             </div>
           )}
         </div>
+        {/* The hint box is pointer-events-none so it never blocks the grid
+            underneath, so the Cancel has to re-enable pointer events on
+            itself. Placed here rather than in the kind picker because the
+            placement step is exactly the state that had no way out. */}
+        {selectedKind ? (
+          <button
+            type="button"
+            onClick={onClose}
+            className="pointer-events-auto mt-2 border border-control-border bg-control-bg px-3 py-1 text-[11px] leading-none text-control-fg hover:border-control-border-hover hover:text-ink"
+          >
+            Cancel
+          </button>
+        ) : null}
       </div>
 
       {!selectedKind && (
-        <div className="absolute inset-0 flex items-center justify-center">
-          <div className="w-[340px] border border-border bg-surface shadow-lg shadow-black/30">
+        // pointer-events-none on the CENTERING layer, re-enabled on the card
+        // itself. Without this the layer is `absolute inset-0` and covers the
+        // whole backdrop, so the backdrop's click-to-dismiss could never fire
+        // (event.target was always this div, never the backdrop). In Dispatch
+        // and linked-agent mode that was fatal rather than annoying: those are
+        // kind-only, so `selectedKind` never becomes truthy, the Cancel button
+        // below never renders, and the overlay had ZERO mouse exits — the only
+        // way out with a mouse was to create an agent you did not want. The
+        // Dispatch "+" leads straight here, so it would have shipped a button
+        // whose only destination is a trap.
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+          <div className="pointer-events-auto w-[340px] border border-border bg-surface shadow-lg shadow-black/30">
             <div className="border-b border-border px-4 py-3 text-[12px] uppercase tracking-wider text-muted">
               New Agent
             </div>
@@ -457,6 +507,19 @@ export function NewAgentPlacementOverlay({
                   </button>
                 )
               })}
+            </div>
+            {/* An explicit Cancel on the kind step too. The backdrop click
+                above is now reachable, but a visible control is what a
+                mouse-first user actually looks for — and this is the only step
+                Dispatch and linked-agent mode ever show. */}
+            <div className="flex justify-end border-t border-border px-3 py-2">
+              <button
+                type="button"
+                onClick={onClose}
+                className="border border-control-border bg-control-bg px-3 py-1 text-[11px] leading-none text-control-fg hover:border-control-border-hover hover:text-ink"
+              >
+                Cancel
+              </button>
             </div>
           </div>
         </div>

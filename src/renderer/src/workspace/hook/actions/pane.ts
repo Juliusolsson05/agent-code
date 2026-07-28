@@ -18,6 +18,7 @@ import type {
   SessionMeta,
   SplitDirection,
   Tab,
+  TabId,
   TileNode,
   WorkspaceState,
 } from '@renderer/workspace/types'
@@ -288,7 +289,10 @@ export function usePaneActions(
   ) => Promise<void>
   startNewAgentPlacement: () => void
   commitNewAgentPlacement: (kind: SessionKind, target: PlacementTarget) => Promise<void>
-  createDetachedDispatchAgent: (kind: Exclude<SessionKind, 'terminal'>) => Promise<void>
+  createDetachedDispatchAgent: (
+    kind: Exclude<SessionKind, 'terminal'>,
+    projectOverride?: { tabId: TabId; anchorSessionId: SessionId },
+  ) => Promise<void>
   createLinkedAgent: (
     kind: Exclude<SessionKind, 'terminal'>,
     parentId: SessionId,
@@ -534,13 +538,33 @@ export function usePaneActions(
   }, [openNewAgentPlacement, state.activeTabId, state.tabs])
 
   const createDetachedDispatchAgent = useCallback(
-    async (kind: Exclude<SessionKind, 'terminal'>) => {
+    async (
+      kind: Exclude<SessionKind, 'terminal'>,
+      // Explicit project override, supplied by the Dispatch header "+".
+      //
+      // WHY it must override BOTH halves rather than just the tab: cwd is
+      // derived from the FOCUSED session below, which belongs to a different
+      // project when the user clicked "+" on a project they are not focused
+      // on. Overriding the tab alone would file the agent correctly and then
+      // spawn it in the wrong directory — or fail outright, since a project
+      // whose grid leaves are all closed has no leaf cwd to fall back on and
+      // Dispatch agents are never inserted into tab.root.
+      projectOverride?: { tabId: TabId; anchorSessionId: SessionId },
+    ) => {
       const snapshot = refs.stateRef.current
       // Resolve the target project ONCE so cwd and projectTab agree. In Tiled
       // Dispatch this follows the focused lane, not the stale active tab —
       // reading cwd from focusedSessionId while filing under activeTabId is the
       // bug this fixes (issue #266 / #248). See resolveDispatchSpawnTarget.
-      const target = resolveDispatchSpawnTarget(snapshot)
+      //
+      // laneIndex is deliberately kept from the resolver even when a project
+      // override is present: the override says WHICH PROJECT, while the lane
+      // is about where the new agent should appear in Tiled Dispatch, which is
+      // still a function of the user's current focus.
+      const resolved = resolveDispatchSpawnTarget(snapshot)
+      const target = projectOverride
+        ? { ...resolved, tabId: projectOverride.tabId, cwdSessionId: projectOverride.anchorSessionId }
+        : resolved
       const tab = snapshot.tabs.find(t => t.id === target.tabId)
       if (!tab) return
 

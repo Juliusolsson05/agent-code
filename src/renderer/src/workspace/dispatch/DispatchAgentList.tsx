@@ -43,6 +43,7 @@ export const DispatchAgentList = memo(function DispatchAgentList({
   focusSessionInTab,
   showWorktreeBadges,
   disabledSessionIds,
+  onCreateAgentInProject,
 }: {
   groups: ReturnType<typeof buildDispatchGroups>
   pinnedRows: DispatchAgentRow[]
@@ -50,6 +51,11 @@ export const DispatchAgentList = memo(function DispatchAgentList({
   dispatchScope: 'global' | 'project'
   focusSessionInTab: Workspace['focusSessionInTab']
   showWorktreeBadges: boolean
+  // Renders a "+" in each project header when supplied. Optional so the
+  // Tiled and classic layouts can adopt it independently, and so a caller
+  // that has no meaningful create path simply omits it rather than passing a
+  // no-op the header would still render a button for.
+  onCreateAgentInProject?: (tabId: TabId, anchorSessionId: SessionId) => void
   // Sessions that must render as unselectable in this index. Used by Tiled
   // Dispatch's lane-0 index to grey out agents already shown in another lane
   // (the one-session-per-lane invariant — without this, clicking a claimed
@@ -121,7 +127,9 @@ export const DispatchAgentList = memo(function DispatchAgentList({
           groups don't gain an empty section header. */}
       {pinnedRows.length > 0 && (
         <div className="border-b border-border" data-dispatch-pinned-group="true">
-          <DispatchGroupHeader title="Pinned" rows={pinnedRows} />
+          {/* projectTabId=null: pinned agents can span several projects, so
+              there is no single tab a new agent would belong to. */}
+          <DispatchGroupHeader title="Pinned" rows={pinnedRows} projectTabId={null} />
           <div>
             {pinnedRows.map(row => (
               <DispatchAgentListRow
@@ -139,7 +147,12 @@ export const DispatchAgentList = memo(function DispatchAgentList({
       )}
       {groups.map(group => (
         <div key={group.tab.id} className="border-b border-border">
-          <DispatchGroupHeader title={group.tab.title} rows={group.rows} />
+          <DispatchGroupHeader
+            title={group.tab.title}
+            rows={group.rows}
+            projectTabId={group.tab.id}
+            onCreateAgent={onCreateAgentInProject}
+          />
           <div>
             {group.rows.map(row => (
               <DispatchAgentListRow
@@ -161,9 +174,19 @@ export const DispatchAgentList = memo(function DispatchAgentList({
 const DispatchGroupHeader = memo(function DispatchGroupHeader({
   title,
   rows,
+  // Null for the "Pinned" section, which reuses this header but is not a
+  // project — there is no tab to create an agent in, so the button is omitted
+  // rather than guessing. Passed explicitly rather than derived here, because
+  // deriving it would mean this component knowing which of its two callers it
+  // is, which is exactly the coupling that makes a shared header stop being
+  // shared.
+  projectTabId,
+  onCreateAgent,
 }: {
   title: string
   rows: DispatchAgentRow[]
+  projectTabId: TabId | null
+  onCreateAgent?: ((tabId: TabId, anchorSessionId: SessionId) => void) | undefined
 }) {
   const sessionIds = useMemo(() => rows.map(row => row.sessionId), [rows])
   const runningCount = useAppStore(useShallow(state => {
@@ -178,8 +201,30 @@ const DispatchGroupHeader = memo(function DispatchGroupHeader({
   return (
     <div className="flex items-center justify-between gap-2 px-2.5 py-1 text-[10px] text-ink bg-canvas">
       <span className="truncate">{title}</span>
-      <span className="text-muted tabular-nums">
-        {runningCount}/{rows.length}
+      {/* The header div has no onClick of its own, so this needs no
+          stopPropagation and there is no button-in-button hazard — unlike the
+          agent rows below, which ARE buttons. Deliberately always visible
+          rather than hover-revealed: DispatchColorFlagStrip already sets the
+          precedent that this list reserves its space permanently so the
+          trailing edge stays straight, and a hover-revealed control is one a
+          mouse-first user has to hunt for. */}
+      {/* Grouped so `justify-between` puts the title left and this pair right;
+          three loose children would space the button out into the middle. */}
+      <span className="flex shrink-0 items-center gap-1.5">
+        {projectTabId && onCreateAgent && rows.length > 0 ? (
+          <button
+            type="button"
+            aria-label={`New agent in ${title}`}
+            title={`New agent in ${title}`}
+            onClick={() => onCreateAgent(projectTabId, rows[0].sessionId)}
+            className="h-4 w-4 text-[12px] leading-none text-muted hover:bg-border hover:text-ink"
+          >
+            +
+          </button>
+        ) : null}
+        <span className="text-muted tabular-nums">
+          {runningCount}/{rows.length}
+        </span>
       </span>
     </div>
   )

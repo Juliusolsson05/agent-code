@@ -4,6 +4,7 @@ import {
   DialogDescription,
   DialogTitle,
 } from '@renderer/components/ui/dialog'
+import { DialogActions } from '@renderer/components/ui/dialog-actions'
 import { tabIndexLabel } from '@renderer/workspace/tile-tree/paneLabels'
 import type { SessionId } from '@renderer/workspace/types'
 
@@ -151,6 +152,27 @@ export function PinAgentsModal({
             <span><kbd>Esc</kbd> cancel</span>
           </span>
         </div>
+        {/* WHY this footer had to exist: rows toggle on click, but `onCommit`
+            fired ONLY from the Enter branch of usePinAgentsKeybinds. A mouse
+            user could build an entire selection and then have no way to save
+            it — and the only pointer-reachable exit, clicking the backdrop,
+            ran onCancel and silently discarded the whole draft. The key legend
+            above stays because those bindings are still real; it just is not
+            the only way out any more.
+
+            confirmOnEnter is false because the row list already owns Enter via
+            usePinAgentsKeybinds — wiring it here too would commit twice. */}
+        <DialogActions
+          confirmLabel={
+            selectedIds.length === 1 ? 'Pin 1 Agent' : `Pin ${selectedIds.length} Agents`
+          }
+          // Nothing selected commits an empty list under a button reading
+          // "Pin 0 Agents", which reads like a no-op the user has to guess at.
+          confirmDisabled={selectedIds.length === 0}
+          onConfirm={() => onConfirm(selectedIds)}
+          onCancel={onCancel}
+          confirmOnEnter={false}
+        />
       </DialogContent>
     </Dialog>
   )

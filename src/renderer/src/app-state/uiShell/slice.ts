@@ -25,6 +25,7 @@ export const createUiShellSlice: StateCreator<
   recordingNotePrompt: null,
   viewPromptsSessionId: null,
   newAgentPlacementOpen: false,
+  newAgentProjectIntent: null,
   tiledDispatchPromptOpen: false,
   dispatchAttachIntent: null,
   linkedAgentParentId: null,
@@ -151,8 +152,21 @@ export const createUiShellSlice: StateCreator<
 
   openNewAgentPlacement: () =>
     set({ newAgentPlacementOpen: true }, false, 'uiShell/openNewAgentPlacement'),
+  openNewAgentForProject: (tabId, anchorSessionId) =>
+    set(
+      { newAgentPlacementOpen: true, newAgentProjectIntent: { tabId, anchorSessionId } },
+      false,
+      'uiShell/openNewAgentForProject',
+    ),
   closeNewAgentPlacement: () =>
-    set({ newAgentPlacementOpen: false }, false, 'uiShell/closeNewAgentPlacement'),
+    // Clear the project intent alongside the flag. Leaving it set would make
+    // the NEXT ordinary "New Agent…" silently spawn into whichever project
+    // the user last clicked "+" on — the classic stale-intent bug.
+    set(
+      { newAgentPlacementOpen: false, newAgentProjectIntent: null },
+      false,
+      'uiShell/closeNewAgentPlacement',
+    ),
   openTiledDispatchPrompt: () =>
     set({ tiledDispatchPromptOpen: true }, false, 'uiShell/openTiledDispatchPrompt'),
   closeTiledDispatchPrompt: () =>
