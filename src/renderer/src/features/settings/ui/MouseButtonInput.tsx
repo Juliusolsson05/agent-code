@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
+import { Button } from '@renderer/components/ui/button'
 import {
   formatMouseButtonForDisplay,
   mouseButtonBindingFromButton,
@@ -124,8 +125,8 @@ export function MouseButtonInput({ value, onChange }: Props) {
             ? 'Press the mouse button you want'
             : formatMouseButtonForDisplay(value) || 'Click to set a button'}
         </button>
-        <button
-          type="button"
+        <Button
+          variant="outline"
           onClick={() => {
             setError(null)
             // Leave capture mode too. "Off" must mean off — staying armed
@@ -133,10 +134,12 @@ export function MouseButtonInput({ value, onChange }: Props) {
             stop()
             void onChange('')
           }}
-          className="border border-control-border bg-control-bg px-3 py-2 text-[12px] text-control-fg hover:border-control-border-hover hover:bg-control-hover-bg hover:text-ink"
+          // h-auto: pairs with the capture button beside it, which sizes to
+          // its own two-line content.
+          className="h-auto py-2"
         >
           Off
-        </button>
+        </Button>
       </div>
 
       {error ? <div className="text-[11px] text-muted">{error}</div> : null}

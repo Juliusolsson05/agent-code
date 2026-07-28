@@ -5,6 +5,7 @@ import {
 } from '@shared/types/providerKind'
 import type { AgentProviderKind } from '@shared/types/providerKind'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
+import { Button } from '@renderer/components/ui/button'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import {
@@ -457,13 +458,17 @@ export function NewAgentPlacementOverlay({
             itself. Placed here rather than in the kind picker because the
             placement step is exactly the state that had no way out. */}
         {selectedKind ? (
-          <button
-            type="button"
+          <Button
+            variant="outline"
+            size="sm"
             onClick={onClose}
-            className="pointer-events-auto mt-2 border border-control-border bg-control-bg px-3 py-1 text-[11px] leading-none text-control-fg hover:border-control-border-hover hover:text-ink"
+            // pointer-events-auto: the overlay root is pointer-events-none so
+            // clicks reach the tiles being placed into; this escape hatch has
+            // to opt back in.
+            className="pointer-events-auto mt-2"
           >
             Cancel
-          </button>
+          </Button>
         ) : null}
       </div>
 
@@ -513,13 +518,9 @@ export function NewAgentPlacementOverlay({
                 mouse-first user actually looks for — and this is the only step
                 Dispatch and linked-agent mode ever show. */}
             <div className="flex justify-end border-t border-border px-3 py-2">
-              <button
-                type="button"
-                onClick={onClose}
-                className="border border-control-border bg-control-bg px-3 py-1 text-[11px] leading-none text-control-fg hover:border-control-border-hover hover:text-ink"
-              >
+              <Button variant="outline" size="sm" onClick={onClose}>
                 Cancel
-              </button>
+              </Button>
             </div>
           </div>
         </div>

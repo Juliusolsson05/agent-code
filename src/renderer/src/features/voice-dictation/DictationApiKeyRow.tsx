@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 
+import { Button } from '@renderer/components/ui/button'
+import { Input } from '@renderer/components/ui/input'
+
 import type { DictationApiKeyStatus } from '@preload/api/types'
 
 // Voice-dictation API-key row for the Settings page.
@@ -106,7 +109,11 @@ export function DictationApiKeyRow() {
       )}
 
       <div className="flex items-center gap-2">
-        <input
+        {/* This field used to be styled with the `control-*` family, which is
+            button chrome — `input-*` is field chrome, and the two are
+            independently themeable in customAppearance. Under a custom theme
+            that separated them, the key field rendered as a button. */}
+        <Input
           type="password"
           autoComplete="off"
           spellCheck={false}
@@ -114,26 +121,26 @@ export function DictationApiKeyRow() {
           onChange={event => setPending(event.target.value)}
           placeholder={status.configured ? 'Replace key…' : 'Paste Deepgram API key'}
           disabled={busy || status.source === 'env'}
-          className="flex-1 border border-control-border bg-control-bg px-2 py-1 font-code text-[12px] text-ink focus:border-accent focus:outline-none"
+          className="h-7 flex-1"
         />
-        <button
-          type="button"
+        <Button
+          variant="outline"
+          size="sm"
           disabled={busy || !pending.trim() || status.source === 'env'}
           onClick={() => void commit(pending)}
-          className="border border-control-border bg-control-bg px-2 py-1 text-[11px] text-control-fg hover:border-control-border-hover hover:text-ink disabled:opacity-50"
         >
           Save
-        </button>
+        </Button>
         {status.configured && status.source !== 'env' ? (
-          <button
-            type="button"
+          <Button
+            variant="destructive-outline"
+            size="sm"
             disabled={busy}
             onClick={() => void commit('')}
-            className="border border-control-border bg-control-bg px-2 py-1 text-[11px] text-danger hover:border-danger hover:text-danger disabled:opacity-50"
             title="Clear the stored Deepgram key"
           >
             Remove
-          </button>
+          </Button>
         ) : null}
       </div>
 

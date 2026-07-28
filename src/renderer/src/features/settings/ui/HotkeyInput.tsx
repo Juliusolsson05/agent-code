@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
+import { Button } from '@renderer/components/ui/button'
 import {
   bindingFromKeyboardEvent,
   cloneEmptyModifiers,
@@ -129,31 +130,40 @@ export function HotkeyInput({ value, onChange }: Props) {
             ? 'Press any key or shortcut'
             : formatBindingForDisplay(value) || 'Click to set binding'}
         </button>
-        <button
-          type="button"
+        <Button
+          variant="outline"
+          // h-auto: this sits beside the capture button, which is a two-line
+          // target sized by its own content. A fixed-height Button would break
+          // the row's alignment.
+          className="h-auto py-2"
           onClick={() => void onChange(DEFAULT_DICTATION_HOTKEY)}
-          className="border border-control-border bg-control-bg px-3 py-2 text-[12px] text-control-fg hover:border-control-border-hover hover:bg-control-hover-bg hover:text-ink"
         >
           Default
-        </button>
+        </Button>
       </div>
 
       {!capturing ? (
         <div className="flex gap-1.5">
-          <button
-            type="button"
+          {/* text-muted overrides the variant's control-fg: these are
+              tertiary quick-picks under the real control, and dimming them is
+              deliberate. Preserved as an explicit override so the difference
+              reads as a decision rather than drift. */}
+          <Button
+            variant="outline"
+            size="sm"
+            className="text-muted"
             onClick={() => void onChange('Fn')}
-            className="border border-control-border bg-control-bg px-2 py-1 text-[11px] text-muted hover:border-control-border-hover hover:bg-control-hover-bg hover:text-ink"
           >
             fn
-          </button>
-          <button
-            type="button"
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="text-muted"
             onClick={() => void onChange('Cmd')}
-            className="border border-control-border bg-control-bg px-2 py-1 text-[11px] text-muted hover:border-control-border-hover hover:bg-control-hover-bg hover:text-ink"
           >
             Cmd
-          </button>
+          </Button>
         </div>
       ) : null}
 

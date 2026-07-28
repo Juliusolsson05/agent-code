@@ -1,4 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
+
+import { DialogActions } from '@renderer/components/ui/dialog-actions'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@renderer/components/ui/dialog'
 
 // Modal walking the user through Deepgram signup + key configuration.
 //
@@ -10,6 +19,29 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 //   fully local, and reuses the same overlay stack every other Agent Code
 //   command modal uses.
 //
+// WHY this is a `DialogContent` and no longer a hand-rolled overlay:
+//
+//   This file used to implement its own Escape handler, its own Tab focus
+//   trap, its own `fixed inset-0` backdrop, its own focus restoration, and it
+//   copied `data-agent-code-interaction-owner="app"` onto its root by hand.
+//   components/ui/README.md forbids every one of those by name — they are
+//   properties of DialogContent, not properties each feature reinterprets, and
+//   this was the last hand-rolled app modal in the tree.
+//
+//   The hand-rolled trap was also subtly wrong in a way Radix's FocusScope is
+//   not: it queried focusable nodes once per keydown off a static selector, so
+//   the `<a>` links inside the guide body participated but anything mounted
+//   into a nested portal would not have. Deleting it removes the divergence
+//   rather than fixing it twice.
+//
+//   The one behaviour deliberately NOT carried over is the window-capture
+//   swallow of Cmd/Option chords. That existed because a hand-rolled overlay
+//   has no way to tell the workspace shortcut router "an app surface owns the
+//   turn". DialogContent mounts the ownership marker for exactly its own
+//   lifetime, and the router already checks that marker synchronously, so the
+//   chord suppression is now structural instead of a second listener racing
+//   the first.
+//
 // WHY placeholder screenshots instead of committed assets:
 //
 //   The user has final say on which screenshots ship — they will match a
@@ -18,7 +50,6 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 //   keep the layout obviously incomplete instead of "silently missing".
 export function DictationGuideModal() {
   const [open, setOpen] = useState(false)
-  const dialogRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     const onOpen = () => setOpen(true)
@@ -26,101 +57,23 @@ export function DictationGuideModal() {
     return () => window.removeEventListener('agent-code:open-dictation-guide', onOpen)
   }, [])
 
-  const close = useCallback(() => setOpen(false), [])
-  useEffect(() => {
-    if (!open) return
-    const previouslyFocused = document.activeElement instanceof HTMLElement
-      ? document.activeElement
-      : null
-    const focusFrame = requestAnimationFrame(() => dialogRef.current?.focus())
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault()
-        event.stopPropagation()
-        close()
-        return
-      }
-      if (event.key === 'Tab') {
-        const dialog = dialogRef.current
-        if (!dialog) return
-        const focusable = Array.from(
-          dialog.querySelectorAll<HTMLElement>(
-            'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
-          ),
-        )
-        if (focusable.length === 0) {
-          event.preventDefault()
-          dialog.focus()
-          return
-        }
-        const current = focusable.indexOf(document.activeElement as HTMLElement)
-        const next = event.shiftKey
-          ? current <= 0 ? focusable.length - 1 : current - 1
-          : current === -1 || current === focusable.length - 1 ? 0 : current + 1
-        event.preventDefault()
-        event.stopPropagation()
-        focusable[next]?.focus()
-        return
-      }
-      // The workspace shortcut router listens on document capture. Capturing
-      // app-owned Cmd/Option chords one level earlier (window) prevents a guide
-      // opened above the workspace from splitting/closing panes underneath it.
-      // Ordinary keys continue to the dialog; type/paste ingress is blocked by
-      // the explicit ownership marker on the dialog root below.
-      if (event.metaKey || event.altKey) {
-        event.preventDefault()
-        event.stopPropagation()
-      }
-    }
-    window.addEventListener('keydown', onKey, { capture: true })
-    return () => {
-      cancelAnimationFrame(focusFrame)
-      window.removeEventListener('keydown', onKey, { capture: true })
-      previouslyFocused?.focus()
-    }
-  }, [open, close])
-
-  if (!open) return null
   return (
-    <div
-      ref={dialogRef}
-      tabIndex={-1}
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="dictation-guide-title"
-      data-agent-code-interaction-owner="app"
-      className="
-        fixed inset-0 z-[60] flex items-center justify-center
-        bg-canvas/80 backdrop-blur-sm p-6
-      "
-      onClick={event => {
-        if (event.target === event.currentTarget) close()
-      }}
-    >
-      <div className="max-h-full w-full max-w-2xl overflow-y-auto border border-border bg-canvas text-ink shadow-2xl">
-        <header className="flex items-center justify-between border-b border-border px-4 py-3">
-          <h2 id="dictation-guide-title" className="text-[14px] font-semibold">
-            Configure Voice Dictation
-          </h2>
-          <button
-            type="button"
-            onClick={close}
-            className="text-[12px] text-muted hover:text-ink"
-            aria-label="Close guide"
-          >
-            Close
-          </button>
-        </header>
+    <Dialog open={open} onOpenChange={setOpen}>
+      {/* Wider than the 520px default and height-capped: this is three
+          illustrated steps rather than a confirm prompt, so the body scrolls
+          inside the dialog instead of letting the surface grow past the
+          viewport. */}
+      <DialogContent className="w-[min(672px,92vw)] max-h-[88vh] grid-rows-[auto_1fr_auto]">
+        <DialogHeader>
+          <DialogTitle>Configure Voice Dictation</DialogTitle>
+          <DialogDescription>
+            Agent Code's inline dictation streams audio to Deepgram for
+            transcription. New Deepgram accounts get $200 in free credits, which
+            is generally enough for very long-term personal use.
+          </DialogDescription>
+        </DialogHeader>
 
-        <div className="flex flex-col gap-6 px-4 py-4 text-[12px] leading-relaxed">
-          <p>
-            Agent Code's inline dictation streams audio to{' '}
-            <span className="font-semibold">Deepgram</span> for transcription. New
-            Deepgram accounts get $200 in free credits, which is generally enough
-            for very long-term personal use. Follow the three steps below to get
-            up and running.
-          </p>
-
+        <div className="flex min-h-0 flex-col gap-6 overflow-y-auto px-4 py-4 text-[12px] leading-relaxed">
           <GuideStep
             number={1}
             title="Create a Deepgram account"
@@ -186,17 +139,13 @@ export function DictationGuideModal() {
           </div>
         </div>
 
-        <footer className="flex items-center justify-end gap-2 border-t border-border px-4 py-3">
-          <button
-            type="button"
-            onClick={close}
-            className="border border-control-border bg-control-bg px-3 py-1 text-[12px] text-control-fg hover:text-ink"
-          >
-            Close
-          </button>
-        </footer>
-      </div>
-    </div>
+        {/* Acknowledgement-only footer: there is nothing to cancel, so this is
+            the confirm-only shape DialogActions supports via omitting
+            onCancel. confirmOnEnter stays on — the body is prose and links,
+            nothing in it owns Enter. */}
+        <DialogActions confirmLabel="Done" onConfirm={() => setOpen(false)} />
+      </DialogContent>
+    </Dialog>
   )
 }
 

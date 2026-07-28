@@ -13,6 +13,19 @@ import { DictationApiKeyRow } from '@renderer/features/voice-dictation/Dictation
 import { DictationHistoryRow } from '@renderer/features/voice-dictation/DictationHistoryRow'
 import { ThemePickerRow } from '@renderer/features/settings/ui/ThemePickerRow'
 import { AgentCodeConventionsRow } from '@renderer/features/settings/ui/AgentCodeConventionsRow'
+import { Button } from '@renderer/components/ui/button'
+import { cn } from '@renderer/lib/utils'
+
+// Settings rows are full-width, left-aligned, and two-line-capable, so they
+// override Button's default size geometry. They do NOT override its colours —
+// that is the whole point of routing them through the variant: the resting/
+// hover control chrome now comes from one place, and follows the user's
+// control-* appearance overrides for free.
+//
+// h-auto rather than a size: none of the fixed sizes fit a row whose height is
+// set by its content.
+const SETTINGS_ROW_CLASS =
+  'flex h-auto w-full items-center justify-between px-3 py-2 text-left text-[12px]'
 
 type Props = {
   definitions: SettingDefinition[]
@@ -105,15 +118,15 @@ function SettingRow({
           <SettingMetadataBadges definition={definition} />
 
           {control.type === 'toggle' ? (
-            <button
-              type="button"
+            <Button
+              variant="outline"
               onClick={() =>
                 void control.onToggle(
                   context,
                   !control.getValue(settings),
                 )
               }
-              className="flex w-full items-center justify-between border border-control-border bg-control-bg px-3 py-2 text-left text-[12px] text-control-fg hover:border-control-border-hover hover:bg-control-hover-bg hover:text-ink"
+              className={SETTINGS_ROW_CLASS}
             >
               <span>{control.getValue(settings) ? 'Enabled' : 'Disabled'}</span>
               <span
@@ -123,7 +136,7 @@ function SettingRow({
                         : 'border-control-border-hover bg-transparent'
                 }`}
               />
-            </button>
+            </Button>
           ) : null}
 
           {control.type === 'select' ? (
@@ -172,18 +185,18 @@ function SettingRow({
             />
           ) : null}
 
+          {/* The variant ternary below switches on TONE, not on a
+              pressed/selected state, so both arms are ordinary variants — this
+              is not one of the toggles that has to keep a hand-rolled
+              conditional class. */}
           {control.type === 'action' ? (
-            <button
-              type="button"
+            <Button
+              variant={control.tone === 'danger' ? 'destructive-outline' : 'outline'}
               onClick={() => void control.onTrigger(context)}
-              className={`w-full border px-3 py-2 text-left text-[12px] ${
-                control.tone === 'danger'
-                  ? 'border-danger text-danger hover:bg-danger-soft'
-                  : 'border-control-border bg-control-bg text-control-fg hover:border-control-border-hover hover:bg-control-hover-bg hover:text-ink'
-              }`}
+              className={cn(SETTINGS_ROW_CLASS, 'justify-start')}
             >
               {control.label}
-            </button>
+            </Button>
           ) : null}
 
           {/* CLI auto-updater — the row owns its own subscription

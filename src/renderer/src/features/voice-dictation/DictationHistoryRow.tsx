@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
+import { Button } from '@renderer/components/ui/button'
+
 import type { DictationHistoryEntry, DictationHistorySnapshot } from '@preload/api/types'
 
 // Dictation history + stats panel for the Settings page.
@@ -79,13 +81,9 @@ export function DictationHistoryRow() {
           {error}
         </div>
         <div>
-          <button
-            type="button"
-            onClick={() => setReloadKey(key => key + 1)}
-            className="border border-control-border bg-control-bg px-2 py-1 text-[11px] text-control-fg hover:border-control-border-hover hover:text-ink"
-          >
+          <Button variant="outline" size="sm" onClick={() => setReloadKey(key => key + 1)}>
             Retry
-          </button>
+          </Button>
         </div>
       </div>
     )
@@ -169,24 +167,26 @@ export function DictationHistoryRow() {
       <div className="flex items-center gap-2">
         {confirming === null ? (
           <div key="history-actions" className="flex items-center gap-2">
-            <button
-              type="button"
+            <Button
+              variant="outline"
+              size="sm"
               disabled={busy || entries.length === 0}
               onClick={() => setConfirming('clear')}
-              className="border border-control-border bg-control-bg px-2 py-1 text-[11px] text-control-fg hover:border-control-border-hover hover:text-ink disabled:opacity-50"
               title="Remove the retained transcripts. Lifetime statistics are kept."
             >
               Clear List
-            </button>
-            <button
-              type="button"
+            </Button>
+            {/* destructive-outline, not destructive: this only OPENS the
+                confirmation. The filled treatment is reserved for Confirm. */}
+            <Button
+              variant="destructive-outline"
+              size="sm"
               disabled={busy || (stats.lifetimeSessions === 0 && entries.length === 0)}
               onClick={() => setConfirming('reset')}
-              className="border border-control-border bg-control-bg px-2 py-1 text-[11px] text-danger hover:border-danger disabled:opacity-50"
               title="Remove the transcripts AND zero the lifetime statistics."
             >
               Reset Statistics
-            </button>
+            </Button>
           </div>
         ) : (
           <div
@@ -209,8 +209,12 @@ export function DictationHistoryRow() {
                 ? 'Remove retained transcripts? Statistics are kept.'
                 : 'Remove transcripts and zero all statistics? This cannot be undone.'}
             </span>
-            <button
-              type="button"
+            <Button
+              // This click IS the destructive act, so it takes the stronger
+              // border while staying unfilled — a filled button here would be
+              // the brightest thing on the Settings page.
+              variant="destructive-outline"
+              size="sm"
               disabled={busy}
               onClick={() =>
                 void mutate(
@@ -219,22 +223,24 @@ export function DictationHistoryRow() {
                     : () => window.api.resetDictationStats(),
                 )
               }
-              className="border border-danger bg-control-bg px-2 py-1 text-[11px] text-danger hover:bg-danger/10 disabled:opacity-50"
+              className="border-danger"
             >
               Confirm
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
               disabled={busy}
               // Focus lands on CANCEL, never Confirm. The remount above
               // destroys the previously focused node, so something must claim
               // focus deliberately; the safe choice is the non-destructive one.
+              // Button forwards its ref to the underlying <button>, so this
+              // keeps working through the primitive.
               ref={node => node?.focus()}
               onClick={() => setConfirming(null)}
-              className="border border-control-border bg-control-bg px-2 py-1 text-[11px] text-control-fg hover:text-ink disabled:opacity-50"
             >
               Cancel
-            </button>
+            </Button>
           </div>
         )}
       </div>
@@ -328,22 +334,18 @@ function HistoryRow({
         <div className="flex flex-col gap-2 border-t border-control-border px-2 py-2">
           <p className="m-0 whitespace-pre-wrap text-[11px] text-ink">{entry.text}</p>
           <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => void copy()}
-              className="border border-control-border bg-control-bg px-2 py-1 text-[11px] text-control-fg hover:border-control-border-hover hover:text-ink"
-            >
+            <Button variant="outline" size="sm" onClick={() => void copy()}>
               {copyState === 'copied' ? 'Copied' : copyState === 'failed' ? 'Copy failed' : 'Copy'}
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
+              variant="destructive-outline"
+              size="sm"
               disabled={busy}
               onClick={onDelete}
-              className="border border-control-border bg-control-bg px-2 py-1 text-[11px] text-danger hover:border-danger disabled:opacity-50"
               title="Remove this transcript. Your lifetime statistics are unaffected."
             >
               Delete
-            </button>
+            </Button>
           </div>
         </div>
       ) : null}
