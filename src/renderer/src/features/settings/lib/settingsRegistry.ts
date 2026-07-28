@@ -18,6 +18,7 @@ import { listPickerCommandMeta } from '@renderer/features/command-palette/regist
 import { isVisibleInPicker } from '@renderer/features/command-palette/pickerVisibility'
 import type { PickerCommandMeta } from '@renderer/features/command-palette/registry'
 import type { ConfigurableBuiltInMcpDomain } from '@mcp/shared/types'
+import type { MouseButtonBinding } from '@renderer/lib/mouseBinding'
 
 /**
  * Machine-readable facts about what a setting actually DOES, rendered as small
@@ -126,6 +127,19 @@ export type SettingDefinition =
         type: 'hotkey'
         getValue: (settings: Settings) => string
         onChange: (ctx: SettingActionContext, value: string) => void | Promise<void>
+      }
+    }
+  | {
+      id: string
+      category: SettingCategoryId
+      title: string
+      description: string
+      keywords: string[]
+      metadata?: SettingMetadata
+      control: {
+        type: 'mouse-button'
+        getValue: (settings: Settings) => MouseButtonBinding
+        onChange: (ctx: SettingActionContext, value: MouseButtonBinding) => void | Promise<void>
       }
     }
   | {
@@ -790,6 +804,30 @@ export function getSettingsRegistry(): SettingDefinition[] {
         type: 'hotkey',
         getValue: settings => settings.dictationShortcut,
         onChange: (ctx, value) => ctx.onChange({ dictationShortcut: value }),
+      },
+    },
+    {
+      id: 'dictation-mouse-button',
+      category: 'dictation',
+      title: 'Dictation Mouse Button',
+      description:
+        'Hold a mouse button to talk and release to transcribe. Requires Inline Dictation above. Works while Agent Code is focused — no system permission needed. Only the middle and side buttons can be bound, the bound button stops doing its normal job app-wide, and a stray click will briefly open the microphone before it is discarded.',
+      keywords: [
+        'voice',
+        'dictation',
+        'mouse',
+        'button',
+        'middle',
+        'side',
+        'thumb',
+        'hold',
+        'push to talk',
+        'binding',
+      ],
+      control: {
+        type: 'mouse-button',
+        getValue: settings => settings.dictationMouseButton,
+        onChange: (ctx, value) => ctx.onChange({ dictationMouseButton: value }),
       },
     },
     {

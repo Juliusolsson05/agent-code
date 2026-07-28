@@ -5,6 +5,7 @@ import type {
 } from '@renderer/features/settings/lib/settingsRegistry'
 import { SETTING_CATEGORIES } from '@renderer/features/settings/lib/settingsCategories'
 import { HotkeyInput } from '@renderer/features/settings/ui/HotkeyInput'
+import { MouseButtonInput } from '@renderer/features/settings/ui/MouseButtonInput'
 import { CommandKeybindingsRow } from '@renderer/features/settings/ui/CommandKeybindingsRow'
 import { settingMetadata } from '@renderer/features/settings/lib/settingsRegistry'
 import { CliUpdateBehaviorRow } from '@renderer/features/cli-updates/CliUpdateBehaviorRow'
@@ -158,6 +159,13 @@ function SettingRow({
 
           {control.type === 'hotkey' ? (
             <HotkeyInput
+              value={control.getValue(settings)}
+              onChange={value => control.onChange(context, value)}
+            />
+          ) : null}
+
+          {control.type === 'mouse-button' ? (
+            <MouseButtonInput
               value={control.getValue(settings)}
               onChange={value => control.onChange(context, value)}
             />

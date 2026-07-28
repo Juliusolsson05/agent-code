@@ -10,6 +10,8 @@ import {
 } from '@renderer/features/voice-dictation/dictationStatusStore'
 import { keyboardEventMatchesBinding } from '@renderer/lib/hotkeyBinding'
 import {
+  getActiveDictationHoldStyle,
+  markDictationToggleStyle,
   registerDictationTarget,
 } from '@renderer/workspace/tile-tree/TileLeaf/dictationHotkeyRegistry'
 import type {
@@ -404,6 +406,10 @@ export function useComposerDictation({
       status: next,
       levels: next === 'recording' ? levelRefs.current : EMPTY_LEVELS,
       targetSessionId: sinkRef.current.sessionId,
+      // Read from the registry rather than inferred from settings: only the
+      // trigger that actually started this recording knows whether finishing
+      // means releasing or pressing again. See getActiveDictationHoldStyle.
+      holdToTalk: getActiveDictationHoldStyle() === 'hold',
       ...(next !== 'error' ? { errorMessage: null } : {}),
     })
   }, [])
@@ -1167,6 +1173,11 @@ export function useComposerDictation({
 
   const toggle = useCallback(() => {
     if (!enabled) return
+    // The mic button and the in-composer keydown fallback never go through
+    // the hold registry, so they have to declare their own style or the
+    // overlay would keep whatever the previous hold left behind and tell the
+    // user to release a button they are not holding.
+    markDictationToggleStyle()
     if (activeRef.current) {
       void stop()
     } else {

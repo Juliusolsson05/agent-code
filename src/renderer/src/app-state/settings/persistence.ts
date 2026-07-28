@@ -27,6 +27,7 @@ import { coerceCustomAppearanceJson } from '@renderer/app-state/settings/customA
 import { coerceDispatchColorFlags } from '@renderer/app-state/settings/dispatchColorFlags'
 import { coerceCommandKeybindingOverrides } from '@renderer/features/command-keybindings/resolve'
 import { coerceHotkeyBinding } from '@renderer/lib/hotkeyBinding'
+import { coerceMouseButtonBinding } from '@renderer/lib/mouseBinding'
 import { coerceSavedPromptTemplates } from '@renderer/features/prompt-templates/savedPromptTemplates'
 import { normalizeConfigurableBuiltInMcpDomains } from '@mcp/shared/types'
 
@@ -76,6 +77,12 @@ export function coerceSettings(value: unknown): Settings {
     // fixed-choice values from the first integration draft and fall back for
     // non-strings so a corrupt localStorage blob cannot break settings boot.
     dictationShortcut: coerceHotkeyBinding(parsed.dictationShortcut),
+    // WHY a closed-enum coercion here where dictationShortcut gets an open
+    // one: keyboard bindings are arbitrary captured physical keys, but the
+    // bindable mouse buttons are a fixed three. A persisted value outside
+    // that set must fall back to off rather than arm a listener that
+    // preventDefaults a button we have no contract for.
+    dictationMouseButton: coerceMouseButtonBinding(parsed.dictationMouseButton),
     aggressiveDebugPersistence: parsed.aggressiveDebugPersistence === true,
     // `!== false` so the default is ON — only an explicit persisted `false`
     // turns autosend off. Fresh installs / older workspace.json blobs (no

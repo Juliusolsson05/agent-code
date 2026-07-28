@@ -32,10 +32,19 @@ export const useAppStore = create<AppStore>()(
       })),
       {
         name: APP_STORE_STORAGE_KEY,
-        // BUMP THIS whenever a new persisted `Settings` field is added.
-        // coerceSettings (which fills defaults for missing fields) only runs
-        // inside `migrate`, and `migrate` only fires when the persisted version
-        // is older than this number. #249 added `commandVisibilityOverrides`
+        // HISTORICALLY: bump whenever a new persisted `Settings` field is
+        // added, because coerceSettings only ran inside `migrate`.
+        //
+        // THAT IS NO LONGER TRUE — and the rest of this comment is the record
+        // of why the rule existed, not a live instruction. `merge` below now
+        // calls coerceSettings unconditionally on EVERY hydration (see the WHY
+        // there), so a newly added field is backfilled for same-version blobs
+        // without any bump. `settings.dictationMouseButton` was added this way
+        // and deliberately did not bump v10. Bump only when a change needs
+        // more than default-backfilling — a value REINTERPRETED or migrated
+        // from an older shape, which is what every entry below actually was.
+        //
+        // #249 added `commandVisibilityOverrides`
         // without bumping the version, so every existing user (already at v2)
         // skipped coercion, loaded settings without that field, and the command
         // registry's `commandVisible` dereferenced `undefined[id]` → black
