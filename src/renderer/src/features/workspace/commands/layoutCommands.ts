@@ -1,5 +1,6 @@
 import type { CommandDef } from '@renderer/features/command-palette/types'
 import { status, toggle, value } from '@renderer/features/command-palette/commandState'
+import { MIN_DISPATCH_TILES } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 
 export const layoutCommands: CommandDef[] = [
   {
@@ -56,6 +57,71 @@ export const layoutCommands: CommandDef[] = [
     description: '**What it does:** Opens a multi-lane **Dispatch** layout — the full agent index plus several live agent lanes side by side.\n\n**Use when:** You want to watch and drive multiple agents at once.\n\n**Notes:** Prompts for a tile count (1–10). The leftmost lane is the full index; every other lane has its own compact selector. Re-run to change the tile count (existing lane selections are preserved). Return to the normal grid with **Dispatch Mode**.',
     keywords: ['tiled dispatch', 'multi agent', 'lanes', 'split dispatch', 'cockpit', 'parallel agents', 'grid of agents'],
     run: ({ ui }) => ui.openTiledDispatchPrompt(),
+  },
+  {
+    // WHY these two exist at all: Tiled Dispatch's size is a single count, and
+    // shrinking by count always drops the TAIL (`lanes.slice(0, next)`). With
+    // seven lanes open and the finished agent in lane three, 7 -> 6 removes
+    // lane seven. Closing that agent instead does not shrink anything either —
+    // the lane empties and auto-fill re-homes another agent into it. So there
+    // was no way to reclaim a slot at a position of the user's choosing.
+    //
+    // WHY two commands rather than one with a flag: the default is destructive,
+    // and a command that sometimes ends a session and sometimes does not is
+    // the kind of thing that surprises someone moving fast. The titles carry
+    // the difference — `Close` is this catalog's established verb for ending a
+    // session, so the destructive one leads with it.
+    id: 'remove-tiled-lane',
+    category: 'layout-dispatch',
+    surface: 'dispatch',
+    title: 'Remove Lane',
+    description: '**What it does:** Removes the **focused lane** from Tiled Dispatch, shrinking the layout by one lane. The agent keeps running and stays in the index.\n\n**Use when:** You are done watching one agent but want the others to stay exactly where they are.\n\n**Notes:** Changing the tile count instead always drops the LAST lane. Removing the leftmost lane promotes the next one into its place, where it is selected from the full index rather than its own compact selector.',
+    keywords: ['remove', 'lane', 'tile', 'tiled dispatch', 'shrink', 'slot'],
+    when: ({ workspace }) => {
+      const tiled = workspace.state.dispatchMode?.tiled
+      return Boolean(tiled && tiled.lanes.length > MIN_DISPATCH_TILES)
+    },
+    run: ({ workspace }) => {
+      const tiled = workspace.state.dispatchMode?.tiled
+      if (!tiled) return
+      workspace.removeTiledLane(tiled.focusedLane)
+    },
+  },
+  {
+    id: 'close-agent-remove-lane',
+    category: 'layout-dispatch',
+    surface: 'dispatch',
+    title: 'Close Agent and Remove Lane',
+    description: '**What it does:** Closes the agent in the **focused lane**, then removes that lane, shrinking the layout by one.\n\n**Use when:** An agent has finished and you want it gone along with its slot.\n\n**Notes:** This ends the session. Use **Remove Lane** to reclaim the slot while leaving the agent running. Irreversible closes still confirm first, and declining leaves the layout untouched.',
+    keywords: ['close', 'agent', 'remove agent', 'lane', 'tile', 'tiled dispatch', 'shrink', 'finished', 'done'],
+    when: ({ workspace }) => {
+      const tiled = workspace.state.dispatchMode?.tiled
+      if (!tiled || tiled.lanes.length <= MIN_DISPATCH_TILES) return false
+      // An empty lane has no agent to close, so this collapses to Remove Lane —
+      // admission has to agree with what the command will do.
+      //
+      // Liveness, not mere presence: a lane can hold a set-but-dead id for the
+      // render between a session disappearing (killed from Agent Activity, tab
+      // closed) and the layout's heal effect clearing it. Admitting on presence
+      // alone let the command run, find nothing to close, and silently do
+      // neither of the two things its title promises.
+      const sessionId = tiled.lanes[tiled.focusedLane]?.selectedSessionId
+      return Boolean(sessionId && workspace.state.sessions[sessionId])
+    },
+    run: async ({ workspace }) => {
+      const tiled = workspace.state.dispatchMode?.tiled
+      if (!tiled) return
+      const laneIndex = tiled.focusedLane
+      const sessionId = tiled.lanes[laneIndex]?.selectedSessionId
+      if (!sessionId) return
+      // Close FIRST, and only splice if it actually happened. closeSession runs
+      // its own confirmation for irreversible closes; splicing before it
+      // resolves would shrink the grid while the user was still deciding, and
+      // a declined confirm would leave the layout changed with the agent alive
+      // — the worst of both outcomes.
+      const closed = await workspace.closeSession(sessionId)
+      if (closed) workspace.removeTiledLane(laneIndex)
+    },
   },
   // REMOVED: the 'toggle-dispatch-terminal' command, then its replacement
   // `settings.dispatchProjectTerminal`, and now the feature itself. The

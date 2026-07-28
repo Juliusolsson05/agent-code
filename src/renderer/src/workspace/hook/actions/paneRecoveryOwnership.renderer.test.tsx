@@ -218,7 +218,7 @@ describe('pane recovery ownership', () => {
     // ceremony — it is the assertion that the dialog names BOTH sessions.
     // Before the gate counted detached children, this close reported one target
     // and silently took two.
-    let closing: Promise<void> | undefined
+    let closing: Promise<boolean> | undefined
     await act(async () => {
       closing = harness.result.current.closeSession(paneId)
       await Promise.resolve()
