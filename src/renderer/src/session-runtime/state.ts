@@ -550,6 +550,17 @@ export type SessionRuntime = {
    * at this state, which is exactly the quantity being reported.
    */
   inputReadinessChangedAt: number | null
+  /**
+   * When `transcriptStatus` last changed, for the "loading transcript · Ns"
+   * elapsed readout.
+   *
+   * Separate from `inputReadinessChangedAt` because they measure different
+   * things: a pane can sit ready for ten minutes and only then begin a
+   * transcript load. Sharing one clock made that render as "loading transcript
+   * · 10m" immediately — fabricated evidence in the one place (#283) where the
+   * duration is the whole diagnostic.
+   */
+  transcriptStatusChangedAt: number | null
   semantic: SemanticRuntimeState
   /** Current in-feed stream phase. Set by the `stream_phase` reducer
    *  case from SemanticStreamPhaseEvent; additionally set by the
@@ -754,6 +765,7 @@ export function emptyRuntime(): SessionRuntime {
     inputReadinessRevision: -1,
     inputReadinessReason: null,
     inputReadinessChangedAt: null,
+    transcriptStatusChangedAt: null,
     semantic: emptySemanticRuntime(),
     streamPhase: 'idle',
     streamPhasePendingToolName: null,

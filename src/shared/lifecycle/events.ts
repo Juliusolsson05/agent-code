@@ -60,20 +60,32 @@ export const SESSION_LIFECYCLE_EVENT_NAMES = [
   'recover.failed',
 
   // "How long did actually starting a provider process take?"
+  // spawn.begin without a spawn.end on purpose: the terminal fact is already
+  // recover.spawned/recover.failed, which carry the same duration. What this
+  // rung adds that nothing else does is the GAP to provider.start.begin — the
+  // time spent in spawn setup (MCP registration, proxy launch) before the
+  // provider binary is even asked to start. A crash between them strands here.
   'spawn.begin',
-  'spawn.end',
   'provider.start.begin',
   'provider.start.end',
 
   // "Why is the composer not accepting input?"
   //
-  // `gate.eval` is the single most important name here. `publishPromptGate`
-  // (claudeSession.ts) is EDGE-triggered — it emits only on a transition into
-  // or out of ready. A session that never becomes ready therefore emits
-  // nothing at all after the initial `{ready:false, reason:'starting'}`, which
-  // is precisely why "the agent takes minutes to start" has never been
-  // diagnosable. `gate.eval` fires on EVERY evaluation, so "stuck at
-  // composer-unpainted for 90s" becomes a recorded fact instead of a guess.
+  // `gate.eval` is the single most important name here, and it is worth being
+  // precise about what it does and does not do.
+  //
+  // `publishPromptGate` (claudeSession.ts) already deduplicates: it returns
+  // early when the derived state equals the previous one, so the `prompt-gate`
+  // event this rides is edge-triggered at the source. `gate.eval` therefore
+  // records TRANSITIONS, not every evaluation — an earlier version of this
+  // comment claimed otherwise and was simply wrong.
+  //
+  // What makes it valuable is the pairing with `readiness.publish`. That path
+  // collapses the verdict to 'ready' | 'provider-not-ready' before it leaves
+  // the provider, so a session that never becomes ready emits nothing
+  // informative after the initial `{ready:false, reason:'starting'}`. Recording
+  // the detailed verdict AND re-sampling it while it persists is what turns
+  // "stuck at composer-unpainted for 90s" into a fact instead of a guess.
   'gate.eval',
   'readiness.publish',
 
@@ -200,6 +212,8 @@ export const SESSION_LIFECYCLE_DATA_KEYS = [
   'disposition',
   'lifecycle',
   'provider',
+  // Free-form sub-classification for events whose variant is not an outcome.
+  // Exists so `ok` is never overloaded to mean something other than success.
   'source',
 
   // outcome
@@ -209,7 +223,6 @@ export const SESSION_LIFECYCLE_DATA_KEYS = [
   'stage',
   'status',
   'retryable',
-  'exitCode',
   'cause',
 
   // readiness
@@ -234,7 +247,6 @@ export const SESSION_LIFECYCLE_DATA_KEYS = [
   'resolvedCount',
   'entryCount',
   'suppressed',
-  'attempt',
 
   // timing
   'durationMs',

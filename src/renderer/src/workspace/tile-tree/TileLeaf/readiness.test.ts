@@ -124,8 +124,34 @@ describe('resolveReadinessText', () => {
     expect(resolveReadinessText({
       ...emptyRuntime(),
       transcriptStatus: 'loading',
-      inputReadinessChangedAt: since,
+      transcriptStatusChangedAt: since,
     }, since + 30_000)).toBe('loading transcript · 30s')
+  })
+
+  it('times the transcript line on the TRANSCRIPT clock, not the readiness clock', () => {
+    // Regression test for a defect found in review. Feeding
+    // inputReadinessChangedAt here made a pane whose readiness settled ten
+    // minutes ago render "loading transcript · 10m" the instant a load began —
+    // fabricating the exact evidence this line exists to provide.
+    const now = 1_000_000
+    expect(resolveReadinessText({
+      ...emptyRuntime(),
+      transcriptStatus: 'loading',
+      inputReadinessChangedAt: now - 600_000,
+      transcriptStatusChangedAt: now - 2_000,
+    }, now)).toBe('loading transcript · 2s')
+  })
+
+  it('reports no clock for a healthy pane, so no timer is mounted for it', () => {
+    // readinessStatusSince is what decides whether TileLeaf mounts a 1 Hz
+    // interval. Returning a timestamp for a healthy pane put a permanent
+    // per-pane timer and re-render on an idle workspace.
+    expect(resolveReadinessText({
+      ...emptyRuntime(),
+      processStatus: 'started',
+      inputReady: true,
+      transcriptStatus: 'ready',
+    })).toBeNull()
   })
 })
 

@@ -81,7 +81,6 @@ describe('SessionManager lifecycle journal', () => {
       'readiness.publish',
       'provider.start.begin',
       'provider.start.end',
-      'spawn.end',
       'recover.spawned',
     ])
     expect(spy.find('recover.claim')?.ids).toEqual({ sessionId: 's1' })
@@ -235,11 +234,13 @@ describe('SessionManager lifecycle journal', () => {
     })
   })
 
-  it('coalesces an unchanged gate verdict instead of emitting per evaluation', async () => {
-    // derivePromptGateState runs off screen snapshots. An unconditional emit
-    // would be a 60 Hz firehose that buries the boot breadcrumbs inside the
-    // journal's own byte ceiling — the instrumentation evicting the evidence it
-    // exists to keep.
+  it('records a change of WHAT a gate is blocked on', async () => {
+    // Regression test for a real defect found in review. The dedupe originally
+    // compared gate kind + reason, but `blocked` states carry no `reason` — they
+    // carry `condition`. Every blocked state therefore looked identical, so
+    // trust-dialog → permission-prompt was silently dropped and its `since`
+    // never reset. That is the one event whose stated purpose is recording what
+    // a gate is blocked on.
     const { SessionManager } = await import('./sessionManager')
     const spy = journalSpy()
     const session = new FakeAgentSession()
@@ -247,13 +248,11 @@ describe('SessionManager lifecycle journal', () => {
     const manager = new SessionManager(null, null, spy.journal as never)
 
     await manager.recover({ sessionId: 's1', kind: 'claude', cwd: '/tmp/project' })
-    for (let i = 0; i < 50; i += 1) {
-      session.emit('prompt-gate', { kind: 'warming', reason: 'replay-pending' })
-    }
-    session.emit('prompt-gate', { kind: 'ready' })
+    session.emit('prompt-gate', { kind: 'blocked', condition: 'trust-dialog', resolvable: true })
+    session.emit('prompt-gate', { kind: 'blocked', condition: 'permission-prompt', resolvable: true })
 
     const evals = spy.lifecycle().filter(r => r.name === 'gate.eval')
-    expect(evals.map(e => e.data?.gate)).toEqual(['warming', 'ready'])
+    expect(evals.map(e => e.data?.conditionKind)).toEqual(['trust-dialog', 'permission-prompt'])
   })
 
   it('records what a blocked gate is blocked on', async () => {

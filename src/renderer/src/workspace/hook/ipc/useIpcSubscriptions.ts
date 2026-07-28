@@ -831,6 +831,11 @@ export function useIpcSubscriptions(
               processStatus: 'exited',
               processError: null,
               inputReady: false,
+              // Restamped on exit for the same reason as every other readiness
+              // write: without it the pane would report how long ago the DEAD
+              // backend became ready.
+              inputReadinessReason: null,
+              inputReadinessChangedAt: Date.now(),
               // Clear phase on exit. The WorkIndicator renders
               // nothing for `idle`; letting a pre-exit phase
               // linger would leave the in-feed indicator saying

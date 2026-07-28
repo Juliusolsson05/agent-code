@@ -288,10 +288,14 @@ export function AgentTerminalLeaf({
         if (await tryAttach()) {
           // Already live and showing. Still wake if the runtime says the
           // backend is gone — tryAttach only proves an entry existed.
-          if (needsWake) await ensureSessionLiveRef.current(sessionId, 'agent-terminal-leaf.attach-retry')
+          // Attach already succeeded; this wake is secondary. Tagged `mount`
+          // because no retry follows it — the tags were swapped in review.
+          if (needsWake) await ensureSessionLiveRef.current(sessionId, 'agent-terminal-leaf.mount')
           return
         }
-        if (needsWake) await ensureSessionLiveRef.current(sessionId, 'agent-terminal-leaf.mount')
+        // Attach failed, so wake and RETRY the attach below. This is the site
+        // the `attach-retry` tag describes.
+        if (needsWake) await ensureSessionLiveRef.current(sessionId, 'agent-terminal-leaf.attach-retry')
         if (await tryAttach()) return
         if (disposed) return
         // Wake reported success but there is still nothing to attach to. Say

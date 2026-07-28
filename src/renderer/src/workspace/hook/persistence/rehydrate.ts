@@ -423,6 +423,8 @@ export async function rehydrateWorkspace(
         processError: failure,
         recoveryFailureCode: failureCode ?? 'start-failed',
         inputReady: false,
+        inputReadinessReason: null,
+        inputReadinessChangedAt: Date.now(),
       }
     }
     if (backend && !preserveObservedTerminalProcess) {
@@ -436,6 +438,15 @@ export async function rehydrateWorkspace(
           ? {
               inputReady: backend.input.ready,
               inputReadinessRevision: backend.input.revision,
+              // WHY the reason and clock are seeded on cold restore: main's
+              // setInputReadiness dedupes, so a backend already sitting in a
+              // non-ready state emits no further event after restore. Without
+              // this, a pane that comes back wedged shows a generic "starting
+              // agent" with no elapsed time — exactly the case the readout was
+              // built for. Date.now() is honest here: the renderer genuinely
+              // has not observed this state for any longer than it has existed.
+              inputReadinessReason: backend.input.reason ?? null,
+              inputReadinessChangedAt: Date.now(),
             }
           : {}),
       }

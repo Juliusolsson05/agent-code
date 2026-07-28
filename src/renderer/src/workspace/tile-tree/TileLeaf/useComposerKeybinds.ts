@@ -226,11 +226,13 @@ export function useComposerKeybinds({
     // submit.begin → (optimistic streamPhase 'submitting') → submit.result
     // ok:false. Today nothing follows that, and the pane counts up forever.
     const submitStartedAt = Date.now()
+    let sendsThatWrote = 0
     reportLifecycle('submit.begin', sessionId, {
       provider: submitProvider,
-      // Image attachments take a different provider protocol; worth separating
-      // in the corpus because their absorption path is the slower one.
-      ok: draftImages.length > 0,
+      // `source` and NOT `ok`. Every other event uses `ok` for an outcome, so
+      // overloading it here to mean "has images" would have made the summarizer
+      // and any future ok:false filter bucket every image submit as a failure.
+      source: draftImages.length > 0 ? 'with-images' : 'text-only',
     })
     workspace.setStreamingBaseline(sessionId, baseline)
     if (caps.usesOptimisticUserEcho) {
@@ -254,7 +256,23 @@ export function useComposerKeybinds({
         sessionId,
         input,
         draftImages: caps.supportsImageAttachments ? draftImages : [],
-        send,
+        // WHY successful sends are counted rather than trusting the thrown
+        // error: Codex never goes through `deliverPrompt` at all — its submit
+        // is a sequence of raw `send` calls (bracketed paste chunks, then
+        // Enter) that throw plain Errors carrying no write evidence. So the
+        // delivery-result gate below covers Claude and opencode but left the
+        // ENTIRE Codex path unfixed, reproducing the reported bug byte for
+        // byte on a Codex pane.
+        //
+        // A blanket unwind on any plain error would be wrong for the same
+        // reason: if the paste succeeded and only the Enter threw, something
+        // DID reach the provider. `send` throws on failure and returns on
+        // success, so a count of returns is exactly "how many writes landed".
+        send: async (...args: Parameters<typeof send>) => {
+          const result = await send(...args)
+          sendsThatWrote += 1
+          return result
+        },
         deliverPrompt: (prompt, imagePaths) =>
           feed.deliverPrompt(sessionId, prompt, imagePaths, pasteId),
         pasteId,
@@ -320,13 +338,20 @@ export function useComposerKeybinds({
       //
       // The `uncertain` case — something WAS written — is intentionally left
       // alone: a turn may genuinely be running and unwinding could hide it.
-      const nothingWasWritten = failed !== null && !failed.promptWritten && !failed.enterWritten
+      // Two independent proofs that nothing reached the provider, one per
+      // submit protocol. Claude/opencode report it in the delivery result;
+      // Codex has no delivery result, so the evidence is that not a single
+      // `send` returned successfully.
+      const nothingWasWritten = failed !== null
+        ? !failed.promptWritten && !failed.enterWritten
+        : sendsThatWrote === 0
       if (nothingWasWritten) {
         workspace.unwindStreamingBaseline(sessionId)
         reportLifecycle('submit.unwound', sessionId, {
           provider: submitProvider,
-          code: failed.code,
-          stage: failed.stage,
+          code: failed?.code ?? 'threw',
+          stage: failed?.stage ?? null,
+          source: failed !== null ? 'delivery-result' : 'no-successful-send',
         })
       }
       reportLifecycle('submit.result', sessionId, {

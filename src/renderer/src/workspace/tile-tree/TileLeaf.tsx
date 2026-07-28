@@ -33,7 +33,7 @@ import { usePasteToFocus } from '@renderer/workspace/tile-tree/TileLeaf/usePaste
 import { usePromptHistory } from '@renderer/workspace/tile-tree/TileLeaf/usePromptHistory'
 import { useClaudeImagePaste } from '@renderer/workspace/tile-tree/TileLeaf/useClaudeImagePaste'
 import { registerComposerEnterTarget } from '@renderer/workspace/tile-tree/TileLeaf/composerEnterRegistry'
-import { resolveReadinessText } from '@renderer/workspace/tile-tree/TileLeaf/readiness'
+import { readinessStatusSince, resolveReadinessText } from '@renderer/workspace/tile-tree/TileLeaf/readiness'
 import { recordHtmlTraceSnapshot } from '@renderer/features/debug/renderTrace'
 import { isSessionExited } from '@renderer/workspace/providerSessionIdentity'
 import { useLedgerFeedItems } from '@renderer/features/feed/ledger/useLedgerFeedItems'
@@ -563,16 +563,32 @@ export function TileLeaf({
   }, [input, submitCurrentDraft])
 
   const isSessionLive = runtime.sessionStatus === 'running'
-  // Ticks only while a readiness line is actually on screen: `since` is null
-  // for a healthy pane, and useElapsedSeconds mounts no timer for null.
-  const readinessSince = runtime.inputReadinessChangedAt
+  // WHY the text is resolved TWICE:
+  //
+  // `inputReadinessChangedAt` is non-null for a HEALTHY pane too — the reducer
+  // stamps it on the false→true transition as well. Ticking on that alone
+  // mounted a permanent 1 Hz interval per pane, re-rendering this component
+  // (and its composer/feed subtrees) once a second, forever, while
+  // `resolveReadinessText` returned null and nothing was displayed. Fifteen
+  // panes meant fifteen idle timers and fifteen renders a second.
+  //
+  // So: resolve without a clock first. That answers "is a line shown at all"
+  // for free, and only then does the timer mount. This is the invariant
+  // useElapsedSeconds documents — no timers for status lines that are not
+  // being shown — which the first version violated.
+  const readinessBaseText = resolveReadinessText(runtime)
+  const readinessSince = readinessBaseText === null
+    ? null
+    : readinessStatusSince(runtime)
   const readinessElapsedSeconds = useElapsedSeconds(readinessSince)
-  const readinessText = resolveReadinessText(
-    runtime,
-    readinessSince === null || readinessElapsedSeconds === null
-      ? null
-      : readinessSince + readinessElapsedSeconds * 1000,
-  )
+  const readinessText = readinessBaseText === null
+    ? null
+    : resolveReadinessText(
+        runtime,
+        readinessSince === null || readinessElapsedSeconds === null
+          ? null
+          : readinessSince + readinessElapsedSeconds * 1000,
+      )
   const canRetryBackend = runtime.processStatus === 'failed' ||
     runtime.processStatus === 'exited'
 

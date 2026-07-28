@@ -55,7 +55,12 @@ export function resolveReadinessText(
     // #283's signature state. Elapsed matters more here than anywhere else: a
     // transcript load that never terminates is invisible without it, and used
     // to require a manual agent reload to escape.
-    return withElapsed('loading transcript', runtime.inputReadinessChangedAt, now)
+    //
+    // It reads the TRANSCRIPT clock, not the readiness clock. Feeding
+    // `inputReadinessChangedAt` here made a pane whose readiness settled ten
+    // minutes ago render "loading transcript · 10m" the instant a load began —
+    // fabricating the exact evidence this line exists to provide.
+    return withElapsed('loading transcript', runtime.transcriptStatusChangedAt, now)
   }
   if (runtime.transcriptStatus === 'error') {
     return `transcript unavailable${runtime.transcriptError ? `: ${runtime.transcriptError}` : ''}`
@@ -90,6 +95,20 @@ export function resolveReadinessText(
     return withElapsed(label, runtime.inputReadinessChangedAt, now)
   }
   return null
+}
+
+/**
+ * The timestamp whose elapsed time belongs beside the status line, or null when
+ * no line is shown.
+ *
+ * Exists so the caller can decide whether to mount a 1 Hz timer WITHOUT
+ * duplicating the branch order of `resolveReadinessText` — the two must agree
+ * about which clock is being displayed, and encoding that twice is how they
+ * silently diverge.
+ */
+export function readinessStatusSince(runtime: SessionRuntime): number | null {
+  if (runtime.transcriptStatus === 'loading') return runtime.transcriptStatusChangedAt
+  return runtime.inputReadinessChangedAt
 }
 
 function withElapsed(label: string, since: number | null, now: number | null): string {

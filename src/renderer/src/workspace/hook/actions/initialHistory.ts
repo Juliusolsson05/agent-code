@@ -137,6 +137,13 @@ export async function loadInitialHistoryForSession({
   // #283 "marked-but-never-loaded" half. `dropped-*` means the write RAN but
   // its runtime key was gone — the "dropped write" half. Two distinct defects
   // that presented identically as a pane spinning on 'loading transcript'.
+  // WHY a mutable local rather than reading state back: this is set from inside
+  // the setRuntimes updaters below, which is safe ONLY because the workspace
+  // store invokes updaters synchronously. If runtimes ever move behind a
+  // deferred setter, `history.load.end` would silently report
+  // 'no-terminal-write' forever — and that value is the #283 fingerprint, so a
+  // false positive here is worse than no signal. Flagged in review; the
+  // synchronous contract is asserted by the test below rather than assumed.
   let loadOutcome = 'no-terminal-write'
   let loadedEntryCount = 0
   setRuntimes(prev => {
@@ -147,6 +154,7 @@ export async function loadInitialHistoryForSession({
       [sessionId]: {
         ...current,
         transcriptStatus: 'loading',
+        transcriptStatusChangedAt: Date.now(),
         transcriptError: null,
       },
     }
@@ -279,6 +287,7 @@ export async function loadInitialHistoryForSession({
           historyOldestMarker: initialOldestMarker ?? current.historyOldestMarker,
           hasOlderHistory: chunk.hasMore,
           transcriptStatus: 'ready',
+          transcriptStatusChangedAt: Date.now(),
           transcriptError: null,
           workActivity,
           workContext,
@@ -325,6 +334,7 @@ export async function loadInitialHistoryForSession({
         [sessionId]: {
           ...current,
           transcriptStatus: 'error',
+          transcriptStatusChangedAt: Date.now(),
           transcriptError: message,
         },
       }

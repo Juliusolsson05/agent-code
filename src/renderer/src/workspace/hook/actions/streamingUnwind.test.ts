@@ -9,10 +9,14 @@ import { reduceStreamPhase } from '@renderer/session-runtime/semantic/streamPhas
 //   ...then the pane shows `Sending · 17s`, counting up forever, and only an
 //   agent reload clears it.
 //
-// The unwind itself is a React callback, so these tests pin the two things that
-// make the bug possible and the fix correct: that nothing ELSE can clear the
-// phase, and that the unwind's precondition is a reported fact rather than an
-// inference. The callback wiring is covered by the composer renderer test.
+// This file pins ONE thing: that nothing else in the system can clear the
+// stuck phase, which is why the repair has to live at the submit site.
+//
+// The unwind itself is covered by streamingUnwind.renderer.test.tsx, which
+// drives the real hook. An earlier version of this file also "tested" a
+// predicate defined in the test file itself — it imported nothing from
+// production and could not fail if the fix regressed. Deleted rather than kept
+// for the count.
 
 function submittingRuntime(): SessionRuntime {
   return {
@@ -48,28 +52,5 @@ describe('stuck-submitting: why nothing else can clear the phase', () => {
     )
 
     expect(next.streamPhase).toBe('submitting')
-  })
-})
-
-describe('unwind precondition', () => {
-  // The discriminator that keeps this out of the conditional trap: main REPORTS
-  // whether anything reached the provider. We never infer it from the failure
-  // code, the readiness state, or elapsed time.
-  const nothingWritten = (r: { promptWritten: boolean; enterWritten: boolean }): boolean =>
-    !r.promptWritten && !r.enterWritten
-
-  it('holds for the reported failure — a registry miss writes nothing', () => {
-    // sessionManager.deliverPromptToAgent's before-write branch, verbatim shape.
-    expect(nothingWritten({ promptWritten: false, enterWritten: false })).toBe(true)
-  })
-
-  it('does not hold once the body reached the provider', () => {
-    // A turn may genuinely be starting. Unwinding here would trade a stuck
-    // spinner for a hidden running turn.
-    expect(nothingWritten({ promptWritten: true, enterWritten: false })).toBe(false)
-  })
-
-  it('does not hold once Enter reached the provider', () => {
-    expect(nothingWritten({ promptWritten: true, enterWritten: true })).toBe(false)
   })
 })

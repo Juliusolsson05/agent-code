@@ -186,6 +186,7 @@ function softReloadRuntime(current: SessionRuntime, hasProviderSession: boolean)
     submittedAt: current.submittedAt,
     hasOlderHistory: true,
     transcriptStatus: 'loading',
+    transcriptStatusChangedAt: Date.now(),
     transcriptError: null,
   }
 }
@@ -453,6 +454,8 @@ export function useSessionActions(
                 processError: message,
                 recoveryFailureCode: 'start-failed',
                 inputReady: false,
+                inputReadinessReason: null,
+                inputReadinessChangedAt: Date.now(),
               },
             }
           })
@@ -535,7 +538,7 @@ export function useSessionActions(
           })
           if (!recovery.ok) {
             readyError = new Error(recovery.message)
-            reportLifecycle('wake.result', sessionId, {
+            reportLifecycle('recover.request', sessionId, {
               caller,
               ok: false,
               code: recovery.code,
@@ -552,7 +555,7 @@ export function useSessionActions(
             // disposition + readiness together are the #596 fingerprint: an
             // ADOPTED backend reporting ready:false is the state whose 30s
             // timeout used to kill a healthy busy agent.
-            reportLifecycle('wake.result', sessionId, {
+            reportLifecycle('recover.request', sessionId, {
               caller,
               ok: true,
               disposition: recovery.disposition,
@@ -588,6 +591,16 @@ export function useSessionActions(
                           ? {
                               inputReady: recovery.snapshot.input.ready,
                               inputReadinessRevision: recovery.snapshot.input.revision,
+                              // WHY the reason and clock are seeded here too:
+                              // main's setInputReadiness DEDUPES, so a backend
+                              // that was already non-ready before this wake
+                              // will never emit another readiness event. Without
+                              // seeding, the pane falls back to a generic
+                              // "starting agent" with no elapsed time —
+                              // precisely the wedged case the readout exists
+                              // for. The reason is already on the wire.
+                              inputReadinessReason: recovery.snapshot.input.reason ?? null,
+                              inputReadinessChangedAt: Date.now(),
                             }
                           : {}),
                         exited: null,
@@ -680,6 +693,19 @@ export function useSessionActions(
           const message = readyError instanceof Error && readyError.message.length > 0
             ? readyError.message
             : `Could not wake session ${sessionId}`
+          // WHY this is here and not beside the recovery result: recovery
+          // succeeding is NOT the wake succeeding. After a successful recover
+          // this function still waits on readiness, and on timeout it kills a
+          // spawned backend and fails the pane. Recording ok:true at the
+          // recovery boundary meant the #548/#596 path — the exact incident
+          // this instrumentation exists for — was journaled as a success.
+          reportLifecycle('wake.result', sessionId, {
+            caller,
+            ok: false,
+            disposition: recoveryDisposition,
+            code: recoveryFailureCode ?? 'start-failed',
+            durationMs: Date.now() - recoverStartedAt,
+          })
           setRuntimes(prev => {
             const current = prev[sessionId]
             if (!current) return prev
@@ -693,6 +719,8 @@ export function useSessionActions(
                   ? 'start-failed'
                   : recoveryFailureCode ?? priorRecoveryFailureCode ?? 'start-failed',
                 inputReady: false,
+                inputReadinessReason: null,
+                inputReadinessChangedAt: Date.now(),
               },
             }
           })
@@ -720,6 +748,17 @@ export function useSessionActions(
             : {}),
           ...(recoveredTmuxName ? { tmuxName: recoveredTmuxName } : {}),
         }
+        // The wake genuinely succeeded: recovery resolved, readiness either
+        // arrived or was legitimately skipped for an adopted live backend, and
+        // nothing killed the pane on the way through.
+        reportLifecycle('wake.result', sessionId, {
+          caller,
+          ok: true,
+          disposition: recoveryDisposition,
+          ready: recoverySnapshot?.input.ready ?? null,
+          durationMs: Date.now() - recoverStartedAt,
+        })
+
         setState(prev => {
           const current = prev.sessions[sessionId]
           if (!current) return prev

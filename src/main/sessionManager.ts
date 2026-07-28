@@ -451,17 +451,39 @@ export class SessionManager extends EventEmitter {
    */
   private readonly lastGateEvaluation = new Map<
     string,
-    { gate: string; reason: string | null; since: number }
+    { signature: string; gate: string; kind: SessionKind; reason: string | null; since: number; samples: number }
   >()
 
   private gateSampler: ReturnType<typeof setInterval> | null = null
 
   private noteGateEvaluation(sessionId: string, kind: SessionKind, gate: PromptGateState): void {
     const reason = 'reason' in gate ? gate.reason : null
+    const conditionKind = gate.kind === 'blocked' ? gate.condition : null
+    // WHY the signature includes the condition and not just kind+reason:
+    //
+    // `blocked` states carry NO `reason` field — they carry `condition` and
+    // `resolvable`. Comparing only kind+reason therefore made every blocked
+    // state look identical, so a transition from blocked/trust-dialog to
+    // blocked/permission-prompt was silently dropped AND its `since` never
+    // reset. That is the one event whose stated purpose is recording what a
+    // gate is blocked on, so dropping a change of what it is blocked on
+    // defeated it entirely.
+    const signature = `${gate.kind}:${reason ?? ''}:${conditionKind ?? ''}`
     const previous = this.lastGateEvaluation.get(sessionId)
-    const changed = previous?.gate !== gate.kind || previous?.reason !== reason
+    const changed = previous === undefined || previous.signature !== signature
     const since = changed ? Date.now() : previous.since
-    this.lastGateEvaluation.set(sessionId, { gate: gate.kind, reason, since })
+    this.lastGateEvaluation.set(sessionId, {
+      signature,
+      gate: gate.kind,
+      kind,
+      reason,
+      since,
+      samples: changed ? 0 : (previous?.samples ?? 0),
+    })
+    // The upstream `publishPromptGate` already returns early on an unchanged
+    // verdict, so this is not the load-bearing deduplication — it exists so
+    // `since` stays anchored to when the CURRENT state began, and so a future
+    // provider that emits unconditionally cannot flood the journal.
     if (!changed) return
     this.lifecycle.session('gate.eval', sessionId, {
       kind,
@@ -479,26 +501,55 @@ export class SessionManager extends EventEmitter {
    * Re-record any session that has been sitting in a non-ready gate, once every
    * SAMPLE seconds.
    *
-   * WHY sampling instead of emitting every evaluation: `derivePromptGateState`
-   * runs off screen snapshots, so an unconditional emit would be a 60 Hz
-   * firehose that buries the boot breadcrumbs inside the journal's own byte
-   * ceiling — the instrumentation would evict the evidence it exists to keep.
-   * On-change plus a periodic sample gives the same answer ("stuck at X for
-   * 90s") at a few hundred bytes instead of a few megabytes.
+   * WHY sampling at all, given `prompt-gate` is already edge-triggered at the
+   * source: a transition tells you a stall STARTED and nothing tells you it is
+   * still going. Without re-sampling, a session wedged for ten minutes and one
+   * wedged for two seconds produce byte-identical journals — and the duration
+   * is the entire diagnostic. Periodic sampling answers "stuck at X for 90s"
+   * in a few hundred bytes; emitting unconditionally from the screen-snapshot
+   * path would cost megabytes and evict the breadcrumbs around it.
    *
    * WHY it only runs while something is non-ready: an idle workspace of ready
    * agents writes nothing at all.
+   *
+   * TWO BOUNDS, both learned in review, both protecting the SAME shared budget:
+   *
+   * 1. **States that mean "waiting on a human" are not sampled.** `occupied`
+   *    (a draft in the composer) and `blocked` (a trust or permission prompt on
+   *    screen) are the app working correctly and waiting for the user. A pane
+   *    parked on an unanswered trust dialog would otherwise emit 17,280 events
+   *    a day describing a non-problem.
+   * 2. **Sampling stops after MAX_SAMPLES per stall stretch.** The signal
+   *    saturates: knowing a gate has been stuck for two minutes proves the
+   *    stall; the 300th identical sample proves nothing more.
+   *
+   * Why both matter more than they look: `AppRunJournal.reserveJournalBytes` is
+   * a PERMANENT latch. Once a run hits the 50 MiB ceiling, every later event
+   * AND incident is dropped for the rest of that run — heap pressure,
+   * window-unresponsive, crash breadcrumbs included. An unbounded sampler could
+   * therefore blind the incident journal over a multi-day run, which is exactly
+   * the outcome this instrumentation exists to prevent.
    */
   private ensureGateSampler(): void {
     if (this.gateSampler) return
     const SAMPLE_MS = 5_000
+    // ~2 minutes of stall at 5s. Past that the fact is established.
+    const MAX_SAMPLES = 24
+    // Gate kinds that mean "correctly waiting for the user", not "stalled".
+    const AWAITING_HUMAN = new Set(['occupied', 'blocked'])
     this.gateSampler = setInterval(() => {
       let stalled = 0
       for (const [sessionId, state] of this.lastGateEvaluation) {
         if (state.gate === 'ready') continue
+        if (AWAITING_HUMAN.has(state.gate)) continue
         if (!this.sessions.has(sessionId)) continue
+        if (state.samples >= MAX_SAMPLES) continue
         stalled += 1
+        state.samples += 1
         this.lifecycle.session('gate.eval', sessionId, {
+          // `kind` was missing here, so every SAMPLE dropped out of
+          // provider-filtered queries while the transitions stayed in.
+          kind: state.kind,
           gate: state.gate,
           reason: state.reason,
           elapsedMs: Date.now() - state.since,
@@ -864,11 +915,6 @@ export class SessionManager extends EventEmitter {
           message: `Recovery for session ${options.sessionId} was cancelled`,
         }
       }
-      this.lifecycle.session('spawn.end', options.sessionId, {
-        kind: claim.kind,
-        ok: true,
-        durationMs: performance.now() - claim.startedAt,
-      })
       this.lifecycle.session('recover.spawned', options.sessionId, {
         kind: claim.kind,
         disposition: 'spawned',
@@ -903,11 +949,6 @@ export class SessionManager extends EventEmitter {
           message: `Recovery for session ${options.sessionId} was cancelled`,
         }
       }
-      this.lifecycle.session('spawn.end', options.sessionId, {
-        kind: claim.kind,
-        ok: false,
-        durationMs: performance.now() - claim.startedAt,
-      })
       this.lifecycle.session('recover.failed', options.sessionId, {
         kind: claim.kind,
         code: 'start-failed',
@@ -1252,6 +1293,13 @@ export class SessionManager extends EventEmitter {
       })
 
       this.sessions.set(sessionId, agentEntry)
+      // Clear any gate state left by a PREVIOUS backend under this same local
+      // id. Stable ids are deliberately reused after a failed start, and
+      // cleanupSessionState is generation-owned — it returns early for a
+      // superseded entry, so relying on teardown alone let a fresh backend
+      // inherit the dead one's `since` (fabricating elapsed) and, because the
+      // first verdict then looked unchanged, skip arming the sampler entirely.
+      this.lastGateEvaluation.delete(sessionId)
       this.rememberSessionId(sessionId)
       this.throwIfRecoveryCancelled(recoveryClaim)
       // Hoisted out of the try so the catch can report a duration too: a
