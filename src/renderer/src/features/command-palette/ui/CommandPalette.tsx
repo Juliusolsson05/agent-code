@@ -929,6 +929,30 @@ function OpenCommandPalette({
     [directAgentCommand, filteredCommands],
   )
 
+  /**
+   * Index of the LAST starred row, so it can carry a rule separating the
+   * pinned block from everything else. -1 when no separator should render.
+   *
+   * WHY only for an empty query: the pinned block only exists there.
+   * `rankCommands` hard-partitions on an empty query, but during a search a
+   * star is merely a same-tier tiebreak — starred and unstarred rows
+   * legitimately interleave, so a rule drawn after the first run of starred
+   * rows would imply a grouping that does not exist.
+   *
+   * Also -1 when every row is starred or none is, since a separator at the
+   * very top or very bottom of the list divides nothing.
+   */
+  const starredBoundaryIndex = useMemo(() => {
+    if (queryText.length > 0) return -1
+    let starredCount = 0
+    for (const command of paletteCommands) {
+      if (!commandStarred[command.id]) break
+      starredCount += 1
+    }
+    if (starredCount === 0 || starredCount === paletteCommands.length) return -1
+    return starredCount - 1
+  }, [commandStarred, paletteCommands, queryText])
+
   const filteredLength =
     mode === 'resume'
       ? filteredSessions.length
@@ -1724,11 +1748,33 @@ function OpenCommandPalette({
                         ? 'bg-row-selected-bg text-row-selected-fg'
                         : 'text-ink-dim hover:bg-row-hover-bg'
                     }
+                    ${i === starredBoundaryIndex ? 'border-b border-border' : ''}
                   `}
                     onMouseEnter={() => setSelectedIndex(i)}
                     onClick={() => executeCommand(command)}
                   >
                     <div className="min-w-0 flex items-center gap-2">
+                      {/* Marks starred rows in the list itself. Without it the
+                          pinned block at the top looked like an arbitrary
+                          reordering — the star lived only in the detail pane,
+                          so identifying which commands were pinned meant
+                          selecting them one at a time. Fixed-width so titles
+                          stay left-aligned whether or not a row is starred. */}
+                      <span
+                        aria-hidden
+                        className={`w-3 flex-shrink-0 text-center text-[12px] leading-none ${
+                          commandStarred[command.id] ? 'text-accent' : 'text-transparent'
+                        }`}
+                      >
+                        ★
+                      </span>
+                      {/* The glyph above is aria-hidden because announcing
+                          "star" on all 102 rows is noise. But starred state was
+                          then conveyed only visually, so a screen-reader user
+                          got a list silently reordered for a reason they could
+                          not perceive. This says it once, only where it is
+                          true. */}
+                      {commandStarred[command.id] ? <span className="sr-only">Starred. </span> : null}
                       <span>{command.title}</span>
                       {command.state && <CommandStateBadge state={command.state} />}
                     </div>
@@ -2083,15 +2129,27 @@ const CommandDescriptionPanel = memo(function CommandDescriptionPanel({
             anything again and that the retired-id prune cannot recognise. The
             history recorder skips these rows for the same reason. */}
         {!isAgentIndexCommand(command) ? (
+          // Sized as a real control, not a glyph. The first version was a
+          // 13px character with `px-1` and no height — about a 13x13 target in
+          // `text-muted`, which on the canvas background was close to
+          // invisible and awkward to hit. A star is the only interactive
+          // element in this pane, so it has to read as pressable: 24x24 hit
+          // area (the floor for a comfortable pointer target), 16px glyph, a
+          // border that appears on hover, and `text-ink-dim` rather than
+          // `text-muted` when unstarred so the outline is legible at rest.
           <button
             type="button"
             aria-pressed={starred}
             aria-label={starred ? 'Unstar command' : 'Star command'}
             title={starred ? 'Unstar command' : 'Star command'}
             onClick={() => onToggleStar(command.id)}
-            className={`shrink-0 px-1 text-[13px] leading-none ${
-              starred ? 'text-accent' : 'text-muted hover:text-ink'
-            }`}
+            className={`
+              flex h-6 w-6 shrink-0 items-center justify-center border
+              text-[16px] leading-none
+              ${starred
+                ? 'border-transparent text-accent hover:border-control-border-hover'
+                : 'border-transparent text-ink-dim hover:border-control-border-hover hover:text-ink'}
+            `}
           >
             {starred ? '★' : '☆'}
           </button>
