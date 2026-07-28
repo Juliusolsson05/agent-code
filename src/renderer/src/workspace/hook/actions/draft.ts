@@ -101,7 +101,13 @@ export function useDraftActions(
           return prev
         }
         cleared = true
-        clearedDrafts.set(sessionId, current.draftInput)
+        // Do NOT overwrite an existing stash with an empty string. Clearing a
+        // composer that holds only images has `draftInput === ''`, and blindly
+        // stashing that destroyed the text an earlier clear had saved — while
+        // the toast still promised it was restorable, and Undo then no-opped
+        // in total silence. An empty clear has nothing worth remembering, so
+        // it leaves the previous stash alone.
+        if (current.draftInput.length > 0) clearedDrafts.set(sessionId, current.draftInput)
         return {
           ...prev,
           [sessionId]: { ...current, draftInput: '', draftImages: [] },
@@ -128,12 +134,25 @@ export function useDraftActions(
     (sessionId: SessionId) => {
       const stashed = clearedDrafts.get(sessionId)
       if (stashed === undefined || stashed.length === 0) return false
-      clearedDrafts.delete(sessionId)
-      updateRuntime(sessionId, { draftInput: stashed })
+      // SWAP, not a one-way restore. Undo deliberately survives further
+      // typing, so "clear, start retyping, change your mind" is a sequence the
+      // description actively invites — and a plain overwrite silently threw
+      // away whatever had been typed since, with the stash already consumed so
+      // there was no second undo. For a command whose entire purpose is not
+      // losing typed text, losing typed text was the wrong failure mode.
+      // Swapping makes it a toggle: run it again to get back where you were.
+      let previous = ''
+      setRuntimes(prev => {
+        const current = prev[sessionId] ?? emptyRuntime()
+        previous = current.draftInput
+        return { ...prev, [sessionId]: { ...current, draftInput: stashed } }
+      })
+      if (previous.length > 0) clearedDrafts.set(sessionId, previous)
+      else clearedDrafts.delete(sessionId)
       setDraftVersion(v => v + 1)
       return true
     },
-    [setDraftVersion, updateRuntime],
+    [setDraftVersion, setRuntimes],
   )
 
   return { setDraftInput, setDraftImages, clearDraft, undoClearDraft }

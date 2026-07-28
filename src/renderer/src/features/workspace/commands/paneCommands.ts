@@ -591,6 +591,14 @@ export const paneCommands: CommandDef[] = [
   },
   {
     id: 'clear-composer',
+    // Composer commands need a composer. In hard Terminal view an agent renders
+    // through AgentTerminalLeaf, which never registers a composer target at
+    // all — so without this, Send Prompt was admitted and silently did nothing
+    // while Clear toasted about a draft the user could not see. This is the
+    // policy rewind-to-prompt already declares for the same reason: it too
+    // restores text into the composer. Hybrid needs no special case — a
+    // non-empty draft already promotes the pane to the rendered surface.
+    renderedViewPolicy: { kind: 'opens-rendered-feed' },
     category: 'session',
     surface: 'session',
     title: 'Clear Composer',
@@ -618,6 +626,14 @@ export const paneCommands: CommandDef[] = [
   },
   {
     id: 'undo-clear-composer',
+    // Composer commands need a composer. In hard Terminal view an agent renders
+    // through AgentTerminalLeaf, which never registers a composer target at
+    // all — so without this, Send Prompt was admitted and silently did nothing
+    // while Clear toasted about a draft the user could not see. This is the
+    // policy rewind-to-prompt already declares for the same reason: it too
+    // restores text into the composer. Hybrid needs no special case — a
+    // non-empty draft already promotes the pane to the rendered surface.
+    renderedViewPolicy: { kind: 'opens-rendered-feed' },
     category: 'session',
     surface: 'session',
     title: 'Undo Clear Composer',
@@ -638,6 +654,14 @@ export const paneCommands: CommandDef[] = [
   },
   {
     id: 'send-composer',
+    // Composer commands need a composer. In hard Terminal view an agent renders
+    // through AgentTerminalLeaf, which never registers a composer target at
+    // all — so without this, Send Prompt was admitted and silently did nothing
+    // while Clear toasted about a draft the user could not see. This is the
+    // policy rewind-to-prompt already declares for the same reason: it too
+    // restores text into the composer. Hybrid needs no special case — a
+    // non-empty draft already promotes the pane to the rendered surface.
+    renderedViewPolicy: { kind: 'opens-rendered-feed' },
     category: 'session',
     surface: 'session',
     title: 'Send Prompt',
@@ -653,8 +677,15 @@ export const paneCommands: CommandDef[] = [
     // built from `submitCurrentDraft`, which owns provider capability dispatch,
     // the optimistic-echo rollback and the in-flight latch. A second submit
     // path is the exact class of bug that registry exists to prevent.
-    run: () => {
-      submitActiveComposer()
+    run: ({ workspace }) => {
+      if (submitActiveComposer()) return
+      // Feedback on the no-op. Without it a mouse-first user who clicks this
+      // with an empty draft — or with the pointer parked on a different, empty
+      // composer — gets absolutely nothing back and cannot tell the command
+      // from a dead row. Clear Composer already toasts on success; this is the
+      // same courtesy for the failure it is far more likely to hit.
+      const sessionId = commandTargetSessionId(workspace)
+      if (sessionId) workspace.showPaneToast(sessionId, 'Nothing to send')
     },
   },
 ]

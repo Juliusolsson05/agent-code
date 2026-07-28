@@ -1768,6 +1768,13 @@ function OpenCommandPalette({
                       >
                         ★
                       </span>
+                      {/* The glyph above is aria-hidden because announcing
+                          "star" on all 102 rows is noise. But starred state was
+                          then conveyed only visually, so a screen-reader user
+                          got a list silently reordered for a reason they could
+                          not perceive. This says it once, only where it is
+                          true. */}
+                      {commandStarred[command.id] ? <span className="sr-only">Starred. </span> : null}
                       <span>{command.title}</span>
                       {command.state && <CommandStateBadge state={command.state} />}
                     </div>

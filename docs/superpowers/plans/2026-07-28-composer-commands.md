@@ -22,6 +22,20 @@
 >   resurrect one the user deliberately removed in the same gesture.
 > - Three commands were added, so `catalog.test.ts` moved 99 → 102 across its
 >   ordered snapshot, its length assertion, and both arithmetic assertions.
+> - **The commands live in `paneCommands.ts`, not `sessionCommands.ts`** as the
+>   task sketch below says — they sit beside `copy-last-assistant` and the other
+>   focused-agent actions, which is where the target helper already is.
+> - **Option (c) — a `when` guard on a non-empty draft — did NOT ship, and that
+>   is a deliberate reversal of the Q2 recommendation.** `clearDraft` returns
+>   false and the command stays quiet instead. The guard is achievable
+>   (`toggle-tail` reads runtime state in exactly this position), so this is a
+>   judgement call, not a limitation: a command that appears and disappears from
+>   the palette as you type is more disorienting than one that is always there.
+> - `activeComposerHasDraft()` was consequently never added.
+> - All three declare `renderedViewPolicy: { kind: 'opens-rendered-feed' }`,
+>   which the sketch did not anticipate. Without it they are admitted in hard
+>   Terminal view, where no composer is registered at all — Send would have been
+>   offered and silently done nothing.
 
 **Goal:** Give the composer two palette-reachable actions — clear the draft, and send it — so a user driving Agent Code with a mouse can undo a mistyped prompt and submit without reaching for the keyboard.
 

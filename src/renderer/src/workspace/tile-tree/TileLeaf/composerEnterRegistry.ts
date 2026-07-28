@@ -142,6 +142,12 @@ function ensureListener(): void {
  * instead of reporting a success that did not happen.
  */
 export function submitActiveComposer(): boolean {
+  // Same refusal bare Enter makes. A menu or listbox owns the keyboard while
+  // open, and without this a user who bound this command to a chord could fire
+  // it from inside Quick Open or the appearance menu — submitting the draft AND
+  // yanking DOM focus out of a menu that stays open. The Enter router declines
+  // this case by design; a command reaching the same submit must decline it too.
+  if (hasOpenKeyboardOwner()) return false
   const target = pickTarget()
   if (!target) return false
   target.focus()
