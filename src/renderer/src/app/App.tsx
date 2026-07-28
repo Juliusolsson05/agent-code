@@ -11,6 +11,7 @@ import { useDevDebugConfigSync } from '@renderer/features/debug/devDebugConfig'
 import { useDebugAutosave } from '@renderer/features/debug/useDebugAutosave'
 import { useCaffeinateSync } from '@renderer/features/caffeinate/useCaffeinateSync'
 import { useDictationHotkeySync } from '@renderer/features/voice-dictation/useDictationHotkeySync'
+import { useDictationMouseTrigger } from '@renderer/features/voice-dictation/useDictationMouseTrigger'
 import { usePathPickerRequests } from '@renderer/features/path-picker/usePathPickerRequests'
 import { useSelectionCapture } from '@renderer/features/reply-to-selection/useSelectionCapture'
 import { GlobalModals } from '@renderer/app/surfaces/GlobalModals'
@@ -64,6 +65,7 @@ export default function App() {
   useDevDebugConfigSync()
   useCaffeinateSync()
   useDictationHotkeySync()
+  useDictationMouseTrigger()
   // Fetch the initial CLI-update snapshot on mount and subscribe to
   // subsequent transitions. Same mount-once discipline as the other
   // sync hooks above — installing this in more than one place would
