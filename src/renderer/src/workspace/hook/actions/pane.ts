@@ -106,9 +106,41 @@ function forgetClosedSessionDebugState(refs: WorkspaceRefs, sessionId: SessionId
  * — omit it — is the gated path, and the Agent Activity modal's Close button is
  * exactly the case that must keep paying for it: a single button in a list, no
  * preview of the cascade it triggers.
+ *
+ * A fourth caller does NOT qualify and must not assert it: orchestration MCP.
+ * See `silentIfSoleTarget` below for what it uses instead and why.
  */
 export type CloseSessionOptions = {
   preConfirmed?: boolean
+  /**
+   * Skip the dialog ONLY IF this close kills exactly the session named, and
+   * confirm with `headline` otherwise.
+   *
+   * WHY orchestration needs its own mode rather than `preConfirmed`: an
+   * orchestrating agent closing children it created is routine housekeeping,
+   * and a dialog per close devalues the confirmations that matter. But the
+   * ownership gate that authorizes the call only scopes WHICH SESSION MAY BE
+   * NAMED — it says nothing about WHICH SESSIONS DIE. `closeSession` kills a
+   * SET, and two real shapes reach beyond the named target:
+   *
+   *   - `closeLinkedChildren` takes every session linked to the target. A user
+   *     can run "Linked Agent…" on an orchestration child, and that linked
+   *     agent carries no orchestration fields at all — so the gate cannot see
+   *     it, and asserting preConfirmed would kill a session the user built by
+   *     hand, silently.
+   *   - Closing a tab's SOLE grid leaf takes every detached session in that
+   *     tab. Orchestration children live detached in the root's tab, so that
+   *     set can include the caller itself, its siblings, and Dispatch agents
+   *     the user parked there.
+   *
+   * Agent Management refuses both shapes outright (`additionalCloseImpact`)
+   * even though it has a dialog available. Orchestration cannot refuse — a
+   * fleet must be able to clean up — so it confirms instead, but only for the
+   * shapes that actually reach further than advertised. The routine case (a
+   * detached child with no linked children) expands to exactly one and stays
+   * silent, which is the entire point.
+   */
+  silentIfSoleTarget?: { headline: string }
   /**
    * Confirm even when the policy would let this through silently.
    *
@@ -1447,12 +1479,32 @@ export function usePaneActions(
       // straight through, cascade and all, with no dialog. `closeFocused`
       // delegates here for its Dispatch and detached-child arms and passes
       // preConfirmed, so those still ask exactly once.
-      if (!options?.preConfirmed) {
+      // Resolve the orchestration mode into the two existing ones, HERE, where
+      // paneCloseTargets is in scope — it is the only code that computes the
+      // full set a close destroys, which is exactly what the caller cannot
+      // know from the outside.
+      let effectivePreConfirmed = options?.preConfirmed === true
+      let effectiveRequireConfirmation = options?.requireConfirmation
+      if (options?.silentIfSoleTarget) {
+        const expanded = paneCloseTargets(
+          refs.stateRef.current,
+          refs.latestRuntimesRef.current,
+          targetId,
+        )
+        const soleTarget = expanded.length === 1 && expanded[0]?.sessionId === targetId
+        if (soleTarget) {
+          effectivePreConfirmed = true
+        } else {
+          effectiveRequireConfirmation = options.silentIfSoleTarget
+        }
+      }
+
+      if (!effectivePreConfirmed) {
         const gate = await runCloseConfirmationGate({
           enumerate: () =>
             paneCloseTargets(refs.stateRef.current, refs.latestRuntimesRef.current, targetId),
           ask: requestCloseConfirmation,
-          force: options?.requireConfirmation,
+          force: effectiveRequireConfirmation,
         })
         if (!gate.ok) {
           if (gate.reason === 'changed') showToast(CLOSE_CHANGED_TOAST)

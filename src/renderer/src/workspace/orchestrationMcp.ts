@@ -131,16 +131,32 @@ export function readOrchestrationRunOutputs(params: {
  * housekeeping is the reason "are you sure?" stops meaning anything by the time
  * it guards something that matters.
  *
- * The ownership gate is what keeps this safe and is deliberately untouched. If
- * that gate is ever loosened, this decision has to be revisited with it.
+ * WHY `silentIfSoleTarget` and not `preConfirmed`: the ownership gate below
+ * scopes WHICH SESSION MAY BE NAMED, not WHICH SESSIONS DIE. `closeSession`
+ * kills a set, and two shapes reach past the named target — a linked agent the
+ * USER attached to a child (it carries no orchestration fields, so the gate
+ * cannot see it), and a tab's sole grid leaf (which takes every detached
+ * session in that tab, including the caller's siblings and the user's parked
+ * agents). Asserting preConfirmed would destroy those silently. This mode stays
+ * silent for the routine case — a detached child that expands to exactly
+ * itself — and falls back to a dialog naming the requester for the rest.
  *
  * Returns whether the session actually closed, so a caller can report an
  * already-gone agent as skipped rather than claiming it closed one.
  */
 export type OrchestrationCloseSession = (
   sessionId: SessionId,
-  options?: { preConfirmed?: boolean },
+  options?: { silentIfSoleTarget?: { headline: string } },
 ) => Promise<boolean>
+
+/** "Agent “Reviewer” is asking to close an agent it started." — the sentence
+ *  that tells the user why a dialog they did not summon just appeared. Only
+ *  reached when the close would reach past the agent that was named. */
+function closeRequestHeadline(state: WorkspaceState, parentSessionId: string): string {
+  const title = state.sessions[parentSessionId]?.title
+  const who = title ? `Agent “${title}”` : 'An agent'
+  return `${who} is asking to close an agent it started.`
+}
 
 export async function closeOrchestrationAgent(params: {
   state: WorkspaceState
@@ -152,10 +168,17 @@ export async function closeOrchestrationAgent(params: {
   if (!meta || !isVisibleToOrchestrationParent(meta, params.parentSessionId)) {
     throw new Error('Orchestration agent not found for this parent session.')
   }
-  const closed = await params.closeSession(params.sessionId, { preConfirmed: true })
+  const closed = await params.closeSession(params.sessionId, {
+    silentIfSoleTarget: {
+      headline: closeRequestHeadline(params.state, params.parentSessionId),
+    },
+  }).catch(() => false)
   // Report what happened. Previously this returned the id unconditionally, so
   // an agent whose close did not take (already gone) was told it had closed
   // one — and it would then proceed on that assumption.
+  // The `.catch(() => false)` above mirrors close_run's catch: a rejected
+  // backend kill runs AFTER closeLinkedChildren, so a bare throw could report
+  // neither closed nor skipped while children were already gone.
   return closed
     ? { closedSessionIds: [params.sessionId] }
     : { closedSessionIds: [], skippedSessionIds: [params.sessionId] }
@@ -174,6 +197,7 @@ export async function closeOrchestrationRun(params: {
   )
   const closedSessionIds: string[] = []
   const skippedSessionIds: string[] = []
+  const headline = closeRequestHeadline(params.state, params.parentSessionId)
   for (const sessionId of sessionIds) {
     try {
       // No dialog, per the WHY on OrchestrationCloseSession. A run close is a
@@ -185,9 +209,19 @@ export async function closeOrchestrationRun(params: {
       // reach the catch — but the confirmation gate resolves false, it never
       // rejected, so skippedSessionIds could not populate from a decline and
       // the caller was told every agent closed. With no dialog a decline is
-      // impossible, but an already-gone session still returns false and is now
-      // correctly reported as skipped.
-      const closed = await params.closeSession(sessionId, { preConfirmed: true })
+      // impossible, but a session that is simply gone still returns false and
+      // is now correctly reported as skipped.
+      //
+      // Be precise about what false means: closeSession returns it whenever the
+      // id is in neither `tabs` nor `detachedSessions`. The id list here is
+      // computed once from a pre-loop snapshot, so a sibling taken out by an
+      // EARLIER iteration's tab cascade also reports false — i.e. "skipped" can
+      // include "already closed by this very operation". The error direction is
+      // the safe one (it over-reports survival, where the old code
+      // over-reported success), but do not read skipped as "still running".
+      const closed = await params.closeSession(sessionId, {
+        silentIfSoleTarget: { headline },
+      })
       if (closed) closedSessionIds.push(sessionId)
       else skippedSessionIds.push(sessionId)
     } catch {

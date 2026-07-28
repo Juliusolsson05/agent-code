@@ -759,13 +759,24 @@ export function useWorkspace(
           // idle target does not slip through the human-ergonomics exemption
           // the policy grants ⌘W. Declining rejects the tool call.
           const caller = current.sessions[request.callerSessionId]?.title
-          await closeOrchestrationSessionRef.current(request.sessionId, {
+          const closed = await closeOrchestrationSessionRef.current(request.sessionId, {
             requireConfirmation: {
               headline: caller
                 ? `Agent “${caller}” is asking to close this agent.`
                 : 'An agent is asking to close this agent.',
             },
           })
+          // The comment above says "declining rejects the tool call" — it did
+          // not. The gate RESOLVES false rather than throwing, so the success
+          // below fired anyway and the calling agent was told the close took
+          // while its target kept running. This is the surface where a decline
+          // is still possible, so it is the surface where reporting it matters
+          // most.
+          if (!closed) {
+            throw new Error(
+              'close_agent was declined: the user did not approve closing this agent.',
+            )
+          }
         }
         await window.api.resolveAgentManagementRequest({
           requestId: request.requestId,

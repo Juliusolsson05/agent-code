@@ -12,10 +12,16 @@ import type { SessionId, SessionMeta, WorkspaceState } from '@renderer/workspace
 // `closedSessionIds` whether or not the close took. So the contract worth
 // pinning is not "does it call closeSession" but "does it tell the truth".
 //
-// The confirmation dialog these calls used to raise is gone (see the WHY on
-// OrchestrationCloseSession), so `preConfirmed: true` is now part of the
-// contract too — a regression that re-armed the dialog would make a fleet's
-// routine cleanup interrupt the user several times per run.
+// The unconditional confirmation these calls used to raise is gone, replaced by
+// `silentIfSoleTarget` (see the WHY on OrchestrationCloseSession). That option
+// is the whole safety argument: it stays silent when the close kills exactly
+// the named agent, and asks when it would reach further — a linked agent the
+// user attached, or a tab's sole leaf taking every detached session with it.
+//
+// So the option itself is part of the contract in both directions: a regression
+// that swapped it for `preConfirmed: true` would destroy user-created sessions
+// silently, and one that dropped it entirely would put a dialog back in front of
+// routine fleet cleanup.
 
 const PARENT = 'parent-1' as SessionId
 
@@ -27,6 +33,21 @@ const child = (overrides: Partial<SessionMeta> = {}): SessionMeta => ({
   ...overrides,
 }) as SessionMeta
 
+/**
+ * Narrow harness: both functions under test read ONLY `state.sessions`, so a
+ * bare sessions map is the whole input surface.
+ *
+ * WHY the `unknown` cast (which docs/testing/standard.md otherwise forbids):
+ * `WorkspaceState` carries a dozen fields — tabs, detachedSessions, dispatch
+ * mode, tile tree — that neither function touches, and building them would be
+ * a fixture that lies about what is being exercised.
+ *
+ * WHAT WOULD REMOVE IT: if either function starts reading `state.tabs` or
+ * `state.detachedSessions`, this cast will keep compiling while the fixture
+ * silently supplies `undefined`. That is exactly where `closeSession`'s own
+ * true/false answer comes from, so if these functions ever reach for it, build
+ * a real state factory instead of widening this one.
+ */
 const stateWith = (sessions: Record<string, SessionMeta>): WorkspaceState =>
   ({ sessions } as unknown as WorkspaceState)
 
@@ -39,9 +60,12 @@ describe('closeOrchestrationAgent', () => {
       sessionId: 'child-1',
       closeSession,
     })
-    // preConfirmed is the whole point: these are the caller's own children and
-    // the ownership gate already scoped them.
-    expect(closeSession).toHaveBeenCalledWith('child-1', { preConfirmed: true })
+    // NOT preConfirmed: the ownership gate scopes which session may be NAMED,
+    // not which sessions die, so the decision has to be made where the full
+    // expanded target set is computable.
+    expect(closeSession).toHaveBeenCalledWith('child-1', {
+      silentIfSoleTarget: { headline: expect.stringContaining('asking to close') },
+    })
   })
 
   it('reports the id as closed when the close took', async () => {
@@ -63,6 +87,20 @@ describe('closeOrchestrationAgent', () => {
       parentSessionId: PARENT,
       sessionId: 'child-1',
       closeSession: vi.fn().mockResolvedValue(false),
+    })
+    expect(result).toEqual({ closedSessionIds: [], skippedSessionIds: ['child-1'] })
+  })
+
+  it('reports a thrown close as skipped rather than failing the tool call', async () => {
+    // close_agent had no catch: killSessionBackendIfOwned is IPC and can
+    // reject, and it runs AFTER closeLinkedChildren — so a bare throw could
+    // surface as a tool error while children were already gone, reported as
+    // neither closed nor skipped.
+    const result = await closeOrchestrationAgent({
+      state: stateWith({ 'child-1': child() }),
+      parentSessionId: PARENT,
+      sessionId: 'child-1',
+      closeSession: vi.fn().mockRejectedValue(new Error('backend kill failed')),
     })
     expect(result).toEqual({ closedSessionIds: [], skippedSessionIds: ['child-1'] })
   })
@@ -95,9 +133,13 @@ describe('closeOrchestrationRun', () => {
     })
     expect(result.closedSessionIds.sort()).toEqual(['c1', 'c2', 'c3'])
     // Previously the FIRST call carried requireConfirmation and the rest rode
-    // that answer. Now none of them do.
+    // that answer, which meant one decline silently mis-reported the rest.
+    // Now every call carries the same sole-target mode and is judged on its own
+    // blast radius.
     for (const call of closeSession.mock.calls) {
-      expect(call[1]).toEqual({ preConfirmed: true })
+      expect(call[1]).toEqual({
+        silentIfSoleTarget: { headline: expect.stringContaining('asking to close') },
+      })
     }
   })
 
@@ -110,6 +152,21 @@ describe('closeOrchestrationRun', () => {
     })
     expect(result.closedSessionIds.sort()).toEqual(['c1', 'c3'])
     expect(result.skippedSessionIds).toEqual(['c2'])
+  })
+
+  it('names the requesting agent in the fallback headline', async () => {
+    // The headline is only ever shown when the close reaches past the named
+    // agent — a dialog the user did not summon. It has to say who asked.
+    const closeSession = vi.fn().mockResolvedValue(true)
+    await closeOrchestrationRun({
+      state: stateWith({
+        [PARENT]: { cwd: '/tmp/p', kind: 'claude', title: 'Reviewer' } as SessionMeta,
+        c1: child(),
+      }),
+      parentSessionId: PARENT,
+      closeSession,
+    })
+    expect(closeSession.mock.calls[0][1].silentIfSoleTarget.headline).toContain('Reviewer')
   })
 
   it('treats a thrown close as a skip and keeps going', async () => {
@@ -135,7 +192,49 @@ describe('closeOrchestrationRun', () => {
       parentSessionId: PARENT,
       closeSession: vi.fn().mockResolvedValue(true),
     })
-    expect(result.skippedSessionIds).toBeUndefined()
+    // `in`, not toBeUndefined: the latter also passes for an explicitly-present
+    // `undefined`, which is not what "omits entirely" claims.
+    expect('skippedSessionIds' in result).toBe(false)
+  })
+
+  it('closes only the named run when a runId is given', async () => {
+    // With the unconditional dialog gone, this filter is the only thing
+    // separating "close this run" from "close every child I have ever
+    // started". It had no coverage at all before.
+    const closeSession = vi.fn().mockResolvedValue(true)
+    await closeOrchestrationRun({
+      state: stateWith({
+        a1: child({ orchestrationRunId: 'run-a' } as Partial<SessionMeta>),
+        a2: child({ orchestrationRunId: 'run-a' } as Partial<SessionMeta>),
+        b1: child({ orchestrationRunId: 'run-b' } as Partial<SessionMeta>),
+      }),
+      parentSessionId: PARENT,
+      runId: 'run-a',
+      closeSession,
+    })
+    expect(closeSession.mock.calls.map(c => c[0]).sort()).toEqual(['a1', 'a2'])
+  })
+
+  it('excludes non-agent sessions such as terminals', async () => {
+    // A terminal parked in the same run is not an orchestration child and must
+    // not be swept up by a run close.
+    const closeSession = vi.fn().mockResolvedValue(true)
+    await closeOrchestrationRun({
+      state: stateWith({ agent: child(), shell: child({ kind: 'terminal' }) }),
+      parentSessionId: PARENT,
+      closeSession,
+    })
+    expect(closeSession.mock.calls.map(c => c[0])).toEqual(['agent'])
+  })
+
+  it('returns an empty result when the caller has no children', async () => {
+    const result = await closeOrchestrationRun({
+      state: stateWith({}),
+      parentSessionId: PARENT,
+      closeSession: vi.fn().mockResolvedValue(true),
+    })
+    expect(result.closedSessionIds).toEqual([])
+    expect('skippedSessionIds' in result).toBe(false)
   })
 
   it('only touches the caller’s own children', async () => {
