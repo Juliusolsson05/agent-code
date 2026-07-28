@@ -412,10 +412,22 @@ export function useWorkspace(
             state: snapshot,
             parentSessionId: request.parentSessionId,
             sessionId: request.sessionId,
-            // Adapted to the orchestration contract's Promise<void>: the MCP
-            // layer has no use for whether the close was declined, and
-            // widening a shared cross-process type for one local caller would
-            // be the tail wagging the dog.
+            // Adapted to the orchestration contract's Promise<void>.
+            //
+            // NOT because the signal is useless — it is not. `OrchestrationClose-
+            // Result` carries `skippedSessionIds` for exactly this, and
+            // closeOrchestrationRun's own comment claims "declining it throws,
+            // which the catch below turns into a skip" — which is false:
+            // requestCloseConfirmation RESOLVES false, it never rejects. So an
+            // orchestrating agent that has its close declined by the user is
+            // currently told the child closed. That is a real pre-existing bug
+            // and this boolean is the missing half of its fix.
+            //
+            // It is deliberately NOT fixed here: changing what an orchestrating
+            // agent is told about a close is a cross-process behaviour change
+            // that deserves its own review, not a ride-along in a
+            // Dispatch-lane PR. Filed as follow-up work; do not "tidy" this
+            // comment away without doing it.
             closeSession: async (id, opts) => {
               await closeOrchestrationSessionRef.current(id, opts)
             },

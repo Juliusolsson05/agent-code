@@ -75,7 +75,7 @@ export const layoutCommands: CommandDef[] = [
     category: 'layout-dispatch',
     surface: 'dispatch',
     title: 'Remove Lane',
-    description: '**What it does:** Removes the **focused lane** from Tiled Dispatch and shrinks the grid by one. The agent keeps running and stays in the index.\n\n**Use when:** You are done watching one agent but want the others to stay exactly where they are.\n\n**Notes:** Changing the tile count instead always drops the LAST lane. Removing the leftmost lane promotes the next one into its place, where it is selected from the full index rather than its own compact selector.',
+    description: '**What it does:** Removes the **focused lane** from Tiled Dispatch, shrinking the layout by one lane. The agent keeps running and stays in the index.\n\n**Use when:** You are done watching one agent but want the others to stay exactly where they are.\n\n**Notes:** Changing the tile count instead always drops the LAST lane. Removing the leftmost lane promotes the next one into its place, where it is selected from the full index rather than its own compact selector.',
     keywords: ['remove', 'lane', 'tile', 'tiled dispatch', 'shrink', 'slot'],
     when: ({ workspace }) => {
       const tiled = workspace.state.dispatchMode?.tiled
@@ -92,14 +92,21 @@ export const layoutCommands: CommandDef[] = [
     category: 'layout-dispatch',
     surface: 'dispatch',
     title: 'Close Agent and Remove Lane',
-    description: '**What it does:** Closes the agent in the **focused lane**, then removes that lane and shrinks the grid by one.\n\n**Use when:** An agent has finished and you want it gone along with its slot.\n\n**Notes:** This ends the session. Use **Remove Lane** to reclaim the slot while leaving the agent running. Irreversible closes still confirm first, and declining leaves the grid untouched.',
-    keywords: ['close', 'agent', 'lane', 'tile', 'tiled dispatch', 'shrink', 'finished', 'done'],
+    description: '**What it does:** Closes the agent in the **focused lane**, then removes that lane, shrinking the layout by one.\n\n**Use when:** An agent has finished and you want it gone along with its slot.\n\n**Notes:** This ends the session. Use **Remove Lane** to reclaim the slot while leaving the agent running. Irreversible closes still confirm first, and declining leaves the layout untouched.',
+    keywords: ['close', 'agent', 'remove agent', 'lane', 'tile', 'tiled dispatch', 'shrink', 'finished', 'done'],
     when: ({ workspace }) => {
       const tiled = workspace.state.dispatchMode?.tiled
       if (!tiled || tiled.lanes.length <= MIN_DISPATCH_TILES) return false
       // An empty lane has no agent to close, so this collapses to Remove Lane —
       // admission has to agree with what the command will do.
-      return Boolean(tiled.lanes[tiled.focusedLane]?.selectedSessionId)
+      //
+      // Liveness, not mere presence: a lane can hold a set-but-dead id for the
+      // render between a session disappearing (killed from Agent Activity, tab
+      // closed) and the layout's heal effect clearing it. Admitting on presence
+      // alone let the command run, find nothing to close, and silently do
+      // neither of the two things its title promises.
+      const sessionId = tiled.lanes[tiled.focusedLane]?.selectedSessionId
+      return Boolean(sessionId && workspace.state.sessions[sessionId])
     },
     run: async ({ workspace }) => {
       const tiled = workspace.state.dispatchMode?.tiled

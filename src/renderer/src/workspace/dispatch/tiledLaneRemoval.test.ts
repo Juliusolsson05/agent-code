@@ -49,8 +49,34 @@ describe('removeLaneFromTiled', () => {
 
   it('leaves focus alone when a later lane is removed', () => {
     const next = removeLaneFromTiled(tiled(['a', 'b', 'c', 'd'], 1), 3)
+    // Asserting the lane list too, not just the index: without it this passes
+    // even if the wrong lane were spliced, since index 1 would still be 'b'.
+    expect(idsOf(next)).toEqual(['a', 'b', 'c'])
     expect(next?.focusedLane).toBe(1)
     expect(next?.lanes[next.focusedLane]?.selectedSessionId).toBe('b')
+  })
+
+  it('keeps the index when the focused lane itself is removed mid-list', () => {
+    // The arm where NEITHER the -1 adjust nor the clamp does anything, and the
+    // most common real invocation (Close Agent and Remove Lane on a middle
+    // lane). Focus stays put and now shows the ex-successor, which is the
+    // cursor-trails-deletion convention the rest of Dispatch already follows.
+    // A regression swapping `<` for `<=` in the adjust would leave every other
+    // test in this file green and break exactly this case.
+    const next = removeLaneFromTiled(tiled(['a', 'b', 'c'], 1), 1)
+    expect(idsOf(next)).toEqual(['a', 'c'])
+    expect(next?.focusedLane).toBe(1)
+    expect(next?.lanes[next.focusedLane]?.selectedSessionId).toBe('c')
+  })
+
+  it('keeps focus on lane 0 when lane 0 is removed', () => {
+    // Lane 0 is the one selected from the full index rather than its own
+    // mini-list, so removing it promotes lane 1 into that role. Focus must not
+    // drift off the leftmost lane in the process.
+    const next = removeLaneFromTiled(tiled(['a', 'b', 'c'], 0), 0)
+    expect(idsOf(next)).toEqual(['b', 'c'])
+    expect(next?.focusedLane).toBe(0)
+    expect(next?.lanes[0]?.selectedSessionId).toBe('b')
   })
 
   it('clamps focus into range when the last lane was the focused one', () => {
@@ -61,10 +87,21 @@ describe('removeLaneFromTiled', () => {
     expect(next?.focusedLane).toBe(1)
   })
 
-  it('always drops stored ratios', () => {
-    // Ratios are positional. Carrying them across a removal lays the surviving
-    // lanes out against boundaries that no longer exist.
-    const next = removeLaneFromTiled(tiled(['a', 'b', 'c'], 0, [0.2, 0.3, 0.5]), 1)
+  it('drops the removed lane weight but keeps the index-sidebar fraction', () => {
+    // ratios[0] is the INDEX-SIDEBAR fraction, not a lane boundary — only
+    // ratios.slice(1) are lane weights. Dropping the array wholesale would
+    // snap a deliberately-dragged sidebar back to its default, which is an
+    // unrelated setting the user never asked to change.
+    //
+    // The surviving weights must number exactly lanes.length, or
+    // normalizedLaneWeights discards them and falls back to even distribution.
+    const next = removeLaneFromTiled(tiled(['a', 'b', 'c'], 0, [0.25, 0.1, 0.6, 0.3]), 1)
+    expect(next?.ratios).toEqual([0.25, 0.1, 0.3])
+    expect(next?.ratios?.length).toBe((next?.lanes.length ?? 0) + 1)
+  })
+
+  it('leaves ratios undefined when none were stored', () => {
+    const next = removeLaneFromTiled(tiled(['a', 'b', 'c'], 0), 1)
     expect(next?.ratios).toBeUndefined()
   })
 

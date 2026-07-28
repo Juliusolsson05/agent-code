@@ -168,6 +168,40 @@ export function clampTileCount(n: number): number {
  * put the same agent in two lanes afterwards (duplicates are allowed and the
  * views mirror; see DispatchLane).
  */
+export function buildAutoLanes(
+  state: WorkspaceState,
+  count: number,
+  preserve: DispatchLane[] = [],
+): DispatchLane[] {
+  const rows = buildVisibleDispatchRows(state)
+  const claimed = new Set<SessionId>(
+    preserve
+      .map(lane => lane.selectedSessionId)
+      .filter((id): id is SessionId => Boolean(id)),
+  )
+  const lanes: DispatchLane[] = []
+  for (let i = 0; i < count; i++) {
+    if (preserve[i]) {
+      lanes.push(preserve[i])
+      continue
+    }
+    const next = rows.find(row => !claimed.has(row.sessionId))
+    if (next) {
+      claimed.add(next.sessionId)
+      lanes.push({ selectedSessionId: next.sessionId })
+    } else {
+      lanes.push({})
+    }
+  }
+  return lanes
+}
+
+// NOTE: render still performs scope validation before mounting a lane, but the
+// durability boundary must not rely on a later React effect. Autosave routes
+// through keepTiledLaneSessions so stale lane ids do not survive to the next
+// launch; render-time healing remains the user-facing repair for scope changes
+// and temporarily empty lanes.
+
 /**
  * Remove ONE lane by index. Returns null when the removal is refused, so the
  * caller can leave state untouched rather than writing back an identical object.
@@ -209,43 +243,34 @@ export function removeLaneFromTiled(
       laneIndex < tiled.focusedLane ? tiled.focusedLane - 1 : tiled.focusedLane,
       lanes.length - 1,
     ),
-    // Stored boundary ratios are positional, so removing a lane invalidates
-    // them. Dropping them lets the layout recompute — exactly what
-    // setTiledLaneCount does on any count change.
-    ratios: undefined,
+    // `ratios` is NOT a uniform array of lane boundaries: index 0 is the
+    // INDEX-SIDEBAR fraction (TiledDispatchLayout reads `ratios?.[0]`), and
+    // only `ratios.slice(1)` are lane weights. Dropping the whole array — what
+    // setTiledLaneCount does — therefore also snaps the sidebar back to its
+    // default, undoing a width the user deliberately dragged and never asked
+    // to change.
+    //
+    // A count *increase* has no honest answer (there is a new lane with no
+    // weight to invent), which is why setTiledLaneCount resets wholesale. A
+    // removal does: keep the sidebar fraction, drop the removed lane's weight,
+    // and let normalizedLaneWeights re-normalize what is left.
+    ratios: removeLaneWeight(tiled.ratios, laneIndex),
   }
 }
 
-export function buildAutoLanes(
-  state: WorkspaceState,
-  count: number,
-  preserve: DispatchLane[] = [],
-): DispatchLane[] {
-  const rows = buildVisibleDispatchRows(state)
-  const claimed = new Set<SessionId>(
-    preserve
-      .map(lane => lane.selectedSessionId)
-      .filter((id): id is SessionId => Boolean(id)),
-  )
-  const lanes: DispatchLane[] = []
-  for (let i = 0; i < count; i++) {
-    if (preserve[i]) {
-      lanes.push(preserve[i])
-      continue
-    }
-    const next = rows.find(row => !claimed.has(row.sessionId))
-    if (next) {
-      claimed.add(next.sessionId)
-      lanes.push({ selectedSessionId: next.sessionId })
-    } else {
-      lanes.push({})
-    }
-  }
-  return lanes
+/**
+ * Drop one lane's weight from a `ratios` array while preserving index 0, the
+ * index-sidebar fraction. Returns undefined when there is nothing stored, so
+ * the layout falls back to even distribution exactly as before.
+ */
+function removeLaneWeight(
+  ratios: number[] | undefined,
+  laneIndex: number,
+): number[] | undefined {
+  if (!ratios || ratios.length === 0) return undefined
+  const [indexFraction, ...laneWeights] = ratios
+  // A ratios array written before this lane existed simply has no weight to
+  // drop; keeping the sidebar fraction is still the right call.
+  if (laneIndex >= laneWeights.length) return [indexFraction]
+  return [indexFraction, ...laneWeights.filter((_, i) => i !== laneIndex)]
 }
-
-// NOTE: render still performs scope validation before mounting a lane, but the
-// durability boundary must not rely on a later React effect. Autosave routes
-// through keepTiledLaneSessions so stale lane ids do not survive to the next
-// launch; render-time healing remains the user-facing repair for scope changes
-// and temporarily empty lanes.

@@ -1,6 +1,33 @@
 # Dispatch Lane Removal Implementation Plan
 
-> **Status:** PROPOSED — awaiting review. Ships on `feat/dispatch-lane-removal`.
+> **Status:** IMPLEMENTED and reviewed (PR #625).
+>
+> **Where the implementation differs from this plan:**
+>
+> - **The focus rule is not a plain clamp.** A lane removed BEFORE the focused
+>   one shifts indices down, so holding `focusedLane` constant would silently
+>   move focus to the next agent. It adjusts, then clamps. D5 described only the
+>   clamp half.
+> - **`closeSession` had to change signature** to `Promise<boolean>` so D2's
+>   "only splice if it actually closed" is expressible. Two orchestration call
+>   sites adapt locally to their `Promise<void>` contract.
+> - **`ratios` is not dropped wholesale.** Index 0 is the index-SIDEBAR
+>   fraction, not a lane boundary — only `ratios.slice(1)` are lane weights. D4
+>   was wrong to copy `setTiledLaneCount` here: a removal can preserve the
+>   sidebar width and drop just the removed lane's weight, which a count
+>   *increase* cannot (it would have to invent a weight for the new lane).
+> - **The destructive command's `when` tests liveness, not presence.** A lane
+>   can hold a set-but-dead id for one render; admitting on presence alone let
+>   the command run and do neither of the two things its title promises.
+>
+> **Known pre-existing bug this PR did NOT fix, deliberately:** an orchestrating
+> agent whose close is declined by the user is told the child closed.
+> `requestCloseConfirmation` resolves `false` rather than throwing, so
+> `closeOrchestrationAgent`/`closeOrchestrationRun` report success
+> unconditionally and `skippedSessionIds` stays empty. The `Promise<boolean>`
+> added here is the missing half of the fix, but threading it changes what a
+> cross-process caller is told and deserves its own review rather than a
+> ride-along. See the comment at the wrapper sites.
 
 **Goal:** Let a user remove a *specific* lane from Tiled Dispatch, instead of only being able to shrink the grid from the tail.
 

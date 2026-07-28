@@ -9,9 +9,9 @@ import type { CommandDef } from '@renderer/features/command-palette/types'
 // Phase 0 of the command-governance plan (docs/superpowers/plans/
 // 2026-07-23-command-surface-audit.md): CHARACTERIZE THE CURRENT CATALOG.
 //
-// This file pinned the exact 102-id before-state, and now pins the 102-id
+// This file pinned the exact 102-id before-state, and now pins the 104-id
 // after-state: five durable preferences retired to Settings, seven approved
-// additions. Keeping ONE snapshot that moved — rather
+// additions (102 - 5 + 7 = 104). Keeping ONE snapshot that moved — rather
 // than a "baseline" file and an "after" file — is what makes the plan's
 // headline count an assertion anyone can check against running code instead of
 // prose.
@@ -336,7 +336,7 @@ describe('governance targets', () => {
     // Additions so far: `open-command-palette` (governance: the palette could
     // not be rebound because it had no command id), `open-keyboard-shortcuts`,
     // and the three composer commands (`clear-composer`,
-    // `undo-clear-composer`, `send-composer`), and the two lane-removal
+    // `undo-clear-composer`, `send-composer`) and the two lane-removal
     // commands (`remove-tiled-lane`, `close-agent-remove-lane`).
     expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 7).toBe(102)
     expect(builtInCommandCatalog).toHaveLength(104)
