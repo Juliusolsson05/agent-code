@@ -73,6 +73,7 @@
   --color-row-bg: var(--theme-row-bg);
   --color-row-hover-bg: var(--theme-row-hover-bg);
   --color-row-selected-bg: var(--theme-row-selected-bg);
+  --color-row-selected-solid-bg: var(--theme-row-selected-solid-bg);
   --color-row-selected-fg: var(--theme-row-selected-fg);
   --color-row-danger-selected-bg: var(--theme-row-danger-selected-bg);
 
@@ -551,6 +552,15 @@
   --theme-row-bg: transparent;
   --theme-row-hover-bg: var(--theme-surface-hi);
   --theme-row-selected-bg: color-mix(in srgb, var(--theme-accent) 15%, transparent);
+  /* Opaque twin of the row-selected tint, for the one layout that cannot use
+     the transparent one: a `gap-px` grid whose PARENT is painted with the
+     border colour so the gaps read as seams. That trick only works while every
+     cell is opaque — a transparent cell lets the parent's border colour flood
+     the whole cell, and a semi-transparent one tints it. Mixing against
+     `--theme-surface` instead of `transparent` gives the identical colour on a
+     surface-coloured panel while remaining safe over any backdrop.
+     See ThemePickerRow.tsx. */
+  --theme-row-selected-solid-bg: color-mix(in srgb, var(--theme-accent) 15%, var(--theme-surface));
   --theme-row-selected-fg: var(--theme-ink);
   --theme-row-danger-selected-bg: var(--theme-danger-soft);
 
