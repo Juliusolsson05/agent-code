@@ -1,0 +1,223 @@
+import { EventEmitter } from 'node:events'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+import { SESSION_LIFECYCLE_AREA } from '@shared/lifecycle/events.js'
+
+// Mirrors the mock preamble in sessionManager.recover.test.ts. Kept as a
+// separate file rather than appended there because these assertions are about
+// the DIAGNOSTIC stream, not about ownership correctness — mixing them would
+// make a future reader unsure which failures mean "recovery is broken" and
+// which mean "we stopped recording something".
+const { createSession, deliverPrompt } = vi.hoisted(() => ({
+  createSession: vi.fn(),
+  deliverPrompt: vi.fn(),
+}))
+
+vi.mock('@providers/registry.main.js', () => ({
+  getMainProvider: () => ({ createSession, deliverPrompt }),
+}))
+
+vi.mock('@main/setup/toolchain.js', () => ({
+  getToolPath: () => '/usr/bin/true',
+}))
+
+vi.mock('@main/performance/PerformanceService.js', () => ({
+  performanceService: { mark: vi.fn(), record: vi.fn(), error: vi.fn() },
+}))
+
+vi.mock('@main/storage/feedDebugLog.js', () => ({
+  forgetFeedDebugSession: vi.fn(),
+}))
+
+class FakeAgentSession extends EventEmitter {
+  readonly start = vi.fn(async (): Promise<void> => {
+    this.emit('started', { projectDir: '/tmp/project' })
+  })
+  readonly stop = vi.fn(async (): Promise<void> => {})
+  readonly write = vi.fn()
+  readonly resize = vi.fn()
+}
+
+type LifecycleRecord = { area: string; name: string; ids?: { sessionId?: string }; data?: Record<string, unknown> }
+
+function journalSpy() {
+  const all: LifecycleRecord[] = []
+  return {
+    journal: { record: (input: LifecycleRecord) => all.push(input) },
+    /** Only the lifecycle stream — the same journal carries other areas. */
+    lifecycle: () => all.filter(r => r.area === SESSION_LIFECYCLE_AREA),
+    names: () => all.filter(r => r.area === SESSION_LIFECYCLE_AREA).map(r => r.name),
+    find: (name: string) => all.find(r => r.area === SESSION_LIFECYCLE_AREA && r.name === name),
+  }
+}
+
+describe('SessionManager lifecycle journal', () => {
+  beforeEach(() => {
+    createSession.mockReset()
+    createSession.mockImplementation(() => new FakeAgentSession())
+    deliverPrompt.mockReset()
+  })
+
+  it('records the full cold-start ladder in order', async () => {
+    // This ladder IS the artifact. "The agent takes minutes to start" becomes a
+    // measurable claim only once every rung carries a duration, and the gap
+    // between rungs is where the minutes will turn out to live.
+    const { SessionManager } = await import('./sessionManager')
+    const spy = journalSpy()
+    const manager = new SessionManager(null, null, spy.journal as never)
+
+    await manager.recover({ sessionId: 's1', kind: 'claude', cwd: '/tmp/project' })
+
+    expect(spy.names()).toEqual([
+      'recover.claim',
+      'spawn.begin',
+      // Seeded `{ ready: false, reason: 'starting' }` BEFORE the provider is
+      // asked to start — pinned deliberately, because this is the *only*
+      // readiness fact a never-ready session ever produces. `publishPromptGate`
+      // is edge-triggered, so if the provider never reaches its composer
+      // boundary nothing further is emitted and the renderer waits forever with
+      // no additional signal. A ladder that ends here is the fingerprint of
+      // "the agent takes minutes to start".
+      'readiness.publish',
+      'provider.start.begin',
+      'provider.start.end',
+      'spawn.end',
+      'recover.spawned',
+    ])
+    expect(spy.find('recover.claim')?.ids).toEqual({ sessionId: 's1' })
+    expect(spy.find('recover.spawned')?.data).toMatchObject({
+      kind: 'claude',
+      disposition: 'spawned',
+      lifecycle: 'live',
+    })
+    expect(typeof spy.find('provider.start.end')?.data?.durationMs).toBe('number')
+  })
+
+  it('records hasResumeId on the claim so cold resume is separable from a fresh pane', async () => {
+    const { SessionManager } = await import('./sessionManager')
+    const spy = journalSpy()
+    const manager = new SessionManager(null, null, spy.journal as never)
+
+    await manager.recover({
+      sessionId: 's1',
+      kind: 'claude',
+      cwd: '/tmp/project',
+      resumeSessionId: 'provider-history',
+    })
+
+    expect(spy.find('recover.claim')?.data).toMatchObject({ hasResumeId: true })
+  })
+
+  it('records adoption with the adopted backend readiness, not just the disposition', async () => {
+    // #596's entire root cause was that callers could not tell an adopted live
+    // agent from a freshly spawned one. Recording readiness AT adoption is what
+    // lets the Stage 4 catalog separate "adopted a busy healthy agent" from
+    // "adopted a wedged one".
+    const { SessionManager } = await import('./sessionManager')
+    const spy = journalSpy()
+    const manager = new SessionManager(null, null, spy.journal as never)
+
+    await manager.recover({ sessionId: 's1', kind: 'claude', cwd: '/tmp/project' })
+    await manager.recover({ sessionId: 's1', kind: 'claude', cwd: '/tmp/project/.' })
+
+    const adopted = spy.find('recover.adopted')
+    expect(adopted?.data).toMatchObject({ disposition: 'adopted', lifecycle: 'live' })
+    expect(adopted?.data).toHaveProperty('ready')
+    expect(createSession).toHaveBeenCalledTimes(1)
+  })
+
+  it('records an ownership conflict with the reason that produced it', async () => {
+    const { SessionManager } = await import('./sessionManager')
+    const spy = journalSpy()
+    const manager = new SessionManager(null, null, spy.journal as never)
+
+    await manager.recover({ sessionId: 's1', kind: 'claude', cwd: '/tmp/project' })
+    const conflict = await manager.recover({ sessionId: 's1', kind: 'codex', cwd: '/tmp/project' })
+
+    expect(conflict).toMatchObject({ ok: false, code: 'ownership-conflict' })
+    expect(spy.find('recover.conflict')?.data).toMatchObject({
+      code: 'ownership-conflict',
+      reason: 'live-entry-mismatch',
+    })
+  })
+
+  it('classifies a delivery rejection against an id main has never owned', async () => {
+    // The reported failure: "Cannot deliver prompt: <id> is not a live agent
+    // session". `never-owned` means the renderer invented or resurrected an id —
+    // a persistence/ownership defect.
+    const { SessionManager } = await import('./sessionManager')
+    const spy = journalSpy()
+    const manager = new SessionManager(null, null, spy.journal as never)
+
+    const result = await manager.deliverPromptToAgent('ghost-id', 'hello')
+
+    expect(result).toMatchObject({ ok: false, code: 'not-ready', stage: 'before-write' })
+    expect(spy.find('delivery.reject')?.data).toMatchObject({
+      code: 'not-ready',
+      registryHit: false,
+      reason: 'never-owned',
+    })
+  })
+
+  it('distinguishes a delivery rejection for a session main owned and lost', async () => {
+    // Same user-visible message, completely different defect: main DID own this
+    // id, so a lifecycle teardown was not observed by the renderer — an
+    // event-delivery bug rather than an id-provenance bug. These two shapes are
+    // byte-identical to the user and were indistinguishable in logs until now.
+    const { SessionManager } = await import('./sessionManager')
+    const spy = journalSpy()
+    const manager = new SessionManager(null, null, spy.journal as never)
+
+    await manager.recover({ sessionId: 's1', kind: 'claude', cwd: '/tmp/project' })
+    await manager.kill('s1')
+    await manager.deliverPromptToAgent('s1', 'hello')
+
+    expect(spy.find('delivery.reject')?.data).toMatchObject({
+      registryHit: false,
+      reason: 'entry-lost-after-owned',
+    })
+  })
+
+  it('classifies kill by what it actually terminated', async () => {
+    const { SessionManager } = await import('./sessionManager')
+    const spy = journalSpy()
+    const manager = new SessionManager(null, null, spy.journal as never)
+
+    await manager.recover({ sessionId: 's1', kind: 'claude', cwd: '/tmp/project' })
+    await manager.kill('s1')
+    await manager.kill('never-existed')
+
+    const kills = spy.lifecycle().filter(r => r.name === 'kill.request')
+    expect(kills.map(k => k.data?.cause)).toEqual(['live-entry', 'no-owner'])
+  })
+
+  it('records every published readiness transition with its monotonic revision', async () => {
+    const { SessionManager } = await import('./sessionManager')
+    const spy = journalSpy()
+    const session = new FakeAgentSession()
+    createSession.mockImplementation(() => session)
+    const manager = new SessionManager(null, null, spy.journal as never)
+
+    await manager.recover({ sessionId: 's1', kind: 'claude', cwd: '/tmp/project' })
+    session.emit('input-readiness', { ready: true, reason: 'ready' })
+
+    const publishes = spy.lifecycle().filter(r => r.name === 'readiness.publish')
+    expect(publishes.length).toBeGreaterThanOrEqual(2)
+    expect(publishes[0].data).toMatchObject({ ready: false, reason: 'starting' })
+    expect(publishes.at(-1)?.data).toMatchObject({ ready: true, reason: 'ready' })
+    // Revisions are the ordering key every consumer uses to reject a stale seed.
+    // A non-monotonic sequence here would mean the recorded stream cannot be
+    // trusted to reconstruct what the renderer actually saw.
+    const revisions = publishes.map(p => p.data?.revision as number)
+    expect(revisions).toEqual([...revisions].sort((a, b) => a - b))
+  })
+
+  it('emits nothing when constructed without a journal', async () => {
+    const { SessionManager } = await import('./sessionManager')
+    const manager = new SessionManager()
+
+    await expect(
+      manager.recover({ sessionId: 's1', kind: 'claude', cwd: '/tmp/project' }),
+    ).resolves.toMatchObject({ ok: true })
+  })
+})

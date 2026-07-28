@@ -50,6 +50,7 @@ import type { AgentProviderKind, SessionKind } from '@shared/types/providerKind.
 import type { BuiltInMcpDomain, BuiltInMcpServerConfig } from '@mcp/shared/types.js'
 import type { BuiltInMcpHttpHost } from '@mcp/runtime/BuiltInMcpHttpHost.js'
 import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
+import { SessionLifecycleJournal } from '@main/lifecycle/SessionLifecycleJournal.js'
 import type {
   SessionSpawnOptions,
   SessionSpawnResult,
@@ -376,7 +377,14 @@ export class SessionManager extends EventEmitter {
     private readonly beforeAgentSessionStart: (() => Promise<void>) | null = null,
   ) {
     super()
+    // Typed lifecycle emitter over the same journal. Constructed here rather
+    // than injected so every SessionManager — including the ones tests build
+    // with a null journal — has a non-null emitter and no call site needs a
+    // `?.` guard. See SessionLifecycleJournal for why nothing may READ these.
+    this.lifecycle = new SessionLifecycleJournal(journal)
   }
+
+  private readonly lifecycle: SessionLifecycleJournal
 
   // Terminal attach/replay state.
   //
@@ -432,24 +440,6 @@ export class SessionManager extends EventEmitter {
     this.lastActivityAt.set(sessionId, Date.now())
   }
 
-  private recordRecovery(
-    name: 'session.recovery.joined' | 'session.recovery.completed' | 'session.recovery.failed',
-    data: Record<string, unknown>,
-  ): void {
-    // WHY this helper is best-effort and metadata-only: recovery is the path
-    // that repairs the app after a crash, so diagnostics must never become a
-    // new startup dependency. The existing journal is already byte/pending-
-    // bounded; this wrapper additionally prevents an unexpected journal bug
-    // from delaying ownership reconciliation. Callers provide only local id,
-    // provider kind, disposition/lifecycle, duration, or typed failure code—
-    // never prompts, commands, transcript text, MCP URLs, tokens, or payloads.
-    try {
-      this.journal?.record({ area: 'session.recovery', name, data })
-    } catch {
-      // Recovery correctness outranks optional forensic breadcrumbs.
-    }
-  }
-
   private setInputReadiness(sessionId: string, next: AgentInputReadiness): void {
     const previous = this.lastInputReadiness.get(sessionId)
     if (previous?.ready === next.ready && previous.reason === next.reason) return
@@ -466,6 +456,19 @@ export class SessionManager extends EventEmitter {
     // seed that arrives after a newer event. Process/activity signals cannot
     // safely substitute for this fact.
     this.emit('input-readiness', { sessionId, input })
+    // Records only the DEDUPED transitions this method actually publishes —
+    // deliberately not every provider evaluation. The per-evaluation stream is
+    // `gate.eval`, emitted at the provider, and the two together are what make
+    // a stall legible: `gate.eval` says the provider keeps re-deciding
+    // "not ready, composer-unpainted", while the absence of a following
+    // `readiness.publish` proves no consumer was ever told anything changed.
+    // That gap is invisible today and is the shape behind "the agent takes
+    // minutes to start".
+    this.lifecycle.session('readiness.publish', sessionId, {
+      ready: input.ready,
+      reason: input.reason ?? null,
+      revision,
+    })
   }
 
   private cleanupSessionState(
@@ -623,18 +626,17 @@ export class SessionManager extends EventEmitter {
     const existingClaim = this.recoveriesInFlight.get(options.sessionId)
     if (existingClaim) {
       if (existingClaim.kind === kind && existingClaim.cwd === cwd) {
-        this.recordRecovery('session.recovery.joined', {
-          sessionId: options.sessionId,
+        this.lifecycle.session('recover.join', options.sessionId, {
           kind,
           lifecycle: 'spawning',
         })
         return existingClaim.promise
       }
-      this.recordRecovery('session.recovery.failed', {
-        sessionId: options.sessionId,
+      this.lifecycle.session('recover.conflict', options.sessionId, {
         kind,
         code: 'ownership-conflict',
         lifecycle: 'spawning',
+        reason: 'claim-in-flight',
       })
       return Promise.resolve(this.recoveryConflict(options.sessionId, existingClaim))
     }
@@ -643,11 +645,18 @@ export class SessionManager extends EventEmitter {
     if (existingEntry) {
       const snapshot = this.getBackendSnapshot(options.sessionId)
       if (snapshot && snapshot.kind === kind && path.resolve(snapshot.cwd) === cwd) {
-        this.recordRecovery('session.recovery.completed', {
-          sessionId: options.sessionId,
+        // Adoption carries the ADOPTED BACKEND'S readiness, not just the
+        // disposition. #596 turned on exactly this distinction: a caller that
+        // adopts a live-but-not-ready agent behaves completely differently from
+        // one that spawned a fresh process, and until now nothing recorded
+        // which case a given wake was. Pairing this with `wake.request`'s
+        // caller tag is what will let the Stage 4 catalog separate them.
+        this.lifecycle.session('recover.adopted', options.sessionId, {
           kind,
           disposition: 'adopted',
           lifecycle: snapshot.lifecycle,
+          ready: snapshot.input.ready,
+          reason: snapshot.input.reason ?? null,
           durationMs: 0,
         })
         return Promise.resolve({
@@ -659,21 +668,21 @@ export class SessionManager extends EventEmitter {
             : {}),
         })
       }
-      this.recordRecovery('session.recovery.failed', {
-        sessionId: options.sessionId,
+      this.lifecycle.session('recover.conflict', options.sessionId, {
         kind,
         code: 'ownership-conflict',
         lifecycle: snapshot?.lifecycle ?? 'live',
+        reason: 'live-entry-mismatch',
       })
       return Promise.resolve(this.recoveryConflict(options.sessionId, snapshot))
     }
 
     if (this.spawningSessionGenerations.has(options.sessionId)) {
-      this.recordRecovery('session.recovery.failed', {
-        sessionId: options.sessionId,
+      this.lifecycle.session('recover.conflict', options.sessionId, {
         kind,
         code: 'ownership-conflict',
         lifecycle: 'spawning',
+        reason: 'spawn-generation-held',
       })
       return Promise.resolve(this.recoveryConflict(options.sessionId, null))
     }
@@ -696,6 +705,16 @@ export class SessionManager extends EventEmitter {
     }
     claim.promise = Promise.resolve().then(() => this.runRecovery(options, claim))
     this.recoveriesInFlight.set(options.sessionId, claim)
+    // The moment this session becomes main-owned. Recorded because a claim that
+    // is published and never followed by adopted/spawned/conflict/cancelled/
+    // failed is a stranded pane — the exact state that presents to the user as
+    // "the agent never started" with nothing anywhere explaining why. That
+    // unterminated-claim shape is the first invariant the Stage 5 replay
+    // harness will check for.
+    this.lifecycle.session('recover.claim', options.sessionId, {
+      kind,
+      hasResumeId: Boolean(options.resumeSessionId),
+    })
     return claim.promise
   }
 
@@ -725,11 +744,11 @@ export class SessionManager extends EventEmitter {
   ): Promise<SessionRecoverResult> {
     try {
       if (claim.cancelled) {
-        this.recordRecovery('session.recovery.failed', {
-          sessionId: options.sessionId,
+        this.lifecycle.session('recover.cancelled', options.sessionId, {
           kind: claim.kind,
           code: 'cancelled',
           lifecycle: 'spawning',
+          reason: 'cancelled-before-start',
           durationMs: performance.now() - claim.startedAt,
         })
         return {
@@ -739,6 +758,7 @@ export class SessionManager extends EventEmitter {
           message: `Recovery for session ${options.sessionId} was cancelled`,
         }
       }
+      this.lifecycle.session('spawn.begin', options.sessionId, { kind: claim.kind })
       const spawnPromise = this.spawnWithId({
         ...options,
         cwd: claim.cwd,
@@ -752,11 +772,15 @@ export class SessionManager extends EventEmitter {
         // renderer a phantom backend; stop any late materialization and report
         // the stable cancelled outcome instead.
         await this.kill(options.sessionId)
-        this.recordRecovery('session.recovery.failed', {
-          sessionId: options.sessionId,
+        this.lifecycle.session('recover.cancelled', options.sessionId, {
           kind: claim.kind,
           code: 'cancelled',
           lifecycle: snapshot?.lifecycle ?? 'spawning',
+          // Distinguishes "the user closed the pane mid-start" from a provider
+          // that resolved start() after its registry entry was already gone.
+          // Both return `cancelled` to the renderer, but only the latter is a
+          // provider-behaviour question worth chasing.
+          reason: claim.cancelled ? 'cancelled-during-start' : 'entry-vanished',
           durationMs: performance.now() - claim.startedAt,
         })
         return {
@@ -766,11 +790,21 @@ export class SessionManager extends EventEmitter {
           message: `Recovery for session ${options.sessionId} was cancelled`,
         }
       }
-      this.recordRecovery('session.recovery.completed', {
-        sessionId: options.sessionId,
+      this.lifecycle.session('spawn.end', options.sessionId, {
+        kind: claim.kind,
+        ok: true,
+        durationMs: performance.now() - claim.startedAt,
+      })
+      this.lifecycle.session('recover.spawned', options.sessionId, {
         kind: claim.kind,
         disposition: 'spawned',
         lifecycle: snapshot.lifecycle,
+        // A cold-spawned backend is almost never ready at this instant. Capturing
+        // readiness HERE gives the corpus a baseline to measure "minutes to
+        // start" against: the interval between this event and the first
+        // `readiness.publish` with ready:true is the number nobody has ever had.
+        ready: snapshot.input.ready,
+        reason: snapshot.input.reason ?? null,
         durationMs: performance.now() - claim.startedAt,
       })
       return {
@@ -781,11 +815,11 @@ export class SessionManager extends EventEmitter {
       }
     } catch (error) {
       if (claim.cancelled) {
-        this.recordRecovery('session.recovery.failed', {
-          sessionId: options.sessionId,
+        this.lifecycle.session('recover.cancelled', options.sessionId, {
           kind: claim.kind,
           code: 'cancelled',
           lifecycle: 'spawning',
+          reason: 'cancelled-after-throw',
           durationMs: performance.now() - claim.startedAt,
         })
         return {
@@ -795,8 +829,12 @@ export class SessionManager extends EventEmitter {
           message: `Recovery for session ${options.sessionId} was cancelled`,
         }
       }
-      this.recordRecovery('session.recovery.failed', {
-        sessionId: options.sessionId,
+      this.lifecycle.session('spawn.end', options.sessionId, {
+        kind: claim.kind,
+        ok: false,
+        durationMs: performance.now() - claim.startedAt,
+      })
+      this.lifecycle.session('recover.failed', options.sessionId, {
         kind: claim.kind,
         code: 'start-failed',
         lifecycle: 'spawning',
@@ -1123,12 +1161,27 @@ export class SessionManager extends EventEmitter {
       this.sessions.set(sessionId, agentEntry)
       this.rememberSessionId(sessionId)
       this.throwIfRecoveryCancelled(recoveryClaim)
+      // Hoisted out of the try so the catch can report a duration too: a
+      // provider that throws after 90 seconds and one that throws instantly are
+      // completely different failures, and the old code could not tell them
+      // apart because this was scoped to the success path.
+      const startStartedAt = performance.now()
       try {
-        const startStartedAt = performance.now()
+        // WHY this duplicates the performanceService span below: that span is
+        // gated behind AGENT_CODE_PERF, which is off by default — which is
+        // precisely why "the agent takes minutes to start" has never had a
+        // measurement attached to it. This pair is always on. The perf span
+        // stays for its richer sampling when someone deliberately enables it.
+        this.lifecycle.session('provider.start.begin', sessionId, { kind })
         await session.start()
         await this.settleEntryStart(sessionId, agentEntry)
         this.throwIfRecoveryCancelled(recoveryClaim)
         if (!ownsEntry()) throw new RecoveryCancelledError()
+        this.lifecycle.session('provider.start.end', sessionId, {
+          kind,
+          ok: true,
+          durationMs: performance.now() - startStartedAt,
+        })
         performanceService.record({
           kind: 'span_end',
           process: 'main',
@@ -1140,6 +1193,11 @@ export class SessionManager extends EventEmitter {
         })
       } catch (err) {
         await this.settleEntryStart(sessionId, agentEntry)
+        this.lifecycle.session('provider.start.end', sessionId, {
+          kind,
+          ok: false,
+          durationMs: performance.now() - startStartedAt,
+        })
         performanceService.error('session.spawn.providerStart.error', err, {
           sessionId,
           kind,
@@ -1730,6 +1788,11 @@ export class SessionManager extends EventEmitter {
   ): Promise<PromptDeliveryResult> {
     if (this.promptDeliveriesInFlight.has(sessionId)) {
       record?.('duplicate-blocked')
+      this.lifecycle.session('delivery.reject', sessionId, {
+        code: 'delivery-in-flight',
+        stage: 'reservation',
+        registryHit: this.sessions.has(sessionId),
+      })
       return {
         ok: false, stage: 'reservation', code: 'delivery-in-flight',
         retrySafe: true, disposition: 'retry-same-session',
@@ -1743,6 +1806,31 @@ export class SessionManager extends EventEmitter {
     // comparisons, and we need `entry.session` narrowed to
     // AgentSession for the registry call below.
     if (!entry || entry.kind === 'terminal') {
+      // ── THE REPORTED FAILURE ──
+      // "Cannot deliver prompt: <id> is not a live agent session", followed by
+      // a pane stuck on `Sending · 17s` until the agent is reloaded.
+      //
+      // This branch is REGISTRY SPLIT-BRAIN: the renderer believes the pane is
+      // started, ready and writable, while main holds no entry for it. Why the
+      // entry is missing is NOT derivable from source — the candidates (an exit
+      // the renderer never processed, a cancelled recovery, a kill, a wedged
+      // provider) are indistinguishable at this line.
+      //
+      // `everKnown` is the discriminator that makes them distinguishable in the
+      // corpus, and it is the whole reason this event exists: an id main has
+      // NEVER owned means the renderer invented or resurrected it (a
+      // persistence/ownership bug), while an id main owned and lost means a
+      // lifecycle teardown was not observed by the renderer (an event-delivery
+      // bug). Those are different defects in different files, and today they
+      // produce byte-identical user-visible symptoms.
+      this.lifecycle.session('delivery.reject', sessionId, {
+        code: 'not-ready',
+        stage: 'before-write',
+        registryHit: Boolean(entry),
+        reason: entry ? 'terminal-session' : this.everKnownSessionIds.has(sessionId)
+          ? 'entry-lost-after-owned'
+          : 'never-owned',
+      })
       return {
         ok: false, stage: 'before-write', code: 'not-ready', retrySafe: true,
         disposition: 'session-unusable',
@@ -1821,6 +1909,16 @@ export class SessionManager extends EventEmitter {
     if (recovery) recovery.cancelled = true
     const entry = this.sessions.get(sessionId)
     const generation = entry?.lifecycle.generation ?? recovery?.spawnGeneration ?? null
+    // Every backend death passes through here, so this is the one place that
+    // can answer "did something kill my agent, or did it never start?" — a
+    // question #596 took a bug report and a full source trace to answer once.
+    // `cause` separates the three shapes: killing a live entry, cancelling an
+    // in-flight recovery, and a no-op kill against an id main does not hold
+    // (which usually means the caller is operating on a stale id).
+    this.lifecycle.session('kill.request', sessionId, {
+      cause: entry ? 'live-entry' : recovery ? 'recovery-claim' : 'no-owner',
+      kind: entry?.kind ?? recovery?.kind ?? null,
+    })
 
     // WHY registry visibility is severed now but the spawn-generation fence is
     // not: callers must stop routing input immediately, yet a replacement may
