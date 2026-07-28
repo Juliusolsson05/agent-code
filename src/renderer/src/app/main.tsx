@@ -16,6 +16,15 @@ import { AppErrorBoundary } from '@renderer/app/AppErrorBoundary'
 import { WorkflowClientProvider } from '@renderer/features/workflows/client/WorkflowClientContext'
 import { ipcWorkflowClient } from '@renderer/features/workflows/client/IpcWorkflowClient'
 import { startRendererFreezeHeartbeat } from '@renderer/performance/freezeHeartbeat'
+import { installHostGlobal } from '@renderer/apps/api/hostGlobal'
+import { ExtensionHostProvider } from '@renderer/apps/host/ExtensionHostProvider'
+
+// Publish globalThis.__agentCodeHost before ANY extension module can be
+// imported. Extension bundles alias `react` to a shim that reads this object at
+// module-evaluation time, so an extension imported before this ran would throw
+// on its very first import rather than on first render — a failure that would
+// look like a broken extension rather than a host ordering bug.
+installHostGlobal()
 
 void initializePerformance().then(() => {
   mark('app.renderer.reactRenderCalled')
@@ -85,9 +94,17 @@ createRoot(document.getElementById('root')!).render(
     <WorkflowClientProvider value={ipcWorkflowClient}>
       <SessionFeedProvider value={ipcSessionFeed}>
         <GlobalToastProvider>
-          <AppErrorBoundary>
-            <App />
-          </AppErrorBoundary>
+          {/* INSIDE GlobalToastProvider because the extension API's showToast
+              comes from it, and INSIDE AppErrorBoundary's parent so a throw
+              while loading extensions is caught rather than blanking the app.
+              Extensions activate from an effect here, not from bootstrap:
+              blocking the first paint on third-party module evaluation would let
+              one slow extension delay startup for everything. */}
+          <ExtensionHostProvider>
+            <AppErrorBoundary>
+              <App />
+            </AppErrorBoundary>
+          </ExtensionHostProvider>
         </GlobalToastProvider>
       </SessionFeedProvider>
     </WorkflowClientProvider>

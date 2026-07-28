@@ -1,5 +1,7 @@
 import type { PaletteMode } from '@renderer/features/command-palette/paletteMode'
 import type { TabId, SessionId } from '@renderer/workspace/types'
+import type { ExtensionListEntry } from '@shared/types/extensions'
+import type { ExtensionFailure } from '@renderer/apps/host/ExtensionHost'
 
 export type DispatchAttachIntent = {
   sessionId: SessionId
@@ -303,6 +305,43 @@ export type UiShellState = {
    * session.
    */
   agentViewModePickerSessionId: SessionId | null
+  /**
+   * Non-null when a built-in app is open; the value is its `AppDefinition` id.
+   *
+   * WHY one nullable id rather than one boolean per app: apps are mutually
+   * exclusive by construction — a single host surface renders one at a time — and
+   * N booleans would permit two to be true, a state the host physically cannot
+   * express. Same shape and same reasoning as `rewindPromptSessionId` above.
+   *
+   * WHY this is a plain string and not a branded id like SessionId: the value comes
+   * from a compile-time registry today but from a manifest on disk in Stage 2, and
+   * a brand would have to be cast away at exactly the boundary where validation
+   * actually matters. `AppHostSurface` resolves it through `APP_BY_ID` and treats a
+   * miss as closed, which is the real check.
+   *
+   * WHY uiShell (in-memory) and never persisted Settings: an app left open across a
+   * restart is not desirable, and more importantly extension-adjacent data must not
+   * enter the zustand-persist blob — app-state/store.ts records that a forgotten
+   * version bump there black-screened launch twice (#249).
+   */
+  openAppId: string | null
+  /**
+   * Installed extensions, as reported by main's ledger.
+   *
+   * WHY the store and not a module-scope array: the palette, Settings and the
+   * view host must all re-render when an extension is installed or removed, and
+   * a module variable cannot notify them. The previous static `APPS` array was
+   * exactly that mistake — an adversarial audit found it, along with the stale
+   * `APP_BY_ID` map built beside it.
+   *
+   * Holds the MANIFESTS, not loaded modules. Contributions are declared, so this
+   * is enough to populate the palette and Settings without importing a single
+   * extension bundle.
+   */
+  installedExtensions: ExtensionListEntry[]
+  /** Extensions whose import or activate() threw. Surfaced in Settings rather
+   *  than hidden, because a silently-missing extension is undiagnosable. */
+  extensionFailures: ExtensionFailure[]
   /** Session whose Dispatch color-flag picker modal is open, or null. */
   colorFlagPickerSessionId: SessionId | null
   /** Splitter ratio between the dispatch agent list and the active

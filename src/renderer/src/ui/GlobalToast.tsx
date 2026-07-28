@@ -12,6 +12,18 @@ import { createContext, useCallback, useContext, useRef, useState } from 'react'
 // dismiss: warning-grade toasts (hotkey failures) use long durations so
 // the user actually sees them, and a 10-second banner you can't get rid
 // of reads as broken UI — one click clears it early.
+//
+// WHY z-[1200] and not z-50: the toast sat below the Radix dialog scrim
+// (z-[1100], 88% opaque) so any toast raised while a modal was open was
+// washed out to invisibility. That went unnoticed for as long as every caller
+// was non-modal chrome — TileLeaf, SafeInlineCode, SafeMarkdownLink. It broke
+// the moment extensions started toasting from inside a hosted view, where the
+// toast can ONLY fire while a dialog is open, making it hidden 100% of the time.
+//
+// Raising the toast rather than lowering the dialog is the correct direction: a
+// toast is by definition the topmost transient layer, and every existing caller
+// is unaffected by it moving up, whereas lowering the dialog would break the
+// modal stacking the entire surface registry depends on.
 
 type GlobalToastContextValue = {
   showToast: (message: string, durationMs?: number) => void
@@ -54,7 +66,7 @@ export function GlobalToastProvider({ children }: { children: React.ReactNode })
           onClick={dismiss}
           title="Dismiss"
           className="
-            fixed top-3 right-3 z-50
+            fixed top-3 right-3 z-[1200]
             toast-enter
             cursor-pointer
             bg-accent/80 border border-accent/40

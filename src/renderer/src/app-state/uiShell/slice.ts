@@ -50,6 +50,9 @@ export const createUiShellSlice: StateCreator<
   usageModalOpen: false,
   rewindPromptSessionId: null,
   agentViewModePickerSessionId: null,
+  openAppId: null,
+  installedExtensions: [],
+  extensionFailures: [],
   colorFlagPickerSessionId: null,
   // Default keeps the dispatch list at 25% (matching the
   // previous-hardcoded `basis-1/4`) so the migration is visually a
@@ -309,6 +312,14 @@ export const createUiShellSlice: StateCreator<
     set({ rewindPromptSessionId: sessionId }, false, 'uiShell/openRewindPrompt'),
   closeRewindPrompt: () =>
     set({ rewindPromptSessionId: null }, false, 'uiShell/closeRewindPrompt'),
+
+  openApp: appId => set({ openAppId: appId }, false, 'uiShell/openApp'),
+  closeApp: () => set({ openAppId: null }, false, 'uiShell/closeApp'),
+
+  setInstalledExtensions: entries =>
+    set({ installedExtensions: entries }, false, 'uiShell/setInstalledExtensions'),
+  setExtensionFailures: failures =>
+    set({ extensionFailures: failures }, false, 'uiShell/setExtensionFailures'),
 
   openAgentViewModePicker: sessionId =>
     set(
