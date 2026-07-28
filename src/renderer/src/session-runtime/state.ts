@@ -31,7 +31,9 @@ import type {
   WorktreeActivityState,
 } from '@shared/work-context/types'
 import type { ProviderConditionSnapshot } from '@shared/types/providerConditions'
-import type { SessionRecoverFailureCode } from '@shared/types/session'
+import type { SessionRecoverFailureCode,
+  SessionInputReadiness,
+} from '@shared/types/session'
 import type { BuiltInMcpDomain } from '@mcp/shared/types'
 import type { SubAgentState } from '@preload/api/types'
 export type { SubAgentState, SubAgentToolCall } from '@preload/api/types'
@@ -523,6 +525,42 @@ export type SessionRuntime = {
   /** Last main-owned readiness revision applied to this runtime. -1 means no
    * authoritative snapshot/event has arrived yet. */
   inputReadinessRevision: number
+  /**
+   * The advisory reason accompanying the last applied readiness fact.
+   *
+   * Correctness gates on `inputReady` ONLY — this is display and diagnosis.
+   * It exists because a disabled composer with no stated cause is
+   * indistinguishable to the user from a broken app, which is how "the agent
+   * takes minutes to start" became a report with nothing attached to it.
+   *
+   * Known limitation, deliberate: the provider's DETAILED verdict (replay
+   * pending vs composer-unpainted vs human-draft) is collapsed to
+   * 'provider-not-ready' before it leaves main. Recovering that detail here
+   * means widening the SessionInputReadiness contract, which is Tier 3
+   * transport this PR does not touch. The detail is in the lifecycle journal's
+   * `gate.eval` today.
+   */
+  inputReadinessReason: SessionInputReadiness['reason'] | null
+  /**
+   * When the current readiness state began, for the elapsed display.
+   *
+   * This is the field that turns a status into evidence: "starting agent" says
+   * nothing, "starting agent · 94s" says the pane is wedged. Renderer clock,
+   * not a producer timestamp — it measures how long the USER has been looking
+   * at this state, which is exactly the quantity being reported.
+   */
+  inputReadinessChangedAt: number | null
+  /**
+   * When `transcriptStatus` last changed, for the "loading transcript · Ns"
+   * elapsed readout.
+   *
+   * Separate from `inputReadinessChangedAt` because they measure different
+   * things: a pane can sit ready for ten minutes and only then begin a
+   * transcript load. Sharing one clock made that render as "loading transcript
+   * · 10m" immediately — fabricated evidence in the one place (#283) where the
+   * duration is the whole diagnostic.
+   */
+  transcriptStatusChangedAt: number | null
   semantic: SemanticRuntimeState
   /** Current in-feed stream phase. Set by the `stream_phase` reducer
    *  case from SemanticStreamPhaseEvent; additionally set by the
@@ -725,6 +763,9 @@ export function emptyRuntime(): SessionRuntime {
     recoveryFailureCode: null,
     inputReady: false,
     inputReadinessRevision: -1,
+    inputReadinessReason: null,
+    inputReadinessChangedAt: null,
+    transcriptStatusChangedAt: null,
     semantic: emptySemanticRuntime(),
     streamPhase: 'idle',
     streamPhasePendingToolName: null,

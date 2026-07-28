@@ -631,6 +631,14 @@ export function useIpcSubscriptions(
               ...current,
               inputReady: input.ready,
               inputReadinessRevision: input.revision,
+              inputReadinessReason: input.reason ?? null,
+              // Only restamped when the state actually changes, so a repeated
+              // identical verdict does not keep resetting the clock and hide a
+              // long stall behind a permanently small number.
+              inputReadinessChangedAt:
+                current.inputReady === input.ready && current.inputReadinessReason === (input.reason ?? null)
+                  ? current.inputReadinessChangedAt
+                  : Date.now(),
             },
             {
               layer: 'STATE',
@@ -823,6 +831,11 @@ export function useIpcSubscriptions(
               processStatus: 'exited',
               processError: null,
               inputReady: false,
+              // Restamped on exit for the same reason as every other readiness
+              // write: without it the pane would report how long ago the DEAD
+              // backend became ready.
+              inputReadinessReason: null,
+              inputReadinessChangedAt: Date.now(),
               // Clear phase on exit. The WorkIndicator renders
               // nothing for `idle`; letting a pre-exit phase
               // linger would leave the in-feed indicator saying

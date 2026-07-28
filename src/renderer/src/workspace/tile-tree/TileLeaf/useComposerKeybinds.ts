@@ -22,6 +22,7 @@ import { useAppStore } from '@renderer/app-state/hooks'
 import { useSessionFeed } from '@renderer/features/sessionFeed/SessionFeedContext'
 import type { PromptDeliveryResult } from '@shared/types/providerConfig'
 import { draftAfterAcceptance, imagesAfterAcceptance } from './promptDeliveryDraft'
+import { reportLifecycle } from '@renderer/lifecycle/report'
 
 // The big onKeyDown handler for the composer textarea.
 //
@@ -220,6 +221,19 @@ export function useComposerKeybinds({
       : DEFAULT_PROVIDER
     const caps = getRendererProviderCapabilities(submitProvider)
     const baseline = extractAssistantInProgress(screen, submitProvider)
+    // Emitted BEFORE the optimistic streaming state is set, so a recorded
+    // ladder shows the exact ordering that produces the stuck-`Sending` bug:
+    // submit.begin → (optimistic streamPhase 'submitting') → submit.result
+    // ok:false. Today nothing follows that, and the pane counts up forever.
+    const submitStartedAt = Date.now()
+    let sendsThatWrote = 0
+    reportLifecycle('submit.begin', sessionId, {
+      provider: submitProvider,
+      // `source` and NOT `ok`. Every other event uses `ok` for an outcome, so
+      // overloading it here to mean "has images" would have made the summarizer
+      // and any future ok:false filter bucket every image submit as a failure.
+      source: draftImages.length > 0 ? 'with-images' : 'text-only',
+    })
     workspace.setStreamingBaseline(sessionId, baseline)
     if (caps.usesOptimisticUserEcho) {
       // Codex does not reliably give us a structured user
@@ -242,7 +256,23 @@ export function useComposerKeybinds({
         sessionId,
         input,
         draftImages: caps.supportsImageAttachments ? draftImages : [],
-        send,
+        // WHY successful sends are counted rather than trusting the thrown
+        // error: Codex never goes through `deliverPrompt` at all — its submit
+        // is a sequence of raw `send` calls (bracketed paste chunks, then
+        // Enter) that throw plain Errors carrying no write evidence. So the
+        // delivery-result gate below covers Claude and opencode but left the
+        // ENTIRE Codex path unfixed, reproducing the reported bug byte for
+        // byte on a Codex pane.
+        //
+        // A blanket unwind on any plain error would be wrong for the same
+        // reason: if the paste succeeded and only the Enter threw, something
+        // DID reach the provider. `send` throws on failure and returns on
+        // success, so a count of returns is exactly "how many writes landed".
+        send: async (...args: Parameters<typeof send>) => {
+          const result = await send(...args)
+          sendsThatWrote += 1
+          return result
+        },
         deliverPrompt: (prompt, imagePaths) =>
           feed.deliverPrompt(sessionId, prompt, imagePaths, pasteId),
         pasteId,
@@ -276,6 +306,11 @@ export function useComposerKeybinds({
         layer: 'OUTCOME',
         event: 'submit:returned',
       })
+      reportLifecycle('submit.result', sessionId, {
+        provider: submitProvider,
+        ok: true,
+        durationMs: Date.now() - submitStartedAt,
+      })
     } catch (err) {
       // Keep the draft visible if main no longer has a live
       // session for this pane. Clearing the composer on a
@@ -286,6 +321,49 @@ export function useComposerKeybinds({
       }
       const delivery = (err as { promptDeliveryResult?: PromptDeliveryResult })
         .promptDeliveryResult
+      // `bodyWritten`/`enterWritten` are the fields that decide whether this
+      // failure is recoverable. NOTE the rename: the journal's redactor drops
+      // any key matching /prompt|content|text|env|token|secret|key/i, so a
+      // field called `promptWritten` would record NOTHING while looking correct
+      // in review. See the trap comment in @shared/lifecycle/events.
+      // Narrowed once: PromptDeliveryResult is a union and the write-evidence
+      // fields exist only on the failure branch.
+      const failed = delivery && !delivery.ok ? delivery : null
+      // THE UNWIND. Gated on main's own evidence that neither the prompt body
+      // nor Enter reached the provider — not on an inference about why delivery
+      // failed. Nothing written means no turn can start, so the optimistic
+      // `submitting` phase set before the attempt is provably stale and would
+      // otherwise count up forever (see unwindStreamingBaseline for the three
+      // reasons nothing else can clear it).
+      //
+      // The `uncertain` case — something WAS written — is intentionally left
+      // alone: a turn may genuinely be running and unwinding could hide it.
+      // Two independent proofs that nothing reached the provider, one per
+      // submit protocol. Claude/opencode report it in the delivery result;
+      // Codex has no delivery result, so the evidence is that not a single
+      // `send` returned successfully.
+      const nothingWasWritten = failed !== null
+        ? !failed.promptWritten && !failed.enterWritten
+        : sendsThatWrote === 0
+      if (nothingWasWritten) {
+        workspace.unwindStreamingBaseline(sessionId)
+        reportLifecycle('submit.unwound', sessionId, {
+          provider: submitProvider,
+          code: failed?.code ?? 'threw',
+          stage: failed?.stage ?? null,
+          source: failed !== null ? 'delivery-result' : 'no-successful-send',
+        })
+      }
+      reportLifecycle('submit.result', sessionId, {
+        provider: submitProvider,
+        ok: false,
+        code: failed ? failed.code : 'threw',
+        stage: failed ? failed.stage : null,
+        bodyWritten: failed ? failed.promptWritten : null,
+        enterWritten: failed ? failed.enterWritten : null,
+        retryable: failed ? failed.retrySafe : null,
+        durationMs: Date.now() - submitStartedAt,
+      })
       workspace.updateRuntime(sessionId, {
         promptDelivery: delivery && !delivery.ok && !delivery.retrySafe
           ? {

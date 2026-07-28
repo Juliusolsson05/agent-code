@@ -83,7 +83,7 @@ describe('switchAgentProvider', () => {
       targetKind: 'codex',
     })
 
-    expect(ensureSessionLive).toHaveBeenCalledWith('source-pane')
+    expect(ensureSessionLive).toHaveBeenCalledWith('source-pane', 'provider-switch.wake-source')
     expect(switchProvider).toHaveBeenCalledWith({
       sourceKind: 'claude',
       targetKind: 'codex',

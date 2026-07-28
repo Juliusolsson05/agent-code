@@ -10,7 +10,11 @@ import { CodexHeadless, CodexResponsesAdapter, ResponsesProxy } from 'codex-head
 import type { CodexConditionSnapshot, CodexRolloutLine, CodexSemanticEvent } from 'codex-headless'
 import { canonicalizePath, sanitizePathSegment } from '@shared/runtime/projectDir.js'
 import type { BuiltInMcpServerConfig } from '@mcp/shared/types.js'
-import type { AgentInputReadiness, PromptReadinessOutcome } from '@shared/types/session.js'
+import type {
+  AgentInputReadiness,
+  PromptGateState,
+  PromptReadinessOutcome,
+} from '@shared/types/session.js'
 import { isCodexReadyForPromptScreen } from '@providers/codex/runtime/codexReadyForPrompt.js'
 import { addCodexBuiltInMcpLaunchConfig } from '@providers/shared/runtime/builtInMcpLaunch.js'
 
@@ -111,6 +115,13 @@ export type CodexScreenSnapshot = {
 export type CodexSessionEvents = {
   started: [{ projectDir: string; proxyUrl?: string }]
   'input-readiness': [AgentInputReadiness]
+  // Declared, never emitted. This provider latches a coarse ready boolean and
+  // has no equivalent of Claude's detailed gate verdict, but the key must exist
+  // for the session to satisfy AgentSession — the same interface-merging shape
+  // the legacy Claude condition events use. A consumer simply never sees it
+  // fire, which is the honest representation of "this provider cannot tell you
+  // why it isn't ready".
+  'prompt-gate': [PromptGateState]
   'pty-data': [string]
   screen: [CodexScreenSnapshot]
   'jsonl-entry': [CodexRolloutLine, string]

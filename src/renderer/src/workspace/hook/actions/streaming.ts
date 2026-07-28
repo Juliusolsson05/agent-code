@@ -109,6 +109,7 @@ export function codexPromptsMatchForOwnership(
 
 export function useStreamingActions(setRuntimes: WorkspaceSetRuntimes): {
   setStreamingBaseline: (sessionId: SessionId, baseline: string | null) => void
+  unwindStreamingBaseline: (sessionId: SessionId) => void
   clearPendingRewindUndo: (sessionId: SessionId) => void
   addOptimisticCodexUserEntry: (sessionId: SessionId, text: string) => void
   removeOptimisticCodexUserEntry: (sessionId: SessionId, text: string) => void
@@ -132,6 +133,84 @@ export function useStreamingActions(setRuntimes: WorkspaceSetRuntimes): {
             ...current,
             pendingRewindUndo: null,
           },
+        }
+      })
+    },
+    [setRuntimes],
+  )
+
+  /**
+   * Undo the optimistic submit state when the prompt provably never reached the
+   * provider.
+   *
+   * ── THE BUG THIS FIXES ──
+   *
+   * `setStreamingBaseline` sets `streamPhase: 'submitting'` BEFORE the delivery
+   * attempt. When delivery failed, the catch in `useComposerKeybinds` recorded
+   * the failure and showed a toast — but never touched the phase. And nothing
+   * else could: there are exactly three paths back to `'idle'`, and under a
+   * before-write failure none of them can fire.
+   *
+   *   1. `onSessionExit` needs a real exit event. Main holds no registry entry
+   *      to exit — that IS the failure.
+   *   2. `emptyRuntime()` only happens on a fresh runtime, i.e. an agent
+   *      reload. This is why reloading was the only escape.
+   *   3. `reduceStreamPhase` needs a provider semantic event. Nothing was
+   *      written, so none will arrive — and `streamPhaseMachine` deliberately
+   *      refuses to stomp `'submitting'` from screen-derived signals anyway.
+   *
+   * So `WorkIndicator` rendered `Sending` and `useElapsedSeconds` counted up
+   * forever: `Sending · 17s`, `Sending · 4m`, until the agent was reloaded.
+   *
+   * ── WHY THIS IS NOT THE CONDITIONAL TRAP ──
+   *
+   * The repeated failure mode in this subsystem is a guard added to protect one
+   * path becoming the weapon on another (#548's kill-timeout became #596;
+   * TileLeaf's `!inputReady` gate became #598). Both were guards that INFERRED
+   * state. This does not infer: the caller unwinds only when main REPORTS that
+   * neither the body nor Enter was written. Nothing written means no turn can
+   * start, so the optimistic phase is provably a lie — not probably one.
+   *
+   * The `uncertain` case (something WAS written) is deliberately untouched.
+   * There a turn may genuinely be starting and unwinding could hide it.
+   *
+   * Equally deliberate: this does NOT relax the `submitting`/`requesting` guard
+   * in `streamPhaseMachine`. That guard is a shipped regression's tombstone.
+   * The unwind belongs at the site that OWNS the optimistic set.
+   */
+  const unwindStreamingBaseline = useCallback(
+    (sessionId: SessionId) => {
+      setRuntimes(prev => {
+        const current = prev[sessionId]
+        if (!current) return prev
+        // Only unwind what this submit actually set. A provider event that
+        // arrived between the optimistic write and the failure is real, and
+        // stomping it would trade a stuck spinner for a lost turn — the exact
+        // suppress-before-replace shape the rendering pipeline is built to
+        // avoid.
+        if (current.streamPhase !== 'submitting') return prev
+        return {
+          ...prev,
+          [sessionId]: withDerivedSessionStatus(
+            appendFeedDebugLog(
+              {
+                ...current,
+                streamPhase: 'idle',
+                streamPhasePendingToolName: null,
+                streamPhasePendingToolUseId: null,
+                submittedAt: null,
+                turnStartedAt: null,
+                phaseChangedAt: null,
+                awaitingAssistant: false,
+                streamingBaseline: null,
+              },
+              {
+                layer: 'STATE',
+                kind: 'submit',
+                summary: 'submit unwound: nothing was written to the provider',
+              },
+            ),
+          ),
         }
       })
     },
@@ -315,6 +394,7 @@ export function useStreamingActions(setRuntimes: WorkspaceSetRuntimes): {
 
   return {
     setStreamingBaseline,
+    unwindStreamingBaseline,
     clearPendingRewindUndo,
     addOptimisticCodexUserEntry,
     removeOptimisticCodexUserEntry,
