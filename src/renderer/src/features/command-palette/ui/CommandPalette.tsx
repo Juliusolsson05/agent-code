@@ -1,7 +1,7 @@
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import type { AgentProviderKind } from '@shared/types/providerKind'
 import { getProviderFeatures } from '@providers/shared/featureCapabilities'
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 
 import { Button } from '@renderer/components/ui/button'
@@ -26,6 +26,8 @@ import {
 } from '@renderer/features/command-palette/lib/recentCommandHistory'
 import { useGlobalToast } from '@renderer/ui/GlobalToast'
 import { rankCommands } from '@renderer/features/command-palette/lib/rankCommands'
+import { CommandSortControl } from '@renderer/features/command-palette/ui/CommandSortControl'
+import type { CommandSortMode } from '@renderer/features/command-palette/lib/sortCommands'
 import {
   body,
   primary,
@@ -907,9 +909,37 @@ function OpenCommandPalette({
     },
     [commandStarred, setSettings],
   )
-  const filteredCommands = useMemo(
-    () => rankCommands(commands, queryText, historyScoreMap, commandStarred),
-    [commands, queryText, historyScoreMap, commandStarred],
+  // The sort mode is a persisted browse preference, read the same way starring
+  // is — straight from settings, deliberately NOT through `commandContext.flags`.
+  // Same reasoning as the comment above: flags feed the context memo, and
+  // putting a value there that changes on a menu click would rebuild all 99
+  // commands (every function title, every getState, resolveEffectiveKeybindings)
+  // to reorder a list that is already built.
+  const commandSortMode = settings.commandSortMode
+  const setCommandSortMode = useCallback(
+    (next: CommandSortMode) => {
+      setSettings({ commandSortMode: next })
+      // Load-bearing, and for exactly the reason spelled out on the `setQuery`
+      // handler below: a reordering that leaves the LENGTH unchanged is
+      // invisible to both guards. The clamp effect keys on `filteredLength`,
+      // which does not move; the scroll effect keys on `selectedIndex`, which
+      // does not move either. So without this the highlight stays on row N
+      // while row N becomes a completely different command, and Enter runs
+      // something the user never looked at — and the catalog contains
+      // destructive commands.
+      //
+      // Every `enter*Mode` callback resets the index for the same reason. The
+      // sort control was the one reordering path that did not.
+      setSelectedIndex(0)
+    },
+    [setSettings],
+  )
+  // `headers` is the section map for `grouped` mode and empty for every other
+  // mode. It comes back from the SAME call that produced the ordering, so a
+  // header can never be drawn above the wrong row — see `browseOrder`.
+  const { commands: filteredCommands, headers: commandGroupHeaders } = useMemo(
+    () => rankCommands(commands, queryText, historyScoreMap, commandStarred, commandSortMode),
+    [commands, queryText, historyScoreMap, commandStarred, commandSortMode],
   )
   const directAgentTarget = useMemo(
     () => resolveAgentPaneLabel(workspace.state, queryText, workspace.tileTabs),
@@ -930,6 +960,19 @@ function OpenCommandPalette({
     [directAgentCommand, filteredCommands],
   )
 
+  // `commandGroupHeaders` is keyed by index into `filteredCommands`, but the
+  // rendered list is `paletteCommands` — one longer whenever a direct agent
+  // coordinate row is prepended. Shifting the lookup by that offset keeps the
+  // two aligned.
+  //
+  // In practice the two are mutually exclusive: headers exist only for an EMPTY
+  // query, and `resolveAgentPaneLabel` needs a query matching /^[A-Z]+[1-9]\d*$/
+  // to produce a row at all. The offset is here anyway because relying on that
+  // coincidence would put a silent off-by-one behind any future change to
+  // either rule, and the failure mode — every section heading sitting one row
+  // too high — is exactly the kind of thing that ships unnoticed.
+  const directAgentRowOffset = directAgentCommand ? 1 : 0
+
   /**
    * Index of the LAST starred row, so it can carry a rule separating the
    * pinned block from everything else. -1 when no separator should render.
@@ -942,9 +985,16 @@ function OpenCommandPalette({
    *
    * Also -1 when every row is starred or none is, since a separator at the
    * very top or very bottom of the list divides nothing.
+   *
+   * ALSO -1 in `grouped` sort mode, added when sort modes landed: grouped mode
+   * already renders a labelled "★ Starred" section, so the rule would draw a
+   * second, unlabelled divider immediately under a heading that says the same
+   * thing. Headers own the structure in that mode; this separator is the
+   * fallback for the modes that have none.
    */
   const starredBoundaryIndex = useMemo(() => {
     if (queryText.length > 0) return -1
+    if (commandSortMode === 'grouped') return -1
     let starredCount = 0
     for (const command of paletteCommands) {
       if (!commandStarred[command.id]) break
@@ -952,7 +1002,7 @@ function OpenCommandPalette({
     }
     if (starredCount === 0 || starredCount === paletteCommands.length) return -1
     return starredCount - 1
-  }, [commandStarred, paletteCommands, queryText])
+  }, [commandSortMode, commandStarred, paletteCommands, queryText])
 
   const filteredLength =
     mode === 'resume'
@@ -1006,11 +1056,27 @@ function OpenCommandPalette({
 
   useEffect(() => {
     if (!listRef.current) return
-    const el = listRef.current.children[selectedIndex]
+    // Resolve the row by its declared index, NOT by position among the
+    // container's children.
+    //
+    // `children[selectedIndex]` assumed every child of the list is a selectable
+    // row, and that was already false before grouping existed: the
+    // `ai-workspace-open`/`clear` modes render an error banner as a sibling of
+    // the rows, so while an error was showing every scroll target was off by
+    // one. Grouped mode's section headings would have made it wrong in a fourth
+    // mode. An explicit `data-palette-row` makes a row's index part of its
+    // identity, so sibling chrome — banners, headings, anything added later —
+    // can never shift it again.
+    const el = listRef.current.querySelector(`[data-palette-row="${selectedIndex}"]`)
     if (el instanceof HTMLElement) {
       el.scrollIntoView({ block: 'nearest' })
     }
-  }, [selectedIndex])
+    // `paletteCommands` is a dependency, not just `selectedIndex`: switching sort
+    // mode moves the selected row to a different scroll offset (grouped mode
+    // inserts headers, which shifts everything below them) while the index may
+    // be unchanged. Keyed on the index alone, the effect would not re-run and
+    // the highlighted row could sit off-screen with nothing visibly selected.
+  }, [selectedIndex, paletteCommands])
 
   const executeCommand = useCallback(
     (command: ResolvedCommand) => {
@@ -1634,6 +1700,18 @@ function OpenCommandPalette({
               Manage
             </Button>
           )}
+          {/* Commands mode only. The other ten modes render short, intrinsically
+              ordered lists (session recency, buried-at time, [...custom,
+              ...builtin]) where a sort control would be chrome without a
+              purpose — the command list is the only one long enough to be hard
+              to scan. */}
+          {mode === 'commands' && (
+            <CommandSortControl
+              mode={commandSortMode}
+              onChange={setCommandSortMode}
+              searching={queryText.length > 0}
+            />
+          )}
         </div>
 
         <div className="flex-1 min-h-0 flex overflow-hidden">
@@ -1732,56 +1810,85 @@ function OpenCommandPalette({
                   No matching commands
                 </div>
               ) : (
-                paletteCommands.map((command, i) => (
-                  <div
-                    key={command.id}
-                    className={`
-                    flex items-center justify-between
-                    px-3 py-1.5
-                    cursor-pointer
-                    text-[13px] font-code
-                    ${
-                      i === selectedIndex
-                        ? 'bg-row-selected-bg text-row-selected-fg'
-                        : 'text-ink-dim hover:bg-row-hover-bg'
-                    }
-                    ${i === starredBoundaryIndex ? 'border-b border-border' : ''}
-                  `}
-                    onMouseEnter={() => setSelectedIndex(i)}
-                    onClick={() => executeCommand(command)}
-                  >
-                    <div className="min-w-0 flex items-center gap-2">
-                      {/* Marks starred rows in the list itself. Without it the
-                          pinned block at the top looked like an arbitrary
-                          reordering — the star lived only in the detail pane,
-                          so identifying which commands were pinned meant
-                          selecting them one at a time. Fixed-width so titles
-                          stay left-aligned whether or not a row is starred. */}
-                      <span
-                        aria-hidden
-                        className={`w-3 flex-shrink-0 text-center text-[12px] leading-none ${
-                          commandStarred[command.id] ? 'text-accent' : 'text-transparent'
-                        }`}
+                paletteCommands.map((command, i) => {
+                  const groupHeader = commandGroupHeaders.get(i - directAgentRowOffset)
+                  return (
+                    <Fragment key={command.id}>
+                      {groupHeader && (
+                        <div
+                          // A section heading, not a selectable row: `selectedIndex`
+                          // indexes `paletteCommands`, and headings live outside that
+                          // array entirely. Arrow keys, Enter, hover and the clamp
+                          // effect are all untouched by grouping — which is why the
+                          // header map is keyed by command index rather than the list
+                          // being restructured into sections.
+                          //
+                          // Deliberately NOT aria-hidden. Non-selectable is a reason
+                          // to give it no role or tabindex, not a reason to remove it
+                          // from the accessibility tree: grouped mode's entire value
+                          // IS the structure, so hiding the labels would make it
+                          // announce identically to catalog mode.
+                          role="presentation"
+                          className="
+                            px-3 pt-3 pb-1
+                            text-[9px] font-code uppercase tracking-[0.14em] text-muted
+                            first:pt-1
+                          "
+                        >
+                          {groupHeader}
+                        </div>
+                      )}
+                      <div
+                        data-palette-row={i}
+                        className={`
+                        flex items-center justify-between
+                        px-3 py-1.5
+                        cursor-pointer
+                        text-[13px] font-code
+                        ${
+                          i === selectedIndex
+                            ? 'bg-row-selected-bg text-row-selected-fg'
+                            : 'text-ink-dim hover:bg-row-hover-bg'
+                        }
+                        ${i === starredBoundaryIndex ? 'border-b border-border' : ''}
+                      `}
+                        onMouseEnter={() => setSelectedIndex(i)}
+                        onClick={() => executeCommand(command)}
                       >
-                        ★
-                      </span>
-                      {/* The glyph above is aria-hidden because announcing
-                          "star" on all 102 rows is noise. But starred state was
-                          then conveyed only visually, so a screen-reader user
-                          got a list silently reordered for a reason they could
-                          not perceive. This says it once, only where it is
-                          true. */}
-                      {commandStarred[command.id] ? <span className="sr-only">Starred. </span> : null}
-                      <span>{command.title}</span>
-                      {command.state && <CommandStateBadge state={command.state} />}
-                    </div>
-                    {command.shortcut && (
-                      <span className="ml-3 flex-shrink-0 text-[11px] text-muted">
-                        {command.shortcut}
-                      </span>
-                    )}
-                  </div>
-                ))
+                        <div className="min-w-0 flex items-center gap-2">
+                          {/* Marks starred rows in the list itself. Without it the
+                              pinned block at the top looked like an arbitrary
+                              reordering — the star lived only in the detail pane,
+                              so identifying which commands were pinned meant
+                              selecting them one at a time. Fixed-width so titles
+                              stay left-aligned whether or not a row is starred. */}
+                          <span
+                            aria-hidden
+                            className={`w-3 flex-shrink-0 text-center text-[12px] leading-none ${
+                              commandStarred[command.id] ? 'text-accent' : 'text-transparent'
+                            }`}
+                          >
+                            ★
+                          </span>
+                          {/* The glyph above is aria-hidden because announcing
+                              "star" on all 102 rows is noise. But starred state was
+                              then conveyed only visually, so a screen-reader user
+                              got a list silently reordered for a reason they could
+                              not perceive. This says it once, only where it is
+                              true. */}
+                          {commandStarred[command.id] ? <span className="sr-only">Starred. </span> : null}
+                          <span>{command.title}</span>
+                          {command.state && <CommandStateBadge state={command.state} />}
+                        </div>
+                        {command.shortcut && (
+                          <span className="ml-3 flex-shrink-0 text-[11px] text-muted">
+                            {command.shortcut}
+                          </span>
+                        )}
+                      </div>
+                    </Fragment>
+                  )
+                })
               ))}
 
             {mode === 'resume' &&
@@ -1807,6 +1914,7 @@ function OpenCommandPalette({
                         : 'text-ink-dim hover:bg-row-hover-bg'
                     }
                   `}
+                    data-palette-row={i}
                     onMouseEnter={() => setSelectedIndex(i)}
                     onClick={() => executeResume(session)}
                   >
@@ -1847,6 +1955,7 @@ function OpenCommandPalette({
                       <button
                         type="button"
                         key={workspace.workspaceId}
+                        data-palette-row={i}
                         disabled={aiWorkspacePending !== null}
                         className={`
                           block w-full border-b border-border px-3 py-2 text-left last:border-b-0
@@ -1938,6 +2047,7 @@ function OpenCommandPalette({
                         : 'text-ink-dim hover:bg-row-hover-bg'
                     }
                   `}
+                    data-palette-row={i}
                     onMouseEnter={() => setSelectedIndex(i)}
                     onClick={() => executeBuried(item)}
                   >
@@ -1967,6 +2077,7 @@ function OpenCommandPalette({
                         : 'text-ink-dim hover:bg-row-hover-bg'
                     }
                   `}
+                    data-palette-row={i}
                     onMouseEnter={() => setSelectedIndex(i)}
                     onClick={() => executeKillBuried(item)}
                   >
@@ -1998,6 +2109,7 @@ function OpenCommandPalette({
                         : 'text-ink-dim hover:bg-row-hover-bg'
                     }
                   `}
+                    data-palette-row={i}
                     onMouseEnter={() => setSelectedIndex(i)}
                     onClick={() => void executePromptTemplate(template)}
                   >

@@ -1,5 +1,10 @@
 import type { ResolvedCommand } from '@renderer/features/command-palette/types'
 import { primary, rankEntries, secondary } from '@renderer/features/command-palette/lib/rankEntries'
+// EMPTY_HEADERS is shared rather than re-declared: search results are never
+// sectioned either, and headers describe a browse structure a relevance-ordered
+// list does not have.
+import { browseOrder, EMPTY_HEADERS } from '@renderer/features/command-palette/lib/sortCommands'
+import type { BrowseOrder, CommandSortMode } from '@renderer/features/command-palette/lib/sortCommands'
 
 // rankCommands — the ordering function for the command-palette's command
 // list specifically. The generic relevance machinery now lives in
@@ -28,8 +33,15 @@ import { primary, rankEntries, secondary } from '@renderer/features/command-pale
 //
 // Empty-query behavior (registry order, no history reordering) also lives in
 // `rankEntries` now, for the same reason it did here: the palette's resting
-// state must not shuffle. Starred commands are the ONE documented exception —
-// see the WHY on the partition below before assuming that is a bug.
+// state must not shuffle by itself. Two documented exceptions, both of which
+// are the user asking for it rather than the app deciding on its own:
+//
+//   1. STARRED commands hoist to the top — see the WHY on the partition below.
+//   2. The SORT MODE (`sortCommands.ts`) reorders the browse list on request.
+//
+// Neither can touch a SEARCH result. Both are applied only on the empty-query
+// path, below the `query.length > 0` early return, which is what keeps "a text
+// match always beats every other signal" true.
 
 // Re-exported because the palette's other call sites import `fuzzyMatch`
 // from here. Its real definition — and the warning about never running it
@@ -53,7 +65,8 @@ export function rankCommands(
   query: string,
   historyScore: Map<string, number>,
   starred: Record<string, boolean>,
-): ResolvedCommand[] {
+  sortMode: CommandSortMode = 'catalog',
+): BrowseOrder {
   const ranked = rankEntries(
     commands,
     query,
@@ -61,13 +74,24 @@ export function rankCommands(
     command => (starred[command.id] ? STAR_WEIGHT : 0) + (historyScore.get(command.id) ?? 0),
   )
 
-  if (query.length > 0) return ranked
+  // THE INVARIANT, and the reason `sortMode` is not consulted anywhere above:
+  // a non-empty query is answered by relevance alone. The sort mode governs the
+  // BROWSE state only.
+  //
+  // This is not a limitation waiting to be lifted. Applying a sort to search
+  // results would let 'A – Z' place a tier-1 subsequence match above the tier-5
+  // prefix match the user typed in full — the exact inversion class that
+  // `rankEntries` was extracted to eliminate (see the plan doc referenced in
+  // its header). The control in the header shows "Relevance" and disables
+  // itself while a query is present, so this is legible to the user rather than
+  // looking like the setting stopped working.
+  if (query.length > 0) return { commands: ranked, headers: EMPTY_HEADERS }
 
   // Empty query needs its own handling, because `rankEntries` short-circuits
   // and returns the input verbatim WITHOUT sorting — so the extraTiebreak
   // above is dead here.
   //
-  // WHY the partition lives in this adapter and not in `rankEntries`: five
+  // WHY the star partition lives in this adapter and not in `rankEntries`: five
   // lists share that short-circuit (commands, prompt templates, sessions,
   // buried tabs, AI workspaces). Editing it would silently reshuffle four
   // resting orders nobody asked to change.
@@ -80,10 +104,11 @@ export function rankCommands(
   // the list, so the top row moving is precisely what they asked for. DO NOT
   // "fix" this back to match the sibling rule without reading this paragraph.
   //
-  // Two filter passes rather than a sort: this is a STABLE partition, so
-  // catalog registration order is preserved within each half — and that order
-  // is a declared user-visible invariant (catalog.ts).
-  const starredRows = ranked.filter(command => starred[command.id])
-  if (starredRows.length === 0) return ranked
-  return [...starredRows, ...ranked.filter(command => !starred[command.id])]
+  // The partition itself now lives in `browseOrder`, which owns every
+  // browse-state ordering decision (star split, the four sort modes, and the
+  // section headers that must stay in lockstep with the flat order). It still
+  // preserves catalog registration order within each half when the mode is
+  // 'catalog' — that order is a declared user-visible invariant (catalog.ts)
+  // and remains the default.
+  return browseOrder(ranked, sortMode, historyScore, starred)
 }

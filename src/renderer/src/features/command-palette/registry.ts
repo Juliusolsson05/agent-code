@@ -170,6 +170,14 @@ export function buildCommandRegistry(ctx: CommandContext): ResolvedCommand[] {
         title: typeof command.title === 'function' ? command.title(ctx) : command.title,
         description,
         surface: command.surface,
+        // Carried through so the palette's `grouped` sort mode can section the
+        // list by the taxonomy that was DESIGNED for user-facing grouping.
+        // Grouping by `surface` instead is the exact conflation `CommandCategory`
+        // was introduced to undo (see its doc comment): `surface` answers "does
+        // this concept exist in the current layout", which is a machine
+        // applicability question, and reusing it as a presentation axis means a
+        // command cannot be reclassified without changing when it applies.
+        category: command.category,
         // The FIRST effective binding, in display form. A command may have
         // several (Close Pane has Cmd+W and Alt+W); the row shows one, and the
         // first is the primary by declaration order. Undefined when the command
