@@ -122,6 +122,33 @@ function ensureListener(): void {
   document.addEventListener('keydown', keydownListener)
 }
 
+/**
+ * Submit the composer the Enter router would have submitted, from a command.
+ *
+ * WHY this lives here rather than on `workspace`: `submit` is owned by the
+ * registered handle, not by the store — TileLeaf builds it from
+ * `submitCurrentDraft`, which closes over provider capabilities, the
+ * optimistic-echo rollback and the in-flight latch. Re-deriving any of that in
+ * a command would be a second submit path, which is the class of bug the whole
+ * registry exists to prevent.
+ *
+ * Deliberately reuses `pickTarget()` unchanged, so a command submits the SAME
+ * composer a bare Enter would have: hovered wins over focused, and an empty
+ * hovered composer resolves to nothing rather than falling through to some
+ * other pane. A command that picked differently from Enter would be a subtly
+ * different feature wearing the same name.
+ *
+ * Returns false when there was nothing to submit, so the caller can stay quiet
+ * instead of reporting a success that did not happen.
+ */
+export function submitActiveComposer(): boolean {
+  const target = pickTarget()
+  if (!target) return false
+  target.focus()
+  target.submit()
+  return true
+}
+
 export function registerComposerEnterTarget(
   handle: ComposerEnterTargetHandle,
 ): () => void {

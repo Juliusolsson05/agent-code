@@ -1,7 +1,27 @@
 # Composer Commands (Clear / Send) Implementation Plan
 
-> **Status:** PROPOSED — awaiting two product decisions (Q1, Q2 below). No
-> implementation has started. Ships in PR #619 alongside the star-visibility fix.
+> **Status:** IMPLEMENTED in PR #619. Both open questions were resolved in
+> favour of the recommendations below: **no Mouse Mode gate** (Q1) and
+> **undoable clear** (Q2).
+>
+> **Where the implementation differs from this plan:**
+>
+> - **Undo is a third COMMAND, not an action inside the pane toast.**
+>   `PaneToast` renders text only — it has no action slot — so an in-toast Undo
+>   would have meant a new UI primitive plus storing a callback in runtime
+>   state. `undo-close` is the existing precedent for a reversible destructive
+>   action, and it is a command. So: `undo-clear-composer`.
+> - **The stash lives in module state in `actions/draft.ts`, not on
+>   `SessionRuntime`.** Nothing renders from it, so putting it on the runtime
+>   would add a field every reducer, debug bundle and replay fixture carries for
+>   a value the UI never reads.
+> - **`undo-clear-composer` ships with no `when` guard**, mirroring
+>   `undo-close`. A guard would have to read that module state, which the
+>   command registry does not re-derive on, so it would go stale.
+> - **Undo restores text only, not attached images.** Re-inserting images could
+>   resurrect one the user deliberately removed in the same gesture.
+> - Three commands were added, so `catalog.test.ts` moved 99 → 102 across its
+>   ordered snapshot, its length assertion, and both arithmetic assertions.
 
 **Goal:** Give the composer two palette-reachable actions — clear the draft, and send it — so a user driving Agent Code with a mouse can undo a mistyped prompt and submit without reaching for the keyboard.
 

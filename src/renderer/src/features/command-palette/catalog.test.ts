@@ -64,6 +64,9 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   'toggle-tail-all',
   'jump-latest-message',
   'copy-last-assistant',
+  'clear-composer',
+  'undo-clear-composer',
+  'send-composer',
   // layoutCommands (8, was 9: toggle-status-mode retired)
   'dispatch-mode',
   'global-dispatch',
@@ -170,12 +173,12 @@ const NAVIGATION_COMMAND_GROUP: readonly string[] = [
 const ids = (): string[] => builtInCommandCatalog.map(c => c.id)
 
 describe('built-in command catalog — baseline characterization', () => {
-  it('contains exactly the 99 governed commands in registration order', () => {
+  it('contains exactly the 102 governed commands in registration order', () => {
     // Order matters: this is the palette's empty-query browse order.
     expect(ids()).toEqual([...BASELINE_COMMAND_IDS])
   })
 
-  it('has exactly 99 commands', () => {
+  it('has exactly 102 commands', () => {
     // Stated separately from the order assertion because this number is the
     // thing that moves, and a bare count failure is a clearer signal than a
     // 99-line array diff.
@@ -183,7 +186,7 @@ describe('built-in command catalog — baseline characterization', () => {
     // 102 baseline → 98 after governance (5 retirements, 1 addition) → 99 with
     // `open-keyboard-shortcuts`. Each step of that arithmetic was a deliberate
     // edit to this line, which is the entire point of pinning it.
-    expect(builtInCommandCatalog).toHaveLength(99)
+    expect(builtInCommandCatalog).toHaveLength(102)
   })
 
   it('reports no structural defects', () => {
@@ -218,7 +221,7 @@ describe('generated per-provider split commands', () => {
     // modules. At the original baseline this read 102 - 4 = 98; it moved by the
     // five retirements, then by the two additions (open-command-palette,
     // open-keyboard-shortcuts).
-    expect(builtInCommandCatalog.length - nonDefaultProviders.length * 2).toBe(95)
+    expect(builtInCommandCatalog.length - nonDefaultProviders.length * 2).toBe(98)
   })
 
   it('emits both directions for every non-default provider', () => {
@@ -321,8 +324,8 @@ describe('governance targets', () => {
     // real catalog rather than trusted as prose. The additions are
     // `open-command-palette` (governance: the palette could not be rebound
     // because it had no command id) and `open-keyboard-shortcuts`.
-    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 2).toBe(102)
-    expect(builtInCommandCatalog).toHaveLength(99)
+    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 2).toBe(105)
+    expect(builtInCommandCatalog).toHaveLength(102)
   })
 })
 

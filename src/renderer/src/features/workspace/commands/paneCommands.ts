@@ -16,6 +16,7 @@ import {
 import { resolveDispatchAttachTarget } from '@renderer/workspace/dispatch/dispatchTarget'
 import { dispatchFocusedSessionId } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
+import { submitActiveComposer } from '@renderer/workspace/tile-tree/TileLeaf/composerEnterRegistry'
 
 /**
  * Buried panes visible from the CURRENT tab.
@@ -586,6 +587,74 @@ export const paneCommands: CommandDef[] = [
         void navigator.clipboard.writeText(text)
         workspace.showPaneToast(sessionId, 'Copied to clipboard')
       }
+    },
+  },
+  {
+    id: 'clear-composer',
+    category: 'session',
+    surface: 'session',
+    title: 'Clear Composer',
+    description:
+      '**What it does:** Empties the composer draft for the focused agent.\n\n**Use when:** You typed or dictated something you want to start over from — with a mouse there is no select-all-and-delete.\n\n**Notes:** Reversible with **Undo Clear Composer**. Attached images are removed but not restored by the undo.',
+    keywords: ['clear', 'composer', 'draft', 'erase', 'reset', 'prompt', 'delete'],
+    // Terminals have no composer draft — their input goes straight to the PTY —
+    // so offering this on a shell row would imply a draft that cannot exist.
+    // Same reasoning as copy-last-assistant above.
+    when: ({ workspace }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return false
+      return workspace.state.sessions[sessionId]?.kind !== 'terminal'
+    },
+    run: ({ workspace }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return
+      // Silence on a no-op is deliberate: `clearDraft` returns false when the
+      // composer was already empty, and toasting "Cleared" at someone who
+      // cleared nothing is noise.
+      if (workspace.clearDraft(sessionId)) {
+        workspace.showPaneToast(sessionId, 'Composer cleared · Undo Clear Composer to restore')
+      }
+    },
+  },
+  {
+    id: 'undo-clear-composer',
+    category: 'session',
+    surface: 'session',
+    title: 'Undo Clear Composer',
+    description:
+      '**What it does:** Restores the draft removed by the last **Clear Composer** in this agent.\n\n**Use when:** You cleared the composer by mistake.\n\n**Notes:** Text only — attached images are not restored. Survives further typing, so it is still available after you start over.',
+    keywords: ['undo', 'restore', 'composer', 'draft', 'clear', 'recover'],
+    // NO `when` guard, matching `undo-close`: the stash lives in module state
+    // that the command registry does not re-derive on, so a guard reading it
+    // would go stale. `undoClearDraft` returns false when there is nothing to
+    // restore and the command stays quiet.
+    run: ({ workspace }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return
+      if (workspace.undoClearDraft(sessionId)) {
+        workspace.showPaneToast(sessionId, 'Draft restored')
+      }
+    },
+  },
+  {
+    id: 'send-composer',
+    category: 'session',
+    surface: 'session',
+    title: 'Send Prompt',
+    description:
+      '**What it does:** Submits the composer draft for the focused agent, exactly as pressing Enter would.\n\n**Use when:** You are driving with a mouse, or you want the action bound to a shortcut of your own.\n\n**Notes:** Targets the same composer bare Enter would — the hovered one if the pointer is over a composer, otherwise the focused one. Does nothing when there is no submittable draft.',
+    keywords: ['send', 'submit', 'prompt', 'composer', 'enter', 'go'],
+    when: ({ workspace }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return false
+      return workspace.state.sessions[sessionId]?.kind !== 'terminal'
+    },
+    // Routed through the Enter registry rather than reimplemented: `submit` is
+    // built from `submitCurrentDraft`, which owns provider capability dispatch,
+    // the optimistic-echo rollback and the in-flight latch. A second submit
+    // path is the exact class of bug that registry exists to prevent.
+    run: () => {
+      submitActiveComposer()
     },
   },
 ]
