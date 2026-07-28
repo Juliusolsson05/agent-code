@@ -49,13 +49,30 @@ to be insufficient, filtering is a separate, later change.
 |---|---|---|
 | `catalog` | Catalog registration order (today's behavior) | the existing muscle memory; the default |
 | `alpha` | Title, `localeCompare` | "I know the name, I just can't spot it" |
-| `grouped` | By `surface`, section headers, alphabetical within group | **browsing / discovery** — the actual reported pain |
+| `grouped` | By `category`, section headers, alphabetical within group | **browsing / discovery** — the actual reported pain |
 | `recent` | History score DESC, then catalog order | muscle memory, made explicit |
 
-`grouped` is the one that motivated the feature. `surface` is already mandatory
-on every `CommandDef` (`docs/command-style.md` rule 10) and is already carried
-through to `ResolvedCommand` *specifically* so consumers can group by it —
-`types.ts` says so in as many words. The data model has been waiting for this UI.
+`grouped` is the one that motivated the feature.
+
+**Grouping keys on `CommandCategory`, not `CommandSurface`.** The first
+implementation used `surface` and that was wrong on both counts:
+
+- *Correctness.* `CommandCategory`'s doc comment records that `surface` is a
+  MACHINE applicability dimension driving mode gating, and that reading it as a
+  category is a conflation the codebase already paid for once in the Settings
+  list — "once one field means both, you cannot reclassify a command's
+  presentation without changing when it applies."
+- *Fitness.* By surface the buckets are app 41 / dispatch 34 / session 32 /
+  grid 11 / debug 11 / editor 9, and since grid and dispatch are mutually
+  exclusive one section holds ~40% of the visible list — barely a narrowing. By
+  category they are session 24 / layout-dispatch 16 / navigate 12 /
+  developer 12 / workspace-tools 11 / editor-files 10 / create 10 /
+  preferences 3.
+
+`category` is optional on `CommandDef` until the governance migration completes,
+and extension-contributed commands cannot declare one, so uncategorized rows get
+a trailing **Other** section rather than being silently dropped from the one
+mode built for discovery.
 
 ### 2.2 The cardinal rule is preserved
 
@@ -132,14 +149,19 @@ With a query present:
 
 ```
 ║  ── ★ STARRED ──────────────────                              ║
-║    Reader Mode                ⟨ON⟩     ⌘⇧R                    ║
-║  ── APP ────────────────────────                              ║
+║  ★ Reader Mode                ⟨ON⟩     ⌘⇧R                    ║
+║  ── CREATE ─────────────────────                              ║
+║    New Agent…                          ⌘N                     ║
 ║    New Tab                             ⌘T                     ║
-║    Open Settings                       ⌘,                     ║
 ║  ── SESSION ────────────────────                              ║
 ║    Reload Agent                                               ║
 ║    Rewind to Prompt…                                          ║
 ```
+
+The `★` column and the starred-block divider come from the starring feature
+(#619) and are preserved: in `grouped` mode the divider is suppressed, because a
+labelled `★ Starred` heading already says what the unlabelled rule was there to
+imply.
 
 The control sits in the same header slot `Manage` already occupies in
 `prompt-template` mode, so no new layout geometry is introduced.
@@ -156,16 +178,17 @@ Pure, no React, no storage, no `Date.now()` — same contract as its neighbours
 ```ts
 export type CommandSortMode = 'catalog' | 'alpha' | 'grouped' | 'recent'
 
-sortCommands(commands, mode, historyScore): ResolvedCommand[]
+browseOrder(commands, mode, historyScore, starred): BrowseOrder
 groupCommands(commands, starred): CommandGroup[]   // grouped mode only
 ```
 
 `groupCommands` returns `{ label, commands }[]`, so the component renders
-headers without knowing the surface taxonomy. Group order is fixed and
+headers without knowing the category taxonomy. Group order is fixed and
 declared in the module:
 
 ```
-★ STARRED · APP · SESSION · GRID · DISPATCH · EDITOR · DEBUG
+★ Starred · Create · Navigate · Session · Layout & Dispatch ·
+Editor & Files · Workspace Tools · Preferences · Developer · Other
 ```
 
 `grid` and `dispatch` are mutually exclusive at runtime (`surfaceAvailable` in
@@ -242,10 +265,32 @@ Focus discipline, which is the whole difficulty:
 - `onMouseDown` → `preventDefault()` on the button and every menu item, so the
   search input **never loses focus**. Typing immediately after picking a sort
   must work.
-- Escape closes the menu and **must not** close the Dialog — `stopPropagation`
-  on the menu's key handler, since the palette's own `onEscapeKeyDown` ladder
-  owns Escape at the Dialog level.
 - Click-outside closes, via a `pointerdown` listener on `document` while open.
+  `pointerdown` rather than `click`, so a press landing on a palette row closes
+  the menu before that row's command can run.
+- **All menu keys are handled on `document` in the CAPTURE phase.**
+
+That last point was the design's one real mistake, caught in review. The first
+implementation put a React `onKeyDown` on the control's root — which is
+unreachable dead code, because `keepFocusInSearchInput` guarantees focus never
+enters the subtree, and the search input is a *sibling* of the control, not a
+descendant. Three keys went to the wrong widget:
+
+| Key | Where it actually went |
+|---|---|
+| Escape | Radix's dismiss handler — **closed the whole palette** |
+| ↑ / ↓ | moved the selection in the list *behind* the open menu |
+| Enter | ran `paletteCommands[selectedIndex]` from that hidden list |
+
+Capture-phase on `document` beats both competitors: React 18 delegates synthetic
+events to the root container (a descendant of `document`, so later), and Radix's
+dismiss layer listens on `document` in the bubble phase (later still). One
+listener therefore fixes all three, and makes the menu genuinely keyboard-operable
+— which its ARIA roles were already promising.
+
+The keyboard cursor is component state, not DOM focus, so the highlight is
+painted from `highlighted` rather than `:focus`; hover writes to the same state,
+exactly as the palette's own rows do.
 
 ---
 
@@ -258,7 +303,10 @@ Focus discipline, which is the whole difficulty:
 | `lib/rankCommands.ts` | mode param; sort inside each star partition |
 | `lib/rankCommands.test.ts` | **new** — star × sort composition, query-wins invariant |
 | `ui/CommandSortControl.tsx` | **new** — button + popover |
+| `ui/CommandSortControl.renderer.test.tsx` | **new** — the keyboard contract |
 | `ui/CommandPalette.tsx` | wire control, render group headers, `data-palette-row`, scroll fix |
+| `registry.ts` | carry `category` through to `ResolvedCommand` |
+| `types.ts` | `ResolvedCommand.category`; note that `surface` is not a grouping axis |
 | `app-state/settings/types.ts` | `commandSortMode` field + default |
 | `app-state/settings/persistence.ts` | `coerceCommandSortMode` |
 
@@ -275,17 +323,30 @@ tests are pure:
 - `recent` puts history-scored commands first, unscored keep catalog order.
 - `grouped` emits groups in the declared fixed order, drops empty groups,
   sorts alphabetically within a group.
-- `grouped` emits `★ STARRED` first and only when something is starred.
+- `grouped` emits `★ Starred` first and only when something is starred.
+- `grouped` keys on **category, not surface** — every fixture shares one
+  surface, so a regression to the old axis collapses them into one section.
+- Uncategorized commands land in a trailing `Other` section rather than
+  vanishing.
 
 **`rankCommands.test.ts`**
-- **The invariant:** a non-empty query ignores sort mode entirely — a tier-5
-  prefix match stays first under every one of the four modes.
+- **The invariant:** a non-empty query ignores sort mode entirely — results are
+  asserted *byte-identical* across all four modes, not merely "the winner stayed
+  on top".
 - Starred commands stay partitioned above unstarred under every mode.
 - Sorting applies within both partitions, not across them.
 
-No renderer test for the popover. The behavior worth pinning (ordering) is pure
-and covered above; a happy-dom test asserting that a menu opens on click would
-pin the implementation, not the contract.
+**`CommandSortControl.renderer.test.tsx`**
+
+This file exists because the plan originally declined it, and review found
+exactly what that let through. The reasoning — "a test asserting a menu opens on
+click pins the implementation, not the contract" — was right about *opening* and
+wrong about *keys*: Escape closing the whole palette, and ↑/↓/Enter driving the
+list behind an open menu, are contract violations a user can observe.
+
+The tests reproduce the real DOM relationship (search input as a **sibling** of
+the control, focus in the input) and assert behavior, not structure. All of them
+fail against the pre-review implementation.
 
 ---
 
