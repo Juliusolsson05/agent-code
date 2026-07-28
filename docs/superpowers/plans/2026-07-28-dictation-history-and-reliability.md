@@ -63,11 +63,13 @@ history and Zustand state does not survive a reinstall.
 
 ## 1. Global constraints
 
-- **No new test files in this PR.** Standing repo preference: feature/fix PRs
-  do not add test files or wire new `test:*` scripts; a test-cleanup PR is
-  planned separately. Where a behavior *would* deserve a spec, the task says so
-  explicitly so the cleanup PR inherits the list. Adding cases to an
-  *existing* colocated test file is fine and is called out where it applies.
+- **Tests are expected, and they go beside their source.** `foo.ts` →
+  `foo.test.ts`, per `testing/README.md`; `testing/` is only for what cannot be
+  colocated. Filenames pick the Vitest project: `*.test.ts` → `unit` (node),
+  `*.renderer.test.tsx` → `renderer` (happy-dom). The §2 fix in particular
+  should be pinned by a spec — it is a silent data-loss bug that a reader could
+  plausibly "simplify" back in, and a comment alone has already failed to
+  prevent that once.
 - **Comment policy** (`CLAUDE.md`): thick WHY comments. Every non-obvious guard
   in this plan exists because of a specific recorded failure — say which one.
   The §2 fix in particular MUST carry the evidence in a comment, or the next
@@ -230,12 +232,13 @@ The fix is one line in each of two files, so the risk is not "does it compile"
 3. **Re-run the corpus script** in §5 against the journal directory; the
    `first sent idx` column must read `0` for every session including cold ones.
 
-> **Would deserve a test (for the cleanup PR):** a renderer spec feeding a
-> synthetic `dataavailable` sequence `[1, 3074, 2100]` bytes through the hook
-> and asserting main receives all three in order with byte-exact totals. The
-> existing colocated file `TileLeaf/inputOwnership.renderer.test.tsx` is the
-> natural home; adding a case there is permitted under §1 if you prefer to
-> pin it now.
+4. **Pin it with a spec.** Feed a synthetic `dataavailable` sequence of
+   `[1, 3074, 2100]` bytes through the hook and assert main receives all three
+   in order, with byte-exact totals and `chunkIndex` starting at `0`. Assert on
+   the *bytes delivered*, not on "a chunk was sent" — an existence-only
+   assertion passes while the leading byte is missing, which is exactly how
+   this shipped. `TileLeaf/inputOwnership.renderer.test.tsx` is the natural
+   neighbour; a new `useComposerDictation.renderer.test.tsx` is equally fine.
 
 ---
 
