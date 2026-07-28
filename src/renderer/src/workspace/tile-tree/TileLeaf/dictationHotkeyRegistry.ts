@@ -1,6 +1,14 @@
 import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
 
-// Single shared dispatcher for the native dictation hotkey.
+// Single shared dispatcher for every dictation hold, whatever triggered it.
+//
+// Two trigger sources feed this module today: the native keyboard hotkey
+// (main-process IPC, global reach) and the in-app mouse button
+// (features/voice-dictation/useDictationMouseTrigger.ts, renderer DOM,
+// focused-app reach). They share `beginDictationHold`/`endDictationHold`
+// below rather than each implementing target selection — a second copy of
+// that policy would drift, and the failure mode is the ugly one: two
+// sources each believing they own the same recording.
 //
 // Why this module exists at all:
 // useComposerDictation used to subscribe to onDictationHotkeyDown/Up directly.
@@ -50,38 +58,61 @@ type Subscriptions = {
 
 const targets = new Set<DictationTargetHandle>()
 let dispatcherSubs: Subscriptions | null = null
-// Captured at down time so the up event always reaches the same target —
+// Captured at press time so the release always reaches the same target —
 // even if focus moved or another composer mounted between press and release.
-let activeTargetForKeyHold: DictationTargetHandle | null = null
+// Shared by BOTH trigger sources (native keyboard hotkey and the in-app
+// mouse button) on purpose: only one dictation can be live at a time, so a
+// single ownership slot is the correct model. If both are somehow held at
+// once, the first release wins and stops the recording — biasing toward
+// stopping is deliberate (see endDictationHold below).
+let activeTargetForHold: DictationTargetHandle | null = null
+
+/**
+ * Begin a dictation hold from any trigger source.
+ *
+ * WHY this is exported rather than inlined in the IPC callback: the in-app
+ * mouse trigger must make the SAME decisions — the interaction-owner gate,
+ * the focused-else-most-recently-focused target pick, and the ownership
+ * capture below. One decision point, two callers.
+ */
+export const beginDictationHold = (): void => {
+  // Trigger events bypass the DOM's focus model entirely, so a focus trap or
+  // a pointer-inert overlay cannot protect the composer. Consult the same
+  // synchronous ownership contract as DOM input before choosing a target.
+  if (hasAppInteractionOwner()) return
+  const target = pickTarget()
+  if (!target) return
+  activeTargetForHold = target
+  target.start()
+}
+
+/**
+ * End a dictation hold from any trigger source.
+ *
+ * Deliberately does NOT consult `hasAppInteractionOwner()`. If a dialog opens
+ * while the user is mid-hold, the release must still stop the recording that
+ * already took ownership of the press — otherwise the mic stays open with no
+ * surface able to close it. Every release path in this subsystem biases
+ * toward stopping for that reason.
+ */
+export const endDictationHold = (): void => {
+  // Hand the release to whatever target consumed the press, even if it is no
+  // longer the focused leaf. A user can press, click somewhere else, then
+  // release — the release must still stop the original recording. If no
+  // target took ownership of the press (e.g. the trigger fired with zero
+  // registered tiles), look up the current best target as a fallback to
+  // drain any latent starting state.
+  const target = activeTargetForHold ?? pickTarget()
+  activeTargetForHold = null
+  if (!target) return
+  if (target.isActive() || target.isStarting()) target.stop()
+}
 
 const ensureDispatcher = (): void => {
   if (dispatcherSubs) return
   dispatcherSubs = {
-    offDown: window.api.onDictationHotkeyDown(() => {
-      // Native hotkey events bypass the DOM entirely, so a focus trap or
-      // pointer-inert overlay cannot protect the composer. Consult the same
-      // synchronous ownership contract as DOM input before choosing a target.
-      // Key-up intentionally does NOT share this early return: if a dialog
-      // opens while the user is holding Fn, release must still stop the
-      // recording that already took ownership of the press.
-      if (hasAppInteractionOwner()) return
-      const target = pickTarget()
-      if (!target) return
-      activeTargetForKeyHold = target
-      target.start()
-    }),
-    offUp: window.api.onDictationHotkeyUp(() => {
-      // Hand the release to whatever target consumed the press, even if it
-      // is no longer the focused leaf. A user can press Fn, click somewhere
-      // else, then release — the release must still stop the original
-      // recording. If no target took ownership of the press (e.g. the
-      // hotkey fired with zero registered tiles), look up the current best
-      // target as a fallback to drain any latent starting state.
-      const target = activeTargetForKeyHold ?? pickTarget()
-      activeTargetForKeyHold = null
-      if (!target) return
-      if (target.isActive() || target.isStarting()) target.stop()
-    }),
+    offDown: window.api.onDictationHotkeyDown(beginDictationHold),
+    offUp: window.api.onDictationHotkeyUp(endDictationHold),
   }
 }
 
@@ -112,7 +143,7 @@ export const registerDictationTarget = (
   ensureDispatcher()
   return () => {
     targets.delete(handle)
-    if (activeTargetForKeyHold === handle) activeTargetForKeyHold = null
+    if (activeTargetForHold === handle) activeTargetForHold = null
     teardownDispatcherIfIdle()
   }
 }
