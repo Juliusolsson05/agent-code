@@ -12,6 +12,7 @@ import { useDebugAutosave } from '@renderer/features/debug/useDebugAutosave'
 import { useCaffeinateSync } from '@renderer/features/caffeinate/useCaffeinateSync'
 import { useDictationHotkeySync } from '@renderer/features/voice-dictation/useDictationHotkeySync'
 import { useDictationMouseTrigger } from '@renderer/features/voice-dictation/useDictationMouseTrigger'
+import { useMouseChordPalette } from '@renderer/features/command-palette/useMouseChordPalette'
 import { usePathPickerRequests } from '@renderer/features/path-picker/usePathPickerRequests'
 import { useSelectionCapture } from '@renderer/features/reply-to-selection/useSelectionCapture'
 import { GlobalModals } from '@renderer/app/surfaces/GlobalModals'
@@ -66,6 +67,10 @@ export default function App() {
   useCaffeinateSync()
   useDictationHotkeySync()
   useDictationMouseTrigger()
+  // Mount order between these two no longer matters — both register with the
+  // shared arbiter rather than installing their own window listeners, which is
+  // the whole reason that module exists.
+  useMouseChordPalette()
   // Fetch the initial CLI-update snapshot on mount and subscribe to
   // subsequent transitions. Same mount-once discipline as the other
   // sync hooks above — installing this in more than one place would

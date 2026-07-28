@@ -3,7 +3,7 @@ import type { SavedTheme } from '@renderer/app-state/settings/savedThemes'
 import type { PromptTemplate } from '@renderer/features/prompt-templates/types'
 import type { ColorFlagId } from '@renderer/app-state/settings/dispatchColorFlags'
 import type { DictationProvider } from '@shared/types/dictation'
-import type { MouseButtonBinding } from '@renderer/lib/mouseBinding'
+import type { MouseButtonBinding, MouseChordBinding } from '@renderer/lib/mouseBinding'
 import type { ConfigurableBuiltInMcpDomain } from '@mcp/shared/types'
 
 // Built-in theme ids only. 'custom' used to live here as a sentinel that
@@ -342,6 +342,18 @@ export type Settings = {
    *  lib/mouseBinding.ts for the full WHY. Both may be set at once; whichever
    *  the user presses starts the same hold. */
   dictationMouseButton: MouseButtonBinding
+  /** Mouse chord that opens the command palette, or '' for none.
+   *
+   *  WHY a chord rather than a single button: the palette is the door to ~60
+   *  commands that have no other mouse path, so it needs a binding that works
+   *  anywhere — but every single button either already has a job or is the one
+   *  the user may have given to dictation. A two-button chord is reachable
+   *  everywhere and collides with nothing, at the cost of being deliberate.
+   *
+   *  WHY the vocabulary is a closed union rather than an arbitrary mask: it
+   *  keeps "right is never bindable ALONE" (see mouseBinding.ts) structurally
+   *  true rather than a rule someone has to remember to enforce. */
+  paletteMouseChord: MouseChordBinding
   /** When true, periodically writes Save-Debug-Logs-style bundles for
    *  every active agent session and attempts one last write during
    *  renderer unload. This is a developer-mode setting, not a
@@ -386,6 +398,31 @@ export type Settings = {
    *  registry, the single picker-list chokepoint. It NEVER affects
    *  `run()` or keybindings — hiding is list-only. */
   commandVisibilityOverrides: Record<string, boolean>
+  /** Commands the user has starred, keyed by stable command id. Sparse and
+   *  absent-means-false, exactly like `commandVisibilityOverrides` above — the
+   *  map only ever holds deliberate stars, never a full 99-entry table.
+   *
+   *  WHY this is a second map rather than a richer per-command record shared
+   *  with visibility: visibility is consumed INSIDE `buildCommandRegistry` and
+   *  therefore has to travel in `CommandContext.flags`, while starring is
+   *  applied after the registry is built and must NOT be in flags — putting it
+   *  there would rebuild all 99 commands (including every function title and
+   *  `resolveEffectiveKeybindings`) on every single star toggle. Two maps with
+   *  two lifecycles beats one map that forces the cheap one to pay the
+   *  expensive one's cost. */
+  commandStarred: Record<string, boolean>
+  /** Show pointer-only affordances that a keyboard user does not need — today
+   *  the composer's Send and Stop buttons.
+   *
+   *  WHY this gates so little: the instinct is to hang every mouse affordance
+   *  off one mode, but that means two UIs to keep correct forever and two sets
+   *  of states every future change must be checked against. Steppers, the
+   *  Dispatch "+", and command starring are harmless always-on and nobody
+   *  resents them. The composer buttons are the only ones that are genuine
+   *  visual noise for someone who lives on Enter, so they are the only ones
+   *  behind this flag. More affordances join it only if they prove annoying in
+   *  practice. */
+  mouseModeEnabled: boolean
   /**
    * Whether the closed **Navigation Commands** family appears in the command
    * picker. Off by default.
@@ -474,6 +511,10 @@ export const DEFAULT_SETTINGS: Settings = {
   // claiming one without the user asking would silently break a gesture they
   // rely on. Opt-in only.
   dictationMouseButton: '',
+  // Off by default for the same reason as dictationMouseButton: the chord
+  // suppresses both of its buttons while held, and claiming a gesture the
+  // user never asked for is how you break something they relied on.
+  paletteMouseChord: '',
   aggressiveDebugPersistence: false,
   defaultWorkspaceMode: 'grid',
   agentViewMode: 'agent',
@@ -486,6 +527,12 @@ export const DEFAULT_SETTINGS: Settings = {
   // command. This keeps the whole feature purely additive — fresh
   // installs and existing users see the exact same picker they do today.
   commandVisibilityOverrides: {},
+  // Nothing starred until the user stars something. The palette's resting
+  // order is otherwise exactly the catalog order it has always been.
+  commandStarred: {},
+  // Off by default. The composer buttons cost ~28px of pane height per pane
+  // and a keyboard user gets nothing from them, so this is opt-in.
+  mouseModeEnabled: false,
   // Off on a fresh install: the six members duplicate shortcuts users already
   // have, so the default that costs nothing is the one that keeps them out of
   // the picker. Their keyboard behavior is unaffected either way.

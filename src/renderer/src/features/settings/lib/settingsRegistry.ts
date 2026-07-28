@@ -19,6 +19,7 @@ import { isVisibleInPicker } from '@renderer/features/command-palette/pickerVisi
 import type { PickerCommandMeta } from '@renderer/features/command-palette/registry'
 import type { ConfigurableBuiltInMcpDomain } from '@mcp/shared/types'
 import type { MouseButtonBinding } from '@renderer/lib/mouseBinding'
+import { coerceMouseChordBinding } from '@renderer/lib/mouseBinding'
 
 /**
  * Machine-readable facts about what a setting actually DOES, rendered as small
@@ -828,6 +829,61 @@ export function getSettingsRegistry(): SettingDefinition[] {
         type: 'mouse-button',
         getValue: settings => settings.dictationMouseButton,
         onChange: (ctx, value) => ctx.onChange({ dictationMouseButton: value }),
+      },
+    },
+    {
+      id: 'palette-mouse-chord',
+      category: 'commands',
+      title: 'Command Palette Mouse Chord',
+      description:
+        'Hold the middle button and press right to open the command palette. Without it the palette is keyboard-only, and so is every command that has no shortcut. While the chord is armed the right-click menu is suppressed, and a terminal running a mouse-aware TUI will not see either button.',
+      keywords: [
+        'mouse',
+        'chord',
+        'command',
+        'palette',
+        'middle',
+        'right',
+        'click',
+        'binding',
+        'pointer',
+      ],
+      control: {
+        type: 'select',
+        getValue: settings => settings.paletteMouseChord,
+        options: [
+          { value: '', label: 'Off' },
+          { value: 'Middle+Right', label: 'Middle + Right' },
+        ],
+        columns: 2,
+        // WHY a select and not a capture control like the dictation row: the
+        // chord vocabulary is a closed two-item set, so there is nothing to
+        // discover by pressing. The dictation row captures because nobody can
+        // tell which physical thumb button reports DOM button 3 versus 4.
+        onSelect: (ctx, value) =>
+          ctx.onChange({ paletteMouseChord: coerceMouseChordBinding(value) }),
+      },
+    },
+    {
+      id: 'mouse-mode',
+      category: 'workspace',
+      title: 'Mouse Mode',
+      description:
+        'Show pointer-only controls that a keyboard user does not need — currently Send and Stop buttons under the composer. Costs a row of height in every agent pane, which is why it is opt-in rather than always on.',
+      keywords: [
+        'mouse',
+        'pointer',
+        'send',
+        'stop',
+        'button',
+        'composer',
+        'click',
+        'accessibility',
+      ],
+      control: {
+        type: 'toggle',
+        getValue: settings => settings.mouseModeEnabled,
+        onToggle: (ctx, value) => ctx.onChange({ mouseModeEnabled: value }),
       },
     },
     {

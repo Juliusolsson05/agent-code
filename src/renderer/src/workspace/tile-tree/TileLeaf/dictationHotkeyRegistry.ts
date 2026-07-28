@@ -45,6 +45,13 @@ export type DictationTargetHandle = {
   // start/stop are wrapped in refs by the caller so identity is stable.
   start: () => void
   stop: () => void
+  // Discard an in-flight hold WITHOUT transcribing it. Distinct from stop()
+  // because stop() is a successful completion — it finalizes the provider
+  // stream and pastes the result. This is for the case where another gesture
+  // took over mid-hold (a mouse chord completing on top of the button that
+  // started a dictation): the user never meant to dictate, so shipping a
+  // fragment of audio and pasting it into their composer would be wrong.
+  cancel: () => void
   // Lifecycle predicates so the dispatcher can decide whether a release
   // should call stop() (recording in progress) or be ignored.
   isStarting: () => boolean
@@ -171,6 +178,22 @@ export const endDictationHold = (): void => {
   activeTargetForHold = null
   if (!target) return
   if (target.isActive() || target.isStarting()) target.stop()
+}
+
+/**
+ * Abandon the current hold without completing it.
+ *
+ * Used when a different gesture claims the buttons mid-hold — today, a mouse
+ * chord completing on the button that started a dictation. Clearing the
+ * ownership slot matters as much as the discard: leaving it set would make
+ * `beginDictationHold`'s re-entrancy guard permanently reject every future
+ * hold.
+ */
+export const cancelDictationHold = (): void => {
+  const target = activeTargetForHold
+  activeTargetForHold = null
+  if (!target) return
+  if (target.isActive() || target.isStarting()) target.cancel()
 }
 
 const ensureDispatcher = (): void => {
