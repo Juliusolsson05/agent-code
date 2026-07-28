@@ -398,6 +398,20 @@ export function NewAgentPlacementOverlay({
       ref={overlayRef}
       data-agent-code-interaction-owner="app"
       className="absolute inset-0 z-40 bg-black/20"
+      // WHY the backdrop is now clickable: during the placement step this
+      // overlay rendered ZERO interactive elements — the preview rect is
+      // pointer-events-none, targets move on arrows, commit is Enter, and
+      // cancel was Escape. A mouse-only user who picked an agent kind was
+      // trapped in a modal they could neither commit nor dismiss. This does
+      // not make placement itself clickable (see the WHY further up on why
+      // clickable target rectangles were removed and should stay removed) —
+      // it just guarantees a way out, which is the part that was harmful.
+      onClick={event => {
+        // Only a click on the backdrop ITSELF. A click that bubbled up from
+        // the kind picker must not also dismiss the overlay.
+        if (event.target !== event.currentTarget) return
+        onClose()
+      }}
     >
       {selectedKind && placementTarget && (
         <div
@@ -438,6 +452,19 @@ export function NewAgentPlacementOverlay({
             </div>
           )}
         </div>
+        {/* The hint box is pointer-events-none so it never blocks the grid
+            underneath, so the Cancel has to re-enable pointer events on
+            itself. Placed here rather than in the kind picker because the
+            placement step is exactly the state that had no way out. */}
+        {selectedKind ? (
+          <button
+            type="button"
+            onClick={onClose}
+            className="pointer-events-auto mt-2 border border-control-border bg-control-bg px-3 py-1 text-[11px] leading-none text-control-fg hover:border-control-border-hover hover:text-ink"
+          >
+            Cancel
+          </button>
+        ) : null}
       </div>
 
       {!selectedKind && (

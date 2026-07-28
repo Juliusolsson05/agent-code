@@ -75,6 +75,34 @@ export function ReorderTabsModal({
     [draftTabs],
   )
 
+  /**
+   * Move a specific tab by one slot.
+   *
+   * WHY this takes an explicit id rather than reading `movingTabId`: reordering
+   * was Enter-to-pick then Arrow-to-move, which meant a mouse user could open
+   * this dialog, click rows all day, press Done, and commit the UNCHANGED
+   * order — the dialog's entire purpose was keyboard-only. The per-row ↑/↓
+   * buttons need to move the row they belong to without first requiring a
+   * "pick" step that only Enter can perform.
+   */
+  const moveTabById = useCallback(
+    (tabId: TabId, delta: -1 | 1) => {
+      setError(null)
+      setDraftTabs(prev => {
+        const index = prev.findIndex(tab => tab.id === tabId)
+        if (index < 0) return prev
+        const nextIndex = index + delta
+        if (nextIndex < 0 || nextIndex >= prev.length) return prev
+        const next = [...prev]
+        const [tab] = next.splice(index, 1)
+        next.splice(nextIndex, 0, tab)
+        return next
+      })
+      setCursorTabId(tabId)
+    },
+    [],
+  )
+
   const movePickedTab = useCallback(
     (delta: -1 | 1) => {
       if (!movingTabId) return
@@ -186,8 +214,15 @@ export function ReorderTabsModal({
             const moving = tab.id === movingTabId
             const active = tab.id === activeTabId
             return (
-              <button
+              // Row + reorder controls. The row itself stays a <button> (it
+              // sets the cursor), so the arrows must be SIBLINGS, not children
+              // — nested buttons are invalid HTML and the inner one would not
+              // receive clicks reliably.
+              <div
                 key={tab.id}
+                className="flex items-stretch border-b border-border last:border-b-0"
+              >
+              <button
                 type="button"
                 onClick={() => {
                   setError(null)
@@ -195,8 +230,8 @@ export function ReorderTabsModal({
                   if (movingTabId) setMovingTabId(tab.id)
                 }}
                 className={`
-                  w-full flex items-center gap-3 px-3 py-2 border-l-4
-                  border-b border-border last:border-b-0 text-left
+                  min-w-0 flex-1 flex items-center gap-3 px-3 py-2 border-l-4
+                  text-left
                   ${moving
                     ? 'border-l-accent bg-accent text-accent-fg'
                     : cursor
@@ -220,6 +255,25 @@ export function ReorderTabsModal({
                   />
                 )}
               </button>
+                <button
+                  type="button"
+                  aria-label={`Move ${tab.title} up`}
+                  disabled={index === 0}
+                  onClick={() => moveTabById(tab.id, -1)}
+                  className="w-7 shrink-0 border-l border-border text-[11px] leading-none text-muted hover:bg-surface-hi hover:text-ink disabled:opacity-30 disabled:hover:bg-transparent"
+                >
+                  ↑
+                </button>
+                <button
+                  type="button"
+                  aria-label={`Move ${tab.title} down`}
+                  disabled={index === draftTabs.length - 1}
+                  onClick={() => moveTabById(tab.id, 1)}
+                  className="w-7 shrink-0 border-l border-border text-[11px] leading-none text-muted hover:bg-surface-hi hover:text-ink disabled:opacity-30 disabled:hover:bg-transparent"
+                >
+                  ↓
+                </button>
+              </div>
             )
           })}
         </div>

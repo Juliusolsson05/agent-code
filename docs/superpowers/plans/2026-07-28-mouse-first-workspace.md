@@ -1,8 +1,30 @@
 # Mouse-First Workspace Implementation Plan
 
-> **Status:** READY for review. Written from an eight-agent read of the codebase
-> plus hardware probing. Awaiting product-owner approval before implementation.
-> One question is open — see **Q1** under Decisions.
+> **Status:** IMPLEMENTED on `feat/mouse-first-workspace` (PR #617). All six
+> workstreams landed. Q1 below is still open and does not block anything.
+>
+> **Where the implementation diverged from this plan**, so the next reader
+> trusts the code over the doc:
+>
+> - **The chord's settings control is a `select`, not a capture control.** The
+>   plan implied a `MouseButtonInput` sibling. The chord vocabulary is a closed
+>   two-item set, so there is nothing to discover by pressing — capture only
+>   earns its complexity for the dictation row, where nobody can tell which
+>   physical thumb button reports DOM button 3 versus 4.
+> - **`DictationTargetHandle` gained `cancel()`.** The plan said a chord should
+>   cancel the nascent dictation hold but did not notice that no discard path
+>   was reachable from the registry: `stop()` finalizes the provider stream and
+>   pastes the result. Cancelling needed a real second verb.
+> - **`ReorderTabsModal` got per-row ↑/↓ buttons as siblings of the row, plus a
+>   new `moveTabById`.** The existing `movePickedTab` reads `movingTabId`, which
+>   only Enter can set — reusing it would have left the dialog keyboard-gated in
+>   exactly the way the audit flagged.
+> - **`TiledDispatchCountOverlay` now holds a number, not a string.**
+>   `NumberInput` owns parsing and clamping; keeping a parallel string would
+>   mean two places deciding what "not a number yet" means.
+> - **The stale xterm claim in `useDictationMouseTrigger` is gone.** That
+>   comment justified suppression partly as keeping middle-click out of xterm's
+>   X11 paste; xterm guards that behind `isLinux`, so it never applied on macOS.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
