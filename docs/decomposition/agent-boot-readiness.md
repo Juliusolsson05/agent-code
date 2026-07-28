@@ -1,7 +1,21 @@
 # Agent Boot & Readiness — Stage Decomposition
 
-> **Status:** PROPOSED. Nothing implemented. Awaiting approval on the stage list
-> before any code is written.
+> **Status:** Stages 1 and 2 **IMPLEMENTED** on `feat/session-lifecycle-observability`
+> (plan: [`../superpowers/plans/2026-07-28-session-lifecycle-observability.md`](../superpowers/plans/2026-07-28-session-lifecycle-observability.md)).
+> **Stage 3 is now the blocking step and it is not an engineering task** — it is
+> using the app normally until the corpus has repeats. Stages 4–6 cannot be
+> scheduled until it does.
+>
+> **What shipped:** `src/shared/lifecycle/events.ts` (closed vocabulary,
+> allowlisted payload), `src/main/lifecycle/SessionLifecycleJournal.ts`,
+> `src/main/ipc/lifecycle.ts`, `src/renderer/src/lifecycle/report.ts`,
+> ~20 emit points, `npm run lifecycle:summarize`, the readiness reason + elapsed
+> on the pane, and the Bug B submit unwind.
+>
+> **Corrections this work forced on the document below:** §3 said nine wake call
+> sites. Making `caller` a required parameter of `ensureSessionLive` turned the
+> compiler into the census and found **thirteen**. The grep undercounted, which
+> is a small instance of the document's own thesis.
 >
 > **For agentic workers:** REQUIRED SUB-SKILL: `staged-decomposition`. Stages use
 > checkbox (`- [ ]`) syntax. Do not start a stage before its predecessor's
@@ -119,10 +133,19 @@ optimistic set. Do **not** weaken the `streamPhaseMachine` guard at `:118` to
 achieve it — that guard is a shipped regression's tombstone, and relaxing it
 reintroduces the pinned-`submitting` bug it was written to fix.
 
-> **Status:** B is a candidate for immediate repair ahead of Stage 1, on the
-> grounds that its failing case is constructible without the corpus (reject
-> `deliverPrompt`, assert the phase unwinds) and it is not a substrate question.
-> A remains blocked on Stage 1. **Awaiting the user's call.**
+> **Status: B is FIXED** — shipped as part of Stage 2 rather than as a patch
+> ahead of it, because "the pane stops lying about its own state" is precisely
+> what Stage 2 is. The unwind fires only when main reports
+> `promptWritten === false && enterWritten === false`; the `uncertain` path and
+> the `streamPhaseMachine` guard are both untouched. Every firing is recorded as
+> `submit.unwound`, so the corpus will measure how often the old build would
+> have wedged a pane.
+>
+> **A is still unfixed, deliberately.** It is now recorded and classified —
+> `delivery.reject` carries `never-owned` versus `entry-lost-after-owned`, which
+> are two different defects that are byte-identical to the user. Which one
+> actually happens is a Stage 3 question, and answering it from source instead
+> of from the corpus would be the thirty-first patch.
 
 ### On "temporary code"
 
@@ -174,9 +197,9 @@ cannot precede it.
 
 ## 2. The stages
 
-### Stage 1 — The boot journal
+### Stage 1 — The boot journal ✅ SHIPPED
 
-- [ ] **Produces:** `~/.config/agent-code/boot/<runId>.jsonl` — one append-only,
+- [x] **Produces:** `~/.config/agent-code/boot/<runId>.jsonl` — one append-only,
   metadata-only, bounded record per app run, containing every session-lifecycle
   transition from all three processes on one clock:
   `rehydrate.start/complete`, `recover.request/claim/adopt/spawn/conflict/cancel/fail`,
@@ -187,17 +210,17 @@ cannot precede it.
   `sessionId`, `kind`, monotonic ms, and phase-relative elapsed.
   Plus a paired reader: `Save Boot Journal` command and a `scripts/` summarizer
   that prints one line per session — the phase ladder and where it stopped.
-- [ ] **Verified by:** boot the app with a known workspace; the journal must
+- [x] **Verified by:** boot the app with a known workspace; the journal must
   account for every visible pane with a monotonically ordered ladder and no
   gaps. Independently checkable: the ladder's terminal event must match what the
   pane visibly did. It needs no later stage to be judged correct — either it
   explains the boot you just watched, or it does not.
-- [ ] **Why separate:** if this lands with a fix, the fix defines what gets
+- [x] **Why separate:** if this lands with a fix, the fix defines what gets
   recorded, and we will only record the phases the fix's author already believed
   in. Recording must be authored by someone who does not yet know the answer.
   This is also the stage that survives every future regression, which a fix does
   not.
-- [ ] **Reality check:** built against the *existing* call sites listed in §0 —
+- [x] **Reality check:** built against the *existing* call sites listed in §0 —
   every event name above corresponds to a line that already executes today. No
   new lifecycle is invented here; this stage only makes the existing one legible.
 
@@ -206,21 +229,28 @@ cannot precede it.
 recordings of a failure that happens daily. Bounded by the existing
 `AGENT_CODE_DEBUG_MAX_GB` / TTL sweeper.
 
-### Stage 2 — The pane tells the truth
+### Stage 2 — The pane tells the truth ✅ SHIPPED (with one gap, stated)
 
-- [ ] **Produces:** the composer/pane surfaces the live gate reason and elapsed
+> **Gap:** the pane shows the COARSE reason. Claude's detailed verdict
+> (`replay-pending` / `composer-unpainted` / `human-draft`) is collapsed to
+> `provider-not-ready` before it leaves main, and recovering it means widening
+> the `SessionInputReadiness` contract — Tier 3 transport this PR does not
+> touch (§4). The detail is recorded in `gate.eval` meanwhile. Whether to widen
+> that contract is a Stage 4 decision, made from the corpus.
+
+- [x] **Produces:** the composer/pane surfaces the live gate reason and elapsed
   time — `Replaying transcript… 4s`, `Waiting for composer… 38s`,
   `Permission prompt on screen`, `Draft in composer` — sourced from
   `SessionInputReadiness.reason`, which already crosses the wire and is currently
   discarded. Plus: failure toasts carry reason + session id + phase.
-- [ ] **Verified by:** with Stage 1's journal open beside the app, the on-screen
+- [x] **Verified by:** with Stage 1's journal open beside the app, the on-screen
   reason must match the journal's current gate state at all times. Any divergence
   is a bug in this stage, and the journal is the referee.
-- [ ] **Why separate:** this is what converts *your* future bug reports from "it
+- [x] **Why separate:** this is what converts *your* future bug reports from "it
   didn't start" into "it sat at composer-unpainted for 90s" — which is the input
   Stage 3 needs. Merged into a fix, it becomes a cosmetic afterthought and gets
   cut for scope.
-- [ ] **Reality check:** the reason strings already exist and are already
+- [x] **Reality check:** the reason strings already exist and are already
   computed (`claudeSession.ts:744-783`, `codexSession.ts`, opencode). This stage
   transports and renders; it invents no new state.
 
