@@ -82,3 +82,36 @@ export function declaredTier(
 ): CommandPickerVisibility {
   return command.pickerVisibility ?? 'default'
 }
+
+/**
+ * The WRITE half of the same rule `isVisibleInPicker` reads.
+ *
+ * Returns the next override map for "the user set this command's palette
+ * visibility to `visible`".
+ *
+ * WHY it prunes instead of always storing the boolean: setting a command back
+ * to its declared tier DELETES the entry rather than recording a redundant
+ * `true`/`false`. The map then only ever holds deliberate deviations, which
+ * matters the day a command's shipped default changes — a stale entry that
+ * merely restated the old default would silently keep overriding the new one,
+ * and the user would have no idea they were pinning it.
+ *
+ * Lives here, next to the read rule, because the two have to agree about what
+ * "declared default" means. It used to be inline in `settingsRegistry.ts`,
+ * which is also where the *second*, drifted copy of the read rule lived — that
+ * copy did not know about command groups and made Settings state the opposite
+ * of what the palette showed. One home for each half, both in this file.
+ */
+export function setPickerVisibilityOverride(
+  overrides: Record<string, boolean> | undefined,
+  command: Pick<CommandDef, 'id' | 'pickerVisibility'>,
+  visible: boolean,
+): Record<string, boolean> {
+  const next = { ...(overrides ?? {}) }
+  if (visible === (declaredTier(command) === 'default')) {
+    delete next[command.id]
+  } else {
+    next[command.id] = visible
+  }
+  return next
+}

@@ -14,9 +14,6 @@ import type {
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { SETTING_CATEGORIES } from '@renderer/features/settings/lib/settingsCategories'
 import type { SettingCategoryId } from '@renderer/features/settings/lib/settingsCategories'
-import { listPickerCommandMeta } from '@renderer/features/command-palette/registry'
-import { isVisibleInPicker } from '@renderer/features/command-palette/pickerVisibility'
-import type { PickerCommandMeta } from '@renderer/features/command-palette/registry'
 import type { ConfigurableBuiltInMcpDomain } from '@mcp/shared/types'
 import type { MouseButtonBinding } from '@renderer/lib/mouseBinding'
 import { coerceMouseChordBinding } from '@renderer/lib/mouseBinding'
@@ -252,38 +249,6 @@ export type SettingDefinition =
         type: 'command-keybindings'
       }
     }
-  | {
-      id: string
-      category: SettingCategoryId
-      title: string
-      description: string
-      keywords: string[]
-      metadata?: SettingMetadata
-      control: {
-        type: 'command-visibility'
-        /** Full command catalog to render rows for. Carried as a value
-         *  (not re-derived in the view) so the registry stays the single
-         *  source of "what commands exist". */
-        commands: PickerCommandMeta[]
-        /** Whether a given command currently shows in the picker, after
-         *  applying the user's override on top of the declared default.
-         *  The view only needs the resolved boolean, not the resolution
-         *  rules. */
-        isVisible: (settings: Settings, command: PickerCommandMeta) => boolean
-        /** Flip one command's visibility. Writes a sparse override entry;
-         *  setting it back to the declared default prunes the entry so the
-         *  map never accumulates no-op rows. */
-        onToggleCommand: (
-          ctx: SettingActionContext,
-          command: PickerCommandMeta,
-          visible: boolean,
-        ) => void
-        /** Drop all overrides, returning every command to its declared
-         *  default. */
-        onResetVisibility: (ctx: SettingActionContext) => void
-      }
-    }
-
 const ACCENT_OPTIONS: ChoiceOption<AccentId>[] = ACCENTS.map(accent => ({
   value: accent.id,
   label: accent.name,
@@ -323,45 +288,6 @@ const DICTATION_PROVIDER_OPTIONS: ChoiceOption<Settings['dictationProvider']>[] 
   },
 ]
 
-// Resolve a command's effective picker visibility from settings alone.
-// Mirrors `commandVisible` in the command registry, minus the live
-// `showHiddenCommands` escape hatch (the settings UI always edits the
-// underlying preference, never the transient reveal-all state).
-//
-// This now delegates to the SHARED resolver rather than re-implementing the
-// rule. It used to be a private second copy, justified by "the settings layer
-// shouldn't depend on the registry's CommandContext-typed internals" — a real
-// concern that `pickerVisibility.ts` removed by taking a context-free policy
-// struct instead of a CommandContext.
-//
-// Keeping the copy after that was an active defect, not just duplication: the
-// copy knew about overrides and the declared tier only, so it never learned
-// about the Navigation Commands group. On a fresh install Settings rendered
-// all six navigation switches ON (they declare no tier, so the copy said
-// "visible") while the palette omitted them — Settings stating the opposite of
-// what the user could see. Toggling one wrote an override and still changed
-// nothing, because the group gate deliberately outranks per-command overrides.
-// That is exactly the "switches that appear able to override their parent"
-// shape the precedence rule exists to prevent.
-//
-// `showHiddenCommands: false` is passed deliberately: Settings shows the
-// PERSISTED preference, not the transient reveal-all state, so a user reading
-// this list sees what their profile actually does.
-function resolveCommandVisible(settings: Settings, command: PickerCommandMeta): boolean {
-  return isVisibleInPicker(
-    {
-      id: command.id,
-      pickerVisibility: command.pickerVisibility,
-      commandGroup: command.commandGroup,
-    },
-    {
-      overrides: settings.commandVisibilityOverrides,
-      showHiddenCommands: false,
-      navigationCommandsEnabled: settings.navigationCommandsEnabled,
-    },
-  )
-}
-
 function updateDefaultBuiltInMcpDomain(
   ctx: SettingActionContext,
   domain: ConfigurableBuiltInMcpDomain,
@@ -380,11 +306,6 @@ function updateDefaultBuiltInMcpDomain(
 }
 
 export function getSettingsRegistry(): SettingDefinition[] {
-  // Resolved once per registry build. The command catalog is static for
-  // the lifetime of the app (it's the flat `commandDefs` array), so
-  // there's no reason to recompute it per render.
-  const pickerCommands = listPickerCommandMeta()
-
   return [
     {
       id: 'theme-mode',
@@ -686,47 +607,6 @@ export function getSettingsRegistry(): SettingDefinition[] {
         // way that costs them their arrow keys.
         getValue: settings => settings.navigationCommandsEnabled,
         onToggle: (ctx, value) => ctx.onChange({ navigationCommandsEnabled: value }),
-      },
-    },
-    {
-      id: 'command-picker-visibility',
-      category: 'commands',
-      title: 'Command Picker Visibility',
-      description:
-        'Choose which commands appear in the command picker. Hiding a command only removes it from the picker list — its keyboard shortcut still works.',
-      keywords: [
-        'command',
-        'picker',
-        'palette',
-        'visibility',
-        'hide',
-        'show',
-        'advanced',
-        'debug',
-      ],
-      metadata: { scope: 'app', apply: 'immediate', storage: 'settings' },
-      control: {
-        type: 'command-visibility',
-        commands: pickerCommands,
-        isVisible: resolveCommandVisible,
-        onToggleCommand: (ctx, command, visible) => {
-          const next = { ...ctx.settings.commandVisibilityOverrides }
-          // Prune the entry when the new state equals the command's
-          // declared default, so the override map only ever holds
-          // deliberate deviations. Without this, toggling a command off
-          // then on again would leave a redundant `true` (or `false`)
-          // that survives a default change in a future release.
-          const declaredVisible = command.pickerVisibility === 'default'
-          if (visible === declaredVisible) {
-            delete next[command.id]
-          } else {
-            next[command.id] = visible
-          }
-          ctx.onChange({ commandVisibilityOverrides: next })
-        },
-        onResetVisibility: ctx => {
-          ctx.onChange({ commandVisibilityOverrides: {} })
-        },
       },
     },
     {

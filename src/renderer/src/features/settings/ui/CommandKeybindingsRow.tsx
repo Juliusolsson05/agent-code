@@ -15,8 +15,13 @@ import {
   resolveEffectiveKeybindings,
   setCommandKeybindings,
 } from '@renderer/features/command-keybindings/resolve'
+import {
+  declaredTier,
+  isVisibleInPicker,
+  setPickerVisibilityOverride,
+} from '@renderer/features/command-palette/pickerVisibility'
 import type { Keybinding } from '@renderer/features/command-keybindings/normalize'
-import type { CommandCategory } from '@renderer/features/command-palette/types'
+import type { CommandCategory, CommandDef } from '@renderer/features/command-palette/types'
 
 // ---------------------------------------------------------------------------
 // Commands & Shortcuts: the built-in keybinding editor (governance plan §4).
@@ -70,6 +75,63 @@ const CATEGORY_RANK: Record<CommandCategory, number> = {
 const CATEGORY_ORDER = (Object.keys(CATEGORY_RANK) as CommandCategory[])
   .sort((a, b) => CATEGORY_RANK[a] - CATEGORY_RANK[b])
 
+/**
+ * What the Palette column can show for one command. THREE states, not two.
+ *
+ * A plain boolean was not enough, and collapsing this back to one would
+ * reintroduce a defect rather than simplify:
+ *
+ *  - `excluded` — the palette structurally never lists this command
+ *    (`PALETTE_SELF_EXCLUDED_COMMAND_IDS`, i.e. "open the palette" inside the
+ *    palette). The old Settings list rendered a live switch here that persisted
+ *    an override and could never change anything, because the registry filters
+ *    the command out BEFORE any visibility logic runs. A control that visibly
+ *    does nothing is worse than an absent one.
+ *  - `group-suppressed` — a member of a disabled command GROUP. The group gate
+ *    outranks per-command overrides by design (`isVisibleInPicker` step 2
+ *    before step 3), so an editable checkbox here would be a switch that
+ *    appears able to contradict its own disabled parent. The old list did
+ *    exactly this: it drew all six navigation commands as ON while the palette
+ *    omitted them, and ticking one wrote an override that changed nothing.
+ *  - `editable` — the ordinary case.
+ */
+type PaletteState =
+  | { kind: 'editable'; visible: boolean }
+  | { kind: 'excluded' }
+  | { kind: 'group-suppressed'; groupLabel: string }
+
+/** Human name for a command group, for the "off via X" explanation. Keyed by
+ *  the group id so adding a group without a label is visible here rather than
+ *  rendering a bare identifier at the user. */
+const COMMAND_GROUP_LABELS: Record<string, string> = {
+  navigation: 'Navigation Commands',
+}
+
+function paletteState(
+  command: CommandDef,
+  overrides: Record<string, boolean> | undefined,
+  navigationCommandsEnabled: boolean,
+): PaletteState {
+  if (PALETTE_SELF_EXCLUDED_COMMAND_IDS.has(command.id)) return { kind: 'excluded' }
+  if (command.commandGroup === 'navigation' && !navigationCommandsEnabled) {
+    return {
+      kind: 'group-suppressed',
+      groupLabel: COMMAND_GROUP_LABELS[command.commandGroup] ?? command.commandGroup,
+    }
+  }
+  return {
+    kind: 'editable',
+    // `showHiddenCommands: false` deliberately: Settings shows the PERSISTED
+    // preference, not the transient reveal-all state, so what the user reads
+    // here is what their profile actually does.
+    visible: isVisibleInPicker(command, {
+      overrides,
+      showHiddenCommands: false,
+      navigationCommandsEnabled,
+    }),
+  }
+}
+
 type PendingConflict = {
   commandId: string
   binding: Keybinding
@@ -98,6 +160,8 @@ export function CommandKeybindingsRow() {
   const [conflict, setConflict] = useState<PendingConflict | null>(null)
 
   const overrides = settings.commandKeybindingOverrides
+  const visibilityOverrides = settings.commandVisibilityOverrides
+  const navigationCommandsEnabled = settings.navigationCommandsEnabled
   const defaults = useMemo(() => buildDefaultKeybindings(), [])
 
   const effective = useMemo(() => {
@@ -122,15 +186,21 @@ export function CommandKeybindingsRow() {
       // A command the palette never renders still gets a binding row — it is
       // reachable by chord, menu and programmatic call, so it is bindable.
       .filter(command => command.category)
-      .map(command => ({
-        id: command.id,
-        title: typeof command.title === 'function' ? command.id : command.title,
-        category: command.category as CommandCategory,
-        description: command.description,
-        keywords: command.keywords ?? [],
-        bindings: effective.get(command.id) ?? [],
-        customized: overrides[command.id] !== undefined,
-      }))
+      .map(command => {
+        const palette = paletteState(command, visibilityOverrides, navigationCommandsEnabled)
+        return {
+          id: command.id,
+          command,
+          title: typeof command.title === 'function' ? command.id : command.title,
+          category: command.category as CommandCategory,
+          description: command.description,
+          keywords: command.keywords ?? [],
+          bindings: effective.get(command.id) ?? [],
+          customized: overrides[command.id] !== undefined,
+          palette,
+          tier: declaredTier(command),
+        }
+      })
       .filter(row => {
         if (!needle) return true
         const haystack = [
@@ -139,10 +209,28 @@ export function CommandKeybindingsRow() {
           row.description,
           ...row.keywords,
           ...row.bindings.map(displayKeybinding),
+          // Searchable by the visibility concern too, now that it lives here.
+          // Without this a user typing "hidden" — the whole reason they opened
+          // this list — matches nothing.
+          row.tier,
+          row.palette.kind === 'editable' && !row.palette.visible ? 'hidden' : '',
         ].join(' ').toLowerCase()
         return haystack.includes(needle)
       })
-  }, [query, effective, overrides])
+  }, [query, effective, overrides, visibilityOverrides, navigationCommandsEnabled])
+
+  const setPaletteVisible = useCallback(
+    (command: CommandDef, visible: boolean) => {
+      setSettings({
+        commandVisibilityOverrides: setPickerVisibilityOverride(
+          visibilityOverrides,
+          command,
+          visible,
+        ),
+      })
+    },
+    [visibilityOverrides, setSettings],
+  )
 
   const grouped = useMemo(() => {
     const byCategory = new Map<CommandCategory, typeof rows>()
@@ -311,6 +399,20 @@ export function CommandKeybindingsRow() {
         </div>
       ) : null}
 
+      {/* Column header. Without it the checkbox column is unexplained, and the
+          one thing a user must not assume about it is that it disables the
+          command. The sub-line says so in the only place they will read it. */}
+      <div className="flex items-center gap-2 px-2 text-[10px] uppercase tracking-wide text-ink-dim">
+        <span className="min-w-0 flex-1">Command</span>
+        <span className="shrink-0">Shortcut</span>
+        <span
+          className="w-16 shrink-0 text-center"
+          title="Show the command in the command palette. Shortcuts keep working when unticked."
+        >
+          Palette
+        </span>
+      </div>
+
       <div className="flex max-h-[420px] flex-col gap-2 overflow-auto">
         {grouped.map(group => (
           <div key={group.category} className="flex flex-col gap-0.5">
@@ -324,9 +426,6 @@ export function CommandKeybindingsRow() {
               >
                 <div className="min-w-0 flex-1 truncate text-ink" title={row.id}>
                   {row.title}
-                  {PALETTE_SELF_EXCLUDED_COMMAND_IDS.has(row.id) ? (
-                    <span className="ml-1 text-ink-dim">(not shown in palette)</span>
-                  ) : null}
                 </div>
 
                 <div className="flex items-center gap-1">
@@ -370,6 +469,19 @@ export function CommandKeybindingsRow() {
                       Reset
                     </button>
                   ) : null}
+
+                  {/* Palette column, pinned to the right edge of every row.
+                      Labelled "palette", NEVER "enabled": unticking hides the
+                      command from the picker LIST and nothing else — it stays
+                      fully executable by the chord shown on this very row, by
+                      the native menu, and by programmatic dispatch. Treating
+                      this as an on/off switch is how a cosmetic "tidy my
+                      palette" preference once silently killed File → New Tab.
+                      See the READ THIS block in pickerVisibility.ts. */}
+                  <PaletteToggle
+                    state={row.palette}
+                    onChange={visible => setPaletteVisible(row.command, visible)}
+                  />
                 </div>
               </div>
             ))}
@@ -377,13 +489,75 @@ export function CommandKeybindingsRow() {
         ))}
       </div>
 
-      <button
-        onClick={() => setSettings({ commandKeybindingOverrides: {} })}
-        className="self-start border border-border px-1.5 py-0.5 text-xs hover:bg-surface"
-      >
-        Reset all bindings
-      </button>
+      {/* Two resets, kept SEPARATE on purpose. One control doing both would
+          mean a user restoring their shortcuts silently un-hides every command
+          they deliberately tidied away (or the reverse) — a destructive side
+          effect on a concern they did not mention. They live side by side
+          because the list now edits both concerns; they do not merge. */}
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => setSettings({ commandKeybindingOverrides: {} })}
+          className="self-start border border-border px-1.5 py-0.5 text-xs hover:bg-surface"
+        >
+          Reset all bindings
+        </button>
+        <button
+          onClick={() => setSettings({ commandVisibilityOverrides: {} })}
+          className="self-start border border-border px-1.5 py-0.5 text-xs hover:bg-surface"
+          title="Return every command to its shipped palette visibility. Shortcuts are untouched."
+        >
+          Reset palette visibility
+        </button>
+      </div>
     </div>
+  )
+}
+
+/**
+ * The Palette cell. A real `<input type="checkbox">` rather than the styled
+ * `<button>` the old visibility list used: this is a checkbox by semantics, and
+ * the native element brings keyboard activation, the checked state, and screen
+ * reader announcement for free. The old list nested its indicator inside a
+ * button and announced nothing.
+ */
+function PaletteToggle({
+  state,
+  onChange,
+}: {
+  state: PaletteState
+  onChange: (visible: boolean) => void
+}) {
+  if (state.kind === 'excluded') {
+    return (
+      <span
+        className="w-16 shrink-0 text-center text-ink-dim"
+        title="The command palette never lists this command, so there is nothing to show or hide."
+      >
+        —
+      </span>
+    )
+  }
+
+  const suppressed = state.kind === 'group-suppressed'
+  return (
+    <label
+      className={`flex w-16 shrink-0 items-center justify-center gap-1 ${
+        suppressed ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'
+      }`}
+      title={
+        suppressed
+          ? `Hidden while ${state.groupLabel} is off. Turn that on to control this command individually.`
+          : 'Show this command in the command palette. Its keyboard shortcut works either way.'
+      }
+    >
+      <input
+        type="checkbox"
+        checked={state.kind === 'editable' ? state.visible : false}
+        disabled={suppressed}
+        onChange={event => onChange(event.target.checked)}
+        className="accent-accent"
+      />
+    </label>
   )
 }
 
