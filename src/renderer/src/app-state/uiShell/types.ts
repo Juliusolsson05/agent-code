@@ -137,6 +137,29 @@ export type UiShellState = {
    * stack. See uiShell/slice.ts for the same reasoning on attach.
    */
   linkedAgentParentId: SessionId | null
+  /**
+   * Non-null when the placement overlay was opened by the Dispatch project
+   * header's "+" — the project the new agent must land in, plus a session in
+   * that project to anchor its working directory.
+   *
+   * WHY the target is captured up front rather than resolved at commit time:
+   * exactly the reason `dispatchAttachIntent` documents above. Tiled Dispatch
+   * lane selection does not mutate `activeTabId`, and
+   * `resolveDispatchSpawnTarget`'s tiled branch reads the focused LANE, never
+   * `dispatchMode.focusedSessionId`. So the tempting cheap version — focus the
+   * project, then open the normal flow — works in classic Dispatch and
+   * silently spawns into whatever project lane 0 happens to show in Tiled
+   * Dispatch. It also moves the user's selection as a side effect of clicking
+   * a "+". The visible header already knows its own tab; capture it once.
+   *
+   * WHY an anchor session and not just the tab: `createDetachedDispatchAgent`
+   * derives `cwd` from the FOCUSED session, which is in the wrong project
+   * here. Dispatch agents are detached and never inserted into `tab.root`, so
+   * a project whose grid leaves are all closed has no cwd to fall back on and
+   * the spawn fails with "no project directory found". A session from the
+   * clicked group is a correct and always-present source.
+   */
+  newAgentProjectIntent: { tabId: TabId; anchorSessionId: SessionId } | null
   gitBarOpen: boolean
   worktreesBarOpen: boolean
   debugPanelOpen: boolean

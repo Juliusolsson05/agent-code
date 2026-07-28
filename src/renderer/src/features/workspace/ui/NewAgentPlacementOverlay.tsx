@@ -13,7 +13,7 @@ import {
   placementTargetIdForArrow,
 } from '@renderer/features/workspace/lib/newAgentPlacement'
 import type { PlacementTarget } from '@renderer/features/workspace/lib/newAgentPlacement'
-import type { SessionId, SessionKind } from '@renderer/workspace/types'
+import type { SessionId, SessionKind, TabId } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { DispatchAttachIntent } from '@renderer/app-state/uiShell/types'
 
@@ -43,6 +43,13 @@ type Props = {
    * uiShell-level intent passed in, so App.tsx owns the close path.
    */
   linkedAgentParentId: SessionId | null
+  /**
+   * Non-null = the Dispatch project header's "+" opened this, and the new
+   * agent must land in that project rather than the focused one. Carries a
+   * session from the clicked group as a cwd anchor — see the field's WHY in
+   * uiShell/types.ts for why both halves are needed.
+   */
+  projectIntent: { tabId: TabId; anchorSessionId: SessionId } | null
 }
 
 // Registry-derived agent options (#394 phase 2c-2) + the one
@@ -70,6 +77,7 @@ export function NewAgentPlacementOverlay({
   onClose,
   attachIntent,
   linkedAgentParentId,
+  projectIntent,
 }: Props) {
   // Attach mode is "user wants to move this existing detached session
   // into the grid." The overlay still does placement, just no spawn.
@@ -164,7 +172,12 @@ export function NewAgentPlacementOverlay({
       // Dispatch Mode creates a detached provider agent on the focused
       // Dispatch project; there is intentionally no placement step.
       // createDetachedDispatchAgent owns its own overlay close.
-      void workspace.createDetachedDispatchAgent(kind)
+      //
+      // When the project header's "+" opened this, the target is explicit and
+      // must override focus-based resolution — the whole reason that intent
+      // exists is that focus does NOT identify the clicked project in Tiled
+      // Dispatch.
+      void workspace.createDetachedDispatchAgent(kind, projectIntent ?? undefined)
       return
     }
     setSelectedKind(kind)

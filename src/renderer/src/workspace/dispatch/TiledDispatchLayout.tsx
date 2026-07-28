@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 
+import { useAppStore } from '@renderer/app-state/hooks'
 import type { AgentViewMode } from '@renderer/app-state/settings/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { SplitHandle } from '@renderer/features/shared/SplitHandle'
@@ -71,6 +72,11 @@ export function TiledDispatchLayout({
   const state = workspace.state
   const tiled = state.dispatchMode!.tiled!
   const lanes = tiled.lanes
+  // The whole reason the "+" carries an explicit project intent: in this
+  // layout the focused LANE decides the spawn target, and lane selection never
+  // touches activeTabId. Resolving the project at commit time would spawn into
+  // whatever lane 0 happens to show, not the header the user clicked.
+  const openNewAgentForProject = useAppStore(state_ => state_.openNewAgentForProject)
 
   const groups = useMemo(() => buildDispatchGroups(state), [state])
   const pinnedRows = useMemo(() => buildPinnedDispatchRows(state), [state])
@@ -177,6 +183,7 @@ export function TiledDispatchLayout({
             workspace.setTiledFocusedLane(0)
           }}
           showWorktreeBadges={showWorktreeBadges}
+          onCreateAgentInProject={openNewAgentForProject}
         />
       </div>
 

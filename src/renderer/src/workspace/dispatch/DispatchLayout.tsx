@@ -86,6 +86,7 @@ function ClassicDispatchLayout({
   // splitter handle and the actual list edge at narrow / wide
   // viewports. If a user manages to get the list unreadably narrow at
   // a tiny viewport, the 15% floor still applies.
+  const openNewAgentForProject = useAppStore(state => state.openNewAgentForProject)
   const dispatchListRatio = useAppStore(state => state.dispatchListRatio)
   const setDispatchListRatio = useAppStore(state => state.setDispatchListRatio)
   const layoutRowRef = useRef<HTMLDivElement | null>(null)
@@ -146,6 +147,7 @@ function ClassicDispatchLayout({
           dispatchScope={workspace.state.dispatchMode?.scope === 'global' ? 'global' : 'project'}
           focusSessionInTab={workspace.focusDispatchSession}
           showWorktreeBadges={showWorktreeBadges}
+          onCreateAgentInProject={openNewAgentForProject}
         />
       </div>
 
