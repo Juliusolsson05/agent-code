@@ -236,6 +236,7 @@ export function useWorkspace(
   )
   const {
     setStreamingBaseline,
+    unwindStreamingBaseline,
     clearPendingRewindUndo,
     addOptimisticCodexUserEntry,
     removeOptimisticCodexUserEntry,
@@ -909,6 +910,7 @@ export function useWorkspace(
     setSplitRatio,
     setSplitRatioInTab,
     setStreamingBaseline,
+    unwindStreamingBaseline,
     clearPendingRewindUndo,
     acknowledgeSession,
     appendFeedDebug,

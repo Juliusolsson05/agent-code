@@ -103,7 +103,7 @@ describe('useAgentIndexNavigationActions', () => {
       expect(await harness.actions.focusAgentByPaneLabel('a2')).toBe(true)
     })
 
-    expect(ensureSessionLive).toHaveBeenCalledWith('a2')
+    expect(ensureSessionLive).toHaveBeenCalledWith('a2', 'agent-index.navigate')
     expect(harness.getState().tabs[0].root).toEqual({ type: 'leaf', sessionId: 'a2' })
     expect(harness.getState().detachedSessions.a1?.sessionId).toBe('a1')
     expect(harness.getState().detachedSessions.a2).toBeUndefined()

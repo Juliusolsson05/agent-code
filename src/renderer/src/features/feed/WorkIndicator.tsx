@@ -27,6 +27,7 @@ import { memo, useEffect, useState } from 'react'
 
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import type { StreamPhase } from '@renderer/session-runtime/state'
+import { useElapsedSeconds } from '@renderer/lib/useElapsedSeconds'
 
 type Props = {
   phase: StreamPhase
@@ -124,35 +125,6 @@ function phaseLabel(phase: StreamPhase, toolName: string | null): string | null 
     case 'awaiting-tool':
       return toolName ? `Awaiting ${toolName}` : 'Awaiting tool'
   }
-}
-
-// ---------------------------------------------------------------------------
-// Elapsed-time hook.
-// ---------------------------------------------------------------------------
-//
-// Only mounts a timer when `since` is non-null. Returns null otherwise
-// — caller renders the elapsed slot as empty. We use 1 Hz intentionally:
-// sub-second updates are overkill for a "how long have I been waiting"
-// readout, and the re-render cost in the feed (which contains
-// potentially hundreds of already-mounted rows) is real.
-
-function useElapsedSeconds(since: number | null): number | null {
-  const [elapsed, setElapsed] = useState<number | null>(() =>
-    since === null ? null : Math.max(0, Math.floor((Date.now() - since) / 1000)),
-  )
-  useEffect(() => {
-    if (since === null) {
-      setElapsed(null)
-      return
-    }
-    // Fire once immediately so the switch from null → number isn't
-    // a full second behind; then tick at 1 Hz.
-    const tick = () => setElapsed(Math.max(0, Math.floor((Date.now() - since) / 1000)))
-    tick()
-    const id = setInterval(tick, 1000)
-    return () => clearInterval(id)
-  }, [since])
-  return elapsed
 }
 
 // ---------------------------------------------------------------------------

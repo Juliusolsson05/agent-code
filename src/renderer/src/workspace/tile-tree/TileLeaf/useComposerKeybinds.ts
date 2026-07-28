@@ -311,6 +311,24 @@ export function useComposerKeybinds({
       // Narrowed once: PromptDeliveryResult is a union and the write-evidence
       // fields exist only on the failure branch.
       const failed = delivery && !delivery.ok ? delivery : null
+      // THE UNWIND. Gated on main's own evidence that neither the prompt body
+      // nor Enter reached the provider — not on an inference about why delivery
+      // failed. Nothing written means no turn can start, so the optimistic
+      // `submitting` phase set before the attempt is provably stale and would
+      // otherwise count up forever (see unwindStreamingBaseline for the three
+      // reasons nothing else can clear it).
+      //
+      // The `uncertain` case — something WAS written — is intentionally left
+      // alone: a turn may genuinely be running and unwinding could hide it.
+      const nothingWasWritten = failed !== null && !failed.promptWritten && !failed.enterWritten
+      if (nothingWasWritten) {
+        workspace.unwindStreamingBaseline(sessionId)
+        reportLifecycle('submit.unwound', sessionId, {
+          provider: submitProvider,
+          code: failed.code,
+          stage: failed.stage,
+        })
+      }
       reportLifecycle('submit.result', sessionId, {
         provider: submitProvider,
         ok: false,

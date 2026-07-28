@@ -41,6 +41,7 @@ import { collectWorkflowRunReferences } from '@renderer/features/workflows/model
 import { useSessionWorkflowViews } from '@renderer/features/workflows/model/useSessionWorkflowViews'
 import { WorkflowRunView } from '@renderer/features/workflows/ui/WorkflowRunRow'
 import { WorkflowViewSelector } from '@renderer/features/workflows/ui/WorkflowViewSelector'
+import { useElapsedSeconds } from '@renderer/lib/useElapsedSeconds'
 
 // Claude paste-state-machine constants + helpers moved to
 // ./TileLeaf/claudePaste.ts. Image helpers moved to
@@ -562,7 +563,16 @@ export function TileLeaf({
   }, [input, submitCurrentDraft])
 
   const isSessionLive = runtime.sessionStatus === 'running'
-  const readinessText = resolveReadinessText(runtime)
+  // Ticks only while a readiness line is actually on screen: `since` is null
+  // for a healthy pane, and useElapsedSeconds mounts no timer for null.
+  const readinessSince = runtime.inputReadinessChangedAt
+  const readinessElapsedSeconds = useElapsedSeconds(readinessSince)
+  const readinessText = resolveReadinessText(
+    runtime,
+    readinessSince === null || readinessElapsedSeconds === null
+      ? null
+      : readinessSince + readinessElapsedSeconds * 1000,
+  )
   const canRetryBackend = runtime.processStatus === 'failed' ||
     runtime.processStatus === 'exited'
 

@@ -631,6 +631,14 @@ export function useIpcSubscriptions(
               ...current,
               inputReady: input.ready,
               inputReadinessRevision: input.revision,
+              inputReadinessReason: input.reason ?? null,
+              // Only restamped when the state actually changes, so a repeated
+              // identical verdict does not keep resetting the clock and hide a
+              // long stall behind a permanently small number.
+              inputReadinessChangedAt:
+                current.inputReady === input.ready && current.inputReadinessReason === (input.reason ?? null)
+                  ? current.inputReadinessChangedAt
+                  : Date.now(),
             },
             {
               layer: 'STATE',
