@@ -17,6 +17,8 @@ import {
 } from '@renderer/app-state/settings/savedThemes'
 import type { SavedTheme } from '@renderer/app-state/settings/savedThemes'
 import { parseCustomAppearanceJson } from '@renderer/app-state/settings/customAppearance'
+import { isCommandSortMode } from '@renderer/features/command-palette/lib/sortCommands'
+import type { CommandSortMode } from '@renderer/features/command-palette/lib/sortCommands'
 import type {
   AccentId,
   FontFamilyId,
@@ -138,6 +140,7 @@ export function coerceSettings(value: unknown): Settings {
     // shape. A garbage value collapses to `{}` (nothing overridden),
     // matching the "absent ≡ declared default" semantic.
     commandStarred: coerceCommandStarred(parsed.commandStarred),
+    commandSortMode: coerceCommandSortMode(parsed.commandSortMode),
     mouseModeEnabled: parsed.mouseModeEnabled === true,
     commandVisibilityOverrides: coerceCommandVisibilityOverrides(
       parsed.commandVisibilityOverrides,
@@ -287,6 +290,21 @@ function coerceCommandStarred(value: unknown): Record<string, boolean> {
     if (entry === true) result[key] = true
   }
   return result
+}
+
+/**
+ * Fall back to the shipped default on anything unrecognized.
+ *
+ * The union is closed, but the blob it is read from is not: a settings file
+ * written by a future build (a fifth mode), hand-edited in devtools, or
+ * truncated mid-write can all put a string here that no longer means anything.
+ * An unknown value must degrade to 'catalog' — the behavior the palette had
+ * before this setting existed — rather than reaching `browseOrder`, where it
+ * would fall through every branch and silently produce the catalog order
+ * anyway, just with a control claiming a mode that is not in effect.
+ */
+function coerceCommandSortMode(value: unknown): CommandSortMode {
+  return isCommandSortMode(value) ? value : DEFAULT_SETTINGS.commandSortMode
 }
 
 function coerceCommandVisibilityOverrides(value: unknown): Record<string, boolean> {
