@@ -89,12 +89,17 @@ Counted across the desktop renderer, `providers/*/renderer`, and
 
 | Measure | Count |
 | --- | --- |
-| Raw `<button>` in the renderer | 213 |
-| — carrying tokens matching an existing variant | 177 (83%) |
+| Raw `<button>` in `src/renderer`, excluding tests | 223 |
+| — carrying tokens matching an existing variant | ~180 (81%) |
 | — genuinely bespoke (tab strips, segmented controls, chips) | 29 |
 | — unstyled | 7 |
-| Hand-rolled `control-*` button recipe | 25 sites / 11 files |
-| Files importing `Button` | 17 |
+| Hand-rolled `control-*` button recipe | 25 sites / 12 files |
+| Files importing `Button` (renderer only / all of `src`) | 20 / 24 |
+
+Counting method, so these are reproducible: `git grep -c "<button" origin/main --
+'src/renderer/**/*.tsx'` then drop lines whose path contains `.test.`. The
+variant-shape buckets come from a token-presence classifier, so treat them as
+indicative rather than exact.
 
 Bucketed by the tokens each raw button carries: 77 outline-shaped, 52
 ghost-shaped, 31 accent-shaped, 17 danger-shaped. "Shaped like" means *carries
@@ -109,8 +114,11 @@ segmented controls and tab strips legitimately are not `Button`s.
   barrel, no nested taxonomy.
 - Exactly one `fixed inset-0` outside `dialog.tsx`; no `createPortal` outside
   Radix.
-- The provider renderers are the best-behaved surface in the codebase — all
-  provider modals use `Dialog` + `Button` with zero raw buttons.
+- Every provider *modal* uses `Dialog` + `Button` and contains zero raw
+  buttons. Note the scope: `providers/*/renderer` as a whole still has 13 raw
+  `<button>`s across 11 files, all of them disclosure toggles inside feed row
+  components, which is appropriate. The modals are the clean part, not the
+  whole surface.
 - `remote-client` shares no primitives with the desktop renderer. It is a
   separate Vite build using plain CSS classes, deliberately, for touch targets.
   Out of scope here; noted so the next audit does not re-derive it.
@@ -183,7 +191,7 @@ scope.
 - The other ~150 raw buttons. `components/ui/README.md` says directly: *"No
   migration of every existing button as a prerequisite."* Most are tab strips
   and segmented controls where `Button` is not a drop-in.
-- New primitives (checkbox ×5, radio ×4, `<select>` ×2 have ad-hoc
+- New primitives (checkbox ×7, radio ×4, `<select>` ×2 have ad-hoc
   implementations and each now clears the README's "real consumer" bar). Worth
   a follow-up; not this PR.
 - `remote-client` chrome.

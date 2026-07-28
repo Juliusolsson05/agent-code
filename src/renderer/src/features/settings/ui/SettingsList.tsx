@@ -185,18 +185,18 @@ function SettingRow({
             />
           ) : null}
 
+          {/* The variant ternary below switches on TONE, not on a
+              pressed/selected state, so both arms are ordinary variants — this
+              is not one of the toggles that has to keep a hand-rolled
+              conditional class. */}
           {control.type === 'action' ? (
-            <button
-              type="button"
+            <Button
+              variant={control.tone === 'danger' ? 'destructive-outline' : 'outline'}
               onClick={() => void control.onTrigger(context)}
-              className={`w-full border px-3 py-2 text-left text-[12px] ${
-                control.tone === 'danger'
-                  ? 'border-danger text-danger hover:bg-danger-soft'
-                  : 'border-control-border bg-control-bg text-control-fg hover:border-control-border-hover hover:bg-control-hover-bg hover:text-ink'
-              }`}
+              className={cn(SETTINGS_ROW_CLASS, 'justify-start')}
             >
               {control.label}
-            </button>
+            </Button>
           ) : null}
 
           {/* CLI auto-updater — the row owns its own subscription

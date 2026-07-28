@@ -133,15 +133,10 @@ export function DictationApiKeyRow() {
         </Button>
         {status.configured && status.source !== 'env' ? (
           <Button
-            variant="outline"
+            variant="destructive-outline"
             size="sm"
             disabled={busy}
             onClick={() => void commit('')}
-            // Danger is carried as an override rather than variant="destructive":
-            // this is a clear-the-field action sitting in a settings row, not a
-            // filled destructive confirm. The outline chrome stays, the text and
-            // hover border go danger.
-            className="text-danger hover:border-danger hover:text-danger"
             title="Clear the stored Deepgram key"
           >
             Remove

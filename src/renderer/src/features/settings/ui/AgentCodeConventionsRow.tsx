@@ -103,15 +103,18 @@ export function AgentCodeConventionsRow() {
             {lines > 0 ? `${lines} lines saved` : 'No rules saved'}
           </div>
         </div>
-        <button
-          type="button"
+        {/* The button's own chrome carries no state conditional — only the
+            indicator span does — so this is a plain control, same shape as the
+            toggle row in SettingsList. */}
+        <Button
+          variant="outline"
+          size="sm"
           disabled={busy || snapshot.health === 'recovery-required' || snapshot.health === 'unsupported'}
           onClick={() => void toggle()}
-          className="flex items-center gap-2 border border-control-border px-2 py-1 text-[11px] text-control-fg disabled:opacity-50"
         >
           <span>{snapshot.enabled ? 'On' : 'Off'}</span>
           <span className={`h-3.5 w-3.5 border ${snapshot.enabled ? 'border-control-active-bg bg-control-active-bg' : 'border-control-border-hover'}`} />
-        </button>
+        </Button>
       </div>
 
       <div className="flex flex-wrap gap-2">

@@ -26,7 +26,8 @@ import { cn } from '@renderer/lib/utils'
 //   controlFg used to get every hand-rolled control button in the tree
 //   honouring it while every <Button> silently ignored it — which made this
 //   primitive LESS theme-correct than the ad-hoc markup it exists to replace,
-//   and is the most plausible reason adoption stalled at 17 files.
+//   and is the most plausible reason adoption never displaced the hand-rolled
+//   recipe (which still had ~24 call sites when this landed).
 //
 //   NumberInput (number-input.tsx) already builds its steppers on `control-*`.
 //   Before this change a single DialogActions footer could render a `ghost`
@@ -37,17 +38,33 @@ import { cn } from '@renderer/lib/utils'
 // and danger chrome, not control chrome, and the control family has no
 // equivalent for them.
 //
-// WHY `secondary` is NOT retokenized: it is the filled/raised treatment, and
-// there is no `control-*` token meaning "raised resting". `controlActiveBg`
-// means SELECTED, which is a different state — mapping secondary onto it would
-// invent a meaning the theme schema does not have.
+// WHY `secondary` keeps `bg-surface-hi` and `text-ink` but DOES take the
+// control border: it is the filled/raised treatment, and there is no
+// `control-*` token meaning "raised resting" — `controlActiveBg` means
+// SELECTED, a different state, and `controlFg` is the dimmer resting colour
+// that `secondary` deliberately is not. Those two have no control equivalent.
+// Its BORDER does: `controlBorder` is documented as "Resting control border"
+// and a secondary button is unambiguously a control, so leaving it on the
+// generic `border` token would reintroduce exactly the split this file is
+// fixing — SettingsPage renders an `outline` Close and a `secondary` Cancel in
+// the same view, and they must not disagree about their border.
+//
+// WHY `destructive-outline` exists as a variant rather than a className
+// override: five call sites had independently written some spelling of
+// "outline chrome, danger text" (dictation key row, three dictation history
+// actions, composer Stop). Each had to actively CANCEL `outline`'s
+// `hover:text-ink`, which is the signal that it is a variant and not
+// feature-specific layout. It is the filled `destructive`'s quieter sibling:
+// use it when the click OPENS a confirmation, and `destructive` when the click
+// IS the destructive act.
 const buttonVariants = cva(
   'inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap border font-code font-medium transition-colors outline-none focus-visible:border-focus-ring focus-visible:ring-1 focus-visible:ring-focus-ring disabled:pointer-events-none disabled:opacity-50',
   {
     variants: {
       variant: {
         default: 'border-accent bg-accent text-accent-fg hover:brightness-110',
-        secondary: 'border-border bg-surface-hi text-ink hover:border-border-hi',
+        secondary:
+          'border-control-border bg-surface-hi text-ink hover:border-control-border-hover',
         // `hover:bg-control-hover-bg` is new relative to the pre-retokenization
         // `outline`, which had no hover fill. It matches what the 25
         // hand-rolled control-button call sites already paint, so migrating
@@ -58,6 +75,8 @@ const buttonVariants = cva(
         ghost:
           'border-transparent bg-transparent text-control-fg hover:bg-control-hover-bg hover:text-ink',
         destructive: 'border-danger bg-danger text-danger-fg hover:brightness-110',
+        'destructive-outline':
+          'border-control-border bg-control-bg text-danger hover:border-danger hover:bg-danger-soft hover:text-danger',
         link: 'border-transparent bg-transparent text-accent underline-offset-4 hover:underline',
       },
       size: {

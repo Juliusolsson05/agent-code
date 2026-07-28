@@ -97,9 +97,11 @@ export function ComposerActions({
           // "not the composer").
           onMouseDown={event => event.preventDefault()}
           onClick={onStop}
-          // Danger on hover only — Stop is a normal control at rest, and a
-          // filled destructive variant beside the Send button would read as
-          // the primary action.
+          // Deliberately NOT `destructive-outline`, which colours its text
+          // danger at rest. Stop sits permanently beside Send while an agent
+          // runs; a permanently red control there reads as an error state
+          // rather than an available action. Danger belongs on hover only —
+          // the one case in this PR where the shared variant is the wrong fit.
           className="hover:border-danger hover:bg-transparent hover:text-danger"
         >
           Stop

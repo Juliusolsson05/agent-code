@@ -176,16 +176,13 @@ export function DictationHistoryRow() {
             >
               Clear List
             </Button>
-            {/* Danger as an override on `outline`, not variant="destructive":
-                this only OPENS a confirmation, so a filled destructive button
-                would overstate what the click does. The filled treatment is
-                reserved for the Confirm below. */}
+            {/* destructive-outline, not destructive: this only OPENS the
+                confirmation. The filled treatment is reserved for Confirm. */}
             <Button
-              variant="outline"
+              variant="destructive-outline"
               size="sm"
               disabled={busy || (stats.lifetimeSessions === 0 && entries.length === 0)}
               onClick={() => setConfirming('reset')}
-              className="text-danger hover:border-danger hover:text-danger"
               title="Remove the transcripts AND zero the lifetime statistics."
             >
               Reset Statistics
@@ -213,7 +210,10 @@ export function DictationHistoryRow() {
                 : 'Remove transcripts and zero all statistics? This cannot be undone.'}
             </span>
             <Button
-              variant="outline"
+              // This click IS the destructive act, so it takes the stronger
+              // border while staying unfilled — a filled button here would be
+              // the brightest thing on the Settings page.
+              variant="destructive-outline"
               size="sm"
               disabled={busy}
               onClick={() =>
@@ -223,7 +223,7 @@ export function DictationHistoryRow() {
                     : () => window.api.resetDictationStats(),
                 )
               }
-              className="border-danger text-danger hover:border-danger hover:bg-danger/10 hover:text-danger"
+              className="border-danger"
             >
               Confirm
             </Button>
@@ -338,11 +338,10 @@ function HistoryRow({
               {copyState === 'copied' ? 'Copied' : copyState === 'failed' ? 'Copy failed' : 'Copy'}
             </Button>
             <Button
-              variant="outline"
+              variant="destructive-outline"
               size="sm"
               disabled={busy}
               onClick={onDelete}
-              className="text-danger hover:border-danger hover:text-danger"
               title="Remove this transcript. Your lifetime statistics are unaffected."
             >
               Delete
