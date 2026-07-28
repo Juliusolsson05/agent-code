@@ -209,8 +209,9 @@ function mountView(viewId) {
 }
 
 // Import, activate, mount, then announce readiness.
+let extensionModule = null;
 import('./' + ENTRY)
-  .then((mod) => mod.activate(context))
+  .then((mod) => { extensionModule = mod; return mod.activate(context); })
   .then(() => {
     mountView(VIEW_ID);
     // Signal the host that activate() has resolved — meaning registerCommand() has
@@ -223,6 +224,25 @@ import('./' + ENTRY)
     const root = document.getElementById('root');
     if (root) root.textContent = 'Extension failed to load: ' + (error && error.message || error);
   });
+
+// Run the extension's cleanup when the frame is torn down. The host closes a view
+// by navigating the iframe to about:blank (viewBridge), which fires pagehide on
+// this document; app quit fires it too. Mirrors the same-realm host's deactivate:
+// call the module's deactivate(), THEN dispose registrations in reverse order (so a
+// later subscription built on an earlier one tears down first). Best-effort and
+// synchronous — the document is going away, so async cleanup cannot be awaited; the
+// timer's engine.dispose()/removeStyles() are exactly this shape. Without this an
+// extension leaks its intervals/AudioContext/listeners every time its view closes.
+window.addEventListener('pagehide', () => {
+  try {
+    if (extensionModule && typeof extensionModule.deactivate === 'function') extensionModule.deactivate();
+  } catch (e) {
+    console.error('[extension] deactivate failed:', e);
+  }
+  for (const sub of subscriptions.slice().reverse()) {
+    try { sub.dispose(); } catch (e) { /* one bad disposer must not strand the rest */ }
+  }
+});
 `.trim()
 
   return [
