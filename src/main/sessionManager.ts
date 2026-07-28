@@ -51,6 +51,7 @@ import type { BuiltInMcpDomain, BuiltInMcpServerConfig } from '@mcp/shared/types
 import type { BuiltInMcpHttpHost } from '@mcp/runtime/BuiltInMcpHttpHost.js'
 import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import { SessionLifecycleJournal } from '@main/lifecycle/SessionLifecycleJournal.js'
+import type { PromptGateState } from '@shared/types/session.js'
 import type {
   SessionSpawnOptions,
   SessionSpawnResult,
@@ -440,6 +441,78 @@ export class SessionManager extends EventEmitter {
     this.lastActivityAt.set(sessionId, Date.now())
   }
 
+  /**
+   * Last gate verdict observed per session, plus when this stretch of it began.
+   *
+   * Exists so a STALL has a duration. A single "not ready, composer-unpainted"
+   * event is nearly worthless — that is the normal state for a moment during
+   * every boot. The same verdict still holding ninety seconds later is the
+   * whole bug, and nothing in the app records elapsed time in a gate state.
+   */
+  private readonly lastGateEvaluation = new Map<
+    string,
+    { gate: string; reason: string | null; since: number }
+  >()
+
+  private gateSampler: ReturnType<typeof setInterval> | null = null
+
+  private noteGateEvaluation(sessionId: string, kind: SessionKind, gate: PromptGateState): void {
+    const reason = 'reason' in gate ? gate.reason : null
+    const previous = this.lastGateEvaluation.get(sessionId)
+    const changed = previous?.gate !== gate.kind || previous?.reason !== reason
+    const since = changed ? Date.now() : previous.since
+    this.lastGateEvaluation.set(sessionId, { gate: gate.kind, reason, since })
+    if (!changed) return
+    this.lifecycle.session('gate.eval', sessionId, {
+      kind,
+      gate: gate.kind,
+      reason,
+      ...(gate.kind === 'blocked'
+        ? { conditionKind: gate.condition, resolvable: gate.resolvable }
+        : {}),
+      elapsedMs: 0,
+    })
+    this.ensureGateSampler()
+  }
+
+  /**
+   * Re-record any session that has been sitting in a non-ready gate, once every
+   * SAMPLE seconds.
+   *
+   * WHY sampling instead of emitting every evaluation: `derivePromptGateState`
+   * runs off screen snapshots, so an unconditional emit would be a 60 Hz
+   * firehose that buries the boot breadcrumbs inside the journal's own byte
+   * ceiling — the instrumentation would evict the evidence it exists to keep.
+   * On-change plus a periodic sample gives the same answer ("stuck at X for
+   * 90s") at a few hundred bytes instead of a few megabytes.
+   *
+   * WHY it only runs while something is non-ready: an idle workspace of ready
+   * agents writes nothing at all.
+   */
+  private ensureGateSampler(): void {
+    if (this.gateSampler) return
+    const SAMPLE_MS = 5_000
+    this.gateSampler = setInterval(() => {
+      let stalled = 0
+      for (const [sessionId, state] of this.lastGateEvaluation) {
+        if (state.gate === 'ready') continue
+        if (!this.sessions.has(sessionId)) continue
+        stalled += 1
+        this.lifecycle.session('gate.eval', sessionId, {
+          gate: state.gate,
+          reason: state.reason,
+          elapsedMs: Date.now() - state.since,
+        })
+      }
+      if (stalled === 0 && this.gateSampler) {
+        clearInterval(this.gateSampler)
+        this.gateSampler = null
+      }
+    }, SAMPLE_MS)
+    // Never hold the process open for a diagnostic timer.
+    this.gateSampler.unref?.()
+  }
+
   private setInputReadiness(sessionId: string, next: AgentInputReadiness): void {
     const previous = this.lastInputReadiness.get(sessionId)
     if (previous?.ready === next.ready && previous.reason === next.reason) return
@@ -508,6 +581,7 @@ export class SessionManager extends EventEmitter {
     this.lastConditionsSnapshot.delete(sessionId)
     this.lastTranscriptFile.delete(sessionId)
     this.lastInputReadiness.delete(sessionId)
+    this.lastGateEvaluation.delete(sessionId)
     this.spawnInfo.delete(sessionId)
     // Keep lastActivityAt after removal. Process telemetry can be asked about a
     // pane the renderer still knows but whose PTY already exited; deleting this
@@ -1084,6 +1158,25 @@ export class SessionManager extends EventEmitter {
       session.on('input-readiness', (input: AgentInputReadiness) => {
         if (!ownsEntry()) return
         this.setInputReadiness(sessionId, input)
+      })
+      // The RICH stall reason, and the reason this listener exists at all.
+      //
+      // `publishPromptGate` collapses its detailed verdict into an
+      // input-readiness event carrying only 'ready' | 'provider-not-ready', so
+      // by the time readiness reaches main the distinction between "replaying
+      // history", "the composer never painted", and "a human has a draft in the
+      // box" is already gone. Those are three completely different problems and
+      // they are indistinguishable in every log we have today.
+      //
+      // Only Claude emits this; Codex and opencode latch a coarse boolean. That
+      // asymmetry is itself worth recording rather than papering over — see
+      // `sampleStalledGates` for the provider-agnostic duration signal.
+      //
+      // Nothing here changes gate behaviour. This is a listener on an event the
+      // provider already emitted.
+      session.on('prompt-gate', (gate: PromptGateState) => {
+        if (!ownsEntry()) return
+        this.noteGateEvaluation(sessionId, kind, gate)
       })
       session.on('pty-data', (data: string) => {
         if (!ownsEntry()) return

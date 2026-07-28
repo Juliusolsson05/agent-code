@@ -212,6 +212,121 @@ describe('SessionManager lifecycle journal', () => {
     expect(revisions).toEqual([...revisions].sort((a, b) => a - b))
   })
 
+  it('records the rich gate verdict that input-readiness collapses away', async () => {
+    // publishPromptGate reduces its verdict to 'ready' | 'provider-not-ready'
+    // before it reaches main, so "replaying history", "the composer never
+    // painted" and "a human has a draft in the box" are indistinguishable in
+    // every log we have today. They are three different problems.
+    const { SessionManager } = await import('./sessionManager')
+    const spy = journalSpy()
+    const session = new FakeAgentSession()
+    createSession.mockImplementation(() => session)
+    const manager = new SessionManager(null, null, spy.journal as never)
+
+    await manager.recover({ sessionId: 's1', kind: 'claude', cwd: '/tmp/project' })
+    session.emit('prompt-gate', { kind: 'warming', reason: 'composer-unpainted' })
+
+    const evals = spy.lifecycle().filter(r => r.name === 'gate.eval')
+    expect(evals).toHaveLength(1)
+    expect(evals[0].data).toMatchObject({
+      gate: 'warming',
+      reason: 'composer-unpainted',
+      elapsedMs: 0,
+    })
+  })
+
+  it('coalesces an unchanged gate verdict instead of emitting per evaluation', async () => {
+    // derivePromptGateState runs off screen snapshots. An unconditional emit
+    // would be a 60 Hz firehose that buries the boot breadcrumbs inside the
+    // journal's own byte ceiling — the instrumentation evicting the evidence it
+    // exists to keep.
+    const { SessionManager } = await import('./sessionManager')
+    const spy = journalSpy()
+    const session = new FakeAgentSession()
+    createSession.mockImplementation(() => session)
+    const manager = new SessionManager(null, null, spy.journal as never)
+
+    await manager.recover({ sessionId: 's1', kind: 'claude', cwd: '/tmp/project' })
+    for (let i = 0; i < 50; i += 1) {
+      session.emit('prompt-gate', { kind: 'warming', reason: 'replay-pending' })
+    }
+    session.emit('prompt-gate', { kind: 'ready' })
+
+    const evals = spy.lifecycle().filter(r => r.name === 'gate.eval')
+    expect(evals.map(e => e.data?.gate)).toEqual(['warming', 'ready'])
+  })
+
+  it('records what a blocked gate is blocked on', async () => {
+    const { SessionManager } = await import('./sessionManager')
+    const spy = journalSpy()
+    const session = new FakeAgentSession()
+    createSession.mockImplementation(() => session)
+    const manager = new SessionManager(null, null, spy.journal as never)
+
+    await manager.recover({ sessionId: 's1', kind: 'claude', cwd: '/tmp/project' })
+    session.emit('prompt-gate', { kind: 'blocked', condition: 'trust-dialog', resolvable: true })
+
+    expect(spy.lifecycle().find(r => r.name === 'gate.eval')?.data).toMatchObject({
+      gate: 'blocked',
+      conditionKind: 'trust-dialog',
+      resolvable: true,
+    })
+  })
+
+  it('re-samples a stalled gate so the stall has a measured duration', async () => {
+    // A single "not ready" event is nearly worthless — that is the normal state
+    // for a moment during every boot. The same verdict still holding 90 seconds
+    // later is the entire bug, and nothing in the app records elapsed time in a
+    // gate state.
+    vi.useFakeTimers()
+    try {
+      const { SessionManager } = await import('./sessionManager')
+      const spy = journalSpy()
+      const session = new FakeAgentSession()
+      createSession.mockImplementation(() => session)
+      const manager = new SessionManager(null, null, spy.journal as never)
+
+      await manager.recover({ sessionId: 's1', kind: 'claude', cwd: '/tmp/project' })
+      session.emit('prompt-gate', { kind: 'warming', reason: 'composer-unpainted' })
+      await vi.advanceTimersByTimeAsync(11_000)
+
+      const samples = spy.lifecycle()
+        .filter(r => r.name === 'gate.eval')
+        .filter(r => (r.data?.elapsedMs as number) > 0)
+      expect(samples.length).toBeGreaterThanOrEqual(2)
+      expect(samples.at(-1)?.data).toMatchObject({
+        gate: 'warming',
+        reason: 'composer-unpainted',
+      })
+      expect(samples.at(-1)?.data?.elapsedMs as number).toBeGreaterThanOrEqual(10_000)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('stops sampling once nothing is stalled, so an idle workspace writes nothing', async () => {
+    vi.useFakeTimers()
+    try {
+      const { SessionManager } = await import('./sessionManager')
+      const spy = journalSpy()
+      const session = new FakeAgentSession()
+      createSession.mockImplementation(() => session)
+      const manager = new SessionManager(null, null, spy.journal as never)
+
+      await manager.recover({ sessionId: 's1', kind: 'claude', cwd: '/tmp/project' })
+      session.emit('prompt-gate', { kind: 'warming', reason: 'replay-pending' })
+      session.emit('prompt-gate', { kind: 'ready' })
+      await vi.advanceTimersByTimeAsync(30_000)
+
+      const samples = spy.lifecycle()
+        .filter(r => r.name === 'gate.eval')
+        .filter(r => (r.data?.elapsedMs as number) > 0)
+      expect(samples).toHaveLength(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('emits nothing when constructed without a journal', async () => {
     const { SessionManager } = await import('./sessionManager')
     const manager = new SessionManager()
