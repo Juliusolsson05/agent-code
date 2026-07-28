@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 
+import { Button } from '@renderer/components/ui/button'
 import type {
   AgentCodeConventionsMutationResult,
   AgentCodeConventionsSnapshot,
@@ -114,21 +115,12 @@ export function AgentCodeConventionsRow() {
       </div>
 
       <div className="flex flex-wrap gap-2">
-        <button
-          type="button"
-          onClick={() => setEditorOpen(true)}
-          className="border border-control-border bg-control-bg px-2 py-1 text-[11px] text-control-fg hover:text-ink"
-        >
+        <Button variant="outline" size="sm" onClick={() => setEditorOpen(true)}>
           Edit conventions…
-        </button>
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => void refresh()}
-          className="border border-control-border bg-control-bg px-2 py-1 text-[11px] text-control-fg hover:text-ink disabled:opacity-50"
-        >
+        </Button>
+        <Button variant="outline" size="sm" disabled={busy} onClick={() => void refresh()}>
           Refresh status
-        </button>
+        </Button>
       </div>
 
       {snapshot.targets.length > 0 ? (

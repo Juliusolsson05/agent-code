@@ -1,3 +1,4 @@
+import { Button } from '@renderer/components/ui/button'
 import type { DictationStatus } from '@shared/types/dictation'
 
 // ComposerActions — pointer-clickable Send and Stop, shown only in Mouse Mode.
@@ -86,8 +87,9 @@ export function ComposerActions({
   return (
     <div className="flex shrink-0 items-center justify-end gap-2 border-t border-border bg-surface px-3 py-1.5">
       {working ? (
-        <button
-          type="button"
+        <Button
+          variant="outline"
+          size="sm"
           // preventDefault on mousedown keeps focus in the textarea. Without
           // it, clicking moves DOM focus to this button, which drops the
           // composer's focus ring and makes the bare-Enter router bail
@@ -95,10 +97,13 @@ export function ComposerActions({
           // "not the composer").
           onMouseDown={event => event.preventDefault()}
           onClick={onStop}
-          className="border border-control-border bg-control-bg px-3 py-1 text-[11px] leading-none text-control-fg hover:border-danger hover:text-danger"
+          // Danger on hover only — Stop is a normal control at rest, and a
+          // filled destructive variant beside the Send button would read as
+          // the primary action.
+          className="hover:border-danger hover:bg-transparent hover:text-danger"
         >
           Stop
-        </button>
+        </Button>
       ) : null}
       <button
         type="button"

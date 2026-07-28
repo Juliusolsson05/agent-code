@@ -4,6 +4,7 @@ import { getProviderFeatures } from '@providers/shared/featureCapabilities'
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 
+import { Button } from '@renderer/components/ui/button'
 import {
   Dialog,
   DialogContent,
@@ -1629,13 +1630,9 @@ function OpenCommandPalette({
             }
           />
           {mode === 'prompt-template' && (
-            <button
-              type="button"
-              className="border border-control-border bg-control-bg px-2 py-1 text-[11px] text-control-fg hover:border-control-border-hover hover:bg-control-hover-bg hover:text-ink"
-              onClick={enterManagePromptTemplateMode}
-            >
+            <Button variant="outline" size="sm" onClick={enterManagePromptTemplateMode}>
               Manage
-            </button>
+            </Button>
           )}
         </div>
 
