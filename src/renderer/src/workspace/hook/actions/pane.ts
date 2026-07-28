@@ -318,6 +318,7 @@ export function usePaneActions(
   focusSession: (sessionId: SessionId) => void
   focusSessionInTab: (tabId: string, sessionId: SessionId) => void
   navigate: (direction: 'left' | 'right' | 'up' | 'down') => void
+  openExtensionViewInPane: (viewId: string, direction?: SplitDirection) => void
 } {
   const closeSessionRef = useRef<
     ((targetId: SessionId, options?: CloseSessionOptions) => Promise<void>) | null
@@ -2063,6 +2064,46 @@ export function usePaneActions(
     [focusSession, state.activeTabId, state.tabs],
   )
 
+  // Open a contributed extension view as a PANE (a tile leaf), not a modal.
+  //
+  // Unlike every other pane this creates NO backing process: an extension view is
+  // pure renderer UI reconstructed from SessionMeta.extensionViewId by
+  // ExtensionViewLeaf. So it deliberately does NOT call sessionActions.spawn (which
+  // mints the SessionId in MAIN by starting a PTY/agent). It mints its own id — the
+  // one place the renderer is allowed to, the same as tab ids — writes the meta
+  // directly, and splits beside the focused pane. collectLiveProcessIds excludes
+  // 'extension-view', so rehydrate reconstructs this leaf from metadata and never
+  // tries to recover a process for it.
+  const openExtensionViewInPane = useCallback(
+    (viewId: string, direction: SplitDirection = 'vertical') => {
+      const snapshot = refs.stateRef.current
+      const tab = snapshot.tabs.find(t => t.id === snapshot.activeTabId)
+      if (!tab) return
+      const parentSessionId = tab.focusedSessionId
+      if (!parentSessionId) return
+      // Cosmetic for a process-less view, but SessionMeta carries a cwd and the
+      // parent pane's is the honest inheritance (mirrors splitFocused).
+      const cwd = snapshot.sessions[parentSessionId]?.cwd ?? ''
+      const sessionId = crypto.randomUUID() as SessionId
+      setState(prev => ({
+        ...prev,
+        sessions: {
+          ...prev.sessions,
+          [sessionId]: { cwd, kind: 'extension-view', extensionViewId: viewId },
+        },
+        tabs: prev.tabs.map(t => {
+          if (t.id !== prev.activeTabId) return t
+          return {
+            ...t,
+            root: splitLeaf(t.root, parentSessionId, direction, sessionId),
+            focusedSessionId: sessionId,
+          }
+        }),
+      }))
+    },
+    [refs.stateRef, setState],
+  )
+
   return {
     splitFocused,
     startNewAgentPlacement,
@@ -2082,6 +2123,7 @@ export function usePaneActions(
     focusSession,
     focusSessionInTab,
     navigate,
+    openExtensionViewInPane,
   }
 }
 
