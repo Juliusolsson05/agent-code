@@ -78,7 +78,15 @@ function OpenExtensionView({ definition }: { definition: AppDefinition }) {
 
   return (
     <Dialog open onOpenChange={onOpenChange}>
-      <DialogContent showCloseButton className="w-[min(560px,92vw)] overflow-hidden">
+      {/* Content-width, not a fixed 560: the frame reports its natural size and the
+          iframe takes a definite width/height, so a small extension stays snug while a
+          large one (a game canvas) grows the modal up to the cap. Inline style beats
+          the primitive's own `w-[…]` utility. */}
+      <DialogContent
+        showCloseButton
+        className="overflow-hidden"
+        style={{ width: 'auto', maxWidth: 'min(1160px, 94vw)' }}
+      >
         {/* Radix requires an accessible title on every Dialog; visually hidden
             because an extension owns its own header treatment. Omitting it logs
             a console error and leaves the dialog unlabelled for screen readers. */}

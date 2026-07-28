@@ -50,6 +50,11 @@ export function viewComponentFor(
     // modal grows to fit the extension instead of clamping it. Null until the first
     // report — the iframe falls back to a minimum so it is never a zero-height strip.
     const [contentHeight, setContentHeight] = useState<number | null>(null)
+    // Content-driven WIDTH, the sibling of the height above: a fixed-width extension
+    // (a game canvas) reports its natural width and the modal grows to fit it, while
+    // a small extension stays snug. Null until the first report → the iframe falls
+    // back to filling its container (the modal's own width).
+    const [contentWidth, setContentWidth] = useState<number | null>(null)
 
     useEffect(() => {
       const iframe = iframeRef.current
@@ -75,13 +80,16 @@ export function viewComponentFor(
       // window reference, which no other frame can forge.
       const onChildMessage = (event: MessageEvent) => {
         if (event.source !== iframe.contentWindow) return
-        const data = event.data as { kind?: unknown; height?: unknown } | null
+        const data = event.data as { kind?: unknown; height?: unknown; width?: unknown } | null
         if (!data) return
         if (data.kind === 'agent-code-ext:resize') {
           // Clamped so a buggy or hostile child cannot drive the modal past the
           // viewport or collapse it to nothing.
           if (typeof data.height !== 'number' || !Number.isFinite(data.height)) return
           setContentHeight(Math.min(Math.max(Math.round(data.height), 80), 1400))
+          if (typeof data.width === 'number' && Number.isFinite(data.width)) {
+            setContentWidth(Math.min(Math.max(Math.round(data.width), 240), 1200))
+          }
         } else if (data.kind === 'agent-code-ext:ready') {
           // activate() has resolved in the frame — command handlers now exist, so
           // it is safe to publish the dispatcher and flush any queued commands.
@@ -195,13 +203,14 @@ export function viewComponentFor(
           style={{
             display: status === 'ready' ? 'block' : 'none',
             border: 'none',
-            width: '100%',
-            // Pane (fill): fill the tile — its parent has a definite height, so
-            // 100% is correct and content-sizing would leave dead space or clip.
-            // Modal (default): a definite pixel height once the child reports its
-            // content size — that is what lets the auto-height modal grow to fit.
-            // Before the first report we use the floor, never '100%': '100%' of an
-            // auto-height parent is what collapsed the frame to a 120px strip.
+            // Pane (fill): fill the tile in both axes. Modal: a definite pixel width
+            // once reported (so a content-width modal wraps it), else 100% of the
+            // modal's own width until the first report.
+            width: fill ? '100%' : contentWidth ?? '100%',
+            // Modal: a definite pixel height once the child reports its content size —
+            // that is what lets the auto-size modal grow to fit. Before the first
+            // report we use the floor, never '100%': '100%' of an auto parent is what
+            // collapsed the frame to a strip.
             height: fill ? '100%' : contentHeight ?? 120,
             minHeight: fill ? undefined : 120,
           }}

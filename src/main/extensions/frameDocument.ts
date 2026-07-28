@@ -189,8 +189,12 @@ const context = {
 function reportSize() {
   const root = document.getElementById('root');
   if (!root) return;
+  // scrollHeight/scrollWidth capture the CONTENT extent even when #root itself is
+  // width:100% of a smaller iframe — a fixed-width extension (a game canvas) overflows
+  // and its true width is reported, so the host can grow the modal to fit it.
   const height = root.scrollHeight;
-  if (height > 0) window.parent.postMessage({ kind: 'agent-code-ext:resize', height: height }, '*');
+  const width = root.scrollWidth;
+  if (height > 0) window.parent.postMessage({ kind: 'agent-code-ext:resize', height: height, width: width }, '*');
 }
 
 let mounted = false;
