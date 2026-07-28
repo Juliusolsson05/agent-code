@@ -16,6 +16,45 @@
 >    "zero the statistics", which would have left rows visible whose words were
 >    no longer counted anywhere — a list that visibly contradicts the tiles
 >    above it.
+>
+> **Two-reviewer adversarial pass** (main-process lens + renderer/contract lens)
+> then found eleven real defects in the first implementation, all fixed. The
+> ones worth remembering, because each was a case where the CODE and its own
+> COMMENT disagreed:
+>
+> - **`read()` destroyed the store on any transient read error.** It returned
+>   an empty store for every `readFile` failure, and the next `appendEntry`
+>   wrote that emptiness back over a healthy file — one EMFILE or EACCES during
+>   a dictation would wipe every transcript and the lifetime counter, durably,
+>   silently, in violation of this document's own "must never decrease" rule.
+>   Only ENOENT now means "no store yet"; an unrecognised `v:` refuses to write
+>   at all so a rollback cannot eat a newer file.
+> - **A held Enter key wiped all statistics.** React reconciles fragment
+>   children by index, so `Reset Statistics` and `Confirm` were literally the
+>   same DOM node with swapped text — keydown auto-repeat walked straight
+>   through the "cannot be undone" prompt. Fixed with distinct keys, forced
+>   focus onto Cancel, Escape-to-dismiss, and `role="alert"`.
+> - **`looksLikeStrayTap` swallowed real failures.** Keying only on clip size
+>   meant a 401 from a bad API key surfaced as "No speech detected" on every
+>   short command. It now also requires a malformed-request status; auth, rate
+>   limit, outage and network errors always surface.
+> - **The WPM numerator was shared with the lifetime word count**, so a row
+>   with no measurable duration biased the average upward forever. Split into
+>   `words` and `wpmWords`.
+> - **`flushHistoryWrites()` at quit was documented as a guarantee it never
+>   provided.** `before-quit` does not gate on it. Rather than preventDefault a
+>   quit for one bookkeeping row, the behaviour stays best-effort and the
+>   comments now say so.
+> - **Renderer and main `chunkIndex` could desync** on a zero-byte blob,
+>   silently breaking the sha8 pairing that the journal — the instrument that
+>   found the cold-start bug in the first place — depends on.
+> - **Three tests proved nothing.** The `flushHistoryWrites` test passed with
+>   the function gutted; the ordering claims in the renderer spec passed with
+>   `chunkChain` deleted and with the id published before the drain; the
+>   privacy test asserted the absence of key names the code never used. All
+>   three are now mutation-verified to fail against the defect they describe,
+>   and `MAX_ENTRIES` eviction — the invariant the whole stored-totals design
+>   exists for — is covered for the first time.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development`
 > (recommended) or `superpowers:executing-plans` to implement this plan

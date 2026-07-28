@@ -987,10 +987,15 @@ export function useComposerDictation({
       }
 
       recorder.addEventListener('dataavailable', event => {
-        const chunkIndex = recording.nextChunkIndex
-        recording.nextChunkIndex += 1
+        // NOTE the index is assigned AFTER the empty-blob guard below, not
+        // here. Main derives its own index as `chunkCount - 1` and only counts
+        // chunks it actually received, so if this side burned an index on a
+        // skipped blob the two would drift apart permanently and every sha8
+        // pairing in the journal would compare mismatched chunks — reading as
+        // "IPC rewrote the payload", the one diagnosis the journal calls
+        // catastrophic. Both sides count forwarded chunks only.
         debug('recorder:dataavailable', {
-          chunkIndex,
+          pendingChunkIndex: recording.nextChunkIndex,
           size: event.data.size,
           type: event.data.type,
           recorderState: recorder.state,
@@ -1032,6 +1037,8 @@ export function useComposerDictation({
         // `=== 0`, as does the standalone flow-electron app). Only this port
         // drifted. Do not "tighten" it back.
         if (event.data.size === 0) return
+        const chunkIndex = recording.nextChunkIndex
+        recording.nextChunkIndex += 1
         // MediaRecorder fires `dataavailable` in order, but the Blob ->
         // ArrayBuffer conversion is asynchronous and does not preserve that
         // ordering for us. That was the root cause of Deepgram's intermittent

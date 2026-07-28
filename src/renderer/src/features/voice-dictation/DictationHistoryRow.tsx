@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import type { DictationHistoryEntry, DictationHistorySnapshot } from '@preload/api/types'
 
@@ -27,20 +27,34 @@ export function DictationHistoryRow() {
   const [busy, setBusy] = useState(false)
   const [confirming, setConfirming] = useState<'clear' | 'reset' | null>(null)
 
+  // `reloadKey` exists so the failure branch can retry. Without it a single
+  // transient FS error on mount left `snapshot` null forever: the only thing
+  // that cleared `error` was `mutate`, and every control that calls `mutate`
+  // lives behind the `!snapshot` early return — so the panel was a dead end
+  // until the user closed and reopened Settings, with nothing saying so.
+  const [reloadKey, setReloadKey] = useState(0)
+
   useEffect(() => {
     let cancelled = false
     void window.api
       .listDictationHistory()
       .then(next => {
-        if (!cancelled) setSnapshot(next)
+        if (cancelled) return
+        setSnapshot(next)
+        setError(null)
       })
-      .catch(() => {
-        if (!cancelled) setError('Could not read dictation history.')
+      .catch((err: unknown) => {
+        if (cancelled) return
+        // Surface the real reason. Main now refuses to read a store it cannot
+        // trust (rather than silently reporting it as empty and then
+        // overwriting it), so this message is the user's only signal that their
+        // history is intact but temporarily unreadable.
+        setError(err instanceof Error ? err.message : 'Could not read dictation history.')
       })
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [reloadKey])
 
   const mutate = useCallback(
     async (operation: () => Promise<DictationHistorySnapshot>) => {
@@ -60,8 +74,19 @@ export function DictationHistoryRow() {
 
   if (error && !snapshot) {
     return (
-      <div role="alert" className="text-[11px] text-danger">
-        {error}
+      <div className="flex flex-col gap-2">
+        <div role="alert" className="text-[11px] text-danger">
+          {error}
+        </div>
+        <div>
+          <button
+            type="button"
+            onClick={() => setReloadKey(key => key + 1)}
+            className="border border-control-border bg-control-bg px-2 py-1 text-[11px] text-control-fg hover:border-control-border-hover hover:text-ink"
+          >
+            Retry
+          </button>
+        </div>
       </div>
     )
   }
@@ -107,9 +132,14 @@ export function DictationHistoryRow() {
       ) : (
         <>
           <div className="text-[10px] uppercase tracking-wide text-muted">
-            Recent — last {entries.length}
+            Recent — last {stats.retainedEntries}
           </div>
-          <ul className="flex flex-col gap-1">
+          {/* Bounded, matching the `command-visibility` row's precedent in
+              SettingsList. Unbounded, 200 retained transcripts inject ~5,600px
+              into the middle of the Settings page and push every row below
+              this one — including Dictation Shortcut, which is what a user
+              most likely opened Settings to find — off screen. */}
+          <ul className="flex max-h-[320px] flex-col gap-1 overflow-auto">
             {entries.map(entry => (
               <HistoryRow
                 key={entry.id}
@@ -124,9 +154,21 @@ export function DictationHistoryRow() {
         </>
       )}
 
+      {/* The `key` on each branch is a SAFETY property, not a lint nicety.
+          React reconciles fragment children by index, so without distinct keys
+          the <button>Reset Statistics</button> at index 1 and the
+          <button>Confirm</button> at index 1 are the same element type and
+          React REUSES the same DOM node, swapping only its text. The focused
+          element then silently mutates from a safe button into the destructive
+          one: a keyboard user holding Enter on "Reset Statistics" gets
+          keydown auto-repeat, the first press opens the confirmation, and the
+          second press lands on "Confirm" — wiping every lifetime statistic
+          inside a single key press, with the "cannot be undone" warning shown
+          and dismissed too fast to read. Distinct keys force a remount so the
+          reused-node path cannot exist. */}
       <div className="flex items-center gap-2">
         {confirming === null ? (
-          <>
+          <div key="history-actions" className="flex items-center gap-2">
             <button
               type="button"
               disabled={busy || entries.length === 0}
@@ -145,10 +187,24 @@ export function DictationHistoryRow() {
             >
               Reset Statistics
             </button>
-          </>
+          </div>
         ) : (
-          <>
-            <span className="text-[11px] text-muted">
+          <div
+            key="history-confirm"
+            className="flex items-center gap-2"
+            // Escape is the expected way out of a destructive prompt, and
+            // without it a keyboard user who opened this by accident has to
+            // hunt for Cancel past up to 200 transcript rows.
+            onKeyDown={event => {
+              if (event.key === 'Escape') {
+                event.stopPropagation()
+                setConfirming(null)
+              }
+            }}
+          >
+            {/* role="alert" so a screen reader announces that a destructive
+                confirmation is now pending — otherwise the prompt is silent. */}
+            <span role="alert" className="text-[11px] text-muted">
               {confirming === 'clear'
                 ? 'Remove retained transcripts? Statistics are kept.'
                 : 'Remove transcripts and zero all statistics? This cannot be undone.'}
@@ -170,12 +226,16 @@ export function DictationHistoryRow() {
             <button
               type="button"
               disabled={busy}
+              // Focus lands on CANCEL, never Confirm. The remount above
+              // destroys the previously focused node, so something must claim
+              // focus deliberately; the safe choice is the non-destructive one.
+              ref={node => node?.focus()}
               onClick={() => setConfirming(null)}
               className="border border-control-border bg-control-bg px-2 py-1 text-[11px] text-control-fg hover:text-ink disabled:opacity-50"
             >
               Cancel
             </button>
-          </>
+          </div>
         )}
       </div>
 
@@ -209,6 +269,19 @@ function HistoryRow({
   const [expanded, setExpanded] = useState(false)
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
 
+  // Held so a second copy can cancel the first one's pending revert. Without
+  // this, two copies 300ms apart leave two timers running and the first fires
+  // mid-way through the second's confirmation, blanking the label while the
+  // user is still looking at it. Also cleared on unmount — deleting a row while
+  // its timer is live would otherwise leak it.
+  const revertTimer = useRef<number | null>(null)
+  useEffect(
+    () => () => {
+      if (revertTimer.current !== null) window.clearTimeout(revertTimer.current)
+    },
+    [],
+  )
+
   const copy = useCallback(async () => {
     try {
       // Raw text, deliberately: no <stt> wrapper. The wrapper is a hint for a
@@ -218,13 +291,18 @@ function HistoryRow({
       await navigator.clipboard.writeText(entry.text)
       setCopyState('copied')
     } catch {
-      // clipboard.writeText rejects when the document is not focused. Surface
-      // it — a copy button that silently does nothing reads as broken.
+      // clipboard.writeText rejects when the document is not focused, and the
+      // property access itself throws if clipboard is unavailable. Surface it —
+      // a copy button that silently does nothing reads as broken.
       setCopyState('failed')
     }
     // A clipboard write has no other visible effect, so the button label IS the
     // confirmation. Revert so the control does not look stuck.
-    setTimeout(() => setCopyState('idle'), 1200)
+    if (revertTimer.current !== null) window.clearTimeout(revertTimer.current)
+    revertTimer.current = window.setTimeout(() => {
+      revertTimer.current = null
+      setCopyState('idle')
+    }, 1200)
   }, [entry.text])
 
   return (

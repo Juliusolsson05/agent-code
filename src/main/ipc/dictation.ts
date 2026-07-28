@@ -159,8 +159,14 @@ export function registerDictationIpc(deps: {
   // Dictation history. Every mutating handler returns the FRESH snapshot rather
   // than void, so the renderer updates in one round-trip instead of firing a
   // follow-up list call — same shape as `dictation:api-key-set` returning the
-  // new status. It also removes the window where two renderers could disagree
-  // about what the store contains.
+  // new status.
+  //
+  // Known gap, stated so nobody assumes otherwise: this makes a renderer's OWN
+  // mutations consistent, not the panel as a whole. A dictation committed in
+  // another pane appends a row that no open Settings panel hears about — there
+  // is no `dictation:history-changed` push today, so the list is stale until it
+  // remounts. Reads are serialised against in-flight appends (see readHistory),
+  // so what it shows is always a real past state, never a torn one.
   ipcMain.handle('dictation:history-list', async () => readHistory())
   ipcMain.handle('dictation:history-delete', async (_evt, params: { id?: string }) => {
     if (!params?.id) return readHistory()
@@ -383,7 +389,15 @@ export function registerDictationIpc(deps: {
       // — we have never seen this).
       emit(session.debugSessionId, 'CHUNK', 'main:received', {
         streamId: params.id,
-        chunkIndex: session.chunkCount - 1, // 0-based to match renderer's nextChunkIndex
+        // 0-based, and it matches the renderer's `chunkIndex` because BOTH
+        // sides now count only chunks that were actually forwarded — the
+        // renderer increments `nextChunkIndex` after its own empty-blob guard.
+        // If the two ever diverge, every sha8 pairing in the journal shifts by
+        // one and reads as "IPC rewrote the chunks in flight", which is the
+        // catastrophic-and-never-seen diagnosis warned about above. The journal
+        // is the instrument that found the cold-start bug; keeping its keying
+        // honest is what makes the next investigation possible.
+        chunkIndex: session.chunkCount - 1,
         bytes: chunk.byteLength,
         sha8: sha8(chunk),
         cumulativeBytes: session.audioBytes,
@@ -561,18 +575,33 @@ export function registerDictationIpc(deps: {
         // throws, and surfacing a red "Dictation failed" toast for a half-second
         // stray press trains the user to ignore the toast that matters.
         //
-        // Deliberately narrow: only when the clip is BOTH tiny in chunks and
-        // short in wall-clock. A real dictation that fails for a real reason
-        // (bad key, provider outage, network) still surfaces as an error, which
-        // is the whole point of not just swallowing every throw here.
+        // Deliberately narrow, and gated on the ERROR SHAPE as well as the clip
+        // size. Size alone is not enough — the reclassification band works out
+        // to roughly audioDurationMs ∈ [300, 600) once the pre-flight `< 300`
+        // guard above is accounted for, and that band contains ordinary short
+        // push-to-talk commands ("yes", "next", "commit it"), not just
+        // accidental brushes. Keying on size alone therefore turned a wrong API
+        // key into "No speech detected" on every short command, and the user
+        // would conclude the microphone was broken while the real cause (a 401)
+        // sat only in the journal.
+        //
+        // So: only a request the provider rejected as MALFORMED can be
+        // downgraded. Auth (401/403), rate limits (429), provider outages (5xx),
+        // and network-layer throws (no status at all) always surface as errors,
+        // because those are exactly the failures the user must be told about.
         //
         // NOT fixed by widening the `audioDurationMs < 300` pre-flight guard
         // above: that duration is measured from `recording.startedAt`, stamped
         // at recorder creation, so it already includes ~150ms of startup before
         // any audio exists. Raising it would start discarding real short
         // dictations, which is a worse failure than a stray toast.
+        const status = (err as { status?: unknown } | null)?.status
+        const providerRejectedTheClip = typeof status === 'number' && status >= 400 && status < 500
+          && status !== 401 && status !== 403 && status !== 429
         const looksLikeStrayTap =
-          session.chunkCount <= 3 && (params.audioDurationMs ?? 0) < 1000
+          providerRejectedTheClip
+          && session.chunkCount <= 3
+          && (params.audioDurationMs ?? 0) < 1000
         if (looksLikeStrayTap) {
           emit(session.debugSessionId, 'OUTCOME', 'no-speech', {
             streamId: params.id,

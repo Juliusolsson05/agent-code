@@ -62,19 +62,44 @@ class FakeMediaRecorder {
     for (const handler of this.listeners.get('stop') ?? []) handler({})
   }
 
-  emit(payload: Uint8Array): void {
+  /**
+   * Emit one timeslice.
+   *
+   * `deferred: true` withholds the Blob→ArrayBuffer conversion until the
+   * returned `release()` is called. That is the whole point of the fake: the
+   * real bug class here is that `dataavailable` fires IN ORDER but
+   * `blob.arrayBuffer()` is async and does not preserve that order, so a later
+   * chunk's conversion can win the race and reach the wire first — which is
+   * what produced Deepgram's `UNPARSABLE_CLIENT_MESSAGE` (a media cluster
+   * arriving before the EBML init segment). A fake that always resolves
+   * immediately cannot express that, and a test built on one silently passes
+   * even with the `chunkChain` serialization deleted.
+   */
+  emit(payload: Uint8Array, options: { deferred?: boolean } = {}): { release: () => void } {
     const buffer = payload.slice().buffer
+    let release = (): void => {}
+    const ready = options.deferred
+      ? new Promise<void>(resolve => {
+          release = () => resolve()
+        })
+      : Promise.resolve()
     const blob = {
       size: payload.byteLength,
       type: this.mimeType,
-      arrayBuffer: async () => buffer,
+      arrayBuffer: async () => {
+        await ready
+        return buffer
+      },
     }
     for (const handler of this.listeners.get('dataavailable') ?? []) handler({ data: blob })
+    return { release }
   }
 }
 
 let captured: CapturedChunk[] = []
 let controller: ComposerDictationController | null = null
+/** When set, the first `pushDictationChunk` blocks on this until resolved. */
+let holdFirstPush: Promise<void> | null = null
 
 function Harness(): React.JSX.Element {
   controller = useComposerDictation({
@@ -93,6 +118,7 @@ const wait = (ms: number): Promise<void> => new Promise(resolve => setTimeout(re
 beforeEach(() => {
   captured = []
   controller = null
+  holdFirstPush = null
   FakeMediaRecorder.instances = []
 
   const track = {
@@ -148,7 +174,12 @@ beforeEach(() => {
     recordDictationDebugEvent: () => {},
     startDictationStream: async () => ({ kind: 'started', id: 'stream-1' }),
     pushDictationChunk: async (params: { id: string; chunk: ArrayBuffer }) => {
+      // Record at CALL time — that is the order main would receive them in.
       captured.push([...new Uint8Array(params.chunk)])
+      // `holdFirstPush` lets a test freeze the drain loop mid-flight so it can
+      // emit a chunk while the queue is still draining. That window is the only
+      // place the drain-then-publish ordering bug is observable.
+      if (holdFirstPush && captured.length === 1) await holdFirstPush
       return { kind: 'ok' }
     },
     stopDictationStream: async () => ({ kind: 'no-speech' }),
@@ -224,5 +255,93 @@ describe('composer dictation chunk delivery', () => {
     // A zero-byte blob contributes nothing to the container, so skipping it is
     // the one safe case — concatenating nothing is a no-op.
     expect(captured).toEqual([[0x99, 0x99]])
+  })
+
+  it('preserves recorder order when an earlier chunk converts late', async () => {
+    // Pins the `chunkChain` serialization. `dataavailable` fires in order but
+    // `blob.arrayBuffer()` is async, so without the chain a later chunk whose
+    // conversion resolves first reaches the wire first — the WebM stream then
+    // begins with a media cluster instead of the EBML init segment and Deepgram
+    // rejects it as UNPARSABLE_CLIENT_MESSAGE.
+    render(
+      <SessionFeedProvider value={createFakeSessionFeed()}>
+        <Harness />
+      </SessionFeedProvider>,
+    )
+
+    await act(async () => {
+      controller?.toggle()
+    })
+    const recorder = FakeMediaRecorder.instances[0]
+
+    // Chunk 0 (the header) converts LATE; chunk 1 converts immediately.
+    let releaseHeader = (): void => {}
+    await act(async () => {
+      releaseHeader = recorder!.emit(bytes(3, 0x1a), { deferred: true }).release
+      recorder!.emit(bytes(2, 0x42))
+    })
+
+    await act(async () => {
+      releaseHeader()
+      await wait(MIN_HOLD_TO_TRANSCRIBE_MS + 120)
+    })
+
+    // Recorder order, not conversion order.
+    expect(captured).toEqual([
+      [0x1a, 0x1a, 0x1a],
+      [0x42, 0x42],
+    ])
+  })
+
+  it('keeps order across the queued-to-direct handover once the stream is open', async () => {
+    // The queued path (before the provider session exists) and the direct
+    // push-ipc path (after `recording.id` is published) are different branches.
+    // The handover between them is where the drain-then-publish ordering fix
+    // lives: publishing the id BEFORE the queue is empty lets a concurrent
+    // chunk jump ahead of the queued ones.
+    render(
+      <SessionFeedProvider value={createFakeSessionFeed()}>
+        <Harness />
+      </SessionFeedProvider>,
+    )
+
+    await act(async () => {
+      controller?.toggle()
+    })
+    const recorder = FakeMediaRecorder.instances[0]
+
+    // Freeze the drain after its first push so a new chunk can arrive while the
+    // queue is still non-empty. Publishing `recording.id` before the queue
+    // empties would let that chunk take the direct branch and overtake the
+    // still-queued one.
+    let releaseDrain = (): void => {}
+    holdFirstPush = new Promise<void>(resolve => {
+      releaseDrain = () => resolve()
+    })
+
+    await act(async () => {
+      recorder!.emit(bytes(1, 0x01))
+      recorder!.emit(bytes(1, 0x02))
+    })
+    // Let the tap window elapse so the stream opens and the drain begins.
+    await act(async () => {
+      await wait(MIN_HOLD_TO_TRANSCRIBE_MS + 120)
+    })
+    // Mid-drain: chunk 0x03 arrives while 0x02 is still queued.
+    await act(async () => {
+      recorder!.emit(bytes(1, 0x03))
+      await wait(20)
+    })
+    await act(async () => {
+      releaseDrain()
+      await wait(80)
+    })
+    // And a chunk after the handover completes, on the direct branch.
+    await act(async () => {
+      recorder!.emit(bytes(1, 0x04))
+      await wait(50)
+    })
+
+    expect(captured).toEqual([[0x01], [0x02], [0x03], [0x04]])
   })
 })
