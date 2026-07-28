@@ -140,7 +140,11 @@ export function useComposerKeybinds({
   }
 
   const submitCurrentDraft = async (
-    source: 'textarea-enter' | 'global-enter',
+    // 'button' is the Mouse Mode Send control. Kept distinct from the two
+    // Enter paths because this value is written into the paste-debug journal,
+    // and "was this submitted by click or by key?" is exactly the kind of
+    // question that journal exists to answer after the fact.
+    source: 'textarea-enter' | 'global-enter' | 'button',
     hasModifier = false,
   ) => {
     if (runtime.providerSwitch) {
