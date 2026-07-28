@@ -1,4 +1,8 @@
-import type { CommandDef, CommandPickerVisibility } from '@renderer/features/command-palette/types'
+import type {
+  CommandDef,
+  CommandGroup,
+  CommandPickerVisibility,
+} from '@renderer/features/command-palette/types'
 
 /**
  * Everything the visibility decision needs, and nothing else.
@@ -61,7 +65,7 @@ export function isVisibleInPicker(
 ): boolean {
   if (policy.showHiddenCommands) return true
 
-  if (command.commandGroup === 'navigation' && !policy.navigationCommandsEnabled) return false
+  if (suppressingCommandGroup(command, policy) !== null) return false
 
   // Optional-chain defensively: this runs inside the palette's first-render
   // useMemo, so if `overrides` is ever undefined (a persisted-settings shape
@@ -75,10 +79,71 @@ export function isVisibleInPicker(
   return declaredTier(command) === 'default'
 }
 
+/**
+ * Which command GROUP, if any, is currently suppressing this command — step 2
+ * of the resolution order, extracted so it has exactly one implementation.
+ *
+ * WHY it is exported rather than inlined into `isVisibleInPicker`: Settings
+ * needs to distinguish "hidden because the user unticked it" from "hidden
+ * because its parent group is off", so it can disable that row and NAME the
+ * parent instead of offering a checkbox whose value the group gate will
+ * immediately outrank. Before this existed the Settings row re-implemented the
+ * `commandGroup === 'navigation' && !navigationCommandsEnabled` test locally —
+ * a second copy of the rule, in the same PR that consolidated the other half.
+ * The copy did not generalize: adding a second gated group would teach
+ * `isVisibleInPicker` about it and leave Settings rendering an enabled,
+ * unticked checkbox that snaps back the moment it is ticked.
+ *
+ * Returns the group id so the caller can label it, or `null` when nothing is
+ * group-suppressing this command.
+ */
+export function suppressingCommandGroup(
+  command: Pick<CommandDef, 'commandGroup'>,
+  policy: Pick<PickerVisibilityPolicy, 'navigationCommandsEnabled'>,
+): CommandGroup | null {
+  if (command.commandGroup === 'navigation' && !policy.navigationCommandsEnabled) {
+    return 'navigation'
+  }
+  return null
+}
+
 /** The command's declared tier, with the documented `absent ≡ 'default'` rule
  *  applied in ONE place so callers never re-implement the fallback and drift. */
 export function declaredTier(
   command: Pick<CommandDef, 'pickerVisibility'>,
 ): CommandPickerVisibility {
   return command.pickerVisibility ?? 'default'
+}
+
+/**
+ * The WRITE half of the same rule `isVisibleInPicker` reads.
+ *
+ * Returns the next override map for "the user set this command's palette
+ * visibility to `visible`".
+ *
+ * WHY it prunes instead of always storing the boolean: setting a command back
+ * to its declared tier DELETES the entry rather than recording a redundant
+ * `true`/`false`. The map then only ever holds deliberate deviations, which
+ * matters the day a command's shipped default changes — a stale entry that
+ * merely restated the old default would silently keep overriding the new one,
+ * and the user would have no idea they were pinning it.
+ *
+ * Lives here, next to the read rule, because the two have to agree about what
+ * "declared default" means. It used to be inline in `settingsRegistry.ts`,
+ * which is also where the *second*, drifted copy of the read rule lived — that
+ * copy did not know about command groups and made Settings state the opposite
+ * of what the palette showed. One home for each half, both in this file.
+ */
+export function setPickerVisibilityOverride(
+  overrides: Record<string, boolean> | undefined,
+  command: Pick<CommandDef, 'id' | 'pickerVisibility'>,
+  visible: boolean,
+): Record<string, boolean> {
+  const next = { ...(overrides ?? {}) }
+  if (visible === (declaredTier(command) === 'default')) {
+    delete next[command.id]
+  } else {
+    next[command.id] = visible
+  }
+  return next
 }

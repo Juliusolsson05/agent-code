@@ -134,8 +134,8 @@ export function DictationHistoryRow() {
           <div className="text-[10px] uppercase tracking-wide text-muted">
             Recent — last {stats.retainedEntries}
           </div>
-          {/* Bounded, matching the `command-visibility` row's precedent in
-              SettingsList. Unbounded, 200 retained transcripts inject ~5,600px
+          {/* Bounded, matching the keybinding list's precedent in
+              CommandKeybindingsRow. Unbounded, 200 retained transcripts inject ~5,600px
               into the middle of the Settings page and push every row below
               this one — including Dictation Shortcut, which is what a user
               most likely opened Settings to find — off screen. */}
