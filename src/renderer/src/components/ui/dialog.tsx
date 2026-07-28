@@ -84,9 +84,13 @@ function DialogHeader({ className, ...props }: React.ComponentProps<'div'>) {
   )
 }
 
-function DialogFooter({ className, ...props }: React.ComponentProps<'div'>) {
-  return (
+// forwardRef, like DialogTitle/DialogDescription below: DialogActions needs a
+// node inside the footer to find its own dialog root with `closest`, so it can
+// scope its Enter listener to this dialog instead of the whole document.
+const DialogFooter = React.forwardRef<HTMLDivElement, React.ComponentProps<'div'>>(
+  ({ className, ...props }, ref) => (
     <div
+      ref={ref}
       data-slot="dialog-footer"
       className={cn(
         'flex items-center justify-end gap-2 border-t border-border px-4 py-3',
@@ -94,8 +98,9 @@ function DialogFooter({ className, ...props }: React.ComponentProps<'div'>) {
       )}
       {...props}
     />
-  )
-}
+  ),
+)
+DialogFooter.displayName = 'DialogFooter'
 
 const DialogTitle = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Title>,

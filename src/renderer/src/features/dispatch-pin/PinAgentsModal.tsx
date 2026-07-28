@@ -166,6 +166,9 @@ export function PinAgentsModal({
           confirmLabel={
             selectedIds.length === 1 ? 'Pin 1 Agent' : `Pin ${selectedIds.length} Agents`
           }
+          // Nothing selected commits an empty list under a button reading
+          // "Pin 0 Agents", which reads like a no-op the user has to guess at.
+          confirmDisabled={selectedIds.length === 0}
           onConfirm={() => onConfirm(selectedIds)}
           onCancel={onCancel}
           confirmOnEnter={false}

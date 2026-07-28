@@ -33,9 +33,8 @@ export type ComposerActionsProps = {
   providerSwitching: boolean
   /** True while the composer is in slash-command mode. */
   slashMode: boolean
-  /** True when the session has exited. */
-  exited: boolean
-  /** True while the agent is producing output — gates Stop's visibility. */
+  /** True while the agent is producing output — gates Stop's visibility.
+   *  Deliberately no `exited` prop: see the WHY on `sendDisabled`. */
   working: boolean
   dictationStatus: DictationStatus
   onSend: () => void
@@ -49,7 +48,6 @@ export function ComposerActions({
   deliveryUncertain,
   providerSwitching,
   slashMode,
-  exited,
   working,
   dictationStatus,
   onSend,
@@ -58,11 +56,19 @@ export function ComposerActions({
   // Mirrors the phone's predicate (remote-client SessionView) plus the two
   // desktop-only blockers below. Kept as one expression rather than early
   // returns so the disabled reasons stay readable together.
+  // WHY there is no `exited` term here, despite the phone's Send having one:
+  // an exited pane is NOT a dead end on the desktop. TileLeaf's `send()` routes
+  // failed/exited panes through `ensureSessionLive` on purpose — "provider
+  // attempts are disposable... main's stable-id recovery protocol is explicitly
+  // retryable" — so pressing Enter in an exited pane wakes it and delivers.
+  // Copying the phone's `transcript.exited` term verbatim disabled this button
+  // in exactly the state where the app has a deliberate recovery path, leaving
+  // a Mouse Mode user staring at a permanently dimmed control with no
+  // explanation. The button must not be more conservative than Enter.
   const sendDisabled =
     (input.trim().length === 0 && !hasDraftImages) ||
     sending ||
     deliveryUncertain ||
-    exited ||
     // Provider switch already disables the textarea; the button must agree or
     // it would look like the one live control on a dead composer.
     providerSwitching ||

@@ -39,6 +39,13 @@
 //      the app — Radix dialog dismissal, Feed, ComposerInput, TileTabsView —
 //      therefore sits chords out for free. Only `mousedown` consumers need
 //      suppressing.)
+//
+//      This is ALSO why `suppress()` refuses to preventDefault a pointerdown:
+//      doing so sets Chromium's PREVENT MOUSE EVENT flag for the whole pointer
+//      and drops the compat mousedown/mouseup stream the chord depends on. The
+//      captured probe data shows exactly that — a middle press whose
+//      pointerdown was cancelled produced pointerdown/pointerup/auxclick and
+//      NO mousedown at all.
 //   2. Release must be decided from the `buttons` BITMASK, never
 //      `event.button`. "Hold middle, click left, release middle, release left"
 //      emits no pointerup for middle and one pointerup reporting button 0.
@@ -89,10 +96,20 @@ let listenersInstalled = false
 
 /**
  * Every button mask any consumer cares about. Used to decide whether an event
- * is ours at all — we suppress ONLY on a real match, never speculatively,
- * because suppression here is genuinely expensive: xterm in mouse-reporting
- * mode forwards buttons 0/1/2 straight to the child process, so a speculative
- * stopPropagation() would silently break an agent TUI that is using the mouse.
+ * is ours at all: an untracked button is never touched.
+ *
+ * BE HONEST ABOUT THE COST, because it is easy to misread this as cheaper than
+ * it is. A *bound* button is suppressed on EVERY press, not only when a gesture
+ * completes — the anchor of a chord has to be swallowed the moment it goes
+ * down, since we cannot know whether the second button is coming. So binding
+ * the chord kills plain middle-click app-wide: middle-click-to-close in the
+ * editor tab strip, middle-click-to-open on rendered markdown links, and
+ * middle/right forwarding to any xterm pane whose child process has enabled
+ * mouse reporting (an agent TUI using the mouse will not see those buttons).
+ *
+ * That is a deliberate shipping decision, not an oversight, and it is the
+ * reason both bindings default to off. What we do NOT do is touch buttons no
+ * consumer asked for.
  */
 function isTrackedButton(button: number): boolean {
   const mask = buttonToMask(button)
@@ -114,7 +131,18 @@ function buttonToMask(button: number): number {
 }
 
 function suppress(event: Event): void {
-  event.preventDefault()
+  // NEVER preventDefault a `pointerdown`. Cancelling it sets Chromium's
+  // PREVENT MOUSE EVENT flag for the whole pointer, which drops the compat
+  // `mousedown`/`mouseup` stream for the REST of the gesture — including the
+  // chord's completing press, which arrives only as a `mousedown`. Suppressing
+  // the anchor that way would make the chord undetectable, silently, exactly
+  // when the anchor is also a bound button.
+  //
+  // stopPropagation alone is enough on pointerdown: it keeps the event away
+  // from every app handler without touching the compat stream. The default
+  // action (which is what we actually need to cancel — history navigation,
+  // middle-click-to-close) is cancelled on the `mousedown` that follows.
+  if (event.type !== 'pointerdown') event.preventDefault()
   // stopPropagation, NOT stopImmediatePropagation: other listeners on this same
   // node must still run. MouseButtonInput's settings capture listener sits on
   // window too, and without it the user could never re-bind a button that is
@@ -139,6 +167,20 @@ function releaseActiveHold(): void {
 function onDown(event: MouseEvent): void {
   if (!isTrackedButton(event.button)) return
   const mask = buttonToMask(event.button)
+
+  // A chord already owns this gesture; ignore every further press until every
+  // button is up. Two distinct bugs live here without this guard:
+  //   1. Tapping the completing button again while the anchor stays held
+  //      re-matches the full mask and fires the chord a second time, which
+  //      also resets an open palette sub-mode.
+  //   2. A THIRD tracked button could start a hold whose release `onUp` then
+  //      swallows (it returns early while the flag is set), leaving a
+  //      recording running with `activeHold` pinned — after which the guard
+  //      at the hold branch rejects every future press forever.
+  if (chordClaimedGesture) {
+    suppress(event)
+    return
+  }
 
   // Chord first: a completing press must beat the hold that its own anchor
   // started. `event.buttons` on a mousedown already includes the button being
@@ -177,11 +219,16 @@ function onDown(event: MouseEvent): void {
 function onUp(event: MouseEvent): void {
   // Decided on the bitmask, never event.button — see the header.
   if (chordClaimedGesture) {
-    if (event.buttons === 0) chordClaimedGesture = false
     // Suppress the trailing releases of a chord so the completing button's
-    // click/auxclick never reaches the app.
+    // click/auxclick never reaches the app. Note both `pointerup` and the
+    // `mouseup` behind it are suppressed: clearing the flag on the first and
+    // returning would let the second escape, and a mouse-reporting xterm
+    // would see a release whose press it never saw.
     if (isTrackedButton(event.button)) suppress(event)
-    return
+    if (event.buttons === 0) chordClaimedGesture = false
+    // Deliberately NO early return — fall through to the hold check below.
+    // Returning here was a real stuck-microphone path: a hold started while
+    // the flag was set would never see its own release.
   }
   if (!activeHold) return
   if ((event.buttons & activeHold.mask) !== 0) return
@@ -213,43 +260,58 @@ function onContextMenu(event: Event): void {
 let anchorHeld = false
 
 function trackAnchor(event: MouseEvent): void {
-  const mask = buttonToMask(event.button)
-  if (mask === 0) return
-  let matchesAnchor = false
+  // Recomputed from `event.buttons` on EVERY mouse event, not only on an
+  // anchor's own down/up. Deriving it solely from anchor transitions desynced
+  // after a blur: `releaseEverything` clears the flag, and if the user came
+  // back still holding the anchor, nothing ever set it true again — so the
+  // chord would fire while `onContextMenu` believed no anchor was held and let
+  // the native menu through.
+  let held = false
   for (const consumer of chordConsumers) {
-    if ((consumer.anchorMask & mask) !== 0) matchesAnchor = true
+    if ((event.buttons & consumer.anchorMask) !== 0) held = true
   }
-  if (!matchesAnchor) return
-  anchorHeld = (event.buttons & mask) !== 0
+  anchorHeld = held
 }
 
 function releaseEverything(): void {
   // Window blur / tab hide: we will never see the up edge, so end the gesture
   // now. Biasing toward ending is deliberate — an interrupted dictation is
   // recoverable, a recording that never stops is not.
-  cancelOrReleasePending()
+  //
+  // A blur mid-hold is a real release from the user's point of view: they said
+  // their piece and switched away. Complete it rather than discarding it.
+  releaseActiveHold()
   chordClaimedGesture = false
   anchorHeld = false
 }
 
-function cancelOrReleasePending(): void {
-  // A blur mid-hold is a real release from the user's point of view: they said
-  // their piece and switched away. Complete it rather than discarding it.
-  releaseActiveHold()
+function abortEverything(): void {
+  // `pointercancel` is not a release — the input stream was torn away, so
+  // whatever the user was mid-way through saying is not something to finalize
+  // and paste. Discard instead. (Blur above is the opposite case and
+  // deliberately completes.)
+  cancelActiveHold()
+  chordClaimedGesture = false
+  anchorHeld = false
 }
 
 function installListeners(): void {
   if (listenersInstalled) return
   listenersInstalled = true
   // Down needs BOTH pointerdown and mousedown: pointerdown fires only on the
-  // 0 -> non-zero transition, so a button pressed while another is already held
-  // emits mousedown alone. `activeHold`/`chordClaimedGesture` make the handler
-  // idempotent when both fire for the same press.
+  // 0 -> non-zero transition, so a button pressed while another is already
+  // held emits mousedown alone.
+  //
+  // Both CAN fire for the same first press (we no longer cancel pointerdown,
+  // so the compat mousedown survives), and `activeHold`/`chordClaimedGesture`
+  // make the second one a no-op. What must not be assumed is the reverse — the
+  // probe data shows a cancelled pointerdown produces no mousedown at all,
+  // which is precisely the behaviour `suppress()` now avoids triggering.
   window.addEventListener('pointerdown', onDownTracked, true)
   window.addEventListener('mousedown', onDownTracked, true)
   window.addEventListener('pointerup', onUpTracked, true)
   window.addEventListener('mouseup', onUpTracked, true)
-  window.addEventListener('pointercancel', releaseEverything, true)
+  window.addEventListener('pointercancel', abortEverything, true)
   window.addEventListener('auxclick', onAuxClick, true)
   window.addEventListener('contextmenu', onContextMenu, true)
   window.addEventListener('blur', releaseEverything)
@@ -263,7 +325,7 @@ function removeListeners(): void {
   window.removeEventListener('mousedown', onDownTracked, true)
   window.removeEventListener('pointerup', onUpTracked, true)
   window.removeEventListener('mouseup', onUpTracked, true)
-  window.removeEventListener('pointercancel', releaseEverything, true)
+  window.removeEventListener('pointercancel', abortEverything, true)
   window.removeEventListener('auxclick', onAuxClick, true)
   window.removeEventListener('contextmenu', onContextMenu, true)
   window.removeEventListener('blur', releaseEverything)

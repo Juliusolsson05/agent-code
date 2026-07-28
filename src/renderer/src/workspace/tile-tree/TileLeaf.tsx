@@ -846,8 +846,14 @@ export function TileLeaf({
           deliveryUncertain={runtime.promptDelivery.kind === 'uncertain'}
           providerSwitching={runtime.providerSwitch !== null}
           slashMode={slashMode}
-          exited={isSessionExited(runtime)}
-          working={runtime.streamPhase !== 'idle'}
+          // Same predicate the Dispatch list uses for its running count. NOT
+          // `streamPhase !== 'idle'` alone: between clicking Send and the first
+          // token, streamPhase is still idle while the session is already
+          // running, so a stream-only test hid Stop during precisely the
+          // interval where "I just sent the wrong thing" is most likely.
+          working={
+            runtime.sessionStatus === 'running' || runtime.streamPhase !== 'idle'
+          }
           dictationStatus={dictation.status}
           onSend={() => void submitCurrentDraft('button')}
           // Same escape byte the keyboard interrupt sends, and the same one the

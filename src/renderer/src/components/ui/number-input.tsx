@@ -34,6 +34,10 @@ export type NumberInputProps = {
   'aria-label'?: string
   autoFocus?: boolean
   className?: string
+  /** Forwarded to the inner `<input>`. Dialogs need this to take mount focus
+   *  back from Radix's FocusScope, which otherwise focuses the first tabbable
+   *  node — one of the steppers — and does so after any child autoFocus. */
+  inputRef?: React.Ref<HTMLInputElement>
 }
 
 export function NumberInput({
@@ -45,6 +49,7 @@ export function NumberInput({
   id,
   autoFocus,
   className,
+  inputRef,
   ...rest
 }: NumberInputProps) {
   const clamp = React.useCallback(
@@ -52,20 +57,63 @@ export function NumberInput({
     [max, min],
   )
 
-  const commit = React.useCallback(
+  // What the user has typed, while it is not yet a committable number.
+  // Non-null only mid-edit (empty field, a lone "-", or a value below `min`
+  // that is a prefix of a valid one).
+  //
+  // WHY this exists: clamping on every keystroke makes the field unusable.
+  // Typing "5" over a pre-filled "2" in a 1-10 field gives "25" -> clamped to
+  // 10, silently and with nothing on screen to explain it. And the field could
+  // not be cleared to retype, because an empty string parses to NaN, the
+  // commit bailed, and the controlled input snapped straight back. Holding the
+  // raw draft until it is a usable number fixes both.
+  const [draft, setDraft] = React.useState<string | null>(null)
+
+  const commitFromText = React.useCallback(
+    (text: string) => {
+      if (text.trim() === '') {
+        setDraft('')
+        return
+      }
+      const parsed = Number.parseInt(text, 10)
+      if (Number.isNaN(parsed)) return
+      // Only the UPPER bound is enforced per keystroke — exceeding max is
+      // never a prefix of something valid, so clamping it immediately is
+      // helpful rather than obstructive. A value below `min` IS a legal prefix
+      // ("1" on the way to "10"), so it is held as a draft instead.
+      if (parsed < min) {
+        setDraft(text)
+        return
+      }
+      setDraft(null)
+      onChange(Math.min(max, parsed))
+    },
+    [max, min, onChange],
+  )
+
+  const commitNumber = React.useCallback(
     (next: number) => {
-      // NaN guard: an empty field, a lone "-", and a pasted word all parse to
-      // NaN, and clamping NaN yields NaN, which would propagate into whatever
-      // consumes this value. Hold the previous value instead — the user is
-      // mid-edit, not asking for garbage.
       if (Number.isNaN(next)) return
+      setDraft(null)
       onChange(clamp(next))
     },
     [clamp, onChange],
   )
 
-  const atMin = value <= min
-  const atMax = value >= max
+  // Resolve any half-typed draft when focus leaves. This is the only place a
+  // below-min value gets clamped up, which is why the draft cannot get stuck.
+  const settleDraft = React.useCallback(() => {
+    if (draft === null) return
+    const parsed = Number.parseInt(draft, 10)
+    setDraft(null)
+    onChange(clamp(Number.isNaN(parsed) ? value : parsed))
+  }, [clamp, draft, onChange, value])
+
+  // Steppers reflect the committed value, not a half-typed draft — a draft is
+  // by definition below `min`, and dimming "+" while the user is mid-word
+  // would be wrong.
+  const atMin = draft === null && value <= min
+  const atMax = draft === null && value >= max
 
   return (
     <div className={cn('flex items-stretch border border-control-border bg-control-bg', className)}>
@@ -77,7 +125,7 @@ export function NumberInput({
         // keep typing, and so the dialog's Enter-to-confirm still applies to
         // the field rather than re-firing this button.
         onMouseDown={event => event.preventDefault()}
-        onClick={() => commit(value - step)}
+        onClick={() => commitNumber(value - step)}
         className="w-7 shrink-0 border-r border-control-border text-[13px] leading-none text-control-fg hover:bg-control-hover-bg hover:text-ink disabled:opacity-40 disabled:hover:bg-control-bg"
       >
         −
@@ -90,16 +138,20 @@ export function NumberInput({
         aria-valuenow={value}
         aria-valuemin={min === Number.NEGATIVE_INFINITY ? undefined : min}
         aria-valuemax={max === Number.POSITIVE_INFINITY ? undefined : max}
-        value={Number.isFinite(value) ? value : ''}
+        value={draft ?? (Number.isFinite(value) ? String(value) : '')}
         min={min === Number.NEGATIVE_INFINITY ? undefined : min}
         max={max === Number.POSITIVE_INFINITY ? undefined : max}
         step={step}
         autoFocus={autoFocus}
-        onChange={event => commit(Number.parseInt(event.target.value, 10))}
-        // Clamp on blur, not on every keystroke: clamping while typing makes
-        // "10" impossible to enter in a 1-10 field, because the intermediate
-        // "1" would be rewritten the instant the "0" arrives.
-        onBlur={() => commit(clamp(value))}
+        onChange={event => commitFromText(event.target.value)}
+        ref={inputRef}
+        onBlur={settleDraft}
+        // Enter usually commits the surrounding dialog, and blur will not have
+        // fired yet — so settle here too, or a half-typed draft would be
+        // discarded and the dialog would commit the previous value.
+        onKeyDown={event => {
+          if (event.key === 'Enter') settleDraft()
+        }}
         className="w-full min-w-0 bg-transparent px-2 py-2 text-center font-code text-[12px] tabular-nums text-control-fg outline-none"
         {...rest}
       />
@@ -108,7 +160,7 @@ export function NumberInput({
         aria-label="Increase"
         disabled={atMax}
         onMouseDown={event => event.preventDefault()}
-        onClick={() => commit(value + step)}
+        onClick={() => commitNumber(value + step)}
         className="w-7 shrink-0 border-l border-control-border text-[13px] leading-none text-control-fg hover:bg-control-hover-bg hover:text-ink disabled:opacity-40 disabled:hover:bg-control-bg"
       >
         +

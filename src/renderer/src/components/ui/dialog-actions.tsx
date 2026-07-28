@@ -79,32 +79,50 @@ export function DialogActions({
   children,
 }: DialogActionsProps) {
   const blocked = confirmDisabled || busy
+  const footerRef = React.useRef<HTMLDivElement>(null)
 
   React.useEffect(() => {
     if (!confirmOnEnter) return
+    // Scope the listener to THIS footer's own dialog rather than the document.
+    // Two mounted dialogs (or a dialog over a full-page surface) would
+    // otherwise both fire on a single Enter, and the one the user is not
+    // looking at would commit.
+    // HTMLElement rather than Element so the keydown listener types check —
+    // Element's event map does not include keyboard events.
+    const root = footerRef.current?.closest<HTMLElement>('[data-slot="dialog-content"]') ?? null
+    if (!root) return
+
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Enter') return
       // Shift+Enter is newline everywhere in this app; a modifier means the
       // user is composing, not committing.
       if (event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return
+      const target = event.target as HTMLElement | null
       // A textarea owns its own Enter. Without this the footer would commit
       // the dialog while the user was trying to start a new line — the exact
       // reason several dialogs previously hand-rolled `!shiftKey` checks.
-      const target = event.target as HTMLElement | null
       if (target?.tagName === 'TEXTAREA') return
+      // A FOCUSED BUTTON OWNS ITS OWN ENTER. This is the important one:
+      // calling preventDefault below suppresses the synthesized click that
+      // Enter would have sent to the focused control, so without this guard
+      // tabbing to Cancel and pressing Enter would CONFIRM — and for a
+      // destructive dialog that means Enter-on-Cancel performs the deletion.
+      if (target?.tagName === 'BUTTON' || target?.tagName === 'A') return
       if (blocked) return
       event.preventDefault()
       onConfirm()
     }
-    // Bubble phase, not capture: anything inside the dialog that genuinely
-    // owns Enter (a listbox, a picker) gets first refusal and can
-    // stopPropagation. Capturing here would silently break those.
-    document.addEventListener('keydown', onKeyDown)
-    return () => document.removeEventListener('keydown', onKeyDown)
+    // Bubble phase on the dialog root. Anything inside that genuinely owns
+    // Enter can stopPropagation to claim it first; note that a child using a
+    // plain React onKeyDown WITHOUT stopPropagation will still reach this, so
+    // such dialogs should pass confirmOnEnter={false} rather than rely on
+    // ordering.
+    root.addEventListener('keydown', onKeyDown)
+    return () => root.removeEventListener('keydown', onKeyDown)
   }, [blocked, confirmOnEnter, onConfirm])
 
   return (
-    <DialogFooter>
+    <DialogFooter ref={footerRef}>
       {children ? <div className="mr-auto text-[11px] text-muted">{children}</div> : null}
       {onCancel ? (
         <Button variant="ghost" size="sm" onClick={onCancel}>

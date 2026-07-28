@@ -468,8 +468,18 @@ export function NewAgentPlacementOverlay({
       </div>
 
       {!selectedKind && (
-        <div className="absolute inset-0 flex items-center justify-center">
-          <div className="w-[340px] border border-border bg-surface shadow-lg shadow-black/30">
+        // pointer-events-none on the CENTERING layer, re-enabled on the card
+        // itself. Without this the layer is `absolute inset-0` and covers the
+        // whole backdrop, so the backdrop's click-to-dismiss could never fire
+        // (event.target was always this div, never the backdrop). In Dispatch
+        // and linked-agent mode that was fatal rather than annoying: those are
+        // kind-only, so `selectedKind` never becomes truthy, the Cancel button
+        // below never renders, and the overlay had ZERO mouse exits — the only
+        // way out with a mouse was to create an agent you did not want. The
+        // Dispatch "+" leads straight here, so it would have shipped a button
+        // whose only destination is a trap.
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+          <div className="pointer-events-auto w-[340px] border border-border bg-surface shadow-lg shadow-black/30">
             <div className="border-b border-border px-4 py-3 text-[12px] uppercase tracking-wider text-muted">
               New Agent
             </div>
@@ -497,6 +507,19 @@ export function NewAgentPlacementOverlay({
                   </button>
                 )
               })}
+            </div>
+            {/* An explicit Cancel on the kind step too. The backdrop click
+                above is now reachable, but a visible control is what a
+                mouse-first user actually looks for — and this is the only step
+                Dispatch and linked-agent mode ever show. */}
+            <div className="flex justify-end border-t border-border px-3 py-2">
+              <button
+                type="button"
+                onClick={onClose}
+                className="border border-control-border bg-control-bg px-3 py-1 text-[11px] leading-none text-control-fg hover:border-control-border-hover hover:text-ink"
+              >
+                Cancel
+              </button>
             </div>
           </div>
         </div>

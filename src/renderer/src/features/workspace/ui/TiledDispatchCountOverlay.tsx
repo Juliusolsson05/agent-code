@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 
 import { Button } from '@renderer/components/ui/button'
 import {
@@ -46,6 +46,7 @@ export function TiledDispatchCountOverlay({ workspace, onClose }: Props) {
   // and clamping, so keeping a string here would mean two places deciding what
   // "not a number yet" means.
   const [value, setValue] = useState<number>(existingCount ?? DEFAULT_DISPATCH_TILES)
+  const inputRef = useRef<HTMLInputElement | null>(null)
 
   const commit = useCallback(() => {
     const count = clampTileCount(value)
@@ -73,6 +74,16 @@ export function TiledDispatchCountOverlay({ workspace, onClose }: Props) {
     }}>
       <DialogContent
         className="w-[320px]"
+        // Radix's FocusScope runs focusFirst() on the first TABBABLE node after
+        // mount — which is now the "−" stepper, not the field — and it runs
+        // after any child autoFocus/ref, so a child cannot win this race.
+        // Without taking the mount focus back here, typing goes nowhere and
+        // Enter activates the stepper instead of committing.
+        onOpenAutoFocus={event => {
+          event.preventDefault()
+          inputRef.current?.focus()
+          inputRef.current?.select()
+        }}
       >
         <DialogHeader>
           <DialogTitle>How many dispatch tiles?</DialogTitle>
@@ -93,7 +104,7 @@ export function TiledDispatchCountOverlay({ workspace, onClose }: Props) {
             max={MAX_DISPATCH_TILES}
             value={value}
             onChange={setValue}
-            autoFocus
+            inputRef={inputRef}
           />
         </div>
         <DialogFooter>

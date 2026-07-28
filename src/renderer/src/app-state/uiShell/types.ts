@@ -149,8 +149,12 @@ export type UiShellState = {
    * `dispatchMode.focusedSessionId`. So the tempting cheap version — focus the
    * project, then open the normal flow — works in classic Dispatch and
    * silently spawns into whatever project lane 0 happens to show in Tiled
-   * Dispatch. It also moves the user's selection as a side effect of clicking
-   * a "+". The visible header already knows its own tab; capture it once.
+   * Dispatch. The visible header already knows its own tab; capture it once.
+   *
+   * NOTE this does NOT make clicking "+" selection-neutral: the spawn still
+   * sets `activeTabId` to the target project unconditionally, so the active
+   * tab does move. What the intent fixes is spawning into the WRONG project,
+   * not the focus change that follows a correct spawn.
    *
    * WHY an anchor session and not just the tab: `createDetachedDispatchAgent`
    * derives `cwd` from the FOCUSED session, which is in the wrong project
