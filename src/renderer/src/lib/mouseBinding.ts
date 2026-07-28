@@ -41,6 +41,38 @@ export const MOUSE_BUTTON_BINDINGS: Record<Exclude<MouseButtonBinding, ''>, numb
   Forward: 4,
 }
 
+/**
+ * The same buttons as bits in `MouseEvent.buttons` (everything held right now),
+ * as opposed to `MouseEvent.button` above (the single button that changed).
+ *
+ * DO NOT collapse this into `1 << button`. The two DOM encodings are not the
+ * same and middle/right are SWAPPED between them:
+ *
+ *   button 0 (left)   -> buttons bit 1
+ *   button 1 (middle) -> buttons bit 4     <- not 2
+ *   button 2 (right)  -> buttons bit 2     <- not 4
+ *   button 3 (back)   -> buttons bit 8
+ *   button 4 (forward)-> buttons bit 16
+ *
+ * Verified against a real mouse: `pointerdown button=1 buttons=4` for middle,
+ * `button=2 buttons=2` for right. A shift-based derivation would silently bind
+ * right when the user asked for middle.
+ *
+ * WHY we need the mask form at all — this is the load-bearing part. For a mouse
+ * there is ONE pointer, so `pointerdown` fires only on the 0 -> non-zero
+ * transition and `pointerup` only on non-zero -> 0. Press middle, then also
+ * press left, then release middle: no `pointerup` is emitted for middle at all,
+ * and the eventual `pointerup` carries `button: 0`. Matching the release on
+ * `event.button` therefore MISSES it and leaves the microphone recording with
+ * no path to stop it. `buttons` is the authoritative "is it still down?" state
+ * and is the only correct thing to test on a release edge.
+ */
+export const MOUSE_BUTTON_MASKS: Record<Exclude<MouseButtonBinding, ''>, number> = {
+  Middle: 4,
+  Back: 8,
+  Forward: 16,
+}
+
 /** Resolve a DOM `MouseEvent.button` to a bindable name, or null when the
  *  button is one we refuse to bind (left/right) or don't recognise. */
 export function mouseButtonBindingFromButton(button: number): MouseButtonBinding | null {
@@ -60,7 +92,19 @@ export function mouseButtonBindingFromButton(button: number): MouseButtonBinding
  */
 export function coerceMouseButtonBinding(value: unknown): MouseButtonBinding {
   if (typeof value !== 'string') return ''
-  if (value in MOUSE_BUTTON_BINDINGS) return value as MouseButtonBinding
+  // Own-property check, never `value in ...`: `in` walks the prototype chain,
+  // so `'toString' in MOUSE_BUTTON_BINDINGS` is true and a hand-edited
+  // localStorage blob containing "toString" would coerce to itself and be
+  // treated as a valid binding. That directly contradicts the closed-enum
+  // guarantee this function exists to provide.
+  //
+  // `Object.prototype.hasOwnProperty.call` rather than the tidier
+  // `Object.hasOwn`: this project's web tsconfig targets a lib older than
+  // ES2022, so `Object.hasOwn` does not type-check. Not worth widening the
+  // whole project's lib for one call.
+  if (Object.prototype.hasOwnProperty.call(MOUSE_BUTTON_BINDINGS, value)) {
+    return value as MouseButtonBinding
+  }
   return ''
 }
 

@@ -1,5 +1,32 @@
 # Dictation Mouse Trigger Implementation Plan
 
+> **Status: SHIPPED** (PR #616). Two things this plan got WRONG were found in
+> review and by a hardware probe, and the merged code differs from the task
+> bodies below. Read this section before trusting any code block here.
+>
+> 1. **`beginDictationHold` needs a re-entrancy guard.** The plan assumed one
+>    ownership slot was sufficient for two triggers. It is not: a second
+>    `begin` while a hold is outstanding could capture a *different* target
+>    (pickTarget prefers the focused pane), start a second recorder and orphan
+>    the first one's microphone forever — and it reset the hold clock, so a
+>    stray click during a live dictation measured as a sub-180 ms tap and
+>    discarded the whole recording.
+> 2. **The release edge must test `event.buttons`, not `event.button`.** For a
+>    mouse there is ONE pointer, so `pointerup` fires only when the last button
+>    is released and carries whichever button that was. "Hold middle, click
+>    left, release middle, release left" never produces a `pointerup` for
+>    middle. The plan's `event.button !== boundButton` guard dropped that
+>    release and left the mic open. Down likewise needs `mousedown` as well as
+>    `pointerdown`, since pressing the bound button while another is held emits
+>    no `pointerdown` at all. Confirmed against real hardware — see
+>    `MOUSE_BUTTON_MASKS` in `lib/mouseBinding.ts` for the captured evidence.
+>
+> Also corrected post-plan: `coerceMouseButtonBinding` used `in` (walks the
+> prototype chain, so `'toString'` coerced to itself) and now uses
+> `Object.hasOwn`; the terminal overlay's instruction text no longer sniffs
+> `dictationShortcut` for `'Fn'` (wrong for a bare `Cmd` native hold, and blind
+> to the mouse trigger) and instead reads the registry's active hold style.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Let the user hold a mouse button — middle, or either side button — to dictate into the focused Agent Code composer or terminal, releasing to transcribe.

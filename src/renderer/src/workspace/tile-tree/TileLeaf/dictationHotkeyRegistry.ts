@@ -62,10 +62,48 @@ let dispatcherSubs: Subscriptions | null = null
 // even if focus moved or another composer mounted between press and release.
 // Shared by BOTH trigger sources (native keyboard hotkey and the in-app
 // mouse button) on purpose: only one dictation can be live at a time, so a
-// single ownership slot is the correct model. If both are somehow held at
-// once, the first release wins and stops the recording — biasing toward
-// stopping is deliberate (see endDictationHold below).
+// single ownership slot is the correct model. Non-null means a hold is
+// outstanding, which is what makes the re-entrancy guard in
+// beginDictationHold below possible — see the WHY there, it is load-bearing.
 let activeTargetForHold: DictationTargetHandle | null = null
+
+/**
+ * Whether the trigger that owns the CURRENT hold is a true press-and-hold or
+ * a press-again-to-stop toggle. The overlay needs this to tell the user how
+ * to finish ("release" vs "press again"), and it cannot be derived from
+ * settings: `dictationShortcut` alone does not determine it (a bare `Cmd`
+ * binding is a native hold and contains no "Fn"), and with a mouse button
+ * also bound there is no single setting that identifies which trigger is
+ * live. The trigger itself is the only thing that knows.
+ */
+export type DictationHoldStyle = 'hold' | 'toggle'
+let activeHoldStyle: DictationHoldStyle = 'toggle'
+
+/** Which input produced the hold. The mouse is always a true hold (pointer
+ *  events carry real down/up edges); the keyboard depends on which
+ *  main-process path registered the binding, hence `keyboardHoldStyle`. */
+export type DictationTriggerSource = 'keyboard' | 'mouse'
+
+// Set by useDictationHotkeySync from the main-process configure result:
+// `native: true` means the Accessibility-gated CGEventTap helper owns the
+// binding and emits real press/release edges, while the quiet Electron
+// globalShortcut path can only toggle (it has no key-up callback).
+let keyboardHoldStyle: DictationHoldStyle = 'toggle'
+
+export const setKeyboardDictationHoldStyle = (style: DictationHoldStyle): void => {
+  keyboardHoldStyle = style
+}
+
+/** Read by useComposerDictation when it publishes overlay state, so the
+ *  floating chip's instruction matches the gesture actually in use. */
+export const getActiveDictationHoldStyle = (): DictationHoldStyle => activeHoldStyle
+
+/** The composer mic button and the in-composer keydown fallback both toggle
+ *  rather than hold, and neither goes through this registry. They mark the
+ *  style directly so the overlay stays truthful for those paths too. */
+export const markDictationToggleStyle = (): void => {
+  activeHoldStyle = 'toggle'
+}
 
 /**
  * Begin a dictation hold from any trigger source.
@@ -75,7 +113,32 @@ let activeTargetForHold: DictationTargetHandle | null = null
  * the focused-else-most-recently-focused target pick, and the ownership
  * capture below. One decision point, two callers.
  */
-export const beginDictationHold = (): void => {
+export const beginDictationHold = (source: DictationTriggerSource = 'keyboard'): void => {
+  // RE-ENTRANCY GUARD. Do not remove — two separate stuck-state bugs live here.
+  //
+  // Before the mouse trigger existed this was unreachable: the native helper
+  // only ever emits paired down/up, so a second begin could not arrive while
+  // a hold was outstanding. With two independent triggers it can, and the
+  // unguarded version failed two ways:
+  //
+  //  1. ORPHANED RECORDER. pickTarget() prefers the *currently focused* pane.
+  //     Hold the keyboard trigger over pane A, click into pane B, then press
+  //     the mouse button: the second begin captured B, started a second
+  //     recorder, and overwrote the ownership slot. Releasing the mouse
+  //     stopped B and cleared the slot; releasing the keyboard then found
+  //     nothing to stop. A's microphone, MediaRecorder and meter ran on with
+  //     no remaining path to stop them — the exact failure this subsystem
+  //     treats as unacceptable.
+  //
+  //  2. DISCARDED DICTATION. `handle.start()` resets the hold clock
+  //     (hotkeyDownAtRef) even when it does not start a new recording. A
+  //     stray ~60ms click during a live 20-second dictation reset that clock,
+  //     and the click's release measured as a sub-180ms accidental tap and
+  //     cancelled the whole recording, silently restoring the composer.
+  //
+  // One hold at a time. A second trigger is ignored until the first releases,
+  // which is safe because every release path clears the slot unconditionally.
+  if (activeTargetForHold) return
   // Trigger events bypass the DOM's focus model entirely, so a focus trap or
   // a pointer-inert overlay cannot protect the composer. Consult the same
   // synchronous ownership contract as DOM input before choosing a target.
@@ -83,8 +146,10 @@ export const beginDictationHold = (): void => {
   const target = pickTarget()
   if (!target) return
   activeTargetForHold = target
+  activeHoldStyle = source === 'mouse' ? 'hold' : keyboardHoldStyle
   target.start()
 }
+
 
 /**
  * End a dictation hold from any trigger source.
@@ -111,8 +176,11 @@ export const endDictationHold = (): void => {
 const ensureDispatcher = (): void => {
   if (dispatcherSubs) return
   dispatcherSubs = {
-    offDown: window.api.onDictationHotkeyDown(beginDictationHold),
-    offUp: window.api.onDictationHotkeyUp(endDictationHold),
+    // Wrapped, not passed by reference: the IPC handler is invoked with the
+    // `{ binding }` payload, which would arrive as beginDictationHold's
+    // `source` argument and silently misreport the trigger.
+    offDown: window.api.onDictationHotkeyDown(() => beginDictationHold('keyboard')),
+    offUp: window.api.onDictationHotkeyUp(() => endDictationHold()),
   }
 }
 

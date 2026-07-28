@@ -811,10 +811,18 @@ export function getSettingsRegistry(): SettingDefinition[] {
       category: 'dictation',
       title: 'Dictation Mouse Button',
       description:
-        'Hold a mouse button to talk and release to transcribe. Works while Agent Code is focused — no system permission needed. Only the middle and side buttons can be bound, and the bound button stops doing its normal job.',
+        'Hold a mouse button to talk and release to transcribe. Requires Inline Dictation above. Works while Agent Code is focused — no system permission needed. Only the middle and side buttons can be bound, the bound button stops doing its normal job app-wide, and a stray click will briefly open the microphone before it is discarded.',
       keywords: [
-        'voice', 'dictation', 'mouse', 'button', 'middle', 'side', 'thumb',
-        'hold', 'push to talk', 'binding',
+        'voice',
+        'dictation',
+        'mouse',
+        'button',
+        'middle',
+        'side',
+        'thumb',
+        'hold',
+        'push to talk',
+        'binding',
       ],
       control: {
         type: 'mouse-button',

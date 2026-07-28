@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { useAppStore } from '@renderer/app-state/hooks'
 import { useGlobalToast } from '@renderer/ui/GlobalToast'
+import { setKeyboardDictationHoldStyle } from '@renderer/workspace/tile-tree/TileLeaf/dictationHotkeyRegistry'
 
 // Root effect extracted from App.tsx (#494).
 export function useDictationHotkeySync(): void {
@@ -15,6 +16,14 @@ export function useDictationHotkeySync(): void {
     // whether to consume the resulting press/release event.
     const binding = dictationEnabled ? dictationShortcut : ''
     void window.api.configureDictationHotkey({ binding }).then(result => {
+      // Main is the only place that knows which path claimed the binding, and
+      // the two have different gestures: the CGEventTap helper (`native`)
+      // emits real press/release edges and is hold-to-talk, while the quiet
+      // globalShortcut path has no key-up callback and can only toggle. The
+      // overlay's instruction text depends on this, so record it centrally
+      // instead of re-deriving it from the binding string (which cannot tell
+      // a bare `Cmd` native hold from a `Cmd+Shift+D` toggle).
+      setKeyboardDictationHoldStyle(result.native ? 'hold' : 'toggle')
       if (!result.ok) {
         console.warn('[dictation] hotkey registration failed:', result)
         // The whole point of #495 A4 / #508 is that this failure must be

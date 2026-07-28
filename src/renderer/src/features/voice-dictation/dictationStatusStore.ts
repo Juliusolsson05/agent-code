@@ -54,6 +54,13 @@ export type DictationOverlayState = {
   // because the overlay shows it as a preview, not the value that gets
   // pasted — the wrap-with-stt happens on the paste path inside main.
   previewText: string
+  // Whether the trigger that started THIS recording is a press-and-hold or a
+  // press-again-to-stop toggle, so the chip's instruction matches the gesture
+  // actually in use. Published from the registry's active hold style rather
+  // than sniffed from settings: the old `dictationShortcut.includes('Fn')`
+  // test was wrong for a bare `Cmd` binding (also a native hold, no "Fn" in
+  // the string) and had no way at all to account for the mouse trigger.
+  holdToTalk: boolean
 }
 
 // Shared frozen idle state so the equality short-circuit in
@@ -66,6 +73,7 @@ const IDLE_STATE: DictationOverlayState = Object.freeze({
   targetSessionId: null,
   errorMessage: null,
   previewText: '',
+  holdToTalk: false,
 }) as DictationOverlayState
 
 let state: DictationOverlayState = IDLE_STATE
@@ -102,7 +110,8 @@ export function setDictationOverlayState(
     computed.levels === state.levels &&
     computed.targetSessionId === state.targetSessionId &&
     computed.errorMessage === state.errorMessage &&
-    computed.previewText === state.previewText
+    computed.previewText === state.previewText &&
+    computed.holdToTalk === state.holdToTalk
   ) {
     return
   }

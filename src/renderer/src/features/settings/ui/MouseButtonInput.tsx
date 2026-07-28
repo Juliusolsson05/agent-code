@@ -26,8 +26,11 @@ type Props = {
  *
  * WHY capturing here cannot accidentally start dictation: `SettingsPage`
  * marks itself as the app interaction owner, and `beginDictationHold()`
- * refuses to start while an owner is mounted. The live trigger is inert for
- * as long as this control is on screen.
+ * refuses to start while an owner is mounted. Note this gates the START only
+ * — `useDictationMouseTrigger`'s listeners stay installed and still swallow
+ * the bound button everywhere in Settings, including its text areas. So
+ * middle-click paste really is dead here if Middle is bound; that is the
+ * documented cost of binding a button, not a bug in this control.
  */
 export function MouseButtonInput({ value, onChange }: Props) {
   const [capturing, setCapturing] = useState(false)
@@ -53,6 +56,14 @@ export function MouseButtonInput({ value, onChange }: Props) {
           stop()
           return
         }
+        // ...unless they clicked this control's OWN buttons. Those are the
+        // toggle and Off affordances, not an attempt to bind left click, and
+        // window-capture pointerdown runs before their click handlers. Without
+        // this branch, pressing "Off" flashed the reserved-button warning and
+        // left the control still armed — value cleared, label still reading
+        // "Press the mouse button you want", and the next middle-click
+        // anywhere in the app silently re-bound it.
+        if ((event.target as HTMLElement | null)?.closest('button')) return
         setError('Left and right click stay reserved. Use the middle or a side button.')
         return
       }
@@ -117,6 +128,9 @@ export function MouseButtonInput({ value, onChange }: Props) {
           type="button"
           onClick={() => {
             setError(null)
+            // Leave capture mode too. "Off" must mean off — staying armed
+            // after clearing the value is the contradiction described above.
+            stop()
             void onChange('')
           }}
           className="border border-control-border bg-control-bg px-3 py-2 text-[12px] text-control-fg hover:border-control-border-hover hover:bg-control-hover-bg hover:text-ink"
