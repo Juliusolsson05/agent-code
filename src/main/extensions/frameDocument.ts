@@ -132,7 +132,10 @@ function request(method, extra) {
 
 // The Tier-0 AgentCodeApiV1, proxied. Same method names as the same-realm object.
 const api = {
-  extension: { apiVersion: 1 },
+  // id from the frame's own origin host (agent-code-ext://<id>) — unforgeable and
+  // exactly the id the host attributes this frame to. AgentCodeApiV1 promises it;
+  // the same-realm createAppHostApi already provided it, this closes the frame gap.
+  extension: { id: location.hostname, apiVersion: 1 },
   storage: {
     get: (key) => request('storage.get', { key }),
     set: (key, value) => request('storage.set', { key, value }),
