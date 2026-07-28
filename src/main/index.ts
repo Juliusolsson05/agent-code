@@ -25,6 +25,10 @@ import { TmuxRegistry } from '@main/tmux/TmuxRegistry.js'
 import { reconcile } from '@main/tmux/tmuxRecovery.js'
 import type { PersistedTerminalRef } from '@main/tmux/tmuxRecovery.js'
 
+import {
+  handleExtensionScheme,
+  registerExtensionScheme,
+} from '@main/extensions/scheme.js'
 import { STATE_DIR, STATE_FILE } from '@main/storage/paths.js'
 import {
   scheduleDebugStoragePrune,
@@ -215,6 +219,15 @@ async function runPackagingSmoke(): Promise<void> {
 // shared. If that lock ever feels too strict, the storage model must be changed
 // first; deleting the guard alone would make last-writer-wins corruption
 // possible again.
+// MUST run at module scope, before any app.whenReady() handler. Electron silently
+// treats a scheme registered after ready as opaque — no origin semantics, no secure
+// context, no CORS — and the failure then surfaces in the renderer as a CSP or CORS
+// error, which sends you looking at index.html instead of at call ordering. There is
+// no runtime warning for getting this wrong. Verified working from a file:// document
+// (the production origin) by the B1 spike: dynamic import, relative specifiers, and
+// path-traversal rejection all behave.
+registerExtensionScheme()
+
 const hasSingleInstanceLock = packagingSmoke || app.requestSingleInstanceLock()
 
 if (packagingSmoke) {
@@ -444,6 +457,12 @@ async function startApp(): Promise<void> {
     // Classification is best-effort forensics — never let it block startup.
     appRunJournal.recordError('prior_run.classify.error', err)
   }
+
+  // Install the agent-code-ext:// handler before any window exists. The renderer
+  // imports extension modules over this scheme during startup, so a window that
+  // opened first could race a request against an unregistered handler and see a
+  // spurious load failure that never reproduces on a warm run.
+  handleExtensionScheme()
 
   void performanceService.start().catch(err => {
     console.warn('[performance] failed to start:', err)
