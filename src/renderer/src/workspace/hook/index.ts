@@ -412,25 +412,7 @@ export function useWorkspace(
             state: snapshot,
             parentSessionId: request.parentSessionId,
             sessionId: request.sessionId,
-            // Adapted to the orchestration contract's Promise<void>.
-            //
-            // NOT because the signal is useless — it is not. `OrchestrationClose-
-            // Result` carries `skippedSessionIds` for exactly this, and
-            // closeOrchestrationRun's own comment claims "declining it throws,
-            // which the catch below turns into a skip" — which is false:
-            // requestCloseConfirmation RESOLVES false, it never rejects. So an
-            // orchestrating agent that has its close declined by the user is
-            // currently told the child closed. That is a real pre-existing bug
-            // and this boolean is the missing half of its fix.
-            //
-            // It is deliberately NOT fixed here: changing what an orchestrating
-            // agent is told about a close is a cross-process behaviour change
-            // that deserves its own review, not a ride-along in a
-            // Dispatch-lane PR. Filed as follow-up work; do not "tidy" this
-            // comment away without doing it.
-            closeSession: async (id, opts) => {
-              await closeOrchestrationSessionRef.current(id, opts)
-            },
+            closeSession: closeOrchestrationSessionRef.current,
           })
           await window.api.resolveOrchestrationRequest({
             requestId: request.requestId,
@@ -505,10 +487,7 @@ export function useWorkspace(
           state: snapshot,
           parentSessionId: request.parentSessionId,
           runId: request.runId,
-          // Same adaptation as the single-agent close above.
-          closeSession: async (id, opts) => {
-            await closeOrchestrationSessionRef.current(id, opts)
-          },
+          closeSession: closeOrchestrationSessionRef.current,
         })
         await window.api.resolveOrchestrationRequest({
           requestId: request.requestId,
@@ -780,13 +759,24 @@ export function useWorkspace(
           // idle target does not slip through the human-ergonomics exemption
           // the policy grants ⌘W. Declining rejects the tool call.
           const caller = current.sessions[request.callerSessionId]?.title
-          await closeOrchestrationSessionRef.current(request.sessionId, {
+          const closed = await closeOrchestrationSessionRef.current(request.sessionId, {
             requireConfirmation: {
               headline: caller
                 ? `Agent “${caller}” is asking to close this agent.`
                 : 'An agent is asking to close this agent.',
             },
           })
+          // The comment above says "declining rejects the tool call" — it did
+          // not. The gate RESOLVES false rather than throwing, so the success
+          // below fired anyway and the calling agent was told the close took
+          // while its target kept running. This is the surface where a decline
+          // is still possible, so it is the surface where reporting it matters
+          // most.
+          if (!closed) {
+            throw new Error(
+              'close_agent was declined: the user did not approve closing this agent.',
+            )
+          }
         }
         await window.api.resolveAgentManagementRequest({
           requestId: request.requestId,
