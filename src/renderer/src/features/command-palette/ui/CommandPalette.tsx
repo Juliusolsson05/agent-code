@@ -916,7 +916,21 @@ function OpenCommandPalette({
   // to reorder a list that is already built.
   const commandSortMode = settings.commandSortMode
   const setCommandSortMode = useCallback(
-    (next: CommandSortMode) => setSettings({ commandSortMode: next }),
+    (next: CommandSortMode) => {
+      setSettings({ commandSortMode: next })
+      // Load-bearing, and for exactly the reason spelled out on the `setQuery`
+      // handler below: a reordering that leaves the LENGTH unchanged is
+      // invisible to both guards. The clamp effect keys on `filteredLength`,
+      // which does not move; the scroll effect keys on `selectedIndex`, which
+      // does not move either. So without this the highlight stays on row N
+      // while row N becomes a completely different command, and Enter runs
+      // something the user never looked at — and the catalog contains
+      // destructive commands.
+      //
+      // Every `enter*Mode` callback resets the index for the same reason. The
+      // sort control was the one reordering path that did not.
+      setSelectedIndex(0)
+    },
     [setSettings],
   )
   // `headers` is the section map for `grouped` mode and empty for every other
@@ -957,6 +971,37 @@ function OpenCommandPalette({
   // either rule, and the failure mode — every section heading sitting one row
   // too high — is exactly the kind of thing that ships unnoticed.
   const directAgentRowOffset = directAgentCommand ? 1 : 0
+
+  /**
+   * Index of the LAST starred row, so it can carry a rule separating the
+   * pinned block from everything else. -1 when no separator should render.
+   *
+   * WHY only for an empty query: the pinned block only exists there.
+   * `rankCommands` hard-partitions on an empty query, but during a search a
+   * star is merely a same-tier tiebreak — starred and unstarred rows
+   * legitimately interleave, so a rule drawn after the first run of starred
+   * rows would imply a grouping that does not exist.
+   *
+   * Also -1 when every row is starred or none is, since a separator at the
+   * very top or very bottom of the list divides nothing.
+   *
+   * ALSO -1 in `grouped` sort mode, added when sort modes landed: grouped mode
+   * already renders a labelled "★ Starred" section, so the rule would draw a
+   * second, unlabelled divider immediately under a heading that says the same
+   * thing. Headers own the structure in that mode; this separator is the
+   * fallback for the modes that have none.
+   */
+  const starredBoundaryIndex = useMemo(() => {
+    if (queryText.length > 0) return -1
+    if (commandSortMode === 'grouped') return -1
+    let starredCount = 0
+    for (const command of paletteCommands) {
+      if (!commandStarred[command.id]) break
+      starredCount += 1
+    }
+    if (starredCount === 0 || starredCount === paletteCommands.length) return -1
+    return starredCount - 1
+  }, [commandSortMode, commandStarred, paletteCommands, queryText])
 
   const filteredLength =
     mode === 'resume'
@@ -1025,7 +1070,12 @@ function OpenCommandPalette({
     if (el instanceof HTMLElement) {
       el.scrollIntoView({ block: 'nearest' })
     }
-  }, [selectedIndex])
+    // `paletteCommands` is a dependency, not just `selectedIndex`: switching sort
+    // mode moves the selected row to a different scroll offset (grouped mode
+    // inserts headers, which shifts everything below them) while the index may
+    // be unchanged. Keyed on the index alone, the effect would not re-run and
+    // the highlighted row could sit off-screen with nothing visibly selected.
+  }, [selectedIndex, paletteCommands])
 
   const executeCommand = useCallback(
     (command: ResolvedCommand) => {
@@ -1766,53 +1816,80 @@ function OpenCommandPalette({
                 paletteCommands.map((command, i) => {
                   const groupHeader = commandGroupHeaders.get(i - directAgentRowOffset)
                   return (
-                  <Fragment key={command.id}>
-                    {groupHeader && (
-                      <div
-                        // Not a selectable row and deliberately not counted by
-                        // anything: `selectedIndex` indexes `paletteCommands`,
-                        // and headers live outside that array entirely. Arrow
-                        // keys, Enter, hover and the clamp effect are all
-                        // untouched by grouping — which is why the header map is
-                        // keyed by command index rather than the list being
-                        // restructured into sections.
-                        aria-hidden
-                        className="
-                          px-3 pt-3 pb-1
-                          text-[9px] font-code uppercase tracking-[0.14em] text-muted
-                          first:pt-1
-                        "
-                      >
-                        {groupHeader}
-                      </div>
-                    )}
-                    <div
-                      data-palette-row={i}
-                      className={`
-                      flex items-center justify-between
-                      px-3 py-1.5
-                      cursor-pointer
-                      text-[13px] font-code
-                      ${
-                        i === selectedIndex
-                          ? 'bg-row-selected-bg text-row-selected-fg'
-                          : 'text-ink-dim hover:bg-row-hover-bg'
-                      }
-                    `}
-                      onMouseEnter={() => setSelectedIndex(i)}
-                      onClick={() => executeCommand(command)}
-                    >
-                      <div className="min-w-0 flex items-center gap-2">
-                        <span>{command.title}</span>
-                        {command.state && <CommandStateBadge state={command.state} />}
-                      </div>
-                      {command.shortcut && (
-                        <span className="ml-3 flex-shrink-0 text-[11px] text-muted">
-                          {command.shortcut}
-                        </span>
+                    <Fragment key={command.id}>
+                      {groupHeader && (
+                        <div
+                          // A section heading, not a selectable row: `selectedIndex`
+                          // indexes `paletteCommands`, and headings live outside that
+                          // array entirely. Arrow keys, Enter, hover and the clamp
+                          // effect are all untouched by grouping — which is why the
+                          // header map is keyed by command index rather than the list
+                          // being restructured into sections.
+                          //
+                          // Deliberately NOT aria-hidden. Non-selectable is a reason
+                          // to give it no role or tabindex, not a reason to remove it
+                          // from the accessibility tree: grouped mode's entire value
+                          // IS the structure, so hiding the labels would make it
+                          // announce identically to catalog mode.
+                          role="presentation"
+                          className="
+                            px-3 pt-3 pb-1
+                            text-[9px] font-code uppercase tracking-[0.14em] text-muted
+                            first:pt-1
+                          "
+                        >
+                          {groupHeader}
+                        </div>
                       )}
-                    </div>
-                  </Fragment>
+                      <div
+                        data-palette-row={i}
+                        className={`
+                        flex items-center justify-between
+                        px-3 py-1.5
+                        cursor-pointer
+                        text-[13px] font-code
+                        ${
+                          i === selectedIndex
+                            ? 'bg-row-selected-bg text-row-selected-fg'
+                            : 'text-ink-dim hover:bg-row-hover-bg'
+                        }
+                        ${i === starredBoundaryIndex ? 'border-b border-border' : ''}
+                      `}
+                        onMouseEnter={() => setSelectedIndex(i)}
+                        onClick={() => executeCommand(command)}
+                      >
+                        <div className="min-w-0 flex items-center gap-2">
+                          {/* Marks starred rows in the list itself. Without it the
+                              pinned block at the top looked like an arbitrary
+                              reordering — the star lived only in the detail pane,
+                              so identifying which commands were pinned meant
+                              selecting them one at a time. Fixed-width so titles
+                              stay left-aligned whether or not a row is starred. */}
+                          <span
+                            aria-hidden
+                            className={`w-3 flex-shrink-0 text-center text-[12px] leading-none ${
+                              commandStarred[command.id] ? 'text-accent' : 'text-transparent'
+                            }`}
+                          >
+                            ★
+                          </span>
+                          {/* The glyph above is aria-hidden because announcing
+                              "star" on all 102 rows is noise. But starred state was
+                              then conveyed only visually, so a screen-reader user
+                              got a list silently reordered for a reason they could
+                              not perceive. This says it once, only where it is
+                              true. */}
+                          {commandStarred[command.id] ? <span className="sr-only">Starred. </span> : null}
+                          <span>{command.title}</span>
+                          {command.state && <CommandStateBadge state={command.state} />}
+                        </div>
+                        {command.shortcut && (
+                          <span className="ml-3 flex-shrink-0 text-[11px] text-muted">
+                            {command.shortcut}
+                          </span>
+                        )}
+                      </div>
+                    </Fragment>
                   )
                 })
               ))}
@@ -2164,15 +2241,27 @@ const CommandDescriptionPanel = memo(function CommandDescriptionPanel({
             anything again and that the retired-id prune cannot recognise. The
             history recorder skips these rows for the same reason. */}
         {!isAgentIndexCommand(command) ? (
+          // Sized as a real control, not a glyph. The first version was a
+          // 13px character with `px-1` and no height — about a 13x13 target in
+          // `text-muted`, which on the canvas background was close to
+          // invisible and awkward to hit. A star is the only interactive
+          // element in this pane, so it has to read as pressable: 24x24 hit
+          // area (the floor for a comfortable pointer target), 16px glyph, a
+          // border that appears on hover, and `text-ink-dim` rather than
+          // `text-muted` when unstarred so the outline is legible at rest.
           <button
             type="button"
             aria-pressed={starred}
             aria-label={starred ? 'Unstar command' : 'Star command'}
             title={starred ? 'Unstar command' : 'Star command'}
             onClick={() => onToggleStar(command.id)}
-            className={`shrink-0 px-1 text-[13px] leading-none ${
-              starred ? 'text-accent' : 'text-muted hover:text-ink'
-            }`}
+            className={`
+              flex h-6 w-6 shrink-0 items-center justify-center border
+              text-[16px] leading-none
+              ${starred
+                ? 'border-transparent text-accent hover:border-control-border-hover'
+                : 'border-transparent text-ink-dim hover:border-control-border-hover hover:text-ink'}
+            `}
           >
             {starred ? '★' : '☆'}
           </button>

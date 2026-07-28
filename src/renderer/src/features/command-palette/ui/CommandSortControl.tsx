@@ -50,7 +50,15 @@ export function CommandSortControl({
   searching: boolean
 }) {
   const [open, setOpen] = useState(false)
+  /** Keyboard cursor within the menu. Seeded to the ACTIVE mode on open so
+   *  arrowing starts from where the user already is rather than from the top. */
+  const [highlighted, setHighlighted] = useState(0)
   const rootRef = useRef<HTMLDivElement>(null)
+
+  const openMenu = useCallback(() => {
+    setHighlighted(Math.max(0, COMMAND_SORT_MODES.indexOf(mode)))
+    setOpen(true)
+  }, [mode])
 
   // Close on any pointer press outside the control.
   //
@@ -82,21 +90,79 @@ export function CommandSortControl({
     [onChange],
   )
 
-  const onKeyDown = useCallback((event: React.KeyboardEvent) => {
-    if (event.key !== 'Escape') return
-    // Escape must close the MENU without closing the palette. The Dialog's
-    // `onEscapeKeyDown` owns a back-out ladder (sub-mode → command list →
-    // dismiss), and letting this key reach it would skip a rung — press Escape
-    // to dismiss a menu, lose your whole sub-mode.
-    event.preventDefault()
-    event.stopPropagation()
-    setOpen(false)
-  }, [])
+  /**
+   * All menu keyboard handling, on `document` in the CAPTURE phase.
+   *
+   * WHY not a React `onKeyDown` on this component's root — which is what this
+   * originally was, and which was silently dead code:
+   *
+   * `keepFocusInSearchInput` means focus NEVER enters this subtree. The palette's
+   * search input is a SIBLING of this control in the header row, so a keydown
+   * originating there propagates up through the header — never through us. The
+   * handler could not fire, and three keys went to the wrong place:
+   *
+   *   - Escape reached Radix's dismiss handler, closing the ENTIRE palette
+   *     while this menu was still open.
+   *   - ArrowUp/ArrowDown moved the selection in the command list *behind* the
+   *     open menu, invisibly.
+   *   - Enter ran `paletteCommands[selectedIndex]` — executing a command from a
+   *     list the user was not even looking at.
+   *
+   * Capture-phase on `document` fixes all three with one mechanism, because it
+   * runs before BOTH competing listeners: React 18 delegates synthetic events to
+   * the root container (a descendant of `document`, so its handlers are later),
+   * and Radix's dismiss layer listens on `document` in the bubble phase (later
+   * still). `stopPropagation` here therefore reaches neither.
+   *
+   * It also means the menu is genuinely keyboard-operable, which the ARIA roles
+   * on it have been promising all along.
+   */
+  useEffect(() => {
+    if (!open) return
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      const keys = ['Escape', 'ArrowDown', 'ArrowUp', 'Enter', 'Tab', 'Home', 'End']
+      if (!keys.includes(event.key)) return
+
+      // Claim the key before anything else can act on it. Every branch below
+      // either consumes the key or closes the menu, so there is no case where
+      // swallowing it leaves the user stuck.
+      event.preventDefault()
+      event.stopPropagation()
+
+      if (event.key === 'Escape' || event.key === 'Tab') {
+        setOpen(false)
+        return
+      }
+      if (event.key === 'Enter') {
+        const chosen = COMMAND_SORT_MODES[highlighted]
+        if (chosen) select(chosen)
+        return
+      }
+      if (event.key === 'Home') {
+        setHighlighted(0)
+        return
+      }
+      if (event.key === 'End') {
+        setHighlighted(COMMAND_SORT_MODES.length - 1)
+        return
+      }
+      const delta = event.key === 'ArrowDown' ? 1 : -1
+      // Clamp rather than wrap: the list is four items on screen at once, so
+      // wrapping buys nothing and makes it easy to shoot past the end.
+      setHighlighted(current =>
+        Math.min(COMMAND_SORT_MODES.length - 1, Math.max(0, current + delta)),
+      )
+    }
+
+    document.addEventListener('keydown', onKeyDown, true)
+    return () => document.removeEventListener('keydown', onKeyDown, true)
+  }, [open, highlighted, select])
 
   const label = searching ? 'Relevance' : COMMAND_SORT_MODE_LABELS[mode]
 
   return (
-    <div ref={rootRef} className="relative flex-shrink-0" onKeyDown={onKeyDown}>
+    <div ref={rootRef} className="relative flex-shrink-0">
       <button
         type="button"
         disabled={searching}
@@ -115,7 +181,7 @@ export function CommandSortControl({
             : 'Change how the command list is ordered'
         }
         onMouseDown={keepFocusInSearchInput}
-        onClick={() => setOpen(current => !current)}
+        onClick={() => (open ? setOpen(false) : openMenu())}
         className="
           flex items-center gap-1
           border border-control-border bg-control-bg
@@ -144,19 +210,25 @@ export function CommandSortControl({
             shadow-[0_8px_24px_var(--theme-shadow-color)]
           "
         >
-          {COMMAND_SORT_MODES.map(candidate => (
+          {COMMAND_SORT_MODES.map((candidate, index) => (
             <button
               key={candidate}
               type="button"
               role="menuitemradio"
               aria-checked={candidate === mode}
+              // The keyboard cursor is state, not DOM focus — focus stays in the
+              // search input by design — so the highlight has to be painted from
+              // `highlighted` rather than a `:focus` style. Hover writes to the
+              // same state so the two input methods share one cursor, exactly as
+              // the palette's own rows do.
+              onMouseEnter={() => setHighlighted(index)}
               onMouseDown={keepFocusInSearchInput}
               onClick={() => select(candidate)}
               className={`
                 flex w-full items-center gap-2
                 px-2 py-1.5 text-left text-[11px]
                 ${
-                  candidate === mode
+                  index === highlighted
                     ? 'bg-row-selected-bg text-row-selected-fg'
                     : 'text-ink-dim hover:bg-row-hover-bg hover:text-ink'
                 }

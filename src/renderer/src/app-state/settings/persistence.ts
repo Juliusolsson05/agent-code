@@ -299,9 +299,10 @@ function coerceCommandStarred(value: unknown): Record<string, boolean> {
  * written by a future build (a fifth mode), hand-edited in devtools, or
  * truncated mid-write can all put a string here that no longer means anything.
  * An unknown value must degrade to 'catalog' — the behavior the palette had
- * before this setting existed — rather than reaching `browseOrder`, where it
- * would fall through every branch and silently produce the catalog order
- * anyway, just with a control claiming a mode that is not in effect.
+ * before this setting existed. Letting one through would NOT be harmless: it
+ * falls past the 'catalog' and 'alpha' branches in `orderFlat` and lands on the
+ * history sort, so an unrecognized mode would silently render as "recently
+ * used" while the control displayed whatever string it read.
  */
 function coerceCommandSortMode(value: unknown): CommandSortMode {
   return isCommandSortMode(value) ? value : DEFAULT_SETTINGS.commandSortMode

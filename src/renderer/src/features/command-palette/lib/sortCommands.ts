@@ -1,4 +1,4 @@
-import type { CommandSurface, ResolvedCommand } from '@renderer/features/command-palette/types'
+import type { CommandCategory, ResolvedCommand } from '@renderer/features/command-palette/types'
 
 // sortCommands — how the command list is ordered when the user is BROWSING
 // rather than searching.
@@ -53,36 +53,62 @@ export const COMMAND_SORT_MODE_LABELS: Record<CommandSortMode, string> = {
 }
 
 /**
- * Order in which surface groups are presented in `grouped` mode.
+ * Order in which category sections are presented in `grouped` mode.
  *
- * WHY this fixed order and not the `CommandSurface` union's declaration order:
- * this is a browse sequence, so it runs most-general to most-specialized —
- * `app` (always meaningful) first, `debug` (developer tooling) last. The union
- * in `types.ts` is a taxonomy, not a ranking, and coupling the two would mean a
- * future reordering of the type for readability silently reshuffled the UI.
+ * WHY `CommandCategory` and NOT `CommandSurface` — this was the first
+ * implementation and it was wrong. `surface` is a MACHINE applicability
+ * dimension: it answers "does this concept exist in the current layout" and
+ * drives mode gating. `CommandCategory`'s own doc comment records that reusing
+ * it as a presentation axis is a conflation the codebase already paid for once
+ * (the Settings list did it), because once one field means both, a command
+ * cannot be reclassified for display without changing WHEN IT APPLIES.
  *
- * `grid` and `dispatch` are mutually exclusive at runtime — `surfaceAvailable`
- * in `registry.ts` hides one or the other depending on Dispatch Mode — so at
- * most one of those two sections can ever render. Both are listed because this
- * module has no way to know which mode is active, and must not care.
+ * It is also simply worse at the job this mode exists for. By surface the
+ * buckets are app 41 / dispatch 34 / session 32 / grid 11 / debug 11 /
+ * editor 9 — and since grid and dispatch are mutually exclusive, one section
+ * holds ~40% of the visible list, which is barely a narrowing at all. By
+ * category they are session 24 / layout-dispatch 16 / navigate 12 /
+ * developer 12 / workspace-tools 11 / editor-files 10 / create 10 /
+ * preferences 3: eight sections a person can actually scan.
+ *
+ * WHY this fixed order rather than the union's declaration order: this is a
+ * browse sequence, running from what people reach for most to what they reach
+ * for least, ending with developer tooling. The union in `types.ts` is a
+ * taxonomy, not a ranking, and coupling them would mean a future reordering of
+ * the type for readability silently reshuffled the UI.
  */
-const SURFACE_ORDER: readonly CommandSurface[] = [
-  'app',
+const CATEGORY_ORDER: readonly CommandCategory[] = [
+  'create',
+  'navigate',
   'session',
-  'grid',
-  'dispatch',
-  'editor',
-  'debug',
+  'layout-dispatch',
+  'editor-files',
+  'workspace-tools',
+  'preferences',
+  'developer',
 ]
 
-const SURFACE_LABELS: Record<CommandSurface, string> = {
-  app: 'App',
+const CATEGORY_LABELS: Record<CommandCategory, string> = {
+  create: 'Create',
+  navigate: 'Navigate',
   session: 'Session',
-  grid: 'Grid',
-  dispatch: 'Dispatch',
-  editor: 'Editor',
-  debug: 'Debug',
+  'layout-dispatch': 'Layout & Dispatch',
+  'editor-files': 'Editor & Files',
+  'workspace-tools': 'Workspace Tools',
+  preferences: 'Preferences',
+  developer: 'Developer',
 }
+
+/**
+ * Section for commands that declare no category.
+ *
+ * `CommandDef.category` is optional until the governance migration makes it
+ * required, and extension-contributed commands have no way to declare one at
+ * all. Dropping those rows would silently hide working commands from a browse
+ * mode — the worst possible failure for a feature whose entire purpose is
+ * discovery — so they get a labelled home at the end instead.
+ */
+const UNCATEGORIZED_LABEL = 'Other'
 
 /** The starred section's label in `grouped` mode. Starring already hoists rows
  *  to the top invisibly (see `rankCommands`); grouped mode is the one view that
@@ -237,9 +263,8 @@ function orderFlat(
  * Exported for its own tests; the palette consumes it through `browseOrder`.
  *
  * Empty groups are dropped rather than rendered as bare headers — a section
- * heading over nothing reads as a bug, and in practice at least two of the six
- * surfaces are empty in any given mode (`grid` and `dispatch` can never both be
- * populated).
+ * heading over nothing reads as a bug, and several categories are empty in any
+ * given context once mode gating and picker visibility have filtered the list.
  */
 export function groupCommands(
   commands: readonly ResolvedCommand[],
@@ -259,19 +284,25 @@ export function groupCommands(
     .filter(command => !starred[command.id])
     .map((command, index) => ({ command, index }))
 
-  for (const surface of SURFACE_ORDER) {
-    const inSurface = rest.filter(entry => entry.command.surface === surface)
-    if (inSurface.length === 0) continue
-    // Alphabetical WITHIN a group. Once the section headings carry the
-    // structure, catalog adjacency inside a section stops earning its keep —
-    // the user is scanning a short labelled list at that point, and A–Z is the
-    // fastest thing to scan.
-    inSurface.sort(byTitleThenIndex)
-    groups.push({
-      label: SURFACE_LABELS[surface],
-      commands: inSurface.map(entry => entry.command),
-    })
+  const sectionFor = (entries: typeof rest, label: string): void => {
+    if (entries.length === 0) return
+    // Alphabetical WITHIN a section. Once the headings carry the structure,
+    // catalog adjacency inside a section stops earning its keep — the user is
+    // scanning a short labelled list at that point, and A–Z is the fastest
+    // thing to scan.
+    const sorted = [...entries].sort(byTitleThenIndex)
+    groups.push({ label, commands: sorted.map(entry => entry.command) })
   }
+
+  for (const category of CATEGORY_ORDER) {
+    sectionFor(rest.filter(entry => entry.command.category === category), CATEGORY_LABELS[category])
+  }
+
+  // Last, so a categorized command never sorts below an uncategorized one.
+  // Empty in practice today, and it stays empty as long as every command
+  // declares a category — but see UNCATEGORIZED_LABEL for why this cannot be a
+  // silent drop.
+  sectionFor(rest.filter(entry => entry.command.category === undefined), UNCATEGORIZED_LABEL)
 
   return groups
 }

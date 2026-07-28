@@ -229,7 +229,7 @@ export function useWorkspace(
   const showPaneToast = usePaneToast(refs.paneToastTimers, updateRuntime)
 
   // ---- Actions ----
-  const { setDraftInput, setDraftImages } = useDraftActions(
+  const { setDraftInput, setDraftImages, clearDraft, undoClearDraft } = useDraftActions(
     setRuntimes,
     updateRuntime,
     setDraftVersion,
@@ -916,6 +916,8 @@ export function useWorkspace(
     removeOptimisticCodexUserEntry,
     setDraftInput,
     setDraftImages,
+    clearDraft,
+    undoClearDraft,
     loadOlderHistory,
     showPaneToast,
     undoClose,

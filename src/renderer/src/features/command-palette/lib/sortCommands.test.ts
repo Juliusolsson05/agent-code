@@ -6,17 +6,21 @@ import {
   isCommandSortMode,
   STARRED_GROUP_LABEL,
 } from '@renderer/features/command-palette/lib/sortCommands'
-import type { CommandSurface, ResolvedCommand } from '@renderer/features/command-palette/types'
+import type { CommandCategory, ResolvedCommand } from '@renderer/features/command-palette/types'
 
 // Minimal command factory. Only the four fields the sorter reads are real —
 // everything else is filler, deliberately, so a change to `ResolvedCommand`'s
 // unrelated fields cannot break these tests.
-function cmd(id: string, title: string, surface: CommandSurface = 'app'): ResolvedCommand {
+//
+// `category` is what grouping keys on; `surface` is fixed at 'app' throughout
+// precisely to prove grouping does NOT consult it.
+function cmd(id: string, title: string, category?: CommandCategory): ResolvedCommand {
   return {
     id,
     title,
     description: `${title} description`,
-    surface,
+    surface: 'app',
+    category,
     keywords: [],
     keepPaletteOpen: false,
     state: null,
@@ -144,10 +148,10 @@ describe('browseOrder — starring composes with sorting', () => {
 describe('browseOrder — grouped', () => {
   const commands = [
     cmd('sess-b', 'Reload Agent', 'session'),
-    cmd('app-b', 'Open Settings', 'app'),
+    cmd('pref-a', 'Open Settings', 'preferences'),
     cmd('sess-a', 'Copy Last Response', 'session'),
-    cmd('app-a', 'New Tab', 'app'),
-    cmd('dbg', 'Save Debug Logs', 'debug'),
+    cmd('create-a', 'New Tab', 'create'),
+    cmd('dev-a', 'Save Debug Logs', 'developer'),
   ]
 
   it('emits sections in the declared order with rows alphabetical inside each', () => {
@@ -155,50 +159,82 @@ describe('browseOrder — grouped', () => {
 
     expect(titles(result.commands)).toEqual([
       'New Tab',
-      'Open Settings',
       'Copy Last Response',
       'Reload Agent',
+      'Open Settings',
       'Save Debug Logs',
     ])
     expect([...result.headers.entries()]).toEqual([
-      [0, 'App'],
-      [2, 'Session'],
-      [4, 'Debug'],
+      [0, 'Create'],
+      [1, 'Session'],
+      [3, 'Preferences'],
+      [4, 'Developer'],
     ])
   })
 
-  it('drops empty groups instead of rendering a heading over nothing', () => {
-    const result = browseOrder([cmd('only', 'Only One', 'editor')], 'grouped', NO_HISTORY, NOTHING_STARRED)
-
-    expect([...result.headers.values()]).toEqual(['Editor'])
+  it('groups by category and NOT by surface', () => {
+    // Every command here shares surface 'app' and differs only by category. If
+    // grouping ever regresses to keying on `surface` — the conflation
+    // CommandCategory exists to prevent — this collapses to one section.
+    const result = browseOrder(commands, 'grouped', NO_HISTORY, NOTHING_STARRED)
+    expect(result.headers.size).toBe(4)
   })
 
-  it('leads with a starred section and pulls those rows out of their surfaces', () => {
+  it('drops empty groups instead of rendering a heading over nothing', () => {
+    const result = browseOrder(
+      [cmd('only', 'Only One', 'editor-files')],
+      'grouped',
+      NO_HISTORY,
+      NOTHING_STARRED,
+    )
+
+    expect([...result.headers.values()]).toEqual(['Editor & Files'])
+  })
+
+  it('keeps uncategorized commands visible in a trailing Other section', () => {
+    // Category is optional on CommandDef until the governance migration lands,
+    // and extension-contributed commands cannot declare one at all. Dropping
+    // them would silently hide working commands from the one mode built for
+    // discovery.
+    const result = browseOrder(
+      [cmd('mystery', 'Mystery Command'), cmd('known', 'Known Command', 'create')],
+      'grouped',
+      NO_HISTORY,
+      NOTHING_STARRED,
+    )
+
+    expect(titles(result.commands)).toEqual(['Known Command', 'Mystery Command'])
+    expect([...result.headers.entries()]).toEqual([
+      [0, 'Create'],
+      [1, 'Other'],
+    ])
+  })
+
+  it('leads with a starred section and pulls those rows out of their categories', () => {
     const result = browseOrder(commands, 'grouped', NO_HISTORY, { 'sess-b': true })
 
     expect(result.headers.get(0)).toBe(STARRED_GROUP_LABEL)
     expect(result.commands[0]?.title).toBe('Reload Agent')
-    // Session now has one member, so it is still present but no longer holds
-    // the starred row.
+    // Session still exists with its remaining member, but no longer holds the
+    // starred row.
     expect(titles(result.commands)).toEqual([
       'Reload Agent',
       'New Tab',
-      'Open Settings',
       'Copy Last Response',
+      'Open Settings',
       'Save Debug Logs',
     ])
   })
 
   it('anchors every header on the first row of its section', () => {
     // The invariant that makes headers safe to render inside the flat list: a
-    // header index always points at a real command, and that command's group
-    // label matches the header.
-    const result = browseOrder(commands, 'grouped', NO_HISTORY, { 'app-a': true })
+    // header index always points at a real command.
+    const result = browseOrder(commands, 'grouped', NO_HISTORY, { 'create-a': true })
 
     for (const [index] of result.headers) {
       expect(result.commands[index]).toBeDefined()
     }
-    expect(result.headers.size).toBe(4) // Starred + App + Session + Debug
+    expect(result.headers.size).toBe(4) // Starred + Session + Preferences + Developer
   })
 })
 
@@ -214,11 +250,28 @@ describe('groupCommands', () => {
     expect(titles(groups[0]?.commands ?? [])).toEqual(['Zebra', 'Apple'])
   })
 
-  it('never emits both grid and dispatch sections populated in one build', () => {
-    // Not a rule this module enforces — `surfaceAvailable` in the registry
-    // guarantees it upstream — but the group order lists both, so this pins
-    // that each is handled independently and neither swallows the other.
-    const groups = groupCommands([cmd('g', 'Split Pane Right', 'grid')], NOTHING_STARRED)
-    expect(groups.map(group => group.label)).toEqual(['Grid'])
+  it('places every category in the declared browse order', () => {
+    // Pins the full ordering, so a reshuffle of CATEGORY_ORDER is a deliberate
+    // act with a failing test attached rather than a silent UI change.
+    const oneEach = [
+      cmd('h', 'H', 'developer'),
+      cmd('g', 'G', 'preferences'),
+      cmd('f', 'F', 'workspace-tools'),
+      cmd('e', 'E', 'editor-files'),
+      cmd('d', 'D', 'layout-dispatch'),
+      cmd('c', 'C', 'session'),
+      cmd('b', 'B', 'navigate'),
+      cmd('a', 'A', 'create'),
+    ]
+    expect(groupCommands(oneEach, NOTHING_STARRED).map(group => group.label)).toEqual([
+      'Create',
+      'Navigate',
+      'Session',
+      'Layout & Dispatch',
+      'Editor & Files',
+      'Workspace Tools',
+      'Preferences',
+      'Developer',
+    ])
   })
 })
