@@ -3,6 +3,7 @@ import type { SavedTheme } from '@renderer/app-state/settings/savedThemes'
 import type { PromptTemplate } from '@renderer/features/prompt-templates/types'
 import type { ColorFlagId } from '@renderer/app-state/settings/dispatchColorFlags'
 import type { DictationProvider } from '@shared/types/dictation'
+import type { MouseButtonBinding } from '@renderer/lib/mouseBinding'
 import type { ConfigurableBuiltInMcpDomain } from '@mcp/shared/types'
 
 // Built-in theme ids only. 'custom' used to live here as a sentinel that
@@ -334,6 +335,13 @@ export type Settings = {
    *  same "press the key you want" model because composer bindings compete
    *  with editor shortcuts. Empty string means "button only". */
   dictationShortcut: string
+  /** Mouse button held to dictate, or '' for none. Separate from
+   *  `dictationShortcut` because its REACH differs: the keyboard binding is
+   *  registered in main and fires globally, while this one is a renderer DOM
+   *  listener that only fires while Agent Code has focus. See
+   *  lib/mouseBinding.ts for the full WHY. Both may be set at once; whichever
+   *  the user presses starts the same hold. */
+  dictationMouseButton: MouseButtonBinding
   /** When true, periodically writes Save-Debug-Logs-style bundles for
    *  every active agent session and attempts one last write during
    *  renderer unload. This is a developer-mode setting, not a
@@ -461,6 +469,11 @@ export const DEFAULT_SETTINGS: Settings = {
   // round-trips through the settings persistence layer without any
   // special-casing.
   dictationShortcut: 'Cmd+Shift+D',
+  // Off by default. Every bindable button already has a job — middle click
+  // is paste/new-tab and the side buttons are history navigation — so
+  // claiming one without the user asking would silently break a gesture they
+  // rely on. Opt-in only.
+  dictationMouseButton: '',
   aggressiveDebugPersistence: false,
   defaultWorkspaceMode: 'grid',
   agentViewMode: 'agent',
