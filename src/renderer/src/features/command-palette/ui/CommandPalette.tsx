@@ -1,7 +1,7 @@
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import type { AgentProviderKind } from '@shared/types/providerKind'
 import { getProviderFeatures } from '@providers/shared/featureCapabilities'
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 
 import {
@@ -25,6 +25,8 @@ import {
 } from '@renderer/features/command-palette/lib/recentCommandHistory'
 import { useGlobalToast } from '@renderer/ui/GlobalToast'
 import { rankCommands } from '@renderer/features/command-palette/lib/rankCommands'
+import { CommandSortControl } from '@renderer/features/command-palette/ui/CommandSortControl'
+import type { CommandSortMode } from '@renderer/features/command-palette/lib/sortCommands'
 import {
   body,
   primary,
@@ -906,9 +908,23 @@ function OpenCommandPalette({
     },
     [commandStarred, setSettings],
   )
-  const filteredCommands = useMemo(
-    () => rankCommands(commands, queryText, historyScoreMap, commandStarred),
-    [commands, queryText, historyScoreMap, commandStarred],
+  // The sort mode is a persisted browse preference, read the same way starring
+  // is — straight from settings, deliberately NOT through `commandContext.flags`.
+  // Same reasoning as the comment above: flags feed the context memo, and
+  // putting a value there that changes on a menu click would rebuild all 99
+  // commands (every function title, every getState, resolveEffectiveKeybindings)
+  // to reorder a list that is already built.
+  const commandSortMode = settings.commandSortMode
+  const setCommandSortMode = useCallback(
+    (next: CommandSortMode) => setSettings({ commandSortMode: next }),
+    [setSettings],
+  )
+  // `headers` is the section map for `grouped` mode and empty for every other
+  // mode. It comes back from the SAME call that produced the ordering, so a
+  // header can never be drawn above the wrong row — see `browseOrder`.
+  const { commands: filteredCommands, headers: commandGroupHeaders } = useMemo(
+    () => rankCommands(commands, queryText, historyScoreMap, commandStarred, commandSortMode),
+    [commands, queryText, historyScoreMap, commandStarred, commandSortMode],
   )
   const directAgentTarget = useMemo(
     () => resolveAgentPaneLabel(workspace.state, queryText, workspace.tileTabs),
@@ -928,6 +944,19 @@ function OpenCommandPalette({
     () => (directAgentCommand ? [directAgentCommand, ...filteredCommands] : filteredCommands),
     [directAgentCommand, filteredCommands],
   )
+
+  // `commandGroupHeaders` is keyed by index into `filteredCommands`, but the
+  // rendered list is `paletteCommands` — one longer whenever a direct agent
+  // coordinate row is prepended. Shifting the lookup by that offset keeps the
+  // two aligned.
+  //
+  // In practice the two are mutually exclusive: headers exist only for an EMPTY
+  // query, and `resolveAgentPaneLabel` needs a query matching /^[A-Z]+[1-9]\d*$/
+  // to produce a row at all. The offset is here anyway because relying on that
+  // coincidence would put a silent off-by-one behind any future change to
+  // either rule, and the failure mode — every section heading sitting one row
+  // too high — is exactly the kind of thing that ships unnoticed.
+  const directAgentRowOffset = directAgentCommand ? 1 : 0
 
   const filteredLength =
     mode === 'resume'
@@ -981,7 +1010,18 @@ function OpenCommandPalette({
 
   useEffect(() => {
     if (!listRef.current) return
-    const el = listRef.current.children[selectedIndex]
+    // Resolve the row by its declared index, NOT by position among the
+    // container's children.
+    //
+    // `children[selectedIndex]` assumed every child of the list is a selectable
+    // row, and that was already false before grouping existed: the
+    // `ai-workspace-open`/`clear` modes render an error banner as a sibling of
+    // the rows, so while an error was showing every scroll target was off by
+    // one. Grouped mode's section headings would have made it wrong in a fourth
+    // mode. An explicit `data-palette-row` makes a row's index part of its
+    // identity, so sibling chrome — banners, headings, anything added later —
+    // can never shift it again.
+    const el = listRef.current.querySelector(`[data-palette-row="${selectedIndex}"]`)
     if (el instanceof HTMLElement) {
       el.scrollIntoView({ block: 'nearest' })
     }
@@ -1613,6 +1653,18 @@ function OpenCommandPalette({
               Manage
             </button>
           )}
+          {/* Commands mode only. The other ten modes render short, intrinsically
+              ordered lists (session recency, buried-at time, [...custom,
+              ...builtin]) where a sort control would be chrome without a
+              purpose — the command list is the only one long enough to be hard
+              to scan. */}
+          {mode === 'commands' && (
+            <CommandSortControl
+              mode={commandSortMode}
+              onChange={setCommandSortMode}
+              searching={queryText.length > 0}
+            />
+          )}
         </div>
 
         <div className="flex-1 min-h-0 flex overflow-hidden">
@@ -1711,34 +1763,58 @@ function OpenCommandPalette({
                   No matching commands
                 </div>
               ) : (
-                paletteCommands.map((command, i) => (
-                  <div
-                    key={command.id}
-                    className={`
-                    flex items-center justify-between
-                    px-3 py-1.5
-                    cursor-pointer
-                    text-[13px] font-code
-                    ${
-                      i === selectedIndex
-                        ? 'bg-row-selected-bg text-row-selected-fg'
-                        : 'text-ink-dim hover:bg-row-hover-bg'
-                    }
-                  `}
-                    onMouseEnter={() => setSelectedIndex(i)}
-                    onClick={() => executeCommand(command)}
-                  >
-                    <div className="min-w-0 flex items-center gap-2">
-                      <span>{command.title}</span>
-                      {command.state && <CommandStateBadge state={command.state} />}
-                    </div>
-                    {command.shortcut && (
-                      <span className="ml-3 flex-shrink-0 text-[11px] text-muted">
-                        {command.shortcut}
-                      </span>
+                paletteCommands.map((command, i) => {
+                  const groupHeader = commandGroupHeaders.get(i - directAgentRowOffset)
+                  return (
+                  <Fragment key={command.id}>
+                    {groupHeader && (
+                      <div
+                        // Not a selectable row and deliberately not counted by
+                        // anything: `selectedIndex` indexes `paletteCommands`,
+                        // and headers live outside that array entirely. Arrow
+                        // keys, Enter, hover and the clamp effect are all
+                        // untouched by grouping — which is why the header map is
+                        // keyed by command index rather than the list being
+                        // restructured into sections.
+                        aria-hidden
+                        className="
+                          px-3 pt-3 pb-1
+                          text-[9px] font-code uppercase tracking-[0.14em] text-muted
+                          first:pt-1
+                        "
+                      >
+                        {groupHeader}
+                      </div>
                     )}
-                  </div>
-                ))
+                    <div
+                      data-palette-row={i}
+                      className={`
+                      flex items-center justify-between
+                      px-3 py-1.5
+                      cursor-pointer
+                      text-[13px] font-code
+                      ${
+                        i === selectedIndex
+                          ? 'bg-row-selected-bg text-row-selected-fg'
+                          : 'text-ink-dim hover:bg-row-hover-bg'
+                      }
+                    `}
+                      onMouseEnter={() => setSelectedIndex(i)}
+                      onClick={() => executeCommand(command)}
+                    >
+                      <div className="min-w-0 flex items-center gap-2">
+                        <span>{command.title}</span>
+                        {command.state && <CommandStateBadge state={command.state} />}
+                      </div>
+                      {command.shortcut && (
+                        <span className="ml-3 flex-shrink-0 text-[11px] text-muted">
+                          {command.shortcut}
+                        </span>
+                      )}
+                    </div>
+                  </Fragment>
+                  )
+                })
               ))}
 
             {mode === 'resume' &&
@@ -1764,6 +1840,7 @@ function OpenCommandPalette({
                         : 'text-ink-dim hover:bg-row-hover-bg'
                     }
                   `}
+                    data-palette-row={i}
                     onMouseEnter={() => setSelectedIndex(i)}
                     onClick={() => executeResume(session)}
                   >
@@ -1804,6 +1881,7 @@ function OpenCommandPalette({
                       <button
                         type="button"
                         key={workspace.workspaceId}
+                        data-palette-row={i}
                         disabled={aiWorkspacePending !== null}
                         className={`
                           block w-full border-b border-border px-3 py-2 text-left last:border-b-0
@@ -1895,6 +1973,7 @@ function OpenCommandPalette({
                         : 'text-ink-dim hover:bg-row-hover-bg'
                     }
                   `}
+                    data-palette-row={i}
                     onMouseEnter={() => setSelectedIndex(i)}
                     onClick={() => executeBuried(item)}
                   >
@@ -1924,6 +2003,7 @@ function OpenCommandPalette({
                         : 'text-ink-dim hover:bg-row-hover-bg'
                     }
                   `}
+                    data-palette-row={i}
                     onMouseEnter={() => setSelectedIndex(i)}
                     onClick={() => executeKillBuried(item)}
                   >
@@ -1955,6 +2035,7 @@ function OpenCommandPalette({
                         : 'text-ink-dim hover:bg-row-hover-bg'
                     }
                   `}
+                    data-palette-row={i}
                     onMouseEnter={() => setSelectedIndex(i)}
                     onClick={() => void executePromptTemplate(template)}
                   >
