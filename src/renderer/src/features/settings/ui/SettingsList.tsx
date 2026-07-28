@@ -10,6 +10,7 @@ import { CommandKeybindingsRow } from '@renderer/features/settings/ui/CommandKey
 import { settingMetadata } from '@renderer/features/settings/lib/settingsRegistry'
 import { CliUpdateBehaviorRow } from '@renderer/features/cli-updates/CliUpdateBehaviorRow'
 import { DictationApiKeyRow } from '@renderer/features/voice-dictation/DictationApiKeyRow'
+import { DictationHistoryRow } from '@renderer/features/voice-dictation/DictationHistoryRow'
 import { ThemePickerRow } from '@renderer/features/settings/ui/ThemePickerRow'
 import { AgentCodeConventionsRow } from '@renderer/features/settings/ui/AgentCodeConventionsRow'
 
@@ -239,6 +240,10 @@ function SettingRow({
               safeStorage-backed main state, so the row owns the IPC
               round-trip. See features/voice-dictation/DictationApiKeyRow.tsx. */}
           {control.type === 'dictation-api-key' ? <DictationApiKeyRow /> : null}
+
+          {/* Same marker-row rationale: the transcripts and lifetime totals
+              live in a main-owned JSON store, not in Settings. */}
+          {control.type === 'dictation-history' ? <DictationHistoryRow /> : null}
 
           {control.type === 'agent-code-conventions' ? <AgentCodeConventionsRow /> : null}
 

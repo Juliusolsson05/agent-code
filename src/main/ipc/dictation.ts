@@ -14,6 +14,13 @@ import {
   readDeepgramApiKeyForRuntime,
   setDeepgramApiKey,
 } from '@main/dictation/apiKeyStore.js'
+import {
+  appendEntry,
+  clearEntries,
+  deleteEntry,
+  readHistory,
+  resetTotals,
+} from '@main/dictation/historyStore.js'
 import { sendToMainWindow } from '@main/window/mainWindow.js'
 import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import type { DictationDebugJournalRegistry } from '@main/dictationJournal.js'
@@ -61,6 +68,48 @@ const activeSessions = new Map<string, ActiveDictationSession>()
 const sha8 = (buf: Uint8Array): string =>
   sha8FromDigestBytes(createHash('sha256').update(buf).digest())
 
+// Unpack everything a provider failure knows, not just `.message`.
+//
+// WHY this exists: the package throws `SpeechProviderError` carrying `status`
+// (HTTP code) and `details` (the response body), but every journal site used to
+// log only `err.message` — which for Deepgram is the constant string
+// "Deepgram transcription failed". Two recorded failures could not be diagnosed
+// from the journal at all because the actual rejection reason was thrown away
+// at the logging boundary. A durable log that records a constant is not a log.
+//
+// Structural checks rather than `instanceof`: SpeechProviderError lives in the
+// agent-voice-dictation submodule, and importing a class across that boundary
+// purely to satisfy an instanceof — which also breaks if two copies of the
+// module ever load — buys nothing over reading the fields defensively.
+function describeProviderError(err: unknown): Record<string, unknown> {
+  const base: Record<string, unknown> = {
+    message: err instanceof Error ? err.message : String(err),
+  }
+  if (!err || typeof err !== 'object') return base
+  const candidate = err as { status?: unknown; details?: unknown; provider?: unknown }
+  if (typeof candidate.status === 'number') base.status = candidate.status
+  if (typeof candidate.provider === 'string') base.provider = candidate.provider
+  if (candidate.details !== undefined) {
+    // Truncated: `details` is a raw response body and a provider having a bad
+    // day can return an HTML error page. The first 2 KB always contains the
+    // machine-readable reason if there is one.
+    const text =
+      typeof candidate.details === 'string'
+        ? candidate.details
+        : safeJsonStringify(candidate.details)
+    if (text) base.details = text.slice(0, 2048)
+  }
+  return base
+}
+
+function safeJsonStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value) ?? ''
+  } catch {
+    return ''
+  }
+}
+
 export function registerDictationIpc(deps: {
   dictationDebugJournals: DictationDebugJournalRegistry
   // App-run journal for hotkey-helper degrade breadcrumbs (#495 A4). The
@@ -106,6 +155,19 @@ export function registerDictationIpc(deps: {
       }
     }
   })
+
+  // Dictation history. Every mutating handler returns the FRESH snapshot rather
+  // than void, so the renderer updates in one round-trip instead of firing a
+  // follow-up list call — same shape as `dictation:api-key-set` returning the
+  // new status. It also removes the window where two renderers could disagree
+  // about what the store contains.
+  ipcMain.handle('dictation:history-list', async () => readHistory())
+  ipcMain.handle('dictation:history-delete', async (_evt, params: { id?: string }) => {
+    if (!params?.id) return readHistory()
+    return deleteEntry(params.id)
+  })
+  ipcMain.handle('dictation:history-clear', async () => clearEntries())
+  ipcMain.handle('dictation:history-reset-totals', async () => resetTotals())
 
   ipcMain.handle('dictation:hotkey-configure', async (_evt, params: { binding?: string }) => {
     try {
@@ -281,7 +343,19 @@ export function registerDictationIpc(deps: {
       if (!session) return { kind: 'ignored' }
 
       const chunk = new Uint8Array(params.chunk)
-      if (chunk.byteLength <= 1) return { kind: 'ignored' }
+      // `=== 0`, never `<= 1`. This is the second half of the same bug the
+      // renderer's dataavailable handler carried: an audio chunk is a slice of
+      // one continuous muxed byte stream with no per-chunk framing, so dropping
+      // a 1-byte chunk deletes a byte out of the middle of the WebM container
+      // and Deepgram rejects the whole recording as "corrupt or unsupported
+      // data". A cold encoder emits exactly such a 1-byte first chunk.
+      //
+      // This guard is defense-in-depth behind the renderer's, and it has to
+      // agree with it — a stricter main-side threshold would resurrect the bug
+      // even after the renderer was fixed, and the failure would look identical
+      // (transcription silently empty on the first press of an app run). See
+      // useComposerDictation.ts's dataavailable handler for the full evidence.
+      if (chunk.byteLength === 0) return { kind: 'ignored' }
 
       session.chunkCount += 1
       session.audioBytes += chunk.byteLength
@@ -356,7 +430,7 @@ export function registerDictationIpc(deps: {
             emit(session.debugSessionId, 'ERROR', 'streaming:stop:throw', {
               streamId: params.id,
               streamingId,
-              message: err instanceof Error ? err.message : String(err),
+              ...describeProviderError(err),
               ms: Date.now() - session.startedAt,
             })
             return null
@@ -426,6 +500,33 @@ export function registerDictationIpc(deps: {
           sttMs: Date.now() - startedAt,
           rawTextLen: cleanText.length,
         })
+        // Record the dictation in the durable history store — deliberately
+        // NOT awaited. The user is watching a "transcribing…" pill right now;
+        // putting a disk write between the provider answering and the composer
+        // filling would make dictation feel slower than it is, in exchange for
+        // bookkeeping they cannot see. The store serialises its own writes, and
+        // `flushHistoryWrites()` on before-quit covers the dictate-then-⌘Q race.
+        //
+        // Raw text, never the <stt>-wrapped form: the wrapper is a delivery
+        // concern for the LIVE prompt, and baking today's tag format into every
+        // historical row would make the format un-changeable.
+        //
+        // A failed write must never fail the dictation. The transcript reaching
+        // the composer is the product; this row is bookkeeping.
+        void appendEntry({
+          text: cleanText,
+          provider: session.provider,
+          audioDurationMs: params.audioDurationMs ?? 0,
+          audioBytes: session.audioBytes,
+          chunkCount: session.chunkCount,
+          sttMs: Date.now() - startedAt,
+        }).catch(err => {
+          emit(session.debugSessionId, 'ERROR', 'history:append:throw', {
+            streamId: params.id,
+            message: err instanceof Error ? err.message : String(err),
+          })
+        })
+
         emit(session.debugSessionId, 'OUTCOME', 'success', {
           streamId: params.id,
           audioBytes: session.audioBytes,
@@ -449,9 +550,40 @@ export function registerDictationIpc(deps: {
       } catch (err) {
         emit(session.debugSessionId, 'ERROR', 'batch:upload:throw', {
           streamId: params.id,
-          message: err instanceof Error ? err.message : String(err),
+          ...describeProviderError(err),
           ms: Date.now() - session.startedAt,
         })
+
+        // A sub-second accidental press that the provider rejects is not an
+        // error the user needs to see — it is the "no speech" case arriving by
+        // a different route. The streaming path already gets this right: it
+        // returns empty text cleanly for these clips. Only the HTTP batch path
+        // throws, and surfacing a red "Dictation failed" toast for a half-second
+        // stray press trains the user to ignore the toast that matters.
+        //
+        // Deliberately narrow: only when the clip is BOTH tiny in chunks and
+        // short in wall-clock. A real dictation that fails for a real reason
+        // (bad key, provider outage, network) still surfaces as an error, which
+        // is the whole point of not just swallowing every throw here.
+        //
+        // NOT fixed by widening the `audioDurationMs < 300` pre-flight guard
+        // above: that duration is measured from `recording.startedAt`, stamped
+        // at recorder creation, so it already includes ~150ms of startup before
+        // any audio exists. Raising it would start discarding real short
+        // dictations, which is a worse failure than a stray toast.
+        const looksLikeStrayTap =
+          session.chunkCount <= 3 && (params.audioDurationMs ?? 0) < 1000
+        if (looksLikeStrayTap) {
+          emit(session.debugSessionId, 'OUTCOME', 'no-speech', {
+            streamId: params.id,
+            reason: 'too-short-provider-rejected',
+            chunkCount: session.chunkCount,
+            audioBytes: session.audioBytes,
+            audioDurationMs: params.audioDurationMs ?? null,
+          })
+          return { kind: 'no-speech' }
+        }
+
         emit(session.debugSessionId, 'OUTCOME', 'error', {
           streamId: params.id,
           message: err instanceof Error ? err.message : 'Dictation failed.',

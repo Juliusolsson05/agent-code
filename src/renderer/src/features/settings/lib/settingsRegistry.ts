@@ -212,6 +212,23 @@ export type SettingDefinition =
       description: string
       keywords: string[]
       metadata?: SettingMetadata
+      // Marker for the dictation history + stats panel. Same rationale as
+      // dictation-api-key above: the data lives in a main-owned JSON store
+      // (src/main/dictation/historyStore.ts), not in Settings, so there is no
+      // getValue/onChange to hoist here. Hoisting it would also mean every
+      // Settings render pulled the whole transcript list over IPC.
+      // See features/voice-dictation/DictationHistoryRow.tsx.
+      control: {
+        type: 'dictation-history'
+      }
+    }
+  | {
+      id: string
+      category: SettingCategoryId
+      title: string
+      description: string
+      keywords: string[]
+      metadata?: SettingMetadata
       // Main owns both the canonical document and the external deployment
       // health. A marker row prevents renderer Settings from inventing a second
       // boolean source of truth that could say Active after filesystem failure.
@@ -792,6 +809,32 @@ export function getSettingsRegistry(): SettingDefinition[] {
       // why 'Reset Settings' does not clear it.
       metadata: { scope: 'app', apply: 'immediate', storage: 'keychain' },
       control: { type: 'dictation-api-key' },
+    },
+    {
+      id: 'dictation-history',
+      category: 'dictation',
+      title: 'Dictation History',
+      description:
+        'Words spoken, average speaking rate, and your recent transcripts. Stored locally on this machine and never uploaded — audio is never kept, only text.',
+      keywords: [
+        'voice',
+        'dictation',
+        'history',
+        'recents',
+        'recent',
+        'stats',
+        'statistics',
+        'words',
+        'wpm',
+        'speed',
+        'transcript',
+        'copy',
+        'clipboard',
+      ],
+      // A JSON file under STATE_DIR, not renderer Settings — so 'Reset
+      // Settings' does not clear it, and the badge has to say so.
+      metadata: { scope: 'app', apply: 'immediate', storage: 'external-files' },
+      control: { type: 'dictation-history' },
     },
     {
       id: 'dictation-shortcut',

@@ -998,7 +998,40 @@ export function useComposerDictation({
           streamId: recording.id,
           queuedChunks: recording.queuedChunks.length,
         }, 'RECORDER')
-        if (event.data.size <= 1) return
+        // ONLY skip genuinely empty blobs. This guard used to read `<= 1`, and
+        // that single extra byte silently broke the FIRST dictation of every
+        // app run for months.
+        //
+        // WHY `=== 0` is the only defensible threshold: a `dataavailable` Blob
+        // is a *slice of one continuous muxed byte stream*, not a
+        // self-contained frame. There is no per-blob header, framing, or
+        // padding — the concatenation of every blob IS the WebM file.
+        // Therefore dropping any non-empty blob deletes bytes out of the middle
+        // of the container. A zero-byte blob is safe to skip only because
+        // concatenating nothing is a no-op.
+        //
+        // What actually went wrong: on a COLD encoder — the first MediaRecorder
+        // in the renderer process after boot, where getUserMedia itself took
+        // 700-3100ms instead of the warm ~130ms — the Opus encoder/WebM muxer
+        // has produced exactly ONE byte by the time the first 120ms timeslice
+        // fires. That byte is the head of the EBML header. We dropped it, so
+        // the stream we shipped began mid-header, and Deepgram correctly
+        // reported "Failed to process audio: corrupt or unsupported data" on
+        // BOTH the websocket and the HTTP batch upload. Once warm the muxer has
+        // the full ~1128-byte init segment ready before the first tick, chunk 0
+        // passes, and everything works — which is exactly why the second press
+        // always succeeded and this looked like an unfixable warm-up race.
+        //
+        // Evidence: 52 press journals in <userData>/dictation-debug/ correlate
+        // 1-byte-chunk-0 with total transcription failure 7/7, and >=496-byte
+        // chunk 0 with success 43/43. See docs/superpowers/plans/
+        // 2026-07-28-dictation-history-and-reliability.md §2.
+        //
+        // The package has always had this right
+        // (packages/agent-voice-dictation/src/recorder/browserRecorder.ts uses
+        // `=== 0`, as does the standalone flow-electron app). Only this port
+        // drifted. Do not "tighten" it back.
+        if (event.data.size === 0) return
         // MediaRecorder fires `dataavailable` in order, but the Blob ->
         // ArrayBuffer conversion is asynchronous and does not preserve that
         // ordering for us. That was the root cause of Deepgram's intermittent

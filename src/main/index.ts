@@ -43,6 +43,7 @@ import { isSessionRecordingEnabled, isSessionRecordingAutoStart } from '@main/ip
 import { registerAllIpc } from '@main/ipc/index.js'
 import { AgentCodeConventionsService } from '@main/agentCodeConventions/AgentCodeConventionsService.js'
 import { cleanupDictationIpcResources } from '@main/ipc/dictation.js'
+import { flushHistoryWrites } from '@main/dictation/historyStore.js'
 import { performanceService } from '@main/performance/PerformanceService.js'
 import { startMainHeapWatchdog, stopMainHeapWatchdog } from '@main/performance/heapWatchdog.js'
 import { getPlatformKey, resolveBundledTool } from '@main/setup/runtimeTools.js'
@@ -876,6 +877,13 @@ app.on('before-quit', (event) => {
   // dictation journal is idle at quit unless the user is pressing Fn
   // at the exact moment of app shutdown.
   void dictationDebugJournals.flushAll()
+  // Dictation HISTORY is a separate store from the debug journal above, and its
+  // flush is load-bearing rather than best-effort: `appendEntry` is called
+  // without await from the stream-stop handler (so a disk write never delays
+  // the transcript reaching the composer), which means a dictation finished
+  // seconds before quit can still be in flight right now. Without this the row
+  // is simply lost, with no error anywhere. See historyStore.ts.
+  void flushHistoryWrites()
   void pasteDebugJournals.flushAll()
   performanceService.stop()
 })

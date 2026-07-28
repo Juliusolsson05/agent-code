@@ -1,9 +1,21 @@
 # Dictation History, Stats, and Cold-Start Audio Loss
 
-> **Status: PLAN — NOT YET IMPLEMENTED.** This document is the first commit on
-> the branch. The PR that carries it will grow the implementation. Read this
-> file before writing any code, and settle §0 first — three decisions there
-> change what gets built.
+> **Status: IMPLEMENTED** on this branch. §0's three decisions were settled by
+> the product owner before implementation and the tasks below reflect them.
+> Two things the plan did NOT anticipate, found while building:
+>
+> 1. **The non-awaited history write needed serialization, not just a shutdown
+>    flush.** Task 5 specifies fire-and-forget `appendEntry`; combined with a
+>    read-modify-write of a whole JSON file, two dictations finishing close
+>    together would both read the same file, both `unshift`, and the second
+>    write would clobber the first — losing a row and a session's totals. The
+>    store now funnels every mutation through one promise chain (`enqueue`),
+>    which also gives `flushHistoryWrites()` something concrete to await.
+>    Pinned by the "does not lose entries when appends overlap" spec.
+> 2. **`resetTotals()` clears the entries too.** The plan described it only as
+>    "zero the statistics", which would have left rows visible whose words were
+>    no longer counted anywhere — a list that visibly contradicts the tiles
+>    above it.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development`
 > (recommended) or `superpowers:executing-plans` to implement this plan
@@ -19,8 +31,8 @@ same data:
 2. **Give dictation a memory.** A durable, local, main-owned history of every
    successful dictation, surfaced in Settings → Dictation as a stats panel
    (lifetime words spoken, average words-per-minute) plus a recents list with a
-   paste action — the same shape the standalone `flow-electron` Hub already
-   ships, adapted to Agent Code's composer.
+   copy-to-clipboard action — the same shape the standalone `flow-electron` Hub
+   already ships.
 
 **Why one PR:** the stats feature needs the transcript, word count and audio
 duration at exactly the moment `dictation:stream-stop` resolves — which is the
@@ -38,21 +50,34 @@ the standalone app's `recentsStore.ts` semantics), **one IPC surface**, and
 `agent-code-conventions`).
 
 **Tech Stack:** TypeScript, Electron main (`node:fs/promises`), React 18,
-existing preload `contextBridge` API, Zustand workspace store for the paste
-target. No new dependency.
+existing preload `contextBridge` API. No new dependency, and — per D2/D3 — no
+renderer coupling to the workspace store or to `agent-voice-dictation`.
 
 ---
 
-## 0. Decisions to settle before Task 1
+## 0. Decisions — SETTLED 2026-07-28
 
-These are genuinely open. The plan below implements the **recommended** column;
-if you disagree, change this section and the affected tasks before starting.
+All three are answered. Do not relitigate them; if the shape below feels wrong
+during implementation, raise it rather than quietly deviating.
 
-| # | Question | Options | Recommended |
-| --- | --- | --- | --- |
-| **D1** | What does "how many words have I spoken" count? | (a) words in the retained recents list (what `flow-electron` does — the number *shrinks* when old entries fall off the 200-entry cap) (b) a separate lifetime counter that only ever increases | **(b) lifetime counter.** (a) is a bug wearing a feature's clothes: the user asked "how many words have I spoken", and an answer that silently decreases when the ring buffer rolls is wrong. Costs one extra integer on disk. |
-| **D2** | What does the row's primary action do? | (a) **Copy** to clipboard (what `flow-electron` does — it has no composer of its own) (b) **Paste** into the focused agent composer (c) both | **(c), with Paste primary.** Agent Code *has* a composer; `workspace.setDraftInput` + `applyPromptTemplateInsertMode` is the exact precedent (`CommandPalette.tsx:1103`). Copy stays as a secondary for terminal panes and external apps. See §4 Task 6 for the disabled-state rule. |
-| **D3** | Does history record the raw transcript or the `<stt>`-wrapped text? | (a) raw (b) wrapped | **(a) raw**, wrapping applied at paste time via `wrapWithSttTag`. Storing wrapped text bakes today's tag format into every historical row; the standalone app made the same call (`displayTranscriptText` strips on read). |
+| # | Question | **Decision** |
+| --- | --- | --- |
+| **D1** | What does "how many words have I spoken" count? | **A lifetime counter that only ever increases.** Deriving the total from the retained recents list (what `flow-electron` does) makes the number silently *shrink* when entries fall off the 200-entry cap — wrong for a stat that answers "how many words have I spoken". Costs one integer on disk. |
+| **D2** | What does the row's action do? | **Copy to the clipboard. That is the only text action.** Matches the standalone Hub. There is **no** insert-into-composer path: no `commandTargetSessionId` resolution, no `setDraftInput`, no disabled-state rule, no closing the Settings modal. The user pastes wherever they want. |
+| **D3** | Raw transcript or `<stt>`-wrapped? | **Raw**, both on disk and on the clipboard. Storing wrapped text bakes today's tag format into every historical row. Copying raw means the clipboard holds exactly what was said, with no markup to strip if the destination is a note, a commit message, or anything that is not an agent composer. |
+
+**Consequence of D2+D3 worth noting:** because nothing is wrapped, the renderer
+never needs `wrapWithSttTag`, so this feature adds **no import from
+`agent-voice-dictation`** at all. If a future change reintroduces one, import
+from the `/composer` **subpath** — the package root re-exports the Deepgram
+streaming module, which imports `node:crypto` and breaks the renderer bundle.
+(Documented in `flow-electron/src/renderer/hub/Home.tsx`; it is a real trap.)
+
+**Reversible if it reads wrong in practice:** copying raw means pasting an old
+transcript into an agent composer loses the `<stt>` hint that tells the model
+"this came from speech, expect transcription errors." That hint still applies to
+*live* dictation, which is unchanged. If historical pastes turn out to want it
+too, wrapping at copy time is a one-line change — but it is not the default.
 
 **Non-decisions** (settled, do not relitigate): history is local-only and never
 leaves the machine; audio bytes are never stored; the store is main-owned, not
@@ -352,7 +377,7 @@ Layout, top to bottom:
   180 wpm).
 - **Recents list**, newest first, collapsed rows showing
   `time · duration · preview(100 chars)`; click to expand to full text with
-  `Paste` / `Copy` / `Delete` actions.
+  `Copy` / `Delete` actions.
 - **Footer actions** — `Clear List` and `Reset Statistics`, both confirming.
 
 ---
@@ -361,17 +386,17 @@ Layout, top to bottom:
 
 ### Task 1: Fix the byte-dropping guards
 
-- [ ] `src/renderer/.../useComposerDictation.ts:1001` — `event.data.size <= 1`
+- [x] `src/renderer/.../useComposerDictation.ts:1001` — `event.data.size <= 1`
       → `event.data.size === 0`.
-- [ ] `src/main/ipc/dictation.ts:284` — `chunk.byteLength <= 1` →
+- [x] `src/main/ipc/dictation.ts:284` — `chunk.byteLength <= 1` →
       `chunk.byteLength === 0`.
-- [ ] Add a WHY comment at **both** sites recording: a `dataavailable` Blob is a
+- [x] Add a WHY comment at **both** sites recording: a `dataavailable` Blob is a
       slice of one muxed byte stream with no framing, so dropping a non-empty
       blob deletes container bytes; a cold encoder emits a 1-byte first blob
       (the leading EBML byte) which this guard used to discard, corrupting
       every first-press-after-boot recording; the package's
       `browserRecorder.ts` has always used `=== 0`; see §2 of this plan.
-- [ ] Leave the `recorder:dataavailable` journal event emitting *before* the
+- [x] Leave the `recorder:dataavailable` journal event emitting *before* the
       guard (it already does) — it is what made this diagnosable.
 
 **Do not** change `nextChunkIndex` accounting. It already increments before the
@@ -382,22 +407,22 @@ the drop visible. That is a feature.
 
 ### Task 2: Preserve provider error detail
 
-- [ ] In `src/main/ipc/dictation.ts`, the `batch:upload:throw` emit currently
+- [x] In `src/main/ipc/dictation.ts`, the `batch:upload:throw` emit currently
       records only `err.message`. Widen it to carry `status` and `details` when
       the error is a `SpeechProviderError` (structural check — do not import
       the class across the submodule boundary just for an `instanceof`).
-- [ ] Same for `streaming:stop:throw`.
+- [x] Same for `streaming:stop:throw`.
 
 **Verify:** trigger a failure with a deliberately bad key; the journal line must
 now include the HTTP status.
 
 ### Task 3: Treat a rejected too-short clip as no-speech
 
-- [ ] In the `stream-stop` catch block, when the upload throws **and**
+- [x] In the `stream-stop` catch block, when the upload throws **and**
       `session.chunkCount <= 3` **and** `params.audioDurationMs < 1000`, emit
       `OUTCOME: no-speech` with `reason: 'too-short-provider-rejected'` and
       return `{ kind: 'no-speech' }` instead of `{ kind: 'error' }`.
-- [ ] Comment it against §2.5: the streaming path already returns empty text
+- [x] Comment it against §2.5: the streaming path already returns empty text
       cleanly for these; only the batch path throws, and surfacing a red error
       for a half-second accidental press trains the user to distrust real
       errors.
@@ -409,81 +434,77 @@ discarding real short dictations.
 
 ### Task 4: The history store
 
-- [ ] Create `src/main/dictation/historyStore.ts` implementing
+- [x] Create `src/main/dictation/historyStore.ts` implementing
       `readHistory()`, `appendEntry(entry)`, `deleteEntry(id)`,
       `clearEntries()`, `resetTotals()`.
-- [ ] Header comment covering: local-only, text-not-audio, why totals are
+- [x] Header comment covering: local-only, text-not-audio, why totals are
       stored rather than derived (§3.2), why not safeStorage, and the
       delete-vs-totals rule.
-- [ ] `MAX_ENTRIES = 200`, newest-first, `unshift` + truncate — same as the
+- [x] `MAX_ENTRIES = 200`, newest-first, `unshift` + truncate — same as the
       standalone `recentsStore.ts`.
-- [ ] Corrupt/absent file returns an empty store; never throw. A broken history
+- [x] Corrupt/absent file returns an empty store; never throw. A broken history
       file must not be able to break dictation itself.
-- [ ] Export `countWords` from `src/shared/lib/countWords.ts` and use it here.
+- [x] Export `countWords` from `src/shared/lib/countWords.ts` and use it here.
 
 ### Task 5: Record on success
 
-- [ ] In the `dictation:stream-stop` success branch, after `cleanText` is
+- [x] In the `dictation:stream-stop` success branch, after `cleanText` is
       known, kick off `void appendEntry({...}).catch(...)` and return the
       transcript **without awaiting it**. The user is watching a
       "transcribing…" pill; a disk write must not sit between the provider
       answering and the composer filling. See the Known Risk note below.
-- [ ] Record **raw** text (D3).
-- [ ] Failure to write history must **never** fail the dictation — the
+- [x] Record **raw** text (D3).
+- [x] Failure to write history must **never** fail the dictation — the
       `.catch()` emits an `ERROR` journal event and nothing else. The
       transcript reaching the composer is the product; the history row is
       bookkeeping.
-- [ ] Because the write is not awaited, `cleanupDictationIpcResources()` and
+- [x] Because the write is not awaited, `cleanupDictationIpcResources()` and
       the `before-quit` path must flush it, or a dictation immediately followed
       by ⌘Q loses its row. Mirror how `DictationDebugJournalRegistry.flushAll()`
       is already wired into shutdown.
 
 ### Task 6: IPC + preload
 
-- [ ] `dictation:history-list`, `dictation:history-delete`,
+- [x] `dictation:history-list`, `dictation:history-delete`,
       `dictation:history-clear`, `dictation:history-reset-totals` in
       `registerDictationIpc`. All return the fresh
       `{ stats, entries }` snapshot so the renderer updates in one round-trip
       (same pattern as `setDeepgramApiKey` returning the fresh status).
-- [ ] Corresponding methods in `src/preload/api/dictation.ts` and types in
+- [x] Corresponding methods in `src/preload/api/dictation.ts` and types in
       `src/preload/api/types.ts`.
 
 ### Task 7: The Settings row
 
-- [ ] Add `control: { type: 'dictation-history' }` to the `SettingDefinition`
+- [x] Add `control: { type: 'dictation-history' }` to the `SettingDefinition`
       union in `settingsRegistry.ts`, with the marker-row comment explaining
       it fronts main-owned state.
-- [ ] Register the row: id `dictation-history`, category `dictation`, title
+- [x] Register the row: id `dictation-history`, category `dictation`, title
       **`Dictation History`**, keywords covering
       `history, recents, stats, words, wpm, transcript, paste`.
       `metadata: { scope: 'app', apply: 'immediate', storage: 'external-files' }`
       — it is a JSON file in `STATE_DIR`, so `Reset Settings` does not clear it
       and the badge must say so.
-- [ ] Render it in `SettingsList.tsx` alongside the other marker rows.
-- [ ] Create `src/renderer/src/features/voice-dictation/DictationHistoryRow.tsx`
+- [x] Render it in `SettingsList.tsx` alongside the other marker rows.
+- [x] Create `src/renderer/src/features/voice-dictation/DictationHistoryRow.tsx`
       per §3.4. Loads on mount, refreshes after every mutation.
 
-### Task 8: Paste and copy
+### Task 8: Copy to clipboard
 
-- [ ] **Paste** (D2 primary): resolve the target with
-      `commandTargetSessionId(workspace)`; if it is an agent pane, write
-      `workspace.setDraftInput(sessionId, applyPromptTemplateInsertMode(currentDraft, wrapWithSttTag(text), 'append'))`
-      and close the settings modal so the user lands on the composer.
-      Reuse the existing helper rather than reimplementing separator logic —
-      `CommandPalette.tsx:1103` is the precedent.
-- [ ] Disable Paste with an explanatory title when there is no agent target
-      (terminal-only pane, or nothing focused). Do **not** silently no-op.
-- [ ] **Copy** (secondary): `navigator.clipboard.writeText`, wrapped form,
-      matching the standalone app.
-- [ ] Import `wrapWithSttTag` from `agent-voice-dictation/composer` — the
-      **subpath**, not the package root. The root re-exports the Deepgram
-      streaming module which imports `node:crypto` and will break the renderer
-      bundle. This is documented in `flow-electron/src/renderer/hub/Home.tsx`
-      and is a real trap.
+- [x] `navigator.clipboard.writeText(entry.text)` — the **raw** stored text,
+      per D2 + D3. No wrapping, no transformation.
+- [x] Show transient confirmation on the button itself (`Copy` → `Copied`,
+      reverting after ~1.2 s). A clipboard write has no other visible effect,
+      and a button that appears to do nothing reads as broken.
+- [x] Guard the `navigator.clipboard` call: it rejects when the document is not
+      focused. Catch and surface a short inline failure rather than throwing
+      into an unhandled rejection.
+
+There is deliberately **no** composer-insert path here (D2). Do not add one
+opportunistically.
 
 ### Task 9: Retention and pruning
 
-- [ ] The recents cap (200) bounds the file, but confirm the store is included
+- [x] The recents cap (200) bounds the file, but confirm the store is included
       in whatever the app already prunes at boot. `pruneOldDictationDebugLogs()`
       handles the *journals*, not this file; a 200-entry JSON is small enough
       that no prune is needed — state that explicitly in the header so nobody
@@ -491,17 +512,18 @@ discarding real short dictations.
 
 ### Task 10: Verification
 
-- [ ] `npx tsc -p tsconfig.node.json --noEmit false` and `tsconfig.web.json`
+- [x] `npx tsc -p tsconfig.node.json --noEmit false` and `tsconfig.web.json`
       (raw `tsc` on **both** projects — `electron-vite build` and `vitest` do
       not type-check).
-- [ ] `npm test` once, at the end.
-- [ ] `npm run check:keybindings` (a new settings row does not add a binding,
+- [x] `npm test` once, at the end.
+- [x] `npm run check:keybindings` (a new settings row does not add a binding,
       but the check is cheap and the registry changed).
-- [ ] Manual: cold-boot dictation per §2.6; then a second dictation; confirm a
+- [x] Manual: cold-boot dictation per §2.6; then a second dictation; confirm a
       history row appears with a plausible word count and the WPM tile moves.
-- [ ] Manual: paste into an agent composer; paste with a terminal pane focused
-      (must be disabled, not silent); delete a row and confirm lifetime words
-      does **not** drop.
+- [x] Manual: copy a row and confirm the clipboard holds the **raw** text with
+      no `<stt>` wrapper; delete a row and confirm lifetime words does **not**
+      drop; `Clear List` empties the list while totals survive; `Reset
+      Statistics` zeroes both.
 
 ---
 
