@@ -565,9 +565,14 @@ export function getSettingsRegistry(): SettingDefinition[] {
     {
       id: 'command-keybindings',
       category: 'commands',
-      title: 'Keyboard Shortcuts',
+      title: 'Commands and Shortcuts',
       description:
-        'Assign, add, or remove keyboard shortcuts for built-in commands. A command may have several bindings or none. Conflicts are blocked and name the command or app interaction that already owns the chord.',
+        'Assign keyboard shortcuts, and choose which commands appear in the command picker. A command may have several bindings or none; conflicts are blocked and name whatever already owns the chord. Hiding a command only removes it from the picker list — its shortcut still works.',
+      // Carries BOTH vocabularies. This row absorbed the deleted
+      // 'Command Picker Visibility' row, and Settings search matches on
+      // keywords — so dropping that row's terms would mean a user typing
+      // "hide" or "visibility" (the words for the thing they want) gets no
+      // result at all, even though the control is right there.
       keywords: [
         'keybinding',
         'keyboard',
@@ -577,6 +582,17 @@ export function getSettingsRegistry(): SettingDefinition[] {
         'rebind',
         'hotkey',
         'conflict',
+        'command',
+        'picker',
+        'palette',
+        'visibility',
+        'visible',
+        'hide',
+        'hidden',
+        'show',
+        'advanced',
+        'experimental',
+        'debug',
       ],
       metadata: { scope: 'app', apply: 'immediate', storage: 'settings' },
       control: { type: 'command-keybindings' },

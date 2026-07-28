@@ -1,5 +1,13 @@
 # One Command List in Settings
 
+> **Status: IMPLEMENTED**, then revised after a two-reviewer pass (one Codex,
+> one Claude). Both cleared the core — picker visibility stays presentation-only,
+> no command lost or gained a row, the prune rule is correct for every tier.
+> Between them they found one factual error in this plan (see the correction in
+> §2), a missing accessible name on all 98 checkboxes, a lost Settings-search
+> vocabulary, and a second copy of the group-gate rule that did not generalize.
+> All fixed.
+
 **Goal:** Settings has two lists of the same commands. Merge them into one — the
 keybinding editor — with a palette-visibility checkbox on the right of each row.
 
@@ -51,13 +59,22 @@ adds a third case. Every row must render one of:
 | **Not applicable** | id in `PALETTE_SELF_EXCLUDED_COMMAND_IDS` | `—` + title explaining the palette never lists it |
 | **Group-suppressed** | `commandGroup: 'navigation'` while `navigationCommandsEnabled` is false | disabled checkbox, unticked, title naming the parent switch |
 
-The third state fixes a live defect rather than preserving behaviour. Today
-Settings renders all six navigation commands as ON while the palette omits them,
-and toggling one writes an override that changes nothing — because
-`isVisibleInPicker` checks the group gate *before* per-command overrides
+**Correction (post-review):** an earlier draft of this plan claimed the third
+state fixed a live defect — that Settings rendered all six navigation commands
+as ON while the palette omitted them. **That was wrong**, and the review caught
+it. At base `1e4f2d8f`, `resolveCommandVisible` already delegated to
+`isVisibleInPicker` *including* `commandGroup`, so the old list computed the
+checked state correctly. That bug existed once and was fixed in an earlier PR;
+the past-tense comment on `PickerCommandMeta.commandGroup` describing it is what
+misled the draft.
+
+What the third state actually adds is smaller and worth stating honestly: those
+rows previously rendered as an ordinary **enabled, unticked** checkbox with no
+explanation. Clicking one wrote an override that changed nothing visible,
+because `isVisibleInPicker` checks the group gate *before* per-command overrides
 (deliberately: a child switch that appears able to contradict its disabled
-parent is the "disabled parent, enabled child" trap). Settings currently states
-the opposite of what the user can see.
+parent is the "disabled parent, enabled child" trap). Now the row is disabled
+and names the parent switch. Better affordance, not a correctness fix.
 
 ---
 
@@ -80,23 +97,23 @@ Both move into `CommandKeybindingsRow.tsx` unchanged in behaviour.
 
 ## 4. Tasks
 
-- [ ] **Task 1 — Add the visibility column.** In `CommandKeybindingsRow.tsx`:
+- [x] **Task 1 — Add the visibility column.** In `CommandKeybindingsRow.tsx`:
       read `commandVisibilityOverrides` + `navigationCommandsEnabled` from the
       store, compute per-row state per §2, render the checkbox at the right edge
       of each command row, and write through the prune-on-default rule.
       Extract that rule as an exported helper so it has exactly one home.
-- [ ] **Task 2 — Include visibility in the reset.** The row already has a reset
+- [x] **Task 2 — Include visibility in the reset.** The row already has a reset
       for keybindings. Give the reset control both actions, clearly separated —
       one must not silently perform the other.
-- [ ] **Task 3 — Delete the old row.** Remove the `command-picker-visibility`
+- [x] **Task 3 — Delete the old row.** Remove the `command-picker-visibility`
       registry entry, the `command-visibility` member of the `SettingDefinition`
       union, its `SettingsList.tsx` block, and `resolveCommandVisible` +
       `listPickerCommandMeta` if nothing else consumes them. Check before
       deleting: `listPickerCommandMeta` may have other callers.
-- [ ] **Task 4 — Keep search honest.** The search haystack must cover the new
+- [x] **Task 4 — Keep search honest.** The search haystack must cover the new
       concern, otherwise a user typing "hidden" finds nothing. Include the
       command's declared tier in the searchable text.
-- [ ] **Task 5 — Verify.** `tsc` on both projects (raw — electron-vite and
+- [x] **Task 5 — Verify.** `tsc` on both projects (raw — electron-vite and
       vitest do not type-check), `npm run check:keybindings`, full suite.
 
 ---
@@ -106,7 +123,8 @@ Both move into `CommandKeybindingsRow.tsx` unchanged in behaviour.
 - **Comment policy** (`CLAUDE.md`): thick WHY comments. The §1 naming decision
   and the §2 group-suppressed state both need the reasoning in the code, not
   only here — a future reader who "simplifies" the three states back to two
-  reintroduces the lying-Settings bug.
+  reintroduces an enabled checkbox whose value the group gate silently
+  outranks.
 - **Copy style** (`docs/command-style.md`): stable noun-phrase titles, no
   Toggle/Enable/Show verbs.
 - **Do not touch** `pickerVisibility.ts`'s resolution order, the
@@ -118,9 +136,12 @@ Both move into `CommandKeybindingsRow.tsx` unchanged in behaviour.
 
 ## 6. Self-review
 
-**Least certain:** whether the Settings category description still reads
-correctly once two rows become one — worth a look at
-`settingsCategories.ts`'s `commands` entry during Task 3.
+**Was least certain, and the review confirmed it mattered:** whether the
+Settings copy still read correctly once two rows became one. It did not — the
+surviving row kept only the keybinding vocabulary, so a user searching Settings
+for "hide" or "visibility" got zero results even though the control was right
+there. Both the row's keywords/description and the `commands` category
+description now cover both concerns.
 
 **Deliberately out of scope:** a reveal-all control (the merged list is one),
 bulk enable/disable (an empty palette with no obvious way back is a worse state

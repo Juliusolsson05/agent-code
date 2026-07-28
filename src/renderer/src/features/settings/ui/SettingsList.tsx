@@ -186,13 +186,6 @@ function SettingRow({
             </button>
           ) : null}
 
-          {/* Command-visibility control: one toggle row per command plus a
-              reset action. Purely presentational — every state transition
-              flows out through the control's callbacks (which patch the
-              sparse override map in settings); this branch never owns or
-              derives visibility itself. The toggle row reuses the same
-              border/checkbox styling as the `toggle` control above so the
-              long list reads as a single coherent group. */}
           {/* CLI auto-updater — the row owns its own subscription
               because the value lives in setup.json (main-owned), not
               in the renderer Settings store. See

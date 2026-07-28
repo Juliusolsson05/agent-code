@@ -1,4 +1,8 @@
-import type { CommandDef, CommandPickerVisibility } from '@renderer/features/command-palette/types'
+import type {
+  CommandDef,
+  CommandGroup,
+  CommandPickerVisibility,
+} from '@renderer/features/command-palette/types'
 
 /**
  * Everything the visibility decision needs, and nothing else.
@@ -61,7 +65,7 @@ export function isVisibleInPicker(
 ): boolean {
   if (policy.showHiddenCommands) return true
 
-  if (command.commandGroup === 'navigation' && !policy.navigationCommandsEnabled) return false
+  if (suppressingCommandGroup(command, policy) !== null) return false
 
   // Optional-chain defensively: this runs inside the palette's first-render
   // useMemo, so if `overrides` is ever undefined (a persisted-settings shape
@@ -73,6 +77,34 @@ export function isVisibleInPicker(
   if (typeof override === 'boolean') return override
 
   return declaredTier(command) === 'default'
+}
+
+/**
+ * Which command GROUP, if any, is currently suppressing this command — step 2
+ * of the resolution order, extracted so it has exactly one implementation.
+ *
+ * WHY it is exported rather than inlined into `isVisibleInPicker`: Settings
+ * needs to distinguish "hidden because the user unticked it" from "hidden
+ * because its parent group is off", so it can disable that row and NAME the
+ * parent instead of offering a checkbox whose value the group gate will
+ * immediately outrank. Before this existed the Settings row re-implemented the
+ * `commandGroup === 'navigation' && !navigationCommandsEnabled` test locally —
+ * a second copy of the rule, in the same PR that consolidated the other half.
+ * The copy did not generalize: adding a second gated group would teach
+ * `isVisibleInPicker` about it and leave Settings rendering an enabled,
+ * unticked checkbox that snaps back the moment it is ticked.
+ *
+ * Returns the group id so the caller can label it, or `null` when nothing is
+ * group-suppressing this command.
+ */
+export function suppressingCommandGroup(
+  command: Pick<CommandDef, 'commandGroup'>,
+  policy: Pick<PickerVisibilityPolicy, 'navigationCommandsEnabled'>,
+): CommandGroup | null {
+  if (command.commandGroup === 'navigation' && !policy.navigationCommandsEnabled) {
+    return 'navigation'
+  }
+  return null
 }
 
 /** The command's declared tier, with the documented `absent ≡ 'default'` rule

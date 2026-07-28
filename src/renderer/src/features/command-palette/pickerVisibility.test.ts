@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest'
 import {
   declaredTier,
   isVisibleInPicker,
+  setPickerVisibilityOverride,
+  suppressingCommandGroup,
 } from '@renderer/features/command-palette/pickerVisibility'
 import type { CommandPickerVisibility } from '@renderer/features/command-palette/types'
 
@@ -98,6 +100,96 @@ describe('isVisibleInPicker', () => {
       const overrides = { a: 'yes' as unknown as boolean }
       expect(isVisibleInPicker(cmd('a', 'debug'), policy({ overrides }))).toBe(false)
       expect(isVisibleInPicker(cmd('a'), policy({ overrides }))).toBe(true)
+    })
+  })
+
+  describe('setPickerVisibilityOverride (the WRITE half)', () => {
+    // The prune rule is the half most likely to be "simplified" into
+    // `next[id] = visible` by someone who does not read the docstring. Without
+    // these four cases the whole suite stays green through that change, and the
+    // bug only shows up the day a command's shipped default changes and a stale
+    // entry that merely restated the old default keeps overriding the new one.
+
+    it('deletes the entry when a default-tier command is set visible', () => {
+      const next = setPickerVisibilityOverride({ a: false }, cmd('a'), true)
+      expect(next).not.toHaveProperty('a')
+    })
+
+    it('stores false when a default-tier command is hidden', () => {
+      expect(setPickerVisibilityOverride({}, cmd('a'), false)).toEqual({ a: false })
+    })
+
+    it('deletes the entry when a hidden-tier command is set back to hidden', () => {
+      for (const tier of ['advanced', 'experimental', 'debug'] as const) {
+        const next = setPickerVisibilityOverride({ a: true }, cmd('a', tier), false)
+        expect(next, tier).not.toHaveProperty('a')
+      }
+    })
+
+    it('stores true when a hidden-tier command is revealed', () => {
+      expect(setPickerVisibilityOverride({}, cmd('a', 'debug'), true)).toEqual({ a: true })
+    })
+
+    it('never mutates the map it was given', () => {
+      const before = { a: false, b: true }
+      setPickerVisibilityOverride(before, cmd('a'), true)
+      expect(before).toEqual({ a: false, b: true })
+    })
+
+    it('tolerates an undefined map, like the read half does', () => {
+      expect(setPickerVisibilityOverride(undefined, cmd('a'), false)).toEqual({ a: false })
+    })
+
+    it('round-trips with isVisibleInPicker for every tier', () => {
+      // The two halves must agree about what "declared default" means; this is
+      // the property that keeps them from drifting apart.
+      for (const tier of [undefined, 'advanced', 'experimental', 'debug'] as const) {
+        for (const visible of [true, false]) {
+          const overrides = setPickerVisibilityOverride({}, cmd('a', tier), visible)
+          expect(isVisibleInPicker(cmd('a', tier), policy({ overrides })), `${tier}/${visible}`)
+            .toBe(visible)
+        }
+      }
+    })
+  })
+
+  describe('suppressingCommandGroup', () => {
+    // Settings needs to tell "user unticked it" apart from "its parent group is
+    // off" so it can disable that row and NAME the parent. Exported for exactly
+    // that; pinned here so it cannot drift from the gate isVisibleInPicker uses.
+    it('names the group when the group is off', () => {
+      expect(
+        suppressingCommandGroup(
+          { commandGroup: 'navigation' },
+          { navigationCommandsEnabled: false },
+        ),
+      ).toBe('navigation')
+    })
+
+    it('returns null when the group is on, or when the command has no group', () => {
+      expect(
+        suppressingCommandGroup(
+          { commandGroup: 'navigation' },
+          { navigationCommandsEnabled: true },
+        ),
+      ).toBeNull()
+      expect(suppressingCommandGroup({}, { navigationCommandsEnabled: false })).toBeNull()
+    })
+
+    it('agrees with isVisibleInPicker: a suppressed command is never visible', () => {
+      const command = { id: 'a', commandGroup: 'navigation' as const }
+      expect(suppressingCommandGroup(command, { navigationCommandsEnabled: false })).not.toBeNull()
+      expect(
+        isVisibleInPicker(command, policy({ navigationCommandsEnabled: false })),
+      ).toBe(false)
+      // ...even with an explicit override trying to force it on, because the
+      // group gate deliberately outranks per-command overrides.
+      expect(
+        isVisibleInPicker(
+          command,
+          policy({ navigationCommandsEnabled: false, overrides: { a: true } }),
+        ),
+      ).toBe(false)
     })
   })
 })
