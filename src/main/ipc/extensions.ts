@@ -1,4 +1,5 @@
 import { BrowserWindow, dialog, ipcMain } from 'electron'
+import type { IpcMainInvokeEvent } from 'electron'
 
 import {
   extensionStorageDelete,
@@ -6,7 +7,8 @@ import {
   extensionStorageKeys,
   extensionStorageSet,
 } from '@main/extensions/storage.js'
-import { installExtension } from '@main/extensions/install.js'
+import { installExtension, installExtensionFromPath } from '@main/extensions/install.js'
+import type { ConsentPrompt } from '@main/extensions/install.js'
 import { listInstalledExtensions, removeExtension } from '@main/extensions/ledger.js'
 import { grantedCapabilities, revokeGrant } from '@main/extensions/grants.js'
 import type {
@@ -14,6 +16,31 @@ import type {
   ExtensionInstallResult,
   ExtensionListEntry,
 } from '@shared/types/extensions.js'
+
+// The capability-consent dialog, shared by both install paths (GitHub + local
+// folder). A blocking, OS-native dialog on purpose: granting an extension
+// filesystem or session access is exactly the moment that must not be a quiet
+// in-page toggle. Tier-0-only extensions never reach it (installers only call it
+// when permissions is non-empty).
+function consentPromptFor(evt: IpcMainInvokeEvent): ConsentPrompt {
+  return async manifest => {
+    const win = BrowserWindow.fromWebContents(evt.sender)
+    const detail = (manifest.permissions ?? []).map(cap => `  • ${cap}`).join('\n')
+    const options = {
+      type: 'warning' as const,
+      buttons: ['Cancel', 'Grant & install'],
+      defaultId: 0,
+      cancelId: 0,
+      title: 'Extension permissions',
+      message: `${manifest.name} requests capabilities beyond the default:`,
+      detail: `${detail}\n\nThese let the extension act outside its own sandbox. Only grant them if you trust ${manifest.id}.`,
+    }
+    const result = win
+      ? await dialog.showMessageBox(win, options)
+      : await dialog.showMessageBox(options)
+    return result.response === 1
+  }
+}
 
 // IPC for extension-app state.
 //
@@ -67,34 +94,37 @@ export function registerExtensionsIpc(): void {
     'extensions:install',
     async (evt, repo: string): Promise<ExtensionInstallResult> => {
       try {
-        // The consent prompt for capability-requesting extensions. A blocking,
-        // OS-native dialog on purpose: granting an extension filesystem or session
-        // access is exactly the moment that must not be a quiet in-page toggle the
-        // user clicks through. Tier-0-only extensions never reach this (installExtension
-        // only calls it when permissions is non-empty).
-        const record = await installExtension(repo, async manifest => {
-          const win = BrowserWindow.fromWebContents(evt.sender)
-          const detail = (manifest.permissions ?? []).map(cap => `  • ${cap}`).join('\n')
-          const options = {
-            type: 'warning' as const,
-            buttons: ['Cancel', 'Grant & install'],
-            defaultId: 0,
-            cancelId: 0,
-            title: 'Extension permissions',
-            message: `${manifest.name} requests capabilities beyond the default:`,
-            detail: `${detail}\n\nThese let the extension act outside its own sandbox. Only grant them if you trust ${manifest.id}.`,
-          }
-          const result = win
-            ? await dialog.showMessageBox(win, options)
-            : await dialog.showMessageBox(options)
-          return result.response === 1
-        })
+        const record = await installExtension(repo, consentPromptFor(evt))
         return { ok: true, entry: { ...record, present: true } }
       } catch (error) {
         return { ok: false, error: error instanceof Error ? error.message : String(error) }
       }
     },
   )
+
+  // "Load unpacked" — install from a local folder chosen in a native picker, so an
+  // author iterating on an unpublished extension never has to cut a GitHub release.
+  // The picker runs in main (a directory chooser cannot be a renderer input), and
+  // the same consent + validation pipeline as GitHub install applies.
+  ipcMain.handle('extensions:install-path', async (evt): Promise<ExtensionInstallResult> => {
+    const win = BrowserWindow.fromWebContents(evt.sender)
+    const options = {
+      properties: ['openDirectory' as const],
+      title: 'Load extension from folder',
+      message: "Choose the extension's built folder (containing agent-code.extension.json)",
+    }
+    const picked = win
+      ? await dialog.showOpenDialog(win, options)
+      : await dialog.showOpenDialog(options)
+    const dir = picked.filePaths[0]
+    if (picked.canceled || !dir) return { ok: false, error: 'No folder selected.' }
+    try {
+      const record = await installExtensionFromPath(dir, consentPromptFor(evt))
+      return { ok: true, entry: { ...record, present: true } }
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
 
   ipcMain.handle('extensions:remove', async (_evt, id: string): Promise<void> => {
     await removeExtension(id)

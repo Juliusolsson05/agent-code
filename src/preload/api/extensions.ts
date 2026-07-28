@@ -35,6 +35,10 @@ export const extensionsApi = {
   extensionsInstall: (repo: string): Promise<ExtensionInstallResult> =>
     ipcRenderer.invoke('extensions:install', repo),
 
+  // "Load unpacked" from a local folder (main opens the native directory picker).
+  extensionsInstallPath: (): Promise<ExtensionInstallResult> =>
+    ipcRenderer.invoke('extensions:install-path'),
+
   extensionsRemove: (id: string): Promise<void> => ipcRenderer.invoke('extensions:remove', id),
 
   // Reads the set of capabilities a user granted an extension, for the frame broker

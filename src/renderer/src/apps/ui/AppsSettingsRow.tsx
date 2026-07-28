@@ -123,6 +123,29 @@ export function AppsSettingsRow() {
     [extensionHost, refresh],
   )
 
+  // "Load unpacked" — install from a local folder via the native picker (main
+  // opens it). The dev loop for an unpublished extension: rebuild, click, reload —
+  // instead of cutting a GitHub release for every change.
+  const loadFromFolder = useCallback(async () => {
+    if (busy) return
+    setBusy(true)
+    setError(null)
+    setNotice(null)
+    try {
+      const result = await window.api.extensionsInstallPath()
+      if (result.ok) {
+        setNotice(`Loaded ${result.entry.manifest.name} ${result.entry.manifest.version}`)
+        await refresh()
+      } else {
+        setError(result.error)
+      }
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : String(loadError))
+    } finally {
+      setBusy(false)
+    }
+  }, [busy, refresh])
+
   return (
     <div className="flex flex-col gap-3">
       <div className="flex gap-2">
@@ -154,6 +177,15 @@ export function AppsSettingsRow() {
           className="shrink-0 border border-control-border bg-control-bg px-3 py-1.5 text-[12px] text-control-fg outline-none hover:border-control-border-hover disabled:opacity-40"
         >
           {busy ? 'Installing…' : 'Install'}
+        </button>
+        <button
+          type="button"
+          onClick={() => void loadFromFolder()}
+          disabled={busy}
+          title="Install from a local folder — for developing an unpublished extension"
+          className="shrink-0 border border-control-border bg-control-bg px-3 py-1.5 text-[12px] text-control-fg outline-none hover:border-control-border-hover disabled:opacity-40"
+        >
+          Load folder…
         </button>
       </div>
 

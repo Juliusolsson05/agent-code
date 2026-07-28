@@ -1,8 +1,8 @@
 import { spawn } from 'child_process'
 import { createHash } from 'node:crypto'
-import { access, constants as fsConstants, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from 'fs/promises'
+import { access, constants as fsConstants, cp, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
-import { join, resolve as resolvePath, sep } from 'path'
+import { join, relative, resolve as resolvePath, sep } from 'path'
 
 import { EXTENSIONS_DIR } from '@main/storage/paths.js'
 import { ManifestError, parseExtensionManifest } from '@main/extensions/manifest.js'
@@ -202,6 +202,66 @@ async function readManifestFrom(dir: string): Promise<ExtensionManifest> {
 }
 
 /**
+ * The shared tail of every install path: consent, move the validated bundle into
+ * place, write the ledger row, bind (or drop) the grant. Both the GitHub and the
+ * local-folder installers converge here once they have a validated manifest in a
+ * staging directory — the ONLY differences between them are how the bundle got
+ * staged and what `repo`/`ref`/`sha256` describe its provenance.
+ *
+ * `bundleDir` is renamed into place (not copied), so it must already be a temp
+ * directory the caller owns; on any failure here the caller's `finally` removes it.
+ */
+async function finalizeInstall(
+  manifest: ExtensionManifest,
+  bundleDir: string,
+  provenance: { repo: string; ref: string; sha256: string },
+  promptConsent?: ConsentPrompt,
+): Promise<InstalledExtension> {
+  // Consent gate. If the extension requests capabilities beyond Tier 0, the user
+  // must approve them BEFORE the bundle moves into place — declining aborts the
+  // install, so nothing is left behind. A Tier-0-only extension installs with no
+  // prompt, matching the "repo name is the trust decision" stance.
+  const permissions = manifest.permissions ?? []
+  if (permissions.length > 0) {
+    const approved = promptConsent ? await promptConsent(manifest) : false
+    if (!approved) {
+      throw new InstallError(
+        `Installation of ${manifest.name} was declined — its requested capabilities were not granted.`,
+      )
+    }
+  }
+
+  await mkdir(EXTENSIONS_DIR, { recursive: true })
+  const finalDir = join(EXTENSIONS_DIR, manifest.id)
+
+  // Remove any previous install of this id before renaming the new one in. This
+  // makes install idempotent and doubles as the update path. Extension STATE is
+  // untouched — it lives under EXTENSION_STATE_DIR precisely so an update cannot
+  // take a user's saved data with it.
+  await rm(finalDir, { recursive: true, force: true })
+  await rename(bundleDir, finalDir)
+
+  const record: InstalledExtension = {
+    manifest,
+    repo: provenance.repo,
+    ref: provenance.ref,
+    sha256: provenance.sha256,
+    installedAt: Date.now(),
+  }
+
+  const ledger = await readLedger()
+  await writeLedger([...ledger.filter(row => row.manifest.id !== manifest.id), record])
+
+  // Bind the grant to exactly these bytes. A downgrade to Tier-0-only drops any
+  // prior grant, so revoking capabilities is as simple as shipping a manifest that
+  // no longer asks for them.
+  if (permissions.length > 0) await recordGrant(manifest.id, provenance.sha256, permissions)
+  else await revokeGrant(manifest.id)
+
+  return record
+}
+
+/**
  * Install (or reinstall) an extension from a GitHub repository.
  *
  * Sequence matters: everything that can fail happens in a temp directory, and the
@@ -229,50 +289,66 @@ export async function installExtension(
     const manifest = await readManifestFrom(staging)
     await verifyEntryInsideBundle(staging, manifest.entry)
 
-    // Consent gate. If the extension requests capabilities beyond Tier 0, the user
-    // must approve them BEFORE the bundle moves into place — declining aborts the
-    // install (the temp dir is cleaned by finally), so nothing is left behind. A
-    // Tier-0-only extension installs with no prompt, matching the "repo name is the
-    // trust decision" stance. Inserted here, with the manifest in hand and before
-    // the ledger write, mirroring WorkflowSourceApprovalStore's gate placement.
-    const permissions = manifest.permissions ?? []
-    if (permissions.length > 0) {
-      const approved = promptConsent ? await promptConsent(manifest) : false
-      if (!approved) {
-        throw new InstallError(
-          `Installation of ${manifest.name} was declined — its requested capabilities were not granted.`,
-        )
-      }
-    }
+    return await finalizeInstall(manifest, staging, { repo, ref: source.ref, sha256 }, promptConsent)
+  } finally {
+    await rm(work, { recursive: true, force: true })
+  }
+}
 
-    await mkdir(EXTENSIONS_DIR, { recursive: true })
-    const finalDir = join(EXTENSIONS_DIR, manifest.id)
+/**
+ * Install an extension from a LOCAL folder — the "load unpacked" path.
+ *
+ * WHY this exists: the GitHub installer resolves `releases/latest`, so iterating on
+ * an unpublished extension otherwise means cutting a release for every change. This
+ * lets an author point at their built folder and reinstall in one click. It is a
+ * SNAPSHOT (a copy), not a live mount: a rebuild + reinstall is the loop, which is
+ * still vastly cheaper than a release. A live-reference mode (serve straight from
+ * the folder) is a larger change to the scheme handler and is deliberately left for
+ * later — a copy reuses the exact same containment guarantees as the tarball path.
+ */
+export async function installExtensionFromPath(
+  sourceDir: string,
+  promptConsent?: ConsentPrompt,
+): Promise<InstalledExtension> {
+  let sourceReal: string
+  try {
+    sourceReal = await realpath(sourceDir)
+  } catch {
+    throw new InstallError(`Folder "${sourceDir}" does not exist.`)
+  }
 
-    // Remove any previous install of this id before renaming the new one in. This
-    // makes install idempotent and doubles as the update path. Extension STATE is
-    // untouched — it lives under EXTENSION_STATE_DIR precisely so an update cannot
-    // take a user's saved data with it.
-    await rm(finalDir, { recursive: true, force: true })
-    await rename(staging, finalDir)
+  const work = await mkdtemp(join(tmpdir(), 'agent-code-ext-'))
+  try {
+    const staging = join(work, 'unpacked')
+    await mkdir(staging, { recursive: true })
 
-    const record: InstalledExtension = {
+    // Copy the folder, skipping node_modules and .git: the built bundle plus assets
+    // is what ships; a dev folder's dependencies and history are neither needed nor
+    // small (node_modules would blow past the mental model of "an extension is a JS
+    // bundle"). This is the tarball path minus the download + strip-components.
+    await cp(sourceReal, staging, {
+      recursive: true,
+      filter: src => {
+        const rel = relative(sourceReal, src)
+        return rel === '' || !rel.split(sep).some(part => part === 'node_modules' || part === '.git')
+      },
+    })
+
+    const manifest = await readManifestFrom(staging)
+    await verifyEntryInsideBundle(staging, manifest.entry)
+
+    // No tarball to hash, so bind the grant to the built ENTRY bytes: they change
+    // exactly when the code the user is consenting to changes, which is the grant's
+    // whole invariant. A dev rebuild therefore correctly forces re-consent.
+    const entryBytes = await readFile(join(staging, manifest.entry))
+    const sha256 = createHash('sha256').update(entryBytes).digest('hex')
+
+    return await finalizeInstall(
       manifest,
-      repo,
-      ref: source.ref,
-      sha256,
-      installedAt: Date.now(),
-    }
-
-    const ledger = await readLedger()
-    await writeLedger([...ledger.filter(row => row.manifest.id !== manifest.id), record])
-
-    // Bind the grant to exactly these bytes. A downgrade to Tier-0-only drops any
-    // prior grant, so revoking capabilities is as simple as shipping a manifest
-    // that no longer asks for them.
-    if (permissions.length > 0) await recordGrant(manifest.id, sha256, permissions)
-    else await revokeGrant(manifest.id)
-
-    return record
+      staging,
+      { repo: sourceReal, ref: 'local', sha256 },
+      promptConsent,
+    )
   } finally {
     await rm(work, { recursive: true, force: true })
   }
