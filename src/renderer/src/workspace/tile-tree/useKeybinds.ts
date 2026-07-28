@@ -1,8 +1,9 @@
 import { useEffect, useMemo } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
+import { deriveExtensionKeybindings } from '@renderer/apps/host/derive'
 import { buildDefaultKeybindings } from '@renderer/features/command-keybindings/defaults'
-import type { BindingContext } from '@renderer/features/command-keybindings/defaults'
+import type { BindingContext, CommandBindingDefault } from '@renderer/features/command-keybindings/defaults'
 import { keybindingFromEvent } from '@renderer/features/command-keybindings/normalize'
 import { commandOwnsOpenSurface } from '@renderer/features/command-palette/surfaceOwnership'
 import { resolveEffectiveKeybindings } from '@renderer/features/command-keybindings/resolve'
@@ -238,9 +239,17 @@ const GLOBAL_CONTEXT_ONLY: ReadonlySet<BindingContext> = new Set<BindingContext>
 /** Chord -> candidate commands, built once per override change. */
 function buildBindingIndex(
   overrides: Record<string, string[]>,
+  // Extension-contributed defaults, concatenated onto the shipped table. A user
+  // override still wins (resolveEffectiveKeybindings applies overrides on top of
+  // whatever defaults it is handed), so this is the ONE site that actually makes
+  // an extension's declared chord fire — the editor/sheet/palette only display it.
+  extensionDefaults: CommandBindingDefault[],
 ): Map<string, { commandId: string; context: BindingContext }[]> {
   const index = new Map<string, { commandId: string; context: BindingContext }[]>()
-  for (const entry of resolveEffectiveKeybindings(overrides, buildDefaultKeybindings())) {
+  for (const entry of resolveEffectiveKeybindings(overrides, [
+    ...buildDefaultKeybindings(),
+    ...extensionDefaults,
+  ])) {
     for (const binding of entry.bindings) {
       const list = index.get(binding) ?? []
       list.push({ commandId: entry.commandId, context: entry.context })
@@ -258,6 +267,7 @@ export function useKeybinds(
   const commandKeybindingOverrides = useAppStore(
     state => state.settings.commandKeybindingOverrides,
   )
+  const installedExtensions = useAppStore(state => state.installedExtensions)
   const agentViewMode = useAppStore(state => state.settings.agentViewMode)
   const closeSettingsPage = useAppStore(state => state.closeSettingsPage)
   const buryPromptSessionId = useAppStore(state => state.buryPromptSessionId)
@@ -290,12 +300,20 @@ export function useKeybinds(
   const pinAgentsOpen = useAppStore(state => state.pinAgentsOpen)
   const closePinAgents = useAppStore(state => state.closePinAgents)
 
+  // Extension keybinding defaults, derived from installed manifests (no bundle
+  // import). Recomputed only when the installed set changes, so an install/remove
+  // makes a contributed chord start/stop firing without a reload.
+  const extensionKeybindings = useMemo(
+    () => deriveExtensionKeybindings(installedExtensions),
+    [installedExtensions],
+  )
+
   // Built once per override change, not per keystroke. Resolving inside the
   // handler meant rebuilding the default table and re-normalizing ~30 strings
   // on every keydown, including ordinary typing.
   const bindingIndex = useMemo(
-    () => buildBindingIndex(commandKeybindingOverrides),
-    [commandKeybindingOverrides],
+    () => buildBindingIndex(commandKeybindingOverrides, extensionKeybindings),
+    [commandKeybindingOverrides, extensionKeybindings],
   )
 
   useEffect(() => {

@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
 import { builtInCommandCatalog } from '@renderer/features/command-palette/catalog'
+import { deriveExtensionCommands, deriveExtensionKeybindings } from '@renderer/apps/host/derive'
+import { useExtensionHost } from '@renderer/apps/host/ExtensionHostProvider'
 import { PALETTE_SELF_EXCLUDED_COMMAND_IDS } from '@renderer/features/command-palette/commands/paletteCommands'
 import { buildDefaultKeybindings } from '@renderer/features/command-keybindings/defaults'
 import type { BindingContext } from '@renderer/features/command-keybindings/defaults'
@@ -45,6 +47,7 @@ const CATEGORY_LABELS: Record<CommandCategory, string> = {
   'workspace-tools': 'Workspace Tools',
   preferences: 'Preferences',
   developer: 'Developer',
+  extensions: 'Extensions',
 }
 
 /**
@@ -65,6 +68,10 @@ const CATEGORY_RANK: Record<CommandCategory, number> = {
   'workspace-tools': 5,
   preferences: 6,
   developer: 7,
+  // Last: extension-contributed commands browse after every first-party group,
+  // the same "third-party entries never above the app's own" ordering the palette
+  // uses for extension commands.
+  extensions: 8,
 }
 
 const CATEGORY_ORDER = (Object.keys(CATEGORY_RANK) as CommandCategory[])
@@ -93,12 +100,34 @@ export function CommandKeybindingsRow() {
   const settings = useAppStore(state => state.settings)
   const setSettings = useAppStore(state => state.setSettings)
 
+  // Extension commands, derived from installed MANIFESTS exactly as the palette
+  // (CommandPalette.tsx) and the visibility list (SettingsPage.tsx) do — no bundle
+  // is imported. Without this the editor iterated only builtInCommandCatalog, so an
+  // extension command could be shown/hidden in the Commands list but never assigned
+  // a key here. openApp is a no-op: the editor reads command metadata and never
+  // invokes `run`. They are stamped with the 'extensions' category so the row
+  // builder's category filter admits them and they group under their own heading.
+  const installedExtensions = useAppStore(state => state.installedExtensions)
+  const extensionHost = useExtensionHost()
+  const extensionCommands = useMemo(
+    () =>
+      (extensionHost ? deriveExtensionCommands(extensionHost, installedExtensions, () => {}) : [])
+        .map(command => ({ ...command, category: 'extensions' as const })),
+    [extensionHost, installedExtensions],
+  )
+
   const [query, setQuery] = useState('')
   const [capturingFor, setCapturingFor] = useState<string | null>(null)
   const [conflict, setConflict] = useState<PendingConflict | null>(null)
 
   const overrides = settings.commandKeybindingOverrides
-  const defaults = useMemo(() => buildDefaultKeybindings(), [])
+  // Shipped defaults + extension-contributed defaults, so the editor shows an
+  // extension's declared chord as its default and conflict-checks against it —
+  // the same combined table the router fires from (useKeybinds.ts).
+  const defaults = useMemo(
+    () => [...buildDefaultKeybindings(), ...deriveExtensionKeybindings(installedExtensions)],
+    [installedExtensions],
+  )
 
   const effective = useMemo(() => {
     const map = new Map<string, readonly Keybinding[]>()
@@ -118,7 +147,7 @@ export function CommandKeybindingsRow() {
 
   const rows = useMemo(() => {
     const needle = query.trim().toLowerCase()
-    return builtInCommandCatalog
+    return [...builtInCommandCatalog, ...extensionCommands]
       // A command the palette never renders still gets a binding row — it is
       // reachable by chord, menu and programmatic call, so it is bindable.
       .filter(command => command.category)
@@ -142,7 +171,7 @@ export function CommandKeybindingsRow() {
         ].join(' ').toLowerCase()
         return haystack.includes(needle)
       })
-  }, [query, effective, overrides])
+  }, [query, effective, overrides, extensionCommands])
 
   const grouped = useMemo(() => {
     const byCategory = new Map<CommandCategory, typeof rows>()
