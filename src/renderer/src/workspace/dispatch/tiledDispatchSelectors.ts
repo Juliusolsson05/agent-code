@@ -1,4 +1,10 @@
-import type { DispatchLane, DispatchModeState, SessionId, WorkspaceState } from '@renderer/workspace/types'
+import type {
+  DispatchLane,
+  DispatchModeState,
+  SessionId,
+  TiledDispatchState,
+  WorkspaceState,
+} from '@renderer/workspace/types'
 import { buildVisibleDispatchRows } from '@renderer/workspace/dispatch/dispatchSelectors'
 
 // ============================================================================
@@ -162,6 +168,54 @@ export function clampTileCount(n: number): number {
  * put the same agent in two lanes afterwards (duplicates are allowed and the
  * views mirror; see DispatchLane).
  */
+/**
+ * Remove ONE lane by index. Returns null when the removal is refused, so the
+ * caller can leave state untouched rather than writing back an identical object.
+ *
+ * WHY this exists at all, given `setTiledLaneCount` already resizes the grid:
+ * that action takes only a COUNT, and shrinking by count always drops the tail
+ * (`lanes.slice(0, next)`). With seven lanes open and the finished agent in
+ * lane three, 7 -> 6 removes lane SEVEN and leaves the user re-selecting the
+ * rest by hand.
+ *
+ * Closing the agent instead does not shrink anything either: the lane empties
+ * and `buildAutoLanes`' auto-fill re-homes another agent into it, so the count
+ * stays put. Before this, there was no way to shrink the tiled grid at a
+ * position of the user's choosing.
+ *
+ * WHY it is a pure function rather than living inside the reducer: the
+ * splice/clamp/ratio rules are the whole behaviour, and they are worth testing
+ * without standing up a hook.
+ */
+export function removeLaneFromTiled(
+  tiled: TiledDispatchState,
+  laneIndex: number,
+): TiledDispatchState | null {
+  // Refuse at the floor. Emptying the layout is Dispatch Mode's job; a
+  // lane-removal that silently became a mode-exit would be two different
+  // actions sharing one name.
+  if (tiled.lanes.length <= MIN_DISPATCH_TILES) return null
+  if (!Number.isInteger(laneIndex)) return null
+  if (laneIndex < 0 || laneIndex >= tiled.lanes.length) return null
+
+  const lanes = tiled.lanes.filter((_, i) => i !== laneIndex)
+  return {
+    lanes,
+    // Same clamp `setTiledLaneCount` applies: removing the last lane would
+    // otherwise leave focusedLane pointing past the end. Note a lane removed
+    // BEFORE the focused one shifts it down by one, which Math.min does not
+    // do — so adjust explicitly rather than only clamping.
+    focusedLane: Math.min(
+      laneIndex < tiled.focusedLane ? tiled.focusedLane - 1 : tiled.focusedLane,
+      lanes.length - 1,
+    ),
+    // Stored boundary ratios are positional, so removing a lane invalidates
+    // them. Dropping them lets the layout recompute — exactly what
+    // setTiledLaneCount does on any count change.
+    ratios: undefined,
+  }
+}
+
 export function buildAutoLanes(
   state: WorkspaceState,
   count: number,

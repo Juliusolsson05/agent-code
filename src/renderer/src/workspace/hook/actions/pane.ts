@@ -310,7 +310,12 @@ export function usePaneActions(
   attachAllDetachedForTab: (tabId: string) => Promise<void>
   detachFocusedToDispatch: () => void
   closeFocused: () => Promise<void>
-  closeSession: (targetId: SessionId, options?: CloseSessionOptions) => Promise<void>
+  /** Resolves true when the session was actually closed, false when it did
+   *  not exist or the user declined the confirmation. Callers that need to
+   *  follow a close with a dependent mutation (e.g. shrinking a Dispatch lane)
+   *  must branch on this rather than assume success — a cancelled confirm
+   *  would otherwise leave the layout changed with the agent still alive. */
+  closeSession: (targetId: SessionId, options?: CloseSessionOptions) => Promise<boolean>
   requestBuryFocused: () => void
   buryFocused: (note?: string, targetSessionId?: SessionId) => void
   reviveBuried: (buriedId: string) => Promise<void>
@@ -320,7 +325,7 @@ export function usePaneActions(
   navigate: (direction: 'left' | 'right' | 'up' | 'down') => void
 } {
   const closeSessionRef = useRef<
-    ((targetId: SessionId, options?: CloseSessionOptions) => Promise<void>) | null
+    ((targetId: SessionId, options?: CloseSessionOptions) => Promise<boolean>) | null
   >(null)
 
   // Spawns a new session in the parent pane's cwd, inserts a new
@@ -1433,7 +1438,7 @@ export function usePaneActions(
         !initial.tabs.some(t => collectLeaves(t.root).includes(targetId)) &&
         !initial.detachedSessions[targetId]
       ) {
-        return
+        return false
       }
 
       // CONFIRMATION GATE. This path was previously ungated entirely, which
@@ -1451,7 +1456,7 @@ export function usePaneActions(
         })
         if (!gate.ok) {
           if (gate.reason === 'changed') showToast(CLOSE_CHANGED_TOAST)
-          return
+          return false
         }
       }
 
@@ -1463,7 +1468,7 @@ export function usePaneActions(
       const owningTab = snapshot.tabs.find(t => collectLeaves(t.root).includes(targetId))
       const sessionMeta = snapshot.sessions[targetId]
       const detached = snapshot.detachedSessions[targetId]
-      if (!owningTab && !detached) return
+      if (!owningTab && !detached) return false
 
       // Linked agents are lifecycle-bound to their parent — close
       // any session that named `targetId` as its linkedParentId
@@ -1499,9 +1504,9 @@ export function usePaneActions(
         const kindLabel = sessionMeta?.kind ?? DEFAULT_PROVIDER
         const cwdBase = sessionMeta?.cwd.split('/').filter(Boolean).pop() ?? sessionMeta?.cwd ?? 'session'
         showToast(`Closed detached ${kindLabel} session (${cwdBase})`)
-        return
+        return true
       }
-      if (!owningTab) return
+      if (!owningTab) return false
 
       // Same two-case undo capture as closeFocused: pane-in-split
       // vs. last-pane-in-tab. Keeps ⌘⇧T working for modal-driven
@@ -1608,6 +1613,10 @@ export function usePaneActions(
           dispatchMode: dispatchModeAfterSessionRemoval(prev, next, targetId),
         }
       })
+      // Reached only after the pane/tab close actually committed. Every
+      // earlier exit returns false, so a caller can distinguish "closed" from
+      // "declined at the confirmation" or "session was already gone".
+      return true
     },
     [
       closeLinkedChildren,

@@ -412,7 +412,13 @@ export function useWorkspace(
             state: snapshot,
             parentSessionId: request.parentSessionId,
             sessionId: request.sessionId,
-            closeSession: closeOrchestrationSessionRef.current,
+            // Adapted to the orchestration contract's Promise<void>: the MCP
+            // layer has no use for whether the close was declined, and
+            // widening a shared cross-process type for one local caller would
+            // be the tail wagging the dog.
+            closeSession: async (id, opts) => {
+              await closeOrchestrationSessionRef.current(id, opts)
+            },
           })
           await window.api.resolveOrchestrationRequest({
             requestId: request.requestId,
@@ -487,7 +493,10 @@ export function useWorkspace(
           state: snapshot,
           parentSessionId: request.parentSessionId,
           runId: request.runId,
-          closeSession: closeOrchestrationSessionRef.current,
+          // Same adaptation as the single-agent close above.
+          closeSession: async (id, opts) => {
+            await closeOrchestrationSessionRef.current(id, opts)
+          },
         })
         await window.api.resolveOrchestrationRequest({
           requestId: request.requestId,
@@ -963,6 +972,7 @@ export function useWorkspace(
     exitTiledDispatch: dispatchActions.exitTiledDispatch,
     setTiledLaneSession: dispatchActions.setTiledLaneSession,
     setTiledLaneCount: dispatchActions.setTiledLaneCount,
+    removeTiledLane: dispatchActions.removeTiledLane,
     setTiledFocusedLane: dispatchActions.setTiledFocusedLane,
     setTiledRatios: dispatchActions.setTiledRatios,
   }
