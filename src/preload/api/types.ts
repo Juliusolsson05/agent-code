@@ -1,5 +1,10 @@
 import type { ConditionCustomAction } from '@shared/types/providerConditions.js'
-import type { DictationProvider } from '@shared/types/dictation.js'
+import type {
+  DictationHistoryEntry,
+  DictationHistorySnapshot,
+  DictationProvider,
+  DictationStats,
+} from '@shared/types/dictation.js'
 import type { BuiltInMcpDomain } from '@mcp/shared/types.js'
 // Local binding for in-file uses (SessionStartedEvent.kind, etc.). The
 // `export type { SessionKind }` re-export below is a separate statement that
@@ -88,7 +93,12 @@ export type {
   UsageSpend,
 } from '@shared/types/usage.js'
 
-export type { DictationProvider }
+export type {
+  DictationHistoryEntry,
+  DictationHistorySnapshot,
+  DictationProvider,
+  DictationStats,
+}
 
 export type DictationStartResult =
   | { kind: 'started'; id: string }

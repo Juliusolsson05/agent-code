@@ -4,6 +4,7 @@ import { subscribe } from '@preload/api/ipc.js'
 import type {
   DictationApiKeyStatus,
   DictationApiKeySetResult,
+  DictationHistorySnapshot,
   DictationHotkeyConfigureResult,
   DictationProvider,
   DictationStartResult,
@@ -60,4 +61,19 @@ export const dictationApi = {
 
   cancelDictationStream: (params: { id: string }): Promise<{ kind: 'ok' }> =>
     ipcRenderer.invoke('dictation:stream-cancel', params),
+
+  // History. Every mutation resolves with the fresh snapshot, so callers never
+  // need a follow-up list call and can never render a stale list between the
+  // mutation and a refetch.
+  listDictationHistory: (): Promise<DictationHistorySnapshot> =>
+    ipcRenderer.invoke('dictation:history-list'),
+
+  deleteDictationHistoryEntry: (params: { id: string }): Promise<DictationHistorySnapshot> =>
+    ipcRenderer.invoke('dictation:history-delete', params),
+
+  clearDictationHistory: (): Promise<DictationHistorySnapshot> =>
+    ipcRenderer.invoke('dictation:history-clear'),
+
+  resetDictationStats: (): Promise<DictationHistorySnapshot> =>
+    ipcRenderer.invoke('dictation:history-reset-totals'),
 }
