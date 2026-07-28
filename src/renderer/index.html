@@ -4,6 +4,17 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <!--
+      WHY agent-code-ext: appears in script-src, connect-src, and the asset
+      directives: installed extensions are served over that privileged scheme
+      (see main/extensions/scheme.ts). It is the narrowest concession that makes
+      runtime-loaded extensions possible — deliberately NOT 'unsafe-eval', NOT
+      blob:, and NOT file:, each of which would relax the policy for all code
+      rather than for one auditable origin whose handler enforces path
+      containment. connect-src is required separately because default-src 'self'
+      backstops it, so an extension fetching its own JSON would otherwise fail.
+      script-src is the load-bearing one; the rest let an extension ship CSS,
+      icons and fonts without inlining everything as data: URIs.
+
       WHY worker-src 'self' blob:
       Monaco language services run in Web Workers (Vite ?worker imports
       are same-origin files in prod, but Vite's dev server and some
@@ -14,7 +25,7 @@
     -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; script-src 'self'; worker-src 'self' blob:"
+      content="default-src 'self'; img-src 'self' data: blob: agent-code-ext:; style-src 'self' 'unsafe-inline' agent-code-ext: https://fonts.googleapis.com; font-src 'self' data: agent-code-ext: https://fonts.gstatic.com; script-src 'self' agent-code-ext:; connect-src 'self' agent-code-ext:; frame-src agent-code-ext:; worker-src 'self' blob:"
     />
     <title>Agent Code</title>
   </head>
