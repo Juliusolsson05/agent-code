@@ -189,11 +189,26 @@ const context = {
 function reportSize() {
   const root = document.getElementById('root');
   if (!root) return;
-  // scrollHeight/scrollWidth capture the CONTENT extent even when #root itself is
-  // width:100% of a smaller iframe — a fixed-width extension (a game canvas) overflows
-  // and its true width is reported, so the host can grow the modal to fit it.
+  // Height comes from #root: it is height:auto, so scrollHeight IS the content height,
+  // and growing the iframe never changes it — no resize feedback loop.
   const height = root.scrollHeight;
-  const width = root.scrollWidth;
+  // WIDTH MUST BE MEASURED FROM THE CHILDREN, NOT FROM #root.
+  //
+  // #root is width:100%, and scrollWidth is by definition never smaller than clientWidth.
+  // So root.scrollWidth returns at least the CURRENT iframe width, always. The modal
+  // could therefore grow but never shrink: switching from a wide view to a narrow one
+  // (a 892px game to a 375px one) left the modal stuck at the old width with the new
+  // content marooned in the corner — which is exactly the "cropping works weird" report.
+  //
+  // The children carry their own intrinsic width, so measuring them lets the report go
+  // DOWN as well as up. Fall back to scrollWidth if an extension mounts nothing we can
+  // measure. Note this deliberately reads getBoundingClientRect rather than offsetWidth:
+  // it is sub-pixel accurate and, unlike offsetWidth, correct for transformed children.
+  let width = 0;
+  for (let i = 0; i < root.children.length; i++) {
+    width = Math.max(width, Math.ceil(root.children[i].getBoundingClientRect().width));
+  }
+  if (width <= 0) width = root.scrollWidth;
   if (height > 0) window.parent.postMessage({ kind: 'agent-code-ext:resize', height: height, width: width }, '*');
 }
 
@@ -211,7 +226,20 @@ function mountView(viewId) {
   reportSize();
   if (typeof ResizeObserver !== 'undefined') {
     const observer = new ResizeObserver(function () { reportSize(); });
+    // Observing #root alone is NOT enough. It is width:100%, so a content change that
+    // only alters WIDTH never changes #root's own box and the observer stays silent —
+    // the modal would keep a stale width until something happened to change the height
+    // too. Observe the children, whose boxes track the content, and re-sync that list
+    // when the extension swaps its tree (a router switching screens replaces the child).
     observer.observe(root);
+    const syncChildren = function () {
+      for (let i = 0; i < root.children.length; i++) observer.observe(root.children[i]);
+      reportSize();
+    };
+    syncChildren();
+    if (typeof MutationObserver !== 'undefined') {
+      new MutationObserver(syncChildren).observe(root, { childList: true });
+    }
   }
 }
 
