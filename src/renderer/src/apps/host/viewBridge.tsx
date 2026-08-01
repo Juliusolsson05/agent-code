@@ -56,6 +56,18 @@ export function viewComponentFor(
     // back to filling its container (the modal's own width).
     const [contentWidth, setContentWidth] = useState<number | null>(null)
 
+    // Viewport, tracked so an oversized extension can be SCALED to fit (see `scale`).
+    const [viewport, setViewport] = useState(() => ({
+      w: typeof window === 'undefined' ? 1280 : window.innerWidth,
+      h: typeof window === 'undefined' ? 800 : window.innerHeight,
+    }))
+    useEffect(() => {
+      if (fill) return
+      const onResize = () => setViewport({ w: window.innerWidth, h: window.innerHeight })
+      window.addEventListener('resize', onResize)
+      return () => window.removeEventListener('resize', onResize)
+    }, [])
+
     useEffect(() => {
       const iframe = iframeRef.current
       if (!iframe) {
@@ -179,8 +191,42 @@ export function viewComponentFor(
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [])
 
+    // ── FIT AN OVERSIZED EXTENSION TO THE WINDOW ──
+    //
+    // An extension with a FIXED natural size — a game canvas is the motivating case —
+    // reports e.g. 892×652. That fits a normal window, but on a short one the modal
+    // previously CLIPPED it: DialogContent has no maxHeight and is `overflow-hidden`,
+    // so the bottom of the game simply vanished with no scrollbar and no way to reach
+    // the action buttons.
+    //
+    // Scaling rather than scrolling, because the content is a single fixed-aspect
+    // surface: a scrollbar on a game is worse than a slightly smaller game, and
+    // clipping is worse than both.
+    //
+    // This MUST live host-side. The obvious alternative — have the extension size
+    // itself in vw/vh — is a trap: those units resolve against the IFRAME's viewport,
+    // which the host sets from the content's reported size, so the extension's size
+    // would depend on its own size. That is exactly the resize feedback loop
+    // frameDocument.ts's measurement is carefully built to avoid.
+    //
+    // Budgets leave room for the modal's own chrome and the scrim margin.
+    const scale =
+      fill || !contentWidth || !contentHeight
+        ? 1
+        : Math.min(1, (viewport.w * 0.9) / contentWidth, (viewport.h * 0.86) / contentHeight)
+
+    // The wrapper must occupy the SCALED footprint, otherwise the auto-sized modal
+    // reserves room for the unscaled iframe and the game floats in dead space.
+    const scaledBox =
+      !fill && status === 'ready' && contentWidth && contentHeight
+        ? { width: contentWidth * scale, height: contentHeight * scale }
+        : undefined
+
     return (
-      <div className={fill ? 'relative h-full w-full' : 'relative min-h-[120px]'}>
+      <div
+        className={fill ? 'relative h-full w-full' : 'relative min-h-[120px]'}
+        style={scaledBox}
+      >
         {status === 'loading' ? (
           <div className="px-6 py-8 text-[12px] text-muted">Loading {entry.manifest.name}…</div>
         ) : null}
@@ -213,6 +259,12 @@ export function viewComponentFor(
             // collapsed the frame to a strip.
             height: fill ? '100%' : contentHeight ?? 120,
             minHeight: fill ? undefined : 120,
+            // The iframe keeps its NATURAL pixel size and is scaled visually, so the
+            // extension's own layout never changes and it never learns it was resized
+            // (which would re-trigger the content-size report). Origin top-left so the
+            // scaled box lines up with the wrapper computed above.
+            transform: scale === 1 ? undefined : `scale(${scale})`,
+            transformOrigin: 'top left',
           }}
         />
       </div>
