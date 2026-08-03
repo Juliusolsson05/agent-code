@@ -152,10 +152,26 @@ export function viewComponentFor(
 
       const onLoad = () => {
         setStatus('ready')
-        // Tell the child which of its registered views to mount. This is the
-        // frame equivalent of calling the returned ViewMount in the same realm.
-        frameHost.push({ kind: 'agent-code-ext:mount', viewId })
-        pushTheme()
+        // THEME BEFORE MOUNT — the ordering is load-bearing.
+        //
+        // Previously mount was pushed synchronously and the theme followed a microtask
+        // later (tokens() is async), so the view rendered against variables that did not
+        // exist yet and every extension had to carry its own fallback palette to avoid a
+        // flash of unstyled content. That is why extensions ended up re-declaring the
+        // whole token set locally — the platform gave them no moment at which the theme
+        // was guaranteed present.
+        //
+        // Pushing theme first, then mount, closes that window: postMessage preserves
+        // order, so by the time the child mounts, --theme-* is already set on its
+        // documentElement. Extensions can now write var(--theme-canvas) bare.
+        //
+        // A theme failure must never prevent the view from mounting, hence the catch:
+        // an unthemed extension is a bug, an unmounted one is a broken product.
+        void api.theme
+          .tokens()
+          .then(tokens => frameHost.push({ kind: 'agent-code-ext:theme', tokens }))
+          .catch(() => {})
+          .finally(() => frameHost.push({ kind: 'agent-code-ext:mount', viewId }))
       }
       // A frame that cannot even load its document (bad scheme response, blocked
       // by CSP) fails visibly rather than showing an indefinite spinner.
