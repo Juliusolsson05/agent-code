@@ -17,6 +17,9 @@
 // SDK's child runtime (WS8); treat a real in-frame load as its acceptance test.
 
 export type FrameDocumentInput = {
+  /** The extension this frame belongs to. Already validated by the scheme handler —
+   *  used to build a per-ORIGIN CSP rather than a per-scheme one (see childFrameCsp). */
+  extensionId: string
   /** The contributed view id to mount once the parent sends the mount message. */
   viewId: string
   /** The manifest `entry`, relative to the bundle root (already path-validated). */
@@ -30,33 +33,58 @@ export type FrameDocumentInput = {
 /**
  * The child Content-Security-Policy — far stricter than the host's.
  *
- * `default-src 'none'` denies everything not re-granted below. Scripts are limited
- * to the extension's own origin plus the single nonced inline bootstrap (no
- * 'unsafe-inline', so injected script cannot run). There is NO `connect-src` beyond
- * the origin and NO `frame-src`: a sandboxed extension cannot open sockets to the
- * network or nest further frames. Styles/img/font allow the extension's own assets
- * and inline styles (canvas/React need them); that is the widest concession.
+ * ── PER-ORIGIN, NOT PER-SCHEME ──
+ * Every source below names THIS extension's origin explicitly. The previous version
+ * used the bare `agent-code-ext:` scheme-source, which matches
+ * `agent-code-ext://<any-other-id>` — and since `'self'` already covers the document's
+ * own origin, the bare scheme granted ONLY the cross-extension case. Extension A could
+ * fetch and, worse, `<script src>`-execute extension B's bundle. That is what turned
+ * an HTML-injection bug into arbitrary code execution across extension identities.
+ *
+ * `base-uri` and `form-action` are listed explicitly because NEITHER falls back to
+ * `default-src`. Without `base-uri 'none'`, an injected `<base>` repoints the
+ * bootstrap's relative `import()`; without `form-action 'none'`, a form can POST to
+ * any origin — an egress channel the connect-src restriction does not cover.
+ *
+ * Note what CSP still cannot do: it has no directive governing `window.open`
+ * (`navigate-to` was never shipped). That hole is closed by the iframe's `sandbox`
+ * attribute in viewBridge.tsx, not here.
  */
-export function childFrameCsp(nonce: string): string {
+export function childFrameCsp(nonce: string, extensionId: string): string {
+  const self = `agent-code-ext://${extensionId}`
   return [
     "default-src 'none'",
-    `script-src 'self' agent-code-ext: 'nonce-${nonce}'`,
-    "style-src 'self' 'unsafe-inline' agent-code-ext:",
-    'img-src agent-code-ext: data: blob:',
-    'font-src agent-code-ext: data:',
-    "connect-src 'self' agent-code-ext:",
+    "base-uri 'none'",
+    "form-action 'none'",
+    `script-src '${`nonce-${nonce}`}' ${self}`,
+    `style-src 'unsafe-inline' ${self}`,
+    `img-src ${self} data: blob:`,
+    `font-src ${self} data:`,
+    `connect-src ${self}`,
   ].join('; ')
 }
 
 export function buildFrameDocument(input: FrameDocumentInput): string {
-  const { viewId, entry, parentOrigin, nonce } = input
+  const { extensionId, viewId, entry, parentOrigin, nonce } = input
   // The bootstrap. Everything the child needs to (a) expose a Tier-0 API that
   // proxies to the parent over postMessage, (b) import and activate the extension,
   // (c) mount its view on the parent's signal. Kept in one nonced module.
   const bootstrap = `
-const PARENT_ORIGIN = ${JSON.stringify(parentOrigin)};
-const VIEW_ID = ${JSON.stringify(viewId)};
-const ENTRY = ${JSON.stringify(entry)};
+// ── CONFIG COMES FROM A JSON BLOCK, NOT FROM INTERPOLATED JS ──
+// These three values used to be spliced straight into this script as
+// \`const VIEW_ID = \${JSON.stringify(viewId)}\`. JSON.stringify escapes quotes and
+// backslashes but NOT \`<\` or \`/\` — so a value containing \`</script>\` closed this
+// element from inside a string literal and everything after it became new markup.
+// The entry path passed all four of the manifest's negative refinements with that
+// payload embedded, and viewId was taken from the query string unchecked.
+//
+// Parsing a JSON island removes the sink entirely: a \`</script>\` inside JSON text is
+// still just text to the JS parser, and the HTML tokenizer never sees it because
+// buildFrameDocument escapes \`<\` when emitting the block.
+const CFG = JSON.parse(document.getElementById('agent-code-ext-cfg').textContent);
+const PARENT_ORIGIN = CFG.parentOrigin;
+const VIEW_ID = CFG.viewId;
+const ENTRY = CFG.entry;
 
 // Correlate replies to requests over the single channel to the parent.
 let seq = 0;
@@ -285,7 +313,7 @@ window.addEventListener('pagehide', () => {
     '<html>',
     '<head>',
     '<meta charset="utf-8" />',
-    `<meta http-equiv="Content-Security-Policy" content="${childFrameCsp(nonce)}" />`,
+    `<meta http-equiv="Content-Security-Policy" content="${childFrameCsp(nonce, extensionId)}" />`,
     // #root is width:100% but height:AUTO on purpose: it sizes to the extension's
     // content, which reportSize() measures and the host uses to size the iframe.
     // A height:100% here would make #root track the (initially collapsed) iframe
@@ -301,6 +329,14 @@ window.addEventListener('pagehide', () => {
     '</head>',
     '<body>',
     '<div id="root"></div>',
+    // The config island. `<` is escaped to \u003c so no value can close this element
+    // (or open another) regardless of what the manifest or query string contained.
+    // JSON.parse reads \u003c back as `<`, so values round-trip exactly.
+    `<script type="application/json" id="agent-code-ext-cfg">${JSON.stringify({
+      parentOrigin,
+      viewId,
+      entry,
+    }).replace(/</g, '\\u003c')}</script>`,
     `<script type="module" nonce="${nonce}">${bootstrap}</script>`,
     '</body>',
     '</html>',

@@ -4,6 +4,7 @@ import { join } from 'path'
 import { z } from 'zod'
 
 import { EXTENSIONS_DIR, EXTENSIONS_LOCKFILE, STATE_DIR } from '@main/storage/paths.js'
+import { isValidExtensionId } from '@shared/types/extensionId.js'
 import type { ExtensionListEntry, InstalledExtension } from '@shared/types/extensions.js'
 
 import { extensionManifestSchema } from './manifest.js'
@@ -108,6 +109,12 @@ export async function listInstalledExtensions(): Promise<ExtensionListEntry[]> {
  * a few KB of JSON; lost state is the user's data.
  */
 export async function removeExtension(id: string): Promise<void> {
+  // VALIDATE BEFORE THE RECURSIVE DELETE. `id` arrives from IPC, and this is a
+  // `rm(..., { recursive: true })` — a value like `../../something` would escape
+  // EXTENSIONS_DIR entirely and delete an unrelated tree. Every other path-handling
+  // site in this subsystem validates; this one did not, which is the whole reason the
+  // shared validator now exists rather than a fifth copy of the regex.
+  if (!isValidExtensionId(id)) throw new Error(`invalid extension id: ${id}`)
   await rm(join(EXTENSIONS_DIR, id), { recursive: true, force: true })
   const ledger = await readLedger()
   await writeLedger(ledger.filter(row => row.manifest.id !== id))

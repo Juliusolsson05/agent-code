@@ -4,6 +4,7 @@ import { realpath } from 'fs/promises'
 import { extname, join, resolve as resolvePath, sep } from 'path'
 import { pathToFileURL } from 'url'
 
+import { isValidExtensionId } from '@shared/types/extensionId.js'
 import { EXTENSIONS_DIR } from '@main/storage/paths.js'
 import { buildFrameDocument, childFrameCsp } from '@main/extensions/frameDocument.js'
 import { readLedger } from '@main/extensions/ledger.js'
@@ -101,6 +102,19 @@ function contentTypeFor(path: string): string {
  *
  * URL shape: `agent-code-ext://<extensionId>/<path-inside-bundle>`
  */
+/**
+ * CORS for a bundle asset: the extension's own origin, or nothing.
+ *
+ * Returning an empty object (rather than a wildcard) is deliberate — absence of the
+ * header is a closed door, and it keeps cross-extension reads from being a one-word
+ * regression away.
+ */
+function corsHeadersFor(origin: string | null, extensionId: string): Record<string, string> {
+  return origin && origin === `${EXTENSION_SCHEME}://${extensionId}`
+    ? { 'access-control-allow-origin': origin }
+    : {}
+}
+
 export function handleExtensionScheme(): void {
   protocol.handle(EXTENSION_SCHEME, async request => {
     let url: URL
@@ -110,8 +124,21 @@ export function handleExtensionScheme(): void {
       return new Response('bad request', { status: 400 })
     }
 
+    // ── VALIDATE THE ID BEFORE IT IS USED AS A PATH SEGMENT ──
+    // `url.hostname` is attacker-chosen. It is joined onto EXTENSIONS_DIR below, and
+    // the containment check further down resolves against a root DERIVED FROM THIS
+    // VALUE — so if the id escapes, the check certifies the wrong root and approves
+    // everything beneath it. A request for `agent-code-ext://../extension-grants.json`
+    // yielded hostname `..`, rooting the handler at the whole state directory: grants,
+    // the ledger, workspace.json, and the proxy dumps that contain provider
+    // Authorization headers. Reachable from a Tier-0 extension that triggered no
+    // consent dialog, since `connect-src agent-code-ext:` permits the request.
+    //
+    // This must be the FIRST thing the handler does. The shared validator is imported
+    // rather than re-written: this file having no copy of the pattern, while four other
+    // files had one, is precisely how the gap happened.
     const extensionId = url.hostname
-    if (!extensionId) return new Response('not found', { status: 404 })
+    if (!isValidExtensionId(extensionId)) return new Response('not found', { status: 404 })
 
     // decodeURIComponent BEFORE the containment check, never after. A check
     // performed on the encoded form would pass `..%2f..%2f.ssh` — the segments
@@ -138,8 +165,17 @@ export function handleExtensionScheme(): void {
       // 404 like a missing bundle rather than serving an empty shell.
       if (!record) return new Response('not found', { status: 404 })
 
+      // The view id must be one this extension actually declares. It was previously
+      // taken from the query string verbatim and interpolated into the frame document,
+      // where it is an injection sink — and a persisted SessionMeta.extensionViewId is
+      // attacker-influenced on the rehydrate path. Checking it against the manifest we
+      // already hold costs one `.some()` and removes the sink's most reachable source.
+      const declaresView = (record.manifest.contributes?.views ?? []).some(v => v.id === viewId)
+      if (!declaresView) return new Response('bad request', { status: 400 })
+
       const nonce = randomBytes(16).toString('base64')
       const html = buildFrameDocument({
+        extensionId,
         viewId,
         entry: record.manifest.entry,
         parentOrigin,
@@ -152,7 +188,7 @@ export function handleExtensionScheme(): void {
           // Both the meta tag inside the document AND this header carry the CSP,
           // with the same nonce. The header cannot be undone by a document.write,
           // so it is the authoritative copy.
-          'content-security-policy': childFrameCsp(nonce),
+          'content-security-policy': childFrameCsp(nonce, extensionId),
           'cache-control': 'no-cache',
         },
       })
@@ -217,11 +253,18 @@ export function handleExtensionScheme(): void {
         // allow-origin header every `import()` fails with an opaque CORS error
         // that says nothing about the actual cause.
         //
-        // `*` is safe here because the scheme is only reachable from inside this
-        // app's renderer, and the handler above has already proven the path is
-        // contained. There is no ambient authority to leak: this origin serves
-        // extension bundle files and nothing else.
-        'access-control-allow-origin': '*',
+        // ── NOT `*` ──
+        // The old value was justified as "there is no ambient authority to leak: this
+        // origin serves extension bundle files and nothing else". That is true of the
+        // HOST, and false of a sibling EXTENSION: with `*`, extension A could
+        // `fetch('agent-code-ext://b/index.js')` and read extension B's entire bundle.
+        // Combined with the scheme-wide CSP source it also let A execute B's code.
+        //
+        // Echo the request Origin only when it is this extension's own origin. Any other
+        // origin gets no CORS header at all, so the read fails closed. The host document
+        // itself never fetches bundle assets — it only frames them — so it needs nothing
+        // here.
+        ...corsHeadersFor(request.headers.get('origin'), extensionId),
         // Bundles are replaced wholesale on update, and a stale cached module
         // after an update is a confusing, hard-to-diagnose bug class. Extensions
         // are local files; there is nothing to gain by caching them.

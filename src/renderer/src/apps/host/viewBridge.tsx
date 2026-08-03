@@ -90,8 +90,17 @@ export function viewComponentFor(
       // carry no authority), so they do not belong in the schema-validated request
       // path. Authenticated the same way frameHost authenticates requests — by
       // window reference, which no other frame can forge.
+      const expectedChildOrigin = `agent-code-ext://${extensionId}`
       const onChildMessage = (event: MessageEvent) => {
+        // TWO gates, matching frameHost — source AND origin. This listener previously
+        // checked only the window reference, and claimed parity with frameHost while
+        // having one fewer check. `iframe.contentWindow` is an identity-stable
+        // WindowProxy across navigations, so source alone survives a frame navigating
+        // itself: a document at any other agent-code-ext:// origin landing in this frame
+        // could still fire `ready` and publish a command dispatcher under THIS
+        // extension's id. Origin is the gate that actually distinguishes them.
         if (event.source !== iframe.contentWindow) return
+        if (event.origin !== expectedChildOrigin) return
         const data = event.data as { kind?: unknown; height?: unknown; width?: unknown } | null
         if (!data) return
         if (data.kind === 'agent-code-ext:resize') {
@@ -254,13 +263,37 @@ export function viewComponentFor(
             </div>
           </div>
         ) : null}
-        {/* Always present so the ref exists before the effect runs. No `sandbox`
-            attribute on purpose: the isolation comes from the distinct
-            agent-code-ext://<id> origin + the child CSP, and `sandbox` would give
-            the frame an opaque "null" origin, breaking the origin-derived identity
-            the whole broker depends on. */}
+        {/* Always present so the ref exists before the effect runs.
+            ── THE SANDBOX ATTRIBUTE IS LOAD-BEARING ──
+            An earlier comment here claimed `sandbox` could not be used because it would
+            give the frame an opaque "null" origin and break the origin-derived identity
+            the broker depends on. That is only true WITHOUT `allow-same-origin`.
+            With it, the document keeps its agent-code-ext://<id> origin — so event.origin
+            and every identity check are untouched — while the other flags stay off.
+
+            What staying off buys, none of which CSP can do:
+              - no allow-popups        → window.open() is dead. This was a real egress
+                                         channel: no CSP directive governs window.open
+                                         (navigate-to was never shipped), so a Tier-0
+                                         extension could exfiltrate storage to any URL
+                                         via the OS browser with no consent prompt.
+              - no allow-top-navigation → cannot navigate the whole app away.
+              - no allow-modals         → cannot wedge the renderer with alert()/print().
+              - no allow-forms          → closes the <form target=_blank> egress variant.
+              - no allow-downloads      → closes download-based exfiltration.
+
+            The usual objection — that a frame with both allow-scripts and
+            allow-same-origin can strip its own sandbox — requires the child to be
+            same-origin with the EMBEDDER. Here it is cross-origin to the host, so it
+            cannot reach the <iframe> element at all.
+
+            Enforcing here rather than in setWindowOpenHandler is deliberate: Electron's
+            HandlerDetails carries no `frame` field, and `referrer` is suppressible with
+            window.open(url, '_blank', 'noreferrer'), so main cannot reliably identify
+            the initiating frame. The attribute is the only place this is decidable. */}
         <iframe
           ref={iframeRef}
+          sandbox="allow-scripts allow-same-origin"
           title={entry.manifest.name}
           style={{
             display: status === 'ready' ? 'block' : 'none',

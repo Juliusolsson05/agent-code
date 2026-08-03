@@ -41,14 +41,32 @@ const jsonValueSchema: z.ZodType<unknown> = z.lazy(() =>
   ]),
 )
 
+/**
+ * A storage key that cannot collide with Object.prototype machinery.
+ *
+ * `storage.ts` does `data[key] = value` on a JSON.parse result. With key `__proto__`
+ * that hits Object.prototype's setter instead of creating an own property: on a fresh
+ * store the write silently vanishes and keys() never lists it, while on a store whose
+ * JSON literally contained "__proto__" it behaves completely differently. Not
+ * exploitable — Object.prototype is never mutated — but it is silent, state-dependent
+ * data loss, and an extension author would have no way to diagnose it. Reject loudly.
+ */
+const SAFE_STORAGE_KEY = z
+  .string()
+  .min(1)
+  .max(256)
+  .refine(k => k !== '__proto__' && k !== 'constructor' && k !== 'prototype', {
+    message: 'key may not be __proto__, constructor, or prototype',
+  })
+
 export const frameRequestSchema = z.discriminatedUnion('method', [
-  z.object({ method: z.literal('storage.get'), key: z.string().min(1).max(256) }),
+  z.object({ method: z.literal('storage.get'), key: SAFE_STORAGE_KEY }),
   z.object({
     method: z.literal('storage.set'),
-    key: z.string().min(1).max(256),
+    key: SAFE_STORAGE_KEY,
     value: jsonValueSchema,
   }),
-  z.object({ method: z.literal('storage.delete'), key: z.string().min(1).max(256) }),
+  z.object({ method: z.literal('storage.delete'), key: SAFE_STORAGE_KEY }),
   z.object({ method: z.literal('storage.keys') }),
   z.object({ method: z.literal('ui.close') }),
   z.object({ method: z.literal('ui.showToast'), message: z.string().min(1).max(2000) }),
