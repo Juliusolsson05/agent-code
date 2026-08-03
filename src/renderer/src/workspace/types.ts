@@ -131,6 +131,14 @@ export type SessionMeta = {
    */
   tmuxName?: string
   /**
+   * Set on an `extension-view` pane: the contributed view id (`<extensionId>.<view>`)
+   * this leaf hosts. The durable handle that answers "which extension view does this
+   * pane render", the extension analogue of `tmuxName` for a terminal. The render
+   * seam reads it; rehydrate uses it to decide whether the owning extension is still
+   * installed. Absent on every non-extension kind.
+   */
+  extensionViewId?: string
+  /**
    * Set on a "Linked Agent" — an agent spawned via the Linked Agent
    * command with another agent as its parent. Two consequences:
    *

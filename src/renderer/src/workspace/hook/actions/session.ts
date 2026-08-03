@@ -441,6 +441,21 @@ export function useSessionActions(
         if (!meta) {
           throw new Error(`Cannot wake ${sessionId}; no persisted session metadata exists.`)
         }
+        // ── A PROCESS-LESS LEAF IS ALREADY LIVE ──
+        // isSessionKind now accepts 'extension-view', so this function used to sail
+        // past the unsupported-kind guard below, call recoverSession, and get main's
+        // "extension-view panes have no process to recover" rejection — which it
+        // throws. That stranded a pane permanently in three separate flows, all of
+        // which funnel through here: Revive Buried, Attach Detached, and Attach All.
+        // Bury and Detach-to-Dispatch are both ungated commands, so this was a
+        // one-way trip with Kill Buried as the only exit.
+        //
+        // Fencing at this single choke point covers all three callers and mirrors the
+        // two fences main already has. There is nothing to wake: a leaf with no
+        // process is live by definition.
+        if (meta.kind === 'extension-view') {
+          return { sessionId, builtInMcpDomains: undefined }
+        }
         if (meta.kind !== undefined && !isSessionKind(meta.kind)) {
           const message = 'This pane uses an unsupported provider. Update Agent Code or close it.'
           setRuntimes(prev => {

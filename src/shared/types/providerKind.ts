@@ -44,10 +44,10 @@ export type AgentProviderKind = (typeof AGENT_PROVIDER_KINDS)[number]
  * makes sense for agents (resume listing, prompt indexing, condition
  * snapshots) cannot accidentally be handed `'terminal'`.
  */
-export type SessionKind = AgentProviderKind | 'terminal'
+export type SessionKind = AgentProviderKind | 'terminal' | 'extension-view'
 
 /** All session kinds, runtime form. Kept derived so it never drifts. */
-export const SESSION_KINDS = [...AGENT_PROVIDER_KINDS, 'terminal'] as const
+export const SESSION_KINDS = [...AGENT_PROVIDER_KINDS, 'terminal', 'extension-view'] as const
 
 /**
  * Narrow an untrusted string (IPC arg, persisted metadata, MCP input)

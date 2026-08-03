@@ -12,6 +12,7 @@ import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import type { ResolveConditionResult } from '@shared/sessionFeed/types.js'
 import type { ConditionCustomAction } from '@shared/conditions-core/contract.js'
 import type { SessionKind } from '@shared/types/providerKind.js'
+import { isAgentProviderKind } from '@shared/types/providerKind.js'
 import type { PromptDeliveryResult } from '@shared/types/providerConfig.js'
 import type { SessionBackendSnapshot } from '@shared/types/session.js'
 
@@ -662,7 +663,7 @@ export class RemoteServer extends EventEmitter {
           return { ok: false, error: 'no transcript on disk yet for this session' }
         }
         const kind = this.deps.manager.getSessionKind(msg.sessionId)
-        if (!kind || kind === 'terminal') {
+        if (!isAgentProviderKind(kind)) {
           return { ok: false, error: 'not an agent session' }
         }
         const chunk = msg.beforeMarker

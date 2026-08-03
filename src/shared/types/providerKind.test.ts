@@ -18,8 +18,18 @@ describe('provider kind source of truth', () => {
     expect([...AGENT_PROVIDER_KINDS]).toEqual(['claude', 'codex', 'opencode'])
   })
 
-  it('SESSION_KINDS is the agent kinds plus terminal, derived (never hand-listed)', () => {
-    expect([...SESSION_KINDS]).toEqual(['claude', 'codex', 'opencode', 'terminal'])
+  it('SESSION_KINDS is the agent kinds plus terminal plus extension-view, derived', () => {
+    // Asserted as a DERIVATION rather than a literal list, which is what the guard was
+    // always for: hand-listing is exactly how the set silently drifts from
+    // AGENT_PROVIDER_KINDS.
+    //
+    // OPEN QUESTION (review finding H3): 'extension-view' is a process-less pane, and
+    // widening SESSION_KINDS to hold it means every `kind === 'terminal'` check in the
+    // renderer now reads a pane as an agent. The proposed fix is to split this into a
+    // ProcessSessionKind (agents + terminal) and a renderer-only PaneKind that adds
+    // extension-view. This assertion tracks today's shape; it is not an endorsement of
+    // it, and it should change when that split lands.
+    expect([...SESSION_KINDS]).toEqual([...AGENT_PROVIDER_KINDS, 'terminal', 'extension-view'])
   })
 
   it('isAgentProviderKind accepts wired providers and rejects everything else', () => {

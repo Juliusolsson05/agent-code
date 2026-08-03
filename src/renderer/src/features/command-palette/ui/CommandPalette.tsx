@@ -68,6 +68,8 @@ import type {
   PromptTemplateVariableValueMap,
 } from '@renderer/features/prompt-templates/types'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
+import { deriveExtensionCommands, deriveExtensionKeybindings } from '@renderer/apps/host/derive'
+import { useExtensionHost } from '@renderer/apps/host/ExtensionHostProvider'
 import { resolveAgentPaneLabel } from '@renderer/workspace/tile-tree/paneLabels'
 import { useWorkspaceContext } from '@renderer/workspace/WorkspaceContext'
 import type { PaletteMode } from '@renderer/features/command-palette/paletteMode'
@@ -272,6 +274,7 @@ function OpenCommandPalette({
   const closePinAgents = useAppStore(state => state.closePinAgents)
   const closePathPicker = useAppStore(state => state.closePathPicker)
   const openUsageModal = useAppStore(state => state.openUsageModal)
+  const openApp = useAppStore(state => state.openApp)
   const toggleGitBar = useAppStore(state => state.toggleGitBar)
   const toggleWorktreesBar = useAppStore(state => state.toggleWorktreesBar)
   const toggleDebugPanel = useAppStore(state => state.toggleDebugPanel)
@@ -637,7 +640,13 @@ function OpenCommandPalette({
         enterAiWorkspaceOpenMode,
         enterAiWorkspaceCreateMode,
         enterAiWorkspaceClearMode,
+        openApp,
         closePalette: onClose,
+        // NOTE: openApp is in the dep array below alongside every other store
+        // action. Zustand action identities are stable, so omitting it was
+        // benign — but it would become a stale closure the instant that
+        // assumption changed, and there is no lint rule in this repo to catch
+        // it (no eslint config, no `lint` script).
       },
       flags: {
         statusModeEnabled,
@@ -709,6 +718,7 @@ function OpenCommandPalette({
       closePinAgents,
       closePathPicker,
       openUsageModal,
+      openApp,
       toggleGitBar,
       toggleWorktreesBar,
       toggleDebugPanel,
@@ -791,7 +801,34 @@ function OpenCommandPalette({
     ],
   )
 
-  const commands = useMemo(() => buildCommandRegistry(commandContext), [commandContext])
+  // Extension commands are derived from installed MANIFESTS, not from loaded
+  // modules — that is what lets the palette list an extension's commands before
+  // a single byte of it has been imported. `run` activates on demand.
+  const installedExtensions = useAppStore(state => state.installedExtensions)
+  const extensionHost = useExtensionHost()
+  const extensionCommands = useMemo(
+    () =>
+      extensionHost
+        ? deriveExtensionCommands(
+            extensionHost,
+            installedExtensions,
+            openApp,
+            workspace.openExtensionViewInPane,
+          )
+        : [],
+    [extensionHost, installedExtensions, openApp, workspace.openExtensionViewInPane],
+  )
+  // Extension keybinding defaults, so a palette row for an extension command shows
+  // its shipped chord. Independent of the host (manifests only), unlike commands.
+  const extensionKeybindings = useMemo(
+    () => deriveExtensionKeybindings(installedExtensions),
+    [installedExtensions],
+  )
+
+  const commands = useMemo(
+    () => buildCommandRegistry(commandContext, extensionCommands, extensionKeybindings),
+    [commandContext, extensionCommands, extensionKeybindings],
+  )
 
   const promptTemplates = useMemo(
     () => allPromptTemplates(customPromptTemplates),

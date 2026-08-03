@@ -19,3 +19,6 @@
 [submodule "packages/workflow-mcp"]
 	path = packages/workflow-mcp
 	url = https://github.com/Juliusolsson05/workflow-mcp.git
+[submodule "packages/agent-code-extension-api"]
+	path = packages/agent-code-extension-api
+	url = https://github.com/Juliusolsson05/agent-code-extension-api.git

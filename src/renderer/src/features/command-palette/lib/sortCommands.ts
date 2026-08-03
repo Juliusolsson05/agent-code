@@ -86,6 +86,10 @@ const CATEGORY_ORDER: readonly CommandCategory[] = [
   'workspace-tools',
   'preferences',
   'developer',
+  // Third-party last. Extension commands are the only category whose membership the
+  // app does not control, so they browse after everything first-party rather than
+  // interleaving — the same reasoning that puts them last in the registry concat.
+  'extensions',
 ]
 
 const CATEGORY_LABELS: Record<CommandCategory, string> = {
@@ -97,6 +101,7 @@ const CATEGORY_LABELS: Record<CommandCategory, string> = {
   'workspace-tools': 'Workspace Tools',
   preferences: 'Preferences',
   developer: 'Developer',
+  extensions: 'Extensions',
 }
 
 /**

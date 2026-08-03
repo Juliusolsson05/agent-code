@@ -113,6 +113,15 @@ export function collectLiveProcessIds(input: SessionOwnershipInput): Set<Session
   const live = new Set<SessionId>()
   for (const tab of input.tabs) {
     for (const id of collectLeaves(tab.root)) {
+      // Extension-view leaves have NO backing process (no PTY, no agent). They ARE
+      // tile leaves — so they are owned and persist like any other — but they must
+      // never enter the live-process set: rehydrate spawns/recovers a process for
+      // every id in here (rehydrate.ts), and an extension-view kind would fall into
+      // SessionManager's terminal-spawn branch and start a stray shell. Their pane
+      // is reconstructed purely from SessionMeta.extensionViewId by ExtensionViewLeaf,
+      // so excluding them here is the single point that keeps rehydrate process-free
+      // for them while leaving persistence (ownership by tree membership) untouched.
+      if (input.sessions[id]?.kind === 'extension-view') continue
       live.add(id)
     }
   }

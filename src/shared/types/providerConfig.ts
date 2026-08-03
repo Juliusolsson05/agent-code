@@ -15,7 +15,7 @@
 
 import type { ComponentType, ReactNode } from 'react'
 import type { SessionOptions, SessionInfo, AgentSession } from '@shared/types/session.js'
-import type { AgentProviderKind } from '@shared/types/providerKind.js'
+import type { AgentProviderKind, SessionKind } from '@shared/types/providerKind.js'
 import type { Entry, ToolResultBlock, ToolUseBlock } from '@shared/types/transcript.js'
 
 /**
@@ -109,7 +109,10 @@ export type TileLeafRelatedAgentTab = {
   relation: 'parent' | 'linked' | 'orchestration'
   label: string
   title: string
-  kind: AgentProviderKind | 'terminal' | undefined
+  // Widened to SessionKind: an extension-view pane is never actually a related
+  // agent tab, but the kind flows from a SessionKind source and this is a display
+  // label only, so allowing it costs nothing and keeps the assignment total.
+  kind: SessionKind | undefined
   placement: 'grid' | 'detached'
 }
 

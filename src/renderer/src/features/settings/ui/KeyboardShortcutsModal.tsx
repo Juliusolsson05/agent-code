@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
 import { builtInCommandCatalog } from '@renderer/features/command-palette/catalog'
+import { deriveExtensionCommands, deriveExtensionKeybindings } from '@renderer/apps/host/derive'
+import { useExtensionHost } from '@renderer/apps/host/ExtensionHostProvider'
 import { buildDefaultKeybindings } from '@renderer/features/command-keybindings/defaults'
 import { displayKeybinding } from '@renderer/features/command-keybindings/normalize'
 import { resolveEffectiveKeybindings } from '@renderer/features/command-keybindings/resolve'
@@ -62,6 +64,7 @@ const CATEGORY_LABELS: Record<CommandCategory, string> = {
   'workspace-tools': 'Workspace Tools',
   preferences: 'Preferences',
   developer: 'Developer',
+  extensions: 'Extensions',
 }
 
 /** Display order. Exhaustive by type for the same reason the Settings row is:
@@ -77,6 +80,7 @@ const CATEGORY_RANK: Record<CommandCategory, number> = {
   'workspace-tools': 5,
   preferences: 6,
   developer: 7,
+  extensions: 8,
 }
 
 /**
@@ -97,6 +101,18 @@ const CONTEXT_LABELS: Record<BindingContext, string | null> = {
 
 export function KeyboardShortcutsModal({ open, onClose }: Props) {
   const overrides = useAppStore(state => state.settings.commandKeybindingOverrides)
+
+  // Extension commands, so a chord a user bound to one is not a silent hole in a
+  // reference sheet — the exact failure the CATEGORY_RANK comment above warns
+  // against. Derived from manifests (no bundle import); openApp unused here.
+  const installedExtensions = useAppStore(state => state.installedExtensions)
+  const extensionHost = useExtensionHost()
+  const extensionCommands = useMemo(
+    () =>
+      (extensionHost ? deriveExtensionCommands(extensionHost, installedExtensions, () => {}) : [])
+        .map(command => ({ ...command, category: 'extensions' as const })),
+    [extensionHost, installedExtensions],
+  )
   const [query, setQuery] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -111,12 +127,14 @@ export function KeyboardShortcutsModal({ open, onClose }: Props) {
   }, [open])
 
   const rows = useMemo<ShortcutRow[]>(() => {
-    const defaults = buildDefaultKeybindings()
+    // Include extension-contributed defaults so a chord an extension SHIPS (not
+    // just one the user rebound) shows in the reference, matching what fires.
+    const defaults = [...buildDefaultKeybindings(), ...deriveExtensionKeybindings(installedExtensions)]
     const contextById = new Map(defaults.map(d => [d.commandId, d.context]))
     const effective = new Map(
       resolveEffectiveKeybindings(overrides, defaults).map(e => [e.commandId, e.bindings]),
     )
-    const byId = new Map(builtInCommandCatalog.map(c => [c.id, c]))
+    const byId = new Map([...builtInCommandCatalog, ...extensionCommands].map(c => [c.id, c]))
 
     const out: ShortcutRow[] = []
     for (const [commandId, bindings] of effective) {
@@ -140,7 +158,7 @@ export function KeyboardShortcutsModal({ open, onClose }: Props) {
       })
     }
     return out
-  }, [overrides])
+  }, [overrides, extensionCommands, installedExtensions])
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase()

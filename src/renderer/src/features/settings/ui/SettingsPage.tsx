@@ -31,6 +31,9 @@ import { getSettingsRegistry, matchesSettingQuery } from '@renderer/features/set
 import { SettingsList } from '@renderer/features/settings/ui/SettingsList'
 import { SettingsSearch } from '@renderer/features/settings/ui/SettingsSearch'
 import { SettingsSidebar } from '@renderer/features/settings/ui/SettingsSidebar'
+import { deriveExtensionCommands } from '@renderer/apps/host/derive'
+import { useExtensionHost } from '@renderer/apps/host/ExtensionHostProvider'
+import { useAppStore } from '@renderer/app-state/store'
 
 type Props = {
   onClose: () => void
@@ -53,7 +56,28 @@ export function SettingsPage({ onClose, workspace, settings, onChange, onReset }
   // (null) distinguishable from "creating" (id: null).
   const [editorTarget, setEditorTarget] = useState<{ id: string | null } | null>(null)
 
-  const registry = useMemo(() => getSettingsRegistry(), [])
+  // Extension commands derived from installed MANIFESTS, exactly as the command
+  // palette does it (CommandPalette.tsx) — so the Settings "Commands" category
+  // and the keybind editor list them without importing a single extension bundle.
+  //
+  // openApp is a no-op here on purpose: it only ever becomes a command's `run`
+  // closure, and the Settings command list reads metadata (id, title, visibility)
+  // and never invokes `run`. Passing the real opener would drag app-open plumbing
+  // into Settings for a callback that can never fire from this surface.
+  const installedExtensions = useAppStore(state => state.installedExtensions)
+  const extensionHost = useExtensionHost()
+  const extensionCommands = useMemo(
+    () =>
+      extensionHost
+        ? deriveExtensionCommands(extensionHost, installedExtensions, () => {})
+        : [],
+    [extensionHost, installedExtensions],
+  )
+
+  const registry = useMemo(
+    () => getSettingsRegistry(installedExtensions),
+    [extensionCommands, installedExtensions],
+  )
   const visibleDefinitions = useMemo(
     () =>
       registry.filter(definition => {

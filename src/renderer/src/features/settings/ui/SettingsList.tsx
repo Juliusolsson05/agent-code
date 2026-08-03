@@ -12,6 +12,8 @@ import { CliUpdateBehaviorRow } from '@renderer/features/cli-updates/CliUpdateBe
 import { DictationApiKeyRow } from '@renderer/features/voice-dictation/DictationApiKeyRow'
 import { DictationHistoryRow } from '@renderer/features/voice-dictation/DictationHistoryRow'
 import { ThemePickerRow } from '@renderer/features/settings/ui/ThemePickerRow'
+import { AppsSettingsRow } from '@renderer/apps/ui/AppsSettingsRow'
+import { ExtensionSettingRow } from '@renderer/apps/ui/ExtensionSettingRow'
 import { AgentCodeConventionsRow } from '@renderer/features/settings/ui/AgentCodeConventionsRow'
 import { Button } from '@renderer/components/ui/button'
 import { cn } from '@renderer/lib/utils'
@@ -205,6 +207,17 @@ function SettingRow({
               features/cli-updates/CliUpdateBehaviorRow.tsx. */}
           {control.type === 'command-keybindings' ? <CommandKeybindingsRow /> : null}
 
+          {/* One extension-contributed setting. Self-subscribing: the value lives
+              in the extension's own storage, not the Settings blob (#249). */}
+          {control.type === 'extension' ? (
+            <ExtensionSettingRow
+              extensionId={control.extensionId}
+              settingId={control.settingId}
+              valueType={control.valueType}
+              defaultValue={control.default}
+            />
+          ) : null}
+
           {control.type === 'cli-update-behavior' ? <CliUpdateBehaviorRow /> : null}
 
           {/* Voice-dictation API key — same self-subscribing marker-row
@@ -212,6 +225,12 @@ function SettingRow({
               safeStorage-backed main state, so the row owns the IPC
               round-trip. See features/voice-dictation/DictationApiKeyRow.tsx. */}
           {control.type === 'dictation-api-key' ? <DictationApiKeyRow /> : null}
+
+          {/* Built-in apps — the purest marker row: there is no value at all,
+              just a listing of apps/registry.ts, which is compile-time data the
+              Settings store has no business mirroring.
+              See apps/ui/AppsSettingsRow.tsx. */}
+          {control.type === 'apps' ? <AppsSettingsRow /> : null}
 
           {/* Same marker-row rationale: the transcripts and lifetime totals
               live in a main-owned JSON store, not in Settings. */}
