@@ -1,7 +1,6 @@
 import { spawn } from 'child_process'
 import { createHash } from 'node:crypto'
 import { access, constants as fsConstants, cp, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from 'fs/promises'
-import { tmpdir } from 'os'
 import { join, relative, resolve as resolvePath, sep } from 'path'
 
 import { EXTENSIONS_DIR } from '@main/storage/paths.js'
@@ -211,6 +210,23 @@ async function readManifestFrom(dir: string): Promise<ExtensionManifest> {
  * `bundleDir` is renamed into place (not copied), so it must already be a temp
  * directory the caller owns; on any failure here the caller's `finally` removes it.
  */
+/**
+ * A staging directory INSIDE the extensions root, not in the OS temp dir.
+ *
+ * finalizeInstall commits by `rename(staging, finalDir)`. rename cannot cross
+ * filesystems: where /tmp is its own mount — Linux tmpfs, the common case — it fails
+ * with EXDEV. And because the commit deletes the live bundle BEFORE the rename, that
+ * failure mode is not "install didn't work", it is "install destroyed the version you
+ * had". Staging as a sibling of the destination makes the rename same-filesystem by
+ * construction, which is the only way to get atomicity out of it.
+ *
+ * The dot prefix keeps it out of the ledger's view of installed extension directories.
+ */
+async function makeStagingDir(): Promise<string> {
+  await mkdir(EXTENSIONS_DIR, { recursive: true })
+  return await mkdtemp(join(EXTENSIONS_DIR, '.staging-'))
+}
+
 async function finalizeInstall(
   manifest: ExtensionManifest,
   bundleDir: string,
@@ -278,7 +294,7 @@ export async function installExtension(
   const source = await resolveSource(repo)
   const { bytes, sha256 } = await downloadTarball(source.tarballUrl)
 
-  const work = await mkdtemp(join(tmpdir(), 'agent-code-ext-'))
+  const work = await makeStagingDir()
   try {
     const archivePath = join(work, 'bundle.tar.gz')
     const staging = join(work, 'unpacked')
@@ -317,7 +333,7 @@ export async function installExtensionFromPath(
     throw new InstallError(`Folder "${sourceDir}" does not exist.`)
   }
 
-  const work = await mkdtemp(join(tmpdir(), 'agent-code-ext-'))
+  const work = await makeStagingDir()
   try {
     const staging = join(work, 'unpacked')
     await mkdir(staging, { recursive: true })
