@@ -132,7 +132,13 @@ export function deriveExtensionCommands(
           if (!dispatchToFrame(extensionId, command.id)) {
             if (onlyView) {
               queuePendingCommand(extensionId, command.id)
-              openApp(onlyView)
+              // Honour the view's DECLARED mount, exactly as the targetView branch
+              // above does. This called openApp() unconditionally, so a panel-only
+              // extension's action command opened it as a floating modal — directly
+              // contradicting its own manifest — because deriveAppDefinitions builds
+              // an AppDefinition for every view regardless of declared mount.
+              if (viewMountById.get(onlyView) === 'panel') openInPane(onlyView)
+              else openApp(onlyView)
             }
           }
           ui.closePalette()

@@ -79,18 +79,32 @@ export function useUndoCloseAction(
       //     point of having a tmux backing.
       const meta = entry.sessionMeta
       let newSessionId: SessionId
-      try {
-        newSessionId = await sessionActions.spawn(meta.cwd, {
+      if (meta.kind === 'extension-view') {
+        // ── A PROCESS-LESS LEAF IS RESTORED, NOT SPAWNED ──
+        // Undo previously called spawn() for every kind. Main rejects an
+        // extension-view spawn outright, the catch below turned that into
+        // 'retryable-failure', and undoClose PUSHES A FAILED ENTRY BACK — so the
+        // stack head became permanently poisoned. Every later Cmd+Shift+T popped the
+        // same entry, failed, re-pushed, and returned: all older undo history became
+        // unreachable for the rest of the session.
+        //
+        // Minting the id and writing the meta here mirrors openExtensionViewInPane
+        // exactly; there is nothing to recover because there was never a process.
+        newSessionId = crypto.randomUUID() as SessionId
+      } else {
+        try {
+          newSessionId = await sessionActions.spawn(meta.cwd, {
           kind: meta.kind ?? DEFAULT_PROVIDER,
           resumeSessionId: resumableProviderSessionId(meta),
           recoverTmuxName: meta.kind === 'terminal' ? meta.tmuxName : undefined,
           // WHY capability intent is restored but credentials are not: closing a pane revokes its
           // session token. Undo must ask main to mint a fresh token from these durable domain names;
           // dropping them makes an undo-restored transcript silently lose tools after restart.
-          builtInMcpDomains: meta.builtInMcpDomains,
-        })
-      } catch {
-        return 'retryable-failure'
+            builtInMcpDomains: meta.builtInMcpDomains,
+          })
+        } catch {
+          return 'retryable-failure'
+        }
       }
 
       let inserted = false
@@ -150,6 +164,20 @@ export function useUndoCloseAction(
         const meta = entry.sessionMetas[oldId]
         if (!meta) {
           return 'stale'
+        }
+        // Same process-less restore as the pane branch, and it matters MORE here:
+        // this loop spawns leaves in order, so hitting an extension-view leaf used to
+        // throw partway through, and the catch below then killed every sibling it had
+        // just spawned. Undoing a tab that contained one extension pane started N real
+        // claude/codex processes and their proxies, killed them all, restored nothing,
+        // and poisoned the undo stack.
+        if (meta.kind === 'extension-view') {
+          const newId = crypto.randomUUID() as SessionId
+          idMap.set(oldId, newId)
+          freshSessions[newId] = meta
+          // Deliberately NOT pushed to spawnedIds: there is no process to kill on
+          // rollback, and adding it would make the failure path try to terminate one.
+          continue
         }
         try {
           const kind: SessionKind = meta.kind ?? DEFAULT_PROVIDER

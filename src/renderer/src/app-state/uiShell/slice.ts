@@ -52,6 +52,10 @@ export const createUiShellSlice: StateCreator<
   agentViewModePickerSessionId: null,
   openAppId: null,
   installedExtensions: [],
+  // False until the first SUCCESSFUL extensionsList(). Distinguishes "no extensions"
+  // from "not asked yet", which the pane leaf needs to avoid claiming an installed
+  // extension is missing during the async gap on every reload.
+  installedExtensionsLoaded: false,
   extensionFailures: [],
   colorFlagPickerSessionId: null,
   // Default keeps the dispatch list at 25% (matching the
@@ -317,7 +321,11 @@ export const createUiShellSlice: StateCreator<
   closeApp: () => set({ openAppId: null }, false, 'uiShell/closeApp'),
 
   setInstalledExtensions: entries =>
-    set({ installedExtensions: entries }, false, 'uiShell/setInstalledExtensions'),
+    set(
+      { installedExtensions: entries, installedExtensionsLoaded: true },
+      false,
+      'uiShell/setInstalledExtensions',
+    ),
   setExtensionFailures: failures =>
     set({ extensionFailures: failures }, false, 'uiShell/setExtensionFailures'),
 

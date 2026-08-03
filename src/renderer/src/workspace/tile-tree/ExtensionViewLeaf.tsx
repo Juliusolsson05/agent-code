@@ -32,16 +32,28 @@ type Props = {
   workspace: Workspace
 }
 
-export function ExtensionViewLeaf({ sessionId, workspace }: Props) {
+export function ExtensionViewLeaf({ sessionId, workspace, focused, onFocusRequest }: Props) {
   const installedExtensions = useAppStore(state => state.installedExtensions)
+  const installedExtensionsLoaded = useAppStore(state => state.installedExtensionsLoaded)
   const host = useExtensionHost()
   const { showToast } = useGlobalToast()
 
-  const viewId = workspace.state.sessions[sessionId]?.extensionViewId
-  const extensionId = viewId ? (viewId.split('.')[0] ?? viewId) : undefined
+  const persistedViewId = workspace.state.sessions[sessionId]?.extensionViewId
+  const extensionId = persistedViewId ? (persistedViewId.split('.')[0] ?? persistedViewId) : undefined
   const entry = extensionId
     ? installedExtensions.find(candidate => candidate.manifest.id === extensionId)
     : undefined
+
+  // ── THE PERSISTED VIEW ID MUST BE ONE THE MANIFEST DECLARES ──
+  // extensionViewId is an unconstrained string on SessionMeta, restored from
+  // workspace.json. Deriving the extension from `split('.')[0]` and then trusting the
+  // rest means any persisted "victim.anything" mounts a live broker for victim. It also
+  // used to flow unchecked into the frame document, where it was an injection sink.
+  // Accept it only if the extension actually contributes that view.
+  const viewId =
+    persistedViewId && (entry?.manifest.contributes?.views ?? []).some(v => v.id === persistedViewId)
+      ? persistedViewId
+      : undefined
 
   const api = useMemo(
     () =>
@@ -64,25 +76,39 @@ export function ExtensionViewLeaf({ sessionId, workspace }: Props) {
   )
 
   if (!viewId || !entry || !host || !View || !api) {
-    // The pane persists (its SessionMeta is kept) but the owning extension is not
-    // installed, or the host is not ready. A dead-but-closable leaf, mirroring the
-    // unknown-kind rehydrate policy, rather than a blank pane with no explanation.
+    // ── DO NOT CLAIM "NOT INSTALLED" BEFORE THE LIST HAS LOADED ──
+    // installedExtensions starts [] and is filled by an async IPC whose failure path
+    // deliberately leaves the store untouched. Collapsing "still loading" into "not
+    // installed" flashed a false message on every reload, and one failed
+    // extensionsList() made it permanent — sending the user to uninstall and reinstall
+    // an extension that was fine.
+    const stillLoading = !installedExtensionsLoaded || !host
     return (
       <div
         className="flex h-full w-full items-center justify-center bg-canvas px-6 text-center"
-        onMouseDown={onFocusRequestGuard}
+        onMouseDown={onFocusRequest}
       >
         <div className="text-[12px] text-muted">
-          {viewId
-            ? `Extension "${extensionId}" is not installed. Install it to restore this pane.`
-            : 'This pane is not backed by an extension view.'}
+          {stillLoading
+            ? 'Loading…'
+            : persistedViewId
+              ? `Extension "${extensionId}" is not installed. Install it to restore this pane.`
+              : 'This pane is not backed by an extension view.'}
         </div>
       </div>
     )
   }
 
   return (
-    <div className="h-full w-full bg-canvas">
+    // onMouseDown wires pane focus, which every sibling leaf does and this one did not:
+    // clicking an extension pane left focus on the previously focused pane, so Cmd+W
+    // then closed the WRONG pane. The cross-origin iframe swallows mousedown over its
+    // own content, so this catches the surrounding gutter — partial, but strictly
+    // better than a pane that can never be focused by pointer at all.
+    <div
+      className={`h-full w-full bg-canvas${focused ? '' : ''}`}
+      onMouseDown={onFocusRequest}
+    >
       <View api={api} />
     </div>
   )

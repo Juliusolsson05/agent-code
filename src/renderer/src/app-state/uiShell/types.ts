@@ -339,6 +339,8 @@ export type UiShellState = {
    * extension bundle.
    */
   installedExtensions: ExtensionListEntry[]
+  /** True once extensionsList() has succeeded at least once. */
+  installedExtensionsLoaded: boolean
   /** Extensions whose import or activate() threw. Surfaced in Settings rather
    *  than hidden, because a silently-missing extension is undiagnosable. */
   extensionFailures: ExtensionFailure[]
