@@ -27,6 +27,11 @@ export type FrameHostHandle = {
   dispose: () => void
 }
 
+/** Compile-time proof that every FrameRequest method is handled. */
+function assertNeverMethod(request: never): never {
+  throw new Error(`unhandled frame request method: ${JSON.stringify(request)}`)
+}
+
 export function createFrameHost(options: {
   iframe: HTMLIFrameElement
   extensionId: string
@@ -65,7 +70,35 @@ export function createFrameHost(options: {
     iframe.contentWindow?.postMessage(message, expectedOrigin)
   }
 
+  /**
+   * Which capability each method requires — DATA, not a convention inside a switch.
+   *
+   * The tier gate used to exist only as `await requireGrant(...)` lines sprinkled
+   * through the switch below. Adding a Tier-2/3 member to frameRequestSchema and
+   * forgetting its requireGrant line was a one-line, review-invisible privilege
+   * escalation; there was nothing to notice the omission. As a Record keyed by the
+   * method union, a new schema member does not COMPILE until its tier is declared.
+   *
+   * `null` means Tier 0 — no grant needed, available to every extension.
+   */
+  const REQUIRED_CAPABILITY: Record<FrameRequest['method'], ExtensionCapability | null> = {
+    'storage.get': null,
+    'storage.set': null,
+    'storage.delete': null,
+    'storage.keys': null,
+    'ui.close': null,
+    'ui.showToast': null,
+    'theme.tokens': null,
+    'workspace.observe': 'workspace.observe',
+    'sessions.observe': 'sessions.observe',
+    'panes.observe': 'panes.observe',
+  }
+
   const perform = async (request: FrameRequest): Promise<unknown> => {
+    // One gate, before the dispatch, so no arm can accidentally skip it.
+    const needed = REQUIRED_CAPABILITY[request.method]
+    if (needed) await requireGrant(needed)
+
     switch (request.method) {
       case 'storage.get':
         return api.storage.get(request.key)
@@ -85,17 +118,18 @@ export function createFrameHost(options: {
         return undefined
       case 'theme.tokens':
         return api.theme.tokens()
-      // Tier 1 — gated on the grant. requireGrant throws (→ ok:false reply) when the
-      // extension did not request/receive the capability at install.
+      // Tier 1 — the grant was already enforced above by REQUIRED_CAPABILITY.
       case 'workspace.observe':
-        await requireGrant('workspace.observe')
         return api.workspace.observe()
       case 'sessions.observe':
-        await requireGrant('sessions.observe')
         return api.sessions.observe()
       case 'panes.observe':
-        await requireGrant('panes.observe')
         return api.panes.observe()
+      default:
+        // Exhaustiveness. Without it an unhandled method fell off the end returning
+        // undefined, which the caller reported as `ok: true, result: undefined` — a
+        // silent false success for a capability that was never performed.
+        return assertNeverMethod(request)
     }
   }
 
