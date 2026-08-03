@@ -106,9 +106,41 @@ function forgetClosedSessionDebugState(refs: WorkspaceRefs, sessionId: SessionId
  * — omit it — is the gated path, and the Agent Activity modal's Close button is
  * exactly the case that must keep paying for it: a single button in a list, no
  * preview of the cascade it triggers.
+ *
+ * A fourth caller does NOT qualify and must not assert it: orchestration MCP.
+ * See `silentIfSoleTarget` below for what it uses instead and why.
  */
 export type CloseSessionOptions = {
   preConfirmed?: boolean
+  /**
+   * Skip the dialog ONLY IF this close kills exactly the session named, and
+   * confirm with `headline` otherwise.
+   *
+   * WHY orchestration needs its own mode rather than `preConfirmed`: an
+   * orchestrating agent closing children it created is routine housekeeping,
+   * and a dialog per close devalues the confirmations that matter. But the
+   * ownership gate that authorizes the call only scopes WHICH SESSION MAY BE
+   * NAMED — it says nothing about WHICH SESSIONS DIE. `closeSession` kills a
+   * SET, and two real shapes reach beyond the named target:
+   *
+   *   - `closeLinkedChildren` takes every session linked to the target. A user
+   *     can run "Linked Agent…" on an orchestration child, and that linked
+   *     agent carries no orchestration fields at all — so the gate cannot see
+   *     it, and asserting preConfirmed would kill a session the user built by
+   *     hand, silently.
+   *   - Closing a tab's SOLE grid leaf takes every detached session in that
+   *     tab. Orchestration children live detached in the root's tab, so that
+   *     set can include the caller itself, its siblings, and Dispatch agents
+   *     the user parked there.
+   *
+   * Agent Management refuses both shapes outright (`additionalCloseImpact`)
+   * even though it has a dialog available. Orchestration cannot refuse — a
+   * fleet must be able to clean up — so it confirms instead, but only for the
+   * shapes that actually reach further than advertised. The routine case (a
+   * detached child with no linked children) expands to exactly one and stays
+   * silent, which is the entire point.
+   */
+  silentIfSoleTarget?: { headline: string }
   /**
    * Confirm even when the policy would let this through silently.
    *
@@ -310,7 +342,12 @@ export function usePaneActions(
   attachAllDetachedForTab: (tabId: string) => Promise<void>
   detachFocusedToDispatch: () => void
   closeFocused: () => Promise<void>
-  closeSession: (targetId: SessionId, options?: CloseSessionOptions) => Promise<void>
+  /** Resolves true when the session was actually closed, false when it did
+   *  not exist or the user declined the confirmation. Callers that need to
+   *  follow a close with a dependent mutation (e.g. shrinking a Dispatch lane)
+   *  must branch on this rather than assume success — a cancelled confirm
+   *  would otherwise leave the layout changed with the agent still alive. */
+  closeSession: (targetId: SessionId, options?: CloseSessionOptions) => Promise<boolean>
   requestBuryFocused: () => void
   buryFocused: (note?: string, targetSessionId?: SessionId) => void
   reviveBuried: (buriedId: string) => Promise<void>
@@ -321,7 +358,7 @@ export function usePaneActions(
   openExtensionViewInPane: (viewId: string, direction?: SplitDirection) => void
 } {
   const closeSessionRef = useRef<
-    ((targetId: SessionId, options?: CloseSessionOptions) => Promise<void>) | null
+    ((targetId: SessionId, options?: CloseSessionOptions) => Promise<boolean>) | null
   >(null)
 
   // Spawns a new session in the parent pane's cwd, inserts a new
@@ -910,7 +947,7 @@ export function usePaneActions(
   const attachDetachedToGrid = useCallback(
     async (sessionId: SessionId, targetTabId: string, target: PlacementTarget) => {
       try {
-        await sessionActions.ensureSessionLive(sessionId)
+        await sessionActions.ensureSessionLive(sessionId, 'pane.attach-detached')
       } catch (err) {
         showToast(
           err instanceof Error && err.message.length > 0
@@ -997,7 +1034,7 @@ export function usePaneActions(
       const liveIds: SessionId[] = []
       for (const sessionId of detachedIds) {
         try {
-          await sessionActions.ensureSessionLive(sessionId)
+          await sessionActions.ensureSessionLive(sessionId, 'pane.attach-all-detached')
           liveIds.push(sessionId)
         } catch (err) {
           console.warn('[workspace] failed to wake detached session before bulk attach:', err)
@@ -1434,7 +1471,7 @@ export function usePaneActions(
         !initial.tabs.some(t => collectLeaves(t.root).includes(targetId)) &&
         !initial.detachedSessions[targetId]
       ) {
-        return
+        return false
       }
 
       // CONFIRMATION GATE. This path was previously ungated entirely, which
@@ -1443,16 +1480,36 @@ export function usePaneActions(
       // straight through, cascade and all, with no dialog. `closeFocused`
       // delegates here for its Dispatch and detached-child arms and passes
       // preConfirmed, so those still ask exactly once.
-      if (!options?.preConfirmed) {
+      // Resolve the orchestration mode into the two existing ones, HERE, where
+      // paneCloseTargets is in scope — it is the only code that computes the
+      // full set a close destroys, which is exactly what the caller cannot
+      // know from the outside.
+      let effectivePreConfirmed = options?.preConfirmed === true
+      let effectiveRequireConfirmation = options?.requireConfirmation
+      if (options?.silentIfSoleTarget) {
+        const expanded = paneCloseTargets(
+          refs.stateRef.current,
+          refs.latestRuntimesRef.current,
+          targetId,
+        )
+        const soleTarget = expanded.length === 1 && expanded[0]?.sessionId === targetId
+        if (soleTarget) {
+          effectivePreConfirmed = true
+        } else {
+          effectiveRequireConfirmation = options.silentIfSoleTarget
+        }
+      }
+
+      if (!effectivePreConfirmed) {
         const gate = await runCloseConfirmationGate({
           enumerate: () =>
             paneCloseTargets(refs.stateRef.current, refs.latestRuntimesRef.current, targetId),
           ask: requestCloseConfirmation,
-          force: options?.requireConfirmation,
+          force: effectiveRequireConfirmation,
         })
         if (!gate.ok) {
           if (gate.reason === 'changed') showToast(CLOSE_CHANGED_TOAST)
-          return
+          return false
         }
       }
 
@@ -1464,7 +1521,7 @@ export function usePaneActions(
       const owningTab = snapshot.tabs.find(t => collectLeaves(t.root).includes(targetId))
       const sessionMeta = snapshot.sessions[targetId]
       const detached = snapshot.detachedSessions[targetId]
-      if (!owningTab && !detached) return
+      if (!owningTab && !detached) return false
 
       // Linked agents are lifecycle-bound to their parent — close
       // any session that named `targetId` as its linkedParentId
@@ -1500,9 +1557,9 @@ export function usePaneActions(
         const kindLabel = sessionMeta?.kind ?? DEFAULT_PROVIDER
         const cwdBase = sessionMeta?.cwd.split('/').filter(Boolean).pop() ?? sessionMeta?.cwd ?? 'session'
         showToast(`Closed detached ${kindLabel} session (${cwdBase})`)
-        return
+        return true
       }
-      if (!owningTab) return
+      if (!owningTab) return false
 
       // Same two-case undo capture as closeFocused: pane-in-split
       // vs. last-pane-in-tab. Keeps ⌘⇧T working for modal-driven
@@ -1609,6 +1666,10 @@ export function usePaneActions(
           dispatchMode: dispatchModeAfterSessionRemoval(prev, next, targetId),
         }
       })
+      // Reached only after the pane/tab close actually committed. Every
+      // earlier exit returns false, so a caller can distinguish "closed" from
+      // "declined at the confirmation" or "session was already gone".
+      return true
     },
     [
       closeLinkedChildren,
@@ -1798,7 +1859,7 @@ export function usePaneActions(
       const initialEntry = refs.stateRef.current.buried.find(item => item.id === buriedId)
       if (!initialEntry) return
       try {
-        await sessionActions.ensureSessionLive(initialEntry.sessionId)
+        await sessionActions.ensureSessionLive(initialEntry.sessionId, 'pane.revive-buried')
       } catch (err) {
         showToast(
           err instanceof Error && err.message.length > 0

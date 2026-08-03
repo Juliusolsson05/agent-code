@@ -10,10 +10,24 @@ import { CommandKeybindingsRow } from '@renderer/features/settings/ui/CommandKey
 import { settingMetadata } from '@renderer/features/settings/lib/settingsRegistry'
 import { CliUpdateBehaviorRow } from '@renderer/features/cli-updates/CliUpdateBehaviorRow'
 import { DictationApiKeyRow } from '@renderer/features/voice-dictation/DictationApiKeyRow'
+import { DictationHistoryRow } from '@renderer/features/voice-dictation/DictationHistoryRow'
 import { ThemePickerRow } from '@renderer/features/settings/ui/ThemePickerRow'
 import { AppsSettingsRow } from '@renderer/apps/ui/AppsSettingsRow'
 import { ExtensionSettingRow } from '@renderer/apps/ui/ExtensionSettingRow'
 import { AgentCodeConventionsRow } from '@renderer/features/settings/ui/AgentCodeConventionsRow'
+import { Button } from '@renderer/components/ui/button'
+import { cn } from '@renderer/lib/utils'
+
+// Settings rows are full-width, left-aligned, and two-line-capable, so they
+// override Button's default size geometry. They do NOT override its colours —
+// that is the whole point of routing them through the variant: the resting/
+// hover control chrome now comes from one place, and follows the user's
+// control-* appearance overrides for free.
+//
+// h-auto rather than a size: none of the fixed sizes fit a row whose height is
+// set by its content.
+const SETTINGS_ROW_CLASS =
+  'flex h-auto w-full items-center justify-between px-3 py-2 text-left text-[12px]'
 
 type Props = {
   definitions: SettingDefinition[]
@@ -106,15 +120,15 @@ function SettingRow({
           <SettingMetadataBadges definition={definition} />
 
           {control.type === 'toggle' ? (
-            <button
-              type="button"
+            <Button
+              variant="outline"
               onClick={() =>
                 void control.onToggle(
                   context,
                   !control.getValue(settings),
                 )
               }
-              className="flex w-full items-center justify-between border border-control-border bg-control-bg px-3 py-2 text-left text-[12px] text-control-fg hover:border-control-border-hover hover:bg-control-hover-bg hover:text-ink"
+              className={SETTINGS_ROW_CLASS}
             >
               <span>{control.getValue(settings) ? 'Enabled' : 'Disabled'}</span>
               <span
@@ -124,7 +138,7 @@ function SettingRow({
                         : 'border-control-border-hover bg-transparent'
                 }`}
               />
-            </button>
+            </Button>
           ) : null}
 
           {control.type === 'select' ? (
@@ -173,59 +187,18 @@ function SettingRow({
             />
           ) : null}
 
+          {/* The variant ternary below switches on TONE, not on a
+              pressed/selected state, so both arms are ordinary variants — this
+              is not one of the toggles that has to keep a hand-rolled
+              conditional class. */}
           {control.type === 'action' ? (
-            <button
-              type="button"
+            <Button
+              variant={control.tone === 'danger' ? 'destructive-outline' : 'outline'}
               onClick={() => void control.onTrigger(context)}
-              className={`w-full border px-3 py-2 text-left text-[12px] ${
-                control.tone === 'danger'
-                  ? 'border-danger text-danger hover:bg-danger-soft'
-                  : 'border-control-border bg-control-bg text-control-fg hover:border-control-border-hover hover:bg-control-hover-bg hover:text-ink'
-              }`}
+              className={cn(SETTINGS_ROW_CLASS, 'justify-start')}
             >
               {control.label}
-            </button>
-          ) : null}
-
-          {/* Command-visibility control: one toggle row per command plus a
-              reset action. Purely presentational — every state transition
-              flows out through the control's callbacks (which patch the
-              sparse override map in settings); this branch never owns or
-              derives visibility itself. The toggle row reuses the same
-              border/checkbox styling as the `toggle` control above so the
-              long list reads as a single coherent group. */}
-          {control.type === 'command-visibility' ? (
-            <div className="flex flex-col gap-1.5">
-              <div className="flex max-h-[320px] flex-col gap-1 overflow-auto">
-                {control.commands.map(command => {
-                  const visible = control.isVisible(settings, command)
-                  return (
-                    <button
-                      key={command.id}
-                      type="button"
-                      onClick={() => control.onToggleCommand(context, command, !visible)}
-                      className="flex w-full items-center justify-between border border-control-border bg-control-bg px-3 py-2 text-left text-[12px] text-control-fg hover:border-control-border-hover hover:bg-control-hover-bg hover:text-ink"
-                    >
-                      <span className="min-w-0 truncate">{command.title}</span>
-                      <span
-                        className={`ml-3 flex h-3.5 w-3.5 shrink-0 border ${
-                          visible
-                            ? 'border-control-active-bg bg-control-active-bg'
-                            : 'border-control-border-hover bg-transparent'
-                        }`}
-                      />
-                    </button>
-                  )
-                })}
-              </div>
-              <button
-                type="button"
-                onClick={() => control.onResetVisibility(context)}
-                className="w-full border border-control-border bg-control-bg px-3 py-2 text-left text-[12px] text-control-fg hover:border-control-border-hover hover:bg-control-hover-bg hover:text-ink"
-              >
-                Reset command visibility
-              </button>
-            </div>
+            </Button>
           ) : null}
 
           {/* CLI auto-updater — the row owns its own subscription
@@ -258,6 +231,11 @@ function SettingRow({
               Settings store has no business mirroring.
               See apps/ui/AppsSettingsRow.tsx. */}
           {control.type === 'apps' ? <AppsSettingsRow /> : null}
+
+          {/* Same marker-row rationale: the transcripts and lifetime totals
+              live in a main-owned JSON store, not in Settings. */}
+          {control.type === 'dictation-history' ? <DictationHistoryRow /> : null}
+
           {control.type === 'agent-code-conventions' ? <AgentCodeConventionsRow /> : null}
 
           {/* Theme grid — built-ins and saved themes in one list, with the

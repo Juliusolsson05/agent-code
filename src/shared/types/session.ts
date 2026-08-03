@@ -234,6 +234,22 @@ export type AgentPermissionPromptState = {
 export type AgentSessionEvents = {
   started: [{ projectDir?: string; proxyUrl?: string }]
   'input-readiness': [AgentInputReadiness]
+  /**
+   * Optional, diagnostic-only companion to `input-readiness`.
+   *
+   * `input-readiness` is the CONTRACT — a boolean plus a coarse reason, and the
+   * only thing correctness may gate on. This carries the provider's detailed
+   * verdict (replay pending, composer unpainted, human draft, blocked on a
+   * condition), which `publishPromptGate` otherwise collapses away before main
+   * can see it. Those distinctions are three different problems that are
+   * indistinguishable in every log we have.
+   *
+   * Declared optional-by-convention: only Claude emits it today. A provider
+   * that doesn't simply never fires the callback, exactly like the legacy
+   * condition events below. Nothing may branch on it — a consumer that needs a
+   * decision must use `input-readiness`.
+   */
+  'prompt-gate': [PromptGateState]
   'pty-data': [string]
   screen: [AgentScreenSnapshot]
   'jsonl-entry': [AgentTranscriptEntry, string]

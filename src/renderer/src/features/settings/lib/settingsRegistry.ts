@@ -14,10 +14,6 @@ import type {
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { SETTING_CATEGORIES } from '@renderer/features/settings/lib/settingsCategories'
 import type { SettingCategoryId } from '@renderer/features/settings/lib/settingsCategories'
-import { listPickerCommandMeta } from '@renderer/features/command-palette/registry'
-import { isVisibleInPicker } from '@renderer/features/command-palette/pickerVisibility'
-import type { PickerCommandMeta } from '@renderer/features/command-palette/registry'
-import type { CommandDef } from '@renderer/features/command-palette/types'
 import type { ExtensionListEntry } from '@shared/types/extensions'
 import type { ConfigurableBuiltInMcpDomain } from '@mcp/shared/types'
 import type { MouseButtonBinding } from '@renderer/lib/mouseBinding'
@@ -233,6 +229,45 @@ export type SettingDefinition =
       description: string
       keywords: string[]
       metadata?: SettingMetadata
+      // Marker for one extension-contributed setting. Self-subscribing like the
+      // other markers, because the VALUE lives in the extension's main-owned
+      // storage (EXTENSION_STATE_DIR), never the zustand-persist blob (#249). The
+      // payload is everything the row needs to read/write that store; the row owns
+      // its own IPC round-trip. See apps/ui/ExtensionSettingRow.tsx.
+      control: {
+        type: 'extension'
+        /** Storage namespace (appId) — the owning extension's id. */
+        extensionId: string
+        /** Storage key — the setting's `<extensionId>.<name>` contribution id. */
+        settingId: string
+        valueType: 'boolean' | 'number' | 'string'
+        default: boolean | number | string
+      }
+    }
+  | {
+      id: string
+      category: SettingCategoryId
+      title: string
+      description: string
+      keywords: string[]
+      metadata?: SettingMetadata
+      // Marker for the dictation history + stats panel. Same rationale as
+      // dictation-api-key above: the data lives in a main-owned JSON store
+      // (src/main/dictation/historyStore.ts), not in Settings, so there is no
+      // getValue/onChange to hoist here. Hoisting it would also mean every
+      // Settings render pulled the whole transcript list over IPC.
+      // See features/voice-dictation/DictationHistoryRow.tsx.
+      control: {
+        type: 'dictation-history'
+      }
+    }
+  | {
+      id: string
+      category: SettingCategoryId
+      title: string
+      description: string
+      keywords: string[]
+      metadata?: SettingMetadata
       // Main owns both the canonical document and the external deployment
       // health. A marker row prevents renderer Settings from inventing a second
       // boolean source of truth that could say Active after filesystem failure.
@@ -255,60 +290,6 @@ export type SettingDefinition =
         type: 'command-keybindings'
       }
     }
-  | {
-      id: string
-      category: SettingCategoryId
-      title: string
-      description: string
-      keywords: string[]
-      metadata?: SettingMetadata
-      control: {
-        type: 'command-visibility'
-        /** Full command catalog to render rows for. Carried as a value
-         *  (not re-derived in the view) so the registry stays the single
-         *  source of "what commands exist". */
-        commands: PickerCommandMeta[]
-        /** Whether a given command currently shows in the picker, after
-         *  applying the user's override on top of the declared default.
-         *  The view only needs the resolved boolean, not the resolution
-         *  rules. */
-        isVisible: (settings: Settings, command: PickerCommandMeta) => boolean
-        /** Flip one command's visibility. Writes a sparse override entry;
-         *  setting it back to the declared default prunes the entry so the
-         *  map never accumulates no-op rows. */
-        onToggleCommand: (
-          ctx: SettingActionContext,
-          command: PickerCommandMeta,
-          visible: boolean,
-        ) => void
-        /** Drop all overrides, returning every command to its declared
-         *  default. */
-        onResetVisibility: (ctx: SettingActionContext) => void
-      }
-    }
-  | {
-      id: string
-      category: SettingCategoryId
-      title: string
-      description: string
-      keywords: string[]
-      metadata?: SettingMetadata
-      // Marker for one extension-contributed setting. Self-subscribing like the
-      // other markers, because the VALUE lives in the extension's main-owned
-      // storage (EXTENSION_STATE_DIR), never the zustand-persist blob (#249). The
-      // payload is everything the row needs to read/write that store; the row owns
-      // its own IPC round-trip. See apps/ui/ExtensionSettingRow.tsx.
-      control: {
-        type: 'extension'
-        /** Storage namespace (appId) — the owning extension's id. */
-        extensionId: string
-        /** Storage key — the setting's `<extensionId>.<name>` contribution id. */
-        settingId: string
-        valueType: 'boolean' | 'number' | 'string'
-        default: boolean | number | string
-      }
-    }
-
 const ACCENT_OPTIONS: ChoiceOption<AccentId>[] = ACCENTS.map(accent => ({
   value: accent.id,
   label: accent.name,
@@ -347,45 +328,6 @@ const DICTATION_PROVIDER_OPTIONS: ChoiceOption<Settings['dictationProvider']>[] 
       'Streaming Flux path. Paste your Deepgram API key below — get $200 in free credits from console.deepgram.com.',
   },
 ]
-
-// Resolve a command's effective picker visibility from settings alone.
-// Mirrors `commandVisible` in the command registry, minus the live
-// `showHiddenCommands` escape hatch (the settings UI always edits the
-// underlying preference, never the transient reveal-all state).
-//
-// This now delegates to the SHARED resolver rather than re-implementing the
-// rule. It used to be a private second copy, justified by "the settings layer
-// shouldn't depend on the registry's CommandContext-typed internals" — a real
-// concern that `pickerVisibility.ts` removed by taking a context-free policy
-// struct instead of a CommandContext.
-//
-// Keeping the copy after that was an active defect, not just duplication: the
-// copy knew about overrides and the declared tier only, so it never learned
-// about the Navigation Commands group. On a fresh install Settings rendered
-// all six navigation switches ON (they declare no tier, so the copy said
-// "visible") while the palette omitted them — Settings stating the opposite of
-// what the user could see. Toggling one wrote an override and still changed
-// nothing, because the group gate deliberately outranks per-command overrides.
-// That is exactly the "switches that appear able to override their parent"
-// shape the precedence rule exists to prevent.
-//
-// `showHiddenCommands: false` is passed deliberately: Settings shows the
-// PERSISTED preference, not the transient reveal-all state, so a user reading
-// this list sees what their profile actually does.
-function resolveCommandVisible(settings: Settings, command: PickerCommandMeta): boolean {
-  return isVisibleInPicker(
-    {
-      id: command.id,
-      pickerVisibility: command.pickerVisibility,
-      commandGroup: command.commandGroup,
-    },
-    {
-      overrides: settings.commandVisibilityOverrides,
-      showHiddenCommands: false,
-      navigationCommandsEnabled: settings.navigationCommandsEnabled,
-    },
-  )
-}
 
 function updateDefaultBuiltInMcpDomain(
   ctx: SettingActionContext,
@@ -446,20 +388,17 @@ function deriveExtensionSettings(
 }
 
 export function getSettingsRegistry(
-  // Extension-contributed commands, derived from installed manifests by the
-  // caller. Threaded in so the "Commands" category lists them alongside
-  // first-party commands — which is also what makes them assignable a keybinding
-  // in the editor, since it iterates this same catalog. Empty default keeps every
-  // non-extension caller unchanged. The first-party catalog is static, but the
-  // extension set changes on install/remove, so this is no longer a per-lifetime
-  // constant and must be recomputed when the caller's extension list changes.
-  extensionCommands: readonly CommandDef[] = [],
-  // Installed extensions, so contributed settings render as rows. Same empty
-  // default + install/remove-recompute reasoning as extensionCommands above.
+  // Installed extensions, so contributed settings render as rows. An empty default keeps
+  // every non-extension caller (the tests, mainly) unchanged. The extension set changes
+  // on install/remove, so this is not a per-lifetime constant and must be recomputed
+  // when the caller's list changes.
+  //
+  // NOTE: this used to also take `extensionCommands` for the Commands settings category.
+  // That category was replaced upstream by the unified command list in
+  // CommandKeybindingsRow, which derives extension commands itself — so the parameter
+  // was removed rather than left dangling.
   installedExtensions: readonly ExtensionListEntry[] = [],
 ): SettingDefinition[] {
-  const pickerCommands = listPickerCommandMeta(extensionCommands)
-
   return [
     // Extension-contributed settings, one row each, under the Extensions category.
     // Derived from manifests (no bundle import); an uninstall drops the manifest
@@ -723,9 +662,14 @@ export function getSettingsRegistry(
     {
       id: 'command-keybindings',
       category: 'commands',
-      title: 'Keyboard Shortcuts',
+      title: 'Commands and Shortcuts',
       description:
-        'Assign, add, or remove keyboard shortcuts for built-in commands. A command may have several bindings or none. Conflicts are blocked and name the command or app interaction that already owns the chord.',
+        'Assign keyboard shortcuts, and choose which commands appear in the command picker. A command may have several bindings or none; conflicts are blocked and name whatever already owns the chord. Hiding a command only removes it from the picker list — its shortcut still works.',
+      // Carries BOTH vocabularies. This row absorbed the deleted
+      // 'Command Picker Visibility' row, and Settings search matches on
+      // keywords — so dropping that row's terms would mean a user typing
+      // "hide" or "visibility" (the words for the thing they want) gets no
+      // result at all, even though the control is right there.
       keywords: [
         'keybinding',
         'keyboard',
@@ -735,6 +679,17 @@ export function getSettingsRegistry(
         'rebind',
         'hotkey',
         'conflict',
+        'command',
+        'picker',
+        'palette',
+        'visibility',
+        'visible',
+        'hide',
+        'hidden',
+        'show',
+        'advanced',
+        'experimental',
+        'debug',
       ],
       metadata: { scope: 'app', apply: 'immediate', storage: 'settings' },
       control: { type: 'command-keybindings' },
@@ -765,47 +720,6 @@ export function getSettingsRegistry(
         // way that costs them their arrow keys.
         getValue: settings => settings.navigationCommandsEnabled,
         onToggle: (ctx, value) => ctx.onChange({ navigationCommandsEnabled: value }),
-      },
-    },
-    {
-      id: 'command-picker-visibility',
-      category: 'commands',
-      title: 'Command Picker Visibility',
-      description:
-        'Choose which commands appear in the command picker. Hiding a command only removes it from the picker list — its keyboard shortcut still works.',
-      keywords: [
-        'command',
-        'picker',
-        'palette',
-        'visibility',
-        'hide',
-        'show',
-        'advanced',
-        'debug',
-      ],
-      metadata: { scope: 'app', apply: 'immediate', storage: 'settings' },
-      control: {
-        type: 'command-visibility',
-        commands: pickerCommands,
-        isVisible: resolveCommandVisible,
-        onToggleCommand: (ctx, command, visible) => {
-          const next = { ...ctx.settings.commandVisibilityOverrides }
-          // Prune the entry when the new state equals the command's
-          // declared default, so the override map only ever holds
-          // deliberate deviations. Without this, toggling a command off
-          // then on again would leave a redundant `true` (or `false`)
-          // that survives a default change in a future release.
-          const declaredVisible = command.pickerVisibility === 'default'
-          if (visible === declaredVisible) {
-            delete next[command.id]
-          } else {
-            next[command.id] = visible
-          }
-          ctx.onChange({ commandVisibilityOverrides: next })
-        },
-        onResetVisibility: ctx => {
-          ctx.onChange({ commandVisibilityOverrides: {} })
-        },
       },
     },
     {
@@ -889,6 +803,32 @@ export function getSettingsRegistry(
       // why 'Reset Settings' does not clear it.
       metadata: { scope: 'app', apply: 'immediate', storage: 'keychain' },
       control: { type: 'dictation-api-key' },
+    },
+    {
+      id: 'dictation-history',
+      category: 'dictation',
+      title: 'Dictation History',
+      description:
+        'Words spoken, average speaking rate, and your recent transcripts. Stored locally on this machine and never uploaded — audio is never kept, only text.',
+      keywords: [
+        'voice',
+        'dictation',
+        'history',
+        'recents',
+        'recent',
+        'stats',
+        'statistics',
+        'words',
+        'wpm',
+        'speed',
+        'transcript',
+        'copy',
+        'clipboard',
+      ],
+      // A JSON file under STATE_DIR, not renderer Settings — so 'Reset
+      // Settings' does not clear it, and the badge has to say so.
+      metadata: { scope: 'app', apply: 'immediate', storage: 'external-files' },
+      control: { type: 'dictation-history' },
     },
     {
       id: 'dictation-shortcut',

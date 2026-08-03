@@ -1,6 +1,6 @@
 import { builtInCommandCatalog } from '@renderer/features/command-palette/catalog'
 import { PALETTE_SELF_EXCLUDED_COMMAND_IDS } from '@renderer/features/command-palette/commands/paletteCommands'
-import { declaredTier, isVisibleInPicker } from '@renderer/features/command-palette/pickerVisibility'
+import { isVisibleInPicker } from '@renderer/features/command-palette/pickerVisibility'
 import { buildDefaultKeybindings } from '@renderer/features/command-keybindings/defaults'
 import type { CommandBindingDefault } from '@renderer/features/command-keybindings/defaults'
 import { displayKeybinding } from '@renderer/features/command-keybindings/normalize'
@@ -10,8 +10,6 @@ import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/comma
 import type {
   CommandContext,
   CommandDef,
-  CommandGroup,
-  CommandPickerVisibility,
   CommandSurface,
   ResolvedCommand,
 } from '@renderer/features/command-palette/types'
@@ -203,6 +201,14 @@ export function buildCommandRegistry(
         title: typeof command.title === 'function' ? command.title(ctx) : command.title,
         description,
         surface: command.surface,
+        // Carried through so the palette's `grouped` sort mode can section the
+        // list by the taxonomy that was DESIGNED for user-facing grouping.
+        // Grouping by `surface` instead is the exact conflation `CommandCategory`
+        // was introduced to undo (see its doc comment): `surface` answers "does
+        // this concept exist in the current layout", which is a machine
+        // applicability question, and reusing it as a presentation axis means a
+        // command cannot be reclassified without changing when it applies.
+        category: command.category,
         // The FIRST effective binding, in display form. A command may have
         // several (Close Pane has Cmd+W and Alt+W); the row shows one, and the
         // first is the primary by declaration order. Undefined when the command
@@ -214,55 +220,6 @@ export function buildCommandRegistry(
         run: command.run,
       }
     })
-}
-
-/** Static metadata for one command, surfaced to the settings UI so a
- *  user can flip its picker visibility without the settings layer
- *  needing a live CommandContext. */
-export type PickerCommandMeta = {
-  id: string
-  title: string
-  pickerVisibility: CommandPickerVisibility
-  /** Carried so Settings can apply the SAME group gate the picker applies.
-   *  Omitting it was what let the Settings list claim the six Navigation
-   *  Commands were visible while the palette hid them. */
-  commandGroup?: CommandGroup
-}
-
-/**
- * Flat, context-free list of every command's identity + declared
- * picker visibility, for the "Commands" settings category.
- *
- * WHY context-free: the settings screen has no CommandContext (no
- * focused session, no live ui callbacks) and shouldn't synthesize a
- * fake one just to read titles. So this deliberately skips per-command
- * `when`/`surface` gating — the settings list is the FULL catalog of
- * commands a user might want to show/hide, not the subset currently
- * applicable. A command being mode-gated out right now doesn't change
- * whether the user wants it in the picker when it IS applicable.
- *
- * Function-typed titles (`title: (ctx) => string`) can't be resolved
- * without a context, so we fall back to the stable `id` as the label.
- * Those are the toggle-style commands whose text flips with state; the
- * id is a stable, recognizable stand-in for a settings row and avoids
- * inventing a dummy context purely for a display string.
- */
-export function listPickerCommandMeta(
-  extensionCommands: readonly CommandDef[] = [],
-): PickerCommandMeta[] {
-  return allCommandDefs(extensionCommands)
-    // Commands the palette structurally never renders must not appear here
-    // either. `open-command-palette` was getting a Settings switch that could
-    // never change anything — buildCommandRegistry filters it out BEFORE any
-    // visibility logic runs — while still persisting an override when toggled.
-    // A control that visibly does nothing is worse than an absent one.
-    .filter(command => !PALETTE_SELF_EXCLUDED_COMMAND_IDS.has(command.id))
-    .map(command => ({
-      id: command.id,
-      title: typeof command.title === 'function' ? command.id : command.title,
-      pickerVisibility: declaredTier(command),
-      ...(command.commandGroup ? { commandGroup: command.commandGroup } : {}),
-    }))
 }
 
 /** First effective binding as a display chord, or undefined when unbound. */

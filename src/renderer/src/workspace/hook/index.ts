@@ -229,13 +229,14 @@ export function useWorkspace(
   const showPaneToast = usePaneToast(refs.paneToastTimers, updateRuntime)
 
   // ---- Actions ----
-  const { setDraftInput, setDraftImages } = useDraftActions(
+  const { setDraftInput, setDraftImages, clearDraft, undoClearDraft } = useDraftActions(
     setRuntimes,
     updateRuntime,
     setDraftVersion,
   )
   const {
     setStreamingBaseline,
+    unwindStreamingBaseline,
     clearPendingRewindUndo,
     addOptimisticCodexUserEntry,
     removeOptimisticCodexUserEntry,
@@ -439,7 +440,7 @@ export function useWorkspace(
             sessionId: request.sessionId,
             maxMessages: 1,
           })
-          await ensureSessionLiveRef.current(request.sessionId)
+          await ensureSessionLiveRef.current(request.sessionId, 'orchestration.read-agent')
           const agent = readOrchestrationAgent({
             state: refs.stateRef.current,
             runtimes: refs.latestRuntimesRef.current,
@@ -694,7 +695,7 @@ export function useWorkspace(
           // Sending is the one operation that intentionally wakes a parked
           // target. Re-authorize after the await because the user can move or
           // close a pane while the provider is starting.
-          await ensureSessionLiveRef.current(request.sessionId)
+          await ensureSessionLiveRef.current(request.sessionId, 'orchestration.send-prompt')
           assertManagedTarget({
             state: refs.stateRef.current,
             callerSessionId: request.callerSessionId,
@@ -759,13 +760,24 @@ export function useWorkspace(
           // idle target does not slip through the human-ergonomics exemption
           // the policy grants ⌘W. Declining rejects the tool call.
           const caller = current.sessions[request.callerSessionId]?.title
-          await closeOrchestrationSessionRef.current(request.sessionId, {
+          const closed = await closeOrchestrationSessionRef.current(request.sessionId, {
             requireConfirmation: {
               headline: caller
                 ? `Agent “${caller}” is asking to close this agent.`
                 : 'An agent is asking to close this agent.',
             },
           })
+          // The comment above says "declining rejects the tool call" — it did
+          // not. The gate RESOLVES false rather than throwing, so the success
+          // below fired anyway and the calling agent was told the close took
+          // while its target kept running. This is the surface where a decline
+          // is still possible, so it is the surface where reporting it matters
+          // most.
+          if (!closed) {
+            throw new Error(
+              'close_agent was declined: the user did not approve closing this agent.',
+            )
+          }
         }
         await window.api.resolveAgentManagementRequest({
           requestId: request.requestId,
@@ -910,6 +922,7 @@ export function useWorkspace(
     setSplitRatio,
     setSplitRatioInTab,
     setStreamingBaseline,
+    unwindStreamingBaseline,
     clearPendingRewindUndo,
     acknowledgeSession,
     appendFeedDebug,
@@ -917,6 +930,8 @@ export function useWorkspace(
     removeOptimisticCodexUserEntry,
     setDraftInput,
     setDraftImages,
+    clearDraft,
+    undoClearDraft,
     loadOlderHistory,
     showPaneToast,
     undoClose,
@@ -962,6 +977,7 @@ export function useWorkspace(
     exitTiledDispatch: dispatchActions.exitTiledDispatch,
     setTiledLaneSession: dispatchActions.setTiledLaneSession,
     setTiledLaneCount: dispatchActions.setTiledLaneCount,
+    removeTiledLane: dispatchActions.removeTiledLane,
     setTiledFocusedLane: dispatchActions.setTiledFocusedLane,
     setTiledRatios: dispatchActions.setTiledRatios,
   }

@@ -495,8 +495,16 @@ export type ResolvedCommand = {
   title: string
   description: string
   /** Carried through from CommandDef so palette/menu consumers can
-   *  group or label by surface without re-importing the raw defs. */
+   *  label by surface without re-importing the raw defs.
+   *
+   *  NOT the field to group a user-facing list by — use `category` below.
+   *  See `CommandCategory`'s doc for why the two must not be conflated. */
   surface: CommandSurface
+  /** User-facing grouping, carried through for the palette's `grouped` sort
+   *  mode. Still optional here because it is optional on `CommandDef` until the
+   *  governance migration makes it required; consumers must handle its absence
+   *  rather than assume total coverage. */
+  category?: CommandCategory
   /**
    * The chord this command will actually run, in display form, or undefined
    * when it has none.

@@ -75,7 +75,7 @@ export function SettingsPage({ onClose, workspace, settings, onChange, onReset }
   )
 
   const registry = useMemo(
-    () => getSettingsRegistry(extensionCommands, installedExtensions),
+    () => getSettingsRegistry(installedExtensions),
     [extensionCommands, installedExtensions],
   )
   const visibleDefinitions = useMemo(
@@ -115,13 +115,9 @@ export function SettingsPage({ onClose, workspace, settings, onChange, onReset }
                 Search, browse, and change application defaults.
               </div>
             </div>
-            <button
-              type="button"
-              onClick={onClose}
-              className="border border-control-border bg-control-bg px-2.5 py-1.5 text-[11px] text-control-fg hover:border-control-border-hover hover:bg-control-hover-bg hover:text-ink"
-            >
+            <Button variant="outline" size="sm" onClick={onClose}>
               Close
-            </button>
+            </Button>
           </div>
 
           <SettingsSearch value={query} onChange={setQuery} />

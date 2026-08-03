@@ -1,4 +1,10 @@
-import type { DispatchLane, DispatchModeState, SessionId, WorkspaceState } from '@renderer/workspace/types'
+import type {
+  DispatchLane,
+  DispatchModeState,
+  SessionId,
+  TiledDispatchState,
+  WorkspaceState,
+} from '@renderer/workspace/types'
 import { buildVisibleDispatchRows } from '@renderer/workspace/dispatch/dispatchSelectors'
 
 // ============================================================================
@@ -195,3 +201,76 @@ export function buildAutoLanes(
 // through keepTiledLaneSessions so stale lane ids do not survive to the next
 // launch; render-time healing remains the user-facing repair for scope changes
 // and temporarily empty lanes.
+
+/**
+ * Remove ONE lane by index. Returns null when the removal is refused, so the
+ * caller can leave state untouched rather than writing back an identical object.
+ *
+ * WHY this exists at all, given `setTiledLaneCount` already resizes the grid:
+ * that action takes only a COUNT, and shrinking by count always drops the tail
+ * (`lanes.slice(0, next)`). With seven lanes open and the finished agent in
+ * lane three, 7 -> 6 removes lane SEVEN and leaves the user re-selecting the
+ * rest by hand.
+ *
+ * Closing the agent instead does not shrink anything either: the lane empties
+ * and `buildAutoLanes`' auto-fill re-homes another agent into it, so the count
+ * stays put. Before this, there was no way to shrink the tiled grid at a
+ * position of the user's choosing.
+ *
+ * WHY it is a pure function rather than living inside the reducer: the
+ * splice/clamp/ratio rules are the whole behaviour, and they are worth testing
+ * without standing up a hook.
+ */
+export function removeLaneFromTiled(
+  tiled: TiledDispatchState,
+  laneIndex: number,
+): TiledDispatchState | null {
+  // Refuse at the floor. Emptying the layout is Dispatch Mode's job; a
+  // lane-removal that silently became a mode-exit would be two different
+  // actions sharing one name.
+  if (tiled.lanes.length <= MIN_DISPATCH_TILES) return null
+  if (!Number.isInteger(laneIndex)) return null
+  if (laneIndex < 0 || laneIndex >= tiled.lanes.length) return null
+
+  const lanes = tiled.lanes.filter((_, i) => i !== laneIndex)
+  return {
+    lanes,
+    // Same clamp `setTiledLaneCount` applies: removing the last lane would
+    // otherwise leave focusedLane pointing past the end. Note a lane removed
+    // BEFORE the focused one shifts it down by one, which Math.min does not
+    // do — so adjust explicitly rather than only clamping.
+    focusedLane: Math.min(
+      laneIndex < tiled.focusedLane ? tiled.focusedLane - 1 : tiled.focusedLane,
+      lanes.length - 1,
+    ),
+    // `ratios` is NOT a uniform array of lane boundaries: index 0 is the
+    // INDEX-SIDEBAR fraction (TiledDispatchLayout reads `ratios?.[0]`), and
+    // only `ratios.slice(1)` are lane weights. Dropping the whole array — what
+    // setTiledLaneCount does — therefore also snaps the sidebar back to its
+    // default, undoing a width the user deliberately dragged and never asked
+    // to change.
+    //
+    // A count *increase* has no honest answer (there is a new lane with no
+    // weight to invent), which is why setTiledLaneCount resets wholesale. A
+    // removal does: keep the sidebar fraction, drop the removed lane's weight,
+    // and let normalizedLaneWeights re-normalize what is left.
+    ratios: removeLaneWeight(tiled.ratios, laneIndex),
+  }
+}
+
+/**
+ * Drop one lane's weight from a `ratios` array while preserving index 0, the
+ * index-sidebar fraction. Returns undefined when there is nothing stored, so
+ * the layout falls back to even distribution exactly as before.
+ */
+function removeLaneWeight(
+  ratios: number[] | undefined,
+  laneIndex: number,
+): number[] | undefined {
+  if (!ratios || ratios.length === 0) return undefined
+  const [indexFraction, ...laneWeights] = ratios
+  // A ratios array written before this lane existed simply has no weight to
+  // drop; keeping the sidebar fraction is still the right call.
+  if (laneIndex >= laneWeights.length) return [indexFraction]
+  return [indexFraction, ...laneWeights.filter((_, i) => i !== laneIndex)]
+}

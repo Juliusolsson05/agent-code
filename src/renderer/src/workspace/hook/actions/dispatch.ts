@@ -7,6 +7,7 @@ import {
   buildAutoLanes,
   clampTileCount,
   dispatchFocusedSessionId,
+  removeLaneFromTiled,
 } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import type {
   WorkspaceSetState,
@@ -36,6 +37,7 @@ export function useDispatchActions(
   exitTiledDispatch: () => void
   setTiledLaneSession: (laneIndex: number, sessionId: SessionId) => void
   setTiledLaneCount: (count: number) => void
+  removeTiledLane: (laneIndex: number) => void
   setTiledFocusedLane: (laneIndex: number) => void
   setTiledRatios: (ratios: number[]) => void
 } {
@@ -203,6 +205,28 @@ export function useDispatchActions(
     [setState],
   )
 
+  /**
+   * Remove ONE lane, shrinking the grid by one.
+   *
+   * The splice/clamp/ratio rules live in `removeLaneFromTiled` so they can be
+   * tested as a pure function; this is only the state wiring. A null return
+   * means the removal was refused (at the lane floor, or a bad index), in
+   * which case we hand back `prev` untouched rather than writing an identical
+   * object and forcing a re-render.
+   */
+  const removeTiledLane = useCallback(
+    (laneIndex: number) => {
+      setState(prev => {
+        const tiled = prev.dispatchMode?.tiled
+        if (!tiled) return prev
+        const next = removeLaneFromTiled(tiled, laneIndex)
+        if (!next) return prev
+        return { ...prev, dispatchMode: { ...prev.dispatchMode!, tiled: next } }
+      })
+    },
+    [setState],
+  )
+
   // Move keyboard-selection focus between lanes. Clamped. Must never touch
   // any lane's selection — that's what keeps lanes independent.
   const setTiledFocusedLane = useCallback(
@@ -324,6 +348,7 @@ export function useDispatchActions(
     exitTiledDispatch,
     setTiledLaneSession,
     setTiledLaneCount,
+    removeTiledLane,
     setTiledFocusedLane,
     setTiledRatios,
   }

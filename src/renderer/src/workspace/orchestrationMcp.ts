@@ -117,17 +117,41 @@ export function readOrchestrationRunOutputs(params: {
 /**
  * How `closeSession` is called from the orchestration MCP surface.
  *
- * Typed here rather than inlined so the options — specifically
- * `requireConfirmation` — cannot be dropped by a caller that copies the older
- * one-argument shape.
+ * WHY orchestration closes are NOT confirmed, while Agent Management's are:
+ * the two surfaces have different blast radii. Agent Management can reach any
+ * agent in the caller's project, so a human has to sign off. Orchestration
+ * cannot — `isVisibleToOrchestrationParent` restricts every read and close to
+ * children the caller itself created (or descendants of its own root run).
+ * Those agents are disposable by construction: the parent spawned them for a
+ * task, and closing them when the task is done is the normal end of their
+ * lifecycle, not a destructive act on something the user built.
+ *
+ * The dialog was therefore asking a human to approve a fleet cleaning up after
+ * itself, several times per run. A confirmation that fires on routine
+ * housekeeping is the reason "are you sure?" stops meaning anything by the time
+ * it guards something that matters.
+ *
+ * WHY `silentIfSoleTarget` and not `preConfirmed`: the ownership gate below
+ * scopes WHICH SESSION MAY BE NAMED, not WHICH SESSIONS DIE. `closeSession`
+ * kills a set, and two shapes reach past the named target — a linked agent the
+ * USER attached to a child (it carries no orchestration fields, so the gate
+ * cannot see it), and a tab's sole grid leaf (which takes every detached
+ * session in that tab, including the caller's siblings and the user's parked
+ * agents). Asserting preConfirmed would destroy those silently. This mode stays
+ * silent for the routine case — a detached child that expands to exactly
+ * itself — and falls back to a dialog naming the requester for the rest.
+ *
+ * Returns whether the session actually closed, so a caller can report an
+ * already-gone agent as skipped rather than claiming it closed one.
  */
 export type OrchestrationCloseSession = (
   sessionId: SessionId,
-  options?: { preConfirmed?: boolean; requireConfirmation?: { headline: string } },
-) => Promise<void>
+  options?: { silentIfSoleTarget?: { headline: string } },
+) => Promise<boolean>
 
 /** "Agent “Reviewer” is asking to close an agent it started." — the sentence
- *  that tells the user why a dialog they did not summon just appeared. */
+ *  that tells the user why a dialog they did not summon just appeared. Only
+ *  reached when the close would reach past the agent that was named. */
 function closeRequestHeadline(state: WorkspaceState, parentSessionId: string): string {
   const title = state.sessions[parentSessionId]?.title
   const who = title ? `Agent “${title}”` : 'An agent'
@@ -144,10 +168,20 @@ export async function closeOrchestrationAgent(params: {
   if (!meta || !isVisibleToOrchestrationParent(meta, params.parentSessionId)) {
     throw new Error('Orchestration agent not found for this parent session.')
   }
-  await params.closeSession(params.sessionId, {
-    requireConfirmation: { headline: closeRequestHeadline(params.state, params.parentSessionId) },
-  })
-  return { closedSessionIds: [params.sessionId] }
+  const closed = await params.closeSession(params.sessionId, {
+    silentIfSoleTarget: {
+      headline: closeRequestHeadline(params.state, params.parentSessionId),
+    },
+  }).catch(() => false)
+  // Report what happened. Previously this returned the id unconditionally, so
+  // an agent whose close did not take (already gone) was told it had closed
+  // one — and it would then proceed on that assumption.
+  // The `.catch(() => false)` above mirrors close_run's catch: a rejected
+  // backend kill runs AFTER closeLinkedChildren, so a bare throw could report
+  // neither closed nor skipped while children were already gone.
+  return closed
+    ? { closedSessionIds: [params.sessionId] }
+    : { closedSessionIds: [], skippedSessionIds: [params.sessionId] }
 }
 
 export async function closeOrchestrationRun(params: {
@@ -164,22 +198,34 @@ export async function closeOrchestrationRun(params: {
   const closedSessionIds: string[] = []
   const skippedSessionIds: string[] = []
   const headline = closeRequestHeadline(params.state, params.parentSessionId)
-  for (const [index, sessionId] of sessionIds.entries()) {
+  for (const sessionId of sessionIds) {
     try {
-      // Confirm ONCE, on the first agent, and let the rest ride that answer.
+      // No dialog, per the WHY on OrchestrationCloseSession. A run close is a
+      // fleet cleaning up its own children; the ownership gate above already
+      // guarantees these are the caller's.
       //
-      // Forcing per-agent confirmation on a run of twelve would produce twelve
-      // dialogs, and a user clicking through twelve dialogs is not confirming
-      // anything — it is the reason "are you sure?" stopped meaning anything.
-      // The first dialog names the run's requester; declining it throws, which
-      // the catch below turns into a skip, and the remaining agents then hit
-      // the same declined gate rather than dying silently.
-      await params.closeSession(sessionId, {
-        requireConfirmation: index === 0 ? { headline } : undefined,
-        preConfirmed: index > 0,
+      // The result is branched on rather than assumed. The old loop pushed to
+      // closedSessionIds unconditionally and relied on a decline THROWING to
+      // reach the catch — but the confirmation gate resolves false, it never
+      // rejected, so skippedSessionIds could not populate from a decline and
+      // the caller was told every agent closed. With no dialog a decline is
+      // impossible, but a session that is simply gone still returns false and
+      // is now correctly reported as skipped.
+      //
+      // Be precise about what false means: closeSession returns it whenever the
+      // id is in neither `tabs` nor `detachedSessions`. The id list here is
+      // computed once from a pre-loop snapshot, so a sibling taken out by an
+      // EARLIER iteration's tab cascade also reports false — i.e. "skipped" can
+      // include "already closed by this very operation". The error direction is
+      // the safe one (it over-reports survival, where the old code
+      // over-reported success), but do not read skipped as "still running".
+      const closed = await params.closeSession(sessionId, {
+        silentIfSoleTarget: { headline },
       })
-      closedSessionIds.push(sessionId)
+      if (closed) closedSessionIds.push(sessionId)
+      else skippedSessionIds.push(sessionId)
     } catch {
+      // A genuine throw (backend kill failure) is still a skip.
       skippedSessionIds.push(sessionId)
     }
   }

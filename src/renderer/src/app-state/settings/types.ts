@@ -5,6 +5,7 @@ import type { ColorFlagId } from '@renderer/app-state/settings/dispatchColorFlag
 import type { DictationProvider } from '@shared/types/dictation'
 import type { MouseButtonBinding, MouseChordBinding } from '@renderer/lib/mouseBinding'
 import type { ConfigurableBuiltInMcpDomain } from '@mcp/shared/types'
+import type { CommandSortMode } from '@renderer/features/command-palette/lib/sortCommands'
 
 // Built-in theme ids only. 'custom' used to live here as a sentinel that
 // rendered as a picker cell but acted as a button (it opened the JSON editor
@@ -411,6 +412,24 @@ export type Settings = {
    *  two lifecycles beats one map that forces the cheap one to pay the
    *  expensive one's cost. */
   commandStarred: Record<string, boolean>
+  /** How the command palette orders its list while the search box is EMPTY.
+   *
+   *  Scope is the whole point: this never touches search results. Typing is
+   *  answered by relevance alone (`rankEntries`), and a sort applied on top of
+   *  that would let 'A – Z' push a tier-5 prefix match below a tier-1
+   *  subsequence match — the inversion class the ranking rewrite exists to
+   *  prevent. `rankCommands` enforces the split with an early return; the
+   *  header control shows "Relevance" and disables itself while a query is
+   *  present so the user is told, not left guessing.
+   *
+   *  WHY a persisted setting rather than per-open state: it is a scanning
+   *  preference, not a transient one. Someone who browses by group wants to
+   *  browse by group tomorrow too, and re-picking it on every palette open
+   *  would make the feature not worth using.
+   *
+   *  Defaults to 'catalog' — today's exact behavior — which keeps the whole
+   *  feature additive: nothing about the palette changes until the user asks. */
+  commandSortMode: CommandSortMode
   /** Show pointer-only affordances that a keyboard user does not need — today
    *  the composer's Send and Stop buttons.
    *
@@ -530,6 +549,9 @@ export const DEFAULT_SETTINGS: Settings = {
   // Nothing starred until the user stars something. The palette's resting
   // order is otherwise exactly the catalog order it has always been.
   commandStarred: {},
+  // Catalog order is what the palette has always shown, so it stays the
+  // default and the sort control is a pure opt-in.
+  commandSortMode: 'catalog',
   // Off by default. The composer buttons cost ~28px of pane height per pane
   // and a keyboard user gets nothing from them, so this is opt-in.
   mouseModeEnabled: false,

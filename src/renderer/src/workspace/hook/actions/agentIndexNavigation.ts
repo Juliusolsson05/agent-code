@@ -41,7 +41,7 @@ export function useAgentIndexNavigationActions(
           // first keystroke lands on a dead backend. ensureSessionLive is also
           // safe for an already-running detached agent, so this single branch
           // covers both fresh and restored workspaces.
-          await sessionActions.ensureSessionLive(initialTarget.sessionId)
+          await sessionActions.ensureSessionLive(initialTarget.sessionId, 'agent-index.navigate')
         } catch (error) {
           showToast(
             error instanceof Error && error.message.length > 0

@@ -33,7 +33,7 @@ export const SETTING_CATEGORIES: SettingCategory[] = [
   {
     id: 'commands',
     label: 'Commands',
-    description: 'Which commands appear in the command picker.',
+    description: 'Keyboard shortcuts, and which commands appear in the command picker.',
   },
   {
     id: 'dictation',

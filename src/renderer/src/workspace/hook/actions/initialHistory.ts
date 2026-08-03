@@ -23,6 +23,7 @@ import type { WorkspaceSetRuntimes } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import * as perf from '@renderer/performance/client'
 import { hasDurableProviderSession } from '@renderer/workspace/providerSessionIdentity'
+import { reportLifecycle } from '@renderer/lifecycle/report'
 
 const INITIAL_HISTORY_CONCURRENCY = 2
 let activeInitialHistoryLoads = 0
@@ -122,6 +123,29 @@ export async function loadInitialHistoryForSession({
   // Mark in-flight BEFORE the 'loading' write so the reconciler never sees a
   // window where status is 'loading' but the load looks idle.
   inFlightInitialLoads.add(sessionId)
+  // #283 was "startup/resume stuck at 'loading transcript' until a manual
+  // reload", caused by an ASYMMETRIC state write: 'loading' set unconditionally,
+  // but the terminal 'ready'/'error' writes guarded by `if (!current) return
+  // prev`. A dropped runtime key therefore stranded the pane forever. Bracketing
+  // the load with start/end makes that asymmetry directly observable — a
+  // history.load.start with no matching end IS the bug, with no inference
+  // required.
+  const historyStartedAt = Date.now()
+  reportLifecycle('history.load.start', sessionId, { kind })
+  // Default is deliberately 'no-terminal-write'. That value surviving to the
+  // finally block means neither the ready nor the error write ran at all — the
+  // #283 "marked-but-never-loaded" half. `dropped-*` means the write RAN but
+  // its runtime key was gone — the "dropped write" half. Two distinct defects
+  // that presented identically as a pane spinning on 'loading transcript'.
+  // WHY a mutable local rather than reading state back: this is set from inside
+  // the setRuntimes updaters below, which is safe ONLY because the workspace
+  // store invokes updaters synchronously. If runtimes ever move behind a
+  // deferred setter, `history.load.end` would silently report
+  // 'no-terminal-write' forever — and that value is the #283 fingerprint, so a
+  // false positive here is worse than no signal. Flagged in review; the
+  // synchronous contract is asserted by the test below rather than assumed.
+  let loadOutcome = 'no-terminal-write'
+  let loadedEntryCount = 0
   setRuntimes(prev => {
     const current = prev[sessionId]
     if (!current) return prev
@@ -130,6 +154,7 @@ export async function loadInitialHistoryForSession({
       [sessionId]: {
         ...current,
         transcriptStatus: 'loading',
+        transcriptStatusChangedAt: Date.now(),
         transcriptError: null,
       },
     }
@@ -151,8 +176,10 @@ export async function loadInitialHistoryForSession({
     setRuntimes(prev => {
       const current = prev[sessionId]
       if (!current) {
+        loadOutcome = 'dropped-ready'
         return prev
       }
+      loadOutcome = 'ready'
       const seen = (refs.seenUuidsRef.current[sessionId] ??= new Set())
       seedSeenFromRuntime(current, seen)
 
@@ -226,6 +253,12 @@ export async function loadInitialHistoryForSession({
       // newer than every loaded entry (the
       // "JSONL-stopped-mid-turn before the previous run died" case)
       // surfaces as expected.
+      // Captured for the history.load.end breadcrumb. Plain statement rather
+      // than an assignment folded into the object literal below: this value is
+      // read by a diagnostic, and a diagnostic must never be the reason a
+      // production expression is hard to read.
+      const resolvedTotalEntries = chunk.totalEntries ?? initialEntries.length
+      loadedEntryCount = resolvedTotalEntries
       let lastJsonlEntryAt = current.lastJsonlEntryAt
       for (const entry of initialEntries) {
         const ts = (entry as { timestamp?: unknown }).timestamp
@@ -250,10 +283,11 @@ export async function loadInitialHistoryForSession({
           // Falls back to the visible-buffer length when the loader
           // didn't supply a count — e.g. when initial-history was
           // called for a session with no on-disk transcript yet.
-          totalEntries: chunk.totalEntries ?? initialEntries.length,
+          totalEntries: resolvedTotalEntries,
           historyOldestMarker: initialOldestMarker ?? current.historyOldestMarker,
           hasOlderHistory: chunk.hasMore,
           transcriptStatus: 'ready',
+          transcriptStatusChangedAt: Date.now(),
           transcriptError: null,
           workActivity,
           workContext,
@@ -291,13 +325,16 @@ export async function loadInitialHistoryForSession({
     setRuntimes(prev => {
       const current = prev[sessionId]
       if (!current) {
+        loadOutcome = 'dropped-error'
         return prev
       }
+      loadOutcome = 'error'
       return {
         ...prev,
         [sessionId]: {
           ...current,
           transcriptStatus: 'error',
+          transcriptStatusChangedAt: Date.now(),
           transcriptError: message,
         },
       }
@@ -308,6 +345,12 @@ export async function loadInitialHistoryForSession({
     // load is genuinely done, so the reconciler must be allowed to see it as
     // idle-and-stuck and re-kick it.
     inFlightInitialLoads.delete(sessionId)
+    reportLifecycle('history.load.end', sessionId, {
+      kind,
+      status: loadOutcome,
+      entryCount: loadedEntryCount,
+      durationMs: Date.now() - historyStartedAt,
+    })
   }
 }
 
