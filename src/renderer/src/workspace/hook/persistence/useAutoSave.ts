@@ -2,7 +2,7 @@ import { useCallback, useEffect } from 'react'
 
 import type { PersistedWorkspace } from '@renderer/workspace/persistence'
 import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
-import { pruneSessionOwnership } from '@renderer/workspace/sessionOwnership'
+import { pruneSessionOwnership, repairPersistedTabs } from '@renderer/workspace/sessionOwnership'
 import { withNormalizedBuiltInMcpDomains } from '@renderer/workspace/mcpDomains'
 
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
@@ -53,6 +53,39 @@ export function useAutoSave(
       // eslint-disable-next-line no-console
       console.warn('[workspace] dropping unowned sessions during autosave:', pruned.droppedSessionIds)
     }
+    // Repair the tile trees BEFORE serializing them. `pruneSessionOwnership`
+    // above scrubs every pointer that aims at a session, but the trees are
+    // themselves an ownership surface and used to be written verbatim — so a
+    // leaf whose metadata had already been removed from `state.sessions` could
+    // become durable. That shape is not merely untidy: rehydrate counts such a
+    // leaf as a pane it must restore, can never restore it, and therefore
+    // reports `partial-restore` and holds autosave off on every subsequent
+    // launch. Since autosave is the only writer of workspace.json, the file
+    // then cannot be repaired by the app at all.
+    //
+    // WHY `pruned.sessions` and not `s.sessions`: they agree on exactly the
+    // question being asked. `pruned.sessions` keeps `ownedIds ∩ own keys of
+    // s.sessions`, and every tile leaf with metadata is owned by construction,
+    // so a leaf is missing here if and only if it was already an orphan in
+    // this same snapshot. Nothing `pruneSessionOwnership` drops for an
+    // unrelated reason (unowned metadata, a detached record whose parent tab
+    // is gone, a buried pane) can ever be a tile leaf — which is what stops
+    // this from deleting a live pane. If that ever stops holding, this call
+    // becomes destructive, so keep the two in step.
+    const repairedTabs = repairPersistedTabs({
+      tabs: s.tabs,
+      sessions: pruned.sessions,
+      activeTabId: s.activeTabId,
+      tileTabs: refs.latestTileTabsRef.current,
+    })
+    if (repairedTabs.droppedLeafSessionIds.length > 0) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        '[workspace] dropping tile leaves with no session metadata during autosave:',
+        { leaves: repairedTabs.droppedLeafSessionIds, tabs: repairedTabs.droppedTabIds },
+      )
+    }
+
     // Collect non-empty drafts so in-progress prompts survive crashes.
     const drafts: Record<SessionId, string> = {}
     for (const [id, rt] of Object.entries(refs.latestRuntimesRef.current)) {
@@ -69,13 +102,13 @@ export function useAutoSave(
       id => pruned.sessions[id] !== undefined,
     )
     const persisted: PersistedWorkspace = {
-      tabs: s.tabs.map(t => ({
+      tabs: repairedTabs.tabs.map(t => ({
         id: t.id,
         title: t.title,
         focusedSessionId: t.focusedSessionId,
         root: t.root,
       })),
-      activeTabId: s.activeTabId,
+      activeTabId: repairedTabs.activeTabId,
       dispatchMode: pruned.dispatchMode,
       // WHY normalize MCP domains at the persistence boundary:
       //
@@ -96,7 +129,7 @@ export function useAutoSave(
       pinnedSessionIds: persistedPinnedSessionIds.length > 0
         ? persistedPinnedSessionIds
         : undefined,
-      tileTabs: refs.latestTileTabsRef.current,
+      tileTabs: repairedTabs.tileTabs,
       drafts: Object.keys(drafts).length > 0 ? drafts : undefined,
     }
     let json = ''
