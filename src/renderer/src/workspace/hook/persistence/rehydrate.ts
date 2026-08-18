@@ -821,10 +821,21 @@ export async function rehydrateWorkspace(
   // provider started. A run whose rehydrate.start has no matching complete is a
   // restore that never resolved, which pins autosave off and is invisible today
   // apart from a console.warn.
+  //
+  // WHY the unresolved ids are named and not just counted: a real workspace sat
+  // at `expectedCount 4, resolvedCount 3, ok false` on every launch for three
+  // weeks, and the journal could not say WHICH pane was missing. Diagnosing it
+  // required diffing tile leaves against the `sessions` map by hand. The count
+  // alone tells you that restore is stuck; the ids tell you why, which is the
+  // whole point of recording this event.
+  const unresolvedSessionIds = [...liveProcessIds]
+    .filter(id => !resolvedIds.has(id))
+    .join(',')
   reportLifecycle('rehydrate.complete', undefined, {
     expectedCount: expectedSessions,
     resolvedCount: resolvedIds.size,
     ok: resolvedIds.size === expectedSessions,
+    unresolvedSessionIds,
     durationMs: Date.now() - rehydrateStartedAt,
   })
   return {

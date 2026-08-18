@@ -245,6 +245,14 @@ export const SESSION_LIFECYCLE_DATA_KEYS = [
   'buried',
   'expectedCount',
   'resolvedCount',
+  // Comma-joined session ids that were expected but never resolved. Ids are
+  // already first-class in this stream (`ids.sessionId`), so this adds no new
+  // category of data — it answers "which pane" for an event that previously
+  // only said "one pane", which cost three weeks of a frozen workspace to
+  // diagnose by hand. Joined into a string because payload values must stay
+  // flat: the sanitizer only inspects top-level keys, so an array would sail
+  // past the allowlist.
+  'unresolvedSessionIds',
   'entryCount',
   'suppressed',
 

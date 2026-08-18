@@ -7,7 +7,7 @@ import type {
   TabId,
   TileNode,
 } from '@renderer/workspace/types'
-import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
+import { closeLeaf, collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 import { keepTiledLaneSessions } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 
 type SessionOwnershipTab = {
@@ -113,6 +113,30 @@ export function collectLiveProcessIds(input: SessionOwnershipInput): Set<Session
   const live = new Set<SessionId>()
   for (const tab of input.tabs) {
     for (const id of collectLeaves(tab.root)) {
+      // WHY a tile leaf with no SessionMeta is excluded from the live set:
+      //
+      // This set is BOTH the rehydrate spawn list and the denominator of the
+      // restore-completion gate (`expectedSessions` in rehydrate.ts). A leaf
+      // whose id has no row in `sessions` has no cwd and no kind, so there is
+      // literally nothing to spawn for it — rehydrate's respawn loop iterates
+      // `persisted.sessions` and can never even reach it. Counting it made
+      // `resolvedIds.size === expectedSessions` unsatisfiable FOREVER:
+      // restore reported `partial-restore`, autosave stayed locked to protect
+      // disk, and because autosave was the only writer of workspace.json the
+      // corrupt tree could never be rewritten. A single dangling leaf
+      // permanently froze a real user's workspace file for three weeks
+      // (observed: expectedCount 4, resolvedCount 3, ok false on every boot).
+      //
+      // Excluding it here is what makes an already-corrupt file self-heal: the
+      // gate becomes satisfiable, autosave unlocks, and the write-side guard
+      // (`pruneOrphanTileLeaves`) then serializes a repaired tree. The pane is
+      // not silently dropped from view either — the same guard collapses the
+      // leaf out of the tree, so the user never sees a pane that cannot exist.
+      //
+      // This is deliberately NOT "spawn a fresh session for the orphan": we do
+      // not know its cwd or provider, and inventing one would resurrect a pane
+      // the user never asked for, pointed at the wrong directory.
+      if (!input.sessions[id]) continue
       live.add(id)
     }
   }
@@ -193,4 +217,79 @@ export function pruneSessionOwnership(
     dispatchMode,
     droppedSessionIds,
   }
+}
+
+
+/**
+ * Drop tile leaves whose session id has no `sessions` row, collapsing each
+ * orphaned split into its surviving sibling.
+ *
+ * WHY this belongs at the autosave boundary and not in a close/kill path:
+ *
+ * `pruneSessionOwnership` already claims to keep the serialized model "closed
+ * under restore", and it scrubs every pointer that aims AT a session —
+ * `sessions`, `detachedSessions`, `buried`, dispatch focus, tiled lanes. Tile
+ * trees were the one owner class it never validated, because `useAutoSave`
+ * serialized `state.tabs` verbatim. That asymmetry is what let a torn
+ * in-memory state (a leaf whose metadata had already been removed) become
+ * durable, and durable corruption here is uniquely bad: it disables the very
+ * autosave that would fix it.
+ *
+ * There is a self-reference that makes this the ONLY place the repair can
+ * happen. Ownership is *derived from* tile leaves — `collectOwnedSessionIds`
+ * walks the trees — so an orphan leaf can never be removed by pruning
+ * `sessions` against owners. The orphan IS an owner; there is nothing for
+ * `pickOwnedSessions` to drop. The tree itself has to be rewritten.
+ *
+ * A tab that loses every leaf is dropped: its root would be empty, which
+ * `TileNode` cannot represent and no pane could render. That is the one
+ * destructive branch here, so it is reported in `droppedTabIds` for the caller
+ * to log and to repair `activeTabId` against.
+ */
+export function pruneOrphanTileLeaves<
+  TTab extends SessionOwnershipTab & { focusedSessionId?: SessionId },
+>(
+  tabs: readonly TTab[],
+  sessions: Record<SessionId, SessionMeta>,
+): { tabs: TTab[]; droppedLeafSessionIds: SessionId[]; droppedTabIds: TabId[] } {
+  const droppedLeafSessionIds: SessionId[] = []
+  const droppedTabIds: TabId[] = []
+  const kept: TTab[] = []
+
+  for (const tab of tabs) {
+    const orphans = collectLeaves(tab.root).filter(id => !sessions[id])
+    if (orphans.length === 0) {
+      kept.push(tab)
+      continue
+    }
+    droppedLeafSessionIds.push(...orphans)
+
+    // closeLeaf is the same primitive the user-facing pane close uses, so a
+    // repaired tree has exactly the shape it would have had if the pane had
+    // been closed normally — splits collapse into the survivor, ratios of
+    // untouched splits are preserved.
+    let root: TileNode | null = tab.root
+    for (const orphanId of orphans) {
+      if (root === null) break
+      root = closeLeaf(root, orphanId)
+    }
+    if (root === null) {
+      droppedTabIds.push(tab.id)
+      continue
+    }
+
+    const survivingLeaves = collectLeaves(root)
+    kept.push({
+      ...tab,
+      root,
+      // focusedSessionId is a required field on the persisted tab, and it
+      // pointed at the orphan in the real-world case. Leaving it dangling
+      // would hand the next launch a focus id that resolves to no pane.
+      ...(tab.focusedSessionId !== undefined && !sessions[tab.focusedSessionId]
+        ? { focusedSessionId: survivingLeaves[0] }
+        : {}),
+    })
+  }
+
+  return { tabs: kept, droppedLeafSessionIds, droppedTabIds }
 }
