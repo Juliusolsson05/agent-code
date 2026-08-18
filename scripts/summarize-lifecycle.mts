@@ -112,7 +112,10 @@ async function readLifecycleEvents(runsDir: string, runId: string): Promise<Jour
 function describe(event: JournalEvent): string {
   const data = event.data ?? {}
   const parts: string[] = []
-  for (const key of ['caller', 'kind', 'gate', 'reason', 'code', 'disposition', 'status', 'cause']) {
+  // `unresolvedSessionIds` is here because a restore that never completes is
+  // the failure this summarizer exists to make readable, and the count alone
+  // ('3 of 4') does not tell you which pane to go look at.
+  for (const key of ['caller', 'kind', 'gate', 'reason', 'code', 'disposition', 'status', 'cause', 'unresolvedSessionIds']) {
     const value = data[key]
     if (value !== undefined && value !== null && value !== '') parts.push(`${key}=${String(value)}`)
   }

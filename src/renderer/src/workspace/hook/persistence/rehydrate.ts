@@ -828,14 +828,22 @@ export async function rehydrateWorkspace(
   // required diffing tile leaves against the `sessions` map by hand. The count
   // alone tells you that restore is stuck; the ids tell you why, which is the
   // whole point of recording this event.
-  const unresolvedSessionIds = [...liveProcessIds]
-    .filter(id => !resolvedIds.has(id))
-    .join(',')
+  const unresolved = [...liveProcessIds].filter(id => !resolvedIds.has(id))
   reportLifecycle('rehydrate.complete', undefined, {
     expectedCount: expectedSessions,
     resolvedCount: resolvedIds.size,
     ok: resolvedIds.size === expectedSessions,
-    unresolvedSessionIds,
+    // Only on a failure: a healthy boot would otherwise record an empty string
+    // on every launch, and "the field is absent" already means "none".
+    //
+    // Capped at 8 because the journal sanitizer truncates strings over 300
+    // chars, which at ~37 bytes per comma-joined UUID would slice the last id
+    // in half — a half-id in a diagnostic is worse than a missing one, since
+    // it reads like a real id. `expectedCount`/`resolvedCount` still carry the
+    // true totals.
+    ...(unresolved.length > 0
+      ? { unresolvedSessionIds: unresolved.slice(0, 8).join(',') }
+      : {}),
     durationMs: Date.now() - rehydrateStartedAt,
   })
   return {
