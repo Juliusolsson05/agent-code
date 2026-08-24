@@ -7,6 +7,8 @@ import {
   AgentTerminalOwnershipProvider,
   AgentTerminalOwnerVisibilityProvider,
   MountedAgentTerminalOwner,
+  useAgentTerminalDimensionActive,
+  useHasAgentTerminalDimensionClaim,
 } from '@renderer/workspace/terminal/AgentTerminalOwnership'
 import { DebugSurfacesImpl } from './DebugSurfacesImpl'
 
@@ -16,6 +18,7 @@ const harness = vi.hoisted(() => ({
   workspace: {} as Record<string, unknown>,
   inlineRawTerminalDisabled: undefined as boolean | undefined,
   panePassiveParentClasses: [] as string[],
+  handoffEvents: [] as string[],
 }))
 
 function PanePassiveResizeProbe() {
@@ -26,6 +29,32 @@ function PanePassiveResizeProbe() {
   }, [])
 
   return <div ref={nodeRef} data-testid="pane-passive-probe" />
+}
+
+function PaneDimensionWriterProbe() {
+  const active = useAgentTerminalDimensionActive()
+
+  useEffect(() => {
+    if (active) harness.handoffEvents.push('pane-writer-active')
+  }, [active])
+
+  return null
+}
+
+function InlineDimensionOwnerProbe() {
+  const paneClaimsDimensions = useHasAgentTerminalDimensionClaim('session-1')
+  if (paneClaimsDimensions) return null
+  return <InlineDimensionOwnerLifecycle />
+}
+
+function InlineDimensionOwnerLifecycle() {
+  useEffect(() => {
+    return () => {
+      harness.handoffEvents.push('inline-owner-cleanup')
+    }
+  }, [])
+
+  return null
 }
 
 vi.mock('@renderer/app-state/hooks', () => ({
@@ -57,6 +86,7 @@ describe('DebugSurfacesImpl terminal ownership guard', () => {
   beforeEach(() => {
     harness.inlineRawTerminalDisabled = undefined
     harness.panePassiveParentClasses = []
+    harness.handoffEvents = []
     harness.appState = {
       debugPanelOpen: true,
       feedDebugPanelOpen: false,
@@ -163,6 +193,35 @@ describe('DebugSurfacesImpl terminal ownership guard', () => {
       expect(screen.getByTestId('retained-pane-terminal')).toBe(retainedPane)
       expect(retainedPane.parentElement?.className).toBe('hidden')
       expect(harness.inlineRawTerminalDisabled).toBe(false)
+    })
+  })
+
+  it('does not activate the pane dimension writer until the inline owner passive cleanup finishes', async () => {
+    const tree = (visible: boolean) => (
+      <AgentTerminalOwnershipProvider>
+        <AgentTerminalOwnerVisibilityProvider visible={visible}>
+          <MountedAgentTerminalOwner sessionId="session-1">
+            <PaneDimensionWriterProbe />
+          </MountedAgentTerminalOwner>
+        </AgentTerminalOwnerVisibilityProvider>
+        <InlineDimensionOwnerProbe />
+      </AgentTerminalOwnershipProvider>
+    )
+    const view = render(tree(false))
+
+    harness.handoffEvents = []
+    view.rerender(tree(true))
+
+    // The first gate recorded that sibling passive setup can run before
+    // sibling cleanup. Ownership therefore uses a second render after the
+    // registry/passive flush, rather than trusting component tree order. This
+    // assertion pins the safety property itself: the old inline writer has
+    // completed cleanup before the pane receives write capability.
+    await waitFor(() => {
+      expect(harness.handoffEvents).toEqual([
+        'inline-owner-cleanup',
+        'pane-writer-active',
+      ])
     })
   })
 

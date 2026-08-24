@@ -4,12 +4,12 @@ import { afterEach, describe, expect, it } from 'vitest'
 import {
   AgentTerminalOwnershipProvider,
   MountedAgentTerminalOwner,
-  useHasMountedAgentTerminal,
+  useHasAgentTerminalDimensionClaim,
 } from '@renderer/workspace/terminal/AgentTerminalOwnership'
 import { GlobalEditorWorkspaceSlot } from './GlobalEditorWorkspaceSlot'
 
 function OwnershipProbe() {
-  const ownsDimensions = useHasMountedAgentTerminal('session-1')
+  const ownsDimensions = useHasAgentTerminalDimensionClaim('session-1')
   return <div data-testid="ownership-probe">{ownsDimensions ? 'owned' : 'released'}</div>
 }
 

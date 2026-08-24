@@ -9,7 +9,7 @@ import { useAppStore } from '@renderer/app-state/hooks'
 import { useWorkspaceContext } from '@renderer/workspace/WorkspaceContext'
 import { useDevDebugConfig } from '@renderer/features/debug/devDebugConfig'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
-import { useHasMountedAgentTerminal } from '@renderer/workspace/terminal/AgentTerminalOwnership'
+import { useHasAgentTerminalDimensionClaim } from '@renderer/workspace/terminal/AgentTerminalOwnership'
 
 // The debug side surfaces, one block per panel flag, in the exact
 // order App.tsx mounted them. Every surface needs the command-target session;
@@ -34,7 +34,7 @@ export function DebugSurfacesImpl() {
   const devDebugEnabled = useDevDebugConfig(state => state.enabled)
 
   const targetId = commandTargetSessionId(workspace)
-  const paneTerminalMounted = useHasMountedAgentTerminal(targetId)
+  const paneTerminalClaimsDimensions = useHasAgentTerminalDimensionClaim(targetId)
   if (!targetId) return null
   const kind = workspace.state.sessions[targetId]?.kind ?? DEFAULT_PROVIDER
   const session = workspace.state.sessions[targetId]
@@ -90,7 +90,7 @@ export function DebugSurfacesImpl() {
           // while Spotlight can mount a different session. The interactive
           // debug xterm conflicts only with a real, mounted AgentTerminalLeaf
           // that can currently resize this exact PTY.
-          inlineRawTerminalDisabled={paneTerminalMounted}
+        inlineRawTerminalDisabled={paneTerminalClaimsDimensions}
           onClose={toggleDebugPanel}
         />
       )}

@@ -1,6 +1,6 @@
 # Agent View / Debug Panel Interlock — Implementation Plan
 
-**Status:** Visibility/transition stage implemented; awaiting third orchestration gate
+**Status:** Terminal writer fencing implemented; awaiting fourth orchestration gate
 
 **Date:** 2026-08-24
 
@@ -97,6 +97,20 @@ exit this creates a two-phase handoff: register while the pane has zero layout
 dimensions, then reveal the pane in the same render that removes the inline
 terminal. No effect-order assumption is required for safety.
 
+The third gate found that DOM visibility still does not fence an asynchronous
+write already queued inside `AgentTerminalLeaf`. A visible pane can measure its
+viewport while `attachAgentPty()` is pending, enter Global Editor fullscreen,
+release registry ownership, and then replay that old `pendingResize` when the
+attach promise resolves. The retained component is hidden, but its closure is
+still live and can overwrite the inline terminal's dimensions.
+
+The terminal writer itself must consume the ownership handoff. Every pane
+`resize()` path—including delayed attach replay—will check a context published
+by the ownership boundary. Losing ownership clears pending measurements and
+invalidates the last-sent de-duplication key. Reacquiring ownership schedules a
+fresh measurement; it must not trust dimensions captured before an inline
+terminal could have resized the backend.
+
 ## Regression coverage
 
 Keep `workspace/agentDisplayMode.test.ts` coverage for session-aware policy:
@@ -123,6 +137,10 @@ Add a renderer regression that co-renders `MainSurface` and
 6. Assert the pane boundary is still layout-hidden during the registration
    render. This records the transition protection that replaces the disproven
    passive-effect ordering assumption.
+7. Delay the real pane's `attachAgentPty()` promise, capture a visible pane
+   measurement, enter Global Editor fullscreen, then resolve attach. Assert the
+   hidden pane emits no resize, and assert leaving fullscreen produces a fresh
+   pane resize even when its rows/columns equal the pre-takeover measurement.
 
 ## Delivery steps
 
@@ -137,10 +155,12 @@ Add a renderer regression that co-renders `MainSurface` and
    tests from the second orchestration gate before revising ownership.
 6. Thread workspace visibility through Global Editor and make the ownership
    boundary retain-but-hide terminals until they are registered and visible.
-7. Run the focused unit test, renderer tests, typecheck, and the repository's
+7. Fence all pane resize paths with the published active-owner context, clear
+   stale pending/dedupe state on release, and remeasure after safe reacquisition.
+8. Run the focused unit test, renderer tests, typecheck, and the repository's
    contract/keybinding checks. Run the full test suite and production build if
    the focused verification is clean.
-8. Update this plan's status and verification record, commit the complete
+9. Update this plan's status and verification record, commit the complete
    change, push the branch, and open the pull request.
 
 ## Explicit non-goals
@@ -205,3 +225,18 @@ Add a renderer regression that co-renders `MainSurface` and
   packaged-output verification has no new `release/mac-arm64` artifact to read;
   this is an existing packaging configuration constraint, not a test weakened
   for this change. The production application build itself is green.
+- Third orchestration gate `run_9420110a-5ccd-47dc-9c09-2ecbcba9ee6a`
+  reproduced a delayed-attach P1: `AgentTerminalLeaf` replayed a pane-sized
+  `pendingResize` after Global Editor fullscreen had hidden and unregistered
+  it. The real-terminal regression was added against a controllable attach
+  promise and failed red with the forbidden `resize(session-1, 120, 40)` call
+  before the writer fence was implemented.
+- The real delayed-attach regression now passes. The pane writer consumes the
+  ownership context, cancels scheduled frames, discards epoch-stale pending
+  measurements, invalidates its last-sent dimensions on release, and performs a
+  fresh fit on reacquisition. A second regression proves the inline owner's
+  passive cleanup is recorded before pane writer activation.
+- Focused policy/ownership/real-terminal suites pass 21/21. TypeScript,
+  test-contract, keybinding, production build, and `git diff --check` pass.
+  Full Vitest is 1,839/1,840; the sole failure remains the unchanged missing
+  private image-corpus session documented above.
