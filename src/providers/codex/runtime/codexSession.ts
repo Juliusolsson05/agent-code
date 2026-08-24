@@ -7,7 +7,12 @@ import type { SlashPickerState } from '@preload/index.js'
 import { PROXY_EVENTS_DIR } from '@main/storage/paths.js'
 import { scheduleDebugStoragePrune } from '@main/storage/debugRetention.js'
 import { CodexHeadless, CodexResponsesAdapter, ResponsesProxy } from 'codex-headless'
-import type { CodexConditionSnapshot, CodexRolloutLine, CodexSemanticEvent } from 'codex-headless'
+import type {
+  CodexConditionSnapshot,
+  CodexRolloutDiagnostic,
+  CodexRolloutLine,
+  CodexSemanticEvent,
+} from 'codex-headless'
 import { canonicalizePath, sanitizePathSegment } from '@shared/runtime/projectDir.js'
 import type { BuiltInMcpServerConfig } from '@mcp/shared/types.js'
 import type {
@@ -126,6 +131,7 @@ export type CodexSessionEvents = {
   screen: [CodexScreenSnapshot]
   'jsonl-entry': [CodexRolloutLine, string]
   'jsonl-error': [Error]
+  'transcript-diagnostic': [CodexRolloutDiagnostic]
   // process-state carries the optional spinner-derived status string
   // (e.g. "working… 12s") so the renderer can show provider-specific
   // verbiage in its activity indicator. Without this, the renderer
@@ -364,6 +370,16 @@ export class CodexSession extends EventEmitter {
 
     this.headless.on('rollout-error', err => {
       this.emit('jsonl-error', err)
+    })
+
+    // WHY this is a diagnostic channel instead of jsonl-error: a held fresh
+    // candidate is the safe fail-closed outcome when ownership is not proven.
+    // Calling it an error makes a healthy sibling rollout look fatal; dropping
+    // it made #632 indistinguishable from failed PTY delivery. The main process
+    // records this content-safe evidence but no renderer correctness path uses
+    // it.
+    this.headless.on('rollout-diagnostic', diagnostic => {
+      this.emit('transcript-diagnostic', diagnostic)
     })
 
     this.headless.semantic.on('event', (ev: CodexSemanticEvent) => {

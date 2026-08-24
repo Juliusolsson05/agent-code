@@ -254,6 +254,14 @@ export type AgentSessionEvents = {
   screen: [AgentScreenSnapshot]
   'jsonl-entry': [AgentTranscriptEntry, string]
   'jsonl-error': [Error]
+  /**
+   * Diagnostic-only explanation of transcript discovery/ownership decisions.
+   * Providers that do not expose one simply never emit it. Correctness must
+   * continue to use committed entries and errors; this channel exists so a
+   * held candidate is inspectable in a recording instead of looking like a
+   * silent transport failure.
+   */
+  'transcript-diagnostic': [unknown]
   'process-state': [AgentProcessState]
   'trust-dialog': [AgentTrustDialogState]
   conditions: [ProviderConditionSnapshot]

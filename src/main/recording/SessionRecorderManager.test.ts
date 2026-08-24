@@ -62,6 +62,15 @@ describe('SessionRecorderManager', () => {
     // Allowlisted.
     mono = 10
     m.observe('session:semantic-event', [{ sessionId: 's1', event: { kind: 'turn_started' } }])
+    mono = 18
+    m.observe('session:transcript-diagnostic', [{
+      sessionId: 's1',
+      diagnostic: {
+        type: 'fresh-rollout-ownership-decision',
+        decision: 'hold',
+        tailStarted: false,
+      },
+    }])
     mono = 25
     m.observe('session:jsonl-entries', [
       { sessionId: 's1', entries: [{ uuid: 'u1' }], file: '/x.jsonl' },
@@ -71,19 +80,29 @@ describe('SessionRecorderManager', () => {
     const dir = await readRecordingDir('s1')
     const meta = JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8'))
     expect(meta.sessionId).toBe('s1')
-    expect(meta.eventCount).toBe(2) // the two allowlisted, not the pty/lsp
+    expect(meta.eventCount).toBe(3) // the three allowlisted, not the pty/lsp
     expect(meta.endedAtWall).toBe(wall)
 
     const lines = readFileSync(join(dir, 'events.jsonl'), 'utf8')
       .trim()
       .split('\n')
       .map(l => JSON.parse(l))
-    expect(lines.map(l => l.ch)).toEqual(['session:semantic-event', 'session:jsonl-entries'])
-    // t is relative to recording START (explicit startRecording at mono=0);
-    // the two events at mono 10 and 25 are t=10 and t=25.
+    expect(lines.map(l => l.ch)).toEqual([
+      'session:semantic-event',
+      'session:transcript-diagnostic',
+      'session:jsonl-entries',
+    ])
+    // t is relative to recording START (explicit startRecording at mono=0),
+    // so adding a diagnostic must preserve the original event timestamps and
+    // occupy its own measured point rather than inheriting the next feed event.
     expect(lines[0].t).toBe(10)
-    expect(lines[1].t).toBe(25)
+    expect(lines[1].t).toBe(18)
+    expect(lines[2].t).toBe(25)
     expect(lines[0].payload.event.kind).toBe('turn_started')
+    expect(lines[1].payload.diagnostic).toMatchObject({
+      decision: 'hold',
+      tailStarted: false,
+    })
   })
 
   it('defers payload serialization off the outbound IPC observation stack', async () => {
