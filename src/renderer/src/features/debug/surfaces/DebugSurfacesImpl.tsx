@@ -9,7 +9,7 @@ import { useAppStore } from '@renderer/app-state/hooks'
 import { useWorkspaceContext } from '@renderer/workspace/WorkspaceContext'
 import { useDevDebugConfig } from '@renderer/features/debug/devDebugConfig'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
-import { getEffectiveAgentSurface } from '@renderer/workspace/agentDisplayMode'
+import { getEffectiveAgentSurfaceForSession } from '@renderer/workspace/agentDisplayMode'
 
 // The debug side surfaces, one block per panel flag, in the exact
 // order App.tsx mounted them. Every surface needs the command-target session;
@@ -38,6 +38,7 @@ export function DebugSurfacesImpl() {
   if (!targetId) return null
   const kind = workspace.state.sessions[targetId]?.kind ?? DEFAULT_PROVIDER
   const session = workspace.state.sessions[targetId]
+  const runtime = workspace.getRuntime(targetId)
 
   const saveRenderingElement = async (diagnosticJson: string): Promise<void> => {
     try {
@@ -82,13 +83,19 @@ export function DebugSurfacesImpl() {
       {debugPanelOpen && (
         <DebugPanel
           sessionId={targetId}
-          runtime={workspace.getRuntime(targetId)}
+          runtime={runtime}
           kind={kind}
           inlineRawTerminalDisabled={
-            getEffectiveAgentSurface({
+            // WHY this must be the exact session-aware selector used by
+            // TileTree: the interactive debug xterm and AgentTerminalLeaf both
+            // resize the same provider PTY. Byte-stream attachment is safely
+            // refcounted, but a PTY has only one row/column size, so mounting
+            // both viewports creates a last-writer-wins resize fight.
+            getEffectiveAgentSurfaceForSession({
               kind,
-              mode: agentViewMode,
-              runtime: workspace.getRuntime(targetId),
+              globalMode: agentViewMode,
+              override: session?.agentViewModeOverride,
+              runtime,
             }) === 'terminal'
           }
           onClose={toggleDebugPanel}
@@ -97,7 +104,7 @@ export function DebugSurfacesImpl() {
       {feedDebugPanelOpen && (
         <FeedDebugPanel
           sessionId={targetId}
-          runtime={workspace.getRuntime(targetId)}
+          runtime={runtime}
           kind={kind}
           onClose={toggleFeedDebugPanel}
         />
@@ -119,7 +126,7 @@ export function DebugSurfacesImpl() {
       {devDebugEnabled && devDebugPanelOpen && (
         <DevDebugPanel
           sessionId={targetId}
-          runtime={workspace.getRuntime(targetId)}
+          runtime={runtime}
           kind={kind}
           workspace={workspace}
           onClose={toggleDevDebugPanel}

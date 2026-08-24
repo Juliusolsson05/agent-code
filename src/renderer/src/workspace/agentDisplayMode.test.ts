@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   commandAllowedByRenderedViewPolicy,
   getEffectiveAgentSurface,
+  getEffectiveAgentSurfaceForSession,
   resolveConfiguredAgentViewMode,
 } from '@renderer/workspace/agentDisplayMode'
 import { emptyRuntime } from '@renderer/session-runtime/state'
@@ -35,6 +36,47 @@ describe('agent display mode policy', () => {
     expect(resolveConfiguredAgentViewMode('hybrid', undefined)).toBe('hybrid')
     expect(resolveConfiguredAgentViewMode('hybrid', 'agent')).toBe('agent')
     expect(resolveConfiguredAgentViewMode('agent', 'terminal')).toBe('terminal')
+  })
+
+  it('uses the resolved session mode when choosing the mounted surface', () => {
+    expect(
+      getEffectiveAgentSurfaceForSession({
+        kind: 'claude',
+        globalMode: 'agent',
+        override: 'terminal',
+        runtime: emptyRuntime(),
+      }),
+    ).toBe('terminal')
+
+    expect(
+      getEffectiveAgentSurfaceForSession({
+        kind: 'codex',
+        globalMode: 'terminal',
+        override: 'agent',
+        runtime: emptyRuntime(),
+      }),
+    ).toBe('rendered')
+
+    expect(
+      getEffectiveAgentSurfaceForSession({
+        kind: 'claude',
+        globalMode: 'terminal',
+        override: undefined,
+        runtime: emptyRuntime(),
+      }),
+    ).toBe('terminal')
+
+    expect(
+      getEffectiveAgentSurfaceForSession({
+        kind: 'claude',
+        globalMode: 'hybrid',
+        override: undefined,
+        runtime: {
+          ...emptyRuntime(),
+          renderedViewLeases: { 'copy-assistant-message': 1 },
+        },
+      }),
+    ).toBe('rendered')
   })
 
   it('keeps Agent mode on the rendered surface even without leases', () => {

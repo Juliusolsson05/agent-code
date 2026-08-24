@@ -113,6 +113,27 @@ export function getEffectiveAgentSurface(args: {
   return renderedViewLeaseCount(runtime) > 0 ? 'rendered' : 'terminal'
 }
 
+export function getEffectiveAgentSurfaceForSession(args: {
+  kind: SessionKind | undefined
+  globalMode: AgentViewMode
+  override: AgentViewModeOverride | undefined
+  runtime: SessionRuntime
+}): EffectiveAgentSurface {
+  // WHY this composition is a named policy boundary instead of two calls at
+  // every consumer: the pane renderer and any auxiliary terminal surface must
+  // agree on which surface owns the provider PTY. A per-session override was
+  // once added to TileTree without being added to the debug-panel guard. That
+  // allowed two differently-sized xterms to call resize() for one PTY, making
+  // the provider TUI alternate between their row/column pairs. Keeping global
+  // mode, durable session override, provider normalization, and Hybrid runtime
+  // promotion in one selector makes dropping any of those inputs harder.
+  return getEffectiveAgentSurface({
+    kind: args.kind,
+    mode: resolveConfiguredAgentViewMode(args.globalMode, args.override),
+    runtime: args.runtime,
+  })
+}
+
 export function commandAllowedByRenderedViewPolicy(args: {
   policy: RenderedViewPolicy | undefined
   kind: SessionKind | undefined
