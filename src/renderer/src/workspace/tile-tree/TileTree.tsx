@@ -3,15 +3,13 @@ import { useCallback, useRef } from 'react'
 
 import { getRendererProvider } from '@providers/registry.renderer'
 import type { AgentViewMode } from '@renderer/app-state/settings/types'
-import {
-  getEffectiveAgentSurface,
-  resolveConfiguredAgentViewMode,
-} from '@renderer/workspace/agentDisplayMode'
+import { getEffectiveAgentSurfaceForSession } from '@renderer/workspace/agentDisplayMode'
 import {
   buildGridRelatedAgentTabs,
   selectedGridRelatedSessionId,
 } from '@renderer/workspace/gridRelatedAgents'
 import { AgentTerminalLeaf } from '@renderer/workspace/tile-tree/AgentTerminalLeaf'
+import { MountedAgentTerminalOwner } from '@renderer/workspace/terminal/AgentTerminalOwnership'
 import { TerminalLeaf } from '@renderer/workspace/tile-tree/TerminalLeaf'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { SessionId, TabId, TileNode } from '@renderer/workspace/types'
@@ -129,22 +127,25 @@ export function renderWorkspaceLeaf(
 
   const provider = getRendererProvider(kind)
   const runtime = workspace.getRuntime(renderedSessionId)
-  const configuredAgentViewMode = resolveConfiguredAgentViewMode(
-    agentViewMode,
-    meta?.agentViewModeOverride,
-  )
-  if (getEffectiveAgentSurface({ kind, mode: configuredAgentViewMode, runtime }) === 'terminal') {
+  if (getEffectiveAgentSurfaceForSession({
+    kind,
+    globalMode: agentViewMode,
+    override: meta?.agentViewModeOverride,
+    runtime,
+  }) === 'terminal') {
     return (
-      <AgentTerminalLeaf
-        sessionId={renderedSessionId}
-        paneLabel={paneLabel}
-        focused={sessionId === focusedSessionId}
-        onFocusRequest={onFocusRequest}
-        workspace={workspace}
-        runtime={runtime}
-        projectDir={runtime.projectDir ?? meta?.cwd ?? null}
-        provider={kind}
-      />
+      <MountedAgentTerminalOwner sessionId={renderedSessionId}>
+        <AgentTerminalLeaf
+          sessionId={renderedSessionId}
+          paneLabel={paneLabel}
+          focused={sessionId === focusedSessionId}
+          onFocusRequest={onFocusRequest}
+          workspace={workspace}
+          runtime={runtime}
+          projectDir={runtime.projectDir ?? meta?.cwd ?? null}
+          provider={kind}
+        />
+      </MountedAgentTerminalOwner>
     )
   }
 

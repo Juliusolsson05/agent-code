@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 
@@ -15,6 +15,7 @@ import { isSessionExited } from '@renderer/workspace/providerSessionIdentity'
 import { shortenCwd } from '@renderer/workspace/tile-tree/TileLeaf/labels'
 import { PaneToast } from '@renderer/workspace/tile-tree/TileLeaf/PaneToast'
 import { useComposerDictation } from '@renderer/workspace/tile-tree/TileLeaf/useComposerDictation'
+import { useAgentTerminalDimensionActive } from '@renderer/workspace/terminal/AgentTerminalOwnership'
 
 type Props = {
   sessionId: SessionId
@@ -69,6 +70,22 @@ export function AgentTerminalLeaf({
   const termRef = useRef<Terminal | null>(null)
   const focusedRef = useRef(focused)
   focusedRef.current = focused
+  const dimensionActive = useAgentTerminalDimensionActive()
+  const dimensionActiveRef = useRef(false)
+  const dimensionOwnershipEpochRef = useRef(0)
+  const onDimensionOwnershipChangeRef = useRef<((active: boolean) => void) | null>(null)
+
+  useLayoutEffect(() => {
+    // WHY the terminal receives ownership as an imperative fence as well as a
+    // hidden ancestor: asynchronous attach/ResizeObserver callbacks outlive the
+    // render that scheduled them. A delayed attach can otherwise replay a
+    // measurement captured before Global Editor fullscreen released ownership.
+    // Incrementing the epoch invalidates queued measurements across both loss
+    // and reacquisition, even if the component itself remains mounted.
+    dimensionActiveRef.current = dimensionActive
+    dimensionOwnershipEpochRef.current += 1
+    onDimensionOwnershipChangeRef.current?.(dimensionActive)
+  }, [dimensionActive])
 
   useComposerDictation({
     enabled: dictationEnabled,
@@ -110,12 +127,17 @@ export function AgentTerminalLeaf({
     let attachedBackfillDone = false
     let lastCols = 0
     let lastRows = 0
-    let pendingResize: { cols: number; rows: number } | null = null
+    let pendingResize: { cols: number; rows: number; ownershipEpoch: number } | null = null
     const pendingInput: string[] = []
     const backlogQueue: string[] = []
     let onThemeChangedListener: ((e: Event) => void) | null = null
 
     const sendResizeIfChanged = (cols: number, rows: number) => {
+      // Visibility is not merely a measurement concern. This is the last
+      // writer-side fence before the singular provider PTY size changes, so it
+      // also protects delayed attach replay and callbacks already queued when
+      // ownership was released.
+      if (!dimensionActiveRef.current) return
       if (cols === lastCols && rows === lastRows) return
       lastCols = cols
       lastRows = rows
@@ -124,6 +146,10 @@ export function AgentTerminalLeaf({
 
     const fitAndResizeBackend = () => {
       resizeFrame = null
+      if (!dimensionActiveRef.current) {
+        pendingResize = null
+        return
+      }
       if (!term || !fit) return
       try {
         fit.fit()
@@ -140,7 +166,11 @@ export function AgentTerminalLeaf({
           // and remembering those cols/rows as "sent" would prevent the real PTY
           // from receiving its first size. Preserve only the latest measurement
           // and replay it once attach confirms the backend exists.
-          pendingResize = { cols, rows }
+          pendingResize = {
+            cols,
+            rows,
+            ownershipEpoch: dimensionOwnershipEpochRef.current,
+          }
           return
         }
         sendResizeIfChanged(cols, rows)
@@ -151,8 +181,32 @@ export function AgentTerminalLeaf({
     }
 
     const scheduleFitAndResizeBackend = () => {
+      if (!dimensionActiveRef.current) return
       if (resizeFrame !== null) return
       resizeFrame = requestAnimationFrame(fitAndResizeBackend)
+    }
+
+    onDimensionOwnershipChangeRef.current = active => {
+      if (!active) {
+        // WHY reset both queued and sent state: while this pane is inactive the
+        // inline terminal may resize the backend to a different viewport. A
+        // stale pending measurement must never replay, and lastCols/lastRows no
+        // longer describe backend truth even if this pane returns at the same
+        // size it had before the takeover.
+        pendingResize = null
+        lastCols = 0
+        lastRows = 0
+        if (resizeFrame !== null) {
+          cancelAnimationFrame(resizeFrame)
+          resizeFrame = null
+        }
+        return
+      }
+
+      // Reacquisition always measures the current container. It cannot reuse a
+      // pre-takeover value because another legitimate owner may have changed
+      // the singular backend dimensions while this retained xterm was hidden.
+      scheduleFitAndResizeBackend()
     }
 
     try {
@@ -169,7 +223,7 @@ export function AgentTerminalLeaf({
       term.open(container)
       termRef.current = term
 
-      scheduleFitAndResizeBackend()
+      if (dimensionActiveRef.current) scheduleFitAndResizeBackend()
       resizeObserver = new ResizeObserver(scheduleFitAndResizeBackend)
       resizeObserver.observe(container)
 
@@ -273,8 +327,14 @@ export function AgentTerminalLeaf({
         backlogQueue.length = 0
         attachedBackfillDone = true
         if (pendingResize) {
-          sendResizeIfChanged(pendingResize.cols, pendingResize.rows)
+          const measured = pendingResize
           pendingResize = null
+          if (
+            dimensionActiveRef.current &&
+            measured.ownershipEpoch === dimensionOwnershipEpochRef.current
+          ) {
+            sendResizeIfChanged(measured.cols, measured.rows)
+          }
         }
         if (pendingInput.length > 0) {
           void window.api.sendInput(sessionId, pendingInput.join(''))
@@ -335,6 +395,7 @@ export function AgentTerminalLeaf({
       if (attached) void window.api.detachAgentPty(sessionId)
       term?.dispose()
       termRef.current = null
+      onDimensionOwnershipChangeRef.current = null
     }
   }, [sessionId])
 
