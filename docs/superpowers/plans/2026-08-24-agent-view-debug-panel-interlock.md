@@ -1,6 +1,6 @@
 # Agent View / Debug Panel Interlock — Implementation Plan
 
-**Status:** Revised implementation complete; awaiting second orchestration gate
+**Status:** Visibility/transition stage implemented; awaiting third orchestration gate
 
 **Date:** 2026-08-24
 
@@ -77,6 +77,26 @@ inside the debug panel would create a second renderer that inevitably drifts.
 The mount boundary is the inspectable fact we care about, and a refcount keeps
 duplicate visible renderers of one session safe.
 
+The second orchestration gate exposed two facts that make "mounted" alone too
+weak:
+
+- Global Editor fullscreen deliberately retains the workspace subtree under
+  `display:none`. Its pane terminal is mounted but has no positive viewport and
+  therefore cannot own useful dimensions. Suppressing the debug terminal in
+  that state recreates the Settings/Reader bug through a different takeover.
+- A recorded React effect-order experiment showed that a newly mounted pane's
+  passive effect can run before the already-open inline terminal's passive
+  cleanup, even when ownership is published from a layout effect. The original
+  comment promising the reverse ordering was incorrect.
+
+The ownership boundary must therefore mean **visible and resize-capable**, not
+merely mounted. Global Editor will publish whether its retained workspace slot
+is visible. The boundary keeps the terminal component mounted for state
+retention, but hides its DOM until registration has propagated. On takeover
+exit this creates a two-phase handoff: register while the pane has zero layout
+dimensions, then reveal the pane in the same render that removes the inline
+terminal. No effect-order assumption is required for safety.
+
 ## Regression coverage
 
 Keep `workspace/agentDisplayMode.test.ts` coverage for session-aware policy:
@@ -96,6 +116,13 @@ Add a renderer regression that co-renders `MainSurface` and
    the pane terminal reclaims dimension ownership.
 4. Repeat the ownership assertion for Reader or Spotlight identity where the
    focused takeover changes what is actually mounted.
+5. Keep a retained pane terminal mounted but mark its containing workspace
+   invisible, matching Global Editor fullscreen. The pane must remain hidden,
+   release dimension ownership, and make the inline recovery terminal
+   available; restoring visibility must reverse that handoff.
+6. Assert the pane boundary is still layout-hidden during the registration
+   render. This records the transition protection that replaces the disproven
+   passive-effect ordering assumption.
 
 ## Delivery steps
 
@@ -106,10 +133,14 @@ Add a renderer regression that co-renders `MainSurface` and
    move `DebugSurfacesImpl` to the ownership registry.
 4. Add the failing takeover transition test from recorded orchestration review
    evidence before changing the implementation.
-5. Run the focused unit test, renderer tests, typecheck, and the repository's
+5. Add the failing retained-but-hidden Global Editor and two-phase handoff
+   tests from the second orchestration gate before revising ownership.
+6. Thread workspace visibility through Global Editor and make the ownership
+   boundary retain-but-hide terminals until they are registered and visible.
+7. Run the focused unit test, renderer tests, typecheck, and the repository's
    contract/keybinding checks. Run the full test suite and production build if
    the focused verification is clean.
-6. Update this plan's status and verification record, commit the complete
+8. Update this plan's status and verification record, commit the complete
    change, push the branch, and open the pull request.
 
 ## Explicit non-goals
@@ -152,3 +183,25 @@ Add a renderer regression that co-renders `MainSurface` and
 - The production build reports the repository's existing bundle-size and
   dynamic-import warnings and intentionally skips uncached release-only runtime
   archives.
+- Second orchestration gate `run_6aa4f919-28fb-42a1-8097-b6585f059489`
+  completed both independent reviews without the first gate's workflow timeout
+  pathology. One review was GREEN; the other reproduced Global Editor
+  fullscreen as a mounted-but-hidden false owner and recorded React's actual
+  transition effect order. This plan was revised before another implementation
+  change, and the gate remains RED until those recorded cases pass.
+- The passive-order and retained-fullscreen regressions were recorded red before
+  the ownership revision. The focused policy/ownership suite now passes 19/19,
+  including a test of the real `GlobalEditorWorkspaceSlot` rather than the old
+  passthrough shell mock. It proves the xterm DOM identity survives fullscreen,
+  ownership is released under `display:none`, and registration propagates
+  before the terminal becomes layout-visible again.
+- TypeScript build, test-contract check, keybinding check, production build,
+  and `git diff --check`: pass after the visibility revision. Full Vitest is
+  1,837/1,838; its only failure remains the unchanged missing private corpus
+  session documented above.
+- Local macOS packaging cannot be regenerated in this worktree because the
+  repository currently declares Electron as the range `^43.1.0`, which
+  electron-builder refuses without an exact configured version. Consequently
+  packaged-output verification has no new `release/mac-arm64` artifact to read;
+  this is an existing packaging configuration constraint, not a test weakened
+  for this change. The production application build itself is green.

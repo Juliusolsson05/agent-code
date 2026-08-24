@@ -1,9 +1,11 @@
-import { cleanup, render } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { useEffect, useRef } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import {
   AgentTerminalOwnershipProvider,
+  AgentTerminalOwnerVisibilityProvider,
   MountedAgentTerminalOwner,
 } from '@renderer/workspace/terminal/AgentTerminalOwnership'
 import { DebugSurfacesImpl } from './DebugSurfacesImpl'
@@ -13,7 +15,18 @@ const harness = vi.hoisted(() => ({
   devDebugState: { enabled: false } as Record<string, unknown>,
   workspace: {} as Record<string, unknown>,
   inlineRawTerminalDisabled: undefined as boolean | undefined,
+  panePassiveParentClasses: [] as string[],
 }))
+
+function PanePassiveResizeProbe() {
+  const nodeRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    harness.panePassiveParentClasses.push(nodeRef.current?.parentElement?.className ?? '')
+  }, [])
+
+  return <div ref={nodeRef} data-testid="pane-passive-probe" />
+}
 
 vi.mock('@renderer/app-state/hooks', () => ({
   useAppStore: (selector: (state: Record<string, unknown>) => unknown) =>
@@ -43,6 +56,7 @@ vi.mock('@renderer/features/debug/ui/DebugPanel', () => ({
 describe('DebugSurfacesImpl terminal ownership guard', () => {
   beforeEach(() => {
     harness.inlineRawTerminalDisabled = undefined
+    harness.panePassiveParentClasses = []
     harness.appState = {
       debugPanelOpen: true,
       feedDebugPanelOpen: false,
@@ -92,6 +106,64 @@ describe('DebugSurfacesImpl terminal ownership guard', () => {
     // leaving this side panel alive. The registry is the only fact that proves
     // another xterm can currently resize this PTY.
     expect(harness.inlineRawTerminalDisabled).toBe(true)
+  })
+
+  it('keeps a newly mounting pane layout-hidden until ownership has displaced the inline terminal', async () => {
+    render(
+      <AgentTerminalOwnershipProvider>
+        <MountedAgentTerminalOwner sessionId="session-1">
+          <PanePassiveResizeProbe />
+        </MountedAgentTerminalOwner>
+        <DebugSurfacesImpl />
+      </AgentTerminalOwnershipProvider>,
+    )
+
+    // Recorded orchestration evidence showed that React may flush a newly
+    // mounted pane's passive terminal effect before an already-open inline
+    // terminal's passive cleanup. The pane therefore has to be zero-layout in
+    // that first passive effect; relying on cleanup order recreates the resize
+    // race even though the registry itself uses a layout effect.
+    expect(harness.panePassiveParentClasses).toEqual(['hidden'])
+    await waitFor(() => {
+      expect(screen.getByTestId('pane-passive-probe').parentElement?.className).toBe('contents')
+      expect(harness.inlineRawTerminalDisabled).toBe(true)
+    })
+  })
+
+  it('releases a retained pane while its workspace is hidden and reclaims ownership before reveal', async () => {
+    const tree = (visible: boolean) => (
+      <AgentTerminalOwnershipProvider>
+        <AgentTerminalOwnerVisibilityProvider visible={visible}>
+          <MountedAgentTerminalOwner sessionId="session-1">
+            <div data-testid="retained-pane-terminal" />
+          </MountedAgentTerminalOwner>
+        </AgentTerminalOwnerVisibilityProvider>
+        <DebugSurfacesImpl />
+      </AgentTerminalOwnershipProvider>
+    )
+    const view = render(tree(false))
+    const retainedPane = screen.getByTestId('retained-pane-terminal')
+
+    // Global Editor fullscreen uses display:none specifically to retain the
+    // workspace/xterm state. Mounted is not sufficient dimension ownership:
+    // the hidden pane cannot produce a positive viewport, so the debug terminal
+    // must remain available while the DOM node itself stays mounted.
+    expect(retainedPane.parentElement?.className).toBe('hidden')
+    expect(harness.inlineRawTerminalDisabled).toBe(false)
+
+    view.rerender(tree(true))
+    await waitFor(() => {
+      expect(screen.getByTestId('retained-pane-terminal')).toBe(retainedPane)
+      expect(retainedPane.parentElement?.className).toBe('contents')
+      expect(harness.inlineRawTerminalDisabled).toBe(true)
+    })
+
+    view.rerender(tree(false))
+    await waitFor(() => {
+      expect(screen.getByTestId('retained-pane-terminal')).toBe(retainedPane)
+      expect(retainedPane.parentElement?.className).toBe('hidden')
+      expect(harness.inlineRawTerminalDisabled).toBe(false)
+    })
   })
 
   it('keeps the inline debug xterm available when policy says Terminal but no pane terminal is mounted', () => {

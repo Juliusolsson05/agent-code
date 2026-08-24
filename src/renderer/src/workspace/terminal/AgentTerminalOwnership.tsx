@@ -18,6 +18,26 @@ type AgentTerminalOwnership = {
 
 const AgentTerminalOwnershipContext = createContext<AgentTerminalOwnership | null>(null)
 
+// Default-visible is intentional: most workspace renderers are physically
+// removed when they lose the main surface, so they need no extra coordination.
+// Only shells that retain a subtree under display:none must opt in and tell the
+// terminal boundary that "mounted" no longer means "can measure a viewport."
+const AgentTerminalOwnerVisibilityContext = createContext(true)
+
+export function AgentTerminalOwnerVisibilityProvider({
+  visible,
+  children,
+}: {
+  visible: boolean
+  children: ReactNode
+}) {
+  return (
+    <AgentTerminalOwnerVisibilityContext.Provider value={visible}>
+      {children}
+    </AgentTerminalOwnerVisibilityContext.Provider>
+  )
+}
+
 export function AgentTerminalOwnershipProvider({ children }: { children: ReactNode }) {
   const ownerCountsRef = useRef(new Map<string, number>())
   const [mountedSessionIds, setMountedSessionIds] = useState<ReadonlySet<string>>(() => new Set())
@@ -63,17 +83,34 @@ export function MountedAgentTerminalOwner({
   children: ReactNode
 }) {
   const ownership = useAgentTerminalOwnership()
+  const ownerVisible = useContext(AgentTerminalOwnerVisibilityContext)
+  const registered = ownerVisible && ownership.mountedSessionIds.has(sessionId)
 
   useLayoutEffect(() => {
-    // WHY this is a layout effect instead of an ordinary effect: when Reader
-    // or Settings closes while the debug inline xterm is open, the pane xterm
-    // is about to mount in the same commit. Publishing ownership before paint
-    // lets DebugPanel remove the inline terminal before either terminal's
-    // passive attach/resize effect can make two viewports fight over one PTY.
-    return ownership.registerMountedOwner(sessionId)
-  }, [ownership.registerMountedOwner, sessionId])
+    // WHY visibility controls registration instead of component lifetime:
+    // Global Editor fullscreen intentionally retains the complete workspace
+    // under display:none so xterm/editor state survives the takeover. That
+    // terminal is technically mounted but cannot measure positive dimensions,
+    // so treating it as an owner would suppress the only usable debug terminal.
+    if (!ownerVisible) return undefined
 
-  return <>{children}</>
+    // WHY this remains a layout effect: registration must be scheduled before
+    // the browser can paint a newly visible pane. We do not depend on layout
+    // effects to order passive terminal effects, however; React may flush a
+    // child's passive setup before the provider state update below. The hidden
+    // handshake in this component is the protection against that real ordering.
+    return ownership.registerMountedOwner(sessionId)
+  }, [ownerVisible, ownership.registerMountedOwner, sessionId])
+
+  // WHY the pane is retained but layout-hidden until registration propagates:
+  // returning null would destroy the xterm that Global Editor deliberately
+  // preserves, while rendering it visibly in the registration commit permits
+  // its passive fit effect to race an inline terminal whose cleanup has not run
+  // yet. The first commit therefore has zero layout dimensions. The provider's
+  // synchronous follow-up render both reveals this pane (`display: contents`)
+  // and tells DebugPanel to remove the inline owner, making the handoff safe
+  // without assuming any particular passive-effect order.
+  return <div className={registered ? 'contents' : 'hidden'}>{children}</div>
 }
 
 export function useHasMountedAgentTerminal(sessionId: string | null): boolean {

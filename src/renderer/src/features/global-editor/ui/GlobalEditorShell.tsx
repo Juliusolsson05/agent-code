@@ -29,6 +29,7 @@ import {
 } from '@renderer/features/global-editor/openFileInGlobalEditor'
 import { QuickOpenOverlay } from '@renderer/features/global-editor/ui/QuickOpenOverlay'
 import { ContentSearchOverlay } from '@renderer/features/global-editor/ui/ContentSearchOverlay'
+import { GlobalEditorWorkspaceSlot } from '@renderer/features/global-editor/ui/GlobalEditorWorkspaceSlot'
 import {
   loadPersistedGlobalEditorState,
   startGlobalEditorPersistence,
@@ -1215,18 +1216,13 @@ export function GlobalEditorShell({ children, workspace }: Props) {
         />
       )}
       {open && !editorFullscreen && outerSplitter.cursorLock}
-      <div
-        className="flex flex-col min-h-0 overflow-hidden"
-        style={
-          !open
-            ? { width: '100%' }
-            : editorFullscreen
-              ? { display: 'none' }
-              : { width: `calc(${rightPercent}% - ${SPLITTER_PX / 2}px)` }
-        }
+      <GlobalEditorWorkspaceSlot
+        open={open}
+        editorFullscreen={editorFullscreen}
+        splitWorkspaceWidth={`calc(${rightPercent}% - ${SPLITTER_PX / 2}px)`}
       >
         {children}
-      </div>
+      </GlobalEditorWorkspaceSlot>
       {open && quickOpenOpen && activeCwd && (
         <QuickOpenOverlay root={activeCwd} onClose={() => setQuickOpenOpen(false)} />
       )}
