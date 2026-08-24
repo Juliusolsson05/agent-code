@@ -9,7 +9,7 @@ import { useAppStore } from '@renderer/app-state/hooks'
 import { useWorkspaceContext } from '@renderer/workspace/WorkspaceContext'
 import { useDevDebugConfig } from '@renderer/features/debug/devDebugConfig'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
-import { getEffectiveAgentSurfaceForSession } from '@renderer/workspace/agentDisplayMode'
+import { useHasMountedAgentTerminal } from '@renderer/workspace/terminal/AgentTerminalOwnership'
 
 // The debug side surfaces, one block per panel flag, in the exact
 // order App.tsx mounted them. Every surface needs the command-target session;
@@ -31,10 +31,10 @@ export function DebugSurfacesImpl() {
   const toggleRenderingDebugMode = useAppStore(state => state.toggleRenderingDebugMode)
   const openDebugBundleNotePrompt = useAppStore(state => state.openDebugBundleNotePrompt)
   const toggleDevDebugPanel = useAppStore(state => state.toggleDevDebugPanel)
-  const agentViewMode = useAppStore(state => state.settings.agentViewMode)
   const devDebugEnabled = useDevDebugConfig(state => state.enabled)
 
   const targetId = commandTargetSessionId(workspace)
+  const paneTerminalMounted = useHasMountedAgentTerminal(targetId)
   if (!targetId) return null
   const kind = workspace.state.sessions[targetId]?.kind ?? DEFAULT_PROVIDER
   const session = workspace.state.sessions[targetId]
@@ -85,19 +85,12 @@ export function DebugSurfacesImpl() {
           sessionId={targetId}
           runtime={runtime}
           kind={kind}
-          inlineRawTerminalDisabled={
-            // WHY this must be the exact session-aware selector used by
-            // TileTree: the interactive debug xterm and AgentTerminalLeaf both
-            // resize the same provider PTY. Byte-stream attachment is safely
-            // refcounted, but a PTY has only one row/column size, so mounting
-            // both viewports creates a last-writer-wins resize fight.
-            getEffectiveAgentSurfaceForSession({
-              kind,
-              globalMode: agentViewMode,
-              override: session?.agentViewModeOverride,
-              runtime,
-            }) === 'terminal'
-          }
+          // WHY policy is not enough here: Settings and Reader unmount the
+          // workspace even though the target remains configured for Terminal,
+          // while Spotlight can mount a different session. The interactive
+          // debug xterm conflicts only with a real, mounted AgentTerminalLeaf
+          // that can currently resize this exact PTY.
+          inlineRawTerminalDisabled={paneTerminalMounted}
           onClose={toggleDebugPanel}
         />
       )}

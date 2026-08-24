@@ -9,6 +9,7 @@ import {
   selectedGridRelatedSessionId,
 } from '@renderer/workspace/gridRelatedAgents'
 import { AgentTerminalLeaf } from '@renderer/workspace/tile-tree/AgentTerminalLeaf'
+import { MountedAgentTerminalOwner } from '@renderer/workspace/terminal/AgentTerminalOwnership'
 import { TerminalLeaf } from '@renderer/workspace/tile-tree/TerminalLeaf'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { SessionId, TabId, TileNode } from '@renderer/workspace/types'
@@ -133,16 +134,18 @@ export function renderWorkspaceLeaf(
     runtime,
   }) === 'terminal') {
     return (
-      <AgentTerminalLeaf
-        sessionId={renderedSessionId}
-        paneLabel={paneLabel}
-        focused={sessionId === focusedSessionId}
-        onFocusRequest={onFocusRequest}
-        workspace={workspace}
-        runtime={runtime}
-        projectDir={runtime.projectDir ?? meta?.cwd ?? null}
-        provider={kind}
-      />
+      <MountedAgentTerminalOwner sessionId={renderedSessionId}>
+        <AgentTerminalLeaf
+          sessionId={renderedSessionId}
+          paneLabel={paneLabel}
+          focused={sessionId === focusedSessionId}
+          onFocusRequest={onFocusRequest}
+          workspace={workspace}
+          runtime={runtime}
+          projectDir={runtime.projectDir ?? meta?.cwd ?? null}
+          provider={kind}
+        />
+      </MountedAgentTerminalOwner>
     )
   }
 

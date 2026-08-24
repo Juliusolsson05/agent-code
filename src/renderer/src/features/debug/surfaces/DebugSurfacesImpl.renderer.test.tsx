@@ -2,6 +2,10 @@ import { cleanup, render } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { emptyRuntime } from '@renderer/session-runtime/state'
+import {
+  AgentTerminalOwnershipProvider,
+  MountedAgentTerminalOwner,
+} from '@renderer/workspace/terminal/AgentTerminalOwnership'
 import { DebugSurfacesImpl } from './DebugSurfacesImpl'
 
 const harness = vi.hoisted(() => ({
@@ -73,34 +77,29 @@ describe('DebugSurfacesImpl terminal ownership guard', () => {
     cleanup()
   })
 
-  it('disables the inline debug xterm for a per-session Terminal override', () => {
-    render(<DebugSurfacesImpl />)
+  it('disables the inline debug xterm while that session has a mounted pane terminal', () => {
+    render(
+      <AgentTerminalOwnershipProvider>
+        <MountedAgentTerminalOwner sessionId="session-1">
+          <div />
+        </MountedAgentTerminalOwner>
+        <DebugSurfacesImpl />
+      </AgentTerminalOwnershipProvider>,
+    )
 
-    // WHY assert the prop at this integration seam instead of only testing the
-    // shared selector: the regression was not incorrect policy math. It was a
-    // call site that omitted durable session metadata while TileTree included
-    // it. This assertion fails if DebugSurfacesImpl ever repeats that drift.
+    // WHY assert the prop at this integration seam instead of predicting from
+    // display settings: Settings and Reader can unmount the pane renderer while
+    // leaving this side panel alive. The registry is the only fact that proves
+    // another xterm can currently resize this PTY.
     expect(harness.inlineRawTerminalDisabled).toBe(true)
   })
 
-  it('keeps the inline debug xterm available for an Agent override of a Terminal default', () => {
-    harness.appState = {
-      ...harness.appState,
-      settings: { agentViewMode: 'terminal' },
-    }
-    harness.workspace = {
-      ...harness.workspace,
-      state: {
-        sessions: {
-          'session-1': {
-            kind: 'codex',
-            agentViewModeOverride: 'agent',
-          },
-        },
-      },
-    }
-
-    render(<DebugSurfacesImpl />)
+  it('keeps the inline debug xterm available when policy says Terminal but no pane terminal is mounted', () => {
+    render(
+      <AgentTerminalOwnershipProvider>
+        <DebugSurfacesImpl />
+      </AgentTerminalOwnershipProvider>,
+    )
 
     expect(harness.inlineRawTerminalDisabled).toBe(false)
   })

@@ -19,6 +19,7 @@ import { GlobalModals } from '@renderer/app/surfaces/GlobalModals'
 import { GlobalOverlays } from '@renderer/app/surfaces/GlobalOverlays'
 import { SidePanels } from '@renderer/app/surfaces/SidePanels'
 import { MainSurface } from '@renderer/app/shell/MainSurface'
+import { AgentTerminalOwnershipProvider } from '@renderer/workspace/terminal/AgentTerminalOwnership'
 import { RestoreBanner } from '@renderer/app/shell/RestoreBanner'
 import { ConfigureDictationCard } from '@renderer/features/voice-dictation/ConfigureDictationCard'
 import { DictationGuideModal } from '@renderer/features/voice-dictation/DictationGuideModal'
@@ -117,12 +118,14 @@ export default function App() {
         <ConfigureDictationCard />
         <TabBar workspace={workspace} onNewTabRequest={onNewTabRequest} />
         <SettingsBar />
-        <div className="flex-1 min-h-0 min-w-0 flex overflow-hidden">
-          <main className="flex-1 min-h-0 min-w-0 overflow-hidden">
-            <MainSurface onNewTabRequest={onNewTabRequest} />
-          </main>
-          <SidePanels />
-        </div>
+        <AgentTerminalOwnershipProvider>
+          <div className="flex-1 min-h-0 min-w-0 flex overflow-hidden">
+            <main className="flex-1 min-h-0 min-w-0 overflow-hidden">
+              <MainSurface onNewTabRequest={onNewTabRequest} />
+            </main>
+            <SidePanels />
+          </div>
+        </AgentTerminalOwnershipProvider>
         {/* Mount order here IS the z-order contract: overlays and modals
             are fixed-position siblings and mostly share z-50, so DOM
             order is the paint-order tiebreaker. Overlays render first

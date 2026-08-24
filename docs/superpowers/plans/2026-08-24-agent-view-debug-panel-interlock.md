@@ -1,6 +1,6 @@
 # Agent View / Debug Panel Interlock — Implementation Plan
 
-**Status:** Implemented
+**Status:** Revised implementation complete; awaiting second orchestration gate
 
 **Date:** 2026-08-24
 
@@ -31,17 +31,26 @@ same inputs:
   `AgentTerminalLeaf` while the debug panel still offers `AgentInlineTerminal`.
   Both call `window.api.resize(sessionId, cols, rows)`.
 
-The existing `DebugPanel` guard is conceptually correct. This is a call-site
-policy drift introduced when per-session overrides were added after the guard.
+The existing `DebugPanel` guard is conceptually correct. This began as a
+call-site policy drift introduced when per-session overrides were added after
+the guard.
+
+The first implementation made configured display policy the debug guard's
+source of truth. A four-agent orchestration review then found a second, distinct
+state that policy cannot answer: Settings and Reader replace the workspace
+surface, so a Terminal-configured session may have no `AgentTerminalLeaf`
+mounted at all. Spotlight can also change which session is actually rendered.
+Suppressing the inline terminal from configuration alone therefore removes a
+valid recovery tool when there is no competing dimension owner.
 
 ## Invariants
 
-1. If the focused pane's effective surface is Terminal, the debug panel must
-   remain useful as a read-only diagnostic panel but must not mount its inline
-   interactive xterm.
-2. The decision must include the global mode, the session override, provider
-   capabilities, and Hybrid runtime state—the same inputs that choose the pane
-   surface.
+1. If an `AgentTerminalLeaf` for the debug target is actually mounted, the
+   debug panel must remain useful as a read-only diagnostic panel but must not
+   mount its inline interactive xterm.
+2. Configured display policy still decides whether a workspace renderer mounts
+   `AgentTerminalLeaf`; the debug panel consumes the resulting mount ownership
+   instead of independently predicting it.
 3. A per-session Agent override over a global Terminal default must not
    unnecessarily disable the inline debug terminal; the effective surface, not
    either setting in isolation, is authoritative.
@@ -52,41 +61,55 @@ policy drift introduced when per-session overrides were added after the guard.
 
 ## Design
 
-Add one shared session-aware selector in `workspace/agentDisplayMode.ts` that
+Keep the shared session-aware selector in `workspace/agentDisplayMode.ts` that
 composes `resolveConfiguredAgentViewMode` with `getEffectiveAgentSurface`.
 
-Use that selector in both:
+Use that selector in `TileTree`, the renderer that chooses the pane surface.
+Wrap each rendered `AgentTerminalLeaf` in a small ownership boundary backed by
+a provider at the app root. The boundary registers and unregisters the exact
+session during React's layout-effect phase. `DebugSurfacesImpl` asks that
+registry whether its target currently owns a mounted pane terminal.
 
-- `TileTree`, which is the source of truth for the mounted pane surface; and
-- `DebugSurfacesImpl`, which decides whether the inline debug terminal is safe.
-
-Keeping both consumers on one selector makes the required inputs explicit and
-prevents another call site from accidentally dropping the override during a
-future display-policy change.
+WHY registration is separate from another layout selector: Agent Code has
+several workspace renderers (grid, classic and tiled Dispatch, Tile Tabs, and
+Spotlight), while Settings and Reader replace them. Re-enumerating those modes
+inside the debug panel would create a second renderer that inevitably drifts.
+The mount boundary is the inspectable fact we care about, and a refcount keeps
+duplicate visible renderers of one session safe.
 
 ## Regression coverage
 
-Extend `workspace/agentDisplayMode.test.ts` with session-aware cases:
+Keep `workspace/agentDisplayMode.test.ts` coverage for session-aware policy:
 
 1. Global Agent + session Terminal => Terminal.
 2. Global Terminal + session Agent => rendered Agent surface.
 3. No override follows the global setting.
 4. Hybrid still follows runtime promotion rules after override resolution.
 
-The first case is the reported regression. The inverse case proves the fix is
-based on the resolved surface rather than a blanket "global or override says
-Terminal" condition.
+Add a renderer regression that co-renders `MainSurface` and
+`DebugSurfacesImpl` under the real ownership provider:
+
+1. Normal workspace + Terminal override mounts `AgentTerminalLeaf`, suppresses
+   the inline control, and exposes only the raw text snapshot.
+2. Opening Settings unmounts the pane terminal and enables the inline control.
+3. Opening that inline terminal and returning to the workspace unmounts it as
+   the pane terminal reclaims dimension ownership.
+4. Repeat the ownership assertion for Reader or Spotlight identity where the
+   focused takeover changes what is actually mounted.
 
 ## Delivery steps
 
-1. Add the failing session-aware policy tests.
-2. Add the shared selector with a thick WHY comment documenting the one-PTY,
-   one-dimension-owner invariant.
-3. Move `TileTree` and `DebugSurfacesImpl` to the shared selector.
-4. Run the focused unit test, renderer tests, typecheck, and the repository's
+1. Preserve the failing-first session-aware policy tests and shared selector.
+2. Add the mount-ownership provider and boundary with a thick WHY comment
+   documenting why render configuration is not mount truth.
+3. Register `AgentTerminalLeaf` instances at the `renderWorkspaceLeaf` seam and
+   move `DebugSurfacesImpl` to the ownership registry.
+4. Add the failing takeover transition test from recorded orchestration review
+   evidence before changing the implementation.
+5. Run the focused unit test, renderer tests, typecheck, and the repository's
    contract/keybinding checks. Run the full test suite and production build if
    the focused verification is clean.
-5. Update this plan's status and verification record, commit the complete
+6. Update this plan's status and verification record, commit the complete
    change, push the branch, and open the pull request.
 
 ## Explicit non-goals
@@ -99,19 +122,33 @@ Terminal" condition.
 
 ## Verification record
 
-- The session-aware selector test was added first and failed red because the
-  selector did not exist yet.
-- Focused policy and renderer integration tests: 14/14 pass.
-- TypeScript project build: pass.
-- Contract check and command-keybinding check: pass.
-- Production application build and packaged-output verification: pass. The
-  build reports the repository's existing bundle-size/dynamic-import warnings
-  and intentionally skips uncached release-only runtime archives.
-- `git diff --check`: pass.
-- Full Vitest run: one unrelated corpus-provenance test fails because its
-  fixture cites a private Claude transcript that is absent from this machine:
+- The original session-aware selector test was added first and failed red
+  because the selector did not exist yet. The first implementation's focused
+  policy and renderer tests passed 14/14 before review.
+- Initial orchestration gate `run_9a7cb5a9-7869-40e5-931c-d012a23677f8`
+  returned RED. Its surviving full-diff reviewer reproduced the
+  Settings/Reader takeover gap and identified that the first renderer test had
+  encoded configured policy without mounting the competing terminal. The plan
+  was revised before further implementation instead of adding another policy
+  conditional.
+- The takeover regression was added before the mount registry and failed red
+  because the ownership module did not exist. After implementation, the
+  session-aware policy suite and both ownership renderer suites pass: 16/16.
+- The renderer transition test co-renders `MainSurface` and
+  `DebugSurfacesImpl`. It proves normal workspace → Settings → normal workspace
+  ownership handoff, including opening the inline terminal during takeover and
+  closing it before the pane terminal reattaches. A Spotlight identity case
+  proves that a terminal mounted for session B does not suppress the debug
+  terminal for session A.
+- TypeScript project build, test-contract check, command-keybinding check,
+  production application build, packaged-output verification, and
+  `git diff --check`: pass.
+- Full Vitest run: 1,833/1,834 pass. The sole failure is the same unrelated,
+  corpus-provenance failure on untouched `main`: the fixture
   `atp-codex-image-inside-claude-transcript` expects
   `~/.claude/projects/-Users-juliusolsson-Desktop-Development-klay/c0c60d3d-681f-4457-b5c8-bf58745625de.jsonl`.
-  Running that test alone on untouched `main` produces the identical failure;
-  its other 16 assertions pass. The missing real-data assertion was not weakened
-  or replaced for this UI fix.
+  Its other 16 assertions pass. The missing real-data assertion was not
+  weakened or replaced for this UI fix.
+- The production build reports the repository's existing bundle-size and
+  dynamic-import warnings and intentionally skips uncached release-only runtime
+  archives.
