@@ -647,8 +647,9 @@ parent typecheck plus focused nine-test Codex readiness suite pass.
 
 - [ ] **Produces:** a new codex-headless commit and PR head, any required parser
   API migration, an Agent Code submodule repin, package/parent CI, live fresh,
-  prepared-resume, startup-typing, and Tab-submission smokes, plus a new
-  independent multi-agent review of the exact commits intended for merge.
+  prepared-resume, and provider-backed Tab-queue smokes, the recorded
+  startup-typing regression, plus a new independent multi-agent review of the
+  exact commits intended for merge.
 - **Verified by:** every package and parent check is green; live committed
   streams contain the exact submitted prompt and response from one verified
   generation with zero rollout errors; all constituent reviewer artifacts and
@@ -664,6 +665,18 @@ parent typecheck plus focused nine-test Codex readiness suite pass.
   failures, and a RED synthesizer at exact parent `91d4a70f`, codex-headless
   `3e6a019`, and parser `a3fee9d`. Its clean orchestration health makes these
   findings code blockers rather than workflow transport ambiguity.
+
+Pre-push Stage 24 live evidence is green against the standalone Codex CLI
+`0.149.1`: a typed fresh turn committed 12 entries, an exact prepared resume
+committed 21, and a second prompt submitted with the provider-rendered
+`tab to queue` state committed 29; every stream contained its exact prompt and
+response token with zero rollout errors. The same sequence also passed the
+repository-pinned Codex `0.144.4` with 14/23/32 entries and zero errors. A
+separate attempt to inject terminal bytes before the provider rendered any TUI
+produced no provider rollout at all, so it is not counted as ownership evidence:
+the actual Agent Code race begins after the PTY is interactive but before
+watcher readiness, and remains independently covered by the recorded system
+fixture that holds watcher priming while the exact terminal chunks arrive.
 
 ## 4. Isolation boundary
 
