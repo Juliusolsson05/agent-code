@@ -681,7 +681,7 @@ fixture that holds watcher priming while the exact terminal chunks arrive.
 
 ### Stage 25 — record effective-input and capability-boundary reality
 
-- [ ] **Produces:** a content-safe Codex `0.149.1` input-evidence corpus and
+- [x] **Produces:** a content-safe Codex `0.149.1` input-evidence corpus and
   catalog containing the exact PTY chunks, pre-write structural screen state,
   effective TUI configuration class, and durable submitted user value for:
   trust/update or approval modal actions, modal-consumed Ctrl+C, decomposed
@@ -1060,3 +1060,18 @@ enumerable fields retain raw ownership identity after disposal. It rejected an
 independent parser defect and parent ownership-policy regression. Stages 25–28
 are the approved corrective path; implementation follows only after provider
 recordings and the red contracts exist.
+
+Stage 25 is complete. `testing/record-live-prompt-input.mts` exercised the real
+installed `codex-cli 0.149.1` binary (SHA-256 `f0d876…fb6c`) through an isolated
+`CODEX_HOME`, real node-pty/xterm rendering, real rollout persistence, and a
+localhost canned Responses server derived from the exact upstream tag. Ten
+sanitized cases independently agree on the durable role-user value and the
+request-body value, or agree that neither submission nor request occurred. The
+corpus covers trust input, Unicode grapheme/word edits, repeated multiline
+bounds, remapped/unbound controls, Vim, history-search Ctrl+C preservation,
+popup footer spoofing, and a positive provider-backed Tab queue. Each case
+retains private PTY/request/rollout SHA-256 provenance but no raw source. A
+separate built-artifact projection records the pre-repair capability's deep-
+import construction and enumerable pre/post-dispose identity shape. Stage 26
+may now create red contracts from these artifacts; it may not rewrite their
+provider outcomes to fit the implementation.
