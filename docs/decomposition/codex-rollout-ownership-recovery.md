@@ -712,7 +712,7 @@ fixture that holds watcher priming while the exact terminal chunks arrive.
 
 ### Stage 26 — turn the recordings into independent red contracts
 
-- [ ] **Produces:** fixture-driven failing tests for every Stage 25 input class,
+- [x] **Produces:** fixture-driven failing tests for every Stage 25 input class,
   plus package tests proving a caller-created object cannot authorize exact
   tailing and that the issued resume capability exposes no raw root, path, CWD,
   provider ID, owner ID, generation ID, coordinator acquisition, or buffered
@@ -730,6 +730,16 @@ fixture that holds watcher priming while the exact terminal chunks arrive.
   smokes all passed while these boundaries remained reachable. The new tests
   must therefore exercise the exact omitted states rather than add more copies
   of those already-green happy paths.
+
+Package checkpoint `89506f1` records the red boundary before production edits.
+The 21-case prompt suite executes all ten provider recordings plus corpus and
+provenance controls: 12 controls pass and nine behavior cases fail for the
+recorded trust, Unicode, repeated-boundary, keymap, Vim, history-modal, and Tab
+differences. The recorded resume-capability group has one lifecycle control
+green and three expected failures proving enumerable sensitive state,
+reflective construction, and duck/prototype forgery. Typecheck and diff checks
+remain green, and the prior buffered-lineage test now synchronizes through the
+coordinator's public inspection result instead of reopening private state.
 
 ### Stage 27 — isolate provider input evidence and seal resume issuance
 
