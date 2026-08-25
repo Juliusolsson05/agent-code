@@ -603,7 +603,7 @@ append control passed before the replacement assertion failed.
 
 ### Stage 23 — bind physical tails and preserve submitted evidence
 
-- [ ] **Produces:** one generation-bound rollout capability shared by fresh,
+- [x] **Produces:** one generation-bound rollout capability shared by fresh,
   exact-id, and resume-lineage paths. It carries the verified `dev:ino` through
   arbitration into `JsonlTailer`, verifies the descriptor at the physical-open
   boundary, follows same-inode appends, and permanently refuses bytes from a
@@ -633,6 +633,15 @@ append control passed before the replacement assertion failed.
   onto a new inode. `CodexHeadless.write()` also consumes and resets a complete
   prompt while `freshRolloutParticipant` is null during async watcher priming.
   These are concrete missing handoffs in the current source.
+
+Package `6244eac` turns every Stage 22 failure green. The physical tail now
+opens/fstats the authorized generation synchronously, reads from that descriptor,
+and stops with one structure-only error if the pathname later names another
+inode. Exact lookup and lineage extraction use verified handles; fresh startup
+installs its participant before the first await. The exact `0.149.1` input cases
+and a provider-footer Tab integration pass. Package check is green at 92 tests,
+parser check at 94 tests, the monorepo live-probe typecheck is green, and the
+parent typecheck plus focused nine-test Codex readiness suite pass.
 
 ### Stage 24 — repin and obtain an eighth exact-head gate
 
