@@ -395,6 +395,71 @@ shape and cannot be used as evidence that current rollout ownership works.
   mergeable; real Codex 0.149.1 committed a prompt, response, and 14 rollout
   entries with zero errors. Those facts did not cover the six confirmed orders.
 
+### Stage 16 — record unknown-age, buffered-observer, and raw-retention cases
+
+- [x] **Produces:** three red regressions derived from the recorded ownership
+  corpus: an old rollout generation first surfaced by `change` on a filesystem
+  without birth time; an insufficient-lineage decision buffered before
+  `CodexHeadless.start()` and replayed to a throwing diagnostic listener; and an
+  unmatched candidate whose participant expires while a sibling acquisition
+  keeps the root watcher live.
+- **Verified by:** each test fails independently against package `4fc0a30` for
+  the fifth gate's exact reason. The unknown-age test preserves the recorded
+  file/generation identity across the stale initial scan and later change; the
+  observer test proves exact X remains tail-able despite a diagnostic throw;
+  and the retention test asserts the sibling watcher stays live while all
+  coordinator candidates report `hasRawPath: false` after the grace barrier.
+- **Why separate:** birth-time fallback, buffered callback replay, and privacy
+  compaction are three different lifetimes. Fixing them before recording each
+  failure would let one broad cleanup change accidentally hide another.
+- **Reality check:** fifth gate
+  `run_4f82b82c-be41-4c20-98c5-39e3d249d875` replayed the six fourth-gate
+  sequences. All three reviewers agreed the previous fixes landed, while two
+  independently reproduced the unknown-birth-time cross-wire and the remaining
+  reviewers identified buffered diagnostic failure and raw candidate retention.
+
+### Stage 17 — preserve stale-generation knowledge and isolate observation
+
+- [x] **Produces:** content-safe watcher state that remembers a stale
+  path+generation pair even when birth time is unavailable; candidate
+  compaction behind the same admitted-read barrier used for participant expiry;
+  and exception isolation for buffered diagnostic decisions without weakening
+  lease-callback failure semantics.
+- **Verified by:** every Stage 16 regression turns green; replacement inodes
+  remain eligible, append/change of the same stale inode remains ineligible,
+  future candidate appends restore only the raw path needed for an active
+  decision, and a throwing diagnostic listener neither closes exact X nor
+  changes its path lease. Privacy projections retain HMAC evidence but no root,
+  path, CWD, prompt, provider ID, or lineage value after compaction.
+- **Why separate:** an observation timestamp is not a creation timestamp. The
+  watcher is the only layer that saw the stale generation before registration,
+  so that content-safe fact must cross into arbitration explicitly. Diagnostics
+  remain observational and may not acquire ownership semantics.
+- **Reality check:** `snapshotFile()` intentionally maps unavailable birth time
+  to null, after which the coordinator currently substitutes the later change
+  observation time. The live-sibling timer currently calls only participant
+  expiry, and `consume()` directly invokes buffered decisions unlike the
+  coordinator's exception-isolated live callbacks.
+
+### Stage 18 — repin and obtain a sixth clean gate
+
+- [ ] **Produces:** repaired exact package and parent heads, repeated live fresh
+  and pre-spawn resume smokes, exact-head GitHub checks, and a sixth independent
+  workflow verdict covering both the previous six sequences and all Stage 16
+  counterexamples.
+- **Verified by:** every reviewer artifact and the synthesizer contain zero
+  confirmed findings of every severity. Only then merge codex-headless PR #41,
+  prove the parent submodule pin is reachable from package `main`, merge Agent
+  Code PR #634, and close issue #632 with the final evidence.
+- **Why separate:** package `4fc0a30` and parent `402094cd` are CI-green and real
+  Codex 0.149.1 committed both a fresh and a prepared-resume turn, but the fifth
+  adversarial review still found reachable ownership/privacy failures. A new
+  exact-head review is therefore a release artifact, not optional reassurance.
+- **Reality check:** the successful smoke produced 10 fresh and 15 resume
+  rollout entries from one file each, with both exact prompt/response tokens and
+  zero errors. Runtime success does not exercise unsupported birth times,
+  observer exceptions, or post-grace in-memory privacy.
+
 ## 4. Isolation boundary
 
 The hard part is **fresh rollout ownership**, not rendering and not prompt
