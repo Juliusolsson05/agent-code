@@ -1,9 +1,9 @@
 # Codex Fresh Rollout Ownership Recovery
 
-> **Status:** Reopened again after the third independent gate found that fresh
-> and resume-fork ownership still arbitrate separately. Stages 10–12 below must
-> complete before Stage 9 can close. The earlier gates remain recorded as
-> evidence; neither PR may merge on a superseded review snapshot.
+> **Status:** Stage 11 is implemented and verified locally after the third
+> independent gate found that fresh and resume-fork ownership still arbitrated
+> separately. Stage 12 and then Stage 9 remain open. The earlier gates remain
+> recorded as evidence; neither PR may merge on a superseded review snapshot.
 >
 > **Incident:** Agent Code issue #632.
 >
@@ -291,7 +291,7 @@ shape and cannot be used as evidence that current rollout ownership works.
 
 ### Stage 11 — reconcile lineage and prompt evidence in one owner
 
-- [ ] **Produces:** one coordinator graph containing fresh prompt participants
+- [x] **Produces:** one coordinator graph containing fresh prompt participants
   and active resume-lineage participants. Recorded candidate parsing exposes
   bounded opaque item IDs; the coordinator HMACs them and gives verified lineage
   claims precedence before evaluating copied user history as fresh evidence.
@@ -350,8 +350,10 @@ choosing a rollout:
 - `src/providers/codex/runtime/codexSession.ts`;
 - prompt-delivery/readiness code;
 - semantic proxy and screen-fallback channels;
-- resume/fork ownership code, except through shared inert types or normalization
-  helpers whose semantics are explicitly tested.
+- resume/fork ownership code may register opaque lineage evidence only through
+  the shared coordinator; it may not watch, select, or lease candidates through
+  a second policy. Shared inert parsing and normalization helpers remain
+  separately testable.
 
 Agent Code may forward content-safe decision diagnostics and consume the final
 committed stream. It may not implement a second ownership policy to compensate
@@ -403,11 +405,12 @@ adding a conditional.
 
 Corrective Stage 5 reuses the recorded concurrent rollout structures and
 exercises their real arrival order through the coordinator boundary. Stage 7
-regenerates sanitizer v2 projections from the same private sources; it may not
-replace those sources with plausible literals. The only synthetic mutation is
-the explicitly labeled prompt-equality collision, because the behavior under
-identical private prompt text is the approved safety invariant and the rollout
-transport/order still comes from recordings.
+regenerates sanitizer v2 projections from the same private sources; Stage 10
+extends those projections to v3 by retaining content-safe copied-lineage field
+and equality shape. Neither stage may replace the sources with plausible
+literals. The only synthetic mutations are explicitly labeled equality or
+truncation counterexamples whose surrounding rollout transport/order still
+comes from recordings.
 
 ## 7. Implementation and verification record
 
@@ -496,3 +499,31 @@ is the unchanged image-attachment fixture that points at a missing private
 Claude transcript outside this worktree. Stage 9 intentionally stays open until
 the new package pin is committed, pushed, green in GitHub CI, and reviewed by a
 fresh orchestration run.
+
+A third independent gate, `run_d5e0bbe3-ef4b-4039-a1de-835bea799d0a`, returned
+**RED** against package `6c2c069` and parent `c31b72bd`. Its five confirmed
+findings became Stage 10's failing recorded/system tests before Stage 11 code:
+
+1. final watcher release compacted stopped-owner evidence before the parent PTY
+   could perform a delayed provider flush;
+2. overlapping `CodexHeadless.stop()` calls could retire an exact lease while
+   its first physical close remained pending;
+3. copied user prompts let a fresh participant lease a reconstructed resume
+   fork before the independent lineage watcher reserved it;
+4. a successful X → Y resume switch left X's physical lease active; and
+5. the process-global registry retained raw Codex sessions roots indefinitely.
+
+Package `d620c07` resolves those counterexamples by arbitrating fresh prompt and
+resume lineage edges in one mutual-singleton graph, installing lineage leases
+before callbacks, retaining HMAC-only stopped-owner tombstones through the
+provider-flush grace, serializing stop and switch cleanup, retiring each closed
+physical path, and HMAC-keying the global root registry. Sanitizer v3 preserves
+the copied-ID equality shape from all seven private recordings so the lineage
+tests do not rely on invented provider objects. Additional recorded tests prove
+that an unrelated fresh rollout remains attachable during a resume window, two
+resume claimants fail closed, truncated lineage quarantines, pre-start stop
+closes late acquisition, and terminal-exit cleanup is joined by explicit stop.
+The package contract, typecheck, 67-test suite, production package verifier,
+Codex `0.149.1` upstream check, and private seven-recording regeneration are
+green. Stage 12 remains open until this exact pin passes parent verification,
+live smoke, GitHub CI, and a fourth independent gate.
