@@ -565,7 +565,7 @@ that failure was PTY delivery timing rather than transcript attachment.
 
 ### Stage 22 — record the seventh-gate ownership and input counterexamples
 
-- [ ] **Produces:** deterministic red regressions for all four confirmed
+- [x] **Produces:** deterministic red regressions for all four confirmed
   findings from workflow `run_813d693c-517f-4c9e-a3df-32d54566b9a5`: a
   recorded fresh prompt submitted synchronously after `start()` is called but
   before watcher readiness; replacement of verified inode A after ownership
@@ -593,6 +593,13 @@ that failure was PTY delivery timing rather than transcript attachment.
   submission when no popup consumes it). The generation sequence is the real
   watcher-prefix-to-`JsonlTailer` handoff traced independently by two reviewers,
   not a speculative filesystem policy.
+
+Package checkpoint `4bf01d6` records the failures before implementation. The
+focused run produced exactly eight red assertions and 50 green controls: stale
+history recovery, multiline Ctrl+U, Tab submission, fresh/lineage lease
+generation, startup-time submission, exact preparation generation, buffered
+lineage generation, and `JsonlTailer` following replacement B. The same-inode
+append control passed before the replacement assertion failed.
 
 ### Stage 23 — bind physical tails and preserve submitted evidence
 
