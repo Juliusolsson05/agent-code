@@ -460,6 +460,97 @@ shape and cannot be used as evidence that current rollout ownership works.
   zero errors. Runtime success does not exercise unsupported birth times,
   observer exceptions, or post-grace in-memory privacy.
 
+### Stage 19 — record missed consumers, interactive input, and observer lifetimes
+
+- [x] **Produces:** independently failing integration artifacts from the
+  sixth-gate attempt: the tracked live-resume probe's dedicated TypeScript gate
+  covering both Codex resume call sites; a fresh headless regression that feeds
+  the real xterm chunk order (`"h"`, `"i"`, `"\r"`) before a matching recorded
+  rollout; a coordinator system regression in which a live acquisition's
+  throwing error observer precedes a later recorded candidate event; a fresh
+  accepted-decision observer that throws after the physical tail opens; and a
+  resume preparation stopped after construction without `start()`. Two watcher
+  transport cases additionally reserve inode A before opening replacement inode
+  B's recorded bytes, and inspect raw known-path/fingerprint caches after graph
+  compaction while a sibling keeps the watcher live.
+- **Verified by:** `npm run typecheck:probe` fails at both
+  `live-resume-probe.mts` construction sites because they omit the mandatory
+  prepared-resume capability; the chunked-input case remains
+  `awaiting-local-prompt`; the queue case proves one observational throw rejects
+  a predecessor and skips the later recorded observation; the accepted decision
+  case turns successful tail setup into an uncertain lease tombstone; and the
+  never-started resume continues to reject an otherwise sequential exact reopen.
+  The replacement test leases B under A's eligible generation, while the
+  live-sibling test shows coordinator paths scrubbed but one raw registry cache
+  entry retained.
+- **Why separate:** the probe failure is a consumer migration/CI-coverage gap;
+  chunk assembly is input evidence; queue continuity and accepted-decision
+  delivery are exception boundaries; constructor-held preparation is a resource
+  lifetime. Treating any as another ownership conditional would hide which
+  upstream artifact was lost or which observer acquired authority.
+- **Reality check:** the fallback exact-head gate ran the repository's separately
+  declared `typecheck:probe` against parent `7d0c3356` and got TS2345 at lines
+  391 and 520. Agent Code's xterm callbacks forward each `onData` chunk unchanged,
+  while `extractSubmittedPromptFromWrite()` accepts only one complete write.
+  Other reviewers traced live callbacks into serialized queues and the
+  post-`tailFile()` lease callback with no exception isolation, and confirmed
+  `stop()` returns early when a constructor-held preparation has not reached
+  `start()`.
+
+### Stage 20 — assemble input, migrate resume spawns, and isolate observers
+
+- [ ] **Produces:** one shared live-probe helper/order that prepares the exact
+  rollout before every Codex resume PTY spawn and passes the opaque capability
+  into `CodexHeadless`; one transcript-owned incremental input assembler that
+  reconstructs ordinary chunked typing and complete bracketed paste before
+  registering submitted prompt evidence; process-global error and ownership
+  diagnostics become best-effort observations that cannot reject watcher/read/
+  maintenance queues or invalidate a successfully opened tail. Never-started
+  resume preparations are disposed by `stop()`. Reserved prefix reads verify
+  the opened handle still names the snapshotted generation, and retention
+  compacts registry transport caches with the graph. The parser package's ordinary
+  verification includes its probe typecheck so a future public API migration
+  cannot silently break the real-data tool again.
+- **Verified by:** every Stage 19 failure turns green; preparation is disposed if
+  spawn or construction fails and when stopped before start; the live probe
+  remains the sole owner of PTY termination and `CodexHeadless.stop()`; chunked
+  typed/pasted prompts register exactly once while cancellations and unsupported
+  editing fail closed; throwing observers do not suppress the next candidate,
+  tail authorization, queue drain, or clean sequential exact reopen. Parent and
+  package checks, artifacts, and `git diff --check` pass.
+- **Why separate:** preparation must cross the irreversible spawn boundary as a
+  capability; input assembly must precede the PTY write to preserve causal
+  ordering; diagnostics must remain outside ownership semantics. One helper
+  makes resume ordering reviewable at both probe call sites without moving
+  arbitration policy into the probe.
+- **Reality check:** Agent Code's production `CodexSession` already uses the
+  correct pre-spawn sequence, proving the public integration shape. The missed
+  probe still uses the superseded spawn-first order, and its script is excluded
+  from the parser package's current `check` command.
+
+### Stage 21 — obtain a seventh exact-head gate and merge
+
+- [ ] **Produces:** newly pinned parent/package commits, exact-head CI, a live
+  fresh plus prepared-resume smoke, and a seventh independent review with no
+  coverage gaps or confirmed findings. Because the Agent Code workflow provider
+  failed both the original and manual-recovery sixth runs, the final evidence
+  must include completed constituent reviewer results rather than treating an
+  orchestration transport failure as approval.
+- **Verified by:** all reviewer artifacts are inspectable and GREEN; package and
+  parent checks cover the probe typecheck; live committed streams contain the
+  exact prompt and response from one rollout each with zero errors; both PRs are
+  clean/mergeable at the reviewed commits. Merge dependency PR #41 first,
+  verify the pinned package commit is reachable from its `main`, then merge PR
+  #634 and close issue #632.
+- **Why separate:** exact-head review is invalidated by any corrective commit.
+  The failed workflow runs produced coverage-gap values, not code verdicts, and
+  therefore cannot satisfy the release gate even though GitHub CI was green.
+- **Reality check:** workflow runs `run_5930a8e0-8bd9-4398-9710-1e0731e5edfa`
+  and recovery `run_6061aadd-5dae-4e58-8efb-fa1b8265d90a` ended
+  `completed_with_errors` after DNS/stream and unconfirmed-provider-termination
+  failures. The fallback review then found the red live-probe typecheck that
+  those runs never reached.
+
 ## 4. Isolation boundary
 
 The hard part is **fresh rollout ownership**, not rendering and not prompt
