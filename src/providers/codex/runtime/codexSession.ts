@@ -10,7 +10,7 @@ import {
   CodexHeadless,
   CodexResponsesAdapter,
   ResponsesProxy,
-  createCodex01491PromptInputProfile,
+  prepareCodex01491PromptInputProfile,
   prepareCodexResumeRollout,
 } from 'codex-headless'
 import type {
@@ -21,7 +21,6 @@ import type {
   CodexRolloutLine,
   CodexSemanticEvent,
 } from 'codex-headless'
-import { readInstalledVersion } from '@main/setup/cliVersion.js'
 import { canonicalizePath, sanitizePathSegment } from '@shared/runtime/projectDir.js'
 import type { BuiltInMcpServerConfig } from '@mcp/shared/types.js'
 import type {
@@ -257,7 +256,6 @@ export class CodexSession extends EventEmitter {
     for (const [k, v] of Object.entries(this.env)) {
       if (typeof v === 'string') cleanEnv[k] = v
     }
-    const promptInputProfile = await this.preparePromptInputProfile()
     if (this.dangerousMode) {
       args.push('--dangerously-bypass-approvals-and-sandbox')
     }
@@ -299,13 +297,17 @@ export class CodexSession extends EventEmitter {
       this.proxyServer = proxy
       args.push('--config', `openai_base_url=${JSON.stringify(proxy.info.proxyBaseUrl)}`)
     }
+    const promptInputProfile = await this.preparePromptInputProfile(
+      args,
+      cleanEnv,
+    )
     if (promptInputProfile) {
       // WHY these package-issued overrides must be the last configuration
-      // layer before the subcommand: Codex resolves user, project, and CLI
-      // keymaps in precedence order. Passing the profile to CodexHeadless
-      // without launching the same PTY with these exact final arguments would
-      // attest nothing and would restore the false prompt evidence recorded in
-      // the 0.149.1 custom-keymap/Vim fixtures.
+      // arguments before the subcommand. The package has already run
+      // config/read through this same binary/cwd/env and the exact `args`
+      // prefix, then refused conflicting or higher-precedence routing. Passing
+      // the capability to CodexHeadless without appending its immutable suffix
+      // to the immediately following PTY would sever that attestation.
       args.push(...promptInputProfile.cliArgs)
     }
     if (this.resumeSessionId) {
@@ -484,37 +486,29 @@ export class CodexSession extends EventEmitter {
     })
   }
 
-  private async preparePromptInputProfile(): Promise<CodexPromptInputProfile | null> {
-    const version = await readInstalledVersion(this.binary)
-    if (!version.ok) {
-      // WHY spawning must remain available when a custom binary cannot answer
-      // `--version`, but prompt ownership cannot silently assume its semantics.
-      // The absent capability keeps ordinary terminal/screen use working while
-      // the transcript claimant fails closed instead of leasing a sibling.
-      this.emit(
-        'jsonl-error',
-        new Error(
-          `Codex prompt evidence disabled: binary version probe ${version.reason}`,
-        ),
-      )
-      return null
-    }
+  private async preparePromptInputProfile(
+    baseArgs: readonly string[],
+    env: Readonly<Record<string, string>>,
+  ): Promise<CodexPromptInputProfile | null> {
+    const preparation = await prepareCodex01491PromptInputProfile({
+      binary: this.binary,
+      cwd: this.cwd,
+      env,
+      baseArgs,
+    })
+    if (preparation.ok) return preparation.profile
 
-    try {
-      return createCodex01491PromptInputProfile({ cliVersion: version.version })
-    } catch {
-      // WHY this adapter is deliberately version-pinned to the provider corpus
-      // recorded for 0.149.1. A newer layout/key routing contract needs a new
-      // recording and adapter revision; treating "newer" as "probably equal"
-      // recreates the exact forward-patching failure this repair removes.
-      this.emit(
-        'jsonl-error',
-        new Error(
-          `Codex prompt evidence disabled: unsupported CLI ${version.version}`,
-        ),
-      )
-      return null
-    }
+    // WHY profile refusal must not make the terminal unusable. Custom/new
+    // binaries and user policy still launch with their untouched keymap; only
+    // fresh-rollout prompt ownership is disabled, because a plausible but
+    // unverified prompt is more dangerous than a missing transcript edge.
+    this.emit(
+      'jsonl-error',
+      new Error(
+        `Codex prompt evidence disabled: ${preparation.reason}`,
+      ),
+    )
+    return null
   }
 
   // Unified cleanup for start() failure paths. Must be safe to call

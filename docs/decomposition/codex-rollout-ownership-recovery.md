@@ -875,7 +875,7 @@ authority.
 
 ### Stage 31 — repair the isolated evidence, capability, and transport boundaries
 
-- [ ] **Produces:** composer evidence tied to a causally acknowledged draft and
+- [x] **Produces:** composer evidence tied to a causally acknowledged draft and
   layout epoch rather than any PTY byte; structurally scoped footer/modal/Vim
   parsing; a conflict-free input profile issued only when no higher-precedence
   managed layer can alter it; a public resume handle with no sensitive
@@ -1241,3 +1241,18 @@ failures, five prompt/config failures, and three built-package failures, while
 the prior recorded controls and typecheck remain green. Stage 31 may now change
 production code; these artifacts and expectations may not be weakened to obtain
 green.
+
+Stage 31 is complete at codex-headless `6c6336b`. Synchronous tail acquisition
+now retires cleanly only when no stop authority was returned; unresolved live
+candidates retain bounded rescan transport while terminal paths are evicted;
+and retention projections expose process-HMAC participant fingerprints rather
+than raw IDs. Resume rollback authority is a frozen null-prototype dispose-only
+handle backed by module-private WeakMap state. Prompt evidence requires a
+provider-valid layout epoch and a changed keyed composer/cursor revision, while
+bottom-pane structure scopes modal/Vim detection. Finally, the exact Codex
+binary resolves `config/read` with the imminent cwd/environment/base arguments;
+unsupported versions, extra effective bindings, and legacy managed layers
+withhold capability without blocking ordinary terminal launch. Package check is
+green at 142/142, the built ninth-gate projection is 3/3, real 0.149.1 safe and
+conflicting config/read probes produce the expected allow/refuse outcomes, and
+the focused parent launch-binding test is 2/2.
