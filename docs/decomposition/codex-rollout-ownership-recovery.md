@@ -1,8 +1,11 @@
 # Codex Fresh Rollout Ownership Recovery
 
-> **Status:** Implemented after explicit approval on 2026-08-24. The five
-> stages were completed in order; the package implementation is codex-headless
-> PR #41 and this Agent Code branch pins it and records its diagnostics.
+> **Status:** Reopened on 2026-08-24 after the independent PR #634 merge gate
+> returned **RED**. The first five stages established the upstream format
+> regression and fixed single-session matching, but review proved that the
+> runtime ownership substrate is still wrong for concurrent sessions. Corrective
+> Stages 5–9 below replace per-instance candidate visibility with process-wide
+> reconciliation before either PR may merge.
 >
 > **Incident:** Agent Code issue #632.
 >
@@ -42,6 +45,9 @@ context on the recorded `0.147.0` and `0.149.0` shapes.
    lineage proof and does not regress.
 5. Every fresh candidate decision is inspectable in a debug bundle without
    recording raw prompt or injected-instruction text in new diagnostics.
+6. Fresh ownership has one process-wide source of truth per normalized Codex
+   sessions root. A rollout path is leased atomically at most once, and a
+   session never starts tailing before that shared owner has resolved it.
 
 ## 2. Root cause established before implementation
 
@@ -160,13 +166,124 @@ shape and cannot be used as evidence that current rollout ownership works.
   chain and shows its precise break: delivery/processing are present, candidate
   attachment and all downstream committed events are absent.
 
+### Stage 5 — record the failed concurrency substrate as tests
+
+- [ ] **Produces:** fixture-driven red tests for sequential watcher delivery,
+  including two same-CWD sessions with the same normalized submitted prompt,
+  two sessions with distinct recorded prompts whose filesystem events arrive
+  in reverse order, registration-before-PTY-write ordering, participant cleanup,
+  and start-failure cleanup. The exact-id subagent recording also becomes an
+  executable locator test rather than catalog-only evidence.
+- **Verified by:** run the tests against PR #41's current per-instance maps and
+  demonstrate the identical-prompt case can lease the first observed rollout to
+  whichever watcher callback runs first. Record the failing assertions before
+  implementation changes make them green.
+- **Why separate:** the first concurrency test presented both candidates to one
+  pure function at once. That proves set-level ambiguity but misses the runtime
+  ordering bug, where one private watcher accepts before its sibling has even
+  observed the candidate. The red runtime sequence must exist independently of
+  the replacement coordinator.
+- **Reality check:** the PR gate traced the actual call chain from private
+  `freshRolloutCandidates` maps to immediate `tailFile()`. The recorded alpha
+  and beta rollouts supply the real event shapes; the identical-prompt variant
+  changes only their sanitized equality token to exercise an unrecordable
+  privacy-safe collision without inventing a rollout structure.
+
+### Stage 6 — centralize fresh ownership and path leasing
+
+- [ ] **Produces:** an isolated, process-wide coordinator keyed by normalized
+  sessions root. It owns global candidate visibility, participants partitioned
+  by normalized CWD, synchronous prompt registration, causal evidence sequence,
+  and irreversible path leases. An edge exists only when the prompt was
+  registered before the matching durable message was first observed. It emits a
+  lease only for a mutual singleton in the participant ↔ candidate evidence
+  graph; it uses no settlement timeout. `CodexHeadless` remains the sole
+  consumer and the sole caller of `tailFile()`.
+- **Verified by:** Stage 5's ordered-event tests pass under every tested
+  interleaving. Distinct prompts attach immediately to their matching paths;
+  identical prompts remain unresolved after one or both candidates arrive; a
+  leased path is never reassigned after owner cleanup; and coordinator
+  references are released after normal stop and partial startup failure.
+- **Why separate:** watcher delivery order is not ownership evidence. If every
+  `CodexHeadless` instance retains its own candidate set, no local conditional
+  can know that a sibling is also eligible. Reconciliation and leasing must be
+  one atomic decision owned outside every individual consumer.
+- **Reality check:** Agent Code records a prompt synchronously in
+  `CodexHeadless.write()` before invoking the PTY write. Therefore a later
+  participant cannot have durably authored a rollout that was already uniquely
+  matched and leased before its prompt existed. This permits immediate unique
+  leases without guessing a delay while still holding true collisions closed.
+
+### Stage 7 — make fixture verification independent and shape-faithful
+
+- [ ] **Produces:** a frozen legacy oracle that does not import the modern
+  claimant, a separate modern target verification, and sanitizer v2 fixtures
+  that preserve user transport wrappers, item counts/types, ordered equality
+  classes, and exact text-length shape while replacing all private text.
+- **Verified by:** private-source `--verify` independently reproduces the
+  historical and target decisions, compares source/projection structural
+  signatures, and fails under wrapper, item-count, length, equality, hash, or
+  source-prefix mutation. The known modern `hold → accept` recordings verify
+  successfully instead of asking the modern claimant to reproduce legacy hold.
+- **Why separate:** using the production claimant as the historical oracle
+  makes verification circular, while flattening multipart content can erase the
+  exact upstream shape a future parser regression depends on. Neither defect is
+  repaired by more claimant assertions.
+- **Reality check:** review found both defects in the committed extractor: its
+  `expectedLegacyDecision` check calls the upgraded claimant, and its sanitizer
+  rewrites multipart content into a single item with a different size shape.
+
+### Stage 8 — unify exact-id lookup and content-safe diagnostics
+
+- [ ] **Produces:** one exported exact-rollout locator used by both
+  `codex-headless` and Agent Code, an executable test built from the recorded
+  exact-id subagent fixture, and ownership diagnostics whose candidate identities
+  are process-local HMACs rather than rollout paths or UUID-bearing basenames.
+- **Verified by:** the recorded exact-id fixture wins over decoys according to
+  one documented newest-verified-match rule; partial IDs and filename-only
+  matches are rejected; the requested ID, filename UUID, and parsed
+  `session_meta.id` must all agree; package and parent callers return the same
+  path; and an exported structure-only debug bundle contains neither the private
+  sessions root nor rollout UUID/path fragments.
+- **Why separate:** exact resume/subagent identity must bypass fresh arbitration,
+  but two independently implemented locators can select different duplicates.
+  Diagnostics also cross the package boundary, so path privacy cannot be left to
+  a downstream exporter that intentionally preserves structural values.
+- **Reality check:** review found reverse-`readdir` selection in the package,
+  newest-mtime selection in Agent Code, a recorded exact-id fixture never loaded
+  by tests, and raw `changedPath`/candidate paths in the diagnostic payload.
+
+### Stage 9 — reintegrate, exercise reality, and rerun the merge gate
+
+- [ ] **Produces:** an updated codex-headless commit and PR, an updated Agent Code
+  submodule pin plus startup rollback that stops a partially started headless
+  instance, live fresh/resume/concurrent captures, and a new independent
+  orchestration verdict covering the complete diffs.
+- **Verified by:** package tests/typecheck/build/contracts, private fixture
+  verification, parent tests/typecheck/build, live Codex CLI smokes, GitHub CI,
+  and a fresh multi-agent review are all green. Merge order is dependency first:
+  codex-headless PR #41, then Agent Code PR #634.
+- **Why separate:** a correct coordinator can still leak its process-wide
+  registration when parent startup rolls back, or remain absent from the parent
+  build if the submodule pin is stale. The release gate must inspect the exact
+  commits that will merge, not the earlier red revisions.
+- **Reality check:** `CodexSession.rollbackStart()` currently nulls the headless
+  instance without calling its idempotent `stop()`. That was harmless with only
+  private state but would leak coordinator membership after this redesign.
+
 ## 4. Isolation boundary
 
 The hard part is **fresh rollout ownership**, not rendering and not prompt
-delivery. It remains in the `codex-headless` transcript layer, with a dedicated
-module/directory if Stage 3 grows beyond the current single file. Its only
-runtime consumer is `CodexHeadless`, which receives one decision and alone may
+delivery. It remains in the `codex-headless` transcript layer as an explicit
+coordinator boundary. The coordinator is the only fresh-session component that
+may observe the global candidate/participant sets or lease a path. Its only
+runtime consumer is `CodexHeadless`, which receives one lease and alone may
 start `tailFile`.
+
+Exact-id discovery is a separate inert locator: it may enumerate and validate
+rollout metadata but may not import or participate in fresh ownership. The
+frozen legacy oracle is test/extraction infrastructure and production code is
+forbidden from importing it.
 
 The following are forbidden from importing claimant internals or independently
 choosing a rollout:
@@ -203,6 +320,13 @@ for the package.
 8. The exact renderer transition from disconnected to ready and the queue row
    consumed by the first committed user item must be asserted in Stage 4 rather
    than inferred from package tests.
+9. The coordinator guarantee is process-wide. A second operating-system process
+   sharing the same Codex sessions root cannot see the first process's
+   participants or leases; cross-process locking remains outside this incident's
+   evidence and must not be claimed as solved.
+10. Filesystem watchers can coalesce or omit intermediate changes. The
+    coordinator must re-read known growing candidates on observed changes, but
+    the supported-filesystem live smoke remains necessary evidence.
 
 ## 6. Fixture plan
 
@@ -218,6 +342,14 @@ No implementation may create a fixture, and no failing recorded case may be
 deleted or weakened to make Stage 3 green. If a recorded case contradicts this
 decomposition, revise this document and return to the approval gate instead of
 adding a conditional.
+
+Corrective Stage 5 reuses the recorded concurrent rollout structures and
+exercises their real arrival order through the coordinator boundary. Stage 7
+regenerates sanitizer v2 projections from the same private sources; it may not
+replace those sources with plausible literals. The only synthetic mutation is
+the explicitly labeled prompt-equality collision, because the behavior under
+identical private prompt text is the approved safety invariant and the rollout
+transport/order still comes from recordings.
 
 ## 7. Implementation and verification record
 
@@ -260,3 +392,20 @@ The exact `0.146.x` change point and the 4 MiB prefix-risk frequency remain
 documented unknowns. Neither is papered over: the former does not affect the
 structural matcher, and the latter still fails closed rather than attaching by
 recency.
+
+## 8. Corrective review record
+
+The independent merge gate run `run_15bdd110-af0f-42f6-9c0b-95411e2e401a`
+returned **RED** against package commit `f3b9b8b` and parent commit `08f767a`.
+Three independent reviewers and a synthesizer agreed that Stage 3's pure
+ambiguity rule was not sufficient because each runtime instance owned a private
+candidate map and could tail the first matching filesystem event before sibling
+visibility existed. They also found the circular legacy verifier, shape-losing
+sanitizer, unused exact-id recording, duplicated locator policy, raw path-bearing
+diagnostics, and parent startup cleanup gap captured in Stages 5–9.
+
+This document was revised before corrective implementation. The user's
+instruction to resolve the blockers and continue the review/fix loop is the
+explicit approval to execute these corrective stages; any later evidence that
+invalidates the mutual-singleton model requires another document revision rather
+than a forward patch.
