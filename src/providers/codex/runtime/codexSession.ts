@@ -10,15 +10,18 @@ import {
   CodexHeadless,
   CodexResponsesAdapter,
   ResponsesProxy,
+  createCodex01491PromptInputProfile,
   prepareCodexResumeRollout,
 } from 'codex-headless'
 import type {
   CodexConditionSnapshot,
+  CodexPromptInputProfile,
   CodexResumeRolloutPreparation,
   CodexRolloutDiagnostic,
   CodexRolloutLine,
   CodexSemanticEvent,
 } from 'codex-headless'
+import { readInstalledVersion } from '@main/setup/cliVersion.js'
 import { canonicalizePath, sanitizePathSegment } from '@shared/runtime/projectDir.js'
 import type { BuiltInMcpServerConfig } from '@mcp/shared/types.js'
 import type {
@@ -254,6 +257,7 @@ export class CodexSession extends EventEmitter {
     for (const [k, v] of Object.entries(this.env)) {
       if (typeof v === 'string') cleanEnv[k] = v
     }
+    const promptInputProfile = await this.preparePromptInputProfile()
     if (this.dangerousMode) {
       args.push('--dangerously-bypass-approvals-and-sandbox')
     }
@@ -294,6 +298,15 @@ export class CodexSession extends EventEmitter {
       const proxy = await ResponsesProxy.create({ eventsFile })
       this.proxyServer = proxy
       args.push('--config', `openai_base_url=${JSON.stringify(proxy.info.proxyBaseUrl)}`)
+    }
+    if (promptInputProfile) {
+      // WHY these package-issued overrides must be the last configuration
+      // layer before the subcommand: Codex resolves user, project, and CLI
+      // keymaps in precedence order. Passing the profile to CodexHeadless
+      // without launching the same PTY with these exact final arguments would
+      // attest nothing and would restore the false prompt evidence recorded in
+      // the 0.149.1 custom-keymap/Vim fixtures.
+      args.push(...promptInputProfile.cliArgs)
     }
     if (this.resumeSessionId) {
       args.push('resume', this.resumeSessionId)
@@ -339,6 +352,7 @@ export class CodexSession extends EventEmitter {
         cols: this.cols,
         rows: this.rows,
         snapshotIntervalMs: this.snapshotIntervalMs,
+        promptInputProfile: promptInputProfile ?? undefined,
       }
       if (this.resumeSessionId) {
         const preparation = this.resumeRolloutPreparation
@@ -468,6 +482,39 @@ export class CodexSession extends EventEmitter {
       projectDir: sessionsDir,
       proxyUrl: this.proxyServer?.info.proxyBaseUrl,
     })
+  }
+
+  private async preparePromptInputProfile(): Promise<CodexPromptInputProfile | null> {
+    const version = await readInstalledVersion(this.binary)
+    if (!version.ok) {
+      // WHY spawning must remain available when a custom binary cannot answer
+      // `--version`, but prompt ownership cannot silently assume its semantics.
+      // The absent capability keeps ordinary terminal/screen use working while
+      // the transcript claimant fails closed instead of leasing a sibling.
+      this.emit(
+        'jsonl-error',
+        new Error(
+          `Codex prompt evidence disabled: binary version probe ${version.reason}`,
+        ),
+      )
+      return null
+    }
+
+    try {
+      return createCodex01491PromptInputProfile({ cliVersion: version.version })
+    } catch {
+      // WHY this adapter is deliberately version-pinned to the provider corpus
+      // recorded for 0.149.1. A newer layout/key routing contract needs a new
+      // recording and adapter revision; treating "newer" as "probably equal"
+      // recreates the exact forward-patching failure this repair removes.
+      this.emit(
+        'jsonl-error',
+        new Error(
+          `Codex prompt evidence disabled: unsupported CLI ${version.version}`,
+        ),
+      )
+      return null
+    }
   }
 
   // Unified cleanup for start() failure paths. Must be safe to call
