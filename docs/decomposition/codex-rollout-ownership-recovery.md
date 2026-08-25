@@ -1,9 +1,9 @@
 # Codex Fresh Rollout Ownership Recovery
 
-> **Status:** Stage 11 is implemented and verified locally after the third
-> independent gate found that fresh and resume-fork ownership still arbitrated
-> separately. Stage 12 and then Stage 9 remain open. The earlier gates remain
-> recorded as evidence; neither PR may merge on a superseded review snapshot.
+> **Status:** Reopened after the fourth independent gate found six reachable
+> order/lifecycle regressions in the unified owner. Stages 13–15 below must
+> complete before Stage 9 can close. The earlier gates remain recorded as
+> evidence; neither PR may merge on a superseded review snapshot.
 >
 > **Incident:** Agent Code issue #632.
 >
@@ -329,6 +329,72 @@ shape and cannot be used as evidence that current rollout ownership works.
   `c31b72bd`, and a live Codex 0.149.1 smoke committed 14 entries with no errors,
   yet independent review still produced reachable counterexamples.
 
+### Stage 13 — record pre-spawn, causal, and shared-lifetime counterexamples
+
+- [ ] **Produces:** recorded-fixture red regressions for all six fourth-gate
+  findings: reconstructed Y arriving before resume lineage registration; an O1
+  prefix that already contains P being superseded by unrelated O2 after local P;
+  an old exact X changed after fresh registration; resume-window expiry with an
+  otherwise live root acquisition; insufficient lineage with no ignored-fork
+  diagnostic; and one stopped participant whose sibling acquisition remains
+  live beyond the grace interval.
+- **Verified by:** each new test fails independently against package `d620c07`
+  for the gate's stated reason. Y, X, P, and insufficient-lineage structure must
+  derive from the recorded exact/concurrent fixtures; synthetic control is
+  limited to event order, time, and removing recorded equality classes.
+- **Why separate:** the existing green tests register lineage before Y, put P
+  only in the later append, use current-generation files, stop the last root
+  reference, and assert only successful switches. Implementing first would let
+  the same process invent both the missing ordering and its asserted fix.
+- **Reality check:** run `run_cae34b23-8d7e-4db3-8939-48d117692ee8` inspected
+  exact parent `839ea0de` and package `d620c07`. Three independent reviewers and
+  a synthesizer confirmed all six sequences with zero rejected candidates.
+
+### Stage 14 — prepare resume ownership and close causal lifetimes
+
+- [ ] **Produces:** a package-owned prepared-resume handle acquired before the
+  consumer spawns `codex`; it reserves exact X, fingerprints X lineage, and
+  registers the resume participant before reconstructed Y can exist. Agent Code
+  consumes that handle before PTY spawn without implementing ownership policy.
+  Candidate commits preserve earliest serialized observation rather than newest
+  reservation; every fresh edge enforces the generation lower bound. Resume
+  watcher references release after switch/window expiry, ignored-fork decisions
+  regain candidate-correlated HMAC diagnostics, and every participant release
+  arms expiry behind the current admitted-read barrier even if siblings remain.
+- **Verified by:** all Stage 13 failures turn green under both relevant delivery
+  orders; preparation is disposed on proxy/pre-spawn/spawn/headless-start
+  failure; exact and fork tails keep their physical lease until their own close;
+  the watcher stops while the exact JsonlTailer remains live after window expiry;
+  and diagnostics/retention inspection contain no raw root, path, CWD, prompt,
+  provider ID, or lineage value.
+- **Why separate:** provider spawn is the irreversible boundary: once Codex can
+  create Y, registering stronger lineage later cannot revoke a fresh physical
+  tail. Preparation therefore belongs in the isolated transcript package and
+  must be handed to the parent as one opaque capability, not recreated from
+  locator/coordinator primitives in Agent Code.
+- **Reality check:** Agent Code currently invokes `ptySpawn()` before
+  `CodexHeadless.start()`. A sibling acquisition can already transport Y while
+  start awaits locator/coordinator/file reads. The package also serializes reads,
+  so throwing away O1 merely because O2 was reserved is unnecessary and erases
+  the real causal boundary.
+
+### Stage 15 — repin and obtain a fifth clean gate
+
+- [ ] **Produces:** repaired package and parent commits, fresh live fresh/resume
+  smokes, exact-head GitHub checks, and a fifth independent orchestration verdict
+  whose reviewers explicitly challenge all six fourth-gate sequences.
+- **Verified by:** inspect every constituent result plus the synthesizer and
+  require zero confirmed findings of every severity. Merge package PR #41 first,
+  prove the parent pin is an ancestor of package `main`, then merge Agent Code PR
+  #634 and close issue #632 with the final evidence.
+- **Why separate:** the fourth gate was RED despite green CI and a successful
+  live fresh turn. Only a new review of the repaired exact heads can establish
+  that pre-spawn precedence and shared-root lifetimes work outside the tests that
+  introduced them.
+- **Reality check:** package `d620c07` passed 67 tests and both PRs were clean and
+  mergeable; real Codex 0.149.1 committed a prompt, response, and 14 rollout
+  entries with zero errors. Those facts did not cover the six confirmed orders.
+
 ## 4. Isolation boundary
 
 The hard part is **fresh rollout ownership**, not rendering and not prompt
@@ -527,3 +593,27 @@ The package contract, typecheck, 67-test suite, production package verifier,
 Codex `0.149.1` upstream check, and private seven-recording regeneration are
 green. Stage 12 remains open until this exact pin passes parent verification,
 live smoke, GitHub CI, and a fourth independent gate.
+
+The fourth gate, `run_cae34b23-8d7e-4db3-8939-48d117692ee8`, returned **RED**
+against package `d620c07` and parent `839ea0de`. Package CI, parent CI, and a
+real fresh Codex `0.149.1` smoke were green, but the read-only gate confirmed six
+counterexamples with zero rejected candidates:
+
+1. Agent Code spawns the resume PTY before the package registers lineage, so a
+   reconstructed Y can be irreversibly leased as fresh during start awaits;
+2. reserving O2 before serialized O1 commits discards O1 and makes P that was
+   already durable appear causally newer than a local P;
+3. active fresh participants omit the generation lower bound and can claim an
+   old exact X when resume appends before reserving X;
+4. resume-window expiry unregisters lineage but retains the watcher acquisition,
+   raw live watcher root, and rescan until the pane eventually stops;
+5. insufficient/missing lineage no longer emits the public content-safe
+   `resume-fork-ignored` diagnostic; and
+6. inactive participants expire only when the last root reference stops, so a
+   long-lived sibling retains every stopped participant indefinitely.
+
+Stages 13–15 replace forward patching with recorded red order tests, one
+pre-spawn package capability, and a new exact-head gate. Stage 11's unified
+evidence graph remains the substrate; the corrective work changes when stronger
+evidence becomes authoritative, how ordered observations commit, and when its
+content-safe state expires.
