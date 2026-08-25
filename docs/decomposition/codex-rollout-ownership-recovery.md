@@ -826,7 +826,7 @@ authority.
 
 ### Stage 29 — record ninth-gate causality, configuration, and retention reality
 
-- [ ] **Produces:** inspectable artifacts for all ten confirmed findings before
+- [x] **Produces:** inspectable artifacts for all ten confirmed findings before
   production edits: recorded 0.149.1 narrow-wrap frames across resize; ordinary
   composer submissions whose draft/CWD contain the modal and Vim sentinel
   strings; a real lower-layer conflicting keymap plus the exact upstream
@@ -853,7 +853,7 @@ authority.
 
 ### Stage 30 — turn the ninth-gate artifacts into red contracts
 
-- [ ] **Produces:** deterministic failing tests for CH-01 through CH-10 before
+- [x] **Produces:** deterministic failing tests for CH-01 through CH-10 before
   changing production code. The matrix covers clean retry after synchronous
   no-open failure for exact/fresh/lineage; missed-event rescan for a live
   unresolved sibling; post-compaction terminal-path eviction; stale unchanged
@@ -1228,3 +1228,16 @@ separate built-artifact projection records the pre-repair capability's deep-
 import construction and enumerable pre/post-dispose identity shape. Stage 26
 may now create red contracts from these artifacts; it may not rewrite their
 provider outcomes to fit the implementation.
+
+Stages 29 and 30 are complete at codex-headless checkpoint `1c8dbfa`. The real
+0.149.1 corpus now contains sixteen cases, including the independently durable
+resize, unchanged-redraw, adversarial modal/Vim text, and lower-layer keymap
+outcomes. A sanitized `config/read` recording proves the effective keymap and
+layer projection without retaining raw configuration; exact upstream hashes
+pin the precedence and conflict implementation. Built-package and recorded-
+rollout lifecycle artifacts cover CH-01–03 and CH-06–08. Against the pre-repair
+package, the focused contracts are red exactly as intended: five lifecycle
+failures, five prompt/config failures, and three built-package failures, while
+the prior recorded controls and typecheck remain green. Stage 31 may now change
+production code; these artifacts and expectations may not be weakened to obtain
+green.
