@@ -563,6 +563,92 @@ that failure was PTY delivery timing rather than transcript attachment.
   failures. The fallback review then found the red live-probe typecheck that
   those runs never reached.
 
+### Stage 22 — record the seventh-gate ownership and input counterexamples
+
+- [ ] **Produces:** deterministic red regressions for all four confirmed
+  findings from workflow `run_813d693c-517f-4c9e-a3df-32d54566b9a5`: a
+  recorded fresh prompt submitted synchronously after `start()` is called but
+  before watcher readiness; replacement of verified inode A after ownership
+  authorization but before the fresh physical tail opens; the same replacement
+  boundary on prepared exact X and a lineage switch; modified/private CSI,
+  multiline Ctrl+U, and punctuation-sensitive Ctrl+W sequences whose current
+  reconstruction differs from Codex; and a plain Tab submission in an observed
+  no-popup composer state. The input cases retain a captured screen/state label
+  identifying whether Codex treated Tab as submission or completion.
+- **Verified by:** the startup case remains `awaiting-local-prompt`; each inode
+  case emits replacement B under A's proof; the editing cases return a false
+  prompt token or incorrectly recover validity; and the no-popup Tab case
+  registers no local prompt against package `3e6a019`. Each failure must be
+  observed before implementation changes and must use the existing recorded
+  rollout transport rather than a newly imagined JSONL literal.
+- **Why separate:** watcher readiness, physical file generation, provider input
+  semantics, and Tab popup state are independent evidence boundaries. Fixing
+  them together first would let one green integration hide a second false
+  ownership path and would repeat the forward-patching failure this document is
+  meant to prevent.
+- **Reality check:** the fresh rollout body comes from
+  `modern-0149-agents-first`; the provider controls come from the vendored exact
+  `rust-v0.149.1` source and its textarea/composer tests (Ctrl+U is line-scoped,
+  Ctrl+W honors `/`, modified arrows move by word, and default plain Tab invokes
+  submission when no popup consumes it). The generation sequence is the real
+  watcher-prefix-to-`JsonlTailer` handoff traced independently by two reviewers,
+  not a speculative filesystem policy.
+
+### Stage 23 — bind physical tails and preserve submitted evidence
+
+- [ ] **Produces:** one generation-bound rollout capability shared by fresh,
+  exact-id, and resume-lineage paths. It carries the verified `dev:ino` through
+  arbitration into `JsonlTailer`, verifies the descriptor at the physical-open
+  boundary, follows same-inode appends, and permanently refuses bytes from a
+  replacement generation. Fresh participation is installed synchronously in
+  `start()` before its first await so prompt registration precedes both PTY
+  delivery and watcher observations. The input assembler either implements the
+  exact recorded default editing result or invalidates that submission; it may
+  recover unknown state only from a control proven to reset the real composer.
+  Tab becomes evidence only when the pre-write screen/input state proves the
+  provider will submit rather than complete.
+- **Verified by:** every Stage 22 regression turns green; inode B contributes
+  zero entries under A's proof while later bytes appended to A still commit;
+  exact lookup metadata, lineage extraction, bootstrap, and polling all remain
+  on the same verified generation; startup typing attaches to the recorded
+  rollout; false editing tokens cannot lease a sibling; and both no-popup Tab
+  submission and popup-consumed Tab are distinguished. Existing causal-order,
+  overlap, replacement-prefix, and clean exact-reopen tests remain green.
+- **Why separate:** `dev:ino` is an authorization capability, not another
+  candidate field, and prompt registration is a causal event, not buffered UI
+  state. Both must survive intact to their consumers. The renderer and Agent
+  Code adapter remain forbidden from inventing ownership; their only input
+  responsibility is forwarding the exact terminal bytes already observed by
+  the package.
+- **Reality check:** the accepted prefix reader already proves A by `fstat` but
+  then closes it, `FreshRolloutLease` currently drops the generation, exact
+  lookup separately reopens by pathname, and `JsonlTailer` deliberately resets
+  onto a new inode. `CodexHeadless.write()` also consumes and resets a complete
+  prompt while `freshRolloutParticipant` is null during async watcher priming.
+  These are concrete missing handoffs in the current source.
+
+### Stage 24 — repin and obtain an eighth exact-head gate
+
+- [ ] **Produces:** a new codex-headless commit and PR head, any required parser
+  API migration, an Agent Code submodule repin, package/parent CI, live fresh,
+  prepared-resume, startup-typing, and Tab-submission smokes, plus a new
+  independent multi-agent review of the exact commits intended for merge.
+- **Verified by:** every package and parent check is green; live committed
+  streams contain the exact submitted prompt and response from one verified
+  generation with zero rollout errors; all constituent reviewer artifacts and
+  the synthesizer report no coverage gaps and zero confirmed findings. Merge
+  codex-headless PR #41, then parser PR #21, prove both pinned commits are
+  ancestors of dependency `main`, merge Agent Code PR #634, and verify issue
+  #632 closes.
+- **Why separate:** any corrective commit invalidates the seventh gate even if
+  its old CI remains green. Dependency reachability and live provider behavior
+  are release facts that cannot be inferred from unit tests or an earlier
+  reviewed SHA.
+- **Reality check:** the seventh gate completed with four agents, no provider
+  failures, and a RED synthesizer at exact parent `91d4a70f`, codex-headless
+  `3e6a019`, and parser `a3fee9d`. Its clean orchestration health makes these
+  findings code blockers rather than workflow transport ambiguity.
+
 ## 4. Isolation boundary
 
 The hard part is **fresh rollout ownership**, not rendering and not prompt
@@ -621,6 +707,15 @@ for the package.
 10. Filesystem watchers can coalesce or omit intermediate changes. The
     coordinator must re-read known growing candidates on observed changes, but
     the supported-filesystem live smoke remains necessary evidence.
+11. Codex keybindings are configurable. The exact default `0.149.1` behavior is
+    recorded, but a custom mapping cannot be inferred from raw bytes alone. Tab
+    evidence therefore needs an observed provider state/key hint or must fail
+    closed; default behavior must not be silently generalized to every config.
+12. A pathname replacement after a fresh lease has no safe automatic owner
+    without a new arbitration event. The generation-bound tail must reject it;
+    whether a later generation at the same pathname may be reconsidered for the
+    same live participant remains intentionally fail-closed until recorded
+    provider behavior requires and justifies such recovery.
 
 ## 6. Fixture plan
 
@@ -785,3 +880,16 @@ pre-spawn package capability, and a new exact-head gate. Stage 11's unified
 evidence graph remains the substrate; the corrective work changes when stronger
 evidence becomes authoritative, how ordered observations commit, and when its
 content-safe state expires.
+
+The seventh exact-head gate,
+`run_813d693c-517f-4c9e-a3df-32d54566b9a5`, completed normally against parent
+`91d4a70f`, codex-headless `3e6a019`, and parser `a3fee9d`. Three independent
+reviewers and the synthesizer confirmed four remaining blockers: generation A
+is discarded before pathname-based physical tailing, prompts can be consumed
+before the fresh participant exists during `start()`, supported editing controls
+can reconstruct a value different from the exact Codex `0.149.1` composer, and
+plain Tab submissions produce no local evidence. The synthesizer rejected the
+fixture-provenance privacy concern because the committed corpus contract
+explicitly retains those app-local identifiers and timestamps, and it found no
+independent parser defect. Stages 22–24 are the approved corrective path; no
+implementation begins until the red artifacts in Stage 22 exist.
