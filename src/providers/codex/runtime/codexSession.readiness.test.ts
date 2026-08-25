@@ -29,6 +29,31 @@ function installHeadless(
 }
 
 describe('CodexSession prompt readiness lifecycle', () => {
+  it('stops a partially started headless before killing its PTY', async () => {
+    const session = new CodexSession()
+    const order: string[] = []
+    const internals = session as unknown as {
+      headless: { stop(): Promise<void> } | null
+      pty: { kill(): void } | null
+      rollbackStart(): Promise<void>
+    }
+    internals.headless = {
+      stop: async () => { order.push('headless.stop') },
+    }
+    internals.pty = {
+      kill: () => { order.push('pty.kill') },
+    }
+
+    await internals.rollbackStart()
+
+    // WHY order matters: killing the PTY first can race coordinator cleanup
+    // with filesystem events from the exiting process. Revocation must be
+    // complete before the last producer is torn down.
+    expect(order).toEqual(['headless.stop', 'pty.kill'])
+    expect(internals.headless).toBeNull()
+    expect(internals.pty).toBeNull()
+  })
+
   it('returns terminal exit instead of polling until the deadline', async () => {
     vi.useFakeTimers()
     const session = new CodexSession()

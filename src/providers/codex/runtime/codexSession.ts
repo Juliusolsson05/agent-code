@@ -441,12 +441,16 @@ export class CodexSession extends EventEmitter {
     this.proxyAdapter = null
     try { await this.proxyServer?.stop() } catch { /* best-effort */ }
     this.proxyServer = null
+    // WHY a partially started headless must stop before its PTY is discarded:
+    // codex-headless now registers fresh claimants and path leases in a shared
+    // process-wide coordinator. Its stop path is deliberately idempotent and
+    // transactional; skipping it leaks live membership after a failed start,
+    // making later sessions look permanently contended even though this pane
+    // never became usable.
+    try { await this.headless?.stop() } catch { /* best-effort */ }
+    this.headless = null
     try { this.pty?.kill() } catch { /* best-effort */ }
     this.pty = null
-    // Intentionally no headless teardown here: if headless.start()
-    // threw, its internal state is undefined; calling stop() on it
-    // risks a second throw. Let GC collect it.
-    this.headless = null
   }
 
   write(data: string): void {
