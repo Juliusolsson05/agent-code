@@ -1,11 +1,9 @@
 # Codex Fresh Rollout Ownership Recovery
 
-> **Status:** Reopened on 2026-08-24 after the independent PR #634 merge gate
-> returned **RED**. The first five stages established the upstream format
-> regression and fixed single-session matching, but review proved that the
-> runtime ownership substrate is still wrong for concurrent sessions. Corrective
-> Stages 5–9 below replace per-instance candidate visibility with process-wide
-> reconciliation before either PR may merge.
+> **Status:** Corrective Stages 5–8 are implemented. Stage 9 remains open while
+> the exact repaired commits pass GitHub CI and a new independent merge gate.
+> The earlier gates remain recorded below as evidence for the counterexamples;
+> neither PR may merge on the strength of a superseded review snapshot.
 >
 > **Incident:** Agent Code issue #632.
 >
@@ -168,7 +166,7 @@ shape and cannot be used as evidence that current rollout ownership works.
 
 ### Stage 5 — record the failed concurrency substrate as tests
 
-- [ ] **Produces:** fixture-driven red tests for sequential watcher delivery,
+- [x] **Produces:** fixture-driven red tests for sequential watcher delivery,
   including two same-CWD sessions with the same normalized submitted prompt,
   two sessions with distinct recorded prompts whose filesystem events arrive
   in reverse order, registration-before-PTY-write ordering, participant cleanup,
@@ -191,7 +189,7 @@ shape and cannot be used as evidence that current rollout ownership works.
 
 ### Stage 6 — centralize fresh ownership and path leasing
 
-- [ ] **Produces:** an isolated, process-wide coordinator keyed by normalized
+- [x] **Produces:** an isolated, process-wide coordinator keyed by normalized
   sessions root. It owns global candidate visibility, participants partitioned
   by normalized CWD, synchronous prompt registration, causal evidence sequence,
   and irreversible path leases. An edge exists only when the prompt was
@@ -216,7 +214,7 @@ shape and cannot be used as evidence that current rollout ownership works.
 
 ### Stage 7 — make fixture verification independent and shape-faithful
 
-- [ ] **Produces:** a frozen legacy oracle that does not import the modern
+- [x] **Produces:** a frozen legacy oracle that does not import the modern
   claimant, a separate modern target verification, and sanitizer v2 fixtures
   that preserve user transport wrappers, item counts/types, ordered equality
   classes, and exact text-length shape while replacing all private text.
@@ -235,7 +233,7 @@ shape and cannot be used as evidence that current rollout ownership works.
 
 ### Stage 8 — unify exact-id lookup and content-safe diagnostics
 
-- [ ] **Produces:** one exported exact-rollout locator used by both
+- [x] **Produces:** one exported exact-rollout locator used by both
   `codex-headless` and Agent Code, an executable test built from the recorded
   exact-id subagent fixture, and ownership diagnostics whose candidate identities
   are process-local HMACs rather than rollout paths or UUID-bearing basenames.
@@ -409,3 +407,32 @@ instruction to resolve the blockers and continue the review/fix loop is the
 explicit approval to execute these corrective stages; any later evidence that
 invalidates the mutual-singleton model requires another document revision rather
 than a forward patch.
+
+A second independent gate, `run_9ac87e29-09c4-4cf7-9db6-aa94298ab59e`,
+returned **RED** against package `f10e299` and parent `452f468c`. Its six
+confirmed findings became recorded counterexamples before repair:
+
+1. a stopped provider could lose a delayed rollout to a later identical-prompt
+   sibling;
+2. a process-lifetime exact lease prevented ordinary sequential reopen;
+3. a queued async read could assign newly appended bytes an earlier sequence;
+4. stopped callbacks and raw ownership evidence remained process-global;
+5. sanitized provenance exposed UUID-bearing provider filenames; and
+6. aggregate diagnostics could not correlate a decision with a candidate.
+
+Package `6c2c069` resolves those findings with generation-window tombstones,
+clean-versus-uncertain lease retirement, watcher-time inode/byte snapshots plus
+a known-file rescan, process-keyed HMAC evidence with post-drain compaction,
+public-fixture-derived opaque provenance labels, and candidate-level HMAC
+diagnostics. Recorded tests exercise the stopped-owner, growing-prefix,
+overlapping/sequential exact-tail, callback-failure, and retention sequences.
+The package check, build, artifact check, upstream check, and private seven-file
+regeneration/verification are green.
+
+The parent integration against that package revision passes contract,
+keybindings, typecheck, its production build/artifact verifier, and the focused
+Codex rollback suite. The full local suite passes 1,830/1,831; its sole failure
+is the unchanged image-attachment fixture that points at a missing private
+Claude transcript outside this worktree. Stage 9 intentionally stays open until
+the new package pin is committed, pushed, green in GitHub CI, and reviewed by a
+fresh orchestration run.
