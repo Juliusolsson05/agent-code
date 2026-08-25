@@ -1,9 +1,9 @@
 # Codex Fresh Rollout Ownership Recovery
 
-> **Status:** Corrective Stages 5–8 are implemented. Stage 9 remains open while
-> the exact repaired commits pass GitHub CI and a new independent merge gate.
-> The earlier gates remain recorded below as evidence for the counterexamples;
-> neither PR may merge on the strength of a superseded review snapshot.
+> **Status:** Reopened again after the third independent gate found that fresh
+> and resume-fork ownership still arbitrate separately. Stages 10–12 below must
+> complete before Stage 9 can close. The earlier gates remain recorded as
+> evidence; neither PR may merge on a superseded review snapshot.
 >
 > **Incident:** Agent Code issue #632.
 >
@@ -268,6 +268,66 @@ shape and cannot be used as evidence that current rollout ownership works.
 - **Reality check:** `CodexSession.rollbackStart()` currently nulls the headless
   instance without calling its idempotent `stop()`. That was harmless with only
   private state but would leak coordinator membership after this redesign.
+
+### Stage 10 — record cross-policy and teardown failures
+
+- [x] **Produces:** red recorded-fixture regressions for a reconstructed
+  resume/subagent rollout whose copied prompt also matches a fresh sibling; a
+  stopped fresh owner compacted before its PTY flush; overlapping `stop()` calls
+  while an exact tail close is gated; an exact path reopened after its tail has
+  switched cleanly to a fork; and a released registry inspected for raw session
+  roots.
+- **Verified by:** each test fails against package `6c2c069` for the reviewer’s
+  stated reason, while the existing fresh, exact, and sanitizer corpus remains
+  green. The resume/fresh collision must reuse the recorded exact-id fixture and
+  a recorded prompt equality class, not an invented rollout object.
+- **Why separate:** a green implementation-authored happy path would not prove
+  that split fresh/resume arbitration is gone. These interleavings must remain
+  independently inspectable even if the coordinator is redesigned again.
+- **Reality check:** gate `run_d5e0bbe3-ef4b-4039-a1de-835bea799d0a` traced each
+  failure through reachable package and parent lifecycle calls. The existing
+  stopped-owner test omitted the production compaction boundary, and the exact
+  test was sequential rather than overlapping.
+
+### Stage 11 — reconcile lineage and prompt evidence in one owner
+
+- [ ] **Produces:** one coordinator graph containing fresh prompt participants
+  and active resume-lineage participants. Recorded candidate parsing exposes
+  bounded opaque item IDs; the coordinator HMACs them and gives verified lineage
+  claims precedence before evaluating copied user history as fresh evidence.
+  Tail switching retires only the tail actually closed, stop is promise-
+  idempotent, stopped prompt tombstones survive the post-watcher PTY flush
+  window, and the global registry is keyed by a process-local HMAC rather than a
+  raw sessions root.
+- **Verified by:** all Stage 10 failures become green under both candidate
+  delivery orders; a real unrelated fresh candidate remains immediately
+  attachable while a resume window is active; two lineage claimants fail closed;
+  no exact path has two active tails; and the post-drain registry projection has
+  no root, path, provider ID, CWD, or prompt.
+- **Why separate:** copied history and fresh prompt equality are individually
+  valid evidence but have different strength. Letting independent watchers race
+  them makes callback order the hidden arbiter. The coordinator must resolve the
+  stronger lineage edge first and emit one lease.
+- **Reality check:** reconstructed rollouts copy opaque item IDs and prior user
+  messages together. The existing resume verifier already uses overlap of those
+  IDs; moving that evidence into the coordinator removes policy duplication
+  without inventing a new provider signal.
+
+### Stage 12 — repin and obtain a fourth clean gate
+
+- [ ] **Produces:** repaired package and parent commits, a fresh real Codex
+  smoke, green GitHub checks, and a fourth independent orchestration verdict
+  against the exact merge heads.
+- **Verified by:** inspect every constituent reviewer result as well as the
+  synthesizer; require zero confirmed findings of every severity. Merge package
+  PR #41 first, verify the parent pin remains reachable from package `main`, then
+  merge Agent Code PR #634 and close issue #632 with evidence.
+- **Why separate:** the third gate’s CI was green while ownership was still
+  structurally split. Tests and CI are necessary but not sufficient; the final
+  gate must challenge the new unified graph rather than the superseded commits.
+- **Reality check:** package and parent GitHub checks passed on `6c2c069` and
+  `c31b72bd`, and a live Codex 0.149.1 smoke committed 14 entries with no errors,
+  yet independent review still produced reachable counterexamples.
 
 ## 4. Isolation boundary
 
