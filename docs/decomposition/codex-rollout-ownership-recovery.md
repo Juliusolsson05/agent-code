@@ -743,7 +743,7 @@ coordinator's public inspection result instead of reopening private state.
 
 ### Stage 27 — isolate provider input evidence and seal resume issuance
 
-- [ ] **Produces:** a transcript-owned input-evidence state machine with an
+- [x] **Produces:** a transcript-owned input-evidence state machine with an
   explicit composer/modal/mode boundary. Non-composer actions bypass or
   invalidate prompt evidence; configurable/unproven keymaps and Vim mode fail
   closed; supported default editing follows the recorded Codex grapheme, word,
@@ -769,6 +769,28 @@ coordinator's public inspection result instead of reopening private state.
   and assumes default bindings. The current exported class has a public
   constructor and enumerable raw fields. Those are substrate defects at the two
   named boundaries; renderer or queue changes are forbidden workarounds.
+
+Codex-headless `93c6fcb` and parent `dc226882` complete this stage. The package
+now issues a frozen, version-pinned launch profile whose final CLI overrides
+force Enter submit, Tab queue, non-Vim startup, and no runtime Vim-toggle
+binding. `CodexHeadless` accepts prompt evidence only with that issued object;
+Agent Code probes the exact binary, appends the issued arguments after every
+other configuration layer and immediately before `resume`, then passes the same
+capability beside the PTY. The isolated adapter reads an immutable xterm frame,
+requires a recorded bottom composer/footer, and uses the provider-rendered draft
+instead of reproducing Unicode, word, history, or configurable editor behavior.
+Terminal attachment now follows the synchronous ownership setup but precedes
+watcher readiness, preserving real startup frames while `start()` is pending.
+
+The resume preparation is now a factory-only public interface with native
+private fields, a module-private constructor token, WeakSet issuer validation at
+`CodexHeadless` construction, and disposal-time scrubbing. Package check is
+green at 119 tests, including all ten recorded input cases and the recorded
+capability attacks; type/build/package contracts are green. Parent typecheck and
+the 15 focused Codex readiness/delivery tests are green. The otherwise-complete
+parent test run has one unrelated local corpus-reference failure because a
+fixture cites a deleted private Claude session; the changed Codex suites and CI
+do not depend on that machine-local artifact.
 
 ### Stage 28 — repin, exercise configuration reality, and obtain a ninth gate
 
