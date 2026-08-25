@@ -1,10 +1,11 @@
 # Codex Fresh Rollout Ownership Recovery
 
-> **Status:** Reopened after the eighth independent gate found five reachable
-> input-evidence and capability-boundary regressions around the now-stable
-> ownership graph. Stages 25–28 below must complete before any dependency or
-> parent PR merges. The earlier gates remain recorded as evidence; no green CI
-> run or live happy path overrides a RED exact-head review.
+> **Status:** Reopened after the ninth independent gate found ten reachable
+> input-causality, configuration, lifecycle, retention, and capability-boundary
+> regressions around the now-stable ownership graph. Stages 29–32 below must
+> complete before any dependency or parent PR merges. The earlier gates remain
+> recorded as evidence; no green CI run or live happy path overrides a RED
+> exact-head review.
 >
 > **Incident:** Agent Code issue #632.
 >
@@ -814,6 +815,108 @@ do not depend on that machine-local artifact.
   four HIGH findings plus one MEDIUM privacy finding. This is code work, not an
   orchestration-health ambiguity.
 
+The ninth exact-head gate
+`run_82f91693-7c19-450a-8862-0b5821d962bf` completed normally against parent
+`680cccc1`, codex-headless `93c6fcbe`, and parser `a3fee9d`. All four agents
+completed with no retry, stall, provider failure, or coverage gap. The
+synthesizer returned **RED** with ten deduplicated findings. It rejected the
+claimed atomic-paste/no-submission bug because no committed provider recording
+proved that outcome; that candidate remains an unknown and is not implementation
+authority.
+
+### Stage 29 — record ninth-gate causality, configuration, and retention reality
+
+- [ ] **Produces:** inspectable artifacts for all ten confirmed findings before
+  production edits: recorded 0.149.1 narrow-wrap frames across resize; ordinary
+  composer submissions whose draft/CWD contain the modal and Vim sentinel
+  strings; a real lower-layer conflicting keymap plus the exact upstream
+  `rust-v0.149.1` precedence/conflict source coordinates; built-package
+  reflection projections for resume getters, structural-profile promotion, and
+  raw participant IDs; and recorded-rollout lifecycle schedules for synchronous
+  generation-open failure/retry, unresolved-candidate missed-event recovery,
+  and terminal-candidate post-compaction append.
+- **Verified by:** provider cases compare the PTY input with the durable user
+  item or explicit startup failure from the same run. Source-derived config
+  evidence records tag commit and file hashes. Package projections execute the
+  built `93c6fcbe` artifact. Lifecycle schedules retain real rollout bytes and
+  mutate only inode/event/timer order. Each artifact must reproduce the
+  reviewer's counterexample independently of the later fix.
+- **Why separate:** resize interpretation, effective keymap precedence,
+  capability reflection, physical-tail transactionality, and watcher retention
+  are independent facts. Writing the repair first would let implementation
+  assumptions define the evidence and repeat the green-but-wrong failure.
+- **Reality check:** the gate reproduced stale-draft promotion and reflective
+  leaks from the built package, traced the lifecycle/retention sequences through
+  reachable code, and inspected exact upstream precedence 30/40/50. New live
+  recording is required only where the gate correctly identified a missing
+  provider artifact.
+
+### Stage 30 — turn the ninth-gate artifacts into red contracts
+
+- [ ] **Produces:** deterministic failing tests for CH-01 through CH-10 before
+  changing production code. The matrix covers clean retry after synchronous
+  no-open failure for exact/fresh/lineage; missed-event rescan for a live
+  unresolved sibling; post-compaction terminal-path eviction; stale unchanged
+  composer redraw after an edit; conflicting and higher-precedence keymap
+  refusal; complete prototype-chain capability privacy; unissued compatibility
+  lookalike rejection; content-safe retention inspection; resize-layout
+  invalidation; and structurally scoped modal/Vim detection.
+- **Verified by:** run the focused suite against `93c6fcbe` and record each
+  expected failure while all prior recorded controls remain green. Every test
+  names its Stage 29 artifact; no hand-authored provider screen or rollout may
+  replace the recorded source.
+- **Why separate:** these are contracts about outcomes, not a proposed
+  algorithm. Keeping the red checkpoint reviewable prevents a broad fail-closed
+  shortcut from hiding ordinary valid submissions or permanent transcript
+  disconnection.
+- **Reality check:** package, parser, and parent CI are all green at the RED
+  heads. The new contracts must therefore exercise the exact omitted orders and
+  surfaces rather than add more happy-path counts.
+
+### Stage 31 — repair the isolated evidence, capability, and transport boundaries
+
+- [ ] **Produces:** composer evidence tied to a causally acknowledged draft and
+  layout epoch rather than any PTY byte; structurally scoped footer/modal/Vim
+  parsing; a conflict-free input profile issued only when no higher-precedence
+  managed layer can alter it; a public resume handle with no sensitive
+  prototype surface; no shipped structural-profile promotion or raw testing
+  identity projection; transactional tail acquisition whose synchronous
+  no-open failure retires cleanly; and state-aware transport retention that
+  preserves polling for unresolved active candidates while immediately evicting
+  terminal candidates.
+- **Verified by:** every Stage 30 red contract turns green, all prior 119 package
+  tests and recorded fixture checks remain green, and mutation controls prove
+  that an unchanged newer frame, resize-before-redraw, managed config,
+  conflicting lower bindings, delayed terminal events, and reflection cannot
+  manufacture evidence or retain raw identity. Ordinary adversarial-text
+  prompts must still attach.
+- **Why separate:** prompt evidence, capability issuance, and transport leasing
+  stay isolated sibling layers with `CodexHeadless` as their sole consumer.
+  Renderer, QueueStrip, parent readiness, and transcript reducers remain
+  forbidden workarounds.
+- **Reality check:** CH-01 through CH-10 are all reachable in codex-headless or
+  its Agent Code launch integration; the parser and provider-neutral parent
+  paths survived review. The repair must remain concentrated at the boundaries
+  that produced the false or missing evidence.
+
+### Stage 32 — repin, replay reality, obtain a tenth gate, and merge
+
+- [ ] **Produces:** repaired dependency and parent commits, exact-head package
+  and parent CI, live default/conflict/managed-absence/resize/adversarial-text
+  evidence, and a tenth independent orchestration verdict against the commits
+  intended for merge.
+- **Verified by:** inspect every constituent artifact plus the synthesizer and
+  require zero coverage gaps and zero confirmed findings. Merge codex-headless
+  PR #41, then parser PR #21, prove both pinned commits are ancestors of their
+  dependency `main`, merge Agent Code PR #634, and verify issue #632 closes.
+- **Why separate:** every corrective commit invalidates the ninth review.
+  Dependency reachability, current CI, live provider behavior, and the exact
+  parent pin are release artifacts and cannot be inferred from repaired tests.
+- **Reality check:** at the ninth heads all three PRs were clean, mergeable, and
+  CI-green, and the current development host had no legacy or MDM managed
+  config. Those facts did not cover the ten confirmed counterexamples and are
+  not permission to merge them.
+
 ## 4. Isolation boundary
 
 The hard parts are **fresh rollout ownership**, **provider input evidence**, and
@@ -894,6 +997,17 @@ for the package.
 15. JavaScript `Intl.Segmenter` and Rust `unicode-segmentation` must be compared
     on the recorded grapheme/word cases before equivalence is claimed. Any
     divergent class stays unsupported and fail-closed.
+16. Codex 0.149.1 legacy managed file and MDM layers outrank session flags.
+    Detecting their absence immediately before spawn is operational evidence,
+    not an atomic lock against an administrator changing policy during startup;
+    the residual race must be named and fail closed wherever provider state no
+    longer agrees with the issued profile.
+17. A larger PTY generation is not necessarily a composer acknowledgement. The
+    complete set of harmless status/redraw chunks between an edit and the next
+    composer paint is not enumerated, so unchanged drafts remain stale.
+18. The existing corpus does not prove that production's atomic bracketed paste
+    plus Enter fails to submit on 0.149.1. That ninth-gate candidate was rejected
+    and must not drive code until a real no-request/no-rollout recording exists.
 
 ## 6. Fixture plan
 
@@ -926,6 +1040,13 @@ screen rows, active-pane/footer placement, effective configuration class,
 submission/no-submission outcome, and equality with the durable role-user item.
 Capability fixtures come from the built package projection and contain only
 presence/type/equality flags—never the raw values they prove are retained.
+
+Stage 29 extends those same sources instead of inventing new provider shapes.
+Resize and adversarial-text fixtures come from real 0.149.1 terminal/request/
+rollout captures; config precedence comes from exact upstream tag
+`rust-v0.149.1`; capability/privacy projections execute the built ninth-gate
+package; lifecycle tests reuse the existing recorded exact and modern rollout
+bodies while changing only reviewed inode, queue, timer, and watcher order.
 
 ## 7. Implementation and verification record
 
