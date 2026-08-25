@@ -331,7 +331,7 @@ shape and cannot be used as evidence that current rollout ownership works.
 
 ### Stage 13 — record pre-spawn, causal, and shared-lifetime counterexamples
 
-- [ ] **Produces:** recorded-fixture red regressions for all six fourth-gate
+- [x] **Produces:** recorded-fixture red regressions for all six fourth-gate
   findings: reconstructed Y arriving before resume lineage registration; an O1
   prefix that already contains P being superseded by unrelated O2 after local P;
   an old exact X changed after fresh registration; resume-window expiry with an
@@ -352,7 +352,7 @@ shape and cannot be used as evidence that current rollout ownership works.
 
 ### Stage 14 — prepare resume ownership and close causal lifetimes
 
-- [ ] **Produces:** a package-owned prepared-resume handle acquired before the
+- [x] **Produces:** a package-owned prepared-resume handle acquired before the
   consumer spawns `codex`; it reserves exact X, fingerprints X lineage, and
   registers the resume participant before reconstructed Y can exist. Agent Code
   consumes that handle before PTY spawn without implementing ownership policy.

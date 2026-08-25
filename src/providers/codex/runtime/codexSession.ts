@@ -6,9 +6,15 @@ import { spawn as ptySpawn } from 'node-pty'
 import type { SlashPickerState } from '@preload/index.js'
 import { PROXY_EVENTS_DIR } from '@main/storage/paths.js'
 import { scheduleDebugStoragePrune } from '@main/storage/debugRetention.js'
-import { CodexHeadless, CodexResponsesAdapter, ResponsesProxy } from 'codex-headless'
+import {
+  CodexHeadless,
+  CodexResponsesAdapter,
+  ResponsesProxy,
+  prepareCodexResumeRollout,
+} from 'codex-headless'
 import type {
   CodexConditionSnapshot,
+  CodexResumeRolloutPreparation,
   CodexRolloutDiagnostic,
   CodexRolloutLine,
   CodexSemanticEvent,
@@ -196,6 +202,10 @@ export class CodexSession extends EventEmitter {
   private readonly builtInMcpServers: BuiltInMcpServerConfig[]
   private proxyServer: ResponsesProxy | null = null
   private proxyAdapter: CodexResponsesAdapter | null = null
+  // Exists only across prepare -> PTY spawn -> event wiring. The parent keeps
+  // rollback authority until the exact `headless.start()` call boundary; after
+  // that call begins, the headless prepared-tail path owns lease retirement.
+  private resumeRolloutPreparation: CodexResumeRolloutPreparation | null = null
 
   constructor(options: CodexSessionOptions = {}) {
     super()
@@ -295,6 +305,18 @@ export class CodexSession extends EventEmitter {
     // leaks the proxy HTTP server — nothing else would ever call
     // stop() on it. Wrap everything in a try/catch that rolls back.
     try {
+      if (this.resumeSessionId) {
+        // WHY this must precede ptySpawn: Codex can reconstruct a resume fork
+        // immediately after process creation. Locating X and registering its
+        // lineage afterwards leaves a real interval where a same-cwd fresh
+        // sibling can lease Y. The capability makes the ordering auditable and
+        // gives rollback one object that owns every pre-spawn reservation.
+        this.resumeRolloutPreparation = await prepareCodexResumeRollout({
+          cwd: this.cwd,
+          resumeThreadId: this.resumeSessionId,
+          onError: error => this.emit('jsonl-error', error),
+        })
+      }
       // Spawn the PTY.
       this.pty = ptySpawn(this.binary, args, {
         name: 'xterm-256color',
@@ -310,110 +332,127 @@ export class CodexSession extends EventEmitter {
 
     // Create CodexHeadless — it attaches to the PTY and does all
     // the headless terminal + parser + transcript work.
-    this.headless = new CodexHeadless({
-      pty: this.pty,
-      cwd: this.cwd,
-      cols: this.cols,
-      rows: this.rows,
-      snapshotIntervalMs: this.snapshotIntervalMs,
-      resumeThreadId: this.resumeSessionId ?? undefined,
-    })
-
-    // Forward raw PTY bytes — SessionManager expects this event.
-    this.pty.onData((data: string) => {
-      this.emit('pty-data', data)
-    })
-
-    // Forward screen snapshots.
-    this.headless.on('screen', snap => {
-      this.markComposerReady(snap.plain)
-      this.emit('screen', {
-        plain: snap.plain,
-        markdown: snap.markdown,
-        recent: snap.recent,
-        recentMarkdown: snap.recentMarkdown,
-        // Codex doesn't have a slash picker yet — static "not visible"
-        // so the renderer's picker component stays hidden.
-        picker: { visible: false, items: [] },
-      })
-    })
-
-    // Forward the activity status string (the bottom Working row text
-    // parsed by codex-headless). Without `status`, the renderer's
-    // ActivityIndicator falls back to detectActivity on the screen
-    // plaintext, which is a Claude-specific spinner detector and
-    // returns null for Codex panes — leaving them with the generic
-    // "thinking…" placeholder despite the working state being known.
-    this.headless.on('activity', status => {
-      this.emit('process-state', { active: true, status })
-    })
-
-    this.headless.on('idle', () => {
-      this.emit('process-state', { active: false })
-    })
-
-    // Forward trust dialog state. The headless emits on every
-    // transition (visible + hidden) so the renderer can mount and
-    // unmount the modal in lockstep with Codex's own dialog.
-    this.headless.on('trust-dialog', state => {
-      this.emit('trust-dialog', state)
-    })
-
-    this.headless.on('conditions', snapshot => {
-      this.emit('conditions', snapshot)
-    })
-
-    // Forward rollout entries as jsonl-entry (matches Claude's event name).
-    this.headless.on('rollout-entry', (line, file) => {
-      this.emit('jsonl-entry', line, file)
-    })
-
-    this.headless.on('rollout-error', err => {
-      this.emit('jsonl-error', err)
-    })
-
-    // WHY this is a diagnostic channel instead of jsonl-error: a held fresh
-    // candidate is the safe fail-closed outcome when ownership is not proven.
-    // Calling it an error makes a healthy sibling rollout look fatal; dropping
-    // it made #632 indistinguishable from failed PTY delivery. The main process
-    // records this content-safe evidence but no renderer correctness path uses
-    // it.
-    this.headless.on('rollout-diagnostic', diagnostic => {
-      this.emit('transcript-diagnostic', diagnostic)
-    })
-
-    this.headless.semantic.on('event', (ev: CodexSemanticEvent) => {
-      this.emit('semantic-event', ev)
-    })
-
-    if (this.proxyServer) {
-      // The adapter parses OpenAI Responses SSE and publishes to the
-      // same SemanticChannel the rollout reducer writes to. When both
-      // sources overlap, the channel emits `source_changed` so the
-      // renderer can see which source is driving the live text. The
-      // proxy wins the first-chunk race; rollout later reconciles
-      // with the authoritative text at task_complete.
-      this.proxyAdapter = new CodexResponsesAdapter(this.proxyServer, this.headless)
-      this.proxyAdapter.attach()
+    try {
+      const common = {
+        pty: this.pty,
+        cwd: this.cwd,
+        cols: this.cols,
+        rows: this.rows,
+        snapshotIntervalMs: this.snapshotIntervalMs,
+      }
+      if (this.resumeSessionId) {
+        const preparation = this.resumeRolloutPreparation
+        if (!preparation) {
+          throw new Error('Codex resume ownership was not prepared before spawn')
+        }
+        this.headless = new CodexHeadless({
+          ...common,
+          resumeThreadId: this.resumeSessionId,
+          resumeRolloutPreparation: preparation,
+        })
+      } else {
+        this.headless = new CodexHeadless(common)
+      }
+    } catch (err) {
+      await this.rollbackStart()
+      throw err
     }
 
-    this.headless.on('exit', ({ exitCode, signal }) => {
-      this.exited = true
-      this.composerReady = false
-      this.emit('input-readiness', { ready: false, reason: 'provider-not-ready' })
-      this.emit('exit', { exitCode, signal })
-    })
-
-    // Start the transcript tailer BEFORE we emit started — same
-    // ordering as ClaudeSession to avoid missing early entries.
-    //
-    // If headless.start() throws we're in the same leak shape as a
-    // pty-spawn failure: a listening proxy server, a live PTY, and
-    // a partially-constructed CodexHeadless. Roll back all three so
-    // the caller can retry cleanly instead of being told "start
-    // failed" while a port quietly stays bound.
     let sessionsDir: string
     try {
+      // Forward raw PTY bytes — SessionManager expects this event.
+      this.pty.onData((data: string) => {
+        this.emit('pty-data', data)
+      })
+
+      // Forward screen snapshots.
+      this.headless.on('screen', snap => {
+        this.markComposerReady(snap.plain)
+        this.emit('screen', {
+          plain: snap.plain,
+          markdown: snap.markdown,
+          recent: snap.recent,
+          recentMarkdown: snap.recentMarkdown,
+          // Codex doesn't have a slash picker yet — static "not visible"
+          // so the renderer's picker component stays hidden.
+          picker: { visible: false, items: [] },
+        })
+      })
+
+      // Forward the activity status string (the bottom Working row text
+      // parsed by codex-headless). Without `status`, the renderer's
+      // ActivityIndicator falls back to detectActivity on the screen
+      // plaintext, which is a Claude-specific spinner detector and
+      // returns null for Codex panes — leaving them with the generic
+      // "thinking…" placeholder despite the working state being known.
+      this.headless.on('activity', status => {
+        this.emit('process-state', { active: true, status })
+      })
+
+      this.headless.on('idle', () => {
+        this.emit('process-state', { active: false })
+      })
+
+      // Forward trust dialog state. The headless emits on every
+      // transition (visible + hidden) so the renderer can mount and
+      // unmount the modal in lockstep with Codex's own dialog.
+      this.headless.on('trust-dialog', state => {
+        this.emit('trust-dialog', state)
+      })
+
+      this.headless.on('conditions', snapshot => {
+        this.emit('conditions', snapshot)
+      })
+
+      // Forward rollout entries as jsonl-entry (matches Claude's event name).
+      this.headless.on('rollout-entry', (line, file) => {
+        this.emit('jsonl-entry', line, file)
+      })
+
+      this.headless.on('rollout-error', err => {
+        this.emit('jsonl-error', err)
+      })
+
+      // WHY this is a diagnostic channel instead of jsonl-error: a held fresh
+      // candidate is the safe fail-closed outcome when ownership is not proven.
+      // Calling it an error makes a healthy sibling rollout look fatal; dropping
+      // it made #632 indistinguishable from failed PTY delivery. The main process
+      // records this content-safe evidence but no renderer correctness path uses
+      // it.
+      this.headless.on('rollout-diagnostic', diagnostic => {
+        this.emit('transcript-diagnostic', diagnostic)
+      })
+
+      this.headless.semantic.on('event', (ev: CodexSemanticEvent) => {
+        this.emit('semantic-event', ev)
+      })
+
+      if (this.proxyServer) {
+        // The adapter parses OpenAI Responses SSE and publishes to the
+        // same SemanticChannel the rollout reducer writes to. When both
+        // sources overlap, the channel emits `source_changed` so the
+        // renderer can see which source is driving the live text. The
+        // proxy wins the first-chunk race; rollout later reconciles
+        // with the authoritative text at task_complete.
+        this.proxyAdapter = new CodexResponsesAdapter(this.proxyServer, this.headless)
+        this.proxyAdapter.attach()
+      }
+
+      this.headless.on('exit', ({ exitCode, signal }) => {
+        this.exited = true
+        this.composerReady = false
+        this.emit('input-readiness', { ready: false, reason: 'provider-not-ready' })
+        this.emit('exit', { exitCode, signal })
+      })
+
+      // Start the transcript tailer BEFORE we emit started — same ordering as
+      // ClaudeSession to avoid missing early entries. Ownership crosses from
+      // the parent to CodexHeadless at this exact call boundary: every setup
+      // throw above still leaves rollbackStart a preparation to dispose, while
+      // every throw inside start is cleaned by the prepared tail path itself.
+      // Clearing the alias before awaiting also prevents both layers from
+      // independently deciding the physical tail's close outcome.
+      this.resumeRolloutPreparation = null
       const res = await this.headless.start()
       sessionsDir = res.sessionsDir
     } catch (err) {
@@ -449,6 +488,11 @@ export class CodexSession extends EventEmitter {
     // never became usable.
     try { await this.headless?.stop() } catch { /* best-effort */ }
     this.headless = null
+    // If constructor/spawn failed before the ownership handoff, there is no
+    // headless instance to retire X or unregister lineage. Dispose that
+    // pre-spawn capability here before killing the provider process.
+    try { await this.resumeRolloutPreparation?.dispose(true) } catch { /* best-effort */ }
+    this.resumeRolloutPreparation = null
     try { this.pty?.kill() } catch { /* best-effort */ }
     this.pty = null
   }

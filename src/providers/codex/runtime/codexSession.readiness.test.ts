@@ -54,6 +54,32 @@ describe('CodexSession prompt readiness lifecycle', () => {
     expect(internals.pty).toBeNull()
   })
 
+  it('disposes pre-spawn resume ownership before killing a spawned PTY', async () => {
+    const session = new CodexSession()
+    const order: string[] = []
+    const internals = session as unknown as {
+      resumeRolloutPreparation: { dispose(clean?: boolean): Promise<void> } | null
+      pty: { kill(): void } | null
+      rollbackStart(): Promise<void>
+    }
+    internals.resumeRolloutPreparation = {
+      dispose: async clean => { order.push(`preparation.dispose:${clean}`) },
+    }
+    internals.pty = {
+      kill: () => { order.push('pty.kill') },
+    }
+
+    await internals.rollbackStart()
+
+    // WHY this is the spawn/constructor-failure shape: no CodexHeadless owns
+    // the capability yet, but the exact path and lineage participant are
+    // already live. Killing Codex first would admit its final filesystem flush
+    // while cleanup still believes this owner can receive a callback.
+    expect(order).toEqual(['preparation.dispose:true', 'pty.kill'])
+    expect(internals.resumeRolloutPreparation).toBeNull()
+    expect(internals.pty).toBeNull()
+  })
+
   it('returns terminal exit instead of polling until the deadline', async () => {
     vi.useFakeTimers()
     const session = new CodexSession()
