@@ -1,9 +1,10 @@
 # Codex Fresh Rollout Ownership Recovery
 
-> **Status:** Reopened after the fourth independent gate found six reachable
-> order/lifecycle regressions in the unified owner. Stages 13–15 below must
-> complete before Stage 9 can close. The earlier gates remain recorded as
-> evidence; neither PR may merge on a superseded review snapshot.
+> **Status:** Reopened after the eighth independent gate found five reachable
+> input-evidence and capability-boundary regressions around the now-stable
+> ownership graph. Stages 25–28 below must complete before any dependency or
+> parent PR merges. The earlier gates remain recorded as evidence; no green CI
+> run or live happy path overrides a RED exact-head review.
 >
 > **Incident:** Agent Code issue #632.
 >
@@ -678,14 +679,120 @@ the actual Agent Code race begins after the PTY is interactive but before
 watcher readiness, and remains independently covered by the recorded system
 fixture that holds watcher priming while the exact terminal chunks arrive.
 
+### Stage 25 — record effective-input and capability-boundary reality
+
+- [ ] **Produces:** a content-safe Codex `0.149.1` input-evidence corpus and
+  catalog containing the exact PTY chunks, pre-write structural screen state,
+  effective TUI configuration class, and durable submitted user value for:
+  trust/update or approval modal actions, modal-consumed Ctrl+C, decomposed
+  grapheme Backspace/Delete, mixed ASCII/CJK Ctrl+W, repeated multiline
+  Ctrl+A/Ctrl+E, a custom composer submit mapping, an unbound editor action,
+  `tui.vim_mode_default`, active-footer Tab queue, transcript-spoofed footer,
+  and `$` skill completion. It also records a package-level capability
+  projection showing construction, own/enumerable keys, serialization, consume,
+  and post-dispose retention at exact head `6244eac`.
+- **Verified by:** for each provider case, compare the terminal input with the
+  actual durable role-user item written by the same fresh Codex rollout and
+  record whether no submission occurred. Capture the exact CLI version and the
+  isolated `CODEX_HOME`/profile/`-c` configuration inputs without committing
+  private paths or prompt text. The capability projection must be reproduced
+  from the built package, not only TypeScript source inspection.
+- **Why separate:** the provider keymap, active bottom-pane stack, Unicode text
+  model, and footer layout are upstream facts. If their expected outcomes are
+  written first by the implementation author, the resulting tests merely bless
+  another terminal-editor guess. Capability privacy is likewise a runtime
+  representation property, not a TypeScript declaration property.
+- **Reality check:** gate
+  `run_cafdcd49-8732-4847-9871-0ea8eb4e2f23` traced real production trust bytes
+  through `CodexHeadless.write()`, verified the configurable `tui.keymap.*` and
+  `tui.vim_mode_default` surface in exact `rust-v0.149.1`, reproduced divergent
+  grapheme/word/line navigation, and constructed a forged preparation from the
+  built package. These observations define the recording matrix; they are not
+  substitutes for the provider recordings this stage produces.
+
+### Stage 26 — turn the recordings into independent red contracts
+
+- [ ] **Produces:** fixture-driven failing tests for every Stage 25 input class,
+  plus package tests proving a caller-created object cannot authorize exact
+  tailing and that the issued resume capability exposes no raw root, path, CWD,
+  provider ID, owner ID, generation ID, coordinator acquisition, or buffered
+  lease through reflection/serialization before or after disposal.
+- **Verified by:** run the focused contracts against package `6244eac` and
+  record each expected failure before production changes. The input assertions
+  compare with the recorded durable provider result/no-result; capability tests
+  compare the public built artifact with the Stage 25 runtime projection. Every
+  previous 92-test ownership/lifecycle control must remain green.
+- **Why separate:** keymap/modal invalidation, exact default editing, structural
+  footer proof, and runtime issuance are distinct contracts. Recording all red
+  boundaries before repair prevents one fail-closed shortcut from concealing a
+  different false-positive ownership path.
+- **Reality check:** the eighth gate confirmed that CI and fresh/resume/Tab live
+  smokes all passed while these boundaries remained reachable. The new tests
+  must therefore exercise the exact omitted states rather than add more copies
+  of those already-green happy paths.
+
+### Stage 27 — isolate provider input evidence and seal resume issuance
+
+- [ ] **Produces:** a transcript-owned input-evidence state machine with an
+  explicit composer/modal/mode boundary. Non-composer actions bypass or
+  invalidate prompt evidence; configurable/unproven keymaps and Vim mode fail
+  closed; supported default editing follows the recorded Codex grapheme, word,
+  and repeated line-boundary semantics; and Tab requires a structurally located
+  active bottom footer with no completion pane/token. The resume preparation is
+  an issued public capability whose sensitive state lives only in package-
+  private storage, whose runtime issuer is validated at consume, and whose
+  disposal scrubs that storage. Agent Code and the live probe may only prepare,
+  pass, and dispose it.
+- **Verified by:** every Stage 26 red contract turns green, all earlier recorded
+  ownership/lifecycle fixtures stay green, and mutation checks prove that
+  transcript text cannot spoof footer evidence, adding `$` disables Tab proof,
+  a mode/keymap override cannot register a local prompt, fabricated lookalikes
+  fail before any tail opens, and disposed capabilities cannot be reused or
+  inspected for raw identity.
+- **Why separate:** prompt text is evidence consumed by the ownership graph; it
+  is not ownership policy itself. Effective input semantics belong in one
+  provider adapter with the coordinator as its single consumer. Resume
+  preparation similarly remains one package-issued handoff across spawn rather
+  than exposing locator/coordinator state to callers.
+- **Reality check:** the current assembler accepts every `write()` as composer
+  input, scans the whole screen for `tab to queue`, edits JavaScript code points,
+  and assumes default bindings. The current exported class has a public
+  constructor and enumerable raw fields. Those are substrate defects at the two
+  named boundaries; renderer or queue changes are forbidden workarounds.
+
+### Stage 28 — repin, exercise configuration reality, and obtain a ninth gate
+
+- [ ] **Produces:** repaired codex-headless and parent commits, any necessary
+  parser probe API migration, live default/custom-keymap/Vim/modal/Unicode/Tab
+  recordings, exact-head CI, and a ninth independent workflow verdict against
+  the commits intended for merge.
+- **Verified by:** inspect every constituent reviewer artifact plus the
+  synthesizer and require zero coverage gaps and zero confirmed findings of any
+  severity. Live default input still attaches and reconciles QueueStrip; custom
+  or unproven input modes demonstrably fail closed without cross-wiring a
+  sibling. Merge codex-headless PR #41, then parser PR #21, prove both pinned
+  commits are ancestors of dependency `main`, merge Agent Code PR #634, and
+  verify issue #632 closes.
+- **Why separate:** any corrective commit invalidates the eighth review and its
+  earlier green CI. Runtime package shape, provider configuration, dependency
+  reachability, and the final parent pin are release facts that must be checked
+  on the exact merge heads.
+- **Reality check:** the eighth run completed normally with four agents, no
+  stalls, retries, provider failures, or coverage gaps, and returned RED with
+  four HIGH findings plus one MEDIUM privacy finding. This is code work, not an
+  orchestration-health ambiguity.
+
 ## 4. Isolation boundary
 
-The hard part is **fresh rollout ownership**, not rendering and not prompt
-delivery. It remains in the `codex-headless` transcript layer as an explicit
-coordinator boundary. The coordinator is the only fresh-session component that
-may observe the global candidate/participant sets or lease a path. Its only
-runtime consumer is `CodexHeadless`, which receives one lease and alone may
-start `tailFile`.
+The hard parts are **fresh rollout ownership**, **provider input evidence**, and
+the **pre-spawn resume handoff**, not rendering. They remain in the
+`codex-headless` transcript layer as explicit sibling boundaries. The
+coordinator is the only fresh-session component that may observe the global
+candidate/participant sets or lease a path. The input-evidence adapter is the
+only component that may turn PTY bytes plus proven provider state into a local
+prompt edge. The resume factory is the only component that may issue a
+pre-spawn capability. Their only runtime consumer is `CodexHeadless`, which
+receives one lease and alone may start `tailFile`.
 
 Exact-id discovery is a separate inert locator: it may enumerate and validate
 rollout metadata but may not import or participate in fresh ownership. The
@@ -745,6 +852,16 @@ for the package.
     whether a later generation at the same pathname may be reconsidered for the
     same live participant remains intentionally fail-closed until recorded
     provider behavior requires and justifies such recovery.
+13. Codex configuration layering now includes base config, named profile, CLI
+    `-c` overrides, and possibly project/managed policy. Until the complete
+    effective keymap can be proven at the spawn boundary, non-default or unknown
+    input semantics must fail closed rather than inherit the base-file guess.
+14. The complete set of provider bottom panes that consume Ctrl+C or ordinary
+    editing keys is not enumerated. Stage 25 records the reachable modal cases;
+    every unrecognized active pane remains invalid input evidence.
+15. JavaScript `Intl.Segmenter` and Rust `unicode-segmentation` must be compared
+    on the recorded grapheme/word cases before equivalence is claimed. Any
+    divergent class stays unsupported and fail-closed.
 
 ## 6. Fixture plan
 
@@ -769,6 +886,14 @@ and equality shape. Neither stage may replace the sources with plausible
 literals. The only synthetic mutations are explicitly labeled equality or
 truncation counterexamples whose surrounding rollout transport/order still
 comes from recordings.
+
+Stage 25 extends the corpus with provider-produced input outcomes rather than
+hand-authored terminal strings. Stage 26 may sanitize prompt atoms consistently,
+but it must preserve exact UTF-8/code-unit structure, PTY chunk boundaries,
+screen rows, active-pane/footer placement, effective configuration class,
+submission/no-submission outcome, and equality with the durable role-user item.
+Capability fixtures come from the built package projection and contain only
+presence/type/equality flags—never the raw values they prove are retained.
 
 ## 7. Implementation and verification record
 
@@ -922,3 +1047,16 @@ fixture-provenance privacy concern because the committed corpus contract
 explicitly retains those app-local identifiers and timestamps, and it found no
 independent parser defect. Stages 22–24 are the approved corrective path; no
 implementation begins until the red artifacts in Stage 22 exist.
+
+The eighth exact-head gate,
+`run_cafdcd49-8732-4847-9871-0ea8eb4e2f23`, completed normally against parent
+`793b1a4b`, codex-headless `6244eac`, and parser `a3fee9d`, with four completed
+reviewers, zero retries/stalls/coverage gaps, and a RED synthesizer. It confirmed
+five reachable findings: input reconstruction is not bound to composer/modal or
+effective keymap/Vim state; whole-screen Tab hints are spoofable and `$`
+completion is omitted; Unicode grapheme/word and repeated Ctrl+A/Ctrl+E results
+diverge from exact Codex; the public resume preparation is forgeable; and its
+enumerable fields retain raw ownership identity after disposal. It rejected an
+independent parser defect and parent ownership-policy regression. Stages 25–28
+are the approved corrective path; implementation follows only after provider
+recordings and the red contracts exist.
