@@ -499,7 +499,7 @@ shape and cannot be used as evidence that current rollout ownership works.
 
 ### Stage 20 — assemble input, migrate resume spawns, and isolate observers
 
-- [ ] **Produces:** one shared live-probe helper/order that prepares the exact
+- [x] **Produces:** one shared live-probe helper/order that prepares the exact
   rollout before every Codex resume PTY spawn and passes the opaque capability
   into `CodexHeadless`; one transcript-owned incremental input assembler that
   reconstructs ordinary chunked typing and complete bracketed paste before
@@ -508,9 +508,11 @@ shape and cannot be used as evidence that current rollout ownership works.
   maintenance queues or invalidate a successfully opened tail. Never-started
   resume preparations are disposed by `stop()`. Reserved prefix reads verify
   the opened handle still names the snapshotted generation, and retention
-  compacts registry transport caches with the graph. The parser package's ordinary
-  verification includes its probe typecheck so a future public API migration
-  cannot silently break the real-data tool again.
+  compacts registry transport caches with the graph. Agent Code's integration
+  verification includes the probe typecheck so a future cross-package API
+  migration cannot silently break the real-data tool again; the standalone
+  parser repository cannot run that check because the probe intentionally
+  imports its two sibling headless packages.
 - **Verified by:** every Stage 19 failure turns green; preparation is disposed if
   spawn or construction fails and when stopped before start; the live probe
   remains the sole owner of PTY termination and `CodexHeadless.stop()`; chunked
@@ -528,9 +530,19 @@ shape and cannot be used as evidence that current rollout ownership works.
   probe still uses the superseded spawn-first order, and its script is excluded
   from the parser package's current `check` command.
 
+Package `3e6a019` turns all recorded Stage 19 cases green in an 83-test suite;
+parser `a3fee9d` passes its 94-test check plus the monorepo-only probe typecheck.
+A real `codex-cli 0.149.1` run submitted the fresh prompt as character chunks,
+then resumed through the prepared capability: fresh committed 14 entries and
+resume committed 25, each from one rollout with exact prompt/response evidence
+and zero errors. A deliberately immediate synthetic Enter first remained
+visible in the composer while ownership correctly reported one local prompt and
+no matching rollout; a 250 ms human input boundary submitted normally, proving
+that failure was PTY delivery timing rather than transcript attachment.
+
 ### Stage 21 — obtain a seventh exact-head gate and merge
 
-- [ ] **Produces:** newly pinned parent/package commits, exact-head CI, a live
+- [ ] **Produces:** newly pinned parent and both dependency commits, exact-head CI, a live
   fresh plus prepared-resume smoke, and a seventh independent review with no
   coverage gaps or confirmed findings. Because the Agent Code workflow provider
   failed both the original and manual-recovery sixth runs, the final evidence
@@ -540,8 +552,8 @@ shape and cannot be used as evidence that current rollout ownership works.
   parent checks cover the probe typecheck; live committed streams contain the
   exact prompt and response from one rollout each with zero errors; both PRs are
   clean/mergeable at the reviewed commits. Merge dependency PR #41 first,
-  verify the pinned package commit is reachable from its `main`, then merge PR
-  #634 and close issue #632.
+  merge both dependency PRs, verify each pinned commit is reachable from its
+  `main`, then merge PR #634 and close issue #632.
 - **Why separate:** exact-head review is invalidated by any corrective commit.
   The failed workflow runs produced coverage-gap values, not code verdicts, and
   therefore cannot satisfy the release gate even though GitHub CI was green.
