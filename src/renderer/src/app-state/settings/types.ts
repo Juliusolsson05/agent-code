@@ -430,6 +430,17 @@ export type Settings = {
    *  Defaults to 'catalog' — today's exact behavior — which keeps the whole
    *  feature additive: nothing about the palette changes until the user asks. */
   commandSortMode: CommandSortMode
+  /** Include prompt templates in the TOP-LEVEL command palette only after the
+   *  user starts typing. The empty command menu remains command-only even when
+   *  this is enabled; the dedicated template picker remains available in both
+   *  states.
+   *
+   *  WHY this is opt-in rather than an unconditional catalog expansion:
+   *  templates are user content, not application commands. Mixing them into
+   *  every search can be useful for people who treat the palette as a global
+   *  launcher, but doing it silently would change a long-standing navigation
+   *  surface and make generic command queries noisier for everyone else. */
+  promptTemplatesInCommandSearchEnabled: boolean
   /** Show pointer-only affordances that a keyboard user does not need — today
    *  the composer's Send and Stop buttons.
    *
@@ -552,6 +563,9 @@ export const DEFAULT_SETTINGS: Settings = {
   // Catalog order is what the palette has always shown, so it stays the
   // default and the sort control is a pure opt-in.
   commandSortMode: 'catalog',
+  // Off by default so upgrading users keep the exact command-search surface
+  // they already know. Enabling it still leaves the empty browse menu alone.
+  promptTemplatesInCommandSearchEnabled: false,
   // Off by default. The composer buttons cost ~28px of pane height per pane
   // and a keyboard user gets nothing from them, so this is opt-in.
   mouseModeEnabled: false,

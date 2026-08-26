@@ -654,6 +654,21 @@ export function getSettingsRegistry(): SettingDefinition[] {
       },
     },
     {
+      id: 'prompt-templates-in-command-search',
+      category: 'commands',
+      title: 'Prompt Templates in Command Search',
+      description:
+        'Include matching prompt templates after you type in the command palette. The default menu stays command-only.',
+      keywords: ['prompt', 'template', 'command', 'palette', 'picker', 'search', 'launcher'],
+      control: {
+        type: 'toggle',
+        getValue: settings => settings.promptTemplatesInCommandSearchEnabled,
+        onToggle: (ctx, value) => ctx.onChange({
+          promptTemplatesInCommandSearchEnabled: value,
+        }),
+      },
+    },
+    {
       id: 'aggressive-debug-persistence',
       category: 'experimental',
       title: 'Persistent Aggressive Debug Logs',
