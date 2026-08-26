@@ -1,7 +1,8 @@
 # Worktree Context and Dispatch Labels — Staged Decomposition
 
-> Status: Stage 2 completed and independently verified on 2026-08-26.
-> Awaiting explicit user approval for Stage 3. Production remains unchanged.
+> Status: Stage 3 completed and independently verified on 2026-08-26.
+> Stages 4 and 5 are explicitly approved; Stage 6 remains out of scope for
+> this implementation pass.
 >
 > Issues: #658 (Codex worktree evidence) and #659 (Dispatch pane coordinate).
 
@@ -353,6 +354,26 @@ same drift that broke current Codex detection.
 The accepted discriminators, field paths, URL form, and FileChange collection
 shape come directly from Stage 1 fixtures and frequencies. No recursive
 "find anything named cwd" heuristic is allowed.
+
+### Stage 3 completion record
+
+Current and legacy Codex grammar now lives behind a provider adapter under
+`src/shared/work-context/provider-evidence/`; the corresponding Claude logic
+was moved behind its own adapter without changing its recorded behavior. The
+shared extractor remains the sole normalized scoring/key boundary consumed by
+both live tracking and historical indexing.
+
+The adapter recognizes only the measured current carriers. It explicitly
+leaves completed MCP calls as non-evidence and accepts FileChange object keys
+without adding the unobserved array variant. Local non-hosted `file://` values
+are converted only inside shared path matching, so literal recorded evidence
+remains unchanged in emitted events and the historical index.
+
+All six focused Stage 2 unit contracts are green. That includes the real MCP
+negative and Claude preservation cases. The recorded live Worktrees projection
+also became green from provider recognition alone, proving no renderer
+`active`/`primary` policy change is authorized or needed in Stage 4. TypeScript
+and whitespace verification pass.
 
 ## Stage 4 — Invalidate historical derivation and apply only proven consumer semantics
 
