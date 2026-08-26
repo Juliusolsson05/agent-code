@@ -33,6 +33,10 @@ import {
   type CommandPaletteRow,
 } from '@renderer/features/command-palette/lib/rankPaletteRows'
 import {
+  promptTemplateFillReturnState,
+  type PromptTemplateFillReturnState,
+} from '@renderer/features/command-palette/lib/promptTemplateFillReturn'
+import {
   body,
   primary,
   rankEntries,
@@ -71,6 +75,7 @@ import type {
   PromptTemplateInsertMode,
   PromptTemplateVariableValueMap,
 } from '@renderer/features/prompt-templates/types'
+import { promptTemplateTargetSessionId } from '@renderer/features/prompt-templates/targetSession'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import { resolveAgentPaneLabel } from '@renderer/workspace/tile-tree/paneLabels'
 import { useWorkspaceContext } from '@renderer/workspace/WorkspaceContext'
@@ -113,6 +118,7 @@ type PromptTemplateFillState = {
   template: PromptTemplate
   values: PromptTemplateVariableValueMap
   insertMode: PromptTemplateInsertMode
+  returnTo: PromptTemplateFillReturnState
 }
 
 // Global "reveal every command" escape hatch. Hard-coded false, moved
@@ -387,6 +393,9 @@ function OpenCommandPalette({
 
   const focusedSessionId = commandTargetSessionId(workspace)
   const focusedMeta = focusedSessionId ? workspace.state.sessions[focusedSessionId] : null
+  const promptTemplateSessionId = promptTemplateTargetSessionId(workspace)
+  const promptTemplatesInCommandSearch =
+    promptTemplatesInCommandSearchEnabled && promptTemplateSessionId !== null
   const focusedCwd = focusedMeta?.cwd ?? null
   const focusedProvider = focusedMeta?.kind ?? DEFAULT_PROVIDER
   const customPromptTemplates = settings.savedPromptTemplates
@@ -951,7 +960,10 @@ function OpenCommandPalette({
       historyScore: historyScoreMap,
       starred: commandStarred,
       sortMode: commandSortMode,
-      includePromptTemplates: promptTemplatesInCommandSearchEnabled,
+      // A terminal is a valid generic command target but has no agent
+      // composer. Hiding templates there matches the dedicated picker and
+      // prevents an actionable-looking result whose execution can only no-op.
+      includePromptTemplates: promptTemplatesInCommandSearch,
     }),
     [
       commands,
@@ -960,7 +972,7 @@ function OpenCommandPalette({
       historyScoreMap,
       commandStarred,
       commandSortMode,
-      promptTemplatesInCommandSearchEnabled,
+      promptTemplatesInCommandSearch,
     ],
   )
   const directAgentQuery = useMemo(
@@ -1249,8 +1261,8 @@ function OpenCommandPalette({
   )
 
   const executePromptTemplate = useCallback(
-    async (template: PromptTemplate) => {
-      const sessionId = commandTargetSessionId(workspace)
+    async (template: PromptTemplate, originSelectedIndex = selectedIndex) => {
+      const sessionId = promptTemplateSessionId
       if (!sessionId) return
 
       try {
@@ -1262,6 +1274,7 @@ function OpenCommandPalette({
             template: template.buildBody ? { ...template, body } : template,
             values: {},
             insertMode: template.insertMode,
+            returnTo: promptTemplateFillReturnState(mode, query, originSelectedIndex),
           })
           setMode('fill-prompt-template')
           setQuery('')
@@ -1282,7 +1295,7 @@ function OpenCommandPalette({
         workspace.showPaneToast(sessionId, `Template failed: ${message}`)
       }
     },
-    [onClose, workspace],
+    [mode, onClose, promptTemplateSessionId, query, selectedIndex, workspace],
   )
 
   const savePromptTemplateForm = useCallback(() => {
@@ -1433,6 +1446,18 @@ function OpenCommandPalette({
       workspace.showPaneToast(sessionId, `Template failed: ${message}`)
     }
   }, [onClose, promptTemplateFillState, workspace])
+
+  const cancelPromptTemplateFill = useCallback(() => {
+    const returnTo = promptTemplateFillState?.returnTo ?? {
+      mode: 'prompt-template' as const,
+      query: '',
+      selectedIndex: 0,
+    }
+    setPromptTemplateFillState(null)
+    setMode(returnTo.mode)
+    setQuery(returnTo.query)
+    setSelectedIndex(returnTo.selectedIndex)
+  }, [promptTemplateFillState, setMode])
 
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -1616,7 +1641,10 @@ function OpenCommandPalette({
           if (mode === 'edit-prompt-template' || mode === 'save-prompt-template') {
             setMode('manage-prompt-template')
           } else if (mode === 'fill-prompt-template') {
-            setMode('prompt-template')
+            // Fill has two entry points now. Returning through the captured
+            // origin keeps Escape and the visible Cancel button identical.
+            cancelPromptTemplateFill()
+            return
           } else {
             setMode('commands')
           }
@@ -1635,7 +1663,9 @@ function OpenCommandPalette({
       >
         <DialogTitle className="sr-only">Command palette</DialogTitle>
         <DialogDescription className="sr-only">
-          Search application commands, prompt templates, and related session workflows.
+          {mode === 'commands' && promptTemplatesInCommandSearch
+            ? 'Search application commands, prompt templates, and related session workflows.'
+            : 'Search application commands and related session workflows.'}
         </DialogDescription>
         <div className="flex-shrink-0 border-b border-border px-3 py-2 flex items-center gap-2">
           {mode === 'resume' && (
@@ -1858,8 +1888,7 @@ function OpenCommandPalette({
                   setPromptTemplateFillState(state => state ? { ...state, insertMode } : state)
                 }}
                 onCancel={() => {
-                  setPromptTemplateFillState(null)
-                  setMode('prompt-template')
+                  cancelPromptTemplateFill()
                 }}
                 onInsert={insertFilledPromptTemplate}
               />
@@ -1868,7 +1897,7 @@ function OpenCommandPalette({
             {mode === 'commands' &&
               (paletteRows.length === 0 ? (
                 <div className="px-3 py-4 text-muted text-[12px] text-center">
-                  {promptTemplatesInCommandSearchEnabled && queryText.length > 0
+                  {promptTemplatesInCommandSearch && queryText.length > 0
                     ? 'No matching commands or prompt templates'
                     : 'No matching commands'}
                 </div>
@@ -1893,7 +1922,7 @@ function OpenCommandPalette({
                           }
                         `}
                         onMouseEnter={() => setSelectedIndex(i)}
-                        onClick={() => void executePromptTemplate(template)}
+                        onClick={() => void executePromptTemplate(template, i)}
                       >
                         <div className="min-w-0 flex items-center gap-2">
                           {/* The command rows reserve this column for a star.

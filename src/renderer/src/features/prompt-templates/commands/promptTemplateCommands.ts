@@ -1,14 +1,5 @@
-import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
 import type { CommandDef } from '@renderer/features/command-palette/types'
-import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
-import type { Workspace } from '@renderer/workspace/workspaceStore'
-
-function focusedAgentSessionId(workspace: Workspace): string | null {
-  const sessionId = commandTargetSessionId(workspace)
-  if (!sessionId) return null
-  const kind = workspace.state.sessions[sessionId]?.kind ?? DEFAULT_PROVIDER
-  return kind === 'terminal' ? null : sessionId
-}
+import { promptTemplateTargetSessionId } from '@renderer/features/prompt-templates/targetSession'
 
 export const promptTemplateCommands: CommandDef[] = [
   {
@@ -40,7 +31,7 @@ export const promptTemplateCommands: CommandDef[] = [
     keywords: ['prompt', 'template', 'snippet', 'insert', 'draft'],
     keepPaletteOpen: true,
     renderedViewPolicy: { kind: 'opens-rendered-feed' },
-    when: ({ workspace }) => focusedAgentSessionId(workspace) !== null,
+    when: ({ workspace }) => promptTemplateTargetSessionId(workspace) !== null,
     run: ({ ui, flags }) => {
       // Already showing this mode? Dismiss. A mode-entering command whose
       // second press re-enters the mode it is already in reads as a dead key,
@@ -63,7 +54,7 @@ export const promptTemplateCommands: CommandDef[] = [
     keepPaletteOpen: true,
     renderedViewPolicy: { kind: 'requires-rendered-feed' },
     when: ({ workspace }) => {
-      const sessionId = focusedAgentSessionId(workspace)
+      const sessionId = promptTemplateTargetSessionId(workspace)
       if (!sessionId) return false
       return workspace.getRuntime(sessionId).draftInput.trim().length > 0
     },
@@ -75,7 +66,7 @@ export const promptTemplateCommands: CommandDef[] = [
         ui.closePalette()
         return
       }
-      const sessionId = focusedAgentSessionId(workspace)
+      const sessionId = promptTemplateTargetSessionId(workspace)
       if (!sessionId) return
       ui.enterSavePromptTemplateMode()
     },
