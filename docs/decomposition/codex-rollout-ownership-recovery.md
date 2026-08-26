@@ -1876,7 +1876,7 @@ gate before merge.
 
 ### Stage 46 — validate one pinned protocol owner
 
-- [ ] **Produces:** one private `ConfigLayer`/safe-`ConfigLayerSource`
+- [x] **Produces:** one private `ConfigLayer`/safe-`ConfigLayerSource`
   structural predicate inside `CodexPromptInputProfile.ts`, consumed before
   singleton accounting.
 - **Verified by:** all Stage 45 one-field removals fail closed unchanged; the
@@ -1937,3 +1937,20 @@ production. Exactly seven mutations—missing layer `version`, missing layer
 missing project `dotCodexFolder`, and invalid optional `disabledReason`—still
 issue authority and fail their assertions (10 pass / 7 fail). This isolates the
 structural matcher as the sole repair boundary.
+
+Stage 46 is complete at codex-headless `4e10c16`. One private predicate now
+requires the materialized layer envelope (`config` presence and string
+`version`), validates optional `disabledReason` when present, and switches over
+the four recorded-safe sources to require their pinned fields before singleton
+accounting. It deliberately does not parse effective config contents or move
+provider policy into Agent Code. The unchanged focused checkpoint is 17/17
+green, and the full package contract/typecheck/test/package gate is green with
+166/166 tests.
+
+The parent integration at the same working pin is also green: Agent Code
+typecheck, the live-resume probe, 16/16 launch/profile/readiness tests, and the
+packaged application build all pass. The installed binary remains exact
+0.149.1 at SHA-256 `f0d8762236594359b60cfbe17f4c7e945a3ce8d1c91e74778838c968d250fb6c`.
+Its config recorder reproduces the same sessionFlags/user/system projection,
+and all six bounded live canned-Responses cases pass with exact durable/request
+agreement or the recorded pre-composer rejection.
