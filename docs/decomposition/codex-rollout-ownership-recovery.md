@@ -1826,3 +1826,103 @@ discoverable until a replacement has joined that cleanup. The five red
 contracts, built-runtime projection, 158 package tests, 16 parent lifecycle/
 profile/readiness tests, and both typechecks are green without changing any
 recorded expected prompt, rollout, or lease outcome.
+
+## 12. Pinned config-layer structural closure
+
+The bounded exact-head gate `run_3e10f0f1-c23c-4994-a03a-8a10c9901e2b`
+completed with four of four agents healthy and no retry, stall, recovery, or
+provider-circuit failure. Its immutable result has SHA-256
+`6592e9d89423c06022d5b456988a43cb4412ca5c2b1c406361f8845b403963ab`.
+It accepted exactly one HIGH finding: Stage 43 checked layer source names and
+singleton counts but the deterministic `recorded-safe` response itself omitted
+the pinned `ConfigLayer.version` and the required `user.file`/`system.file`
+source fields. The emitted adapter therefore issued prompt authority for a
+response that Codex 0.149.1 cannot produce. This is a refinement of frozen
+twelfth schedule 2, not a new subsystem or an invitation to reopen the seven
+already-rejected hypotheses. The other four twelfth schedules and the complete
+first-through-eleventh corpus passed.
+
+**A — trusted input:** the exact `rust-v0.149.1` generated `ConfigLayer` and
+`ConfigLayerSource` types in `vendor/codex-src`, plus a fresh shape-only probe
+of the installed binary whose SHA-256 is already recorded in
+`testing/fixtures/prompt-input/codex-01491-config-read-recorded.json`. The live
+response contains `version` and `config` on every layer; `sessionFlags` has only
+its discriminator; `user` has string `file` and nullable `profile`; and
+`system` has string `file`.
+
+**D — observable end state:** a structurally valid sanitized replay still
+issues the exact frozen Enter/Tab profile, while removing `version`, `config`,
+or any required field from each allowed source makes preparation return
+`effective-config-unverified`. All earlier malformed, unknown, managed,
+duplicate, lifecycle, terminal-cell, capability, and bridge contracts remain
+green, and the corrected dependency/parent exact heads receive a GREEN bounded
+gate before merge.
+
+### Stage 45 — record the real layer envelope and freeze the red boundary
+
+- [ ] **Produces:** a sanitized config-layer shape projection derived from a
+  fresh installed 0.149.1 `config/read`; a structurally valid `recorded-safe`
+  protocol response assembled from that projection; and table-driven fixture
+  modes that remove exactly one required envelope/source field at a time.
+- **Verified by:** the sanitized shape agrees with the pinned generated types;
+  the valid control issues a profile; and every one-field removal still issues
+  a profile against unchanged production, proving the full structural gap red.
+- **Why separate:** repairing the matcher while the safe control is malformed
+  would let the implementation and fixture bless the same invented shape. The
+  recorded control must become independently valid before production changes.
+- **Reality check:** field presence/types come from the installed 0.149.1
+  response and pinned schema. Sanitized placeholder paths/version strings carry
+  no user content and are used only where the real response proved a string.
+
+### Stage 46 — validate one pinned protocol owner
+
+- [ ] **Produces:** one private `ConfigLayer`/safe-`ConfigLayerSource`
+  structural predicate inside `CodexPromptInputProfile.ts`, consumed before
+  singleton accounting.
+- **Verified by:** all Stage 45 one-field removals fail closed unchanged; the
+  valid recorded control and multiple-project control pass; existing unknown,
+  managed, malformed, duplicate, response-envelope, and version cases remain
+  red/green as previously specified.
+- **Why separate:** layer validity is one provider-protocol decision. Spreading
+  checks through the fixture, Agent Code launch code, or singleton loop would
+  create multiple partial schema owners and restart conditional patching.
+- **Reality check:** the predicate implements only the allowed 0.149.1 sources
+  actually needed for safe launches (`sessionFlags`, `user`, `system`, and
+  `project`) and their pinned required fields. Future/managed variants continue
+  to fail closed rather than being guessed.
+
+### Stage 47 — exact-head verification and dependency-order merge
+
+- [ ] **Produces:** corrected codex-headless/parent pins, full local checks, an
+  exact-head GitHub check set, one GREEN bounded workflow artifact, merged
+  dependency PRs before parent PR #634, and closed issue #632.
+- **Verified by:** every constituent workflow result and final checksum is read;
+  the corrected codex commit is an ancestor of its default branch before the
+  parent merge; the parent pins both merged dependency commits; and GitHub
+  reports the parent merged rather than merely mergeable.
+- **Why separate:** focused structural green proves the repair, not the pushed
+  graph or merge order. Conversely, another open-ended review would violate the
+  bounded gate that isolated this single refinement.
+- **Reality check:** rerun the same installed 0.149.1 shape/config probe, six
+  live canned-Responses cases, package/parent suites, and frozen workflow
+  corpus. Preserve the unrelated missing private Claude transcript failure as
+  environmental evidence instead of weakening its test.
+
+### Isolation, unknowns, and fixture plan for Stages 45–47
+
+- The structural predicate lives only beside profile issuance. Agent Code, the
+  parser, terminal, and ownership coordinator may not import or reimplement it.
+- `config` is required by the pinned envelope but accepts any parsed JSON value;
+  inspecting its contents here would duplicate Codex's resolver. `disabledReason`
+  is optional in the wire schema and absent in the fresh live response, so it is
+  validated only when present. `user.profile` is nullable in the live response;
+  whether omission is legal differs between generated TypeScript and JSON
+  schema, so the fail-closed adapter will require its observed field rather than
+  silently widening the corpus.
+- Project layers were not present in this cwd's live response. Their required
+  `dotCodexFolder` string comes from the pinned generated type; multiple project
+  layers remain legal because the upstream resolver documents one per nested
+  `.codex` directory.
+- Store only sanitized field/type presence and the raw-response checksum. Do
+  not commit host paths, user config, or effective values beyond the existing
+  content-safe keymap projection.
