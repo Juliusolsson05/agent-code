@@ -1309,7 +1309,7 @@ they are plausible.
 
 ### Stage 34 — turn the omitted real sequences into red contracts
 
-- [ ] **Produces:** a content-safe tenth-gate finding manifest; recorded-rollout
+- [x] **Produces:** a content-safe tenth-gate finding manifest; recorded-rollout
   system tests for pre-registration lineage and later terminalization; a built-
   artifact deep-export projection; recorded app-server result-plus-error modes;
   and a parent resume-preparation barrier test that switches between the already
@@ -1417,3 +1417,12 @@ they are plausible.
 - Drive parent ordering through a controllable resume-preparation barrier and
   the recorded safe/conflicting projections. The test asserts custody and order;
   it does not invent Codex keymap semantics.
+
+Stage 34 is complete at codex-headless `b160578`. Against the unchanged
+production implementation, the two recorded ownership schedules fail on the
+pre-registration lineage lease and retained terminal path; the two invalid
+success/error envelope modes incorrectly issue a profile; the emitted deep
+module still exports the controller unwrapper; and the parent barrier observes
+profile attestation before `resume:start`. Existing controls in the same focused
+runs remain green. These exact assertions are now the implementation boundary
+and may not be weakened or replaced with post-repair literals.
