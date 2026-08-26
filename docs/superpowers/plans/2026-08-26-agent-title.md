@@ -1,6 +1,6 @@
 # Set Agent Title Implementation Plan
 
-> **Status: REVIEW FEEDBACK RESOLVED — PR #660 OPEN, UNMERGED**
+> **Status: COMPLETE — TWO REVIEWS RESOLVED, QUALITY GATE GREEN**
 
 **Goal:** Let the user assign, edit, and clear a durable title for the focused
 agent from Grid, classic Dispatch, or Tiled Dispatch, then show that title as a
@@ -74,5 +74,9 @@ four validated findings are being resolved at the shared contract boundaries:
   code point rather than native UTF-16 code-unit length.
 - [x] Re-trim after truncation so a length boundary cannot manufacture durable
   trailing whitespace.
-- [ ] Add regression coverage, rerun verification, synchronize the PR, and
-  merge only after CI is green.
+- [x] Add regression coverage, rerun verification, synchronize the PR, and
+  confirm the current GitHub quality gate is green before merge.
+
+The final GitHub quality gate passed its test contract, typechecks, core,
+system, and renderer suites, coverage baseline, and distributable-output
+verification. The user explicitly authorized merging after this review gate.
