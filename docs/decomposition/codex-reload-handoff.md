@@ -1,11 +1,13 @@
 # Codex Reload Ownership Handoff
 
-> **Status:** Stages 1–3 are implemented against the revised two-phase design.
-> The second exact-head review exposed four additional transaction races around
-> explicit teardown, compensation cancellation, recovery-generation settlement,
-> and natural predecessor exit. The reopened Stage 2 now has recorded-race tests
-> and an independently verified implementation. Stage 4 exact-head re-review,
-> CI, and live verification remain.
+> **Status:** Stages 1–3 were implemented against the revised two-phase design.
+> The third exact-head review exposed two more cross-generation/lifetime races:
+> a delayed recovery cancellation can target the later compensation generation,
+> and a successful successor can outlive the renderer that was supposed to make
+> its random local ID durable. Stage 2 is reopened again. Its transaction now
+> needs generation-scoped recovery cancellation plus a durable renderer-to-main
+> ownership commit before the handoff record may retire. Stage 4 exact-head
+> re-review, CI, and live verification remain.
 >
 > **Incident:** Agent Code issue #638. Related fresh-rollout incident: #632.
 
@@ -49,6 +51,14 @@
 10. A predecessor that exits naturally during successor preflight is joined as
     successful teardown; an explicitly closed predecessor cancels replacement
     and is never silently reclassified as safe.
+11. A recovery timeout can cancel only the exact recovery generation whose
+    deadline fired; it cannot match a later compensation claim merely because
+    both use the same local ID, kind, and cwd.
+12. A successful successor is not considered renderer-owned until a workspace
+    save has durably replaced the predecessor local ID with the successor ID.
+    If renderer reload/crash leaves the predecessor ID durable, recovery joins
+    the pending transaction, retires the hidden successor, and restores the
+    stable predecessor ID instead of colliding with an orphan rollout owner.
 
 ## 2. Intermediate stages
 
@@ -102,6 +112,24 @@ settlement before reusing the stable ID, publishes its own `RecoveryClaim`
 before any awaited preflight, and rechecks cancellation before restoration.
 Natural exit is accepted only from the captured predecessor generation after
 its generation-owned cleanup settles; absence of an entry alone is never proof.
+
+The third exact-head review reopens this stage with two further artifacts:
+
+1. Recovery admission carries an opaque generation token supplied by the
+   renderer request. The 30-second cancellation message must present that exact
+   token, so a delayed cancellation for predecessor generation R cannot cancel
+   compensation generation C after the stable local ID has been reused.
+2. Successful replacement remains a main-owned pending transaction after spawn
+   returns. The renderer must not issue its legacy predecessor kill for this
+   path. A workspace save is the durable ownership acknowledgement: only a save
+   whose owned session set contains the successor and not the predecessor may
+   commit the pending handoff. Until then, rehydrate recovery for the durable
+   predecessor ID joins transaction settlement and, on successor success,
+   stops the hidden successor before restoring/recovering the predecessor ID.
+   Main retains a bounded predecessor redirect after durable commit so a
+   renderer that loaded the old workspace immediately before the atomic save
+   can still reclaim safely; the redirect never weakens the exact-rollout
+   coordinator.
 
 ### Stage 3 — route every same-pane replacement through the handoff
 
@@ -177,6 +205,13 @@ receives no pane IDs and gains no replacement exception.
 - **Resolved by second-review Stage 2 design:** natural exit is proven by the
   captured registry generation's lifecycle marker and joined cleanup, never by
   a missing map entry.
+- **Resolved by third-review Stage 2 design:** recovery cancellation is scoped
+  by an opaque request generation, not the reusable ID/kind/cwd ownership tuple.
+- **Resolved by third-review Stage 2 design:** successful spawn is not the
+  renderer commit boundary. Workspace persistence acknowledges the new local
+  ID; pending and recently committed handoffs retain enough main-owned routing
+  evidence to restore the predecessor for a stale renderer without accepting a
+  second rollout owner.
 - Predecessor stop can fail or become uncertain. The coordinator's tombstone
   must remain fail-closed; compensation may also fail in that state and needs a
   truthful lifecycle outcome rather than an unsafe lease exception.
@@ -216,3 +251,13 @@ between replacement admission and the ownership callback. Each test controls
 the exact promise boundary reported by review and asserts registry, provider,
 MCP, and generation outcomes. The explicit-close companion proves that natural
 exit handling cannot turn teardown into successor authorization.
+
+Third-review fixtures add the two newly observed process-lifetime sequences:
+(a) cancellation captured for recovery generation R is delivered only after
+compensation generation C has published under the same stable ID; and (b) a
+same-rollout successor becomes live but its spawn response is abandoned before
+the renderer remaps/persists, after which a fresh renderer recovers the still-
+durable predecessor ID. The second fixture also exercises stale predecessor
+recovery immediately around durable successor acknowledgement. These tests
+assert that C survives R's token and that exactly one backend remains reachable
+under the durable renderer identity.

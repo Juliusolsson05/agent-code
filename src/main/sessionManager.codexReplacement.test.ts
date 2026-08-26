@@ -804,4 +804,344 @@ describe('SessionManager Codex replacement handoff', () => {
     expect(predecessor.stop).toHaveBeenCalledTimes(1)
     expect(manager.list()).toEqual([])
   })
+
+  it('does not let recovery R cancel the later compensation generation C', async () => {
+    const recoveryStartGate = deferred<void>()
+    const compensationPreflight = deferred<void>()
+    const compensationEntered = deferred<void>()
+    let preflightCalls = 0
+    const beforeAgentSessionStart = vi.fn(async () => {
+      preflightCalls += 1
+      if (preflightCalls === 3) {
+        compensationEntered.resolve()
+        await compensationPreflight.promise
+      }
+    })
+    const order: string[] = []
+    const predecessorStopped = { value: false }
+    const recovery = new LeaseAwareCodexSession(
+      'recovery', order, predecessorStopped, false,
+    )
+    const successor = new LeaseAwareCodexSession(
+      'successor', order, predecessorStopped, true,
+    )
+    const restored = new LeaseAwareCodexSession(
+      'restored', order, predecessorStopped, true,
+    )
+    recovery.blockStartOn(recoveryStartGate.promise)
+    successor.failStartWith(new Error('recorded successor start failure'))
+    createSession
+      .mockImplementationOnce(() => recovery)
+      .mockImplementationOnce(options => installBoundaryFromCreateOptions(successor, options))
+      .mockImplementationOnce(() => restored)
+
+    const { SessionManager } = await import('./sessionManager')
+    const manager = new SessionManager(null, null, null, beforeAgentSessionStart)
+    const recoveryAttempt = manager.recover({
+      sessionId: 'recovering-predecessor',
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+      // WHY the token is part of the recorded race: the renderer timeout owns
+      // recovery generation R, not every future claim that happens to reuse
+      // the same stable local id.
+      recoveryToken: 'recovery-r',
+    } as never)
+    await vi.waitFor(() => expect(recovery.start).toHaveBeenCalledTimes(1))
+    const replacement = manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+      predecessorSessionId: 'recovering-predecessor',
+    })
+    const observedReplacement = replacement.catch(error => error)
+
+    await vi.waitFor(() => expect(successor.start).toHaveBeenCalledTimes(1))
+    recoveryStartGate.resolve()
+    await expect(recoveryAttempt).resolves.toMatchObject({
+      ok: false,
+      code: 'cancelled',
+    })
+    await compensationEntered.promise
+
+    await expect(manager.cancelRecovery({
+      sessionId: 'recovering-predecessor',
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      recoveryToken: 'recovery-r',
+    } as never)).resolves.toBe(false)
+    compensationPreflight.resolve()
+    await expect(observedReplacement).resolves.toBeInstanceOf(Error)
+
+    expect(restored.start).toHaveBeenCalledTimes(1)
+    expect(manager.getBackendSnapshot('recovering-predecessor')).toMatchObject({
+      sessionId: 'recovering-predecessor',
+      kind: 'codex',
+      lifecycle: 'live',
+    })
+  })
+
+  it('reclaims an unpersisted live successor when a fresh renderer recovers the predecessor id', async () => {
+    const order: string[] = []
+    const predecessorStopped = { value: false }
+    const predecessor = new LeaseAwareCodexSession(
+      'predecessor', order, predecessorStopped, false,
+    )
+    const successor = new LeaseAwareCodexSession(
+      'successor', order, predecessorStopped, true,
+    )
+    const restored = new LeaseAwareCodexSession(
+      'restored', order, predecessorStopped, true,
+    )
+    createSession
+      .mockImplementationOnce(() => predecessor)
+      .mockImplementationOnce(options => installBoundaryFromCreateOptions(successor, options))
+      .mockImplementationOnce(() => restored)
+
+    const { SessionManager } = await import('./sessionManager')
+    const manager = new SessionManager()
+    const first = await manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+    })
+    const replacement = await manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+      predecessorSessionId: first.sessionId,
+    })
+
+    // The initiating renderer disappeared before it could remap/persist the
+    // random successor id. A newly booted renderer therefore asks for the
+    // still-durable predecessor id and explicitly authorizes transaction
+    // reclamation rather than receiving a transient ownership conflict.
+    await expect(manager.recover({
+      sessionId: first.sessionId,
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      // Reclamation restores the main-captured predecessor identity; a stale
+      // renderer cannot retarget the capability at another transcript merely
+      // because it knows the local ownership tuple.
+      resumeSessionId: 'stale-renderer-wrong-provider-id',
+      recoveryToken: 'fresh-renderer-recovery',
+      reclaimPendingReplacement: true,
+    } as never)).resolves.toMatchObject({
+      ok: true,
+      snapshot: {
+        sessionId: first.sessionId,
+        kind: 'codex',
+        lifecycle: 'live',
+      },
+    })
+
+    expect(replacement).toMatchObject({
+      sessionId: expect.any(String),
+      replacementTransactionId: expect.any(String),
+    })
+    expect(successor.stop).toHaveBeenCalledTimes(1)
+    expect(restored.start).toHaveBeenCalledTimes(1)
+    expect(createSession.mock.calls[2]?.[0]).toMatchObject({
+      resumeSessionId: 'provider-a',
+    })
+    expect(manager.list()).toEqual([first.sessionId])
+  })
+
+  it('keeps a stale-renderer redirect after durable successor acknowledgement', async () => {
+    const successorStopGate = deferred<void>()
+    const order: string[] = []
+    const predecessorStopped = { value: false }
+    const predecessor = new LeaseAwareCodexSession(
+      'predecessor', order, predecessorStopped, false,
+    )
+    const successor = new LeaseAwareCodexSession(
+      'successor', order, predecessorStopped, true, successorStopGate.promise,
+    )
+    const restored = new LeaseAwareCodexSession(
+      'restored', order, predecessorStopped, true,
+    )
+    createSession
+      .mockImplementationOnce(() => predecessor)
+      .mockImplementationOnce(options => installBoundaryFromCreateOptions(successor, options))
+      .mockImplementationOnce(() => restored)
+
+    const { SessionManager } = await import('./sessionManager')
+    const manager = new SessionManager()
+    const first = await manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+    })
+    const replacement = await manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+      predecessorSessionId: first.sessionId,
+    })
+
+    // Model the atomic workspace rename winning immediately after a new
+    // renderer had already loaded the previous bytes. Durable acknowledgement
+    // may retire the active transaction, but not the evidence that lets that
+    // stale renderer stop the exact successor before reclaiming oldId.
+    manager.acknowledgePersistedSessionOwnership(new Set([
+      replacement.sessionId,
+    ]))
+    const firstStaleRecovery = manager.recover({
+      sessionId: first.sessionId,
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+      recoveryToken: 'stale-renderer-after-persist',
+      reclaimPendingReplacement: true,
+    })
+    await vi.waitFor(() => expect(successor.stop).toHaveBeenCalledTimes(1))
+    const joinedStaleRecovery = manager.recover({
+      sessionId: first.sessionId,
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+      recoveryToken: 'second-stale-renderer-request',
+      reclaimPendingReplacement: true,
+    })
+    expect(joinedStaleRecovery).toBe(firstStaleRecovery)
+    successorStopGate.resolve()
+
+    await expect(firstStaleRecovery).resolves.toMatchObject({
+      ok: true,
+      snapshot: { sessionId: first.sessionId, lifecycle: 'live' },
+    })
+
+    expect(successor.stop).toHaveBeenCalledTimes(1)
+    expect(restored.start).toHaveBeenCalledTimes(1)
+    expect(manager.list()).toEqual([first.sessionId])
+  })
+
+  it('reclaims through a newer in-flight replacement without racing its generation', async () => {
+    const secondSuccessorGate = deferred<void>()
+    const order: string[] = []
+    const predecessorStopped = { value: false }
+    const predecessor = new LeaseAwareCodexSession(
+      'predecessor', order, predecessorStopped, false,
+    )
+    const firstSuccessor = new LeaseAwareCodexSession(
+      'successor', order, predecessorStopped, true,
+    )
+    const secondSuccessor = new LeaseAwareCodexSession(
+      'successor', order, predecessorStopped, true,
+    )
+    const restored = new LeaseAwareCodexSession(
+      'restored', order, predecessorStopped, true,
+    )
+    secondSuccessor.blockStartOn(secondSuccessorGate.promise)
+    createSession
+      .mockImplementationOnce(() => predecessor)
+      .mockImplementationOnce(options => installBoundaryFromCreateOptions(firstSuccessor, options))
+      .mockImplementationOnce(options => installBoundaryFromCreateOptions(secondSuccessor, options))
+      .mockImplementationOnce(() => restored)
+
+    const { SessionManager } = await import('./sessionManager')
+    const manager = new SessionManager()
+    const first = await manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+    })
+    const firstReplacement = await manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+      predecessorSessionId: first.sessionId,
+    })
+    manager.acknowledgePersistedSessionOwnership(new Set([
+      firstReplacement.sessionId,
+    ]))
+
+    const secondReplacement = manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+      predecessorSessionId: firstReplacement.sessionId,
+    })
+    const observedSecondReplacement = secondReplacement.catch(error => error)
+    await vi.waitFor(() => expect(secondSuccessor.start).toHaveBeenCalledTimes(1))
+
+    const staleRecovery = manager.recover({
+      sessionId: first.sessionId,
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+      recoveryToken: 'stale-renderer-through-newer-replacement',
+      reclaimPendingReplacement: true,
+    })
+    await vi.waitFor(() => expect(secondSuccessor.stop).toHaveBeenCalledTimes(1))
+    secondSuccessorGate.resolve()
+
+    await expect(observedSecondReplacement).resolves.toBeInstanceOf(Error)
+    await expect(staleRecovery).resolves.toMatchObject({
+      ok: true,
+      snapshot: { sessionId: first.sessionId, lifecycle: 'live' },
+    })
+    expect(restored.start).toHaveBeenCalledTimes(1)
+    expect(manager.list()).toEqual([first.sessionId])
+  })
+
+  it('does not restore a committed redirect when the stale pane closes during reclaim', async () => {
+    const successorStopGate = deferred<void>()
+    const order: string[] = []
+    const predecessorStopped = { value: false }
+    const predecessor = new LeaseAwareCodexSession(
+      'predecessor', order, predecessorStopped, false,
+    )
+    const successor = new LeaseAwareCodexSession(
+      'successor', order, predecessorStopped, true, successorStopGate.promise,
+    )
+    const restored = new LeaseAwareCodexSession(
+      'restored', order, predecessorStopped, true,
+    )
+    createSession
+      .mockImplementationOnce(() => predecessor)
+      .mockImplementationOnce(options => installBoundaryFromCreateOptions(successor, options))
+      .mockImplementationOnce(() => restored)
+
+    const { SessionManager } = await import('./sessionManager')
+    const manager = new SessionManager()
+    const first = await manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+    })
+    const replacement = await manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+      predecessorSessionId: first.sessionId,
+    })
+    manager.acknowledgePersistedSessionOwnership(new Set([
+      replacement.sessionId,
+    ]))
+
+    const reclaim = manager.recover({
+      sessionId: first.sessionId,
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+      recoveryToken: 'stale-reclaim-before-close',
+      reclaimPendingReplacement: true,
+    })
+    await vi.waitFor(() => expect(successor.stop).toHaveBeenCalledTimes(1))
+    const closing = manager.killOwned({
+      sessionId: first.sessionId,
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+    })
+    successorStopGate.resolve()
+
+    await expect(closing).resolves.toBe(true)
+    await expect(reclaim).resolves.toMatchObject({
+      ok: false,
+      code: 'cancelled',
+    })
+    expect(restored.start).not.toHaveBeenCalled()
+    expect(manager.list()).toEqual([])
+  })
 })

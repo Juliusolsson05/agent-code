@@ -28,6 +28,7 @@ import type {
   SessionBackendSnapshot,
   SessionInputReadiness,
   SessionOwnershipOptions,
+  SessionRecoveryCancellationOptions,
   SessionRecoverOptions,
   SessionRecoverResult,
 } from '@shared/types/session.js'
@@ -213,6 +214,7 @@ type RegistryEntry =
 type RecoveryClaim = {
   kind: SessionKind
   cwd: string
+  recoveryToken: string
   startedAt: number
   cancelled: boolean
   spawnGeneration: symbol | null
@@ -230,10 +232,26 @@ type SessionSpawnInfo = {
 type CodexReplacementProof = 'same-resume-id' | 'same-transcript-path'
 
 type CodexReplacementReservation = {
+  transactionId: string
   predecessorSessionId: string
   successorSessionId: string
   predecessorOwnership: SessionOwnershipOptions | null
+  restoreOptions: SessionSpawnOptions | null
   cancelled: boolean
+  reclaimRequested: boolean
+  spawnOutcome: 'pending' | 'successor-live' | 'failed'
+  spawnSettled: Promise<void>
+  settleSpawn: () => void
+  reclaimPromise: Promise<SessionRecoverResult> | null
+}
+
+type CodexReplacementRedirect = {
+  predecessorSessionId: string
+  successorSessionId: string
+  predecessorOwnership: SessionOwnershipOptions
+  restoreOptions: SessionSpawnOptions
+  cancelled: boolean
+  reclaimPromise: Promise<SessionRecoverResult> | null
 }
 
 type CodexReplacementHandoff = {
@@ -392,6 +410,15 @@ export class SessionManager extends EventEmitter {
   private readonly codexReplacementHandoffs = new Map<
     string,
     CodexReplacementReservation
+  >()
+  // Durable workspace acknowledgement retires the active transaction, but a
+  // renderer can have loaded the predecessor snapshot immediately before that
+  // atomic save completed. Keep a bounded in-memory redirect until the live
+  // successor is torn down so that stale renderer can reclaim by stopping the
+  // exact owner first instead of becoming a second rollout tail.
+  private readonly codexReplacementRedirects = new Map<
+    string,
+    CodexReplacementRedirect
   >()
   private readonly sessionSizes = new Map<string, PtySize>()
   // Coalesce "input write to a session main doesn't own" incidents — the
@@ -791,6 +818,158 @@ export class SessionManager extends EventEmitter {
     }
   }
 
+  private replacementOwnershipMatches(
+    ownership: SessionOwnershipOptions | null,
+    options: SessionRecoverOptions,
+  ): boolean {
+    if (!ownership) return false
+    return (
+      (ownership.kind ?? DEFAULT_PROVIDER) === (options.kind ?? DEFAULT_PROVIDER) &&
+      path.resolve(ownership.cwd) === path.resolve(options.cwd)
+    )
+  }
+
+  private reclaimPendingCodexReplacement(
+    options: SessionRecoverOptions,
+    reservation: CodexReplacementReservation,
+  ): Promise<SessionRecoverResult> {
+    if (!this.replacementOwnershipMatches(reservation.predecessorOwnership, options)) {
+      return Promise.resolve(this.recoveryConflict(options.sessionId, null))
+    }
+    if (reservation.reclaimPromise) return reservation.reclaimPromise
+
+    reservation.reclaimRequested = true
+    reservation.reclaimPromise = (async () => {
+      await reservation.spawnSettled
+      if (reservation.cancelled) {
+        return {
+          ok: false,
+          code: 'cancelled',
+          retryable: true,
+          message: `Replacement for session ${options.sessionId} was cancelled`,
+        }
+      }
+
+      if (reservation.spawnOutcome === 'successor-live') {
+        // WHY this stop carries transaction authority: the successor is live
+        // only because the abandoned renderer asked main to transfer the exact
+        // rollout. Rehydrate still owns predecessorId durably, so reclamation
+        // must retire that hidden owner without reclassifying the event as a
+        // user close (which would suppress the stable-ID recovery below).
+        await this.killInternal(reservation.successorSessionId, reservation)
+      }
+      if (
+        this.codexReplacementHandoffs.get(reservation.predecessorSessionId) ===
+          reservation
+      ) {
+        this.codexReplacementHandoffs.delete(reservation.predecessorSessionId)
+      }
+      return await this.recover({
+        ...(reservation.restoreOptions ?? options),
+        sessionId: reservation.predecessorSessionId,
+        recoveryToken: options.recoveryToken,
+        reclaimPendingReplacement: false,
+      })
+    })()
+    return reservation.reclaimPromise
+  }
+
+  private reclaimPersistedCodexRedirect(
+    options: SessionRecoverOptions,
+    redirect: CodexReplacementRedirect,
+  ): Promise<SessionRecoverResult> {
+    if (!this.replacementOwnershipMatches(redirect.predecessorOwnership, options)) {
+      return Promise.resolve(this.recoveryConflict(options.sessionId, null))
+    }
+    if (redirect.reclaimPromise) return redirect.reclaimPromise
+
+    redirect.reclaimPromise = (async () => {
+      // A later replacement may already be active for this target. Public
+      // teardown semantics are correct in that case: cancel the newer transfer
+      // and cascade through its hidden successor before the stale durable ID is
+      // allowed to resume the rollout.
+      const nestedReplacement = this.codexReplacementHandoffs.get(
+        redirect.successorSessionId,
+      )
+      await this.killInternal(redirect.successorSessionId, null, redirect)
+      // stop() can return before a provider start generation finishes its
+      // second late-materialization stop. Joining the nested transaction keeps
+      // the stale predecessor from racing that still-physical rollout owner
+      // merely because the local registry rows are already gone.
+      if (nestedReplacement) await nestedReplacement.spawnSettled
+      if (redirect.cancelled) {
+        if (
+          this.codexReplacementRedirects.get(redirect.predecessorSessionId) ===
+            redirect
+        ) {
+          this.codexReplacementRedirects.delete(redirect.predecessorSessionId)
+        }
+        return {
+          ok: false,
+          code: 'cancelled',
+          retryable: true,
+          message: `Replacement recovery for session ${options.sessionId} was cancelled`,
+        }
+      }
+      if (
+        this.codexReplacementRedirects.get(redirect.predecessorSessionId) ===
+          redirect
+      ) {
+        this.codexReplacementRedirects.delete(redirect.predecessorSessionId)
+      }
+      return await this.recover({
+        ...redirect.restoreOptions,
+        sessionId: redirect.predecessorSessionId,
+        recoveryToken: options.recoveryToken,
+        reclaimPendingReplacement: false,
+      })
+    })()
+    return redirect.reclaimPromise
+  }
+
+  /**
+   * Advance successful handoffs only after the renderer's ownership map is on
+   * disk. The workspace IPC calls this after its atomic rename, never before.
+   */
+  acknowledgePersistedSessionOwnership(sessionIds: ReadonlySet<string>): void {
+    for (const [predecessorSessionId, reservation] of this.codexReplacementHandoffs) {
+      if (reservation.spawnOutcome !== 'successor-live') continue
+      if (reservation.cancelled || reservation.reclaimRequested) continue
+      if (
+        !sessionIds.has(reservation.successorSessionId) ||
+        sessionIds.has(predecessorSessionId) ||
+        !reservation.predecessorOwnership ||
+        !reservation.restoreOptions
+      ) {
+        continue
+      }
+
+      // Flatten older committed redirects so repeated reloads do not build a
+      // chain whose intermediate successor has already been retired.
+      for (const redirect of this.codexReplacementRedirects.values()) {
+        if (redirect.successorSessionId === predecessorSessionId) {
+          redirect.successorSessionId = reservation.successorSessionId
+          redirect.restoreOptions = reservation.restoreOptions
+        }
+      }
+      this.codexReplacementRedirects.set(predecessorSessionId, {
+        predecessorSessionId,
+        successorSessionId: reservation.successorSessionId,
+        predecessorOwnership: reservation.predecessorOwnership,
+        restoreOptions: reservation.restoreOptions,
+        cancelled: false,
+        reclaimPromise: null,
+      })
+      this.codexReplacementHandoffs.delete(predecessorSessionId)
+      this.lifecycle.session('replacement.commit', reservation.successorSessionId, {
+        kind: 'codex',
+        predecessorSessionId,
+        ok: true,
+        reason: 'workspace-persisted',
+      })
+    }
+  }
+
   /**
    * Reconcile one persisted renderer pane with main's backend registry.
    *
@@ -824,7 +1003,11 @@ export class SessionManager extends EventEmitter {
     // retired nor recreate the old ID after destructive handoff. The fence is
     // main-owned and lasts through compensation, so no renderer lifetime or
     // React single-flight can reopen the exact-rollout race found in review.
-    if (this.codexReplacementHandoffs.has(options.sessionId)) {
+    const replacement = this.codexReplacementHandoffs.get(options.sessionId)
+    if (replacement) {
+      if (options.reclaimPendingReplacement) {
+        return this.reclaimPendingCodexReplacement(options, replacement)
+      }
       this.lifecycle.session('recover.conflict', options.sessionId, {
         kind,
         code: 'ownership-conflict',
@@ -836,6 +1019,18 @@ export class SessionManager extends EventEmitter {
         code: 'ownership-conflict',
         retryable: true,
         message: `Session ${options.sessionId} is being replaced`,
+      })
+    }
+    const redirect = this.codexReplacementRedirects.get(options.sessionId)
+    if (redirect) {
+      if (options.reclaimPendingReplacement) {
+        return this.reclaimPersistedCodexRedirect(options, redirect)
+      }
+      return Promise.resolve({
+        ok: false,
+        code: 'ownership-conflict',
+        retryable: true,
+        message: `Session ${options.sessionId} has a persisted replacement`,
       })
     }
     const existingClaim = this.recoveriesInFlight.get(options.sessionId)
@@ -910,6 +1105,7 @@ export class SessionManager extends EventEmitter {
     const claim: RecoveryClaim = {
       kind,
       cwd,
+      recoveryToken: options.recoveryToken ?? randomUUID(),
       startedAt: performance.now(),
       cancelled: false,
       spawnGeneration: null,
@@ -1093,12 +1289,29 @@ export class SessionManager extends EventEmitter {
       kind,
     )
     try {
-      return await this.spawnWithId(
+      const result = await this.spawnWithId(
         options,
         sessionId,
         undefined,
         codexHandoffClaim,
       )
+      if (!codexHandoffClaim) return result
+
+      const reservation = codexHandoffClaim.reservation
+      reservation.spawnOutcome = 'successor-live'
+      reservation.settleSpawn()
+      // A fresh renderer can request the still-durable predecessor while the
+      // abandoned spawn IPC is finishing. Let that reclaim transaction retire
+      // the hidden successor and restore the stable ID before the old renderer
+      // is allowed to observe a success it can no longer commit.
+      if (reservation.reclaimRequested && reservation.reclaimPromise) {
+        await reservation.reclaimPromise
+        throw new RecoveryCancelledError()
+      }
+      return {
+        ...result,
+        replacementTransactionId: reservation.transactionId,
+      }
     } catch (error) {
       // A same-rollout successor can fail after the exact ownership boundary:
       // prompt-profile attestation, PTY spawn, and headless start all happen
@@ -1108,19 +1321,26 @@ export class SessionManager extends EventEmitter {
       // failed reload remains a failed reload, not a dead pane.
       if (
         codexHandoffClaim?.compensationRequired &&
+        codexHandoffClaim.reservation.spawnOutcome !== 'successor-live' &&
         !codexHandoffClaim.reservation.cancelled
       ) {
         await this.restoreCodexReplacementPredecessor(codexHandoffClaim)
       }
+      if (codexHandoffClaim?.reservation.spawnOutcome === 'pending') {
+        codexHandoffClaim.reservation.spawnOutcome = 'failed'
+        codexHandoffClaim.reservation.settleSpawn()
+      }
       throw error
     } finally {
-      // Keep the predecessor claim until the successor transaction is fully
-      // terminal. Releasing immediately after stop would let a repeated stale
-      // UI gesture start another successor in the small window before the first
-      // replacement publishes its new local id.
+      // Successor start is only the PROCESS half of the transaction. The
+      // renderer still has to make its random local id durable. Keeping the
+      // reservation after success lets a reload that retained predecessorId
+      // reclaim safely; workspace persistence later moves it to a bounded
+      // redirect tombstone. Failed/cancelled/reclaimed attempts are terminal.
       if (
         options.predecessorSessionId &&
         codexHandoffClaim &&
+        codexHandoffClaim.reservation.spawnOutcome !== 'successor-live' &&
         this.codexReplacementHandoffs.get(options.predecessorSessionId) ===
           codexHandoffClaim.reservation
       ) {
@@ -1151,21 +1371,36 @@ export class SessionManager extends EventEmitter {
     if (predecessorSessionId === successorSessionId) {
       throw new Error('A session cannot replace its own local routing id')
     }
-    if (this.codexReplacementHandoffs.has(predecessorSessionId)) {
+    if (this.findCodexReplacementReservation(predecessorSessionId)) {
       throw new Error('A Codex replacement is already in progress for this session')
     }
 
     // Publish the claim before transcript resolution awaits. Two IPC calls can
     // otherwise both inspect the same live predecessor, both wait on disk, and
     // then both stop/start against one exact lease.
+    let settleSpawn!: () => void
+    const spawnSettled = new Promise<void>(resolve => {
+      settleSpawn = resolve
+    })
     const reservation: CodexReplacementReservation = {
+      transactionId: randomUUID(),
       predecessorSessionId,
       successorSessionId,
       predecessorOwnership: null,
+      restoreOptions: null,
       cancelled: false,
+      reclaimRequested: false,
+      spawnOutcome: 'pending',
+      spawnSettled,
+      settleSpawn,
+      reclaimPromise: null,
     }
     this.codexReplacementHandoffs.set(predecessorSessionId, reservation)
     const release = (): void => {
+      if (reservation.spawnOutcome === 'pending') {
+        reservation.spawnOutcome = 'failed'
+        reservation.settleSpawn()
+      }
       if (
         this.codexReplacementHandoffs.get(predecessorSessionId) === reservation
       ) {
@@ -1226,6 +1461,16 @@ export class SessionManager extends EventEmitter {
       const size = this.sessionSizes.get(predecessorSessionId)
       const effectiveDomains =
         this.builtInMcpHost?.sessionDomains?.(predecessorSessionId) ?? []
+      const restoreOptions: SessionSpawnOptions = {
+        kind: 'codex',
+        cwd: predecessorInfo.cwd,
+        resumeSessionId: options.resumeSessionId,
+        ...(size ? { cols: size.cols, rows: size.rows } : {}),
+        dangerousMode: predecessorInfo.dangerousMode,
+        useProxy: predecessorInfo.useProxy,
+        builtInMcpDomains: effectiveDomains,
+      }
+      reservation.restoreOptions = restoreOptions
       const handoff: CodexReplacementHandoff = {
         reservation,
         predecessorSessionId,
@@ -1239,15 +1484,7 @@ export class SessionManager extends EventEmitter {
         // original spawnInfo necessarily contains null. The path/ID proof above
         // is what authorizes this value; copying null would create a fresh
         // session and abandon the pane's transcript after a failed reload.
-        restoreOptions: {
-          kind: 'codex',
-          cwd: predecessorInfo.cwd,
-          resumeSessionId: options.resumeSessionId,
-          ...(size ? { cols: size.cols, rows: size.rows } : {}),
-          dangerousMode: predecessorInfo.dangerousMode,
-          useProxy: predecessorInfo.useProxy,
-          builtInMcpDomains: effectiveDomains,
-        },
+        restoreOptions,
         stopPromise: null,
         compensationRequired: false,
       }
@@ -1396,6 +1633,10 @@ export class SessionManager extends EventEmitter {
       const claim: RecoveryClaim = {
         kind: 'codex',
         cwd: path.resolve(handoff.restoreOptions.cwd),
+        // Compensation is a new generation even though it reuses the stable
+        // local ID. It must never inherit the timeout token belonging to the
+        // interrupted predecessor recovery.
+        recoveryToken: randomUUID(),
         startedAt: performance.now(),
         cancelled: false,
         spawnGeneration: null,
@@ -2563,8 +2804,24 @@ export class SessionManager extends EventEmitter {
   private async killInternal(
     sessionId: string,
     authorizedReplacement: CodexReplacementReservation | null = null,
+    authorizedRedirect: CodexReplacementRedirect | null = null,
   ): Promise<boolean> {
     const replacement = this.findCodexReplacementReservation(sessionId)
+    for (const redirect of this.codexReplacementRedirects.values()) {
+      if (
+        redirect.successorSessionId === sessionId &&
+        redirect !== authorizedRedirect &&
+        !(
+          authorizedReplacement &&
+          authorizedReplacement.predecessorSessionId === sessionId
+        )
+      ) {
+        // A close of either the stale predecessor or current successor is user
+        // teardown intent. Publish it before stop awaits so an already-running
+        // stale-renderer reclaim cannot resurrect predecessorId afterward.
+        redirect.cancelled = true
+      }
+    }
     const cancelsReplacement = Boolean(
       replacement && replacement !== authorizedReplacement,
     )
@@ -2633,6 +2890,34 @@ export class SessionManager extends EventEmitter {
       // prevents this internal cascade from being mistaken for a second cause.
       await this.killInternal(replacement.successorSessionId, replacement)
     }
+    if (
+      cancelsReplacement &&
+      replacement?.spawnOutcome === 'successor-live' &&
+      this.codexReplacementHandoffs.get(replacement.predecessorSessionId) ===
+        replacement
+    ) {
+      // Once spawn IPC has returned there is no outer finally left to retire a
+      // later close. The explicit teardown already stopped whichever side was
+      // still live, so retaining the transaction would only reserve a dead ID
+      // forever and make shutdown/recovery report a replacement that no longer
+      // exists.
+      this.codexReplacementHandoffs.delete(replacement.predecessorSessionId)
+    }
+    for (const [predecessorId, redirect] of this.codexReplacementRedirects) {
+      if (
+        predecessorId === sessionId ||
+        (
+          redirect.successorSessionId === sessionId &&
+          !redirect.reclaimPromise &&
+          !(
+            authorizedReplacement &&
+            authorizedReplacement.predecessorSessionId === sessionId
+          )
+        )
+      ) {
+        this.codexReplacementRedirects.delete(predecessorId)
+      }
+    }
     return Boolean(entry || recovery || cancelsReplacement)
   }
 
@@ -2652,6 +2937,7 @@ export class SessionManager extends EventEmitter {
     const entry = this.sessions.get(options.sessionId)
     const claim = this.recoveriesInFlight.get(options.sessionId)
     const replacement = this.findCodexReplacementReservation(options.sessionId)
+    const redirect = this.codexReplacementRedirects.get(options.sessionId)
 
     // WHY check and kill occur without an await between them: this is the
     // atomic ownership proof missing from renderer-only guards. A stale pane
@@ -2664,6 +2950,20 @@ export class SessionManager extends EventEmitter {
       }
     } else if (claim) {
       if (claim.kind !== kind || claim.cwd !== cwd) return false
+    } else if (redirect) {
+      if (
+        (redirect.predecessorOwnership.kind ?? DEFAULT_PROVIDER) !== kind ||
+        path.resolve(redirect.predecessorOwnership.cwd) !== cwd
+      ) {
+        return false
+      }
+      redirect.cancelled = true
+      await this.killInternal(redirect.successorSessionId)
+      // The redirect itself is main-owned teardown work even when the first
+      // reclaim continuation already removed the target registry row before
+      // this close reached it. Report the cancellation as handled so renderer
+      // close does not mistake an idempotent joined stop for a stale miss.
+      return true
     } else {
       // During destructive handoff the predecessor row is intentionally gone,
       // and during compensation preflight the recovery claim is the owner. The
@@ -2686,20 +2986,26 @@ export class SessionManager extends EventEmitter {
   }
 
   /** Cancel only a matching in-flight recovery claim, never an adopted entry. */
-  async cancelRecovery(options: SessionOwnershipOptions): Promise<boolean> {
+  async cancelRecovery(options: SessionRecoveryCancellationOptions): Promise<boolean> {
     const requestedKind: unknown = options.kind
     if (requestedKind !== undefined && !isSessionKind(requestedKind)) return false
     const kind = options.kind ?? DEFAULT_PROVIDER
     const cwd = path.resolve(options.cwd)
     const claim = this.recoveriesInFlight.get(options.sessionId)
-    if (!claim || claim.kind !== kind || claim.cwd !== cwd) return false
+    if (
+      !claim ||
+      claim.kind !== kind ||
+      claim.cwd !== cwd ||
+      claim.recoveryToken !== options.recoveryToken
+    ) return false
 
     // WHY this is distinct from killOwned: a renderer deadline can fire while
     // an earlier recover IPC is merely queued behind a blocked main event loop.
     // By the time cancellation is processed, recover may already have returned
-    // an ownership conflict or adopted a healthy existing backend. Claim-only
-    // cancellation makes that delayed message a harmless no-op instead of an
-    // id-based kill of another renderer's live session.
+    // an ownership conflict, adopted a healthy backend, or replacement may have
+    // published compensation generation C under the same stable tuple. The
+    // opaque token makes every delayed message a no-op unless it still names
+    // the exact claim generation R whose renderer deadline fired.
     claim.cancelled = true
     const entry = this.sessions.get(options.sessionId)
     const ownsEntry = Boolean(

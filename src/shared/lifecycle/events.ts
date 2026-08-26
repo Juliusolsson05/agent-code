@@ -73,6 +73,10 @@ export const SESSION_LIFECYCLE_EVENT_NAMES = [
   // rollout owner before the successor reached provider start?"
   'replacement.handoff.begin',
   'replacement.handoff.end',
+  // "Did the renderer make the successor's random local ID durable?" Spawn
+  // success alone cannot answer this because the invoking renderer may reload
+  // before its workspace remap reaches disk.
+  'replacement.commit',
   // "Did a successor failure restore the predecessor's stable local ID?"
   'replacement.rollback.begin',
   'replacement.rollback.end',

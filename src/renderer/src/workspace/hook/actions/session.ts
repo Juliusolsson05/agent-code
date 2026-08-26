@@ -235,6 +235,7 @@ export function useSessionActions(
   refs: WorkspaceRefs,
 ): SessionActions {
   const wakeInFlightRef = useRef(new Map<SessionId, Promise<SessionWakeResult>>())
+  const pendingReplacementSuccessorsRef = useRef(new Set<SessionId>())
 
   // spawn — wrapped so callers don't have to touch window.api
   // directly. Updates state.sessions synchronously after main
@@ -292,6 +293,14 @@ export function useSessionActions(
         })
         sessionId = result.sessionId
         tmuxName = result.tmuxName
+        if (result.replacementTransactionId) {
+          // WHY presence, not renderer inference: only main can prove the
+          // successor targeted the predecessor's exact Codex rollout and
+          // therefore consumed the destructive handoff. replaceSession uses
+          // this marker to suppress its legacy predecessor kill; workspace
+          // persistence later commits the still-pending main transaction.
+          pendingReplacementSuccessorsRef.current.add(sessionId)
+        }
       } catch (err) {
         throw new Error(sessionSpawnErrorMessage(kind, err, useProxy === true))
       }
@@ -938,6 +947,8 @@ export function useSessionActions(
         predecessorSessionId: oldId,
         ...(builtInMcpDomains !== undefined ? { builtInMcpDomains } : {}),
       })
+      const mainHandledPredecessor =
+        pendingReplacementSuccessorsRef.current.delete(newId)
       setRuntimes(prev => ({
         ...prev,
         [newId]: {
@@ -946,7 +957,9 @@ export function useSessionActions(
         },
       }))
 
-      await killSessionBackendIfOwned(refs, oldId)
+      if (!mainHandledPredecessor) {
+        await killSessionBackendIfOwned(refs, oldId)
+      }
       setRuntimes(prev => {
         const next = { ...prev }
         delete next[oldId]

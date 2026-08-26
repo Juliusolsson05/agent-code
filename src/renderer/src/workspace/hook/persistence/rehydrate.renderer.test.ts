@@ -6,6 +6,10 @@ import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type { PersistedWorkspace } from '@renderer/workspace/persistence'
 import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
+import type {
+  SessionRecoverOptions,
+  SessionRecoveryCancellationOptions,
+} from '@shared/types/session'
 
 import { rehydrateWorkspace } from './rehydrate'
 
@@ -461,9 +465,13 @@ describe('rehydrateWorkspace backend reconciliation', () => {
   it('bounds a never-settling recovery, cancels main ownership, and completes bootstrap', async () => {
     const persisted = makePersisted()
     const harness = makeHarness()
-    const cancelSessionRecovery = vi.fn(async () => true)
+    const cancelSessionRecovery = vi.fn(
+      async (_options: SessionRecoveryCancellationOptions) => true,
+    )
     const recoveryApi = {
-      recoverSession: vi.fn(() => new Promise<never>(() => {})),
+      recoverSession: vi.fn(
+        (_options: SessionRecoverOptions) => new Promise<never>(() => {}),
+      ),
       cancelSessionRecovery,
       defaultCwd: vi.fn(async () => '/tmp/fallback'),
     }
@@ -484,7 +492,15 @@ describe('rehydrateWorkspace backend reconciliation', () => {
       sessionId: 'stable-session',
       kind: 'claude',
       cwd: '/tmp/project',
+      recoveryToken: expect.any(String),
     })
+    const admittedRecovery = recoveryApi.recoverSession.mock.calls[0]?.[0]
+    const cancelledRecovery = cancelSessionRecovery.mock.calls[0]?.[0]
+    expect(admittedRecovery).toMatchObject({
+      reclaimPendingReplacement: true,
+      recoveryToken: expect.any(String),
+    })
+    expect(cancelledRecovery?.recoveryToken).toBe(admittedRecovery?.recoveryToken)
     expect(harness.state().tabs[0].root).toEqual({
       type: 'leaf',
       sessionId: 'stable-session',

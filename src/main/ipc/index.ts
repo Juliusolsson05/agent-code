@@ -89,7 +89,7 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerLspIpc(deps.lspManager, editorFsRoots, deps.aiWorkspaceRegistry)
   registerFsIpc()
   registerSessionsIpc()
-  registerWorkspaceIpc()
+  registerWorkspaceIpc(deps.manager)
   registerGhostIpc(deps.ghostJournals)
   registerDebugIpc()
   registerGitIpc()

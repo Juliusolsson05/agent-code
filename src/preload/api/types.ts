@@ -165,6 +165,7 @@ export type {
   SessionBackendSnapshot,
   SessionInputReadiness,
   SessionOwnershipOptions,
+  SessionRecoveryCancellationOptions,
   SessionRecoverOptions,
   SessionRecoverResult,
 } from '@shared/types/session.js'
@@ -204,6 +205,12 @@ export type SessionSpawnResult = {
   sessionId: string
   /** Set only for tmux-backed terminal sessions and persisted for recovery. */
   tmuxName?: string
+  /**
+   * Present only when main performed a destructive same-rollout Codex handoff.
+   * Renderer uses presence as proof that predecessor cleanup already happened;
+   * durable workspace persistence, not this response, commits the transaction.
+   */
+  replacementTransactionId?: string
 }
 
 export type { ConditionCustomAction }

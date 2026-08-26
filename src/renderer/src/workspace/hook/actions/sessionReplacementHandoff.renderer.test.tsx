@@ -94,7 +94,10 @@ describe('renderer session replacement handoff', () => {
       refs.latestRuntimesRef.current = runtimes
     }
     const spawnSession = vi.fn()
-      .mockResolvedValueOnce({ sessionId: 'local-successor' })
+      .mockResolvedValueOnce({
+        sessionId: 'local-successor',
+        replacementTransactionId: 'replacement-transaction',
+      })
       .mockResolvedValueOnce({ sessionId: 'fresh-local-session' })
     const killOwnedSession = vi.fn(async () => false)
     Object.defineProperty(window, 'api', {
@@ -136,14 +139,11 @@ describe('renderer session replacement handoff', () => {
       recoverTmuxName: undefined,
       builtInMcpDomains: ['workflows'],
     })
-    // Main already consumed the authorized handoff in production. The existing
-    // renderer cleanup remains a generation-safe no-op fallback and must still
-    // carry its durable owner tuple rather than issuing an id-only kill.
-    expect(killOwnedSession).toHaveBeenCalledWith({
-      sessionId: predecessorId,
-      kind: 'codex',
-      cwd: '/recorded/worktree',
-    })
+    // A transaction-bearing result means main already retired the predecessor
+    // and is holding the successor pending durable workspace ownership. Sending
+    // the legacy cleanup here is indistinguishable from an explicit close and
+    // would correctly cancel the hidden successor before the remap can persist.
+    expect(killOwnedSession).not.toHaveBeenCalled()
     expect(state.tabs[0]).toMatchObject({
       root: { type: 'leaf', sessionId: 'local-successor' },
       focusedSessionId: 'local-successor',

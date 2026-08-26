@@ -2,6 +2,7 @@ import { ipcMain } from 'electron'
 import { mkdir, readFile, writeFile, rename } from 'fs/promises'
 
 import { STATE_DIR, STATE_FILE } from '@main/storage/paths.js'
+import type { SessionManager } from '@main/sessionManager.js'
 
 // Workspace state persistence.
 //
@@ -10,7 +11,7 @@ import { STATE_DIR, STATE_FILE } from '@main/storage/paths.js'
 // atomic-write pattern (temp sibling + rename) keeps us from
 // corrupting the file if the process dies mid-write.
 
-export function registerWorkspaceIpc(): void {
+export function registerWorkspaceIpc(manager: SessionManager): void {
   ipcMain.handle('workspace:load', async () => {
     try {
       const text = await readFile(STATE_FILE, 'utf8')
@@ -40,6 +41,27 @@ export function registerWorkspaceIpc(): void {
       .slice(2)}.tmp`
     await writeFile(tmp, json, 'utf8')
     await rename(tmp, STATE_FILE)
+    // WHY replacement commit follows the rename: a successful spawn response
+    // is not durable renderer ownership. If reload destroys the renderer before
+    // its remapped local ID reaches workspace.json, main must retain the
+    // predecessor transaction so rehydrate can stop the hidden successor and
+    // restore the still-owned predecessor ID. Parsing is deliberately narrow;
+    // main does not otherwise interpret renderer workspace state.
+    try {
+      const parsed = JSON.parse(json) as {
+        workspace?: { sessions?: Record<string, unknown> }
+      }
+      const sessions = parsed.workspace?.sessions
+      if (sessions && typeof sessions === 'object') {
+        manager.acknowledgePersistedSessionOwnership(
+          new Set(Object.keys(sessions)),
+        )
+      }
+    } catch {
+      // workspace:save historically accepts opaque bytes. A malformed payload
+      // must not gain transaction authority; leaving the handoff pending is the
+      // safe outcome and preserves the existing persistence error surface.
+    }
   })
 
   // Renderer calls this on first launch when there's no saved state

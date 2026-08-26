@@ -576,7 +576,10 @@ describe('SessionManager recover', () => {
       .resolves.toBe(false)
     await expect(manager.killOwned({ ...owner, kind: 'codex' }))
       .resolves.toBe(false)
-    await expect(manager.cancelRecovery(owner)).resolves.toBe(false)
+    await expect(manager.cancelRecovery({
+      ...owner,
+      recoveryToken: 'already-settled-recovery',
+    })).resolves.toBe(false)
     expect(manager.getBackendSnapshot(owner.sessionId)).toMatchObject({
       kind: 'claude',
       cwd: '/tmp/project',

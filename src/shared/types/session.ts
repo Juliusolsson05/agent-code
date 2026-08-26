@@ -51,12 +51,31 @@ export type SessionRecoverOptions = {
   useProxy?: boolean
   recoverTmuxName?: string
   builtInMcpDomains?: BuiltInMcpDomain[]
+  /**
+   * Opaque renderer-generated generation for this recovery admission.
+   *
+   * WHY the stable ownership tuple is insufficient: a timeout message for an
+   * earlier recovery can arrive after replacement compensation has published a
+   * new claim under the same sessionId/kind/cwd. Cancellation must name the
+   * generation whose deadline fired or it can tear down the later restore.
+   */
+  recoveryToken?: string
+  /**
+   * Bootstrap-only authority to reclaim an unpersisted Codex replacement.
+   * Ordinary wake/retry calls must remain fenced while a same-pane replacement
+   * is active; only rehydrate knows the predecessor ID is still durable.
+   */
+  reclaimPendingReplacement?: boolean
 }
 
 export type SessionOwnershipOptions = Pick<
   SessionRecoverOptions,
   'sessionId' | 'kind' | 'cwd'
 >
+
+export type SessionRecoveryCancellationOptions = SessionOwnershipOptions & {
+  recoveryToken: string
+}
 
 export type SessionRecoverFailureCode =
   | 'ownership-conflict'
