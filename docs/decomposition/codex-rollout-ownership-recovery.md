@@ -1452,3 +1452,12 @@ therefore select the already-recorded expected prompt from entries appended
 after the baseline and keep waiting when only injected context arrived. It must
 not treat arbitrary context as the prompt, and it must still time out if the
 expected durable value never appears.
+
+The recorder repair is complete at codex-headless `62d9b27`. It now searches
+only the post-baseline durable entries for the case's already-recorded expected
+prompt instead of treating the first user-shaped append as the submission.
+The six-case regression replay against the installed Codex 0.149.1 binary is
+green: all four submitting cases have exact rollout/request agreement, the
+valid lower-layer keymap reaches the composer, and the issued-profile conflict
+is rejected before the composer. This changes observation fidelity only; the
+production ownership and launch implementation remains the Stage 35 head.
