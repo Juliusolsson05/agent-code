@@ -67,6 +67,14 @@ jobs:
         # which the app build depends on.
         run: npm run typecheck
 
+      - name: Type-check live resume probe
+        # WHY the probe intentionally imports the sibling headless packages and
+        # therefore cannot be checked in the standalone parser repository. PR
+        # #634 made pre-spawn ownership a required API and the ordinary app
+        # typecheck stayed green while both real-data resume call sites broke.
+        # This monorepo checkout is the only gate that has all three sources.
+        run: npm run check:live-resume-probe
+
       - name: Test core
         # WHY there is no per-submodule test step here: each owned package
         # enforces its private suite in its own `package / quality-gate` CI.

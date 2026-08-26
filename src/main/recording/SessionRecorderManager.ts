@@ -17,13 +17,15 @@ import { SESSION_RECORDING_DIR } from '@main/storage/paths.js'
 //
 // ALLOWLIST, not a prefix: the `session:` prefix also carries
 // terminal-data / agent-pty-data (raw PTY, not feed events). We record only
-// the 9 channels that map 1:1 to the SessionFeed methods the renderer's
-// rendering pipeline consumes.
+// the feed channels plus content-safe transcript ownership diagnostics. The
+// diagnostic channel is intentionally recorded even though replay ignores it:
+// it explains why committed input never began without becoming fold input.
 const RECORDED_CHANNELS: ReadonlySet<string> = new Set([
   'session:started',
   'session:screen',
   'session:jsonl-entries',
   'session:jsonl-error',
+  'session:transcript-diagnostic',
   'session:process-state',
   'session:conditions',
   'session:semantic-event',

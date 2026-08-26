@@ -110,6 +110,7 @@ type ManagerEvents = {
    *  it onto the registry. */
   'jsonl-entry': [{ sessionId: string; entry: AgentTranscriptEntry; file: string }]
   'jsonl-error': [{ sessionId: string; error: Error }]
+  'transcript-diagnostic': [{ sessionId: string; diagnostic: unknown }]
   'process-state': [{ sessionId: string; active: boolean; status?: string }]
   'trust-dialog': [{ sessionId: string; visible: boolean; workspace?: string }]
   'resume-prompt': [{
@@ -1248,6 +1249,10 @@ export class SessionManager extends EventEmitter {
         if (!ownsEntry()) return
         this.markActivity(sessionId)
         this.emit('jsonl-error', { sessionId, error })
+      })
+      session.on('transcript-diagnostic', (diagnostic: unknown) => {
+        if (!ownsEntry()) return
+        this.emit('transcript-diagnostic', { sessionId, diagnostic })
       })
       session.on('process-state', (state: AgentProcessState) => {
         if (!ownsEntry()) return
