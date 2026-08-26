@@ -1,0 +1,360 @@
+{
+  "$fixture": {
+    "id": "dispatch-global-d23",
+    "source": "persisted-agent-code-workspace",
+    "sourceFingerprint": "ae49474c670f764f",
+    "observed": {
+      "tabCount": 4,
+      "visibleRowCount": 24,
+      "mismatchCount": 20,
+      "targetSessionId": "session-23",
+      "targetVisibleLabel": "D23",
+      "targetLocalLabel": "D12",
+      "targetPlacement": "detached"
+    }
+  },
+  "state": {
+    "tabs": [
+      {
+        "id": "tab-1",
+        "title": "project-1",
+        "root": {
+          "type": "leaf",
+          "sessionId": "session-1"
+        },
+        "focusedSessionId": "session-1"
+      },
+      {
+        "id": "tab-2",
+        "title": "project-2",
+        "root": {
+          "type": "leaf",
+          "sessionId": "session-5"
+        },
+        "focusedSessionId": "session-5"
+      },
+      {
+        "id": "tab-3",
+        "title": "project-3",
+        "root": {
+          "type": "leaf",
+          "sessionId": "session-11"
+        },
+        "focusedSessionId": "session-11"
+      },
+      {
+        "id": "tab-4",
+        "title": "project-4",
+        "root": {
+          "type": "split",
+          "direction": "vertical",
+          "ratio": 0.5,
+          "a": {
+            "type": "leaf",
+            "sessionId": "session-12"
+          },
+          "b": {
+            "type": "leaf",
+            "sessionId": "session-15"
+          }
+        },
+        "focusedSessionId": "session-12"
+      }
+    ],
+    "activeTabId": "tab-4",
+    "dispatchMode": {
+      "scope": "global",
+      "focusedSessionId": "session-22",
+      "tiled": {
+        "focusedLane": 1,
+        "ratios": [
+          0.1,
+          0.14285714285714288,
+          0.14285714285714288,
+          0.14285714285714288,
+          0.14285714285714288
+        ],
+        "lanes": [
+          {
+            "selectedSessionId": "session-12"
+          },
+          {
+            "selectedSessionId": "session-17"
+          },
+          {
+            "selectedSessionId": "session-18"
+          },
+          {
+            "selectedSessionId": "session-22"
+          }
+        ]
+      }
+    },
+    "sessions": {
+      "session-6": {
+        "cwd": "/fixture/home/path-1/path-2/path-3",
+        "kind": "codex"
+      },
+      "session-5": {
+        "cwd": "/fixture/home/path-1/path-2/path-3",
+        "kind": "claude"
+      },
+      "session-1": {
+        "cwd": "/fixture/home/path-1/path-4/path-5",
+        "kind": "claude"
+      },
+      "session-11": {
+        "cwd": "/fixture/project-1",
+        "kind": "claude"
+      },
+      "session-12": {
+        "cwd": "/fixture/project-2",
+        "kind": "codex"
+      },
+      "session-2": {
+        "cwd": "/fixture/home/path-1/path-4/path-5",
+        "kind": "claude"
+      },
+      "session-13": {
+        "cwd": "/fixture/project-2/.worktrees/worktree-1",
+        "kind": "codex",
+        "title": "agent-7",
+        "orchestrationParentId": "session-12"
+      },
+      "session-14": {
+        "cwd": "/fixture/project-2/.worktrees/worktree-1",
+        "kind": "codex",
+        "title": "agent-8",
+        "orchestrationParentId": "session-12"
+      },
+      "session-3": {
+        "cwd": "/fixture/home/path-1/path-4/path-5",
+        "kind": "claude"
+      },
+      "session-4": {
+        "cwd": "/fixture/home/path-1/path-4/path-5",
+        "kind": "codex"
+      },
+      "session-15": {
+        "cwd": "/fixture/project-2",
+        "kind": "terminal"
+      },
+      "session-7": {
+        "cwd": "/fixture/home/path-1/path-2/path-3",
+        "kind": "codex"
+      },
+      "session-8": {
+        "cwd": "/fixture/home/path-1/path-2/path-3",
+        "kind": "codex"
+      },
+      "session-9": {
+        "cwd": "/fixture/home/path-1/path-2/path-3",
+        "kind": "codex"
+      },
+      "session-10": {
+        "cwd": "/fixture/home/path-1/path-2/path-3",
+        "kind": "codex"
+      },
+      "session-16": {
+        "cwd": "/fixture/project-2",
+        "kind": "codex"
+      },
+      "session-17": {
+        "cwd": "/fixture/project-2",
+        "kind": "codex"
+      },
+      "session-18": {
+        "cwd": "/fixture/project-2",
+        "kind": "codex"
+      },
+      "session-19": {
+        "cwd": "/fixture/project-2",
+        "kind": "codex"
+      },
+      "session-22": {
+        "cwd": "/fixture/project-2",
+        "kind": "codex"
+      },
+      "session-20": {
+        "cwd": "/fixture/project-2/.worktrees/worktree-2",
+        "kind": "codex",
+        "title": "agent-21",
+        "orchestrationParentId": "session-19"
+      },
+      "session-21": {
+        "cwd": "/fixture/project-2/.worktrees/worktree-2",
+        "kind": "codex",
+        "title": "agent-22",
+        "orchestrationParentId": "session-19"
+      },
+      "session-23": {
+        "cwd": "/fixture/project-2/.worktrees/worktree-3",
+        "kind": "claude",
+        "title": "agent-23",
+        "orchestrationParentId": "session-22"
+      },
+      "session-24": {
+        "cwd": "/fixture/project-2/.worktrees/worktree-3",
+        "kind": "codex",
+        "title": "agent-24",
+        "orchestrationParentId": "session-22"
+      }
+    },
+    "detachedSessions": {
+      "session-6": {
+        "sessionId": "session-6",
+        "surface": "dispatch",
+        "projectTabId": "tab-2",
+        "projectTabTitle": "tab-2",
+        "projectTabIndex": 6,
+        "detachedAt": 1
+      },
+      "session-2": {
+        "sessionId": "session-2",
+        "surface": "dispatch",
+        "projectTabId": "tab-1",
+        "projectTabTitle": "tab-1",
+        "projectTabIndex": 0,
+        "detachedAt": 2
+      },
+      "session-13": {
+        "sessionId": "session-13",
+        "surface": "dispatch",
+        "projectTabId": "tab-4",
+        "projectTabTitle": "tab-4",
+        "projectTabIndex": 3,
+        "detachedAt": 3
+      },
+      "session-14": {
+        "sessionId": "session-14",
+        "surface": "dispatch",
+        "projectTabId": "tab-4",
+        "projectTabTitle": "tab-4",
+        "projectTabIndex": 3,
+        "detachedAt": 4
+      },
+      "session-3": {
+        "sessionId": "session-3",
+        "surface": "dispatch",
+        "projectTabId": "tab-1",
+        "projectTabTitle": "tab-1",
+        "projectTabIndex": 0,
+        "detachedAt": 5
+      },
+      "session-4": {
+        "sessionId": "session-4",
+        "surface": "dispatch",
+        "projectTabId": "tab-1",
+        "projectTabTitle": "tab-1",
+        "projectTabIndex": 0,
+        "detachedAt": 6
+      },
+      "session-7": {
+        "sessionId": "session-7",
+        "surface": "dispatch",
+        "projectTabId": "tab-2",
+        "projectTabTitle": "tab-2",
+        "projectTabIndex": 1,
+        "detachedAt": 7
+      },
+      "session-8": {
+        "sessionId": "session-8",
+        "surface": "dispatch",
+        "projectTabId": "tab-2",
+        "projectTabTitle": "tab-2",
+        "projectTabIndex": 1,
+        "detachedAt": 8
+      },
+      "session-9": {
+        "sessionId": "session-9",
+        "surface": "dispatch",
+        "projectTabId": "tab-2",
+        "projectTabTitle": "tab-2",
+        "projectTabIndex": 1,
+        "detachedAt": 10
+      },
+      "session-10": {
+        "sessionId": "session-10",
+        "surface": "dispatch",
+        "projectTabId": "tab-2",
+        "projectTabTitle": "tab-2",
+        "projectTabIndex": 1,
+        "detachedAt": 11
+      },
+      "session-16": {
+        "sessionId": "session-16",
+        "surface": "dispatch",
+        "projectTabId": "tab-4",
+        "projectTabTitle": "tab-4",
+        "projectTabIndex": 3,
+        "detachedAt": 9
+      },
+      "session-17": {
+        "sessionId": "session-17",
+        "surface": "dispatch",
+        "projectTabId": "tab-4",
+        "projectTabTitle": "tab-4",
+        "projectTabIndex": 3,
+        "detachedAt": 12
+      },
+      "session-18": {
+        "sessionId": "session-18",
+        "surface": "dispatch",
+        "projectTabId": "tab-4",
+        "projectTabTitle": "tab-4",
+        "projectTabIndex": 3,
+        "detachedAt": 13
+      },
+      "session-19": {
+        "sessionId": "session-19",
+        "surface": "dispatch",
+        "projectTabId": "tab-4",
+        "projectTabTitle": "tab-4",
+        "projectTabIndex": 3,
+        "detachedAt": 14
+      },
+      "session-22": {
+        "sessionId": "session-22",
+        "surface": "dispatch",
+        "projectTabId": "tab-4",
+        "projectTabTitle": "tab-4",
+        "projectTabIndex": 3,
+        "detachedAt": 15
+      },
+      "session-20": {
+        "sessionId": "session-20",
+        "surface": "dispatch",
+        "projectTabId": "tab-4",
+        "projectTabTitle": "tab-4",
+        "projectTabIndex": 3,
+        "detachedAt": 16
+      },
+      "session-21": {
+        "sessionId": "session-21",
+        "surface": "dispatch",
+        "projectTabId": "tab-4",
+        "projectTabTitle": "tab-4",
+        "projectTabIndex": 3,
+        "detachedAt": 17
+      },
+      "session-23": {
+        "sessionId": "session-23",
+        "surface": "dispatch",
+        "projectTabId": "tab-4",
+        "projectTabTitle": "tab-4",
+        "projectTabIndex": 3,
+        "detachedAt": 18
+      },
+      "session-24": {
+        "sessionId": "session-24",
+        "surface": "dispatch",
+        "projectTabId": "tab-4",
+        "projectTabTitle": "tab-4",
+        "projectTabIndex": 3,
+        "detachedAt": 19
+      }
+    },
+    "buried": [],
+    "pinnedSessionIds": []
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "$fixture": {
+    "id": "codex-mcp-child-cwd",
+    "cutoff": "2026-08-26T21:38:22.000Z",
+    "source": "codex-rollout-b",
+    "sourceFingerprint": "399bd5f5b021aa71",
+    "records": [
+      {
+        "timestamp": "2026-08-26T21:03:44.673Z",
+        "line": 869
+      }
+    ]
+  },
+  "records": [
+    {
+      "type": "event_msg",
+      "timestamp": "2026-08-26T21:03:44.673Z",
+      "payload": {
+        "type": "item_completed",
+        "item": {
+          "type": "McpToolCall",
+          "status": "completed",
+          "tool": "orchestration_create_agent",
+          "arguments": {
+            "cwd": "/fixture/project-1/.worktrees/worktree-1"
+          }
+        }
+      }
+    }
+  ]
+}

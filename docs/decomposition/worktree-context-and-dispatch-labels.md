@@ -1,6 +1,8 @@
 # Worktree Context and Dispatch Labels — Staged Decomposition
 
-> Status: awaiting explicit user approval. No implementation stage has begun.
+> Status: Stage 1 completed and independently verified on 2026-08-26.
+> Awaiting explicit user approval for Stage 2. No test or implementation stage
+> has begun.
 >
 > Issues: #658 (Codex worktree evidence) and #659 (Dispatch pane coordinate).
 
@@ -75,16 +77,20 @@ content.
 
 ### Codex snapshot
 
-Snapshot: `2026-08-26T21:38:22Z`, 15 rollout files from 2026-08-26.
+Fixed cutoff: `2026-08-26T21:38:22Z`. The final exporter scanned 1,672 files
+with relevant records across the retained corpus and 20 relevant files from
+2026-08-26. The generated
+[`shape-census.md`](evidence/worktree-context/shape-census.md) is the
+authoritative full catalog.
 
 | Recorded shape | Count | Relevant observation |
 |---|---:|---|
-| `session_meta` | 17 | `payload.cwd`; Git branch present under `payload.git.branch` in worktree examples |
-| `turn_context` | 68 | `payload.cwd`; five observed worktree turns in the earlier classification pass |
-| `thread_settings_applied` | 39 | cwd nested under `payload.thread_settings.cwd` |
-| completed `CommandExecution` | 1,396 | every recorded cwd was a `file://` URL |
-| completed `FileChange` | 102 | every recorded `changes` value was an object; 208 total changed paths in the preceding 100-record snapshot, max 8 paths/record |
-| completed `McpToolCall` | 108 | eight carried an argument named `cwd`, proving generic cwd mining would misattribute child/target work |
+| `session_meta` | 17 that day / 1,804 full | `payload.cwd`; 1,715 full-corpus records carry `payload.git.branch` |
+| `turn_context` | 103 that day / 15,064 full | `payload.cwd`; `workspace_roots` is absent in 10,504 full-corpus records |
+| `thread_settings_applied` | 51 that day / 2,838 full | cwd nested under `payload.thread_settings.cwd` |
+| completed `CommandExecution` | 2,442 that day / 5,796 full | every recorded cwd was a local, non-hosted, non-percent-encoded `file://` URL |
+| completed `FileChange` | 326 that day / 830 full | every recorded `changes` value was an object; 1,111 full-corpus paths, max 8 per record |
+| completed `McpToolCall` | 488 that day / 1,372 full | 18 full-corpus calls carried an argument named `cwd`, proving generic cwd mining would misattribute child/target work |
 
 The live corpus grows while agents run, so absolute counts will drift. The
 shape ratios and cited fixture records are the durable evidence; extraction
@@ -93,11 +99,15 @@ not by "the Nth current match".
 
 ### Claude snapshot
 
-- 11 real `worktree-state` enter records were found; all 11 include a branch.
+- 11 real `worktree-state` enter records were found; all 11 include a branch,
+  and all live in a retained provider backup rather than the current corpus.
 - No real `worktree-state` exit record was found in the local corpus. Null exit
   remains a trusted upstream contract and existing production behavior, but no
   new test may pretend an invented null record is a recording.
-- 26,208 real agent-code conversation records carry top-level `cwd`, confirming
+- Four enters have a following conversation-cwd record; all four retain the
+  entered worktree cwd, none return to `originalCwd`, and seven have no later
+  conversation in the retained recording.
+- 22,245 real agent-code conversation records carry top-level `cwd`, confirming
   that the existing generic Claude cwd path is a common live shape.
 
 ### Dispatch snapshot
@@ -105,8 +115,8 @@ not by "the Nth current match".
 Running the existing selectors against the current persisted workspace gives:
 
 - four project tabs;
-- 25 visible Global Dispatch rows;
-- 21 rows whose visible Dispatch label differs from their tab-local label; and
+- 24 visible Global Dispatch rows;
+- 20 rows whose visible Dispatch label differs from their tab-local label; and
 - the reported visible `D23` detached row currently recomputes as `D13` in pane
   chrome. Earlier in the same investigation, before another session joined the
   tab-local sequence, it recomputed as `D12`.
@@ -179,6 +189,57 @@ It consumes only the existing Codex/Claude/workspace sources enumerated in A
 and must reproduce the census above. It adds no instrumentation. An observed
 shape missing from the fixture manifest blocks Stage 2 or receives an explicit
 written reason it is irrelevant.
+
+### Stage 1 completion record
+
+Stage 1 produced exactly the approved invisible substrate:
+
+- `scripts/extract-work-context-fixtures.mts`, an offline exporter over the
+  provider/workspace persistence already present in Agent Code;
+- `testing/fixtures/worktree-context/`, containing the real Codex transition,
+  real MCP negative control, recorded Claude enter-to-conversation pair plus a
+  current conversation record, and reduced persisted D23 workspace; and
+- `docs/decomposition/evidence/worktree-context/shape-census.md`, the generated
+  full/day/provider/Dispatch census.
+
+Independent verification—not only exporter self-checks—established:
+
+- two complete extractions without source mutation produced byte-identical
+  script, census, manifest, and fixture hashes;
+- `jq` shape assertions preserved five ordered Codex records, the two-path
+  FileChange object, the nested MCP child cwd, and all three Claude records;
+- replay through the production selectors produced 24 rows and the same
+  session as visible D23 / tab-local D13; and
+- a separate identity/secret scan found no operator path, username, UUID,
+  common token prefix, or private-key marker.
+
+No runtime recorder, test, or production file was added or changed. The source
+workspace is live mutable state; its checked-in reduced fixture is the stable
+recording. Re-running the exporter after the source workspace changes is a
+deliberate fixture refresh and must be reviewed via its source fingerprint.
+
+Stage 1 resolved the recorded-data unknowns as follows:
+
+1. All 830 recorded FileChange values are objects. No array variant exists in
+   this corpus, so Stage 3 may not add one speculatively.
+2. Of 1,111 changed paths, 1,080 retain a recognizable checkout boundary and 31
+   do not. Zero records span two or more recognized checkout roots. The census
+   deliberately does not equate different arbitrary parent directories with
+   different worktrees; final matching remains Git-owned.
+3. The real Codex fixture records main-checkout launch, turn, command, and
+   thread-setting cwd followed by a two-file write in one linked worktree.
+4. Current Claude conversation-cwd evidence is plentiful, while explicit enter
+   evidence exists only in retained recordings and exit evidence does not exist
+   locally. The fixture and future test names must preserve that distinction.
+5. Every recorded Claude enter with a following conversation stays at its
+   worktree cwd (4/4), so no invented precedence case is needed.
+6. All 5,796 current-style command cwd values are local `file://` URLs; none
+   carries a host, percent encoding, or malformed URL shape.
+7. Production Dispatch selectors replay the reduced persisted state with only
+   the existing `pinnedSessionIds` rehydration default.
+8. The Worktrees live-agent projection is the direct primary-context consumer
+   implicated here. Session badges already prefer `workActivity.active`; no
+   global primary/active semantic swap is justified.
 
 ## Stage 2 — Write failing contracts against the recorded fixtures
 
@@ -313,7 +374,7 @@ identity it already selected.
 
 **Reality check**
 
-The input is the reduced real workspace with 25 rows and 21 mismatches, not a
+The input is the reduced real workspace with 24 rows and 20 mismatches, not a
 manually constructed `DispatchAgentRow` labelled D23.
 
 ## Stage 6 — Cross-boundary verification and review
@@ -363,29 +424,24 @@ Forbidden dependencies:
 - pane leaf components may not rebuild Dispatch rows. They may receive the
   already-selected visible label from the Dispatch parent.
 
-## Unknowns that Stage 1 must resolve
+## Unknowns remaining after Stage 1
 
-1. Whether older/current Codex versions elsewhere in the full local corpus
-   contain additional completed-item spellings or FileChange collection shapes.
-2. Whether multi-path FileChange records ever span more than one Git worktree;
-   if so, object-key order is not automatically a valid "active now" authority.
-3. Whether `session_meta`, `turn_context`, and `thread_settings_applied` ever
-   disagree within one real ordered turn, and which later command/write record
-   resolves that disagreement.
-4. Whether a current (non-backup) Claude corpus contains explicit
-   `worktree-state` enter/exit records. The local evidence currently contains
-   enters only in the retained backup corpus.
-5. Whether a real Claude worktree-state enter is followed by conversation cwd
-   pointing at `originalCwd`; replay must reveal whether the existing tracker
-   preserves explicit worktree intent or is overwritten.
-6. Whether any relevant `file://` cwd uses a host, percent-encoded path, or
-   non-macOS drive form. Only local macOS URLs are currently observed.
-7. Whether the persisted workspace snapshot needs rehydration defaults beyond
-   `pinnedSessionIds` to reproduce the exact app-visible row stream. The fixture
-   exporter must apply the same production rehydration path where possible.
-8. Which surface should use weighted primary context outside the Worktrees
-   live-agent list. This fix must not globally swap `primary`/`active` semantics
-   without recorded evidence for each consumer.
+1. The 31 FileChange paths outside the recognized local checkout topology
+   cannot be classified historically after their Git repositories/worktrees
+   disappear. They justify conservative Git validation, not a guessed parser
+   branch.
+2. No current-corpus Claude `worktree-state` enter and no recorded exit exists.
+   Stage 2 can protect recorded retained behavior and current conversation-cwd
+   behavior, but may not claim that current Claude emits an unobserved record.
+3. Until Stage 2 replays the Codex sequence through the unchanged tracker, the
+   exact failing `active`/`primary` state is not a recorded test artifact. The
+   test must derive that state rather than construct the desired answer.
+4. The persisted workspace is mutable. The checked-in reduced D23 fixture is
+   the stable record; a future extraction after workspace mutation is a fixture
+   refresh, not evidence that the original fixture was non-deterministic.
+5. Non-macOS `file://` semantics are absent from this corpus. This change may
+   implement standards-based local-file conversion, but may not add unrecorded
+   platform cases to the regression corpus and call them real fixtures.
 
 An unknown becoming relevant requires a recorded fixture or an explicit user
 semantic decision. It must not be handled by appending a speculative branch.
