@@ -1,6 +1,6 @@
 # Set Agent Title Implementation Plan
 
-> **Status: IN PROGRESS**
+> **Status: COMPLETE — PR #660 OPEN, UNMERGED**
 
 **Goal:** Let the user assign, edit, and clear a durable title for the focused
 agent from Grid, classic Dispatch, or Tiled Dispatch, then show that title as a
@@ -33,19 +33,30 @@ latest-prompt fallback only when no explicit title exists.
 
 ## Tasks
 
-- [ ] Add title normalization and an identity-stable workspace mutation for
+- [x] Add title normalization and an identity-stable workspace mutation for
   setting/clearing one agent title.
-- [ ] Add transient UI-shell state, a `Set Agent Title…` session command, and an
+- [x] Add transient UI-shell state, a `Set Agent Title…` session command, and an
   app-root modal that edits the captured target without focus-race drift.
-- [ ] Render an explicit title directly below the pane's status/path/index row
+- [x] Render an explicit title directly below the pane's status/path/index row
   in Grid, classic Dispatch, and every Tiled Dispatch lane.
-- [ ] Make explicit titles win over latest-prompt-derived Dispatch row text,
+- [x] Make explicit titles win over latest-prompt-derived Dispatch row text,
   while preserving the prompt fallback for untitled agents.
-- [ ] Add focused tests for normalization/state mutation, Grid and Tiled
+- [x] Add focused tests for normalization/state mutation, Grid and Tiled
   Dispatch target capture, modal save/clear behavior, pane-header rendering,
   Dispatch precedence, and persisted-title recovery.
-- [ ] Run renderer tests, command/catalog checks, typecheck, and the broader
+- [x] Run renderer tests, command/catalog checks, typecheck, and the broader
   project checks justified by the final diff.
-- [ ] Review the final diff, update this status, open an unmerged PR, and report
+- [x] Review the final diff, update this status, open an unmerged PR, and report
   verification and remaining limitations.
 
+## Verification
+
+- Focused unit and renderer suites pass, including command targeting in Grid,
+  classic Dispatch, and Tiled Dispatch; prompt save/clear; conditional header
+  placement; Dispatch title precedence; and persisted-title rehydration.
+- Typecheck, command/keybinding governance, test contract, live-resume probe,
+  production build, and packaged-output verification pass.
+- The complete Vitest matrix reaches 1,882 passing tests. Its only failure is
+  an environment-owned corpus invariant: fixture
+  `atp-codex-image-inside-claude-transcript` cites a transcript below
+  `~/.claude` that is absent on this machine. No feature test fails.
