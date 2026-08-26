@@ -1860,7 +1860,7 @@ gate before merge.
 
 ### Stage 45 — record the real layer envelope and freeze the red boundary
 
-- [ ] **Produces:** a sanitized config-layer shape projection derived from a
+- [x] **Produces:** a sanitized config-layer shape projection derived from a
   fresh installed 0.149.1 `config/read`; a structurally valid `recorded-safe`
   protocol response assembled from that projection; and table-driven fixture
   modes that remove exactly one required envelope/source field at a time.
@@ -1926,3 +1926,14 @@ gate before merge.
 - Store only sanitized field/type presence and the raw-response checksum. Do
   not commit host paths, user config, or effective values beyond the existing
   content-safe keymap projection.
+
+Stage 45 is complete at codex-headless red checkpoint `79a3afd`. A fresh
+installed 0.149.1 response produced raw-layer SHA-256
+`7d2f5b9bea4734da5d4d418d7faa975dc177ccb5074d830fab74c007733cec1b`;
+only its field names/types and content-safe placeholder values entered the
+fixture. The corrected control and repeated-project control pass unchanged
+production. Exactly seven mutations—missing layer `version`, missing layer
+`config`, missing user `file`, missing user `profile`, missing system `file`,
+missing project `dotCodexFolder`, and invalid optional `disabledReason`—still
+issue authority and fail their assertions (10 pass / 7 fail). This isolates the
+structural matcher as the sole repair boundary.
