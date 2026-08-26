@@ -113,14 +113,17 @@ export function TiledDispatchLayout({
     })
   }, [lanes, rowBySession])
 
-  // Auto-fill / heal effect. Any lane that did NOT resolve (empty, dead,
-  // out-of-scope, or a de-duped duplicate) is handed the next visible agent
-  // not already resolved by another lane. Convergent: once every fillable
-  // lane holds a unique, in-scope, live agent there is nothing to assign.
-  // If there are more lanes than agents the surplus stay empty (picker
-  // prompt) and the effect settles. setTiledLaneSession overwrites the
-  // lane's stale id, so this also repairs the live-duplicate case (the
-  // second lane's old id is replaced rather than left double-mounted).
+  // Auto-fill / heal effect. Any lane that did NOT resolve (empty, dead, or
+  // out-of-scope) is handed the next visible agent not already resolved by
+  // another lane. Convergent: once every fillable lane holds an in-scope,
+  // live agent there is nothing to assign. If there are more lanes than
+  // agents the surplus stay empty (picker prompt) and the effect settles.
+  //
+  // WHY duplicates are absent from that invalid list: mirrored lanes are a
+  // supported view of one durable session, and `A2!` intentionally creates
+  // them. Both copies resolve above, so this healer must skip both; treating a
+  // duplicate as missing would make forced placement appear for one render
+  // and then silently replace it with an unrelated available agent.
   useEffect(() => {
     const resolvedIds = new Set<SessionId>()
     for (const r of laneResolutions) if (r) resolvedIds.add(r.sessionId)
