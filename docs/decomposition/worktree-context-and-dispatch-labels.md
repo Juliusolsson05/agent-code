@@ -435,7 +435,7 @@ Stage 4 intentionally makes no Worktrees renderer consumer change.
 **Verified by**
 
 - The Stage 2 real-workspace regression turns green: visible D23, pane D23,
-  unchanged tab-local D13 derivation.
+  unchanged divergent tab-local derivation.
 - The same recorded D23 contract is exercised through Classic and Tiled
   Dispatch. Per explicit user direction, this small label-plumbing fix does not
   add an exhaustive counting/property matrix for every mismatched row.
@@ -458,7 +458,7 @@ manually constructed `DispatchAgentRow` labelled D23.
 Dispatch passes the selected visible row label; Tiled Dispatch retains that
 same label in lane resolution and passes it to the pane. Grid and Spotlight
 callers omit the value and therefore retain the established tab-local label.
-The recorded D23/D13 regression is green in both Dispatch layouts, and 66
+The recorded D23/tab-local regression is green in both Dispatch layouts, and 66
 focused Dispatch/pane-label tests pass without adding a broad counting matrix.
 
 ### Heap-safety checkpoint requested during Stage 5
@@ -509,6 +509,51 @@ isolation, or packaging. Those are independent release gates.
 
 The verification report names fixture ids and census coverage, not only test
 counts.
+
+### Stage 6 local and review checkpoint
+
+The final branch is based on `origin/main` after both the adjacent tiled-lane
+work and the rendering-shape merge. The work-context extractor scans 1,673
+Codex and 883 Claude files and reruns byte-identically from the checked-in
+Dispatch snapshot. The fixed-cutoff census now publishes terminal status
+counts: 830 recorded FileChange items are `completed`; no failed or declined
+FileChange was recorded. The production fail-closed status rule therefore
+comes from the vendored Codex protocol rather than from a fabricated fixture.
+
+The same rollout fixture now includes the real later `turn_context` at
+`2026-08-26T21:10:28.439Z`, after the recorded linked-worktree write. Its replay
+proves that per-turn launch-cwd metadata cannot repossess the active badge. The
+refreshed workspace still produces visible D23 and a different tab-local label
+(currently D12), while Classic and Tiled pane chrome both render D23.
+
+The first Claude review found an over-broad fixture path allowlist and the
+per-turn active-context regression. The first Codex review found that an
+unsuccessful FileChange proposal could be misclassified as a write. All three
+were resolved before publication. Every non-structural path segment is now a
+token, detach wall clocks are ordinal ranks, the allowlist validates the whole
+path, and the unpublished history was rewritten so the unsafe fixture values
+are absent from every reachable branch commit. Delta reviews by the same
+Claude and Codex agents report no blocking findings.
+
+Heap review confirmed that historical events are compacted inside the JSONL
+stream, stale cache versions are rejected with one 4 KiB probe, unsuccessful
+FileChanges fail before path-array allocation, and the facade selects one
+mutually exclusive provider adapter instead of combining two result arrays for
+every line. Retention remains bounded by the existing timeline, dedupe, and LRU
+caps; a valid current-version index still requires one whole-file startup
+parse, which remains an explicit follow-up boundary rather than hidden scope.
+
+Local verification after the final rebase/fixes:
+
+- fixture extraction and privacy/determinism gates pass;
+- typecheck and test-contract pass;
+- focused work-context/cache/live/Dispatch/lane suites pass;
+- renderer passes 327/327 and system passes 73/73;
+- package/build entry-point verification passes; and
+- unit passes 1,566/1,567. The sole failure is an unrelated pre-existing media
+  fixture that cites a missing local Claude transcript; this branch does not
+  touch that test or corpus, and the same missing-source failure was reproduced
+  from the clean base checkout.
 
 ## What is isolated
 
