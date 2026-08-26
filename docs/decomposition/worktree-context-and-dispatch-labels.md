@@ -1,8 +1,8 @@
 # Worktree Context and Dispatch Labels — Staged Decomposition
 
-> Status: Stage 3 completed and independently verified on 2026-08-26.
-> Stages 4 and 5 are explicitly approved; Stage 6 remains out of scope for
-> this implementation pass.
+> Status: Stage 4 completed and independently verified on 2026-08-26.
+> Stage 5 is explicitly approved; Stage 6 remains out of scope for this
+> implementation pass.
 >
 > Issues: #658 (Codex worktree evidence) and #659 (Dispatch pane coordinate).
 
@@ -409,6 +409,19 @@ The current live failure is already fully explained by current records yielding
 no normalized events. Whether weighted `workContext` is a second cause remains
 unknown until Stage 3 gives the recorded replay real events. This stage is
 bound to that exact output, not a guessed active/primary sequence.
+
+### Stage 4 completion record
+
+The derived worktree activity index now has one exported parser-cache version,
+bumped from 2 to 3 and used by loading, point reads, refresh writes, and summary
+snapshots. A version-2 cache is ignored so the next normal refresh reparses the
+unchanged provider transcripts with Stage 3 semantics.
+
+The persistence boundary test writes both an old derived cache and separate raw
+provider bytes. Loading returns a clean version-3 cache while the raw transcript
+remains byte-identical. All seven focused provider/parser/cache/live contracts
+pass, as does TypeScript. Because recorded live projection is already green,
+Stage 4 intentionally makes no Worktrees renderer consumer change.
 
 ## Stage 5 — Carry the canonical Dispatch row label into pane chrome
 
