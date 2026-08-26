@@ -1,9 +1,11 @@
 # Codex Reload Ownership Handoff
 
-> **Status:** Stages 1–3 are implemented against the revised two-phase design
-> and independently verified. The first exact-head review exposed and now has
-> regression coverage for a recovery race and destructive preflight failure.
-> Stage 4 exact-head re-review, CI, and live verification remain.
+> **Status:** Stages 1–3 are implemented against the revised two-phase design.
+> The second exact-head review exposed four additional transaction races around
+> explicit teardown, compensation cancellation, recovery-generation settlement,
+> and natural predecessor exit. The reopened Stage 2 now has recorded-race tests
+> and an independently verified implementation. Stage 4 exact-head re-review,
+> CI, and live verification remain.
 >
 > **Incident:** Agent Code issue #638. Related fresh-rollout incident: #632.
 
@@ -36,9 +38,17 @@
    compensation is in flight.
 6. If successor startup fails after the destructive handoff, main restores a
    resumable Codex backend under the predecessor's original local ID before the
-   renderer receives the failure.
+   renderer receives the failure, unless a close, successor kill, or global
+   shutdown has cancelled the replacement transaction.
 7. Lifecycle evidence records handoff and compensation outcomes, so a future
    failure is diagnosable without a stack trace or private transcript data.
+8. Compensation is itself a cancellable stable-ID recovery and cannot publish
+   a backend after the renderer closes the pane during restoration preflight.
+9. Compensation waits for any predecessor recovery generation interrupted by
+   handoff to retire its spawn fence before reusing the stable local ID.
+10. A predecessor that exits naturally during successor preflight is joined as
+    successful teardown; an explicitly closed predecessor cancels replacement
+    and is never silently reclassified as safe.
 
 ## 2. Intermediate stages
 
@@ -82,6 +92,17 @@
   after teardown, and MCP/proxy/provider setup can throw after an eager kill.
   No heuristic UI timing is required to close either sequence.
 
+The second exact-head review reopens this stage with one additional artifact: a
+main-owned replacement transaction record containing predecessor and successor
+IDs, cancellation state, the captured predecessor generation/entry, and a
+cancellable compensation recovery claim. Explicit predecessor close, successor
+kill, and `killAll()` cancel that record. Internal handoff teardown is the only
+kill authorized not to cancel it. Compensation joins an interrupted recovery's
+settlement before reusing the stable ID, publishes its own `RecoveryClaim`
+before any awaited preflight, and rechecks cancellation before restoration.
+Natural exit is accepted only from the captured predecessor generation after
+its generation-owned cleanup settles; absence of an entry alone is never proof.
+
 ### Stage 3 — route every same-pane replacement through the handoff
 
 - [x] **Produces:** renderer replacement code that supplies the predecessor ID
@@ -109,11 +130,15 @@
 - **Reality check:** the incident recorder already captures the lifecycle
   markers needed to compare the fixed run to the five failed attempts.
 
-The first Stage 4 review is itself retained as Stage 2 evidence rather than
-patched around: both reviewers independently found that eager predecessor
-teardown destroys rollback. One reviewer additionally traced the unfenced
-`recover(oldId)` race. Exact-head review must restart after the revised Stage 2
-lands; the earlier approval cannot apply to new code.
+Both Stage 4 reviews are retained as Stage 2 evidence rather than patched
+around. The first review proved eager teardown destroys rollback and that
+`recover(oldId)` needs a fence. The second proved a fence without teardown
+intent can resurrect a deliberately closed pane, direct `spawnWithId`
+compensation is not cancellable during pre-entry awaits, an interrupted
+recovery can retain the stable-ID generation fence after `stop()` returns, and
+natural exit can remove the captured registry row before handoff executes.
+Exact-head review must restart after the reopened Stage 2 lands; neither earlier
+review can approve new transaction code.
 
 ## 3. Isolation boundary
 
@@ -141,6 +166,17 @@ receives no pane IDs and gains no replacement exception.
   Codex callback invokes destructive handoff only at exact ownership acquire.
 - **Resolved by revised Stage 2 design:** recovery of the predecessor local ID
   is fenced from initial admission through successor success or compensation.
+- **Resolved by second-review Stage 2 design:** teardown intent is durable main
+  state, not inferred from registry absence. Explicit close/shutdown cancels the
+  replacement while the one internal predecessor stop carries transaction
+  authority and does not cancel itself.
+- **Resolved by second-review Stage 2 design:** compensation uses the same
+  synchronously published, kill-visible `RecoveryClaim` substrate as ordinary
+  stable-ID recovery and waits for a captured predecessor recovery claim to
+  settle before attempting ID reuse.
+- **Resolved by second-review Stage 2 design:** natural exit is proven by the
+  captured registry generation's lifecycle marker and joined cleanup, never by
+  a missing map entry.
 - Predecessor stop can fail or become uncertain. The coordinator's tombstone
   must remain fail-closed; compensation may also fail in that state and needs a
   truthful lifecycle outcome rather than an unsafe lease exception.
@@ -170,3 +206,13 @@ recovery during the destructive handoff window, and successor start failure
 after handoff. These are not imagined provider envelopes; each is a reachable
 await/throw sequence traced in the committed manager and Codex runtime. The
 tests assert ownership and compensation artifacts, not an invented UI result.
+
+The second exact-head review adds four more deterministic sequences derived
+from concrete await boundaries in the committed manager: explicit predecessor
+close/global shutdown after destructive handoff; pane close while compensation
+is blocked before registry publication; successor failure while the predecessor
+belongs to a still-settling recovery generation; and natural predecessor exit
+between replacement admission and the ownership callback. Each test controls
+the exact promise boundary reported by review and asserts registry, provider,
+MCP, and generation outcomes. The explicit-close companion proves that natural
+exit handling cannot turn teardown into successor authorization.

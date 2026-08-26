@@ -45,6 +45,16 @@ type ReplacementOptions = SessionSpawnOptions & {
   predecessorSessionId: string
 }
 
+function deferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
+
 class LeaseAwareCodexSession extends EventEmitter {
   readonly start = vi.fn(async (): Promise<void> => {
     // WHY the injected boundary runs before the fake records physical start:
@@ -52,6 +62,7 @@ class LeaseAwareCodexSession extends EventEmitter {
     // rollout acquisition is the first step that conflicts with the live
     // predecessor. Tests need to distinguish that boundary from an eager kill
     // at the top of SessionManager.spawn().
+    await this.boundaryGate
     await this.beforeResumeOwnershipAcquire?.()
     await this.startGate
     this.order.push(`${this.label}:start`)
@@ -69,13 +80,16 @@ class LeaseAwareCodexSession extends EventEmitter {
   readonly stop = vi.fn(async (): Promise<void> => {
     this.order.push(`${this.label}:stop`)
     await this.stopGate
-    if (this.label === 'predecessor') this.predecessorStopped.value = true
+    if (this.label === 'predecessor' || this.label === 'recovery') {
+      this.predecessorStopped.value = true
+    }
   })
 
   readonly write = vi.fn()
   readonly resize = vi.fn()
 
   private beforeResumeOwnershipAcquire: (() => Promise<void>) | null = null
+  private boundaryGate: Promise<void> = Promise.resolve()
   private startGate: Promise<void> = Promise.resolve()
   private startError: Error | null = null
 
@@ -98,6 +112,10 @@ class LeaseAwareCodexSession extends EventEmitter {
 
   blockStartOn(gate: Promise<void>): void {
     this.startGate = gate
+  }
+
+  blockOwnershipBoundaryOn(gate: Promise<void>): void {
+    this.boundaryGate = gate
   }
 
   failStartWith(error: Error): void {
@@ -503,5 +521,287 @@ describe('SessionManager Codex replacement handoff', () => {
     expect(builtInMcpHost.revokeSession).toHaveBeenCalledWith(
       expect.not.stringMatching(first.sessionId),
     )
+  })
+
+  it('does not restore a predecessor explicitly closed after destructive handoff', async () => {
+    const successorGate = deferred<void>()
+    const order: string[] = []
+    const predecessorStopped = { value: false }
+    const predecessor = new LeaseAwareCodexSession(
+      'predecessor', order, predecessorStopped, false,
+    )
+    const successor = new LeaseAwareCodexSession(
+      'successor', order, predecessorStopped, true,
+    )
+    const restored = new LeaseAwareCodexSession(
+      'restored', order, predecessorStopped, true,
+    )
+    successor.blockStartOn(successorGate.promise)
+    successor.failStartWith(new Error('recorded successor start failure'))
+    createSession
+      .mockImplementationOnce(() => predecessor)
+      .mockImplementationOnce(options => installBoundaryFromCreateOptions(successor, options))
+      .mockImplementationOnce(() => restored)
+
+    const { SessionManager } = await import('./sessionManager')
+    const manager = new SessionManager()
+    const first = await manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+    })
+    const replacement = manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+      predecessorSessionId: first.sessionId,
+    })
+
+    await vi.waitFor(() => expect(predecessor.stop).toHaveBeenCalledTimes(1))
+    await expect(manager.killOwned({
+      sessionId: first.sessionId,
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+    })).resolves.toBe(true)
+    successorGate.resolve()
+    await expect(replacement).rejects.toThrow('recorded successor start failure')
+
+    expect(createSession).toHaveBeenCalledTimes(2)
+    expect(restored.start).not.toHaveBeenCalled()
+    expect(manager.list()).toEqual([])
+  })
+
+  it('does not compensate a replacement cancelled by global shutdown', async () => {
+    const successorGate = deferred<void>()
+    const order: string[] = []
+    const predecessorStopped = { value: false }
+    const predecessor = new LeaseAwareCodexSession(
+      'predecessor', order, predecessorStopped, false,
+    )
+    const successor = new LeaseAwareCodexSession(
+      'successor', order, predecessorStopped, true,
+    )
+    const restored = new LeaseAwareCodexSession(
+      'restored', order, predecessorStopped, true,
+    )
+    successor.blockStartOn(successorGate.promise)
+    successor.failStartWith(new Error('recorded successor start failure'))
+    createSession
+      .mockImplementationOnce(() => predecessor)
+      .mockImplementationOnce(options => installBoundaryFromCreateOptions(successor, options))
+      .mockImplementationOnce(() => restored)
+
+    const { SessionManager } = await import('./sessionManager')
+    const manager = new SessionManager()
+    const first = await manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+    })
+    const replacement = manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+      predecessorSessionId: first.sessionId,
+    })
+
+    await vi.waitFor(() => expect(predecessor.stop).toHaveBeenCalledTimes(1))
+    await manager.killAll()
+    successorGate.resolve()
+    await expect(replacement).rejects.toThrow()
+
+    expect(createSession).toHaveBeenCalledTimes(2)
+    expect(restored.start).not.toHaveBeenCalled()
+    expect(manager.list()).toEqual([])
+  })
+
+  it('keeps compensation cancellable before its registry entry is published', async () => {
+    const compensationPreflight = deferred<void>()
+    const compensationEntered = deferred<void>()
+    let preflightCalls = 0
+    const beforeAgentSessionStart = vi.fn(async () => {
+      preflightCalls += 1
+      if (preflightCalls === 3) {
+        compensationEntered.resolve()
+        await compensationPreflight.promise
+      }
+    })
+    const order: string[] = []
+    const predecessorStopped = { value: false }
+    const predecessor = new LeaseAwareCodexSession(
+      'predecessor', order, predecessorStopped, false,
+    )
+    const successor = new LeaseAwareCodexSession(
+      'successor', order, predecessorStopped, true,
+    )
+    const restored = new LeaseAwareCodexSession(
+      'restored', order, predecessorStopped, true,
+    )
+    successor.failStartWith(new Error('recorded successor start failure'))
+    createSession
+      .mockImplementationOnce(() => predecessor)
+      .mockImplementationOnce(options => installBoundaryFromCreateOptions(successor, options))
+      .mockImplementationOnce(() => restored)
+
+    const { SessionManager } = await import('./sessionManager')
+    const manager = new SessionManager(null, null, null, beforeAgentSessionStart)
+    const first = await manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+    })
+    const replacement = manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+      predecessorSessionId: first.sessionId,
+    })
+
+    await compensationEntered.promise
+    await expect(manager.killOwned({
+      sessionId: first.sessionId,
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+    })).resolves.toBe(true)
+    compensationPreflight.resolve()
+    await expect(replacement).rejects.toThrow('recorded successor start failure')
+
+    expect(createSession).toHaveBeenCalledTimes(2)
+    expect(restored.start).not.toHaveBeenCalled()
+    expect(manager.list()).toEqual([])
+  })
+
+  it('waits for an interrupted predecessor recovery generation before compensation', async () => {
+    const recoveryStartGate = deferred<void>()
+    const order: string[] = []
+    const predecessorStopped = { value: false }
+    const recovery = new LeaseAwareCodexSession(
+      'recovery', order, predecessorStopped, false,
+    )
+    const successor = new LeaseAwareCodexSession(
+      'successor', order, predecessorStopped, true,
+    )
+    const restored = new LeaseAwareCodexSession(
+      'restored', order, predecessorStopped, true,
+    )
+    recovery.blockStartOn(recoveryStartGate.promise)
+    successor.failStartWith(new Error('recorded successor start failure'))
+    createSession
+      .mockImplementationOnce(() => recovery)
+      .mockImplementationOnce(options => installBoundaryFromCreateOptions(successor, options))
+      .mockImplementationOnce(() => restored)
+
+    const { SessionManager } = await import('./sessionManager')
+    const manager = new SessionManager()
+    const recoveryAttempt = manager.recover({
+      sessionId: 'recovering-predecessor',
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+    })
+    await vi.waitFor(() => expect(recovery.start).toHaveBeenCalledTimes(1))
+    const replacement = manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+      predecessorSessionId: 'recovering-predecessor',
+    })
+    const observedReplacement = replacement.catch(error => error)
+
+    await vi.waitFor(() => expect(successor.start).toHaveBeenCalledTimes(1))
+    expect(createSession).toHaveBeenCalledTimes(2)
+    recoveryStartGate.resolve()
+    await expect(recoveryAttempt).resolves.toMatchObject({
+      ok: false,
+      code: 'cancelled',
+    })
+    await expect(observedReplacement).resolves.toBeInstanceOf(Error)
+
+    expect(createSession).toHaveBeenCalledTimes(3)
+    expect(restored.start).toHaveBeenCalledTimes(1)
+    expect(manager.list()).toContain('recovering-predecessor')
+  })
+
+  it('joins a naturally exited predecessor before acquiring successor ownership', async () => {
+    const ownershipBoundary = deferred<void>()
+    const order: string[] = []
+    const predecessorStopped = { value: false }
+    const predecessor = new LeaseAwareCodexSession(
+      'predecessor', order, predecessorStopped, false,
+    )
+    const successor = new LeaseAwareCodexSession(
+      'successor', order, predecessorStopped, true,
+    )
+    successor.blockOwnershipBoundaryOn(ownershipBoundary.promise)
+    createSession
+      .mockImplementationOnce(() => predecessor)
+      .mockImplementationOnce(options => installBoundaryFromCreateOptions(successor, options))
+
+    const { SessionManager } = await import('./sessionManager')
+    const manager = new SessionManager()
+    const first = await manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+    })
+    const replacement = manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+      predecessorSessionId: first.sessionId,
+    })
+
+    await vi.waitFor(() => expect(successor.start).toHaveBeenCalledTimes(1))
+    predecessor.emit('exit', { exitCode: 0 })
+    expect(manager.list()).not.toContain(first.sessionId)
+    ownershipBoundary.resolve()
+    await expect(replacement).resolves.toMatchObject({
+      sessionId: expect.any(String),
+    })
+
+    expect(predecessor.stop).toHaveBeenCalledTimes(1)
+    expect(successor.start).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not treat an explicit predecessor close as a natural-exit handoff', async () => {
+    const ownershipBoundary = deferred<void>()
+    const order: string[] = []
+    const predecessorStopped = { value: false }
+    const predecessor = new LeaseAwareCodexSession(
+      'predecessor', order, predecessorStopped, false,
+    )
+    const successor = new LeaseAwareCodexSession(
+      'successor', order, predecessorStopped, true,
+    )
+    successor.blockOwnershipBoundaryOn(ownershipBoundary.promise)
+    createSession
+      .mockImplementationOnce(() => predecessor)
+      .mockImplementationOnce(options => installBoundaryFromCreateOptions(successor, options))
+
+    const { SessionManager } = await import('./sessionManager')
+    const manager = new SessionManager()
+    const first = await manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+    })
+    const replacement = manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+      predecessorSessionId: first.sessionId,
+    })
+
+    await vi.waitFor(() => expect(successor.start).toHaveBeenCalledTimes(1))
+    await expect(manager.killOwned({
+      sessionId: first.sessionId,
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+    })).resolves.toBe(true)
+    ownershipBoundary.resolve()
+    await expect(replacement).rejects.toThrow()
+
+    expect(predecessor.stop).toHaveBeenCalledTimes(1)
+    expect(manager.list()).toEqual([])
   })
 })

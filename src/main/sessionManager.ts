@@ -185,6 +185,7 @@ type AgentSessionLike = AgentSession
 type RegistryLifecycle = {
   generation: symbol
   startSettled: boolean
+  naturalExitObserved: boolean
   stopRequested: boolean
   stopRequestedBeforeStartSettled: boolean
   stopPromise: Promise<void> | null
@@ -228,14 +229,23 @@ type SessionSpawnInfo = {
 
 type CodexReplacementProof = 'same-resume-id' | 'same-transcript-path'
 
+type CodexReplacementReservation = {
+  predecessorSessionId: string
+  successorSessionId: string
+  predecessorOwnership: SessionOwnershipOptions | null
+  cancelled: boolean
+}
+
 type CodexReplacementHandoff = {
-  claim: symbol
+  reservation: CodexReplacementReservation
   predecessorSessionId: string
   predecessorOwnership: SessionOwnershipOptions
+  predecessorEntry: RegistryEntry
+  predecessorRecovery: RecoveryClaim | null
   proof: CodexReplacementProof
   restoreOptions: SessionSpawnOptions
   stopPromise: Promise<void> | null
-  predecessorStopped: boolean
+  compensationRequired: boolean
 }
 
 class RecoveryCancelledError extends Error {
@@ -249,6 +259,7 @@ function createRegistryLifecycle(generation: symbol): RegistryLifecycle {
   return {
     generation,
     startSettled: false,
+    naturalExitObserved: false,
     stopRequested: false,
     stopRequestedBeforeStartSettled: false,
     stopPromise: null,
@@ -378,7 +389,10 @@ export class SessionManager extends EventEmitter {
   // provider construction, readiness publication, and proxy setup have already
   // happened by then. This app-level claim rejects a duplicate user gesture at
   // the boundary that actually knows which local pane authorized the handoff.
-  private readonly codexReplacementHandoffs = new Map<string, symbol>()
+  private readonly codexReplacementHandoffs = new Map<
+    string,
+    CodexReplacementReservation
+  >()
   private readonly sessionSizes = new Map<string, PtySize>()
   // Coalesce "input write to a session main doesn't own" incidents — the
   // restored-agents-null bug can make a renderer spam writes against a stale id,
@@ -684,6 +698,33 @@ export class SessionManager extends EventEmitter {
     if (claim?.cancelled) throw new RecoveryCancelledError()
   }
 
+  private findCodexReplacementReservation(
+    sessionId: string,
+  ): CodexReplacementReservation | null {
+    const predecessorReservation = this.codexReplacementHandoffs.get(sessionId)
+    if (predecessorReservation) return predecessorReservation
+    for (const reservation of this.codexReplacementHandoffs.values()) {
+      if (reservation.successorSessionId === sessionId) return reservation
+    }
+    return null
+  }
+
+  private throwIfSpawnCancelled(
+    recoveryClaim?: RecoveryClaim,
+    replacementHandoff?: CodexReplacementHandoff | null,
+  ): void {
+    this.throwIfRecoveryCancelled(recoveryClaim)
+    if (replacementHandoff?.reservation.cancelled) {
+      // WHY replacement cancellation shares the recovery cancellation error:
+      // both mean main deliberately revoked this startup generation. The spawn
+      // transaction must run its ordinary generation-owned rollback, while the
+      // outer replacement layer must distinguish this from a provider failure
+      // and suppress compensation. A provider-specific exception would tempt
+      // callers to handle teardown policy below SessionManager.
+      throw new RecoveryCancelledError()
+    }
+  }
+
   private requestEntryStop(sessionId: string, entry: RegistryEntry): Promise<void> {
     const lifecycle = entry.lifecycle
     lifecycle.stopRequested = true
@@ -945,7 +986,17 @@ export class SessionManager extends EventEmitter {
         // removed its registry entry. Treating that as success would hand the
         // renderer a phantom backend; stop any late materialization and report
         // the stable cancelled outcome instead.
-        await this.kill(options.sessionId)
+        // WHY recovery's own late-materialization cleanup is not a new user
+        // teardown intent: a replacement may have cancelled this predecessor
+        // recovery on purpose. Calling public kill() here would rediscover that
+        // reservation and cancel the very replacement that owns the cleanup.
+        // If a real close already cancelled the reservation, its flag remains
+        // set; authorization only prevents this internal follow-up from
+        // manufacturing a second cause.
+        await this.killInternal(
+          options.sessionId,
+          this.findCodexReplacementReservation(options.sessionId),
+        )
         this.lifecycle.session('recover.cancelled', options.sessionId, {
           kind: claim.kind,
           code: 'cancelled',
@@ -1055,7 +1106,10 @@ export class SessionManager extends EventEmitter {
       // still keyed by predecessorSessionId because replaceSession has not
       // returned. Restore that ID before surfacing the successor error so a
       // failed reload remains a failed reload, not a dead pane.
-      if (codexHandoffClaim?.predecessorStopped) {
+      if (
+        codexHandoffClaim?.compensationRequired &&
+        !codexHandoffClaim.reservation.cancelled
+      ) {
         await this.restoreCodexReplacementPredecessor(codexHandoffClaim)
       }
       throw error
@@ -1068,7 +1122,7 @@ export class SessionManager extends EventEmitter {
         options.predecessorSessionId &&
         codexHandoffClaim &&
         this.codexReplacementHandoffs.get(options.predecessorSessionId) ===
-          codexHandoffClaim.claim
+          codexHandoffClaim.reservation
       ) {
         this.codexReplacementHandoffs.delete(options.predecessorSessionId)
       }
@@ -1104,10 +1158,17 @@ export class SessionManager extends EventEmitter {
     // Publish the claim before transcript resolution awaits. Two IPC calls can
     // otherwise both inspect the same live predecessor, both wait on disk, and
     // then both stop/start against one exact lease.
-    const claim = Symbol(predecessorSessionId)
-    this.codexReplacementHandoffs.set(predecessorSessionId, claim)
+    const reservation: CodexReplacementReservation = {
+      predecessorSessionId,
+      successorSessionId,
+      predecessorOwnership: null,
+      cancelled: false,
+    }
+    this.codexReplacementHandoffs.set(predecessorSessionId, reservation)
     const release = (): void => {
-      if (this.codexReplacementHandoffs.get(predecessorSessionId) === claim) {
+      if (
+        this.codexReplacementHandoffs.get(predecessorSessionId) === reservation
+      ) {
         this.codexReplacementHandoffs.delete(predecessorSessionId)
       }
     }
@@ -1119,6 +1180,14 @@ export class SessionManager extends EventEmitter {
         release()
         return null
       }
+      const predecessorOwnership: SessionOwnershipOptions = {
+        sessionId: predecessorSessionId,
+        kind: predecessorInfo.kind,
+        cwd: predecessorInfo.cwd,
+      }
+      reservation.predecessorOwnership = predecessorOwnership
+      const predecessorRecovery =
+        this.recoveriesInFlight.get(predecessorSessionId) ?? null
 
       let proof: CodexReplacementProof | null =
         predecessorInfo.resumeSessionId === options.resumeSessionId
@@ -1138,6 +1207,7 @@ export class SessionManager extends EventEmitter {
             cwd: options.cwd,
             providerSessionId: options.resumeSessionId,
           })
+          if (reservation.cancelled) throw new RecoveryCancelledError()
           if (
             requestedPath &&
             path.resolve(requestedPath) === path.resolve(observedPath)
@@ -1151,18 +1221,17 @@ export class SessionManager extends EventEmitter {
         release()
         return null
       }
+      if (reservation.cancelled) throw new RecoveryCancelledError()
 
       const size = this.sessionSizes.get(predecessorSessionId)
       const effectiveDomains =
         this.builtInMcpHost?.sessionDomains?.(predecessorSessionId) ?? []
-      return {
-        claim,
+      const handoff: CodexReplacementHandoff = {
+        reservation,
         predecessorSessionId,
-        predecessorOwnership: {
-          sessionId: predecessorSessionId,
-          kind: predecessorInfo.kind,
-          cwd: predecessorInfo.cwd,
-        },
+        predecessorOwnership,
+        predecessorEntry: predecessor,
+        predecessorRecovery,
         proof,
         // WHY compensation resumes the requested exact provider ID even when
         // the predecessor began as a fresh pane: session_meta may have taught
@@ -1180,8 +1249,9 @@ export class SessionManager extends EventEmitter {
           builtInMcpDomains: effectiveDomains,
         },
         stopPromise: null,
-        predecessorStopped: false,
+        compensationRequired: false,
       }
+      return handoff
     } catch (error) {
       release()
       throw error
@@ -1210,8 +1280,52 @@ export class SessionManager extends EventEmitter {
         hasResumeId: true,
         reason: handoff.proof,
       })
-      const stopped = await this.killOwned(handoff.predecessorOwnership)
-      if (!stopped) {
+      const throwCancelled = (): never => {
+        this.lifecycle.session('replacement.handoff.end', successorSessionId, {
+          kind: 'codex',
+          predecessorSessionId: handoff.predecessorSessionId,
+          ok: false,
+          reason: 'replacement-cancelled',
+          durationMs: performance.now() - startedAt,
+        })
+        throw new RecoveryCancelledError()
+      }
+      if (handoff.reservation.cancelled) throwCancelled()
+
+      const currentEntry = this.sessions.get(handoff.predecessorSessionId)
+      let handoffReason: string = handoff.proof
+      if (currentEntry === handoff.predecessorEntry) {
+        const stopped = await this.killOwnedInternal(
+          handoff.predecessorOwnership,
+          handoff.reservation,
+        )
+        if (stopped) handoff.compensationRequired = true
+        if (!stopped) {
+          this.lifecycle.session('replacement.handoff.end', successorSessionId, {
+            kind: 'codex',
+            predecessorSessionId: handoff.predecessorSessionId,
+            ok: false,
+            reason: 'predecessor-ownership-changed',
+            durationMs: performance.now() - startedAt,
+          })
+          throw new Error('Codex replacement predecessor is no longer owned by this pane')
+        }
+      } else if (
+        !currentEntry &&
+        handoff.predecessorEntry.lifecycle.naturalExitObserved
+      ) {
+        // WHY a missing registry row is insufficient proof: explicit close and
+        // natural process exit both remove the row. Only the captured
+        // generation's synchronous exit listener can authorize this branch.
+        // Joining stop here lets the wrapper retire watchers/proxy/rollout
+        // ownership before the successor asks the fail-closed coordinator for
+        // the same path. A naturally dead pane is not compensation-eligible.
+        await this.requestEntryStop(
+          handoff.predecessorSessionId,
+          handoff.predecessorEntry,
+        )
+        handoffReason = 'predecessor-natural-exit'
+      } else {
         this.lifecycle.session('replacement.handoff.end', successorSessionId, {
           kind: 'codex',
           predecessorSessionId: handoff.predecessorSessionId,
@@ -1221,12 +1335,12 @@ export class SessionManager extends EventEmitter {
         })
         throw new Error('Codex replacement predecessor is no longer owned by this pane')
       }
-      handoff.predecessorStopped = true
+      if (handoff.reservation.cancelled) throwCancelled()
       this.lifecycle.session('replacement.handoff.end', successorSessionId, {
         kind: 'codex',
         predecessorSessionId: handoff.predecessorSessionId,
         ok: true,
-        reason: handoff.proof,
+        reason: handoffReason,
         durationMs: performance.now() - startedAt,
       })
     })()
@@ -1249,14 +1363,75 @@ export class SessionManager extends EventEmitter {
       },
     )
     try {
-      // Bypass public recover() deliberately: the handoff fence must continue
-      // rejecting unrelated wake callers until compensation itself settles.
-      // spawnWithId still applies every normal generation, MCP, readiness, and
-      // rollback invariant to the restored backend.
-      await this.spawnWithId(
-        handoff.restoreOptions,
-        handoff.predecessorSessionId,
+      // A handoff can interrupt a recovery after its registry row is visible
+      // but before that generation's start/rollback finally releases the stable
+      // ID fence. stop() alone is not that settlement proof. Joining the exact
+      // captured claim keeps compensation from becoming a one-shot "already
+      // live" failure while preserving the late-materialization safety fence.
+      if (handoff.predecessorRecovery) {
+        await handoff.predecessorRecovery.promise
+      }
+      if (handoff.reservation.cancelled) {
+        this.lifecycle.session(
+          'replacement.rollback.end',
+          handoff.predecessorSessionId,
+          {
+            kind: 'codex',
+            predecessorSessionId: handoff.predecessorSessionId,
+            ok: false,
+            reason: 'replacement-cancelled',
+            durationMs: performance.now() - startedAt,
+          },
+        )
+        return
+      }
+      if (this.recoveriesInFlight.has(handoff.predecessorSessionId)) {
+        throw new Error('Codex predecessor recovery did not release its claim')
+      }
+
+      const restoreOptions: SessionRecoverOptions = {
+        ...handoff.restoreOptions,
+        sessionId: handoff.predecessorSessionId,
+      }
+      const claim: RecoveryClaim = {
+        kind: 'codex',
+        cwd: path.resolve(handoff.restoreOptions.cwd),
+        startedAt: performance.now(),
+        cancelled: false,
+        spawnGeneration: null,
+        promise: new Promise<SessionRecoverResult>(() => {}),
+      }
+      // WHY compensation publishes the same claim as ordinary recovery before
+      // its first await: close/shutdown must be able to cancel resolveToolPath,
+      // conventions reconciliation, MCP registration, provider construction,
+      // and provider start. Direct spawnWithId compensation made every
+      // pre-entry await an invisible resurrection window.
+      claim.promise = Promise.resolve().then(() =>
+        this.runRecovery(restoreOptions, claim),
       )
+      this.recoveriesInFlight.set(handoff.predecessorSessionId, claim)
+      this.lifecycle.session('recover.claim', handoff.predecessorSessionId, {
+        kind: 'codex',
+        hasResumeId: true,
+        reason: 'replacement-compensation',
+      })
+      const result = await claim.promise
+      if (!result.ok) {
+        this.lifecycle.session(
+          'replacement.rollback.end',
+          handoff.predecessorSessionId,
+          {
+            kind: 'codex',
+            predecessorSessionId: handoff.predecessorSessionId,
+            ok: false,
+            reason: result.code === 'cancelled'
+              ? 'replacement-cancelled'
+              : 'restore-start-failed',
+            durationMs: performance.now() - startedAt,
+          },
+        )
+        return
+      }
       this.lifecycle.session(
         'replacement.rollback.end',
         handoff.predecessorSessionId,
@@ -1353,7 +1528,7 @@ export class SessionManager extends EventEmitter {
     let mcpRegistered = false
     let createdTmuxName: string | null = null
     try {
-    this.throwIfRecoveryCancelled(recoveryClaim)
+    this.throwIfSpawnCancelled(recoveryClaim, codexReplacementHandoff)
     const spawnStartedAt = performance.now()
     performanceService.mark('session.spawn.start', {
       sessionId,
@@ -1392,12 +1567,12 @@ export class SessionManager extends EventEmitter {
         // refreshToolchainFromState pair the setup gate uses so the next
         // spawn takes the fast cache path and PATH augmentation applies.
         const resolved = await resolveToolPath(kind)
-        this.throwIfRecoveryCancelled(recoveryClaim)
+        this.throwIfSpawnCancelled(recoveryClaim, codexReplacementHandoff)
         if (resolved) {
           await updateToolPaths({ [kind]: resolved })
-          this.throwIfRecoveryCancelled(recoveryClaim)
+          this.throwIfSpawnCancelled(recoveryClaim, codexReplacementHandoff)
           await refreshToolchainFromState()
-          this.throwIfRecoveryCancelled(recoveryClaim)
+          this.throwIfSpawnCancelled(recoveryClaim, codexReplacementHandoff)
           binary = resolved
         }
       }
@@ -1421,7 +1596,7 @@ export class SessionManager extends EventEmitter {
         })
         mcpRegistered = true
       }
-      this.throwIfRecoveryCancelled(recoveryClaim)
+      this.throwIfSpawnCancelled(recoveryClaim, codexReplacementHandoff)
       if (this.beforeAgentSessionStart) {
         try {
           // Conventions reconciliation is a best-effort compatibility boundary,
@@ -1432,7 +1607,7 @@ export class SessionManager extends EventEmitter {
         } catch (error) {
           this.journal?.recordError('conventions.pre_spawn_reconcile.error', error)
         }
-        this.throwIfRecoveryCancelled(recoveryClaim)
+        this.throwIfSpawnCancelled(recoveryClaim, codexReplacementHandoff)
       }
       const provider = getMainProvider(kind)
       const createStartedAt = performance.now()
@@ -1498,7 +1673,7 @@ export class SessionManager extends EventEmitter {
       }
       entry = agentEntry
       const ownsEntry = (): boolean => this.sessions.get(sessionId) === agentEntry
-      this.throwIfRecoveryCancelled(recoveryClaim)
+      this.throwIfSpawnCancelled(recoveryClaim, codexReplacementHandoff)
       // No cast: createSession's return type is now AgentSession, so
       // any provider whose runtime drifts from the contract fails
       // compilation inside the provider (registry.main.ts's
@@ -1611,6 +1786,12 @@ export class SessionManager extends EventEmitter {
       })
       session.on('exit', ({ exitCode, signal }: { exitCode: number; signal?: number }) => {
         if (!ownsEntry()) return
+        // WHY this marker precedes registry cleanup: replacement admission may
+        // have captured this exact generation while successor preflight was
+        // awaiting. Once cleanup removes the row, only the captured lifecycle
+        // can distinguish natural provider death from an explicit close (whose
+        // kill path removes listeners before stop and therefore cannot set it).
+        agentEntry.lifecycle.naturalExitObserved = true
         this.markActivity(sessionId)
         this.setInputReadiness(sessionId, {
           ready: false,
@@ -1630,7 +1811,7 @@ export class SessionManager extends EventEmitter {
       // first verdict then looked unchanged, skip arming the sampler entirely.
       this.lastGateEvaluation.delete(sessionId)
       this.rememberSessionId(sessionId)
-      this.throwIfRecoveryCancelled(recoveryClaim)
+      this.throwIfSpawnCancelled(recoveryClaim, codexReplacementHandoff)
       // Hoisted out of the try so the catch can report a duration too: a
       // provider that throws after 90 seconds and one that throws instantly are
       // completely different failures, and the old code could not tell them
@@ -1645,7 +1826,7 @@ export class SessionManager extends EventEmitter {
         this.lifecycle.session('provider.start.begin', sessionId, { kind })
         await session.start()
         await this.settleEntryStart(sessionId, agentEntry)
-        this.throwIfRecoveryCancelled(recoveryClaim)
+        this.throwIfSpawnCancelled(recoveryClaim, codexReplacementHandoff)
         if (!ownsEntry()) throw new RecoveryCancelledError()
         this.lifecycle.session('provider.start.end', sessionId, {
           kind,
@@ -1701,7 +1882,7 @@ export class SessionManager extends EventEmitter {
       const recoveredTmux = options.recoverTmuxName
         ? await reg.sessionExists(options.recoverTmuxName)
         : false
-      this.throwIfRecoveryCancelled(recoveryClaim)
+      this.throwIfSpawnCancelled(recoveryClaim, codexReplacementHandoff)
       if (options.recoverTmuxName && recoveredTmux) {
         // Reattach path — tmux owned this session through the previous
         // Agent Code launch and it's still alive. Reuse the name; do
@@ -1721,7 +1902,7 @@ export class SessionManager extends EventEmitter {
           cwd: options.cwd,
         })
         createdTmuxName = tmuxSessionName
-        this.throwIfRecoveryCancelled(recoveryClaim)
+        this.throwIfSpawnCancelled(recoveryClaim, codexReplacementHandoff)
       }
       performanceService.record({
         kind: 'span_end',
@@ -1772,7 +1953,7 @@ export class SessionManager extends EventEmitter {
     }
     entry = terminalEntry
     const ownsEntry = (): boolean => this.sessions.get(sessionId) === terminalEntry
-    this.throwIfRecoveryCancelled(recoveryClaim)
+    this.throwIfSpawnCancelled(recoveryClaim, codexReplacementHandoff)
 
     // Initialize an empty buffer entry NOW, before start() fires any
     // data events. The buffer accumulates every byte of PTY output
@@ -1816,6 +1997,7 @@ export class SessionManager extends EventEmitter {
     })
     session.on('exit', ({ exitCode, signal }) => {
       if (!ownsEntry()) return
+      terminalEntry.lifecycle.naturalExitObserved = true
       this.markActivity(sessionId)
       this.setInputReadiness(sessionId, {
         ready: false,
@@ -1828,12 +2010,12 @@ export class SessionManager extends EventEmitter {
 
     this.sessions.set(sessionId, terminalEntry)
     this.rememberSessionId(sessionId)
-    this.throwIfRecoveryCancelled(recoveryClaim)
+    this.throwIfSpawnCancelled(recoveryClaim, codexReplacementHandoff)
     try {
       const terminalStartStartedAt = performance.now()
       await session.start()
       await this.settleEntryStart(sessionId, terminalEntry)
-      this.throwIfRecoveryCancelled(recoveryClaim)
+      this.throwIfSpawnCancelled(recoveryClaim, codexReplacementHandoff)
       if (!ownsEntry()) throw new RecoveryCancelledError()
       this.setInputReadiness(sessionId, {
         ready: true,
@@ -2375,6 +2557,26 @@ export class SessionManager extends EventEmitter {
    * the session existed and was killed.
    */
   async kill(sessionId: string): Promise<boolean> {
+    return await this.killInternal(sessionId)
+  }
+
+  private async killInternal(
+    sessionId: string,
+    authorizedReplacement: CodexReplacementReservation | null = null,
+  ): Promise<boolean> {
+    const replacement = this.findCodexReplacementReservation(sessionId)
+    const cancelsReplacement = Boolean(
+      replacement && replacement !== authorizedReplacement,
+    )
+    if (cancelsReplacement && replacement) {
+      // WHY cancellation is recorded before any stop await: successor failure
+      // and compensation run on other promise continuations. If teardown intent
+      // were published after stop, the failure continuation could resurrect the
+      // predecessor while an explicit close or app shutdown was still waiting.
+      // The destructive handoff passes its reservation as authority; it is the
+      // one predecessor kill that transfers ownership instead of cancelling it.
+      replacement.cancelled = true
+    }
     const recovery = this.recoveriesInFlight.get(sessionId)
     if (recovery) recovery.cancelled = true
     const entry = this.sessions.get(sessionId)
@@ -2412,23 +2614,44 @@ export class SessionManager extends EventEmitter {
       )
     }
 
-    if (!entry) return recovery !== undefined
+    if (entry) {
+      // For tmux-backed terminals, stop() detaches the client but intentionally
+      // leaves the tmux session alive for undo-close. Failed spawn rollback is
+      // different and destroys only the tmux server created by that transaction.
+      await this.requestEntryStop(sessionId, entry)
+    }
 
-    // For tmux-backed terminals, stop() detaches the client but intentionally
-    // leaves the tmux session alive for undo-close. Failed spawn rollback is
-    // different and destroys only the tmux server created by that transaction.
-    await this.requestEntryStop(sessionId, entry)
-    return true
+    if (
+      cancelsReplacement &&
+      replacement &&
+      sessionId === replacement.predecessorSessionId
+    ) {
+      // The renderer only knows the old local ID until replacement spawn
+      // returns. Closing that pane must also stop the hidden successor already
+      // registered under its new random ID; otherwise a cancelled replacement
+      // can keep a provider alive with no renderer owner. Passing the reservation
+      // prevents this internal cascade from being mistaken for a second cause.
+      await this.killInternal(replacement.successorSessionId, replacement)
+    }
+    return Boolean(entry || recovery || cancelsReplacement)
   }
 
   /** Kill only when the caller's durable workspace ownership still matches. */
   async killOwned(options: SessionOwnershipOptions): Promise<boolean> {
+    return await this.killOwnedInternal(options)
+  }
+
+  private async killOwnedInternal(
+    options: SessionOwnershipOptions,
+    authorizedReplacement: CodexReplacementReservation | null = null,
+  ): Promise<boolean> {
     const requestedKind: unknown = options.kind
     if (requestedKind !== undefined && !isSessionKind(requestedKind)) return false
     const kind = options.kind ?? DEFAULT_PROVIDER
     const cwd = path.resolve(options.cwd)
     const entry = this.sessions.get(options.sessionId)
     const claim = this.recoveriesInFlight.get(options.sessionId)
+    const replacement = this.findCodexReplacementReservation(options.sessionId)
 
     // WHY check and kill occur without an await between them: this is the
     // atomic ownership proof missing from renderer-only guards. A stale pane
@@ -2439,10 +2662,27 @@ export class SessionManager extends EventEmitter {
       if (!snapshot || snapshot.kind !== kind || path.resolve(snapshot.cwd) !== cwd) {
         return false
       }
-    } else if (!claim || claim.kind !== kind || claim.cwd !== cwd) {
-      return false
+    } else if (claim) {
+      if (claim.kind !== kind || claim.cwd !== cwd) return false
+    } else {
+      // During destructive handoff the predecessor row is intentionally gone,
+      // and during compensation preflight the recovery claim is the owner. The
+      // reservation preserves the original main-verified kind/cwd so a close
+      // against that still-visible pane can cancel the hidden successor without
+      // turning an arbitrary stale ID into teardown authority.
+      const reservedOwnership =
+        replacement?.predecessorSessionId === options.sessionId
+          ? replacement.predecessorOwnership
+          : null
+      if (
+        !reservedOwnership ||
+        (reservedOwnership.kind ?? DEFAULT_PROVIDER) !== kind ||
+        path.resolve(reservedOwnership.cwd) !== cwd
+      ) {
+        return false
+      }
     }
-    return await this.kill(options.sessionId)
+    return await this.killInternal(options.sessionId, authorizedReplacement)
   }
 
   /** Cancel only a matching in-flight recovery claim, never an adopted entry. */
@@ -2619,7 +2859,24 @@ export class SessionManager extends EventEmitter {
     // Recoveries can still be in the pre-entry tool/tmux/MCP phase and are not
     // visible in list(). Shutdown must mark those claims cancelled too so they
     // cannot publish a provider after the app has begun quitting.
-    const ids = [...new Set([...this.list(), ...this.recoveriesInFlight.keys()])]
+    // Replacement successors have the same invisible pre-entry window. Mark
+    // every reservation first, before awaiting any individual stop, so a
+    // concurrently failing successor cannot start compensation after the
+    // shutdown snapshot. Include both IDs because either side may currently be
+    // absent from the registry while still owning transaction work.
+    const replacements = [...this.codexReplacementHandoffs.values()]
+    for (const replacement of replacements) replacement.cancelled = true
+    const replacementIds = replacements.flatMap(replacement => [
+      replacement.predecessorSessionId,
+      replacement.successorSessionId,
+    ])
+    const ids = [
+      ...new Set([
+        ...this.list(),
+        ...this.recoveriesInFlight.keys(),
+        ...replacementIds,
+      ]),
+    ]
     await Promise.all(ids.map(id => this.kill(id)))
   }
 }
