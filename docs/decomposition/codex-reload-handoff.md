@@ -13,8 +13,15 @@
 > Their four red-first schedules are green; the affected main cluster is 94/94,
 > typecheck, system 61/61, renderer 289/289, contracts, keybindings, live-resume
 > probe, and packaged-build verification are green. Full unit is 1,569/1,570
-> with only the same missing external corpus session. Stage 4 exact-head
-> re-review, new-head CI, and live verification remain.
+> with only the same missing external corpus session. The ninth exact-head
+> review converged on one remaining durability-liveness gap: an immediate
+> successor-addressed replacement rejected during the preceding handoff's
+> debounced-save window. Contract 36 is now implemented. Its two manager
+> schedules and autosave retry fixture failed first and are green; the affected
+> seven-file matrix is 82/82, typecheck, system 61/61, renderer 290/290,
+> contracts, keybindings, live-resume probe, and packaged-build verification
+> are green. Full unit is 1,571/1,572 with only the same missing external corpus
+> session. Exact-head re-review, new-head CI, and live verification remain.
 >
 > **Incident:** Agent Code issue #638. Related fresh-rollout incident: #632.
 
@@ -160,6 +167,16 @@
     recovery claim, close/shutdown through either reservation identity can
     cancel and stop it; reclaim association is additional timeout authority,
     not the only route to the physical generation.
+36. A replacement addressed to the live successor of an already-successful
+    pending handoff waits for that exact handoff's durability transition rather
+    than failing as a concurrent replacement. A committed transition admits
+    the next replacement against the still-live successor; a reclaimed,
+    closed, failed, or otherwise retired transition cancels the queued request
+    instead of falling through to an ordinary spawn. Workspace autosave retries
+    a failed write from the latest renderer state so the durability wait cannot
+    become permanent merely because its first save attempt rejected. A second
+    request against the original predecessor while teardown/start is still in
+    flight remains a collision and is still rejected.
 
 ## 2. Intermediate stages
 
@@ -321,6 +338,15 @@ start compensation without any renderer reclaim to carry the optional
 reclaim-to-restoration link. Both associations remain in the ledger record;
 provider lifecycle execution stays in `SessionManager`.
 
+The ninth exact-head review adds a durability-settlement capability to the same
+reservation rather than allowing overlapping P→S and S→T transactions. Once
+P→S has produced a live S, an S→T request joins that capability until the
+workspace save either commits P→S or retires it. This preserves P as the sole
+durable fallback and avoids inventing partially overlapping reservations whose
+close/reclaim semantics would need a second ownership graph. The renderer's
+autosave remains the durability producer, but a failed attempt schedules a
+latest-state retry; main never treats elapsed debounce time as proof of commit.
+
 This is separate from the async manager logic because the fifth review found
 the same missing-identity failure in recovery, close, and transaction cleanup.
 Adding three more scans/conditionals would preserve the substrate that produced
@@ -474,6 +500,12 @@ receives no pane IDs and gains no replacement exception.
   depend on an optional reclaim. The reservation directly names the exact claim
   it caused, while a reclaim—when present—also names that same generation for
   token cancellation.
+- **Resolved by ninth-review Stage 2 design:** a live successor is valid input
+  to a later replacement before its local ID is durable, but it cannot safely
+  start a second ownership transaction yet. The first reservation exposes one
+  settlement capability: commit wakes the queued successor request, while any
+  non-commit outcome cancels it. Renderer autosave retries failures using the
+  latest state so this correctness wait also has a liveness path.
 - Predecessor stop can fail or become uncertain. The coordinator's tombstone
   must remain fail-closed; compensation may also fail in that state and needs a
   truthful lifecycle outcome rather than an unsafe lease exception.
@@ -593,3 +625,13 @@ makes S fail after destructive handoff, starts gated compensation without any
 reclaim, and closes by S. These are distinct from the earlier fixtures that
 closed while S was still starting/stopping or only after a committed redirect
 existed.
+
+Ninth-review fixtures add the one sequence independently reported by both
+reviewers at exact commit `7a7bac32`: complete P→S, invoke S→T before the
+debounced ownership save, and prove the second request remains pending rather
+than rejecting or constructing T. A real ownership acknowledgement then wakes
+the request and preserves stop-before-start ordering. Companion schedules
+retire P→S while S→T waits and prove the queued request is cancelled, while a
+renderer autosave fixture rejects its first real `saveWorkspace` call and
+proves the timer retries from the latest state without another mutation. The
+existing original-predecessor collision fixture remains the negative control.

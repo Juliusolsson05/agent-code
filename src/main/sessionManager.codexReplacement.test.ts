@@ -466,6 +466,128 @@ describe('SessionManager Codex replacement handoff', () => {
     expect(createSession).toHaveBeenCalledTimes(2)
   })
 
+  it('queues a live-successor replacement until the preceding handoff is durable', async () => {
+    const order: string[] = []
+    const predecessorStopped = { value: false }
+    const predecessor = new LeaseAwareCodexSession(
+      'predecessor', order, predecessorStopped, false,
+    )
+    const firstSuccessor = new LeaseAwareCodexSession(
+      'successor', order, predecessorStopped, true,
+    )
+    const secondSuccessor = new LeaseAwareCodexSession(
+      'successor', order, predecessorStopped, true,
+    )
+    createSession
+      .mockImplementationOnce(() => predecessor)
+      .mockImplementationOnce(options => installBoundaryFromCreateOptions(firstSuccessor, options))
+      .mockImplementationOnce(options => installBoundaryFromCreateOptions(secondSuccessor, options))
+
+    const { SessionManager } = await import('./sessionManager')
+    const manager = new SessionManager()
+    const first = await manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+    })
+    const second = await manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+      predecessorSessionId: first.sessionId,
+    })
+
+    // WHY this begins before acknowledgement: renderer exposes S immediately,
+    // while the real autosave waits 400 ms before making S durable. Rejecting
+    // here turns an ordinary double reload/MCP toggle into a user-visible race;
+    // constructing T here would instead overlap two fallback owners. The only
+    // safe progress is to join the exact P→S durability transition.
+    const thirdAttempt = manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+      predecessorSessionId: second.sessionId,
+    })
+    let thirdSettled = false
+    void thirdAttempt.then(
+      () => { thirdSettled = true },
+      () => { thirdSettled = true },
+    )
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(thirdSettled).toBe(false)
+    expect(createSession).toHaveBeenCalledTimes(2)
+
+    manager.acknowledgePersistedSessionOwnership(new Set([second.sessionId]))
+    const third = await thirdAttempt
+
+    expect(firstSuccessor.stop).toHaveBeenCalledTimes(1)
+    expect(secondSuccessor.start).toHaveBeenCalledTimes(1)
+    expect(third.sessionId).not.toBe(second.sessionId)
+    expect(manager.list()).toEqual([third.sessionId])
+  })
+
+  it('cancels a queued successor replacement when the preceding handoff retires', async () => {
+    const order: string[] = []
+    const predecessorStopped = { value: false }
+    const predecessor = new LeaseAwareCodexSession(
+      'predecessor', order, predecessorStopped, false,
+    )
+    const firstSuccessor = new LeaseAwareCodexSession(
+      'successor', order, predecessorStopped, true,
+    )
+    const forbiddenSuccessor = new LeaseAwareCodexSession(
+      'successor', order, predecessorStopped, true,
+    )
+    createSession
+      .mockImplementationOnce(() => predecessor)
+      .mockImplementationOnce(options => installBoundaryFromCreateOptions(firstSuccessor, options))
+      .mockImplementationOnce(options => installBoundaryFromCreateOptions(forbiddenSuccessor, options))
+
+    const { SessionManager } = await import('./sessionManager')
+    const manager = new SessionManager()
+    const first = await manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+    })
+    const second = await manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+      predecessorSessionId: first.sessionId,
+    })
+    const queued = manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+      predecessorSessionId: second.sessionId,
+    })
+    const observed = queued.catch(error => error)
+    let queuedSettled = false
+    void observed.then(() => { queuedSettled = true })
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(queuedSettled).toBe(false)
+    expect(createSession).toHaveBeenCalledTimes(2)
+
+    await expect(manager.killOwned({
+      sessionId: second.sessionId,
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+    })).resolves.toBe(true)
+    await expect(observed).resolves.toBeInstanceOf(Error)
+
+    // A close/reclaim that wins before P→S commit invalidates S as replacement
+    // authority. Waking the waiter into ordinary spawn would resurrect the
+    // closed rollout under T with no durable renderer owner.
+    expect(forbiddenSuccessor.start).not.toHaveBeenCalled()
+    expect(createSession).toHaveBeenCalledTimes(2)
+    expect(manager.list()).toEqual([])
+  })
+
   it('keeps the predecessor live when successor MCP preflight fails', async () => {
     const order: string[] = []
     const predecessorStopped = { value: false }

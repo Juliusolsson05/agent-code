@@ -9,6 +9,8 @@ export type CodexReplacementTeardownIntent =
   | 'shutdown'
   | null
 
+export type CodexReplacementDurabilityOutcome = 'committed' | 'retired'
+
 export type CodexReplacementReservation<TRecoveryClaim = unknown> = {
   transactionId: string
   predecessorSessionId: string
@@ -22,6 +24,8 @@ export type CodexReplacementReservation<TRecoveryClaim = unknown> = {
   spawnOutcome: 'pending' | 'successor-live' | 'failed'
   spawnSettled: Promise<void>
   settleSpawn: () => void
+  durabilitySettled: Promise<CodexReplacementDurabilityOutcome>
+  settleDurability: (outcome: CodexReplacementDurabilityOutcome) => void
   reclaimPromise: Promise<SessionRecoverResult> | null
   restorationClaim: TRecoveryClaim | null
 }

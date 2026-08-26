@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 
 import type { PersistedWorkspace } from '@renderer/workspace/persistence'
 import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
@@ -37,7 +37,9 @@ export function useAutoSave(
   refs: WorkspaceRefs,
   bootstrapComplete: boolean,
 ): void {
-  const flushSave = useCallback(() => {
+  const retryEnabledRef = useRef(false)
+  const flushSaveRef = useRef<(retryOnFailure?: boolean) => void>(() => undefined)
+  const flushSave = useCallback((retryOnFailure = true) => {
     const saveSpan = perf.span('workspace.autosave.flush')
     const s = refs.latestStateRef.current
     const pruned = pruneSessionOwnership(s)
@@ -152,15 +154,52 @@ export function useAutoSave(
         saveSpan.fail(err, { bytes: json.length })
         // eslint-disable-next-line no-console
         console.warn('[workspace] save failed:', err)
+        if (
+          retryOnFailure &&
+          retryEnabledRef.current &&
+          refs.saveTimerRef.current === null
+        ) {
+          // WHY persistence failure owns its own retry: a successful Codex
+          // replacement remains main-owned until this save acknowledges its
+          // successor ID. Requiring an unrelated UI mutation to schedule the
+          // next debounce leaves both ownership and a queued second reload
+          // blocked forever after one transient filesystem error. Re-entering
+          // flushSave through a ref serializes the latest state, not the stale
+          // JSON captured by the failed attempt.
+          refs.saveTimerRef.current = setTimeout(() => {
+            refs.saveTimerRef.current = null
+            flushSaveRef.current(true)
+          }, 400)
+        }
       })
   }, [refs.latestRuntimesRef, refs.latestStateRef, refs.latestTileTabsRef])
+
+  // The retry callback must always execute the newest serializer closure, but
+  // adding flushSave to its own dependency graph would make the callback
+  // recursive at construction time. A ref expresses the real invariant: one
+  // timer may call the latest committed render's flush implementation.
+  flushSaveRef.current = flushSave
+
+  useEffect(() => {
+    retryEnabledRef.current = bootstrapComplete
+    return () => {
+      retryEnabledRef.current = false
+    }
+  }, [bootstrapComplete])
 
   useEffect(() => {
     if (!bootstrapComplete) return
     if (refs.saveTimerRef.current) clearTimeout(refs.saveTimerRef.current)
-    refs.saveTimerRef.current = setTimeout(flushSave, 400)
+    const timer = setTimeout(() => {
+      refs.saveTimerRef.current = null
+      flushSave(true)
+    }, 400)
+    refs.saveTimerRef.current = timer
     return () => {
-      if (refs.saveTimerRef.current) clearTimeout(refs.saveTimerRef.current)
+      if (refs.saveTimerRef.current === timer) {
+        clearTimeout(timer)
+        refs.saveTimerRef.current = null
+      }
     }
   }, [state, draftVersion, flushSave, refs.saveTimerRef, bootstrapComplete])
 
@@ -172,7 +211,11 @@ export function useAutoSave(
         clearTimeout(refs.saveTimerRef.current)
         refs.saveTimerRef.current = null
       }
-      flushSave()
+      // The window is leaving; retrying after this point could write from a
+      // renderer whose ownership lifetime has ended. Main has already received
+      // this final IPC attempt, so preserve the historical best-effort unload
+      // behavior without starting another timer.
+      flushSave(false)
     }
     window.addEventListener('beforeunload', onBeforeUnload)
     return () => window.removeEventListener('beforeunload', onBeforeUnload)

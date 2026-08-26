@@ -868,6 +868,12 @@ export class SessionManager extends EventEmitter {
   private retireCodexReplacementReservation(
     reservation: CodexReplacementReservationRecord,
   ): void {
+    // WHY every non-commit removal resolves the same capability: an immediate
+    // S→T request can be waiting for pending P→S to become durable. Close,
+    // reclaim, failed startup, and shutdown all make S invalid as the next
+    // replacement predecessor. Waking that waiter as "retired" lets it abort
+    // instead of hanging forever or falling through to an ordinary spawn.
+    reservation.settleDurability('retired')
     if (this.preserveClosedCodexReplacementLineage(reservation)) return
     this.codexReplacements.deleteReservation(reservation)
   }
@@ -1211,6 +1217,10 @@ export class SessionManager extends EventEmitter {
         reclaimPromise: null,
       })
       this.codexReplacements.deleteReservation(reservation)
+      // Resolve only after redirect publication and reservation deletion. The
+      // queued S→T continuation runs in a later microtask and must observe the
+      // complete durable transition, never the half-state between both maps.
+      reservation.settleDurability('committed')
       this.lifecycle.session('replacement.commit', reservation.successorSessionId, {
         kind: 'codex',
         predecessorSessionId,
@@ -1727,8 +1737,46 @@ export class SessionManager extends EventEmitter {
     if (predecessorSessionId === successorSessionId) {
       throw new Error('A session cannot replace its own local routing id')
     }
-    if (this.findCodexReplacementReservation(predecessorSessionId)) {
-      throw new Error('A Codex replacement is already in progress for this session')
+
+    let waitedForPredecessorDurability = false
+    while (true) {
+      const existing = this.findCodexReplacementReservation(predecessorSessionId)
+      if (!existing) break
+      const replacesLivePendingSuccessor =
+        existing.successorSessionId === predecessorSessionId &&
+        existing.spawnOutcome === 'successor-live' &&
+        !existing.cancelled &&
+        !existing.reclaimRequested
+      if (!replacesLivePendingSuccessor) {
+        // A repeated request against P while P→S is still stopping/starting is
+        // a true collision. Only S—the already-returned live successor—may join
+        // the durability boundary before beginning a later transaction.
+        throw new Error('A Codex replacement is already in progress for this session')
+      }
+
+      waitedForPredecessorDurability = true
+      // WHY queue in main instead of accepting overlapping reservations: until
+      // workspace.json names S, P remains the sole durable fallback. Starting
+      // S→T now would require P→S and S→T to share close/reclaim authority while
+      // neither renderer snapshot proves the middle owner. The existing P→S
+      // transaction already has the exact event we need, so join it and keep a
+      // single ownership graph.
+      const outcome = await existing.durabilitySettled
+      if (outcome !== 'committed') throw new RecoveryCancelledError()
+    }
+
+    if (waitedForPredecessorDurability) {
+      const predecessorStillLive = this.sessions.has(predecessorSessionId)
+      const predecessorWasClosed = this.codexReplacements
+        .findRedirects(predecessorSessionId)
+        .some(redirect => redirect.cancelled)
+      if (!predecessorStillLive || predecessorWasClosed) {
+        // Commit and close can race before this promise continuation runs. A
+        // missing/tombstoned S must cancel the queued command; returning null
+        // would reinterpret it as an unrelated fresh spawn and resurrect a pane
+        // whose replacement authority disappeared while it waited.
+        throw new RecoveryCancelledError()
+      }
     }
 
     // Publish the claim before transcript resolution awaits. Two IPC calls can
@@ -1737,6 +1785,12 @@ export class SessionManager extends EventEmitter {
     let settleSpawn!: () => void
     const spawnSettled = new Promise<void>(resolve => {
       settleSpawn = resolve
+    })
+    let settleDurability!: (
+      outcome: 'committed' | 'retired',
+    ) => void
+    const durabilitySettled = new Promise<'committed' | 'retired'>(resolve => {
+      settleDurability = resolve
     })
     const reservation: CodexReplacementReservationRecord = {
       transactionId: randomUUID(),
@@ -1755,6 +1809,8 @@ export class SessionManager extends EventEmitter {
       spawnOutcome: 'pending',
       spawnSettled,
       settleSpawn,
+      durabilitySettled,
+      settleDurability,
       reclaimPromise: null,
       restorationClaim: null,
     }
@@ -1767,6 +1823,7 @@ export class SessionManager extends EventEmitter {
       if (reservation.cancelled) {
         this.retireCodexReplacementReservation(reservation)
       } else {
+        reservation.settleDurability('retired')
         this.codexReplacements.deleteReservation(reservation)
       }
     }
