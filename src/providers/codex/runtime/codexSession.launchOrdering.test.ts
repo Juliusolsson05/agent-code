@@ -21,7 +21,7 @@ vi.mock('node-pty', () => ({
       process: 'recorded-codex',
       write: () => undefined,
       resize: () => undefined,
-      kill: () => undefined,
+      kill: () => { launch.events.push('pty:kill') },
       onData: () => ({ dispose: () => undefined }),
       onExit: () => ({ dispose: () => undefined }),
     }
@@ -42,7 +42,7 @@ vi.mock('codex-headless', () => {
       launch.events.push('headless:start')
       return { sessionsDir: '/recorded/codex/sessions' }
     }
-    async stop(): Promise<void> {}
+    async stop(): Promise<void> { launch.events.push('headless:stop') }
   }
 
   return {
@@ -224,6 +224,101 @@ describe('CodexSession resume launch attestation ordering', () => {
       // test even when an assertion exposes the current late-spawn bug.
       launch.releaseProfile()
       await startOutcome
+      await session.stop()
+    }
+  })
+
+  it('disposes a resume capability that materializes after its generation was stopped', async () => {
+    const session = new CodexSession({
+      binary: 'recorded-codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: '00000000-0000-4000-8000-000000000632',
+      useProxy: false,
+    })
+    const starting = session.start()
+    const startOutcome = starting.then(
+      () => 'resolved' as const,
+      () => 'rejected' as const,
+    )
+
+    try {
+      await vi.waitFor(() => expect(launch.events).toEqual(['resume:start']))
+      await session.stop()
+      launch.releaseResume()
+      await startOutcome
+
+      // WHY stop cannot dispose a capability the provider locator has not
+      // returned yet. The cancelled continuation becomes the sole owner at the
+      // instant the await resolves, so it must dispose locally before profile
+      // attestation or any synchronous launch work. Publishing it to a shared
+      // field first would let a newer generation inherit the stale ownership.
+      expect(launch.events).toEqual([
+        'resume:start',
+        'resume:end',
+        'preparation:dispose:true',
+      ])
+    } finally {
+      launch.releaseResume()
+      await startOutcome
+      await session.stop()
+    }
+  })
+
+  it('does not let a cancelled generation clean a later successful restart', async () => {
+    launch.profileBarrier = new Promise<void>(resolve => {
+      launch.releaseProfile = resolve
+    })
+    const releaseFirstProfile = (): void => launch.releaseProfile()
+    const session = new CodexSession({
+      binary: 'recorded-codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: '00000000-0000-4000-8000-000000000632',
+      useProxy: false,
+    })
+    const firstStart = session.start()
+    const firstOutcome = firstStart.then(
+      () => 'resolved' as const,
+      () => 'rejected' as const,
+    )
+    let secondOutcome: Promise<'resolved' | 'rejected'> | null = null
+
+    try {
+      await vi.waitFor(() => expect(launch.events).toEqual(['resume:start']))
+      launch.releaseResume()
+      await vi.waitFor(() => expect(launch.events).toEqual([
+        'resume:start',
+        'resume:end',
+        'profile:recorded-safe',
+      ]))
+      const releaseCancelledProfile = launch.releaseProfile
+      await session.stop()
+
+      // The second generation uses an independently completed config/read while
+      // the cancelled first generation remains suspended on its old response.
+      // This is the overlap that makes a shared boolean or unconditional field
+      // nulling unsafe: A's continuation runs only after B is fully live.
+      launch.profileBarrier = Promise.resolve()
+      const secondStart = session.start()
+      secondOutcome = secondStart.then(
+        () => 'resolved' as const,
+        () => 'rejected' as const,
+      )
+      await expect(secondOutcome).resolves.toBe('resolved')
+      releaseCancelledProfile()
+      await firstOutcome
+
+      expect(launch.events.filter(event => event === 'pty:spawn')).toHaveLength(1)
+      expect(launch.events.filter(event => event === 'headless:construct'))
+        .toHaveLength(1)
+      expect(launch.events.filter(event => event === 'headless:start'))
+        .toHaveLength(1)
+      expect(launch.events.filter(event => event === 'headless:stop')).toEqual([])
+      expect(launch.events.filter(event => event === 'pty:kill')).toEqual([])
+      expect(session.getProcessPid()).toBe(123)
+    } finally {
+      releaseFirstProfile()
+      await firstOutcome
+      await secondOutcome
       await session.stop()
     }
   })

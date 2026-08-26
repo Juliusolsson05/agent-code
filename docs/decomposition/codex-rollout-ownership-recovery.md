@@ -1537,7 +1537,7 @@ interleave. Neither rejected candidate is implementation work in this repair.
 
 ### Stage 39 — isolate and repair the four owners
 
-- [ ] **Produces:** a schema-versioned process-global bridge whose functions
+- [x] **Produces:** a schema-versioned process-global bridge whose functions
   close over registry state rather than publishing it; non-reflectable HMAC
   custody; per-row/cursor provider-paint generations sufficient for the Codex
   adapter to require a real composer repaint after resize; maintenance eviction
@@ -1641,3 +1641,21 @@ while its genuine repaint control remains green. Finally, stop during the held
 recorded-safe config read disposes no preparation and later reaches PTY spawn,
 headless construction, and headless start. These four failures are now the
 implementation boundary and may not be weakened to obtain green.
+
+Stage 39 is complete at codex-headless `6f6149b` plus the parent cancellation
+change following red checkpoint `5c8658da`. The immutable schema-v4 global slot
+now contains only a frozen operation bridge whose closure owns every Registry,
+RootEntry, path cache, and root HMAC; coordinator HMAC custody moved to a
+module-private WeakMap. Count-only inspection and behavioral queue gates retain
+the recorded tests without exporting backing collections. Pending immutable
+reads are counted separately from completed invalid paths, and maintenance
+compacts both coordinator/raw watcher transport whenever claimant policy says
+rescan is no longer useful. Stable terminal frames now carry provider-neutral
+row/cursor paint generations across a resize fence, while only the Codex input
+adapter maps those facts onto composer rows. Parent starts have identity-scoped
+generations: stop closes admission before awaiting cleanup, disposes any
+pre-spawn capability, and stale continuations cannot spawn or clear a later
+restart's resources. The four Stage 38 contracts, five coordinator suites
+(60/60), terminal and recorded prompt suites (39/39), built projection (5/5),
+codex package check (152/152), parent launch/profile/readiness tests (15/15),
+and both typechecks are green.
