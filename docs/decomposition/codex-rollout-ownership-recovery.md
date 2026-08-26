@@ -1514,7 +1514,7 @@ interleave. Neither rejected candidate is implementation work in this repair.
 
 ### Stage 38 — encode the four real sequences as red contracts
 
-- [ ] **Produces:** a content-safe eleventh-gate finding manifest; a built-
+- [x] **Produces:** a content-safe eleventh-gate finding manifest; a built-
   runtime reflection projection; a recorded post-resize non-composer generation
   replay; a stale-no-birth generation transport test; and a parent config/read
   barrier test that stops the session before the recorded safe response is
@@ -1630,3 +1630,14 @@ interleave. Neither rejected candidate is implementation work in this repair.
 - Extend the parent launch-order harness's real safe projection with a stop
   during its existing response barrier. Assert event order and absence of spawn;
   do not invent a Codex response or keymap outcome.
+
+Stage 38 is complete against codex-headless `62d9b27` and parent production
+`6c4ee504`. The reflection projection reaches the unfrozen Registry, Maps,
+Sets, coordinator, HMAC key, UUID-bearing path, and participant ID. The stale
+no-birth schedule reports `requiresCandidateRescan=false` and nonterminal state
+but retains both watcher caches after two maintenance intervals. The recorded
+resize/status composition returns the exact prompt with a manufactured newline
+while its genuine repaint control remains green. Finally, stop during the held
+recorded-safe config read disposes no preparation and later reaches PTY spawn,
+headless construction, and headless start. These four failures are now the
+implementation boundary and may not be weakened to obtain green.

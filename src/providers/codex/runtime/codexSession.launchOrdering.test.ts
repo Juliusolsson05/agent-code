@@ -8,6 +8,8 @@ const launch = vi.hoisted(() => ({
   configMode: 'recorded-safe',
   resumeBarrier: Promise.resolve() as Promise<void>,
   releaseResume: (() => undefined) as () => void,
+  profileBarrier: Promise.resolve() as Promise<void>,
+  releaseProfile: (() => undefined) as () => void,
   headlessOptions: null as null | Record<string, unknown>,
 }))
 
@@ -58,11 +60,21 @@ vi.mock('codex-headless', () => {
       launch.events.push('resume:start')
       await launch.resumeBarrier
       launch.events.push('resume:end')
-      return { dispose: async () => undefined }
+      return {
+        dispose: async (clean?: boolean) => {
+          launch.events.push(`preparation:dispose:${clean}`)
+        },
+      }
     },
     prepareCodex01491PromptInputProfile: async () => {
-      launch.events.push(`profile:${launch.configMode}`)
-      if (launch.configMode !== 'recorded-safe') {
+      // WHY capture the projected result before the barrier: the fixture models
+      // one real config/read operation whose response has not returned yet, not
+      // a second read after cancellation. Tests may move only completion order;
+      // they must not mutate what that already-admitted provider read observed.
+      const configMode = launch.configMode
+      launch.events.push(`profile:${configMode}`)
+      await launch.profileBarrier
+      if (configMode !== 'recorded-safe') {
         return { ok: false, reason: 'effective-config-unverified' as const }
       }
       return {
@@ -102,6 +114,8 @@ beforeEach(() => {
   launch.resumeBarrier = new Promise<void>(resolve => {
     launch.releaseResume = resolve
   })
+  launch.profileBarrier = Promise.resolve()
+  launch.releaseProfile = () => undefined
 })
 
 describe('CodexSession resume launch attestation ordering', () => {
@@ -142,5 +156,75 @@ describe('CodexSession resume launch attestation ordering', () => {
     ])
     expect(launch.headlessOptions?.promptInputProfile).toBeUndefined()
     await session.stop()
+  })
+
+  it('does not resurrect a resumed provider stopped during the final safe config read', async () => {
+    expect(recorded.effectiveInputProjection).toMatchObject({
+      composerSubmit: 'enter',
+      composerQueue: 'tab',
+    })
+    launch.profileBarrier = new Promise<void>(resolve => {
+      launch.releaseProfile = resolve
+    })
+    const session = new CodexSession({
+      binary: 'recorded-codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: '00000000-0000-4000-8000-000000000632',
+      useProxy: false,
+    })
+    const starting = session.start()
+    const startOutcome = starting.then(
+      () => 'resolved' as const,
+      () => 'rejected' as const,
+    )
+
+    try {
+      await vi.waitFor(() => {
+        expect(launch.events).toEqual(['resume:start'])
+      })
+      launch.releaseResume()
+      await vi.waitFor(() => {
+        expect(launch.events).toEqual([
+          'resume:start',
+          'resume:end',
+          'profile:recorded-safe',
+        ])
+      })
+
+      // WHY this is the real cancellation window omitted by the prior ordering
+      // control: exact X and its lineage watcher are already reserved, while the
+      // final recorded-safe config/read is still awaiting its response. stop()
+      // must synchronously close future launch admission and dispose that sole
+      // pre-spawn owner. Merely cleaning up the fields visible *at this instant*
+      // lets the continuation after the await spawn a provider into a pane the
+      // user already closed, with nobody left to stop its headless/tail lifecycle.
+      await session.stop()
+      const disposedBeforeConfigReturned = launch.events.includes(
+        'preparation:dispose:true',
+      )
+
+      launch.releaseProfile()
+      await startOutcome
+
+      expect.soft(disposedBeforeConfigReturned).toBe(true)
+      expect.soft(
+        launch.events.filter(event => event === 'preparation:dispose:true'),
+      ).toHaveLength(1)
+      expect.soft(
+        launch.events.filter(event => event === 'pty:spawn'),
+      ).toEqual([])
+      expect.soft(
+        launch.events.filter(event => event === 'headless:construct'),
+      ).toEqual([])
+      expect(
+        launch.events.filter(event => event === 'headless:start'),
+      ).toEqual([])
+    } finally {
+      // Idempotent release/stop keeps the RED contract from stranding a future
+      // test even when an assertion exposes the current late-spawn bug.
+      launch.releaseProfile()
+      await startOutcome
+      await session.stop()
+    }
   })
 })
