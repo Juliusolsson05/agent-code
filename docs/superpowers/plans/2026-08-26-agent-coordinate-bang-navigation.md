@@ -1,6 +1,6 @@
 # Agent Coordinate Bang Navigation
 
-> Status: ready for implementation.
+> Status: implemented; awaiting review.
 
 ## Goal
 
@@ -138,4 +138,3 @@ superproject worktree is clean apart from the intended commits.
 - Adding bang semantics to pinned `★N` labels.
 - Reworking Tiled Dispatch's existing support for mirrored agent views.
 - Adding a general-purpose palette grammar for other punctuation commands.
-

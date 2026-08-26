@@ -22,6 +22,10 @@ export type AgentIndexNavigationKind =
   | 'replace-focused-tiled-dispatch-lane'
   | 'swap-detached-into-focused-grid-pane'
 
+export type AgentIndexNavigationIntent =
+  | 'reuse-existing-view'
+  | 'open-in-focused-tiled-dispatch-lane'
+
 export type AgentIndexNavigationResult = {
   kind: AgentIndexNavigationKind
   state: WorkspaceState
@@ -49,6 +53,7 @@ export function navigateToAgentIndexTarget(
   state: WorkspaceState,
   tileTabs: TileTabsState | null,
   target: AgentPaneLabelTarget,
+  intent: AgentIndexNavigationIntent = 'reuse-existing-view',
 ): AgentIndexNavigationResult | null {
   const meta = state.sessions[target.sessionId]
   const kind = meta?.kind ?? DEFAULT_PROVIDER
@@ -62,11 +67,19 @@ export function navigateToAgentIndexTarget(
   // while the user is looking at tiled tabs.
   if (!tileTabs && dispatchMode?.tiled) {
     const tiled = dispatchMode.tiled
+    const forceFocusedLane = intent === 'open-in-focused-tiled-dispatch-lane'
     // Duplicated lanes are legal. If the currently focused lane already shows
     // the target, keep it rather than jumping left to the first duplicate;
     // otherwise the first rendered copy is the deterministic destination.
-    const existingLane =
-      tiled.lanes[tiled.focusedLane]?.selectedSessionId === target.sessionId
+    //
+    // WHY the bang intent deliberately reports no existing lane: `A2!` is the
+    // user's request to curate the CURRENT lane, not to discover where A2 is
+    // already visible. Tiled Dispatch explicitly permits mirrored lanes, so
+    // skipping this lookup creates another view of the same live session
+    // without cloning or restarting its provider process.
+    const existingLane = forceFocusedLane
+      ? -1
+      : tiled.lanes[tiled.focusedLane]?.selectedSessionId === target.sessionId
         ? tiled.focusedLane
         : tiled.lanes.findIndex(lane => lane.selectedSessionId === target.sessionId)
     const focusedLane = existingLane >= 0

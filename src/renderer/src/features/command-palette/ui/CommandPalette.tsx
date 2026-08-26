@@ -19,6 +19,7 @@ import {
 import {
   buildAgentIndexCommand,
   isAgentIndexCommand,
+  parseAgentIndexPaletteQuery,
 } from '@renderer/features/command-palette/lib/agentIndexCommand'
 import {
   buildHistoryScoreMap,
@@ -941,16 +942,30 @@ function OpenCommandPalette({
     () => rankCommands(commands, queryText, historyScoreMap, commandStarred, commandSortMode),
     [commands, queryText, historyScoreMap, commandStarred, commandSortMode],
   )
+  const directAgentQuery = useMemo(
+    () => parseAgentIndexPaletteQuery(queryText),
+    [queryText],
+  )
   const directAgentTarget = useMemo(
-    () => resolveAgentPaneLabel(workspace.state, queryText, workspace.tileTabs),
-    [queryText, workspace.state, workspace.tileTabs],
+    () => directAgentQuery
+      ? resolveAgentPaneLabel(
+          workspace.state,
+          directAgentQuery.label,
+          workspace.tileTabs,
+        )
+      : null,
+    [directAgentQuery, workspace.state, workspace.tileTabs],
   )
   const directAgentCommand = useMemo(
     () =>
-      directAgentTarget
-        ? buildAgentIndexCommand(directAgentTarget, workspace.focusAgentByPaneLabel)
+      directAgentTarget && directAgentQuery
+        ? buildAgentIndexCommand(
+            directAgentTarget,
+            workspace.focusAgentByPaneLabel,
+            directAgentQuery.intent,
+          )
         : null,
-    [directAgentTarget, workspace.focusAgentByPaneLabel],
+    [directAgentQuery, directAgentTarget, workspace.focusAgentByPaneLabel],
   )
   // The exact coordinate result is deliberately row zero. It is not part of
   // fuzzy command ranking and must win Enter even if a future command happens
@@ -966,8 +981,9 @@ function OpenCommandPalette({
   // two aligned.
   //
   // In practice the two are mutually exclusive: headers exist only for an EMPTY
-  // query, and `resolveAgentPaneLabel` needs a query matching /^[A-Z]+[1-9]\d*$/
-  // to produce a row at all. The offset is here anyway because relying on that
+  // query, and the agent-coordinate parser needs a query matching an exact
+  // label with an optional trailing bang to produce a row at all. The offset
+  // is here anyway because relying on that
   // coincidence would put a silent off-by-one behind any future change to
   // either rule, and the failure mode — every section heading sitting one row
   // too high — is exactly the kind of thing that ships unnoticed.

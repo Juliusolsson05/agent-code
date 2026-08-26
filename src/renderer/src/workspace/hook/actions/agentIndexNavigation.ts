@@ -1,6 +1,7 @@
 import { useCallback } from 'react'
 
 import { navigateToAgentIndexTarget } from '@renderer/workspace/agentIndexNavigation'
+import type { AgentIndexNavigationIntent } from '@renderer/workspace/agentIndexNavigation'
 import { resolveAgentPaneLabel } from '@renderer/workspace/tile-tree/paneLabels'
 import type {
   WorkspaceSetState,
@@ -16,10 +17,16 @@ export function useAgentIndexNavigationActions(
   sessionActions: SessionActions,
   showToast: (message: string, durationMs?: number) => void,
 ): {
-  focusAgentByPaneLabel: (label: string) => Promise<boolean>
+  focusAgentByPaneLabel: (
+    label: string,
+    intent?: AgentIndexNavigationIntent,
+  ) => Promise<boolean>
 } {
   const focusAgentByPaneLabel = useCallback(
-    async (label: string): Promise<boolean> => {
+    async (
+      label: string,
+      intent: AgentIndexNavigationIntent = 'reuse-existing-view',
+    ): Promise<boolean> => {
       const initialTarget = resolveAgentPaneLabel(
         refs.stateRef.current,
         label,
@@ -30,6 +37,7 @@ export function useAgentIndexNavigationActions(
         refs.stateRef.current,
         refs.latestTileTabsRef.current,
         initialTarget,
+        intent,
       )
       if (!initialResult) return false
 
@@ -70,6 +78,7 @@ export function useAgentIndexNavigationActions(
           current,
           refs.latestTileTabsRef.current,
           currentTarget,
+          intent,
         )
         if (!result) return current
         committed = true

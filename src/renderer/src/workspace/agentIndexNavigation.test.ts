@@ -82,6 +82,45 @@ describe('agent index navigation', () => {
     expect(result?.state.dispatchMode?.tiled?.ratios).toEqual([0.2, 0.4, 0.4])
   })
 
+  it('opens an already-visible agent in the focused Tiled Dispatch lane for the bang intent', () => {
+    const state = makeState()
+    state.dispatchMode = {
+      scope: 'global',
+      focusedSessionId: 'a1',
+      tiled: {
+        focusedLane: 0,
+        ratios: [0.2, 0.4, 0.4],
+        lanes: [
+          { selectedSessionId: 'a1' },
+          { selectedSessionId: 'a2' },
+          { selectedSessionId: 'b1' },
+        ],
+      },
+    }
+
+    const result = navigateToAgentIndexTarget(
+      state,
+      null,
+      target(state, 'A2'),
+      'open-in-focused-tiled-dispatch-lane',
+    )
+
+    expect(result?.kind).toBe('replace-focused-tiled-dispatch-lane')
+    expect(result?.state.dispatchMode?.tiled).toEqual({
+      focusedLane: 0,
+      ratios: [0.2, 0.4, 0.4],
+      lanes: [
+        { selectedSessionId: 'a2' },
+        { selectedSessionId: 'a2' },
+        { selectedSessionId: 'b1' },
+      ],
+    })
+    // Both lanes mirror one durable session. Forced placement is a view
+    // operation, so it must never rewrite provider ownership metadata.
+    expect(result?.state.sessions.a2).toBe(state.sessions.a2)
+    expect(result?.requiresWake).toBe(false)
+  })
+
   it('replaces only the focused Tiled Dispatch lane when the agent is absent', () => {
     const state = makeState()
     state.dispatchMode = {
@@ -135,6 +174,22 @@ describe('agent index navigation', () => {
     expect(result?.state.activeTabId).toBe('tab-b')
     expect(result?.state.dispatchMode?.focusedSessionId).toBe('b1')
     expect(result?.state.tabs[0].focusedSessionId).toBe('a1')
+  })
+
+  it('degrades the bang intent to ordinary navigation outside Tiled Dispatch', () => {
+    const state = makeState()
+    state.dispatchMode = { scope: 'global', focusedSessionId: 'a1' }
+
+    const result = navigateToAgentIndexTarget(
+      state,
+      null,
+      target(state, 'B1'),
+      'open-in-focused-tiled-dispatch-lane',
+    )
+
+    expect(result?.kind).toBe('focus-classic-dispatch')
+    expect(result?.state.activeTabId).toBe('tab-b')
+    expect(result?.state.dispatchMode?.focusedSessionId).toBe('b1')
   })
 
   it('focuses an already tiled tab and preserves membership, direction, and ratios', () => {
@@ -306,7 +361,12 @@ describe('agent index navigation', () => {
       },
     }
 
-    const result = navigateToAgentIndexTarget(state, null, target(state, 'B1'))
+    const result = navigateToAgentIndexTarget(
+      state,
+      null,
+      target(state, 'B1'),
+      'open-in-focused-tiled-dispatch-lane',
+    )
 
     expect(result?.state.dispatchMode?.scope).toBe('global')
     expect(result?.state.dispatchMode?.tiled?.lanes).toEqual([
