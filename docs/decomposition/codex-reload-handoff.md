@@ -1,13 +1,13 @@
 # Codex Reload Ownership Handoff
 
 > **Status:** Stages 1–3 were implemented against the revised two-phase design.
-> The third exact-head review exposed two more cross-generation/lifetime races:
-> a delayed recovery cancellation can target the later compensation generation,
-> and a successful successor can outlive the renderer that was supposed to make
-> its random local ID durable. Stage 2 is reopened again. Its transaction now
-> needs generation-scoped recovery cancellation plus a durable renderer-to-main
-> ownership commit before the handoff record may retire. Stage 4 exact-head
-> re-review, CI, and live verification remain.
+> The fourth exact-head review exposed four more real ordering/teardown gaps:
+> overlapping workspace saves can commit ownership out of order; a reclaim has
+> no token-addressable cancellation record while it waits for the replacement;
+> global teardown can miss a redirect whose successor is already removed from
+> the registry but still stopping; and explicit close cannot retire a redirect
+> after its successor exits naturally. Stage 2 is reopened again. Stage 4
+> exact-head re-review, CI, and live verification remain.
 >
 > **Incident:** Agent Code issue #638. Related fresh-rollout incident: #632.
 
@@ -59,6 +59,20 @@
     If renderer reload/crash leaves the predecessor ID durable, recovery joins
     the pending transaction, retires the hidden successor, and restores the
     stable predecessor ID instead of colliding with an orphan rollout owner.
+13. Workspace ownership acknowledgements occur in the same order as save IPC
+    admission, so an older delayed write cannot overwrite or acknowledge after
+    a newer renderer snapshot has already become durable.
+14. Pending-handoff and committed-redirect reclaim publish a token-addressable
+    cancellation record before their first await. A renderer deadline can
+    cancel that exact reclaim generation even while successor spawn/stop is
+    pending, and cancellation may retire a successor but never restore the
+    predecessor after the deadline.
+15. Global teardown cancels and joins every redirect reclaim, including the
+    window after successor registry removal but before its asynchronous stop
+    settles, so no backend can be resurrected after `killAll()` begins.
+16. Explicitly closing a naturally exited committed successor retires its
+    reverse redirect. Natural exit alone remains recoverable, but later stale
+    predecessor state cannot resurrect a pane the current renderer closed.
 
 ## 2. Intermediate stages
 
@@ -131,6 +145,24 @@ The third exact-head review reopens this stage with two further artifacts:
    can still reclaim safely; the redirect never weakens the exact-rollout
    coordinator.
 
+The fourth exact-head review reopens this stage with two final ownership
+artifacts rather than more renderer conditionals:
+
+1. Workspace persistence has one main-owned ordering queue. Save invocation A
+   must finish its write, rename, and ownership acknowledgement before admitted
+   save B begins, so disk order and transaction-commit order cannot diverge.
+   Unique temp paths remain necessary for crash-safe atomic replacement, but
+   they are no longer treated as concurrency control.
+2. Reclaim is represented by a generation-scoped record published before it
+   awaits replacement settlement or successor teardown. The record carries the
+   renderer recovery token, cancellation state, predecessor/successor IDs, and
+   the reclaim promise. Exact-token cancellation, explicit close, and global
+   teardown can therefore cancel/join the same generation even when neither ID
+   currently has a registry entry or ordinary `RecoveryClaim`. Redirect lookup
+   supports both predecessor and successor identity so close intent can retire
+   a naturally exited successor's reverse redirect without weakening ownership
+   validation.
+
 ### Stage 3 — route every same-pane replacement through the handoff
 
 - [x] **Produces:** renderer replacement code that supplies the predecessor ID
@@ -167,6 +199,13 @@ recovery can retain the stable-ID generation fence after `stop()` returns, and
 natural exit can remove the captured registry row before handoff executes.
 Exact-head review must restart after the reopened Stage 2 lands; neither earlier
 review can approve new transaction code.
+
+The third and fourth reviews are retained for the same reason. The third proved
+that stable local IDs require generation-scoped cancellation and a durable
+renderer ownership commit. The fourth proved that the commit must itself be
+totally ordered with workspace writes, and that reclaim needs a first-class
+cancellable lifetime before ordinary recovery publication. Exact-head review
+must restart after these artifacts land.
 
 ## 3. Isolation boundary
 
@@ -212,6 +251,19 @@ receives no pane IDs and gains no replacement exception.
   ID; pending and recently committed handoffs retain enough main-owned routing
   evidence to restore the predecessor for a stale renderer without accepting a
   second rollout owner.
+- **Resolved by fourth-review Stage 2 design:** unique workspace temp files
+  prevent scratch-path collisions but do not order final renames. Main
+  serializes the complete write/rename/acknowledgement critical section in IPC
+  admission order.
+- **Resolved by fourth-review Stage 2 design:** reclaim cancellation cannot be
+  deferred until the final ordinary recovery claim because replacement
+  settlement and successor stop are unbounded awaits. A separate reclaim
+  generation is published synchronously and owns cancellation for the entire
+  operation.
+- **Resolved by fourth-review Stage 2 design:** reverse redirects have two
+  relevant identities. Rehydrate enters by predecessor ID; explicit close may
+  arrive by successor ID after natural exit. Main validates and retires the
+  same redirect from either direction.
 - Predecessor stop can fail or become uncertain. The coordinator's tombstone
   must remain fail-closed; compensation may also fail in that state and needs a
   truthful lifecycle outcome rather than an unsafe lease exception.
@@ -261,3 +313,16 @@ durable predecessor ID. The second fixture also exercises stale predecessor
 recovery immediately around durable successor acknowledgement. These tests
 assert that C survives R's token and that exactly one backend remains reachable
 under the durable renderer identity.
+
+Fourth-review fixtures add four deterministic schedules taken from concrete
+await boundaries in the reviewed head: (a) save A is admitted first and gated
+before rename while save B is invoked; the final file and acknowledgement must
+still reflect B; (b) reclaim publishes token T and waits for successor startup,
+then exact-token cancellation arrives before startup settles; (c) redirect
+reclaim removes its successor registry row and blocks in provider stop while
+`killAll()` begins; and (d) a committed successor exits naturally and is then
+explicitly closed by successor ID. The tests assert durable bytes, exact
+acknowledgement order, cancellation truth, no post-deadline restoration, and no
+post-close/post-shutdown resurrection. These schedules are not invented
+provider data: each gates the precise promise boundary identified by the two
+read-only reviewers against commit `026e9281`.

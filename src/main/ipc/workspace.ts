@@ -12,6 +12,16 @@ import type { SessionManager } from '@main/sessionManager.js'
 // corrupting the file if the process dies mid-write.
 
 export function registerWorkspaceIpc(manager: SessionManager): void {
+  // WHY the whole save transaction is queued, not just writeFile: unique temp
+  // names prevent scratch-path ENOENT races, but they do not order the final
+  // renames. An older renderer save can be delayed, rename after a newer save,
+  // and then acknowledge an ownership map that is no longer the newest one.
+  // Keeping write + rename + acknowledgement on one admission-ordered tail
+  // makes the bytes on disk and SessionManager's ownership commit one atomic
+  // logical sequence. A rejected save is still surfaced to its IPC caller;
+  // only the private tail absorbs it so later saves are not poisoned forever.
+  let saveTail: Promise<void> = Promise.resolve()
+
   ipcMain.handle('workspace:load', async () => {
     try {
       const text = await readFile(STATE_FILE, 'utf8')
@@ -23,45 +33,42 @@ export function registerWorkspaceIpc(manager: SessionManager): void {
     }
   })
 
-  ipcMain.handle('workspace:save', async (_evt, json: string) => {
-    await mkdir(STATE_DIR, { recursive: true })
-    // WHY this temp file is unique per IPC call:
-    //
-    // The renderer can legitimately issue overlapping autosaves during a busy
-    // restore: session spawns finish, debug state settles, dispatch focus moves,
-    // and each transition wants to persist the workspace. A single shared
-    // `workspace.json.tmp` makes those saves race each other. Save A can write
-    // the temp file and rename it while Save B is still between write and
-    // rename, leaving B to fail with ENOENT because the shared temp path no
-    // longer exists. That looked like random state corruption after the
-    // packaged-app/proxy failure, but it was just non-atomic concurrency. The
-    // final destination is still one file; only the scratch path needs a nonce.
-    const tmp = `${STATE_FILE}.${process.pid}.${Date.now()}.${Math.random()
-      .toString(36)
-      .slice(2)}.tmp`
-    await writeFile(tmp, json, 'utf8')
-    await rename(tmp, STATE_FILE)
-    // WHY replacement commit follows the rename: a successful spawn response
-    // is not durable renderer ownership. If reload destroys the renderer before
-    // its remapped local ID reaches workspace.json, main must retain the
-    // predecessor transaction so rehydrate can stop the hidden successor and
-    // restore the still-owned predecessor ID. Parsing is deliberately narrow;
-    // main does not otherwise interpret renderer workspace state.
-    try {
-      const parsed = JSON.parse(json) as {
-        workspace?: { sessions?: Record<string, unknown> }
+  ipcMain.handle('workspace:save', (_evt, json: string) => {
+    const save = saveTail.then(async () => {
+      await mkdir(STATE_DIR, { recursive: true })
+      // WHY this temp file is still unique even though saves are serialized:
+      // the queue is process-local ordering, while the nonce is crash-safety
+      // and protection from stale scratch files left by an interrupted run.
+      // The final destination remains one atomic rename target.
+      const tmp = `${STATE_FILE}.${process.pid}.${Date.now()}.${Math.random()
+        .toString(36)
+        .slice(2)}.tmp`
+      await writeFile(tmp, json, 'utf8')
+      await rename(tmp, STATE_FILE)
+      // WHY replacement commit follows the rename: a successful spawn response
+      // is not durable renderer ownership. If reload destroys the renderer before
+      // its remapped local ID reaches workspace.json, main must retain the
+      // predecessor transaction so rehydrate can stop the hidden successor and
+      // restore the still-owned predecessor ID. Parsing is deliberately narrow;
+      // main does not otherwise interpret renderer workspace state.
+      try {
+        const parsed = JSON.parse(json) as {
+          workspace?: { sessions?: Record<string, unknown> }
+        }
+        const sessions = parsed.workspace?.sessions
+        if (sessions && typeof sessions === 'object') {
+          manager.acknowledgePersistedSessionOwnership(
+            new Set(Object.keys(sessions)),
+          )
+        }
+      } catch {
+        // workspace:save historically accepts opaque bytes. A malformed payload
+        // must not gain transaction authority; leaving the handoff pending is the
+        // safe outcome and preserves the existing persistence error surface.
       }
-      const sessions = parsed.workspace?.sessions
-      if (sessions && typeof sessions === 'object') {
-        manager.acknowledgePersistedSessionOwnership(
-          new Set(Object.keys(sessions)),
-        )
-      }
-    } catch {
-      // workspace:save historically accepts opaque bytes. A malformed payload
-      // must not gain transaction authority; leaving the handoff pending is the
-      // safe outcome and preserves the existing persistence error surface.
-    }
+    })
+    saveTail = save.catch(() => undefined)
+    return save
   })
 
   // Renderer calls this on first launch when there's no saved state

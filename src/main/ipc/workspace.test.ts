@@ -1,0 +1,91 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+const {
+  handle,
+  mkdir,
+  readFile,
+  writeFile,
+  rename,
+} = vi.hoisted(() => ({
+  handle: vi.fn(),
+  mkdir: vi.fn(),
+  readFile: vi.fn(),
+  writeFile: vi.fn(),
+  rename: vi.fn(),
+}))
+
+vi.mock('electron', () => ({ ipcMain: { handle } }))
+vi.mock('fs/promises', () => ({ mkdir, readFile, writeFile, rename }))
+vi.mock('@main/storage/paths.js', () => ({
+  STATE_DIR: '/recorded/state',
+  STATE_FILE: '/recorded/state/workspace.json',
+}))
+
+function deferred() {
+  let resolve!: () => void
+  const promise = new Promise<void>(res => {
+    resolve = res
+  })
+  return { promise, resolve }
+}
+
+describe('workspace persistence ordering', () => {
+  beforeEach(() => {
+    handle.mockReset()
+    mkdir.mockReset().mockResolvedValue(undefined)
+    readFile.mockReset()
+    writeFile.mockReset()
+    rename.mockReset()
+  })
+
+  it('commits overlapping saves in IPC admission order', async () => {
+    const firstWriteGate = deferred()
+    const tempContents = new Map<string, string>()
+    const acknowledgements: string[][] = []
+    let durableContents = ''
+    let writeCount = 0
+
+    writeFile.mockImplementation(async (file: string, contents: string) => {
+      writeCount += 1
+      if (writeCount === 1) await firstWriteGate.promise
+      tempContents.set(file, contents)
+    })
+    rename.mockImplementation(async (source: string) => {
+      durableContents = tempContents.get(source) ?? ''
+    })
+
+    const { registerWorkspaceIpc } = await import('./workspace')
+    registerWorkspaceIpc({
+      acknowledgePersistedSessionOwnership: (sessionIds: ReadonlySet<string>) => {
+        acknowledgements.push([...sessionIds])
+      },
+    } as never)
+    const save = handle.mock.calls.find(([channel]) => channel === 'workspace:save')?.[1] as
+      | ((_event: unknown, json: string) => Promise<void>)
+      | undefined
+    expect(save).toBeTypeOf('function')
+
+    const firstJson = JSON.stringify({ workspace: { sessions: { predecessor: {} } } })
+    const secondJson = JSON.stringify({ workspace: { sessions: { successor: {} } } })
+    const firstSave = save?.({}, firstJson)
+    await vi.waitFor(() => expect(writeFile).toHaveBeenCalledTimes(1))
+    const secondSave = save?.({}, secondJson)
+
+    // WHY inspect the blocked boundary before releasing it: the production
+    // failure needs no corrupt temp file. Unique scratch paths let save B race
+    // past delayed save A, after which A can overwrite the newer renderer
+    // snapshot and acknowledge ownership in the wrong order.
+    await Promise.resolve()
+    await Promise.resolve()
+    const writesBeforeRelease = writeFile.mock.calls.length
+    firstWriteGate.resolve()
+    await Promise.all([firstSave, secondSave])
+
+    expect(writesBeforeRelease).toBe(1)
+    expect(durableContents).toBe(secondJson)
+    expect(acknowledgements).toEqual([
+      ['predecessor'],
+      ['successor'],
+    ])
+  })
+})
