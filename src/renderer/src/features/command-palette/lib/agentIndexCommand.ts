@@ -48,7 +48,7 @@ export function buildAgentIndexCommand(
       : `Go to ${target.label} · ${target.title}`,
     description: opensHere
       ? [
-          `**What it does:** Shows live agent **${target.label}** in the currently focused Tiled Dispatch lane, even when another lane already shows it. Outside Tiled Dispatch, this behaves like the ordinary coordinate navigation.`,
+          `**What it does:** Shows live agent **${target.label}** in the currently focused Tiled Dispatch lane, even when another lane already shows it.`,
           '',
           `**Target:** ${target.title} · ${target.tabTitle} · ${target.cwd}`,
           '',
@@ -60,6 +60,8 @@ export function buildAgentIndexCommand(
           `**Target:** ${target.title} · ${target.tabTitle} · ${target.cwd}`,
           '',
           '**Notes:** Reuses the running session. It does not clone, resume, restart, or kill the agent.',
+          '',
+          `**Tip:** Type \`${target.label}!\` to show this same agent in the currently focused Tiled Dispatch lane.`,
         ].join('\n'),
     surface: 'app',
     keywords: [],

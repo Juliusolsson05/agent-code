@@ -38,6 +38,7 @@ describe('agent index palette command', () => {
     const command = buildAgentIndexCommand(target, focusAgentByPaneLabel)
 
     expect(command.title).toBe('Go to B5 · Fix focus routing')
+    expect(command.description).toContain('Type `B5!`')
     expect(command.state).toEqual({ kind: 'value', label: 'codex' })
     expect(isAgentIndexCommand(command)).toBe(true)
 

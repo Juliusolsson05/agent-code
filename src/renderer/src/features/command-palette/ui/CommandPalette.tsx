@@ -956,16 +956,33 @@ function OpenCommandPalette({
       : null,
     [directAgentQuery, workspace.state, workspace.tileTabs],
   )
+  // WHY the syntax intent is normalized against the visible surface before we
+  // build the row: `A2!` can only mean "Here" when a Tiled Dispatch lane is on
+  // screen. Persisted state can contain a hidden Dispatch layout underneath
+  // Tiled Tabs, and grid/classic Dispatch deliberately retain ordinary
+  // coordinate navigation. Passing the raw bang there would make row zero
+  // promise "Open Here" while Enter actually switches to an existing pane.
+  const directAgentIntent =
+    directAgentQuery?.intent === 'open-in-focused-tiled-dispatch-lane' &&
+    !workspace.tileTabs &&
+    workspace.state.dispatchMode?.tiled
+      ? directAgentQuery.intent
+      : 'reuse-existing-view'
   const directAgentCommand = useMemo(
     () =>
       directAgentTarget && directAgentQuery
         ? buildAgentIndexCommand(
             directAgentTarget,
             workspace.focusAgentByPaneLabel,
-            directAgentQuery.intent,
+            directAgentIntent,
           )
         : null,
-    [directAgentQuery, directAgentTarget, workspace.focusAgentByPaneLabel],
+    [
+      directAgentIntent,
+      directAgentQuery,
+      directAgentTarget,
+      workspace.focusAgentByPaneLabel,
+    ],
   )
   // The exact coordinate result is deliberately row zero. It is not part of
   // fuzzy command ranking and must win Enter even if a future command happens

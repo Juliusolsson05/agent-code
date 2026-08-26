@@ -153,10 +153,7 @@ describe('useAgentIndexNavigationActions', () => {
     const harness = mountNavigation(ensureSessionLive)
 
     await act(async () => {
-      expect(await harness.actions.focusAgentByPaneLabel(
-        'A2',
-        'open-in-focused-tiled-dispatch-lane',
-      )).toBe(false)
+      expect(await harness.actions.focusAgentByPaneLabel('A2')).toBe(false)
     })
 
     expect(harness.getState().tabs[0].root).toEqual({ type: 'leaf', sessionId: 'a1' })
