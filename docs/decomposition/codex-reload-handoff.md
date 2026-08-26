@@ -1,0 +1,135 @@
+# Codex Reload Ownership Handoff
+
+> **Status:** Approved for implementation by the user request to continue the
+> diagnosis/fix pipeline. This document is the first branch artifact.
+>
+> **Incident:** Agent Code issue #638. Related fresh-rollout incident: #632.
+
+## 1. A and D
+
+### A — what exists and is trusted
+
+| Artifact | Location | What is trusted |
+|---|---|---|
+| Exact rollout lease | `packages/codex-headless/src/transcript/FreshRolloutOwnershipCoordinator.ts` | One physical rollout path may have at most one active tail owner. Rejecting a second unrelated owner is correct and must remain fail-closed. |
+| Pre-spawn resume preparation | `src/providers/codex/runtime/codexSession.ts` and `packages/codex-headless/src/CodexHeadless.ts` | A resumed Codex process reserves its exact rollout before PTY spawn, so ownership cannot be established after an untracked provider has already started. |
+| Pane replacement sequence | `src/renderer/src/workspace/hook/actions/session.ts` | `replaceSession` currently starts the successor, then stops the predecessor. The sequence is source-confirmed and is incompatible with a same-rollout exact lease. |
+| Main backend ownership | `src/main/sessionManager.ts` | Main owns the mapping from local session IDs to live/spawning provider backends and is the only layer that can await predecessor shutdown before admitting a successor. |
+| Recorded failure | incident run `2026-08-26T17-57-28-324Z-main-70190-fd75b0` | Five ordinary Codex spawn attempts reached `replaying-history` and failed in 165–203 ms with the exact lease error while the original resumed pane remained live. |
+| Unrelated proxy cleanup | `packages/codex-headless/src/proxy/CodexResponsesAdapter.ts` | Proxy watchdog release removes silent HTTP flow state. It does not own or retire rollout leases and is not the cause of #638. |
+
+### D — observable end state
+
+1. Reload Agent and built-in MCP toggles can replace a resumed Codex pane
+   without hitting the exact-rollout lease error.
+2. Main receives the local predecessor ID as an explicit handoff capability,
+   validates that it names a live Codex backend, and completes predecessor stop
+   before successor provider start.
+3. Ordinary new-pane resumes do not gain handoff authority and still fail
+   closed if another live session owns the exact rollout.
+4. Claude, OpenCode, terminal, fresh Codex, and replacement-to-a-different-
+   transcript retain the existing start-success-before-old-stop behavior.
+5. Lifecycle evidence records that the replacement requested and completed a
+   pre-spawn Codex handoff, so a future failure is diagnosable without a stack
+   trace or private transcript data.
+
+## 2. Intermediate stages
+
+### Stage 1 — turn the recorded sequence into a replacement contract
+
+- [ ] **Produces:** a sanitized lifecycle fixture describing the #638 ordering
+  (`starting` → `provider.start.begin` → `replaying-history` → exact lease
+  rejection) and a main-process regression test that models an existing resumed
+  Codex backend followed by a replacement request for the same provider ID.
+- **Verified by:** the test fails against `origin/main` because successor start
+  occurs while the predecessor is still live; the assertion checks event order,
+  not the coordinator's error string alone.
+- **Why separate:** a test that merely expects the current error would preserve
+  the bug. The real contract is ownership order across renderer, main, and the
+  provider start boundary.
+- **Reality check:** the five captured attempts all fail after provider start
+  begins, while restart restores the original pane. That is the exact ordering
+  the fixture must preserve.
+
+### Stage 2 — add an explicit app-level handoff boundary
+
+- [ ] **Produces:** a typed replacement/predecessor field at the preload IPC
+  boundary and a `SessionManager` pre-spawn handoff that is admitted only for a
+  same-provider Codex resume targeting the predecessor's exact transcript.
+- **Verified by:** Stage 1 becomes green; focused tests also prove an unrelated
+  session ID, a different resume ID, and a non-Codex replacement do not stop the
+  old backend before successor success.
+- **Why separate:** the rollout coordinator cannot know Agent Code pane intent.
+  Weakening its lease would make a UI convenience indistinguishable from the
+  cross-wire it exists to prevent; the app-level manager has both identities.
+- **Reality check:** `replaceSession` already knows the old local session ID,
+  while `SessionManager` already owns its kind, spawn-time resume identity, and
+  observed transcript path. No heuristic UI timing is required.
+
+### Stage 3 — route every same-pane replacement through the handoff
+
+- [ ] **Produces:** renderer replacement code that supplies the predecessor ID
+  to main, preserves existing post-success state remapping, and leaves ordinary
+  `spawn`/new-tab calls without replacement authority.
+- **Verified by:** renderer tests assert the handoff field for `replaceSession`
+  and its absence for fresh spawn; Reload Agent and Workflow MCP use the same
+  central replacement path without one-off conditionals.
+- **Why separate:** adding the main capability without routing the central
+  renderer action would leave commands broken; adding command-specific fixes
+  would duplicate policy across every MCP toggle and the reload command.
+- **Reality check:** source inspection shows all affected capability toggles and
+  Reload Agent already converge on `workspace.replaceSession()`.
+
+### Stage 4 — integration verification and review
+
+- [ ] **Produces:** passing focused tests, typechecks/build, a clean live Codex
+  reload/MCP-toggle capture, and a pull request linked with `Fixes #638`.
+- **Verified by:** the live capture shows predecessor removal before successor
+  `provider.start.begin`, successor readiness reaches ready, and no exact lease
+  rejection occurs. Exact-head CI and review must be green.
+- **Why separate:** unit ordering can be correct while preload wiring or real
+  provider teardown remains wrong. The live recording verifies the physical
+  lease is retired, not only that mocks were called in order.
+- **Reality check:** the incident recorder already captures the lifecycle
+  markers needed to compare the fixed run to the five failed attempts.
+
+## 3. Isolation boundary
+
+The hard part is **same-transcript replacement admission**. It remains in
+`SessionManager`, adjacent to backend ownership and before provider creation.
+The renderer may declare intent by naming the local predecessor; it may not
+decide that a rollout lease is safe to reuse. `CodexHeadless`, the proxy adapter,
+QueueStrip, workflow UI, and individual MCP-toggle commands are forbidden from
+importing or duplicating the handoff policy.
+
+The rollout coordinator remains a single consumer-independent safety layer. It
+receives no pane IDs and gains no replacement exception.
+
+## 4. Unknowns
+
+- A fresh Codex pane has no spawn-time resume ID. Main may need to compare its
+  observed transcript path with the requested exact path to validate a later
+  replacement; the test must decide whether this is required for #638 or a
+  separately recorded follow-up.
+- Predecessor stop can fail or become uncertain. The handoff must fail before
+  successor spawn in that case; whether a user-facing retry can recover without
+  an app restart needs live verification.
+- A provider may emit exit/removal while renderer replacement is awaiting main.
+  Existing generation/ownership guards should absorb that event, but the state
+  remap must be checked rather than assumed.
+- The incident journal currently records only the successor local ID. The
+  smallest content-safe schema for predecessor/handoff outcome needs to be
+  confirmed against the lifecycle emitter's allowlist.
+
+## 5. Fixture plan
+
+Stage 1 derives its event vocabulary, ordering, timing class, provider kind, and
+failure boundary from the recorded #638 incident. Private local/provider IDs,
+paths, prompts, and transcript contents are not fixture inputs. The fixture
+keeps stable aliases (`predecessor`, `successor`) and the exact observed ordering
+needed to prove the fix.
+
+Additional negative cases are structural mutations of that recorded scenario:
+different predecessor ID, different resume ID, and different provider kind.
+They are not claims about unseen provider output; they prove that the narrowly
+granted handoff capability cannot be widened into a general pre-spawn kill.
