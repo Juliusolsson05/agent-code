@@ -19,10 +19,19 @@ export function extractWorktreeActivityEvents(
   const record = asRecord(raw)
   if (!record) return []
 
-  const seeds = [
-    ...extractClaudeWorktreeActivitySeeds(record),
-    ...extractCodexWorktreeActivitySeeds(record),
-  ]
+  // WHY choose one adapter before extraction: Claude's worktree/conversation
+  // outer discriminators and Codex's rollout discriminators are disjoint. A
+  // full historical rebuild visits mostly irrelevant records; calling both
+  // adapters and spreading two short-lived arrays on every line creates heap
+  // churn without adding reconciliation value. Provider-specific details
+  // remain inside the adapters; this boundary knows only the stable envelope
+  // ownership needed to select one of them.
+  const seeds =
+    record.type === 'worktree-state' ||
+    record.type === 'user' ||
+    record.type === 'assistant'
+      ? extractClaudeWorktreeActivitySeeds(record)
+      : extractCodexWorktreeActivitySeeds(record)
 
   return seeds.map((seed, index) => {
     const ts = seed.ts ?? timestampMs(record, now)

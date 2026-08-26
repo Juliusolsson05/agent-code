@@ -19,43 +19,14 @@ export function extractCodexWorktreeActivitySeeds(
   record: Record<string, unknown>,
 ): WorktreeActivityEventSeed[] {
   const payload = asRecord(record.payload)
-  const seeds: WorktreeActivityEventSeed[] = []
 
-  seeds.push(...currentContextSeeds(record, payload))
-  seeds.push(...currentCompletedItemSeeds(record, payload))
-  seeds.push(...legacyEventSeeds(record, payload))
-
-  if (record.type === 'response_item' && payload?.type === 'local_shell_call') {
-    const action = asRecord(payload.action)
-    const cwd =
-      stringField(action, 'working_directory') ??
-      stringField(action, 'workdir')
-    if (cwd) {
-      const command = commandFromAction(action)
-      const kind = classifyCommand(command)
-      seeds.push({
-        kind,
-        source: 'codex:local_shell_call.cwd',
-        path: cwd,
-        branch: null,
-        confidence: 'medium',
-        active: true,
-        command: command ?? undefined,
-      })
-    }
-  }
-
-  if (record.type === 'response_item' && payload?.type === 'function_call') {
-    seeds.push(...functionCallSeeds(payload))
-  }
-
-  return seeds
-}
-
-function currentContextSeeds(
-  record: Record<string, unknown>,
-  payload: Record<string, unknown> | null,
-): WorktreeActivityEventSeed[] {
+  // WHY return from one discriminator branch instead of accumulating several
+  // helper arrays: this function runs for every JSONL record during a cache
+  // rebuild, including the many records that carry no worktree evidence. A
+  // cascade of `push(...helper())` calls allocated multiple empty arrays per
+  // irrelevant line. The provider grammar is mutually exclusive at these
+  // outer discriminators, so one branch is both easier to audit and bounded to
+  // a single short-lived result array.
   if (record.type === 'session_meta') {
     const cwd = stringField(payload, 'cwd')
     if (!cwd) return []
@@ -74,23 +45,62 @@ function currentContextSeeds(
       : []
   }
 
-  if (record.type === 'event_msg' && payload?.type === 'thread_settings_applied') {
-    const settings = asRecord(payload.thread_settings)
-    const cwd = stringField(settings, 'cwd')
-    return cwd
-      ? [sessionCwdSeed({ source: 'codex:thread_settings.cwd', path: cwd })]
-      : []
+  if (record.type === 'event_msg') {
+    if (payload?.type === 'thread_settings_applied') {
+      const settings = asRecord(payload.thread_settings)
+      const cwd = stringField(settings, 'cwd')
+      return cwd
+        ? [sessionCwdSeed({ source: 'codex:thread_settings.cwd', path: cwd })]
+        : []
+    }
+    if (payload?.type === 'item_completed') {
+      return currentCompletedItemSeeds(payload)
+    }
+    if (payload?.type === 'exec_command_end') {
+      return legacyCommandSeed(payload, 'codex:exec_command_end.cwd', 'cwd')
+    }
+    if (payload?.type === 'exec_approval_request') {
+      return legacyCommandSeed(
+        payload,
+        'codex:exec_approval_request.workdir',
+        'workdir',
+        'medium',
+      )
+    }
+    return []
+  }
+
+  if (record.type !== 'response_item') return []
+
+  if (payload?.type === 'local_shell_call') {
+    const action = asRecord(payload.action)
+    const cwd =
+      stringField(action, 'working_directory') ??
+      stringField(action, 'workdir')
+    if (!cwd) return []
+    const command = commandFromAction(action)
+    const kind = classifyCommand(command)
+    return [{
+      kind,
+      source: 'codex:local_shell_call.cwd',
+      path: cwd,
+      branch: null,
+      confidence: 'medium',
+      active: true,
+      command: command ?? undefined,
+    }]
+  }
+
+  if (payload?.type === 'function_call') {
+    return functionCallSeeds(payload)
   }
 
   return []
 }
 
 function currentCompletedItemSeeds(
-  record: Record<string, unknown>,
-  payload: Record<string, unknown> | null,
+  payload: Record<string, unknown>,
 ): WorktreeActivityEventSeed[] {
-  if (record.type !== 'event_msg' || payload?.type !== 'item_completed') return []
-
   const item = asRecord(payload.item)
   if (item?.type === 'CommandExecution') {
     const cwd = stringField(item, 'cwd')
@@ -135,43 +145,26 @@ function currentCompletedItemSeeds(
   return []
 }
 
-function legacyEventSeeds(
-  record: Record<string, unknown>,
-  payload: Record<string, unknown> | null,
+function legacyCommandSeed(
+  payload: Record<string, unknown>,
+  source: string,
+  cwdField: string,
+  confidenceOverride?: 'medium',
 ): WorktreeActivityEventSeed[] {
-  if (record.type === 'event_msg' && payload?.type === 'exec_command_end') {
-    const cwd = stringField(payload, 'cwd')
-    if (!cwd) return []
-    const command = commandFromPayload(payload)
-    const kind = classifyCommand(command)
-    return [{
-      kind,
-      source: 'codex:exec_command_end.cwd',
-      path: cwd,
-      branch: null,
-      confidence: kind === 'verification' ? 'medium' : 'strong',
-      active: true,
-      command: command ?? undefined,
-    }]
-  }
-
-  if (record.type === 'event_msg' && payload?.type === 'exec_approval_request') {
-    const cwd = stringField(payload, 'workdir')
-    if (!cwd) return []
-    const command = commandFromPayload(payload)
-    const kind = classifyCommand(command)
-    return [{
-      kind,
-      source: 'codex:exec_approval_request.workdir',
-      path: cwd,
-      branch: null,
-      confidence: 'medium',
-      active: true,
-      command: command ?? undefined,
-    }]
-  }
-
-  return []
+  const cwd = stringField(payload, cwdField)
+  if (!cwd) return []
+  const command = commandFromPayload(payload)
+  const kind = classifyCommand(command)
+  return [{
+    kind,
+    source,
+    path: cwd,
+    branch: null,
+    confidence: confidenceOverride ??
+      (kind === 'verification' ? 'medium' : 'strong'),
+    active: true,
+    command: command ?? undefined,
+  }]
 }
 
 function sessionCwdSeed(params: {

@@ -40,17 +40,26 @@ describe('worktree activity index persistence', () => {
       },
     }))
 
-    const loaded = await loadWorktreeActivityIndex()
+    const parseSpy = vi.spyOn(JSON, 'parse')
+    try {
+      const loaded = await loadWorktreeActivityIndex()
 
-    // WHY assert the provider bytes separately: the cache is disposable, but
-    // the JSONL is the user's durable source of truth. A version mismatch must
-    // make the in-memory cache empty and let the normal refresh rebuild it;
-    // it must never "clean up" or rewrite provider-owned recordings.
-    expect(loaded).toEqual({
-      version: WORKTREE_ACTIVITY_INDEX_VERSION,
-      updatedAt: 0,
-      transcripts: {},
-    })
-    expect(await readFile(rawTranscript, 'utf8')).toBe(rawBytes)
+      // WHY assert the provider bytes separately: the cache is disposable, but
+      // the JSONL is the user's durable source of truth. A version mismatch must
+      // make the in-memory cache empty and let the normal refresh rebuild it;
+      // it must never "clean up" or rewrite provider-owned recordings.
+      expect(loaded).toEqual({
+        version: WORKTREE_ACTIVITY_INDEX_VERSION,
+        updatedAt: 0,
+        transcripts: {},
+      })
+      // The old cache can be tens of megabytes. Rejecting it only after
+      // JSON.parse would still create the transient object graph this version
+      // bump is meant to avoid, even though the returned value is empty.
+      expect(parseSpy).not.toHaveBeenCalled()
+      expect(await readFile(rawTranscript, 'utf8')).toBe(rawBytes)
+    } finally {
+      parseSpy.mockRestore()
+    }
   })
 })

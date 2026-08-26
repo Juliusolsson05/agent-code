@@ -7,38 +7,39 @@ import { isConversationEntry } from '@shared/types/transcript.js'
 export function extractClaudeWorktreeActivitySeeds(
   record: Record<string, unknown>,
 ): WorktreeActivityEventSeed[] {
-  const seeds: WorktreeActivityEventSeed[] = []
-
   if (record.type === 'worktree-state') {
     const session = asRecord(record.worktreeSession)
     if (!session) {
-      seeds.push({
+      return [{
         kind: 'worktree-exit',
         source: 'claude:worktree-state:exit',
         path: '',
         branch: null,
         confidence: 'explicit',
         active: true,
-      })
-    } else {
-      const worktreePath = stringField(session, 'worktreePath')
-      if (worktreePath) {
-        seeds.push({
+      }]
+    }
+    const worktreePath = stringField(session, 'worktreePath')
+    return worktreePath
+      ? [{
           kind: 'worktree-enter',
           source: 'claude:worktree-state',
           path: worktreePath,
           branch: stringField(session, 'worktreeBranch'),
           confidence: 'explicit',
           active: true,
-        })
-      }
-    }
+        }]
+      : []
   }
 
-  seeds.push(...conversationToolSeeds(record))
+  // Claude conversation envelopes and Codex rollout envelopes are disjoint.
+  // Return before allocating the tool-event accumulator for the many Codex and
+  // metadata records that pass through the shared facade during a full scan.
+  if (!isConversationEntry(record as Entry)) return []
 
+  const seeds = conversationToolSeeds(record)
   const cwd = stringField(record, 'cwd')
-  if (cwd && isConversationEntry(record as Entry)) {
+  if (cwd) {
     seeds.push({
       kind: 'session-cwd',
       source: 'claude:entry.cwd',
@@ -57,7 +58,6 @@ export function extractClaudeWorktreeActivitySeeds(
 function conversationToolSeeds(
   record: Record<string, unknown>,
 ): WorktreeActivityEventSeed[] {
-  if (!isConversationEntry(record as Entry)) return []
   const content = (record as Entry & { message?: { content?: unknown } }).message?.content
   if (!Array.isArray(content)) return []
 
