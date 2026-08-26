@@ -21,7 +21,16 @@
 > seven-file matrix is 82/82, typecheck, system 61/61, renderer 290/290,
 > contracts, keybindings, live-resume probe, and packaged-build verification
 > are green. Full unit is 1,571/1,572 with only the same missing external corpus
-> session. Exact-head re-review, new-head CI, and live verification remain.
+> session. The tenth exact-head review found two persistence-lifecycle edges in
+> the new retry path: vetoed unload disabled its only retry, while persistent
+> rename failure retried at fixed cadence and retained unique temp files.
+> Contract 37 is now implemented. Its vetoed-unload retry, exponential-backoff
+> and unmount-cancellation, and exact-temp-cleanup fixtures failed first and are
+> green. The affected seven-file matrix is 85/85, typecheck, system 61/61,
+> renderer 292/292, contracts, keybindings, live-resume probe, and packaged-
+> build verification are green. Full unit is 1,572/1,573 with only the same
+> missing external corpus session. Exact-head re-review, new-head CI, and live
+> verification remain.
 >
 > **Incident:** Agent Code issue #638. Related fresh-rollout incident: #632.
 
@@ -177,6 +186,15 @@
     become permanent merely because its first save attempt rejected. A second
     request against the original predecessor while teardown/start is still in
     flight remains a collision and is still rejected.
+37. Workspace durability retry belongs to the mounted renderer generation, not
+    to one debounce callback. A vetoed `beforeunload` cancels the prior timer
+    and starts a retry-capable flush because the renderer may survive; an actual
+    unload/unmount cancels whatever debounce or retry timer that generation
+    currently owns. Consecutive failures use capped exponential backoff, while
+    a successful save or newer state resets the delay. Main's atomic writer
+    best-effort unlinks the exact invocation's unique temp file when write or
+    rename fails, so indefinite eventual-success retry cannot accumulate one
+    abandoned file per attempt.
 
 ## 2. Intermediate stages
 
@@ -347,6 +365,15 @@ close/reclaim semantics would need a second ownership graph. The renderer's
 autosave remains the durability producer, but a failed attempt schedules a
 latest-state retry; main never treats elapsed debounce time as proof of commit.
 
+The tenth exact-head review keeps retry policy inside the existing autosave and
+atomic-write substrates. The renderer owns one timer per mounted hook
+generation plus a consecutive-failure counter; main owns cleanup of the unique
+temp path created by one admitted save. Neither concern changes replacement
+admission, the ledger, or provider lifecycle. A finite retry-count limit is
+deliberately rejected because it would recreate the permanent durability wait;
+the delay is exponentially increased to a cap while temp cleanup bounds disk
+artifacts until persistence becomes healthy again.
+
 This is separate from the async manager logic because the fifth review found
 the same missing-identity failure in recovery, close, and transaction cleanup.
 Adding three more scans/conditionals would preserve the substrate that produced
@@ -506,6 +533,11 @@ receives no pane IDs and gains no replacement exception.
   settlement capability: commit wakes the queued successor request, while any
   non-commit outcome cancels it. Renderer autosave retries failures using the
   latest state so this correctness wait also has a liveness path.
+- **Resolved by tenth-review Stage 2 design:** `beforeunload` is an attempted,
+  vetoable transition rather than proof the renderer will die. Its flush stays
+  retry-capable while mounted-generation cleanup is the actual terminal event.
+  Persistent errors retain eventual-success retries with capped backoff, and
+  each failed main write removes only its own nonce-addressed temp artifact.
 - Predecessor stop can fail or become uncertain. The coordinator's tombstone
   must remain fail-closed; compensation may also fail in that state and needs a
   truthful lifecycle outcome rather than an unsafe lease exception.
@@ -635,3 +667,12 @@ retire P→S while S→T waits and prove the queued request is cancelled, while 
 renderer autosave fixture rejects its first real `saveWorkspace` call and
 proves the timer retries from the latest state without another mutation. The
 existing original-predecessor collision fixture remains the negative control.
+
+Tenth-review fixtures add both exact schedules reported at commit `537294ab`:
+(a) dispatch a cancelable `beforeunload`, veto it as the editor guard does,
+reject the attempted flush once, and prove the surviving renderer retries from
+latest state; and (b) keep rejecting autosave, prove retry delays grow from the
+recorded 400 ms base, then unmount and prove no retired-generation timer fires.
+The main IPC fixture lets `writeFile(tmp)` succeed and `rename(tmp, STATE_FILE)`
+reject, captures the generated nonce path, and proves that exact path is passed
+to `unlink` before the save rejection reaches its caller.

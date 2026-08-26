@@ -6,16 +6,18 @@ const {
   readFile,
   writeFile,
   rename,
+  unlink,
 } = vi.hoisted(() => ({
   handle: vi.fn(),
   mkdir: vi.fn(),
   readFile: vi.fn(),
   writeFile: vi.fn(),
   rename: vi.fn(),
+  unlink: vi.fn(),
 }))
 
 vi.mock('electron', () => ({ ipcMain: { handle } }))
-vi.mock('fs/promises', () => ({ mkdir, readFile, writeFile, rename }))
+vi.mock('fs/promises', () => ({ mkdir, readFile, writeFile, rename, unlink }))
 vi.mock('@main/storage/paths.js', () => ({
   STATE_DIR: '/recorded/state',
   STATE_FILE: '/recorded/state/workspace.json',
@@ -36,6 +38,7 @@ describe('workspace persistence ordering', () => {
     readFile.mockReset()
     writeFile.mockReset()
     rename.mockReset()
+    unlink.mockReset().mockResolvedValue(undefined)
   })
 
   it('commits overlapping saves in IPC admission order', async () => {
@@ -128,5 +131,34 @@ describe('workspace persistence ordering', () => {
     // successor, leaving disk and main with opposite owners.
     expect(readsBeforeSaveSettles).toBe(0)
     expect(readFile).toHaveBeenCalledTimes(1)
+  })
+
+  it('removes its unique temp file when the atomic rename rejects', async () => {
+    const recordedFailure = new Error('recorded rename rejection')
+    writeFile.mockResolvedValue(undefined)
+    rename.mockRejectedValue(recordedFailure)
+
+    const { registerWorkspaceIpc } = await import('./workspace')
+    registerWorkspaceIpc({
+      acknowledgePersistedSessionOwnership: vi.fn(),
+    } as never)
+    const save = handle.mock.calls.find(([channel]) => channel === 'workspace:save')?.[1] as
+      | ((_event: unknown, json: string) => Promise<void>)
+      | undefined
+    expect(save).toBeTypeOf('function')
+
+    await expect(save?.({}, JSON.stringify({
+      workspace: { sessions: { successor: {} } },
+    }))).rejects.toBe(recordedFailure)
+
+    const tempPath = writeFile.mock.calls[0]?.[0]
+    expect(tempPath).toMatch(/^\/recorded\/state\/workspace\.json\./)
+    // WHY assert the exact nonce path rather than merely "unlink happened":
+    // concurrent admitted saves each own a different scratch artifact. Broad
+    // cleanup or recomputing the name could delete another generation's file.
+    expect(unlink).toHaveBeenCalledWith(tempPath)
+    expect(unlink.mock.invocationCallOrder[0]).toBeGreaterThan(
+      rename.mock.invocationCallOrder[0],
+    )
   })
 })

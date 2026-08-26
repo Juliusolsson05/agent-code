@@ -8,6 +8,9 @@ import { withNormalizedBuiltInMcpDomains } from '@renderer/workspace/mcpDomains'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import * as perf from '@renderer/performance/client'
 
+const AUTOSAVE_DELAY_MS = 400
+const AUTOSAVE_RETRY_MAX_DELAY_MS = 30_000
+
 // Debounced workspace-save + beforeunload flush.
 //
 // The save is extracted into a stable helper so it can be called
@@ -38,8 +41,9 @@ export function useAutoSave(
   bootstrapComplete: boolean,
 ): void {
   const retryEnabledRef = useRef(false)
-  const flushSaveRef = useRef<(retryOnFailure?: boolean) => void>(() => undefined)
-  const flushSave = useCallback((retryOnFailure = true) => {
+  const retryAttemptRef = useRef(0)
+  const flushSaveRef = useRef<() => void>(() => undefined)
+  const flushSave = useCallback(() => {
     const saveSpan = perf.span('workspace.autosave.flush')
     const s = refs.latestStateRef.current
     const pruned = pruneSessionOwnership(s)
@@ -143,6 +147,7 @@ export function useAutoSave(
     }
     void window.api.saveWorkspace(json)
       .then(() => {
+        retryAttemptRef.current = 0
         saveSpan.end({
           tabs: persisted.tabs.length,
           sessions: Object.keys(persisted.sessions).length,
@@ -155,7 +160,6 @@ export function useAutoSave(
         // eslint-disable-next-line no-console
         console.warn('[workspace] save failed:', err)
         if (
-          retryOnFailure &&
           retryEnabledRef.current &&
           refs.saveTimerRef.current === null
         ) {
@@ -166,10 +170,15 @@ export function useAutoSave(
           // blocked forever after one transient filesystem error. Re-entering
           // flushSave through a ref serializes the latest state, not the stale
           // JSON captured by the failed attempt.
+          const retryDelayMs = Math.min(
+            AUTOSAVE_DELAY_MS * (2 ** retryAttemptRef.current),
+            AUTOSAVE_RETRY_MAX_DELAY_MS,
+          )
+          retryAttemptRef.current += 1
           refs.saveTimerRef.current = setTimeout(() => {
             refs.saveTimerRef.current = null
-            flushSaveRef.current(true)
-          }, 400)
+            flushSaveRef.current()
+          }, retryDelayMs)
         }
       })
   }, [refs.latestRuntimesRef, refs.latestStateRef, refs.latestTileTabsRef])
@@ -187,13 +196,27 @@ export function useAutoSave(
     }
   }, [bootstrapComplete])
 
+  useEffect(() => () => {
+    // WHY this cleanup is not tied to the timer captured by the state effect:
+    // that original debounce may already have fired and installed a later
+    // retry. Unmount is the actual renderer-generation boundary and must cancel
+    // whichever timer the generation owns at that instant.
+    if (refs.saveTimerRef.current) {
+      clearTimeout(refs.saveTimerRef.current)
+      refs.saveTimerRef.current = null
+    }
+  }, [refs.saveTimerRef])
+
   useEffect(() => {
     if (!bootstrapComplete) return
+    // A newer state is a fresh durability attempt, not another failure of the
+    // same bytes. Reset backoff so user progress is persisted promptly.
+    retryAttemptRef.current = 0
     if (refs.saveTimerRef.current) clearTimeout(refs.saveTimerRef.current)
     const timer = setTimeout(() => {
       refs.saveTimerRef.current = null
-      flushSave(true)
-    }, 400)
+      flushSave()
+    }, AUTOSAVE_DELAY_MS)
     refs.saveTimerRef.current = timer
     return () => {
       if (refs.saveTimerRef.current === timer) {
@@ -211,11 +234,12 @@ export function useAutoSave(
         clearTimeout(refs.saveTimerRef.current)
         refs.saveTimerRef.current = null
       }
-      // The window is leaving; retrying after this point could write from a
-      // renderer whose ownership lifetime has ended. Main has already received
-      // this final IPC attempt, so preserve the historical best-effort unload
-      // behavior without starting another timer.
-      flushSave(false)
+      // beforeunload is vetoable (for example, the editor's unsaved-changes
+      // guard). It is only an attempted teardown, so this flush must remain
+      // retry-capable if the renderer survives. Actual unmount flips the
+      // generation flag and cancels whichever retry timer is then current.
+      retryAttemptRef.current = 0
+      flushSave()
     }
     window.addEventListener('beforeunload', onBeforeUnload)
     return () => window.removeEventListener('beforeunload', onBeforeUnload)

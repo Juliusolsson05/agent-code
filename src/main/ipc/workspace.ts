@@ -1,5 +1,5 @@
 import { ipcMain } from 'electron'
-import { mkdir, readFile, writeFile, rename } from 'fs/promises'
+import { mkdir, readFile, writeFile, rename, unlink } from 'fs/promises'
 
 import { STATE_DIR, STATE_FILE } from '@main/storage/paths.js'
 import type { SessionManager } from '@main/sessionManager.js'
@@ -52,8 +52,25 @@ export function registerWorkspaceIpc(manager: SessionManager): void {
       const tmp = `${STATE_FILE}.${process.pid}.${Date.now()}.${Math.random()
         .toString(36)
         .slice(2)}.tmp`
-      await writeFile(tmp, json, 'utf8')
-      await rename(tmp, STATE_FILE)
+      try {
+        await writeFile(tmp, json, 'utf8')
+        await rename(tmp, STATE_FILE)
+      } catch (error) {
+        // WHY cleanup is scoped to this exact nonce path: a rename failure can
+        // leave a complete scratch file behind, and durability retry creates a
+        // new nonce on every attempt. Without unlink, a persistent destination
+        // error converts eventual-success retry into unbounded disk/inode use.
+        // Never scan the directory or infer sibling names—another admitted
+        // save may own them. Cleanup remains best-effort so the caller receives
+        // the original write/rename failure that explains why commit did not
+        // happen.
+        try {
+          await unlink(tmp)
+        } catch {
+          // Missing/locked scratch cleanup cannot make the failed save durable.
+        }
+        throw error
+      }
       // WHY replacement commit follows the rename: a successful spawn response
       // is not durable renderer ownership. If reload destroys the renderer before
       // its remapped local ID reaches workspace.json, main must retain the
