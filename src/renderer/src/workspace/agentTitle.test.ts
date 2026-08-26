@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   AGENT_TITLE_MAX_LENGTH,
+  limitAgentTitleLength,
   normalizeAgentTitle,
   setAgentTitleInWorkspace,
 } from '@renderer/workspace/agentTitle'
@@ -34,6 +35,16 @@ describe('agent title workspace metadata', () => {
       `${'a'.repeat(AGENT_TITLE_MAX_LENGTH - 1)}🙂`,
     )
     expect(Array.from(normalizeAgentTitle(input) ?? '')).toHaveLength(AGENT_TITLE_MAX_LENGTH)
+  })
+
+  it('keeps the input limit Unicode-safe and removes whitespace exposed by truncation', () => {
+    const emojiInput = `${'🙂'.repeat(AGENT_TITLE_MAX_LENGTH)}extra`
+    expect(limitAgentTitleLength(emojiInput)).toBe('🙂'.repeat(AGENT_TITLE_MAX_LENGTH))
+
+    const boundaryWhitespace = `${'a'.repeat(AGENT_TITLE_MAX_LENGTH - 1)} b`
+    expect(normalizeAgentTitle(boundaryWhitespace)).toBe(
+      'a'.repeat(AGENT_TITLE_MAX_LENGTH - 1),
+    )
   })
 
   it('sets and clears one agent title through the durable SessionMeta record', () => {

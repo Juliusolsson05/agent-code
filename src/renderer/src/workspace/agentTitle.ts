@@ -9,10 +9,18 @@ import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
  */
 export const AGENT_TITLE_MAX_LENGTH = 120
 
+export function limitAgentTitleLength(value: string): string {
+  return Array.from(value).slice(0, AGENT_TITLE_MAX_LENGTH).join('')
+}
+
 export function normalizeAgentTitle(value: string): string | null {
   const trimmed = value.trim()
   if (!trimmed) return null
-  return Array.from(trimmed).slice(0, AGENT_TITLE_MAX_LENGTH).join('')
+  // WHY trim again after slicing: a title can contain internal whitespace, and
+  // the length boundary can land exactly on that whitespace. Returning the
+  // raw slice would manufacture a trailing space even though the input was
+  // trimmed first, breaking the canonical-state contract used by no-op checks.
+  return limitAgentTitleLength(trimmed).trimEnd()
 }
 
 /**

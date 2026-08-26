@@ -1,6 +1,6 @@
 # Set Agent Title Implementation Plan
 
-> **Status: COMPLETE — PR #660 OPEN, UNMERGED**
+> **Status: REVIEW FEEDBACK RESOLVED — PR #660 OPEN, UNMERGED**
 
 **Goal:** Let the user assign, edit, and clear a durable title for the focused
 agent from Grid, classic Dispatch, or Tiled Dispatch, then show that title as a
@@ -60,3 +60,19 @@ latest-prompt fallback only when no explicit title exists.
   an environment-owned corpus invariant: fixture
   `atp-codex-image-inside-claude-transcript` cites a transcript below
   `~/.claude` that is absent on this machine. No feature test fails.
+
+## Orchestrated review follow-up
+
+Two independent Agent Code orchestrated reviewers inspected PR #660. Their
+four validated findings are being resolved at the shared contract boundaries:
+
+- [x] Preserve the latest explicit title when a delayed provider/reload/rewind
+  replacement swaps the pane to a fresh session id.
+- [x] Use the same explicit-title-first resolver in Tiled Dispatch mini-chip
+  tooltips as the full Dispatch index.
+- [x] Make modal typing and paste enforce the 120-character limit by Unicode
+  code point rather than native UTF-16 code-unit length.
+- [x] Re-trim after truncation so a length boundary cannot manufacture durable
+  trailing whitespace.
+- [ ] Add regression coverage, rerun verification, synchronize the PR, and
+  merge only after CI is green.

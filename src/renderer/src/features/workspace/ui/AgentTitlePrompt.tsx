@@ -12,7 +12,7 @@ import {
 } from '@renderer/components/ui/dialog'
 import { Input } from '@renderer/components/ui/input'
 import { Label } from '@renderer/components/ui/label'
-import { AGENT_TITLE_MAX_LENGTH } from '@renderer/workspace/agentTitle'
+import { limitAgentTitleLength } from '@renderer/workspace/agentTitle'
 
 export function AgentTitlePrompt({
   open,
@@ -56,9 +56,14 @@ export function AgentTitlePrompt({
             <Input
               id="agent-title-input"
               autoFocus
-              maxLength={AGENT_TITLE_MAX_LENGTH}
               value={title}
-              onChange={event => setTitle(event.target.value)}
+              // WHY native maxLength is not used: browsers count UTF-16 code
+              // units, while the durable title contract counts code points so
+              // it never splits a surrogate pair. A native 120-unit limit
+              // would allow only 60 emoji and disagree with save-time
+              // normalization. Keep typing, paste, and persistence on the same
+              // limiter instead.
+              onChange={event => setTitle(limitAgentTitleLength(event.target.value))}
               placeholder="e.g. Investigate queued prompt race"
             />
             <p className="mt-2 text-[10px] text-muted">

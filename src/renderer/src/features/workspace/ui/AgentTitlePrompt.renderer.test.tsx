@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
 import { AgentTitlePrompt } from '@renderer/features/workspace/ui/AgentTitlePrompt'
+import { AGENT_TITLE_MAX_LENGTH } from '@renderer/workspace/agentTitle'
 import { dispatchRowTitle } from '@renderer/workspace/dispatch/DispatchAgentList'
 import { PaneHeader } from '@renderer/workspace/tile-tree/TileLeaf/PaneHeader'
 import type { Entry } from '@shared/types/transcript'
@@ -40,6 +41,24 @@ describe('Agent title prompt', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Clear title' }))
     expect(onSave).toHaveBeenCalledWith('')
+  })
+
+  it('applies the 120-character input limit by Unicode code point', () => {
+    render(
+      <AgentTitlePrompt
+        open
+        initialTitle=""
+        description="/work/project"
+        onCancel={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    )
+
+    const input = screen.getByLabelText('Title')
+    fireEvent.change(input, {
+      target: { value: `${'🙂'.repeat(AGENT_TITLE_MAX_LENGTH)}extra` },
+    })
+    expect(input).toHaveValue('🙂'.repeat(AGENT_TITLE_MAX_LENGTH))
   })
 })
 

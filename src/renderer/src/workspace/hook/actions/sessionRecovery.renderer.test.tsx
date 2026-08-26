@@ -187,4 +187,104 @@ describe('useSessionActions recovery retry', () => {
       exited: null,
     })
   })
+
+  it('carries the latest pane title across a delayed session replacement', async () => {
+    const sessionId = 'source-session'
+    let state = {
+      tabs: [{
+        id: 'tab-1',
+        title: 'Project',
+        focusedSessionId: sessionId,
+        root: { type: 'leaf' as const, sessionId },
+      }],
+      activeTabId: 'tab-1',
+      sessions: {
+        [sessionId]: {
+          cwd: '/tmp/project',
+          kind: 'claude' as const,
+          title: 'Initial title',
+        },
+      },
+      detachedSessions: {},
+      gridRelatedSelections: {},
+      buried: [],
+      pinnedSessionIds: [],
+      dispatchMode: null,
+    } as WorkspaceState
+    let runtimes: Record<SessionId, SessionRuntime> = {
+      [sessionId]: emptyRuntime(),
+    }
+    const refs = {
+      stateRef: ref(state),
+      latestStateRef: ref(state),
+      latestRuntimesRef: ref(runtimes),
+      dangerousAgentsRef: ref(false),
+      useProxyStreamingRef: ref(false),
+      defaultBuiltInMcpDomainsRef: ref([]),
+      seenUuidsRef: ref({}),
+      latestScreenRef: ref({}),
+    } as unknown as WorkspaceRefs
+    const setState = (next: WorkspaceState | ((prev: WorkspaceState) => WorkspaceState)) => {
+      state = typeof next === 'function' ? next(state) : next
+      refs.stateRef.current = state
+      refs.latestStateRef.current = state
+    }
+    const setRuntimes = (
+      next: Record<SessionId, SessionRuntime> |
+        ((prev: Record<SessionId, SessionRuntime>) => Record<SessionId, SessionRuntime>),
+    ) => {
+      runtimes = typeof next === 'function' ? next(runtimes) : next
+      refs.latestRuntimesRef.current = runtimes
+    }
+    let finishSpawn!: (value: { sessionId: string }) => void
+    const spawnSession = vi.fn(() => new Promise<{ sessionId: string }>(resolve => {
+      finishSpawn = resolve
+    }))
+    const ghostRead = vi.fn(async () => [])
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: {
+        spawnSession,
+        killOwnedSession: vi.fn(async () => true),
+        ghostRead,
+      },
+    })
+    const { result } = renderHook(() => useSessionActions(
+      state,
+      setState,
+      setRuntimes,
+      refs,
+    ))
+
+    let replacement!: Promise<SessionId | undefined>
+    act(() => {
+      replacement = result.current.replaceSession('/tmp/project', {
+        kind: 'codex',
+        targetSessionId: sessionId,
+      })
+    })
+    act(() => {
+      // WHY edit while spawn is unresolved: provider switches and rewinds can
+      // wait on backend work. Reading the pre-await snapshot would make a Save
+      // that visibly succeeded disappear when that delayed replacement lands.
+      setState(prev => ({
+        ...prev,
+        sessions: {
+          ...prev.sessions,
+          [sessionId]: { ...prev.sessions[sessionId]!, title: 'Edited during switch' },
+        },
+      }))
+    })
+    await act(async () => {
+      finishSpawn({ sessionId: 'replacement-session' })
+      await replacement
+    })
+
+    expect(state.sessions[sessionId]).toBeUndefined()
+    expect(state.sessions['replacement-session']?.title).toBe('Edited during switch')
+    // `spawn` intentionally defers ghost bootstrap by one timer tick. Let that
+    // owned task finish before afterEach removes the API mock, or this test can
+    // leak an irrelevant unhandled rejection into a later full-suite worker.
+    await vi.waitFor(() => expect(ghostRead).toHaveBeenCalledWith('replacement-session'))
+  })
 })
