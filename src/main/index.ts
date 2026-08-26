@@ -41,7 +41,7 @@ import { SessionRecorderManager } from '@main/recording/SessionRecorderManager.j
 import { setOutboundObserver } from '@main/window/mainWindow.js'
 import { isSessionRecordingEnabled, isSessionRecordingAutoStart } from '@main/ipc/devDebug.js'
 import { registerAllIpc } from '@main/ipc/index.js'
-import { AgentCodeConventionsService } from '@main/agentCodeConventions/AgentCodeConventionsService.js'
+import { AgentCodeManagedSkillsService } from '@main/agentCodeConventions/AgentCodeManagedSkillsService.js'
 import { cleanupDictationIpcResources } from '@main/ipc/dictation.js'
 import { flushHistoryWrites } from '@main/dictation/historyStore.js'
 import { performanceService } from '@main/performance/PerformanceService.js'
@@ -638,7 +638,7 @@ async function startApp(): Promise<void> {
     appRunJournal.recordError('mcp_host.error', err)
     throw err
   }
-  const agentCodeConventionsService = new AgentCodeConventionsService()
+  const agentCodeConventionsService = new AgentCodeManagedSkillsService()
   await agentCodeConventionsService.initialize()
   manager = new SessionManager(
     tmuxAvailable ? tmuxRegistry : null,

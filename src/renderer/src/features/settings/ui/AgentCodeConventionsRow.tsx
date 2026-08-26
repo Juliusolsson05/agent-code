@@ -163,7 +163,7 @@ export function AgentCodeConventionsRow() {
               type="button"
               className="border border-danger px-2 py-1"
               onClick={() => {
-                if (!window.confirm('Reset unreadable conventions state? The preserved state file will be removed, and any existing provider copies will be left untouched.')) return
+                if (!window.confirm('Reset all unreadable Agent Code-managed skill state? The shared state file will be removed, and any existing provider copies will be left untouched.')) return
                 void window.api.resetAgentCodeConventionsRecovery().then(applyResult)
               }}
             >

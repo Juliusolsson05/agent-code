@@ -70,6 +70,52 @@ describe('Agent Code conventions persistence', () => {
     })
   })
 
+  it('migrates schema-v1 conventions without changing ownership evidence', async () => {
+    const root = await temporaryDirectory()
+    const statePath = join(root, 'conventions.json')
+    const skillPath = join(root, '.agents', 'skills', 'agent-code-conventions', 'SKILL.md')
+    const legacy = {
+      schemaVersion: 1,
+      revision: 7,
+      enabled: true,
+      markdown: '# Preserve me',
+      updatedAt: '2026-08-26T00:00:00.000Z',
+      materializations: {
+        'agents-standard-personal-skills': { path: skillPath, sha256: 'a'.repeat(64) },
+      },
+      pendingOperations: {},
+    }
+    await writeFile(statePath, JSON.stringify(legacy))
+
+    expect(await readAgentCodeConventionsState(statePath)).toEqual({
+      kind: 'ok',
+      document: {
+        ...legacy,
+        schemaVersion: 2,
+        customSkills: {},
+      },
+    })
+  })
+
+  it('treats duplicate or path-shaped custom skill names as recovery-required', async () => {
+    const root = await temporaryDirectory()
+    const statePath = join(root, 'conventions.json')
+    const document = createEmptyAgentCodeConventionsDocument()
+    const timestamp = '2026-08-26T00:00:00.000Z'
+    document.customSkills = {
+      one: { id: 'one', name: 'same-name', description: 'One', markdown: '# One', enabled: false, createdAt: timestamp, updatedAt: timestamp },
+      two: { id: 'two', name: 'same-name', description: 'Two', markdown: '# Two', enabled: false, createdAt: timestamp, updatedAt: timestamp },
+    }
+    await writeFile(statePath, JSON.stringify(document))
+    expect(await readAgentCodeConventionsState(statePath)).toMatchObject({ kind: 'recovery-required' })
+
+    document.customSkills = {
+      unsafe: { id: 'unsafe', name: '../escape', description: 'Unsafe', markdown: '# Unsafe', enabled: false, createdAt: timestamp, updatedAt: timestamp },
+    }
+    await writeFile(statePath, JSON.stringify(document))
+    expect(await readAgentCodeConventionsState(statePath)).toMatchObject({ kind: 'recovery-required' })
+  })
+
   it.runIf(process.platform !== 'win32')('rejects a symlink state file without following it', async () => {
     const root = await temporaryDirectory()
     const source = join(root, 'source.json')

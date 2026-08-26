@@ -13,6 +13,7 @@ import { DictationApiKeyRow } from '@renderer/features/voice-dictation/Dictation
 import { DictationHistoryRow } from '@renderer/features/voice-dictation/DictationHistoryRow'
 import { ThemePickerRow } from '@renderer/features/settings/ui/ThemePickerRow'
 import { AgentCodeConventionsRow } from '@renderer/features/settings/ui/AgentCodeConventionsRow'
+import { AgentCodeCustomSkillsRow } from '@renderer/features/settings/ui/AgentCodeCustomSkillsRow'
 import { Button } from '@renderer/components/ui/button'
 import { cn } from '@renderer/lib/utils'
 
@@ -218,6 +219,8 @@ function SettingRow({
           {control.type === 'dictation-history' ? <DictationHistoryRow /> : null}
 
           {control.type === 'agent-code-conventions' ? <AgentCodeConventionsRow /> : null}
+
+          {control.type === 'agent-code-custom-skills' ? <AgentCodeCustomSkillsRow /> : null}
 
           {/* Theme grid — built-ins and saved themes in one list, with the
               create/edit/delete affordances the generic select can't carry.

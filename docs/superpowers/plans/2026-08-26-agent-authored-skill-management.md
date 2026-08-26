@@ -1,6 +1,6 @@
 # Agent-authored Personal Skill Management
 
-> Status: planned.
+> Status: implemented; verification and PR review pending.
 
 ## Goal
 
@@ -130,9 +130,15 @@ design invariant that exactly one component decides whether bytes are owned.
 ### Persisted state and migration
 
 Introduce a versioned collection document with a global compare-and-swap
-revision, skill definitions, materializations, and pending operations.
+revision, custom skill definitions, materializations, and pending operations.
 Materialization identity includes both stable skill id and provider target id;
 provider target id alone cannot represent multiple skills.
+
+The v2 serialized shape deliberately retains the schema-v1 Conventions fields
+as the reserved record's compatibility facade rather than mechanically moving
+them under `customSkills`. That keeps all existing ownership keys and crash
+journals byte-for-byte attributable during migration while the service treats
+the complete document as one collection.
 
 Migrate schema-v1 Conventions state into a reserved Conventions record while
 preserving:
