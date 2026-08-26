@@ -73,6 +73,9 @@ export const SESSION_LIFECYCLE_EVENT_NAMES = [
   // rollout owner before the successor reached provider start?"
   'replacement.handoff.begin',
   'replacement.handoff.end',
+  // "Did a successor failure restore the predecessor's stable local ID?"
+  'replacement.rollback.begin',
+  'replacement.rollback.end',
 
   // "Why is the composer not accepting input?"
   //

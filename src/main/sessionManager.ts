@@ -218,6 +218,26 @@ type RecoveryClaim = {
   promise: Promise<SessionRecoverResult>
 }
 
+type SessionSpawnInfo = {
+  kind: SessionKind
+  cwd: string
+  resumeSessionId: string | null
+  dangerousMode: boolean
+  useProxy: boolean
+}
+
+type CodexReplacementProof = 'same-resume-id' | 'same-transcript-path'
+
+type CodexReplacementHandoff = {
+  claim: symbol
+  predecessorSessionId: string
+  predecessorOwnership: SessionOwnershipOptions
+  proof: CodexReplacementProof
+  restoreOptions: SessionSpawnOptions
+  stopPromise: Promise<void> | null
+  predecessorStopped: boolean
+}
+
 class RecoveryCancelledError extends Error {
   constructor() {
     super('Session recovery was cancelled')
@@ -351,7 +371,7 @@ export class SessionManager extends EventEmitter {
   // not the workspace the user thinks of.
   private readonly spawnInfo = new Map<
     string,
-    { kind: SessionKind; cwd: string; resumeSessionId: string | null }
+    SessionSpawnInfo
   >()
   // One same-pane Codex replacement per predecessor at a time. The exact
   // rollout coordinator catches a second physical tail, but that is too late:
@@ -755,6 +775,28 @@ export class SessionManager extends EventEmitter {
     }
     const kind = options.kind ?? DEFAULT_PROVIDER
     const cwd = path.resolve(options.cwd)
+
+    // WHY a replacement claim fences recovery even while the predecessor is
+    // still visible: the renderer continues to address the old local ID until
+    // spawn IPC returns and state remapping commits. A mount/send/navigation
+    // wake in that interval must neither adopt a backend that is about to be
+    // retired nor recreate the old ID after destructive handoff. The fence is
+    // main-owned and lasts through compensation, so no renderer lifetime or
+    // React single-flight can reopen the exact-rollout race found in review.
+    if (this.codexReplacementHandoffs.has(options.sessionId)) {
+      this.lifecycle.session('recover.conflict', options.sessionId, {
+        kind,
+        code: 'ownership-conflict',
+        lifecycle: 'spawning',
+        reason: 'replacement-handoff',
+      })
+      return Promise.resolve({
+        ok: false,
+        code: 'ownership-conflict',
+        retryable: true,
+        message: `Session ${options.sessionId} is being replaced`,
+      })
+    }
     const existingClaim = this.recoveriesInFlight.get(options.sessionId)
     if (existingClaim) {
       if (existingClaim.kind === kind && existingClaim.cwd === cwd) {
@@ -1000,7 +1042,23 @@ export class SessionManager extends EventEmitter {
       kind,
     )
     try {
-      return await this.spawnWithId(options, sessionId)
+      return await this.spawnWithId(
+        options,
+        sessionId,
+        undefined,
+        codexHandoffClaim,
+      )
+    } catch (error) {
+      // A same-rollout successor can fail after the exact ownership boundary:
+      // prompt-profile attestation, PTY spawn, and headless start all happen
+      // after the predecessor must release its lease. The old renderer state is
+      // still keyed by predecessorSessionId because replaceSession has not
+      // returned. Restore that ID before surfacing the successor error so a
+      // failed reload remains a failed reload, not a dead pane.
+      if (codexHandoffClaim?.predecessorStopped) {
+        await this.restoreCodexReplacementPredecessor(codexHandoffClaim)
+      }
+      throw error
     } finally {
       // Keep the predecessor claim until the successor transaction is fully
       // terminal. Releasing immediately after stop would let a repeated stale
@@ -1009,7 +1067,8 @@ export class SessionManager extends EventEmitter {
       if (
         options.predecessorSessionId &&
         codexHandoffClaim &&
-        this.codexReplacementHandoffs.get(options.predecessorSessionId) === codexHandoffClaim
+        this.codexReplacementHandoffs.get(options.predecessorSessionId) ===
+          codexHandoffClaim.claim
       ) {
         this.codexReplacementHandoffs.delete(options.predecessorSessionId)
       }
@@ -1030,7 +1089,7 @@ export class SessionManager extends EventEmitter {
     options: SessionSpawnOptions,
     successorSessionId: string,
     kind: SessionKind,
-  ): Promise<symbol | null> {
+  ): Promise<CodexReplacementHandoff | null> {
     const predecessorSessionId = options.predecessorSessionId
     if (kind !== 'codex' || !options.resumeSessionId || !predecessorSessionId) {
       return null
@@ -1061,7 +1120,7 @@ export class SessionManager extends EventEmitter {
         return null
       }
 
-      let proof: 'same-resume-id' | 'same-transcript-path' | null =
+      let proof: CodexReplacementProof | null =
         predecessorInfo.resumeSessionId === options.resumeSessionId
           ? 'same-resume-id'
           : null
@@ -1093,39 +1152,143 @@ export class SessionManager extends EventEmitter {
         return null
       }
 
+      const size = this.sessionSizes.get(predecessorSessionId)
+      const effectiveDomains =
+        this.builtInMcpHost?.sessionDomains?.(predecessorSessionId) ?? []
+      return {
+        claim,
+        predecessorSessionId,
+        predecessorOwnership: {
+          sessionId: predecessorSessionId,
+          kind: predecessorInfo.kind,
+          cwd: predecessorInfo.cwd,
+        },
+        proof,
+        // WHY compensation resumes the requested exact provider ID even when
+        // the predecessor began as a fresh pane: session_meta may have taught
+        // the renderer/main path cache the durable ID after launch, while the
+        // original spawnInfo necessarily contains null. The path/ID proof above
+        // is what authorizes this value; copying null would create a fresh
+        // session and abandon the pane's transcript after a failed reload.
+        restoreOptions: {
+          kind: 'codex',
+          cwd: predecessorInfo.cwd,
+          resumeSessionId: options.resumeSessionId,
+          ...(size ? { cols: size.cols, rows: size.rows } : {}),
+          dangerousMode: predecessorInfo.dangerousMode,
+          useProxy: predecessorInfo.useProxy,
+          builtInMcpDomains: effectiveDomains,
+        },
+        stopPromise: null,
+        predecessorStopped: false,
+      }
+    } catch (error) {
+      release()
+      throw error
+    }
+  }
+
+  /**
+   * Execute the destructive half of an already-proven Codex replacement.
+   *
+   * Codex invokes this closure only after its proxy/config launch preflight and
+   * immediately before exact rollout preparation. Keeping policy here means the
+   * runtime cannot name or tear down panes, while keeping timing there avoids
+   * killing a healthy predecessor for failures that never needed its lease.
+   */
+  private async executeCodexReplacementHandoff(
+    handoff: CodexReplacementHandoff,
+    successorSessionId: string,
+  ): Promise<void> {
+    if (handoff.stopPromise) return await handoff.stopPromise
+
+    handoff.stopPromise = (async () => {
       const startedAt = performance.now()
       this.lifecycle.session('replacement.handoff.begin', successorSessionId, {
-        kind,
-        predecessorSessionId,
+        kind: 'codex',
+        predecessorSessionId: handoff.predecessorSessionId,
         hasResumeId: true,
-        reason: proof,
+        reason: handoff.proof,
       })
-      const stopped = await this.killOwned({
-        sessionId: predecessorSessionId,
-        kind: predecessorInfo.kind,
-        cwd: predecessorInfo.cwd,
-      })
+      const stopped = await this.killOwned(handoff.predecessorOwnership)
       if (!stopped) {
         this.lifecycle.session('replacement.handoff.end', successorSessionId, {
-          kind,
-          predecessorSessionId,
+          kind: 'codex',
+          predecessorSessionId: handoff.predecessorSessionId,
           ok: false,
           reason: 'predecessor-ownership-changed',
           durationMs: performance.now() - startedAt,
         })
         throw new Error('Codex replacement predecessor is no longer owned by this pane')
       }
+      handoff.predecessorStopped = true
       this.lifecycle.session('replacement.handoff.end', successorSessionId, {
-        kind,
-        predecessorSessionId,
+        kind: 'codex',
+        predecessorSessionId: handoff.predecessorSessionId,
         ok: true,
-        reason: proof,
+        reason: handoff.proof,
         durationMs: performance.now() - startedAt,
       })
-      return claim
-    } catch (error) {
-      release()
-      throw error
+    })()
+    return await handoff.stopPromise
+  }
+
+  /** Restore the old local routing ID after a post-handoff successor failure. */
+  private async restoreCodexReplacementPredecessor(
+    handoff: CodexReplacementHandoff,
+  ): Promise<void> {
+    const startedAt = performance.now()
+    this.lifecycle.session(
+      'replacement.rollback.begin',
+      handoff.predecessorSessionId,
+      {
+        kind: 'codex',
+        predecessorSessionId: handoff.predecessorSessionId,
+        hasResumeId: true,
+        reason: 'successor-start-failed',
+      },
+    )
+    try {
+      // Bypass public recover() deliberately: the handoff fence must continue
+      // rejecting unrelated wake callers until compensation itself settles.
+      // spawnWithId still applies every normal generation, MCP, readiness, and
+      // rollback invariant to the restored backend.
+      await this.spawnWithId(
+        handoff.restoreOptions,
+        handoff.predecessorSessionId,
+      )
+      this.lifecycle.session(
+        'replacement.rollback.end',
+        handoff.predecessorSessionId,
+        {
+          kind: 'codex',
+          predecessorSessionId: handoff.predecessorSessionId,
+          ok: true,
+          reason: 'successor-start-failed',
+          durationMs: performance.now() - startedAt,
+        },
+      )
+    } catch (restoreError) {
+      // Never mask the successor failure the renderer/action is already
+      // handling. The lifecycle outcome and internal error retain the separate
+      // fact that compensation failed; the rollout coordinator remains
+      // fail-closed if predecessor teardown was physically uncertain.
+      performanceService.error(
+        'session.spawn.codexReplacementRollback.error',
+        restoreError,
+        { sessionId: handoff.predecessorSessionId, kind: 'codex' },
+      )
+      this.lifecycle.session(
+        'replacement.rollback.end',
+        handoff.predecessorSessionId,
+        {
+          kind: 'codex',
+          predecessorSessionId: handoff.predecessorSessionId,
+          ok: false,
+          reason: 'restore-start-failed',
+          durationMs: performance.now() - startedAt,
+        },
+      )
     }
   }
 
@@ -1143,6 +1306,7 @@ export class SessionManager extends EventEmitter {
     options: SessionSpawnOptions,
     sessionId: string,
     recoveryClaim?: RecoveryClaim,
+    codexReplacementHandoff?: CodexReplacementHandoff | null,
   ): Promise<SessionSpawnResult> {
     const requestedKind: unknown = options.kind
     if (requestedKind !== undefined && !isSessionKind(requestedKind)) {
@@ -1172,6 +1336,8 @@ export class SessionManager extends EventEmitter {
       kind,
       cwd: path.resolve(options.cwd),
       resumeSessionId: options.resumeSessionId ?? null,
+      dangerousMode: options.dangerousMode === true,
+      useProxy: options.useProxy === true,
     })
     // Record even a startup attempt before readiness creates its watermark.
     // Otherwise repeated pre-provider failures would populate the watermark
@@ -1310,6 +1476,20 @@ export class SessionManager extends EventEmitter {
         // `openai_base_url`.
         useProxy: options.useProxy,
         builtInMcpServers,
+        ...(kind === 'codex' && codexReplacementHandoff
+          ? {
+              // WHY the provider receives execution timing, not policy: Codex
+              // knows the final safe point before exact transcript ownership;
+              // SessionManager alone knows which local predecessor was proven
+              // and how to compensate it. The closure keeps that dependency
+              // arrow one-way and is absent from every ordinary spawn.
+              beforeResumeOwnershipAcquire: () =>
+                this.executeCodexReplacementHandoff(
+                  codexReplacementHandoff,
+                  sessionId,
+                ),
+            }
+          : {}),
       })
       const agentEntry: RegistryEntry = {
         kind,

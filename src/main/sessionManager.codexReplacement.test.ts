@@ -47,6 +47,13 @@ type ReplacementOptions = SessionSpawnOptions & {
 
 class LeaseAwareCodexSession extends EventEmitter {
   readonly start = vi.fn(async (): Promise<void> => {
+    // WHY the injected boundary runs before the fake records physical start:
+    // production Codex can prepare proxy/config resources first, but exact
+    // rollout acquisition is the first step that conflicts with the live
+    // predecessor. Tests need to distinguish that boundary from an eager kill
+    // at the top of SessionManager.spawn().
+    await this.beforeResumeOwnershipAcquire?.()
+    await this.startGate
     this.order.push(`${this.label}:start`)
     if (this.requirePredecessorStop && !this.predecessorStopped.value) {
       // WHY the fake rejects at start instead of pretending the coordinator is
@@ -55,6 +62,7 @@ class LeaseAwareCodexSession extends EventEmitter {
       // production boundary while keeping private rollout paths out of git.
       throw new Error(recordedLeaseFailure.failure)
     }
+    if (this.startError) throw this.startError
     this.emit('started', { projectDir: '/recorded/worktree' })
   })
 
@@ -67,8 +75,12 @@ class LeaseAwareCodexSession extends EventEmitter {
   readonly write = vi.fn()
   readonly resize = vi.fn()
 
+  private beforeResumeOwnershipAcquire: (() => Promise<void>) | null = null
+  private startGate: Promise<void> = Promise.resolve()
+  private startError: Error | null = null
+
   constructor(
-    private readonly label: 'predecessor' | 'successor',
+    private readonly label: 'predecessor' | 'successor' | 'restored' | 'recovery',
     private readonly order: string[],
     private readonly predecessorStopped: { value: boolean },
     private readonly requirePredecessorStop: boolean,
@@ -76,6 +88,32 @@ class LeaseAwareCodexSession extends EventEmitter {
   ) {
     super()
   }
+
+  installResumeOwnershipBoundary(boundary: unknown): void {
+    this.beforeResumeOwnershipAcquire =
+      typeof boundary === 'function'
+        ? boundary as () => Promise<void>
+        : null
+  }
+
+  blockStartOn(gate: Promise<void>): void {
+    this.startGate = gate
+  }
+
+  failStartWith(error: Error): void {
+    this.startError = error
+  }
+}
+
+function installBoundaryFromCreateOptions(
+  session: LeaseAwareCodexSession,
+  options: unknown,
+): LeaseAwareCodexSession {
+  const boundary = (
+    options as { beforeResumeOwnershipAcquire?: unknown }
+  ).beforeResumeOwnershipAcquire
+  session.installResumeOwnershipBoundary(boundary)
+  return session
 }
 
 describe('SessionManager Codex replacement handoff', () => {
@@ -109,7 +147,7 @@ describe('SessionManager Codex replacement handoff', () => {
     )
     createSession
       .mockImplementationOnce(() => predecessor)
-      .mockImplementationOnce(() => successor)
+      .mockImplementationOnce(options => installBoundaryFromCreateOptions(successor, options))
 
     const { SessionManager } = await import('./sessionManager')
     const lifecycle: Array<{
@@ -177,7 +215,7 @@ describe('SessionManager Codex replacement handoff', () => {
     )
     createSession
       .mockImplementationOnce(() => predecessor)
-      .mockImplementationOnce(() => successor)
+      .mockImplementationOnce(options => installBoundaryFromCreateOptions(successor, options))
 
     const { SessionManager } = await import('./sessionManager')
     const manager = new SessionManager()
@@ -208,7 +246,7 @@ describe('SessionManager Codex replacement handoff', () => {
     )
     createSession
       .mockImplementationOnce(() => predecessor)
-      .mockImplementationOnce(() => successor)
+      .mockImplementationOnce(options => installBoundaryFromCreateOptions(successor, options))
     resolveTranscriptPath.mockResolvedValue('/recorded/codex/rollout.jsonl')
 
     const { SessionManager } = await import('./sessionManager')
@@ -247,7 +285,7 @@ describe('SessionManager Codex replacement handoff', () => {
     )
     createSession
       .mockImplementationOnce(() => predecessor)
-      .mockImplementationOnce(() => successor)
+      .mockImplementationOnce(options => installBoundaryFromCreateOptions(successor, options))
 
     const { SessionManager } = await import('./sessionManager')
     const manager = new SessionManager()
@@ -281,7 +319,7 @@ describe('SessionManager Codex replacement handoff', () => {
     )
     createSession
       .mockImplementationOnce(() => predecessor)
-      .mockImplementationOnce(() => successor)
+      .mockImplementationOnce(options => installBoundaryFromCreateOptions(successor, options))
 
     const { SessionManager } = await import('./sessionManager')
     const manager = new SessionManager()
@@ -307,5 +345,163 @@ describe('SessionManager Codex replacement handoff', () => {
       sessionId: expect.any(String),
     })
     expect(createSession).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps the predecessor live when successor MCP preflight fails', async () => {
+    const order: string[] = []
+    const predecessorStopped = { value: false }
+    const predecessor = new LeaseAwareCodexSession(
+      'predecessor', order, predecessorStopped, false,
+    )
+    createSession.mockImplementationOnce(() => predecessor)
+    const builtInMcpHost = {
+      registerSession: vi.fn(() => {
+        throw new Error('recorded successor MCP preflight failure')
+      }),
+      revokeSession: vi.fn(),
+      sessionDomains: vi.fn(() => []),
+    }
+
+    const { SessionManager } = await import('./sessionManager')
+    const manager = new SessionManager(null, builtInMcpHost as never)
+    const first = await manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+    })
+
+    await expect(manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+      predecessorSessionId: first.sessionId,
+      builtInMcpDomains: ['agent_management'],
+    })).rejects.toThrow('recorded successor MCP preflight failure')
+
+    expect(predecessor.stop).not.toHaveBeenCalled()
+    expect(manager.list()).toContain(first.sessionId)
+    expect(manager.getBackendSnapshot(first.sessionId)).toMatchObject({
+      lifecycle: 'live',
+      kind: 'codex',
+    })
+  })
+
+  it('fences recovery of the predecessor id until replacement settles', async () => {
+    let releaseSuccessor!: () => void
+    const successorGate = new Promise<void>(resolve => {
+      releaseSuccessor = resolve
+    })
+    const order: string[] = []
+    const predecessorStopped = { value: false }
+    const predecessor = new LeaseAwareCodexSession(
+      'predecessor', order, predecessorStopped, false,
+    )
+    const successor = new LeaseAwareCodexSession(
+      'successor', order, predecessorStopped, true,
+    )
+    const recovery = new LeaseAwareCodexSession(
+      'recovery', order, predecessorStopped, false,
+    )
+    successor.blockStartOn(successorGate)
+    createSession
+      .mockImplementationOnce(() => predecessor)
+      .mockImplementationOnce(options => installBoundaryFromCreateOptions(successor, options))
+      .mockImplementationOnce(() => recovery)
+
+    const { SessionManager } = await import('./sessionManager')
+    const manager = new SessionManager()
+    const first = await manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+    })
+    const replacement = manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+      predecessorSessionId: first.sessionId,
+    })
+    await vi.waitFor(() => expect(predecessor.stop).toHaveBeenCalledTimes(1))
+
+    await expect(manager.recover({
+      sessionId: first.sessionId,
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+    })).resolves.toMatchObject({
+      ok: false,
+      code: 'ownership-conflict',
+      retryable: true,
+    })
+    expect(createSession).toHaveBeenCalledTimes(2)
+
+    releaseSuccessor()
+    await expect(replacement).resolves.toMatchObject({
+      sessionId: expect.any(String),
+    })
+  })
+
+  it('restores the predecessor id when successor start fails after handoff', async () => {
+    const order: string[] = []
+    const predecessorStopped = { value: false }
+    const predecessor = new LeaseAwareCodexSession(
+      'predecessor', order, predecessorStopped, false,
+    )
+    const successor = new LeaseAwareCodexSession(
+      'successor', order, predecessorStopped, true,
+    )
+    const restored = new LeaseAwareCodexSession(
+      'restored', order, predecessorStopped, true,
+    )
+    const activeMcpRegistrations = new Set<string>()
+    const builtInMcpHost = {
+      registerSession: vi.fn((scope: { sessionId: string }) => {
+        activeMcpRegistrations.add(scope.sessionId)
+        return []
+      }),
+      revokeSession: vi.fn((sessionId: string) => {
+        activeMcpRegistrations.delete(sessionId)
+      }),
+      sessionDomains: vi.fn(() => []),
+    }
+    successor.failStartWith(new Error('recorded successor start failure'))
+    createSession
+      .mockImplementationOnce(() => predecessor)
+      .mockImplementationOnce(options => installBoundaryFromCreateOptions(successor, options))
+      .mockImplementationOnce(() => restored)
+
+    const { SessionManager } = await import('./sessionManager')
+    const manager = new SessionManager(null, builtInMcpHost as never)
+    const first = await manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+      useProxy: true,
+    })
+
+    await expect(manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+      predecessorSessionId: first.sessionId,
+      builtInMcpDomains: ['agent_management'],
+    })).rejects.toThrow('recorded successor start failure')
+
+    expect(predecessor.stop).toHaveBeenCalledTimes(1)
+    expect(restored.start).toHaveBeenCalledTimes(1)
+    expect(manager.list()).toContain(first.sessionId)
+    expect(manager.getBackendSnapshot(first.sessionId)).toMatchObject({
+      sessionId: first.sessionId,
+      kind: 'codex',
+      lifecycle: 'live',
+    })
+    expect(createSession.mock.calls[2]?.[0]).toMatchObject({
+      resumeSessionId: 'provider-a',
+      useProxy: true,
+    })
+    expect(activeMcpRegistrations).toEqual(new Set())
+    expect(builtInMcpHost.revokeSession).toHaveBeenCalledWith(
+      expect.not.stringMatching(first.sessionId),
+    )
   })
 })

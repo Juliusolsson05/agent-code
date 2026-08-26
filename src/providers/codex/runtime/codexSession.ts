@@ -111,6 +111,7 @@ export type CodexSessionOptions = {
   shellSessionId?: string
   useProxy?: boolean
   builtInMcpServers?: BuiltInMcpServerConfig[]
+  beforeResumeOwnershipAcquire?: () => Promise<void>
 }
 
 export type CodexScreenSnapshot = {
@@ -214,6 +215,7 @@ export class CodexSession extends EventEmitter {
   private readonly shellSessionId: string | null
   private readonly useProxy: boolean
   private readonly builtInMcpServers: BuiltInMcpServerConfig[]
+  private readonly beforeResumeOwnershipAcquire: (() => Promise<void>) | null
   private proxyServer: ResponsesProxy | null = null
   private proxyAdapter: CodexResponsesAdapter | null = null
   private nextStartGeneration = 0
@@ -234,6 +236,8 @@ export class CodexSession extends EventEmitter {
     this.shellSessionId = options.shellSessionId ?? null
     this.useProxy = options.useProxy === true
     this.builtInMcpServers = options.builtInMcpServers ?? []
+    this.beforeResumeOwnershipAcquire =
+      options.beforeResumeOwnershipAcquire ?? null
     // Fallback matches sessionManager's explicit 100ms (~10Hz) — see
     // the WHY comment there (#390). Keeping this default in sync
     // matters because a `?? 16` here would silently restore the 60Hz
@@ -353,6 +357,15 @@ export class CodexSession extends EventEmitter {
     let promptInputProfile: CodexPromptInputProfile | null = null
     try {
       if (this.resumeSessionId) {
+        // WHY app-level replacement waits until this exact boundary: proxy
+        // allocation, launch-argument assembly, and manager-owned MCP setup do
+        // not need the rollout lease and can fail while the predecessor remains
+        // healthy. The next operation reserves the exact transcript, so this is
+        // the last point where main can retire the authorized predecessor
+        // without creating the #638 overlap. The callback knows pane ownership;
+        // this provider deliberately does not.
+        await this.beforeResumeOwnershipAcquire?.()
+        if (!this.isStartAttemptActive(attempt)) return
         // WHY this must precede ptySpawn: Codex can reconstruct a resume fork
         // immediately after process creation. Locating X and registering its
         // lineage afterwards leaves a real interval where a same-cwd fresh
