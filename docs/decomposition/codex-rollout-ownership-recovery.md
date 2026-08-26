@@ -1,8 +1,8 @@
 # Codex Fresh Rollout Ownership Recovery
 
-> **Status:** Reopened after the ninth independent gate found ten reachable
-> input-causality, configuration, lifecycle, retention, and capability-boundary
-> regressions around the now-stable ownership graph. Stages 29–32 below must
+> **Status:** Reopened after the tenth independent gate found five reachable
+> causal-admission, transport-retention, capability, protocol, and launch-order
+> regressions around the now-stable ownership graph. Stages 33–36 below must
 > complete before any dependency or parent PR merges. The earlier gates remain
 > recorded as evidence; no green CI run or live happy path overrides a RED
 > exact-head review.
@@ -1256,3 +1256,164 @@ withhold capability without blocking ordinary terminal launch. Package check is
 green at 142/142, the built ninth-gate projection is 3/3, real 0.149.1 safe and
 conflicting config/read probes produce the expected allow/refuse outcomes, and
 the focused parent launch-binding test is 2/2.
+
+## 9. Tenth-gate corrective stages
+
+The tenth exact-head gate,
+`run_ad0813cf-5f8f-4644-971d-e6a9ade71d62`, completed normally against parent
+`a057cd69`, codex-headless `6c6336b`, and parser `a3fee9d`. All four agents
+completed with zero stalls, retries, provider-circuit failures, or coverage
+gaps. The synthesizer independently reproduced and confirmed five blockers:
+
+1. a resume-lineage participant accepts a rollout generation first observed
+   before its pre-spawn registration because it inherits the fresh session's
+   five-second negative grace;
+2. an unchanged raw path cached while unresolved survives when a later exact or
+   lineage reservation makes it terminal outside the original read callback;
+3. the emitted deep resume module exports the WeakMap unwrapper and therefore
+   exposes both raw controller state and lease mutation authority;
+4. initialize/config-read messages containing both `result` and `error` are
+   accepted as successful attestation responses; and
+5. parent resume preparation runs after effective-config attestation, leaving a
+   material await in which higher-precedence managed input policy can change
+   before the PTY reads it.
+
+The gate rejected predictable request IDs as an independent exploit on the
+dedicated stdio channel, retained the ninth gate's rejection of an unrecorded
+atomic-paste claim, and found no independent parser defect or duplicate parent
+ownership policy. The five confirmed boundaries below are the complete repair
+set; unsupported candidates do not become implementation work merely because
+they are plausible.
+
+### Stage 33 — freeze the tenth-gate evidence and repair boundaries
+
+- [x] **Produces:** this decomposition plus the immutable workflow artifact
+  identified by result SHA-256
+  `3e9e67215f71461ee0e2394e463a98acd84bf35796b3e3a27e324ca9527c7acb`.
+  The implementation set is named as the five confirmed findings above rather
+  than inferred from nearby code.
+- **Verified by:** the workflow status reports `completed`, four completed
+  agents, zero failed/retrying/stalled agents, and the exact three requested
+  heads. Each confirmed item includes a reachable sequence, exact source
+  locations, and a minimal repair direction; the synthesizer independently
+  replayed the lineage and invalid-envelope failures against emitted JS.
+- **Why separate:** editing production while reviewers were still reading the
+  shared worktree would have invalidated the exact-head audit. Freezing the
+  complete set first also prevents one local conditional from hiding a second
+  ownership boundary before its red contract exists.
+- **Reality check:** all five items came from the completed read-only gate. The
+  lineage and envelope cases were executed against `dist`; the retention and
+  ordering cases were traced through the existing recorded watcher/config
+  schedules; the deep-export case returned the real private root and owner from
+  the emitted module.
+
+### Stage 34 — turn the omitted real sequences into red contracts
+
+- [ ] **Produces:** a content-safe tenth-gate finding manifest; recorded-rollout
+  system tests for pre-registration lineage and later terminalization; a built-
+  artifact deep-export projection; recorded app-server result-plus-error modes;
+  and a parent resume-preparation barrier test that switches between the already
+  recorded safe and conflicting config projections.
+- **Verified by:** against codex-headless `6c6336b` and parent `a057cd69`, the
+  new focused contracts fail once for each confirmed finding while the existing
+  ninth-gate controls remain green. The failure messages must identify the
+  causal sequence, raw transport count, exported unwrapper, invalid response,
+  or pre-spawn ordering rather than fail through setup noise.
+- **Why separate:** tests written after the repair could simply encode the new
+  implementation. The red checkpoint must prove that the current substrate
+  actually admits the five exact sequences before any production shape changes.
+- **Reality check:** rollout bytes come from
+  `subagent-0149-exact-attachment`; configuration values come from the real
+  sanitized Codex 0.149.1 `config/read` capture; process ordering comes from the
+  parent launch sequence confirmed by the gate. No new prompt, lineage, keymap,
+  or protocol outcome is invented.
+
+### Stage 35 — repair the five isolated boundaries
+
+- [ ] **Produces:** strict post-registration sequence admission for resume
+  lineage; terminal checks ahead of unchanged-fingerprint transport shortcuts;
+  resume issuance and consumption co-located in a runtime module closure with no
+  shipped unwrapper; success-envelope validation for both app-server responses;
+  and parent launch ordering with resume preparation before the final
+  config/read await and synchronous PTY spawn.
+- **Verified by:** every Stage 34 red contract turns green without weakening its
+  recorded inputs, and all prior first-through-ninth gate tests remain green.
+  The built output contains no importable controller/unwrapper; malformed
+  envelopes issue no profile; and a recorded fork whose first observation
+  precedes registration never receives a resume-lineage lease.
+- **Why separate:** coordinator policy, watcher transport, runtime capability
+  custody, app-server validation, and parent orchestration have different owners.
+  Combining them in one helper would let a transport or launch consumer
+  arbitrate ownership and recreate the cross-layer substrate this decomposition
+  removed.
+- **Reality check:** each repair is the narrow inverse of one confirmed gate
+  sequence. Fresh participants retain their recorded file-arrival grace; valid
+  app-server responses retain their recorded shape; terminal launch remains
+  available when profile authority is refused.
+
+### Stage 36 — verify the release candidate and merge in dependency order
+
+- [ ] **Produces:** clean codex-headless, parser, and parent heads; full local
+  package/type/test results; live safe/conflicting config evidence; green GitHub
+  checks; a new exact-head four-agent gate with zero findings; and merged
+  dependency PRs before parent PR #634.
+- **Verified by:** inspect every constituent agent artifact, not only the
+  synthesizer preview; require no correctness/privacy/ownership/integration
+  finding of any severity; prove the pinned dependency commits are ancestors of
+  their default branches after merge; then merge the parent and confirm issue
+  #632 closes.
+- **Why separate:** local tests, CI, and a happy-path live probe cannot establish
+  adversarial ownership safety. Conversely, a review of unpushed or unpinned
+  heads cannot authorize a real merge.
+- **Reality check:** use the installed Codex 0.149.1 binary and the same sixteen-
+  case PTY/request/rollout corpus. The one parent-suite reference to a deleted
+  private Claude transcript remains an explicitly unrelated environmental
+  failure and must not be deleted or weakened to manufacture green.
+
+### Isolation for Stages 34–36
+
+- Resume lineage causality remains in
+  `FreshRolloutOwnershipCoordinator`; watcher/registry code may transport
+  immutable observations but may not decide which generation belongs to a
+  resume.
+- Raw path eviction remains in
+  `FreshRolloutOwnershipCoordinatorRegistry`; consumers may not import its
+  private caches or retain paths in diagnostics.
+- Resume controller state and the sole consumer live in the same runtime module
+  closure. The shipped deep preparation module may expose the public dispose-
+  only type/factory compatibility surface, but must not export a controller,
+  unwrapper, token, WeakMap, or lease mutation operation.
+- Effective-input reconciliation remains in `CodexPromptInputProfile`; Agent
+  Code may order the attestation immediately before spawn but may not parse or
+  arbitrate Codex keymap layers itself.
+
+### Unknowns for Stages 34–36
+
+- Whether preserving the historical deep import of the public preparation
+  factory requires a type-only/re-export shim or should be removed as a breaking
+  package change; either route must leave no runtime internal export.
+- Whether a terminal path should be evicted synchronously from a coordinator
+  transition hook or within the next 500 ms maintenance pass. The privacy
+  contract requires bounded removal while a sibling watcher remains live, not a
+  guessed implementation.
+- Whether every filesystem exposes reliable birth time remains unknown. Resume
+  admission therefore must use coordinator observation sequence, not wall-clock
+  creation time.
+- A managed policy can theoretically change in the syscall-sized interval
+  between the final successful config/read and `ptySpawn`. There must be no
+  intervening application await; eliminating external mutation entirely would
+  require provider support for a spawn-bound configuration token.
+
+### Fixture plan for Stages 34–36
+
+- Record the gate run ID, exact heads, result checksum, and five content-safe
+  finding IDs under `testing/fixtures/tenth-gate/`.
+- Reuse the hashed `subagent-0149-exact-attachment` rollout for both lineage and
+  terminalization schedules; mutate only scheduler order, birth/observation
+  sequence, and the copied thread ID already allowed by prior gate fixtures.
+- Extend the existing deterministic app-server shell around the real sanitized
+  config/read projection with invalid result-plus-error envelopes. Preserve the
+  real projection as the sole success control.
+- Drive parent ordering through a controllable resume-preparation barrier and
+  the recorded safe/conflicting projections. The test asserts custody and order;
+  it does not invent Codex keymap semantics.
