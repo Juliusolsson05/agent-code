@@ -853,6 +853,17 @@ export class SessionManager extends EventEmitter {
     }
   }
 
+  private replacementReclaimConflict(
+    sessionId: string,
+  ): SessionRecoverResult {
+    return {
+      ok: false,
+      code: 'ownership-conflict',
+      retryable: true,
+      message: `Session ${sessionId} shares a successor with an active replacement reclaim`,
+    }
+  }
+
   private beginCodexReplacementReclaim(
     options: SessionRecoverOptions,
     successorSessionId: string,
@@ -873,12 +884,18 @@ export class SessionManager extends EventEmitter {
       // cancellation can address the fully formed generation.
       promise: new Promise<SessionRecoverResult>(() => {}),
     }
+    // Publish both identity indices while the promise is still an inert
+    // placeholder. Scheduling the async body before the final admission check
+    // would let a defensive collision throw to the caller while untracked
+    // teardown still runs in a microtask.
+    if (!this.codexReplacements.setReclaim(reclaim)) {
+      throw new Error('Codex replacement lineage already has an active reclaim')
+    }
     reclaim.promise = Promise.resolve()
       .then(() => run(reclaim))
       .finally(() => {
         this.codexReplacements.deleteReclaim(reclaim)
       })
-    this.codexReplacements.setReclaim(reclaim)
     return reclaim
   }
 
@@ -890,6 +907,13 @@ export class SessionManager extends EventEmitter {
       return Promise.resolve(this.recoveryConflict(options.sessionId, null))
     }
     if (reservation.reclaimPromise) return reservation.reclaimPromise
+    if (
+      this.codexReplacements.getReclaimBySuccessor(
+        reservation.successorSessionId,
+      )
+    ) {
+      return Promise.resolve(this.replacementReclaimConflict(options.sessionId))
+    }
 
     reservation.reclaimRequested = true
     const reclaim = this.beginCodexReplacementReclaim(
@@ -935,7 +959,19 @@ export class SessionManager extends EventEmitter {
       return Promise.resolve(this.recoveryConflict(options.sessionId, null))
     }
     if (redirect.reclaimPromise) return redirect.reclaimPromise
+    if (
+      this.codexReplacements.getReclaimBySuccessor(redirect.successorSessionId)
+    ) {
+      // Flattened P→T and S→T redirects are two stale names for one
+      // physical owner. Publishing both async bodies lets each teardown cancel
+      // the other. Reject the later alias synchronously while the first
+      // generation remains token-addressable by its own predecessor ID.
+      return Promise.resolve(this.replacementReclaimConflict(options.sessionId))
+    }
 
+    const siblingRedirects = this.codexReplacements
+      .findRedirects(redirect.successorSessionId)
+      .filter(candidate => candidate !== redirect)
     const reclaim = this.beginCodexReplacementReclaim(
       options,
       redirect.successorSessionId,
@@ -977,13 +1013,45 @@ export class SessionManager extends EventEmitter {
           // ordinary recover and resurrects a pane the user already closed.
           return this.replacementRecoveryCancelled(options.sessionId)
         }
-        this.codexReplacements.deleteRedirect(redirect)
-        return await this.recover({
+        const result = await this.recover({
           ...redirect.restoreOptions,
           sessionId: redirect.predecessorSessionId,
           recoveryToken: options.recoveryToken,
           reclaimPendingReplacement: false,
         })
+        if (
+          redirect.cancelled ||
+          reclaimGeneration.cancelled ||
+          this.shuttingDown
+        ) {
+          return this.replacementRecoveryCancelled(options.sessionId)
+        }
+        if (result.ok) {
+          this.codexReplacements.deleteRedirect(redirect)
+          const restoredOwnership: SessionOwnershipOptions = {
+            sessionId: redirect.predecessorSessionId,
+            kind: result.snapshot.kind,
+            cwd: result.snapshot.cwd,
+          }
+          for (const sibling of siblingRedirects) {
+            if (
+              sibling.cancelled ||
+              sibling.successorSessionId !== redirect.successorSessionId
+            ) {
+              continue
+            }
+            // The winning stale renderer changed the one physical owner from T
+            // back to P. S is still a valid stale alias, so point it at P rather
+            // than deleting it (which would allow an unsafe ordinary spawn) or
+            // calling the internal stop an explicit close.
+            this.codexReplacements.retargetRedirect(
+              sibling,
+              restoredOwnership,
+              sibling.restoreOptions,
+            )
+          }
+        }
+        return result
       },
     )
     redirect.reclaimPromise = reclaim.promise
@@ -994,12 +1062,13 @@ export class SessionManager extends EventEmitter {
           !redirect.cancelled &&
           !this.shuttingDown &&
           !result.ok &&
-          result.code === 'cancelled'
+          result.retryable
         ) {
-          // A deadline owns one reclaim generation, not the lineage forever.
-          // Once its successor teardown has settled, a later renderer token may
-          // retry. Explicit close/shutdown set durable cancellation elsewhere
-          // and intentionally retain the settled tombstone promise.
+          // A deadline or provider start failure owns one reclaim generation,
+          // not the lineage forever. Once its teardown/start attempt has
+          // settled, a later renderer token may retry. Explicit close/shutdown
+          // set durable cancellation elsewhere and intentionally retain the
+          // settled tombstone promise.
           redirect.reclaimPromise = null
         }
       },
@@ -1032,7 +1101,7 @@ export class SessionManager extends EventEmitter {
         if (redirect.successorSessionId === predecessorSessionId) {
           this.codexReplacements.retargetRedirect(
             redirect,
-            reservation.successorSessionId,
+            reservation.successorOwnership,
             reservation.restoreOptions,
           )
         }
@@ -1041,6 +1110,7 @@ export class SessionManager extends EventEmitter {
         predecessorSessionId,
         successorSessionId: reservation.successorSessionId,
         predecessorOwnership: reservation.predecessorOwnership,
+        successorOwnership: reservation.successorOwnership,
         restoreOptions: reservation.restoreOptions,
         cancelled: false,
         reclaimPromise: null,
@@ -1131,28 +1201,64 @@ export class SessionManager extends EventEmitter {
         })
       }
     }
+    if (this.codexReplacements.getReclaimBySuccessor(options.sessionId)) {
+      // Only the winning predecessor redirect carries reclaimPromise; its
+      // flattened siblings do not. The successor-keyed generation is therefore
+      // the source of truth that keeps reverse recovery from adopting or
+      // recreating T while any stale alias owns its teardown.
+      return Promise.resolve(this.replacementReclaimConflict(options.sessionId))
+    }
     const redirects = this.codexReplacements.findRedirects(options.sessionId)
     const predecessorRedirect = redirects.find(
       redirect => redirect.predecessorSessionId === options.sessionId,
     )
+    let ownedRestoreRedirect: CodexReplacementRedirect | null = null
     if (predecessorRedirect) {
-      if (predecessorRedirect.cancelled) {
-        return Promise.resolve(this.replacementRecoveryCancelled(options.sessionId))
+      const owningReclaim = this.codexReplacements.getReclaim(options.sessionId)
+      const entersOwnedRestore = Boolean(
+        !options.reclaimPendingReplacement &&
+        owningReclaim &&
+        owningReclaim.successorSessionId ===
+          predecessorRedirect.successorSessionId &&
+        predecessorRedirect.reclaimPromise === owningReclaim.promise,
+      )
+      if (!entersOwnedRestore) {
+        if (predecessorRedirect.cancelled) {
+          return Promise.resolve(this.replacementRecoveryCancelled(options.sessionId))
+        }
+        if (options.reclaimPendingReplacement) {
+          return this.reclaimPersistedCodexRedirect(options, predecessorRedirect)
+        }
+        return Promise.resolve({
+          ok: false,
+          code: 'ownership-conflict',
+          retryable: true,
+          message: `Session ${options.sessionId} has a persisted replacement`,
+        })
       }
-      if (options.reclaimPendingReplacement) {
-        return this.reclaimPersistedCodexRedirect(options, predecessorRedirect)
-      }
-      return Promise.resolve({
-        ok: false,
-        code: 'ownership-conflict',
-        retryable: true,
-        message: `Session ${options.sessionId} has a persisted replacement`,
-      })
+      // The winning reclaim must keep its redirect published across provider
+      // startup so close/timeout can still address the lineage. Only this exact
+      // predecessor+successor generation may pass through to ordinary recovery;
+      // every external caller continues to hit the redirect fence above.
+      ownedRestoreRedirect = predecessorRedirect
     }
-    if (redirects.some(redirect => redirect.cancelled)) {
+    const externalRedirects = ownedRestoreRedirect
+      ? redirects.filter(redirect => redirect !== ownedRestoreRedirect)
+      : redirects
+    if (externalRedirects.some(redirect => redirect.cancelled)) {
       return Promise.resolve(this.replacementRecoveryCancelled(options.sessionId))
     }
-    if (redirects.some(redirect => redirect.reclaimPromise)) {
+    if (externalRedirects.some(redirect =>
+      redirect.successorSessionId === options.sessionId &&
+      !this.replacementOwnershipMatches(redirect.successorOwnership, options)
+    )) {
+      // Natural exit removes the registry snapshot, but a committed redirect
+      // still knows who the current successor was. Trusting stale predecessor
+      // cwd here would cold-spawn S under P's filesystem context and defeat the
+      // role-specific ownership check used by close.
+      return Promise.resolve(this.recoveryConflict(options.sessionId, null))
+    }
+    if (externalRedirects.some(redirect => redirect.reclaimPromise)) {
       return Promise.resolve({
         ok: false,
         code: 'ownership-conflict',
@@ -1518,6 +1624,11 @@ export class SessionManager extends EventEmitter {
       predecessorSessionId,
       successorSessionId,
       predecessorOwnership: null,
+      successorOwnership: {
+        sessionId: successorSessionId,
+        kind: 'codex',
+        cwd: options.cwd,
+      },
       restoreOptions: null,
       cancelled: false,
       teardownIntent: null,
@@ -1533,7 +1644,11 @@ export class SessionManager extends EventEmitter {
         reservation.spawnOutcome = 'failed'
         reservation.settleSpawn()
       }
-      this.codexReplacements.deleteReservation(reservation)
+      if (reservation.cancelled) {
+        this.retireCodexReplacementReservation(reservation)
+      } else {
+        this.codexReplacements.deleteReservation(reservation)
+      }
     }
 
     try {
@@ -1570,7 +1685,6 @@ export class SessionManager extends EventEmitter {
             cwd: options.cwd,
             providerSessionId: options.resumeSessionId,
           })
-          if (reservation.cancelled) throw new RecoveryCancelledError()
           if (
             requestedPath &&
             path.resolve(requestedPath) === path.resolve(observedPath)
@@ -1584,7 +1698,6 @@ export class SessionManager extends EventEmitter {
         release()
         return null
       }
-      if (reservation.cancelled) throw new RecoveryCancelledError()
 
       const size = this.sessionSizes.get(predecessorSessionId)
       const effectiveDomains =
@@ -1599,6 +1712,11 @@ export class SessionManager extends EventEmitter {
         builtInMcpDomains: effectiveDomains,
       }
       reservation.restoreOptions = restoreOptions
+      // Path proof can be the awaited boundary where explicit close wins. The
+      // resolved path must first establish whether this random successor belongs
+      // to the closed lineage; only then is it safe to publish restore material
+      // and let release() convert the reservation into a tombstone.
+      if (reservation.cancelled) throw new RecoveryCancelledError()
       const handoff: CodexReplacementHandoff = {
         reservation,
         predecessorSessionId,
@@ -2955,6 +3073,11 @@ export class SessionManager extends EventEmitter {
       const authorized =
         redirect === authorizedRedirect ||
         Boolean(
+          authorizedRedirect &&
+          authorizedRedirect.successorSessionId === sessionId &&
+          redirect.successorSessionId === sessionId,
+        ) ||
+        Boolean(
           authorizedReplacement &&
           redirect.successorSessionId === sessionId &&
           authorizedReplacement.predecessorSessionId === sessionId,
@@ -3109,10 +3232,19 @@ export class SessionManager extends EventEmitter {
     } else if (claim) {
       if (claim.kind !== kind || claim.cwd !== cwd) return false
     } else if (redirects.length > 0) {
-      if (redirects.some(redirect =>
-        (redirect.predecessorOwnership.kind ?? DEFAULT_PROVIDER) !== kind ||
-        path.resolve(redirect.predecessorOwnership.cwd) !== cwd
-      )) {
+      if (redirects.some(redirect => {
+        // A redirect carries two independently valid routing identities. A
+        // same-resume replacement may intentionally change cwd, so validating
+        // reverse close of S with P's captured cwd turns a real user close into
+        // a stale miss after S has naturally exited.
+        const ownership = redirect.predecessorSessionId === options.sessionId
+          ? redirect.predecessorOwnership
+          : redirect.successorOwnership
+        return (
+          (ownership.kind ?? DEFAULT_PROVIDER) !== kind ||
+          path.resolve(ownership.cwd) !== cwd
+        )
+      })) {
         return false
       }
       const teardownIds = new Set<string>([options.sessionId])
@@ -3138,7 +3270,11 @@ export class SessionManager extends EventEmitter {
       // reservation preserves the original main-verified kind/cwd so a close
       // against that still-visible pane can cancel the hidden successor without
       // turning an arbitrary stale ID into teardown authority.
-      const reservedOwnership = replacement?.predecessorOwnership ?? null
+      const reservedOwnership = replacement
+        ? replacement.predecessorSessionId === options.sessionId
+          ? replacement.predecessorOwnership
+          : replacement.successorOwnership
+        : null
       if (
         !reservedOwnership ||
         (reservedOwnership.kind ?? DEFAULT_PROVIDER) !== kind ||

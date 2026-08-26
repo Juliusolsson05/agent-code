@@ -292,6 +292,57 @@ describe('SessionManager Codex replacement handoff', () => {
     )
   })
 
+  it('preserves close while formerly-fresh transcript proof is awaiting disk', async () => {
+    const pathLookup = deferred<string | null>()
+    const order: string[] = []
+    const predecessorStopped = { value: false }
+    const predecessor = new LeaseAwareCodexSession(
+      'predecessor', order, predecessorStopped, false,
+    )
+    const resurrected = new LeaseAwareCodexSession(
+      'restored', order, predecessorStopped, true,
+    )
+    createSession
+      .mockImplementationOnce(() => predecessor)
+      .mockImplementationOnce(() => resurrected)
+    resolveTranscriptPath.mockReturnValue(pathLookup.promise)
+
+    const { SessionManager } = await import('./sessionManager')
+    const manager = new SessionManager()
+    const first = await manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+    })
+    predecessor.emit('jsonl-entry', {}, '/recorded/codex/rollout.jsonl')
+
+    const replacement = manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-learned-from-session-meta',
+      predecessorSessionId: first.sessionId,
+    })
+    await vi.waitFor(() => expect(resolveTranscriptPath).toHaveBeenCalledTimes(1))
+    await expect(manager.killOwned({
+      sessionId: first.sessionId,
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+    })).resolves.toBe(true)
+    pathLookup.resolve('/recorded/codex/rollout.jsonl')
+
+    await expect(replacement).rejects.toThrow()
+    await expect(manager.recover({
+      sessionId: first.sessionId,
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-learned-from-session-meta',
+      recoveryToken: 'stale-after-path-proof-close',
+      reclaimPendingReplacement: true,
+    })).resolves.toMatchObject({ ok: false, code: 'cancelled' })
+    expect(resurrected.start).not.toHaveBeenCalled()
+    expect(createSession).toHaveBeenCalledTimes(1)
+    expect(manager.list()).toEqual([])
+  })
+
   it('does not let an unrelated predecessor id bypass the exact lease', async () => {
     const order: string[] = []
     const predecessorStopped = { value: false }
@@ -1176,6 +1227,105 @@ describe('SessionManager Codex replacement handoff', () => {
     expect(manager.list()).toEqual([first.sessionId])
   })
 
+  it('single-flights concurrent reclaims through flattened predecessor aliases', async () => {
+    const order: string[] = []
+    const predecessorStopped = { value: false }
+    const predecessor = new LeaseAwareCodexSession(
+      'predecessor', order, predecessorStopped, false,
+    )
+    const firstSuccessor = new LeaseAwareCodexSession(
+      'successor', order, predecessorStopped, true,
+    )
+    const currentSuccessor = new LeaseAwareCodexSession(
+      'successor', order, predecessorStopped, true,
+    )
+    const restoredOldest = new LeaseAwareCodexSession(
+      'restored', order, predecessorStopped, true,
+    )
+    const restoredMiddle = new LeaseAwareCodexSession(
+      'restored', order, predecessorStopped, true,
+    )
+    createSession
+      .mockImplementationOnce(() => predecessor)
+      .mockImplementationOnce(options => installBoundaryFromCreateOptions(firstSuccessor, options))
+      .mockImplementationOnce(options => installBoundaryFromCreateOptions(currentSuccessor, options))
+      .mockImplementationOnce(() => restoredOldest)
+      .mockImplementationOnce(() => restoredMiddle)
+
+    const { SessionManager } = await import('./sessionManager')
+    const manager = new SessionManager()
+    const first = await manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+    })
+    const second = await manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+      predecessorSessionId: first.sessionId,
+    })
+    manager.acknowledgePersistedSessionOwnership(new Set([second.sessionId]))
+    const third = await manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+      predecessorSessionId: second.sessionId,
+    })
+    manager.acknowledgePersistedSessionOwnership(new Set([third.sessionId]))
+
+    // Both stale renderers can legitimately have loaded a pre-commit snapshot,
+    // but they name one physical owner T. Reclaim admission must therefore be
+    // atomic by T: predecessor-keyed single-flight lets both async bodies start
+    // and makes each misclassify the other as explicit teardown.
+    const oldestReclaim = manager.recover({
+      sessionId: first.sessionId,
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+      recoveryToken: 'concurrent-oldest-alias',
+      reclaimPendingReplacement: true,
+    })
+    const middleReclaim = manager.recover({
+      sessionId: second.sessionId,
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+      recoveryToken: 'concurrent-middle-alias',
+      reclaimPendingReplacement: true,
+    })
+
+    await expect(middleReclaim).resolves.toMatchObject({
+      ok: false,
+      code: 'ownership-conflict',
+      retryable: true,
+    })
+    await expect(oldestReclaim).resolves.toMatchObject({
+      ok: true,
+      snapshot: { sessionId: first.sessionId, lifecycle: 'live' },
+    })
+    expect(currentSuccessor.stop).toHaveBeenCalledTimes(1)
+    expect(restoredOldest.start).toHaveBeenCalledTimes(1)
+
+    // The losing alias remains a stale ownership route to the new physical
+    // owner; it was never a user close. A later retry can safely move ownership
+    // again without starting beside the restored P backend.
+    await expect(manager.recover({
+      sessionId: second.sessionId,
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+      recoveryToken: 'middle-alias-after-oldest-wins',
+      reclaimPendingReplacement: true,
+    })).resolves.toMatchObject({
+      ok: true,
+      snapshot: { sessionId: second.sessionId, lifecycle: 'live' },
+    })
+    expect(restoredOldest.stop).toHaveBeenCalledTimes(1)
+    expect(restoredMiddle.start).toHaveBeenCalledTimes(1)
+    expect(manager.list()).toEqual([second.sessionId])
+  })
+
   it('closes committed ancestors of an unacknowledged replacement', async () => {
     const order: string[] = []
     const predecessorStopped = { value: false }
@@ -1303,6 +1453,84 @@ describe('SessionManager Codex replacement handoff', () => {
       code: 'cancelled',
     })
     expect(restored.start).not.toHaveBeenCalled()
+    expect(manager.list()).toEqual([])
+  })
+
+  it('retains close intent while redirect reclaim starts the predecessor', async () => {
+    const restoredStartGate = deferred<void>()
+    const order: string[] = []
+    const predecessorStopped = { value: false }
+    const predecessor = new LeaseAwareCodexSession(
+      'predecessor', order, predecessorStopped, false,
+    )
+    const successor = new LeaseAwareCodexSession(
+      'successor', order, predecessorStopped, true,
+    )
+    const restored = new LeaseAwareCodexSession(
+      'restored', order, predecessorStopped, true,
+    )
+    const resurrected = new LeaseAwareCodexSession(
+      'restored', order, predecessorStopped, true,
+    )
+    restored.blockStartOn(restoredStartGate.promise)
+    restored.stop.mockImplementationOnce(async () => {
+      // Provider stop is the real cancellation mechanism for a start that is
+      // already past construction. Releasing through stop keeps the fixture
+      // faithful to the pending-start race instead of manually unblocking it.
+      restoredStartGate.resolve()
+    })
+    createSession
+      .mockImplementationOnce(() => predecessor)
+      .mockImplementationOnce(options => installBoundaryFromCreateOptions(successor, options))
+      .mockImplementationOnce(() => restored)
+      .mockImplementationOnce(() => resurrected)
+
+    const { SessionManager } = await import('./sessionManager')
+    const manager = new SessionManager()
+    const first = await manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+    })
+    const replacement = await manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+      predecessorSessionId: first.sessionId,
+    })
+    manager.acknowledgePersistedSessionOwnership(new Set([replacement.sessionId]))
+
+    const reclaim = manager.recover({
+      sessionId: first.sessionId,
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+      recoveryToken: 'redirect-reclaim-restored-start',
+      reclaimPendingReplacement: true,
+    })
+    await vi.waitFor(() => expect(restored.start).toHaveBeenCalledTimes(1))
+    await expect(manager.killOwned({
+      sessionId: first.sessionId,
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+    })).resolves.toBe(true)
+    await expect(reclaim).resolves.toMatchObject({ ok: false, code: 'cancelled' })
+
+    for (const recoveryToken of [
+      'stale-after-restored-start-close-1',
+      'stale-after-restored-start-close-2',
+    ]) {
+      await expect(manager.recover({
+        sessionId: first.sessionId,
+        kind: 'codex',
+        cwd: '/recorded/worktree',
+        resumeSessionId: 'provider-a',
+        recoveryToken,
+        reclaimPendingReplacement: true,
+      })).resolves.toMatchObject({ ok: false, code: 'cancelled' })
+    }
+    expect(resurrected.start).not.toHaveBeenCalled()
+    expect(createSession).toHaveBeenCalledTimes(3)
     expect(manager.list()).toEqual([])
   })
 
@@ -1789,12 +2017,12 @@ describe('SessionManager Codex replacement handoff', () => {
     const manager = new SessionManager()
     const first = await manager.spawn({
       kind: 'codex',
-      cwd: '/recorded/worktree',
+      cwd: '/recorded/old-worktree',
       resumeSessionId: 'provider-a',
     })
     const replacement = await manager.spawn({
       kind: 'codex',
-      cwd: '/recorded/worktree',
+      cwd: '/recorded/new-worktree',
       resumeSessionId: 'provider-a',
       predecessorSessionId: first.sessionId,
     })
@@ -1802,16 +2030,27 @@ describe('SessionManager Codex replacement handoff', () => {
 
     successor.emit('exit', { exitCode: 0 })
     await vi.waitFor(() => expect(manager.list()).not.toContain(replacement.sessionId))
+    await expect(manager.recover({
+      sessionId: replacement.sessionId,
+      kind: 'codex',
+      // P and S share a rollout but not an ownership cwd. Main already retained
+      // S's role-specific facts, so stale P metadata must not cold-spawn S after
+      // natural exit merely because no registry snapshot remains.
+      cwd: '/recorded/old-worktree',
+      resumeSessionId: 'provider-a',
+      recoveryToken: 'wrong-cwd-for-reverse-successor',
+      reclaimPendingReplacement: true,
+    })).resolves.toMatchObject({ ok: false, code: 'ownership-conflict' })
     await expect(manager.killOwned({
       sessionId: replacement.sessionId,
       kind: 'codex',
-      cwd: '/recorded/worktree',
+      cwd: '/recorded/new-worktree',
     })).resolves.toBe(true)
 
     const staleRecovery = {
       sessionId: first.sessionId,
       kind: 'codex',
-      cwd: '/recorded/worktree',
+      cwd: '/recorded/old-worktree',
       resumeSessionId: 'provider-a',
       recoveryToken: 'stale-predecessor-after-close',
       reclaimPendingReplacement: true,

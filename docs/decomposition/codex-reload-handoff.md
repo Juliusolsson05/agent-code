@@ -1,12 +1,13 @@
 # Codex Reload Ownership Handoff
 
 > **Status:** Stages 1–3 were implemented against the revised two-phase design.
-> The fifth exact-head review's six ownership findings are implemented through
-> the isolated replacement ledger, including two repeated-reload chain
-> invariants found during the local lineage audit. Focused, system, renderer,
-> type, contract, probe, and packaged-build verification are green; the full
-> unit suite has only its known missing external corpus-session failure. Stage 4
-> exact-head re-review, CI, and live verification remain.
+> The fifth and sixth exact-head review findings are implemented through the
+> isolated replacement ledger, including the follow-on close-during-restored-
+> start and reverse-recovery ownership invariants found during local audit. The
+> 75-test SessionManager cluster, typecheck, system 61/61, renderer 289/289,
+> contracts, keybindings, live-resume probe, and packaged-build verification are
+> green. Full unit is 1,556/1,557 with only the known missing external corpus
+> session. Stage 4 exact-head re-review, CI, and live verification remain.
 >
 > **Incident:** Agent Code issue #638. Related fresh-rollout incident: #632.
 
@@ -98,6 +99,27 @@
     committed ancestor ending at S. The closed-lineage transition retargets and
     tombstones those aliases with T before deleting the reservation, so stale P
     state cannot route around the newer close through an older P→S redirect.
+25. Redirects retain ownership for both roles. `killOwned(P)` validates P's
+    captured ownership while `killOwned(S)` and reverse cold `recover(S)`
+    validate the successor ownership that was current when the redirect was
+    committed or retargeted; differing same-resume cwd values cannot turn an
+    explicit close into a stale miss or let old P metadata recreate S.
+26. Reclaim admission is single-flight by physical successor, not only by stale
+    predecessor ID. For flattened P→T and S→T aliases, the first reclaim owns
+    T teardown and a competing alias receives a retryable conflict without
+    cancelling the winner or sibling lineage. Successful recovery retargets
+    surviving aliases to the newly restored physical owner.
+27. Formerly-fresh path proof evaluates the resolved path before reacting to
+    concurrent cancellation. A matching path publishes restore/tombstone
+    material and retires the cancelled reservation through the closed-lineage
+    transition; a non-match remains an unrelated spawn and creates no false
+    lineage.
+28. A committed redirect remains published while its winning reclaim starts
+    the predecessor recovery. Only that exact reclaim generation may bypass its
+    own redirect. Explicit close during restored-provider startup therefore
+    converts the still-addressable redirect to a tombstone; timeout or a
+    retryable start failure retains it for a later token instead of deleting the
+    only anti-resurrection evidence before the risky await.
 
 ## 2. Intermediate stages
 
@@ -212,6 +234,31 @@ Before retiring that reservation, the ledger transition retargets every
 committed ancestor ending at S to T and marks it cancelled. Keeping P→S active
 would let stale P bytes bypass the S→T tombstone and recreate a pane the current
 renderer already closed.
+
+The sixth review adds two fields/indices to the same isolation rather than
+moving policy back into callers. Every redirect carries `successorOwnership`
+alongside `predecessorOwnership`, and retargeting updates it with the successor
+ID. Active reclaims gain a reverse index by physical successor. Admission of a
+second predecessor alias for that successor is rejected before either async
+body can run, while internal teardown authorizes all sibling redirects. When
+the winner restores a predecessor ID, surviving siblings are retargeted to that
+new owner so they remain safe, recoverable aliases instead of false close
+tombstones.
+
+Formerly-fresh proof remains in `SessionManager` because the ledger must not
+resolve provider paths. The resolved path is compared first; only a proven
+match receives restore material and may become a closed-lineage tombstone.
+`release()` then delegates cancelled verified reservations to the same ledger
+retirement transition as every later close. This preserves close evidence
+without letting an unproven different-transcript spawn inherit handoff power.
+
+The winner does not delete its redirect merely to enter ordinary recovery.
+Recovery admission recognizes the exact predecessor/reclaim/redirect triple
+and lets only that internal call pass. Success deletes the redirect after the
+new backend is live; retryable failure leaves it; and close can still mark it
+cancelled while provider startup is pending. This keeps the ledger as the
+visible ownership record across the same pre-entry/start awaits that previously
+required cancellable compensation claims.
 
 This is separate from the async manager logic because the fifth review found
 the same missing-identity failure in recovery, close, and transaction cleanup.
@@ -414,3 +461,21 @@ while P reclaim owns T; and (h) closing an unacknowledged S→T transaction also
 tombstones the committed P→S ancestor. The fixtures preserve the distinction
 between R-associated C and an unrelated old recovery token, and between
 retryable timeout and durable close tombstones.
+
+Sixth-review fixtures add three schedules from exact commit `ec4b2ac3`: (a) a
+same-resume replacement changes cwd, commits, exits naturally, and is closed by
+its successor ID/cwd before stale predecessor recovery; (b) committed P→S→T
+receives synchronous reclaim requests through both P and S, proving one
+physical-successor generation wins without mutual cancellation and that the
+remaining alias follows the restored owner; and (c) a formerly fresh pane is
+closed while real transcript-path resolution is gated, then a matching result
+arrives and stale durable recovery remains cancelled. These are the exact
+source-verified schedules reported by the two read-only reviewers, not new
+provider shapes invented from the implementation.
+
+The local post-review audit adds the directly adjacent fourth schedule: a
+committed predecessor reclaim enters restored-provider start, explicit close
+wins while that start is gated, and two later stale recoveries remain
+cancelled. It is derived from the review's precommit-close invariant applied to
+the redirect-to-recovery boundary; deleting the redirect before the await made
+that boundary observably identical to the reviewed resurrection race.

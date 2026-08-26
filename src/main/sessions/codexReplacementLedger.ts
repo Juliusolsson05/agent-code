@@ -14,6 +14,7 @@ export type CodexReplacementReservation = {
   predecessorSessionId: string
   successorSessionId: string
   predecessorOwnership: SessionOwnershipOptions | null
+  successorOwnership: SessionOwnershipOptions
   restoreOptions: SessionSpawnOptions | null
   cancelled: boolean
   teardownIntent: CodexReplacementTeardownIntent
@@ -28,6 +29,7 @@ export type CodexReplacementRedirect = {
   predecessorSessionId: string
   successorSessionId: string
   predecessorOwnership: SessionOwnershipOptions
+  successorOwnership: SessionOwnershipOptions
   restoreOptions: SessionSpawnOptions
   cancelled: boolean
   reclaimPromise: Promise<SessionRecoverResult> | null
@@ -77,6 +79,15 @@ export class CodexReplacementLedger<TRecoveryClaim> {
     Set<CodexReplacementRedirect>
   >()
   private readonly reclaimsByPredecessor = new Map<
+    string,
+    CodexReplacementReclaim<TRecoveryClaim>
+  >()
+  // A token is addressed by the stale predecessor that requested it, while
+  // admission is owned by the physical successor it will stop. Flattened
+  // P→T/S→T aliases therefore need both indices: predecessor lookup keeps
+  // cancellation generation-scoped; successor lookup prevents two teardown
+  // bodies from starting for T and cancelling each other.
+  private readonly reclaimsBySuccessor = new Map<
     string,
     CodexReplacementReclaim<TRecoveryClaim>
   >()
@@ -151,7 +162,7 @@ export class CodexReplacementLedger<TRecoveryClaim> {
       redirect.cancelled = true
       this.retargetRedirect(
         redirect,
-        reservation.successorSessionId,
+        reservation.successorOwnership,
         reservation.restoreOptions,
       )
     }
@@ -159,6 +170,7 @@ export class CodexReplacementLedger<TRecoveryClaim> {
       predecessorSessionId: reservation.predecessorSessionId,
       successorSessionId: reservation.successorSessionId,
       predecessorOwnership: reservation.predecessorOwnership,
+      successorOwnership: reservation.successorOwnership,
       restoreOptions: reservation.restoreOptions,
       cancelled: true,
       reclaimPromise: null,
@@ -197,7 +209,7 @@ export class CodexReplacementLedger<TRecoveryClaim> {
 
   retargetRedirect(
     redirect: CodexReplacementRedirect,
-    successorSessionId: string,
+    successorOwnership: SessionOwnershipOptions,
     restoreOptions: SessionSpawnOptions,
   ): void {
     if (
@@ -206,7 +218,8 @@ export class CodexReplacementLedger<TRecoveryClaim> {
       return
     }
     this.removeSuccessorRedirect(redirect)
-    redirect.successorSessionId = successorSessionId
+    redirect.successorSessionId = successorOwnership.sessionId
+    redirect.successorOwnership = successorOwnership
     redirect.restoreOptions = restoreOptions
     this.addSuccessorRedirect(redirect)
   }
@@ -242,14 +255,28 @@ export class CodexReplacementLedger<TRecoveryClaim> {
     }
   }
 
-  setReclaim(reclaim: CodexReplacementReclaim<TRecoveryClaim>): void {
+  setReclaim(reclaim: CodexReplacementReclaim<TRecoveryClaim>): boolean {
+    if (
+      this.reclaimsByPredecessor.has(reclaim.predecessorSessionId) ||
+      this.reclaimsBySuccessor.has(reclaim.successorSessionId)
+    ) {
+      return false
+    }
     this.reclaimsByPredecessor.set(reclaim.predecessorSessionId, reclaim)
+    this.reclaimsBySuccessor.set(reclaim.successorSessionId, reclaim)
+    return true
   }
 
   getReclaim(
     predecessorSessionId: string,
   ): CodexReplacementReclaim<TRecoveryClaim> | null {
     return this.reclaimsByPredecessor.get(predecessorSessionId) ?? null
+  }
+
+  getReclaimBySuccessor(
+    successorSessionId: string,
+  ): CodexReplacementReclaim<TRecoveryClaim> | null {
+    return this.reclaimsBySuccessor.get(successorSessionId) ?? null
   }
 
   deleteReclaim(reclaim: CodexReplacementReclaim<TRecoveryClaim>): boolean {
@@ -259,6 +286,9 @@ export class CodexReplacementLedger<TRecoveryClaim> {
       return false
     }
     this.reclaimsByPredecessor.delete(reclaim.predecessorSessionId)
+    if (this.reclaimsBySuccessor.get(reclaim.successorSessionId) === reclaim) {
+      this.reclaimsBySuccessor.delete(reclaim.successorSessionId)
+    }
     return true
   }
 
