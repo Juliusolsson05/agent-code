@@ -265,15 +265,20 @@ describe('CodexSession resume launch attestation ordering', () => {
 
     try {
       await vi.waitFor(() => expect(launch.events).toEqual(['resume:start']))
-      await session.stop()
+      const stopping = session.stop()
+      // WHY stop now owns the in-flight preparation task, so awaiting stop
+      // before releasing this recorded provider barrier would ask cleanup to
+      // finish before the resource it must clean can exist. Keep the same
+      // schedule—cancellation wins first—then allow the factory to materialize
+      // and prove stop joins its disposal rather than returning early.
       launch.releaseResume()
+      await stopping
       await startOutcome
 
-      // WHY stop cannot dispose a capability the provider locator has not
-      // returned yet. The cancelled continuation becomes the sole owner at the
-      // instant the await resolves, so it must dispose locally before profile
-      // attestation or any synchronous launch work. Publishing it to a shared
-      // field first would let a newer generation inherit the stale ownership.
+      // WHY cancellation still precedes capability return. Whether rollback or
+      // the cancelled continuation performs the idempotent call is internal;
+      // the observable contract is that stop does not settle until the hidden
+      // exact reservation is disposed, and no later launch work is admitted.
       expect(launch.events).toEqual([
         'resume:start',
         'resume:end',

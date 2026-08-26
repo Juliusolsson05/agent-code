@@ -190,6 +190,7 @@ type CodexStartAttempt = {
   cancelled: boolean
   proxyServer: ResponsesProxy | null
   proxyAdapter: CodexResponsesAdapter | null
+  resumeRolloutPreparationTask: Promise<CodexResumeRolloutPreparation> | null
   resumeRolloutPreparation: CodexResumeRolloutPreparation | null
   pty: ReturnType<typeof ptySpawn> | null
   headless: CodexHeadless | null
@@ -262,6 +263,7 @@ export class CodexSession extends EventEmitter {
       cancelled: false,
       proxyServer: null,
       proxyAdapter: null,
+      resumeRolloutPreparationTask: null,
       resumeRolloutPreparation: null,
       pty: null,
       headless: null,
@@ -356,11 +358,18 @@ export class CodexSession extends EventEmitter {
         // lineage afterwards leaves a real interval where a same-cwd fresh
         // sibling can lease Y. The capability makes the ordering auditable and
         // gives rollback one object that owns every pre-spawn reservation.
-        const preparation = await prepareCodexResumeRollout({
+        const preparationTask = prepareCodexResumeRollout({
           cwd: this.cwd,
           resumeThreadId: this.resumeSessionId,
           onError: error => this.emit('jsonl-error', error),
         })
+        // WHY the factory reserves exact X before its returned capability
+        // exists. The promise is therefore an owned resource, not merely an
+        // implementation detail of this await: stop must join it and dispose
+        // what it produces before a replacement generation may reserve X.
+        attempt.resumeRolloutPreparationTask = preparationTask
+        const preparation = await preparationTask
+        attempt.resumeRolloutPreparationTask = null
         if (!this.isStartAttemptActive(attempt)) {
           // WHY this capability may materialize after stop already found the
           // attempt empty. The awaiting start continuation is then its sole
@@ -608,26 +617,29 @@ export class CodexSession extends EventEmitter {
       cancelled: true,
       proxyServer: this.proxyServer,
       proxyAdapter: this.proxyAdapter,
+      resumeRolloutPreparationTask: null,
       resumeRolloutPreparation: this.resumeRolloutPreparation,
       pty: this.pty,
       headless: this.headless,
       rollbackPromise: null,
     }
     owned.cancelled = true
-    if (this.activeStartAttempt === owned) this.activeStartAttempt = null
     if (owned.rollbackPromise) {
       await owned.rollbackPromise
+      if (this.activeStartAttempt === owned) this.activeStartAttempt = null
       return
     }
 
     const proxyAdapter = owned.proxyAdapter
     const proxyServer = owned.proxyServer
     const headless = owned.headless
+    const preparationTask = owned.resumeRolloutPreparationTask
     const preparation = owned.resumeRolloutPreparation
     const pty = owned.pty
     owned.proxyAdapter = null
     owned.proxyServer = null
     owned.headless = null
+    owned.resumeRolloutPreparationTask = null
     owned.resumeRolloutPreparation = null
     owned.pty = null
 
@@ -653,7 +665,20 @@ export class CodexSession extends EventEmitter {
       // sessions (their preparation has already transferred and is null) while
       // preventing a blocked proxy stop from extending pre-spawn ownership.
       const preparationDisposal = (async () => {
-        try { await preparation?.dispose(true) } catch { /* best-effort */ }
+        let materializedPreparation = preparation
+        if (!materializedPreparation && preparationTask) {
+          // WHY cancellation cannot revoke the factory's filesystem work. It
+          // may already have reserved X and still be reading lineage. Joining
+          // converts that hidden interval into explicit generation-owned
+          // cleanup; a rejection needs no disposal and remains owned by the
+          // original start caller.
+          try { materializedPreparation = await preparationTask } catch {
+            materializedPreparation = null
+          }
+        }
+        try { await materializedPreparation?.dispose(true) } catch {
+          /* best-effort */
+        }
       })()
       try { await proxyServer?.stop() } catch { /* best-effort */ }
       // WHY a partially started headless must stop before its PTY is discarded:
@@ -665,6 +690,11 @@ export class CodexSession extends EventEmitter {
       try { pty?.kill() } catch { /* best-effort */ }
     })()
     await owned.rollbackPromise
+    // WHY keep a cancelled generation discoverable while cleanup is pending.
+    // A concurrent restart will replace this identity but first join its
+    // rollback; clearing it before the join recreates the exact lease collision
+    // even though rollback eventually disposes the late capability correctly.
+    if (this.activeStartAttempt === owned) this.activeStartAttempt = null
   }
 
   write(data: string): void {
@@ -839,7 +869,6 @@ export class CodexSession extends EventEmitter {
       // without spawning. Clearing only at the end recreates the late-provider
       // resurrection recorded by the eleventh gate.
       attempt.cancelled = true
-      if (this.activeStartAttempt === attempt) this.activeStartAttempt = null
       await this.rollbackStart(attempt)
       return
     }
