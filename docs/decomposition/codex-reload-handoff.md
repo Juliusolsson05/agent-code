@@ -29,8 +29,17 @@
 > green. The affected seven-file matrix is 85/85, typecheck, system 61/61,
 > renderer 292/292, contracts, keybindings, live-resume probe, and packaged-
 > build verification are green. Full unit is 1,572/1,573 with only the same
-> missing external corpus session. Exact-head re-review, new-head CI, and live
-> verification remain.
+> missing external corpus session. The eleventh exact-head review found one
+> app-lifecycle boundary error: `before-quit` permanently fenced
+> `SessionManager` before Electron resolved a renderer unload veto, so choosing
+> **Keep Editing** left the surviving app unable to recover or spawn sessions.
+> Contract 38 is implemented through an isolated `will-quit` shutdown gate. Its
+> two source-derived Keep Editing and accepted-quit schedules failed first and
+> are green; the affected main/renderer matrix is 87/87, typecheck, system
+> 61/61, renderer 292/292, contracts, keybindings, live-resume probe, and
+> packaged-build verification are green. Full unit is 1,574/1,575 with only the
+> same missing external corpus session. Exact-head re-review, new-head CI, and
+> live verification remain.
 >
 > **Incident:** Agent Code issue #638. Related fresh-rollout incident: #632.
 
@@ -195,6 +204,14 @@
     best-effort unlinks the exact invocation's unique temp file when write or
     rename fails, so indefinite eventual-success retry cannot accumulate one
     abandoned file per attempt.
+38. Terminal `SessionManager` shutdown begins only after every renderer unload
+    veto has resolved in favor of leaving. `before-quit` may gate asynchronous
+    WorkflowService shutdown, but it must not call `killAll()`: Electron emits
+    it before a dirty renderer can choose **Keep Editing**. A dedicated
+    `will-quit` gate prevents the first terminal quit, awaits the exact manager
+    teardown once, and then re-enters `app.quit()`. A vetoed quit never reaches
+    that gate, while Discard/ordinary quit does; re-entry cannot duplicate
+    teardown.
 
 ## 2. Intermediate stages
 
@@ -374,6 +391,14 @@ deliberately rejected because it would recreate the permanent durability wait;
 the delay is exponentially increased to a cap while temp cleanup bounds disk
 artifacts until persistence becomes healthy again.
 
+The eleventh exact-head review isolates terminal session teardown from the
+earlier, vetoable quit attempt. A small app-lifecycle gate owns only Electron's
+`will-quit` event and the manager's terminal `killAll()` promise. It does not
+know about renderer state, replacement identities, or provider lifecycle. This
+shape deliberately rejects clearing `SessionManager.shuttingDown` after a veto:
+by then stops may already be in flight, so rolling back the fence would expose
+partially torn-down state as usable.
+
 This is separate from the async manager logic because the fifth review found
 the same missing-identity failure in recovery, close, and transaction cleanup.
 Adding three more scans/conditionals would preserve the substrate that produced
@@ -538,6 +563,10 @@ receives no pane IDs and gains no replacement exception.
   retry-capable while mounted-generation cleanup is the actual terminal event.
   Persistent errors retain eventual-success retries with capped backoff, and
   each failed main write removes only its own nonce-addressed temp artifact.
+- **Resolved by eleventh-review Stage 2 design:** Electron's `before-quit` is
+  not proof that windows will unload. Terminal manager teardown is admitted by
+  `will-quit`, after the renderer veto has either been absent or explicitly
+  discarded; Keep Editing therefore leaves the manager entirely untouched.
 - Predecessor stop can fail or become uncertain. The coordinator's tombstone
   must remain fail-closed; compensation may also fail in that state and needs a
   truthful lifecycle outcome rather than an unsafe lease exception.
@@ -676,3 +705,11 @@ recorded 400 ms base, then unmount and prove no retired-generation timer fires.
 The main IPC fixture lets `writeFile(tmp)` succeed and `rename(tmp, STATE_FILE)`
 reject, captures the generated nonce path, and proves that exact path is passed
 to `unlink` before the save rejection reaches its caller.
+
+Eleventh-review fixtures reproduce the source-confirmed Electron ordering from
+exact commit `aeb68639`: a dirty renderer vetoes the quit attempt and **Keep
+Editing** means `will-quit` is never emitted, so `killAll()` must remain
+unobserved and the manager usable. The companion Discard/ordinary schedule
+emits `will-quit`, proves the first event is prevented while one asynchronous
+`killAll()` settles, proves duplicate events cannot start duplicate teardown,
+and proves the re-entered quit is allowed after settlement.

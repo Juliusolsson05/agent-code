@@ -11,6 +11,7 @@ import { join } from 'path'
 import { performance } from 'perf_hooks'
 
 import { SessionManager } from '@main/sessionManager.js'
+import { installSessionShutdownGate } from '@main/sessionShutdownGate.js'
 import { LspManager } from '@main/lspManager.js'
 import { compactAllGhostLogs, GhostJournalRegistry } from '@main/ghostJournal.js'
 import {
@@ -853,11 +854,11 @@ app.on('before-quit', (event) => {
   }
   appRunJournal?.record({ area: 'app.lifecycle', name: 'app.before_quit' })
   performanceService.mark('app.main.beforeQuit')
-  // WHY coalescers drain before killAll: provider shutdown can complete quickly enough that
-  // Electron exits before a pending 100 ms semantic/screen timer. Flushing here preserves the
-  // final admitted state and prevents a timer from sending after recorders have finalized.
+  // WHY coalescers drain on the initial quit attempt: their buffers are cheap
+  // and safe to flush even when a renderer veto keeps the app alive. Terminal
+  // SessionManager teardown is deliberately deferred to will-quit below,
+  // because unlike a coalescer flush it cannot be rolled back after Keep Editing.
   sessionForwarder?.flush()
-  void manager?.killAll()
   void builtInMcpHost.stop()
   void remoteController?.dispose()
   void lspManager.dispose()
@@ -888,10 +889,22 @@ app.on('before-quit', (event) => {
   performanceService.stop()
 })
 
-app.on('will-quit', () => {
-  appRunJournal?.record({ area: 'app.lifecycle', name: 'app.will_quit' })
-  appRunJournal?.markCleanShutdown('will-quit')
-  appRunJournal?.stop()
-  stateProcessLock?.releaseSync()
-  stateProcessLock = null
+installSessionShutdownGate({
+  app,
+  getManager: () => manager,
+  onQuitAllowed: () => {
+    appRunJournal?.record({ area: 'app.lifecycle', name: 'app.will_quit' })
+    appRunJournal?.markCleanShutdown('will-quit')
+    appRunJournal?.stop()
+    stateProcessLock?.releaseSync()
+    stateProcessLock = null
+  },
+  onShutdownError: error => {
+    // WHY a rejected terminal drain blocks quit: SessionManager owns exact
+    // transcript leases and in-flight recovery claims. Exiting while their
+    // teardown is uncertain recreates the cross-process ownership ambiguity
+    // this PR is designed to eliminate. A later explicit quit retries.
+    console.error('[sessions] graceful shutdown blocked:', error)
+    appRunJournal?.recordError('session_manager.kill_all.error', error)
+  },
 })
