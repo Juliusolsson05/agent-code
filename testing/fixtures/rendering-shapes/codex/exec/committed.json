@@ -15,7 +15,40 @@
       "discriminatorValues": { "codex.kind": "custom_tool_call_output", "type": "tool_result" }
     }
   },
+  "recordedSearchEvidence": {
+    "capturedAt": "2026-08-26T20:36:26.658Z",
+    "sourceRecording": "2026-08-26T20-26-14-633Z-g00000007-059a225d-1a05-492a-810f-f8070a2cd784",
+    "sourceCallId": "call_VxhVisjCAQArkw8xJoT2AzbU",
+    "curation": "The invocation is the exact render-debug carrier with only the machine-specific workdir replaced. The paired output keeps the exact recorded envelope, totals, and representative first/last result lines while omitting the unrelated middle of the already-truncated 877-line search result."
+  },
   "cases": [
+    {
+      "expectedRoute": "specialized",
+      "expectedReceipt": {
+        "rendererId": "shared.command",
+        "protocolId": "command.search"
+      },
+      "expectedResultDecision": {
+        "action": "absorb",
+        "ownerRenderId": "shared.command",
+        "protocolId": "command.search"
+      },
+      "toolUse": {
+        "type": "tool_use",
+        "id": "call_VxhVisjCAQArkw8xJoT2AzbU",
+        "name": "exec",
+        "input": {
+          "raw": "const r = await tools.exec_command({\n  cmd: \"rg -n -i --glob '!vendor/**' --glob '!testing/fixtures/**' --glob '!packages/agent-transcript-parser/fixtures/**' --glob '!package-lock.json' \\\"uncategori|unclassified|unknown shape|shape collector|collect.*shape|shape.*collect|observed/catalog|catalog.json|evidence/observed|renderShape|shapeKey\\\" .; rg --files packages/agent-transcript-parser scripts docs src | rg -i '(shape|catalog|evidence|collect|unknown)' | sort | head -n 500\",\n  workdir: \"/workspace/agent-code\",\n  yield_time_ms: 10000,\n  max_output_tokens: 50000\n});\ntext(r.output);"
+        }
+      },
+      "toolResult": {
+        "type": "tool_result",
+        "tool_use_id": "call_VxhVisjCAQArkw8xJoT2AzbU",
+        "content": "Script completed\nWall time 0.1 seconds\nOutput:\n\nWarning: truncated output (original token count: 25163)\nTotal output lines: 877\n\n./src/preload/api/devDebug.ts:4:import type { RenderShapeAppendResult } from '@shared/types/renderShapes.js'\n./scripts/audit-rendering-shapes.mts:15:// UNCLASSIFIED fingerprint\n... 872 recorded lines omitted during privacy curation ...\nsrc/renderer/src/rendering/model/unknowns.ts\nsrc/shared/types/renderShapes.ts\n",
+        "is_error": false,
+        "codex": { "kind": "custom_tool_call_output" }
+      }
+    },
     {
       "expectedRoute": "specialized",
       "expectedReceipt": {

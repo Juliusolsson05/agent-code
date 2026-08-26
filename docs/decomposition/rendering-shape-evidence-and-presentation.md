@@ -1,6 +1,6 @@
 # Recorded rendering-shape reconciliation and semantic operation presentation
 
-**Status:** proposed — awaiting explicit approval before implementation  
+**Status:** approved — implementation active
 **Date:** 2026-08-26  
 **Issues:** #530, #643, #644, #645, #646
 
@@ -9,6 +9,13 @@ production or test implementation may begin until the decomposition is
 approved. If recorded evidence later contradicts a stage, this document must be
 revised and approved again; the implementation must not be patched forward with
 another route-specific conditional.
+
+**Execution update, 2026-08-26:** after approval, the user explicitly narrowed
+the first delivery to the already-recorded Codex `rg` presentation regression.
+That fixture is below the current scan ceiling and does not depend on the later
+evidence-reader work, so the first PR implements Stages 4–5 for this proven
+carrier. Stages 0–3 and 6–7 remain follow-up PRs; this is a priority change, not
+a claim that their unknowns have been resolved.
 
 ## Applicability
 

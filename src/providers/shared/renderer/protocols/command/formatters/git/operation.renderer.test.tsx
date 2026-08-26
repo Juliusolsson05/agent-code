@@ -127,7 +127,7 @@ describe('provider-owned Git operation formatting', () => {
   it('normalizes the captured transparent unified exec before Git formatting', () => {
     // Direct text(r.output) carrier: the output bytes are owned, but no exit
     // code survives this transport, so the Git route claims the pair while the
-    // view stays in the neutral "exit unknown" grammar (rich success cards
+    // view stays in the neutral "exit code unavailable" grammar (rich success cards
     // require proven exit 0).
     const decision = operation('codex', {
       toolUse: {
@@ -158,7 +158,7 @@ describe('provider-owned Git operation formatting', () => {
       protocolId: 'command.git',
     })
     const { container } = render(decision.toolUse.node)
-    expect(screen.getByText('exit unknown')).toBeInTheDocument()
+    expect(screen.getByText('exit code unavailable')).toBeInTheDocument()
     expect(container.textContent).toContain('src/example.ts')
   })
 
@@ -190,7 +190,7 @@ describe('provider-owned Git operation formatting', () => {
     expect(decision.toolResult?.action).toBe('absorb')
     const { container } = render(decision.toolUse.node)
     expect(screen.getByText('git diff and apply')).toBeInTheDocument()
-    expect(screen.getByText('exit unknown')).toBeInTheDocument()
+    expect(screen.getByText('exit code unavailable')).toBeInTheDocument()
     expect(screen.queryByText('complete')).toBeNull()
     expect(screen.queryByText('✓')).toBeNull()
     expect(container.textContent).toContain('git diff --binary')
@@ -304,7 +304,7 @@ describe('provider-owned Git operation formatting', () => {
       protocolId: 'command.git',
     })
     render(decision.toolUse.node)
-    expect(screen.getByText('exit unknown')).toBeInTheDocument()
+    expect(screen.getByText('exit code unavailable')).toBeInTheDocument()
     expect(screen.queryByText('✓')).toBeNull()
     expect(screen.queryByText('complete')).toBeNull()
     // Workflow structure is factual even when outcome is not. The card may

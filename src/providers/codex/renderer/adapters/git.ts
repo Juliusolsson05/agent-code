@@ -27,7 +27,7 @@ export function fromCodexGitOperation(input: {
     // (command.ts commandResultEvidence). The Git view must not enter the
     // rich success cards on it: a rejected push or failed guard chain would
     // parse as a clean success card. `unknown` keeps the exact output in the
-    // neutral command grammar with an explicit "exit unknown" state.
+    // neutral command grammar with an explicit "exit code unavailable" state.
     exitUnknown: command.model.status === 'unknown',
   })
 }

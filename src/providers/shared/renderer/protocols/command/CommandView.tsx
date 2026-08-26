@@ -23,7 +23,7 @@ const STATUS_LABEL: Record<CommandRenderModel['status'], string> = {
   // Deliberately quiet but visible: the command finished and its output is
   // real, but the transport never proved exit 0, so the row must not read as
   // an implicit success (which an empty label would).
-  unknown: 'exit unknown',
+  unknown: 'exit code unavailable',
 }
 
 export const CommandView = memo(function CommandView({ model }: { model: CommandRenderModel }) {
