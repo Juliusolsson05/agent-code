@@ -11,6 +11,8 @@ function commandContext(options: {
   laneIds?: Array<string | undefined>
   focusedLane?: number
   liveIds?: string[]
+  scope?: 'project' | 'global'
+  inserted?: boolean
 } = {}): {
   context: CommandContext
   insertTiledLaneRight: ReturnType<typeof vi.fn>
@@ -19,12 +21,20 @@ function commandContext(options: {
   const laneIds = options.laneIds ?? ['a', 'b', 'c']
   const focusedLane = options.focusedLane ?? 1
   const liveIds = options.liveIds ?? laneIds.filter((id): id is string => Boolean(id))
-  const insertTiledLaneRight = vi.fn()
+  const insertTiledLaneRight = vi.fn().mockReturnValue(options.inserted ?? true)
   const showPaneToast = vi.fn()
+  const tabs = liveIds.map(id => ({
+    id: `tab-${id}`,
+    title: `project-${id}`,
+    root: { type: 'leaf' as const, sessionId: id },
+    focusedSessionId: id,
+  }))
   const workspace = {
     state: {
+      tabs,
+      activeTabId: tabs[0]?.id ?? '',
       dispatchMode: {
-        scope: 'global',
+        scope: options.scope ?? 'global',
         tiled: {
           lanes: laneIds.map(selectedSessionId => selectedSessionId ? { selectedSessionId } : {}),
           focusedLane,
@@ -33,6 +43,9 @@ function commandContext(options: {
       sessions: Object.fromEntries(
         liveIds.map(id => [id, { cwd: `/work/${id}`, kind: 'claude' }]),
       ),
+      detachedSessions: {},
+      buried: [],
+      pinnedSessionIds: [],
     },
     insertTiledLaneRight,
     showPaneToast,
@@ -74,6 +87,32 @@ describe('New Lane command', () => {
 
   it('still inserts from an empty lane without inventing a pane-toast target', () => {
     const harness = commandContext({ laneIds: ['a', undefined], focusedLane: 1 })
+
+    newLaneCommand.run(harness.context)
+
+    expect(harness.insertTiledLaneRight).toHaveBeenCalledWith(1)
+    expect(harness.showPaneToast).not.toHaveBeenCalled()
+  })
+
+  it('does not send pane feedback to a live session outside project scope', () => {
+    // A lane can retain B for one render after project scope moves to A. The
+    // session still exists globally, but the layout cannot render it and its
+    // healer will replace it; a session-existence check alone would toast a
+    // hidden pane that did not originate this visible command.
+    const harness = commandContext({
+      laneIds: ['a', 'b'],
+      focusedLane: 1,
+      scope: 'project',
+    })
+
+    newLaneCommand.run(harness.context)
+
+    expect(harness.insertTiledLaneRight).toHaveBeenCalledWith(1)
+    expect(harness.showPaneToast).not.toHaveBeenCalled()
+  })
+
+  it('does not claim success when the reducer refuses a stale invocation', () => {
+    const harness = commandContext({ inserted: false })
 
     newLaneCommand.run(harness.context)
 

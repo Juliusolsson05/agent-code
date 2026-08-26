@@ -4,6 +4,7 @@ import {
   MAX_DISPATCH_TILES,
   MIN_DISPATCH_TILES,
 } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
+import { resolveStrictDispatchCommandTarget } from '@renderer/workspace/dispatch/dispatchTarget'
 
 export const layoutCommands: CommandDef[] = [
   {
@@ -82,17 +83,22 @@ export const layoutCommands: CommandDef[] = [
       const laneIndex = tiled.focusedLane
       const sourceLane = tiled.lanes[laneIndex]
       if (!sourceLane) return
-      const sourceSessionId = sourceLane.selectedSessionId
+      // The raw lane id can still name a globally live but OUT-OF-SCOPE session
+      // during the render before TiledDispatchLayout heals it. Use the same
+      // strict visual resolver as lifecycle commands so pane feedback can only
+      // target the agent the user can actually see in this focused lane.
+      const sourceTarget = resolveStrictDispatchCommandTarget(workspace.state)
 
-      workspace.insertTiledLaneRight(laneIndex)
+      const inserted = workspace.insertTiledLaneRight(laneIndex)
+      if (!inserted) return
 
       // Pane toasts are SESSION-scoped, not lane-scoped. Reporting through the
       // still-focused source session keeps feedback at the command's point of
       // origin and avoids pretending an empty inserted lane has a runtime that
       // can own feedback. Mirrored copies may all show it by design because
       // they share that same runtime.
-      if (sourceSessionId && workspace.state.sessions[sourceSessionId]) {
-        workspace.showPaneToast(sourceSessionId, 'New lane created')
+      if (sourceTarget?.source === 'tiled-lane' && sourceTarget.laneIndex === laneIndex) {
+        workspace.showPaneToast(sourceTarget.row.sessionId, 'New lane created')
       }
     },
   },

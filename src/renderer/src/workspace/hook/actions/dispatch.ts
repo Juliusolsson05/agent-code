@@ -38,7 +38,7 @@ export function useDispatchActions(
   exitTiledDispatch: () => void
   setTiledLaneSession: (laneIndex: number, sessionId: SessionId) => void
   setTiledLaneCount: (count: number) => void
-  insertTiledLaneRight: (laneIndex: number) => void
+  insertTiledLaneRight: (laneIndex: number) => boolean
   removeTiledLane: (laneIndex: number) => void
   setTiledFocusedLane: (laneIndex: number) => void
   setTiledRatios: (ratios: number[]) => void
@@ -217,13 +217,21 @@ export function useDispatchActions(
    */
   const insertTiledLaneRight = useCallback(
     (laneIndex: number) => {
+      let inserted = false
       setState(prev => {
         const tiled = prev.dispatchMode?.tiled
         if (!tiled) return prev
         const next = insertLaneRightIntoTiled(prev, tiled, laneIndex)
         if (!next) return prev
+        inserted = true
         return { ...prev, dispatchMode: { ...prev.dispatchMode!, tiled: next } }
       })
+      // Zustand's workspace setter applies functional updaters synchronously,
+      // so this reports the reducer's ACTUAL admission rather than the command
+      // palette's earlier render snapshot. That distinction is what prevents a
+      // stale programmatic invocation from announcing a lane that was refused
+      // at the ceiling or after its coordinate disappeared.
+      return inserted
     },
     [setState],
   )

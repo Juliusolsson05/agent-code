@@ -71,6 +71,22 @@ describe('insertLaneRightIntoTiled', () => {
     expect(next?.focusedLane).toBe(1)
   })
 
+  it('preserves the focused session when a general caller inserts before it', () => {
+    // The command currently passes the focused index, but this helper is public
+    // and accepts any lane coordinate. An insertion before focus shifts that
+    // session right; preserving only the numeric index would retarget every
+    // subsequent keyboard command from C to B.
+    const next = insertLaneRightIntoTiled(
+      makeState(['a', 'b', 'c', 'd']),
+      tiled(['a', 'b', 'c'], 2),
+      0,
+    )
+
+    expect(idsOf(next)).toEqual(['a', 'd', 'b', 'c'])
+    expect(next?.focusedLane).toBe(3)
+    expect(next?.lanes[next.focusedLane]?.selectedSessionId).toBe('c')
+  })
+
   it('inserts after lane zero without changing which lane the full index controls', () => {
     const next = insertLaneRightIntoTiled(
       makeState(['a', 'b', 'c']),

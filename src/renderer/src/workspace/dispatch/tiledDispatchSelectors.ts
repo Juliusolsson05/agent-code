@@ -229,10 +229,14 @@ export function insertLaneRightIntoTiled(
       insertedLane,
       ...tiled.lanes.slice(insertAt),
     ],
-    // Inserting AFTER the focused lane means its index does not move. Focusing
-    // the new lane would make a layout command also become a navigation command
-    // and would move the user's keyboard/command target without being asked.
-    focusedLane: tiled.focusedLane,
+    // The command inserts after focus, so its normal path keeps this index.
+    // The helper is deliberately more general, though: if a future caller
+    // inserts before the focused coordinate, preserve the focused SESSION by
+    // shifting its index just as removeLaneFromTiled does in reverse. Leaving
+    // the ordinal unchanged would silently retarget keyboard commands.
+    focusedLane: insertAt <= tiled.focusedLane
+      ? tiled.focusedLane + 1
+      : tiled.focusedLane,
     ratios: insertLaneWeight(tiled.ratios, tiled.lanes.length, insertAt),
   }
 }

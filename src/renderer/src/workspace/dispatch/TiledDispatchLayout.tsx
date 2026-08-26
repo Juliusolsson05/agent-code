@@ -34,9 +34,10 @@ type Props = {
 //                    share the remaining width. A "unit" is one lane's
 //                    [mini-list?][agent view] pair. Weights are normalized
 //                    on read, so their absolute scale is irrelevant.
-// Absent / wrong-length => sensible defaults (even split). Reset to
-// undefined on tile-count change (a weight array sized for the old lane
-// count would mis-lay-out the new set).
+// Absent / wrong-length => sensible defaults (even split). The generic count
+// prompt resets the array because it supplies no position at which to map a
+// new weight; exact New Lane / Remove Lane operations do have that information
+// and preserve the sidebar plus every honestly mappable lane weight.
 const INDEX_MIN = 0.1
 const INDEX_MAX = 0.4
 const DEFAULT_INDEX_FRACTION = 0.18
