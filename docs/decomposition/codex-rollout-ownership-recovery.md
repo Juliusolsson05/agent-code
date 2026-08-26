@@ -1440,3 +1440,15 @@ completes before config/read, leaving no application await between attestation
 and `ptySpawn`. The exact five focused contracts, codex package check (146/146),
 built projection (4/4), parent typecheck, and twelve focused parent lifecycle/
 launch tests are green.
+
+Stage 36 live replay exposed one instrumentation race, not a production
+ownership failure. In the first `ordinary-vim-sentinel-cwd` run, the captured
+request already contained the exact prompt, but a late injected
+`<environment_context>` role-user entry crossed the recorder's count baseline
+first. The recorder selected the global `.at(-1)` value and failed before the
+real prompt append became its sampled value. An isolated rerun produced exact
+rollout/request agreement without code changes. The verification stage must
+therefore select the already-recorded expected prompt from entries appended
+after the baseline and keep waiting when only injected context arrived. It must
+not treat arbitrary context as the prompt, and it must still time out if the
+expected durable value never appears.
