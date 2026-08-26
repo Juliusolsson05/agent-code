@@ -41,7 +41,11 @@ export function extractCodexWorktreeActivitySeeds(
   if (record.type === 'turn_context') {
     const cwd = stringField(payload, 'cwd')
     return cwd
-      ? [sessionCwdSeed({ source: 'codex:turn_context.cwd', path: cwd })]
+      ? [sessionCwdSeed({
+          source: 'codex:turn_context.cwd',
+          path: cwd,
+          active: false,
+        })]
       : []
   }
 
@@ -50,7 +54,11 @@ export function extractCodexWorktreeActivitySeeds(
       const settings = asRecord(payload.thread_settings)
       const cwd = stringField(settings, 'cwd')
       return cwd
-        ? [sessionCwdSeed({ source: 'codex:thread_settings.cwd', path: cwd })]
+        ? [sessionCwdSeed({
+            source: 'codex:thread_settings.cwd',
+            path: cwd,
+            active: false,
+          })]
         : []
     }
     if (payload?.type === 'item_completed') {
@@ -120,6 +128,14 @@ function currentCompletedItemSeeds(
   }
 
   if (item?.type === 'FileChange') {
+    // WHY the completed envelope alone is insufficient: Codex retains the
+    // proposed `changes` object when a patch fails or is declined. Only the
+    // item's terminal status says those paths were actually written. Treating
+    // a proposal as a write would create strong historical evidence for a
+    // worktree the agent never modified. The local recording currently has
+    // only successful FileChange items, while the vendored upstream protocol
+    // explicitly defines completed, failed, and declined terminal statuses.
+    if (item.status !== 'completed') return []
     const changes = asRecord(item.changes)
     if (!changes) return []
 
@@ -171,6 +187,7 @@ function sessionCwdSeed(params: {
   source: string
   path: string
   branch?: string | null
+  active?: boolean
 }): WorktreeActivityEventSeed {
   return {
     kind: 'session-cwd',
@@ -178,7 +195,13 @@ function sessionCwdSeed(params: {
     path: params.path,
     branch: params.branch ?? null,
     confidence: 'medium',
-    active: true,
+    // WHY per-turn configuration is not activity: turn_context and
+    // thread_settings_applied repeat the session's launch cwd at each turn.
+    // They may bootstrap a missing primary context, but must not repossess the
+    // badge after a command or write proves that work moved to a linked
+    // worktree. session_meta keeps the default because it is the one-time
+    // launch seed and provides the initial active badge.
+    active: params.active ?? true,
     requiresWorktreeMatch: true,
   }
 }

@@ -64,6 +64,7 @@ describe('recorded work-context provider contracts', () => {
     const command = extractWorktreeActivityEvents(records[2])
     const threadSettings = extractWorktreeActivityEvents(records[3])
     const fileChange = extractWorktreeActivityEvents(records[4])
+    const nextTurnContext = extractWorktreeActivityEvents(records[5])
     const changes = asRecord(asRecord(asRecord(records[4].payload)?.item)?.changes)
     if (!changes) throw new Error('recorded FileChange lost its changes object')
 
@@ -87,10 +88,21 @@ describe('recorded work-context provider contracts', () => {
       }),
     ])
     expect.soft(threadSettings).toEqual([
-      expect.objectContaining({ kind: 'session-cwd', path: MAIN_CHECKOUT }),
+      expect.objectContaining({
+        kind: 'session-cwd',
+        path: MAIN_CHECKOUT,
+        active: false,
+      }),
     ])
     expect.soft(fileChange.map(event => ({ kind: event.kind, path: event.path })))
       .toEqual(Object.keys(changes).map(path => ({ kind: 'file-write', path })))
+    expect.soft(nextTurnContext).toEqual([
+      expect.objectContaining({
+        kind: 'session-cwd',
+        path: MAIN_CHECKOUT,
+        active: false,
+      }),
+    ])
   })
 
   it('[codex-main-to-worktree] moves recorded activity only when the final worktree write arrives', () => {
@@ -100,8 +112,9 @@ describe('recorded work-context provider contracts', () => {
       identity(LINKED_WORKTREE, 'fixture/worktree-branch'),
     ]
 
-    const beforeWrite = replay(records.slice(0, -1), worktrees, MAIN_CHECKOUT)
-    const afterWrite = replay(records, worktrees, MAIN_CHECKOUT)
+    const beforeWrite = replay(records.slice(0, 4), worktrees, MAIN_CHECKOUT)
+    const afterWrite = replay(records.slice(0, 5), worktrees, MAIN_CHECKOUT)
+    const afterNextTurn = replay(records, worktrees, MAIN_CHECKOUT)
 
     // WHY compare the prefix and complete recording: this is the mechanical
     // proof that the failing expectation is driven by the captured FileChange,
@@ -111,10 +124,12 @@ describe('recorded work-context provider contracts', () => {
       before: deriveAgentWorkContext(beforeWrite)?.worktreePath ?? null,
       afterActive: afterWrite?.active?.worktreePath ?? null,
       afterPrimary: afterWrite?.primary?.worktreePath ?? null,
+      afterNextTurnActive: afterNextTurn?.active?.worktreePath ?? null,
     }).toEqual({
       before: MAIN_CHECKOUT,
       afterActive: LINKED_WORKTREE,
       afterPrimary: LINKED_WORKTREE,
+      afterNextTurnActive: LINKED_WORKTREE,
     })
   })
 
