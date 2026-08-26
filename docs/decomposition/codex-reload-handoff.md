@@ -1,7 +1,7 @@
 # Codex Reload Ownership Handoff
 
-> **Status:** Approved for implementation by the user request to continue the
-> diagnosis/fix pipeline. This document is the first branch artifact.
+> **Status:** Stages 1–3 implemented and independently verified. Stage 4 live
+> verification, exact-head review, and CI remain before merge readiness.
 >
 > **Incident:** Agent Code issue #638. Related fresh-rollout incident: #632.
 
@@ -37,7 +37,7 @@
 
 ### Stage 1 — turn the recorded sequence into a replacement contract
 
-- [ ] **Produces:** a sanitized lifecycle fixture describing the #638 ordering
+- [x] **Produces:** a sanitized lifecycle fixture describing the #638 ordering
   (`starting` → `provider.start.begin` → `replaying-history` → exact lease
   rejection) and a main-process regression test that models an existing resumed
   Codex backend followed by a replacement request for the same provider ID.
@@ -53,7 +53,7 @@
 
 ### Stage 2 — add an explicit app-level handoff boundary
 
-- [ ] **Produces:** a typed replacement/predecessor field at the preload IPC
+- [x] **Produces:** a typed replacement/predecessor field at the preload IPC
   boundary and a `SessionManager` pre-spawn handoff that is admitted only for a
   same-provider Codex resume targeting the predecessor's exact transcript.
 - **Verified by:** Stage 1 becomes green; focused tests also prove an unrelated
@@ -68,7 +68,7 @@
 
 ### Stage 3 — route every same-pane replacement through the handoff
 
-- [ ] **Produces:** renderer replacement code that supplies the predecessor ID
+- [x] **Produces:** renderer replacement code that supplies the predecessor ID
   to main, preserves existing post-success state remapping, and leaves ordinary
   `spawn`/new-tab calls without replacement authority.
 - **Verified by:** renderer tests assert the handoff field for `replaceSession`
@@ -107,10 +107,10 @@ receives no pane IDs and gains no replacement exception.
 
 ## 4. Unknowns
 
-- A fresh Codex pane has no spawn-time resume ID. Main may need to compare its
-  observed transcript path with the requested exact path to validate a later
-  replacement; the test must decide whether this is required for #638 or a
-  separately recorded follow-up.
+- **Resolved in Stage 2:** a fresh Codex pane has no spawn-time resume ID, so
+  main compares its observed transcript path with the provider registry's exact
+  resolution of the requested ID. A regression test proves that evidence path
+  performs the same stop-before-start handoff without trusting renderer state.
 - Predecessor stop can fail or become uncertain. The handoff must fail before
   successor spawn in that case; whether a user-facing retry can recover without
   an app restart needs live verification.

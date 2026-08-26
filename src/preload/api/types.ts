@@ -177,6 +177,17 @@ export type SessionSpawnOptions = {
   rows?: number
   /** Agent sessions only: provider session id to resume from durable history. */
   resumeSessionId?: string
+  /**
+   * Local pane backend this spawn will replace after it succeeds.
+   *
+   * WHY this intent crosses the IPC boundary instead of being inferred from
+   * `resumeSessionId`: many panes may legitimately refer to durable history,
+   * but only the renderer action that owns a particular live pane may authorize
+   * its teardown. Main uses this narrowly for a same-rollout Codex handoff,
+   * where the exact-path lease requires the predecessor to stop before the
+   * successor starts. Other providers keep the safer start-before-stop order.
+   */
+  predecessorSessionId?: string
   /** Agent sessions only: opt into provider-specific dangerous mode. */
   dangerousMode?: boolean
   /** Agent sessions only: opt into provider-specific proxy/semantic streaming. */

@@ -353,6 +353,12 @@ export class SessionManager extends EventEmitter {
     string,
     { kind: SessionKind; cwd: string; resumeSessionId: string | null }
   >()
+  // One same-pane Codex replacement per predecessor at a time. The exact
+  // rollout coordinator catches a second physical tail, but that is too late:
+  // provider construction, readiness publication, and proxy setup have already
+  // happened by then. This app-level claim rejects a duplicate user gesture at
+  // the boundary that actually knows which local pane authorized the handoff.
+  private readonly codexReplacementHandoffs = new Map<string, symbol>()
   private readonly sessionSizes = new Map<string, PtySize>()
   // Coalesce "input write to a session main doesn't own" incidents — the
   // restored-agents-null bug can make a renderer spam writes against a stale id,
@@ -982,7 +988,145 @@ export class SessionManager extends EventEmitter {
    * terminal sessions it's just the PTY spawn.
    */
   async spawn(options: SessionSpawnOptions): Promise<SessionSpawnResult> {
-    return await this.spawnWithId(options, randomUUID())
+    const requestedKind: unknown = options.kind
+    if (requestedKind !== undefined && !isSessionKind(requestedKind)) {
+      throw new Error('Unsupported session provider')
+    }
+    const kind: SessionKind = options.kind ?? DEFAULT_PROVIDER
+    const sessionId = randomUUID()
+    const codexHandoffClaim = await this.prepareCodexReplacementHandoff(
+      options,
+      sessionId,
+      kind,
+    )
+    try {
+      return await this.spawnWithId(options, sessionId)
+    } finally {
+      // Keep the predecessor claim until the successor transaction is fully
+      // terminal. Releasing immediately after stop would let a repeated stale
+      // UI gesture start another successor in the small window before the first
+      // replacement publishes its new local id.
+      if (
+        options.predecessorSessionId &&
+        codexHandoffClaim &&
+        this.codexReplacementHandoffs.get(options.predecessorSessionId) === codexHandoffClaim
+      ) {
+        this.codexReplacementHandoffs.delete(options.predecessorSessionId)
+      }
+    }
+  }
+
+  /**
+   * Stop the exact local Codex predecessor only when this spawn will resume the
+   * same physical transcript.
+   *
+   * WHY this policy cannot live in codex-headless: its coordinator deliberately
+   * knows files and proof, not Agent Code pane intent. Teaching it that a second
+   * owner is "sometimes a replacement" would weaken the cross-wire boundary for
+   * every consumer. Main owns both local backends and can prove that the caller
+   * named the predecessor it is replacing before retiring that one lease.
+   */
+  private async prepareCodexReplacementHandoff(
+    options: SessionSpawnOptions,
+    successorSessionId: string,
+    kind: SessionKind,
+  ): Promise<symbol | null> {
+    const predecessorSessionId = options.predecessorSessionId
+    if (kind !== 'codex' || !options.resumeSessionId || !predecessorSessionId) {
+      return null
+    }
+    if (predecessorSessionId === successorSessionId) {
+      throw new Error('A session cannot replace its own local routing id')
+    }
+    if (this.codexReplacementHandoffs.has(predecessorSessionId)) {
+      throw new Error('A Codex replacement is already in progress for this session')
+    }
+
+    // Publish the claim before transcript resolution awaits. Two IPC calls can
+    // otherwise both inspect the same live predecessor, both wait on disk, and
+    // then both stop/start against one exact lease.
+    const claim = Symbol(predecessorSessionId)
+    this.codexReplacementHandoffs.set(predecessorSessionId, claim)
+    const release = (): void => {
+      if (this.codexReplacementHandoffs.get(predecessorSessionId) === claim) {
+        this.codexReplacementHandoffs.delete(predecessorSessionId)
+      }
+    }
+
+    try {
+      const predecessor = this.sessions.get(predecessorSessionId)
+      const predecessorInfo = this.spawnInfo.get(predecessorSessionId)
+      if (!predecessor || predecessor.kind !== 'codex' || !predecessorInfo) {
+        release()
+        return null
+      }
+
+      let proof: 'same-resume-id' | 'same-transcript-path' | null =
+        predecessorInfo.resumeSessionId === options.resumeSessionId
+          ? 'same-resume-id'
+          : null
+
+      // Fresh Codex panes learn their provider id from session_meta after
+      // spawn, so spawnInfo has no resume id for them. The observed transcript
+      // file is still main-owned durable evidence. Resolve the requested id
+      // through the provider's exact locator and compare paths; do not infer
+      // equality from cwd or UI metadata.
+      if (!proof) {
+        const observedPath = this.lastTranscriptFile.get(predecessorSessionId)
+        if (observedPath) {
+          const requestedPath = await resolveProviderTranscriptPath({
+            kind: 'codex',
+            cwd: options.cwd,
+            providerSessionId: options.resumeSessionId,
+          })
+          if (
+            requestedPath &&
+            path.resolve(requestedPath) === path.resolve(observedPath)
+          ) {
+            proof = 'same-transcript-path'
+          }
+        }
+      }
+
+      if (!proof) {
+        release()
+        return null
+      }
+
+      const startedAt = performance.now()
+      this.lifecycle.session('replacement.handoff.begin', successorSessionId, {
+        kind,
+        predecessorSessionId,
+        hasResumeId: true,
+        reason: proof,
+      })
+      const stopped = await this.killOwned({
+        sessionId: predecessorSessionId,
+        kind: predecessorInfo.kind,
+        cwd: predecessorInfo.cwd,
+      })
+      if (!stopped) {
+        this.lifecycle.session('replacement.handoff.end', successorSessionId, {
+          kind,
+          predecessorSessionId,
+          ok: false,
+          reason: 'predecessor-ownership-changed',
+          durationMs: performance.now() - startedAt,
+        })
+        throw new Error('Codex replacement predecessor is no longer owned by this pane')
+      }
+      this.lifecycle.session('replacement.handoff.end', successorSessionId, {
+        kind,
+        predecessorSessionId,
+        ok: true,
+        reason: proof,
+        durationMs: performance.now() - startedAt,
+      })
+      return claim
+    } catch (error) {
+      release()
+      throw error
+    }
   }
 
   /**

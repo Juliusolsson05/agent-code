@@ -251,6 +251,7 @@ export function useSessionActions(
       cwd: string,
       opts?: {
         resumeSessionId?: string
+        predecessorSessionId?: SessionId
         kind?: SessionKind
         dangerousMode?: boolean
         recoverTmuxName?: string
@@ -281,6 +282,9 @@ export function useSessionActions(
           kind,
           cwd,
           resumeSessionId: opts?.resumeSessionId,
+          ...(opts?.predecessorSessionId
+            ? { predecessorSessionId: opts.predecessorSessionId }
+            : {}),
           dangerousMode,
           useProxy,
           recoverTmuxName: opts?.recoverTmuxName,
@@ -924,6 +928,14 @@ export function useSessionActions(
       const oldDraft = refs.latestRuntimesRef.current[oldId]?.draftInput ?? ''
       const newId = await spawn(cwd, {
         ...spawnOpts,
+        // WHY main needs the local predecessor even though the renderer kills
+        // it below: resumed Codex owns an exact rollout lease before its PTY
+        // starts. The historical start-success-before-old-stop ordering makes
+        // the successor collide with the pane it is replacing (#638). Naming
+        // this exact local owner lets main perform only the unavoidable
+        // same-rollout handoff; Claude, OpenCode, fresh Codex, and different-
+        // transcript swaps retain the rollback-friendly ordering here.
+        predecessorSessionId: oldId,
         ...(builtInMcpDomains !== undefined ? { builtInMcpDomains } : {}),
       })
       setRuntimes(prev => ({
