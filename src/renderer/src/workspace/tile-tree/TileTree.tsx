@@ -101,6 +101,7 @@ export function renderWorkspaceLeaf(
   showWorktreeBadges = true,
   onFocusRequest: () => void = () => workspace.focusSessionInTab(tabId, sessionId),
   showRelatedAgentTabs = false,
+  surfacePaneLabel?: string,
 ) {
   const relatedTabs = showRelatedAgentTabs
     ? buildGridRelatedAgentTabs(workspace.state, tabId, sessionId)
@@ -111,7 +112,14 @@ export function renderWorkspaceLeaf(
   const renderedSessionId = workspace.state.sessions[selectedSessionId] ? selectedSessionId : sessionId
   const meta = workspace.state.sessions[renderedSessionId]
   const kind = meta?.kind ?? DEFAULT_PROVIDER
-  const paneLabel = paneLabelForSession(workspace.state, tabId, sessionId)
+  // WHY a parent-owned label may override the tab-local coordinate: Dispatch
+  // renders one globally ordered visible-row stream, so its D23 identity can
+  // legitimately differ from this session's position inside its owning tab.
+  // The surface that selected the row is the only authority for that
+  // coordinate. Grid and Spotlight callers omit this value and keep the
+  // established paneLabelForSession behavior.
+  const paneLabel = surfacePaneLabel ??
+    paneLabelForSession(workspace.state, tabId, sessionId)
 
   if (kind === 'terminal') {
     return (

@@ -1,8 +1,7 @@
 # Worktree Context and Dispatch Labels — Staged Decomposition
 
-> Status: Stage 4 completed and independently verified on 2026-08-26.
-> Stage 5 is explicitly approved; Stage 6 remains out of scope for this
-> implementation pass.
+> Status: Stages 3–5 completed and independently verified on 2026-08-26.
+> Stage 6 remains out of scope for this implementation pass.
 >
 > Issues: #658 (Codex worktree evidence) and #659 (Dispatch pane coordinate).
 
@@ -437,8 +436,9 @@ Stage 4 intentionally makes no Worktrees renderer consumer change.
 
 - The Stage 2 real-workspace regression turns green: visible D23, pane D23,
   unchanged tab-local D13 derivation.
-- The fixture's other mismatched rows are checked as a property: every rendered
-  Dispatch pane label equals its selected visible row label.
+- The same recorded D23 contract is exercised through Classic and Tiled
+  Dispatch. Per explicit user direction, this small label-plumbing fix does not
+  add an exhaustive counting/property matrix for every mismatched row.
 - Existing grid pane-label tests remain green.
 
 **Why separate**
@@ -451,6 +451,36 @@ identity it already selected.
 
 The input is the reduced real workspace with 24 rows and 20 mismatches, not a
 manually constructed `DispatchAgentRow` labelled D23.
+
+### Stage 5 completion record
+
+`renderWorkspaceLeaf` now accepts an optional parent-surface label. Classic
+Dispatch passes the selected visible row label; Tiled Dispatch retains that
+same label in lane resolution and passes it to the pane. Grid and Spotlight
+callers omit the value and therefore retain the established tab-local label.
+The recorded D23/D13 regression is green in both Dispatch layouts, and 66
+focused Dispatch/pane-label tests pass without adding a broad counting matrix.
+
+### Heap-safety checkpoint requested during Stage 5
+
+The historical JSONL parser now projects rich live events into compact indexed
+events inside the streaming loop. Command strings, file-path arrays, confidence,
+and dedupe keys become collectible after each line instead of surviving until
+EOF beside a second mapped array. Provider adapters return directly from one
+outer discriminator, avoiding several empty helper arrays for every irrelevant
+rollout record during a full rebuild.
+
+The version-3 startup path reads a 4 KiB prefix before loading the derived index.
+A stale version-2 cache is therefore rejected before its 30 MB+ JSON string and
+transcript object graph are allocated. The test explicitly proves `JSON.parse`
+is not invoked for that stale cache and that raw provider bytes remain unchanged.
+Existing hard bounds remain intact: FileChange fan-out is the recorded maximum
+of eight paths, live timeline/recent-key retention is 120/300 events, and the
+historical in-memory LRU is capped at 1,000 transcripts.
+
+A valid current-version index remains one JSON document and still requires a
+whole-file startup parse. Migrating that persisted format to JSONL would need a
+separate compatibility design and is not hidden inside this bug fix.
 
 ## Stage 6 — Cross-boundary verification and review
 
