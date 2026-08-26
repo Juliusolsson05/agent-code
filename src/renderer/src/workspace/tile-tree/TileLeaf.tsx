@@ -895,6 +895,8 @@ export function TileLeaf({
           only the feed-sized viewport above it. */}
       <WorkflowViewSelector
         references={workflowViews.references}
+        historyReferences={workflowViews.allReferences}
+        cwd={workflowCwd}
         selectedRunId={workflowViews.selectedRunId}
         onSelect={workflowViews.selectRun}
       />

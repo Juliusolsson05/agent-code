@@ -88,6 +88,10 @@ export class WorkflowBridge {
     string,
     { cwd: string; slots: Map<string, WorkflowRunReferenceData> }
   >()
+  private readonly latestLifecycleByRunId = new Map<
+    string,
+    { status: string; cursor: number }
+  >()
   private readonly send: WorkflowBridgeSender
   private readonly batchWindowMs: number
   private readonly maxBatchBytes: number
@@ -128,6 +132,7 @@ export class WorkflowBridge {
     // is itself unloading cannot acknowledge delivery. Flushing here used to create one last IPC
     // burst exactly when Chromium was tearing its queues down.
     this.deliveryByScope.clear()
+    this.latestLifecycleByRunId.clear()
   }
 
   setRunInterest(rendererId: number, request: WorkflowRunInterestRequest): void {
@@ -261,10 +266,21 @@ export class WorkflowBridge {
       ? existing
       : { cwd: normalizedCwd, slots: new Map<string, WorkflowRunReferenceData>() }
 
-    session.slots.set(run.runId, {
+    let reference: WorkflowRunReferenceData = {
       cwd: normalizedCwd,
       ...cloneStartResult(run),
-    })
+    }
+    const lifecycle = this.latestLifecycleByRunId.get(run.runId)
+    // WHY a lifecycle event may legitimately predate registration: workflow-mcp starts execution
+    // before its tool handler returns the launch reference, and startup inventory is asynchronous.
+    // A short workflow can therefore complete while there is no session slot to update. Keeping
+    // the event's cursor authority here prevents the later launch/inventory snapshot from reviving
+    // a completed run as Active. Cursor comparison is essential because restart inventory can also
+    // be newer than an old event retained by this process.
+    if (lifecycle && lifecycle.cursor >= (reference.cursor ?? 0)) {
+      reference = { ...reference, ...lifecycle }
+    }
+    session.slots.set(run.runId, reference)
     // WHY collapse after insertion instead of choosing a slot from the incoming run alone:
     // startup storage inventory has no parent-before-child ordering contract. A successor may be
     // seen before its parent, and a three-run lineage can arrive newest, oldest, middle. Repeatedly
@@ -415,6 +431,7 @@ export class WorkflowBridge {
   }
 
   private enqueue(event: StoredWorkflowEvent): void {
+    this.publishRunLifecycleTransition(event)
     let interested = false
     for (const delivery of this.deliveryByScope.values()) {
       if (delivery.runId !== event.runId || delivery.interests.size === 0) continue
@@ -424,6 +441,36 @@ export class WorkflowBridge {
     // No visible workflow view is interested. The event is already in WorkflowService's journal;
     // retaining or cloning it here would create a second, unbounded queue with no consumer.
     if (interested) this.scheduleFlush()
+  }
+
+  private publishRunLifecycleTransition(event: StoredWorkflowEvent): void {
+    const status = workflowStatusFromEvent(event)
+    if (!status) return
+
+    const previousLifecycle = this.latestLifecycleByRunId.get(event.runId)
+    // Durable events normally arrive in order, but the bridge must not make status correctness
+    // depend on subscription scheduling. An older delayed run.started must never turn a terminal
+    // reference back into Active while preserving the terminal event's higher cursor.
+    if (previousLifecycle && previousLifecycle.cursor > event.cursor) return
+    this.latestLifecycleByRunId.set(event.runId, { status, cursor: event.cursor })
+
+    for (const [sessionId, session] of this.runsBySession) {
+      let changed = false
+      for (const [slot, reference] of session.slots) {
+        if (reference.runId !== event.runId) continue
+        if ((reference.cursor ?? 0) > event.cursor) continue
+        const cursor = event.cursor
+        if (reference.status === status && reference.cursor === cursor) continue
+        session.slots.set(slot, { ...reference, status, cursor })
+        changed = true
+      }
+      // WHY session-run pushes follow lifecycle events, not the complete event stream: selectors
+      // need to distinguish live work from history even when no inspector is mounted, but cloning
+      // the list for every agent/tool event would recreate the render pressure the cursor-batched
+      // bridge was designed to remove. Run lifecycle transitions are rare and are the only events
+      // that can change the active/inactive navigation treatment.
+      if (changed) this.publishSessionRuns(sessionId, session)
+    }
   }
 
   private scheduleFlush(): void {
@@ -519,6 +566,19 @@ function byteBoundedEvents(
 
 function runScopeKey(cwd: string, runId: string): string {
   return `${cwd}\u0000${runId}`
+}
+
+function workflowStatusFromEvent(event: StoredWorkflowEvent): string | null {
+  switch (event.event.type) {
+    case 'run.started': return 'running'
+    case 'run.cancellation_requested': return 'cancellation_requested'
+    case 'run.completed':
+      return event.event.payload.withErrors === true ? 'completed_with_errors' : 'completed'
+    case 'run.failed': return 'failed'
+    case 'run.cancelled': return 'cancelled'
+    case 'run.interrupted': return 'interrupted'
+    default: return null
+  }
 }
 
 function workflowManifestForRenderer(manifest: WorkflowRunManifest): WorkflowRunManifest {
