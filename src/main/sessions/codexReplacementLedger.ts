@@ -9,7 +9,7 @@ export type CodexReplacementTeardownIntent =
   | 'shutdown'
   | null
 
-export type CodexReplacementReservation = {
+export type CodexReplacementReservation<TRecoveryClaim = unknown> = {
   transactionId: string
   predecessorSessionId: string
   successorSessionId: string
@@ -23,6 +23,7 @@ export type CodexReplacementReservation = {
   spawnSettled: Promise<void>
   settleSpawn: () => void
   reclaimPromise: Promise<SessionRecoverResult> | null
+  restorationClaim: TRecoveryClaim | null
 }
 
 export type CodexReplacementRedirect = {
@@ -60,11 +61,11 @@ export type CodexReplacementReclaim<TRecoveryClaim> = {
 export class CodexReplacementLedger<TRecoveryClaim> {
   private readonly reservationsByPredecessor = new Map<
     string,
-    CodexReplacementReservation
+    CodexReplacementReservation<TRecoveryClaim>
   >()
   private readonly reservationsBySuccessor = new Map<
     string,
-    CodexReplacementReservation
+    CodexReplacementReservation<TRecoveryClaim>
   >()
   private readonly redirectsByPredecessor = new Map<
     string,
@@ -92,7 +93,9 @@ export class CodexReplacementLedger<TRecoveryClaim> {
     CodexReplacementReclaim<TRecoveryClaim>
   >()
 
-  registerReservation(reservation: CodexReplacementReservation): void {
+  registerReservation(
+    reservation: CodexReplacementReservation<TRecoveryClaim>,
+  ): void {
     if (
       this.reservationsByPredecessor.has(reservation.predecessorSessionId) ||
       this.reservationsBySuccessor.has(reservation.successorSessionId)
@@ -106,7 +109,9 @@ export class CodexReplacementLedger<TRecoveryClaim> {
     this.reservationsBySuccessor.set(reservation.successorSessionId, reservation)
   }
 
-  findReservation(sessionId: string): CodexReplacementReservation | null {
+  findReservation(
+    sessionId: string,
+  ): CodexReplacementReservation<TRecoveryClaim> | null {
     // A chained replacement can make S both the predecessor of S→T and the
     // successor of P→S. Prefer the newer transaction where S is the durable
     // predecessor, matching SessionManager's historical admission rule.
@@ -117,11 +122,13 @@ export class CodexReplacementLedger<TRecoveryClaim> {
 
   getReservationByPredecessor(
     predecessorSessionId: string,
-  ): CodexReplacementReservation | null {
+  ): CodexReplacementReservation<TRecoveryClaim> | null {
     return this.reservationsByPredecessor.get(predecessorSessionId) ?? null
   }
 
-  deleteReservation(reservation: CodexReplacementReservation): boolean {
+  deleteReservation(
+    reservation: CodexReplacementReservation<TRecoveryClaim>,
+  ): boolean {
     if (
       this.reservationsByPredecessor.get(reservation.predecessorSessionId) !==
         reservation
@@ -139,7 +146,7 @@ export class CodexReplacementLedger<TRecoveryClaim> {
   }
 
   tombstoneReservationLineage(
-    reservation: CodexReplacementReservation,
+    reservation: CodexReplacementReservation<TRecoveryClaim>,
   ): boolean {
     if (
       this.reservationsByPredecessor.get(reservation.predecessorSessionId) !==
@@ -177,7 +184,7 @@ export class CodexReplacementLedger<TRecoveryClaim> {
     return this.deleteReservation(reservation)
   }
 
-  reservations(): IterableIterator<CodexReplacementReservation> {
+  reservations(): IterableIterator<CodexReplacementReservation<TRecoveryClaim>> {
     return this.reservationsByPredecessor.values()
   }
 

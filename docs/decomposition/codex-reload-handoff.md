@@ -8,12 +8,13 @@
 > contracts, keybindings, live-resume probe, and packaged-build verification are
 > green. Full unit is 1,556/1,557 with only the known missing external corpus
 > session. The seventh exact-head review's five additional reachable ordering
-> failures are now implemented through contracts 29–33. Their nine red-first
-> schedules are green; the affected main cluster is 90/90, typecheck, system
-> 61/61, renderer 289/289, contracts, keybindings, live-resume probe, and
-> packaged-build verification are green. Full unit is 1,565/1,566 with only the
-> same missing external corpus session. Stage 4 exact-head re-review, new-head
-> CI, and live verification remain.
+> failures are implemented through contracts 29–33. The eighth exact-head
+> review's two later transitions are now implemented through contracts 34–35.
+> Their four red-first schedules are green; the affected main cluster is 94/94,
+> typecheck, system 61/61, renderer 289/289, contracts, keybindings, live-resume
+> probe, and packaged-build verification are green. Full unit is 1,569/1,570
+> with only the same missing external corpus session. Stage 4 exact-head
+> re-review, new-head CI, and live verification remain.
 >
 > **Incident:** Agent Code issue #638. Related fresh-rollout incident: #632.
 
@@ -148,6 +149,17 @@
     Each stale predecessor redirect retains its own captured restoration
     options, including cwd, so reclaim restores that durable ID in the project
     context its ownership proof validated.
+34. A pending-handoff reservation remains the authoritative two-role lineage
+    while its reclaim restores the predecessor. The nested recovery claim is
+    associated with both reservation and reclaim before provider work starts;
+    close through P or S and cancellation through any joined token stop that
+    generation, while explicit close retains a closed-lineage tombstone after
+    restoration settles.
+35. Compensation belongs to the replacement reservation whether or not a
+    renderer reclaim exists. Once compensation publishes its predecessor-keyed
+    recovery claim, close/shutdown through either reservation identity can
+    cancel and stop it; reclaim association is additional timeout authority,
+    not the only route to the physical generation.
 
 ## 2. Intermediate stages
 
@@ -300,6 +312,15 @@ overwriting predecessor-specific restoration context. These are ownership,
 generation, persistence, evidence, and alias-context invariants respectively;
 none belongs in renderer timing or provider-specific exceptions.
 
+The eighth exact-head review closes the final gap between those artifacts: a
+reservation may not be retired merely because successor teardown finished when
+its reclaim is about to publish predecessor restoration. It remains the
+two-role close/tombstone authority until that nested claim settles. The
+reservation also owns compensation directly, because successor failure can
+start compensation without any renderer reclaim to carry the optional
+reclaim-to-restoration link. Both associations remain in the ledger record;
+provider lifecycle execution stays in `SessionManager`.
+
 This is separate from the async manager logic because the fifth review found
 the same missing-identity failure in recovery, close, and transaction cleanup.
 Adding three more scans/conditionals would preserve the substrate that produced
@@ -445,6 +466,14 @@ receives no pane IDs and gains no replacement exception.
 - **Resolved by seventh-review Stage 2 design:** flattened redirects share a
   physical successor but do not share predecessor restoration context. Cwd and
   launch facts remain attached to the alias that originally captured them.
+- **Resolved by eighth-review Stage 2 design:** a pending reclaim entering its
+  final predecessor recovery has not finished the replacement lifetime. The
+  reservation stays published so either role can close the lineage and turn
+  stale durable P bytes into a tombstone rather than a later resurrection.
+- **Resolved by eighth-review Stage 2 design:** compensation ownership cannot
+  depend on an optional reclaim. The reservation directly names the exact claim
+  it caused, while a reclaim—when present—also names that same generation for
+  token cancellation.
 - Predecessor stop can fail or become uncertain. The coordinator's tombstone
   must remain fail-closed; compensation may also fail in that state and needs a
   truthful lifecycle outcome rather than an unsafe lease exception.
@@ -554,3 +583,13 @@ use old cwd. Each fixture gates the precise promise boundary in the review
 report and asserts the externally dangerous result—live hidden backend, stale
 durable bytes, unkillable generation, or wrong-project restoration—rather than
 an internal map shape.
+
+Eighth-review fixtures add four schedules from exact commit `01bc47cc`: an
+unacknowledged successful P→S reclaim is allowed to finish S teardown and enter
+gated P startup, after which (a) joined token T2 cancels the physical claim,
+(b) `killOwned(P)` stops it and fences a later durable-P recovery, and (c)
+`killOwned(S)` does the same through successor ownership. The fourth schedule
+makes S fail after destructive handoff, starts gated compensation without any
+reclaim, and closes by S. These are distinct from the earlier fixtures that
+closed while S was still starting/stopping or only after a committed redirect
+existed.

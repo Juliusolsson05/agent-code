@@ -227,6 +227,9 @@ type RecoveryClaim = {
   promise: Promise<SessionRecoverResult>
 }
 
+type CodexReplacementReservationRecord =
+  CodexReplacementReservation<RecoveryClaim>
+
 type SessionSpawnInfo = {
   kind: SessionKind
   cwd: string
@@ -238,7 +241,7 @@ type SessionSpawnInfo = {
 type CodexReplacementProof = 'same-resume-id' | 'same-transcript-path'
 
 type CodexReplacementHandoff = {
-  reservation: CodexReplacementReservation
+  reservation: CodexReplacementReservationRecord
   predecessorSessionId: string
   predecessorOwnership: SessionOwnershipOptions
   predecessorEntry: RegistryEntry
@@ -706,7 +709,7 @@ export class SessionManager extends EventEmitter {
 
   private findCodexReplacementReservation(
     sessionId: string,
-  ): CodexReplacementReservation | null {
+  ): CodexReplacementReservationRecord | null {
     return this.codexReplacements.findReservation(sessionId)
   }
 
@@ -804,10 +807,17 @@ export class SessionManager extends EventEmitter {
   }
 
   private cancelCodexReplacementReservation(
-    reservation: CodexReplacementReservation,
+    reservation: CodexReplacementReservationRecord,
     teardownIntent: 'explicit-close' | 'shutdown' | null,
   ): void {
     reservation.cancelled = true
+    if (reservation.restorationClaim) {
+      // Compensation and pending-reclaim restoration are reservation-caused
+      // generations even when no renderer reclaim exists. Publish cancellation
+      // synchronously so either reservation identity can revoke startup before
+      // killInternal begins its generation-scoped stop.
+      reservation.restorationClaim.cancelled = true
+    }
     if (teardownIntent && !reservation.teardownIntent) {
       reservation.teardownIntent = teardownIntent
     }
@@ -838,7 +848,7 @@ export class SessionManager extends EventEmitter {
   }
 
   private preserveClosedCodexReplacementLineage(
-    reservation: CodexReplacementReservation,
+    reservation: CodexReplacementReservationRecord,
   ): boolean {
     if (
       !reservation.teardownIntent ||
@@ -856,7 +866,7 @@ export class SessionManager extends EventEmitter {
   }
 
   private retireCodexReplacementReservation(
-    reservation: CodexReplacementReservation,
+    reservation: CodexReplacementReservationRecord,
   ): void {
     if (this.preserveClosedCodexReplacementLineage(reservation)) return
     this.codexReplacements.deleteReservation(reservation)
@@ -921,7 +931,7 @@ export class SessionManager extends EventEmitter {
 
   private reclaimPendingCodexReplacement(
     options: SessionRecoverOptions,
-    reservation: CodexReplacementReservation,
+    reservation: CodexReplacementReservationRecord,
   ): Promise<SessionRecoverResult> {
     if (!this.replacementOwnershipMatches(reservation.predecessorOwnership, options)) {
       return Promise.resolve(this.recoveryConflict(options.sessionId, null))
@@ -970,13 +980,44 @@ export class SessionManager extends EventEmitter {
           this.retireCodexReplacementReservation(reservation)
           return this.replacementRecoveryCancelled(options.sessionId)
         }
-        this.retireCodexReplacementReservation(reservation)
-        return await this.recover({
+        const recoveryPromise = this.recover({
           ...(reservation.restoreOptions ?? options),
           sessionId: reservation.predecessorSessionId,
           recoveryToken: options.recoveryToken,
           reclaimPendingReplacement: false,
         })
+        const restorationClaim = this.recoveriesInFlight.get(
+          reservation.predecessorSessionId,
+        ) ?? null
+        if (restorationClaim) {
+          // WHY the reservation survives this await: disk still names P, while
+          // the stopped hidden owner was S. Close can legitimately arrive by
+          // either identity until restored P is settled, and the reservation is
+          // the only record that both authenticates S and can turn explicit
+          // predecessor close into a durable process-lifetime tombstone.
+          reservation.restorationClaim = restorationClaim
+          reclaimGeneration.restorationClaim = restorationClaim
+          for (const token of reclaimGeneration.recoveryTokens) {
+            restorationClaim.recoveryTokens.add(token)
+          }
+        }
+        const result = await recoveryPromise
+        if (reservation.restorationClaim === restorationClaim) {
+          reservation.restorationClaim = null
+        }
+        if (reclaimGeneration.restorationClaim === restorationClaim) {
+          reclaimGeneration.restorationClaim = null
+        }
+        if (
+          reservation.cancelled ||
+          reclaimGeneration.cancelled ||
+          this.shuttingDown
+        ) {
+          this.retireCodexReplacementReservation(reservation)
+          return this.replacementRecoveryCancelled(options.sessionId)
+        }
+        this.retireCodexReplacementReservation(reservation)
+        return result
       },
     )
     reservation.reclaimPromise = reclaim.promise
@@ -1230,7 +1271,24 @@ export class SessionManager extends EventEmitter {
       ) {
         return this.reclaimPendingCodexReplacement(options, replacement)
       }
-      if (
+      const owningReclaim = addressesPredecessor
+        ? this.codexReplacements.getReclaim(options.sessionId)
+        : null
+      const entersOwnedRestore = Boolean(
+        addressesPredecessor &&
+        !options.reclaimPendingReplacement &&
+        !replacement.cancelled &&
+        owningReclaim &&
+        !owningReclaim.cancelled &&
+        owningReclaim.successorSessionId === replacement.successorSessionId &&
+        replacement.reclaimPromise === owningReclaim.promise,
+      )
+      if (entersOwnedRestore) {
+        // The pending reservation remains published while its exact reclaim
+        // restores predecessorId. Only this predecessor+successor generation
+        // may cross the fence; every renderer call still sees the reservation,
+        // allowing close through either role to publish a tombstone.
+      } else if (
         !addressesPredecessor &&
         !replacement.cancelled &&
         this.sessions.has(options.sessionId)
@@ -1680,7 +1738,7 @@ export class SessionManager extends EventEmitter {
     const spawnSettled = new Promise<void>(resolve => {
       settleSpawn = resolve
     })
-    const reservation: CodexReplacementReservation = {
+    const reservation: CodexReplacementReservationRecord = {
       transactionId: randomUUID(),
       predecessorSessionId,
       successorSessionId,
@@ -1698,6 +1756,7 @@ export class SessionManager extends EventEmitter {
       spawnSettled,
       settleSpawn,
       reclaimPromise: null,
+      restorationClaim: null,
     }
     this.codexReplacements.registerReservation(reservation)
     const release = (): void => {
@@ -1960,6 +2019,11 @@ export class SessionManager extends EventEmitter {
       const reclaim = this.codexReplacements.getReclaim(
         handoff.predecessorSessionId,
       )
+      // Compensation is caused by the reservation, not by rehydrate. A failed
+      // replacement can enter this path before any renderer asks to reclaim,
+      // so successor-addressed close/shutdown must be able to follow the
+      // reservation directly to the predecessor-keyed provider generation.
+      handoff.reservation.restorationClaim = claim
       if (reclaim) {
         // This link is narrower than sharing tokens: only the reclaim that was
         // already waiting on this reservation may cancel the compensation it
@@ -1981,6 +2045,9 @@ export class SessionManager extends EventEmitter {
         reason: 'replacement-compensation',
       })
       const result = await claim.promise
+      if (handoff.reservation.restorationClaim === claim) {
+        handoff.reservation.restorationClaim = null
+      }
       if (reclaim?.restorationClaim === claim) {
         reclaim.restorationClaim = null
       }
@@ -3130,7 +3197,7 @@ export class SessionManager extends EventEmitter {
 
   private async killInternal(
     sessionId: string,
-    authorizedReplacement: CodexReplacementReservation | null = null,
+    authorizedReplacement: CodexReplacementReservationRecord | null = null,
     authorizedRedirect: CodexReplacementRedirect | null = null,
   ): Promise<boolean> {
     const replacement = this.findCodexReplacementReservation(sessionId)
@@ -3210,12 +3277,24 @@ export class SessionManager extends EventEmitter {
     // may be the operation holding the reclaim promise open, and stop() is the
     // only real mechanism that can release it. Merely setting both cancellation
     // booleans can therefore deadlock close behind an unreachable backend.
-    const reclaimTeardown = [...cancelledReclaims].flatMap(reclaim => {
-      const claim = reclaim.restorationClaim
-      return claim
-        ? [this.cancelRecoveryClaim(reclaim.predecessorSessionId, claim)]
-        : []
-    })
+    const restorationClaims = new Map<RecoveryClaim, string>()
+    for (const reclaim of cancelledReclaims) {
+      if (reclaim.restorationClaim) {
+        restorationClaims.set(
+          reclaim.restorationClaim,
+          reclaim.predecessorSessionId,
+        )
+      }
+    }
+    if (cancelsReplacement && replacement?.restorationClaim) {
+      restorationClaims.set(
+        replacement.restorationClaim,
+        replacement.predecessorSessionId,
+      )
+    }
+    const reclaimTeardown = [...restorationClaims].map(([claim, ownerId]) =>
+      this.cancelRecoveryClaim(ownerId, claim),
+    )
     const recovery = this.recoveriesInFlight.get(sessionId)
     if (recovery) recovery.cancelled = true
     const entry = this.sessions.get(sessionId)
@@ -3302,7 +3381,7 @@ export class SessionManager extends EventEmitter {
 
   private async killOwnedInternal(
     options: SessionOwnershipOptions,
-    authorizedReplacement: CodexReplacementReservation | null = null,
+    authorizedReplacement: CodexReplacementReservationRecord | null = null,
   ): Promise<boolean> {
     const requestedKind: unknown = options.kind
     if (requestedKind !== undefined && !isSessionKind(requestedKind)) return false
