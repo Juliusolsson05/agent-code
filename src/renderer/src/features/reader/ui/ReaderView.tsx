@@ -7,6 +7,7 @@ import { CodeBlock } from '@renderer/lib/code/CodeBlock'
 import { CodeRenderContext } from '@renderer/features/feed/context'
 import { SafeInlineCode } from '@renderer/features/rendered-content/SafeInlineCode'
 import { SafeMarkdownLink } from '@renderer/features/rendered-content/SafeMarkdownLink'
+import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
 import { extractAssistantInProgress } from '@shared/parsers/extractAssistant'
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import { assistantUuidsWithText, extractAssistantByUuid } from '@renderer/lib/copyAssistant'
@@ -289,6 +290,12 @@ function ReaderBody({
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      // Reader owns history navigation only while it is the frontmost
+      // application surface. A dialog can open above this inline takeover;
+      // because both use document-level capture listeners, propagation order
+      // cannot protect the dialog from Reader. The mounted interaction-owner
+      // marker is the shared synchronous source of truth for that priority.
+      if (hasAppInteractionOwner()) return
       if (!event.altKey || event.metaKey || event.ctrlKey || event.shiftKey) return
       if (event.key === 'ArrowUp') {
         event.preventDefault()

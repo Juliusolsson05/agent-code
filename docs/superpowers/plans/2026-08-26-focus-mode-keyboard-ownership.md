@@ -1,6 +1,6 @@
 # Focus-mode keyboard ownership
 
-> Status: planned for Issue #647.
+> Status: implemented and verified for Issue #647.
 
 ## Goal
 
@@ -111,3 +111,19 @@ Prefer a small hook/component harness around the real `useKeybinds` and
 - Redesigning the general floating-surface system tracked by Issue #512.
 - Merging the pull request.
 
+## Verification record
+
+- Confirmed the regression red before implementation: Reader's
+  Option/Alt+ArrowDown called `focusDispatchSession` for the hidden classic
+  Dispatch surface.
+- The focused Reader and workspace-router regression files pass, covering
+  classic Dispatch, Tiled Dispatch, Grid, Spotlight, both focus-mode dismissal
+  paths, Reader message history, and modal priority.
+- `npm run test:renderer`, `npm run typecheck`, `npm run check:keybindings`,
+  `npm run test:contract`, `npm run check:live-resume-probe`, and
+  `npm run test:package` pass.
+- The repository-wide `npm run check` reached 1,876 passing tests. Two unrelated
+  five-second tests timed out under full-suite contention and passed immediately
+  in isolation. The only repeatable failure is the media fixture census citing
+  a deleted local Claude transcript; the same focused test fails unchanged on
+  `main`, so it is not caused by this branch.

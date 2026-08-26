@@ -573,6 +573,45 @@ export function useKeybinds(
         return
       }
 
+      // Reader and Spotlight are inline full-screen takeovers rather than
+      // Radix dialogs, so they deliberately do not stamp the DOM interaction-
+      // owner marker handled at the top of this router. Their workspace state
+      // remains live underneath them, though, and that makes the ordinary
+      // grid/Dispatch contexts a lie while either takeover is visible: the
+      // user cannot see the pane or row those shortcuts would mutate.
+      //
+      // WHY this gate lives before BOTH configured commands and the legacy
+      // Dispatch grammar: Reader's Option+Arrow listener calls
+      // preventDefault(), but another capture listener on the same document
+      // still runs. Checking defaultPrevented or stopping propagation would
+      // make correctness depend on React effect/listener registration order.
+      // This router instead declines ownership structurally, while leaving the
+      // event propagating so Reader's own older/newer handler can consume it.
+      //
+      // The one admitted command is the toggle that owns the visible takeover.
+      // That preserves the second-press dismissal contract without reopening
+      // arbitrary global shortcuts against the hidden workspace. Escape is
+      // handled immediately above for the same reason.
+      const focusModeOwnerCommandId = workspace.readerMode
+        ? 'toggle-reader-mode'
+        : workspace.spotlight
+          ? 'toggle-spotlight'
+          : null
+      if (focusModeOwnerCommandId) {
+        const focusModeCommandId = routedCommandForEvent(
+          e,
+          bindingIndex,
+          GLOBAL_CONTEXT_ONLY,
+        )
+        if (focusModeCommandId === focusModeOwnerCommandId) {
+          e.preventDefault()
+          requestCommandInvocation(focusModeCommandId, 'keybinding')
+          return
+        }
+        if (shouldPreventOwnedApplicationShortcut(e)) e.preventDefault()
+        return
+      }
+
       // --- Configured command bindings ---
       //
       // POSITION IS THE FIX. This used to sit near the top of the handler,
