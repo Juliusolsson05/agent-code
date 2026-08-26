@@ -169,6 +169,57 @@ describe('WorkflowBridge', () => {
     })
   })
 
+  it('retains a lifecycle transition that arrives before startup inventory registration', async () => {
+    let listener: ((event: StoredWorkflowEvent) => void) | null = null
+    const staleReference = {
+      runId: 'run-fast',
+      cwd: '/repo',
+      clientId: 'session-1',
+      status: 'running' as const,
+      cursor: 1,
+      workflow: { name: 'fast', description: 'Finishes before registration' },
+      transcriptDirectory: '/state/run-fast/transcripts',
+    }
+    let resolveInventory!: (references: Array<typeof staleReference>) => void
+    const inventory = new Promise<Array<typeof staleReference>>(resolve => {
+      resolveInventory = resolve
+    })
+    const service = {
+      subscribe: vi.fn((next: (event: StoredWorkflowEvent) => void) => {
+        listener = next
+        return () => undefined
+      }),
+      listStoredRunReferences: vi.fn(() => inventory),
+    } as unknown as WorkflowService
+    const bridge = new WorkflowBridge(service, { send: vi.fn() })
+
+    const started = bridge.start()
+    // This ordering is the recorded service behavior: subscription is live while the bridge waits
+    // for an inventory result that may already contain a stale manifest snapshot.
+    listener!({
+      runId: 'run-fast',
+      cursor: 2,
+      recordedAt: '2026-07-14T00:00:02.000Z',
+      event: {
+        schemaVersion: 1,
+        type: 'run.completed',
+        runId: 'run-fast',
+        sequence: 2,
+        eventId: 'run-fast:2',
+        timestamp: '2026-07-14T00:00:02.000Z',
+        payload: {
+          result: { preview: 'done', lineCount: 1, content: 'done' },
+        },
+      },
+    })
+    resolveInventory([staleReference])
+    await started
+
+    expect(bridge.getSessionRuns({ sessionId: 'session-1', cwd: '/repo' }).runs).toEqual([
+      expect.objectContaining({ runId: 'run-fast', status: 'completed', cursor: 2 }),
+    ])
+  })
+
   it('delivers one acknowledged cursor hint only for an interested run', async () => {
     vi.useFakeTimers()
     let listener: ((event: StoredWorkflowEvent) => void) | null = null

@@ -1,5 +1,5 @@
 import { createWorkflowState } from 'workflow-mcp/state'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { useState } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 
@@ -150,5 +150,123 @@ describe('WorkflowViewSelector', () => {
       .toBeInTheDocument()
     expect(document.querySelector('time[datetime="2026-07-14T10:05:05.000Z"]'))
       .toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Workflow history entries' })).toHaveFocus()
+    expect(screen.getByRole('region', { name: 'Workflow history entries' }))
+      .toHaveAttribute('tabindex', '0')
+  })
+
+  it('distinguishes a missing manifest from a failed detail read and retries the failure', async () => {
+    const historyReferences: WorkflowRunReference[] = [
+      { runId: 'run-missing', cwd: '/repo', status: 'queued', workflow: { name: 'missing' } },
+      { runId: 'run-error', cwd: '/repo', status: 'running', workflow: { name: 'error' } },
+    ]
+    let errorAttempts = 0
+    const getSnapshot = vi.fn<WorkflowClient['getSnapshot']>(async ({ cwd, runId }) => {
+      if (runId === 'run-missing') return null
+      errorAttempts += 1
+      if (errorAttempts === 1) throw new Error('IPC unavailable')
+      return {
+        cwd,
+        runId,
+        cursor: 3,
+        manifest: {
+          schemaVersion: 1,
+          runId,
+          cwd,
+          workflow: { name: 'error', description: 'Recovered detail read' },
+          status: 'completed',
+          cursor: 3,
+          createdAt: '2026-07-14T10:00:03.000Z',
+          updatedAt: '2026-07-14T10:00:03.000Z',
+        },
+        state: createWorkflowState(runId),
+      }
+    })
+    const client: WorkflowClient = {
+      ...unavailableWorkflowClient,
+      available: true,
+      getSnapshot,
+    }
+
+    render(
+      <WorkflowClientProvider value={client}>
+        <WorkflowViewSelector
+          references={historyReferences}
+          historyReferences={historyReferences}
+          cwd="/repo"
+          selectedRunId={null}
+          onSelect={vi.fn()}
+        />
+      </WorkflowClientProvider>,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show all' }))
+    await waitFor(() => expect(screen.queryByText('Loading timestamps…')).not.toBeInTheDocument())
+    const historyList = screen.getByRole('list', { name: 'Previous workflow runs' })
+    const missingRow = within(historyList).getByText('missing')
+      .closest('[role="listitem"]') as HTMLElement
+    const errorRow = within(historyList).getByText('error')
+      .closest('[role="listitem"]') as HTMLElement
+    expect(within(missingRow).getByText('Unknown · Status unavailable')).toBeInTheDocument()
+    expect(within(missingRow).getByText('Timestamp unavailable')).toBeInTheDocument()
+    expect(within(errorRow).getByText('Unknown · Status unavailable')).toBeInTheDocument()
+    expect(within(errorRow).getByRole('alert')).toHaveTextContent('Couldn’t load details')
+
+    fireEvent.click(within(errorRow).getByRole('button', { name: 'Retry' }))
+    await waitFor(() => {
+      expect(within(errorRow).getByText('Inactive · Completed')).toBeInTheDocument()
+    })
+    expect(getSnapshot.mock.calls.filter(([scope]) => scope.runId === 'run-error')).toHaveLength(2)
+  })
+
+  it('bounds history detail reads and incrementally mounts a large session history', async () => {
+    const historyReferences: WorkflowRunReference[] = Array.from({ length: 500 }, (_, index) => ({
+      runId: `run-${index}`,
+      cwd: '/repo',
+      status: 'completed',
+      workflow: { name: `workflow-${index}` },
+    }))
+    const pending: Array<() => void> = []
+    let active = 0
+    let maxActive = 0
+    const getSnapshot = vi.fn<WorkflowClient['getSnapshot']>(({ cwd, runId }) => {
+      active += 1
+      maxActive = Math.max(maxActive, active)
+      return new Promise(resolve => {
+        pending.push(() => {
+          active -= 1
+          resolve(null)
+        })
+      })
+    })
+    const client: WorkflowClient = {
+      ...unavailableWorkflowClient,
+      available: true,
+      getSnapshot,
+    }
+
+    render(
+      <WorkflowClientProvider value={client}>
+        <WorkflowViewSelector
+          references={historyReferences.slice(-3)}
+          historyReferences={historyReferences}
+          cwd="/repo"
+          selectedRunId={null}
+          onSelect={vi.fn()}
+        />
+      </WorkflowClientProvider>,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show all' }))
+    await waitFor(() => expect(getSnapshot).toHaveBeenCalledTimes(8))
+    expect(maxActive).toBe(8)
+    expect(screen.getAllByRole('listitem')).toHaveLength(50)
+    expect(screen.getByText('Showing 50 of 500')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show 50 more' }))
+    expect(screen.getAllByRole('listitem')).toHaveLength(100)
+    pending.splice(0, 8).forEach(resolve => resolve())
+    await waitFor(() => expect(getSnapshot).toHaveBeenCalledTimes(16))
+    expect(maxActive).toBe(8)
   })
 })

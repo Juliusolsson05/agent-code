@@ -92,7 +92,11 @@ export function useSessionWorkflowViews({
   const transportReferences = transport.scopeKey === scopeKey ? transport.references : []
   const replacementReferences = replacements.scopeKey === scopeKey ? replacements.references : []
   const allReferences = useMemo(
-    () => mergeReferences(transcriptReferences, transportReferences, replacementReferences),
+    // WHY transport is last: a resume response must add its child immediately, before the bridge
+    // publishes the new session registry. Once that authoritative push arrives, however, its live
+    // status/cursor must supersede the renderer-local launch snapshot. Leaving replacements last
+    // made a completed resumed workflow remain visually Active for the rest of the session.
+    () => mergeReferences(transcriptReferences, replacementReferences, transportReferences),
     [replacementReferences, transcriptReferences, transportReferences],
   )
   // WHY the compact limit remains a state-model concern even though history needs the unbounded

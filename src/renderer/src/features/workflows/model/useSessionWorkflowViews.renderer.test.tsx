@@ -1,7 +1,14 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
+import type { ReactNode } from 'react'
 import { describe, expect, it } from 'vitest'
 
-import type { WorkflowRunReference } from '../client/WorkflowClient'
+import {
+  unavailableWorkflowClient,
+  type WorkflowClient,
+  type WorkflowRunReference,
+  type WorkflowSessionRunsSnapshot,
+} from '../client/WorkflowClient'
+import { WorkflowClientProvider } from '../client/WorkflowClientContext'
 import { useSessionWorkflowViews } from './useSessionWorkflowViews'
 
 function reference(index: number): WorkflowRunReference {
@@ -50,5 +57,59 @@ describe('useSessionWorkflowViews', () => {
     ])
     expect(result.current.allReferences).toHaveLength(6)
     await waitFor(() => expect(result.current.selectedRunId).toBeNull())
+  })
+
+  it('lets an authoritative transport push supersede an optimistic resume replacement', async () => {
+    let publishSessionRuns: ((snapshot: WorkflowSessionRunsSnapshot) => void) | null = null
+    const client: WorkflowClient = {
+      ...unavailableWorkflowClient,
+      available: true,
+      async listSessionRuns() {
+        return []
+      },
+      subscribeSessionRuns(listener) {
+        publishSessionRuns = listener
+        return () => {
+          publishSessionRuns = null
+        }
+      },
+    }
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <WorkflowClientProvider value={client}>{children}</WorkflowClientProvider>
+    )
+    const { result } = renderHook(() => useSessionWorkflowViews({
+      sessionId: 'session-resume',
+      cwd: '/repo',
+      transcriptReferences: [{ runId: 'run-parent', status: 'interrupted', cursor: 4 }],
+    }), { wrapper })
+    await waitFor(() => expect(publishSessionRuns).not.toBeNull())
+
+    act(() => result.current.replaceReference({
+      runId: 'run-child',
+      resumedFromRunId: 'run-parent',
+      status: 'queued',
+      cursor: 1,
+    }))
+    expect(result.current.references).toEqual([
+      expect.objectContaining({ runId: 'run-child', status: 'queued', cursor: 1 }),
+    ])
+
+    act(() => publishSessionRuns!({
+      sessionId: 'session-resume',
+      cwd: '/repo',
+      runs: [{
+        runId: 'run-child',
+        resumedFromRunId: 'run-parent',
+        status: 'completed',
+        cursor: 8,
+      }],
+    }))
+
+    expect(result.current.allReferences).toEqual([
+      expect.objectContaining({ runId: 'run-child', status: 'completed', cursor: 8 }),
+    ])
+    expect(result.current.references).toEqual([
+      expect.objectContaining({ runId: 'run-child', status: 'completed', cursor: 8 }),
+    ])
   })
 })
