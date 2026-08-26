@@ -141,6 +141,10 @@ export function coerceSettings(value: unknown): Settings {
     // matching the "absent ≡ declared default" semantic.
     commandStarred: coerceCommandStarred(parsed.commandStarred),
     commandSortMode: coerceCommandSortMode(parsed.commandSortMode),
+    // Strict opt-in: older stores have no key, and malformed persisted values
+    // must not silently expand the command search surface.
+    promptTemplatesInCommandSearchEnabled:
+      parsed.promptTemplatesInCommandSearchEnabled === true,
     mouseModeEnabled: parsed.mouseModeEnabled === true,
     commandVisibilityOverrides: coerceCommandVisibilityOverrides(
       parsed.commandVisibilityOverrides,
