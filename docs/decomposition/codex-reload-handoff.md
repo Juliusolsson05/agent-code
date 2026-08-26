@@ -1,12 +1,11 @@
 # Codex Reload Ownership Handoff
 
 > **Status:** Stages 1–3 were implemented against the revised two-phase design.
-> The fourth exact-head review exposed four more real ordering/teardown gaps:
-> overlapping workspace saves can commit ownership out of order; a reclaim has
-> no token-addressable cancellation record while it waits for the replacement;
-> global teardown can miss a redirect whose successor is already removed from
-> the registry but still stopping; and explicit close cannot retire a redirect
-> after its successor exits naturally. Stage 2 is reopened again. Stage 4
+> The fifth exact-head review's six ownership findings are implemented through
+> the isolated replacement ledger, including two repeated-reload chain
+> invariants found during the local lineage audit. Focused, system, renderer,
+> type, contract, probe, and packaged-build verification are green; the full
+> unit suite has only its known missing external corpus-session failure. Stage 4
 > exact-head re-review, CI, and live verification remain.
 >
 > **Incident:** Agent Code issue #638. Related fresh-rollout incident: #632.
@@ -73,6 +72,32 @@
 16. Explicitly closing a naturally exited committed successor retires its
     reverse redirect. Natural exit alone remains recoverable, but later stale
     predecessor state cannot resurrect a pane the current renderer closed.
+17. Cancelling a pending-handoff reclaim actively cancels the reservation and
+    starts generation-authorized successor teardown; cleanup does not depend on
+    the blocked provider start deciding to settle by itself.
+18. A reclaim owns any compensation generation it causes. Its exact timeout
+    token cancels that associated compensation, while tokens from unrelated
+    earlier recovery generations still cannot target it.
+19. Replacement lineage lookup is bidirectional. A cancelled lineage fences
+    both predecessor and successor IDs; an active current successor remains
+    adoptable only while no close/reclaim owns its teardown.
+20. Explicit close of either ID during pending-handoff reclaim cancels the same
+    lineage even after registry removal, and the reclaim cannot restore the
+    predecessor behind that close.
+21. Explicit cancellation after verified handoff but before durable commit
+    preserves a process-lifetime closed-lineage tombstone, so stale durable
+    predecessor bytes cannot reverse close intent.
+22. Timeout cancellation is retryable rather than a tombstone: after its exact
+    reclaim generation settles and successor ownership is retired, a new token
+    may start one fresh reclaim generation.
+23. Flattening an acknowledged replacement chain may leave several stale
+    predecessor IDs pointing at one current successor. Reverse lookup retains
+    every alias, so recovery through the successor cannot miss an active
+    reclaim merely because a newer redirect was indexed last.
+24. Closing either ID of an unacknowledged S→T replacement also closes every
+    committed ancestor ending at S. The closed-lineage transition retargets and
+    tombstones those aliases with T before deleting the reservation, so stale P
+    state cannot route around the newer close through an older P→S redirect.
 
 ## 2. Intermediate stages
 
@@ -163,6 +188,37 @@ artifacts rather than more renderer conditionals:
    a naturally exited successor's reverse redirect without weakening ownership
    validation.
 
+The fifth exact-head review invalidates the assumption that three independent
+maps plus call-site scans are an adequate ownership substrate. Stage 2 now
+produces `src/main/sessions/codexReplacementLedger.ts`: the only index for
+reservation, committed/closed redirect, and active reclaim records. It indexes
+both predecessor and successor identities, classifies cancellation as retryable
+timeout versus explicit close/shutdown, associates a reclaim with the exact
+compensation claim it caused, and owns identity-safe register/retarget/delete
+operations. `SessionManager` remains the sole executor of provider stop/start;
+it consumes the ledger instead of directly arbitrating partial maps.
+
+The reverse redirect index is one-to-many rather than one-to-one. This shape is
+required by the existing commit-time chain flattening: after P→S and S→T are
+acknowledged, both P and S legitimately point at T. The recorded incident did
+not contain a repeated reload, but the production flattening loop makes this
+state directly reachable; a deterministic manager test verifies that an active
+P reclaim fences reverse recovery of T even though S→T was indexed later.
+
+The same chain can be caught between acknowledgements: P→S is durable while a
+successful S→T transaction is still main-owned. Explicitly closing S or T is
+authoritative for the whole physical lineage, not only the newest reservation.
+Before retiring that reservation, the ledger transition retargets every
+committed ancestor ending at S to T and marks it cancelled. Keeping P→S active
+would let stale P bytes bypass the S→T tombstone and recreate a pane the current
+renderer already closed.
+
+This is separate from the async manager logic because the fifth review found
+the same missing-identity failure in recovery, close, and transaction cleanup.
+Adding three more scans/conditionals would preserve the substrate that produced
+the bugs. A single ledger makes it impossible for one consumer to remember only
+the predecessor key while another remembers both IDs.
+
 ### Stage 3 — route every same-pane replacement through the handoff
 
 - [x] **Produces:** renderer replacement code that supplies the predecessor ID
@@ -200,17 +256,22 @@ natural exit can remove the captured registry row before handoff executes.
 Exact-head review must restart after the reopened Stage 2 lands; neither earlier
 review can approve new transaction code.
 
-The third and fourth reviews are retained for the same reason. The third proved
+The third through fifth reviews are retained for the same reason. The third proved
 that stable local IDs require generation-scoped cancellation and a durable
 renderer ownership commit. The fourth proved that the commit must itself be
 totally ordered with workspace writes, and that reclaim needs a first-class
 cancellable lifetime before ordinary recovery publication. Exact-head review
-must restart after these artifacts land.
+must restart after these artifacts land. The fifth additionally proved that a
+token-addressable reclaim without active teardown, compensation association,
+bidirectional identity, and retry classification is only partially cancellable.
 
 ## 3. Isolation boundary
 
-The hard part is **same-transcript replacement admission and compensation**. Its
-policy remains in `SessionManager`, adjacent to backend ownership. Codex's
+The hard part is **same-transcript replacement admission and compensation**.
+Provider execution remains in `SessionManager`, adjacent to backend ownership;
+all replacement lifetime/index bookkeeping moves to
+`src/main/sessions/codexReplacementLedger.ts`, consumed only by
+`SessionManager`. Codex's
 runtime receives only a one-shot callback at the exact point immediately before
 resume ownership acquisition; it must not learn pane IDs, recovery policy, or
 how compensation works. The renderer may declare intent by naming the local
@@ -264,6 +325,18 @@ receives no pane IDs and gains no replacement exception.
   relevant identities. Rehydrate enters by predecessor ID; explicit close may
   arrive by successor ID after natural exit. Main validates and retires the
   same redirect from either direction.
+- **Resolved by fifth-review Stage 2 design:** pending successor start is not a
+  passive wait once reclaim times out. The ledger associates the reclaim with
+  its reservation; exact-token cancellation publishes reservation cancellation
+  and starts authorized successor teardown immediately.
+- **Resolved by fifth-review Stage 2 design:** compensation is a distinct token
+  generation but not an unrelated operation. The reclaim record carries an
+  explicit pointer to only the compensation claim it caused, allowing R to
+  cancel C without reopening the earlier bug where an unrelated stale recovery
+  token could cancel C.
+- **Resolved by fifth-review Stage 2 design:** close is permanent for the current
+  main-process lifetime, whereas deadline timeout is retryable. They are named
+  cancellation classes rather than inferred later from a shared boolean.
 - Predecessor stop can fail or become uncertain. The coordinator's tombstone
   must remain fail-closed; compensation may also fail in that state and needs a
   truthful lifecycle outcome rather than an unsafe lease exception.
@@ -326,3 +399,18 @@ acknowledgement order, cancellation truth, no post-deadline restoration, and no
 post-close/post-shutdown resurrection. These schedules are not invented
 provider data: each gates the precise promise boundary identified by the two
 read-only reviewers against commit `026e9281`.
+
+Fifth-review fixtures add eight schedules from exact commit `aa47225b`: (a) a
+stop-aware successor start remains blocked until exact reclaim-token
+cancellation actively calls stop; (b) successor failure starts compensation C,
+then reclaim token R cancels that associated claim during preflight; (c) close
+of committed successor B fences reverse `recover(B)` after registry removal;
+(d) close of uncommitted successor B during predecessor reclaim cancels the
+lineage; (e) close after destructive handoff but before commit is followed by
+two stale predecessor recoveries, neither of which may construct a provider;
+and (f) redirect reclaim token T1 times out, settles, and T2 successfully starts
+a new reclaim; (g) acknowledged P→S→T flattening retains both reverse aliases
+while P reclaim owns T; and (h) closing an unacknowledged S→T transaction also
+tombstones the committed P→S ancestor. The fixtures preserve the distinction
+between R-associated C and an unrelated old recovery token, and between
+retryable timeout and durable close tombstones.
