@@ -297,28 +297,12 @@ export class CodexSession extends EventEmitter {
       this.proxyServer = proxy
       args.push('--config', `openai_base_url=${JSON.stringify(proxy.info.proxyBaseUrl)}`)
     }
-    const promptInputProfile = await this.preparePromptInputProfile(
-      args,
-      cleanEnv,
-    )
-    if (promptInputProfile) {
-      // WHY these package-issued overrides must be the last configuration
-      // arguments before the subcommand. The package has already run
-      // config/read through this same binary/cwd/env and the exact `args`
-      // prefix, then refused conflicting or higher-precedence routing. Passing
-      // the capability to CodexHeadless without appending its immutable suffix
-      // to the immediately following PTY would sever that attestation.
-      args.push(...promptInputProfile.cliArgs)
-    }
-    if (this.resumeSessionId) {
-      args.push('resume', this.resumeSessionId)
-    }
-
     // From here on we have a listening proxy (if useProxy was set) but
     // no PTY, no CodexHeadless, and therefore no exit/stop plumbing.
     // Any throw between the proxy-create above and the end of start()
     // leaks the proxy HTTP server — nothing else would ever call
     // stop() on it. Wrap everything in a try/catch that rolls back.
+    let promptInputProfile: CodexPromptInputProfile | null = null
     try {
       if (this.resumeSessionId) {
         // WHY this must precede ptySpawn: Codex can reconstruct a resume fork
@@ -331,6 +315,22 @@ export class CodexSession extends EventEmitter {
           resumeThreadId: this.resumeSessionId,
           onError: error => this.emit('jsonl-error', error),
         })
+      }
+      // WHY config/read must be the final awaited operation before ptySpawn.
+      // Resume preparation recursively locates and reads exact X; running it
+      // after attestation left a material interval where managed keymap policy
+      // could change while the stale profile still authorized Enter/Tab prompt
+      // evidence. All ownership preparation now completes first. From this
+      // point through spawn there is no application await.
+      promptInputProfile = await this.preparePromptInputProfile(args, cleanEnv)
+      if (promptInputProfile) {
+        // These immutable overrides were resolved by the same binary/cwd/env
+        // and exact base prefix. Keep them as the last global configuration
+        // arguments immediately before the selected TUI subcommand.
+        args.push(...promptInputProfile.cliArgs)
+      }
+      if (this.resumeSessionId) {
+        args.push('resume', this.resumeSessionId)
       }
       // Spawn the PTY.
       this.pty = ptySpawn(this.binary, args, {

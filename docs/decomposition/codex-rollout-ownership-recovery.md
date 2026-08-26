@@ -1330,7 +1330,7 @@ they are plausible.
 
 ### Stage 35 — repair the five isolated boundaries
 
-- [ ] **Produces:** strict post-registration sequence admission for resume
+- [x] **Produces:** strict post-registration sequence admission for resume
   lineage; terminal checks ahead of unchanged-fingerprint transport shortcuts;
   resume issuance and consumption co-located in a runtime module closure with no
   shipped unwrapper; success-envelope validation for both app-server responses;
@@ -1426,3 +1426,17 @@ module still exports the controller unwrapper; and the parent barrier observes
 profile attestation before `resume:start`. Existing controls in the same focused
 runs remain green. These exact assertions are now the implementation boundary
 and may not be weakened or replaced with post-repair literals.
+
+Stage 35 is complete at codex-headless `3cde22f` plus the parent launch-order
+change following parent checkpoint `d7768970`. Resume participants now record a
+coordinator registration sequence and reject candidates whose immutable first
+observation was already admitted; fresh file-arrival grace remains unchanged.
+Watcher maintenance evicts terminal paths before fingerprint comparison.
+Resume issuance and consumption now share the `CodexHeadless` runtime closure,
+while the historical deep preparation module re-exports only the public factory
+and dispose-only type. Initialize and config/read both require a result-bearing,
+error-free success envelope. Finally, parent resume ownership preparation
+completes before config/read, leaving no application await between attestation
+and `ptySpawn`. The exact five focused contracts, codex package check (146/146),
+built projection (4/4), parent typecheck, and twelve focused parent lifecycle/
+launch tests are green.
