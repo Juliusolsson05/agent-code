@@ -30,6 +30,13 @@ describe('useSessionWorkflowViews', () => {
       'run-4',
       'run-5',
     ])
+    expect(result.current.allReferences.map(candidate => candidate.runId)).toEqual([
+      'run-1',
+      'run-2',
+      'run-3',
+      'run-4',
+      'run-5',
+    ])
 
     act(() => result.current.selectRun('run-3'))
     expect(result.current.selectedRunId).toBe('run-3')
@@ -41,6 +48,7 @@ describe('useSessionWorkflowViews', () => {
       'run-5',
       'run-6',
     ])
+    expect(result.current.allReferences).toHaveLength(6)
     await waitFor(() => expect(result.current.selectedRunId).toBeNull())
   })
 })

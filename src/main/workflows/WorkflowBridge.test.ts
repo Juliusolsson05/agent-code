@@ -119,6 +119,56 @@ describe('WorkflowBridge', () => {
     ])
   })
 
+  it('publishes active-to-inactive lifecycle changes without requiring an inspector interest', async () => {
+    let listener: ((event: StoredWorkflowEvent) => void) | null = null
+    const service = {
+      subscribe: vi.fn((next: (event: StoredWorkflowEvent) => void) => {
+        listener = next
+        return () => undefined
+      }),
+    } as unknown as WorkflowService
+    const send = vi.fn()
+    const bridge = new WorkflowBridge(service, { send })
+
+    await bridge.start()
+    bridge.registerRun('session-1', '/repo', {
+      runId: 'run-lifecycle',
+      status: 'running',
+      workflow: { name: 'hunt', description: 'Find bugs' },
+      cursor: 1,
+      transcriptDirectory: '/state/run-lifecycle/transcripts',
+    })
+    send.mockClear()
+
+    listener!({
+      runId: 'run-lifecycle',
+      cursor: 2,
+      recordedAt: '2026-07-14T00:00:02.000Z',
+      event: {
+        schemaVersion: 1,
+        type: 'run.completed',
+        runId: 'run-lifecycle',
+        sequence: 2,
+        eventId: 'run-lifecycle:2',
+        timestamp: '2026-07-14T00:00:02.000Z',
+        payload: {
+          result: { preview: 'done', lineCount: 1, content: 'done' },
+        },
+      },
+    })
+
+    expect(send).toHaveBeenCalledTimes(1)
+    expect(send).toHaveBeenCalledWith('workflows:session-runs', {
+      sessionId: 'session-1',
+      cwd: '/repo',
+      runs: [expect.objectContaining({
+        runId: 'run-lifecycle',
+        status: 'completed',
+        cursor: 2,
+      })],
+    })
+  })
+
   it('delivers one acknowledged cursor hint only for an interested run', async () => {
     vi.useFakeTimers()
     let listener: ((event: StoredWorkflowEvent) => void) | null = null

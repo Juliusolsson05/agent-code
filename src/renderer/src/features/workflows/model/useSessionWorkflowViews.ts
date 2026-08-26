@@ -46,13 +46,7 @@ function mergeReferences(
     .filter(runId => !superseded.has(runId))
     .map(runId => byRunId.get(runId)!)
 
-  // WHY the limit belongs after source reconciliation rather than in the visual selector: the
-  // selected run, selected reference, and rendered tabs must all describe the same collection.
-  // Hiding old rows only in JSX would leave an invisible workflow selected after a fourth run
-  // arrived. The sources already establish stable oldest-to-newest discovery order, so retaining
-  // the tail gives the UI its three newest lineages without inventing timestamp semantics that the
-  // provider-neutral reference envelope does not carry.
-  return lineageReferences.slice(-MAX_VISIBLE_WORKFLOW_VIEWS)
+  return lineageReferences
 }
 
 /**
@@ -73,6 +67,7 @@ export function useSessionWorkflowViews({
   cwd: string | null
   transcriptReferences: readonly WorkflowRunReference[]
 }): {
+  allReferences: WorkflowRunReference[]
   references: WorkflowRunReference[]
   selectedRunId: string | null
   selectedReference: WorkflowRunReference | null
@@ -96,9 +91,17 @@ export function useSessionWorkflowViews({
 
   const transportReferences = transport.scopeKey === scopeKey ? transport.references : []
   const replacementReferences = replacements.scopeKey === scopeKey ? replacements.references : []
-  const references = useMemo(
+  const allReferences = useMemo(
     () => mergeReferences(transcriptReferences, transportReferences, replacementReferences),
     [replacementReferences, transcriptReferences, transportReferences],
+  )
+  // WHY the compact limit remains a state-model concern even though history needs the unbounded
+  // collection: selection and the rendered tabs must still describe the same three-run window.
+  // Returning a second, read-only history projection lets the dialog inspect older lineages without
+  // making an old run invisibly selectable beneath a selector that has no corresponding tab.
+  const references = useMemo(
+    () => allReferences.slice(-MAX_VISIBLE_WORKFLOW_VIEWS),
+    [allReferences],
   )
   const selectedRunId = selection.scopeKey === scopeKey ? selection.runId : null
   const selectedReference = selectedRunId === null
@@ -166,6 +169,7 @@ export function useSessionWorkflowViews({
   }, [scopeKey])
 
   return {
+    allReferences,
     references,
     selectedRunId,
     selectedReference,
