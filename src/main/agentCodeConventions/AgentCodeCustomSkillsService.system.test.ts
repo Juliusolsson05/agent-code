@@ -7,6 +7,7 @@ import { AgentCodeConventionsService } from './AgentCodeConventionsService.js'
 import { renderAgentCodeCustomSkill } from './renderCustomSkill.js'
 import { customArtifactKey } from './customSkillOwnershipPolicy.js'
 import { sha256Text } from './renderSkill.js'
+import { journalTemporaryPath } from './skillPathSafety.js'
 import {
   createEmptyAgentCodeConventionsDocument,
   type AgentCodeCustomSkillRecord,
@@ -264,6 +265,52 @@ describe('Agent Code custom skill management', () => {
     })
   })
 
+  it('preserves an unproven custom write sidecar instead of deleting external bytes', async () => {
+    const root = await temporaryDirectory()
+    const currentTarget = target('agents-standard', join(root, '.agents', 'skills'))
+    const stateFilePath = join(root, 'state', 'conventions.json')
+    const timestamp = '2026-08-26T00:00:00.000Z'
+    const skill: AgentCodeCustomSkillRecord = {
+      id: 'skill-sidecar',
+      name: 'sidecar-safety',
+      description: 'Preserve unproven recovery bytes',
+      markdown: '# Sidecar safety',
+      enabled: true,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    }
+    const skillPath = customPath(currentTarget, skill.name)
+    const key = customArtifactKey(skill.id, currentTarget.id)
+    const operationId = 'planned-but-not-created'
+    const sidecar = journalTemporaryPath(skillPath, operationId)
+    const document = createEmptyAgentCodeConventionsDocument()
+    document.customSkills[skill.id] = skill
+    document.pendingOperations[key] = {
+      operationId,
+      skillId: skill.id,
+      targetId: currentTarget.id,
+      path: skillPath,
+      kind: 'write',
+      previousSha256: null,
+      desiredSha256: sha256Text(renderAgentCodeCustomSkill(skill)),
+    }
+    await writeFileWithParents(stateFilePath, `${JSON.stringify(document)}\n`)
+    await writeFileWithParents(sidecar, 'external sidecar bytes')
+
+    const service = new AgentCodeConventionsService({
+      stateFilePath,
+      homeDirectory: root,
+      resolveTargets: async () => ({ targets: [currentTarget], unsupportedProviders: [] }),
+    })
+    await service.initialize()
+
+    expect(await service.getCustomSkillsSnapshot()).toMatchObject({
+      recovery: undefined,
+      skills: [{ health: 'conflict', targets: [{ state: 'conflict' }] }],
+    })
+    expect(await readFile(sidecar, 'utf8')).toBe('external sidecar bytes')
+  })
+
   it('installs a moved provider root while preserving the historical custom copy', async () => {
     const root = await temporaryDirectory()
     const stateFilePath = join(root, 'state', 'conventions.json')
@@ -296,6 +343,63 @@ describe('Agent Code custom skill management', () => {
     })
     expect(await readFile(customPath(oldTarget, 'portable-skill'), 'utf8')).toContain('# Portable')
     expect(await readFile(customPath(newTarget, 'portable-skill'), 'utf8')).toContain('# Portable')
+  })
+
+  it('accepts a crash-left custom update when the provider root moves', async () => {
+    const root = await temporaryDirectory()
+    const stateFilePath = join(root, 'state', 'conventions.json')
+    const oldTarget = target('agents-standard', join(root, 'old', 'skills'))
+    const newTarget = target('agents-standard', join(root, 'new', 'skills'))
+    const original = new AgentCodeConventionsService({
+      stateFilePath,
+      homeDirectory: root,
+      resolveTargets: async () => ({ targets: [oldTarget], unsupportedProviders: [] }),
+    })
+    await original.initialize()
+    const created = await original.createCustomSkill({
+      expectedRevision: 0,
+      name: 'crash-move-update',
+      description: 'Recover an update after a root move',
+      markdown: '# Version one',
+      enabled: true,
+    })
+    if (!created.ok) throw new Error('create failed')
+    const skill = created.snapshot.skills[0]!
+    const document = JSON.parse(await readFile(stateFilePath, 'utf8')) as ReturnType<
+      typeof createEmptyAgentCodeConventionsDocument
+    >
+    const key = customArtifactKey(skill.id, oldTarget.id)
+    const previous = document.materializations[key]!
+    const updatedRecord = {
+      ...document.customSkills[skill.id]!,
+      markdown: '# Version two',
+      updatedAt: '2026-08-26T01:00:00.000Z',
+    }
+    document.customSkills[skill.id] = updatedRecord
+    document.pendingOperations[key] = {
+      operationId: 'crashed-root-move-update',
+      skillId: skill.id,
+      targetId: oldTarget.id,
+      path: previous.path,
+      kind: 'write',
+      previousSha256: previous.sha256,
+      desiredSha256: sha256Text(renderAgentCodeCustomSkill(updatedRecord)),
+    }
+    await writeFile(stateFilePath, `${JSON.stringify(document)}\n`)
+
+    const restarted = new AgentCodeConventionsService({
+      stateFilePath,
+      homeDirectory: root,
+      resolveTargets: async () => ({ targets: [newTarget], unsupportedProviders: [] }),
+    })
+    await restarted.initialize()
+
+    expect(await restarted.getCustomSkillsSnapshot()).toMatchObject({
+      recovery: undefined,
+      skills: [{ name: skill.name, health: 'conflict' }],
+    })
+    expect(await readFile(customPath(oldTarget, skill.name), 'utf8')).toContain('# Version one')
+    expect(await readFile(customPath(newTarget, skill.name), 'utf8')).toContain('# Version two')
   })
 
   it('invalidates previously active health when provider target discovery later fails', async () => {

@@ -25,6 +25,7 @@ import {
   sha256Text,
 } from './renderSkill.js'
 import {
+  journalCaptureDirectory,
   journalTemporaryPath,
   SkillPathSafety,
   type FileInspection,
@@ -103,6 +104,7 @@ export class AgentCodeManagedSkillsService {
   private targetStatuses: AgentCodeConventionsTargetStatus[] = []
   private customTargetStatuses = new Map<string, AgentCodeConventionsTargetStatus[]>()
   private targetResolutionError: string | null = null
+  private journalWriteCollisions = new Map<string, string>()
   private initialized = false
   private mutationTail: Promise<void> = Promise.resolve()
 
@@ -910,7 +912,7 @@ export class AgentCodeManagedSkillsService {
   }
 
   private async reconcileLocked(): Promise<void> {
-    await this.cleanupJournaledWriteTemps()
+    await this.inspectJournaledWriteSidecars()
     if (this.document.enabled) await this.reconcileEnabledLocked()
     else await this.reconcileDisabledLocked()
     for (const skill of Object.values(this.document.customSkills)
@@ -938,6 +940,15 @@ export class AgentCodeManagedSkillsService {
     const statuses: AgentCodeConventionsTargetStatus[] = []
 
     for (const target of this.targets.targets) {
+      const journalCollision = this.journalWriteCollisions.get(target.id)
+      if (journalCollision) {
+        statuses.push(this.status(
+          target,
+          'conflict',
+          `An unverified write sidecar was preserved at ${this.displayPath(journalCollision)}.`,
+        ))
+        continue
+      }
       const inspection = await this.pathSafety.inspectTarget(target)
       const record = this.document.materializations[target.id]
       const pending = this.document.pendingOperations[target.id]
@@ -1059,6 +1070,15 @@ export class AgentCodeManagedSkillsService {
 
     for (const target of targets.targets) {
       const key = customArtifactKey(skill.id, target.id)
+      const journalCollision = this.journalWriteCollisions.get(key)
+      if (journalCollision) {
+        statuses.push(this.customStatus(
+          target,
+          'conflict',
+          `An unverified write sidecar was preserved at ${this.displayPath(journalCollision)}.`,
+        ))
+        continue
+      }
       const inspection = await this.pathSafety.inspectTarget(target)
       const record = this.document.materializations[key]
       const pending = this.document.pendingOperations[key]
@@ -1302,7 +1322,8 @@ export class AgentCodeManagedSkillsService {
     }
   }
 
-  private async cleanupJournaledWriteTemps(): Promise<void> {
+  private async inspectJournaledWriteSidecars(): Promise<void> {
+    this.journalWriteCollisions.clear()
     for (const [key, operation] of Object.entries(this.document.pendingOperations)) {
       if (operation.kind !== 'write') continue
       if (operation.skillId) {
@@ -1316,10 +1337,26 @@ export class AgentCodeManagedSkillsService {
       } else if (!this.ownershipPolicy.isCurrentMutationPath(key, operation.path, this.targets)) {
         continue
       }
-      await this.pathSafety.cleanupJournaledTemporaryFile(
-        journalTemporaryPath(operation.path, operation.operationId),
-      )
+      const candidate = await this.journalWriteSidecar(operation)
+      if (!candidate) continue
+      // A journal proves that Agent Code intended to use a sidecar name; it
+      // cannot prove who won that pathname before a crash. Preserve the
+      // occupant and stop only this target until the user inspects it.
+      this.journalWriteCollisions.set(key, candidate)
     }
+  }
+
+  private async journalWriteSidecar(
+    operation: AgentCodeConventionsPendingOperation,
+  ): Promise<string | null> {
+    const candidates = [
+      journalTemporaryPath(operation.path, operation.operationId),
+      journalCaptureDirectory(operation.path, operation.operationId),
+    ]
+    for (const candidate of candidates) {
+      if (await this.pathSafety.journaledPathExists(candidate)) return candidate
+    }
+    return null
   }
 
   private adoptPendingWritesForRemoval(document: AgentCodeConventionsDocument): void {
@@ -1353,9 +1390,6 @@ export class AgentCodeManagedSkillsService {
       if (!pending || pending.kind !== 'write') {
         throw new Error('Missing write-ahead operation for conventions publication')
       }
-      await this.pathSafety.cleanupJournaledTemporaryFile(
-        journalTemporaryPath(item.target.skillFile, pending.operationId),
-      )
       await this.pathSafety.ensureTargetDirectory(item.target)
       const expectedVersion = item.inspection.kind === 'file'
         ? item.inspection.version
@@ -1376,8 +1410,21 @@ export class AgentCodeManagedSkillsService {
         expectedVersion,
         maxBytes: AGENT_CODE_CONVENTIONS_COLLISION_MAX_BYTES,
         temporaryPath: journalTemporaryPath(item.target.skillFile, pending.operationId),
+        captureDirectory: journalCaptureDirectory(item.target.skillFile, pending.operationId),
+        expectedSha256: item.inspection.kind === 'file'
+          ? item.inspection.sha256 ?? undefined
+          : undefined,
       })
       if (!result.ok) {
+        const sidecar = await this.journalWriteSidecar(pending)
+        if (sidecar) {
+          this.journalWriteCollisions.set(item.target.id, sidecar)
+          return this.status(
+            item.target,
+            'conflict',
+            `An unverified write sidecar was preserved at ${this.displayPath(sidecar)}.`,
+          )
+        }
         delete this.document.pendingOperations[item.target.id]
         const current = await this.pathSafety.inspectTarget(item.target)
         return current.kind === 'file'
@@ -1491,9 +1538,6 @@ export class AgentCodeManagedSkillsService {
       if (!pending || pending.kind !== 'write' || pending.skillId !== skill.id) {
         throw new Error('Missing write-ahead operation for custom skill publication')
       }
-      await this.pathSafety.cleanupJournaledTemporaryFile(
-        journalTemporaryPath(item.target.skillFile, pending.operationId),
-      )
       await this.pathSafety.ensureTargetDirectory(item.target)
       const expectedVersion = item.inspection.kind === 'file' ? item.inspection.version : null
       const result = await atomicWriteTextFile({
@@ -1502,8 +1546,21 @@ export class AgentCodeManagedSkillsService {
         expectedVersion,
         maxBytes: AGENT_CODE_CONVENTIONS_COLLISION_MAX_BYTES,
         temporaryPath: journalTemporaryPath(item.target.skillFile, pending.operationId),
+        captureDirectory: journalCaptureDirectory(item.target.skillFile, pending.operationId),
+        expectedSha256: item.inspection.kind === 'file'
+          ? item.inspection.sha256 ?? undefined
+          : undefined,
       })
       if (!result.ok) {
+        const sidecar = await this.journalWriteSidecar(pending)
+        if (sidecar) {
+          this.journalWriteCollisions.set(item.key, sidecar)
+          return this.customStatus(
+            item.target,
+            'conflict',
+            `An unverified write sidecar was preserved at ${this.displayPath(sidecar)}.`,
+          )
+        }
         delete this.document.pendingOperations[item.key]
         const current = await this.pathSafety.inspectTarget(item.target)
         return current.kind === 'file'

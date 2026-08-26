@@ -1,5 +1,6 @@
 import { constants, type Stats } from 'fs'
-import { link, lstat, open, rename, unlink } from 'fs/promises'
+import { createHash } from 'crypto'
+import { link, lstat, mkdir, open, rename, rmdir, unlink } from 'fs/promises'
 import { basename, dirname, join, resolve } from 'path'
 
 import type { EditorFsFileVersion } from '@shared/types/editorFs.js'
@@ -142,6 +143,8 @@ export async function atomicWriteTextFile(params: {
   maxBytes: number
   mode?: number
   temporaryPath?: string
+  captureDirectory?: string
+  expectedSha256?: string
 }): Promise<AtomicTextWriteResult> {
   const bytes = Buffer.from(params.text, 'utf8')
   if (bytes.byteLength > params.maxBytes) throw new Error('file is too large')
@@ -175,7 +178,15 @@ export async function atomicWriteTextFile(params: {
     || resolve(tempPath) === resolve(params.absolutePath)) {
     throw new Error('temporary path must be a distinct sibling of the target')
   }
+  if (params.captureDirectory
+    && (resolve(dirname(params.captureDirectory)) !== resolve(dirname(params.absolutePath))
+      || resolve(params.captureDirectory) === resolve(params.absolutePath)
+      || resolve(params.captureDirectory) === resolve(tempPath))) {
+    throw new Error('capture directory must be a distinct sibling of the target')
+  }
   let tempExists = false
+  let captureFilePath: string | null = null
+  let captureContainsExpectedFile = false
   try {
     const temp = await open(
       tempPath,
@@ -207,7 +218,82 @@ export async function atomicWriteTextFile(params: {
       }
     }
 
-    if (current) {
+    if (current && params.captureDirectory) {
+      if (typeof params.expectedVersion !== 'string') {
+        return { ok: false, conflictKind: 'changed' }
+      }
+      try {
+        await mkdir(params.captureDirectory, { mode: 0o700 })
+      } catch (error) {
+        // The write-ahead operation chooses this directory, but it does not
+        // own a later occupant merely because the name matches. Refusing an
+        // existing capture directory is what keeps recovery metadata from
+        // becoming deletion or overwrite authority over external bytes.
+        if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+          return { ok: false, conflictKind: 'changed' }
+        }
+        throw error
+      }
+      captureFilePath = join(params.captureDirectory, basename(params.absolutePath))
+
+      // There is no portable compare-and-swap rename for an existing file in
+      // Node. Moving the currently named inode out of the way first lets us
+      // verify what the mutation actually captured, then the hard-link publish
+      // below gives a concurrent external creator the destination instead of
+      // overwriting it. The operation-derived directory makes the capture
+      // crash-visible without trusting an unverified sidecar as ours.
+      await rename(params.absolutePath, captureFilePath)
+      const captured = await existingRegularFile(captureFilePath)
+      const capturedHash = captured && params.expectedSha256
+        ? createHash('sha256')
+            .update((await readBoundedTextFile(captureFilePath, params.maxBytes)).text)
+            .digest('hex')
+        : null
+      // rename can legitimately advance ctime, so the opaque editor version
+      // cannot survive capture byte-for-byte. Device/inode plus the content
+      // hash prove that we moved the file observed by the final check; an
+      // external replacement has a different inode or different bytes.
+      captureContainsExpectedFile = captured !== null
+        && captured.dev === current.dev
+        && captured.ino === current.ino
+        && captured.size === current.size
+        && captured.mtimeMs === current.mtimeMs
+        && (!params.expectedSha256 || capturedHash === params.expectedSha256)
+      if (!captureContainsExpectedFile) {
+        try {
+          await link(captureFilePath, params.absolutePath)
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+            throw new Error(`External replacement preserved at ${captureFilePath}`)
+          }
+          throw error
+        }
+        await unlink(captureFilePath)
+        captureFilePath = null
+        await rmdir(params.captureDirectory)
+        return { ok: false, conflictKind: 'changed' }
+      }
+
+      try {
+        await link(tempPath, params.absolutePath)
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+          // The captured inode is the exact expected version, so dropping this
+          // extra link cannot lose user data. The new destination belongs to
+          // the external winner and must remain untouched.
+          await unlink(captureFilePath)
+          captureFilePath = null
+          await rmdir(params.captureDirectory)
+          return { ok: false, conflictKind: 'changed' }
+        }
+        throw error
+      }
+      await unlink(tempPath)
+      tempExists = false
+      await unlink(captureFilePath)
+      captureFilePath = null
+      await rmdir(params.captureDirectory)
+    } else if (current) {
       // rename publishes the fully-synced sibling atomically over an existing
       // file. Portable Node cannot compare-and-swap against unrelated external
       // writers in the final lookup window; the version recheck above and the
@@ -235,5 +321,16 @@ export async function atomicWriteTextFile(params: {
     return { ok: true, stat: after, version: editorFileVersion(after) }
   } finally {
     if (tempExists) await unlink(tempPath).catch(() => undefined)
+    if (captureFilePath && captureContainsExpectedFile) {
+      // Ordinary exceptions after capture must not make the expected file
+      // disappear. A no-clobber restore yields to an external creator; in that
+      // case the captured inode is the already-proven expected version and can
+      // be removed without touching the winner.
+      await link(captureFilePath, params.absolutePath).catch(error => {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+      })
+      await unlink(captureFilePath).catch(() => undefined)
+      if (params.captureDirectory) await rmdir(params.captureDirectory).catch(() => undefined)
+    }
   }
 }

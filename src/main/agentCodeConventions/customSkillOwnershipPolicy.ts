@@ -106,7 +106,12 @@ export class AgentCodeCustomSkillOwnershipPolicy {
         const historicalWrite = record
           && record.skillId === skill.id
           && resolve(record.path) === resolve(operation.path)
-          && operation.desiredSha256 === record.sha256
+          // A moved-root update legitimately carries H1 in the settled record
+          // and H2 in desiredSha256. previousSha256 is the ownership link that
+          // proves the retired write began from H1; requiring H2 === H1 turns
+          // every crash during an update into collection-wide recovery.
+          && (operation.previousSha256 === record.sha256
+            || operation.desiredSha256 === record.sha256)
         if ((!currentWrite && !historicalWrite) || operation.desiredSha256 === null) {
           return `custom pending write ${key} does not match a current provider target.`
         }

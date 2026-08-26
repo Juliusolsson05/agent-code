@@ -1,6 +1,6 @@
 # Agent-authored Personal Skill Management
 
-> Status: implemented; verification and PR review pending.
+> Status: implemented; independent review feedback resolved; final verification pending.
 
 ## Goal
 
@@ -236,6 +236,18 @@ implementation. Required scenarios are:
 - Settings metadata reports Conventions as app-wide/new-session behavior;
 - pre-session reconciliation covers both Conventions and custom skills.
 
+The independent pre-merge review added two consolidated hardening records:
+
+- #651 covers managed publication and recovery: capture the file actually
+  named at mutation time, publish with no-clobber semantics, preserve unproven
+  journal sidecars, and accept crash-left updates after a provider-root move;
+- #652 covers manager correctness: explicit revision-conflict decisions,
+  coherent in-flight drafts, shared Conventions/Custom Skills invalidation,
+  typed Reveal failures, and target-specific accessible action names.
+
+These are part of the delivered feature rather than deferred follow-up because
+they protect ownership, user input, and the reviewability of the new manager.
+
 Run focused suites during development, then the repository typecheck, relevant
 unit/system/renderer projects, the complete quality command, and distributable
 output verification. Any unrelated baseline failure must be reproduced on
@@ -245,9 +257,10 @@ unmodified `main` and documented rather than hidden.
 
 The implementation PR title should describe the delivered custom-skill manager
 using Conventional Commit form, not this plan filename. Its body must use
-`Fixes #640`, report concrete verification results, and keep limitations such as
-instruction-only skills and immutable names explicit.
+`Fixes #640`, `Fixes #651`, and `Fixes #652`, report concrete verification
+results, and keep limitations such as instruction-only skills and immutable
+names explicit.
 
-Opening and reviewing the PR does not authorize merging it. After review
-feedback is resolved and current CI is green, report the final state and wait
-for explicit user confirmation.
+Opening a PR does not normally authorize merging it. For this review run the
+user explicitly authorized merge after two orchestrated reviews, valid feedback
+resolution, and current-head CI success.
