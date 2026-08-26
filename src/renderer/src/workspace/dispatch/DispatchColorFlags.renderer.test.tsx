@@ -9,12 +9,13 @@ import type {
   DispatchTabGroup,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
 import { PaneHeader } from '@renderer/workspace/tile-tree/TileLeaf/PaneHeader'
+import type { Entry } from '@shared/types/transcript'
 
 const appState = vi.hoisted(() => ({
   settings: {
     dispatchColorFlags: {} as Record<string, string>,
   },
-  workspaceRuntimes: {} as Record<string, never>,
+  workspaceRuntimes: {} as Record<string, { entries?: Entry[] }>,
   setDispatchColorFlag: vi.fn(),
 }))
 
@@ -124,6 +125,38 @@ describe('Dispatch color-flag layout', () => {
     expect(chips[0].children[1]).toHaveAttribute('data-dispatch-color-flag', 'blue')
     expect(chips[0].children[1]).toHaveClass('w-[10px]', 'flex-none', 'self-stretch')
     expect(chips[1].children[1]).toHaveAttribute('data-dispatch-color-flag', 'none')
+  })
+
+  it('uses an explicit title in tiled mini-list tooltips ahead of the latest prompt', () => {
+    const titledRow = {
+      ...rows[0],
+      agentTitle: 'Queue audit',
+      title: 'Queue audit',
+    }
+    appState.workspaceRuntimes = {
+      [FLAGGED_SESSION_ID]: {
+        entries: [{
+          type: 'user',
+          uuid: 'latest-prompt',
+          parentUuid: null,
+          message: { role: 'user', content: 'Investigate something else' },
+        }] as Entry[],
+      },
+    }
+
+    render(
+      <DispatchMiniList
+        rows={[titledRow]}
+        selectedSessionId={FLAGGED_SESSION_ID}
+        focused
+        onSelect={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByRole('button', { name: 'A1' })).toHaveAttribute(
+      'title',
+      'A1 · Queue audit',
+    )
   })
 
   it('centers the modal swatches inside the same horizontal inset as its chrome', () => {

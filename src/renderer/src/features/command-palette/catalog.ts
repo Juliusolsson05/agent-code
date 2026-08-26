@@ -13,6 +13,7 @@ import { promptTemplateCommands } from '@renderer/features/prompt-templates/comm
 import { replyToSelectionCommands } from '@renderer/features/reply-to-selection/commands/replyToSelectionCommands'
 import { agentStatusCommands } from '@renderer/features/agent-status/commands/agentStatusCommands'
 import { dispatchColorFlagCommands } from '@renderer/features/workspace/commands/dispatchColorFlagCommands'
+import { agentTitleCommands } from '@renderer/features/workspace/commands/agentTitleCommands'
 import { remoteCommands } from '@renderer/features/remote/commands/remoteCommands'
 import { usageCommands } from '@renderer/features/usage/commands/usageCommands'
 import { paletteCommands } from '@renderer/features/command-palette/commands/paletteCommands'
@@ -64,6 +65,7 @@ export const builtInCommandCatalog: readonly CommandDef[] = Object.freeze([
   // regressions to users who navigate by position.
   ...globalEditorCommands,
   ...sessionCommands,
+  ...agentTitleCommands,
   ...dispatchColorFlagCommands,
   ...spotlightCommands,
   ...readerCommands,

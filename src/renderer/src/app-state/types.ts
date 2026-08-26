@@ -52,6 +52,8 @@ export type UiShellSlice = UiShellState & {
   closePinAgents: () => void
   openSettingsPage: () => void
   closeSettingsPage: () => void
+  openAgentTitlePrompt: (sessionId: SessionId) => void
+  closeAgentTitlePrompt: () => void
   openBuryPrompt: (sessionId: SessionId) => void
   closeBuryPrompt: () => void
   openDebugBundleNotePrompt: (payload: {

@@ -138,6 +138,7 @@ export function renderWorkspaceLeaf(
         <AgentTerminalLeaf
           sessionId={renderedSessionId}
           paneLabel={paneLabel}
+          agentTitle={meta?.title}
           focused={sessionId === focusedSessionId}
           onFocusRequest={onFocusRequest}
           workspace={workspace}

@@ -275,9 +275,7 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
   const activity = dispatchActivity(runtime)
   const activityClasses = dispatchActivityClasses(activity, active)
   const subtitle = dispatchSubtitle(runtime, row.kind)
-  const title = !isTerminal && runtime.entries
-    ? cachedLatestPromptTitle(runtime.entries, row.kind) ?? row.title
-    : row.title
+  const title = dispatchRowTitle(row, runtime.entries)
   const attentionLabel = dispatchAttentionLabel(runtime)
   const unreadKind = isTerminal
     ? null
@@ -385,6 +383,29 @@ export function cachedLatestPromptTitle(
   const title = extractLatestUserPrompt(entries, kind)?.text ?? null
   latestPromptTitleCache.set(entries, { kind, title })
   return title
+}
+
+/**
+ * Resolve the one-line Dispatch label without erasing the distinction between
+ * an explicit title and the existing latest-prompt fallback.
+ *
+ * WHY `row.title` alone is insufficient: selectors historically fold the cwd
+ * basename into that field, and the component then replaces it with the latest
+ * prompt. Once users can author a title, applying the same replacement makes
+ * Save appear to work in the pane while the primary Dispatch index—the surface
+ * built for scanning many agents—continues showing something else. Carrying
+ * `agentTitle` separately lets explicit user intent win while preserving the
+ * useful automatic prompt label for every untitled agent.
+ */
+export function dispatchRowTitle(
+  row: Pick<DispatchAgentRow, 'agentTitle' | 'kind' | 'title'>,
+  entries?: Entry[],
+): string {
+  if (row.agentTitle) return row.agentTitle
+  if (row.kind !== 'terminal' && entries) {
+    return cachedLatestPromptTitle(entries, row.kind) ?? row.title
+  }
+  return row.title
 }
 
 function dispatchSubtitle(runtime: {

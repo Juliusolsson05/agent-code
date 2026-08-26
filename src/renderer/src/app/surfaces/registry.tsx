@@ -26,6 +26,7 @@ import { AgentViewModePickerSurface } from '@renderer/features/workspace/surface
 import { ColorFlagPickerSurface } from '@renderer/features/workspace/surfaces/ColorFlagPickerSurface'
 import { KeyboardShortcutsSurface } from '@renderer/features/settings/surfaces/KeyboardShortcutsSurface'
 import { RewindToPromptSurface } from '@renderer/features/workspace/surfaces/RewindToPromptSurface'
+import { AgentTitlePromptSurface } from '@renderer/features/workspace/surfaces/AgentTitlePromptSurface'
 
 // The surface registry (issue #494). Adding a surface = write a wrapper
 // in the owning feature's surfaces/ folder + add ONE import + ONE array
@@ -78,6 +79,7 @@ export const modalSurfaces: SurfaceEntry[] = [
   { id: 'agent-view-mode-picker', Component: AgentViewModePickerSurface },
   { id: 'color-flag-picker', Component: ColorFlagPickerSurface },
   { id: 'rewind-to-prompt', Component: RewindToPromptSurface },
+  { id: 'agent-title-prompt', Component: AgentTitlePromptSurface },
   { id: 'usage', Component: UsageModalSurface },
 ]
 

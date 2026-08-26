@@ -502,6 +502,7 @@ describe('surface ownership', () => {
       'view-prompts',
       'rewind-to-prompt',
       'set-agent-view-mode',
+      'agent.title.set',
       'dispatch.color-flag.set',
       'save-debug-logs',
       'attach-recording-note',
