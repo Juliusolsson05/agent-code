@@ -1,8 +1,7 @@
 # Worktree Context and Dispatch Labels — Staged Decomposition
 
-> Status: Stage 1 completed and independently verified on 2026-08-26.
-> Awaiting explicit user approval for Stage 2. No test or implementation stage
-> has begun.
+> Status: Stage 2 completed and independently verified on 2026-08-26.
+> Awaiting explicit user approval for Stage 3. Production remains unchanged.
 >
 > Issues: #658 (Codex worktree evidence) and #659 (Dispatch pane coordinate).
 
@@ -280,6 +279,46 @@ All provider records and workspace ordering come from Stage 1. Builders remain
 appropriate only for generic Git worktree identities around the recorded
 events; they may not replace the literal provider or workspace fixture.
 
+### Stage 2 completion record
+
+Four colocated contracts now consume the Stage 1 recordings without changing
+production:
+
+- `src/shared/work-context/recordedFixtures.test.ts` checks every observed
+  current Codex carrier in order, the MCP child-cwd negative, and the recorded
+  Claude enter/conversation behavior;
+- `src/main/worktreeActivity/transcriptParser.test.ts` writes the recorded
+  window back as JSONL and exercises the real streaming historical boundary;
+- `src/renderer/src/features/worktrees/lib/loadWorktreeDump.test.ts` builds its
+  runtime context by replaying the fixture rather than assigning
+  `active`/`primary`; and
+- `DispatchPaneLabel.recorded.renderer.test.tsx` renders both Classic and Tiled
+  Dispatch from the reduced D23 workspace through the real shared leaf-render
+  boundary.
+
+The unchanged implementation produces six intentional failing test cases:
+
+1. all five current Codex carriers emit no normalized events;
+2. ordered replay remains `null` before and after the recorded worktree write;
+3. the historical parser discovers the launch cwd but indexes zero activity;
+4. the live agent falls back to the main checkout instead of the recorded
+   linked worktree;
+5. Classic Dispatch renders D13 where its selected row is D23; and
+6. Tiled Dispatch renders the same incorrect D13 for that D23 row.
+
+Two safety cases are green before implementation: the real MCP child cwd emits
+no caller activity, and the recorded Claude behavior remains unchanged.
+TypeScript and the test-contract gate pass. On the clean base checkout, all 313
+renderer tests pass; the unit baseline has two unrelated existing failures (a
+missing local source transcript cited by an image fixture and one store-test
+timeout under the full parallel run). Stage 2 adds only the six fixture-named
+failures above.
+
+The live projection result narrows Stage 4: Stage 2 does **not** justify a
+hand-authored primary-versus-active consumer change. Stage 3 must implement raw
+provider recognition, then rerun the same live fixture. Only a remaining red
+consumer contract can authorize changing that consumer's selection semantics.
+
 ## Stage 3 — Isolate and normalize provider worktree evidence
 
 **Produces**
@@ -315,15 +354,17 @@ The accepted discriminators, field paths, URL form, and FileChange collection
 shape come directly from Stage 1 fixtures and frequencies. No recursive
 "find anything named cwd" heuristic is allowed.
 
-## Stage 4 — Apply normalized evidence to live and historical projections
+## Stage 4 — Invalidate historical derivation and apply only proven consumer semantics
 
 **Produces**
 
 - Historical cache invalidation tied to parser semantics, so version-2 entries
   cannot preserve a previously empty parse after the adapter changes.
-- A Worktrees live-agent projection that answers "where active now" from the
-  tracker state produced by fixture replay, while preserving weighted primary
-  affinity for consumers that intentionally ask a historical question.
+- A checkpoint result from rerunning the recorded live-agent projection after
+  Stage 3. If it remains red because fixture-derived `active` and `primary`
+  answer different questions, the narrow Worktrees consumer changes to the
+  fixture-proven current location. If Stage 3 turns it green, no consumer
+  change is made.
 - No provider-specific conditions outside the shared work-context boundary.
 
 **Verified by**
@@ -343,10 +384,10 @@ policy and make future consumers inherit the wrong meaning of "primary."
 
 **Reality check**
 
-The current live bug exists because current records yield no normalized events
-and the Worktrees projection reads weighted `workContext`. This stage is bound
-to the exact ordered tracker output from the real fixture, not a guessed event
-sequence.
+The current live failure is already fully explained by current records yielding
+no normalized events. Whether weighted `workContext` is a second cause remains
+unknown until Stage 3 gives the recorded replay real events. This stage is
+bound to that exact output, not a guessed active/primary sequence.
 
 ## Stage 5 — Carry the canonical Dispatch row label into pane chrome
 
