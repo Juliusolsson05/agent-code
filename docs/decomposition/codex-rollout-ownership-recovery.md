@@ -1461,3 +1461,172 @@ green: all four submitting cases have exact rollout/request agreement, the
 valid lower-layer keymap reaches the composer, and the issued-profile conflict
 is rejected before the composer. This changes observation fidelity only; the
 production ownership and launch implementation remains the Stage 35 head.
+
+## 10. Eleventh-gate corrective stages
+
+The eleventh exact-head gate,
+`run_9a5f3e22-d23e-4a8d-b639-60809004a954`, completed normally against parent
+`6c4ee504`, codex-headless `62d9b27`, and parser `a3fee9d`. Parent and both
+dependency CIs were green and mergeable, but all four read-only agents completed
+with zero stalls, retries, provider-circuit failures, or coverage gaps and the
+synthesizer returned RED. Its immutable result has SHA-256
+`e19f9edcd18f05235456505e751fd4758792b9b5ef4d32ec8a7878234eff4b09`.
+
+The synthesizer independently confirmed four blockers:
+
+1. the process-global singleton stores the complete registry object, so
+   reflection reaches watcher path caches, coordinator identity maps, and the
+   HMAC key that is supposed to make retention fingerprints non-reversible;
+2. any PTY chunk parsed after resize advances layout authority even when it
+   repaints only status chrome, allowing stale xterm-reflowed composer rows to
+   become prompt evidence;
+3. a generation made causally unusable by a stale initial observation with no
+   birth time is neither terminal nor rescan-eligible, so the unchanged-path
+   maintenance shortcut retains its raw transport indefinitely while a sibling
+   watcher remains live; and
+4. `CodexSession.stop()` during resume/config pre-spawn awaits records no
+   cancellation and disposes no pending preparation, so `start()` can later
+   spawn Codex for a pane that has already been removed.
+
+The gate rejected the proposed runtime `/keymap` mutation because no exact
+0.149.1 recording establishes that composite sequence, and rejected parser
+kill-before-dispose as an ownership race because synchronous disposal follows
+the kill call in the same JavaScript stack before coordinator callbacks can
+interleave. Neither rejected candidate is implementation work in this repair.
+
+### Stage 37 — freeze the eleventh-gate evidence and boundaries
+
+- [x] **Produces:** this decomposition naming the four confirmed findings, the
+  exact three reviewed heads, the completed run, and its immutable result
+  checksum. The two rejected candidates remain recorded as exclusions.
+- **Verified by:** all three specialist artifacts and the synthesizer artifact
+  were read in full; the run reports four completed agents, zero failures,
+  retries, stalls, recovery gaps, or provider-circuit failures. The parent and
+  both dependency worktrees were unchanged by the read-only gate.
+- **Why separate:** the specialists proposed six candidates, but two did not
+  survive independent replay. Freezing only the synthesized set prevents an
+  unrecorded hypothesis from expanding production scope and prevents one fix
+  from obscuring another red boundary.
+- **Reality check:** each accepted finding includes a reachable source path and
+  a replay over existing recorded rollout, terminal, or config boundaries. CI
+  being green is retained as evidence that these are omitted contracts rather
+  than pre-existing red-suite noise.
+
+### Stage 38 — encode the four real sequences as red contracts
+
+- [ ] **Produces:** a content-safe eleventh-gate finding manifest; a built-
+  runtime reflection projection; a recorded post-resize non-composer generation
+  replay; a stale-no-birth generation transport test; and a parent config/read
+  barrier test that stops the session before the recorded safe response is
+  released.
+- **Verified by:** against codex-headless `62d9b27` and parent `6c4ee504`, one
+  focused assertion fails for each confirmed finding while the adjacent tenth-
+  gate and recorded controls remain green. Failures must expose reachable raw
+  state, false newline-bearing evidence, retained transport counts, or a late
+  PTY spawn—not a fixture/setup error.
+- **Why separate:** registry closure shape, per-row terminal paint causality,
+  graph/transport compaction, and parent start cancellation have different
+  owners. Writing their tests first proves all four defects exist independently
+  before those owners change.
+- **Reality check:** reflection starts from the same global symbol exercised by
+  the tenth gate; terminal rows and prompt/request truth come from
+  `narrow-soft-wrap-resize-redraw` and the recorded unrelated-redraw boundary;
+  rollout bytes come from the exact-attachment corpus with only scheduler,
+  birth-time availability, and watcher-liveness order varied; config values and
+  the held response come from the real sanitized Codex 0.149.1 projection.
+
+### Stage 39 — isolate and repair the four owners
+
+- [ ] **Produces:** a schema-versioned process-global bridge whose functions
+  close over registry state rather than publishing it; non-reflectable HMAC
+  custody; per-row/cursor provider-paint generations sufficient for the Codex
+  adapter to require a real composer repaint after resize; maintenance eviction
+  whenever policy says a path no longer needs rescan plus matching coordinator
+  compaction; and generation-scoped parent cancellation checked after every
+  pre-spawn await and immediately before spawn.
+- **Verified by:** all Stage 38 contracts turn green unchanged. Duplicate module
+  copies still converge on one coordinator; count-only test inspection reveals
+  no raw path or identity; the genuine recorded post-resize composer repaint is
+  accepted while a status-only generation is refused; live watcher transport
+  remains for genuinely unresolved candidates; and cancellation disposes the
+  preparation with zero PTY/headless construction.
+- **Why separate:** the global bridge owns only process convergence, the
+  terminal owns physical paint causality, the Codex adapter owns composer
+  interpretation, the coordinator owns rescan eligibility, and Agent Code owns
+  provider lifecycle. Crossing those decisions would recreate the distributed
+  ownership substrate this change is removing.
+- **Reality check:** the repair is the narrow inverse of each recorded failure.
+  It does not attempt the unrecorded keymap mutation, redefine stopped-provider
+  grace, parse Codex keymap policy in Agent Code, or make a generic terminal
+  understand Codex composer semantics.
+
+### Stage 40 — rebuild, regate, and merge
+
+- [ ] **Produces:** clean pushed codex-headless, parser, and parent heads; green
+  full package/CI results; exact live safe/conflicting prompt evidence; a fresh
+  exact-head four-agent GREEN result with every constituent artifact inspected;
+  and dependency-order merges followed by issue #632 closure.
+- **Verified by:** no correctness, privacy, ownership, lifecycle, or integration
+  finding of any severity survives the new gate; both pinned dependency commits
+  are ancestors of their merged default branches before parent merge; GitHub
+  reports the final parent head clean and all required checks successful.
+- **Why separate:** a local green suite cannot prove process-reflection or
+  adversarial scheduling safety, and a review of unpushed heads cannot authorize
+  the actual dependency pins that GitHub will merge.
+- **Reality check:** repeat the installed Codex 0.149.1 recorder/config probes
+  and the entire first-through-eleventh recorded corpus. Preserve the unrelated
+  missing private Claude transcript failure as environmental evidence rather
+  than deleting or weakening its test.
+
+### Isolation for Stages 38–40
+
+- The global value may expose a frozen schema and opaque operations only. It
+  may not expose a Registry, RootEntry, Map, Set, coordinator backing field, raw
+  path cache, or HMAC material. Test inspection is count-only and scoped through
+  an already-held public coordinator reference.
+- `HeadlessTerminal` records which physical rows/cursor a provider parse really
+  changed; it may not import a Codex classifier. `PromptInputEvidence` alone
+  maps that provider-neutral paint fact onto the current composer rows.
+- `FreshRolloutOwnershipCoordinator` remains the sole source of rescan
+  eligibility. Registry maintenance may consume that bit and erase transport,
+  but may not independently recreate generation-window policy.
+- Parent cancellation is generation-scoped lifecycle state. The parser probes
+  and codex-headless package must not import or emulate Agent Code pane/session
+  cancellation policy.
+
+### Unknowns for Stages 38–40
+
+- A provider repaint can theoretically leave every visible composer cell and
+  the final cursor identical to xterm's resize reflow. Such a repaint is not
+  distinguishable from status-only output through stable final cells; failing
+  closed until a composer row/cursor actually changes is acceptable unless a
+  real recording proves it prevents a valid submission.
+- Existing tests inspect the raw global Registry to count watcher transport.
+  They must move to a count-only closure operation without weakening their
+  ability to distinguish coordinator compaction from watcher-cache retention.
+- Cancellation can race either resume preparation or config/read and can be
+  followed by a second `start()` call. A generation token must distinguish a
+  cancelled attempt from a genuinely new attempt without making concurrent
+  starts legal.
+- Causally dead candidate graph entries may retain only content-safe HMAC facts
+  needed for stopped-owner blocking. The red contract requires raw path removal;
+  exact remaining HMAC compaction depends on whether any future participant can
+  use the generation and must be decided by coordinator policy, not the watcher.
+
+### Fixture plan for Stages 38–40
+
+- Add `testing/fixtures/eleventh-gate/` with only run ID, exact heads, result
+  checksum, and the four accepted/two rejected content-safe finding IDs.
+- Extend the built projection from the exact-attachment fixture to recursively
+  traverse the global bridge's reachable own properties and assert that no raw
+  path, participant ID, coordinator map, or HMAC key is reachable.
+- Reuse the real narrow-resize structured frame as the post-resize baseline and
+  a later real non-composer generation as the scheduler mutation. The durable
+  rollout/request prompt remains the sole expected value; no new terminal text
+  or prompt literal is invented.
+- Reuse the exact recorded rollout prefix for the unsupported-birth test and
+  vary only initial-scan staleness, generation time, maintenance intervals, and
+  an unrelated live sibling.
+- Extend the parent launch-order harness's real safe projection with a stop
+  during its existing response barrier. Assert event order and absence of spawn;
+  do not invent a Codex response or keymap outcome.
