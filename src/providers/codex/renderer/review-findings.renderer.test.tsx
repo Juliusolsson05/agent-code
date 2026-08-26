@@ -99,7 +99,7 @@ results.forEach((r,i)=>{text(\`--- \${i+1} ---\`);text(r.output)});`,
     const { container } = render(decision.toolUse.node)
     expect(screen.getByText('git status workflow')).toBeInTheDocument()
     expect(container.textContent).toContain('gh pr view 560')
-    expect(screen.getAllByText('exit unknown')).toHaveLength(2)
+    expect(screen.getAllByText('exit code unavailable')).toHaveLength(2)
     expect(container.textContent).toContain('"state":"MERGED"')
 
     const exact = screen.getByText(/view exact grouped output/).closest('details')!

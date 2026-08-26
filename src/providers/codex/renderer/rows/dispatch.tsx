@@ -13,6 +13,8 @@ import {
 } from '@providers/codex/renderer/adapters/command'
 import type { CodexCommandGroupOperation } from '@providers/codex/renderer/adapters/command'
 import { CommandView } from '@providers/shared/renderer/protocols/command/CommandView'
+import { composeDiscoveryOperation } from '@providers/shared/renderer/protocols/discovery/composeDiscoveryOperation'
+import { DiscoveryOperationView } from '@providers/shared/renderer/protocols/discovery/DiscoveryOperationView'
 
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 // Provider-internal imports reach component directories directly. Phase 9
@@ -137,17 +139,25 @@ export function renderCodexOperation(
     live: input.live,
   })
   if (command && (!input.result || command.ownsResult)) {
+    const discovery = composeDiscoveryOperation(command.model, command.rawCommand)
+    const rendererId = discovery ? 'shared.command' : 'codex.rows.dispatch'
+    const protocolId = discovery?.protocolId
     return {
       toolUse: {
         action: 'render',
-        node: <CommandView model={command.model} />,
-        receipt: { rendererId: 'codex.rows.dispatch' },
+        node: discovery
+          ? <DiscoveryOperationView model={discovery} />
+          : <CommandView model={command.model} />,
+        receipt: { rendererId, ...(protocolId ? { protocolId } : {}) },
       },
       toolResult: input.result
         ? {
             action: 'absorb',
-            ownerRenderId: 'codex.rows.dispatch',
-            reason: 'normalized command operation preserves the validated paired output',
+            ownerRenderId: rendererId,
+            ...(protocolId ? { protocolId } : {}),
+            reason: discovery
+              ? 'the paired discovery operation preserves the validated command output'
+              : 'normalized command operation preserves the validated paired output',
           }
         : null,
     }

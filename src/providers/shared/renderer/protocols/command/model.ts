@@ -18,8 +18,8 @@ export type CommandStatus =
    *  evidence (e.g. Codex code-mode `text(r.output)`, where "Script
    *  completed" only proves the wrapper JavaScript ran). Adapters MUST use
    *  this instead of `success` whenever they cannot prove exit 0 — the view
-   *  renders a muted "exit unknown" so the feed never claims an outcome the
-   *  wire did not carry. */
+   *  renders a muted "exit code unavailable" so the feed distinguishes
+   *  missing transport evidence from an unknown/running process outcome. */
   | 'unknown'
 
 export type CommandRenderModel = {
