@@ -1,6 +1,9 @@
 # Worktree Context and Dispatch Label Corrections
 
-> Status: approved for implementation from reproduced bugs #658 and #659.
+> Status: superseded as implementation authority by
+> `docs/decomposition/worktree-context-and-dispatch-labels.md`. No code work
+> resumes until that staged, recorded-data decomposition receives explicit
+> user approval.
 
 ## Outcome
 
