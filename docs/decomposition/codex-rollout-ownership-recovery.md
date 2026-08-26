@@ -1710,7 +1710,7 @@ implementation scope.
 
 ### Stage 42 — prove every surviving sequence red before production edits
 
-- [ ] **Produces:** a content-safe twelfth-gate manifest; a bridge-operation
+- [x] **Produces:** a content-safe twelfth-gate manifest; a bridge-operation
   reflection projection; a reservation-before-return stop/restart barrier; two
   malformed/unknown config-layer fixture modes; a double-width narrow-composer
   frame derived from the recorded narrow-wrap case; and a retained-handle
@@ -1800,3 +1800,14 @@ implementation scope.
 - The public handle's post-consume behavior may reject or become a harmless
   no-op. It must never mutate active ownership, and internal stop must still
   retire exactly once.
+
+Stage 42 is complete at codex-headless red checkpoint `434d553` and parent red
+checkpoint `abec4db3`. The config profile issues authority for each of the
+recorded malformed, unknown, and duplicate layer mutations; the consumed
+public handle permits a second exact preparation while its physical tail is
+active; reflection from the global `begin()` result reaches both the backing
+coordinator and ordinary Maps; the recorded CJK/narrow composition returns a
+primary composer draft containing a manufactured LF; and the parent restart is
+rejected by the reservation made before A's preparation handle returns. Every
+adjacent recorded control remains green, so these are behavioral failures
+rather than fixture, process, or scheduler setup errors.
