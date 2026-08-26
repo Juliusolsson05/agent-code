@@ -8,6 +8,8 @@ const launch = vi.hoisted(() => ({
   configMode: 'recorded-safe',
   resumeBarrier: Promise.resolve() as Promise<void>,
   releaseResume: (() => undefined) as () => void,
+  reserveResumeBeforeReturn: false,
+  resumeLeaseActive: false,
   profileBarrier: Promise.resolve() as Promise<void>,
   releaseProfile: (() => undefined) as () => void,
   headlessOptions: null as null | Record<string, unknown>,
@@ -58,10 +60,28 @@ vi.mock('codex-headless', () => {
     },
     prepareCodexResumeRollout: async () => {
       launch.events.push('resume:start')
+      if (launch.reserveResumeBeforeReturn) {
+        if (launch.resumeLeaseActive) {
+          launch.events.push('resume:lease-conflict')
+          throw new Error('recorded exact rollout is already leased')
+        }
+        // WHY the real factory reserves exact X before it finishes reading the
+        // copied lineage and returns the public capability. The old mock placed
+        // every side effect after its barrier, so it could never expose the
+        // interval where stop sees no handle but a replacement sees A's lease.
+        launch.resumeLeaseActive = true
+        launch.events.push('resume:reserved')
+      }
       await launch.resumeBarrier
       launch.events.push('resume:end')
+      let disposed = false
       return {
         dispose: async (clean?: boolean) => {
+          if (disposed) return
+          disposed = true
+          if (launch.reserveResumeBeforeReturn) {
+            launch.resumeLeaseActive = false
+          }
           launch.events.push(`preparation:dispose:${clean}`)
         },
       }
@@ -111,6 +131,8 @@ beforeEach(() => {
   launch.events = []
   launch.configMode = 'recorded-safe'
   launch.headlessOptions = null
+  launch.reserveResumeBeforeReturn = false
+  launch.resumeLeaseActive = false
   launch.resumeBarrier = new Promise<void>(resolve => {
     launch.releaseResume = resolve
   })
@@ -261,6 +283,57 @@ describe('CodexSession resume launch attestation ordering', () => {
       launch.releaseResume()
       await startOutcome
       await session.stop()
+    }
+  })
+
+  it('joins an exact reservation made before the preparation handle returns', async () => {
+    launch.reserveResumeBeforeReturn = true
+    const session = new CodexSession({
+      binary: 'recorded-codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: '00000000-0000-4000-8000-000000000632',
+      useProxy: false,
+    })
+    const firstStart = session.start()
+    const firstOutcome = firstStart.then(
+      () => 'resolved' as const,
+      () => 'rejected' as const,
+    )
+    let restartOutcome: Promise<'resolved' | 'rejected'> | null = null
+
+    try {
+      await vi.waitFor(() => expect(launch.events).toEqual([
+        'resume:start',
+        'resume:reserved',
+      ]))
+      const stopping = session.stop()
+      const restarting = session.start()
+      restartOutcome = restarting.then(
+        () => 'resolved' as const,
+        () => 'rejected' as const,
+      )
+
+      // WHY stop and restart overlap deliberately. A owns exact X even though
+      // its public rollback handle is still behind the recorded lineage-read
+      // barrier. B must remain behind A's joined cleanup; trying its own prepare
+      // immediately turns an orderly restart into a false lease collision.
+      launch.releaseResume()
+      await stopping
+      await firstOutcome
+      await expect(restartOutcome).resolves.toBe('resolved')
+
+      expect(launch.events).not.toContain('resume:lease-conflict')
+      expect(launch.events.filter(event => event === 'resume:reserved'))
+        .toHaveLength(2)
+      expect(launch.events.indexOf('preparation:dispose:true'))
+        .toBeLessThan(launch.events.lastIndexOf('resume:start'))
+      expect(launch.events.filter(event => event === 'pty:spawn')).toHaveLength(1)
+    } finally {
+      launch.releaseResume()
+      await firstOutcome
+      await restartOutcome
+      await session.stop()
+      launch.resumeLeaseActive = false
     }
   })
 
