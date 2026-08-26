@@ -28,11 +28,12 @@ function splitSegments(tokens: readonly ShellToken[]): WordToken[][] | null {
       continue
     }
 
-    // WHY only pipe and semicolon: both merely connect already-proven
-    // read-only commands. Redirection writes, background work outlives the
-    // visible row, heredocs hide a second language, and &&/|| make execution
-    // conditional. Those shapes remain honest generic commands until their
-    // complete semantics are independently evidenced.
+    // WHY only pipe and semicolon: both combine already-admitted discovery
+    // intent without contradicting the headline. Redirection writes,
+    // background work outlives the visible row, heredocs hide a second
+    // language, and &&/|| make execution conditional. Those shapes remain
+    // honest generic commands until their presentation semantics are
+    // independently evidenced.
     if (token.text !== '|' && token.text !== ';') return null
     if (words.length === 0) return null
     segments.push(words)
@@ -45,38 +46,56 @@ function splitSegments(tokens: readonly ShellToken[]): WordToken[][] | null {
 
 function segmentKind(words: readonly WordToken[]): SegmentKind | null {
   const command = words[0]
-  // Quoted/path-qualified program names are valid shell, but normalizing them
-  // safely requires command resolution. Declining costs only enrichment.
+  // Quoted/path-qualified program names are valid shell, but neither form is
+  // present in the recorded intent vocabulary. Declining costs only
+  // enrichment and avoids implying that a different executable spelling was
+  // reviewed merely because its basename looks familiar.
   if (!command || command.quoted || command.text.includes('/')) return null
   const kind = SIMPLE_COMMANDS.get(command.text)
   if (!kind) return null
 
   const args = words.slice(1).map(word => word.text)
+  const endOfOptions = args.indexOf('--')
+  const options = endOfOptions >= 0 ? args.slice(0, endOfOptions) : args
   if (
     command.text === 'rg' &&
-    args.some(arg => arg === '--pre' || arg.startsWith('--pre=') || arg === '--pre-glob' || arg.startsWith('--pre-glob='))
+    options.some(arg =>
+      arg === '--pre' ||
+      arg.startsWith('--pre=') ||
+      arg === '--pre-glob' ||
+      arg.startsWith('--pre-glob=') ||
+      arg === '--hostname-bin' ||
+      arg.startsWith('--hostname-bin='),
+    )
   ) {
-    // ripgrep's --pre executes an arbitrary program for every searched file.
-    // A command named `rg` is therefore not sufficient proof of read-only
-    // behavior; the option boundary is part of the semantic contract.
+    // ripgrep can execute arbitrary helper programs through --pre and
+    // --hostname-bin. Those visible options directly contradict a simple
+    // Search/List headline even though this renderer is not an authorization
+    // boundary and cannot resolve the eventual executable through PATH.
     return null
   }
-  if (
-    command.text === 'sort' &&
-    args.some(arg => arg === '-o' || arg === '--output' || arg.startsWith('--output='))
-  ) {
+  if (command.text === 'sort' && options.some(arg => arg.startsWith('-'))) {
+    // The recorded corpus proves only the bare `sort` filter used by the rg
+    // carrier. sort's option grammar includes attached output forms (-oFILE),
+    // long-option abbreviations, and helper execution (--compress-program).
+    // Admit new options from evidence instead of maintaining a denylist that
+    // becomes unsafe whenever the utility adds another side-effecting flag.
     return null
   }
+  if (command.text === 'rg' && options.includes('--files')) return 'list'
   return kind
 }
 
 /**
  * Classify one complete shell expression or decline the whole expression.
  *
- * This is deliberately an allowlist of commands present in the recorded
- * development corpus. It is not a general claim that every invocation of a
- * familiar Unix utility is harmless. New commands/options enter only with a
- * real fixture and an explicit safety review.
+ * This is deliberately a textual-intent classifier for presentation, not an
+ * execution authorization boundary. A transcript does not carry enough
+ * evidence to resolve PATH, shell functions, aliases, or the executable that
+ * ultimately ran, so a command.search receipt must never be treated as proof
+ * that execution was side-effect free. Within the visible syntax, commands
+ * and options enter only from real evidence; explicit mutation or helper
+ * execution makes the whole expression decline.
  */
 export function classifyShellDiscovery(command: string): DiscoveryKind | null {
   if (!command.trim() || /[\r\n]/.test(command)) return null

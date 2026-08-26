@@ -17,6 +17,14 @@ evidence-reader work, so the first PR implements Stages 4–5 for this proven
 carrier. Stages 0–3 and 6–7 remain follow-up PRs; this is a priority change, not
 a claim that their unknowns have been resolved.
 
+**Review clarification, 2026-08-26:** Search/Read/List is syntactic presentation
+intent, not executable-resolution or authorization evidence. The transcript
+does not prove how a bare command name resolved through PATH, functions, or
+aliases. Admission still parses the whole expression and declines visible
+mutation, execution-control, and helper-program options, but downstream code
+must never treat a semantic receipt as proof that the process was side-effect
+free.
+
 ## Applicability
 
 The method applies. Agent Code is far beyond the size threshold, and this work
@@ -84,9 +92,12 @@ The following are explicitly **not** trusted:
    command and complete bounded output remain available, and the terminal copy
    says `exit code unavailable` rather than implying success or presenting the
    ambiguous `exit unknown` phrase.
-5. Search/read/list admission is parse-full-or-decline. A compound pipeline is
-   specialized only when every command and operator is proven non-mutating;
-   ambiguous or mixed commands retain the generic command presentation.
+5. Search/read/list admission is parse-full-or-decline over the recorded
+   command text. A compound pipeline is specialized only when every segment
+   has evidenced discovery intent and no visible mutation, execution-control,
+   or helper-program option; ambiguous or mixed commands retain the generic
+   command presentation. The resulting receipt is not runtime resolution
+   proof.
 6. Semantic/live and committed/durable planes use the same operation kind and
    presentation vocabulary for the same recorded operation.
 7. Shape receipts identify the semantic protocol (`command.search`,
@@ -208,8 +219,8 @@ The following are explicitly **not** trusted:
   recorded exit code.
 - **Why separate:** shell intent is the genuinely hard reconciliation. If it is
   spread between provider adapters, semantic activity helpers, and JSX, each
-  plane will develop a different read-only definition. Isolating the decision
-  also makes a false specialization fail at one contract boundary.
+  plane will develop a different presentation definition. Isolating the
+  decision also makes a false specialization fail at one contract boundary.
 - **Reality check:** `shellLex.ts` already supplies the conservative lexical
   substrate, and the current semantic helper's command-name regexes demonstrate
   both the desired categories and why name presence alone is insufficient.
@@ -381,7 +392,7 @@ An empty answer to any of these must not be manufactured to make a stage green.
 |---|---|---|
 | Codex transparent `rg` search | reported retained invocation/result | Search specialization, exact output ownership, unavailable exit code |
 | Pure read/search/list variants | retained command sightings | Vocabulary and positive admission from actual use |
-| Mixed/ambiguous shell variants | retained or deliberately recorded provider sessions | Whole-expression decline and no false read-only claim |
+| Mixed/ambiguous shell variants | retained or deliberately recorded provider sessions | Whole-expression decline and no false discovery-intent claim |
 | Codex command continuation | `fp2-5b0abcb6` source window | Catalog/receipt agreement and single result owner |
 | Codex raw-json ghost | `fp2-dbcadd9f` source windows from more than one recording | Durable provenance and no synthetic catalog blessing |
 | Late recording sighting | real sighting after byte 64 MiB | Complete offline scan and explicit interactive truncation |
