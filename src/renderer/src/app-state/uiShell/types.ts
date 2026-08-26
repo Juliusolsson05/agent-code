@@ -82,6 +82,15 @@ export type UiShellState = {
    * pin session that the user later cancels with Escape. */
   pinAgentsOpen: boolean
   settingsPageOpen: boolean
+  /**
+   * The session captured when Set Agent Title is invoked.
+   *
+   * WHY the id is stored instead of re-reading focus at Save time: Dispatch
+   * focus can move while a modal is open (especially across Tiled Dispatch
+   * lanes). The edit must land on the agent the user invoked the command for,
+   * not whichever lane happens to be focused after the prompt appears.
+   */
+  agentTitlePromptSessionId: SessionId | null
   buryPromptSessionId: SessionId | null
   debugBundleNotePrompt: {
     bundlePath: string
