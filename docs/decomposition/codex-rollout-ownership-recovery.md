@@ -1730,7 +1730,7 @@ implementation scope.
 
 ### Stage 43 — close the five authority boundaries structurally
 
-- [ ] **Produces:** non-reflectable coordinator state (or an equivalently
+- [x] **Produces:** non-reflectable coordinator state (or an equivalently
   opaque bridge result); a generation-owned in-flight preparation task joined
   by rollback before restart admission; an exact pinned 0.149.1 layer-schema
   allowlist; terminal-cell-based soft-wrap refusal; and public rollback
@@ -1811,3 +1811,18 @@ primary composer draft containing a manufactured LF; and the parent restart is
 rejected by the reservation made before A's preparation handle returns. Every
 adjacent recorded control remains green, so these are behavioral failures
 rather than fixture, process, or scheduler setup errors.
+
+Stage 43 is complete at codex-headless `5cad5fd` and parent `65dc9303`. The
+global bridge now returns one stable frozen, null-rooted, method-allowlisted
+facade per backing coordinator; its closure alone can recover the real object.
+Public preparation disposal becomes a no-op after synchronous consumption,
+while the active tail retains its internal clean/uncertain retirement path.
+The 0.149.1 profile accepts only structurally named safe layer variants and
+rejects duplicate singleton sources. Composer ambiguity is measured from
+physical xterm cells, including empty wide-glyph continuation cells. Finally,
+each parent start generation owns the preparation promise itself; rollback
+joins and disposes whatever it materializes, and the cancelled generation stays
+discoverable until a replacement has joined that cleanup. The five red
+contracts, built-runtime projection, 158 package tests, 16 parent lifecycle/
+profile/readiness tests, and both typechecks are green without changing any
+recorded expected prompt, rollout, or lease outcome.
