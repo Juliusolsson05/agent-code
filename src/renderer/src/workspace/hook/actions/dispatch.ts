@@ -7,6 +7,7 @@ import {
   buildAutoLanes,
   clampTileCount,
   dispatchFocusedSessionId,
+  insertLaneRightIntoTiled,
   removeLaneFromTiled,
 } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import type {
@@ -37,6 +38,7 @@ export function useDispatchActions(
   exitTiledDispatch: () => void
   setTiledLaneSession: (laneIndex: number, sessionId: SessionId) => void
   setTiledLaneCount: (count: number) => void
+  insertTiledLaneRight: (laneIndex: number) => void
   removeTiledLane: (laneIndex: number) => void
   setTiledFocusedLane: (laneIndex: number) => void
   setTiledRatios: (ratios: number[]) => void
@@ -206,6 +208,27 @@ export function useDispatchActions(
   )
 
   /**
+   * Insert ONE lane beside an existing lane without changing command focus.
+   *
+   * WHY this has an explicit lane index rather than reading focusedLane inside
+   * the helper: command invocation captures one coherent UI snapshot. Passing
+   * that coordinate makes a stale invocation harmless instead of letting a
+   * later focus movement insert beside a different agent than the user saw.
+   */
+  const insertTiledLaneRight = useCallback(
+    (laneIndex: number) => {
+      setState(prev => {
+        const tiled = prev.dispatchMode?.tiled
+        if (!tiled) return prev
+        const next = insertLaneRightIntoTiled(prev, tiled, laneIndex)
+        if (!next) return prev
+        return { ...prev, dispatchMode: { ...prev.dispatchMode!, tiled: next } }
+      })
+    },
+    [setState],
+  )
+
+  /**
    * Remove ONE lane, shrinking the grid by one.
    *
    * The splice/clamp/ratio rules live in `removeLaneFromTiled` so they can be
@@ -348,6 +371,7 @@ export function useDispatchActions(
     exitTiledDispatch,
     setTiledLaneSession,
     setTiledLaneCount,
+    insertTiledLaneRight,
     removeTiledLane,
     setTiledFocusedLane,
     setTiledRatios,

@@ -1,6 +1,9 @@
 import type { CommandDef } from '@renderer/features/command-palette/types'
 import { status, toggle, value } from '@renderer/features/command-palette/commandState'
-import { MIN_DISPATCH_TILES } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
+import {
+  MAX_DISPATCH_TILES,
+  MIN_DISPATCH_TILES,
+} from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 
 export const layoutCommands: CommandDef[] = [
   {
@@ -57,6 +60,41 @@ export const layoutCommands: CommandDef[] = [
     description: '**What it does:** Opens a multi-lane **Dispatch** layout — the full agent index plus several live agent lanes side by side.\n\n**Use when:** You want to watch and drive multiple agents at once.\n\n**Notes:** Prompts for a tile count (1–10). The leftmost lane is the full index; every other lane has its own compact selector. Re-run to change the tile count (existing lane selections are preserved). Return to the normal grid with **Dispatch Mode**.',
     keywords: ['tiled dispatch', 'multi agent', 'lanes', 'split dispatch', 'cockpit', 'parallel agents', 'grid of agents'],
     run: ({ ui }) => ui.openTiledDispatchPrompt(),
+  },
+  {
+    id: 'new-tiled-lane',
+    category: 'layout-dispatch',
+    surface: 'dispatch',
+    title: 'New Lane',
+    description: '**What it does:** Inserts a new lane immediately to the **right of the focused lane** in Tiled Dispatch.\n\n**Use when:** You want another live agent view without reopening the tile-count prompt or disturbing the lanes around it.\n\n**Notes:** The current lane stays focused. The new lane shows the first visible agent not already represented, or an empty selector when every agent already has a lane.',
+    keywords: ['new lane', 'add lane', 'insert lane', 'tiled dispatch', 'expand', 'right'],
+    when: ({ workspace }) => {
+      const tiled = workspace.state.dispatchMode?.tiled
+      return Boolean(
+        tiled &&
+        tiled.lanes.length < MAX_DISPATCH_TILES &&
+        tiled.lanes[tiled.focusedLane],
+      )
+    },
+    run: ({ workspace }) => {
+      const tiled = workspace.state.dispatchMode?.tiled
+      if (!tiled || tiled.lanes.length >= MAX_DISPATCH_TILES) return
+      const laneIndex = tiled.focusedLane
+      const sourceLane = tiled.lanes[laneIndex]
+      if (!sourceLane) return
+      const sourceSessionId = sourceLane.selectedSessionId
+
+      workspace.insertTiledLaneRight(laneIndex)
+
+      // Pane toasts are SESSION-scoped, not lane-scoped. Reporting through the
+      // still-focused source session keeps feedback at the command's point of
+      // origin and avoids pretending an empty inserted lane has a runtime that
+      // can own feedback. Mirrored copies may all show it by design because
+      // they share that same runtime.
+      if (sourceSessionId && workspace.state.sessions[sourceSessionId]) {
+        workspace.showPaneToast(sourceSessionId, 'New lane created')
+      }
+    },
   },
   {
     // WHY these two exist at all: Tiled Dispatch's size is a single count, and

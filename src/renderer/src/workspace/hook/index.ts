@@ -991,6 +991,7 @@ export function useWorkspace(
     exitTiledDispatch: dispatchActions.exitTiledDispatch,
     setTiledLaneSession: dispatchActions.setTiledLaneSession,
     setTiledLaneCount: dispatchActions.setTiledLaneCount,
+    insertTiledLaneRight: dispatchActions.insertTiledLaneRight,
     removeTiledLane: dispatchActions.removeTiledLane,
     setTiledFocusedLane: dispatchActions.setTiledFocusedLane,
     setTiledRatios: dispatchActions.setTiledRatios,

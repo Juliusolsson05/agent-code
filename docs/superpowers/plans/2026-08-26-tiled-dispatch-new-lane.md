@@ -43,4 +43,3 @@ any session.
 - Run command-catalog governance tests.
 - Run `npm run typecheck` and `npm run check:keybindings`.
 - Run the full test suite before opening the PR.
-
