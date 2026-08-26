@@ -40,9 +40,9 @@ export type CodexReplacementReclaim<TRecoveryClaim> = {
   successorSessionId: string
   kind: SessionKind
   cwd: string
-  recoveryToken: string
+  recoveryTokens: Set<string>
   cancelled: boolean
-  compensationClaim: TRecoveryClaim | null
+  restorationClaim: TRecoveryClaim | null
   promise: Promise<SessionRecoverResult>
 }
 
@@ -163,7 +163,6 @@ export class CodexReplacementLedger<TRecoveryClaim> {
       this.retargetRedirect(
         redirect,
         reservation.successorOwnership,
-        reservation.restoreOptions,
       )
     }
     this.setRedirect({
@@ -210,7 +209,6 @@ export class CodexReplacementLedger<TRecoveryClaim> {
   retargetRedirect(
     redirect: CodexReplacementRedirect,
     successorOwnership: SessionOwnershipOptions,
-    restoreOptions: SessionSpawnOptions,
   ): void {
     if (
       this.redirectsByPredecessor.get(redirect.predecessorSessionId) !== redirect
@@ -220,7 +218,11 @@ export class CodexReplacementLedger<TRecoveryClaim> {
     this.removeSuccessorRedirect(redirect)
     redirect.successorSessionId = successorOwnership.sessionId
     redirect.successorOwnership = successorOwnership
-    redirect.restoreOptions = restoreOptions
+    // WHY restoreOptions are deliberately not retargeted: a flattened P→T and
+    // S→T lineage shares its current physical owner, but P and S can have
+    // different durable cwd/launch contexts. Those options belong to the stale
+    // predecessor identity whose ownership proof will admit reclaim. Copying
+    // S→T's context into P→T can restore P in the wrong project after reload.
     this.addSuccessorRedirect(redirect)
   }
 

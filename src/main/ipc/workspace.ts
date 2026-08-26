@@ -23,6 +23,15 @@ export function registerWorkspaceIpc(manager: SessionManager): void {
   let saveTail: Promise<void> = Promise.resolve()
 
   ipcMain.handle('workspace:load', async () => {
+    // WHY reads join the same tail even though they do not mutate the file: an
+    // unload save can be admitted before the replacement renderer asks to load
+    // but still be blocked before rename. Reading around that admitted save
+    // lets the new renderer reclaim old predecessor bytes just before the old
+    // renderer durably writes/acknowledges the now-killed successor. Atomic
+    // rename prevents corrupt bytes; this ordering prevents a valid-but-stale
+    // ownership snapshot. saveTail absorbs failures, so a rejected save delays
+    // the read until settlement without changing workspace:load's error shape.
+    await saveTail
     try {
       const text = await readFile(STATE_FILE, 'utf8')
       return text

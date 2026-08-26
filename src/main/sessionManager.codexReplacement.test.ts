@@ -343,6 +343,56 @@ describe('SessionManager Codex replacement handoff', () => {
     expect(manager.list()).toEqual([])
   })
 
+  it('does not fall back to ordinary spawn after close wins a negative path proof', async () => {
+    const pathLookup = deferred<string | null>()
+    const order: string[] = []
+    const predecessorStopped = { value: false }
+    const predecessor = new LeaseAwareCodexSession(
+      'predecessor', order, predecessorStopped, false,
+    )
+    const successor = new LeaseAwareCodexSession(
+      'successor', order, predecessorStopped, false,
+    )
+    createSession
+      .mockImplementationOnce(() => predecessor)
+      .mockImplementationOnce(() => successor)
+    resolveTranscriptPath.mockReturnValue(pathLookup.promise)
+
+    const { SessionManager } = await import('./sessionManager')
+    const manager = new SessionManager()
+    const first = await manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+    })
+    predecessor.emit('jsonl-entry', {}, '/recorded/codex/rollout-a.jsonl')
+
+    const replacement = manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-for-rollout-b',
+      predecessorSessionId: first.sessionId,
+    })
+    await vi.waitFor(() => expect(resolveTranscriptPath).toHaveBeenCalledTimes(1))
+    await expect(manager.killOwned({
+      sessionId: first.sessionId,
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+    })).resolves.toBe(true)
+    pathLookup.resolve('/recorded/codex/rollout-b.jsonl')
+
+    const outcome = await replacement.then(
+      value => value,
+      error => error,
+    )
+    const liveAfterLookup = manager.list()
+    await manager.killAll()
+
+    expect(outcome).toBeInstanceOf(Error)
+    expect(successor.start).not.toHaveBeenCalled()
+    expect(createSession).toHaveBeenCalledTimes(1)
+    expect(liveAfterLookup).toEqual([])
+  })
+
   it('does not let an unrelated predecessor id bypass the exact lease', async () => {
     const order: string[] = []
     const predecessorStopped = { value: false }
@@ -1227,6 +1277,78 @@ describe('SessionManager Codex replacement handoff', () => {
     expect(manager.list()).toEqual([first.sessionId])
   })
 
+  it('preserves each stale alias cwd while flattening a replacement chain', async () => {
+    const order: string[] = []
+    const predecessorStopped = { value: false }
+    const predecessor = new LeaseAwareCodexSession(
+      'predecessor', order, predecessorStopped, false,
+    )
+    const firstSuccessor = new LeaseAwareCodexSession(
+      'successor', order, predecessorStopped, true,
+    )
+    const currentSuccessor = new LeaseAwareCodexSession(
+      'successor', order, predecessorStopped, true,
+    )
+    const restoredOldest = new LeaseAwareCodexSession(
+      'restored', order, predecessorStopped, true,
+    )
+    createSession
+      .mockImplementationOnce(() => predecessor)
+      .mockImplementationOnce(options => installBoundaryFromCreateOptions(firstSuccessor, options))
+      .mockImplementationOnce(options => installBoundaryFromCreateOptions(currentSuccessor, options))
+      .mockImplementationOnce(() => restoredOldest)
+
+    const { SessionManager } = await import('./sessionManager')
+    const manager = new SessionManager()
+    const first = await manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/old-worktree',
+      resumeSessionId: 'provider-a',
+    })
+    const second = await manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/new-worktree',
+      resumeSessionId: 'provider-a',
+      predecessorSessionId: first.sessionId,
+    })
+    manager.acknowledgePersistedSessionOwnership(new Set([second.sessionId]))
+    const third = await manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/new-worktree',
+      resumeSessionId: 'provider-a',
+      predecessorSessionId: second.sessionId,
+    })
+    manager.acknowledgePersistedSessionOwnership(new Set([third.sessionId]))
+
+    const reclaimed = await manager.recover({
+      sessionId: first.sessionId,
+      kind: 'codex',
+      cwd: '/recorded/old-worktree',
+      resumeSessionId: 'provider-a',
+      recoveryToken: 'old-cwd-alias-reclaim',
+      reclaimPendingReplacement: true,
+    })
+    const restoredCreateOptions = createSession.mock.calls.at(-1)?.[0] as
+      | SessionSpawnOptions
+      | undefined
+    const closeWithDurableOwnership = await manager.killOwned({
+      sessionId: first.sessionId,
+      kind: 'codex',
+      cwd: '/recorded/old-worktree',
+    })
+    if (!closeWithDurableOwnership) await manager.killAll()
+
+    expect(reclaimed).toMatchObject({
+      ok: true,
+      snapshot: {
+        sessionId: first.sessionId,
+        cwd: '/recorded/old-worktree',
+      },
+    })
+    expect(restoredCreateOptions?.cwd).toBe('/recorded/old-worktree')
+    expect(closeWithDurableOwnership).toBe(true)
+  })
+
   it('single-flights concurrent reclaims through flattened predecessor aliases', async () => {
     const order: string[] = []
     const predecessorStopped = { value: false }
@@ -1534,6 +1656,171 @@ describe('SessionManager Codex replacement handoff', () => {
     expect(manager.list()).toEqual([])
   })
 
+  it('follows successor close into an active predecessor restoration', async () => {
+    const restoredStartGate = deferred<void>()
+    const order: string[] = []
+    const predecessorStopped = { value: false }
+    const predecessor = new LeaseAwareCodexSession(
+      'predecessor', order, predecessorStopped, false,
+    )
+    const successor = new LeaseAwareCodexSession(
+      'successor', order, predecessorStopped, true,
+    )
+    const restored = new LeaseAwareCodexSession(
+      'restored', order, predecessorStopped, true,
+    )
+    restored.blockStartOn(restoredStartGate.promise)
+    restored.stop.mockImplementationOnce(async () => restoredStartGate.resolve())
+    createSession
+      .mockImplementationOnce(() => predecessor)
+      .mockImplementationOnce(options => installBoundaryFromCreateOptions(successor, options))
+      .mockImplementationOnce(() => restored)
+
+    const { SessionManager } = await import('./sessionManager')
+    const manager = new SessionManager()
+    const first = await manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+    })
+    const replacement = await manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+      predecessorSessionId: first.sessionId,
+    })
+    manager.acknowledgePersistedSessionOwnership(new Set([replacement.sessionId]))
+    const reclaim = manager.recover({
+      sessionId: first.sessionId,
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+      recoveryToken: 'successor-close-during-restore',
+      reclaimPendingReplacement: true,
+    })
+    await vi.waitFor(() => expect(restored.start).toHaveBeenCalledTimes(1))
+
+    const closing = manager.killOwned({
+      sessionId: replacement.sessionId,
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+    })
+    let closeStoppedRestoration = true
+    try {
+      await vi.waitFor(
+        () => expect(restored.stop).toHaveBeenCalled(),
+        { timeout: 250 },
+      )
+    } catch {
+      closeStoppedRestoration = false
+      restoredStartGate.resolve()
+    }
+    await expect(closing).resolves.toBe(true)
+    await expect(reclaim).resolves.toMatchObject({ ok: false, code: 'cancelled' })
+    const ownersAfterClose = manager.list()
+    await manager.killAll()
+
+    expect(closeStoppedRestoration).toBe(true)
+    expect(ownersAfterClose).toEqual([])
+  })
+
+  it('follows flattened alias close into the winning predecessor restoration', async () => {
+    const restoredStartGate = deferred<void>()
+    const order: string[] = []
+    const predecessorStopped = { value: false }
+    const predecessor = new LeaseAwareCodexSession(
+      'predecessor', order, predecessorStopped, false,
+    )
+    const firstSuccessor = new LeaseAwareCodexSession(
+      'successor', order, predecessorStopped, true,
+    )
+    const currentSuccessor = new LeaseAwareCodexSession(
+      'successor', order, predecessorStopped, true,
+    )
+    const restoredOldest = new LeaseAwareCodexSession(
+      'restored', order, predecessorStopped, true,
+    )
+    restoredOldest.blockStartOn(restoredStartGate.promise)
+    restoredOldest.stop.mockImplementationOnce(async () => restoredStartGate.resolve())
+    createSession
+      .mockImplementationOnce(() => predecessor)
+      .mockImplementationOnce(options => installBoundaryFromCreateOptions(firstSuccessor, options))
+      .mockImplementationOnce(options => installBoundaryFromCreateOptions(currentSuccessor, options))
+      .mockImplementationOnce(() => restoredOldest)
+
+    const { SessionManager } = await import('./sessionManager')
+    const manager = new SessionManager()
+    const first = await manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+    })
+    const second = await manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+      predecessorSessionId: first.sessionId,
+    })
+    manager.acknowledgePersistedSessionOwnership(new Set([second.sessionId]))
+    const third = await manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+      predecessorSessionId: second.sessionId,
+    })
+    manager.acknowledgePersistedSessionOwnership(new Set([third.sessionId]))
+    const reclaim = manager.recover({
+      sessionId: first.sessionId,
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+      recoveryToken: 'winning-oldest-alias',
+      reclaimPendingReplacement: true,
+    })
+    await vi.waitFor(() => expect(restoredOldest.start).toHaveBeenCalledTimes(1))
+
+    const closing = manager.killOwned({
+      sessionId: second.sessionId,
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+    })
+    let aliasCloseStoppedRestoration = true
+    try {
+      await vi.waitFor(
+        () => expect(restoredOldest.stop).toHaveBeenCalled(),
+        { timeout: 250 },
+      )
+    } catch {
+      aliasCloseStoppedRestoration = false
+      restoredStartGate.resolve()
+    }
+    await expect(closing).resolves.toBe(true)
+    await expect(reclaim).resolves.toMatchObject({ ok: false, code: 'cancelled' })
+    const oldestRetry = await manager.recover({
+      sessionId: first.sessionId,
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+      recoveryToken: 'oldest-after-alias-close',
+      reclaimPendingReplacement: true,
+    })
+    const middleRetry = await manager.recover({
+      sessionId: second.sessionId,
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+      recoveryToken: 'middle-after-alias-close',
+      reclaimPendingReplacement: true,
+    })
+    const ownersAfterClose = manager.list()
+    await manager.killAll()
+
+    expect(aliasCloseStoppedRestoration).toBe(true)
+    expect(oldestRetry).toMatchObject({ ok: false, code: 'cancelled' })
+    expect(middleRetry).toMatchObject({ ok: false, code: 'cancelled' })
+    expect(ownersAfterClose).toEqual([])
+  })
+
   it('cancels a pending replacement reclaim by its exact recovery token', async () => {
     const successorStartGate = deferred<void>()
     const order: string[] = []
@@ -1619,6 +1906,78 @@ describe('SessionManager Codex replacement handoff', () => {
     expect(manager.list()).toEqual([])
   })
 
+  it('lets a reloaded renderer cancel the pending reclaim it joined', async () => {
+    const successorStartGate = deferred<void>()
+    const order: string[] = []
+    const predecessorStopped = { value: false }
+    const predecessor = new LeaseAwareCodexSession(
+      'predecessor', order, predecessorStopped, false,
+    )
+    const successor = new LeaseAwareCodexSession(
+      'successor', order, predecessorStopped, true,
+    )
+    successor.blockStartOn(successorStartGate.promise)
+    successor.stop.mockImplementationOnce(async () => successorStartGate.resolve())
+    createSession
+      .mockImplementationOnce(() => predecessor)
+      .mockImplementationOnce(options => installBoundaryFromCreateOptions(successor, options))
+
+    const { SessionManager } = await import('./sessionManager')
+    const manager = new SessionManager()
+    const first = await manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+    })
+    const replacement = manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+      predecessorSessionId: first.sessionId,
+    })
+    const observedReplacement = replacement.catch(error => error)
+    await vi.waitFor(() => expect(successor.start).toHaveBeenCalledTimes(1))
+
+    const reclaimOptions = {
+      sessionId: first.sessionId,
+      kind: 'codex' as const,
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+      reclaimPendingReplacement: true,
+    }
+    const firstReclaim = manager.recover({
+      ...reclaimOptions,
+      recoveryToken: 'pending-before-reload',
+    })
+    const joinedReclaim = manager.recover({
+      ...reclaimOptions,
+      recoveryToken: 'pending-after-reload',
+    })
+    const joinedCancellation = await manager.cancelRecovery({
+      sessionId: first.sessionId,
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      recoveryToken: 'pending-after-reload',
+    })
+    if (!joinedCancellation) {
+      await manager.cancelRecovery({
+        sessionId: first.sessionId,
+        kind: 'codex',
+        cwd: '/recorded/worktree',
+        recoveryToken: 'pending-before-reload',
+      })
+    }
+
+    await expect(observedReplacement).resolves.toBeInstanceOf(Error)
+    await expect(Promise.all([firstReclaim, joinedReclaim])).resolves.toEqual([
+      expect.objectContaining({ ok: false, code: 'cancelled' }),
+      expect.objectContaining({ ok: false, code: 'cancelled' }),
+    ])
+    expect(joinedCancellation).toBe(true)
+    expect(successor.stop).toHaveBeenCalled()
+    expect(manager.list()).toEqual([])
+  })
+
   it('cancels only the compensation claim caused by a timed-out reclaim', async () => {
     const successorFailureGate = deferred<void>()
     const compensationPreflight = deferred<void>()
@@ -1688,6 +2047,82 @@ describe('SessionManager Codex replacement handoff', () => {
     expect(createSession).toHaveBeenCalledTimes(2)
     expect(restored.start).not.toHaveBeenCalled()
     expect(manager.list()).toEqual([])
+  })
+
+  it('follows successor close into pending-handoff compensation', async () => {
+    const successorFailureGate = deferred<void>()
+    const restoredStartGate = deferred<void>()
+    const order: string[] = []
+    const predecessorStopped = { value: false }
+    const predecessor = new LeaseAwareCodexSession(
+      'predecessor', order, predecessorStopped, false,
+    )
+    const successor = new LeaseAwareCodexSession(
+      'successor', order, predecessorStopped, true,
+    )
+    const restored = new LeaseAwareCodexSession(
+      'restored', order, predecessorStopped, true,
+    )
+    successor.blockStartOn(successorFailureGate.promise)
+    successor.failStartWith(new Error('recorded successor start failure'))
+    restored.blockStartOn(restoredStartGate.promise)
+    restored.stop.mockImplementationOnce(async () => restoredStartGate.resolve())
+    createSession
+      .mockImplementationOnce(() => predecessor)
+      .mockImplementationOnce(options => installBoundaryFromCreateOptions(successor, options))
+      .mockImplementationOnce(() => restored)
+
+    const { SessionManager } = await import('./sessionManager')
+    const manager = new SessionManager()
+    const first = await manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+    })
+    const replacement = manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+      predecessorSessionId: first.sessionId,
+    })
+    const observedReplacement = replacement.catch(error => error)
+    await vi.waitFor(() => expect(successor.start).toHaveBeenCalledTimes(1))
+    const hiddenSuccessorId = manager.list().find(id => id !== first.sessionId)
+    expect(hiddenSuccessorId).toBeTypeOf('string')
+    const reclaim = manager.recover({
+      sessionId: first.sessionId,
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+      recoveryToken: 'pending-compensation-successor-close',
+      reclaimPendingReplacement: true,
+    })
+    successorFailureGate.resolve()
+    await vi.waitFor(() => expect(restored.start).toHaveBeenCalledTimes(1))
+
+    const closing = manager.killOwned({
+      sessionId: hiddenSuccessorId!,
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+    })
+    let closeStoppedCompensation = true
+    try {
+      await vi.waitFor(
+        () => expect(restored.stop).toHaveBeenCalled(),
+        { timeout: 250 },
+      )
+    } catch {
+      closeStoppedCompensation = false
+      restoredStartGate.resolve()
+    }
+    await expect(closing).resolves.toBe(true)
+    await expect(observedReplacement).resolves.toBeInstanceOf(Error)
+    await expect(reclaim).resolves.toMatchObject({ ok: false, code: 'cancelled' })
+    const ownersAfterClose = manager.list()
+    await manager.killAll()
+
+    expect(closeStoppedCompensation).toBe(true)
+    expect(ownersAfterClose).toEqual([])
   })
 
   it('joins and cancels redirect reclaim during global shutdown', async () => {
@@ -1825,6 +2260,80 @@ describe('SessionManager Codex replacement handoff', () => {
     })
     expect(restored.start).toHaveBeenCalledTimes(1)
     expect(manager.list()).toEqual([first.sessionId])
+  })
+
+  it('lets a reloaded renderer cancel the committed redirect reclaim it joined', async () => {
+    const successorStopGate = deferred<void>()
+    const order: string[] = []
+    const predecessorStopped = { value: false }
+    const predecessor = new LeaseAwareCodexSession(
+      'predecessor', order, predecessorStopped, false,
+    )
+    const successor = new LeaseAwareCodexSession(
+      'successor', order, predecessorStopped, true, successorStopGate.promise,
+    )
+    const restored = new LeaseAwareCodexSession(
+      'restored', order, predecessorStopped, true,
+    )
+    createSession
+      .mockImplementationOnce(() => predecessor)
+      .mockImplementationOnce(options => installBoundaryFromCreateOptions(successor, options))
+      .mockImplementationOnce(() => restored)
+
+    const { SessionManager } = await import('./sessionManager')
+    const manager = new SessionManager()
+    const first = await manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+    })
+    const replacement = await manager.spawn({
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+      predecessorSessionId: first.sessionId,
+    })
+    manager.acknowledgePersistedSessionOwnership(new Set([replacement.sessionId]))
+    const reclaimOptions = {
+      sessionId: first.sessionId,
+      kind: 'codex' as const,
+      cwd: '/recorded/worktree',
+      resumeSessionId: 'provider-a',
+      reclaimPendingReplacement: true,
+    }
+    const firstReclaim = manager.recover({
+      ...reclaimOptions,
+      recoveryToken: 'redirect-before-reload',
+    })
+    await vi.waitFor(() => expect(successor.stop).toHaveBeenCalledTimes(1))
+    const joinedReclaim = manager.recover({
+      ...reclaimOptions,
+      recoveryToken: 'redirect-after-reload',
+    })
+
+    const joinedCancellation = await manager.cancelRecovery({
+      sessionId: first.sessionId,
+      kind: 'codex',
+      cwd: '/recorded/worktree',
+      recoveryToken: 'redirect-after-reload',
+    })
+    if (!joinedCancellation) {
+      await manager.cancelRecovery({
+        sessionId: first.sessionId,
+        kind: 'codex',
+        cwd: '/recorded/worktree',
+        recoveryToken: 'redirect-before-reload',
+      })
+    }
+    successorStopGate.resolve()
+
+    await expect(Promise.all([firstReclaim, joinedReclaim])).resolves.toEqual([
+      expect.objectContaining({ ok: false, code: 'cancelled' }),
+      expect.objectContaining({ ok: false, code: 'cancelled' }),
+    ])
+    expect(joinedCancellation).toBe(true)
+    expect(restored.start).not.toHaveBeenCalled()
+    expect(manager.list()).toEqual([])
   })
 
   it('fences reverse successor recovery while explicit close is stopping it', async () => {

@@ -7,7 +7,13 @@
 > 75-test SessionManager cluster, typecheck, system 61/61, renderer 289/289,
 > contracts, keybindings, live-resume probe, and packaged-build verification are
 > green. Full unit is 1,556/1,557 with only the known missing external corpus
-> session. Stage 4 exact-head re-review, CI, and live verification remain.
+> session. The seventh exact-head review's five additional reachable ordering
+> failures are now implemented through contracts 29–33. Their nine red-first
+> schedules are green; the affected main cluster is 90/90, typecheck, system
+> 61/61, renderer 289/289, contracts, keybindings, live-resume probe, and
+> packaged-build verification are green. Full unit is 1,565/1,566 with only the
+> same missing external corpus session. Stage 4 exact-head re-review, new-head
+> CI, and live verification remain.
 >
 > **Incident:** Agent Code issue #638. Related fresh-rollout incident: #632.
 
@@ -120,6 +126,28 @@
     converts the still-addressable redirect to a tombstone; timeout or a
     retryable start failure retains it for a later token instead of deleting the
     only anti-resurrection evidence before the risky await.
+29. Explicit close follows an active replacement reclaim to the backend it is
+    currently restoring, regardless of whether close arrived through the
+    successor or any flattened alias. It cancels and stops that predecessor-
+    keyed recovery generation before returning; a successful close may never
+    leave an unreachable restored backend holding the rollout lease.
+30. Cancellation during formerly-fresh transcript proof is terminal for the
+    replacement request whether the eventual proof matches or not. A match
+    first publishes the verified closed-lineage material; a non-match releases
+    the unproven reservation, but neither result may fall through and start a
+    successor after the predecessor pane was closed.
+31. A workspace load admitted after a save waits for that save's complete
+    write, rename, and ownership acknowledgement. Renderer reload cannot read
+    older predecessor bytes while an already-admitted unload save is about to
+    make successor ownership durable.
+32. Every renderer token that joins an existing physical recovery or reclaim
+    generation becomes cancellation authority for that generation only. A
+    post-reload token can retire work whose original renderer and deadline no
+    longer exist, while a delayed token cannot cross into a later generation.
+33. Flattening changes only an alias's current physical successor identity.
+    Each stale predecessor redirect retains its own captured restoration
+    options, including cwd, so reclaim restores that durable ID in the project
+    context its ownership proof validated.
 
 ## 2. Intermediate stages
 
@@ -260,6 +288,18 @@ cancelled while provider startup is pending. This keeps the ledger as the
 visible ownership record across the same pre-entry/start awaits that previously
 required cancellable compensation claims.
 
+The seventh exact-head review keeps these responsibilities in the same two
+substrates and rejects five partial call-site fixes. The ledger's active reclaim
+is the source of truth for the predecessor-keyed backend currently being
+restored, so close through any lineage identity must cancel that claim. Recovery
+and reclaim generations carry a set of admitted renderer tokens rather than one
+request's token. Workspace load joins the same persistence tail as saves. Path
+proof treats cancellation as terminal after recording only evidence that was
+actually proven. Redirect retargeting updates successor identity without
+overwriting predecessor-specific restoration context. These are ownership,
+generation, persistence, evidence, and alias-context invariants respectively;
+none belongs in renderer timing or provider-specific exceptions.
+
 This is separate from the async manager logic because the fifth review found
 the same missing-identity failure in recovery, close, and transaction cleanup.
 Adding three more scans/conditionals would preserve the substrate that produced
@@ -311,6 +351,12 @@ cancellable lifetime before ordinary recovery publication. Exact-head review
 must restart after these artifacts land. The fifth additionally proved that a
 token-addressable reclaim without active teardown, compensation association,
 bidirectional identity, and retry classification is only partially cancellable.
+The sixth and seventh reviews extend the same evidence: flattened aliases need
+role-specific ownership and restoration context, close must follow the active
+physical generation, proof cancellation cannot fall back to ordinary spawn,
+loads must share persistence ordering, and joined renderer generations need
+bounded cancellation authority. Every new implementation invalidates the prior
+exact-head approval and requires another two-agent review.
 
 ## 3. Isolation boundary
 
@@ -384,6 +430,21 @@ receives no pane IDs and gains no replacement exception.
 - **Resolved by fifth-review Stage 2 design:** close is permanent for the current
   main-process lifetime, whereas deadline timeout is retryable. They are named
   cancellation classes rather than inferred later from a shared boolean.
+- **Resolved by seventh-review Stage 2 design:** close through a successor or
+  flattened alias addresses the active reclaim's predecessor-keyed recovery
+  claim, not only the registry ID supplied by the renderer.
+- **Resolved by seventh-review Stage 2 design:** a negative transcript proof
+  removes handoff authority but does not erase close intent for the in-flight
+  spawn request; cancellation still aborts ordinary-spawn fallback.
+- **Resolved by seventh-review Stage 2 design:** workspace load participates in
+  the save admission tail. Atomic rename protects file integrity, while tail
+  ordering protects which renderer generation the loaded bytes represent.
+- **Resolved by seventh-review Stage 2 design:** request tokens are join
+  capabilities for one already-published generation. Generation-owned token
+  sets preserve exact cancellation without making the first renderer immortal.
+- **Resolved by seventh-review Stage 2 design:** flattened redirects share a
+  physical successor but do not share predecessor restoration context. Cwd and
+  launch facts remain attached to the alias that originally captured them.
 - Predecessor stop can fail or become uncertain. The coordinator's tombstone
   must remain fail-closed; compensation may also fail in that state and needs a
   truthful lifecycle outcome rather than an unsafe lease exception.
@@ -479,3 +540,17 @@ wins while that start is gated, and two later stale recoveries remain
 cancelled. It is derived from the review's precommit-close invariant applied to
 the redirect-to-recovery boundary; deleting the redirect before the await made
 that boundary observably identical to the reviewed resurrection race.
+
+Seventh-review fixtures add five source-verified schedules from exact commit
+`a42c81a1`: (a) close the current successor, and separately a flattened losing
+alias, after a reclaim has published and gated restored-predecessor start; (b)
+close a formerly-fresh predecessor while transcript lookup is gated, then
+resolve a different path; (c) admit a workspace save, gate it before rename,
+then admit load and prove the read cannot overtake the save; (d) join a blocked
+ordinary recovery and both pending/redirect reclaim shapes with a second token,
+then cancel through that joined token; and (e) commit P(old cwd)→S(new cwd)→T,
+then reclaim P and assert both provider creation and returned ownership still
+use old cwd. Each fixture gates the precise promise boundary in the review
+report and asserts the externally dangerous result—live hidden backend, stale
+durable bytes, unkillable generation, or wrong-project restoration—rather than
+an internal map shape.

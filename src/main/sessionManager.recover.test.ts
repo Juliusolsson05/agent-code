@@ -209,6 +209,52 @@ describe('SessionManager recover', () => {
     expect(createSession).toHaveBeenCalledTimes(1)
   })
 
+  it('lets a reloaded renderer cancel the recovery generation it joined', async () => {
+    const { SessionManager } = await import('./sessionManager')
+    const startGate = deferred<void>()
+    const session = new BlockingAgentSession(startGate.promise)
+    session.stop.mockImplementationOnce(async () => startGate.resolve())
+    createSession.mockImplementationOnce(() => session)
+    const manager = new SessionManager()
+    const ownership = {
+      sessionId: 'joined-token-session',
+      kind: 'codex' as const,
+      cwd: '/tmp/project',
+    }
+
+    const first = manager.recover({
+      ...ownership,
+      recoveryToken: 'renderer-before-reload',
+    })
+    await vi.waitFor(() => expect(createSession).toHaveBeenCalledTimes(1))
+    const joined = manager.recover({
+      ...ownership,
+      recoveryToken: 'renderer-after-reload',
+    })
+
+    const joinedCancellation = await manager.cancelRecovery({
+      ...ownership,
+      recoveryToken: 'renderer-after-reload',
+    })
+    if (!joinedCancellation) {
+      // Keep the red fixture bounded on the reviewed head. Production must not
+      // need the vanished renderer's token; this fallback only releases the
+      // intentionally blocked fake so Vitest can report that contract failure.
+      await manager.cancelRecovery({
+        ...ownership,
+        recoveryToken: 'renderer-before-reload',
+      })
+    }
+
+    expect(joinedCancellation).toBe(true)
+    await expect(Promise.all([first, joined])).resolves.toEqual([
+      expect.objectContaining({ ok: false, code: 'cancelled' }),
+      expect.objectContaining({ ok: false, code: 'cancelled' }),
+    ])
+    expect(session.stop).toHaveBeenCalled()
+    expect(manager.list()).toEqual([])
+  })
+
   it('joins a re-entrant recovery initiated during provider construction', async () => {
     const { SessionManager } = await import('./sessionManager')
     const manager = new SessionManager()

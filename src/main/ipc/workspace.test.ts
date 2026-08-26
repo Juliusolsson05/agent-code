@@ -88,4 +88,45 @@ describe('workspace persistence ordering', () => {
       ['successor'],
     ])
   })
+
+  it('does not let reload read bytes older than an admitted save', async () => {
+    const writeGate = deferred()
+    const savedJson = JSON.stringify({
+      workspace: { sessions: { successor: {} } },
+    })
+    writeFile.mockImplementationOnce(async () => await writeGate.promise)
+    rename.mockResolvedValue(undefined)
+    readFile.mockResolvedValue(savedJson)
+
+    const { registerWorkspaceIpc } = await import('./workspace')
+    registerWorkspaceIpc({
+      acknowledgePersistedSessionOwnership: vi.fn(),
+    } as never)
+    const save = handle.mock.calls.find(([channel]) => channel === 'workspace:save')?.[1] as
+      | ((_event: unknown, json: string) => Promise<void>)
+      | undefined
+    const load = handle.mock.calls.find(([channel]) => channel === 'workspace:load')?.[1] as
+      | (() => Promise<string | null>)
+      | undefined
+    expect(save).toBeTypeOf('function')
+    expect(load).toBeTypeOf('function')
+
+    const saving = save?.({}, savedJson)
+    await vi.waitFor(() => expect(writeFile).toHaveBeenCalledTimes(1))
+    const loading = load?.()
+    await Promise.resolve()
+    await Promise.resolve()
+    const readsBeforeSaveSettles = readFile.mock.calls.length
+
+    writeGate.resolve()
+    await expect(saving).resolves.toBeUndefined()
+    await expect(loading).resolves.toBe(savedJson)
+
+    // A renderer created after unload-save admission must see that save or a
+    // later one. Reading the previous predecessor bytes here can start reclaim
+    // while the blocked rename is about to durably acknowledge the killed
+    // successor, leaving disk and main with opposite owners.
+    expect(readsBeforeSaveSettles).toBe(0)
+    expect(readFile).toHaveBeenCalledTimes(1)
+  })
 })
