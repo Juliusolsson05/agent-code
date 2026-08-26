@@ -73,6 +73,16 @@ export function AgentCodeConventionsEditorModal({
     setAbandonApprovals([])
   }, [open, snapshot])
 
+  useEffect(() => {
+    if (!open || !wasOpen.current || snapshot.revision <= base.revision) return
+    if (snapshot.markdown !== base.markdown || snapshot.enabled !== base.enabled) return
+    // A Custom Skills mutation advances the shared document revision without
+    // changing the conventions draft. Rebasing only that proven-equivalent
+    // base prevents a false conflict while still refusing to absorb a real
+    // conventions edit from another window.
+    setBase(snapshot)
+  }, [base.enabled, base.markdown, base.revision, open, snapshot])
+
   const counts = useMemo(() => ({
     lines: markdown.length === 0 ? 0 : markdown.split('\n').length,
     characters: [...markdown].length,

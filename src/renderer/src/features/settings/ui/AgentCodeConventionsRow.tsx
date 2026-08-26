@@ -1,6 +1,11 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { Button } from '@renderer/components/ui/button'
+import {
+  AGENT_CODE_MANAGED_SKILLS_CHANGED_EVENT,
+  announceAgentCodeManagedSkillsChange,
+  type AgentCodeManagedSkillsChange,
+} from '@renderer/features/settings/lib/agentCodeManagedSkillsEvents'
 import type {
   AgentCodeConventionsMutationResult,
   AgentCodeConventionsSnapshot,
@@ -34,12 +39,15 @@ export function AgentCodeConventionsRow() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [editorOpen, setEditorOpen] = useState(false)
+  const revisionRef = useRef(-1)
 
   const refresh = useCallback(async () => {
     setBusy(true)
     setError(null)
     try {
-      setSnapshot(await window.api.auditAgentCodeConventions())
+      const next = await window.api.auditAgentCodeConventions()
+      revisionRef.current = next.revision
+      setSnapshot(next)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Could not load conventions status.')
     } finally {
@@ -49,11 +57,30 @@ export function AgentCodeConventionsRow() {
 
   useEffect(() => { void refresh() }, [refresh])
 
+  useEffect(() => {
+    const onManagedSkillsChanged = (event: Event) => {
+      const change = (event as CustomEvent<AgentCodeManagedSkillsChange>).detail
+      if (!change || change.source === 'conventions' || change.revision <= revisionRef.current) return
+      void refresh()
+    }
+    window.addEventListener(AGENT_CODE_MANAGED_SKILLS_CHANGED_EVENT, onManagedSkillsChanged)
+    return () => window.removeEventListener(
+      AGENT_CODE_MANAGED_SKILLS_CHANGED_EVENT,
+      onManagedSkillsChanged,
+    )
+  }, [refresh])
+
+  const acceptSnapshot = useCallback((next: AgentCodeConventionsSnapshot) => {
+    revisionRef.current = next.revision
+    setSnapshot(next)
+    announceAgentCodeManagedSkillsChange({ source: 'conventions', revision: next.revision })
+  }, [])
+
   const applyResult = useCallback((result: AgentCodeConventionsMutationResult) => {
-    if ('snapshot' in result) setSnapshot(result.snapshot)
+    if ('snapshot' in result) acceptSnapshot(result.snapshot)
     setError(resultMessage(result) || null)
     return result.ok
-  }, [])
+  }, [acceptSnapshot])
 
   const toggle = useCallback(async () => {
     if (!snapshot || busy) return
@@ -163,7 +190,7 @@ export function AgentCodeConventionsRow() {
               type="button"
               className="border border-danger px-2 py-1"
               onClick={() => {
-                if (!window.confirm('Reset unreadable conventions state? The preserved state file will be removed, and any existing provider copies will be left untouched.')) return
+                if (!window.confirm('Reset all unreadable Agent Code-managed skill state? The shared state file will be removed, and any existing provider copies will be left untouched.')) return
                 void window.api.resetAgentCodeConventionsRecovery().then(applyResult)
               }}
             >
@@ -180,7 +207,7 @@ export function AgentCodeConventionsRow() {
         snapshot={snapshot}
         onOpenChange={setEditorOpen}
         onSnapshot={next => {
-          setSnapshot(next)
+          acceptSnapshot(next)
           setError(null)
         }}
       />

@@ -38,6 +38,11 @@ export function journalTemporaryPath(filePath: string, operationId: string): str
   return join(dirname(filePath), `.${basename(filePath)}.agent-code-conventions-${operationKey}.tmp`)
 }
 
+export function journalCaptureDirectory(filePath: string, operationId: string): string {
+  const operationKey = sha256Text(operationId).slice(0, 32)
+  return join(dirname(filePath), `.${basename(filePath)}.agent-code-conventions-${operationKey}.capture`)
+}
+
 /**
  * Owns the filesystem trust boundary for generated personal-skill paths.
  *
@@ -126,20 +131,13 @@ export class SkillPathSafety {
     }
   }
 
-  async cleanupJournaledTemporaryFile(path: string): Promise<void> {
+  async journaledPathExists(path: string): Promise<boolean> {
     await this.assertNoSymlinkComponents(dirname(path))
     const stat = await lstat(path).catch(error => {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
       throw error
     })
-    if (!stat) return
-    if (stat.isSymbolicLink() || !stat.isFile()) {
-      throw new Error('Journaled temporary path is not a regular file')
-    }
-    // The pending operation authorizes this exact, operation-derived sibling.
-    // It is intentionally the only sidecar we ever clean; directory scans and
-    // marker bytes are not ownership evidence.
-    await unlink(path)
+    return stat !== null
   }
 
   async recoverJournaledDelete(

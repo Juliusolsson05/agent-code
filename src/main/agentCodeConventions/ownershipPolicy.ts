@@ -22,6 +22,7 @@ export class AgentCodeConventionsOwnershipPolicy {
   ): void {
     const currentTargets = new Map(targets.targets.map(target => [target.id, target]))
     for (const [key, record] of Object.entries(document.materializations)) {
+      if (record.skillId) continue
       if (key.startsWith(RETIRED_CONVENTIONS_TARGET_PREFIX)) continue
       const target = currentTargets.get(key)
       if (target && resolve(record.path) === resolve(target.skillFile)) continue
@@ -35,6 +36,7 @@ export class AgentCodeConventionsOwnershipPolicy {
       }
     }
     for (const [key, pending] of Object.entries(document.pendingOperations)) {
+      if (pending.skillId) continue
       if (key.startsWith(RETIRED_CONVENTIONS_TARGET_PREFIX) || document.materializations[key]) {
         continue
       }
@@ -82,11 +84,13 @@ export class AgentCodeConventionsOwnershipPolicy {
     const currentTargetIds = new Set(currentTargets.keys())
 
     for (const [key, record] of Object.entries(document.materializations)) {
+      if (record.skillId) continue
       if (!this.isRecognizedPersistedPath(key, record.path, currentPaths, currentTargetIds)) {
         return `materialization ${key} points outside an allowed skill path.`
       }
     }
     for (const [key, operation] of Object.entries(document.pendingOperations)) {
+      if (operation.skillId) continue
       if (operation.targetId !== key) return `pending operation ${key} has a mismatched target id.`
       if (!this.isRecognizedPersistedPath(key, operation.path, currentPaths, currentTargetIds)) {
         return `pending operation ${key} points outside an allowed skill path.`

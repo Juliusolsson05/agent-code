@@ -60,7 +60,7 @@ describe('SkillPathSafety', () => {
     expect((await stat(target.skillDirectory)).isDirectory()).toBe(true)
   })
 
-  it('cleans only the exact operation-derived temporary sibling', async () => {
+  it('detects an operation-derived temporary sibling without claiming its bytes', async () => {
     const { target, safety } = await fixture()
     await safety.ensureTargetDirectory(target)
     const journaled = journalTemporaryPath(target.skillFile, '../operation/with/separators')
@@ -68,9 +68,9 @@ describe('SkillPathSafety', () => {
     await writeFile(journaled, 'partial')
     await writeFile(unrelated, 'preserve')
 
-    await safety.cleanupJournaledTemporaryFile(journaled)
+    await expect(safety.journaledPathExists(journaled)).resolves.toBe(true)
 
-    await expect(stat(journaled)).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(journaled, 'utf8')).resolves.toBe('partial')
     await expect(readFile(unrelated, 'utf8')).resolves.toBe('preserve')
   })
 
