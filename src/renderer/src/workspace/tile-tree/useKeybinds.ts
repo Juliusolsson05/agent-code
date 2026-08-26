@@ -235,6 +235,31 @@ function routedCommandForEvent(
  *  See the exemption in the handler for why this is not the live context set. */
 const GLOBAL_CONTEXT_ONLY: ReadonlySet<BindingContext> = new Set<BindingContext>(['global'])
 
+/** Spotlight renders a real TileLeaf, so its visible feed retains feed-scoped
+ *  commands even though the hidden Grid/Dispatch layout does not. */
+const GLOBAL_AND_FEED_CONTEXTS: ReadonlySet<BindingContext> = new Set<BindingContext>([
+  'global',
+  'feed',
+])
+
+// WHY these are explicit fail-closed ownership lists instead of every command
+// in the admitted contexts: `global` includes tab, pane, split, and layout
+// mutations whose targets remain hidden behind a focus takeover. Reader has no
+// interactive TileLeaf, so only its dismissal and the Command Palette entry
+// point belong to its visible surface. Spotlight does render a TileLeaf; Tail
+// and Jump Latest therefore act on content the user can actually see. A future
+// command must make the same visible-owner case before crossing this boundary.
+const READER_FOCUS_MODE_COMMAND_IDS: ReadonlySet<string> = new Set([
+  'toggle-reader-mode',
+  'open-command-palette',
+])
+const SPOTLIGHT_FOCUS_MODE_COMMAND_IDS: ReadonlySet<string> = new Set([
+  'toggle-spotlight',
+  'open-command-palette',
+  'toggle-tail',
+  'jump-latest-message',
+])
+
 /** Chord -> candidate commands, built once per override change. */
 function buildBindingIndex(
   overrides: Record<string, string[]>,
@@ -588,22 +613,29 @@ export function useKeybinds(
       // This router instead declines ownership structurally, while leaving the
       // event propagating so Reader's own older/newer handler can consume it.
       //
-      // The one admitted command is the toggle that owns the visible takeover.
-      // That preserves the second-press dismissal contract without reopening
-      // arbitrary global shortcuts against the hidden workspace. Escape is
-      // handled immediately above for the same reason.
-      const focusModeOwnerCommandId = workspace.readerMode
-        ? 'toggle-reader-mode'
+      // Admission is intentionally narrower than context matching. Reader
+      // keeps its palette entry point because Reply to Selection is designed
+      // to be invoked from that palette. Spotlight additionally keeps the
+      // session/feed commands owned by its mounted TileLeaf. Everything else
+      // still returns before hidden layout grammars. Escape is handled above.
+      const focusModeCommandIds = workspace.readerMode
+        ? READER_FOCUS_MODE_COMMAND_IDS
         : workspace.spotlight
-          ? 'toggle-spotlight'
+          ? SPOTLIGHT_FOCUS_MODE_COMMAND_IDS
           : null
-      if (focusModeOwnerCommandId) {
+      if (focusModeCommandIds) {
+        const focusModeContexts = workspace.spotlight
+          && focusedSessionId
+          && renderedAgentSurfaceIsVisible(workspace, agentViewMode, focusedSessionId)
+          && !isTextEditingTarget(e.target)
+          ? GLOBAL_AND_FEED_CONTEXTS
+          : GLOBAL_CONTEXT_ONLY
         const focusModeCommandId = routedCommandForEvent(
           e,
           bindingIndex,
-          GLOBAL_CONTEXT_ONLY,
+          focusModeContexts,
         )
-        if (focusModeCommandId === focusModeOwnerCommandId) {
+        if (focusModeCommandId && focusModeCommandIds.has(focusModeCommandId)) {
           e.preventDefault()
           requestCommandInvocation(focusModeCommandId, 'keybinding')
           return

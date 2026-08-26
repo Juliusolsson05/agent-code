@@ -27,7 +27,7 @@ vi.mock('@renderer/features/global-editor/store', () => ({
 
 function KeyboardHarness({ workspace }: { workspace: Workspace }): ReactElement | null {
   useKeybinds(workspace)
-  return null
+  return <div data-testid="visible-focus-surface" tabIndex={-1} />
 }
 
 function makeWorkspace(
@@ -178,6 +178,80 @@ describe('focus-mode keyboard ownership', () => {
     view.rerender(<KeyboardHarness workspace={grid.workspace} />)
     pressOptionArrow('ArrowUp')
     expect(harness.appState.requestCommandInvocation).not.toHaveBeenCalled()
+  })
+
+  it('keeps the Command Palette reachable from Reader, including through an override', () => {
+    const reader = makeWorkspace('reader', 'dispatch')
+    const view = render(<KeyboardHarness workspace={reader.workspace} />)
+
+    fireEvent.keyDown(document, {
+      metaKey: true,
+      shiftKey: true,
+      code: 'KeyP',
+      key: 'P',
+    })
+    expect(harness.appState.requestCommandInvocation).toHaveBeenCalledWith(
+      'open-command-palette',
+      'keybinding',
+    )
+
+    view.unmount()
+    const overriddenInvocation = vi.fn()
+    harness.appState = {
+      ...harness.appState,
+      requestCommandInvocation: overriddenInvocation,
+      settings: {
+        agentViewMode: 'agent',
+        commandKeybindingOverrides: {
+          'open-command-palette': ['Cmd+Alt+P'],
+        },
+      },
+    }
+    render(<KeyboardHarness workspace={reader.workspace} />)
+
+    fireEvent.keyDown(document, {
+      metaKey: true,
+      altKey: true,
+      code: 'KeyP',
+      key: 'π',
+    })
+    expect(overriddenInvocation).toHaveBeenCalledWith(
+      'open-command-palette',
+      'keybinding',
+    )
+  })
+
+  it('keeps commands owned by the visible Spotlight session and feed available', () => {
+    const spotlight = makeWorkspace('spotlight', 'dispatch')
+    const view = render(<KeyboardHarness workspace={spotlight.workspace} />)
+
+    fireEvent.keyDown(document, {
+      altKey: true,
+      code: 'KeyF',
+      key: 'ƒ',
+    })
+    expect(harness.appState.requestCommandInvocation).toHaveBeenCalledWith(
+      'toggle-tail',
+      'keybinding',
+    )
+
+    fireEvent.keyDown(view.getByTestId('visible-focus-surface'), { code: 'End', key: 'End' })
+    expect(harness.appState.requestCommandInvocation).toHaveBeenCalledWith(
+      'jump-latest-message',
+      'keybinding',
+    )
+
+    fireEvent.keyDown(document, {
+      metaKey: true,
+      shiftKey: true,
+      code: 'KeyP',
+      key: 'P',
+    })
+    expect(harness.appState.requestCommandInvocation).toHaveBeenCalledWith(
+      'open-command-palette',
+      'keybinding',
+    )
+    expect(spotlight.focusDispatchSession).not.toHaveBeenCalled()
   })
 
   it('still admits Escape and the configured toggle owned by each active focus mode', () => {

@@ -48,12 +48,16 @@ Add one focus-takeover ownership gate to `useKeybinds` after its existing
 Escape handling and before configured workspace commands, numbered navigation,
 and bespoke Dispatch movement.
 
-The gate will admit only the global command that owns the currently visible
-focus mode (`toggle-reader-mode` for Reader, `toggle-spotlight` for Spotlight).
-Every other workspace route returns without mutation. Agent Code-owned chords
-still call `preventDefault()` so browser/Electron behavior cannot fire behind
-the takeover, but the gate must not stop propagation: Reader's local document
-listener still needs to receive its older/newer keys.
+The gate uses an explicit, fail-closed ownership list rather than admitting
+every command whose binding context happens to be global. Reader admits its
+own toggle and the Command Palette entry point; the latter is required by the
+existing Reply to Selection workflow. Spotlight also admits Tail and Jump
+Latest because Spotlight renders a real interactive `TileLeaf`, so those
+commands act on the session/feed the user can see. Every Grid/Dispatch route
+and every legacy layout grammar still returns without mutation. Agent
+Code-owned chords call `preventDefault()` so browser/Electron behavior cannot
+fire behind the takeover, but the gate must not stop propagation: Reader's
+local document listener still needs to receive its older/newer keys.
 
 WHY this belongs in the central router instead of relying on
 `stopPropagation()`: both listeners live on the same document, so propagation
@@ -87,6 +91,10 @@ path and assert observable workspace calls:
 5. Escape and the active focus-mode toggle remain admitted.
 6. Reader history still moves older/newer, and an app interaction owner above
    Reader suppresses that local movement.
+7. Reader and Spotlight retain Command Palette access, including effective
+   user overrides.
+8. Spotlight retains session/feed commands owned by its visible `TileLeaf`,
+   while those events still cannot reach hidden layout movement.
 
 Prefer a small hook/component harness around the real `useKeybinds` and
 `ReaderView` behavior over assertions that merely restate a new predicate.
@@ -102,6 +110,8 @@ Prefer a small hook/component harness around the real `useKeybinds` and
    suite, and package/build verification required by the repository gate.
 5. Review the final diff for unrelated changes, update Issue #647 with any
    scope discoveries, push the branch, and open a PR using `Fixes #647`.
+6. Run two independent Agent Code orchestration reviewers, resolve every valid
+   finding, re-run CI, and merge after explicit authorization.
 
 ## Out of scope
 
@@ -109,7 +119,6 @@ Prefer a small hook/component harness around the real `useKeybinds` and
 - Changing Dispatch ordering or its active-row scroll behavior.
 - Clearing or rebuilding workspace focus state when entering a focus mode.
 - Redesigning the general floating-surface system tracked by Issue #512.
-- Merging the pull request.
 
 ## Verification record
 
@@ -118,7 +127,16 @@ Prefer a small hook/component harness around the real `useKeybinds` and
   Dispatch surface.
 - The focused Reader and workspace-router regression files pass, covering
   classic Dispatch, Tiled Dispatch, Grid, Spotlight, both focus-mode dismissal
-  paths, Reader message history, and modal priority.
+  paths, Reader message history, modal priority, Command Palette admission,
+  effective overrides, and visible Spotlight session/feed commands.
+- Two independent Agent Code orchestration reviewers found two valid
+  over-suppression regressions: Command Palette admission in both focus modes
+  and visible session/feed command admission in Spotlight. The explicit
+  ownership lists and renderer regressions above are the resulting remediation.
+- After remediation, the two focused renderer files pass all 9 tests, the full
+  renderer project passes all 297 tests, and typecheck, keybinding governance,
+  and the test contract remain green. The updated head must pass the remote
+  quality gate, including distributable verification, before merge.
 - `npm run test:renderer`, `npm run typecheck`, `npm run check:keybindings`,
   `npm run test:contract`, `npm run check:live-resume-probe`, and
   `npm run test:package` pass.
