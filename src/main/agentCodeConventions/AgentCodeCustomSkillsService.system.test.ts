@@ -297,4 +297,32 @@ describe('Agent Code custom skill management', () => {
     expect(await readFile(customPath(oldTarget, 'portable-skill'), 'utf8')).toContain('# Portable')
     expect(await readFile(customPath(newTarget, 'portable-skill'), 'utf8')).toContain('# Portable')
   })
+
+  it('invalidates previously active health when provider target discovery later fails', async () => {
+    const root = await temporaryDirectory()
+    const currentTarget = target('agents-standard', join(root, '.agents', 'skills'))
+    let discoveryFails = false
+    const service = new AgentCodeConventionsService({
+      stateFilePath: join(root, 'state', 'conventions.json'),
+      homeDirectory: root,
+      resolveTargets: async () => {
+        if (discoveryFails) throw new Error('provider registry unavailable')
+        return { targets: [currentTarget], unsupportedProviders: [] }
+      },
+    })
+    await service.initialize()
+    const created = await service.createCustomSkill({
+      expectedRevision: 0,
+      name: 'health-check',
+      description: 'Expose discovery failures honestly',
+      markdown: '# Health',
+      enabled: true,
+    })
+    expect(created).toMatchObject({ ok: true, snapshot: { skills: [{ health: 'active' }] } })
+
+    discoveryFails = true
+    expect(await service.getCustomSkillsSnapshot({ audit: true })).toMatchObject({
+      skills: [{ health: 'degraded', targets: [{ state: 'error' }] }],
+    })
+  })
 })

@@ -154,6 +154,15 @@ export class AgentCodeManagedSkillsService {
           state: 'error',
           message: safeErrorMessage(error),
         }]
+        for (const skill of Object.values(this.document.customSkills)) {
+          this.customTargetStatuses.set(skill.id, [{
+            id: 'managed-skills-initialization',
+            providers: [],
+            displayPath: this.displayPath(this.stateFilePath),
+            state: 'error',
+            message: safeErrorMessage(error),
+          }])
+        }
       }
       this.initialized = true
     })
@@ -1753,6 +1762,19 @@ export class AgentCodeManagedSkillsService {
         state: 'error',
         message: safeErrorMessage(error),
       }]
+      // A previous successful audit may have left every custom target marked
+      // Installed. Once discovery itself fails, those paths are no longer a
+      // trustworthy statement about the current provider configuration; keep
+      // the desired definitions but invalidate deployment health together.
+      for (const skill of Object.values(this.document.customSkills)) {
+        this.customTargetStatuses.set(skill.id, [{
+          id: 'provider-target-resolution',
+          providers: [],
+          displayPath: '',
+          state: 'error',
+          message: safeErrorMessage(error),
+        }])
+      }
       return false
     }
   }
