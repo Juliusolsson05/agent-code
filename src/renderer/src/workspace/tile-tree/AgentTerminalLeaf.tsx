@@ -16,10 +16,12 @@ import { shortenCwd } from '@renderer/workspace/tile-tree/TileLeaf/labels'
 import { PaneToast } from '@renderer/workspace/tile-tree/TileLeaf/PaneToast'
 import { useComposerDictation } from '@renderer/workspace/tile-tree/TileLeaf/useComposerDictation'
 import { useAgentTerminalDimensionActive } from '@renderer/workspace/terminal/AgentTerminalOwnership'
+import { AgentTitleHeader } from '@renderer/workspace/tile-tree/AgentTitleHeader'
 
 type Props = {
   sessionId: SessionId
   paneLabel?: string
+  agentTitle?: string
   focused: boolean
   onFocusRequest: () => void
   workspace: Workspace
@@ -44,6 +46,7 @@ type Props = {
 export function AgentTerminalLeaf({
   sessionId,
   paneLabel,
+  agentTitle,
   focused,
   onFocusRequest,
   workspace,
@@ -421,21 +424,24 @@ export function AgentTerminalLeaf({
         focusTerminal()
       }}
     >
-      <div className="flex items-center justify-between gap-3 px-3 py-1 border-b border-border bg-surface text-[10px] text-muted font-code select-none">
-        <div className="flex items-center gap-2 min-w-0">
-          {paneLabel && (
-            <span className="flex-shrink-0 rounded-[3px] border border-current/30 px-1 leading-[14px] text-[9px] font-semibold tabular-nums">
-              {paneLabel}
+      <div className="border-b border-border bg-surface">
+        <div className="flex items-center justify-between gap-3 px-3 py-1 text-[10px] text-muted font-code select-none">
+          <div className="flex items-center gap-2 min-w-0">
+            {paneLabel && (
+              <span className="flex-shrink-0 rounded-[3px] border border-current/30 px-1 leading-[14px] text-[9px] font-semibold tabular-nums">
+                {paneLabel}
+              </span>
+            )}
+            <span className="flex-shrink-0 text-ink">raw {provider}</span>
+            <span className="truncate" title={projectDir ?? 'no project dir'}>
+              {shortenCwd(projectDir)}
             </span>
-          )}
-          <span className="flex-shrink-0 text-ink">raw {provider}</span>
-          <span className="truncate" title={projectDir ?? 'no project dir'}>
-            {shortenCwd(projectDir)}
+          </div>
+          <span className="flex-shrink-0 text-[9px] uppercase tracking-wider text-muted">
+            terminal view
           </span>
         </div>
-        <span className="flex-shrink-0 text-[9px] uppercase tracking-wider text-muted">
-          terminal view
-        </span>
+        <AgentTitleHeader title={agentTitle} />
       </div>
 
       <div className="flex-1 min-h-0 min-w-0 overflow-hidden p-2">

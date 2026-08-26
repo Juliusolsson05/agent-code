@@ -204,6 +204,8 @@ export type CommandContext = {
     openAgentViewModePicker: (sessionId: string) => void
     /** Open the Dispatch color-flag swatch picker for a session. */
     openColorFlagPicker: (sessionId: string) => void
+    /** Open the title editor for the captured command-target agent. */
+    openAgentTitlePrompt: (sessionId: string) => void
     openUsageModal: () => void
     toggleGitBar: () => void
     toggleWorktreesBar: () => void

@@ -57,6 +57,7 @@ import {
   readManagedAgentOutputs,
 } from '@renderer/workspace/agentManagementMcp'
 import { loadInitialHistoryForSession } from '@renderer/workspace/hook/actions/initialHistory'
+import { setAgentTitleInWorkspace } from '@renderer/workspace/agentTitle'
 
 // -----------------------------------------------------------------------------
 // useWorkspace — the composer.
@@ -210,6 +211,19 @@ export function useWorkspace(
     }
     return true
   }, [refs.stateRef, setRuntimes, setState, showToast])
+
+  const setAgentTitle = useCallback((sessionId: SessionId, title: string): boolean => {
+    const meta = refs.stateRef.current.sessions[sessionId]
+    if (!meta || !isAgentProviderKind(meta.kind ?? DEFAULT_PROVIDER)) return false
+
+    // WHY the mutation is delegated to a pure workspace helper rather than
+    // written inline here: `SessionMeta.title` is already consumed by several
+    // surfaces and persisted wholesale. One canonical normalizer makes modal,
+    // command, and any future inline-edit entry points converge on the same
+    // trimming, clearing, length, and no-op behavior before autosave sees it.
+    setState(prev => setAgentTitleInWorkspace(prev, sessionId, title))
+    return true
+  }, [refs.stateRef, setState])
 
   // ---- Runtime helpers (updateRuntime / appendFeedDebug / getRuntime / etc) ----
   const {
@@ -908,6 +922,7 @@ export function useWorkspace(
     focusSession: paneActions.focusSession,
     focusSessionInTab: paneActions.focusSessionInTab,
     focusAgentByPaneLabel,
+    setAgentTitle,
     setSessionAgentViewModeOverride,
     selectGridRelatedSession,
     navigate: paneActions.navigate,

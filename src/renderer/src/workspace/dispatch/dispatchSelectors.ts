@@ -12,6 +12,8 @@ export type DispatchAgentRow = {
   tabIndex: number
   sessionId: SessionId
   kind: SessionKind | undefined
+  /** Explicit durable SessionMeta title, before fallback derivation. */
+  agentTitle?: string
   title: string
   placement: 'grid' | 'detached'
   /** Nesting depth in the dispatch list. 0 = ordinary row; 1 = a
@@ -132,6 +134,7 @@ export function buildDispatchGroups(
           tabIndex,
           sessionId,
           kind: meta?.kind,
+          agentTitle: explicitAgentTitle(meta),
           title: sessionTitle(meta),
           placement,
           depth,
@@ -296,6 +299,7 @@ export function buildPinnedDispatchRows(
       tabIndex,
       sessionId,
       kind: meta.kind,
+      agentTitle: explicitAgentTitle(meta),
       title: sessionTitle(meta),
       placement,
       // Pinned rows live in their own flat section — never nested.
@@ -430,8 +434,15 @@ export function resolveDispatchTerminalSplitTarget(
 function sessionTitle(
   meta: WorkspaceState['sessions'][SessionId] | undefined,
 ): string {
-  if (meta?.title?.trim()) return meta.title.trim()
+  const title = explicitAgentTitle(meta)
+  if (title) return title
   return basename(meta?.cwd ?? 'agent')
+}
+
+function explicitAgentTitle(
+  meta: WorkspaceState['sessions'][SessionId] | undefined,
+): string | undefined {
+  return meta?.title?.trim() || undefined
 }
 
 function basename(path: string): string {

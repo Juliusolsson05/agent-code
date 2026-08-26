@@ -272,6 +272,7 @@ function OpenCommandPalette({
   const openRewindPrompt = useAppStore(state => state.openRewindPrompt)
   const openAgentViewModePicker = useAppStore(state => state.openAgentViewModePicker)
   const openColorFlagPicker = useAppStore(state => state.openColorFlagPicker)
+  const openAgentTitlePrompt = useAppStore(state => state.openAgentTitlePrompt)
   const closeUsageModal = useAppStore(state => state.closeUsageModal)
   const closeKeyboardShortcuts = useAppStore(state => state.closeKeyboardShortcuts)
   const closeAgentActivity = useAppStore(state => state.closeAgentActivity)
@@ -608,6 +609,7 @@ function OpenCommandPalette({
         openRewindPrompt,
         openAgentViewModePicker,
         openColorFlagPicker,
+        openAgentTitlePrompt,
         closeUsageModal,
         closeKeyboardShortcuts,
         closeAgentActivity,
@@ -714,6 +716,7 @@ function OpenCommandPalette({
       openBulkProviderSwitch,
       openRewindPrompt,
       openAgentViewModePicker,
+      openAgentTitlePrompt,
       closeUsageModal,
       closeKeyboardShortcuts,
       closeAgentActivity,

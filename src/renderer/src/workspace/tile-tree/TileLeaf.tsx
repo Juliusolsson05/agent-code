@@ -648,6 +648,7 @@ export function TileLeaf({
       <PaneHeader
         sessionId={sessionId}
         paneLabel={paneLabel}
+        agentTitle={workspace.state.sessions[sessionId]?.title}
         projectDir={runtime.projectDir}
         statusMode={showStatusMode}
         isSessionLive={isSessionLive}

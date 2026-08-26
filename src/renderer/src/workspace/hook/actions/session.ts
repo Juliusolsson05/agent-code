@@ -951,6 +951,13 @@ export function useSessionActions(
 
       setState(prev => {
         const sessions = { ...prev.sessions }
+        // WHY read the title from `prev` here instead of the pre-spawn
+        // snapshot: provider switches and rewinds can wait on backend work,
+        // and the user may edit or clear the pane's title during that window.
+        // The replacement is the same logical pane with a fresh transport id,
+        // so its durable glance label must follow using the latest state rather
+        // than being lost—or resurrected from a stale snapshot—on completion.
+        const replacementTitle = prev.sessions[oldId]?.title
         delete sessions[oldId]
         // Persist the replacement provider metadata immediately
         // instead of waiting for the first transcript line to
@@ -976,6 +983,7 @@ export function useSessionActions(
               }
             : {}),
           ...(builtInMcpDomains !== undefined ? { builtInMcpDomains } : {}),
+          ...(replacementTitle !== undefined ? { title: replacementTitle } : {}),
         }
         const detachedSessions = { ...prev.detachedSessions }
         const detached = detachedSessions[oldId]
