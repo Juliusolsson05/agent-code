@@ -1659,3 +1659,144 @@ restart's resources. The four Stage 38 contracts, five coordinator suites
 (60/60), terminal and recorded prompt suites (39/39), built projection (5/5),
 codex package check (152/152), parent launch/profile/readiness tests (15/15),
 and both typechecks are green.
+
+## 11. Twelfth-gate authority-closure stages
+
+The twelfth exact-head gate,
+`run_38d7bd5a-8aea-46c1-bff3-f08d50e22002`, reviewed parent `71c57b6f`,
+codex-headless `6f6149b`, and parser `a3fee9d`. All four agents completed with
+zero failures, retries, stalls, recovery gaps, or provider-circuit failures.
+The synthesizer returned RED and its immutable result has SHA-256
+`4911a8da688e7d97fa8bc5cf7567d230f3e7b5bc258186941716a0e8af50ff91`.
+
+Exactly five HIGH findings survived independent replay:
+
+1. stop cannot join resume preparation after exact X is reserved but before
+   the public capability returns, so a replacement start can collide with the
+   cancelled generation's live lease;
+2. config/read accepts null, malformed, duplicate, and unknown layer entries
+   so long as one `sessionFlags` layer exists and neither known legacy-managed
+   string appears;
+3. the composer wrap fence counts JavaScript code points rather than terminal
+   cells, so a full double-width CJK row can be interpreted as a logical
+   newline and register a different ownership fingerprint;
+4. a retained public resume handle can still call `dispose()` after
+   `CodexHeadless` consumes it, retiring an actively tailed exact lease; and
+5. invoking the global bridge's `begin()` returns the backing coordinator,
+   whose TypeScript-private Maps expose and permit mutation of raw participant,
+   path, lease, and arbitration state.
+
+The gate rejected fixture-provenance leakage, an independent parser ownership
+defect, duplicate parent ownership policy, atomic paste non-submission,
+predictable JSON-RPC IDs as an independent exploit, unrecorded runtime keymap
+mutation, and parser kill-before-dispose. Those seven exclusions are not
+implementation scope.
+
+### Stage 41 — freeze the five confirmed authority failures
+
+- [x] **Produces:** this decomposition naming the exact three heads, completed
+  gate run, immutable result checksum, five accepted findings, and seven
+  rejected candidates.
+- **Verified by:** every specialist result and the synthesizer result was read
+  in full through the workflow artifact API; the run reports four completed
+  agents and no execution-health or coverage failure.
+- **Why separate:** the specialists proposed additional hypotheses that did not
+  survive reachability checking. Freezing the synthesized set stops both scope
+  expansion and another forward-patch cycle driven by partial reports.
+- **Reality check:** each accepted sequence starts from the recorded exact-
+  attachment rollout, the sanitized live 0.149.1 config projection, existing
+  terminal-cell frames, or the production start lifecycle. No imagined provider
+  response or unrecorded editor mutation is admitted.
+
+### Stage 42 — prove every surviving sequence red before production edits
+
+- [ ] **Produces:** a content-safe twelfth-gate manifest; a bridge-operation
+  reflection projection; a reservation-before-return stop/restart barrier; two
+  malformed/unknown config-layer fixture modes; a double-width narrow-composer
+  frame derived from the recorded narrow-wrap case; and a retained-handle
+  active-tail regression.
+- **Verified by:** against the unchanged reviewed heads, exactly one focused
+  assertion fails for each accepted finding while its adjacent recorded control
+  remains green. Failures must reveal backing coordinator state, replacement
+  lease rejection, incorrectly issued profile authority, mismatched prompt
+  evidence, or concurrent exact-tail admission—not fixture/setup errors.
+- **Why separate:** bridge reflection, start joining, protocol validation,
+  terminal geometry, and capability transfer have different owners. A red
+  contract for each proves the five fixes cannot accidentally mask one another.
+- **Reality check:** the global symbol and exact X come from the existing
+  eleventh/exact-attachment corpus; config mutations preserve the real safe
+  response except the named layer entries; CJK changes only recorded draft text
+  while preserving real frame geometry and durable/request equality.
+
+### Stage 43 — close the five authority boundaries structurally
+
+- [ ] **Produces:** non-reflectable coordinator state (or an equivalently
+  opaque bridge result); a generation-owned in-flight preparation task joined
+  by rollback before restart admission; an exact pinned 0.149.1 layer-schema
+  allowlist; terminal-cell-based soft-wrap refusal; and public rollback
+  authority revoked at capability consumption while internal cleanup remains
+  available to the active tail owner.
+- **Verified by:** all Stage 42 contracts turn green unchanged, all prior
+  first-through-eleventh contracts remain green, and no repair introduces a
+  second policy owner or moves Codex semantics into Agent Code/the generic
+  terminal layer.
+- **Why separate:** the repair must change custody rather than add five consumer
+  conditionals. Coordinator collections remain owned by the coordinator,
+  provider launch remains owned by Agent Code, config/composer policy remains
+  in codex-headless, and active-tail cleanup remains owned by `CodexHeadless`.
+- **Reality check:** each change is the narrow inverse of one confirmed gate
+  schedule. Rejected candidates stay unchanged and unsupported evidence keeps
+  failing closed without blocking ordinary terminal launch.
+
+### Stage 44 — bounded release verification and dependency-order merge
+
+- [ ] **Produces:** clean pushed dependency/parent heads; focused and full local
+  green checks; the existing six-case live 0.149.1 replay; green GitHub checks;
+  one bounded exact-head gate replaying the frozen five plus all prior confirmed
+  invariants; merged dependencies before parent; and closed issue #632.
+- **Verified by:** every constituent final-gate artifact is inspected; no
+  correctness, privacy, ownership, lifecycle, or integration finding survives;
+  both pinned dependency commits are ancestors of their default branches before
+  the parent merge.
+- **Why separate:** implementation green is not merge authorization, but another
+  open-ended bug hunt would restart the same unbounded review loop. The final
+  gate is therefore limited to recorded authority lifecycles and regression of
+  already-rejected speculation is out of scope.
+- **Reality check:** preserve the unrelated deleted private Claude transcript
+  failure as environmental evidence. Do not weaken it or invent replacement
+  data to manufacture a completely green local aggregate.
+
+### Isolation and fixture plan for Stages 42–44
+
+- Coordinator collections and normalization functions must be native-private
+  or closure/WeakMap-private. A global operation may return behavior, never a
+  reflectable backing coordinator graph.
+- Parent rollback owns the in-flight preparation promise until it either
+  publishes a capability to the same start generation or joins disposal. A new
+  generation cannot reserve provider identity while that join is incomplete.
+- The pinned config parser must accept only structurally valid known 0.149.1
+  layer sources and reject unknown future sources. Agent Code may not parse the
+  provider protocol.
+- Generic terminal frames remain provider-neutral. The Codex composer adapter
+  uses their physical cells to decide wrap ambiguity.
+- Public capability disposal is pre-transfer rollback only. The active
+  `CodexHeadless` controller is the sole post-transfer cleanup consumer.
+- Store only run/head/checksum/finding identifiers under
+  `testing/fixtures/twelfth-gate/`. Reuse existing recorded rollout/config/
+  terminal fixtures and mutate only the scheduler or protocol field named by
+  each accepted finding.
+
+### Unknowns for Stages 42–44
+
+- Whether native `#` fields or a frozen operation façade is the smallest safe
+  coordinator boundary must be decided from emitted-runtime reflection, not
+  source syntax.
+- Preparation has no provider cancellation signal today. Joining cleanup is
+  required for correctness; abort support is optional only if the join remains
+  deterministic.
+- Xterm cells preserve physical columns but wide-glyph continuation cells may
+  be empty strings. The red frame must prove the chosen occupied-width rule on
+  actual stable-row cell data rather than a Unicode-width guess.
+- The public handle's post-consume behavior may reject or become a harmless
+  no-op. It must never mutate active ownership, and internal stop must still
+  retire exactly once.
