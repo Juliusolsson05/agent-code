@@ -301,10 +301,11 @@ export type TiledDispatchState = {
    * Column widths. Index 0 is the pinned index lane's fraction of the whole
    * row (clamped 0.1..0.4 in the layout). Indices 1..N are relative weights
    * for the N agent-view lane units sharing the remaining width (normalized
-   * on read; absolute scale irrelevant). Absent => even distribution. Reset
-   * to undefined on tile-count change because a weight array sized for the
-   * old lane count would mis-lay-out the new set. (See TiledDispatchLayout's
-   * column-width convention comment, which is the load-bearing spec.)
+   * on read; absolute scale irrelevant). Absent => even distribution. The
+   * generic tile-count prompt resets this because it has no positional intent;
+   * exact insert/remove operations can preserve the sidebar and map individual
+   * weights honestly. (See TiledDispatchLayout's column-width convention
+   * comment, which is the load-bearing spec.)
    */
   ratios?: number[]
 }
