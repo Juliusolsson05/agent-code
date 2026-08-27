@@ -773,41 +773,6 @@ async function startApp(): Promise<void> {
   })
 }
 
-app.on('window-all-closed', () => {
-  if (process.platform === 'darwin') {
-    // macOS treats closing windows as hiding the UI, not quitting the application. Workflow/MCP
-    // services are app-owned and may still be serving Codex turns; stopping them here made Dock
-    // activation create a fresh window backed by a permanently stopped host. The real quit path
-    // below remains the single lifecycle owner for these services.
-    return
-  }
-  void manager?.killAll()
-  // WHY we do NOT stop the built-in MCP host on macOS here (packaged-app fix):
-  //
-  // On macOS, closing the last window does not quit the app — Electron keeps
-  // the process alive so `activate` can create a fresh window (Dock icon
-  // click, reopen from Cmd-Tab, etc.). We previously called
-  // `builtInMcpHost.stop()` here unconditionally, which nulled the internal
-  // HTTP server. The next session:spawn on the reborn window then threw
-  // "Built-in MCP host must be started before registering a session" from
-  // BuiltInMcpHttpHost.registerSession, which cascaded into a partial
-  // workspace restore and the AUTOSAVE-OFF banner. There is no equivalent
-  // teardown path that restarts the host, so on macOS we simply keep it
-  // running while the process is alive; `before-quit` still stops it on
-  // real shutdown. On non-macOS platforms we're about to quit anyway, so
-  // stopping here is redundant with the `before-quit` handler.
-  void remoteController?.dispose()
-  void lspManager.dispose()
-  // WHY we release caffeinate here even though macOS keeps the app process
-  // alive after the last window closes:
-  // this same branch kills every live agent session. Keeping a sleep
-  // assertion after all windows and sessions are gone would keep the machine
-  // awake for an app that no longer has active work to protect. Cmd+Q also
-  // reaches before-quit below; this branch covers the close-window path.
-  caffeinateController.dispose()
-  app.quit()
-})
-
 app.on('before-quit', (event) => {
   // WHY Electron quit is gated on WorkflowService.stop(): the durable service
   // promises that every published event was appended first, but cancellation
@@ -892,6 +857,16 @@ app.on('before-quit', (event) => {
 installSessionShutdownGate({
   app,
   getManager: () => manager,
+  platform: process.platform,
+  onLastWindowClosed: () => {
+    // WHY these provider-neutral resources still stop at last-window close on
+    // non-macOS: this preserves the established cleanup timing while the
+    // shutdown gate remains the exclusive owner of session/provider teardown.
+    // The built-in MCP host intentionally remains app-owned until before-quit.
+    void remoteController?.dispose()
+    void lspManager.dispose()
+    caffeinateController.dispose()
+  },
   onQuitAllowed: () => {
     appRunJournal?.record({ area: 'app.lifecycle', name: 'app.will_quit' })
     appRunJournal?.markCleanShutdown('will-quit')

@@ -4,6 +4,7 @@ interface WillQuitEvent {
 
 interface SessionShutdownApp {
   on(event: 'will-quit', listener: (event: WillQuitEvent) => void): unknown
+  on(event: 'window-all-closed', listener: () => void): unknown
   quit(): void
 }
 
@@ -15,6 +16,8 @@ interface SessionShutdownGateOptions {
   app: SessionShutdownApp
   getManager: () => SessionShutdownManager | null
   onQuitAllowed: () => void
+  platform?: NodeJS.Platform
+  onLastWindowClosed?: () => void
   onShutdownError?: (error: unknown) => void
 }
 
@@ -25,6 +28,24 @@ interface SessionShutdownGateOptions {
 export function installSessionShutdownGate(options: SessionShutdownGateOptions): void {
   let shutdownPromise: Promise<void> | null = null
   let shutdownComplete = false
+
+  options.app.on('window-all-closed', () => {
+    if ((options.platform ?? process.platform) === 'darwin') {
+      // WHY macOS ignores the last-window event: closing windows hides the UI
+      // while the app, agents, and app-owned MCP services remain live. Dock
+      // activation must be able to recreate a window without restarting them.
+      return
+    }
+
+    // WHY this event only requests quit: Electron emits window-all-closed
+    // before will-quit. Calling killAll here would remove registry entries
+    // synchronously, then the will-quit gate could observe an empty snapshot
+    // and allow exit while the first call still awaited physical provider
+    // stops. Keeping manager access out of this branch makes the gate below the
+    // sole owner of the exact teardown promise on every platform.
+    options.onLastWindowClosed?.()
+    options.app.quit()
+  })
 
   options.app.on('will-quit', event => {
     if (shutdownComplete) {

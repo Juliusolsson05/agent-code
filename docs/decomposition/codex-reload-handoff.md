@@ -38,8 +38,15 @@
 > are green; the affected main/renderer matrix is 87/87, typecheck, system
 > 61/61, renderer 292/292, contracts, keybindings, live-resume probe, and
 > packaged-build verification are green. Full unit is 1,574/1,575 with only the
-> same missing external corpus session. Exact-head re-review, new-head CI, and
-> live verification remain.
+> same missing external corpus session. The twelfth exact-head review found one
+> final cross-platform ordering hole: non-macOS `window-all-closed` began an
+> unjoined `killAll()` before the `will-quit` gate began its own teardown.
+> Contract 39 is implemented by routing last-window quit through the same gate.
+> Its source-derived non-macOS and macOS control schedules failed first and are
+> green; the affected main/renderer matrix is 89/89, typecheck, system 61/61,
+> renderer 292/292, contracts, keybindings, live-resume probe, and packaged-
+> build verification are green. Full unit is 1,576/1,577 with only the same
+> missing external corpus session. Exact-head re-review and new-head CI remain.
 >
 > **Incident:** Agent Code issue #638. Related fresh-rollout incident: #632.
 
@@ -212,6 +219,11 @@
     teardown once, and then re-enters `app.quit()`. A vetoed quit never reaches
     that gate, while Discard/ordinary quit does; re-entry cannot duplicate
     teardown.
+39. Every application quit path has exactly one owner for physical
+    `SessionManager` teardown. On non-macOS, `window-all-closed` may run
+    last-window cleanup and request `app.quit()`, but it must not independently
+    call `killAll()`. The ensuing `will-quit` event starts and awaits the sole
+    gate-owned teardown promise before Electron is allowed to exit.
 
 ## 2. Intermediate stages
 
@@ -399,6 +411,12 @@ shape deliberately rejects clearing `SessionManager.shuttingDown` after a veto:
 by then stops may already be in flight, so rolling back the fence would expose
 partially torn-down state as usable.
 
+The twelfth exact-head review keeps non-macOS last-window cleanup in that same
+app-lifecycle boundary. Closing the last window is only a quit request; it is
+not a second owner for terminal session teardown. The gate therefore owns the
+`window-all-closed` request and the later `will-quit` drain as one observable
+sequence, while provider-neutral cleanup remains a callback from `index.ts`.
+
 This is separate from the async manager logic because the fifth review found
 the same missing-identity failure in recovery, close, and transaction cleanup.
 Adding three more scans/conditionals would preserve the substrate that produced
@@ -567,6 +585,11 @@ receives no pane IDs and gains no replacement exception.
   not proof that windows will unload. Terminal manager teardown is admitted by
   `will-quit`, after the renderer veto has either been absent or explicitly
   discarded; Keep Editing therefore leaves the manager entirely untouched.
+- **Resolved by twelfth-review Stage 2 design:** on non-macOS,
+  `window-all-closed` precedes `will-quit`; starting `killAll()` in both events
+  lets the gate join an empty registry while the first physical provider stop
+  is still pending. Last-window closure now requests quit without touching the
+  manager, so the gate awaits the exact first and only teardown generation.
 - Predecessor stop can fail or become uncertain. The coordinator's tombstone
   must remain fail-closed; compensation may also fail in that state and needs a
   truthful lifecycle outcome rather than an unsafe lease exception.
@@ -713,3 +736,10 @@ unobserved and the manager usable. The companion Discard/ordinary schedule
 emits `will-quit`, proves the first event is prevented while one asynchronous
 `killAll()` settles, proves duplicate events cannot start duplicate teardown,
 and proves the re-entered quit is allowed after settlement.
+
+The twelfth-review fixture extends that same source-confirmed lifecycle with
+the non-macOS `window-all-closed` event. It proves last-window cleanup requests
+quit without touching `SessionManager`, then proves the resulting `will-quit`
+event starts exactly one teardown and the re-entered quit is admitted only
+after that promise settles. A macOS control proves last-window closure remains
+a no-op for application quit and terminal teardown.

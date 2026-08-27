@@ -15,28 +15,38 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
 }
 
 function createFakeApp(): {
-  app: {
-    on: (event: 'will-quit', listener: (event: FakeWillQuitEvent) => void) => void
-    quit: () => void
-  }
+  app: Parameters<typeof installSessionShutdownGate>[0]['app']
   emitWillQuit: () => FakeWillQuitEvent
+  emitWindowAllClosed: () => void
 } {
-  let listener: ((event: FakeWillQuitEvent) => void) | null = null
+  let willQuitListener: ((event: FakeWillQuitEvent) => void) | null = null
+  let windowAllClosedListener: (() => void) | null = null
   const quit = vi.fn<() => void>()
   const app = {
-    on: vi.fn((event: 'will-quit', next: (event: FakeWillQuitEvent) => void) => {
-      expect(event).toBe('will-quit')
-      listener = next
+    on: vi.fn((event: string, next: (...args: unknown[]) => void) => {
+      if (event === 'will-quit') {
+        willQuitListener = next as (event: FakeWillQuitEvent) => void
+      } else if (event === 'window-all-closed') {
+        windowAllClosedListener = next
+      } else {
+        throw new Error(`unexpected app event: ${event}`)
+      }
     }),
     quit,
-  }
+  } as unknown as Parameters<typeof installSessionShutdownGate>[0]['app']
   return {
     app,
     emitWillQuit: () => {
-      if (!listener) throw new Error('will-quit listener was not installed')
+      if (!willQuitListener) throw new Error('will-quit listener was not installed')
       const event: FakeWillQuitEvent = { preventDefault: vi.fn() }
-      listener(event)
+      willQuitListener(event)
       return event
+    },
+    emitWindowAllClosed: () => {
+      if (!windowAllClosedListener) {
+        throw new Error('window-all-closed listener was not installed')
+      }
+      windowAllClosedListener()
     },
   }
 }
@@ -91,5 +101,53 @@ describe('installSessionShutdownGate', () => {
     expect(reentered.preventDefault).not.toHaveBeenCalled()
     expect(manager.killAll).toHaveBeenCalledOnce()
     expect(onQuitAllowed).toHaveBeenCalledOnce()
+  })
+
+  it('routes non-macOS last-window quit through the sole terminal teardown', async () => {
+    const fake = createFakeApp()
+    const teardown = deferred()
+    const manager = { killAll: vi.fn(() => teardown.promise) }
+    const onLastWindowClosed = vi.fn()
+
+    installSessionShutdownGate({
+      app: fake.app,
+      getManager: () => manager,
+      onQuitAllowed: vi.fn(),
+      platform: 'linux',
+      onLastWindowClosed,
+    })
+
+    fake.emitWindowAllClosed()
+    expect(onLastWindowClosed).toHaveBeenCalledOnce()
+    expect(fake.app.quit).toHaveBeenCalledOnce()
+    expect(manager.killAll).not.toHaveBeenCalled()
+
+    const first = fake.emitWillQuit()
+    expect(first.preventDefault).toHaveBeenCalledOnce()
+    expect(manager.killAll).toHaveBeenCalledOnce()
+
+    teardown.resolve()
+    await teardown.promise
+    await Promise.resolve()
+    expect(fake.app.quit).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps macOS last-window closure outside application teardown', () => {
+    const fake = createFakeApp()
+    const manager = { killAll: vi.fn(async () => undefined) }
+    const onLastWindowClosed = vi.fn()
+
+    installSessionShutdownGate({
+      app: fake.app,
+      getManager: () => manager,
+      onQuitAllowed: vi.fn(),
+      platform: 'darwin',
+      onLastWindowClosed,
+    })
+
+    fake.emitWindowAllClosed()
+    expect(onLastWindowClosed).not.toHaveBeenCalled()
+    expect(fake.app.quit).not.toHaveBeenCalled()
+    expect(manager.killAll).not.toHaveBeenCalled()
   })
 })
