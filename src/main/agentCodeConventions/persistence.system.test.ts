@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { chmod, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -91,9 +92,96 @@ describe('Agent Code conventions persistence', () => {
       kind: 'ok',
       document: {
         ...legacy,
-        schemaVersion: 2,
+        schemaVersion: 3,
         customSkills: {},
+        installedSkills: {},
+        installedMaterializations: {},
+        installedPendingOperations: {},
       },
+    })
+  })
+
+  it('migrates schema-v2 custom skills without adopting external package state', async () => {
+    const root = await temporaryDirectory()
+    const statePath = join(root, 'conventions.json')
+    const current = createEmptyAgentCodeConventionsDocument()
+    const previous = {
+      schemaVersion: 2,
+      revision: 4,
+      enabled: current.enabled,
+      markdown: current.markdown,
+      updatedAt: current.updatedAt,
+      customSkills: {
+        custom: {
+          id: 'custom',
+          name: 'custom-skill',
+          description: 'A custom skill.',
+          markdown: '# Custom',
+          enabled: false,
+          createdAt: '2026-08-26T00:00:00.000Z',
+          updatedAt: '2026-08-26T00:00:00.000Z',
+        },
+      },
+      materializations: {},
+      pendingOperations: {},
+    }
+    await writeFile(statePath, JSON.stringify(previous))
+
+    expect(await readAgentCodeConventionsState(statePath)).toEqual({
+      kind: 'ok',
+      document: {
+        ...previous,
+        schemaVersion: 3,
+        installedSkills: {},
+        installedMaterializations: {},
+        installedPendingOperations: {},
+      },
+    })
+  })
+
+  it('accepts only installed records whose immutable manifest matches its snapshot digest', async () => {
+    const root = await temporaryDirectory()
+    const statePath = join(root, 'conventions.json')
+    const document = createEmptyAgentCodeConventionsDocument()
+    const file = {
+      path: 'SKILL.md',
+      bytes: 10,
+      sha256: 'a'.repeat(64),
+      executable: false,
+    }
+    const snapshotDigest = createHash('sha256')
+      .update(file.path).update('\0')
+      .update(file.sha256).update('\0')
+      .update('0').update('\0')
+      .digest('hex')
+    document.installedSkills['skill-1'] = {
+      id: 'skill-1',
+      name: 'review-code',
+      description: 'Review code.',
+      enabled: false,
+      source: {
+        owner: 'example',
+        repository: 'skills',
+        repositoryUrl: 'https://github.com/example/skills',
+        requestedRef: 'main',
+        path: 'skills/review-code',
+        skillUrl: 'https://github.com/example/skills/tree/main/skills/review-code',
+        resolvedCommit: 'b'.repeat(40),
+      },
+      snapshotDigest,
+      files: [file],
+      warnings: [],
+      createdAt: '2026-08-27T00:00:00.000Z',
+      updatedAt: '2026-08-27T00:00:00.000Z',
+    }
+    await writeFile(statePath, JSON.stringify(document))
+    expect(await readAgentCodeConventionsState(statePath)).toEqual({ kind: 'ok', document })
+
+    document.installedSkills['skill-1']!.snapshotDigest = 'c'.repeat(64)
+    await writeFile(statePath, JSON.stringify(document))
+    expect(await readAgentCodeConventionsState(statePath)).toMatchObject({
+      kind: 'recovery-required',
+      document: { installedSkills: {} },
     })
   })
 

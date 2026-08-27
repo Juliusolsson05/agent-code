@@ -99,9 +99,10 @@ a running session can move mid-task from Claude Code to Codex or back.
 
 - **Voice dictation** — via
   [`agent-voice-dictation`](https://github.com/Juliusolsson05/agent-voice-dictation).
-- **Shared agent conventions** — save personal development and Git practices
-  once and expose the same native Agent Skill to Claude Code, Codex, and
-  OpenCode, with collision-safe installation and explicit deployment health.
+- **Managed personal skills** — save shared conventions, author instruction-only
+  custom skills, or review and install commit-pinned Agent Skills from public
+  GitHub repositories. Agent Code deploys them to Claude Code, Codex, and
+  OpenCode with collision-safe ownership and explicit deployment health.
 - **Diagnostics** — durable local evidence for provider exits, transcript
   drift, rendering issues, and near-OOM events.
 

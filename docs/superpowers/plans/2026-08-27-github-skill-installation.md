@@ -1,6 +1,6 @@
 # GitHub Skill Installation
 
-> Status: planned for issue #664.
+> Status: implemented and locally verified; PR review is pending for issue #664.
 
 ## Goal
 

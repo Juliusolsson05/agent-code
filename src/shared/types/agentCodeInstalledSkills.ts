@@ -1,0 +1,155 @@
+import type { AgentProviderKind } from '@shared/types/providerKind.js'
+import type {
+  AgentCodeConventionsHealth,
+  AgentCodeConventionsTargetStatus,
+  AgentCodeInstalledSkillFileRecord,
+  AgentCodeInstalledSkillSource,
+} from './agentCodeConventions.js'
+
+export const AGENT_CODE_INSTALLED_SKILL_MAX_COUNT = 25
+export const AGENT_CODE_INSTALLED_SKILL_MAX_URL_LENGTH = 2_048
+export const AGENT_CODE_INSTALLED_SKILL_MAX_FILES = 256
+export const AGENT_CODE_INSTALLED_SKILL_MAX_FILE_BYTES = 5 * 1024 * 1024
+export const AGENT_CODE_INSTALLED_SKILL_MAX_TOTAL_BYTES = 10 * 1024 * 1024
+export const AGENT_CODE_INSTALLED_SKILL_MAX_DISCOVERY_BYTES = 25 * 1024 * 1024
+export const AGENT_CODE_INSTALLED_SKILL_MAX_SKILL_MD_BYTES = 128 * 1024
+export const AGENT_CODE_INSTALLED_SKILL_DISCOVERY_TTL_MS = 15 * 60 * 1_000
+export const AGENT_CODE_INSTALLED_SKILL_MAX_STAGED_DISCOVERIES = 5
+
+export function isSafeAgentCodeInstalledSkillPath(value: unknown): value is string {
+  if (typeof value !== 'string'
+    || value.length === 0
+    || value.length > 1_024
+    || value.startsWith('/')
+    || value.includes('\\')) return false
+  return value.split('/').every(segment => {
+    if (segment.length === 0
+      || segment === '.'
+      || segment === '..'
+      || segment.toLowerCase() === '.git'
+      || /[\u0000-\u001f\u007f<>:"|?*]/.test(segment)
+      || /[. ]$/.test(segment)) return false
+    // WHY Windows device names are rejected even when discovery runs on Unix:
+    // the immutable source identity is supposed to be portable across Agent
+    // Code installations. Accepting a package that can never materialize on a
+    // supported platform would defer a deterministic validation error until
+    // after the user has reviewed and installed it.
+    return !/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i.test(segment)
+  })
+}
+
+export type AgentCodeInstalledSkillCandidate = {
+  candidateId: string
+  name: string
+  description: string
+  source: AgentCodeInstalledSkillSource
+  files: AgentCodeInstalledSkillFileRecord[]
+  totalBytes: number
+  warnings: string[]
+}
+
+export type AgentCodeInstalledSkillDiscovery = {
+  discoveryId: string
+  repositoryUrl: string
+  requestedRef: string
+  resolvedCommit: string
+  expiresAt: string
+  candidates: AgentCodeInstalledSkillCandidate[]
+  notices: string[]
+}
+
+export type AgentCodeInstalledSkillDiscoveryResult =
+  | { ok: true; discovery: AgentCodeInstalledSkillDiscovery }
+  | {
+      ok: false
+      code: 'validation' | 'not-found' | 'git-unavailable' | 'network' | 'io-error'
+      message: string
+    }
+
+export type AgentCodeInstalledSkill = {
+  id: string
+  name: string
+  description: string
+  enabled: boolean
+  source: AgentCodeInstalledSkillSource
+  snapshotDigest: string
+  files: AgentCodeInstalledSkillFileRecord[]
+  totalBytes: number
+  warnings: string[]
+  createdAt: string
+  updatedAt: string
+  health: AgentCodeConventionsHealth
+  targets: AgentCodeConventionsTargetStatus[]
+}
+
+export type AgentCodeInstalledSkillsSnapshot = {
+  revision: number
+  skills: AgentCodeInstalledSkill[]
+  unsupportedProviders: AgentProviderKind[]
+  recovery?: { message: string; stateFilePath: string }
+}
+
+export type InstallAgentCodeGitHubSkillsRequest = {
+  expectedRevision: number
+  discoveryId: string
+  candidateIds: string[]
+}
+
+export type SetAgentCodeInstalledSkillEnabledRequest = {
+  expectedRevision: number
+  skillId: string
+  enabled: boolean
+}
+
+export type DeleteAgentCodeInstalledSkillRequest = {
+  expectedRevision: number
+  skillId: string
+  abandonTargets?: Array<{
+    targetId: string
+    expectedConflictFingerprint: string
+  }>
+}
+
+export type ApplyAgentCodeInstalledSkillUpdateRequest = {
+  expectedRevision: number
+  skillId: string
+  discoveryId: string
+  candidateId: string
+}
+
+export type AgentCodeInstalledSkillFileChanges = {
+  added: string[]
+  changed: string[]
+  removed: string[]
+}
+
+export type AgentCodeInstalledSkillUpdateResult =
+  | { ok: true; kind: 'up-to-date' }
+  | {
+      ok: true
+      kind: 'update-available'
+      discovery: AgentCodeInstalledSkillDiscovery
+      candidate: AgentCodeInstalledSkillCandidate
+      changes: AgentCodeInstalledSkillFileChanges
+    }
+  | {
+      ok: false
+      code: 'validation' | 'not-found' | 'git-unavailable' | 'network' | 'io-error'
+      message: string
+    }
+
+export type AgentCodeInstalledSkillsMutationResult =
+  | { ok: true; snapshot: AgentCodeInstalledSkillsSnapshot }
+  | { ok: false; code: 'validation' | 'expired'; message: string }
+  | { ok: false; code: 'revision-conflict'; snapshot: AgentCodeInstalledSkillsSnapshot }
+  | {
+      ok: false
+      code: 'target-conflict' | 'delete-blocked'
+      message: string
+      snapshot: AgentCodeInstalledSkillsSnapshot
+      targets: AgentCodeConventionsTargetStatus[]
+    }
+  | { ok: false; code: 'unsupported'; snapshot: AgentCodeInstalledSkillsSnapshot }
+  | { ok: false; code: 'recovery-required'; snapshot: AgentCodeInstalledSkillsSnapshot }
+  | { ok: false; code: 'not-found'; message: string; snapshot: AgentCodeInstalledSkillsSnapshot }
+  | { ok: false; code: 'io-error'; message: string; snapshot: AgentCodeInstalledSkillsSnapshot }

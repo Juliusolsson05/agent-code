@@ -2,16 +2,19 @@ import type { AgentProviderKind } from '@shared/types/providerKind.js'
 
 // See docs/design/agent-code-conventions.md for the canonical subsystem design.
 
-export const AGENT_CODE_CONVENTIONS_SCHEMA_VERSION = 2 as const
+export const AGENT_CODE_CONVENTIONS_SCHEMA_VERSION = 3 as const
+export const AGENT_CODE_CONVENTIONS_PREVIOUS_SCHEMA_VERSION = 2 as const
 export const AGENT_CODE_CONVENTIONS_LEGACY_SCHEMA_VERSION = 1 as const
 export const AGENT_CODE_CONVENTIONS_SKILL_NAME = 'agent-code-conventions'
 export const AGENT_CODE_CONVENTIONS_MANAGED_MARKER = '<!-- agent-code-managed:v1 -->'
 export const AGENT_CODE_CONVENTIONS_MAX_BYTES = 32 * 1024
 export const AGENT_CODE_CONVENTIONS_COLLISION_MAX_BYTES = 128 * 1024
-// Custom skills share this app-owned document with Conventions. Keep the read
-// bounded, but do not make a handful of valid 32 KiB skills exhaust a limit
-// chosen when this file held exactly one Markdown document.
-export const AGENT_CODE_CONVENTIONS_STATE_MAX_BYTES = 4 * 1024 * 1024
+// Custom and installed skills share this app-owned document with Conventions.
+// Installed package bytes stay outside JSON, but their bounded path/hash
+// manifests can legitimately exceed the old 4 MiB collection ceiling when a
+// user installs several large multi-file packages. Keep recovery reads bounded
+// without making valid state impossible to persist near the advertised limits.
+export const AGENT_CODE_CONVENTIONS_STATE_MAX_BYTES = 16 * 1024 * 1024
 
 export const AGENT_CODE_CONVENTIONS_STARTER = `# Development workflow
 
@@ -155,6 +158,57 @@ export type AgentCodeCustomSkillRecord = {
   updatedAt: string
 }
 
+export type AgentCodeInstalledSkillFileRecord = {
+  /** POSIX-style path relative to the skill package root. */
+  path: string
+  bytes: number
+  sha256: string
+  executable: boolean
+}
+
+export type AgentCodeInstalledSkillSource = {
+  owner: string
+  repository: string
+  repositoryUrl: string
+  requestedRef: string
+  path: string
+  skillUrl: string
+  resolvedCommit: string
+}
+
+export type AgentCodeInstalledSkillRecord = {
+  id: string
+  name: string
+  description: string
+  enabled: boolean
+  source: AgentCodeInstalledSkillSource
+  snapshotDigest: string
+  files: AgentCodeInstalledSkillFileRecord[]
+  warnings: string[]
+  createdAt: string
+  updatedAt: string
+}
+
+export type AgentCodeInstalledSkillMaterialization = {
+  skillId: string
+  targetId: string
+  path: string
+  snapshotDigest: string
+  files: AgentCodeInstalledSkillFileRecord[]
+}
+
+export type AgentCodeInstalledSkillPendingOperation = {
+  operationId: string
+  skillId: string
+  targetId: string
+  path: string
+  kind: 'sync' | 'delete'
+  previousSnapshotDigest: string | null
+  previousFiles: AgentCodeInstalledSkillFileRecord[]
+  desiredSnapshotDigest: string | null
+  desiredFiles: AgentCodeInstalledSkillFileRecord[]
+}
+
 export type AgentCodeConventionsDocument = {
   schemaVersion: typeof AGENT_CODE_CONVENTIONS_SCHEMA_VERSION
   revision: number
@@ -162,8 +216,11 @@ export type AgentCodeConventionsDocument = {
   markdown: string
   updatedAt: string | null
   customSkills: Record<string, AgentCodeCustomSkillRecord>
+  installedSkills: Record<string, AgentCodeInstalledSkillRecord>
   materializations: Record<string, AgentCodeConventionsMaterialization>
   pendingOperations: Record<string, AgentCodeConventionsPendingOperation>
+  installedMaterializations: Record<string, AgentCodeInstalledSkillMaterialization>
+  installedPendingOperations: Record<string, AgentCodeInstalledSkillPendingOperation>
 }
 
 export function createEmptyAgentCodeConventionsDocument(): AgentCodeConventionsDocument {
@@ -174,7 +231,10 @@ export function createEmptyAgentCodeConventionsDocument(): AgentCodeConventionsD
     markdown: '',
     updatedAt: null,
     customSkills: {},
+    installedSkills: {},
     materializations: {},
     pendingOperations: {},
+    installedMaterializations: {},
+    installedPendingOperations: {},
   }
 }
