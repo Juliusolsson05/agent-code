@@ -1,433 +1,387 @@
 # Claude Queued-Message Feed Handoff — Staged Decomposition
 
-> **Status:** decomposition only; implementation requires explicit approval.
+> **Status:** corrected after recorded-data review; implementation approved on
+> 2026-08-27.
 >
-> **Issue:** #665 — Claude queued prompts vanish after attachment consumption.
-> Related umbrella: #339 — submitted prompts can lose a visible owner.
+> **Issue:** #665. Related umbrella: #339.
 >
-> **Scope:** Claude user-authored prompts that Claude accepts into its queue and
-> later consumes. This does not redesign provider submission generally, and it
-> does not add another recording or collection system.
+> **Scope:** Claude prompt-mode `queued_command` attachments, their feed
+> ownership, and the exact queue attribution evidence they provide. Queued
+> slash commands are separate because Claude does not encode them as
+> `queued_command` attachments.
 
 ## Why staged decomposition applies
 
-Agent Code is well above the size threshold, and this failure sits at the
-boundary between three independent sources of truth:
+Agent Code is well above the size threshold, and this failure crosses three
+sources of truth:
 
-1. Claude's provider-owned `queue-operation` log says whether an item is still
-   pending, but a departure record carries no item identity.
-2. Claude's committed transcript is authoritative conversation history, but a
-   mid-turn queue `remove` is delivered as an attachment and usually creates no
-   committed `user` row.
-3. Agent Code's ownership ledger decides what paints, but it cannot select a
-   candidate that INGEST never created.
+1. `queue-operation` reconstructs pending membership, but `remove` has no
+   item identity.
+2. Claude persists a consumed queued command as a durable
+   `attachment/queued_command` with the missing identity and provenance.
+3. Agent Code's mapper and ledger discard that durable entry, so the renderer
+   never receives a candidate.
 
-The queue itself was recently repaired through evidence-based reconciliation.
-Adding another conditional at its React call site would distribute ownership
-again and recreate the exact vanish/duplicate class the rendering ledger was
-built to eliminate. This change therefore needs a recorded red test, one
-isolated handoff projection, and shared live/replay behavior before UI code is
-touched.
+The first decomposition incorrectly proposed synthesizing a local handoff row.
+Recorded rendering bundles falsified its premise: the durable row already
+exists. This revision changes the substrate before implementation instead of
+patching forward.
 
-The repository already has collection infrastructure and a measured queue
-corpus. Stage 1 reuses it. No recorder, transcript format, debug-bundle format,
-or imagined provider fixture is added by this plan.
+The repository already has transcript collection, bundle capture, redaction,
+and queue-corpus extraction. This work reuses and, where necessary, extends
+those paths. It does not add another recorder.
 
 ## A — concrete trusted starting point
 
-### Provider acceptance and queue evidence
+### Acceptance works
 
-- `src/providers/claude/runtime/promptDelivery.ts` treats either a committed
-  `user` row or `queue-operation/enqueue` as durable acceptance. This proves the
-  reported prompt reached Claude; the missing bubble is downstream of delivery.
-- `testing/fixtures/queue-operations/remove-is-not-persisted.json` is a redacted
-  recording of ordered queue operations and committed user entries from a real
-  Agent Code Claude session.
-- `testing/fixtures/queue-operations/catalog.md` is the reproducible census over
-  the existing local transcript corpus. For queued prompts, committed-user
-  observability is 241/278 after `dequeue` and 230/678 after `remove`.
-- `docs/decomposition/claude-queue-reconciliation.md` records the upstream
-  semantics: `dequeue` delivers a turn input; the dominant `remove` path sends
-  queued work as a mid-turn attachment that is not itself persisted as a user
-  transcript row.
+- `claudeSession.ts` treats a committed `user` row or
+  `queue-operation/enqueue` as prompt acceptance. The prompt reached Claude.
+- Claude has `usesOptimisticUserEcho: false`, so Agent Code correctly does not
+  paint a speculative row while the prompt is pending.
 
-### Existing isolated queue authority
+### The durable artifact exists
 
-- `src/renderer/src/session-runtime/claudeQueue/` is the single pure owner of
-  Claude queue membership and departure attribution.
-- `ClaudeQueueState.pending` retains the exact enqueued content while the item
-  is pending.
-- `QueueDecision.reason` distinguishes `delivered-observed`,
-  `delivered-inferred`, `consumed-as-attachment`, `popped-to-composer`, and
-  `stale-unattributed`.
-- `useIpcSubscriptions.ts` is the sole live consumer. It applies a queue
-  operation, derives `queuedMessages`, then deliberately `continue`s before
-  transcript mapping. A queue operation therefore creates no feed entry.
+`testing/fixtures/rendering-bundles/2026-06-14T14-25-07-012-a8ad1ebb.json`
+contains three recorded transitions:
 
-### Existing render authority
+| Enqueue | Remove | Attachment | Invariant |
+|---:|---:|---:|---|
+| 7 | 8 | 13 | prompt equals enqueue; remove/attachment timestamp matches; no matching conversation user |
+| 27 | 28 | 30 | same |
+| 62 | 63 | 70 | same |
 
-- Claude has `usesOptimisticUserEcho: false`; the composer intentionally does
-  not mint the local row that Codex and OpenCode use.
-- `RuntimeRenderInput.entries` contains committed rows plus explicitly marked
-  local optimistic rows. `queuedMessages` is intentionally outside the feed
-  contract while work remains pending.
-- The ownership ledger is the only visibility/order decision point. Its P6
-  rule prefers a surviving local candidate until committed evidence owns it.
-- The live entry window already bounds retained rows at 2,000 entries or an
-  estimated 32 MiB, trimming with hysteresis to 1,500 entries / 24 MiB.
+Each attachment is `type: "attachment"` with
+`attachment.type: "queued_command"`, a stable UUID, timestamp, and original
+prompt. Entries 55/56/60 prove the working comparison:
+`dequeue → committed user` already paints normally.
 
-### Current misleading test boundary
+The frozen rendering corpus contains 15/48 queue-bearing bundles and 28
+`queued_command` attachments: 22 prompt-mode, 6 task-notification, all with a
+UUID and timestamp.
 
-`src/renderer/src/rendering/fixtures.queueHandoff.test.ts` manually inserts an
-`optimistic-codex-user:*` row while its fixture provider is Claude. That proves
-the ledger can reconcile an optimistic row if one exists; it does not prove the
-real Claude composer or queue fold can create that state. The new contract must
-drive the production Claude queue transition from recorded raw events.
+A content-free structural census over the existing local Claude corpus found
+1,058 durable records across versions 2.1.100–2.1.247:
 
-## Root cause stated as an ownership gap
+- 772 prompt and 286 task-notification;
+- 1,058/1,058 external-user, UUID-bearing, and timestamped;
+- 474 human-origin prompts, 296 legacy prompts without origin, and 2 peer/meta;
+- 1,044 string prompts and 14 block-array prompts.
 
-The submission channel and queue channel are connected correctly. The missing
-link is between **queue departure attribution** and **feed candidate creation**.
+These aggregate counts are evidence, not a new fixture source. Stage 1 makes
+the existing measurement path reproduce the relevant split.
+
+### Agent Code drops it
+
+1. `providers/claude/renderer/transcript/mapper.ts` admits only conversation
+   and compaction entries. Live, history, preview, and remote therefore map
+   queued-command attachments to `entries: []`.
+2. `classifyClaudeDurableEntry` recognizes only compact boundary/summary.
+3. If an attachment bypassed the mapper, the committed collector would reject
+   it as `not-conversation`.
+4. `useIpcSubscriptions.ts` applies the preceding remove and updates
+   `queuedMessages`; no surviving feed candidate owns the durable attachment.
+
+### Queue attribution also ignores the evidence
+
+`applyRemove` guesses a victim immediately. In an ambiguous mixed queue it
+prefers a notification over a prompt because guessing away user work is the
+more dangerous direction. The later queued-command attachment contains the
+consumed command's exact prompt and mode, so this need not remain inference.
+
+`2026-07-07T13-17-20-472-5b19529f.json` records enqueue 73, content-free
+remove 78, and the exact prompt attachment 79 while two notifications remain
+queued. This is the ground truth for the wrong-victim case.
+
+### Existing fixtures have different proof strength
+
+- `fixtures.queueHandoff.test.ts` manually supplies an
+  `optimistic-codex-user:*` row under a Claude label. It proves echo-provider
+  ledger reconciliation, not the Claude producer path.
+- `testing/fixtures/queue-operations/*.json` preserves operation topology,
+  but omits raw type, timestamp, provenance, and attachment payload. It cannot
+  drive durable rendering.
+- Rendering bundles retain those real shapes and are the primary end-to-end
+  fixture family for this fix.
+
+## Root cause
 
 ```text
-queue-operation/enqueue
+queue-operation/enqueue ──▶ ClaudeQueueState.pending ──▶ QueueStrip
+                                  │
+                                  │ remove has no identity
+                                  ▼
+                            guessed queue victim
+
+Claude JSONL: attachment/queued_command (UUID + prompt + provenance)
         │
-        ▼
-ClaudeQueueState.pending ───────────────▶ QueueStrip
-        │ remove/dequeue attribution
-        ▼
-QueueDecision + pending item removed
-        │
-        └── no handoff artifact ──X──▶ RuntimeRenderInput ──▶ RenderLedger
+        ├── mapper rejects it
+        ├── durable classifier does not recognize it
+        └── ledger gets no candidate ──X──▶ user bubble
 ```
 
-When a committed `user` row follows a `dequeue`, the ordinary transcript mapper
-creates the candidate and the bubble paints. When `remove` consumes the prompt
-as an attachment—or a dequeue must be inferred—there is no committed row and
-no local candidate. The queue item disappears correctly, Claude answers it,
-and the feed has nothing it could render.
+The missing link is durable attachment admission, not local synthesis:
+
+- queue reconciliation uses the attachment to identify what stopped pending;
+- the ledger uses the attachment itself as the committed visible owner when
+  provenance proves it is a human prompt.
 
 ## D — concrete observable end state
 
-1. A user-authored Claude prompt remains only in `QueueStrip` while genuinely
-   pending; it is not prematurely painted as sent.
-2. When Claude consumes that prompt as a mid-turn attachment, the prompt moves
-   from the queue lane to one chronologically ordered user bubble in the same
-   render transition.
-3. When `dequeue` is followed by a matching committed user row, that committed
-   row is the sole visible owner. No synthetic twin appears.
-4. When a dequeue has to be inferred because no committed row claims it, one
-   local handoff row survives rather than letting the prompt vanish silently.
-5. If committed evidence arrives after a local handoff, the ledger explicitly
-   transfers ownership to committed and records why; exactly one row remains.
-6. Machine-generated task notifications never become user bubbles. They retain
-   their existing Task-card/notification ownership.
-7. `popAll` and `stale-unattributed` never mint a sent-message bubble: the first
-   returns text to the composer, and the second is not delivery evidence.
-8. Live ingestion, cold history hydration, and replay of the same recorded
-   window produce the same ordered user rows and ownership decisions.
-9. The fix introduces no unbounded full-content collection, no per-operation
-   whole-transcript scan, and no render-time queue scan. Local rows participate
-   in the existing count-and-byte bounded entry lifecycle.
-10. Desktop and remote continue consuming the same ledger output; neither UI
-    component learns Claude queue semantics.
+1. A queued prompt remains only in `QueueStrip` while pending.
+2. A consumed human, non-meta prompt attachment becomes exactly one ordered
+   user bubble using its durable UUID and timestamp.
+3. No optimistic twin is created. Repeated text stays distinct by UUID.
+4. Task-notification, peer, and meta attachments never paint as user-authored.
+5. `dequeue → committed user` keeps the existing committed row as sole owner.
+6. Attachment identity removes the exact mixed-queue item; removes without an
+   attachment retain a bounded explicit fallback.
+7. Live, initial history, older pagination, preview, and remote agree through
+   the shared mapper/classifier.
+8. The provider painter handles every admitted candidate and the ledger bridge
+   reports zero drops.
+9. No unbounded history, per-operation transcript scan, or retained text index
+   is added. Entries remain inside the 2,000-entry/32 MiB window.
+10. Corpus changes are manually triaged; no fixture is blindly blessed.
 
 ## Intermediate stages
 
-### Stage 1 — recorded failing ownership contract
+### Stage 1 — correct evidence and establish red contracts
 
 **Produces**
 
-- A narrowly scoped recorded-data test that replays the relevant windows from
-  `testing/fixtures/queue-operations/remove-is-not-persisted.json` through the
-  production queue attribution boundary.
-- Assertions for the final ordered rows, owner, and reason—not merely queue
-  length or text existence.
-- A correction to `fixtures.queueHandoff.test.ts`'s stated scope so it is
-  explicit that the current optimistic handoff fixture exercises echo-provider
-  ledger behavior, not the real Claude queue producer.
+- Reproducible attachment/provenance measurements in the existing
+  `extract-queue-operations.mts --measure`/catalog path, replacing the false
+  “attachments never reach JSONL” claim.
+- Recorded red tests for prompt admission, the working dequeue comparison,
+  notification exclusion, and mixed-queue exact attribution.
+- Corrected scope for `fixtures.queueHandoff.test.ts` and reduced queue
+  fixtures.
+- If peer/meta or block-array structure is absent from bundles, a hard-redacted
+  projection from existing capture/redact tooling—not a new recorder.
 
 **Verified by**
 
-- Against untouched `main`, the attachment-consumed prompt test fails because
-  no feed candidate is produced.
-- The observed-dequeue case already yields exactly one committed row and stays
-  green, proving the fixture distinguishes the missing path from the working
-  path.
-- The test names the source fixture and exact event indices/window it consumes;
-  no test literal substitutes for recorded provider input.
+- On the untouched implementation, the prompt contract fails at mapper
+  admission and produces no selected row.
+- The dequeue comparison stays green.
+- Every test cites a bundle and event indices or recorded redaction provenance.
+- `--measure` regenerates every retained aggregate claim.
 
 **Why separate**
 
-If the transition API is designed before the failing contract exists, the test
-will encode whatever object the implementation happens to emit. Stage 1 fixes
-the semantic expectation while the implementation still has no influence over
-it.
+The first plan and catalog overlooked attachments already in the same
+transcript. Tests written after the adapter would only ratify the adapter.
 
 **Reality check**
 
-- The source session contains real prompt `enqueue → remove` windows with no
-  matching committed user row, real notification removals, observed dequeue
-  deliveries, and inferred prompt dequeues.
-- The catalog establishes that `remove` is the dominant departure family and
-  that missing committed prompt rows are common, not a theoretical edge.
+The stage uses the 15 queue-bearing bundles and existing local transcripts. It
+adds no imagined fixture family.
 
-### Stage 2 — isolated queue-to-feed handoff transition
+### Stage 2 — isolate provider-owned queued-command admission
 
 **Produces**
 
-- A pure handoff transition under
-  `src/renderer/src/session-runtime/claudeQueue/` that returns queue state plus
-  explicit, transient handoff effects for newly delivered user-authored items.
-- A closed handoff-reason contract derived from existing `QueueDecisionReason`;
-  it does not create a second explanation for the same departure.
-- Reference-stability tests: a no-op returns the previous state and no effects.
+- One pure Claude adapter for `attachment/queued_command`.
+- A provider-neutral durable kind such as `queued-user-prompt`, returned only
+  for `commandMode === "prompt"`, `isMeta !== true`, and absent legacy or
+  `human` origin.
+- Mapper admission through that provider classification.
+- A promoted shape route closing `TODO(system-attachment-grammar)` for only
+  this subtype.
 
 **Verified by**
 
-- Stage 1's recorded windows prove which exact pending item produced each
-  effect and why.
-- Existing queue-corpus replays remain green, including mixed prompt/
-  notification attribution and multi-item departure runs.
-- Unit tests prove `popped-to-composer`, `stale-unattributed`, and notification
-  departures emit no user handoff.
+- Recorded string and block-array prompts decode without losing identity.
+- Task-notification and peer/meta shapes decline the user-prompt kind.
+- All shared mapper call sites receive identical output.
+- Malformed shapes decline safely.
 
 **Why separate**
 
-Queue attribution is the genuinely hard part: departure records carry no ID,
-and only the reconciler knows which pending item left. Letting IPC glue or the
-ledger rediscover the victim would create two queue authorities that can
-disagree.
+Raw Claude grammar must not leak into the shared ledger, queue UI, or React
+components. Provider facts precede visibility ownership.
 
 **Reality check**
 
-The transition consumes the exact event vocabulary and attribution decisions
-already measured in the 220-session corpus. It adds no new provider shapes.
+The current census predicate accepts 770 human/legacy prompts and rejects 286
+task notifications plus 2 peer/meta prompts.
 
-### Stage 3 — one projection into the ownership ledger
+### Stage 3 — give the durable entry one ledger and painter owner
 
 **Produces**
 
-- One session-runtime projection that consumes the Stage 2 effects and creates
-  stable, provider-neutral local user artifacts.
-- A local ownership candidate/decision in the ledger for queue-delivered user
-  prompts, with committed-by-normalized-identity taking ownership when present.
-- The single live IPC call site reduced to forwarding ordered evidence and
-  applying the projection result; no visibility decision remains there.
+- `queued-user-prompt` mapped to committed `user-text`, never
+  `optimistic-submit`.
+- A Claude durable row presenting the original prompt while retaining the
+  attachment UUID/timestamp.
+- Exhaustive bridge/debug reasons so admission cannot silently outpace paint.
 
 **Verified by**
 
-- The recorded attachment window moves `QueueStrip → local user owner` in one
-  tick and paints exactly one row at the departure timestamp.
-- The recorded observed-dequeue window paints only the committed entry.
-- A recorded late-commit window, if present in the corpus selection, proves the
-  local-to-committed transfer. If no such recorded window exists, the behavior
-  remains an explicit unknown and cannot be blessed by an invented fixture.
-- Ledger assertions cover order, selected owner, rejection reason, and zero
-  bridge drops through the real `ledgerToFeedItems` projection.
-- D11 tests prove unchanged planes retain their references.
+- The three recorded remove/attachment transitions each paint once.
+- Dequeue still paints only its committed conversation row.
+- Notification and peer/meta attachments paint no fake user row.
+- Repeated identical prompts remain separate by UUID.
+- `ledgerToFeedItems` has zero drops and classifier/painter exhaustiveness
+  typechecks.
 
 **Why separate**
 
-Stage 2 decides **what left**. Stage 3 decides **who may paint it**. Combining
-those responsibilities would make queue membership depend on renderer policy
-and make the pure corpus replay impossible.
+Stage 2 answers what the provider artifact is. Stage 3 decides who paints it.
+Combining them lets the mapper make UI policy.
 
 **Reality check**
 
-The candidate is created only from a handoff effect whose pending item came
-from a recorded `enqueue`. No screen text, guessed content, or component-local
-queue scan can create it.
+The selected candidate is the recorded attachment. Queue text, screen text,
+synthetic UUIDs, and guessed timestamps cannot mint it.
 
-### Stage 4 — hydration, pagination, and heap-bound parity
+### Stage 4 — replace remove inference with attachment identity
 
 **Produces**
 
-- A shared live/history projection path so recent cold hydration of the
-  recorded transcript produces the same handoff rows as live ingest.
-- A defined reload/pagination contract for a handoff whose `enqueue` and
-  departure straddle a history-page or live-window boundary.
-- Memory/lifecycle verification showing that local handoff rows are included in
-  the existing live-entry count and byte budgets and are reclaimable/reloadable
-  rather than permanently pinning the window.
+- A provider-neutral queued-command observation consumed by the pure
+  `claudeQueue` reconciler.
+- Bounded remove settlement allowing adjacent attachment evidence to identify
+  the exact pending item before fallback.
+- Distinct observed-attachment and no-attachment fallback decisions.
+- IPC forwards typed evidence but contains no victim heuristic.
 
 **Verified by**
 
-- The same recorded event window is replayed through live ingestion and initial
-  history hydration; row identities, order, ownership decisions, and content
-  match.
-- A boundary test is derived by cutting the recorded event sequence at a real
-  marker; it may change chunking, but it may not invent provider records.
-- Heap assertions inspect retained object counts/bytes and reference reuse. No
-  benchmark may pass merely because garbage collection happened to run.
-- Existing `liveEntryWindow` count/byte, pagination-marker, trimmed-UUID, and
-  pair-integrity tests remain green.
+- The mixed bundle removes the prompt and preserves both notifications.
+- Multi-remove runs settle one item per attachment without reordering FIFO
+  peers.
+- A faithful Ctrl+B/no-attachment case exercises fallback.
+- No-op/reference stability and queue-corpus replays remain green.
+- Debt cannot retain more full content than the bounded pending queue.
 
 **Why separate**
 
-A live-only bubble would look fixed until reload or trimming, then silently
-vanish again. Conversely, solving durability first without the ownership
-contract would add a persistent duplicate source. Stage 4 may proceed only
-after Stage 3 has exactly-one-owner behavior.
+Feed ownership needs no queue inference; the attachment paints itself. Queue
+membership still needs a pure identity-free-operation/evidence join.
 
 **Reality check**
 
-The history loaders already stream transcript files with bounded ring buffers;
-they return the raw recorded queue operations. This stage reuses those readers.
-It must not load an entire transcript into an array or introduce another
-full-content sidecar without revising this decomposition and obtaining review.
+Settlement order comes from recorded evidence. If watcher batch boundaries are
+not proven, retain conservative bounded debt rather than invent timing.
 
-### Stage 5 — whole-pipeline verification and delivery
+### Stage 5 — parity, heap verification, and delivery
 
 **Produces**
 
-- Updated rendering architecture documentation for the new local handoff plane
-  and its ownership transfer.
-- A PR linked with `Fixes #665` and `Refs #339`, containing the approved implementation,
-  recorded tests, performance evidence, and known limitations.
-- Two independent code reviews after the branch is complete.
+- Live/history/pagination/preview/remote parity.
+- Heap and reference-stability evidence.
+- Corrected reconciliation comments/docs removing “never persisted.”
+- A PR with `Fixes #665`, `Refs #339`, and independent final reviews.
 
 **Verified by**
 
-- Focused queue, ledger, live-window, renderer, and history-loader tests.
-- The rendering bundle corpus, recording corpus, invariant replay, typecheck,
-  and the applicable system/renderer suites.
-- Review of every corpus divergence; no blind blessing.
-- Final diff audit confirms no unrelated changes and no private transcript
-  content.
+- Focused mapper, classifier, row, queue, ledger, live-window, history, remote,
+  and renderer tests.
+- Bundle corpus, queue replay, shapes, invariants, typecheck, and relevant
+  renderer/system suites.
+- Manual triage of every changed bundle.
+- Final diff audit, synchronized Issue/PR, clean worktree, and passing CI.
 
 **Why separate**
 
-Local green tests do not prove the three-plane ownership system still agrees.
-The final stage checks the full artifact and records its limitations before the
-PR is offered for merge.
+Admission tests do not prove reload/remote parity, and green corpus output does
+not prove heap behavior.
 
 **Reality check**
 
-Verification uses the checked-in recorded queue fixture and existing rendering
-corpora. Any newly discovered source shape must be recorded through the
-existing hard-redacted infrastructure before it can change behavior.
+Any newly observed provider shape returns the work to Stage 1 rather than
+receiving a forward conditional.
 
 ## What is isolated
 
-### Hard component
-
-The hard component is **attributing a queue departure and emitting a user
-handoff exactly once without competing with committed history**.
-
-It remains under:
+The genuinely hard component remains queue attribution under:
 
 ```text
 src/renderer/src/session-runtime/claudeQueue/
 ```
 
-The pure attribution/handoff transition has one consumer: a session-runtime
-projection module. Live IPC, initial hydration, and replay consume that
-projection; they do not import the hard transition directly.
+Its single production consumer is live session-runtime ingestion. It consumes
+provider-neutral queue operations, committed-user observations, and
+queued-command observations; it does not parse Claude grammar or render rows.
 
-### Forbidden dependency and ownership directions
+Provider grammar sits behind one Claude adapter. Mapper, classifier, renderer,
+and live ingestion consume its typed projection; none duplicates raw
+`attachment.*` checks.
 
-- `QueueStrip`, `Feed`, and row components may not import `claudeQueue` or
-  inspect queue-operation records.
-- `rendering/` may not infer which queued item a `remove` or `dequeue` consumed.
-- `claudeQueue/` may not import React, IPC, `features/feed`, or provider renderer
-  components.
-- The IPC hook may not synthesize visibility based on operation strings with a
-  new inline conditional.
-- History hydration may not implement a second queue reconciler.
-- Task-notification XML recognition remains in the existing queue/provider
-  adapters; the feed may not sniff raw XML to decide whether a row is a user
-  prompt.
-- No debug-only derivation may explain a different reason than the decision
-  that actually painted.
+Forbidden directions:
+
+- QueueStrip/Feed/rows may not import `claudeQueue`.
+- Rendering may not infer a remove victim.
+- `claudeQueue` may not import React, IPC, feed, or Claude raw types.
+- Shared ledger code may use the durable kind but not raw attachment fields.
+- IPC may forward adapter evidence but not add a victim heuristic.
+- History/remote may not implement separate attachment mappers.
+- No local optimistic UUID is minted for a durable command.
 
 ## Heap and runtime constraints
 
-1. Full prompt content must not be copied into `ClaudeQueueState.decisions`,
-   which is append-only for the session. Decisions retain the existing bounded
-   preview only.
-2. Handoff effects are transient return values. If a local render entry is
-   needed, it reuses the already-retained string reference and then participates
-   in the existing entry-window byte/count lifecycle.
-3. The current `optimistic-codex-user:` prefix may not be reused blindly. The
-   trimmer deliberately stops before optimistic rows; a delivered Claude row
-   using that protected prefix could pin every later entry for the rest of a
-   long session.
-4. No `Array.find`/`filter` over the complete transcript for every queue event.
-   The existing ordered fold and bounded pending queue are the hot-path inputs.
-5. No module-level content map may outlive its session. Any index must have the
-   same teardown sites as queue/runtime state and must be bounded by live
-   ownership, not historical transcript length.
-6. No `JSON.stringify` of the whole transcript or whole runtime is introduced.
-   Existing sampled/cached live-entry byte estimates remain the memory gate.
-7. No-op inputs return the exact previous references through the reducer,
-   adapter, and ledger chain.
+1. Retain the attachment once in `runtime.entries`; do not copy its prompt
+   into a local entry.
+2. Queue decisions keep bounded preview/evidence only.
+3. Remove debt stores counts/references to pending items, not content history,
+   and has an explicit bound.
+4. Never use `optimistic-codex-user:`; it can pin live-window trimming.
+5. Match only against the bounded pending queue; no transcript scan per op.
+6. Add no session-lifetime normalized-text set. UUID is identity.
+7. Add no transcript/runtime `JSON.stringify`; keep the WeakMap-cached
+   estimator and existing count/byte authority.
+8. No-op inputs preserve references.
 
-## Unknowns that must remain explicit
+## Unknowns
 
-1. **Late committed prompt after `remove`.** The corpus reports 33.9% prompt
-   observability after remove, but the selected fixture window must establish
-   whether any is a true late twin versus repeated/independent text before a
-   dedupe rule is broadened.
-2. **Repeated identical queued prompts.** Text is the only prompt identity in
-   Claude's records. The corpus contains repeated synthetic tokens; we must
-   determine whether FIFO plus departure time is enough to avoid one committed
-   row suppressing multiple legitimate identical local rows.
-3. **Slash-command presentation.** Slash commands are dequeued but may commit
-   as expanded text rather than their literal input. The user-visible contract
-   for showing the typed command versus Claude's expansion must come from a
-   recorded case, not preference.
-4. **Bash-mode indistinguishability.** Claude logs a bash-mode command as bare
-   text, so the queue reconciler cannot distinguish it from a prompt even though
-   upstream attachment eligibility differs. The existing conservative
-   attribution rule remains the boundary unless new evidence exists.
-5. **History page split.** A page can theoretically contain a departure without
-   the earlier enqueue that gives it identity. Stage 4 must measure this against
-   real marker spacing and define state carry-over without turning pagination
-   into a full-file materialization.
-6. **Remote live parity.** Desktop and remote share the ledger painter, but the
-   remote transcript store has its own ingestion lifecycle. The shared
-   projection must either cover it or the limitation must stay explicit.
-7. **Existing queue decision retention.** `QueueDecision[]` itself is currently
-   append-only. This fix must not enlarge its retained payload. Bounding that
-   pre-existing diagnostic history is a separate performance decision unless
-   measurement shows it blocks this work.
+1. **Live batch boundary:** bundles preserve raw order, not necessarily watcher
+   delivery batches. Stage 4 must prove or conservatively bound settlement.
+2. **`source_uuid`:** semantics/coverage are not strong enough to require it.
+3. **Block arrays:** 14 recorded human prompts need supported text/image
+   presentation without unproven flattening.
+4. **Legacy origin:** 296 prompts lack origin/meta. They are accepted for
+   compatibility; contrary evidence must revise the predicate.
+5. **No-attachment remove:** Ctrl+B/future shapes need explicit fallback.
+6. **Append-only decisions:** do not enlarge their payload; bounding the
+   pre-existing array is separate unless measurement blocks this work.
 
-If investigation changes any of these from an unknown into a design decision,
-this document must be revised before code proceeds. Do not patch forward.
+## Explicit non-goals
+
+- Queued slash commands produce no attachment and commit as command scaffolding
+  that the feed filters. They require a separate recorded contract and Issue.
+- Bash commands are excluded from inline attachment drain; existing dequeue
+  behavior is unchanged.
+- No provider-wide optimistic echo for Claude.
+- No redesign of the general ledger or queue UI.
 
 ## Fixture plan
 
-### Existing real sources only
+Primary sources:
 
-- Primary: `testing/fixtures/queue-operations/remove-is-not-persisted.json`.
-- Corpus guard: the other checked-in `testing/fixtures/queue-operations/*.json`
-  replays.
-- Frequency/provenance: `testing/fixtures/queue-operations/catalog.md`.
-- Whole-render regression net: existing bundle and recording corpora.
-- Issue evidence: #339's captured queue-only/screen-only failures, without
-  copying private bundle content into public fixtures.
+- `2026-06-14T14-25-07-012-a8ad1ebb.json`: three missing bubbles, one working
+  dequeue, pending/notification negatives.
+- `2026-07-07T13-17-20-472-5b19529f.json`: mixed queue and exact prompt
+  attachment.
+- The other 13 queue-bearing bundles for variants/regression.
+- Queue-operation fixtures for topology/fallback only.
+- Existing transcripts through current redaction for provenance/block arrays
+  absent from bundles.
 
-### Required red-first cases
+Red-first contracts:
 
-1. Recorded `enqueue(prompt) → remove` with no matching committed user row:
-   pending queue row leaves; one local user handoff appears.
-2. Recorded `enqueue → dequeue → matching user`: one committed user row; no
-   local twin.
-3. Recorded inferred dequeue: one surviving local user row, reason retained.
-4. Recorded task-notification departure: no user bubble.
-5. Recorded pop-to-composer when publishable evidence becomes available; until
-   then the existing synthetic unit case may guard only the already-known pure
-   queue rule and may not be presented as handoff evidence.
+1. Human prompt attachment is admitted, selected as committed user text, and
+   painted once at durable identity/order.
+2. Dequeue plus committed user remains one row.
+3. Notification attachment is not a user prompt.
+4. Peer/meta attachment is not a user prompt.
+5. Block-array human prompt preserves supported content.
+6. Mixed queue removes the attachment-identified item.
+7. Remove without attachment follows bounded fallback.
+8. Live, cold history, older page, preview, and remote map identically.
+9. Trimming reclaims admitted attachments and pagination reloads them.
 
-The tests are written before implementation. A failing assertion against a
-recorded case is never weakened or deleted to make the implementation green.
-If the recorded data contradicts D, stop and request the user's semantic
-judgment rather than blessing a new interpretation.
-
-## Approval boundary
-
-This file is the only repository artifact authorized in the decomposition
-step. After it is committed, work stops. No production code, test code, fixture,
-or corpus expectation may change until the user explicitly approves this
-decomposition.
+If any semantic case lacks recorded evidence, stop at Stage 1 and use the
+existing collection/redaction path. Do not fill the gap with a plausible
+literal.
