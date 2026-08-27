@@ -1,6 +1,6 @@
 # GitHub Skill Installation
 
-> Status: implemented and locally verified; PR review is pending for issue #664.
+> Status: implemented; two-agent PR review completed and remediation verification is in progress for issue #664.
 
 ## Goal
 
@@ -53,10 +53,16 @@ submodules, credential helpers, or interactive authentication. It reads the
 resolved commit tree and blobs directly from a temporary bare clone. Avoiding a
 working-tree checkout is load-bearing: repository-controlled attributes and
 filesystem links must not turn preview into code execution or path traversal.
+The Git subprocess receives an OS-variable allowlist rather than ambient Git,
+credential, proxy, or TLS controls. A live temporary-storage monitor cancels
+Git when acquisition crosses 64 MiB, before repository metadata can grow
+without a disk boundary.
 
 GitHub `/tree/` URLs are resolved against advertised heads and tags, choosing
 the longest matching ref so branch names containing slashes remain
-unambiguous. The canonical source record stores:
+unambiguous. Same-name branch/tag URLs are rejected, and the canonical source
+record stores the ref namespace so an update cannot silently switch from a tag
+to a later branch. The canonical source record stores:
 
 - repository owner and name;
 - requested ref, including the resolved default branch when none was supplied;
@@ -64,7 +70,8 @@ unambiguous. The canonical source record stores:
 - resolved 40-character commit;
 - canonical repository and skill URLs.
 
-Discovery rejects symbolic links, gitlinks/submodules, unsafe paths, malformed
+Discovery rejects symbolic links, gitlinks/submodules, unsafe or
+cross-filesystem-colliding paths, malformed
 or oversized `SKILL.md` frontmatter, duplicate skill names, excessive file
 counts, excessive individual files, and excessive total package bytes. It
 returns explicit warnings for executable modes and provider-specific metadata.
@@ -80,7 +87,9 @@ descendant `SKILL.md` identifies one candidate package.
 
 Frontmatter must contain portable `name` and `description` string fields and
 the directory name must equal `name`. Other frontmatter is retained byte-for-
-byte but reported when it is provider-specific or experimental. Every regular
+byte, but the complete bounded YAML document is parsed so malformed nested
+provider metadata cannot be approved as active. Other fields are reported when
+provider-specific or experimental. Every regular
 file below the candidate directory belongs to the immutable package snapshot.
 
 Package limits are product constants shared by acquisition, persistence, IPC,
@@ -112,7 +121,10 @@ private staging directory, validates every file, and renames it to a directory
 derived from the package digest before state can reference it. A crash may
 leave an unreferenced immutable snapshot, but can never leave state pointing at
 partial bytes. Reconciliation verifies stored bytes against the persisted
-manifest before using them.
+manifest before using them. Unreferenced snapshots are deliberately retained:
+portable Node APIs cannot recursively delete relative to a securely opened
+root handle, so automatic GC could be redirected into unmanaged data by an
+ancestor replacement race.
 
 ## One managed-skill authority
 
@@ -235,6 +247,8 @@ shape:
   materialize across deduplicated provider roots;
 - partial publication resumes from its durable package journal;
 - external edits are preserved during update, disable, and removal;
+- failed removal retains the skill, materialization, and pending operation so a
+  later retry still has deletion authority;
 - update review reports deterministic file changes and applying it updates
   provenance only after confirmation;
 - schema-v1/v2 migration preserves prior managed-skill ownership;

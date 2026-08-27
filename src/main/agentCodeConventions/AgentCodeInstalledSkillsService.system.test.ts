@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AgentCodeInstalledSkillFileRecord } from '@shared/types/agentCodeConventions.js'
 import type { GitHubSkillDiscoveryPayload, StagedInstalledSkillCandidate } from './githubSkillSource.js'
 import { installedSkillManifestDigest } from './installedSkillPackageStore.js'
+import { SkillPathSafety } from './skillPathSafety.js'
 import type {
   AgentCodeConventionsTarget,
   ResolvedAgentCodeConventionsTargets,
@@ -53,7 +54,7 @@ function stagedPackage(input: {
       sha256: createHash('sha256').update(content).digest('hex'),
       executable: file.executable ?? false,
     }
-  }).sort((left, right) => left.path.localeCompare(right.path))
+  }).sort((left, right) => left.path === right.path ? 0 : left.path < right.path ? -1 : 1)
   const snapshotDigest = installedSkillManifestDigest(files)
   return {
     snapshotDigest,
@@ -67,6 +68,7 @@ function stagedPackage(input: {
         repository: 'skills',
         repositoryUrl: 'https://github.com/example/skills',
         requestedRef: 'main',
+        requestedRefType: 'branch',
         path: 'skills/review-code',
         skillUrl: 'https://github.com/example/skills/tree/main/skills/review-code',
         resolvedCommit: input.commit,
@@ -82,6 +84,7 @@ function payload(candidate: StagedInstalledSkillCandidate): GitHubSkillDiscovery
   return {
     repositoryUrl: candidate.candidate.source.repositoryUrl,
     requestedRef: candidate.candidate.source.requestedRef,
+    requestedRefType: candidate.candidate.source.requestedRefType,
     resolvedCommit: candidate.candidate.source.resolvedCommit,
     candidates: [candidate],
     notices: [],
@@ -103,6 +106,7 @@ async function harness(options: { now?: () => Date } = {}) {
     targets: [currentTarget],
     unsupportedProviders: [],
   }
+  const pathSafety = new SkillPathSafety(root)
   const service = new AgentCodeConventionsService({
     stateFilePath: join(root, 'state', 'conventions.json'),
     installedSkillSnapshotRoot: join(root, 'state', 'managed-skill-snapshots'),
@@ -111,12 +115,14 @@ async function harness(options: { now?: () => Date } = {}) {
     githubSkillSource,
     now: options.now ?? (() => new Date('2026-08-27T00:00:00.000Z')),
     operationId: (() => { let value = 0; return () => `installed-operation-${++value}` })(),
+    pathSafety,
   })
   await service.initialize()
   return {
     root,
     service,
     discoveries,
+    pathSafety,
     skillDirectory: join(currentTarget.skillsDirectory, 'review-code'),
   }
 }
@@ -210,14 +216,64 @@ describe('AgentCode installed skills service', () => {
     })
     expect(await readFile(join(skillDirectory, 'SKILL.md'), 'utf8')).toBe('second instructions')
     expect((await stat(join(skillDirectory, 'scripts', 'check.sh'))).mode & 0o111).not.toBe(0)
+    // Immutable snapshots are intentionally retained: Node cannot recursively
+    // delete relative to an opened directory handle on every supported host,
+    // so automatic GC could be redirected by an ancestor-symlink race.
     await expect(stat(join(root, 'state', 'managed-skill-snapshots', first.snapshotDigest)))
-      .rejects.toMatchObject({ code: 'ENOENT' })
+      .resolves.toMatchObject({})
 
     const removed = await service.deleteInstalledSkill({
       expectedRevision: 4,
       skillId,
     })
     expect(removed).toMatchObject({ ok: true, snapshot: { skills: [] } })
+    await expect(stat(join(skillDirectory, 'SKILL.md'))).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('retains ownership and retry authority when provider-file removal fails', async () => {
+    const { root, service, discoveries, pathSafety, skillDirectory } = await harness()
+    const candidate = stagedPackage({
+      commit: 'a'.repeat(40),
+      files: [{ path: 'SKILL.md', content: 'managed instructions' }],
+    })
+    const discovery = await discoverOne(service, discoveries, candidate)
+    const installed = await service.installGitHubSkills({
+      expectedRevision: 0,
+      discoveryId: discovery.discoveryId,
+      candidateIds: [candidate.candidate.candidateId],
+    })
+    if (!installed.ok) throw new Error('installation failed')
+    const skillId = installed.snapshot.skills[0]!.id
+    vi.spyOn(pathSafety, 'unlinkOwnedRegularFile').mockRejectedValueOnce(
+      Object.assign(new Error('permission denied'), { code: 'EACCES' }),
+    )
+
+    const blocked = await service.deleteInstalledSkill({ expectedRevision: 1, skillId })
+
+    expect(blocked).toMatchObject({
+      ok: false,
+      code: 'delete-blocked',
+      snapshot: { skills: [{ id: skillId, enabled: false, health: 'degraded' }] },
+      targets: [{ state: 'error' }],
+    })
+    if (blocked.ok || blocked.code !== 'delete-blocked') {
+      throw new Error('expected removal to remain blocked')
+    }
+    expect(await readFile(join(skillDirectory, 'SKILL.md'), 'utf8')).toBe('managed instructions')
+    const persisted = JSON.parse(await readFile(join(root, 'state', 'conventions.json'), 'utf8')) as {
+      installedSkills: Record<string, unknown>
+      installedMaterializations: Record<string, unknown>
+      installedPendingOperations: Record<string, unknown>
+    }
+    expect(persisted.installedSkills).toHaveProperty(skillId)
+    expect(Object.keys(persisted.installedMaterializations)).toHaveLength(1)
+    expect(Object.keys(persisted.installedPendingOperations)).toHaveLength(1)
+
+    const retried = await service.deleteInstalledSkill({
+      expectedRevision: blocked.snapshot.revision,
+      skillId,
+    })
+    expect(retried).toMatchObject({ ok: true, snapshot: { skills: [] } })
     await expect(stat(join(skillDirectory, 'SKILL.md'))).rejects.toMatchObject({ code: 'ENOENT' })
   })
 

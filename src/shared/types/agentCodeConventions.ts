@@ -171,6 +171,7 @@ export type AgentCodeInstalledSkillSource = {
   repository: string
   repositoryUrl: string
   requestedRef: string
+  requestedRefType: 'branch' | 'tag'
   path: string
   skillUrl: string
   resolvedCommit: string

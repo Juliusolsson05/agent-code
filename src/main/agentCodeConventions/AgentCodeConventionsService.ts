@@ -113,6 +113,7 @@ type ServiceOptions = {
   operationId?: () => string
   githubSkillSource?: Pick<GitHubSkillSource, 'discover'>
   installedSkillSnapshotRoot?: string
+  pathSafety?: SkillPathSafety
 }
 
 type PreflightTarget = {
@@ -176,7 +177,7 @@ export class AgentCodeManagedSkillsService {
   constructor(options: ServiceOptions = {}) {
     this.stateFilePath = options.stateFilePath ?? AGENT_CODE_CONVENTIONS_STATE_FILE
     this.homeDirectory = options.homeDirectory ?? homedir()
-    this.pathSafety = new SkillPathSafety(this.homeDirectory)
+    this.pathSafety = options.pathSafety ?? new SkillPathSafety(this.homeDirectory)
     this.resolveTargetsImpl = options.resolveTargets ?? (() => resolveAgentCodeConventionsTargets({
       homeDirectory: this.homeDirectory,
       environment: options.environment ?? process.env,
@@ -489,7 +490,9 @@ export class AgentCodeManagedSkillsService {
       const payload = await this.githubSkillSource.discover(current.source.skillUrl)
       const candidate = payload.candidates.find(value =>
         value.candidate.name === current.name
-        && value.candidate.source.path === current.source.path)
+        && value.candidate.source.path === current.source.path
+        && value.candidate.source.requestedRef === current.source.requestedRef
+        && value.candidate.source.requestedRefType === current.source.requestedRefType)
       if (!candidate) {
         return {
           ok: false,
@@ -532,7 +535,8 @@ export class AgentCodeManagedSkillsService {
         || candidate.candidate.source.owner !== skill.source.owner
         || candidate.candidate.source.repository !== skill.source.repository
         || candidate.candidate.source.path !== skill.source.path
-        || candidate.candidate.source.requestedRef !== skill.source.requestedRef) {
+        || candidate.candidate.source.requestedRef !== skill.source.requestedRef
+        || candidate.candidate.source.requestedRefType !== skill.source.requestedRefType) {
         return { ok: false, code: 'validation', message: 'The reviewed package is not an update for this skill.' }
       }
       const prepared = await this.prepareInstalledMutation(skill.enabled)
@@ -603,7 +607,9 @@ export class AgentCodeManagedSkillsService {
         skill = this.document.installedSkills[request.skillId]!
       }
       const statuses = this.installedTargetStatuses.get(skill.id) ?? []
-      const blockers = statuses.filter(status => status.state === 'conflict' || status.state === 'retired')
+      const blockers = statuses.filter(status => status.state === 'conflict'
+        || status.state === 'retired'
+        || status.state === 'error')
       const approvals = new Map((request.abandonTargets ?? []).map(value => [value.targetId, value]))
       const unresolved = blockers.filter(status => {
         const approval = approvals.get(status.id)
@@ -615,6 +621,32 @@ export class AgentCodeManagedSkillsService {
           ok: false,
           code: 'delete-blocked',
           message: 'External changes must be reviewed before Agent Code forgets this installed skill.',
+          snapshot: this.installedSnapshot(),
+          targets: blockers,
+        }
+      }
+      const approvedAbandonmentKeys = new Set(blockers.flatMap(status => {
+        if (status.state === 'error') return []
+        const approval = approvals.get(status.id)
+        if (!approval || approval.expectedConflictFingerprint !== status.conflictFingerprint) return []
+        return [status.state === 'retired' ? status.id : installedArtifactKey(skill.id, status.id)]
+      }))
+      const stillOwnedKeys = [
+        ...this.installedMaterializations(skill.id).map(([key]) => key),
+        ...Object.entries(this.document.installedPendingOperations)
+          .filter(([, operation]) => operation.skillId === skill.id)
+          .map(([key]) => key),
+      ]
+      if (stillOwnedKeys.some(key => !approvedAbandonmentKeys.has(key))) {
+        // WHY the journal itself is authoritative here: a status list is a UI
+        // projection and can be incomplete after an I/O failure. Forgetting
+        // ownership while any materialization or pending delete remains would
+        // strand provider-visible bytes that Agent Code can no longer audit or
+        // remove on retry.
+        return {
+          ok: false,
+          code: 'delete-blocked',
+          message: 'Agent Code could not remove every managed copy. Fix the filesystem error and retry removal.',
           snapshot: this.installedSnapshot(),
           targets: blockers,
         }
@@ -1156,6 +1188,7 @@ export class AgentCodeManagedSkillsService {
       discoveryId,
       repositoryUrl: payload.repositoryUrl,
       requestedRef: payload.requestedRef,
+      requestedRefType: payload.requestedRefType,
       resolvedCommit: payload.resolvedCommit,
       expiresAt: new Date(expiresAtMs).toISOString(),
       candidates: payload.candidates.map(value => value.candidate),

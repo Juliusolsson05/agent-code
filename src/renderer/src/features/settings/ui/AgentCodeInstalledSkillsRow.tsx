@@ -436,7 +436,10 @@ function DiscoveryReview({
     <>
       <div className="border border-panel-border p-3 text-[10px] text-muted">
         <div>{discovery.repositoryUrl}</div>
-        <div className="mt-1">Ref {discovery.requestedRef} · commit {discovery.resolvedCommit.slice(0, 12)}</div>
+        <div className="mt-1">
+          {discovery.requestedRefType === 'branch' ? 'Branch' : 'Tag'} {discovery.requestedRef}
+          {' · '}commit {discovery.resolvedCommit.slice(0, 12)}
+        </div>
       </div>
       {discovery.notices.map(notice => (
         <div key={notice} className="border border-warning p-2 text-[10px] text-warning">{notice}</div>

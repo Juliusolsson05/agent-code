@@ -24,6 +24,8 @@ import {
   AGENT_CODE_INSTALLED_SKILL_MAX_FILE_BYTES,
   AGENT_CODE_INSTALLED_SKILL_MAX_TOTAL_BYTES,
   AGENT_CODE_INSTALLED_SKILL_MAX_URL_LENGTH,
+  agentCodeInstalledSkillPathCollisionKey,
+  compareAgentCodeInstalledSkillPaths,
   isSafeAgentCodeInstalledSkillPath,
 } from '@shared/types/agentCodeInstalledSkills.js'
 
@@ -109,10 +111,13 @@ function isInstalledFileManifest(value: unknown): value is AgentCodeInstalledSki
     || value.length > AGENT_CODE_INSTALLED_SKILL_MAX_FILES
     || !value.every(isInstalledFile)) return false
   const paths = value.map(file => file.path)
+  const portablePaths = paths.map(agentCodeInstalledSkillPathCollisionKey)
   const totalBytes = value.reduce((total, file) => total + file.bytes, 0)
   return paths.includes('SKILL.md')
     && new Set(paths).size === paths.length
-    && paths.every((path, index) => index === 0 || value[index - 1]!.path.localeCompare(path) < 0)
+    && new Set(portablePaths).size === portablePaths.length
+    && paths.every((path, index) => index === 0
+      || compareAgentCodeInstalledSkillPaths(value[index - 1]!.path, path) < 0)
     && totalBytes <= AGENT_CODE_INSTALLED_SKILL_MAX_TOTAL_BYTES
 }
 
@@ -126,6 +131,7 @@ function isInstalledSource(value: unknown): value is AgentCodeInstalledSkillReco
     && value.repositoryUrl.length <= AGENT_CODE_INSTALLED_SKILL_MAX_URL_LENGTH
     && typeof value.requestedRef === 'string'
     && value.requestedRef.length > 0 && value.requestedRef.length <= 512
+    && (value.requestedRefType === 'branch' || value.requestedRefType === 'tag')
     && typeof value.path === 'string'
     && (value.path === '' || isSafeAgentCodeInstalledSkillPath(value.path))
     && typeof value.skillUrl === 'string'

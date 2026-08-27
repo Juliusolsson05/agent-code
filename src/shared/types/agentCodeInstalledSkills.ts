@@ -12,6 +12,7 @@ export const AGENT_CODE_INSTALLED_SKILL_MAX_FILES = 256
 export const AGENT_CODE_INSTALLED_SKILL_MAX_FILE_BYTES = 5 * 1024 * 1024
 export const AGENT_CODE_INSTALLED_SKILL_MAX_TOTAL_BYTES = 10 * 1024 * 1024
 export const AGENT_CODE_INSTALLED_SKILL_MAX_DISCOVERY_BYTES = 25 * 1024 * 1024
+export const AGENT_CODE_INSTALLED_SKILL_MAX_ACQUISITION_BYTES = 64 * 1024 * 1024
 export const AGENT_CODE_INSTALLED_SKILL_MAX_SKILL_MD_BYTES = 128 * 1024
 export const AGENT_CODE_INSTALLED_SKILL_DISCOVERY_TTL_MS = 15 * 60 * 1_000
 export const AGENT_CODE_INSTALLED_SKILL_MAX_STAGED_DISCOVERIES = 5
@@ -28,7 +29,12 @@ export function isSafeAgentCodeInstalledSkillPath(value: unknown): value is stri
       || segment === '..'
       || segment.toLowerCase() === '.git'
       || /[\u0000-\u001f\u007f<>:"|?*]/.test(segment)
-      || /[. ]$/.test(segment)) return false
+      || /[. ]$/.test(segment)
+      // WHY component bytes are bounded in the portable contract rather than
+      // left to the current host: Git can represent names that a supported
+      // provider filesystem cannot materialize. Rejecting them during review
+      // prevents an accepted package from becoming an install-time surprise.
+      || new TextEncoder().encode(segment.normalize('NFC')).byteLength > 255) return false
     // WHY Windows device names are rejected even when discovery runs on Unix:
     // the immutable source identity is supposed to be portable across Agent
     // Code installations. Accepting a package that can never materialize on a
@@ -36,6 +42,21 @@ export function isSafeAgentCodeInstalledSkillPath(value: unknown): value is stri
     // after the user has reviewed and installed it.
     return !/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i.test(segment)
   })
+}
+
+export function agentCodeInstalledSkillPathCollisionKey(value: string): string {
+  // WHY both normalization and case folding are required: Git paths are byte
+  // identities, while default macOS and Windows filesystems collapse canonical
+  // Unicode spellings and/or case. The importer promises portability, so two
+  // paths that could name one provider file must be rejected before review.
+  return value.split('/').map(segment => segment.normalize('NFC').toLowerCase()).join('/')
+}
+
+export function compareAgentCodeInstalledSkillPaths(left: string, right: string): number {
+  // localeCompare intentionally does not define manifest identity: its result
+  // changes with locale and treats some distinct Git paths as equal. UTF-16
+  // ordinal order is deterministic in every process that reads persisted state.
+  return left === right ? 0 : left < right ? -1 : 1
 }
 
 export type AgentCodeInstalledSkillCandidate = {
@@ -52,6 +73,7 @@ export type AgentCodeInstalledSkillDiscovery = {
   discoveryId: string
   repositoryUrl: string
   requestedRef: string
+  requestedRefType: 'branch' | 'tag'
   resolvedCommit: string
   expiresAt: string
   candidates: AgentCodeInstalledSkillCandidate[]

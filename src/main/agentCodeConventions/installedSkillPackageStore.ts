@@ -6,7 +6,6 @@ import {
   mkdtemp,
   readdir,
   rename,
-  rm,
   writeFile,
 } from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
@@ -17,6 +16,8 @@ import {
   AGENT_CODE_INSTALLED_SKILL_MAX_FILES,
   AGENT_CODE_INSTALLED_SKILL_MAX_FILE_BYTES,
   AGENT_CODE_INSTALLED_SKILL_MAX_TOTAL_BYTES,
+  agentCodeInstalledSkillPathCollisionKey,
+  compareAgentCodeInstalledSkillPaths,
   isSafeAgentCodeInstalledSkillPath,
 } from '@shared/types/agentCodeInstalledSkills.js'
 import type { StagedInstalledSkillCandidate } from './githubSkillSource.js'
@@ -50,29 +51,31 @@ export class InstalledSkillPackageStore {
       return
     }
 
+    // WHY failed staging directories are allowed to remain: recursively
+    // cleaning a path after releasing the validated root inode has the same
+    // ancestor-swap problem as snapshot GC. A successful rename makes this
+    // path disappear. The rare failed/concurrent case leaves only bounded,
+    // inert package bytes under the private root, which is safer than risking
+    // deletion outside it.
     const staging = await mkdtemp(join(this.root, '.staging-'))
+    for (const file of candidate.candidate.files) {
+      const target = join(staging, ...file.path.split('/'))
+      await this.ensureContainedDirectory(dirname(target), staging)
+      await writeFile(target, candidate.contents.get(file.path)!, {
+        flag: 'wx',
+        mode: file.executable ? 0o700 : 0o600,
+      })
+      // umask may narrow permissions (which is fine) but never let a
+      // permissive inherited default make imported executable data writable
+      // by other users.
+      await chmod(target, file.executable ? 0o700 : 0o600)
+    }
+    await verifyDirectory(staging, candidate.candidate.files)
     try {
-      for (const file of candidate.candidate.files) {
-        const target = join(staging, ...file.path.split('/'))
-        await this.ensureContainedDirectory(dirname(target), staging)
-        await writeFile(target, candidate.contents.get(file.path)!, {
-          flag: 'wx',
-          mode: file.executable ? 0o700 : 0o600,
-        })
-        // umask may narrow permissions (which is fine) but never let a
-        // permissive inherited default make imported executable data writable
-        // by other users.
-        await chmod(target, file.executable ? 0o700 : 0o600)
-      }
-      await verifyDirectory(staging, candidate.candidate.files)
-      try {
-        await rename(staging, destination)
-      } catch (error) {
-        if (!['EEXIST', 'ENOTEMPTY'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error
-        await this.verify(candidate.snapshotDigest, candidate.candidate.files)
-      }
-    } finally {
-      await rm(staging, { recursive: true, force: true }).catch(() => undefined)
+      await rename(staging, destination)
+    } catch (error) {
+      if (!['EEXIST', 'ENOTEMPTY'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error
+      await this.verify(candidate.snapshotDigest, candidate.candidate.files)
     }
   }
 
@@ -139,10 +142,13 @@ export class InstalledSkillPackageStore {
     if (stat.isSymbolicLink() || !stat.isDirectory()) {
       throw new Error('Installed skill snapshot path changed outside Agent Code')
     }
-    // This is the one recursively removed tree in the feature. The target is a
-    // validated direct child of the private app-owned root whose name is a
-    // content digest; provider or user project paths never enter this method.
-    await rm(directory, { recursive: true })
+    // WHY an unreferenced snapshot is retained instead of recursively removed:
+    // Node does not expose a portable openat-style recursive delete anchored to
+    // the directory inode validated above. Between lstat and rm, an external
+    // change could replace the private root with a link and redirect recursive
+    // deletion into unmanaged data. Content-addressed snapshots are inert; a
+    // little retained storage is the safe failure mode until deletion can be
+    // expressed relative to a securely opened root handle.
   }
 
   private snapshotDirectory(digest: string): string {
@@ -222,10 +228,13 @@ function validateManifest(files: AgentCodeInstalledSkillFileRecord[]): void {
   let total = 0
   let previous = ''
   const paths = new Set<string>()
+  const portablePaths = new Set<string>()
   for (const file of files) {
+    const portablePath = agentCodeInstalledSkillPathCollisionKey(file.path)
     if (!isSafeAgentCodeInstalledSkillPath(file.path)
-      || (previous !== '' && previous.localeCompare(file.path) >= 0)
-      || paths.has(file.path)) {
+      || (previous !== '' && compareAgentCodeInstalledSkillPaths(previous, file.path) >= 0)
+      || paths.has(file.path)
+      || portablePaths.has(portablePath)) {
       throw new Error('Installed skill manifest paths are unsafe or unsorted')
     }
     if (!Number.isSafeInteger(file.bytes) || file.bytes < 0
@@ -236,6 +245,7 @@ function validateManifest(files: AgentCodeInstalledSkillFileRecord[]): void {
     total += file.bytes
     previous = file.path
     paths.add(file.path)
+    portablePaths.add(portablePath)
   }
   if (!paths.has('SKILL.md') || total > AGENT_CODE_INSTALLED_SKILL_MAX_TOTAL_BYTES) {
     throw new Error('Installed skill manifest is incomplete or oversized')

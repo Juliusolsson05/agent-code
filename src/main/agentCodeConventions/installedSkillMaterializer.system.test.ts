@@ -40,7 +40,7 @@ function staged(files: Array<{ path: string; content: Buffer | string; executabl
         executable: file.executable ?? false,
       }
     })
-    .sort((left, right) => left.path.localeCompare(right.path))
+    .sort((left, right) => left.path === right.path ? 0 : left.path < right.path ? -1 : 1)
   const snapshotDigest = installedSkillManifestDigest(manifest)
   const candidate: AgentCodeInstalledSkillCandidate = {
     candidateId: snapshotDigest.slice(0, 32),
@@ -51,6 +51,7 @@ function staged(files: Array<{ path: string; content: Buffer | string; executabl
       repository: 'skills',
       repositoryUrl: 'https://github.com/example/skills',
       requestedRef: 'main',
+      requestedRefType: 'branch',
       path: 'skills/review-code',
       skillUrl: 'https://github.com/example/skills/tree/main/skills/review-code',
       resolvedCommit: 'a'.repeat(40),

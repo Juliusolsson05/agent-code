@@ -21,6 +21,7 @@ const skill: AgentCodeInstalledSkillRecord = {
     repository: 'skills',
     repositoryUrl: 'https://github.com/example/skills',
     requestedRef: 'main',
+    requestedRefType: 'branch',
     path: 'skills/review-code',
     skillUrl: 'https://github.com/example/skills/tree/main/skills/review-code',
     resolvedCommit: 'b'.repeat(40),

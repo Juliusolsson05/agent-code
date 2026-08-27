@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto'
 import { execFile } from 'node:child_process'
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { lstat, mkdtemp, mkdir, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, posix } from 'node:path'
+import { parseDocument } from 'yaml'
 
 import type {
   AgentCodeInstalledSkillFileRecord,
@@ -10,11 +11,14 @@ import type {
 } from '@shared/types/agentCodeConventions.js'
 import {
   AGENT_CODE_INSTALLED_SKILL_MAX_FILES,
+  AGENT_CODE_INSTALLED_SKILL_MAX_ACQUISITION_BYTES,
   AGENT_CODE_INSTALLED_SKILL_MAX_FILE_BYTES,
   AGENT_CODE_INSTALLED_SKILL_MAX_DISCOVERY_BYTES,
   AGENT_CODE_INSTALLED_SKILL_MAX_SKILL_MD_BYTES,
   AGENT_CODE_INSTALLED_SKILL_MAX_TOTAL_BYTES,
   AGENT_CODE_INSTALLED_SKILL_MAX_URL_LENGTH,
+  agentCodeInstalledSkillPathCollisionKey,
+  compareAgentCodeInstalledSkillPaths,
   isSafeAgentCodeInstalledSkillPath,
   type AgentCodeInstalledSkillCandidate,
 } from '@shared/types/agentCodeInstalledSkills.js'
@@ -39,6 +43,7 @@ export type StagedInstalledSkillCandidate = {
 export type GitHubSkillDiscoveryPayload = {
   repositoryUrl: string
   requestedRef: string
+  requestedRefType: GitRefType
   resolvedCommit: string
   candidates: StagedInstalledSkillCandidate[]
   notices: string[]
@@ -60,16 +65,34 @@ type GitTreeEntry = {
 
 type ResolvedGitHubSource = ParsedGitHubSkillUrl & {
   requestedRef: string
+  requestedRefType: GitRefType
+  requestedCommit: string
   requestedPath: string
+}
+
+type GitRefType = 'branch' | 'tag'
+
+type AdvertisedGitRef = {
+  name: string
+  type: GitRefType
+  commit: string
 }
 
 type GitRunner = (
   args: string[],
-  options: { cwd?: string; maxBuffer?: number; binary?: boolean; environment: NodeJS.ProcessEnv },
+  options: {
+    cwd?: string
+    maxBuffer?: number
+    binary?: boolean
+    environment: NodeJS.ProcessEnv
+    signal?: AbortSignal
+  },
 ) => Promise<string | Buffer>
 
 export type GitHubSkillSourceOptions = {
   runGit?: GitRunner
+  maxAcquisitionBytes?: number
+  acquisitionPollIntervalMs?: number
 }
 
 /**
@@ -83,9 +106,14 @@ export type GitHubSkillSourceOptions = {
  */
 export class GitHubSkillSource {
   private readonly runGit: GitRunner
+  private readonly maxAcquisitionBytes: number
+  private readonly acquisitionPollIntervalMs: number
 
   constructor(options: GitHubSkillSourceOptions = {}) {
     this.runGit = options.runGit ?? runGitProcess
+    this.maxAcquisitionBytes = options.maxAcquisitionBytes
+      ?? AGENT_CODE_INSTALLED_SKILL_MAX_ACQUISITION_BYTES
+    this.acquisitionPollIntervalMs = options.acquisitionPollIntervalMs ?? 50
   }
 
   async discover(inputUrl: string): Promise<GitHubSkillDiscoveryPayload> {
@@ -99,36 +127,50 @@ export class GitHubSkillSource {
     const environment = isolatedGitEnvironment(emptyGitConfig)
 
     try {
-      const resolved = await this.resolveSource(parsed, environment)
-      await this.gitText([
-        '-c', 'credential.helper=',
-        '-c', `core.hooksPath=${emptyHooks}`,
-        '-c', 'protocol.allow=never',
-        '-c', 'protocol.https.allow=always',
-        // WHY partial clone matters even though every selected blob is bounded
-        // later: a repository can contain enormous unrelated history or files.
-        // Deferring blob transfer keeps the acquisition boundary proportional
-        // to the package the user is actually reviewing.
-        'clone', '--bare', '--filter=blob:none', '--depth=1', '--single-branch',
-        '--branch', resolved.requestedRef,
-        `${resolved.repositoryUrl}.git`, bareRepository,
-      ], { environment })
-      const resolvedCommit = (await this.gitText([
-        '-C', bareRepository, 'rev-parse', 'HEAD^{commit}',
-      ], { environment })).trim()
-      if (!/^[a-f0-9]{40}$/.test(resolvedCommit)) {
-        throw new GitHubSkillSourceError('network', 'GitHub returned an invalid commit identity.')
-      }
-      const treeText = await this.gitText([
-        '-C', bareRepository, 'ls-tree', '-r', '-z', '--full-tree', 'HEAD',
-      ], { environment, maxBuffer: MAX_GIT_TEXT_BYTES })
-      const tree = parseGitTree(treeText)
-      return await this.discoverCandidates({
-        resolved,
-        resolvedCommit,
-        tree,
-        bareRepository,
-        environment,
+      return await withAcquisitionBudget({
+        root: scratch,
+        maxBytes: this.maxAcquisitionBytes,
+        pollIntervalMs: this.acquisitionPollIntervalMs,
+        operation: async signal => {
+          const resolved = await this.resolveSource(parsed, environment, signal)
+          await this.gitText([
+            '-c', 'credential.helper=',
+            '-c', `core.hooksPath=${emptyHooks}`,
+            '-c', 'protocol.allow=never',
+            '-c', 'protocol.https.allow=always',
+            // WHY partial clone matters even though every selected blob is bounded
+            // later: a repository can contain enormous unrelated history or files.
+            // Deferring blob transfer keeps the acquisition boundary proportional
+            // to the package the user is actually reviewing.
+            'clone', '--bare', '--filter=blob:none', '--depth=1', '--single-branch',
+            '--branch', resolved.requestedRef,
+            `${resolved.repositoryUrl}.git`, bareRepository,
+          ], { environment, signal })
+          const resolvedCommit = (await this.gitText([
+            '-C', bareRepository, 'rev-parse', 'HEAD^{commit}',
+          ], { environment, signal })).trim()
+          if (!/^[a-f0-9]{40}$/.test(resolvedCommit)) {
+            throw new GitHubSkillSourceError('network', 'GitHub returned an invalid commit identity.')
+          }
+          if (resolvedCommit !== resolved.requestedCommit) {
+            throw new GitHubSkillSourceError(
+              'validation',
+              'Git resolved a different branch or tag than the source selected for review.',
+            )
+          }
+          const treeText = await this.gitText([
+            '-C', bareRepository, 'ls-tree', '-r', '-z', '--full-tree', 'HEAD',
+          ], { environment, signal, maxBuffer: MAX_GIT_TEXT_BYTES })
+          const tree = parseGitTree(treeText)
+          return await this.discoverCandidates({
+            resolved,
+            resolvedCommit,
+            tree,
+            bareRepository,
+            environment,
+            signal,
+          })
+        },
       })
     } catch (error) {
       throw classifyGitHubSkillSourceError(error)
@@ -140,6 +182,7 @@ export class GitHubSkillSource {
   private async resolveSource(
     parsed: ParsedGitHubSkillUrl,
     environment: NodeJS.ProcessEnv,
+    signal: AbortSignal,
   ): Promise<ResolvedGitHubSource> {
     const remote = `${parsed.repositoryUrl}.git`
     const refs = await this.gitText([
@@ -147,28 +190,37 @@ export class GitHubSkillSource {
       '-c', 'protocol.allow=never',
       '-c', 'protocol.https.allow=always',
       'ls-remote', '--symref', remote, 'HEAD', 'refs/heads/*', 'refs/tags/*',
-    ], { environment })
+    ], { environment, signal })
     const advertised = parseAdvertisedRefs(refs)
-    if (!advertised.defaultBranch) {
+    if (!advertised.defaultRef) {
       throw new GitHubSkillSourceError('not-found', 'The repository has no discoverable default branch.')
     }
     if (parsed.treeSegments.length === 0) {
-      if (advertised.defaultBranch.length > 512) {
+      if (advertised.defaultRef.name.length > 512) {
         throw new GitHubSkillSourceError('validation', 'The default GitHub branch name is too long.')
       }
       return {
         ...parsed,
-        requestedRef: advertised.defaultBranch,
+        requestedRef: advertised.defaultRef.name,
+        requestedRefType: advertised.defaultRef.type,
+        requestedCommit: advertised.defaultRef.commit,
         requestedPath: '',
       }
     }
 
-    let requestedRef: string | null = null
+    let requestedRef: AdvertisedGitRef | null = null
     let refSegmentCount = 0
     for (let length = parsed.treeSegments.length; length >= 1; length -= 1) {
       const candidate = parsed.treeSegments.slice(0, length).join('/')
-      if (!advertised.refs.has(candidate)) continue
-      requestedRef = candidate
+      const identities = advertised.refs.get(candidate) ?? []
+      if (identities.length === 0) continue
+      if (identities.length > 1) {
+        throw new GitHubSkillSourceError(
+          'validation',
+          `GitHub advertises both a branch and tag named ${JSON.stringify(candidate)}. Use an unambiguous source ref.`,
+        )
+      }
+      requestedRef = identities[0]!
       refSegmentCount = length
       break
     }
@@ -178,14 +230,20 @@ export class GitHubSkillSource {
         'The GitHub tree URL does not begin with an advertised branch or tag.',
       )
     }
-    if (requestedRef.length > 512) {
+    if (requestedRef.name.length > 512) {
       throw new GitHubSkillSourceError('validation', 'The GitHub branch or tag name is too long.')
     }
     const requestedPath = parsed.treeSegments.slice(refSegmentCount).join('/')
     if (requestedPath && !isSafeRepositoryPath(requestedPath)) {
       throw new GitHubSkillSourceError('validation', 'The GitHub directory path is unsafe.')
     }
-    return { ...parsed, requestedRef, requestedPath }
+    return {
+      ...parsed,
+      requestedRef: requestedRef.name,
+      requestedRefType: requestedRef.type,
+      requestedCommit: requestedRef.commit,
+      requestedPath,
+    }
   }
 
   private async discoverCandidates(input: {
@@ -194,8 +252,9 @@ export class GitHubSkillSource {
     tree: GitTreeEntry[]
     bareRepository: string
     environment: NodeJS.ProcessEnv
+    signal: AbortSignal
   }): Promise<GitHubSkillDiscoveryPayload> {
-    const { resolved, resolvedCommit, tree, bareRepository, environment } = input
+    const { resolved, resolvedCommit, tree, bareRepository, environment, signal } = input
     const requestedPrefix = resolved.requestedPath ? `${resolved.requestedPath}/` : ''
     const exactSkillPath = `${requestedPrefix}SKILL.md`
     const exact = tree.some(entry => entry.path === exactSkillPath)
@@ -245,6 +304,7 @@ export class GitHubSkillSource {
           tree,
           bareRepository,
           environment,
+          signal,
         })
       } catch (error) {
         const classified = classifyGitHubSkillSourceError(error)
@@ -277,6 +337,7 @@ export class GitHubSkillSource {
     return {
       repositoryUrl: resolved.repositoryUrl,
       requestedRef: resolved.requestedRef,
+      requestedRefType: resolved.requestedRefType,
       resolvedCommit,
       candidates,
       notices,
@@ -290,18 +351,20 @@ export class GitHubSkillSource {
     tree: GitTreeEntry[]
     bareRepository: string
     environment: NodeJS.ProcessEnv
+    signal: AbortSignal
   }): Promise<StagedInstalledSkillCandidate> {
-    const { root, resolved, resolvedCommit, tree, bareRepository, environment } = input
+    const { root, resolved, resolvedCommit, tree, bareRepository, environment, signal } = input
     const entries = tree
       .filter(entry => root === '' || isWithinRepositoryPath(entry.path, root))
       .map(entry => ({ ...entry, relativePath: root === '' ? entry.path : entry.path.slice(root.length + 1) }))
-      .sort((left, right) => left.relativePath.localeCompare(right.relativePath))
+      .sort((left, right) => compareAgentCodeInstalledSkillPaths(left.relativePath, right.relativePath))
     if (entries.length === 0 || entries.length > AGENT_CODE_INSTALLED_SKILL_MAX_FILES) {
       throw new GitHubSkillSourceError(
         'validation',
         `A skill package must contain 1–${AGENT_CODE_INSTALLED_SKILL_MAX_FILES} files.`,
       )
     }
+    const portablePaths = new Map<string, string>()
     for (const entry of entries) {
       if (!isSafeRepositoryPath(entry.relativePath)) {
         throw new GitHubSkillSourceError('validation', `Unsafe package path: ${entry.relativePath}`)
@@ -318,6 +381,15 @@ export class GitHubSkillSource {
           `Unsupported Git file mode ${entry.mode} at ${entry.relativePath}.`,
         )
       }
+      const collisionKey = agentCodeInstalledSkillPathCollisionKey(entry.relativePath)
+      const collision = portablePaths.get(collisionKey)
+      if (collision) {
+        throw new GitHubSkillSourceError(
+          'validation',
+          `Package paths ${JSON.stringify(collision)} and ${JSON.stringify(entry.relativePath)} collide on a supported filesystem.`,
+        )
+      }
+      portablePaths.set(collisionKey, entry.relativePath)
     }
 
     const contents = new Map<string, Buffer>()
@@ -326,7 +398,7 @@ export class GitHubSkillSource {
     for (const entry of entries) {
       const content = await this.gitBuffer([
         '-C', bareRepository, 'cat-file', 'blob', entry.object,
-      ], { environment, maxBuffer: AGENT_CODE_INSTALLED_SKILL_MAX_FILE_BYTES + 1 })
+      ], { environment, signal, maxBuffer: AGENT_CODE_INSTALLED_SKILL_MAX_FILE_BYTES + 1 })
       if (content.byteLength > AGENT_CODE_INSTALLED_SKILL_MAX_FILE_BYTES) {
         throw new GitHubSkillSourceError(
           'validation',
@@ -403,6 +475,7 @@ export class GitHubSkillSource {
       repository: resolved.repository,
       repositoryUrl: resolved.repositoryUrl,
       requestedRef: resolved.requestedRef,
+      requestedRefType: resolved.requestedRefType,
       path: sourcePath,
       skillUrl,
       resolvedCommit,
@@ -421,10 +494,11 @@ export class GitHubSkillSource {
 
   private async gitText(
     args: string[],
-    options: { environment: NodeJS.ProcessEnv; maxBuffer?: number },
+    options: { environment: NodeJS.ProcessEnv; maxBuffer?: number; signal: AbortSignal },
   ): Promise<string> {
     const result = await this.runGit(args, {
       environment: options.environment,
+      signal: options.signal,
       maxBuffer: options.maxBuffer ?? MAX_GIT_TEXT_BYTES,
     })
     if (typeof result !== 'string') return decodeUtf8(result, 'Git output')
@@ -433,10 +507,11 @@ export class GitHubSkillSource {
 
   private async gitBuffer(
     args: string[],
-    options: { environment: NodeJS.ProcessEnv; maxBuffer: number },
+    options: { environment: NodeJS.ProcessEnv; maxBuffer: number; signal: AbortSignal },
   ): Promise<Buffer> {
     const result = await this.runGit(args, {
       environment: options.environment,
+      signal: options.signal,
       maxBuffer: options.maxBuffer,
       binary: true,
     })
@@ -523,55 +598,47 @@ export function parseSkillFrontmatter(text: string): {
   if (end < 0) {
     throw new GitHubSkillSourceError('validation', 'SKILL.md frontmatter has no closing delimiter.')
   }
-  const values = new Map<string, string>()
-  const seenFields = new Set<string>()
+  const document = parseDocument(lines.slice(1, end).join('\n'), {
+    prettyErrors: false,
+    uniqueKeys: true,
+  })
+  if (document.errors.length > 0) {
+    throw new GitHubSkillSourceError(
+      'validation',
+      `SKILL.md contains invalid YAML frontmatter: ${document.errors[0]!.message}`,
+    )
+  }
+  let frontmatter: unknown
+  try {
+    // WHY the whole bounded document is materialized even though Agent Code
+    // only consumes two fields: supported providers parse the whole YAML map.
+    // Skipping nested metadata would let Settings report Active for bytes that
+    // Codex rejects. Map output also avoids object-prototype key hazards.
+    frontmatter = document.toJS({ mapAsMap: true, maxAliasCount: 0 })
+  } catch (error) {
+    throw new GitHubSkillSourceError(
+      'validation',
+      `SKILL.md contains unsafe YAML frontmatter: ${safeErrorMessage(error)}`,
+    )
+  }
+  if (!(frontmatter instanceof Map)) {
+    throw new GitHubSkillSourceError('validation', 'SKILL.md frontmatter must be a YAML mapping.')
+  }
   const fields: string[] = []
-  for (let index = 1; index < end; index += 1) {
-    const line = lines[index]!
-    if (line.trim() === '' || line.trimStart().startsWith('#')) continue
-    if (/^\s/.test(line)) {
-      throw new GitHubSkillSourceError(
-        'validation',
-        'SKILL.md frontmatter must use top-level scalar fields.',
-      )
-    }
-    const match = /^([A-Za-z0-9_-]+):(?:\s*(.*))?$/.exec(line)
-    if (!match) {
-      throw new GitHubSkillSourceError('validation', `Unsupported YAML frontmatter at line ${index + 1}.`)
-    }
-    const key = match[1]!
-    if (seenFields.has(key)) {
-      throw new GitHubSkillSourceError('validation', `SKILL.md repeats frontmatter field ${key}.`)
-    }
-    seenFields.add(key)
-    let scalar = match[2] ?? ''
-    const requiredScalar = key === 'name' || key === 'description'
-    if (/^[>|][+-]?$/.test(scalar) && requiredScalar) {
-      const folded = scalar.startsWith('>')
-      const block: string[] = []
-      while (index + 1 < end && (/^\s/.test(lines[index + 1]!) || lines[index + 1] === '')) {
-        index += 1
-        block.push(lines[index]!.replace(/^ {1,2}/, ''))
-      }
-      scalar = folded ? block.join(' ').replace(/\s+/g, ' ').trim() : block.join('\n').trim()
-      values.set(key, scalar)
-    } else if (requiredScalar) {
-      scalar = parseYamlScalar(scalar, index + 1)
-      values.set(key, scalar)
-    } else if (scalar.trim() === '' || /^[>|][+-]?$/.test(scalar)) {
-      // WHY this parser deliberately does not interpret nested metadata: only
-      // name and description affect Agent Code's identity/UI. Standard skills
-      // commonly use mappings or sequences for metadata and tool declarations;
-      // rejecting those would make the importer less portable, while parsing
-      // them would create an unnecessary YAML execution/complexity surface.
-      while (index + 1 < end && (/^\s/.test(lines[index + 1]!) || lines[index + 1] === '')) {
-        index += 1
-      }
+  for (const key of frontmatter.keys()) {
+    if (typeof key !== 'string' || !/^[A-Za-z0-9_-]+$/.test(key)) {
+      throw new GitHubSkillSourceError('validation', 'SKILL.md frontmatter keys must be portable strings.')
     }
     fields.push(key)
   }
-  const name = values.get('name') ?? ''
-  const description = values.get('description') ?? ''
+  const name = frontmatter.get('name')
+  const description = frontmatter.get('description')
+  if (typeof name !== 'string' || typeof description !== 'string') {
+    throw new GitHubSkillSourceError(
+      'validation',
+      'SKILL.md name and description must be YAML strings.',
+    )
+  }
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name)
     || name.length > 64
     || !isSafeAgentCodeInstalledSkillPath(name)) {
@@ -583,48 +650,39 @@ export function parseSkillFrontmatter(text: string): {
   return { name, description, fields: fields.sort() }
 }
 
-function parseYamlScalar(value: string, line: number): string {
-  const trimmed = value.trim()
-  if (trimmed.startsWith("'")) {
-    if (!trimmed.endsWith("'") || trimmed.length < 2) {
-      throw new GitHubSkillSourceError('validation', `Unterminated YAML string at line ${line}.`)
-    }
-    return trimmed.slice(1, -1).replace(/''/g, "'")
-  }
-  if (trimmed.startsWith('"')) {
-    try {
-      const parsed = JSON.parse(trimmed) as unknown
-      if (typeof parsed === 'string') return parsed
-    } catch {
-      // Fall through to the single actionable scalar error below.
-    }
-    throw new GitHubSkillSourceError('validation', `Invalid quoted YAML string at line ${line}.`)
-  }
-  const comment = trimmed.search(/\s+#/)
-  const plain = comment >= 0 ? trimmed.slice(0, comment).trimEnd() : trimmed
-  if (plain === '' || plain.startsWith('[') || plain.startsWith('{')
-    || plain.startsWith('&') || plain.startsWith('*') || plain.startsWith('!')) {
-    throw new GitHubSkillSourceError(
-      'validation',
-      `Frontmatter line ${line} must contain a plain or quoted string.`,
-    )
-  }
-  return plain
-}
-
-function parseAdvertisedRefs(text: string): { defaultBranch: string | null; refs: Set<string> } {
-  const refs = new Set<string>()
-  let defaultBranch: string | null = null
+function parseAdvertisedRefs(text: string): {
+  defaultRef: AdvertisedGitRef | null
+  refs: Map<string, AdvertisedGitRef[]>
+} {
+  const fullRefs = new Map<string, string>()
+  let defaultFullRef: string | null = null
   for (const line of text.split('\n')) {
     if (line.startsWith('ref: refs/heads/') && line.endsWith('\tHEAD')) {
-      defaultBranch = line.slice('ref: refs/heads/'.length, -'\tHEAD'.length)
-      refs.add(defaultBranch)
+      defaultFullRef = line.slice('ref: '.length, -'\tHEAD'.length)
       continue
     }
-    const match = /^[a-f0-9]{40}\trefs\/(heads|tags)\/(.+?)(?:\^\{\})?$/.exec(line)
-    if (match) refs.add(match[2]!)
+    const match = /^([a-f0-9]{40})\t(refs\/(?:heads|tags)\/.+?)(\^\{\})?$/.exec(line)
+    if (!match) continue
+    // Annotated tag advertisements include both the tag object and a peeled
+    // commit. The latter is the commit `HEAD^{commit}` will produce after
+    // cloning, so it is the identity updates must pin.
+    if (!fullRefs.has(match[2]!) || match[3]) fullRefs.set(match[2]!, match[1]!)
   }
-  return { defaultBranch, refs }
+  const refs = new Map<string, AdvertisedGitRef[]>()
+  for (const [fullRef, commit] of fullRefs) {
+    const branch = fullRef.startsWith('refs/heads/')
+    const prefix = branch ? 'refs/heads/' : 'refs/tags/'
+    const name = fullRef.slice(prefix.length)
+    const identity: AdvertisedGitRef = { name, type: branch ? 'branch' : 'tag', commit }
+    refs.set(name, [...(refs.get(name) ?? []), identity])
+  }
+  const defaultName = defaultFullRef?.startsWith('refs/heads/')
+    ? defaultFullRef.slice('refs/heads/'.length)
+    : null
+  const defaultRef = defaultName
+    ? refs.get(defaultName)?.find(value => value.type === 'branch') ?? null
+    : null
+  return { defaultRef, refs }
 }
 
 function parseGitTree(text: string): GitTreeEntry[] {
@@ -719,22 +777,34 @@ function decodeUtf8(value: Buffer, label: string): string {
 }
 
 function isolatedGitEnvironment(emptyGitConfig: string): NodeJS.ProcessEnv {
-  const environment: NodeJS.ProcessEnv = { ...process.env }
-  for (const key of Object.keys(environment)) {
-    if (key.startsWith('GIT_CONFIG_') || [
-      'GIT_DIR',
-      'GIT_WORK_TREE',
-      'GIT_INDEX_FILE',
-      'GIT_OBJECT_DIRECTORY',
-      'GIT_ALTERNATE_OBJECT_DIRECTORIES',
-      'GIT_EXEC_PATH',
-    ].includes(key)) delete environment[key]
+  const environment: NodeJS.ProcessEnv = {}
+  for (const key of [
+    'PATH',
+    'Path',
+    'PATHEXT',
+    'SystemRoot',
+    'WINDIR',
+    'COMSPEC',
+    'TEMP',
+    'TMP',
+    'TMPDIR',
+    'HOME',
+    'USERPROFILE',
+    'HOMEDRIVE',
+    'HOMEPATH',
+    'LOCALAPPDATA',
+    'LANG',
+    'LC_ALL',
+    'LC_CTYPE',
+    'TZ',
+  ]) {
+    const value = process.env[key]
+    if (value !== undefined) environment[key] = value
   }
-  // WHY inherited Git repository/config variables are removed: Agent Code may
-  // itself be launched from a shell with temporary Git plumbing variables.
-  // Letting those variables redirect object storage or inject `-c` entries
-  // would make acquisition depend on ambient state instead of the hardened
-  // command assembled above.
+  // WHY this is an allowlist rather than a Git-variable denylist: askpass,
+  // credential, TLS, proxy, repository, and future Git control variables all
+  // change the trust boundary. Copying process.env and trying to enumerate
+  // every dangerous spelling would silently regress when Git adds another.
   environment.GIT_CONFIG_GLOBAL = emptyGitConfig
   environment.GIT_CONFIG_NOSYSTEM = '1'
   environment.GIT_TERMINAL_PROMPT = '0'
@@ -785,9 +855,94 @@ function classifyGitHubSkillSourceError(error: unknown): GitHubSkillSourceError 
   )
 }
 
+function safeErrorMessage(error: unknown): string {
+  return error instanceof Error && error.message ? error.message : String(error)
+}
+
+async function withAcquisitionBudget<T>(input: {
+  root: string
+  maxBytes: number
+  pollIntervalMs: number
+  operation: (signal: AbortSignal) => Promise<T>
+}): Promise<T> {
+  const controller = new AbortController()
+  let stopped = false
+  let budgetFailure: GitHubSkillSourceError | null = null
+  const monitor = (async (): Promise<never> => {
+    while (!stopped) {
+      if (await directoryExceedsBudget(input.root, input.maxBytes)) {
+        budgetFailure = new GitHubSkillSourceError(
+          'validation',
+          `GitHub acquisition exceeded the ${formatBytes(input.maxBytes)} temporary storage limit. Use a smaller repository or directory.`,
+        )
+        controller.abort(budgetFailure)
+        throw budgetFailure
+      }
+      await new Promise(resolve => setTimeout(resolve, input.pollIntervalMs))
+    }
+    // The operation always settles the race before setting stopped. This
+    // branch exists only to make the monitor's non-winning type explicit.
+    return await new Promise<never>(() => undefined)
+  })()
+  const operation = input.operation(controller.signal).catch(error => {
+    if (budgetFailure) throw budgetFailure
+    throw error
+  })
+  try {
+    return await Promise.race([operation, monitor])
+  } finally {
+    stopped = true
+    controller.abort()
+    // Cleanup must not race an aborted Git process that is still writing into
+    // the scratch directory. The production runner honors AbortSignal; waiting
+    // for its rejection makes the storage bound and subsequent recursive temp
+    // cleanup describe one ordered lifecycle.
+    if (budgetFailure) await operation.catch(() => undefined)
+  }
+}
+
+async function directoryExceedsBudget(root: string, maxBytes: number): Promise<boolean> {
+  const pending = [root]
+  let total = 0
+  while (pending.length > 0) {
+    const directory = pending.pop()!
+    const entries = await readdir(directory, { withFileTypes: true }).catch(error => {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
+      throw error
+    })
+    for (const entry of entries) {
+      const path = join(directory, entry.name)
+      if (entry.isDirectory()) {
+        pending.push(path)
+        continue
+      }
+      const stat = await lstat(path).catch(error => {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+        throw error
+      })
+      if (!stat) continue
+      if (stat.isSymbolicLink() || !stat.isFile()) {
+        throw new GitHubSkillSourceError(
+          'validation',
+          'Git created an unsupported object inside the acquisition directory.',
+        )
+      }
+      total += stat.size
+      if (total > maxBytes) return true
+    }
+  }
+  return false
+}
+
 function runGitProcess(
   args: string[],
-  options: { cwd?: string; maxBuffer?: number; binary?: boolean; environment: NodeJS.ProcessEnv },
+  options: {
+    cwd?: string
+    maxBuffer?: number
+    binary?: boolean
+    environment: NodeJS.ProcessEnv
+    signal?: AbortSignal
+  },
 ): Promise<string | Buffer> {
   return new Promise((resolvePromise, reject) => {
     execFile('git', args, {
@@ -795,6 +950,7 @@ function runGitProcess(
       env: options.environment,
       encoding: options.binary ? 'buffer' : 'utf8',
       maxBuffer: options.maxBuffer ?? MAX_GIT_TEXT_BYTES,
+      signal: options.signal,
       timeout: 60_000,
       windowsHide: true,
     }, (error, stdout, stderr) => {
