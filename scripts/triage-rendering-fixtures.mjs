@@ -31,6 +31,10 @@
 // legacy-bug:prompt-not-shown — extra-in-next REAL user prompts
 //   (permissionMode present) in fixtures whose note complains about
 //   prompts not rendering. The pipeline painting them is the fix.
+//   Also covers provenance-validated attachment/queued_command prompts: those
+//   are Claude's durable user carrier after a mid-turn queue drain. This branch
+//   is structural and does not depend on prose in the bundle note because the
+//   provider adapter's human/legacy + non-meta gate is the ownership proof.
 //
 // extraction-gap:history-window — missing-in-next turns absent from the
 //   fixture's semanticHistory input: the runtime caps history at 20 turns,
@@ -141,6 +145,20 @@ for (const file of readdirSync(DIR).filter(f => f.endsWith('.json'))) {
       } else if (e.type === 'user' && e.permissionMode !== undefined && /prompt/.test(note) && /show|render|regist/.test(note)) {
         t.verdict = 'legacy-bug:prompt-not-shown'
         t.why = `real user prompt legacy failed to paint — the bundle note is the bug report: "${f.meta.note}"`
+        bump(t.verdict); changed = true
+      } else if (
+        e.type === 'attachment' &&
+        e.attachment?.type === 'queued_command' &&
+        e.attachment.commandMode === 'prompt' &&
+        e.attachment.isMeta !== true &&
+        e.isMeta !== true &&
+        (
+          !Object.prototype.hasOwnProperty.call(e.attachment, 'origin') ||
+          e.attachment.origin?.kind === 'human'
+        )
+      ) {
+        t.verdict = 'legacy-bug:prompt-not-shown'
+        t.why = 'recorded human/legacy non-meta queued-command attachment is Claude\'s durable user prompt; legacy dropped the carrier before paint and the corrected provider path renders it'
         bump(t.verdict); changed = true
       } else if (e.type === 'assistant' || e.type === 'user') {
         // Gate skew-ingestion-lag on the documented timestamp window: the
