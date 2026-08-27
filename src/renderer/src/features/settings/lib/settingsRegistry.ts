@@ -1,12 +1,14 @@
 import {
   ACCENTS,
   AGENT_VIEW_MODES,
+  CORNER_STYLES,
   FONT_FAMILIES,
   WORKSPACE_MODES,
 } from '@renderer/app-state/settings/types'
 import type {
   AccentId,
   AgentViewMode,
+  CornerStyleId,
   FontFamilyId,
   Settings,
   WorkspaceModeId,
@@ -293,6 +295,12 @@ const AGENT_VIEW_MODE_OPTIONS: ChoiceOption<AgentViewMode>[] = AGENT_VIEW_MODES.
   description: mode.description,
 }))
 
+const CORNER_STYLE_OPTIONS: ChoiceOption<CornerStyleId>[] = CORNER_STYLES.map(style => ({
+  value: style.id,
+  label: style.label,
+  description: style.description,
+}))
+
 const DICTATION_PROVIDER_OPTIONS: ChoiceOption<Settings['dictationProvider']>[] = [
   {
     value: 'deepgram',
@@ -374,6 +382,27 @@ export function getSettingsRegistry(): SettingDefinition[] {
         type: 'toggle',
         getValue: settings => settings.contrast,
         onToggle: (ctx, value) => ctx.onChange({ contrast: value }),
+      },
+    },
+    {
+      // Title is a stable noun per docs/command-style.md — "Corners", not
+      // "Rounded Corners" or "Toggle Corner Radius". The selected tier is the
+      // state; the row name is the concept.
+      id: 'corner-style',
+      category: 'appearance',
+      title: 'Corners',
+      description:
+        'Corner radius for badges, code blocks, and floating panels. Panes, tabs, and terminals stay square at every setting.',
+      keywords: [
+        'corner', 'corners', 'radius', 'rounded', 'round', 'sharp', 'square',
+        'border', 'shape', 'appearance',
+      ],
+      control: {
+        type: 'select',
+        getValue: settings => settings.cornerStyle,
+        options: CORNER_STYLE_OPTIONS,
+        columns: 3,
+        onSelect: (ctx, value) => ctx.onChange({ cornerStyle: value as CornerStyleId }),
       },
     },
     {

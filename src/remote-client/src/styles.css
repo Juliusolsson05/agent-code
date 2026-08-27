@@ -4,9 +4,17 @@
  *
  * THE AESTHETIC CONTRACT (same hard rules as @renderer/styles.css, which
  * this file must never fight):
- *   1. No border-radius anywhere. Sharp rectangles. (The connection dot is
+ *   1. Radius marks detachment, and the phone shell has nothing detached:
+ *      topbar, picker, composer, and condition bar are all structure, so
+ *      they stay square at every Corners setting. (The connection dot is
  *      the ONE circle, mirroring the app's radius-full streaming-dot
- *      exception.)
+ *      exception — circles are geometry, not corner policy.)
+ *
+ *      The feed itself renders with the DESKTOP components, so its chips
+ *      and code slabs pick up --theme-radius-* from @renderer/styles.css
+ *      and follow the user's setting automatically. Nothing to mirror here;
+ *      adding a second radius declaration in this file is how the two
+ *      builds start disagreeing about the corner language.
  *   2. Monospace everywhere — var(--font-code), the app's own font token.
  *   3. No bubbles, no cards. Inline flow with ❯ markers in the accent.
  *   4. Every color comes from the app THEME TOKENS (--theme-*), set by

@@ -16,7 +16,21 @@
  * Agent Code styles — v2: "native Claude Code, but typeset"
  *
  * Hard aesthetic rules (don't deviate without the user's explicit OK):
- *   1. No border-radius anywhere. Sharp rectangles.
+ *   1. Radius marks DETACHMENT, it is not decoration. The grid is square:
+ *      anything that shares an edge with a sibling that must line up with it
+ *      — tile leaves, pane headers, tab bars, the terminal, the editor, feed
+ *      rows, bars, settings sections — has zero radius, forever. A rounded
+ *      tile in a 2x2 split leaves a visible notch at every seam, and that is
+ *      the invariant this rule exists to protect. Everything that floats
+ *      free of the grid (dialogs, palette, popovers, menus, toasts) or sits
+ *      inside a scroll column as an object (badges, chips) or a plate (code
+ *      slabs, diffs) uses the semantic radius tokens below. See the
+ *      `--radius-chip/slab/float` block for the classification table.
+ *
+ *      This rule USED to read "no border-radius anywhere", which overstated
+ *      it — and the code never honoured that anyway (see the leak note on
+ *      the token block). Restating it as "no radius on the grid" is what the
+ *      layout actually requires.
  *   2. Monospace everywhere. One font family. No display serifs.
  *   3. No bubbles, no cards, no role labels. Inline flow.
  *   4. Messages are prefixed with ❯ / ⏺ / ⎿ markers in the accent color.
@@ -188,17 +202,83 @@
      not "code blocks only". */
   --font-code: var(--theme-app-font);
 
-  /* Kill the default radius scale — we want sharp everywhere, so
-     if anyone does reach for `rounded-*` by accident, it still collapses
-     to zero. Component code shouldn't use radius classes at all. */
+  /* ---------- Radius ----------
+     Three SEMANTIC tokens, and a hard floor under every generic scale.
+
+     WHY semantic names instead of a t-shirt scale: `rounded-md` says nothing
+     about whether the thing may be rounded at all. `rounded-float` does — it
+     asserts "this surface is detached from the grid", which is the only
+     question that matters here (hard rule 1). A reviewer can check the claim
+     against the element; they cannot check whether `md` was the right size.
+
+       chip  — capsules: badges, keycaps, counters, status pills, scope tags.
+               An OBJECT, not a region.
+       slab  — inset content plates inside a scroll column: code blocks, tool
+               output, diff blocks, image thumbnails, the prompt highlight.
+       float — surfaces detached from the grid: dialogs, the command palette,
+               popovers, context menus, toasts, the dictation overlay. These
+               already carry a shadow or a scrim; radius is the other half of
+               that same "I am on top of the workspace" signal.
+
+     Values come from the user's Corners setting (CORNER_STYLES in
+     app-state/settings/types.ts) and are written inline on <html> by
+     applyTheme, exactly like the accent and font tokens — so changing the
+     setting cascades through the DOM with zero React work. The `:root`
+     fallbacks below cover the window before applyTheme's first run and any
+     caller that hands applyTheme an uncoerced blob (the phone client does).
+
+     Circles are NOT part of this system. `rounded-full` on the streaming
+     dot, connection dots, tab dots, and colour swatches is geometry, not
+     corner policy — those must stay round when Corners is Sharp. */
+  --radius-chip: var(--theme-radius-chip);
+  --radius-slab: var(--theme-radius-slab);
+  --radius-float: var(--theme-radius-float);
+
+  /* Every generic scale is pinned at zero so an unclassified `rounded-*`
+     renders SQUARE rather than picking up a Tailwind default. Square is the
+     safe direction: a missed classification looks like the old app instead of
+     silently inventing a fourth radius nobody chose.
+
+     WHY `--radius` and `--radius-xs` are in this list even though the old
+     comment claimed the scale was already dead: they were the leak. Tailwind
+     v4 resolves the suffix-less `rounded` utility against `--radius: 0.25rem`
+     declared in a SEPARATE `@theme default inline reference` ("Deprecated")
+     block in tailwindcss/theme.css — not in the `--radius-*` scale this file
+     was overriding. So ~30 bare `rounded` call sites (workflow panels, the
+     explorer context menu, editor tabs, palette badges, git ref chips…) have
+     been rendering at 4px this whole time under a header comment asserting
+     0px everywhere. `--radius-xs` was never covered either. */
+  --radius: 0px;
   --radius-none: 0px;
+  --radius-xs: 0px;
   --radius-sm: 0px;
   --radius-md: 0px;
   --radius-lg: 0px;
   --radius-xl: 0px;
   --radius-2xl: 0px;
   --radius-3xl: 0px;
-  --radius-full: 9999px; /* preserved ONLY for the streaming dot */
+  --radius-full: 9999px; /* circles only — see the note above */
+}
+
+/* ---------- Radius defaults ----------
+ * Deliberately OUTSIDE the [data-mode] blocks: corner language is orthogonal
+ * to palette. A theme picks colours; it does not get an opinion on whether
+ * the app is square, because a saved theme authored before this system
+ * existed would then silently re-square the app on selection.
+ *
+ * These values mirror the DEFAULT tier in CORNER_STYLES
+ * (app-state/settings/types.ts). They are a FALLBACK, not the source of
+ * truth — applyTheme overwrites all three inline on <html> on every run,
+ * including its first synchronous run at store creation. They matter for
+ * exactly two cases: the paint before that first run, and a caller handing
+ * applyTheme a blob it cannot resolve. Without them a bad blob yields
+ * `border-radius: ` with an empty var and the browser drops the whole
+ * declaration, which is survivable — but so is keeping one honest default.
+ */
+:root {
+  --theme-radius-chip: 9999px;
+  --theme-radius-slab: 8px;
+  --theme-radius-float: 14px;
 }
 
 /* ---------- Mode: Dark (default) ---------- */
@@ -754,12 +834,17 @@ select {
   padding: 0;
 }
 
-/* Fenced code blocks: dark inset plate, no border, no radius. */
+/* Fenced code blocks: dark inset plate, no border. The plate is a `slab` —
+ * it sits INSIDE the feed's scroll column and shares an edge with nothing, so
+ * hard rule 1 lets it round. The existing `overflow-x: auto` is what makes the
+ * corner actually clip: any overflow value other than `visible` establishes a
+ * clip against the rounded border box, so a long line scrolls under the corner
+ * instead of painting over it. Don't "fix" this to `visible`. */
 .prose-theme pre {
   margin: 10px 0;
   background: var(--theme-code-bg);
   border: none;
-  border-radius: 0;
+  border-radius: var(--theme-radius-slab);
   padding: 12px 14px;
   overflow-x: auto;
   font-size: 12px;
@@ -781,15 +866,23 @@ select {
   padding: 0;
 }
 
+/* The Monaco-backed code block. `overflow: hidden` is NOT cosmetic here:
+ * Monaco paints its own canvas layers (background, margin, scrollbars) at the
+ * shell's full rectangle, so without clipping the editor renders square
+ * corners on top of the rounded parent and the radius silently does nothing.
+ * Same reason the static (highlight.js) variant clips. */
 .code-block-shell {
   margin: 10px 0;
   background: var(--theme-code-bg);
   border: none;
+  border-radius: var(--theme-radius-slab);
+  overflow: hidden;
   min-height: 48px;
 }
 
 .code-block-static {
   background: var(--theme-code-bg);
+  border-radius: var(--theme-radius-slab);
 }
 
 .code-block-static .hljs,
