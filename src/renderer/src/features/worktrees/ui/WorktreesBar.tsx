@@ -355,7 +355,7 @@ function WorktreeRow({ row, cwd }: { row: WorktreeDumpRow; cwd: string | null })
           {row.liveAgents.map(agent => (
             <span
               key={agent.sessionId}
-              className={`px-1.5 py-[1px] text-[9px] rounded-sm border ${
+              className={`px-1.5 py-[1px] text-[9px] rounded-chip border ${
                 agent.live
                   ? 'border-accent text-accent'
                   : 'border-border text-muted'

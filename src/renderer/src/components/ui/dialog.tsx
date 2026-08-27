@@ -56,7 +56,7 @@ const DialogContent = React.forwardRef<
       // marker without mirroring open state into a second modal manager.
       {...{ [APP_INTERACTION_OWNER_ATTRIBUTE]: 'app' }}
       className={cn(
-        'fixed left-1/2 top-1/2 z-[1100] grid w-[min(520px,92vw)] -translate-x-1/2 -translate-y-1/2 border border-border-hi bg-surface text-ink shadow-2xl outline-none',
+        'fixed left-1/2 top-1/2 z-[1100] grid w-[min(520px,92vw)] -translate-x-1/2 -translate-y-1/2 rounded-float border border-border-hi bg-surface text-ink shadow-2xl outline-none',
         className,
       )}
     >

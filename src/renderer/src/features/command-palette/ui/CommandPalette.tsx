@@ -150,7 +150,7 @@ function CommandStateBadge({ state }: { state: CommandState }) {
       // reason Tail says On when this command cannot turn it off, or why
       // Caffeinate is unavailable on this platform.
       title={presentation.detail}
-      className={`rounded border px-1.5 py-0.5 text-[10px] uppercase tracking-wider ${tone}${
+      className={`rounded-chip border px-1.5 py-0.5 text-[10px] uppercase tracking-wider ${tone}${
         presentation.muted ? ' opacity-60' : ''
       }`}
     >
@@ -1942,7 +1942,7 @@ function OpenCommandPalette({
                           <div className="min-w-0">
                             <div className="flex min-w-0 items-center gap-2 text-[13px]">
                               <span className="truncate">{template.title}</span>
-                              <span className="flex-shrink-0 border border-border bg-surface px-1 py-0.5 text-[9px] uppercase tracking-wider text-muted">
+                              <span className="flex-shrink-0 rounded-chip border border-border bg-surface px-1 py-0.5 text-[9px] uppercase tracking-wider text-muted">
                                 Prompt template
                               </span>
                             </div>

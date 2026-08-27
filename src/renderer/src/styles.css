@@ -211,10 +211,17 @@
      question that matters here (hard rule 1). A reviewer can check the claim
      against the element; they cannot check whether `md` was the right size.
 
-       chip  — capsules: badges, keycaps, counters, status pills, scope tags.
-               An OBJECT, not a region.
+       chip  — NON-INTERACTIVE capsule labels: badges, keycaps, counters,
+               status pills, scope tags. An OBJECT, not a region. This is the
+               only class that goes fully pill-shaped, which is safe precisely
+               because a label is always small and content-sized.
+       control — INTERACTIVE chrome: buttons, inputs, textareas, option rows,
+               hover targets. Split from `chip` for one concrete reason:
+               controls come in every width, and a full-width button at a pill
+               radius is a stadium, not a button. Controls stay modest at
+               every tier.
        slab  — inset content plates inside a scroll column: code blocks, tool
-               output, diff blocks, image thumbnails, the prompt highlight.
+               output, diff blocks, image thumbnails, JSON/patch blocks.
        float — surfaces detached from the grid: dialogs, the command palette,
                popovers, context menus, toasts, the dictation overlay. These
                already carry a shadow or a scrim; radius is the other half of
@@ -231,6 +238,7 @@
      dot, connection dots, tab dots, and colour swatches is geometry, not
      corner policy — those must stay round when Corners is Sharp. */
   --radius-chip: var(--theme-radius-chip);
+  --radius-control: var(--theme-radius-control);
   --radius-slab: var(--theme-radius-slab);
   --radius-float: var(--theme-radius-float);
 
@@ -277,6 +285,7 @@
  */
 :root {
   --theme-radius-chip: 9999px;
+  --theme-radius-control: 6px;
   --theme-radius-slab: 8px;
   --theme-radius-float: 14px;
 }

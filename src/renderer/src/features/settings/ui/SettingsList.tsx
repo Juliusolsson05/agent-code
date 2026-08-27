@@ -25,8 +25,15 @@ import { cn } from '@renderer/lib/utils'
 //
 // h-auto rather than a size: none of the fixed sizes fit a row whose height is
 // set by its content.
+//
+// `rounded-none` cancels Button's `rounded-control` deliberately, and is the
+// one place in the app where a control opts OUT of the corner system: these
+// rows are stacked flush inside a bordered section, so they are STRUCTURE by
+// hard rule 1 (styles.css) — rounding them would open a visible gap at every
+// seam between adjacent rows. A control that has been reshaped into a
+// full-bleed row stops being a control for radius purposes.
 const SETTINGS_ROW_CLASS =
-  'flex h-auto w-full items-center justify-between px-3 py-2 text-left text-[12px]'
+  'flex h-auto w-full items-center justify-between rounded-none px-3 py-2 text-left text-[12px]'
 
 type Props = {
   definitions: SettingDefinition[]

@@ -39,7 +39,7 @@ export function SlashCommandPicker({ state }: Props) {
     <div
       className="
         absolute left-0 right-0 bottom-full mb-1 z-50
-        bg-surface border border-border-hi
+        bg-surface border border-border-hi rounded-float
         max-h-[240px] overflow-auto
         shadow-[0_-8px_24px_rgba(0,0,0,0.35)]
       "

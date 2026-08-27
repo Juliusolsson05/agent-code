@@ -477,7 +477,7 @@ function DispatchUnreadBadge({
     return (
       <span
         className="
-          flex-shrink-0 rounded-sm border border-warning-border bg-warning-soft
+          flex-shrink-0 rounded-chip border border-warning-border bg-warning-soft
           px-1.5 py-[1px] text-[9px] font-semibold leading-none text-warning
         "
       >
@@ -488,7 +488,7 @@ function DispatchUnreadBadge({
   return (
     <span
       className="
-        flex-shrink-0 rounded-sm border border-accent/70 bg-accent/20
+        flex-shrink-0 rounded-chip border border-accent/70 bg-accent/20
         px-1.5 py-[1px] text-[9px] font-semibold leading-none text-accent
       "
     >

@@ -223,7 +223,7 @@ export function EditorTabs({
           onClick={onSave}
           title="Save active file (⌘S)"
           aria-label="Save active file"
-          className="rounded px-1.5 py-0.5 text-muted hover:bg-surface-hi hover:text-ink disabled:cursor-default disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-muted"
+          className="rounded-control px-1.5 py-0.5 text-muted hover:bg-surface-hi hover:text-ink disabled:cursor-default disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-muted"
         >
           Save
         </button>
@@ -234,7 +234,7 @@ export function EditorTabs({
           aria-busy={saveAllPending || undefined}
           title={saveAllPending ? 'Saving all modified files' : 'Save all modified files'}
           aria-label="Save all modified files"
-          className="rounded px-1.5 py-0.5 text-muted hover:bg-surface-hi hover:text-ink disabled:cursor-default disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-muted"
+          className="rounded-control px-1.5 py-0.5 text-muted hover:bg-surface-hi hover:text-ink disabled:cursor-default disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-muted"
         >
           {saveAllPending ? 'Saving…' : 'Save All'}
         </button>

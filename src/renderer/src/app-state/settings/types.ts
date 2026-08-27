@@ -171,8 +171,14 @@ export type CornerStyleMeta = {
   id: CornerStyleId
   label: string
   description: string
-  /** Capsules: badges, keycaps, counters, status pills, scope tags. */
+  /** Non-interactive capsule labels: badges, keycaps, counters, scope tags.
+   *  The only class that goes fully pill-shaped — safe because a label is
+   *  always content-sized. */
   chip: string
+  /** Interactive chrome: buttons, inputs, textareas, option rows, hover
+   *  targets. Kept modest at every tier because controls come in every
+   *  width and a full-width pill is a stadium, not a button. */
+  control: string
   /** Inset content plates: code blocks, tool output, diffs, thumbnails. */
   slab: string
   /** Detached surfaces: dialogs, palette, popovers, menus, toasts. */
@@ -185,6 +191,7 @@ export const CORNER_STYLES: CornerStyleMeta[] = [
     label: 'Round',
     description: 'Pill-shaped badges and clearly detached panels.',
     chip: '9999px',
+    control: '6px',
     slab: '8px',
     float: '14px',
   },
@@ -193,6 +200,7 @@ export const CORNER_STYLES: CornerStyleMeta[] = [
     label: 'Soft',
     description: 'Visible corners that keep the terminal character.',
     chip: '3px',
+    control: '3px',
     slab: '4px',
     float: '6px',
   },
@@ -201,6 +209,7 @@ export const CORNER_STYLES: CornerStyleMeta[] = [
     label: 'Sharp',
     description: 'Square everywhere. The original Agent Code look.',
     chip: '0px',
+    control: '0px',
     slab: '0px',
     float: '0px',
   },

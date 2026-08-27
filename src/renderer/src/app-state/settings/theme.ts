@@ -52,6 +52,7 @@ const LEGACY_CODE_FONT_CSS_VAR = '--theme-font-code'
 // the contract by name instead of restating the literal strings, and so a
 // rename cannot silently half-land.
 export const CORNER_CHIP_CSS_VAR = '--theme-radius-chip'
+export const CORNER_CONTROL_CSS_VAR = '--theme-radius-control'
 export const CORNER_SLAB_CSS_VAR = '--theme-radius-slab'
 export const CORNER_FLOAT_CSS_VAR = '--theme-radius-float'
 
@@ -150,12 +151,13 @@ export function applyTheme(settings: Settings): void {
   // above). Resolving to undefined here would write three invalid values and
   // break every rounded surface at once, so the defensive read stays local.
   //
-  // All three are always written together. A partially applied tier (two of
-  // three) is the shape a copy-paste error takes here, and it produces an app
-  // whose chips and panels disagree about the corner language.
+  // All four are always written together. A partially applied tier is the
+  // shape a copy-paste error takes here, and it produces an app whose chips
+  // and panels disagree about the corner language.
   const corners =
     CORNER_STYLES.find(c => c.id === settings.cornerStyle) ?? CORNER_STYLES[0]
   root.style.setProperty(CORNER_CHIP_CSS_VAR, corners.chip)
+  root.style.setProperty(CORNER_CONTROL_CSS_VAR, corners.control)
   root.style.setProperty(CORNER_SLAB_CSS_VAR, corners.slab)
   root.style.setProperty(CORNER_FLOAT_CSS_VAR, corners.float)
   window.dispatchEvent(new CustomEvent(THEME_CHANGED_EVENT, { detail: settings }))

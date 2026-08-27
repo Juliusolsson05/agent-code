@@ -64,7 +64,7 @@ function GitCardHeader({
       {flags?.map((f, index) => (
         <span
           key={`${index}:${f}`}
-          className="font-code text-[11px] text-code-ink-dim bg-code-bg px-1.5 py-0.5 rounded"
+          className="font-code text-[11px] text-code-ink-dim bg-code-bg px-1.5 py-0.5 rounded-chip"
         >
           {f}
         </span>
@@ -84,7 +84,7 @@ function Card({ children }: { children: React.ReactNode }) {
   // Paper surface on top of the feed's content column. Slightly
   // inset so it doesn't bleed into the marker gutter.
   return (
-    <div className="bg-surface border border-border rounded-md px-3 py-2">
+    <div className="bg-surface border border-border rounded-slab px-3 py-2">
       {children}
     </div>
   )
@@ -139,7 +139,7 @@ function HunkSlab({
     [filePath],
   )
   return (
-    <div className="bg-code-bg font-code text-[12px] leading-[1.55] overflow-x-auto">
+    <div className="bg-code-bg rounded-slab font-code text-[12px] leading-[1.55] overflow-x-auto">
       {hunks.map((h, hi) => (
         <div key={hi}>
           <div className="px-3 py-0.5 text-[11px] text-muted select-none whitespace-pre">
@@ -208,7 +208,7 @@ function FileBlock({ file, countsPartial = false }: { file: GitDiffFile; countsP
       <button
         type="button"
         onClick={() => setOpen(o => !o)}
-        className="flex items-center gap-2 text-left px-1 py-0.5 rounded hover:bg-code-bg"
+        className="flex items-center gap-2 text-left px-1 py-0.5 rounded-control hover:bg-code-bg"
       >
         <span className="text-ink-dim w-3 text-[10px] tabular-nums select-none">
           {open ? '▾' : '▸'}
@@ -378,7 +378,7 @@ export const GitCommitCard = memo(function GitCommitCard({
         badges={
           <span className="flex items-baseline gap-2">
             {result.branch && (
-              <span className="font-code text-[11px] text-code-ink-dim bg-code-bg px-1.5 py-0.5 rounded">
+              <span className="font-code text-[11px] text-code-ink-dim bg-code-bg px-1.5 py-0.5 rounded-chip">
                 {result.branch}
               </span>
             )}
@@ -436,7 +436,7 @@ export const GitStatusCard = memo(function GitStatusCard({
       <GitCardHeader
         sub="status"
         badges={r.branch && (
-          <span className="font-code text-[11px] text-code-ink-dim bg-code-bg px-1.5 py-0.5 rounded">
+          <span className="font-code text-[11px] text-code-ink-dim bg-code-bg px-1.5 py-0.5 rounded-chip">
             {r.branch}
           </span>
         )}

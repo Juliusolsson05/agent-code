@@ -468,7 +468,7 @@ export function TerminalLeaf({
       <div className="flex items-center justify-between px-3 py-1 border-b border-border bg-surface text-[10px] text-muted font-code select-none">
         <div className="flex items-center gap-2 min-w-0">
           {paneLabel && (
-            <span className="flex-shrink-0 rounded-[3px] border border-current/30 px-1 leading-[14px] text-[9px] font-semibold tabular-nums">
+            <span className="flex-shrink-0 rounded-chip border border-current/30 px-1 leading-[14px] text-[9px] font-semibold tabular-nums">
               {paneLabel}
             </span>
           )}

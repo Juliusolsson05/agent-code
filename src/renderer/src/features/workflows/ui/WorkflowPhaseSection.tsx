@@ -25,7 +25,7 @@ export function WorkflowPhaseSection({
         ? 'done'
         : 'active'
   return (
-    <section className="rounded border border-border bg-surface px-2 py-2">
+    <section className="rounded-slab border border-border bg-surface px-2 py-2">
       <div className="mb-1.5 flex items-baseline gap-2 border-b border-border px-1 pb-1.5">
         <span className="text-[11px] font-semibold text-ink">{phase.title}</span>
         <span className="text-[10px] text-muted">

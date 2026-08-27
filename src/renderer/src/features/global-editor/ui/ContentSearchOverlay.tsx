@@ -334,7 +334,7 @@ export function ContentSearchOverlay({ root, onClose }: Props) {
               setCaseSensitive(prev => !prev)
               inputRef.current?.focus()
             }}
-            className={`flex-shrink-0 rounded border px-1.5 py-0.5 text-[10px] ${
+            className={`flex-shrink-0 rounded-chip border px-1.5 py-0.5 text-[10px] ${
               caseSensitive ? 'border-accent text-ink' : 'border-border text-muted hover:text-ink'
             }`}
           >
@@ -367,7 +367,7 @@ export function ContentSearchOverlay({ root, onClose }: Props) {
                   <span className="truncate">{path}</span>
                   <span className="text-muted">({matches.length})</span>
                   {recoverableBuffersByPath.has(path) && (
-                    <span className="rounded bg-accent-soft px-1 text-[9px] text-ink-dim">
+                    <span className="rounded-chip bg-accent-soft px-1 text-[9px] text-ink-dim">
                       {recoverableBuffersByPath.get(path)?.dirty ? 'unsaved' : 'in memory'}
                     </span>
                   )}

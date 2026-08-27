@@ -116,7 +116,7 @@ export function ComposerInput({
       ) : null}
 
       {promptDelivery.kind === 'uncertain' ? (
-        <div className="mb-2 rounded border border-warning/50 bg-warning/10 p-2 text-[11px] text-ink">
+        <div className="mb-2 rounded-slab border border-warning/50 bg-warning/10 p-2 text-[11px] text-ink">
           <div>Claude may already have this prompt. Normal resend is blocked.</div>
           <button
             type="button"
@@ -129,7 +129,7 @@ export function ComposerInput({
       ) : null}
 
       {providerSwitchMessage ? (
-        <div className="mb-2 rounded border border-accent/40 bg-accent/10 p-2 text-[11px] text-ink">
+        <div className="mb-2 rounded-slab border border-accent/40 bg-accent/10 p-2 text-[11px] text-ink">
           {providerSwitchMessage} Input is locked until the switch finishes.
         </div>
       ) : null}
@@ -146,7 +146,7 @@ export function ComposerInput({
           {draftImages.map(image => (
             <div
               key={image.id}
-              className="relative w-24 rounded border border-border bg-canvas p-1"
+              className="relative w-24 rounded-slab border border-border bg-canvas p-1"
             >
               <button
                 type="button"
@@ -159,7 +159,7 @@ export function ComposerInput({
               <img
                 src={image.previewUrl}
                 alt={image.filename}
-                className="h-16 w-full rounded object-cover"
+                className="h-16 w-full rounded-slab object-cover"
               />
               <div className="mt-1 truncate text-[10px] font-code text-muted">
                 {image.filename}

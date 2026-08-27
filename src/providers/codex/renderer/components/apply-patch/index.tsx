@@ -50,7 +50,7 @@ export const CodexApplyPatchRow = memo(function CodexApplyPatchRow({
           <summary className="cursor-pointer select-none">
             Rich preview is partial · view exact paged patch
           </summary>
-          <div className="mt-1 rounded border border-border bg-surface px-2 py-1.5">
+          <div className="mt-1 rounded-slab border border-border bg-surface px-2 py-1.5">
             <PagedTextViewer source={rawPatch} />
           </div>
         </details>

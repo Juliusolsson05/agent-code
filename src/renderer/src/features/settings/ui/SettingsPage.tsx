@@ -272,10 +272,10 @@ function ThemeEditorModal({
                 setError(null)
               }}
               spellCheck={false}
-              className="h-full min-h-[420px] resize-none bg-code-bg px-3 py-3 text-[12px] leading-5 text-code-ink"
+              className="h-full min-h-[420px] resize-none rounded-slab bg-code-bg px-3 py-3 text-[12px] leading-5 text-code-ink"
             />
           ) : (
-            <pre className="h-full min-h-[420px] overflow-auto border border-input-border bg-code-bg px-3 py-3 text-[12px] leading-5 text-code-ink">
+            <pre className="h-full min-h-[420px] overflow-auto rounded-slab border border-input-border bg-code-bg px-3 py-3 text-[12px] leading-5 text-code-ink">
               {CUSTOM_APPEARANCE_SCHEMA_JSON}
             </pre>
           )}

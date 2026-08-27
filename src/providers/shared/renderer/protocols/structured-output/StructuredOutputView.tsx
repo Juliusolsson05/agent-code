@@ -35,7 +35,7 @@ function ExactTextDetails({
           children while the browser hides them. An explicit state gate keeps
           the paging scan and text subtree out of memory until user intent. */}
       {open ? (
-        <div className="mt-1 rounded border border-border bg-surface px-2 py-1.5">
+        <div className="mt-1 rounded-slab border border-border bg-surface px-2 py-1.5">
           <PagedTextViewer source={source} isError={isError} />
         </div>
       ) : null}
@@ -63,7 +63,7 @@ function StructuredRecord({
   const label = recordLabel(record, workspaceRoot)
   return (
     <details
-      className="min-w-0 rounded border border-border/70 bg-surface/40 px-2 py-1"
+      className="min-w-0 rounded-slab border border-border/70 bg-surface/40 px-2 py-1"
       onToggle={event => setOpen(event.currentTarget.open)}
     >
       <summary
@@ -132,7 +132,7 @@ export const StructuredOutputView = memo(function StructuredOutputView({
         </div>
 
         {model.contextLines.length > 0 ? (
-          <div className="rounded border border-border/70 bg-surface/40 px-2 py-1.5">
+          <div className="rounded-slab border border-border/70 bg-surface/40 px-2 py-1.5">
             {model.contextLines.map((line, index) => (
               <div key={`${index}:${line}`} className="font-code text-[11px] leading-[1.5] text-muted break-words">
                 {line}

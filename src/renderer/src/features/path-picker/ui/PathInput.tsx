@@ -248,7 +248,7 @@ export function PathInput({
         <div
           className={`
             absolute left-0 right-0 top-full mt-1 z-50
-            bg-surface border border-border-hi
+            bg-surface border border-border-hi rounded-float
             max-h-[280px] overflow-auto
             shadow-[0_10px_30px_rgba(0,0,0,0.4)]
             ${dropdownClassName}

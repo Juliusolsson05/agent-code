@@ -97,7 +97,7 @@ function AgentStatusContent({ model }: { model: AgentStatusModel }) {
 
 function EmptyState() {
   return (
-    <div className="rounded border border-border bg-canvas px-3 py-3 text-muted">
+    <div className="rounded-slab border border-border bg-canvas px-3 py-3 text-muted">
       Focus a Claude or Codex agent to inspect its status.
     </div>
   )
