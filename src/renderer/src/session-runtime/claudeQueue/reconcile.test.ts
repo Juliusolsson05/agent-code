@@ -99,11 +99,14 @@ describe('the reported bug: mixed later/next cohort with one remove', () => {
       timestamp: '2',
     })
     state = applyQueueOperation(state, { operation: 'remove', timestamp: '3' })
+    state = markStaleWhenIdle(state, true)
 
     expect(state.pending).toHaveLength(1)
     expect(state.pending[0]!.content).toContain('Agent "audit" finished')
-    expect(state.decisions.map(d => d.reason)).toEqual(['consumed-as-attachment'])
-    expect(state.decisions[0]!.preview).toContain('Background command "build"')
+    expect(state.decisions.map(d => d.reason)).toContain('consumed-inferred')
+    expect(
+      state.decisions.find(d => d.reason === 'consumed-inferred')?.preview,
+    ).toContain('Background command "build"')
   })
 
   it('does not strand the background command across repeated rounds', () => {
@@ -124,6 +127,7 @@ describe('the reported bug: mixed later/next cohort with one remove', () => {
       })
       state = applyQueueOperation(state, { operation: 'remove', timestamp: `${round}r` })
     }
+    state = markStaleWhenIdle(state, true)
     const stranded = state.pending.filter(i => i.content.includes('Background command'))
     expect(stranded).toEqual([])
   })
@@ -199,6 +203,11 @@ describe('remove: the two upstream callers disagree, and we resolve safely', () 
     // durable identity is only five recorded entries later and may cross a
     // watcher burst, so the bounded debt—not copied prompt text—survives.
     expect(state.pending.map(item => item.content)).toEqual([enqueue.content])
+    expect(state.removeDebt).toEqual({
+      count: 1,
+      at: remove.timestamp,
+    })
+    expect(Object.keys(state.removeDebt ?? {}).sort()).toEqual(['at', 'count'])
     state = applyQueuedCommandObservation(state, {
       uuid: durable.uuid,
       mode: 'prompt',
@@ -232,6 +241,7 @@ describe('remove: the two upstream callers disagree, and we resolve safely', () 
       timestamp: '2',
     })
     state = applyQueueOperation(state, { operation: 'remove', timestamp: '3' })
+    state = markStaleWhenIdle(state, true)
 
     expect(state.pending).toHaveLength(1)
     expect(state.pending[0]!.content).toBe('please run the tests')
@@ -244,6 +254,7 @@ describe('remove: the two upstream callers disagree, and we resolve safely', () 
     state = applyQueueOperation(state, { operation: 'enqueue', content: 'first', timestamp: '1' })
     state = applyQueueOperation(state, { operation: 'enqueue', content: 'second', timestamp: '2' })
     state = applyQueueOperation(state, { operation: 'remove', timestamp: '3' })
+    state = markStaleWhenIdle(state, true)
 
     expect(state.pending.map(i => i.content)).toEqual(['second'])
   })
@@ -476,6 +487,6 @@ describe('recorded corpus replay', () => {
     // the corresponding branch is untested by the corpus and this suite is
     // asserting less than it appears to.
     expect(reasons).toContain('delivered-observed')
-    expect(reasons).toContain('consumed-as-attachment')
+    expect(reasons).toContain('consumed-inferred')
   })
 })

@@ -14,6 +14,11 @@ import { createLedgerInputAdapter } from '@renderer/rendering/adapter/collectLed
 import { createSessionLedger } from '@renderer/rendering/model/ledger'
 import { collectCommittedCandidates } from '@renderer/rendering/observations/committed'
 import { emptyRuntime } from '@renderer/session-runtime/state'
+import { buildPreviewModel } from '@renderer/features/session-preview/previewModel'
+import {
+  applyFeedEvent,
+  createReplayFoldState,
+} from '@renderer/rendering/replay/reconstructSlices'
 import type { Entry } from '@shared/types/transcript'
 import recordedShapes from '../../../../../testing/fixtures/rendering-shapes/claude/queued-command/final.json'
 
@@ -43,8 +48,14 @@ const recordedPromptAttachments = [13, 30, 70].map(
 )
 const recordedTaskNotification =
   notificationBundle.input.entries[43] as Entry
-const recordedBlockArray = recordedShapes.humanBlockArray as Entry
-const recordedPeerMeta = recordedShapes.peerMeta as Entry
+function recordedShape(name: string): Entry {
+  const found = recordedShapes.cases.find(fixtureCase => fixtureCase.name === name)
+  if (!found) throw new Error(`recorded queued-command shape missing: ${name}`)
+  return found.transcriptEntry as Entry
+}
+
+const recordedBlockArray = recordedShape('humanBlockArray')
+const recordedPeerMeta = recordedShape('peerMeta')
 
 function replay(entries: Entry[]) {
   const runtime = emptyRuntime()
@@ -109,6 +120,21 @@ describe('recorded Claude queued-command attachments', () => {
         .filter(item => item.type === 'entry')
         .map(item => item.type === 'entry' ? item.entry.uuid : null),
     ).toEqual(recordedPromptAttachments.map(entry => entry.uuid))
+  })
+
+  it('maps the same durable row through preview and recorded SessionFeed replay', () => {
+    const attachment = recordedPromptAttachments[0]!
+    const preview = buildPreviewModel(
+      [attachment as unknown as Record<string, unknown>],
+      'claude',
+    )
+    expect(preview.entries).toEqual([attachment])
+
+    const replayState = createReplayFoldState('claude', 'recorded-queue-parity')
+    applyFeedEvent(replayState, 'session:jsonl-entries', {
+      entries: [{ file: 'recorded.jsonl', entry: attachment }],
+    })
+    expect(replayState.entries).toEqual([attachment])
   })
 
   it('paints the recorded block-array prompt as a user row without flattening its image', () => {

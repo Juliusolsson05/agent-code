@@ -505,9 +505,9 @@ const CASES: Array<{ id: string; slug: string; note: string }> = [
     id: '4d4c8b1a',
     slug: 'remove-is-not-persisted',
     note:
-      'Ground truth for the dequeue/remove asymmetry: `dequeue` is followed by a user entry ' +
-      'carrying the notification verbatim; `remove` is followed by nothing, because the ' +
-      'mid-turn attachment drain is never written to the transcript.',
+      'Reduced-fixture ground truth for the dequeue/remove asymmetry: `dequeue` is followed ' +
+      'by a retained user identity event; `remove` has no retained event because this fixture ' +
+      'schema intentionally omits durable queued-command attachments.',
   },
 ]
 

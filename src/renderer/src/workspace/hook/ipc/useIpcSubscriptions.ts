@@ -60,11 +60,13 @@ import {
 } from '@renderer/workspace/hook/actions/streaming'
 import {
   applyCommittedUserEntry,
+  applyQueuedCommandObservation,
   applyQueueOperation,
   createClaudeQueueState,
   markStaleWhenIdle,
   type ClaudeQueueState,
 } from '@renderer/session-runtime/claudeQueue'
+import { decodeClaudeQueuedCommand } from '@providers/claude/renderer/entries/queuedCommand'
 import { shouldClearIdleQueuedMessages } from '@renderer/session-runtime/queueInvariants'
 import type { StreamPhase } from '@renderer/session-runtime/state'
 import { conditionStateByKind } from '@shared/types/providerConditions'
@@ -1610,7 +1612,10 @@ export function useIpcSubscriptions(
           // must never decide membership itself. See
           // docs/decomposition/claude-queue-reconciliation.md.
           const entryType = (raw as { type?: string }).type
-          if (entryType === 'queue-operation') {
+          const shapeSaysCodex = isCodexRolloutEntry(raw)
+          const routedKind: AgentProviderKind =
+            mappingKind ?? (shapeSaysCodex ? 'codex' : 'claude')
+          if (entryType === 'queue-operation' && routedKind === 'claude') {
             const op = raw as { operation?: string; content?: string; timestamp?: string }
             claudeQueue = applyQueueOperation(claudeQueue, {
               operation: op.operation ?? '',
@@ -1626,6 +1631,25 @@ export function useIpcSubscriptions(
             // between turns while CC is draining queued work.
             if (queuedMessages.length > 0) awaitingAssistant = true
             continue
+          }
+
+          // ---- Claude legacy-remove identity pass ----
+          // Modern remove records carry content directly. Older records do
+          // not, but Claude persists the consumed command a few JSONL lines
+          // later as attachment/queued_command. Project provider grammar once
+          // through the adapter and let the pure queue reconciler join it to
+          // bounded remove debt; this live site must never choose a victim.
+          const queuedCommand =
+            routedKind === 'claude'
+              ? decodeClaudeQueuedCommand(raw as Entry)
+              : null
+          if (queuedCommand !== null && queuedCommand.promptText !== null) {
+            claudeQueue = applyQueuedCommandObservation(claudeQueue, {
+              uuid: queuedCommand.uuid,
+              mode: queuedCommand.mode,
+              text: queuedCommand.promptText,
+            })
+            queuedMessages = claudeQueue.pending
           }
 
           // ---- Claude queue identity pass ----
@@ -1650,9 +1674,6 @@ export function useIpcSubscriptions(
           }
 
           // ---- Unified mapper routing ----
-          const shapeSaysCodex = isCodexRolloutEntry(raw)
-          const routedKind: AgentProviderKind =
-            mappingKind ?? (shapeSaysCodex ? 'codex' : 'claude')
           if (mappingKind !== null && shapeSaysCodex !== (mappingKind === 'codex')) {
             routeShadowMismatches += 1
             if (!routeShadowSample) {

@@ -1,49 +1,57 @@
 {
   "evidence": "Projected from recorded Claude queued_command attachments in the existing local corpus on 2026-08-27. Free prose, image bytes, UUIDs, sender identity, and paths are synthetic; entry/attachment keys, enum values, block cardinality, and provenance relationships are preserved.",
-  "humanBlockArray": {
-    "type": "attachment",
-    "uuid": "recorded-queued-command-block-array",
-    "parentUuid": null,
-    "timestamp": "2026-08-13T10:56:25.201Z",
-    "userType": "external",
-    "version": "2.1.231",
-    "attachment": {
-      "type": "queued_command",
-      "commandMode": "prompt",
-      "origin": {
-        "kind": "human"
-      },
-      "prompt": [
-        {
-          "type": "text",
-          "text": "RECORDED_BLOCK_TEXT"
-        },
-        {
-          "type": "image",
-          "source": {
-            "type": "base64",
-            "media_type": "image/png",
-            "data": "RECORDED_IMAGE_DATA"
-          }
+  "cases": [
+    {
+      "name": "humanBlockArray",
+      "transcriptEntry": {
+        "type": "attachment",
+        "uuid": "recorded-queued-command-block-array",
+        "parentUuid": null,
+        "timestamp": "2026-08-13T10:56:25.201Z",
+        "userType": "external",
+        "version": "2.1.231",
+        "attachment": {
+          "type": "queued_command",
+          "commandMode": "prompt",
+          "origin": {
+            "kind": "human"
+          },
+          "prompt": [
+            {
+              "type": "text",
+              "text": "RECORDED_BLOCK_TEXT"
+            },
+            {
+              "type": "image",
+              "source": {
+                "type": "base64",
+                "media_type": "image/png",
+                "data": "RECORDED_IMAGE_DATA"
+              }
+            }
+          ]
         }
-      ]
+      }
+    },
+    {
+      "name": "peerMeta",
+      "transcriptEntry": {
+        "type": "attachment",
+        "uuid": "recorded-queued-command-peer-meta",
+        "parentUuid": null,
+        "timestamp": "2026-08-23T02:28:18.907Z",
+        "userType": "external",
+        "version": "2.1.240",
+        "attachment": {
+          "type": "queued_command",
+          "commandMode": "prompt",
+          "origin": {
+            "kind": "peer"
+          },
+          "isMeta": true,
+          "prompt": "RECORDED_PEER_META_PROMPT"
+        }
+      }
     }
-  },
-  "peerMeta": {
-    "type": "attachment",
-    "uuid": "recorded-queued-command-peer-meta",
-    "parentUuid": null,
-    "timestamp": "2026-08-23T02:28:18.907Z",
-    "userType": "external",
-    "version": "2.1.240",
-    "attachment": {
-      "type": "queued_command",
-      "commandMode": "prompt",
-      "origin": {
-        "kind": "peer"
-      },
-      "isMeta": true,
-      "prompt": "RECORDED_PEER_META_PROMPT"
-    }
-  }
+  ]
 }

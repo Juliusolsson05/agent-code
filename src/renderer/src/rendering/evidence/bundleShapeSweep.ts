@@ -179,9 +179,9 @@ export function sweepBundleShapes(bundle: unknown): BundleShapeObservation[] {
  * store only the provider object(s) under test, not a fake RuntimeLedgerSlices
  * wrapper. Making them impersonate a full bundle would add invented evidence.
  * The accepted carrier keys are the fixture schema used in-tree: direct
- * toolUse/toolResult/semanticBlock fields or a `cases[]` array containing
- * those fields. Every emitted observation still goes through the canonical
- * fingerprint helper and the same painter lifecycle semantics.
+ * toolUse/toolResult/semanticBlock/transcriptEntry fields or a `cases[]` array
+ * containing those fields. Every emitted observation still goes through the
+ * canonical fingerprint helper and the same painter lifecycle semantics.
  */
 export function sweepCuratedShapeFixture(
   fixture: unknown,
@@ -236,6 +236,15 @@ export function sweepCuratedShapeFixture(
         semanticBlock.finalized === true ? 'input-complete' : 'prefix',
         semanticBlock.kind,
         semanticBlock,
+      )
+    }
+    const transcriptEntry = asRecord(carrier.transcriptEntry)
+    if (transcriptEntry && typeof transcriptEntry.type === 'string') {
+      observe(
+        'transcript-entry',
+        'durable',
+        transcriptEntry.type,
+        transcriptEntry,
       )
     }
   }

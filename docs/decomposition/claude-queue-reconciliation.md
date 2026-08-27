@@ -3,14 +3,22 @@
 > **Status:** SHIPPED on this branch. All five stages are implemented; §7 keeps
 > the checklist as the record of what was built. The investigation behind it is
 > closed — every unknown that gated the design was answered locally against the
-> vendored upstream source, the installed 2.1.220 binary, and 220 op-carrying
-> transcripts. §3 states the root cause exactly. §5 is the algorithm.
+> vendored upstream source, the installed 2.1.220 binary, and the recorded
+> queue corpus. §3 states the root cause exactly. §5 is the algorithm.
 >
 > **What landed:**
 > `src/renderer/src/session-runtime/claudeQueue/` (the reconciler, single
 > consumer `useIpcSubscriptions`), `scripts/extract-queue-operations.mts`,
 > `testing/fixtures/queue-operations/` (4 recorded agent-code sessions + `catalog.md`).
 > `claudeQueueReconstruction.ts` is deleted.
+>
+> **2026-08-27 evidence correction:** the original investigation treated every
+> `remove` as content-free and every consumed attachment as non-durable. The
+> recorded corpus disproves both claims: 1,203/1,558 removes carry exact content,
+> and older content-free removes are followed by durable
+> `attachment/queued_command` rows. The algorithm and reason names below are
+> updated to the corrected substrate; the priority/fallback analysis remains
+> relevant only when neither identity carrier exists.
 >
 > **Verification:** `npm run typecheck` clean; the full unit+renderer suite and
 > 61 system tests pass, and the 50-test bundle+recording corpora are unchanged —
@@ -33,9 +41,10 @@
 |---|---|---|
 | `queue-operation` records in Claude's JSONL | `messageQueueManager.logOperation` → `sessionStorage.insertQueueOperation` → `appendEntry` | **Trusted.** Verbatim, append-only, same file we tail. |
 | Op vocabulary | `enqueue`, `dequeue`, `remove`, `popAll` | **Trusted** — measured, §2. |
-| `enqueue` / `popAll` carry `content` | `logOperation(op, content)` | **Trusted. 2010/2010 enqueues carried content — zero exceptions.** |
-| `dequeue` / `remove` carry no identity | `logOperation('dequeue')` | **Trusted, and it is the core constraint.** |
-| `<task-notification>` carries `<task-id>` | every emit site | **Trusted. 1045/1045 = 100%.** |
+| `enqueue` / `popAll` carry `content` | `logOperation(op, content)` | **Trusted. 2,181/2,181 enqueues carry content.** |
+| `remove` identity is versioned | recorded JSONL | **Trusted. 1,203/1,558 carry content; 355 legacy records do not.** |
+| Legacy `remove` attachment | recorded JSONL | **Trusted. Claude persists `attachment/queued_command` with prompt, mode, UUID, and timestamp.** |
+| `<task-notification>` carries a correlation id | every emit site | **Trusted. 1,134/1,134 = 100%.** |
 | Committed `user` entries | the transcript | **Trusted** — the `dequeue` delivery channel, §3.3. |
 | `QueueStrip` | `TileLeaf/QueueStrip.tsx` | Trusted; not the bug. |
 
@@ -50,32 +59,26 @@
 
 ---
 
-## 2. Measurements (220 op-carrying transcripts of 1916, `~/.claude/projects`)
+## 2. Measurements (139 op-carrying transcripts of 875, `~/.claude/projects`)
 
 Regenerate with `npx tsx --tsconfig tsconfig.web.json scripts/extract-queue-operations.mts --measure`.
 Counts drift upward as the local corpus grows; the method is what must reproduce.
 
 ```
-enqueue: 2010 records / 1774 runs (7.8% multi)   content present: 2010/2010 = 100%
-dequeue:  897 records /  787 runs (4.8% multi)
-remove:  1093 records /  983 runs (9.1% multi)   <- most frequent departure
+enqueue: 2181 records / 1783 runs (13.7% multi)  content present: 2181/2181 = 100%
+dequeue:  589 records /  552 runs (4.0% multi)
+remove:  1558 records / 1246 runs (13.7% multi)  content present: 1203/1558 = 77.2%
 popAll:     1 record  /    1 run
-task-notifications carrying <task-id>: 1045/1045 = 100%
+task-notifications carrying a correlation id: 1134/1134 = 100%
+queued_command attachments: 1058 (772 prompt, 286 task-notification; all UUID/timestamp bearing)
 ```
 
-**Delivery observability as a committed `user` entry, split by the departure op
-that followed** — the measurement that decided the algorithm:
-
-| | `dequeue` | `remove` |
-|---|---|---|
-| task-notification | **610/619 = 98.5%** | **13/411 = 3.2%** |
-| prompt | 241/278 = 86.7% | 230/678 = 33.9% |
-
-Two op families with completely different evidence profiles. This is why a
-single "match content against the transcript" design would have failed on 40% of
-notification departures, and why a single "simulate the queue" design cannot use
-the identity that *is* available for the other 60%. **The reconciler must use
-both, chosen per op.**
+The earlier 33.9% figure counted later prefix collisions as if they proved a
+specific remove delivery. It is not reproducible evidence and is retired.
+There are three real identity channels: committed user rows after `dequeue`,
+exact `remove.content` on newer Claude, and durable queued-command attachments
+after legacy content-free removes. Cohort simulation is only the bounded last
+resort.
 
 ---
 
@@ -140,7 +143,7 @@ The agent notification is wrongly dropped and **the background command is
 stranded permanently.** That is the bug, verbatim, and it explains the
 divergence observed in real sessions (§4).
 
-### 3.3 `remove` is a delivery that is not persisted
+### 3.3 `remove` has versioned operation identity and a durable carrier
 
 `remove` comes from exactly two callers, both now identified — the earlier
 "who else calls remove" gap is closed:
@@ -153,17 +156,20 @@ divergence observed in real sessions (§4).
 - `REPL.tsx:2532` `removeByFilter(cmd => cmd.mode === 'task-notification')` —
   Ctrl+B session backgrounding.
 
-Attachments are **not written to the JSONL**, which is why `remove` deliveries
-are only 3.2% observable while `dequeue` deliveries are 98.5%. Visible directly
-in a real transcript (`…/agent-code/4d4c8b1a…jsonl`):
+Newer Claude writes the removed command in `remove.content`. Older Claude omits
+that field but writes the mid-turn carrier as a durable
+`attachment/queued_command`. The June rendering bundle records the legacy
+ordering directly:
 
 ```
-654: queue-operation/enqueue  <task-id aeadc3a9…>
-655: queue-operation/remove          <- no user entry; consumed as an attachment
-663: queue-operation/enqueue  <task-id a5d29207…>
-664: queue-operation/dequeue
-665: user  <task-notification><task-id>a5d29207…    <- persisted verbatim
+7:  queue-operation/enqueue  <prompt>
+8:  queue-operation/remove           <- legacy, no content
+13: attachment/queued_command         <- same prompt, stable UUID + timestamp
 ```
+
+The reduced queue fixtures intentionally omit attachments, so their historical
+`remove-is-not-persisted` slug describes that reduced schema, not Claude's
+actual JSONL.
 
 ### 3.4 `popAll` is unhandled, and nothing repairs drift
 
@@ -191,7 +197,8 @@ immune. No Codex work here.
 
 ## 4. Reproduction on real data
 
-Replaying today's reconstruction over 220 op-carrying sessions: 10 end holding a
+Replaying the original reconstruction over its historical 220-session snapshot:
+10 end holding a
 non-empty queue, several holding a set **disjoint** from Claude's — the §3.2
 signature exactly:
 
@@ -232,8 +239,13 @@ on DEQUEUE run of N:
      2. any shortfall of the N: take from eligible items ordered by
         (priority, insertion)      reason: delivered-inferred
 on REMOVE run of N:
-     take the first N eligible items ordered by (priority, insertion)
-                                    reason: consumed-as-attachment
+     1. when remove.content exists, remove its exact prompt/task identity
+                                    reason: consumed-observed
+     2. otherwise retain bounded count-only debt; a later queued-command
+        attachment removes its exact pending identity
+                                    reason: consumed-observed
+     3. at the next non-remove operation or idle boundary, settle any shortfall
+        by the safe cohort fallback  reason: consumed-inferred
 ```
 
 **Why ordering by `(priority, insertion)` and taking N reproduces upstream
@@ -248,9 +260,9 @@ one logical call. Merging two genuinely separate single-item ops into one run is
 harmless — take-first-1 twice equals take-first-2 under the same ordering — so no
 timestamp heuristic is needed.
 
-**Identity first, inference second.** 98.5% of `dequeue` departures are provable;
-only the shortfall is inferred, and it is *recorded as inferred* so the next
-incident is diagnosable.
+**Identity first, inference second.** Exact remove content and durable attachment
+identity both outrank cohort selection. Only the shortfall is inferred, and it
+is *recorded as inferred* so the next incident is diagnosable.
 
 ### Residue
 
@@ -334,7 +346,8 @@ Code advantage over the upstream inbox. Fix the substrate, keep the surface.
 
 - [x] 2.1 `QueueDecision = { item, action, reason, evidence[] }` with `reason` a
       **closed enum**: `delivered-observed`, `delivered-inferred`,
-      `consumed-as-attachment`, `popped-to-composer`, `stale-unattributed`.
+      `consumed-observed`, `consumed-inferred`, `popped-to-composer`,
+      `stale-unattributed`.
       New reason ⇒ new fixture, mirroring `RenderReason` discipline.
 - [x] 2.2 `derivePriority` + `deriveMode` per §3.1, each row carrying a comment
       naming its upstream emit site.
@@ -438,6 +451,7 @@ sessions only, prompt prose pseudonymized, `<result>` bodies dropped. See
   recoverable from the log. Effect is bounded: subagent-scoped notifications may
   linger and will surface as `stale-unattributed` rather than as a wrong
   deletion. Documented, not silently ignored.
-- **Attachment deliveries stay unobservable** (3.2%). The cohort rule is
-  deterministic, so this is inference by construction — which is why those
-  removals are recorded as `consumed-as-attachment` rather than as proof.
+- **Legacy evidence can cross watcher bursts.** Remove debt therefore retains
+  only a bounded count across bursts and settles at a later operation/idle
+  boundary. It never retains copied prompt content; unmatched fallback is
+  recorded as `consumed-inferred`, never as proof.
