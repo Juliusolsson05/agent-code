@@ -21,13 +21,20 @@ interface SessionShutdownGateOptions {
   onShutdownError?: (error: unknown) => void
 }
 
+export interface SessionShutdownGate {
+  isTerminalShutdownAdmitted(): boolean
+}
+
 /**
  * Admit irreversible session teardown only after Electron has resolved every
  * renderer unload veto in favor of leaving the application.
  */
-export function installSessionShutdownGate(options: SessionShutdownGateOptions): void {
+export function installSessionShutdownGate(
+  options: SessionShutdownGateOptions,
+): SessionShutdownGate {
   let shutdownPromise: Promise<void> | null = null
   let shutdownComplete = false
+  let terminalShutdownAdmitted = false
 
   options.app.on('window-all-closed', () => {
     if ((options.platform ?? process.platform) === 'darwin') {
@@ -61,6 +68,7 @@ export function installSessionShutdownGate(options: SessionShutdownGateOptions):
       // WHY absence is already terminal: packaging smoke and failed startup can
       // legitimately quit before SessionManager construction. Inventing an
       // async gate there would hold Electron for work that cannot exist.
+      terminalShutdownAdmitted = true
       shutdownComplete = true
       options.onQuitAllowed()
       return
@@ -73,6 +81,14 @@ export function installSessionShutdownGate(options: SessionShutdownGateOptions):
     // shutdown fence.
     event.preventDefault()
     if (shutdownPromise) return
+
+    // WHY this is a one-way app-level fact rather than an alias for the current
+    // promise: killAll makes SessionManager terminal before its first await. If
+    // teardown later rejects, macOS still must not create a fresh renderer
+    // whose unload veto could strand an unusable, partially stopped app. A
+    // later explicit quit may retry teardown, but this process may never return
+    // to ordinary window/session creation once admission crossed this line.
+    terminalShutdownAdmitted = true
 
     // WHY duplicate will-quit events join one exact promise: killAll marks
     // recovery/replacement claims terminal before awaiting provider stops.
@@ -92,4 +108,8 @@ export function installSessionShutdownGate(options: SessionShutdownGateOptions):
         options.onShutdownError?.(error)
       })
   })
+
+  return {
+    isTerminalShutdownAdmitted: () => terminalShutdownAdmitted,
+  }
 }

@@ -66,7 +66,11 @@ describe('installSessionShutdownGate', () => {
       }),
     }
 
-    installSessionShutdownGate({ app: fake.app, getManager: () => manager, onQuitAllowed })
+    const gate = installSessionShutdownGate({
+      app: fake.app,
+      getManager: () => manager,
+      onQuitAllowed,
+    })
 
     // This is the recorded Keep Editing path: before-quit happened elsewhere,
     // Chromium vetoed the unload, and Electron therefore never emits will-quit.
@@ -74,6 +78,7 @@ describe('installSessionShutdownGate', () => {
     expect(manager.killAll).not.toHaveBeenCalled()
     expect(fake.app.quit).not.toHaveBeenCalled()
     expect(onQuitAllowed).not.toHaveBeenCalled()
+    expect(gate.isTerminalShutdownAdmitted()).toBe(false)
   })
 
   it('awaits one terminal teardown before allowing the re-entered quit', async () => {
@@ -149,5 +154,33 @@ describe('installSessionShutdownGate', () => {
     expect(onLastWindowClosed).not.toHaveBeenCalled()
     expect(fake.app.quit).not.toHaveBeenCalled()
     expect(manager.killAll).not.toHaveBeenCalled()
+  })
+
+  it('latches terminal admission before a slow teardown can admit macOS activation', () => {
+    const fake = createFakeApp()
+    const teardown = deferred()
+    const manager = { killAll: vi.fn(() => teardown.promise) }
+    const gate = installSessionShutdownGate({
+      app: fake.app,
+      getManager: () => manager,
+      onQuitAllowed: vi.fn(),
+      platform: 'darwin',
+    })
+    const createWindow = vi.fn()
+    const activateWithoutWindows = (): void => {
+      if (!gate.isTerminalShutdownAdmitted()) createWindow()
+    }
+
+    // Activation is still valid before will-quit, including when an earlier
+    // renderer veto means terminal teardown was never admitted.
+    activateWithoutWindows()
+    expect(createWindow).toHaveBeenCalledOnce()
+    createWindow.mockClear()
+
+    fake.emitWillQuit()
+    expect(gate.isTerminalShutdownAdmitted()).toBe(true)
+    activateWithoutWindows()
+    expect(createWindow).not.toHaveBeenCalled()
+    expect(fake.app.quit).not.toHaveBeenCalled()
   })
 })

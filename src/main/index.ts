@@ -769,6 +769,13 @@ async function startApp(): Promise<void> {
   performanceService.mark('app.main.window.created')
 
   app.on('activate', () => {
+    if (sessionShutdownGate.isTerminalShutdownAdmitted()) {
+      // WHY activation is suppressed only after will-quit admission: the gate
+      // has already made SessionManager terminal and is waiting to re-enter
+      // quit. A new renderer could add a fresh beforeunload veto and leave a
+      // visible window backed by a manager that can no longer recover or spawn.
+      return
+    }
     if (BrowserWindow.getAllWindows().length === 0) createMainWindow()
   })
 }
@@ -854,7 +861,7 @@ app.on('before-quit', (event) => {
   performanceService.stop()
 })
 
-installSessionShutdownGate({
+const sessionShutdownGate = installSessionShutdownGate({
   app,
   getManager: () => manager,
   platform: process.platform,

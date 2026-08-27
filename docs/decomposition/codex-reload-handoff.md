@@ -46,7 +46,16 @@
 > green; the affected main/renderer matrix is 89/89, typecheck, system 61/61,
 > renderer 292/292, contracts, keybindings, live-resume probe, and packaged-
 > build verification are green. Full unit is 1,576/1,577 with only the same
-> missing external corpus session. Exact-head re-review and new-head CI remain.
+> missing external corpus session. The same review's second agent found one
+> macOS re-entry window: Dock activation could create a new renderer after
+> terminal teardown was admitted, allowing that renderer to veto the final
+> quit after `SessionManager` was already fenced. Contract 40 is implemented by
+> suppressing window creation once terminal teardown begins. Its source-derived
+> activation schedule failed first and is green; the affected main/renderer
+> matrix is 90/90, typecheck, system 61/61, renderer 292/292, contracts,
+> keybindings, live-resume probe, and packaged-build verification are green.
+> Full unit is 1,577/1,578 with only the same missing external corpus session.
+> Exact-head re-review and new-head CI remain.
 >
 > **Incident:** Agent Code issue #638. Related fresh-rollout incident: #632.
 
@@ -224,6 +233,12 @@
     last-window cleanup and request `app.quit()`, but it must not independently
     call `killAll()`. The ensuing `will-quit` event starts and awaits the sole
     gate-owned teardown promise before Electron is allowed to exit.
+40. Once `will-quit` admits terminal `SessionManager` teardown, no later macOS
+    activation may create another renderer generation. A newly opened window
+    could introduce a second unload veto after the manager's shutdown fence is
+    irreversible, stranding a visible but unusable app. Activation remains
+    allowed before terminal admission, including after an earlier Keep Editing
+    veto where `will-quit` never occurred.
 
 ## 2. Intermediate stages
 
@@ -416,6 +431,10 @@ app-lifecycle boundary. Closing the last window is only a quit request; it is
 not a second owner for terminal session teardown. The gate therefore owns the
 `window-all-closed` request and the later `will-quit` drain as one observable
 sequence, while provider-neutral cleanup remains a callback from `index.ts`.
+The gate also exposes its one-way terminal-admission state to the macOS
+`activate` handler. That handler is the only consumer: it may create windows
+before admission, but never between the prevented `will-quit` and its final
+re-entry.
 
 This is separate from the async manager logic because the fifth review found
 the same missing-identity failure in recovery, close, and transaction cleanup.
@@ -590,6 +609,11 @@ receives no pane IDs and gains no replacement exception.
   lets the gate join an empty registry while the first physical provider stop
   is still pending. Last-window closure now requests quit without touching the
   manager, so the gate awaits the exact first and only teardown generation.
+- **Resolved by twelfth-review Stage 2 design:** the prevented `will-quit`
+  creates a real interval in which macOS can emit `activate`. Terminal
+  admission is therefore a latched app-lifecycle fact; `activate` consults it
+  before constructing a renderer that could add a new unload veto after the
+  manager became permanently unavailable.
 - Predecessor stop can fail or become uncertain. The coordinator's tombstone
   must remain fail-closed; compensation may also fail in that state and needs a
   truthful lifecycle outcome rather than an unsafe lease exception.
@@ -743,3 +767,9 @@ quit without touching `SessionManager`, then proves the resulting `will-quit`
 event starts exactly one teardown and the re-entered quit is admitted only
 after that promise settles. A macOS control proves last-window closure remains
 a no-op for application quit and terminal teardown.
+
+The macOS activation fixture holds terminal `killAll()` on a deferred promise,
+emits accepted `will-quit`, and proves a later activation request is rejected
+until process exit rather than creating a renderer that can veto re-entry. Its
+negative control proves activation is still allowed when Keep Editing prevents
+`will-quit`, because no terminal teardown was admitted in that sequence.
