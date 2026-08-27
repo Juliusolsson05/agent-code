@@ -1,22 +1,17 @@
-import type { Entry } from '@shared/types/transcript.js'
-import { isConversationEntry } from '@shared/types/transcript.js'
-import { asRecord, parseJsonRecord } from '@shared/lib/asRecord.js'
-import type {
-  WorkContextConfidence,
-  WorktreeActivityEvent,
-  WorktreeActivityKind,
-} from '@shared/work-context/types.js'
-import {
-  classifyCommand,
-  confidenceForKind,
-  primaryWeightFor,
-} from '@shared/work-context/scoring.js'
+import { asRecord } from '@shared/lib/asRecord.js'
+import { extractClaudeWorktreeActivitySeeds } from '@shared/work-context/provider-evidence/claude.js'
+import { extractCodexWorktreeActivitySeeds } from '@shared/work-context/provider-evidence/codex.js'
+import type { WorktreeActivityEventSeed } from '@shared/work-context/provider-evidence/types.js'
+import { primaryWeightFor } from '@shared/work-context/scoring.js'
+import type { WorktreeActivityEvent } from '@shared/work-context/types.js'
 
-type EventSeed = Omit<WorktreeActivityEvent, 'key' | 'ts' | 'primaryWeight'> & {
-  ts?: number
-  primaryWeight?: number
-}
-
+/**
+ * This facade is the only raw-provider reconciliation boundary consumed by
+ * live tracking and historical indexing. Provider adapters describe where
+ * evidence lives; this layer owns the normalized identity and scoring policy.
+ * Keeping those responsibilities separate prevents the main process and the
+ * renderer from learning fast-changing Codex/Claude transcript grammars.
+ */
 export function extractWorktreeActivityEvents(
   raw: unknown,
   now = Date.now(),
@@ -24,109 +19,19 @@ export function extractWorktreeActivityEvents(
   const record = asRecord(raw)
   if (!record) return []
 
-  const seeds: EventSeed[] = []
-
-  if (record.type === 'worktree-state') {
-    const session = asRecord(record.worktreeSession)
-    if (!session) {
-      seeds.push({
-        kind: 'worktree-exit',
-        source: 'claude:worktree-state:exit',
-        path: '',
-        branch: null,
-        confidence: 'explicit',
-        active: true,
-      })
-    } else {
-      const worktreePath = stringField(session, 'worktreePath')
-      if (worktreePath) {
-        seeds.push({
-          kind: 'worktree-enter',
-          source: 'claude:worktree-state',
-          path: worktreePath,
-          branch: stringField(session, 'worktreeBranch'),
-          confidence: 'explicit',
-          active: true,
-        })
-      }
-    }
-  }
-
-  const codexPayload = asRecord(record.payload)
-  if (record.type === 'event_msg' && codexPayload?.type === 'exec_command_end') {
-    const cwd = stringField(codexPayload, 'cwd')
-    if (cwd) {
-      const command = commandFromPayload(codexPayload)
-      const kind = classifyCommand(command)
-      seeds.push({
-        kind,
-        source: 'codex:exec_command_end.cwd',
-        path: cwd,
-        branch: null,
-        confidence: kind === 'verification' ? 'medium' : 'strong',
-        active: true,
-        command: command ?? undefined,
-      })
-    }
-  }
-
-  if (record.type === 'event_msg' && codexPayload?.type === 'exec_approval_request') {
-    const cwd = stringField(codexPayload, 'workdir')
-    if (cwd) {
-      const command = commandFromPayload(codexPayload)
-      const kind = classifyCommand(command)
-      seeds.push({
-        kind,
-        source: 'codex:exec_approval_request.workdir',
-        path: cwd,
-        branch: null,
-        confidence: 'medium',
-        active: true,
-        command: command ?? undefined,
-      })
-    }
-  }
-
-  if (record.type === 'response_item' && codexPayload?.type === 'local_shell_call') {
-    const action = asRecord(codexPayload.action)
-    const cwd =
-      stringField(action, 'working_directory') ??
-      stringField(action, 'workdir')
-    if (cwd) {
-      const command = commandFromAction(action)
-      const kind = classifyCommand(command)
-      seeds.push({
-        kind,
-        source: 'codex:local_shell_call.cwd',
-        path: cwd,
-        branch: null,
-        confidence: 'medium',
-        active: true,
-        command: command ?? undefined,
-      })
-    }
-  }
-
-  if (record.type === 'response_item' && codexPayload?.type === 'function_call') {
-    const events = functionCallEvents(codexPayload)
-    seeds.push(...events)
-  }
-
-  seeds.push(...conversationToolEvents(record))
-
-  const cwd = stringField(record, 'cwd')
-  if (cwd && isConversationEntry(record as Entry)) {
-    seeds.push({
-      kind: 'session-cwd',
-      source: 'claude:entry.cwd',
-      path: cwd,
-      branch: stringField(record, 'gitBranch'),
-      confidence: 'medium',
-      active: true,
-      requiresWorktreeMatch: true,
-      primaryWeight: 1,
-    })
-  }
+  // WHY choose one adapter before extraction: Claude's worktree/conversation
+  // outer discriminators and Codex's rollout discriminators are disjoint. A
+  // full historical rebuild visits mostly irrelevant records; calling both
+  // adapters and spreading two short-lived arrays on every line creates heap
+  // churn without adding reconciliation value. Provider-specific details
+  // remain inside the adapters; this boundary knows only the stable envelope
+  // ownership needed to select one of them.
+  const seeds =
+    record.type === 'worktree-state' ||
+    record.type === 'user' ||
+    record.type === 'assistant'
+      ? extractClaudeWorktreeActivitySeeds(record)
+      : extractCodexWorktreeActivitySeeds(record)
 
   return seeds.map((seed, index) => {
     const ts = seed.ts ?? timestampMs(record, now)
@@ -140,108 +45,11 @@ export function extractWorktreeActivityEvents(
   })
 }
 
-function functionCallEvents(payload: Record<string, unknown>): EventSeed[] {
-  const name = stringField(payload, 'name')
-  if (!name) return []
-  const args = parseJsonRecord(stringField(payload, 'arguments'))
-  if (!args) return []
-
-  const cwd =
-    stringField(args, 'workdir') ??
-    stringField(args, 'cwd') ??
-    stringField(args, 'working_directory')
-  const command = commandFromPayload(args)
-
-  if (name === 'exec_command' && cwd) {
-    const kind = classifyCommand(command)
-    return [{
-      kind,
-      source: 'codex:function_call.workdir',
-      path: cwd,
-      branch: null,
-      confidence: 'medium',
-      active: true,
-      command: command ?? undefined,
-    }]
-  }
-
-  const filePath = stringField(args, 'file_path') ?? stringField(args, 'path')
-  if (filePath?.startsWith('/')) {
-    const kind = isWriteTool(name) ? 'file-write' : 'file-read'
-    return [{
-      kind,
-      source: `codex:function_call:${name}:path`,
-      path: filePath,
-      branch: null,
-      confidence: confidenceForKind(kind),
-      active: true,
-      requiresWorktreeMatch: true,
-      filePaths: [filePath],
-    }]
-  }
-
-  return []
-}
-
-function conversationToolEvents(record: Record<string, unknown>): EventSeed[] {
-  if (!isConversationEntry(record as Entry)) return []
-  const content = (record as Entry & { message?: { content?: unknown } }).message?.content
-  if (!Array.isArray(content)) return []
-
-  const events: EventSeed[] = []
-  for (const block of content) {
-    const b = asRecord(block)
-    if (!b || b.type !== 'tool_use') continue
-    const input = asRecord(b.input)
-    if (!input) continue
-
-    const toolName = stringField(b, 'name') ?? 'tool'
-    const directPath =
-      stringField(input, 'file_path') ??
-      stringField(input, 'path') ??
-      stringField(input, 'cwd') ??
-      stringField(input, 'workdir')
-    if (!directPath?.startsWith('/')) continue
-
-    const kind = isWriteTool(toolName) ? 'file-write' : 'file-read'
-    events.push({
-      kind,
-      source: `tool:${toolName}:path`,
-      path: directPath,
-      branch: null,
-      confidence: confidenceForKind(kind),
-      active: true,
-      requiresWorktreeMatch: true,
-      filePaths: [directPath],
-    })
-  }
-  return events
-}
-
-function commandFromPayload(payload: Record<string, unknown>): string | null {
-  if (typeof payload.command === 'string') return payload.command
-  if (Array.isArray(payload.command)) {
-    return payload.command.filter((part): part is string => typeof part === 'string').join(' ')
-  }
-  if (Array.isArray(payload.parsed_cmd)) {
-    return payload.parsed_cmd.filter((part): part is string => typeof part === 'string').join(' ')
-  }
-  return null
-}
-
-function commandFromAction(action: Record<string, unknown> | null): string | null {
-  if (!action) return null
-  if (typeof action.command === 'string') return action.command
-  if (Array.isArray(action.command)) {
-    return action.command.filter((part): part is string => typeof part === 'string').join(' ')
-  }
-  if (Array.isArray(action.cmd)) {
-    return action.cmd.filter((part): part is string => typeof part === 'string').join(' ')
-  }
-  return null
-}
-
-function eventKey(seed: EventSeed, ts: number, index: number): string {
+function eventKey(
+  seed: WorktreeActivityEventSeed,
+  ts: number,
+  index: number,
+): string {
   return [
     seed.source,
     seed.kind,
@@ -259,14 +67,6 @@ function timestampMs(record: Record<string, unknown>, fallback: number): number 
   if (!timestamp) return fallback
   const parsed = Date.parse(timestamp)
   return Number.isFinite(parsed) ? parsed : fallback
-}
-
-function isWriteTool(toolName: string): boolean {
-  return toolName === 'Edit' ||
-    toolName === 'Write' ||
-    toolName === 'MultiEdit' ||
-    toolName === 'NotebookEdit' ||
-    toolName === 'apply_patch'
 }
 
 function stringField(

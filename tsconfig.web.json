@@ -50,6 +50,13 @@
     // could not see its `expect` augmentation. Include the one shared setup instead of adding
     // matcher imports to individual specs and letting the two test environments drift.
     "testing/setup/renderer.ts",
+    // This fixture exporter imports the canonical renderer redactor and the
+    // production Dispatch selectors on purpose: the recorded corpus must be
+    // minimized and replay-verified by the same ownership boundaries the app
+    // uses. Keep it in the web project so callback selection, fixture-state
+    // assumptions, and selector API drift fail the normal typecheck instead of
+    // surfacing only when someone refreshes the evidence months later.
+    "scripts/extract-work-context-fixtures.mts",
     // Curated rendering-shape fixtures are imported by provider adapter and
     // DOM contracts. Composite TypeScript refuses transitive JSON that is not
     // named in the project file list; keeping the fixture tree explicit makes

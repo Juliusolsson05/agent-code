@@ -5,9 +5,7 @@ import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { useAppStore } from '@renderer/app-state/hooks'
 import { SplitHandle } from '@renderer/features/shared/SplitHandle'
 import { useResizableSplitter } from '@renderer/features/shared/useResizableSplitter'
-import { TerminalLeaf } from '@renderer/workspace/tile-tree/TerminalLeaf'
 import { renderWorkspaceLeaf } from '@renderer/workspace/tile-tree/TileTree'
-import { paneLabelForSession } from '@renderer/workspace/tile-tree/paneLabels'
 import {
   buildDispatchGroups,
   buildPinnedDispatchRows,
@@ -69,9 +67,6 @@ function ClassicDispatchLayout({
     workspace.state.dispatchMode?.focusedSessionId ?? null,
     workspace.activeTab?.focusedSessionId ?? null,
   )
-  const activeTab = activeRow
-    ? workspace.state.tabs.find(tab => tab.id === activeRow.tabId) ?? null
-    : workspace.activeTab
   // Resizable list/active-agent split. The ratio is owned by uiShell
   // (see UiShellState.dispatchListRatio) so it survives mode toggles
   // without being re-derived from workspace state. We measure against
@@ -178,6 +173,8 @@ function ClassicDispatchLayout({
             showStatusMode,
             showWorktreeBadges,
             () => workspace.focusDispatchSession(activeRow.tabId, activeRow.sessionId),
+            false,
+            activeRow.label,
           )
         ) : (
           <DispatchEmpty message="no sessions in this dispatch scope" />

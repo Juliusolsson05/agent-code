@@ -1,15 +1,21 @@
-import { mkdir, readFile, rename, rm, writeFile } from 'fs/promises'
+import { mkdir, open, readFile, rename, rm, writeFile } from 'fs/promises'
 import { join } from 'path'
 
 import { STATE_DIR } from '@main/storage/paths.js'
 import type { IndexedTranscript, WorktreeActivityIndexFile } from '@main/worktreeActivity/types.js'
 
-const INDEX_VERSION = 2
+// WHY parser semantics are part of the cache version: IndexedTranscript is a
+// derived projection of provider JSONL, so a grammar fix can make an unchanged
+// source file produce different events. mtime/size cannot detect that kind of
+// change. Bumping this value makes the next refresh reparse raw transcripts;
+// it never migrates or mutates the provider-owned source files.
+export const WORKTREE_ACTIVITY_INDEX_VERSION = 3
 const INDEX_FILE = join(STATE_DIR, 'worktree-activity-index.json')
+const INDEX_VERSION_PROBE_BYTES = 4 * 1024
 
 export function emptyIndexFile(): WorktreeActivityIndexFile {
   return {
-    version: INDEX_VERSION,
+    version: WORKTREE_ACTIVITY_INDEX_VERSION,
     updatedAt: 0,
     transcripts: {},
   }
@@ -17,6 +23,7 @@ export function emptyIndexFile(): WorktreeActivityIndexFile {
 
 export async function loadWorktreeActivityIndex(): Promise<WorktreeActivityIndexFile> {
   try {
+    if (await hasStaleVersionPrefix()) return emptyIndexFile()
     const text = await readFile(INDEX_FILE, 'utf8')
     const parsed = JSON.parse(text) as Partial<WorktreeActivityIndexFile>
     // Version mismatch means parser semantics changed. Drop the old
@@ -24,16 +31,51 @@ export async function loadWorktreeActivityIndex(): Promise<WorktreeActivityIndex
     // transcripts are still available and the next background refresh
     // can rebuild from source. This keeps migrations cheap until the
     // index becomes user-visible data rather than derived cache.
-    if (parsed.version !== INDEX_VERSION || !parsed.transcripts) {
+    if (
+      parsed.version !== WORKTREE_ACTIVITY_INDEX_VERSION ||
+      !parsed.transcripts
+    ) {
       return emptyIndexFile()
     }
     return {
-      version: INDEX_VERSION,
+      version: WORKTREE_ACTIVITY_INDEX_VERSION,
       updatedAt: typeof parsed.updatedAt === 'number' ? parsed.updatedAt : 0,
       transcripts: parsed.transcripts as Record<string, IndexedTranscript>,
     }
   } catch {
     return emptyIndexFile()
+  }
+}
+
+async function hasStaleVersionPrefix(): Promise<boolean> {
+  let handle: Awaited<ReturnType<typeof open>> | null = null
+  try {
+    handle = await open(INDEX_FILE, 'r')
+    const probe = Buffer.allocUnsafe(INDEX_VERSION_PROBE_BYTES)
+    const { bytesRead } = await handle.read(
+      probe,
+      0,
+      INDEX_VERSION_PROBE_BYTES,
+      0,
+    )
+    const prefix = probe.toString('utf8', 0, bytesRead)
+    const match = /"version"\s*:\s*(\d+)/.exec(prefix)
+
+    // WHY probe before readFile/JSON.parse: heavy-user indexes exceed 30 MB,
+    // and a parser-version bump makes every byte of the old object graph
+    // useless. The serializer writes `version` first, so the normal stale path
+    // can be rejected after one bounded read instead of briefly retaining the
+    // full string plus parsed transcript map. If an old or hand-edited file
+    // lacks an early version field, the regular parser below remains the safe
+    // fallback and still performs the authoritative schema check.
+    return match !== null &&
+      Number(match[1]) !== WORKTREE_ACTIVITY_INDEX_VERSION
+  } catch {
+    // Missing/unreadable files follow the existing load fallback. Returning
+    // false here preserves a single error-handling path in the caller.
+    return false
+  } finally {
+    await handle?.close().catch(() => undefined)
   }
 }
 
@@ -62,7 +104,10 @@ export async function loadEntryFromDisk(
   try {
     const text = await readFile(INDEX_FILE, 'utf8')
     const parsed = JSON.parse(text) as Partial<WorktreeActivityIndexFile>
-    if (parsed.version !== INDEX_VERSION || !parsed.transcripts) return null
+    if (
+      parsed.version !== WORKTREE_ACTIVITY_INDEX_VERSION ||
+      !parsed.transcripts
+    ) return null
     const entry = (parsed.transcripts as Record<string, IndexedTranscript>)[path]
     return entry ?? null
   } catch {
@@ -96,7 +141,7 @@ export async function saveWorktreeActivityIndex(
   await mkdir(STATE_DIR, { recursive: true })
   const next = {
     ...index,
-    version: INDEX_VERSION,
+    version: WORKTREE_ACTIVITY_INDEX_VERSION,
     updatedAt: Date.now(),
   }
   // WHY the temp path is unique even though the index is only a derived cache:

@@ -1,0 +1,117 @@
+{
+  "$fixture": {
+    "id": "codex-main-to-worktree",
+    "cutoff": "2026-08-26T21:38:22.000Z",
+    "source": "codex-rollout-a",
+    "sourceFingerprint": "602b7c63354504e2",
+    "records": [
+      {
+        "timestamp": "2026-08-26T20:51:40.603Z",
+        "line": 1
+      },
+      {
+        "timestamp": "2026-08-26T20:51:41.198Z",
+        "line": 8
+      },
+      {
+        "timestamp": "2026-08-26T20:51:45.771Z",
+        "line": 16
+      },
+      {
+        "timestamp": "2026-08-26T20:54:01.907Z",
+        "line": 132
+      },
+      {
+        "timestamp": "2026-08-26T21:06:14.436Z",
+        "line": 495
+      },
+      {
+        "timestamp": "2026-08-26T21:10:28.439Z",
+        "line": 598
+      }
+    ]
+  },
+  "records": [
+    {
+      "type": "session_meta",
+      "timestamp": "2026-08-26T20:51:40.603Z",
+      "payload": {
+        "cwd": "/fixture/project-1",
+        "cli_version": "0.149.1",
+        "git": {
+          "branch": "fixture/branch-1"
+        }
+      }
+    },
+    {
+      "type": "turn_context",
+      "timestamp": "2026-08-26T20:51:41.198Z",
+      "payload": {
+        "cwd": "/fixture/project-1",
+        "workspace_roots": [
+          "/fixture/project-1"
+        ]
+      }
+    },
+    {
+      "type": "event_msg",
+      "timestamp": "2026-08-26T20:51:45.771Z",
+      "payload": {
+        "type": "item_completed",
+        "item": {
+          "type": "CommandExecution",
+          "command": [
+            "⟨text:8⟩",
+            "⟨text:3⟩",
+            "⟨text:82⟩"
+          ],
+          "cwd": "file:///fixture/project-1",
+          "status": "completed"
+        }
+      }
+    },
+    {
+      "type": "event_msg",
+      "timestamp": "2026-08-26T20:54:01.907Z",
+      "payload": {
+        "type": "thread_settings_applied",
+        "thread_settings": {
+          "cwd": "/fixture/project-1"
+        }
+      }
+    },
+    {
+      "type": "event_msg",
+      "timestamp": "2026-08-26T21:06:14.436Z",
+      "payload": {
+        "type": "item_completed",
+        "item": {
+          "type": "FileChange",
+          "changes": {
+            "/fixture/project-1/.worktrees/worktree-1/path-1/path-2/path-1/path-3/path-4/path-5/path-6": {
+              "type": "update",
+              "unified_diff": "⟨text:847⟩",
+              "move_path": null
+            },
+            "/fixture/project-1/.worktrees/worktree-1/path-1/path-2/path-1/path-7/path-8/path-9": {
+              "type": "update",
+              "unified_diff": "⟨text:2027⟩",
+              "move_path": null
+            }
+          },
+          "status": "completed"
+        }
+      }
+    },
+    {
+      "type": "turn_context",
+      "timestamp": "2026-08-26T21:10:28.439Z",
+      "payload": {
+        "cwd": "/fixture/project-1",
+        "workspace_roots": [
+          "/fixture/project-1"
+        ]
+      }
+    }
+  ]
+}

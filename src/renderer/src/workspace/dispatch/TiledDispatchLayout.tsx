@@ -62,7 +62,11 @@ function normalizedLaneWeights(ratios: number[] | undefined, laneCount: number):
   return raw.map(w => w / sum)
 }
 
-type LaneResolution = { sessionId: SessionId; tabId: TabId } | null
+type LaneResolution = {
+  sessionId: SessionId
+  tabId: TabId
+  paneLabel: string
+} | null
 
 export function TiledDispatchLayout({
   workspace,
@@ -96,21 +100,23 @@ export function TiledDispatchLayout({
     return map
   }, [rows])
 
-  // Resolve every lane to {sessionId, tabId} | null. A lane resolves iff its
+  // Resolve every lane from the canonical visible row. A lane resolves iff its
   // session is alive AND in the current dispatch scope (present in
-  // rowBySession) — the scope-correct liveness + tab source. We deliberately
-  // do NOT de-dup: the same session may resolve in multiple lanes and each
-  // renders it. Claude/Codex views mirror for free (shared per-session
-  // runtime, input keyed by sessionId); terminals mirror once multi-attach
-  // lands. An empty/dead/out-of-scope lane resolves to null and the heal
-  // effect re-homes it.
+  // rowBySession) — the scope-correct source for liveness, owning tab, and the
+  // visible Dispatch label. Carrying the label here matters because reducing
+  // the row to sessionId/tabId made pane chrome recompute the unrelated
+  // tab-local coordinate. We deliberately do NOT de-dup: the same session may
+  // resolve in multiple lanes and each renders it. Claude/Codex views mirror
+  // for free (shared per-session runtime, input keyed by sessionId); terminals
+  // mirror once multi-attach lands. An empty/dead/out-of-scope lane resolves
+  // to null and the heal effect re-homes it.
   const laneResolutions = useMemo<LaneResolution[]>(() => {
     return lanes.map(lane => {
       const id = lane.selectedSessionId
       if (!id) return null
       const row = rowBySession.get(id)
       if (!row) return null // dead, or not in the current dispatch scope
-      return { sessionId: id, tabId: row.tabId }
+      return { sessionId: id, tabId: row.tabId, paneLabel: row.label }
     })
   }, [lanes, rowBySession])
 
@@ -267,6 +273,8 @@ export function TiledDispatchLayout({
                     showStatusMode,
                     showWorktreeBadges,
                     () => workspace.setTiledFocusedLane(laneIndex),
+                    false,
+                    resolved.paneLabel,
                   )
                 ) : (
                   <DispatchEmpty message="select an agent" />
