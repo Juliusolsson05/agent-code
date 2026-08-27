@@ -5,7 +5,7 @@
 ## Outcome
 
 Replace Agent Code's blanket "no border-radius anywhere" rule with a **semantic
-three-token radius system** and a user-facing **Corners** setting, so that radius
+four-token radius system** and a user-facing **Corners** setting, so that radius
 means *"this is not part of the grid"* rather than being globally banned — and so
 the owner can decide the app's corner language by flipping one setting instead of
 by re-reading a stylesheet comment.
@@ -79,8 +79,9 @@ Radius becomes a **classification**, not a global switch:
 | class | token | applies to | rationale |
 |---|---|---|---|
 | **structure** | none (`0`) | tile leaves, pane headers, tab bars, terminal, editor, feed rows, worktrees bar, settings sections, side panels, status bars | shares an edge with a neighbour; must stay flush |
-| **capsule** | `--radius-chip` | badges, keycaps, counters, status pills, color flags, scope tags | an object, not a region |
-| **slab** | `--radius-slab` | code blocks, tool output, diff blocks, image thumbnails, the user-prompt highlight | an inset content plate inside a scroll column |
+| **capsule** | `--radius-chip` | badges, keycaps, counters, status pills, color flags, scope tags | a non-interactive label; always content-sized, so it is the one class that may go fully pill-shaped |
+| **control** | `--radius-control` | buttons, inputs, textareas, option rows, hover targets | interactive chrome; comes in every width, so it stays modest at every tier |
+| **slab** | `--radius-slab` | code blocks, tool output, diff blocks, JSON/patch blocks, image thumbnails | an inset content plate inside a scroll column |
 | **float** | `--radius-float` | dialogs, command palette, popovers, context menus, toasts, the dictation overlay | detached from the grid; already carries shadow/scrim |
 
 The test for "is this structure?" is mechanical and does not require taste:
@@ -104,25 +105,36 @@ with **zero React work**.
 
 ```css
 @theme inline {
-  --radius-chip:  var(--theme-radius-chip);
-  --radius-slab:  var(--theme-radius-slab);
-  --radius-float: var(--theme-radius-float);
+  --radius-chip:    var(--theme-radius-chip);
+  --radius-control: var(--theme-radius-control);
+  --radius-slab:    var(--theme-radius-slab);
+  --radius-float:   var(--theme-radius-float);
 }
 ```
 
-Tailwind emits `rounded-chip` / `rounded-slab` / `rounded-float` as utilities whose
-value is a `var()` reference. `applyTheme` writes the three `--theme-radius-*`
+Tailwind emits `rounded-chip` / `rounded-control` / `rounded-slab` /
+`rounded-float` as utilities whose
+value is a `var()` reference. `applyTheme` writes the four `--theme-radius-*`
 custom properties inline on `<html>`, where they outrank the `[data-mode]` blocks
-exactly as the accent tokens do. Switching Corners is three
+exactly as the accent tokens do. Switching Corners is four
 `root.style.setProperty` calls and nothing re-renders.
 
 **Why not put radius into `customAppearance`:** that contract is
 `CUSTOM_APPEARANCE_COLOR_KEYS` — 80 keys, all colours, validated as colours, and
-surfaced in the theme editor as colour fields. Threading three lengths through a
-colour pipeline would mean either weakening its validation or special-casing three
+surfaced in the theme editor as colour fields. Threading four lengths through a
+colour pipeline would mean either weakening its validation or special-casing four
 keys in every consumer. Radius is a different axis with three sensible presets, not
 80 free values; it gets its own top-level setting alongside `accent` and
 `fontFamily`.
+
+**Why `control` is separate from `chip` (added during Stage 3):** the initial
+three-token design left every button, input, and option row unclassified, which
+would have shipped an app where feed chips and code slabs round while the
+buttons beside them stay square — legible as a half-finished change rather than
+a rule. They cannot simply join `chip`, because `chip` is the class that goes
+fully pill-shaped at the `Round` tier and controls come in every width; a
+full-width button at a pill radius is a stadium. Splitting them is what lets
+`chip` stay bold (labels are always small) while `control` stays safe.
 
 **Why the presets are a closed enum and not a number input:** the interesting
 question is "which corner language does this app speak", not "is 7px better than
@@ -132,11 +144,11 @@ is literally `0px` — rather than a value someone can approximate.
 
 ### The preset table
 
-|  | `chip` | `slab` | `float` |
-|---|---|---|---|
-| **Sharp** | `0px` | `0px` | `0px` |
-| **Soft** | `3px` | `4px` | `6px` |
-| **Round** | `9999px` | `8px` | `14px` |
+|  | `chip` | `control` | `slab` | `float` |
+|---|---|---|---|---|
+| **Sharp** | `0px` | `0px` | `0px` | `0px` |
+| **Soft** | `3px` | `3px` | `4px` | `6px` |
+| **Round** | `9999px` | `6px` | `8px` | `14px` |
 
 `Soft` is the restrained reading — visible, but it does not change the app's
 character. `Round` is the sudden one: chips become true capsules and floating
@@ -201,7 +213,7 @@ the taste call is cheap to move and does not need to be re-litigated in code.
 
 `src/renderer/src/app-state/settings/theme.ts`
 
-- `applyTheme` resolves the preset and writes the three custom properties, next
+- `applyTheme` resolves the preset and writes the four custom properties, next
   to the existing font/accent writes. Same defensive `?? CORNER_STYLES[0]`
   pattern the font lookup uses, for the same reason: the phone client calls this
   with an uncoerced blob.
@@ -226,13 +238,25 @@ shell, `ExplorerPane` context menu, `GlobalToast`, `VoiceDictationOverlay`,
 **slab** — `.code-block-shell` / `.code-block-static` / `.prose-theme pre` (CSS,
 Stage 1), `StreamingCodeText`, `DiffSlab`, `GitOperationView`'s output block, the
 provider `bg-code-bg` `<pre>` blocks in the permission/trust modals,
-`ComposerInput` image thumbnails, the user-prompt highlight in
-`feed/ui/rows/primitives.tsx`.
+`ComposerInput` image thumbnails, and the JSON / patch / MCP / structured-output
+blocks in `providers/shared/renderer/protocols/`.
+
+The **user-prompt highlight** (`feed/ui/rows/primitives.tsx`) was in this list
+and was dropped after looking at it: the band is `-mx-8` full-bleed to both
+edges of the feed column, so its corners would arc against nothing and it would
+read as a chat bubble — which hard rule 3 ("no bubbles, no cards, inline flow")
+bans for reasons unrelated to radius. Full-bleed bands are regions, not plates.
 
 **chip** — `SessionBadges`, `PaneHeader` / `TerminalLeaf` / `AgentTerminalLeaf`
 badges (the `rounded-[3px]` sites), `DispatchAgentList` flags,
 `WorktreesBar` badges, command-palette scope badges, `GitOperationView` ref
 chips, the ask-user-question chip.
+
+**opted out deliberately** — `SettingsList` cancels `Button`'s
+`rounded-control` with `rounded-none`: those rows are stacked flush inside a
+bordered section, so they are structure, and rounding them opens a gap at every
+seam. `NumberInput` rounds only its outer frame and clips, because rounding the
+individual steppers would put an arc in the middle of a single control.
 
 **left alone deliberately** — `rounded-full` on the streaming dot, connection
 dots, tab dots, the dictation level meter, and the colour-flag swatches. Those
@@ -262,14 +286,17 @@ design expects to change.
 
 What can genuinely break, and therefore gets a test:
 
-1. **`Sharp` is total.** Every token is exactly `0px`. This is the promise that
+1. **`Sharp` is total.** Every token is exactly `0px`, asserted through the
+   values `applyTheme` actually writes rather than against the `CORNER_STYLES`
+   table, which would only restate itself. This is the promise that
    makes the feature safe to ship; if a future tier edit leaves `chip` at
    `9999px` under Sharp, the streaming-dot-shaped bug ships silently.
 2. **An unknown persisted `cornerStyle` coerces to the default.** The failure
    mode is `root.style.setProperty('--theme-radius-chip', undefined)`, which
    yields an app with no corner tokens at all.
-3. **`applyTheme` writes all three properties.** A partially-applied preset (two
-   of three written) is the shape a copy-paste error takes here.
+3. **`applyTheme` writes all four properties.** A partially-applied preset is
+   the shape a copy-paste error takes here, and it fails silently: chips follow
+   the new tier while panels keep the old one.
 
 No corpus or fixture work is involved — this touches none of the rendering
 ownership pipeline, only presentational classes. `docs/rendering/rendering-design-principles.md`
