@@ -4,6 +4,7 @@ import {
   isCompactBoundaryEntry,
   isCompactSummaryEntry,
 } from '@providers/claude/types/claudeTranscript'
+import { decodeClaudeQueuedUserPrompt } from '@providers/claude/renderer/entries/queuedCommand'
 
 /**
  * Claude owns both halves of durable compaction recognition. The ledger calls
@@ -16,5 +17,6 @@ import {
 export function classifyClaudeDurableEntry(entry: Entry): ProviderDurableEntryKind | null {
   if (isCompactBoundaryEntry(entry)) return 'compact-boundary'
   if (isCompactSummaryEntry(entry)) return 'compact-summary'
+  if (decodeClaudeQueuedUserPrompt(entry)) return 'queued-user-prompt'
   return null
 }

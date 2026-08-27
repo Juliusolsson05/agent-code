@@ -132,7 +132,11 @@ describe('recorded Claude queued-command attachments', () => {
       </ProviderContext.Provider>,
     )
     expect(screen.getByText('RECORDED_BLOCK_TEXT')).toBeInTheDocument()
-    expect(screen.getByAltText('Pasted image')).toBeInTheDocument()
+    // Redaction deliberately replaces the real base64 payload, so the shared
+    // image row presents its bounded fallback receipt instead of an <img>.
+    // Seeing that receipt proves the image block survived as a block; a
+    // flatten-to-string adapter would have lost this second row entirely.
+    expect(screen.getByText(/Pasted image · image\/png/)).toBeInTheDocument()
   })
 
   it('does not admit recorded task-notification or peer/meta attachments as user prompts', () => {
