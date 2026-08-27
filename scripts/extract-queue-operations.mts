@@ -567,6 +567,8 @@ function measure(): void {
   let withOps = 0
   let enqueueTotal = 0
   let enqueueWithContent = 0
+  let removeTotal = 0
+  let removeWithContent = 0
   let notifTotal = 0
   let notifWithId = 0
   let queuedCommandTotal = 0
@@ -648,6 +650,9 @@ function measure(): void {
             if (/<task-id>|<tool-use-id>/.test(v.content)) notifWithId += 1
           }
         }
+      } else if (op === 'remove') {
+        removeTotal += 1
+        if (typeof v.content === 'string') removeWithContent += 1
       }
     }
     for (let i = 0; i < seq.length; ) {
@@ -671,6 +676,7 @@ function measure(): void {
     )
   }
   console.log(`\nenqueue content present: ${enqueueWithContent}/${enqueueTotal}`)
+  console.log(`remove content present: ${removeWithContent}/${removeTotal}`)
   console.log(`notifications carrying a correlation id: ${notifWithId}/${notifTotal}`)
   const versions = [...queuedCommandVersions].sort((a, b) =>
     a.localeCompare(b, undefined, { numeric: true }),

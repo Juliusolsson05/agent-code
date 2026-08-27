@@ -15,8 +15,8 @@
 Agent Code is well above the size threshold, and this failure crosses three
 sources of truth:
 
-1. `queue-operation` reconstructs pending membership, but `remove` has no
-   item identity.
+1. `queue-operation` reconstructs pending membership. Newer `remove` records
+   carry item content, while 355/1,558 recorded legacy removes omit it.
 2. Claude persists a consumed queued command as a durable
    `attachment/queued_command` with the missing identity and provenance.
 3. Agent Code's mapper and ledger discard that durable entry, so the renderer
@@ -84,14 +84,19 @@ the existing measurement path reproduce the relevant split.
 
 ### Queue attribution also ignores the evidence
 
-`applyRemove` guesses a victim immediately. In an ambiguous mixed queue it
+`applyRemove` ignores `remove.content` even though 1,203/1,558 recorded removes
+carry it, then guesses a victim immediately. In an ambiguous mixed queue it
 prefers a notification over a prompt because guessing away user work is the
-more dangerous direction. The later queued-command attachment contains the
-consumed command's exact prompt and mode, so this need not remain inference.
+more dangerous direction. The recorded
+`divergence-stranded-background-commands.json` events 111–116 contain a prompt
+and notification together and then remove the prompt by exact logged content;
+the current reconciler removes the notification instead.
 
-`2026-07-07T13-17-20-472-5b19529f.json` records enqueue 73, content-free
-remove 78, and the exact prompt attachment 79 while two notifications remain
-queued. This is the ground truth for the wrong-victim case.
+For 355 legacy content-free removes, the later queued-command attachment
+contains the consumed command's exact prompt and mode. The three June bundle
+transitions prove that join. The July bundle previously cited here does not
+prove a mixed queue at remove time: its notifications were enqueued after the
+remove, so it is retained only as another durable prompt shape.
 
 ### Existing fixtures have different proof strength
 
@@ -109,7 +114,8 @@ queued. This is the ground truth for the wrong-victim case.
 ```text
 queue-operation/enqueue ──▶ ClaudeQueueState.pending ──▶ QueueStrip
                                   │
-                                  │ remove has no identity
+                                  │ exact content when present;
+                                  │ otherwise bounded evidence debt
                                   ▼
                             guessed queue victim
 
@@ -134,8 +140,8 @@ The missing link is durable attachment admission, not local synthesis:
 3. No optimistic twin is created. Repeated text stays distinct by UUID.
 4. Task-notification, peer, and meta attachments never paint as user-authored.
 5. `dequeue → committed user` keeps the existing committed row as sole owner.
-6. Attachment identity removes the exact mixed-queue item; removes without an
-   attachment retain a bounded explicit fallback.
+6. Logged remove content wins when present; otherwise attachment identity
+   removes the exact item. Removes with neither retain a bounded fallback.
 7. Live, initial history, older pagination, preview, and remote agree through
    the shared mapper/classifier.
 8. The provider painter handles every admitted candidate and the ledger bridge
@@ -242,14 +248,17 @@ synthetic UUIDs, and guessed timestamps cannot mint it.
 
 - A provider-neutral queued-command observation consumed by the pure
   `claudeQueue` reconciler.
-- Bounded remove settlement allowing adjacent attachment evidence to identify
-  the exact pending item before fallback.
+- Exact `remove.content` attribution plus bounded legacy settlement allowing
+  adjacent attachment evidence to identify the pending item before fallback.
 - Distinct observed-attachment and no-attachment fallback decisions.
 - IPC forwards typed evidence but contains no victim heuristic.
 
 **Verified by**
 
-- The mixed bundle removes the prompt and preserves both notifications.
+- The recorded mixed queue fixture removes the prompt named by
+  `remove.content` and preserves its notification.
+- The three legacy content-free June transitions settle from their adjacent
+  queued-command attachment.
 - Multi-remove runs settle one item per attachment without reordering FIFO
   peers.
 - A faithful Ctrl+B/no-attachment case exercises fallback.
@@ -337,7 +346,8 @@ Forbidden directions:
 ## Unknowns
 
 1. **Live batch boundary:** bundles preserve raw order, not necessarily watcher
-   delivery batches. Stage 4 must prove or conservatively bound settlement.
+   delivery batches. Legacy settlement therefore survives bursts and falls
+   back only at a later operation or idle boundary.
 2. **`source_uuid`:** semantics/coverage are not strong enough to require it.
 3. **Block arrays:** 14 recorded human prompts need supported text/image
    presentation without unproven flattening.
@@ -362,8 +372,10 @@ Primary sources:
 
 - `2026-06-14T14-25-07-012-a8ad1ebb.json`: three missing bubbles, one working
   dequeue, pending/notification negatives.
-- `2026-07-07T13-17-20-472-5b19529f.json`: mixed queue and exact prompt
-  attachment.
+- `divergence-stranded-background-commands.json` events 111–116: a recorded
+  mixed queue whose remove record carries the exact prompt content.
+- `2026-07-07T13-17-20-472-5b19529f.json`: additional durable prompt shape;
+  not mixed-queue proof.
 - The other 13 queue-bearing bundles for variants/regression.
 - Queue-operation fixtures for topology/fallback only.
 - Existing transcripts through current redaction for provenance/block arrays
@@ -377,7 +389,8 @@ Red-first contracts:
 3. Notification attachment is not a user prompt.
 4. Peer/meta attachment is not a user prompt.
 5. Block-array human prompt preserves supported content.
-6. Mixed queue removes the attachment-identified item.
+6. Mixed queue removes the exact content-identified item; legacy content-free
+   remove settles from the attachment.
 7. Remove without attachment follows bounded fallback.
 8. Live, cold history, older page, preview, and remote map identically.
 9. Trimming reclaims admitted attachments and pagination reloads them.

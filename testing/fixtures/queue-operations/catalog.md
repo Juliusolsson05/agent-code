@@ -15,7 +15,7 @@ as the local corpus grows — a small delta is expected, a large one is a findin
 ```
 enqueue: 2181 records / 1783 runs (13.7% multi-item)  content present: 2181/2181 = 100%
 dequeue:  589 records /  552 runs (4.0% multi-item)
-remove:  1558 records / 1246 runs (13.7% multi-item)  <- most frequent departure
+remove:  1558 records / 1246 runs (13.7% multi-item)  content present: 1203/1558 = 77.2%
 popAll:     1 record  /    1 run                     content logged; unhandled pre-fix
 task-notifications carrying a correlation id: 1134/1134 = 100%
 ```
@@ -29,6 +29,10 @@ thing:
 2. **`remove` outnumbers `dequeue`.** That ratio is what forced finding its real
    emit site (`query.ts:1642`, the mid-turn attachment drain) rather than
    assuming the Ctrl+B path was the only one.
+3. **`remove` is versioned evidence, not uniformly content-free.** 1,203/1,558
+   current-corpus records carry the exact removed content; 355 older records do
+   not. Exact operation content must win when present. The durable
+   `queued_command` attachment supplies adjacent identity for the legacy form.
 
 ## Durable queued-command evidence
 
@@ -58,8 +62,9 @@ snapshot. Task notifications and the two peer/meta prompts are durable queue
 evidence but must not paint as user-authored chat.
 
 `dequeue` still uses a following committed user row as queue identity evidence.
-`remove` should use the queued-command attachment that follows it and reserve
-cohort inference for the bounded no-attachment fallback.
+`remove` should use its own content when present, otherwise the queued-command
+attachment that follows it, and reserve cohort inference for the bounded case
+where neither identity carrier arrives.
 
 ## Priority table (provenance)
 
@@ -87,8 +92,8 @@ queue drops the wrong item.
 | op | Emit site | Removes | Content logged |
 |---|---|---|---|
 | `dequeue` | `queueProcessor.processQueueIfReady` (mode cohort), `print.ts` loops, `killShellTasks` (agentId cohort) | delivered as its own turn input | no |
-| `remove` | `query.ts:1642` mid-turn attachment drain (priority ≤ next, or ≤ later after Sleep; `mode ∈ {prompt, task-notification}`; non-slash; thread-scoped) | delivered as attachments | no |
-| `remove` | `REPL.tsx:2532` Ctrl+B backgrounding | task-notifications only | no |
+| `remove` | `query.ts:1642` mid-turn attachment drain (priority ≤ next, or ≤ later after Sleep; `mode ∈ {prompt, task-notification}`; non-slash; thread-scoped) | delivered as attachments | versioned: 1,203/1,558 recorded removes carry content |
+| `remove` | `REPL.tsx:2532` Ctrl+B backgrounding | task-notifications only | same record grammar; no queued-command attachment follows |
 | `popAll` | `popAllEditable` (UP/ESC) | editable commands only — notifications deliberately stay | **yes** |
 | *(none)* | `clearCommandQueue()` — `useCancelRequest.ts:249`, ctrl+x ctrl+k | everything | n/a — **logs nothing** |
 

@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
   applyCommittedUserEntry,
+  applyQueuedCommandObservation,
   applyQueueOperation,
   createClaudeQueueState,
   markStaleWhenIdle,
@@ -129,6 +130,89 @@ describe('the reported bug: mixed later/next cohort with one remove', () => {
 })
 
 describe('remove: the two upstream callers disagree, and we resolve safely', () => {
+  it('uses the recorded remove content in a mixed queue instead of guessing a victim', () => {
+    const fixture = loadFixture('divergence-stranded-background-commands')
+    // Events 111–116 are one real mixed transition: a notification remains
+    // pending, a prompt is enqueued, and remove names that exact prompt. Using
+    // the fixture slice keeps all earlier queue state/evidence intact instead
+    // of inventing a smaller queue that merely looks plausible.
+    const throughRecordedRemove = fixture.events.slice(0, 117)
+    const removedPrompt = fixture.events[115]
+    const retainedNotification = fixture.events[112]
+    if (
+      removedPrompt?.kind !== 'op' ||
+      typeof removedPrompt.content !== 'string' ||
+      retainedNotification?.kind !== 'op' ||
+      typeof retainedNotification.content !== 'string'
+    ) {
+      throw new Error('recorded mixed-queue fixture indices drifted')
+    }
+
+    const state = replay(throughRecordedRemove)
+    expect(state.pending.map(item => item.content)).toContain(retainedNotification.content)
+    expect(state.pending.map(item => item.content)).not.toContain(removedPrompt.content)
+    expect(state.decisions.at(-1)).toEqual(
+      expect.objectContaining({
+        reason: 'consumed-observed',
+        evidence: ['queue-operation content'],
+      }),
+    )
+  })
+
+  it('waits for the recorded durable attachment on a legacy content-free remove', () => {
+    const bundle = JSON.parse(
+      readFileSync(
+        join(
+          FIXTURE_DIR,
+          '..',
+          'rendering-bundles',
+          '2026-06-14T14-25-07-012-a8ad1ebb.json',
+        ),
+        'utf8',
+      ),
+    ) as { input: { entries: Array<Record<string, unknown>> } }
+    const enqueue = bundle.input.entries[7]!
+    const remove = bundle.input.entries[8]!
+    const durable = bundle.input.entries[13]!
+    const attachment = durable.attachment as Record<string, unknown>
+    if (
+      typeof enqueue.content !== 'string' ||
+      typeof durable.uuid !== 'string' ||
+      attachment.commandMode !== 'prompt' ||
+      typeof attachment.prompt !== 'string'
+    ) {
+      throw new Error('recorded legacy remove/attachment fixture indices drifted')
+    }
+
+    let state = createClaudeQueueState()
+    state = applyQueueOperation(state, {
+      operation: String(enqueue.operation),
+      content: enqueue.content,
+      timestamp: typeof enqueue.timestamp === 'string' ? enqueue.timestamp : undefined,
+    })
+    state = applyQueueOperation(state, {
+      operation: String(remove.operation),
+      timestamp: typeof remove.timestamp === 'string' ? remove.timestamp : undefined,
+    })
+
+    // A content-free remove is not permission to delete the guessed item. The
+    // durable identity is only five recorded entries later and may cross a
+    // watcher burst, so the bounded debt—not copied prompt text—survives.
+    expect(state.pending.map(item => item.content)).toEqual([enqueue.content])
+    state = applyQueuedCommandObservation(state, {
+      uuid: durable.uuid,
+      mode: 'prompt',
+      text: attachment.prompt,
+    })
+    expect(state.pending).toEqual([])
+    expect(state.decisions.at(-1)).toEqual(
+      expect.objectContaining({
+        reason: 'consumed-observed',
+        evidence: [durable.uuid],
+      }),
+    )
+  })
+
   it('never deletes a queued prompt when a notification is also removable', () => {
     // `remove` has two callers. query.ts:1642 selects by PRIORITY (so it would
     // take the prompt); REPL.tsx:2532 (Ctrl+B) selects by MODE and removes
