@@ -17,6 +17,7 @@ import type {
   SessionStartedEvent,
   SessionInputReadinessEvent,
   SessionOwnershipOptions,
+  SessionRecoveryCancellationOptions,
   SessionTerminalDataEvent,
   SessionConditionsEvent,
   ConditionCustomAction,
@@ -51,7 +52,7 @@ export const sessionApi = {
   // A renderer recovery deadline must cancel only the claim it created. An
   // id-only kill is unsafe here because a stale workspace can collide with a
   // live backend owned by another cwd/provider generation.
-  cancelSessionRecovery: (options: SessionOwnershipOptions): Promise<boolean> =>
+  cancelSessionRecovery: (options: SessionRecoveryCancellationOptions): Promise<boolean> =>
     ipcRenderer.invoke('session:cancel-recovery', options),
 
   getBackendSnapshot: (sessionId: string): Promise<SessionBackendSnapshot | null> =>

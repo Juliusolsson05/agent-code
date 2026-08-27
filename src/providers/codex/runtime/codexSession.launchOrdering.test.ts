@@ -141,6 +141,35 @@ beforeEach(() => {
 })
 
 describe('CodexSession resume launch attestation ordering', () => {
+  it('runs the app handoff boundary immediately before exact resume ownership', async () => {
+    const session = new CodexSession({
+      binary: 'recorded-codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: '00000000-0000-4000-8000-000000000632',
+      useProxy: false,
+      beforeResumeOwnershipAcquire: async () => {
+        launch.events.push('handoff')
+      },
+    })
+    const starting = session.start()
+    await vi.waitFor(() => {
+      expect(launch.events).toEqual(['handoff', 'resume:start'])
+    })
+
+    // WHY this assertion names both sides of the seam: moving the callback
+    // earlier would reintroduce destructive preflight failure; moving it after
+    // resume:start would recreate the exact-lease collision. There must be no
+    // application await or ownership side effect between these two events.
+    launch.releaseResume()
+    await starting
+    expect(launch.events.slice(0, 3)).toEqual([
+      'handoff',
+      'resume:start',
+      'resume:end',
+    ])
+    await session.stop()
+  })
+
   it('makes config/read the final await before spawning the resumed PTY', async () => {
     expect(recorded.effectiveInputProjection).toMatchObject({
       composerSubmit: 'enter',

@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "issue": 638,
+    "appRunId": "2026-08-26T17-57-28-324Z-main-70190-fd75b0",
+    "buildGitSha": "2e02d51387e88032d42c681ac6a55ba55f6cdd65",
+    "attemptCount": 5,
+    "provider": "codex"
+  },
+  "observedAttempt": [
+    {
+      "name": "readiness.publish",
+      "data": {
+        "ready": false,
+        "reason": "starting"
+      }
+    },
+    {
+      "name": "provider.start.begin",
+      "data": {
+        "kind": "codex"
+      }
+    },
+    {
+      "name": "readiness.publish",
+      "data": {
+        "ready": false,
+        "reason": "replaying-history"
+      }
+    },
+    {
+      "name": "provider.start.end",
+      "data": {
+        "kind": "codex",
+        "ok": false,
+        "durationClass": "165-203ms"
+      }
+    }
+  ],
+  "failure": "Codex exact rollout path is already leased by another live session",
+  "trustedInvariant": "the predecessor must finish stop before the same-rollout successor starts"
+}

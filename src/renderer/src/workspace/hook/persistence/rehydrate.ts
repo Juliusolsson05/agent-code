@@ -67,6 +67,11 @@ async function recoverSessionBeforeDeadline(
   options: SessionRecoverOptions,
   timeoutMs: number,
 ): Promise<SessionRecoverResult> {
+  const recoveryToken = options.recoveryToken ?? globalThis.crypto.randomUUID()
+  const generationOptions: SessionRecoverOptions = {
+    ...options,
+    recoveryToken,
+  }
   let timeout: ReturnType<typeof setTimeout> | null = null
   const deadline = new Promise<SessionRecoverResult>(resolve => {
     timeout = setTimeout(() => {
@@ -82,6 +87,7 @@ async function recoverSessionBeforeDeadline(
         sessionId: options.sessionId,
         kind: options.kind,
         cwd: options.cwd,
+        recoveryToken,
       }).catch(() => undefined)
       resolve({
         ok: false,
@@ -92,7 +98,10 @@ async function recoverSessionBeforeDeadline(
     }, timeoutMs)
   })
   try {
-    return await Promise.race([recoveryApi.recoverSession(options), deadline])
+    return await Promise.race([
+      recoveryApi.recoverSession(generationOptions),
+      deadline,
+    ])
   } finally {
     if (timeout !== null) clearTimeout(timeout)
   }
@@ -685,6 +694,10 @@ export async function rehydrateWorkspace(
             useProxy: kind !== 'terminal' ? refs.useProxyStreamingRef.current : undefined,
             recoverTmuxName: kind === 'terminal' ? meta.tmuxName : undefined,
             builtInMcpDomains,
+            // Only bootstrap can prove the predecessor ID still came from the
+            // durable workspace. Ordinary retry/wake calls must not be able to
+            // abort a same-pane replacement transaction.
+            reclaimPendingReplacement: true,
           }, recoveryTimeoutMs)
           const newId = oldId
           if (!recovery.ok) {

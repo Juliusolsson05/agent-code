@@ -16,6 +16,7 @@ import { resolveTranscriptPaths } from '@main/sessions/transcriptPaths.js'
 import type { SessionSpawnOptions } from '@preload/api/types.js'
 import type {
   SessionOwnershipOptions,
+  SessionRecoveryCancellationOptions,
   SessionRecoverOptions,
 } from '@shared/types/session.js'
 
@@ -52,7 +53,7 @@ export function registerSessionIpc(
 
   ipcMain.handle(
     'session:cancel-recovery',
-    async (_evt, options: SessionOwnershipOptions) => {
+    async (_evt, options: SessionRecoveryCancellationOptions) => {
       return await manager.cancelRecovery(options)
     },
   )

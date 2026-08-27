@@ -69,6 +69,18 @@ export const SESSION_LIFECYCLE_EVENT_NAMES = [
   'provider.start.begin',
   'provider.start.end',
 
+  // "Did an authorized same-pane Codex replacement retire the old exact
+  // rollout owner before the successor reached provider start?"
+  'replacement.handoff.begin',
+  'replacement.handoff.end',
+  // "Did the renderer make the successor's random local ID durable?" Spawn
+  // success alone cannot answer this because the invoking renderer may reload
+  // before its workspace remap reaches disk.
+  'replacement.commit',
+  // "Did a successor failure restore the predecessor's stable local ID?"
+  'replacement.rollback.begin',
+  'replacement.rollback.end',
+
   // "Why is the composer not accepting input?"
   //
   // `gate.eval` is the single most important name here, and it is worth being
@@ -212,6 +224,7 @@ export const SESSION_LIFECYCLE_DATA_KEYS = [
   'disposition',
   'lifecycle',
   'provider',
+  'predecessorSessionId',
   // Free-form sub-classification for events whose variant is not an outcome.
   // Exists so `ok` is never overloaded to mean something other than success.
   'source',
