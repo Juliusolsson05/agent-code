@@ -7,17 +7,17 @@ committed `user` entries **is** the evidence, which is why they share one array.
 See `docs/decomposition/claude-queue-reconciliation.md` for the design this
 corpus exists to pin.
 
-## Measured over 1916 local transcripts, of which 220 carry queue ops
+## Measured over 876 local transcripts, of which 139 carry queue ops
 
 Regenerate: `… scripts/extract-queue-operations.mts --measure`. These drift upward
 as the local corpus grows — a small delta is expected, a large one is a finding.
 
 ```
-enqueue: 2010 records / 1774 runs (7.8% multi-item)   content present: 2010/2010 = 100%
-dequeue:  897 records /  787 runs (4.8% multi-item)
-remove:  1093 records /  983 runs (9.1% multi-item)  <- most frequent departure
+enqueue: 2181 records / 1783 runs (13.7% multi-item)  content present: 2181/2181 = 100%
+dequeue:  589 records /  552 runs (4.0% multi-item)
+remove:  1558 records / 1246 runs (13.7% multi-item)  <- most frequent departure
 popAll:     1 record  /    1 run                     content logged; unhandled pre-fix
-task-notifications carrying <task-id>: 1045/1045 = 100%
+task-notifications carrying a correlation id: 1134/1134 = 100%
 ```
 
 Two measurements that overturned the working hypothesis, recorded because both
@@ -30,22 +30,36 @@ thing:
    emit site (`query.ts:1642`, the mid-turn attachment drain) rather than
    assuming the Ctrl+B path was the only one.
 
-## Delivery observability, split by the departure op that followed
+## Durable queued-command evidence
 
-The measurement that decided the algorithm. "Observable" = the enqueued item
-later appears as a committed `user` entry (`<task-id>` match for notifications,
-normalized 48-char prefix for prompts).
+The earlier catalog called a prompt "observable" when any later committed
+`user` row contained its normalized 48-character prefix. That is a useful
+dequeue heuristic but not a delivery census: repeated prompts and later prefix
+collisions were counted as if they were late twins. The quoted 33.9% remove
+figure was therefore not reproducible from `--measure` and did not support the
+local-synthesis design that consumed it.
 
-| | `dequeue` | `remove` |
-|---|---|---|
-| task-notification | **610/619 = 98.5%** | **13/411 = 3.2%** |
-| prompt | 241/278 = 86.7% | 230/678 = 33.9% |
+Claude persists the dominant remove delivery directly as
+`type: "attachment"` / `attachment.type: "queued_command"`. The existing
+`--measure` path now counts that durable carrier:
 
-`dequeue` delivers a queued item as a turn input and it lands in the transcript
-verbatim. `remove` consumes it as a mid-turn **attachment**, and attachments are
-never written to the JSONL. So identity is available for one op family and
-structurally absent for the other — the reconciler uses evidence where it
-exists and the cohort rule where it does not, and records which it used.
+```
+queued_command attachments: 1058
+  durable identity: uuid 1058/1058, timestamp 1058/1058, external user 1058/1058
+  mode: prompt 772, task-notification 286
+  prompt provenance: human 474, legacy-no-origin 296, peer-meta 2
+  prompt shape: string 1044, block-array 14
+  versions: 43 (2.1.100 → 2.1.247)
+```
+
+For feed ownership, the recorded admissible set is prompt mode, non-meta, and
+either human origin or the legacy absence of origin: 770 records in this
+snapshot. Task notifications and the two peer/meta prompts are durable queue
+evidence but must not paint as user-authored chat.
+
+`dequeue` still uses a following committed user row as queue identity evidence.
+`remove` should use the queued-command attachment that follows it and reserve
+cohort inference for the bounded no-attachment fallback.
 
 ## Priority table (provenance)
 
@@ -89,7 +103,7 @@ sessions (max 4 per session).
 | `divergence-stranded-background-commands.json` | The reported bug. Reconstruction ends holding two *Background command …* notifications while Claude held two *Agent … finished*. Background-dominant (147 vs 16). |
 | `divergence-agent-dominant.json` | The mirror: 87 agent completions against 10 background commands. Pins that the `later` cohort is not over-drained when it dominates. |
 | `remove-dominant-balanced-mix.json` | Remove-dominant (21 removes vs 15 dequeues) with a balanced mix — the profile that made `query.ts:1642` the real emit site rather than the Ctrl+B path. |
-| `remove-is-not-persisted.json` | Ground truth for the asymmetry: `dequeue` → a `user` entry carrying the notification verbatim; `remove` → nothing. |
+| `remove-is-not-persisted.json` | Reduced queue-replay view: `dequeue` → a retained `user` identity event; `remove` → no retained event because this fixture format intentionally omits attachments. Full rendering bundles prove the durable queued-command carrier. |
 
 **No `popAll` fixture.** The single recorded `popAll` in the local corpus came
 from an unrelated project and is not publishable under the source rule below.

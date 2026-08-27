@@ -17,10 +17,13 @@
 // is the entire signal. A fixture replays by walking `events` in order,
 // exactly as `useIpcSubscriptions` walks a live burst.
 //
-// WHY only `user` entries are kept: `dequeue` delivers a queued item as a turn
-// input, and it lands as a `user` entry carrying the content verbatim (98.5% of
-// the time, measured). Assistant/system/tool entries are never a delivery
-// channel, so keeping them would multiply fixture size for zero decision value.
+// WHY the REDUCED queue-replay fixtures keep only user entries: dequeue
+// identity is carried by committed user rows, while this fixture family exists
+// to pin queue membership rather than feed rendering. This does NOT make other
+// transcript kinds irrelevant. Claude persists mid-turn consumption as an
+// attachment/queued_command; full rendering bundles own admission and paint
+// evidence for that row. The --measure path deliberately counts those
+// attachments even though this reduced output format does not serialize them.
 //
 // REDACTION is hard-gated. This reuses `findSensitiveSurvivors` from the
 // rendering redactor rather than re-implementing a second gate: a duplicated
@@ -566,6 +569,18 @@ function measure(): void {
   let enqueueWithContent = 0
   let notifTotal = 0
   let notifWithId = 0
+  let queuedCommandTotal = 0
+  let queuedCommandWithUuid = 0
+  let queuedCommandWithTimestamp = 0
+  let queuedCommandExternal = 0
+  let queuedCommandPrompt = 0
+  let queuedCommandNotification = 0
+  let queuedCommandHuman = 0
+  let queuedCommandPeerMeta = 0
+  let queuedCommandLegacyPrompt = 0
+  let queuedCommandStringPrompt = 0
+  let queuedCommandBlockPrompt = 0
+  const queuedCommandVersions = new Set<string>()
 
   for (const f of files) {
     let raw: string
@@ -574,15 +589,50 @@ function measure(): void {
     } catch {
       continue
     }
-    if (!raw.includes('"queue-operation"')) continue
-    withOps += 1
+    const carriesQueueOps = raw.includes('"queue-operation"')
+    if (carriesQueueOps) withOps += 1
     const seq: string[] = []
     for (const line of raw.split('\n')) {
-      if (!line.includes('queue-operation')) continue
+      // These literals are the only families this measurement owns. The cheap
+      // gate avoids parsing every unrelated transcript line in a large corpus.
+      if (
+        !line.includes('queue-operation') &&
+        !line.includes('queued_command')
+      ) {
+        continue
+      }
       let v: Record<string, unknown>
       try {
         v = JSON.parse(line) as Record<string, unknown>
       } catch {
+        continue
+      }
+      const attachment = v.attachment as Record<string, unknown> | undefined
+      if (v.type === 'attachment' && attachment?.type === 'queued_command') {
+        queuedCommandTotal += 1
+        if (typeof v.uuid === 'string' && v.uuid.length > 0) {
+          queuedCommandWithUuid += 1
+        }
+        if (typeof v.timestamp === 'string' && v.timestamp.length > 0) {
+          queuedCommandWithTimestamp += 1
+        }
+        if (v.userType === 'external') queuedCommandExternal += 1
+        if (typeof v.version === 'string') queuedCommandVersions.add(v.version)
+
+        const mode = attachment.commandMode
+        if (mode === 'prompt') {
+          queuedCommandPrompt += 1
+          const origin = attachment.origin as Record<string, unknown> | undefined
+          const isMeta = attachment.isMeta === true || v.isMeta === true
+          if (origin?.kind === 'human') queuedCommandHuman += 1
+          else if (origin?.kind === 'peer' && isMeta) queuedCommandPeerMeta += 1
+          else if (origin === undefined && !isMeta) queuedCommandLegacyPrompt += 1
+        } else if (mode === 'task-notification') {
+          queuedCommandNotification += 1
+        }
+
+        if (typeof attachment.prompt === 'string') queuedCommandStringPrompt += 1
+        else if (Array.isArray(attachment.prompt)) queuedCommandBlockPrompt += 1
         continue
       }
       if (v.type !== 'queue-operation') continue
@@ -622,6 +672,28 @@ function measure(): void {
   }
   console.log(`\nenqueue content present: ${enqueueWithContent}/${enqueueTotal}`)
   console.log(`notifications carrying a correlation id: ${notifWithId}/${notifTotal}`)
+  const versions = [...queuedCommandVersions].sort((a, b) =>
+    a.localeCompare(b, undefined, { numeric: true }),
+  )
+  console.log(`\nqueued_command attachments: ${queuedCommandTotal}`)
+  console.log(
+    `  durable identity: uuid ${queuedCommandWithUuid}/${queuedCommandTotal}, ` +
+      `timestamp ${queuedCommandWithTimestamp}/${queuedCommandTotal}, ` +
+      `external user ${queuedCommandExternal}/${queuedCommandTotal}`,
+  )
+  console.log(
+    `  mode: prompt ${queuedCommandPrompt}, task-notification ${queuedCommandNotification}`,
+  )
+  console.log(
+    `  prompt provenance: human ${queuedCommandHuman}, ` +
+      `legacy-no-origin ${queuedCommandLegacyPrompt}, peer-meta ${queuedCommandPeerMeta}`,
+  )
+  console.log(
+    `  prompt shape: string ${queuedCommandStringPrompt}, block-array ${queuedCommandBlockPrompt}`,
+  )
+  console.log(
+    `  versions: ${versions.length} (${versions[0] ?? 'none'} → ${versions.at(-1) ?? 'none'})`,
+  )
 }
 
 function main(): void {
