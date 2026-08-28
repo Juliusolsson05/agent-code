@@ -157,8 +157,7 @@ export function handleExtensionScheme(): void {
     // per-load nonce, and carries a far stricter CSP than the host document.
     if (relative === RESERVED_FRAME_PATH) {
       const viewId = url.searchParams.get('view')
-      const parentOrigin = url.searchParams.get('parentOrigin')
-      if (!viewId || !parentOrigin) return new Response('bad request', { status: 400 })
+      if (!viewId) return new Response('bad request', { status: 400 })
 
       const record = (await readLedger()).find(row => row.manifest.id === extensionId)
       // A frame for an extension not in the ledger is a stale/removed reference;
@@ -178,7 +177,6 @@ export function handleExtensionScheme(): void {
         extensionId,
         viewId,
         entry: record.manifest.entry,
-        parentOrigin,
         nonce,
       })
       return new Response(html, {

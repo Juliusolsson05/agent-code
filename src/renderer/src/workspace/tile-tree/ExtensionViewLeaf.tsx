@@ -73,15 +73,16 @@ export function ExtensionViewLeaf({ sessionId, workspace, onFocusRequest }: Prop
     // fill=true: a pane is a fixed tile, so the view fills it rather than sizing to
     // its own content the way the floating modal does.
     //
-    // Depends on the IDS, not on `entry`. `entry` is a fresh object every time the
-    // installed list is refetched, so depending on it re-ran this memo on every
-    // install/remove. viewComponentFor caches by identity so the returned component
-    // is stable either way, but keeping the dep list to the ids says so locally —
-    // and stops this memo from being the thing that reintroduces the remount if the
-    // cache is ever removed.
+    // Depends on the ids and the installed REVISION, never on the `entry` object.
+    // `entry` is a fresh object on every list refetch, so depending on it remounted
+    // the frame whenever any unrelated extension was installed — destroying this
+    // extension's state for someone else's install. The revision changes only when
+    // THIS extension's installed bytes or version change, which is exactly when the
+    // running frame is stale and must be replaced. viewComponentFor keys its cache
+    // the same way, so the two agree by construction.
     () => (entry && viewId ? viewComponentFor(entry, viewId, true) : null),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [extensionId, viewId],
+    [extensionId, viewId, entry?.manifest.version, entry?.sha256],
   )
 
   if (!viewId || !entry || !View || !api) {

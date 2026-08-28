@@ -65,6 +65,7 @@ import {
   killSessionBackendIfOwned,
   type SessionActions,
 } from '@renderer/workspace/hook/actions/session'
+import type { AgentProviderKind } from '@shared/types/providerKind'
 
 // -----------------------------------------------------------------------------
 // Pane / focus / navigation actions.
@@ -322,11 +323,11 @@ export function usePaneActions(
   startNewAgentPlacement: () => void
   commitNewAgentPlacement: (kind: SessionKind, target: PlacementTarget) => Promise<void>
   createDetachedDispatchAgent: (
-    kind: Exclude<SessionKind, 'terminal'>,
+    kind: AgentProviderKind,
     projectOverride?: { tabId: TabId; anchorSessionId: SessionId },
   ) => Promise<void>
   createLinkedAgent: (
-    kind: Exclude<SessionKind, 'terminal'>,
+    kind: AgentProviderKind,
     parentId: SessionId,
   ) => Promise<void>
   createOrchestrationAgent: (params: {
@@ -577,7 +578,7 @@ export function usePaneActions(
 
   const createDetachedDispatchAgent = useCallback(
     async (
-      kind: Exclude<SessionKind, 'terminal'>,
+      kind: AgentProviderKind,
       // Explicit project override, supplied by the Dispatch header "+".
       //
       // WHY it must override BOTH halves rather than just the tab: cwd is
@@ -676,7 +677,7 @@ export function usePaneActions(
   // route through applyDispatchSpawnFocus so Tiled lanes and classic
   // focus cannot drift.
   const createLinkedAgent = useCallback(
-    async (kind: Exclude<SessionKind, 'terminal'>, parentId: SessionId) => {
+    async (kind: AgentProviderKind, parentId: SessionId) => {
       const snapshot = refs.stateRef.current
       const parentMeta = snapshot.sessions[parentId]
       if (!parentMeta) {
@@ -2140,7 +2141,11 @@ export function usePaneActions(
       const snapshot = refs.stateRef.current
       const tab = snapshot.tabs.find(t => t.id === snapshot.activeTabId)
       if (!tab) return
-      const parentSessionId = tab.focusedSessionId
+      // commandTargetSessionIdForState, NOT tab.focusedSessionId. Grid focus is
+      // grid-only: while Dispatch is active it names the hidden pane behind the
+      // Dispatch surface, so anchoring to it split a pane the user could not see
+      // (the #94 class every other action in this file already routes around).
+      const parentSessionId = commandTargetSessionIdForState(snapshot)
       if (!parentSessionId) return
       // Cosmetic for a process-less view, but SessionMeta carries a cwd and the
       // parent pane's is the honest inheritance (mirrors splitFocused).
@@ -2148,18 +2153,30 @@ export function usePaneActions(
       const sessionId = crypto.randomUUID() as SessionId
       setState(prev => ({
         ...prev,
-        sessions: {
-          ...prev.sessions,
-          [sessionId]: { cwd, kind: 'extension-view', extensionViewId: viewId },
-        },
-        tabs: prev.tabs.map(t => {
-          if (t.id !== prev.activeTabId) return t
+        ...(() => {
+          // The metadata is committed ONLY if the tree actually took the leaf.
+          // splitLeaf returns the root UNCHANGED when the anchor is not a leaf, and
+          // writing sessions[sessionId] unconditionally then left a row owned by
+          // nothing — dropped on the next autosave with a "dropping unowned
+          // sessions" warning, i.e. a silent no-op the user reads as a broken
+          // command. attachDetachedToGrid guards the same way.
+          let inserted = false
+          const tabs = prev.tabs.map(t => {
+            if (t.id !== prev.activeTabId) return t
+            const root = splitLeaf(t.root, parentSessionId, direction, sessionId)
+            if (root === t.root) return t
+            inserted = true
+            return { ...t, root, focusedSessionId: sessionId }
+          })
+          if (!inserted) return {}
           return {
-            ...t,
-            root: splitLeaf(t.root, parentSessionId, direction, sessionId),
-            focusedSessionId: sessionId,
+            tabs,
+            sessions: {
+              ...prev.sessions,
+              [sessionId]: { cwd, kind: 'extension-view' as const, extensionViewId: viewId },
+            },
           }
-        }),
+        })(),
       }))
     },
     [refs.stateRef, setState],

@@ -24,8 +24,6 @@ export type FrameDocumentInput = {
   viewId: string
   /** The manifest `entry`, relative to the bundle root (already path-validated). */
   entry: string
-  /** The parent (host) document origin, so the child posts replies only to it. */
-  parentOrigin: string
   /** Per-load nonce authorizing exactly the one inline bootstrap script. */
   nonce: string
 }
@@ -65,7 +63,7 @@ export function childFrameCsp(nonce: string, extensionId: string): string {
 }
 
 export function buildFrameDocument(input: FrameDocumentInput): string {
-  const { extensionId, viewId, entry, parentOrigin, nonce } = input
+  const { extensionId, viewId, entry, nonce } = input
   // The bootstrap. Everything the child needs to (a) expose a Tier-0 API that
   // proxies to the parent over postMessage, (b) import and activate the extension,
   // (c) mount its view on the parent's signal. Kept in one nonced module.
@@ -82,7 +80,6 @@ export function buildFrameDocument(input: FrameDocumentInput): string {
 // still just text to the JS parser, and the HTML tokenizer never sees it because
 // buildFrameDocument escapes \`<\` when emitting the block.
 const CFG = JSON.parse(document.getElementById('agent-code-ext-cfg').textContent);
-const PARENT_ORIGIN = CFG.parentOrigin;
 const VIEW_ID = CFG.viewId;
 const ENTRY = CFG.entry;
 
@@ -394,7 +391,6 @@ window.addEventListener('pagehide', () => {
     // (or open another) regardless of what the manifest or query string contained.
     // JSON.parse reads \u003c back as `<`, so values round-trip exactly.
     `<script type="application/json" id="agent-code-ext-cfg">${JSON.stringify({
-      parentOrigin,
       viewId,
       entry,
     }).replace(/</g, '\\u003c')}</script>`,

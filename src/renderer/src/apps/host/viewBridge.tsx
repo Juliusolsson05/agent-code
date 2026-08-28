@@ -63,6 +63,10 @@ function clearFailure(extensionId: string): void {
 function buildViewComponent(
   extensionId: string,
   viewId: string,
+  // The installed bundle's identity. Not read for behaviour — it is part of the
+  // CACHE KEY and of the frame URL, which is what makes an update replace the
+  // running frame. See viewComponentFor.
+  bundleRevision: string,
   // When true (a PANE host), the iframe FILLS its container rather than sizing to
   // the extension's reported content height. A modal floats and should hug its view
   // (content-height); a pane is a fixed tile and the view should fill it edge to
@@ -281,10 +285,17 @@ function buildViewComponent(
       // parentOrigin is passed so the child posts its replies back to THIS origin
       // only, never '*'. location.origin is http://localhost in dev and file://
       // in prod; the child cannot know it otherwise across the boundary.
+      // `rev` is not read by the frame document — it exists so the URL CHANGES when
+      // the installed bundle changes. Without it, an update left every open pane
+      // executing the pre-update code indefinitely: the effect is mount-once, the
+      // component is cached by identity, and the URL was constant, so nothing about
+      // a reinstall reached a live frame. Worse, install re-binds the grant to the
+      // new bytes, so the stale frame would start failing capability calls it had
+      // been holding.
       iframe.src =
         `agent-code-ext://${extensionId}/__agent-code-frame__.html` +
         `?view=${encodeURIComponent(viewId)}` +
-        `&parentOrigin=${encodeURIComponent(window.location.origin)}`
+        `&rev=${encodeURIComponent(bundleRevision)}`
 
       return () => {
         iframe.removeEventListener('load', onLoad)
@@ -429,6 +440,18 @@ function buildViewComponent(
 const componentCache = new Map<string, (props: { api: AgentCodeApiV1 }) => JSX.Element>()
 
 /**
+ * What makes one installed version of a view distinct from another.
+ *
+ * `sha256` alone would be ideal, but it is provenance and can legitimately repeat
+ * (reinstalling the same tarball); `version` alone is author-controlled and often
+ * unchanged during development. Together they change whenever the installed bytes
+ * or the declared version do, which is exactly when a running frame is stale.
+ */
+function bundleRevisionOf(entry: ExtensionListEntry): string {
+  return `${entry.manifest.version}-${entry.sha256.slice(0, 12)}`
+}
+
+/**
  * The host-side component for one contributed view: a sandboxed iframe at the
  * extension's origin plus the postMessage broker for it.
  *
@@ -440,10 +463,17 @@ export function viewComponentFor(
   viewId: string,
   fill = false,
 ): (props: { api: AgentCodeApiV1 }) => JSX.Element {
-  const key = `${entry.manifest.id}\u0000${viewId}\u0000${fill}`
+  const revision = bundleRevisionOf(entry)
+  // The revision is part of the key, so an UPDATE yields a different component
+  // identity and React remounts the frame against the new bundle — while a mere
+  // list refresh (install of some other extension, a failed-then-retried list)
+  // yields the same key and leaves running views untouched. Those two cases were
+  // previously indistinguishable: keying on identity alone made every refresh
+  // harmless but also made updates invisible.
+  const key = `${entry.manifest.id}\u0000${viewId}\u0000${fill}\u0000${revision}`
   const cached = componentCache.get(key)
   if (cached) return cached
-  const built = buildViewComponent(entry.manifest.id, viewId, fill)
+  const built = buildViewComponent(entry.manifest.id, viewId, revision, fill)
   componentCache.set(key, built)
   return built
 }

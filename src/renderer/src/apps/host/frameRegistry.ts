@@ -13,18 +13,27 @@
 // WHY a module singleton and not React context: the command `run` closures are
 // built by deriveExtensionCommands (a plain function, not a hook) and invoked from
 // the palette/keybind router, neither of which sits inside the provider tree at the
-// call site. A singleton keyed by extension id is the honest shape — there is at
-// most one visible frame per extension, and identity is the extension id the frame
-// was minted for.
+// call site. A singleton keyed by extension id is the honest shape; identity is the
+// extension id the frame was minted for.
 
 /** Sends one contributed command id into an extension's frame. */
 type FrameDispatch = (commandId: string) => void
 
-// At most one live dispatcher per extension. A second frame for the same extension
-// (e.g. reopening while an old teardown races) overwrites; clearFrameDispatch below
-// only removes an entry that still points at the disposing frame, so a stale unmount
-// cannot unregister a newer frame.
-const dispatchers = new Map<string, FrameDispatch>()
+// ── A STACK PER EXTENSION, NOT A SINGLE ENTRY ──
+// This was a `Map<extensionId, dispatch>` whose comment asserted "there is at most
+// one visible frame per extension". The pane path broke that assumption the moment
+// it landed: openExtensionViewInPane always splits a NEW leaf, and a pane and a
+// modal of the same extension are explicitly designed to coexist. So a second frame
+// silently overwrote the first's dispatcher — and because clearFrameDispatch only
+// removes an entry still pointing at the disposing frame, closing the NEWER frame
+// deleted the entry outright while an older live frame was still on screen. The
+// extension then looked dead: dispatchToFrame returned false, and the command
+// handler responded by opening yet another pane.
+//
+// A stack fixes both directions. The most recently readied frame receives commands,
+// which is the one the user just interacted with; when it goes away, the next live
+// frame down inherits, instead of the extension going deaf.
+const dispatchers = new Map<string, FrameDispatch[]>()
 
 // Commands fired while no frame is open. The command opens the extension's view to
 // bring a frame up, and these flush the instant that frame signals ready — so
@@ -39,7 +48,11 @@ const pending = new Map<string, string[]>()
  * this extension immediately, in order.
  */
 export function setFrameDispatch(extensionId: string, dispatch: FrameDispatch): void {
-  dispatchers.set(extensionId, dispatch)
+  const stack = dispatchers.get(extensionId) ?? []
+  // Pushed last = receives commands. Filtered first so a frame that somehow
+  // re-announces readiness moves to the top rather than appearing twice.
+  dispatchers.set(extensionId, [...stack.filter(entry => entry !== dispatch), dispatch])
+
   const queued = pending.get(extensionId)
   if (queued && queued.length > 0) {
     pending.delete(extensionId)
@@ -48,11 +61,17 @@ export function setFrameDispatch(extensionId: string, dispatch: FrameDispatch): 
 }
 
 /**
- * A frame is tearing down. Only clears the entry if it is still THIS frame's
- * dispatcher — a slow unmount must never unregister the frame that replaced it.
+ * A frame is tearing down. Removes only ITS OWN dispatcher, leaving any other live
+ * frame of the same extension registered — so closing one of two open views does
+ * not deafen the survivor, and a slow unmount cannot unregister the frame that
+ * replaced it.
  */
 export function clearFrameDispatch(extensionId: string, dispatch: FrameDispatch): void {
-  if (dispatchers.get(extensionId) === dispatch) dispatchers.delete(extensionId)
+  const stack = dispatchers.get(extensionId)
+  if (!stack) return
+  const next = stack.filter(entry => entry !== dispatch)
+  if (next.length === 0) dispatchers.delete(extensionId)
+  else dispatchers.set(extensionId, next)
 }
 
 /**
@@ -60,7 +79,8 @@ export function clearFrameDispatch(extensionId: string, dispatch: FrameDispatch)
  * open, so the caller can decide whether to bring one up and queue the command.
  */
 export function dispatchToFrame(extensionId: string, commandId: string): boolean {
-  const dispatch = dispatchers.get(extensionId)
+  const stack = dispatchers.get(extensionId)
+  const dispatch = stack?.[stack.length - 1]
   if (!dispatch) return false
   dispatch(commandId)
   return true

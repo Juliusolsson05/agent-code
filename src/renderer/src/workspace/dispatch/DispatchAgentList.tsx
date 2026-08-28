@@ -428,6 +428,12 @@ function dispatchSubtitle(runtime: {
     if (runtime.sessionStatus === 'running') return 'shell running'
     return 'shell idle'
   }
+  // An extension pane has NO process and no runtime of its own, so every branch
+  // below is a lie about it: a freshly created one reported "starting" forever
+  // (sessionStatus undefined), and a rehydrated one reported "idle" because
+  // rehydrate seeds an empty runtime — both claiming an agent lifecycle that does
+  // not exist. It has one honest state.
+  if (kind === 'extension-view') return 'extension view'
   if (runtime.sessionStatus === undefined) return 'starting'
   if (runtime.streamPhase && runtime.streamPhase !== 'idle') return runtime.streamPhase
   if (runtime.sessionStatus === 'running') return 'running'
@@ -453,13 +459,23 @@ function dispatchAttentionLabel(runtime: {
 function DispatchAgentBadge({ kind }: { kind: SessionKind | undefined }) {
   // Registry-derived (#394 phase 4); terminal keeps its literal,
   // undefined kind = pre-kind back-compat (Claude).
+  // Both non-agent kinds are named explicitly. Falling through to DEFAULT_PROVIDER
+  // is only correct for an ABSENT kind (a pre-kind session, which really was
+  // Claude); letting a known non-agent kind reach it badged every extension pane
+  // "Claude". This site was missed by the isAgentSessionKind sweep because it is
+  // spelled `=== 'terminal' ? … : <agent default>`, so it does not contain the
+  // banned `!== 'terminal'` shape while having exactly the same defect.
   const label =
     kind === 'terminal'
       ? 'Terminal'
-      : getRendererProviderCapabilities(isAgentProviderKind(kind) ? kind : DEFAULT_PROVIDER).shortLabel
-  const classes = kind === 'terminal'
-    ? 'border-info-border bg-info-soft text-info'
-    : 'border-border bg-surface-hi text-muted'
+      : kind === 'extension-view'
+        ? 'Extension'
+        : getRendererProviderCapabilities(isAgentProviderKind(kind) ? kind : DEFAULT_PROVIDER)
+            .shortLabel
+  const classes =
+    kind === 'terminal' || kind === 'extension-view'
+      ? 'border-info-border bg-info-soft text-info'
+      : 'border-border bg-surface-hi text-muted'
   return (
     <span className={`flex-shrink-0 px-1.5 py-[1px] text-[9px] font-code leading-none border ${classes}`}>
       {label}

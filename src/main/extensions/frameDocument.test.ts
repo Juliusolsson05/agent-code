@@ -10,7 +10,6 @@ const base = {
   extensionId: 'victim',
   viewId: 'victim.main',
   entry: 'dist/index.js',
-  parentOrigin: 'https://host.example',
   nonce: 'test-nonce',
 }
 
@@ -64,7 +63,10 @@ describe('buildFrameDocument', () => {
     const cfg = JSON.parse(island![1]) as Record<string, string>
     expect(cfg.viewId).toBe(base.viewId)
     expect(cfg.entry).toBe(base.entry)
-    expect(cfg.parentOrigin).toBe(base.parentOrigin)
+    // Only what the bootstrap actually reads. A `parentOrigin` was carried here
+    // and never used; a required, attacker-supplied, unused field reads as a
+    // security control that is doing nothing.
+    expect(Object.keys(cfg).sort()).toEqual(['entry', 'viewId'])
   })
 
   it('escapes < in the config island so no value can open or close an element', () => {

@@ -3463,6 +3463,13 @@ export class SessionManager extends EventEmitter {
   ): Promise<boolean> {
     const requestedKind: unknown = options.kind
     if (requestedKind !== undefined && !isSessionKind(requestedKind)) return false
+    // The THIRD renderer→main path that can carry an extension-view kind, after
+    // spawnWithId and recover. Every close path in the renderer sends the pane's
+    // kind here, and this returned false for an extension pane already — but by
+    // accident of the ownership tables being empty for it, not by a decision.
+    // Stating it makes the boundary three-for-three and stops a future ownership
+    // change from turning "nothing to kill" into "kill something".
+    if (requestedKind === 'extension-view') return false
     const kind = options.kind ?? DEFAULT_PROVIDER
     const cwd = path.resolve(options.cwd)
     const entry = this.sessions.get(options.sessionId)

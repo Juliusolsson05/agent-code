@@ -28,8 +28,12 @@ export function cwdBasename(cwd: string): string {
 // agent providers (PromptSearchModal) can still pass the narrower
 // 'claude' | 'codex' subset — TypeScript will accept it.
 export function providerGlyph(kind: SessionKind): string {
-  // Registry-derived for agent kinds (#394 phase 2c-2); terminal is
-  // the only non-registry pane kind and keeps its literal.
+  // Registry-derived for agent kinds (#394 phase 2c-2). The non-registry pane
+  // kinds are listed EXPLICITLY rather than sharing one fallback: 'terminal' was
+  // the only one when this was written, so `return '$'` doubled as "the terminal
+  // glyph" and "the default". Adding 'extension-view' silently gave an extension
+  // pane a shell prompt — the same widening this codebase hit at ~30 other sites.
   if (isAgentProviderKind(kind)) return getRendererProviderCapabilities(kind).glyph
+  if (kind === 'extension-view') return '◈'
   return '$'
 }

@@ -88,8 +88,10 @@ export function useUndoCloseAction(
         // same entry, failed, re-pushed, and returned: all older undo history became
         // unreachable for the rest of the session.
         //
-        // Minting the id and writing the meta here mirrors openExtensionViewInPane
-        // exactly; there is nothing to recover because there was never a process.
+        // Minting the id mirrors openExtensionViewInPane; there is nothing to
+        // recover because there was never a process. The METADATA is written in the
+        // setState below — see the note there, because getting that half wrong is
+        // worse than the bug this branch was added to fix.
         newSessionId = crypto.randomUUID() as SessionId
       } else {
         try {
@@ -127,7 +129,29 @@ export function useUndoCloseAction(
             focusedSessionId: newSessionId,
           }
         })
-        return { ...prev, tabs }
+        // ── THE LEAF MUST ARRIVE WITH ITS SessionMeta, IN THE SAME UPDATE ──
+        // For every other kind, `sessionActions.spawn` wrote `sessions[newId]`
+        // before we got here. The extension branch skips spawn, so it has to write
+        // it itself — and the first version did not, which put a leaf into the tile
+        // tree with no row in `sessions`.
+        //
+        // That is not a cosmetic gap. renderWorkspaceLeaf has no missing-meta guard:
+        // `kind = meta?.kind ?? DEFAULT_PROVIDER` resolved to 'claude', so the
+        // extension-view short-circuit was skipped and the restored pane came back as
+        // a dead Claude pane with a live composer sending into nothing. Then, on the
+        // next 400 ms autosave, repairPersistedTabs classified the leaf as an orphan
+        // and closed it out of the serialized tree — and if it was the tab's only
+        // leaf, dropped the whole tab. On-screen and on-disk diverged until relaunch,
+        // after which the pane was simply gone.
+        //
+        // In the SAME updater as the tree edit, deliberately: two setState calls
+        // would leave a window in which a render sees the leaf without its metadata,
+        // which is the same orphan state one tick wide.
+        const sessions =
+          meta.kind === 'extension-view'
+            ? { ...prev.sessions, [newSessionId]: meta }
+            : prev.sessions
+        return { ...prev, tabs, sessions }
       })
 
       if (!inserted) {
@@ -281,6 +305,14 @@ export function useUndoCloseAction(
           ...prev,
           tabs,
           activeTabId: restoredTab.id,
+          // `freshSessions` holds metadata for every leaf this restore minted an id
+          // for WITHOUT going through spawn — today that is exactly the
+          // extension-view leaves. It was being populated and then dropped on the
+          // floor: the comment further up explains the merge is unnecessary because
+          // "spawn registers SessionMeta itself", which is true for every branch
+          // except the one that skips spawn. The result was an orphan leaf that
+          // autosave then deleted from the restored tab.
+          sessions: { ...prev.sessions, ...freshSessions },
           detachedSessions: { ...prev.detachedSessions, ...restoredDetached },
           // Restored sessions get fresh ids (idMap); remap any tiled lane that
           // pointed at the closed tab's sessions so the lane follows the
