@@ -540,15 +540,19 @@ export function usePaneActions(
         if (!filed) {
           // Kill the backend with the kind/cwd THIS call already resolved
           // rather than leaving it to killSession's ownership proof, which
-          // re-reads them from `refs.stateRef`. That ref is refreshed on React
-          // render, so an awaited continuation can observe it lagging (the
-          // hazard session.ts documents at its own replace path); a lagging
-          // read makes the proof fail, the kill silently no-op, and the very
-          // orphan this guard exists to prevent survive in main with no
-          // renderer row pointing at it. killSession still runs for the
-          // renderer-side cleanup — spawn already registered SessionMeta — and
-          // its second ownership check simply finds nothing left to kill.
+          // re-reads them from `refs.stateRef`.
+          //
+          // That ref is a RENDER-BODY mirror (assigned while the workspace hook
+          // renders), not something the store setter writes. Immediately after
+          // an awaited spawn React has not re-rendered, so the ref does not yet
+          // contain the new session, the proof bails on missing metadata, and
+          // the kill silently no-ops — which means this guard never actually
+          // reclaimed anything. killSession still runs for the renderer-side
+          // cleanup (spawn did register SessionMeta in the store); its own
+          // ownership check then returns false for the same stale-ref reason,
+          // harmlessly, because the backend is already gone.
           await window.api.killOwnedSession({ sessionId, kind, cwd })
+            .catch(() => undefined)
           await sessionActions.killSession(sessionId)
           return
         }

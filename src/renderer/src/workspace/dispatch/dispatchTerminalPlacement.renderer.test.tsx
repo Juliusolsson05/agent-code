@@ -39,7 +39,10 @@ function makeDispatchState(dispatchMode: DispatchModeState): WorkspaceState {
     sessions: {
       a1: { cwd: '/work/project-a', kind: 'claude' },
       a2: { cwd: '/work/project-a', kind: 'claude' },
-      a3: { cwd: '/work/project-a', kind: 'codex' },
+      // Distinct on purpose: a3 is the focused Dispatch row in the ordering
+      // test, so a cwd shared with the grid leaf would make the #366 assertion
+      // below unable to tell which source the terminal actually inherited.
+      a3: { cwd: '/work/project-a/worktree', kind: 'codex' },
     },
     detachedSessions: {
       a2: {
@@ -94,10 +97,13 @@ describe('Dispatch terminal placement (#671)', () => {
       'aTerm',
     ])
 
-    // cwd still comes from the focused Dispatch row's project (#366), and the
-    // focused row here is a DETACHED agent — the normal Dispatch state, and the
-    // case with no grid leaf to fall back on.
-    expect(harness.spawn).toHaveBeenCalledWith('/work/project-a', expect.objectContaining({
+    // cwd comes from the focused Dispatch row (#366), which here is a DETACHED
+    // agent in a worktree — the normal Dispatch state, and the case with no
+    // grid leaf to fall back on. `/work/project-a/worktree` is reachable ONLY
+    // through `target.cwdSessionId`; dropping that link from the cwd chain
+    // falls back to the grid leaf's `/work/project-a` and fails here. Without
+    // the distinct cwd this assertion could not tell the two apart.
+    expect(harness.spawn).toHaveBeenCalledWith('/work/project-a/worktree', expect.objectContaining({
       kind: 'terminal',
     }))
     harness.mounted.unmount()

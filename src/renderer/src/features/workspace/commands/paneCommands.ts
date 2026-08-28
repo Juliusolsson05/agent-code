@@ -422,7 +422,7 @@ export const paneCommands: CommandDef[] = [
     category: 'session',
     surface: 'app',
     title: 'Undo Close',
-    description: '**What it does:** Restores the most recent closed **pane or tab** from a small recent-close history.\n\n**Use when:** You closed something by mistake, or repeat it to walk back through earlier closes.\n\n**Notes:** Also restores detached **Dispatch** agents captured with a closed tab.',
+    description: '**What it does:** Restores the most recent closed **pane, tab, or Dispatch row** from a small recent-close history.\n\n**Use when:** You closed something by mistake, or repeat it to walk back through earlier closes.\n\n**Notes:** A restored **Dispatch** terminal re-attaches its tmux session, so its scrollback comes back.',
     run: ({ workspace }) => workspace.undoClose(),
   },
   {

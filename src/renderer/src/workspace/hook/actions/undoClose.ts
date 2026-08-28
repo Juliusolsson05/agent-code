@@ -324,6 +324,39 @@ export function useUndoCloseAction(
         refiled = true
         return {
           ...prev,
+          // `spawn` builds SessionMeta from {cwd, kind, tmuxName, providerSessionId,
+          // builtInMcpDomains} only. The fields that make a session a LINKED or
+          // ORCHESTRATION child — and any user-authored title — are durable
+          // metadata it never sees. Those children are always detached, so they
+          // are precisely the population this undo path covers: without this
+          // patch an undone linked child returns un-nested (buildDispatchGroups
+          // reads `linkedParentId` to indent it) and stops cascading when its
+          // parent closes, and a titled row silently relabels to its cwd
+          // basename. Carry them from the captured meta, which is the only
+          // record of them left once the session is gone.
+          sessions: {
+            ...prev.sessions,
+            [newSessionId]: {
+              ...(prev.sessions[newSessionId] ?? { cwd: meta.cwd, kind }),
+              ...(meta.title ? { title: meta.title } : {}),
+              ...(meta.linkedParentId ? { linkedParentId: meta.linkedParentId } : {}),
+              ...(meta.orchestrationParentId
+                ? { orchestrationParentId: meta.orchestrationParentId }
+                : {}),
+              ...(meta.orchestrationRootId
+                ? { orchestrationRootId: meta.orchestrationRootId }
+                : {}),
+              ...(meta.orchestrationRunId
+                ? { orchestrationRunId: meta.orchestrationRunId }
+                : {}),
+              ...(meta.orchestrationRole
+                ? { orchestrationRole: meta.orchestrationRole }
+                : {}),
+              ...(meta.agentViewModeOverride
+                ? { agentViewModeOverride: meta.agentViewModeOverride }
+                : {}),
+            },
+          },
           detachedSessions: {
             ...prev.detachedSessions,
             [newSessionId]: {
@@ -339,9 +372,15 @@ export function useUndoCloseAction(
               projectTabIndex: tabIndex,
             },
           },
-          // Focus the restored row when Dispatch is up, so undo has a visible
-          // result. When it is not, leave focus alone — the row is still in
-          // the list and entering Dispatch will land on it normally.
+          // Focus the restored row when Dispatch is up. NOTE this is the
+          // classic focus only: in Tiled Dispatch `dispatchFocusedSessionId`
+          // reads the focused LANE first, and the close already cleared that
+          // lane (dispatchModeAfterSessionRemoval) and the heal effect refilled
+          // it with another agent. So the visible result there is the row
+          // reappearing at its old position in the index, not a lane takeover.
+          // Restoring the lane would need the lane index captured on the entry
+          // at close time; deliberately not done, because a lane the user has
+          // since re-aimed should not be yanked back by an undo.
           dispatchMode: prev.dispatchMode
             ? { ...prev.dispatchMode, focusedSessionId: newSessionId }
             : prev.dispatchMode,
@@ -352,6 +391,17 @@ export function useUndoCloseAction(
         // Mirror restorePaneEntry's bail: the spawn already registered a live
         // backend, so a placement that did not happen must not leave it
         // running with no row pointing at it.
+        //
+        // Kill with the kind/cwd resolved above rather than leaving it to
+        // killSession's ownership proof, which re-reads them from
+        // `refs.stateRef`. That ref is a RENDER-BODY mirror, so immediately
+        // after an awaited spawn it does not yet contain the new session and
+        // the proof fails — meaning the kill would silently no-op and strand
+        // exactly the backend this bail exists to reclaim. killSession still
+        // runs for the renderer-side cleanup.
+        await window.api
+          .killOwnedSession({ sessionId: newSessionId, kind, cwd: meta.cwd })
+          .catch(() => undefined)
         await sessionActions.killSession(newSessionId)
         return 'stale'
       }

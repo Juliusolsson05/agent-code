@@ -24,13 +24,22 @@ import type { WorkspaceState } from '@renderer/workspace/types'
 // makes the difference between two specs be the SCENARIO rather than a hundred
 // lines of scaffolding.
 //
-// The important property these tests rely on: `stateWriter` applies functional
-// updates SYNCHRONOUSLY and writes the result straight back into `stateRef`,
-// which is exactly what the real zustand store setter does
-// (app-state/workspace/slice.ts). Action code that reads a flag set inside a
-// `setState` updater is therefore exercised here the same way it runs in the
-// app; a harness that deferred the update would silently pass code that is
-// broken in production.
+// Two fidelity properties, one faithful and one deliberately NOT:
+//
+//  - FAITHFUL: `stateWriter` applies functional updates synchronously, exactly
+//    as the real zustand setter does (app-state/workspace/slice.ts). Action
+//    code that reads a flag set inside a `setState` updater is therefore
+//    exercised the way it runs in the app.
+//
+//  - DELIBERATELY MORE CURRENT THAN PRODUCTION: it also writes the result
+//    straight back into `stateRef`. Production does not — that ref is a
+//    render-body mirror (workspace/hook/index.ts), so after an awaited call it
+//    can still hold pre-await state. This harness therefore CANNOT reproduce
+//    stateRef-lag bugs: a post-`await` `refs.stateRef` read will look correct
+//    here and no-op in the app. That class has already bitten twice (the
+//    orphan-guard kill in pane.ts and the undo bail in undoClose.ts), so if
+//    you are testing one, this harness is not the tool — assert on the state
+//    the writer holds, not on what a ref reports.
 
 export function makeRefs(state: WorkspaceState): WorkspaceRefs {
   const ref = <T,>(value: T): MutableRefObject<T> => ({ current: value })
@@ -91,11 +100,14 @@ export function mountPaneActions(
     /**
      * Id the default spawn resolves to. The default spawn also REGISTERS
      * `sessions[id]`, because the real `sessionActions.spawn` does
-     * (session.ts writes SessionMeta into workspace state itself). A mock that
-     * only returns an id leaves the new session invisible to every selector
-     * that filters on `state.sessions[...] !== undefined` — including
-     * `buildDispatchGroups` — so placement assertions would silently pass
-     * against a session that never actually appeared.
+     * (session.ts writes SessionMeta into workspace state itself).
+     *
+     * A mock that only returns an id leaves the new session invisible to every
+     * selector filtering on `state.sessions[...] !== undefined` — including
+     * `buildDispatchGroups`. Row-stream assertions then fail loudly (the
+     * session is simply missing from the list), but assertions that read
+     * `dispatchMode` or `detachedSessions` directly pass VACUOUSLY, describing
+     * a placement for a session no surface would ever show.
      */
     spawnSessionId?: string
     refs?: WorkspaceRefs

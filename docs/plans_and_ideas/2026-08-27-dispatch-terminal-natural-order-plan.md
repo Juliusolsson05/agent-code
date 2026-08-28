@@ -129,27 +129,42 @@ below was confirmed to FAIL on `main` and pass on this branch.
 `mcpDomainContinuity.renderer.test.tsx` already mounts `usePaneActions`; that
 setup is extracted to `hook/actions/testing/paneActionsHarness.tsx` so both
 suites share one copy. Its mock `spawn` registers `SessionMeta` the way the
-real one does — without that, every selector filtering on
-`state.sessions[...] !== undefined` drops the new session and placement
-assertions pass against a session that never appeared.
+real one does — without that, selectors filtering on
+`state.sessions[...] !== undefined` drop the new session, so row-stream
+assertions fail loudly while assertions reading `dispatchMode` directly pass
+vacuously.
+
+Be precise about which of these are EVIDENCE for the fix and which are
+invariant guards, because a blanket "they all fail on main" is both false and
+the kind of claim a later engineer will lean on:
+
+**Discriminators — verified to fail on `main`:**
 
 1. **Ordering (the actual bug).** ⌥T in Dispatch must leave `tab.root`
    untouched, file a detached record, and land the terminal *after* the agents
    in `buildVisibleDispatchRows`. Fails if anyone reintroduces the grid insert.
+   Also pins the #366 wire: the focused row is a detached agent in a worktree,
+   whose cwd is reachable only through `target.cwdSessionId`, so dropping that
+   link from the cwd chain fails here.
 
-2. **Lane placement.** A Dispatch terminal created with a focused tiled lane
+2. **Undo-close for detached sessions** — capture, restore with
+   `recoverTmuxName` at the preserved `detachedAt`, and stale-tab refusal.
+   All three fail on `main`, which has no `'detached'` entry type at all.
+
+**Invariant guards — these pass on `main` and are not evidence for this fix,
+but each catches a distinct mutation:**
+
+3. **Lane placement.** A Dispatch terminal created with a focused tiled lane
    must occupy THAT lane (`applyDispatchSpawnFocus`), leaving lane 0 alone.
 
-3. **Normal mode is untouched.** ⌥T outside Dispatch still splits the grid, so
+4. **Normal mode is untouched.** ⌥T outside Dispatch still splits the grid, so
    "merge the flows" cannot quietly become "terminals never enter the grid".
 
-4. **#366 survives the deleted resolver.** `resolveDispatchSpawnTarget` with a
-   DETACHED session in the focused lane must keep that session's cwd — the
-   normal Dispatch state, and the case the deleted
-   `resolveDispatchTerminalSplitTarget` test used to own. Without it, a ⌥T
-   fired beside a worktree agent could silently spawn in the parent repo.
-
-5. **Undo-close for detached sessions** (see below).
+5. **#366 at the resolver.** `resolveDispatchSpawnTarget` with a DETACHED
+   session in the focused lane keeps that session's cwd. `resolveDispatchSpawnTarget`
+   is unchanged by this PR, so this cannot discriminate — it restores coverage
+   the deleted `resolveDispatchTerminalSplitTarget` test owned and replaces
+   nothing else.
 
 No test is added merely to cover the deleted functions; deleting dead code
 does not need its own assertion. An earlier draft also shipped a test asserting

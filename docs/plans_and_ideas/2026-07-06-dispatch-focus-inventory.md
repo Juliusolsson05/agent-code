@@ -80,11 +80,6 @@ can differ from focusedLane/classic focus.
 | dispatchTarget.ts:74-83 resolveDispatchAttachTarget | strict | attach target (paneCommands 119/125) | wrong agent attached |
 | paneCommands.ts:461-467 dispatchCommandTabId | + grid | attach-all tab | wrong tab |
 | useKeybinds.ts:803-813 | focusedLane + lane selection | tiled nav cursor | steps from wrong agent |
-
-> Removed 2026-08-27 (#671): `resolveDispatchTerminalSplitTarget` and
-> `ensureDispatchTerminal` are gone. Dispatch terminal creation now shares
-> `resolveDispatchSpawnTarget` with agents, so there is no separate terminal
-> focus reader left to diverge.
 | useKeybinds.ts:830-834 | classic + grid | classic nav cursor | wrong row |
 | dispatchSelectors.ts:201-219 selectVisibleDispatchRow | both params | highlighted row | highlight ≠ target |
 | TiledDispatchLayout.tsx:100-108,131,173,195,221 | lanes + focusedLane | lane render + AUTO-FILL input | stale lane → re-home to first agent |
@@ -93,6 +88,11 @@ can differ from focusedLane/classic focus.
 | agentStatusModel.ts:114 | commandTarget | status highlight | wrong highlight |
 | App.tsx:454 | commandTarget | paste/image/drag-drop routing | paste to wrong agent |
 | dictationHotkeyRegistry.ts:87-97 | DOM focus only (none of the 4) | Fn dictation target | independent of lane focus (D10) |
+
+> Removed 2026-08-27 (#671): `resolveDispatchTerminalSplitTarget` and
+> `ensureDispatchTerminal` are gone. Dispatch terminal creation now shares
+> `resolveDispatchSpawnTarget` with agents, so there is no separate terminal
+> focus reader left to diverge.
 
 ## Divergence windows (concrete repro sequences)
 
