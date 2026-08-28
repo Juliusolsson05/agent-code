@@ -161,14 +161,6 @@ function entryClaims(item: PendingItem, entry: CommittedUserEntry): boolean {
 }
 
 /**
- * Exact identity for a remove carrier.
- *
- * WHY this is stricter than dequeue matching: dequeue's committed user row can
- * wrap the prompt and therefore needs prefix containment. Both remove.content
- * and queued-command.prompt are queue-native carriers. Treating a mere prefix
- * as exact here would let two similar queued prompts remove one another.
- */
-/**
  * Resolve which pending item a remove carrier names.
  *
  * WHY this is a two-pass resolve and not a single `find`: notification identity
@@ -184,11 +176,20 @@ function entryClaims(item: PendingItem, entry: CommittedUserEntry): boolean {
  * module exists to end, wearing a convincing-looking cause.
  *
  * Exact normalized text is the stronger evidence, so it is tried first. The id
- * pass stays as a fallback: it is what survives upstream reformatting of a
- * notification body, and when only one pending item carries the id there is no
- * ambiguity for exactness to resolve. Prompts are unaffected — their branch in
- * removeCarrierClaims already required exact text equality, so the first pass
- * reproduces it.
+ * pass stays as a fallback because it is what survives upstream reformatting of
+ * a notification body — but it applies ONLY when exactly one pending item
+ * carries the id. With two twins and no exact match, the id cannot say which
+ * one left, and returning the first by array order would mislabel a coin flip
+ * as `consumed-observed`, which this module's header forbids ("debug output
+ * never upgrades a fallback into proof") and which strands the item that
+ * actually departed. Declining leaves both visible with the debt open, so the
+ * next cohort settlement retires one as an honest `consumed-inferred` — the
+ * same conservative direction applyRemove takes when its exact target is
+ * absent.
+ *
+ * Prompts are unaffected throughout: their branch in removeCarrierClaims
+ * already required exact text equality, so pass 1 reproduces it and pass 2 can
+ * only ever agree.
  */
 function resolveRemoveCarrierTarget(
   pending: readonly PendingItem[],
@@ -201,9 +202,20 @@ function resolveRemoveCarrierTarget(
     )
     if (exact) return exact
   }
-  return pending.find(item => removeCarrierClaims(item, observation))
+  // Ambiguity is decided by COUNT, not by taking the first: two candidates mean
+  // the carrier's id is not identifying, so no removal is provable here.
+  const byId = pending.filter(item => removeCarrierClaims(item, observation))
+  return byId.length === 1 ? byId[0] : undefined
 }
 
+/**
+ * Exact identity for a remove carrier.
+ *
+ * WHY this is stricter than dequeue matching: dequeue's committed user row can
+ * wrap the prompt and therefore needs prefix containment. Both remove.content
+ * and queued-command.prompt are queue-native carriers. Treating a mere prefix
+ * as exact here would let two similar queued prompts remove one another.
+ */
 function removeCarrierClaims(
   item: PendingItem,
   observation: Pick<QueuedCommandObservation, 'mode' | 'text'>,

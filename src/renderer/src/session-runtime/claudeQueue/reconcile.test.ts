@@ -373,6 +373,61 @@ describe('remove: the two upstream callers disagree, and we resolve safely', () 
     expect(state.removeDebt).toBeNull()
   })
 
+  it('declines rather than guessing when two same-id twins both fail exact match', () => {
+    // The residual of the same class. When the exact pass misses AND more than
+    // one pending item carries the carrier's id, the id pass alone cannot say
+    // which twin left, so returning the first by array order mislabels a coin
+    // flip as `consumed-observed` — which the module header explicitly forbids
+    // ("debug output never upgrades a fallback into proof") and which strands
+    // the item that actually departed, irreversibly.
+    //
+    // Declining is the module's established direction for unprovable evidence:
+    // applyRemove already returns the original state when its exact target is
+    // absent. Both items stay visible and the debt stays open, so the next
+    // cohort settlement retires one as an honest `consumed-inferred`.
+    const stopped = backgroundCommand('watch workflows', 'dup-id')
+    const noRecord = agentFinished('previous session shell', 'dup-id')
+
+    let state = createClaudeQueueState()
+    state = applyQueueOperation(state, { operation: 'enqueue', content: stopped, timestamp: '1' })
+    state = applyQueueOperation(state, { operation: 'enqueue', content: noRecord, timestamp: '2' })
+    const beforeCarrier = state
+
+    // A carrier built from the second twin, reformatted upstream so it
+    // normalizes equal to NEITHER queued body while still carrying the id.
+    state = applyQueueOperation(state, {
+      operation: 'remove',
+      content: `${noRecord}\nreformatted upstream`,
+      timestamp: '3',
+    })
+
+    expect(state).toBe(beforeCarrier)
+    expect(state.pending.map(i => i.content)).toEqual([stopped, noRecord])
+    expect(state.decisions).toEqual([])
+  })
+
+  it('declines an ambiguous same-id attachment observation and keeps the debt', () => {
+    // Same rule on the attachment carrier: an ambiguous observation must not
+    // spend the debt, or the wrong twin is retired and the debt is gone.
+    const stopped = backgroundCommand('watch workflows', 'dup-id')
+    const noRecord = agentFinished('previous session shell', 'dup-id')
+
+    let state = createClaudeQueueState()
+    state = applyQueueOperation(state, { operation: 'enqueue', content: stopped, timestamp: '1' })
+    state = applyQueueOperation(state, { operation: 'enqueue', content: noRecord, timestamp: '2' })
+    state = applyQueueOperation(state, { operation: 'remove', timestamp: '3' })
+    expect(state.removeDebt?.count).toBe(1)
+
+    state = applyQueuedCommandObservation(state, {
+      mode: 'task-notification',
+      text: `${noRecord}\nreformatted upstream`,
+      uuid: 'att-1',
+    })
+
+    expect(state.pending).toHaveLength(2)
+    expect(state.removeDebt?.count).toBe(1)
+  })
+
   it('still matches a same-id notification when only one is queued', () => {
     // The id fallback must survive: a carrier whose text has drifted from the
     // queued body (whitespace, upstream reformatting) still has an
