@@ -182,10 +182,28 @@ function entryClaims(item: PendingItem, entry: CommittedUserEntry): boolean {
  * one left, and returning the first by array order would mislabel a coin flip
  * as `consumed-observed`, which this module's header forbids ("debug output
  * never upgrades a fallback into proof") and which strands the item that
- * actually departed. Declining leaves both visible with the debt open, so the
- * next cohort settlement retires one as an honest `consumed-inferred` — the
- * same conservative direction applyRemove takes when its exact target is
- * absent.
+ * actually departed.
+ *
+ * WHAT DECLINING COSTS, AND WHY IT IS STILL RIGHT — the two carriers recover
+ * differently, so do not assume the attachment path's behaviour holds for both:
+ *
+ *   applyQueuedCommandObservation declines against a removeDebt that its
+ *   earlier content-free `remove` already opened. The debt survives untouched
+ *   and the next enqueue/dequeue settles it, so one item is retired as an
+ *   honest `consumed-inferred`.
+ *
+ *   applyRemove's content-bearing branch has NO debt to preserve — the
+ *   debt-opening code is in the content-free branch below it. Declining there
+ *   records nothing at all, so an item that really did depart upstream stays
+ *   visible until some other departure signal arrives, or for the session.
+ *
+ * That asymmetry is deliberate, and opening a debt to "fix" it would be a
+ * regression: this branch's own rule (see applyRemove) is that failed exact
+ * evidence must not be converted into permission to remove a neighbour, because
+ * the carrier may be a redelivery or a partial bootstrap. A visibly-pending row
+ * that never departed is diagnosable; an irreversibly deleted queued item is
+ * not. The decline is byte-identical in behaviour to the absent-target decline
+ * that rule already shipped.
  *
  * Prompts are unaffected throughout: their branch in removeCarrierClaims
  * already required exact text equality, so pass 1 reproduces it and pass 2 can

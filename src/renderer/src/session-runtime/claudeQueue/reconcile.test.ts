@@ -383,8 +383,15 @@ describe('remove: the two upstream callers disagree, and we resolve safely', () 
     //
     // Declining is the module's established direction for unprovable evidence:
     // applyRemove already returns the original state when its exact target is
-    // absent. Both items stay visible and the debt stays open, so the next
-    // cohort settlement retires one as an honest `consumed-inferred`.
+    // absent.
+    //
+    // NOTE what this specific carrier does NOT do: the content-bearing branch
+    // has no removeDebt to fall back on, so declining records nothing and both
+    // items simply stay visible. That is deliberate — opening a debt here would
+    // convert failed exact evidence into permission to remove a neighbour,
+    // which is the conversion applyRemove's own comment forbids because the
+    // carrier may be a redelivery. The attachment carrier below is the one that
+    // recovers via debt, because its debt already exists.
     const stopped = backgroundCommand('watch workflows', 'dup-id')
     const noRecord = agentFinished('previous session shell', 'dup-id')
 
@@ -404,6 +411,9 @@ describe('remove: the two upstream callers disagree, and we resolve safely', () 
     expect(state).toBe(beforeCarrier)
     expect(state.pending.map(i => i.content)).toEqual([stopped, noRecord])
     expect(state.decisions).toEqual([])
+    // Pinned deliberately: no debt is opened. If a later change starts opening
+    // one here, that is the forbidden conversion above and this must fail.
+    expect(state.removeDebt).toBeNull()
   })
 
   it('declines an ambiguous same-id attachment observation and keeps the debt', () => {
