@@ -9,12 +9,25 @@ import type { ExtensionCapability } from '@shared/types/extensions.js'
 // The capability grant store (WS5).
 //
 // A grant records that the user approved a specific set of capabilities for a
-// specific extension AT a specific content hash. Keying on the sha256 — not just
+// specific extension AT a specific content hash. Keying on the hash — not just
 // the id — is the load-bearing choice, borrowed from WorkflowSourceApprovalStore:
-// an extension can be updated in place (install doubles as update), so a grant that
-// keyed on id alone would let an update silently inherit permissions the user
-// approved for different code. When the bytes change, the grant no longer matches
-// and the capabilities must be re-approved.
+// an extension can be updated in place (install doubles as update), so a grant
+// that keyed on id alone would let an update silently inherit permissions the
+// user approved for different code.
+//
+// ── WHICH HASH, AND WHY IT MATTERS ──
+// The hash MUST be one that can be recomputed from disk later. This store was
+// originally fed the TARBALL digest, and the caller then read that same digest
+// back out of the ledger row — so `row.sha256 !== sha256` compared two copies of
+// one value written by a single finalizeInstall() call and could never be true.
+// The rule this file documents was, in practice, not enforced at all: editing a
+// file under EXTENSIONS_DIR kept every granted capability.
+//
+// It is now fed `computeBundleHash()` over the installed bundle directory
+// (main/extensions/bundleHash.ts), and the IPC check recomputes that hash from
+// disk on every read. The tarball digest stays in the ledger as PROVENANCE —
+// the tarball is deleted after extraction, so it is unrecomputable by
+// construction and can never gate anything.
 //
 // Tier-0 capabilities (storage/ui/theme) are NOT recorded here — they are granted
 // to every extension without asking, so they never appear in a manifest's
@@ -24,7 +37,8 @@ const GRANTS_FILE = join(STATE_DIR, 'extension-grants.json')
 
 const grantSchema = z.object({
   extensionId: z.string().min(1),
-  /** The exact bytes the grant was given for. A different sha means re-consent. */
+  /** computeBundleHash() of the installed bundle at the moment consent was given.
+   *  A different hash means the code changed, which means re-consent. */
   sha256: z.string().regex(/^[a-f0-9]{64}$/),
   capabilities: z.array(z.string()),
   grantedAt: z.number().finite(),
@@ -68,29 +82,34 @@ async function writeGrants(rows: Grant[]): Promise<void> {
  */
 export async function recordGrant(
   extensionId: string,
-  sha256: string,
+  bundleSha256: string,
   capabilities: readonly ExtensionCapability[],
 ): Promise<void> {
   const rows = await readGrants()
   await writeGrants([
     ...rows.filter(row => row.extensionId !== extensionId),
-    { extensionId, sha256, capabilities: [...capabilities], grantedAt: Date.now() },
+    { extensionId, sha256: bundleSha256, capabilities: [...capabilities], grantedAt: Date.now() },
   ])
 }
 
 /**
  * The capabilities currently granted to an extension, but ONLY if the grant was
- * given for exactly the bytes now installed (`sha256`). A grant for different bytes
- * returns nothing — the capabilities were approved for code that is no longer what
- * is running, so they must not carry over silently.
+ * given for exactly the bytes now installed. A grant for different bytes returns
+ * nothing — the capabilities were approved for code that is no longer what is
+ * running, so they must not carry over silently.
+ *
+ * `bundleSha256` MUST be a hash the caller just computed FROM DISK, not one read
+ * back out of the ledger. Passing a stored value makes this function compare the
+ * install record against itself, which is exactly how the check came to be a
+ * tautology in the first place.
  */
 export async function grantedCapabilities(
   extensionId: string,
-  sha256: string,
+  bundleSha256: string,
 ): Promise<Set<ExtensionCapability>> {
   const rows = await readGrants()
   const row = rows.find(candidate => candidate.extensionId === extensionId)
-  if (!row || row.sha256 !== sha256) return new Set()
+  if (!row || row.sha256 !== bundleSha256) return new Set()
   return new Set(row.capabilities as ExtensionCapability[])
 }
 

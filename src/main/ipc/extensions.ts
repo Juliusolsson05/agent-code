@@ -1,3 +1,5 @@
+import { join } from 'path'
+
 import { BrowserWindow, dialog, ipcMain } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
 
@@ -11,6 +13,9 @@ import { installExtension, installExtensionFromPath } from '@main/extensions/ins
 import type { ConsentPrompt } from '@main/extensions/install.js'
 import { listInstalledExtensions, removeExtension } from '@main/extensions/ledger.js'
 import { grantedCapabilities, revokeGrant } from '@main/extensions/grants.js'
+import { computeBundleHash } from '@main/extensions/bundleHash.js'
+import { EXTENSIONS_DIR } from '@main/storage/paths.js'
+import { isValidExtensionId } from '@shared/types/extensionId.js'
 import type {
   ExtensionCapability,
   ExtensionInstallResult,
@@ -136,16 +141,36 @@ export function registerExtensionsIpc(): void {
   // the Tier 1-3 escalation the module header forbids: it does not PERFORM any
   // capability (each capability still executes through its own per-feature IPC) —
   // it reports the grant so the frame broker (frameHost.perform) can GATE a
-  // capability call before allowing it. Keyed on the installed sha256 so a grant
-  // recorded for old bytes never authorizes new ones; grantedCapabilities enforces
-  // that match and returns empty on mismatch or unknown id.
+  // capability call before allowing it.
+  //
+  // ── THE HASH IS RECOMPUTED FROM DISK, NOT READ FROM THE LEDGER ──
+  // This previously passed `entry.sha256`, the value the ledger recorded at
+  // install. The grant's hash was written by the same finalizeInstall() call, so
+  // the comparison inside grantedCapabilities compared two copies of one value
+  // and could never fail. The documented invariant — different bytes, no grant —
+  // did not exist, and editing a file under EXTENSIONS_DIR silently kept every
+  // capability the user had approved for the original code.
+  //
+  // Hashing the bundle here is what makes the check real. It costs one read of
+  // the bundle (capped at 32 MB by the installer, and typically a few hundred
+  // KB) per frame creation — once when a view opens, not per capability call,
+  // because frameHost caches the result for the frame's lifetime.
+  //
+  // Every failure path returns [] rather than throwing: an unreadable or missing
+  // bundle must mean "no capabilities", never "unchanged". Fail closed.
   ipcMain.handle(
     'extensions:granted-capabilities',
     async (_evt, id: string): Promise<ExtensionCapability[]> => {
+      if (!isValidExtensionId(id)) return []
       const installed = await listInstalledExtensions()
       const entry = installed.find(candidate => candidate.manifest.id === id)
       if (!entry) return []
-      return [...(await grantedCapabilities(id, entry.sha256))]
+      try {
+        const actual = await computeBundleHash(join(EXTENSIONS_DIR, id))
+        return [...(await grantedCapabilities(id, actual))]
+      } catch {
+        return []
+      }
     },
   )
 }

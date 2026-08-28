@@ -4,6 +4,7 @@ import { access, constants as fsConstants, cp, mkdir, mkdtemp, readFile, realpat
 import { join, relative, resolve as resolvePath, sep } from 'path'
 
 import { EXTENSIONS_DIR } from '@main/storage/paths.js'
+import { computeBundleHash } from '@main/extensions/bundleHash.js'
 import { ManifestError, parseExtensionManifest } from '@main/extensions/manifest.js'
 import { readLedger, writeLedger } from '@main/extensions/ledger.js'
 import { recordGrant, revokeGrant } from '@main/extensions/grants.js'
@@ -257,21 +258,38 @@ async function finalizeInstall(
   await rm(finalDir, { recursive: true, force: true })
   await rename(bundleDir, finalDir)
 
+  // Hashed AFTER the rename, from the FINAL location, on purpose: this value's
+  // only job is to be recomputable later from exactly the directory the scheme
+  // handler serves. Hashing the staging directory instead would produce the same
+  // digest today and quietly stop matching the moment the two ever diverge (a
+  // partial rename, a future post-install step), which is the failure mode a
+  // grant check must not have.
+  const bundleSha256 = await computeBundleHash(finalDir)
+
   const record: InstalledExtension = {
     manifest,
     repo: provenance.repo,
     ref: provenance.ref,
     sha256: provenance.sha256,
+    bundleSha256,
     installedAt: Date.now(),
   }
 
   const ledger = await readLedger()
   await writeLedger([...ledger.filter(row => row.manifest.id !== manifest.id), record])
 
-  // Bind the grant to exactly these bytes. A downgrade to Tier-0-only drops any
-  // prior grant, so revoking capabilities is as simple as shipping a manifest that
-  // no longer asks for them.
-  if (permissions.length > 0) await recordGrant(manifest.id, provenance.sha256, permissions)
+  // Bind the grant to the INSTALLED BYTES, not to the provenance hash.
+  //
+  // The grant used to key on `provenance.sha256`, which is the tarball digest —
+  // and the tarball is deleted moments later, so the check could only ever
+  // compare the ledger row against the grant row, both written right here. It
+  // could not fail, and editing a file under EXTENSIONS_DIR kept every granted
+  // capability. Keying on the recomputable bundle hash is what turns the
+  // documented "bytes changed, so re-consent" rule into an enforced one.
+  //
+  // A downgrade to Tier-0-only still drops any prior grant, so revoking
+  // capabilities remains as simple as shipping a manifest that stops asking.
+  if (permissions.length > 0) await recordGrant(manifest.id, bundleSha256, permissions)
   else await revokeGrant(manifest.id)
 
   return record
