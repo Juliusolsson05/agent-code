@@ -7,7 +7,7 @@ import { EXTENSIONS_DIR, EXTENSIONS_LOCKFILE, STATE_DIR } from '@main/storage/pa
 import { isValidExtensionId } from '@shared/types/extensionId.js'
 import type { ExtensionListEntry, InstalledExtension } from '@shared/types/extensions.js'
 
-import { extensionManifestSchema } from './manifest.js'
+import { apiVersionMismatch, extensionManifestSchema } from './manifest.js'
 
 // The install ledger.
 //
@@ -58,6 +58,18 @@ export async function readLedger(): Promise<InstalledExtension[]> {
   for (const candidate of parsed) {
     const result = installedExtensionSchema.safeParse(candidate)
     if (result.success) {
+      // The ABI gate, applied at LOAD and not only at install. The schema accepts
+      // any positive apiVersion (it is shared with the install path, which wants
+      // to report a mismatch with a better message than a field error), so a row
+      // written under a host that implemented v1 would otherwise keep loading
+      // against a host that implements v2. Version skew arrives by UPGRADING
+      // AGENT CODE, which involves no install — so an install-time-only check can
+      // never see it.
+      const mismatch = apiVersionMismatch(result.data.manifest.apiVersion)
+      if (mismatch) {
+        console.warn(`[extensions] skipping ${result.data.manifest.id}: ${mismatch}`)
+        continue
+      }
       rows.push(result.data)
     } else {
       // Surfaced, not silent: a dropped row means a corrupt/hand-edited ledger,

@@ -1,5 +1,6 @@
 import { z } from 'zod'
 
+import { EXTENSION_CAPABILITIES } from '@shared/types/extensions.js'
 import type {
   ExtensionActivationEvent,
   ExtensionManifest,
@@ -113,18 +114,22 @@ const keybindingContribution = z.object({
 // A closed capability set — like activationEvent, an unknown capability must fail
 // install with a message, not resolve to nothing. Kept in lockstep with
 // EXTENSION_CAPABILITIES in @shared/types/extensions (the schema wins on drift).
-const capabilityName = z.enum([
-  'workspace.observe',
-  'sessions.observe',
-  'panes.observe',
-  'fs.read',
-  'transcript.read',
-  'git.read',
-  'sessions.prompt',
-  'fs.write',
-  'git.commit',
-  'network.fetch',
-])
+//
+// ONLY IMPLEMENTED CAPABILITIES BELONG HERE. The Tier 2/3 names this enum used to
+// accept (fs.read, transcript.read, git.read, sessions.prompt, fs.write,
+// git.commit, network.fetch) had no request method, no broker arm and no API
+// surface — approving them granted nothing while showing the user a warning
+// dialog that said otherwise. See the ExtensionCapability doc comment for the
+// rule that replaced them.
+const capabilityName = z.enum(EXTENSION_CAPABILITIES, {
+  // zod's default enum message lists the accepted values, which reads as a typo
+  // report. An author who wrote `fs.write` did not make a typo — they wrote
+  // against a capability this build does not have — so the message says that,
+  // in the same shape as the apiVersion mismatch below.
+  message:
+    `unknown capability — this build implements only ${EXTENSION_CAPABILITIES.join(', ')}. ` +
+    `Filesystem, transcript, git, prompt and network capabilities are not available yet.`,
+})
 
 // `.refine` validates but does not narrow, so the parsed type would be `string`
 // and would not satisfy ExtensionActivationEvent. The transform is the narrowing
@@ -198,14 +203,31 @@ export function parseExtensionManifest(raw: string): ExtensionManifest {
   // "needs API v2, this build has v1" instead of a generic field error. This is the
   // only failure here that is not the author's mistake — it means Agent Code is out
   // of date relative to the extension, and the message should say so.
-  if (result.data.apiVersion !== SUPPORTED_API_VERSION) {
-    throw new ManifestError(
-      `extension targets Agent Code API v${result.data.apiVersion}, this build implements v${SUPPORTED_API_VERSION}`,
-    )
-  }
+  const versionError = apiVersionMismatch(result.data.apiVersion)
+  if (versionError) throw new ManifestError(versionError)
 
   assertContributionsAreCoherent(result.data)
   return result.data
+}
+
+/**
+ * The API-version gate, as a REUSABLE check rather than a step inside install.
+ *
+ * ── WHY THIS IS NOT ONLY AN INSTALL-TIME CONCERN ──
+ * It used to live solely in parseExtensionManifest, so it ran when a bundle was
+ * installed and never again. The ledger is re-read on every launch and validates
+ * rows with `extensionManifestSchema` directly, which accepts any positive
+ * integer — so a row recorded under one host version kept loading forever under
+ * the next one. The whole point of versioning the ABI is to refuse to hand a
+ * newer host object to an extension written against an older contract, and a
+ * check that only fires at install cannot do that: the host is what changes,
+ * and it changes without any install happening.
+ *
+ * Returns the user-facing message, or null when the version is supported.
+ */
+export function apiVersionMismatch(apiVersion: number): string | null {
+  if (apiVersion === SUPPORTED_API_VERSION) return null
+  return `extension targets Agent Code API v${apiVersion}, this build implements v${SUPPORTED_API_VERSION}`
 }
 
 /**

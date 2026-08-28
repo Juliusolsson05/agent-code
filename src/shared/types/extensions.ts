@@ -52,37 +52,44 @@ export type ExtensionContributions = {
  * capability fails validation at install, exactly as an unknown activation event
  * does, rather than being silently ignored.
  *
- * Tiered by blast radius (see the platform plan): Tier 1 is read-only metadata,
- * Tier 2 reads real user content, Tier 3 acts. Enforcement of Tiers 2-3 is only
- * meaningful once each extension runs in its own frame — which it now does — so the
- * grant a user gives at install (grants.ts) is what a capability check consults.
+ * ── THIS LIST CONTAINS ONLY CAPABILITIES THAT ARE IMPLEMENTED ──
+ * It previously also declared Tier 2 (`fs.read`, `transcript.read`, `git.read`)
+ * and Tier 3 (`sessions.prompt`, `fs.write`, `git.commit`, `network.fetch`).
+ * None of them existed. There was no request method for any of them in
+ * frameProtocol, no arm in frameHost.perform, and no API surface an extension
+ * could call — `network.fetch` was additionally impossible by construction,
+ * since the child CSP is `connect-src <self>` only.
+ *
+ * What that produced was consent theatre: a manifest could request "filesystem
+ * write and git commit", the user got a blocking OS warning dialog naming those
+ * powers, approved it, and a permanent grant was written for capabilities that
+ * did nothing. The cost is not the dead code — it is that it trains people to
+ * click through the one dialog in the product that must not become routine.
+ *
+ * So the rule for this union is: **a capability is added here in the same change
+ * that implements it**, i.e. together with its member of `frameRequestSchema`,
+ * its entry in frameHost's REQUIRED_CAPABILITY record (which will not compile
+ * without one), and its arm in `perform`. Declaring the vocabulary ahead of the
+ * mechanism is what went wrong; the tier names below are a design note about
+ * blast radius, not a roadmap that manifests may write against.
+ *
+ * Tier 1 is read-only metadata. Tier 2 (reads real user content) and Tier 3
+ * (acts) are deliberately unrepresentable until something implements them — a
+ * manifest asking for one fails install with a message naming it, which is
+ * actionable, rather than being granted nothing in silence.
  */
 export type ExtensionCapability =
-  // Tier 1 — read-only metadata
+  // Tier 1 — read-only metadata. Implemented: frameProtocol has a request
+  // member for each, frameHost gates each on this grant, createAppHostApi
+  // returns a curated serializable snapshot.
   | 'workspace.observe'
   | 'sessions.observe'
   | 'panes.observe'
-  // Tier 2 — reads the user's actual content
-  | 'fs.read'
-  | 'transcript.read'
-  | 'git.read'
-  // Tier 3 — acts
-  | 'sessions.prompt'
-  | 'fs.write'
-  | 'git.commit'
-  | 'network.fetch'
 
 export const EXTENSION_CAPABILITIES: readonly ExtensionCapability[] = [
   'workspace.observe',
   'sessions.observe',
   'panes.observe',
-  'fs.read',
-  'transcript.read',
-  'git.read',
-  'sessions.prompt',
-  'fs.write',
-  'git.commit',
-  'network.fetch',
 ]
 
 /**
