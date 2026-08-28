@@ -210,6 +210,37 @@ allowed-tools: Bash
     ])
   })
 
+  it('charges rejected candidates to one fatal discovery acquisition budget', async () => {
+    const invalidSkill = `---
+name: wrong-name
+description: This package name does not match its directory.
+---
+# Invalid
+`
+    const fixture = githubFixture({
+      files: ['first', 'second', 'third'].map(directory => ({
+        path: `skills/${directory}/SKILL.md`,
+        content: invalidSkill,
+      })),
+    })
+    const maxDiscoveryBytes = Buffer.byteLength(invalidSkill) + 1
+
+    await expect(new GitHubSkillSource({
+      runGit: vi.fn(async () => defaultAdvertisement()),
+      fetchBytes: fixture.fetchBytes,
+      maxDiscoveryBytes,
+    }).discover('https://github.com/example/skills')).rejects
+      .toThrow(/discovery exceeds/)
+
+    // The first candidate is downloaded and rejected for its name mismatch.
+    // Its bytes still exhaust the shared budget, so the second and third raw
+    // package URLs must never be requested.
+    expect(fixture.fetchBytes.mock.calls.map(call => call[0])).toEqual([
+      fixture.treeUrl,
+      `https://raw.githubusercontent.com/example/skills/${COMMIT}/skills/first/SKILL.md`,
+    ])
+  })
+
   it('does not inherit credential, TLS, proxy, or Git-control environment state', async () => {
     vi.stubEnv('GIT_ASKPASS', '/tmp/credential-program')
     vi.stubEnv('SSH_ASKPASS', '/tmp/ssh-credential-program')

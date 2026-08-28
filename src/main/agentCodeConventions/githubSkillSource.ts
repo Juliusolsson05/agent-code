@@ -83,9 +83,15 @@ type GitRunner = (
 
 type HttpRunner = (url: string, maxBytes: number) => Promise<Buffer>
 
+type DiscoveryAcquisitionBudget = {
+  usedBytes: number
+  maxBytes: number
+}
+
 export type GitHubSkillSourceOptions = {
   runGit?: GitRunner
   fetchBytes?: HttpRunner
+  maxDiscoveryBytes?: number
 }
 
 /**
@@ -102,10 +108,13 @@ export type GitHubSkillSourceOptions = {
 export class GitHubSkillSource {
   private readonly runGit: GitRunner
   private readonly fetchBytes: HttpRunner
+  private readonly maxDiscoveryBytes: number
 
   constructor(options: GitHubSkillSourceOptions = {}) {
     this.runGit = options.runGit ?? runGitProcess
     this.fetchBytes = options.fetchBytes ?? fetchBoundedGitHubBytes
+    this.maxDiscoveryBytes = options.maxDiscoveryBytes
+      ?? AGENT_CODE_INSTALLED_SKILL_MAX_DISCOVERY_BYTES
   }
 
   async discover(inputUrl: string): Promise<GitHubSkillDiscoveryPayload> {
@@ -235,7 +244,14 @@ export class GitHubSkillSource {
 
     const candidates: StagedInstalledSkillCandidate[] = []
     const notices: string[] = []
-    let discoveryBytes = 0
+    // WHY rejected candidates share this budget with accepted ones: a
+    // collection repository can contain many invalid packages. Charging only
+    // candidates that survive validation would let every rejected directory
+    // download its full package allowance before being skipped.
+    const acquisitionBudget: DiscoveryAcquisitionBudget = {
+      usedBytes: 0,
+      maxBytes: this.maxDiscoveryBytes,
+    }
     for (const root of roots) {
       let candidate: StagedInstalledSkillCandidate
       try {
@@ -244,19 +260,15 @@ export class GitHubSkillSource {
           resolved,
           resolvedCommit,
           tree,
+          acquisitionBudget,
         })
       } catch (error) {
         const classified = classifyGitHubSkillSourceError(error)
-        if (roots.length === 1) throw classified
+        if (roots.length === 1 || error instanceof GitHubSkillDiscoveryLimitError) {
+          throw classified
+        }
         notices.push(`${displayRoot(root)} was skipped: ${classified.message}`)
         continue
-      }
-      discoveryBytes += candidate.candidate.totalBytes
-      if (discoveryBytes > AGENT_CODE_INSTALLED_SKILL_MAX_DISCOVERY_BYTES) {
-        throw new GitHubSkillSourceError(
-          'validation',
-          `The discovery exceeds ${formatBytes(AGENT_CODE_INSTALLED_SKILL_MAX_DISCOVERY_BYTES)}. Use a narrower GitHub directory URL.`,
-        )
       }
       candidates.push(candidate)
     }
@@ -288,8 +300,9 @@ export class GitHubSkillSource {
     resolved: ResolvedGitHubSource
     resolvedCommit: string
     tree: GitTreeEntry[]
+    acquisitionBudget: DiscoveryAcquisitionBudget
   }): Promise<StagedInstalledSkillCandidate> {
-    const { root, resolved, resolvedCommit, tree } = input
+    const { root, resolved, resolvedCommit, tree, acquisitionBudget } = input
     const entries = tree
       .filter(entry => root === '' || isWithinRepositoryPath(entry.path, root))
       .map(entry => ({ ...entry, relativePath: root === '' ? entry.path : entry.path.slice(root.length + 1) }))
@@ -337,10 +350,33 @@ export class GitHubSkillSource {
           `${entry.relativePath} exceeds the ${formatBytes(AGENT_CODE_INSTALLED_SKILL_MAX_FILE_BYTES)} per-file limit.`,
         )
       }
-      const content = await this.fetchBytes(
-        rawGitHubFileUrl(resolved, entry.path),
+      const remainingDiscoveryBytes = acquisitionBudget.maxBytes - acquisitionBudget.usedBytes
+      if (entry.size === undefined || entry.size > remainingDiscoveryBytes) {
+        throw new GitHubSkillDiscoveryLimitError(acquisitionBudget.maxBytes)
+      }
+      const responseLimit = Math.min(
         AGENT_CODE_INSTALLED_SKILL_MAX_FILE_BYTES + 1,
+        remainingDiscoveryBytes,
       )
+      let content: Buffer
+      try {
+        content = await this.fetchBytes(rawGitHubFileUrl(resolved, entry.path), responseLimit)
+      } catch (error) {
+        // A narrowed per-response limit is the enforcement edge of the shared
+        // discovery budget. Preserve that fatal meaning rather than letting the
+        // outer collection loop misclassify the response as one skippable file.
+        if (responseLimit < AGENT_CODE_INSTALLED_SKILL_MAX_FILE_BYTES + 1
+          && error instanceof GitHubSkillSourceError
+          && error.code === 'validation'
+          && error.message.includes('acquisition limit')) {
+          throw new GitHubSkillDiscoveryLimitError(acquisitionBudget.maxBytes)
+        }
+        throw error
+      }
+      acquisitionBudget.usedBytes += content.byteLength
+      if (acquisitionBudget.usedBytes > acquisitionBudget.maxBytes) {
+        throw new GitHubSkillDiscoveryLimitError(acquisitionBudget.maxBytes)
+      }
       if (content.byteLength > AGENT_CODE_INSTALLED_SKILL_MAX_FILE_BYTES) {
         throw new GitHubSkillSourceError(
           'validation',
@@ -473,6 +509,16 @@ export class GitHubSkillSourceError extends Error {
   ) {
     super(message)
     this.name = 'GitHubSkillSourceError'
+  }
+}
+
+class GitHubSkillDiscoveryLimitError extends GitHubSkillSourceError {
+  constructor(maxBytes: number) {
+    super(
+      'validation',
+      `The discovery exceeds ${formatBytes(maxBytes)} of package content. Use a narrower GitHub directory URL.`,
+    )
+    this.name = 'GitHubSkillDiscoveryLimitError'
   }
 }
 
@@ -662,7 +708,10 @@ function parseGitHubTreeResponse(text: string): GitTreeEntry[] {
     if (value.type === 'tree' && value.mode === '040000') continue
     if ((value.type !== 'blob' && value.type !== 'commit')
       || !['100644', '100755', '120000', '160000'].includes(value.mode)
-      || (value.size !== undefined
+      // GitHub's tree contract includes byte size for every blob. Requiring it
+      // lets discovery reserve aggregate capacity before issuing the raw-file
+      // request instead of discovering an overrun after transport.
+      || (value.type === 'blob'
         && (!Number.isSafeInteger(value.size) || Number(value.size) < 0))) {
       throw new GitHubSkillSourceError('validation', 'The repository contains an unsupported Git tree entry.')
     }
@@ -671,7 +720,7 @@ function parseGitHubTreeResponse(text: string): GitTreeEntry[] {
       type: value.type,
       object: value.sha,
       path: value.path,
-      size: value.size === undefined ? undefined : Number(value.size),
+      size: value.type === 'blob' ? Number(value.size) : undefined,
     })
   }
   return entries
