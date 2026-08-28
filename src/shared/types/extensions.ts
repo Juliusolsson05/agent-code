@@ -155,21 +155,20 @@ export type InstalledExtension = {
    *  default branch name. Recorded so an update can report what it is moving from. */
   ref: string
   /** SHA-256 of the downloaded tarball (or, for a local-folder install, of the
-   *  built entry file — there is no tarball). This is PROVENANCE: it answers
-   *  "which bytes did the source hand me", and it is what an update reports
-   *  moving from. It deliberately does NOT gate capabilities: the tarball is
-   *  deleted after extraction, so this value can never be recomputed and a check
-   *  against it can only ever compare the ledger to itself. */
-  sha256: string
-  /** SHA-256 of the INSTALLED bundle directory (main/extensions/bundleHash.ts).
+   *  built entry file — there is no tarball). This is PROVENANCE and nothing
+   *  else: it answers "which bytes did the source hand me", and it is what an
+   *  update reports moving from.
    *
-   *  This is the integrity record the capability grant binds to, because it is
-   *  the only hash that can be recomputed from disk later — which is what makes
-   *  "the bytes changed, so re-consent" an enforceable rule rather than a
-   *  comment. Optional for back-compat: a ledger row written before this field
-   *  existed has no hash to compare, and grantedCapabilities treats that as
-   *  no-grant (fail closed) rather than as a match. */
-  bundleSha256?: string
+   *  ── NO HASH IN THIS LEDGER GATES ANY CAPABILITY ──
+   *  There was briefly a second field here, `bundleSha256`, documented as "the
+   *  integrity record the capability grant binds to". Nothing ever read it: the
+   *  grant check recomputes the bundle hash FROM DISK and compares it against the
+   *  grants file, never against a ledger row. A persisted copy of a security value
+   *  that is deliberately not consulted is a trap — the obvious optimisation ("the
+   *  ledger already has the hash, skip the expensive recompute") reinstates exactly
+   *  the tautology this design removed — so the field is gone rather than
+   *  documented. If you want to know which bytes are installed, hash them. */
+  sha256: string
   /** Epoch millis. */
   installedAt: number
 }

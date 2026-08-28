@@ -588,7 +588,6 @@ async function finalizeInstall(
     repo: provenance.repo,
     ref: provenance.ref,
     sha256: provenance.sha256,
-    bundleSha256,
     installedAt: Date.now(),
   }
 
@@ -789,9 +788,13 @@ export async function installExtensionFromPath(
     const manifest = await readManifestFrom(staging)
     await verifyEntryInsideBundle(staging, manifest.entry)
 
-    // No tarball to hash, so bind the grant to the built ENTRY bytes: they change
-    // exactly when the code the user is consenting to changes, which is the grant's
-    // whole invariant. A dev rebuild therefore correctly forces re-consent.
+    // PROVENANCE ONLY. There is no tarball, so the entry digest answers "which
+    // bytes did the source hand me" for a local install. It does NOT bind the
+    // grant — finalizeInstall binds that to computeBundleHash over the whole
+    // installed directory, identically on both paths. An earlier comment here said
+    // the opposite, describing entry-scoped binding as the design; entry-scoped
+    // hashing was in fact half of the original defect, because it let a sibling
+    // chunk be swapped while the grant still matched.
     const entryBytes = await readFile(join(staging, manifest.entry))
     const sha256 = createHash('sha256').update(entryBytes).digest('hex')
 

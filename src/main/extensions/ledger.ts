@@ -42,11 +42,6 @@ const installedExtensionSchema = z.object({
   repo: z.string().min(1),
   ref: z.string().min(1),
   sha256: z.string().regex(/^[a-f0-9]{64}$/),
-  // Optional: rows written before the bundle hash existed simply lack it, and
-  // dropping those rows would uninstall working extensions to add a field.
-  // grantedCapabilities fails closed on a missing hash, so the cost of an old
-  // row is re-consent, not a silently retained grant.
-  bundleSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   installedAt: z.number().finite(),
 })
 

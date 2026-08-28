@@ -53,12 +53,27 @@ export function createFrameHost(options: {
   // pushes and the identity we check on every inbound message.
   const expectedOrigin = `agent-code-ext://${extensionId}`
 
-  // The capability grant, fetched ONCE and cached as a promise. This is the "teeth"
-  // of the tiered permission model: every Tier 1-3 request is gated on it below. The
-  // grant is keyed on the installed sha256 in main (grantedCapabilities), so bytes
-  // that were never consented to authorize nothing. Read here rather than in main's
-  // per-feature IPC because that surface is deliberately NOT sender-bound — the frame
-  // broker is the one renderer chokepoint every capability call already passes through.
+  // The capability grant, fetched ONCE and cached for this frame's lifetime. This is
+  // the "teeth" of the tiered permission model: every Tier 1+ request is gated on it
+  // below. The grant is keyed on a hash of the installed bundle recomputed from disk
+  // (grantedCapabilities), so bytes that were never consented to authorize nothing.
+  // Read here rather than in main's per-feature IPC because that surface is
+  // deliberately NOT sender-bound — the frame broker is the one renderer chokepoint
+  // every capability call already passes through.
+  //
+  // ── WHAT "FOR THIS FRAME'S LIFETIME" COSTS, AND WHY IT IS ACCEPTABLE ──
+  // Revocation reaches a frame by DESTROYING it, not by re-reading the grant: an
+  // uninstall drops the extension from the store, which unmounts the view, which
+  // navigates the iframe to about:blank. So a permission downgrade shipped in an
+  // UPDATE does not take effect until the open view is closed — the frame keeps
+  // running the old code with the grant the user approved for exactly that code,
+  // which is internally consistent rather than a hole.
+  //
+  // Re-reading per request would not close the remaining gap either: it is a full
+  // bundle hash in main per capability call, and the frame it would police is one
+  // the user already consented to. The teardown path is the enforcement mechanism,
+  // and AppsSettingsRow.remove is careful to make it fire even when the refresh IPC
+  // that normally triggers it fails.
   const grantPromise: Promise<readonly ExtensionCapability[]> = window.api
     .extensionGrantedCapabilities(extensionId)
     .catch(() => [])

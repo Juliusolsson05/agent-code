@@ -39,11 +39,15 @@ export function AppsSettingsRow() {
       const listed = await window.api.extensionsList()
       setEntries(listed)
       setInstalledExtensions(listed)
+      return true
     } catch (listError) {
       // A failed list is not the same as an empty list, and rendering "no
-      // extensions" over an IPC failure would be a lie the user acts on.
+      // extensions" over an IPC failure would be a lie the user acts on. The STORE
+      // is deliberately left untouched for the same reason — but see `remove`,
+      // where leaving it untouched has a consequence this comment used to miss.
       setEntries([])
       setError(listError instanceof Error ? listError.message : String(listError))
+      return false
     }
   }, [setInstalledExtensions])
 
@@ -136,10 +140,25 @@ export function AppsSettingsRow() {
         setError(removeError instanceof Error ? removeError.message : String(removeError))
       } finally {
         setBusy(false)
-        await refresh()
+        // ── TEARDOWN MUST NOT DEPEND ON THE REFRESH SUCCEEDING ──
+        // Unmounting a removed extension's live frames is a side effect of the
+        // store losing its entry, and `refresh` deliberately leaves the store
+        // untouched when the list IPC fails. So one failed list after a successful
+        // remove left the pane mounted, the iframe running, and frameHost's grant
+        // promise still resolved to the full capability set — against a bundle main
+        // had already deleted and a grant it had already revoked. The frame went on
+        // answering sessions.observe for an uninstalled extension.
+        //
+        // Dropping the row locally is not a guess: `extensionsRemove` resolved, so
+        // the extension IS gone. Refresh is how we learn about everything else.
+        if (!(await refresh())) {
+          setInstalledExtensions(
+            (entries ?? []).filter(candidate => candidate.manifest.id !== entry.manifest.id),
+          )
+        }
       }
     },
-    [busy, refresh],
+    [busy, entries, refresh, setInstalledExtensions],
   )
 
   // "Load unpacked" — install from a local folder via the native picker (main

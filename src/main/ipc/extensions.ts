@@ -27,18 +27,56 @@ import type {
 // filesystem or session access is exactly the moment that must not be a quiet
 // in-page toggle. Tier-0-only extensions never reach it (installers only call it
 // when permissions is non-empty).
-function consentPromptFor(evt: IpcMainInvokeEvent): ConsentPrompt {
+/**
+ * What each capability actually discloses, in the user's terms.
+ *
+ * ── WHY THE RAW ENUM NAME IS NOT ENOUGH ──
+ * The dialog used to render `  • sessions.observe` and nothing else. That gives a
+ * user no way to know it discloses the ABSOLUTE WORKING DIRECTORY of every open
+ * session — which for a working developer enumerates client names, private
+ * repository names, and employer directory layout. A consent prompt that names a
+ * permission without describing it is a prompt that can only be answered by
+ * trusting the author, which is the decision it is supposed to inform.
+ *
+ * Keyed by the capability union, so a new capability does not compile until its
+ * disclosure is written. That is deliberate: the description is part of shipping
+ * the capability, not a follow-up.
+ */
+const CAPABILITY_DISCLOSURE: Record<ExtensionCapability, string> = {
+  'workspace.observe': 'Which tabs are open, and how many sessions exist.',
+  'sessions.observe':
+    'Every open session: its title, its provider, and the full folder path it is running in.',
+  'panes.observe': 'How your panes are arranged, and which session is in each one.',
+}
+
+function consentPromptFor(evt: IpcMainInvokeEvent, source: string): ConsentPrompt {
   return async manifest => {
     const win = BrowserWindow.fromWebContents(evt.sender)
-    const detail = (manifest.permissions ?? []).map(cap => `  • ${cap}`).join('\n')
+    const permissions = manifest.permissions ?? []
+    const detail = permissions.map(cap => `  • ${CAPABILITY_DISCLOSURE[cap]}`).join('\n')
+
     const options = {
-      type: 'warning' as const,
+      // 'question', not 'warning'. Every remaining capability is a read-only
+      // metadata snapshot; the ones that ACTED were removed because nothing
+      // implemented them. A warning triangle over three read permissions trains
+      // click-through exactly as reliably as saying too little does, and the next
+      // capability that genuinely deserves alarm would inherit a numb user.
+      type: 'question' as const,
       buttons: ['Cancel', 'Grant & install'],
+      // Both point at Cancel: Return, Escape and closing the window all decline.
       defaultId: 0,
       cancelId: 0,
       title: 'Extension permissions',
-      message: `${manifest.name} requests capabilities beyond the default:`,
-      detail: `${detail}\n\nThese let the extension act outside its own sandbox. Only grant them if you trust ${manifest.id}.`,
+      // `source` is what the USER typed — the repo name or the folder they picked —
+      // and AppsSettingsRow's own header calls it "the trust decision". It was the
+      // one thing the dialog did not show. `manifest.name` is attacker-chosen and
+      // only length-bounded, so it is presented as a claim about an identity
+      // (`id`), never as the identity itself.
+      message: `Install ${manifest.id} from ${source}?`,
+      detail:
+        `"${manifest.name}" wants to read:\n\n${detail}\n\n` +
+        `It cannot change anything, and it has no network access. ` +
+        `Install it only if you trust ${source}.`,
     }
     const result = win
       ? await dialog.showMessageBox(win, options)
@@ -50,21 +88,31 @@ function consentPromptFor(evt: IpcMainInvokeEvent): ConsentPrompt {
 // IPC for extension-app state.
 //
 // WHY appId is a caller-supplied parameter rather than derived from the sender:
-// in Stage 1 every app is compiled into the one renderer and shares a single
-// WebContents, so `event.sender` cannot distinguish the timer from any other app.
-// That makes this a NAMESPACE, not an authority boundary — any renderer code can
-// name any app's namespace today, exactly as it can already call the other ~130
-// unvalidated handlers in this directory.
+// NOT because identity is unavailable, but because the sender is never the
+// extension. An extension frame is cross-origin with no preload and therefore no
+// `ipcRenderer` at all — it cannot call this or any other handler. Every caller
+// here is the trusted host renderer's main frame, brokering on the extension's
+// behalf, so `event.senderFrame` would identify the BROKER, not the extension, and
+// binding to it would achieve nothing.
 //
-// The invariant that matters is therefore about what may be added here, not about
-// who is calling: storage is the only capability whose worst case (an app reading
-// another app's saved preferences, in a single-user desktop app where all app code
-// is compiled from this repo) is acceptable without sender binding. Do NOT add
-// workspace, session, transcript, git, filesystem, or network capabilities to this
-// module. Those are Tier 1-3 in the API design and they need the sender-derived
-// identity that only Stage 2 — where each app gets its own frame and preload — can
-// provide. Adding one here would be a real privilege escalation wearing a
-// namespace's clothes.
+// (An earlier version of this comment said the opposite: that every app shared one
+// WebContents and that a future "Stage 2" giving each extension its own frame would
+// make sender binding possible. That stage shipped — the frames exist — and the
+// conclusion inverted rather than resolved. A maintainer acting on the old text
+// would implement senderFrame binding, find it identifies the host, and either
+// break every extension's storage or conclude that Tier 1-3 handlers are now safe
+// here. They are not; see below.)
+//
+// The authority boundary is real, and it lives in two places that actually enforce
+// it: `createAppHostApi` closes over one extensionId and is the sole call site of
+// `window.api.extensionStorage*`, and `frameHost` refuses any message whose
+// `event.source` is not that iframe's contentWindow and whose browser-stamped
+// `event.origin` is not `agent-code-ext://<id>`.
+//
+// The prohibition stands unchanged: do NOT add workspace, session, transcript,
+// git, filesystem or network capabilities to this module. Those must route through
+// frameHost, where the origin check is — adding one here would be a real privilege
+// escalation wearing a namespace's clothes.
 export function registerExtensionsIpc(): void {
   ipcMain.handle('extensions:storage-get', async (_evt, appId: string, key: string) =>
     extensionStorageGet(appId, key),
@@ -99,7 +147,7 @@ export function registerExtensionsIpc(): void {
     'extensions:install',
     async (evt, repo: string): Promise<ExtensionInstallResult> => {
       try {
-        const record = await installExtension(repo, consentPromptFor(evt))
+        const record = await installExtension(repo, consentPromptFor(evt, repo.trim()))
         return { ok: true, entry: { ...record, present: true } }
       } catch (error) {
         return { ok: false, error: error instanceof Error ? error.message : String(error) }
@@ -124,7 +172,7 @@ export function registerExtensionsIpc(): void {
     const dir = picked.filePaths[0]
     if (picked.canceled || !dir) return { ok: false, error: 'No folder selected.' }
     try {
-      const record = await installExtensionFromPath(dir, consentPromptFor(evt))
+      const record = await installExtensionFromPath(dir, consentPromptFor(evt, dir))
       return { ok: true, entry: { ...record, present: true } }
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : String(error) }
@@ -142,7 +190,11 @@ export function registerExtensionsIpc(): void {
   // any directory on this machine, on the renderer's say-so".
   //
   // The full validation pipeline still runs: manifest parse, tree containment,
-  // entry containment, and a fresh consent prompt if the rebuild changed the bytes.
+  // entry containment, and — for any manifest requesting permissions — a consent
+  // prompt. That prompt is UNCONDITIONAL, not "only if the bytes changed":
+  // finalizeInstall gates on `permissions.length`, never on a hash comparison, so
+  // an author reloading an unchanged build is asked again. Deliberate, given the
+  // alternative is comparing against a grant the reload is about to replace.
   ipcMain.handle('extensions:update-local', async (evt, id: string): Promise<ExtensionInstallResult> => {
     if (!isValidExtensionId(id)) return { ok: false, error: 'Unknown extension.' }
     const installed = await listInstalledExtensions()
@@ -152,7 +204,7 @@ export function registerExtensionsIpc(): void {
       return { ok: false, error: 'This extension was installed from GitHub; use Update.' }
     }
     try {
-      const record = await installExtensionFromPath(entry.repo, consentPromptFor(evt))
+      const record = await installExtensionFromPath(entry.repo, consentPromptFor(evt, entry.repo))
       return { ok: true, entry: { ...record, present: true } }
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : String(error) }
@@ -160,9 +212,19 @@ export function registerExtensionsIpc(): void {
   })
 
   ipcMain.handle('extensions:remove', async (_evt, id: string): Promise<void> => {
-    await removeExtension(id)
-    // A reinstall must re-consent; a lingering grant would silently re-arm.
-    await revokeGrant(id)
+    // The grant is revoked in a `finally`, not after a successful remove.
+    //
+    // Sequenced the other way, a removeExtension that threw partway — a locked
+    // file, a permissions error, an interrupted write — left the bundle in an
+    // unknown state AND the grant fully intact. Revoking is the safe direction in
+    // every one of those outcomes: the worst case is that a still-installed
+    // extension has to be re-consented, and the alternative worst case is a
+    // half-removed extension retaining capabilities the user just tried to revoke.
+    try {
+      await removeExtension(id)
+    } finally {
+      await revokeGrant(id).catch(() => {})
+    }
   })
 
   // Reads WHICH capabilities the user consented to for an extension. This is NOT

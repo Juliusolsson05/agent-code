@@ -4,6 +4,7 @@ import { join } from 'path'
 import { z } from 'zod'
 
 import { STATE_DIR } from '@main/storage/paths.js'
+import { EXTENSION_CAPABILITIES } from '@shared/types/extensions.js'
 import type { ExtensionCapability } from '@shared/types/extensions.js'
 
 // The capability grant store (WS5).
@@ -40,9 +41,29 @@ const grantSchema = z.object({
   /** computeBundleHash() of the installed bundle at the moment consent was given.
    *  A different hash means the code changed, which means re-consent. */
   sha256: z.string().regex(/^[a-f0-9]{64}$/),
-  capabilities: z.array(z.string()),
+  // ── VALIDATED AGAINST THE IMPLEMENTED SET, NOT `z.array(z.string())` ──
+  // The looser shape round-tripped ANY string into a Set that
+  // `frameHost.requireGrant` then does `.includes()` against. Two consequences:
+  // a grants file naming a capability this build does not implement was carried
+  // forward verbatim rather than dropped, and — once the seven unimplemented
+  // capabilities were removed from the manifest schema — every grant recorded for
+  // them under an older build stayed in the file as a live-looking authorisation
+  // for a power that no longer exists. Parsing against the real enum means the
+  // store cannot hold a capability the host cannot perform, and the migration
+  // away from the removed ones is automatic: unknown entries are dropped on read.
+  // Filtered PER ELEMENT, not validated wholesale. `z.array(z.enum(...))` rejects
+  // the entire array when any one member is unknown, which would turn "this grant
+  // mentions a retired capability" into "this extension has no grant at all" —
+  // silently revoking the capabilities the user did approve and still holds.
+  capabilities: z
+    .array(z.string())
+    .transform(values => values.filter(isKnownCapability)),
   grantedAt: z.number().finite(),
 })
+
+function isKnownCapability(value: string): value is ExtensionCapability {
+  return (EXTENSION_CAPABILITIES as readonly string[]).includes(value)
+}
 
 type Grant = z.infer<typeof grantSchema>
 
@@ -110,7 +131,7 @@ export async function grantedCapabilities(
   const rows = await readGrants()
   const row = rows.find(candidate => candidate.extensionId === extensionId)
   if (!row || row.sha256 !== bundleSha256) return new Set()
-  return new Set(row.capabilities as ExtensionCapability[])
+  return new Set(row.capabilities)
 }
 
 /** Drop an extension's grant. Called on uninstall so a reinstall must re-consent. */
