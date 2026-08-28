@@ -1644,12 +1644,21 @@ export function useIpcSubscriptions(
               ? decodeClaudeQueuedCommand(raw as Entry)
               : null
           if (queuedCommand !== null && queuedCommand.promptText !== null) {
-            claudeQueue = applyQueuedCommandObservation(claudeQueue, {
+            const nextClaudeQueue = applyQueuedCommandObservation(claudeQueue, {
               uuid: queuedCommand.uuid,
               mode: queuedCommand.mode,
               text: queuedCommand.promptText,
             })
-            queuedMessages = claudeQueue.pending
+            // Most modern queued-command attachments carry no legacy remove
+            // debt. The pure reconciler deliberately returns the SAME object
+            // for that no-op; copying its separately-created empty pending
+            // array into queuedMessages would manufacture a React-visible
+            // change from nothing and bypass the noChange guard below. Only a
+            // real attribution transition owns a new queue array/reference.
+            if (nextClaudeQueue !== claudeQueue) {
+              claudeQueue = nextClaudeQueue
+              queuedMessages = claudeQueue.pending
+            }
           }
 
           // ---- Claude queue identity pass ----

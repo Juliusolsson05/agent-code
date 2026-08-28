@@ -297,8 +297,7 @@ function applyRemove(state: ClaudeQueueState, op: QueueOperationRecord): ClaudeQ
   if (typeof op.content === 'string') {
     const content = op.content
     const mode = deriveMode(content)
-    let attributionState = state
-    let victim = attributionState.pending.find(item =>
+    const victim = state.pending.find(item =>
       removeCarrierClaims(item, { mode, text: content }),
     )
 
@@ -310,25 +309,21 @@ function applyRemove(state: ClaudeQueueState, op: QueueOperationRecord): ClaudeQ
     // make count- or identity-set-based repair impossible after the fact.
     //
     // Preserve the stronger carrier first and leave the debt as a bounded
-    // count for its own later identity/idle settlement. Only a missing target
-    // permits the earlier debt to settle here. The retry is intentionally
-    // conservative and keeps the old partial-bootstrap/redelivery behavior if
-    // settlement rules ever gain a repair path that exposes a match.
-    if (!victim) {
-      attributionState = settleDebtByCohort(state)
-      victim = attributionState.pending.find(item =>
-        removeCarrierClaims(item, { mode, text: content }),
-      )
-    }
+    // count for its own later identity/idle settlement. If this exact target
+    // is absent (partial bootstrap or redelivery), return the ORIGINAL state:
+    // settling debt here would remove a neighbor by inference while the caller
+    // believes this carrier was a conservative no-op. There is deliberately no
+    // settle-then-retry scan — settlement only removes pending items, so it
+    // cannot expose a match and would spend heap/CPU to weaken the invariant.
     // A content-bearing remove is its own proof. If redelivery or a partial
     // bootstrap means its target is absent, doing nothing is safer than
     // converting failed exact evidence into permission to remove a neighbor.
-    if (!victim) return attributionState
+    if (!victim) return state
     return {
-      ...attributionState,
-      pending: without(attributionState.pending, [victim]),
+      ...state,
+      pending: without(state.pending, [victim]),
       decisions: [
-        ...attributionState.decisions,
+        ...state.decisions,
         decide(victim, 'consumed-observed', ['queue-operation content'], op.timestamp ?? null),
       ],
     }
