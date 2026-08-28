@@ -3,8 +3,7 @@ import { render } from '@testing-library/react'
 import { act } from 'react'
 import { useRef } from 'react'
 import type { MutableRefObject } from 'react'
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import recordedQueueHandoffBundle from '../../../../../../testing/fixtures/rendering-bundles/2026-06-14T14-25-07-012-a8ad1ebb.json'
 
 import { createFakeSessionFeed } from '@renderer/features/sessionFeed/FakeSessionFeed'
 import { UndoCloseStack } from '@renderer/lib/undoClose'
@@ -87,15 +86,9 @@ describe('useIpcSubscriptions with an injected SessionFeed', () => {
       configurable: true,
       value: { gitWorktrees: vi.fn(async () => ({ ok: false })) },
     })
-    const bundle = JSON.parse(
-      readFileSync(
-        resolve(
-          process.cwd(),
-          'testing/fixtures/rendering-bundles/2026-06-14T14-25-07-012-a8ad1ebb.json',
-        ),
-        'utf8',
-      ),
-    ) as { input: { entries: Array<Record<string, unknown>> } }
+    const bundle = recordedQueueHandoffBundle as {
+      input: { entries: Array<Record<string, unknown>> }
+    }
     const enqueue = bundle.input.entries[7]!
     const remove = bundle.input.entries[8]!
     const durable = bundle.input.entries[13]!
@@ -121,13 +114,29 @@ describe('useIpcSubscriptions with an injected SessionFeed', () => {
     act(() => {
       fake.emitJsonlEntries({
         sessionId,
-        entries: [enqueue, remove].map(entry => ({ file: 'recorded.jsonl', entry })),
+        entries: [{ file: 'recorded.jsonl', entry: enqueue }],
+      })
+    })
+
+    expect(runtimes[sessionId]?.queuedMessages.map(item => item.content)).toEqual([
+      enqueue.content,
+    ])
+    expect(runtimes[sessionId]?.awaitingAssistant).toBe(true)
+    const runtimeAfterEnqueue = runtimes
+
+    act(() => {
+      fake.emitJsonlEntries({
+        sessionId,
+        entries: [{ file: 'recorded.jsonl', entry: remove }],
       })
     })
 
     // The old content-free remove is deliberately not guessed away at the IPC
-    // boundary. Debt survives the watcher burst as a count only; the queue
-    // still owns the prompt until its recorded durable identity arrives.
+    // boundary. This record changes only hidden reconciliation debt: the queue
+    // still owns the prompt and awaitingAssistant was already true. Returning
+    // the existing runtime is therefore correct, but that invisible debt must
+    // still survive outside React until the recorded durable identity arrives.
+    expect(runtimes).toBe(runtimeAfterEnqueue)
     expect(runtimes[sessionId]?.queuedMessages.map(item => item.content)).toEqual([
       enqueue.content,
     ])
