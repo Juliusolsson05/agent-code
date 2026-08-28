@@ -1233,6 +1233,10 @@ function OpenCommandPalette({
       source: pendingMenuCommand.source,
       ctx: commandContext,
       reportError: message => showToast(message, 6000),
+      // Without these a contributed keybinding resolved to nothing here, and the
+      // outcome — `status: 'unknown'` — is not inspected by the keybinding path, so
+      // every manifest-declared shortcut was a silent no-op.
+      extraCommands: extensionCommands,
     })
     onMenuCommandHandled()
     // A command that OPENED the palette must not be closed by the "return to
