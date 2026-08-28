@@ -6,14 +6,29 @@ import type {
   ExtensionListEntry,
 } from '@shared/types/extensions.js'
 
-// Extension-app storage bridge.
+// Extension-app storage and management bridge.
 //
-// These are the only `extension*`-prefixed methods on the flat api object, and the
-// prefix is doing real work: it is what lets `apps/api/useAppHostApi.ts` be the sole
-// call site. App code never touches `window.api` — it receives AgentCodeApiV1, which
-// closes over its own app id. If a second call site for these methods ever appears
-// outside useAppHostApi, the ABI has been bypassed and an app has become
-// non-portable, which is the one failure Stage 1 exists to prevent.
+// ── WHO IS ALLOWED TO CALL WHAT, AND WHY IT IS TWO GROUPS ──
+// An earlier version of this header claimed these methods had a single call site,
+// `apps/api/useAppHostApi.ts`, and that a second one would mean "the ABI has been
+// bypassed". That module does not exist, and five files call these methods
+// directly — so the comment asserted a security-shaped invariant that was simply
+// false, which is worse than no comment at all.
+//
+// The real rule has two halves:
+//
+//   The STORAGE methods are extension-facing, and `createAppHostApi` is their only
+//   legitimate call site. It closes over one extension id, so an extension can
+//   never name another's namespace. A second call site for THOSE would be a real
+//   bypass. (ExtensionSettingRow also calls them, deliberately: a contributed
+//   settings row reads and writes the extension's own storage on its behalf, with
+//   the id coming from the validated manifest.)
+//
+//   The MANAGEMENT methods — list, install, install-path, update-local, remove,
+//   granted-capabilities — are host-facing by design. The Settings UI and the frame
+//   broker call them directly and must. An extension must never reach them, and it
+//   cannot: its frame is cross-origin with no preload, so it has no `window.api`
+//   and no ipcRenderer at all.
 export const extensionsApi = {
   extensionStorageGet: (appId: string, key: string): Promise<unknown> =>
     ipcRenderer.invoke('extensions:storage-get', appId, key),

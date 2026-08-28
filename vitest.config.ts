@@ -66,18 +66,41 @@ const exclude = [
 // credentials. Keeping the exact patterns inspectable lets a focused contract
 // test prevent a future broad `**/*.test.ts` edit from silently pulling those
 // files back into the parallel core project.
-export const unitTestIncludes = [
+export // ── `.tsx` IS INCLUDED SO A TEST CANNOT FALL BETWEEN PROJECTS ──
+// The renderer project takes only `*.renderer.test.tsx`, and this one used to take
+// only `.ts`. A file named `Foo.test.tsx` therefore matched NO project: vitest ran
+// it nowhere, reported success, and `check-test-contract.mjs` — which greps for
+// `.only`, not for project membership — agreed. A test that silently never runs is
+// worse than a missing one, because the coverage it appears to provide is counted.
+//
+// Every one of the ~300 current test files maps to exactly one project, so this
+// closes a hole rather than fixing a live miss. A `.tsx` test that needs a DOM must
+// still be named `*.renderer.test.tsx`; this catches the ones that do not.
+const unitTestIncludes = [
   'testing/unit/**/*.test.ts',
   'src/**/*.test.ts',
+  'src/**/*.test.tsx',
 ] as const
 
+// Every tier suffix, in BOTH extensions.
+//
+// The `.tsx` half is not decorative: the unit project's include list covers
+// `src/**/*.test.tsx`, and `*.renderer.test.tsx` matches that glob too. Without the
+// `.tsx` excludes here, every renderer test would ALSO be collected into the
+// node-environment unit project and fail with "document is not defined" — which is
+// exactly what happened the first time the include was widened.
 export const unitTierExcludes = [
   '**/*.integration.test.ts',
   '**/*.renderer.test.ts',
+  '**/*.renderer.test.tsx',
   '**/*.system.test.ts',
+  '**/*.system.test.tsx',
   '**/*.live.test.ts',
+  '**/*.live.test.tsx',
   '**/*.soak.test.ts',
+  '**/*.soak.test.tsx',
   '**/*.corpus.test.ts',
+  '**/*.corpus.test.tsx',
 ] as const
 
 export const systemTestIncludes = [

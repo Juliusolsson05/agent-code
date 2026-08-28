@@ -210,13 +210,22 @@ cross-origin frame cannot see the host's globals at all: the shim would read
 Your frame is its own document with its own realm. Two React instances in two
 documents are not a conflict; they never meet.
 
-The SDK ships a Vite preset that produces the right output:
+The SDK ships types and a Vite preset that produces the right output. It is **not
+on npm** — install it from GitHub, which works because its `dist/` is committed:
+
+```bash
+npm i -D github:Juliusolsson05/agent-code-extension-api
+```
 
 ```ts
 // vite.config.ts
 import { extensionViteConfig } from 'agent-code-extension-api'
 export default extensionViteConfig()
 ```
+
+The SDK is optional. It gives you `ExtensionManifest`, `ExtensionContext` and
+`AgentCodeApiV1` types plus the build preset; an extension is a plain ES module and
+nothing in the host requires you to depend on it.
 
 ---
 
