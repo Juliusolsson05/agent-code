@@ -69,11 +69,20 @@ describe('queued-command provenance admission', () => {
     // present but malformed field is NOT equivalent to the recorded legacy
     // shape that omits it, and the safe reading of unprovable provenance is
     // "not human".
-    for (const value of ['true', 'false', 1, 0, {}, [], null]) {
+    for (const value of ['true', 'false', 1, 0, {}, []]) {
       const entry = humanPrompt({ isMeta: value })
       expect(decodeClaudeQueuedCommand(entry)?.isMeta).toBe(true)
       expect(decodeClaudeQueuedUserPrompt(entry)).toBeNull()
     }
+  })
+
+  it('admits a prompt whose isMeta is explicitly null', () => {
+    // null states absence, not unreadable provenance, and every other reader of
+    // this field in the repo treats non-`true` as non-meta. Resolving it to
+    // meta would suppress every queued prompt bubble on any build that
+    // serialized the optional flag explicitly — a silent regression to #665.
+    const decoded = decodeClaudeQueuedUserPrompt(humanPrompt({ isMeta: null }))
+    expect(decoded?.promptText).toBe('run the tests')
   })
 
   it('declines when the malformed isMeta sits on the entry rather than the attachment', () => {

@@ -317,6 +317,79 @@ describe('remove: the two upstream callers disagree, and we resolve safely', () 
     expect(state.pending.map(i => i.content)).toEqual(['second'])
   })
 
+  it('removes the notification the carrier names when two share a task id', () => {
+    // Notification identity was matched on the correlation id ALONE. The
+    // recorded corpus shows that is not unique: in
+    // divergence-stranded-background-commands.json, 2 of 126 enqueued task ids
+    // carry two DIFFERENT notification bodies — upstream reuses the id when a
+    // background shell from a previous session is reconciled ("...was stopped"
+    // vs "No completion record was found..."). With both queued, an exact
+    // content-bearing remove naming the SECOND matched the FIRST by id, retired
+    // it with the second's evidence, and stranded the one that actually left.
+    //
+    // The duplicate-id shape is recorded; pairing it with a remove carrier is
+    // reducer-executable rather than sampled, so this is asserted at the
+    // reducer level and says so rather than being dressed as a recording.
+    const stopped = backgroundCommand('watch workflows', 'dup-id')
+    const noRecord = agentFinished('previous session shell', 'dup-id')
+    expect(stopped).not.toBe(noRecord)
+
+    let state = createClaudeQueueState()
+    state = applyQueueOperation(state, { operation: 'enqueue', content: stopped, timestamp: '1' })
+    state = applyQueueOperation(state, { operation: 'enqueue', content: noRecord, timestamp: '2' })
+    state = applyQueueOperation(state, {
+      operation: 'remove',
+      content: noRecord,
+      timestamp: '3',
+    })
+
+    // Exact content is the strongest evidence available; it must beat a
+    // same-id sibling.
+    expect(state.pending.map(i => i.content)).toEqual([stopped])
+    expect(state.decisions).toHaveLength(1)
+    expect(state.decisions[0]!.reason).toBe('consumed-observed')
+  })
+
+  it('resolves a same-id attachment observation to the exact body', () => {
+    // Same defect on the other remove carrier: the durable queued-command
+    // attachment settles legacy content-free remove debt through the same
+    // predicate, so it could retire the wrong twin too.
+    const stopped = backgroundCommand('watch workflows', 'dup-id')
+    const noRecord = agentFinished('previous session shell', 'dup-id')
+
+    let state = createClaudeQueueState()
+    state = applyQueueOperation(state, { operation: 'enqueue', content: stopped, timestamp: '1' })
+    state = applyQueueOperation(state, { operation: 'enqueue', content: noRecord, timestamp: '2' })
+    state = applyQueueOperation(state, { operation: 'remove', timestamp: '3' })
+    expect(state.removeDebt?.count).toBe(1)
+
+    state = applyQueuedCommandObservation(state, {
+      mode: 'task-notification',
+      text: noRecord,
+      uuid: 'att-1',
+    })
+
+    expect(state.pending.map(i => i.content)).toEqual([stopped])
+    expect(state.removeDebt).toBeNull()
+  })
+
+  it('still matches a same-id notification when only one is queued', () => {
+    // The id fallback must survive: a carrier whose text has drifted from the
+    // queued body (whitespace, upstream reformatting) still has an
+    // unambiguous target, and requiring exact text everywhere would strand it.
+    const queued = backgroundCommand('solo', 'solo-id')
+    let state = createClaudeQueueState()
+    state = applyQueueOperation(state, { operation: 'enqueue', content: queued, timestamp: '1' })
+    state = applyQueueOperation(state, {
+      operation: 'remove',
+      content: `${queued}\nappended upstream noise`,
+      timestamp: '2',
+    })
+
+    expect(state.pending).toEqual([])
+    expect(state.decisions[0]!.reason).toBe('consumed-observed')
+  })
+
   it('leaves remove debt untouched when popAll names an absent item', () => {
     // Mirror of applyRemove's redelivery guard: a content-bearing carrier is
     // its own proof, so a miss must be a conservative no-op rather than

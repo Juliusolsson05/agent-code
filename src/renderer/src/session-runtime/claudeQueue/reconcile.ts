@@ -168,6 +168,42 @@ function entryClaims(item: PendingItem, entry: CommittedUserEntry): boolean {
  * and queued-command.prompt are queue-native carriers. Treating a mere prefix
  * as exact here would let two similar queued prompts remove one another.
  */
+/**
+ * Resolve which pending item a remove carrier names.
+ *
+ * WHY this is a two-pass resolve and not a single `find`: notification identity
+ * falls back to a correlation id, and the recorded corpus proves that id is NOT
+ * unique. In divergence-stranded-background-commands.json, 2 of 126 enqueued
+ * task ids carry two DIFFERENT bodies — upstream reuses the id when it
+ * reconciles a background shell from a previous session, so the queue can hold
+ * both "...was stopped" and "No completion record was found..." under one id.
+ *
+ * A plain `find` returns whichever twin was enqueued first. When a carrier named
+ * the SECOND exactly, that retired the first using the second's evidence and
+ * stranded the one that actually departed — the precise wrong-item failure this
+ * module exists to end, wearing a convincing-looking cause.
+ *
+ * Exact normalized text is the stronger evidence, so it is tried first. The id
+ * pass stays as a fallback: it is what survives upstream reformatting of a
+ * notification body, and when only one pending item carries the id there is no
+ * ambiguity for exactness to resolve. Prompts are unaffected — their branch in
+ * removeCarrierClaims already required exact text equality, so the first pass
+ * reproduces it.
+ */
+function resolveRemoveCarrierTarget(
+  pending: readonly PendingItem[],
+  observation: Pick<QueuedCommandObservation, 'mode' | 'text'>,
+): PendingItem | undefined {
+  const needle = normalizeForMatch(observation.text)
+  if (needle.length > 0) {
+    const exact = pending.find(
+      item => item.mode === observation.mode && normalizeForMatch(item.content) === needle,
+    )
+    if (exact) return exact
+  }
+  return pending.find(item => removeCarrierClaims(item, observation))
+}
+
 function removeCarrierClaims(
   item: PendingItem,
   observation: Pick<QueuedCommandObservation, 'mode' | 'text'>,
@@ -297,9 +333,7 @@ function applyRemove(state: ClaudeQueueState, op: QueueOperationRecord): ClaudeQ
   if (typeof op.content === 'string') {
     const content = op.content
     const mode = deriveMode(content)
-    const victim = state.pending.find(item =>
-      removeCarrierClaims(item, { mode, text: content }),
-    )
+    const victim = resolveRemoveCarrierTarget(state.pending, { mode, text: content })
 
     // Exact remove content and older dequeue debt account for DIFFERENT
     // departures. Settling the inferred debt first can guess away the very
@@ -455,7 +489,7 @@ export function applyQueuedCommandObservation(
 ): ClaudeQueueState {
   const debt = state.removeDebt
   if (debt === null || debt.count <= 0) return state
-  const claimed = state.pending.find(item => removeCarrierClaims(item, observation))
+  const claimed = resolveRemoveCarrierTarget(state.pending, observation)
   if (!claimed) return state
   const remaining = debt.count - 1
   return {

@@ -41,7 +41,16 @@ export type ClaudeQueuedCommand = {
  * present-but-unknown `origin`; only `isMeta` was left permissive.
  */
 function readMetaFlag(value: unknown): boolean {
-  if (value === undefined) return false
+  // `null` joins `undefined` as "no value stated", NOT as unreadable
+  // provenance. A JSON serializer that writes the optional flag explicitly as
+  // null is expressing absence, and every other reader of this field in the
+  // repository treats a non-`true` value as non-meta — committed.ts,
+  // sessionIndex.ts, latestUserPrompts.ts, and the transcript parser all test
+  // `isMeta === true`. Resolving null to meta here would make this the only
+  // dissenting reader and, if a Claude build ever emitted it that way, would
+  // suppress EVERY durable queued prompt bubble: a silent regression to the
+  // exact symptom of #665, which took a bug report to notice the first time.
+  if (value === undefined || value === null) return false
   return value !== false
 }
 
