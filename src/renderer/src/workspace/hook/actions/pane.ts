@@ -1,4 +1,4 @@
-import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
+import { DEFAULT_PROVIDER, isAgentSessionKind } from '@shared/types/providerKind'
 import {
   expandSessionCloseTargets,
   expandTabCloseTargets,
@@ -372,7 +372,7 @@ export function usePaneActions(
       const resumeSessionId = continuation?.resumeSessionId
       const builtInMcpDomains = continuation?.builtInMcpDomains
       const dispatchSnapshot = refs.stateRef.current
-      if (dispatchSnapshot.dispatchMode && kind !== 'terminal') {
+      if (dispatchSnapshot.dispatchMode && isAgentSessionKind(kind)) {
         // Same target resolution as createDetachedDispatchAgent: follow the
         // focused lane in Tiled Dispatch so cwd and projectTab agree on the
         // project the user is commanding (issue #266 / #248).

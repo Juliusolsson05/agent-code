@@ -16,6 +16,7 @@ import type {
 } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import type { SessionActions } from '@renderer/workspace/hook/actions/session'
+import { isAgentSessionKind } from '@shared/types/providerKind'
 
 export function useDispatchActions(
   state: { activeTabId: TabId; dispatchMode: DispatchModeState | null; sessions: Record<SessionId, SessionMeta> },
@@ -306,7 +307,7 @@ export function useDispatchActions(
       setState(prev => {
         if (prev.pinnedSessionIds.includes(sessionId)) return prev
         const meta = prev.sessions[sessionId]
-        if (!meta || meta.kind === 'terminal') return prev
+        if (!meta || !isAgentSessionKind(meta.kind)) return prev
         return {
           ...prev,
           pinnedSessionIds: [...prev.pinnedSessionIds, sessionId],
@@ -339,7 +340,7 @@ export function useDispatchActions(
         // at render time.
         const filtered = ids.filter(id => {
           const meta = prev.sessions[id]
-          return meta !== undefined && meta.kind !== 'terminal'
+          return meta !== undefined && isAgentSessionKind(meta.kind)
         })
         // Deduplicate while preserving caller order (first occurrence wins).
         // The modal already enforces this client-side, but a programmatic

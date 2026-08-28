@@ -1,4 +1,4 @@
-import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
+import { DEFAULT_PROVIDER, isAgentSessionKind } from '@shared/types/providerKind'
 import { useCallback, useState } from 'react'
 
 import type {
@@ -186,7 +186,7 @@ export function useUndoCloseAction(
           // agents.
           const newId = await sessionActions.spawn(meta.cwd, {
             kind,
-            resumeSessionId: kind !== 'terminal' ? resumableProviderSessionId(meta) : undefined,
+            resumeSessionId: isAgentSessionKind(kind) ? resumableProviderSessionId(meta) : undefined,
             recoverTmuxName: kind === 'terminal' ? meta.tmuxName : undefined,
             builtInMcpDomains: meta.builtInMcpDomains,
           })
@@ -246,7 +246,7 @@ export function useUndoCloseAction(
           // detached terminals doesn't silently drop tmuxName.
           const newId = await sessionActions.spawn(detached.meta.cwd, {
             kind,
-            resumeSessionId: kind !== 'terminal'
+            resumeSessionId: isAgentSessionKind(kind)
               ? resumableProviderSessionId(detached.meta)
               : undefined,
             recoverTmuxName: kind === 'terminal' ? detached.meta.tmuxName : undefined,

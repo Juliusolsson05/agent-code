@@ -1,6 +1,7 @@
 import {
   DEFAULT_PROVIDER,
   isAgentProviderKind,
+  isAgentSessionKind,
   isSessionKind,
 } from '@shared/types/providerKind'
 import type { SessionRecoverFailureCode } from '@shared/types/session'
@@ -262,12 +263,12 @@ export function useSessionActions(
       const kind: SessionKind = opts?.kind ?? DEFAULT_PROVIDER
       const dangerousMode =
         opts?.dangerousMode ??
-        (kind !== 'terminal' ? refs.dangerousAgentsRef.current : undefined)
+        (isAgentSessionKind(kind) ? refs.dangerousAgentsRef.current : undefined)
       // Agent providers both accept `useProxy`; terminals ignore it.
       // Claude uses MITM proxy streaming, Codex uses a local Responses
       // proxy via `openai_base_url`.
       const useProxy =
-        kind !== 'terminal' ? refs.useProxyStreamingRef.current : undefined
+        isAgentSessionKind(kind) ? refs.useProxyStreamingRef.current : undefined
       const builtInMcpDomains =
         isAgentProviderKind(kind)
           ? resolveSessionBuiltInMcpDomains({
@@ -310,7 +311,7 @@ export function useSessionActions(
         cwd,
         kind,
         ...(tmuxName ? { tmuxName } : {}),
-        ...(kind !== 'terminal' && opts?.resumeSessionId
+        ...(isAgentSessionKind(kind) && opts?.resumeSessionId
           ? {
               providerSessionId: opts.resumeSessionId,
               providerSessionIdSource: 'resume-request' as const,
@@ -337,7 +338,7 @@ export function useSessionActions(
           ...prev,
           [sessionId]: {
             ...base,
-            ...(kind !== 'terminal'
+            ...(isAgentSessionKind(kind)
               ? seedResumedRuntimeFields(current, meta)
               : {
                   hasOlderHistory: false,
@@ -352,7 +353,7 @@ export function useSessionActions(
           },
         }
       })
-      if (kind !== 'terminal' && meta.providerSessionId) {
+      if (isAgentSessionKind(kind) && meta.providerSessionId) {
         void loadInitialHistoryForSession({
           sessionId,
           meta,
@@ -499,7 +500,7 @@ export function useSessionActions(
                 defaultDomains: refs.defaultBuiltInMcpDomainsRef.current,
               })
             : undefined
-        const resumeSessionId = kind !== 'terminal' ? resumableProviderSessionId(meta) : undefined
+        const resumeSessionId = isAgentSessionKind(kind) ? resumableProviderSessionId(meta) : undefined
         const restoredMeta = withoutProvisionalProviderSession(meta)
         const priorRecoveryFailureCode =
           refs.latestRuntimesRef.current[sessionId]?.recoveryFailureCode ?? null
@@ -561,8 +562,8 @@ export function useSessionActions(
             resumeSessionId,
             builtInMcpDomains,
             recoverTmuxName: kind === 'terminal' ? meta.tmuxName : undefined,
-            dangerousMode: kind !== 'terminal' ? refs.dangerousAgentsRef.current : undefined,
-            useProxy: kind !== 'terminal' ? refs.useProxyStreamingRef.current : undefined,
+            dangerousMode: isAgentSessionKind(kind) ? refs.dangerousAgentsRef.current : undefined,
+            useProxy: isAgentSessionKind(kind) ? refs.useProxyStreamingRef.current : undefined,
           })
           if (!recovery.ok) {
             readyError = new Error(recovery.message)
@@ -800,7 +801,7 @@ export function useSessionActions(
         })
 
         if (
-          kind !== 'terminal' &&
+          isAgentSessionKind(kind) &&
           resumeSessionId &&
           refs.stateRef.current.sessions[sessionId] &&
           refs.latestRuntimesRef.current[sessionId]
@@ -1157,7 +1158,7 @@ export function useSessionActions(
             cwd: meta.cwd,
             resumeSessionId,
             dangerousMode,
-            useProxy: kind !== 'terminal' ? refs.useProxyStreamingRef.current : undefined,
+            useProxy: isAgentSessionKind(kind) ? refs.useProxyStreamingRef.current : undefined,
             builtInMcpDomains,
           })
           idMap.set(oldId, newId)

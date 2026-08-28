@@ -16,6 +16,8 @@ import {
 } from '@renderer/lib/copyAssistant'
 import { ratiosEqual, sanitizeTileTabsState } from '@renderer/workspace/layout/helpers'
 
+import { isAgentSessionKind } from '@shared/types/providerKind'
+
 import type {
   WorkspaceSetReaderMode,
   WorkspaceSetSpotlight,
@@ -114,7 +116,7 @@ function validFocusSessionIdsForMode(
     : resolveTabSessions(state, tabId)
 
   return options.agentOnly
-    ? sessionIds.filter(sessionId => state.sessions[sessionId]?.kind !== 'terminal')
+    ? sessionIds.filter(sessionId => isAgentSessionKind(state.sessions[sessionId]?.kind))
     : sessionIds
 }
 
@@ -176,7 +178,7 @@ export function usePinnedSessionIdsSanity(
       // (legacy workspace.json, manual reducer slip) treat it like a
       // missing session and drop it — the invariant the modal +
       // command paths depend on is "pinned ids point at agents."
-      return meta !== undefined && meta.kind !== 'terminal'
+      return meta !== undefined && isAgentSessionKind(meta.kind)
     })
     if (valid.length === pinnedSessionIds.length) return
     setState(prev => {
@@ -186,7 +188,7 @@ export function usePinnedSessionIdsSanity(
       // in this file.
       const next = prev.pinnedSessionIds.filter(id => {
         const meta = prev.sessions[id]
-        return meta !== undefined && meta.kind !== 'terminal'
+        return meta !== undefined && isAgentSessionKind(meta.kind)
       })
       if (next.length === prev.pinnedSessionIds.length) return prev
       return { ...prev, pinnedSessionIds: next }

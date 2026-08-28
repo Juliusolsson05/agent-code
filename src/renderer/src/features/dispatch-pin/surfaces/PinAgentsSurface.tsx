@@ -1,3 +1,4 @@
+import { isAgentSessionKind } from '@shared/types/providerKind'
 import { useMemo } from 'react'
 import { PinAgentsModal } from '@renderer/features/dispatch-pin/PinAgentsModal'
 import type { PinAgentsModalRow } from '@renderer/features/dispatch-pin/PinAgentsModal'
@@ -44,7 +45,7 @@ export function PinAgentsSurface() {
     const pushRow = (sessionId: SessionId, tabId: TabId): void => {
       if (seen.has(sessionId)) return
       const meta = state.sessions[sessionId]
-      if (!meta || meta.kind === 'terminal') return
+      if (!meta || !isAgentSessionKind(meta.kind)) return
       const tabIndex = tabIndexFor(tabId)
       const tab = state.tabs[tabIndex]
       if (!tab) return

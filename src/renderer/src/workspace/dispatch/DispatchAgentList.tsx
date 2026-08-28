@@ -2,6 +2,7 @@ import { getRendererProviderCapabilities } from '@providers/registry.renderer.ca
 import {
   DEFAULT_PROVIDER,
   isAgentProviderKind,
+  isAgentSessionKind,
 } from '@shared/types/providerKind'
 import { memo, useCallback, useLayoutEffect, useMemo, useRef } from 'react'
 import { useShallow } from 'zustand/react/shallow'
@@ -402,7 +403,7 @@ export function dispatchRowTitle(
   entries?: Entry[],
 ): string {
   if (row.agentTitle) return row.agentTitle
-  if (row.kind !== 'terminal' && entries) {
+  if (isAgentSessionKind(row.kind) && entries) {
     return cachedLatestPromptTitle(entries, row.kind) ?? row.title
   }
   return row.title

@@ -45,6 +45,7 @@ import type {
 import {
   DEFAULT_PROVIDER,
   isAgentProviderKind,
+  isAgentSessionKind,
   isSessionKind,
 } from '@shared/types/providerKind.js'
 import type { AgentProviderKind, SessionKind } from '@shared/types/providerKind.js'
@@ -649,7 +650,7 @@ export class SessionManager extends EventEmitter {
     sessionId: string,
     kind: SessionKind,
     expectedEntry?: RegistryEntry,
-    revokeAgentMcp = kind !== 'terminal',
+    revokeAgentMcp = isAgentSessionKind(kind),
     expectedGeneration = expectedEntry?.lifecycle.generation,
   ): boolean {
     // WHY this helper exists even before the larger SessionState consolidation:
@@ -3404,7 +3405,7 @@ export class SessionManager extends EventEmitter {
         sessionId,
         recovery.kind,
         undefined,
-        recovery.kind !== 'terminal',
+        isAgentSessionKind(recovery.kind),
         generation,
       )
     }
@@ -3567,7 +3568,7 @@ export class SessionManager extends EventEmitter {
         sessionId,
         claim.kind,
         undefined,
-        claim.kind !== 'terminal',
+        isAgentSessionKind(claim.kind),
         claim.spawnGeneration,
       )
     }

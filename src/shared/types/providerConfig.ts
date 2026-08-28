@@ -109,9 +109,13 @@ export type TileLeafRelatedAgentTab = {
   relation: 'parent' | 'linked' | 'orchestration'
   label: string
   title: string
-  // Widened to SessionKind: an extension-view pane is never actually a related
-  // agent tab, but the kind flows from a SessionKind source and this is a display
-  // label only, so allowing it costs nothing and keeps the assignment total.
+  // Typed SessionKind because the value flows from SessionMeta.kind, which is a
+  // SessionKind. buildGridRelatedAgentTabs guarantees at runtime that only agent
+  // kinds actually arrive here (it drops every non-agent owner and candidate via
+  // isAgentSessionKind), so the wider type is a plumbing artifact, not a claim
+  // that a terminal or extension-view pane can be a related-agent tab. Narrowing
+  // it to AgentProviderKind would need a cast at the one construction site and
+  // would move the guarantee from a readable filter into an assertion.
   kind: SessionKind | undefined
   placement: 'grid' | 'detached'
 }
