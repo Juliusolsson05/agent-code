@@ -9,7 +9,7 @@ import type { SessionId, TabId } from '@renderer/workspace/types'
 import type { WorkspaceState } from '@renderer/workspace/types'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type { ExtensionListEntry } from '@shared/types/extensions'
-import type { ExtensionFailure } from '@renderer/apps/host/ExtensionHost'
+import type { ExtensionFailure } from '@renderer/apps/types'
 import type {
   ReaderModeState,
   SpotlightState,

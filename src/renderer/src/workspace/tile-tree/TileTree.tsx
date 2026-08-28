@@ -143,8 +143,6 @@ export function renderWorkspaceLeaf(
     return (
       <ExtensionViewLeaf
         sessionId={sessionId}
-        paneLabel={paneLabel}
-        focused={sessionId === focusedSessionId}
         onFocusRequest={onFocusRequest}
         workspace={workspace}
       />

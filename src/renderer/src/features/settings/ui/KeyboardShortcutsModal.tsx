@@ -3,7 +3,6 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAppStore } from '@renderer/app-state/hooks'
 import { builtInCommandCatalog } from '@renderer/features/command-palette/catalog'
 import { deriveExtensionCommands, deriveExtensionKeybindings } from '@renderer/apps/host/derive'
-import { useExtensionHost } from '@renderer/apps/host/ExtensionHostProvider'
 import { buildDefaultKeybindings } from '@renderer/features/command-keybindings/defaults'
 import { displayKeybinding } from '@renderer/features/command-keybindings/normalize'
 import { resolveEffectiveKeybindings } from '@renderer/features/command-keybindings/resolve'
@@ -106,12 +105,9 @@ export function KeyboardShortcutsModal({ open, onClose }: Props) {
   // reference sheet — the exact failure the CATEGORY_RANK comment above warns
   // against. Derived from manifests (no bundle import); openApp unused here.
   const installedExtensions = useAppStore(state => state.installedExtensions)
-  const extensionHost = useExtensionHost()
   const extensionCommands = useMemo(
-    () =>
-      (extensionHost ? deriveExtensionCommands(extensionHost, installedExtensions, () => {}) : [])
-        .map(command => ({ ...command, category: 'extensions' as const })),
-    [extensionHost, installedExtensions],
+    () => deriveExtensionCommands(installedExtensions, () => {}),
+    [installedExtensions],
   )
   const [query, setQuery] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)

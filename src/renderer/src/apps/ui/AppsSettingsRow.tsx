@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
-import { useExtensionHost } from '@renderer/apps/host/ExtensionHostProvider'
 
 import type { ExtensionListEntry } from '@shared/types/extensions'
 
@@ -34,10 +33,6 @@ export function AppsSettingsRow() {
   // component would add an extension nobody else could see until a reload.
   const setInstalledExtensions = useAppStore(state => state.setInstalledExtensions)
   const failures = useAppStore(state => state.extensionFailures)
-  // Needed to tear a live extension down on remove/update. Main has no handle on
-  // the renderer-side host, so deactivation can only be driven from here — without
-  // it a removed extension's intervals/listeners/registrations leak for the session.
-  const extensionHost = useExtensionHost()
 
   const refresh = useCallback(async () => {
     try {
@@ -90,16 +85,19 @@ export function AppsSettingsRow() {
     [repo, busy, refresh],
   )
 
-  // Update = reinstall over the existing bundle (install.ts does rm+rename). The
-  // OLD module is still loaded in the renderer's ESM realm with live subscriptions;
-  // deactivate it first so its disposers run before the bundle is replaced. The new
-  // bundle re-activates lazily (or on next startup) under the version+sha cache key.
+  // Update = reinstall over the existing bundle (install.ts does rm+rename).
+  //
+  // There is deliberately no host-side deactivate() call here any more. The old one
+  // read as a safeguard but was a no-op: it drove ExtensionHost's loaded-module map,
+  // which is always empty under the frame model because the extension never runs in
+  // this realm. A live frame keeps running against the replaced bundle until it is
+  // closed; its own pagehide handler runs deactivate() at that point, which is the
+  // only place the module actually exists.
   const update = useCallback(
     async (entry: ExtensionListEntry) => {
-      await extensionHost?.deactivate(entry.manifest.id)
       await install(entry.repo)
     },
-    [extensionHost, install],
+    [install],
   )
 
   const remove = useCallback(
@@ -107,11 +105,6 @@ export function AppsSettingsRow() {
       setError(null)
       setNotice(null)
       try {
-        // Tear the live extension down BEFORE deleting its files: deactivate()
-        // disposes the loaded module's subscriptions and registrations (it works
-        // off the in-memory module, not the bundle on disk). Skipping this leaked
-        // intervals/listeners for the rest of the session.
-        await extensionHost?.deactivate(entry.manifest.id)
         await window.api.extensionsRemove(entry.manifest.id)
         setNotice(`Removed ${entry.manifest.name}`)
       } catch (removeError) {
@@ -120,7 +113,7 @@ export function AppsSettingsRow() {
         await refresh()
       }
     },
-    [extensionHost, refresh],
+    [refresh],
   )
 
   // "Load unpacked" — install from a local folder via the native picker (main

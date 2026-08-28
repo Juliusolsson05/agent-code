@@ -3,7 +3,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAppStore } from '@renderer/app-state/hooks'
 import { builtInCommandCatalog } from '@renderer/features/command-palette/catalog'
 import { deriveExtensionCommands, deriveExtensionKeybindings } from '@renderer/apps/host/derive'
-import { useExtensionHost } from '@renderer/apps/host/ExtensionHostProvider'
 import { PALETTE_SELF_EXCLUDED_COMMAND_IDS } from '@renderer/features/command-palette/commands/paletteCommands'
 import { buildDefaultKeybindings } from '@renderer/features/command-keybindings/defaults'
 import type { BindingContext } from '@renderer/features/command-keybindings/defaults'
@@ -186,12 +185,9 @@ export function CommandKeybindingsRow() {
   // invokes `run`. They are stamped with the 'extensions' category so the row
   // builder's category filter admits them and they group under their own heading.
   const installedExtensions = useAppStore(state => state.installedExtensions)
-  const extensionHost = useExtensionHost()
   const extensionCommands = useMemo(
-    () =>
-      (extensionHost ? deriveExtensionCommands(extensionHost, installedExtensions, () => {}) : [])
-        .map(command => ({ ...command, category: 'extensions' as const })),
-    [extensionHost, installedExtensions],
+    () => deriveExtensionCommands(installedExtensions, () => {}),
+    [installedExtensions],
   )
 
   const [query, setQuery] = useState('')

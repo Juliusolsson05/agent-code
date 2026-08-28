@@ -3,7 +3,6 @@ import { useCallback, useMemo } from 'react'
 import { useAppStore } from '@renderer/app-state/hooks'
 import { createAppHostApi } from '@renderer/apps/api/createAppHostApi'
 import { deriveAppDefinitions } from '@renderer/apps/host/derive'
-import { useExtensionHost } from '@renderer/apps/host/ExtensionHostProvider'
 import { Dialog, DialogContent, DialogTitle } from '@renderer/components/ui/dialog'
 import { useGlobalToast } from '@renderer/ui/GlobalToast'
 
@@ -26,15 +25,11 @@ import type { AppDefinition } from '@renderer/apps/types'
 export function AppHostSurface() {
   const openAppId = useAppStore(state => state.openAppId)
   const installed = useAppStore(state => state.installedExtensions)
-  const host = useExtensionHost()
 
   // Derived per render from the store rather than a module-scope map. The
   // previous version built `APP_BY_ID` once at import time, which meant a newly
   // installed extension could not open until a reload.
-  const definitions = useMemo(
-    () => (host ? deriveAppDefinitions(host, installed) : []),
-    [host, installed],
-  )
+  const definitions = useMemo(() => deriveAppDefinitions(installed), [installed])
 
   const definition = openAppId
     ? definitions.find(candidate => candidate.id === openAppId)

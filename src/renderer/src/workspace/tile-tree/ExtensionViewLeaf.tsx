@@ -2,7 +2,6 @@ import { useMemo } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
 import { createAppHostApi } from '@renderer/apps/api/createAppHostApi'
-import { useExtensionHost } from '@renderer/apps/host/ExtensionHostProvider'
 import { viewComponentFor } from '@renderer/apps/host/viewBridge'
 import { useGlobalToast } from '@renderer/ui/GlobalToast'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
@@ -24,18 +23,20 @@ import type { SessionId } from '@renderer/workspace/types'
  * the creation path (main-minted session + the panel command) is the deep,
  * runtime-gated remainder of WS6. This is the render seam that receives it.
  */
+// `paneLabel` and `focused` are deliberately NOT props here, unlike every sibling
+// leaf. An extension owns its whole rectangle — the host draws no header strip over
+// it — so there is no chrome to label and no focus ring to paint. They were accepted
+// and then discarded (`focused` reached a `${focused ? '' : ''}` template), which
+// reads as "focus styling exists" to anyone scanning the file.
 type Props = {
   sessionId: SessionId
-  paneLabel?: string
-  focused: boolean
   onFocusRequest: () => void
   workspace: Workspace
 }
 
-export function ExtensionViewLeaf({ sessionId, workspace, focused, onFocusRequest }: Props) {
+export function ExtensionViewLeaf({ sessionId, workspace, onFocusRequest }: Props) {
   const installedExtensions = useAppStore(state => state.installedExtensions)
   const installedExtensionsLoaded = useAppStore(state => state.installedExtensionsLoaded)
-  const host = useExtensionHost()
   const { showToast } = useGlobalToast()
 
   const persistedViewId = workspace.state.sessions[sessionId]?.extensionViewId
@@ -71,18 +72,26 @@ export function ExtensionViewLeaf({ sessionId, workspace, focused, onFocusReques
   const View = useMemo(
     // fill=true: a pane is a fixed tile, so the view fills it rather than sizing to
     // its own content the way the floating modal does.
-    () => (host && entry && viewId ? viewComponentFor(host, entry, viewId, true) : null),
-    [host, entry, viewId],
+    //
+    // Depends on the IDS, not on `entry`. `entry` is a fresh object every time the
+    // installed list is refetched, so depending on it re-ran this memo on every
+    // install/remove. viewComponentFor caches by identity so the returned component
+    // is stable either way, but keeping the dep list to the ids says so locally —
+    // and stops this memo from being the thing that reintroduces the remount if the
+    // cache is ever removed.
+    () => (entry && viewId ? viewComponentFor(entry, viewId, true) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [extensionId, viewId],
   )
 
-  if (!viewId || !entry || !host || !View || !api) {
+  if (!viewId || !entry || !View || !api) {
     // ── DO NOT CLAIM "NOT INSTALLED" BEFORE THE LIST HAS LOADED ──
     // installedExtensions starts [] and is filled by an async IPC whose failure path
     // deliberately leaves the store untouched. Collapsing "still loading" into "not
     // installed" flashed a false message on every reload, and one failed
     // extensionsList() made it permanent — sending the user to uninstall and reinstall
     // an extension that was fine.
-    const stillLoading = !installedExtensionsLoaded || !host
+    const stillLoading = !installedExtensionsLoaded
     return (
       <div
         className="flex h-full w-full items-center justify-center bg-canvas px-6 text-center"
@@ -105,15 +114,8 @@ export function ExtensionViewLeaf({ sessionId, workspace, focused, onFocusReques
     // then closed the WRONG pane. The cross-origin iframe swallows mousedown over its
     // own content, so this catches the surrounding gutter — partial, but strictly
     // better than a pane that can never be focused by pointer at all.
-    <div
-      className={`h-full w-full bg-canvas${focused ? '' : ''}`}
-      onMouseDown={onFocusRequest}
-    >
+    <div className="h-full w-full bg-canvas" onMouseDown={onFocusRequest}>
       <View api={api} />
     </div>
   )
 }
-
-// A no-op kept separate so the dead-leaf branch reads cleanly; focus on a dead pane
-// is meaningless but the container should still swallow the event.
-function onFocusRequestGuard() {}

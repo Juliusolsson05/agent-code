@@ -1,7 +1,7 @@
 import type { PaletteMode } from '@renderer/features/command-palette/paletteMode'
 import type { TabId, SessionId } from '@renderer/workspace/types'
 import type { ExtensionListEntry } from '@shared/types/extensions'
-import type { ExtensionFailure } from '@renderer/apps/host/ExtensionHost'
+import type { ExtensionFailure } from '@renderer/apps/types'
 
 export type DispatchAttachIntent = {
   sessionId: SessionId
@@ -350,8 +350,11 @@ export type UiShellState = {
   installedExtensions: ExtensionListEntry[]
   /** True once extensionsList() has succeeded at least once. */
   installedExtensionsLoaded: boolean
-  /** Extensions whose import or activate() threw. Surfaced in Settings rather
-   *  than hidden, because a silently-missing extension is undiagnosable. */
+  /** Extensions whose frame failed to boot, or whose module threw during import
+   *  or activate(). Reported BY THE FRAME over postMessage and collected by
+   *  viewBridge — the extension does not run in this realm, so the host cannot
+   *  observe the throw directly. Surfaced in Settings rather than hidden, because
+   *  a silently-missing extension is undiagnosable for whoever installed it. */
   extensionFailures: ExtensionFailure[]
   /** Session whose Dispatch color-flag picker modal is open, or null. */
   colorFlagPickerSessionId: SessionId | null

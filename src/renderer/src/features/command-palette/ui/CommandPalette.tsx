@@ -78,7 +78,6 @@ import type {
 import { promptTemplateTargetSessionId } from '@renderer/features/prompt-templates/targetSession'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import { deriveExtensionCommands, deriveExtensionKeybindings } from '@renderer/apps/host/derive'
-import { useExtensionHost } from '@renderer/apps/host/ExtensionHostProvider'
 import { resolveAgentPaneLabel } from '@renderer/workspace/tile-tree/paneLabels'
 import { useWorkspaceContext } from '@renderer/workspace/WorkspaceContext'
 import type { PaletteMode } from '@renderer/features/command-palette/paletteMode'
@@ -823,18 +822,10 @@ function OpenCommandPalette({
   // modules — that is what lets the palette list an extension's commands before
   // a single byte of it has been imported. `run` activates on demand.
   const installedExtensions = useAppStore(state => state.installedExtensions)
-  const extensionHost = useExtensionHost()
   const extensionCommands = useMemo(
     () =>
-      extensionHost
-        ? deriveExtensionCommands(
-            extensionHost,
-            installedExtensions,
-            openApp,
-            workspace.openExtensionViewInPane,
-          )
-        : [],
-    [extensionHost, installedExtensions, openApp, workspace.openExtensionViewInPane],
+      deriveExtensionCommands(installedExtensions, openApp, workspace.openExtensionViewInPane),
+    [installedExtensions, openApp, workspace.openExtensionViewInPane],
   )
   // Extension keybinding defaults, so a palette row for an extension command shows
   // its shipped chord. Independent of the host (manifests only), unlike commands.

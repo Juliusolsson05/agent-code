@@ -2,11 +2,40 @@ import { useEffect, useRef, useState } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
 import type { AgentCodeApiV1 } from '@renderer/apps/api/types'
-import type { ExtensionHost } from '@renderer/apps/host/ExtensionHost'
 import { createFrameHost } from '@renderer/apps/host/frameHost'
 import { clearFrameDispatch, setFrameDispatch } from '@renderer/apps/host/frameRegistry'
 import { THEME_CHANGED_EVENT } from '@renderer/app-state/settings/theme'
 import type { ExtensionListEntry } from '@shared/types/extensions'
+
+// How long the host waits for the frame's own boot signal before calling the load
+// failed. Generous: the only thing it races is a frame that will never start, and a
+// premature "failed" on a slow machine is a worse lie than a late one.
+const BOOT_TIMEOUT_MS = 10_000
+
+/**
+ * Record (or clear) an extension's failure on its Settings row.
+ *
+ * WHY these write through the store rather than local component state: the failure
+ * belongs to the EXTENSION, not to this view instance. Settings lists it next to the
+ * extension long after the frame that produced it was closed, and a second frame for
+ * the same extension must not show a stale failure from the first.
+ */
+function reportFailure(extensionId: string, message: string): void {
+  const state = useAppStore.getState()
+  const name =
+    state.installedExtensions.find(candidate => candidate.manifest.id === extensionId)?.manifest
+      .name ?? extensionId
+  state.setExtensionFailures([
+    ...state.extensionFailures.filter(failure => failure.id !== extensionId),
+    { id: extensionId, name, error: message },
+  ])
+}
+
+function clearFailure(extensionId: string): void {
+  const state = useAppStore.getState()
+  if (!state.extensionFailures.some(failure => failure.id === extensionId)) return
+  state.setExtensionFailures(state.extensionFailures.filter(failure => failure.id !== extensionId))
+}
 
 /**
  * Adapts a contributed view into the `AppDefinition.Component` shape — the iframe
@@ -20,19 +49,19 @@ import type { ExtensionListEntry } from '@shared/types/extensions'
  * frameDocument.ts's bootstrap), and the parent only frames it, brokers its Tier-0
  * API over postMessage (frameHost.ts), and signals which view to mount.
  *
- * WHY the parent no longer imports or activates the extension: an iframe at the
+ * WHY the parent never imports or activates the extension: an iframe at the
  * extension's own origin cannot reach `window.api`, the parent DOM, or another
- * extension, so the module MUST run on the far side of that boundary. The
- * host-side ExtensionHost still owns command activation (same realm), which is why
- * `host` remains in the signature even though this view path no longer calls it.
+ * extension, so the module MUST run on the far side of that boundary. Commands run
+ * there too — the frame is the ONE place an extension executes, which is what ended
+ * the split-brain where a palette command drove a different instance than the
+ * visible view.
  *
  * RUNTIME NOTE: this is the WS4 flip that can only be validated in a live frame —
  * the iframe load, the postMessage handshake, and the child CSP are not
  * typecheckable. A real extension view rendering is its acceptance test.
  */
-export function viewComponentFor(
-  _host: ExtensionHost,
-  entry: ExtensionListEntry,
+function buildViewComponent(
+  extensionId: string,
   viewId: string,
   // When true (a PANE host), the iframe FILLS its container rather than sizing to
   // the extension's reported content height. A modal floats and should hug its view
@@ -41,8 +70,16 @@ export function viewComponentFor(
   // mode. Defaults false so the modal path is unchanged.
   fill = false,
 ): (props: { api: AgentCodeApiV1 }) => JSX.Element {
-  const extensionId = entry.manifest.id
   return function ExtensionView({ api }: { api: AgentCodeApiV1 }) {
+    // Read the display name from the store rather than closing over a manifest.
+    // The component is cached by identity (see viewComponentFor), so a captured
+    // manifest would go stale the first time the extension was updated — and the
+    // name is the only manifest field this component ever needed.
+    const displayName = useAppStore(
+      state =>
+        state.installedExtensions.find(candidate => candidate.manifest.id === extensionId)
+          ?.manifest.name ?? extensionId,
+    )
     const iframeRef = useRef<HTMLIFrameElement | null>(null)
     const [status, setStatus] = useState<'loading' | 'ready' | 'failed'>('loading')
     // Content-driven height. The child (frameDocument.ts) measures its own view and
@@ -101,7 +138,9 @@ export function viewComponentFor(
         // extension's id. Origin is the gate that actually distinguishes them.
         if (event.source !== iframe.contentWindow) return
         if (event.origin !== expectedChildOrigin) return
-        const data = event.data as { kind?: unknown; height?: unknown; width?: unknown } | null
+        const data = event.data as
+          | { kind?: unknown; height?: unknown; width?: unknown; message?: unknown }
+          | null
         if (!data) return
         if (data.kind === 'agent-code-ext:resize') {
           // Clamped so a buggy or hostile child cannot drive the modal past the
@@ -111,13 +150,49 @@ export function viewComponentFor(
           if (typeof data.width === 'number' && Number.isFinite(data.width)) {
             setContentWidth(Math.min(Math.max(Math.round(data.width), 240), 1200))
           }
+        } else if (data.kind === 'agent-code-ext:boot') {
+          // The frame document is executing. This — not the iframe's own 'load'
+          // event — is what proves the load succeeded: an iframe fires 'load' for
+          // an HTTP error body exactly as it does for a real page, and never fires
+          // 'error' for one, so onError below can only ever catch a network-layer
+          // failure. Without this signal a 404 from the scheme handler showed as a
+          // blank frame stuck in 'ready' forever.
+          if (bootTimer !== null) {
+            clearTimeout(bootTimer)
+            bootTimer = null
+          }
+          setStatus('ready')
+          clearFailure(extensionId)
+        } else if (data.kind === 'agent-code-ext:error') {
+          // activate() or the dynamic import threw inside the frame. The frame is
+          // the only place that can observe it — the extension does not run in this
+          // realm — so it reports here and we surface it on the Settings row.
+          setStatus('failed')
+          reportFailure(
+            extensionId,
+            typeof data.message === 'string' ? data.message : 'Extension failed to start.',
+          )
         } else if (data.kind === 'agent-code-ext:ready') {
-          // activate() has resolved in the frame — command handlers now exist, so
-          // it is safe to publish the dispatcher and flush any queued commands.
+          // activate() has RESOLVED — command handlers now exist, so it is safe to
+          // publish the dispatcher and flush any queued commands. Distinct from
+          // 'boot', which only says the document started.
           setFrameDispatch(extensionId, dispatch)
         }
       }
       window.addEventListener('message', onChildMessage)
+
+      // Backstop for every failure that produces no message at all: a 404/403 body,
+      // a CSP violation that blocks the bootstrap, a syntax error in it. Generous
+      // on purpose — this races nothing but a broken frame, and a false "failed"
+      // on a slow machine would be worse than a late one.
+      let bootTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+        bootTimer = null
+        setStatus(current => (current === 'loading' ? 'failed' : current))
+        reportFailure(
+          extensionId,
+          'The extension frame did not start. Its bundle may be missing or blocked.',
+        )
+      }, BOOT_TIMEOUT_MS)
 
       // Live observe: nudge the frame when the workspace changes, for each observe
       // topic the extension was granted, so its api.*.subscribe listeners re-read.
@@ -160,7 +235,10 @@ export function viewComponentFor(
       }
 
       const onLoad = () => {
-        setStatus('ready')
+        // Deliberately does NOT set 'ready' — see the boot handler above. This
+        // fires for an error body too, so treating it as success is what made the
+        // failure state unreachable.
+        //
         // THEME BEFORE MOUNT — the ordering is load-bearing.
         //
         // Previously mount was pushed synchronously and the theme followed a microtask
@@ -204,6 +282,7 @@ export function viewComponentFor(
         window.removeEventListener('message', onChildMessage)
         window.removeEventListener(THEME_CHANGED_EVENT, pushTheme)
         observeDisposed = true
+        if (bootTimer !== null) clearTimeout(bootTimer)
         if (nudgeTimer) clearTimeout(nudgeTimer)
         storeUnsub?.()
         clearFrameDispatch(extensionId, dispatch)
@@ -253,11 +332,11 @@ export function viewComponentFor(
         style={scaledBox}
       >
         {status === 'loading' ? (
-          <div className="px-6 py-8 text-[12px] text-muted">Loading {entry.manifest.name}…</div>
+          <div className="px-6 py-8 text-[12px] text-muted">Loading {displayName}…</div>
         ) : null}
         {status === 'failed' ? (
           <div className="px-6 py-8">
-            <div className="text-[13px] text-ink">{entry.manifest.name} failed to start</div>
+            <div className="text-[13px] text-ink">{displayName} failed to start</div>
             <div className="mt-1 text-[12px] text-muted">
               The extension frame could not be loaded.
             </div>
@@ -294,7 +373,7 @@ export function viewComponentFor(
         <iframe
           ref={iframeRef}
           sandbox="allow-scripts allow-same-origin"
-          title={entry.manifest.name}
+          title={displayName}
           style={{
             display: status === 'ready' ? 'block' : 'none',
             border: 'none',
@@ -319,4 +398,42 @@ export function viewComponentFor(
       </div>
     )
   }
+}
+
+// ── COMPONENT IDENTITY IS CACHED, AND THAT IS A CORRECTNESS REQUIREMENT ──
+//
+// React remounts on component IDENTITY, not on props. `deriveAppDefinitions` and
+// `ExtensionViewLeaf` both call this while deriving from the installed list, and
+// that list is refetched on every install, update and remove — so minting a fresh
+// closure per call meant that installing ANY extension unmounted every open
+// extension view, destroyed its iframe, and re-ran activate() in a new document.
+// A running timer reset because an unrelated extension was installed.
+//
+// Keying on the identity triple is what makes the derivation idempotent. Nothing
+// else varies the component: `fill` picks the layout, and the manifest name is
+// read from the store inside the component precisely so it need not be a key.
+//
+// The map is bounded by (installed extensions x contributed views x 2), which is
+// the same order as the ledger itself, and entries stay valid across an uninstall
+// + reinstall of the same id — the component holds no manifest, only ids.
+const componentCache = new Map<string, (props: { api: AgentCodeApiV1 }) => JSX.Element>()
+
+/**
+ * The host-side component for one contributed view: a sandboxed iframe at the
+ * extension's origin plus the postMessage broker for it.
+ *
+ * `fill` true means a PANE host — the iframe fills its tile instead of sizing to
+ * the extension's reported content height, which is what a floating modal does.
+ */
+export function viewComponentFor(
+  entry: ExtensionListEntry,
+  viewId: string,
+  fill = false,
+): (props: { api: AgentCodeApiV1 }) => JSX.Element {
+  const key = `${entry.manifest.id}\u0000${viewId}\u0000${fill}`
+  const cached = componentCache.get(key)
+  if (cached) return cached
+  const built = buildViewComponent(entry.manifest.id, viewId, fill)
+  componentCache.set(key, built)
+  return built
 }

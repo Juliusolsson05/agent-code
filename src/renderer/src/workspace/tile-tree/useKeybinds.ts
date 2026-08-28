@@ -328,8 +328,18 @@ export function useKeybinds(
   // Extension keybinding defaults, derived from installed manifests (no bundle
   // import). Recomputed only when the installed set changes, so an install/remove
   // makes a contributed chord start/stop firing without a reload.
+  //
+  // ── THE `?? []` IS NOT DEFENSIVE NOISE ──
+  // This hook owns the global keydown router: if it throws during render, the
+  // application has no keyboard at all, and it throws before anything can catch
+  // it usefully. That is the same shape as the persist-version bug that
+  // black-screened launch twice (#249) — a store slice that was expected to exist
+  // and did not. Extension state is the newest slice and the one most likely to be
+  // absent from a partially-restored or partially-mocked store, so the core
+  // keyboard path degrades to "no contributed chords" instead of taking the app
+  // down with it. Nothing else in this hook has an opinion about extensions.
   const extensionKeybindings = useMemo(
-    () => deriveExtensionKeybindings(installedExtensions),
+    () => deriveExtensionKeybindings(installedExtensions ?? []),
     [installedExtensions],
   )
 

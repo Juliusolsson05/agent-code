@@ -86,6 +86,18 @@ const PARENT_ORIGIN = CFG.parentOrigin;
 const VIEW_ID = CFG.viewId;
 const ENTRY = CFG.entry;
 
+// ── ANNOUNCE THAT THIS DOCUMENT IS THE REAL FRAME, IMMEDIATELY ──
+// The host cannot tell a successful load from a failed one any other way. An
+// iframe fires 'load' for an HTTP ERROR BODY just as it does for a real page, and
+// never fires 'error' for one — so the host's onError handler was dead code, and a
+// 404/403 from the scheme handler (missing bundle, unknown view id, an id that
+// failed validation) rendered as a permanently blank "ready" frame with no message
+// anywhere. This is the first statement that runs, before the dynamic import can
+// throw, so its ARRIVAL means "the host's own document is executing" and its
+// ABSENCE within the host's timeout means the load failed for any reason at all —
+// including a CSP violation that stops the bootstrap outright.
+window.parent.postMessage({ kind: 'agent-code-ext:boot' }, '*');
+
 // Correlate replies to requests over the single channel to the parent.
 let seq = 0;
 const pending = new Map();
@@ -284,8 +296,16 @@ import('./' + ENTRY)
     window.parent.postMessage({ kind: 'agent-code-ext:ready' }, '*');
   })
   .catch((error) => {
+    const message = (error && error.message) || String(error);
     const root = document.getElementById('root');
-    if (root) root.textContent = 'Extension failed to load: ' + (error && error.message || error);
+    if (root) root.textContent = 'Extension failed to load: ' + message;
+    // ALSO tell the host. Writing the message into this document only put it
+    // inside the frame — and a frame that fails during activate() is often not
+    // even visible (a queued command opened it), so the user saw nothing at all
+    // and Settings showed a healthy row. The host-realm ExtensionHost used to
+    // collect these from its own try/catch around import+activate; that host is
+    // gone, so the frame is now the only thing that can observe the throw.
+    window.parent.postMessage({ kind: 'agent-code-ext:error', message: message }, '*');
   });
 
 // Run the extension's cleanup when the frame is torn down. The host closes a view

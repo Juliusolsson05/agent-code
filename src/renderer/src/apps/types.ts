@@ -3,33 +3,35 @@ import type { ComponentType } from 'react'
 import type { AgentCodeApiV1 } from '@renderer/apps/api/types'
 
 /**
- * One built-in app.
+ * One contributed extension view, resolved into something a host shell can render.
  *
- * WHY every field except `Component` is JSON-expressible: this shape is
- * deliberately the target that a future out-of-tree manifest resolves INTO. In
- * Stage 2 a loader reads `id`/`title`/`description`/`keywords` from
- * `agent-code.app.json` on disk and produces `Component` by importing the app's
- * bundle — everything else in `apps/` stays exactly as it is. Keeping this type a
- * strict superset-by-one of a manifest is what makes that a swap.
+ * WHY this type still exists after extensions moved into iframes: it is the seam
+ * between "what a manifest declared" and "what a surface mounts". `derive.ts`
+ * produces one of these per `contributes.views` entry, reading ONLY the manifest —
+ * no bundle is imported to build it. AppHostSurface (modal) and ExtensionViewLeaf
+ * (pane) both consume it, which is what lets the same view render in either shell
+ * with nothing but the surrounding chrome differing.
+ *
+ * WHY every field except `Component` is JSON-expressible: they all come straight
+ * off the manifest. `Component` is the one derived member, and it is a closure over
+ * the iframe bridge rather than extension code — the extension itself never crosses
+ * into this realm.
  *
  * The failure to avoid: adding a host-only field here — `getWorkspace: () =>
- * Workspace`, a store selector, a React context, anything not serializable. That
- * silently converts this from a manifest target into a host-only interface, and at
- * that moment Stage 1 becomes a substrate Stage 2 has to tear out rather than one
- * it keeps. If an app needs a capability, it belongs in `AgentCodeApiV1`, not here.
+ * Workspace`, a store selector, a React context, anything not serializable. If a
+ * view needs a capability it belongs in `AgentCodeApiV1`, brokered over
+ * postMessage, not smuggled in beside the component.
  */
 export type AppDefinition = {
   /**
-   * Stable id. Becomes the palette command id (`app.open.<id>`), the value held in
-   * `openAppId`, and the on-disk state directory name under
-   * `~/.config/agent-code/extensions/`. Renaming it orphans saved state and breaks
-   * muscle memory — treat as permanent.
+   * The contributed view id, `<extensionId>.<view>`. Also the value held in
+   * `openAppId` while the view is open as a modal.
    *
-   * Must satisfy the same pattern the main process enforces in
-   * `main/extensions/storage.ts`: /^[a-z][a-z0-9-]{0,63}$/. A violation is not
-   * caught here — it surfaces as an `InvalidAppIdError` on the first storage call,
-   * which is deliberate: main owns that rule because main is where the id becomes
-   * a filesystem path, and duplicating the check here would let the two drift.
+   * The extension-id half is what storage is namespaced by, so renaming it orphans
+   * saved state — treat as permanent. The grammar is enforced by main, at install
+   * (`main/extensions/manifest.ts`), because that is where a hostile manifest first
+   * arrives and where the id becomes a filesystem path. It is deliberately NOT
+   * re-checked here: a second copy of the rule is a second thing to drift.
    */
   id: string
   title: string
@@ -37,19 +39,42 @@ export type AppDefinition = {
    * REQUIRED and non-empty: this string becomes the palette command's description,
    * and `buildCommandRegistry` throws on a blank description. A missing one is a
    * launch crash rather than a lint warning, so the type makes it non-optional.
+   * `derive.ts` falls back to the extension's own description for this reason.
    */
   description: string
   keywords?: string[]
   /**
-   * The app's UI.
+   * The view's host-side component: an iframe at the extension's origin, plus the
+   * postMessage broker for it. Built by `viewComponentFor`.
    *
    * WHY exactly one prop, unlike `SurfaceEntry.Component` which deliberately takes
    * none: for a first-party surface propless is right, because the surface can read
-   * the store directly and props would put the host back in the wiring business.
-   * For an app the opposite holds — the prop IS the boundary that makes the app
-   * portable, and `api` is the only thing an app is permitted to depend on. An app
-   * that imports anything from `@renderer/*` other than these two type modules has
-   * broken the contract; the check is `grep -rn "@renderer/" src/renderer/src/apps/<id>/`.
+   * the store directly. Here the prop IS the boundary — `api` is the only thing the
+   * far side of the frame is permitted to depend on.
    */
   Component: ComponentType<{ api: AgentCodeApiV1 }>
+}
+
+/**
+ * An extension whose frame could not start, surfaced on its Settings row.
+ *
+ * WHY failures are a VALUE in the store rather than a throw: an extension is
+ * third-party code loaded at runtime. One that fails to import, exports no
+ * `activate`, or throws inside it must leave every other extension running and must
+ * never be able to blank the renderer.
+ *
+ * WHY this type lives here and not beside a host object: it used to be produced by
+ * a host-realm `ExtensionHost` that imported and activated extension modules in the
+ * renderer's own realm. That path is gone — an extension now runs only inside its
+ * frame — so failures are REPORTED BY THE FRAME over postMessage and collected by
+ * viewBridge. The type outlived its producer because the Settings row still needs
+ * it; the producer is now the sandbox, which is the point.
+ */
+export type ExtensionFailure = {
+  /** The extension id, matching `InstalledExtension.manifest.id`. */
+  id: string
+  /** Display name, so a row can be labelled before the manifest is looked up. */
+  name: string
+  /** The message shown under the extension's Settings row. */
+  error: string
 }

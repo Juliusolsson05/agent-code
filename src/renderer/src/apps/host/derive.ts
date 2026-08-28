@@ -1,6 +1,5 @@
 import type { CommandDef } from '@renderer/features/command-palette/types'
 import type { AppDefinition } from '@renderer/apps/types'
-import type { ExtensionHost } from '@renderer/apps/host/ExtensionHost'
 import { viewComponentFor } from '@renderer/apps/host/viewBridge'
 import { dispatchToFrame, queuePendingCommand } from '@renderer/apps/host/frameRegistry'
 import type { CommandBindingDefault } from '@renderer/features/command-keybindings/defaults'
@@ -14,7 +13,7 @@ import type { ExtensionListEntry } from '@shared/types/extensions'
 // never a loaded module. That is what makes lazy activation real: the palette
 // lists an extension's commands and the app registry knows about its views while
 // not a single extension bundle has been imported. Importing happens on first
-// use, inside ExtensionHost.
+// use, inside its own frame.
 //
 // Cross-extension id collisions are resolved here rather than at install: neither
 // author can see the other's manifest, so failing the install would punish
@@ -22,10 +21,7 @@ import type { ExtensionListEntry } from '@shared/types/extensions'
 // rather than silently shadowing.
 
 /** `AppDefinition`s for every contributed view. */
-export function deriveAppDefinitions(
-  host: ExtensionHost,
-  installed: ExtensionListEntry[],
-): AppDefinition[] {
+export function deriveAppDefinitions(installed: ExtensionListEntry[]): AppDefinition[] {
   const seen = new Set<string>()
   const definitions: AppDefinition[] = []
 
@@ -41,7 +37,7 @@ export function deriveAppDefinitions(
         // fallback and is what the palette shows under the command.
         description: entry.manifest.description,
         keywords: entry.manifest.keywords,
-        Component: viewComponentFor(host, entry, view.id),
+        Component: viewComponentFor(entry, view.id),
       })
     }
   }
@@ -59,11 +55,6 @@ export function deriveAppDefinitions(
  * worse version of the host's own routing.
  */
 export function deriveExtensionCommands(
-  // Retained for signature stability with deriveAppDefinitions and every caller,
-  // but no longer used: command execution was moved off the host-realm ExtensionHost
-  // and into the extension's frame (Group A), which ended the split-brain where a
-  // palette command drove a different instance than the visible view.
-  _host: ExtensionHost,
   installed: ExtensionListEntry[],
   openApp: (appId: string) => void,
   // Opens a contributed view as a PANE (a tile leaf) instead of a modal. A view
@@ -109,6 +100,16 @@ export function deriveExtensionCommands(
         // the tile tree or to Dispatch, so hiding them in either mode would be
         // wrong.
         surface: 'app',
+        // Assigned HERE, not by each consumer. Two Settings surfaces used to
+        // re-tag these with `.map(c => ({...c, category: 'extensions'}))` after
+        // calling this function, and the command palette did not — so the same
+        // command grouped under "Extensions" in the keybinding editor and under
+        // "Other" in the palette, and sortCommands carried a comment asserting
+        // extension commands "have no way to declare one at all". The manifest
+        // still cannot set a category, which is the point: a third party must not
+        // be able to file itself under a first-party heading. The HOST assigns it,
+        // and one assignment site is what makes every consumer agree.
+        category: 'extensions',
         keywords: command.keywords ?? [],
         run: ({ ui }) => {
           // A command that maps to a view is an "open" command — opening a declared
