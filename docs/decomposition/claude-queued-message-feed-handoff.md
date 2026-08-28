@@ -17,7 +17,7 @@ Agent Code is well above the size threshold, and this failure crosses three
 sources of truth:
 
 1. `queue-operation` reconstructs pending membership. Newer `remove` records
-   carry item content, while 355/1,558 recorded legacy removes omit it.
+   carry item content, while 355/1,572 recorded legacy removes omit it.
 2. Claude persists a consumed queued command as a durable
    `attachment/queued_command` with the missing identity and provenance.
 3. Agent Code's mapper and ledger discard that durable entry, so the renderer
@@ -62,12 +62,12 @@ The frozen rendering corpus contains 15/48 queue-bearing bundles and 28
 UUID and timestamp.
 
 A content-free structural census over the existing local Claude corpus found
-1,058 durable records across versions 2.1.100–2.1.247:
+1,072 durable records across versions 2.1.100–2.1.250:
 
-- 772 prompt and 286 task-notification;
-- 1,058/1,058 external-user, UUID-bearing, and timestamped;
-- 474 human-origin prompts, 296 legacy prompts without origin, and 2 peer/meta;
-- 1,044 string prompts and 14 block-array prompts.
+- 777 prompt and 295 task-notification;
+- 1,072/1,072 external-user, UUID-bearing, and timestamped;
+- 479 human-origin prompts, 296 legacy prompts without origin, and 2 peer/meta;
+- 1,058 string prompts and 14 block-array prompts.
 
 These aggregate counts are evidence, not a new fixture source. Stage 1 makes
 the existing measurement path reproduce the relevant split.
@@ -85,7 +85,7 @@ the existing measurement path reproduce the relevant split.
 
 ### Queue attribution also ignores the evidence
 
-`applyRemove` ignores `remove.content` even though 1,203/1,558 recorded removes
+`applyRemove` ignores `remove.content` even though 1,217/1,572 recorded removes
 carry it, then guesses a victim immediately. In an ambiguous mixed queue it
 prefers a notification over a prompt because guessing away user work is the
 more dangerous direction. The recorded
@@ -211,7 +211,7 @@ components. Provider facts precede visibility ownership.
 
 **Reality check**
 
-The current census predicate accepts 770 human/legacy prompts and rejects 286
+The current census predicate accepts 775 human/legacy prompts and rejects 295
 task notifications plus 2 peer/meta prompts.
 
 ### Stage 3 — give the durable entry one ledger and painter owner

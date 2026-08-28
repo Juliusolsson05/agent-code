@@ -14,7 +14,7 @@
 >
 > **2026-08-27 evidence correction:** the original investigation treated every
 > `remove` as content-free and every consumed attachment as non-durable. The
-> recorded corpus disproves both claims: 1,203/1,558 removes carry exact content,
+> recorded corpus disproves both claims: 1,217/1,572 removes carry exact content,
 > and older content-free removes are followed by durable
 > `attachment/queued_command` rows. The algorithm and reason names below are
 > updated to the corrected substrate; the priority/fallback analysis remains
@@ -41,10 +41,10 @@
 |---|---|---|
 | `queue-operation` records in Claude's JSONL | `messageQueueManager.logOperation` → `sessionStorage.insertQueueOperation` → `appendEntry` | **Trusted.** Verbatim, append-only, same file we tail. |
 | Op vocabulary | `enqueue`, `dequeue`, `remove`, `popAll` | **Trusted** — measured, §2. |
-| `enqueue` / `popAll` carry `content` | `logOperation(op, content)` | **Trusted. 2,181/2,181 enqueues carry content.** |
-| `remove` identity is versioned | recorded JSONL | **Trusted. 1,203/1,558 carry content; 355 legacy records do not.** |
+| `enqueue` / `popAll` carry `content` | `logOperation(op, content)` | **Trusted. 2,196/2,196 enqueues carry content.** |
+| `remove` identity is versioned | recorded JSONL | **Trusted. 1,217/1,572 carry content; 355 legacy records do not.** |
 | Legacy `remove` attachment | recorded JSONL | **Trusted. Claude persists `attachment/queued_command` with prompt, mode, UUID, and timestamp.** |
-| `<task-notification>` carries a correlation id | every emit site | **Trusted. 1,134/1,134 = 100%.** |
+| `<task-notification>` carries a correlation id | every emit site | **Trusted. 1,144/1,144 = 100%.** |
 | Committed `user` entries | the transcript | **Trusted** — the `dequeue` delivery channel, §3.3. |
 | `QueueStrip` | `TileLeaf/QueueStrip.tsx` | Trusted; not the bug. |
 
@@ -59,18 +59,18 @@
 
 ---
 
-## 2. Measurements (139 op-carrying transcripts of 875, `~/.claude/projects`)
+## 2. Measurements (143 op-carrying transcripts of 887, `~/.claude/projects`)
 
 Regenerate with `npx tsx --tsconfig tsconfig.web.json scripts/extract-queue-operations.mts --measure`.
 Counts drift upward as the local corpus grows; the method is what must reproduce.
 
 ```
-enqueue: 2181 records / 1783 runs (13.7% multi)  content present: 2181/2181 = 100%
-dequeue:  589 records /  552 runs (4.0% multi)
-remove:  1558 records / 1246 runs (13.7% multi)  content present: 1203/1558 = 77.2%
+enqueue: 2196 records / 1798 runs (13.6% multi)  content present: 2196/2196 = 100%
+dequeue:  590 records /  553 runs (4.0% multi)
+remove:  1572 records / 1260 runs (13.6% multi)  content present: 1217/1572 = 77.4%
 popAll:     1 record  /    1 run
-task-notifications carrying a correlation id: 1134/1134 = 100%
-queued_command attachments: 1058 (772 prompt, 286 task-notification; all UUID/timestamp bearing)
+task-notifications carrying a correlation id: 1144/1144 = 100%
+queued_command attachments: 1072 (777 prompt, 295 task-notification; all UUID/timestamp bearing)
 ```
 
 The earlier 33.9% figure counted later prefix collisions as if they proved a

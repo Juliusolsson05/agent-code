@@ -22,7 +22,7 @@ import type {
 // See docs/decomposition/claude-queue-reconciliation.md. The one-paragraph
 // version of WHY this module exists at all:
 //
-// Claude logs `{ operation, timestamp, content? }`. Every enqueue and 77.2% of
+// Claude logs `{ operation, timestamp, content? }`. Every enqueue and 77.4% of
 // recorded removes carry content; older removes and every dequeue omit it. So
 // some departures are self-identifying while legacy ones need the durable
 // evidence that follows. The previous implementation ignored remove content
@@ -138,7 +138,7 @@ function without(pending: PendingItem[], removed: readonly PendingItem[]): Pendi
 /**
  * Does this committed entry carry the identity of that pending item?
  *
- * Notifications match on a correlation id (present on 1134/1134 in the
+ * Notifications match on a correlation id (present on 1144/1144 in the
  * current corpus).
  * Prompts have no id, so they match on a normalized prefix — see
  * `normalizeForMatch` for why raw comparison loses ~28% of real deliveries.
