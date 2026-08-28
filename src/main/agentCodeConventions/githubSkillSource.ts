@@ -1,8 +1,6 @@
 import { createHash } from 'node:crypto'
 import { execFile } from 'node:child_process'
-import { lstat, mkdtemp, mkdir, readdir, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { dirname, join, posix } from 'node:path'
+import { dirname, posix } from 'node:path'
 import { parseDocument } from 'yaml'
 
 import type {
@@ -11,14 +9,13 @@ import type {
 } from '@shared/types/agentCodeConventions.js'
 import {
   AGENT_CODE_INSTALLED_SKILL_MAX_FILES,
-  AGENT_CODE_INSTALLED_SKILL_MAX_ACQUISITION_BYTES,
   AGENT_CODE_INSTALLED_SKILL_MAX_FILE_BYTES,
   AGENT_CODE_INSTALLED_SKILL_MAX_DISCOVERY_BYTES,
   AGENT_CODE_INSTALLED_SKILL_MAX_SKILL_MD_BYTES,
   AGENT_CODE_INSTALLED_SKILL_MAX_TOTAL_BYTES,
   AGENT_CODE_INSTALLED_SKILL_MAX_URL_LENGTH,
-  agentCodeInstalledSkillPathCollisionKey,
   compareAgentCodeInstalledSkillPaths,
+  findAgentCodeInstalledSkillPathCollision,
   isSafeAgentCodeInstalledSkillPath,
   type AgentCodeInstalledSkillCandidate,
 } from '@shared/types/agentCodeInstalledSkills.js'
@@ -61,6 +58,7 @@ type GitTreeEntry = {
   type: string
   object: string
   path: string
+  size?: number
 }
 
 type ResolvedGitHubSource = ParsedGitHubSkillUrl & {
@@ -80,109 +78,56 @@ type AdvertisedGitRef = {
 
 type GitRunner = (
   args: string[],
-  options: {
-    cwd?: string
-    maxBuffer?: number
-    binary?: boolean
-    environment: NodeJS.ProcessEnv
-    signal?: AbortSignal
-  },
+  options: { cwd?: string; maxBuffer?: number; binary?: boolean; environment: NodeJS.ProcessEnv },
 ) => Promise<string | Buffer>
+
+type HttpRunner = (url: string, maxBytes: number) => Promise<Buffer>
 
 export type GitHubSkillSourceOptions = {
   runGit?: GitRunner
-  maxAcquisitionBytes?: number
-  acquisitionPollIntervalMs?: number
+  fetchBytes?: HttpRunner
 }
 
 /**
- * Acquires public GitHub repositories without checking repository content out.
+ * Acquires selected public GitHub package bytes without cloning a repository.
  *
- * WHY a bare object database is the trust boundary: a normal checkout can
- * consult repository-controlled attributes, create symlinks, and hand package
- * paths to later filesystem code before validation. `ls-tree` plus `cat-file`
- * keeps every path and mode inert data until this module has bounded and
- * classified it.
+ * WHY ref resolution and content acquisition use separate transports: Git's
+ * public advertisement is the reliable source for slash-containing branch/tag
+ * identity, but even a bare clone lets repository-controlled packfiles cross a
+ * disk limit before a watcher can cancel it. GitHub's recursive tree response
+ * and raw commit URLs can instead be bounded in memory before any package byte
+ * becomes durable. Blob object IDs bind those two responses to the exact
+ * advertised commit that the user reviews.
  */
 export class GitHubSkillSource {
   private readonly runGit: GitRunner
-  private readonly maxAcquisitionBytes: number
-  private readonly acquisitionPollIntervalMs: number
+  private readonly fetchBytes: HttpRunner
 
   constructor(options: GitHubSkillSourceOptions = {}) {
     this.runGit = options.runGit ?? runGitProcess
-    this.maxAcquisitionBytes = options.maxAcquisitionBytes
-      ?? AGENT_CODE_INSTALLED_SKILL_MAX_ACQUISITION_BYTES
-    this.acquisitionPollIntervalMs = options.acquisitionPollIntervalMs ?? 50
+    this.fetchBytes = options.fetchBytes ?? fetchBoundedGitHubBytes
   }
 
   async discover(inputUrl: string): Promise<GitHubSkillDiscoveryPayload> {
     const parsed = parseGitHubSkillUrl(inputUrl)
-    const scratch = await mkdtemp(join(tmpdir(), 'agent-code-skill-source-'))
-    const bareRepository = join(scratch, 'repository.git')
-    const emptyGitConfig = join(scratch, 'empty.gitconfig')
-    const emptyHooks = join(scratch, 'hooks')
-    await writeFile(emptyGitConfig, '', { mode: 0o600 })
-    await mkdir(emptyHooks, { mode: 0o700 })
-    const environment = isolatedGitEnvironment(emptyGitConfig)
+    const environment = isolatedGitEnvironment()
 
     try {
-      return await withAcquisitionBudget({
-        root: scratch,
-        maxBytes: this.maxAcquisitionBytes,
-        pollIntervalMs: this.acquisitionPollIntervalMs,
-        operation: async signal => {
-          const resolved = await this.resolveSource(parsed, environment, signal)
-          await this.gitText([
-            '-c', 'credential.helper=',
-            '-c', `core.hooksPath=${emptyHooks}`,
-            '-c', 'protocol.allow=never',
-            '-c', 'protocol.https.allow=always',
-            // WHY partial clone matters even though every selected blob is bounded
-            // later: a repository can contain enormous unrelated history or files.
-            // Deferring blob transfer keeps the acquisition boundary proportional
-            // to the package the user is actually reviewing.
-            'clone', '--bare', '--filter=blob:none', '--depth=1', '--single-branch',
-            '--branch', resolved.requestedRef,
-            `${resolved.repositoryUrl}.git`, bareRepository,
-          ], { environment, signal })
-          const resolvedCommit = (await this.gitText([
-            '-C', bareRepository, 'rev-parse', 'HEAD^{commit}',
-          ], { environment, signal })).trim()
-          if (!/^[a-f0-9]{40}$/.test(resolvedCommit)) {
-            throw new GitHubSkillSourceError('network', 'GitHub returned an invalid commit identity.')
-          }
-          if (resolvedCommit !== resolved.requestedCommit) {
-            throw new GitHubSkillSourceError(
-              'validation',
-              'Git resolved a different branch or tag than the source selected for review.',
-            )
-          }
-          const treeText = await this.gitText([
-            '-C', bareRepository, 'ls-tree', '-r', '-z', '--full-tree', 'HEAD',
-          ], { environment, signal, maxBuffer: MAX_GIT_TEXT_BYTES })
-          const tree = parseGitTree(treeText)
-          return await this.discoverCandidates({
-            resolved,
-            resolvedCommit,
-            tree,
-            bareRepository,
-            environment,
-            signal,
-          })
-        },
+      const resolved = await this.resolveSource(parsed, environment)
+      const tree = await this.readGitHubTree(resolved)
+      return await this.discoverCandidates({
+        resolved,
+        resolvedCommit: resolved.requestedCommit,
+        tree,
       })
     } catch (error) {
       throw classifyGitHubSkillSourceError(error)
-    } finally {
-      await rm(scratch, { recursive: true, force: true }).catch(() => undefined)
     }
   }
 
   private async resolveSource(
     parsed: ParsedGitHubSkillUrl,
     environment: NodeJS.ProcessEnv,
-    signal: AbortSignal,
   ): Promise<ResolvedGitHubSource> {
     const remote = `${parsed.repositoryUrl}.git`
     const refs = await this.gitText([
@@ -190,7 +135,7 @@ export class GitHubSkillSource {
       '-c', 'protocol.allow=never',
       '-c', 'protocol.https.allow=always',
       'ls-remote', '--symref', remote, 'HEAD', 'refs/heads/*', 'refs/tags/*',
-    ], { environment, signal })
+    ], { environment })
     const advertised = parseAdvertisedRefs(refs)
     if (!advertised.defaultRef) {
       throw new GitHubSkillSourceError('not-found', 'The repository has no discoverable default branch.')
@@ -250,11 +195,8 @@ export class GitHubSkillSource {
     resolved: ResolvedGitHubSource
     resolvedCommit: string
     tree: GitTreeEntry[]
-    bareRepository: string
-    environment: NodeJS.ProcessEnv
-    signal: AbortSignal
   }): Promise<GitHubSkillDiscoveryPayload> {
-    const { resolved, resolvedCommit, tree, bareRepository, environment, signal } = input
+    const { resolved, resolvedCommit, tree } = input
     const requestedPrefix = resolved.requestedPath ? `${resolved.requestedPath}/` : ''
     const exactSkillPath = `${requestedPrefix}SKILL.md`
     const exact = tree.some(entry => entry.path === exactSkillPath)
@@ -302,9 +244,6 @@ export class GitHubSkillSource {
           resolved,
           resolvedCommit,
           tree,
-          bareRepository,
-          environment,
-          signal,
         })
       } catch (error) {
         const classified = classifyGitHubSkillSourceError(error)
@@ -349,11 +288,8 @@ export class GitHubSkillSource {
     resolved: ResolvedGitHubSource
     resolvedCommit: string
     tree: GitTreeEntry[]
-    bareRepository: string
-    environment: NodeJS.ProcessEnv
-    signal: AbortSignal
   }): Promise<StagedInstalledSkillCandidate> {
-    const { root, resolved, resolvedCommit, tree, bareRepository, environment, signal } = input
+    const { root, resolved, resolvedCommit, tree } = input
     const entries = tree
       .filter(entry => root === '' || isWithinRepositoryPath(entry.path, root))
       .map(entry => ({ ...entry, relativePath: root === '' ? entry.path : entry.path.slice(root.length + 1) }))
@@ -364,7 +300,6 @@ export class GitHubSkillSource {
         `A skill package must contain 1–${AGENT_CODE_INSTALLED_SKILL_MAX_FILES} files.`,
       )
     }
-    const portablePaths = new Map<string, string>()
     for (const entry of entries) {
       if (!isSafeRepositoryPath(entry.relativePath)) {
         throw new GitHubSkillSourceError('validation', `Unsafe package path: ${entry.relativePath}`)
@@ -381,28 +316,41 @@ export class GitHubSkillSource {
           `Unsupported Git file mode ${entry.mode} at ${entry.relativePath}.`,
         )
       }
-      const collisionKey = agentCodeInstalledSkillPathCollisionKey(entry.relativePath)
-      const collision = portablePaths.get(collisionKey)
-      if (collision) {
-        throw new GitHubSkillSourceError(
-          'validation',
-          `Package paths ${JSON.stringify(collision)} and ${JSON.stringify(entry.relativePath)} collide on a supported filesystem.`,
-        )
-      }
-      portablePaths.set(collisionKey, entry.relativePath)
+    }
+    const collision = findAgentCodeInstalledSkillPathCollision(
+      entries.map(entry => entry.relativePath),
+    )
+    if (collision) {
+      throw new GitHubSkillSourceError(
+        'validation',
+        `Package paths ${JSON.stringify(collision.left)} and ${JSON.stringify(collision.right)} collide on a supported filesystem.`,
+      )
     }
 
     const contents = new Map<string, Buffer>()
     const files: AgentCodeInstalledSkillFileRecord[] = []
     let totalBytes = 0
     for (const entry of entries) {
-      const content = await this.gitBuffer([
-        '-C', bareRepository, 'cat-file', 'blob', entry.object,
-      ], { environment, signal, maxBuffer: AGENT_CODE_INSTALLED_SKILL_MAX_FILE_BYTES + 1 })
+      if (entry.size !== undefined && entry.size > AGENT_CODE_INSTALLED_SKILL_MAX_FILE_BYTES) {
+        throw new GitHubSkillSourceError(
+          'validation',
+          `${entry.relativePath} exceeds the ${formatBytes(AGENT_CODE_INSTALLED_SKILL_MAX_FILE_BYTES)} per-file limit.`,
+        )
+      }
+      const content = await this.fetchBytes(
+        rawGitHubFileUrl(resolved, entry.path),
+        AGENT_CODE_INSTALLED_SKILL_MAX_FILE_BYTES + 1,
+      )
       if (content.byteLength > AGENT_CODE_INSTALLED_SKILL_MAX_FILE_BYTES) {
         throw new GitHubSkillSourceError(
           'validation',
           `${entry.relativePath} exceeds the ${formatBytes(AGENT_CODE_INSTALLED_SKILL_MAX_FILE_BYTES)} per-file limit.`,
+        )
+      }
+      if (gitBlobObjectId(content) !== entry.object) {
+        throw new GitHubSkillSourceError(
+          'network',
+          `GitHub returned bytes that do not match the reviewed commit tree (${entry.relativePath}).`,
         )
       }
       totalBytes += content.byteLength
@@ -492,31 +440,30 @@ export class GitHubSkillSource {
     return { candidate, snapshotDigest, contents }
   }
 
+  private async readGitHubTree(resolved: ResolvedGitHubSource): Promise<GitTreeEntry[]> {
+    // WHY the recursive tree comes from GitHub's bounded JSON endpoint rather
+    // than a local clone: Git writes packfiles directly to disk, so a polling
+    // watcher can only notice a quota after repository-controlled bytes have
+    // already crossed it. This response is rejected before more than the
+    // bounded buffer is retained, and selected blobs are fetched separately.
+    const treeUrl = `https://api.github.com/repos/${resolved.owner}/${resolved.repository}`
+      + `/git/trees/${resolved.requestedCommit}?recursive=1`
+    const bytes = await this.fetchBytes(treeUrl, MAX_GIT_TEXT_BYTES)
+    return parseGitHubTreeResponse(decodeUtf8(bytes, 'GitHub tree response'))
+  }
+
   private async gitText(
     args: string[],
-    options: { environment: NodeJS.ProcessEnv; maxBuffer?: number; signal: AbortSignal },
+    options: { environment: NodeJS.ProcessEnv; maxBuffer?: number },
   ): Promise<string> {
     const result = await this.runGit(args, {
       environment: options.environment,
-      signal: options.signal,
       maxBuffer: options.maxBuffer ?? MAX_GIT_TEXT_BYTES,
     })
     if (typeof result !== 'string') return decodeUtf8(result, 'Git output')
     return result
   }
 
-  private async gitBuffer(
-    args: string[],
-    options: { environment: NodeJS.ProcessEnv; maxBuffer: number; signal: AbortSignal },
-  ): Promise<Buffer> {
-    const result = await this.runGit(args, {
-      environment: options.environment,
-      signal: options.signal,
-      maxBuffer: options.maxBuffer,
-      binary: true,
-    })
-    return typeof result === 'string' ? Buffer.from(result) : result
-  }
 }
 
 export class GitHubSkillSourceError extends Error {
@@ -685,15 +632,47 @@ function parseAdvertisedRefs(text: string): {
   return { defaultRef, refs }
 }
 
-function parseGitTree(text: string): GitTreeEntry[] {
+function parseGitHubTreeResponse(text: string): GitTreeEntry[] {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    throw new GitHubSkillSourceError('network', 'GitHub returned an invalid repository tree.')
+  }
+  if (!isRecord(parsed) || parsed.truncated !== false || !Array.isArray(parsed.tree)) {
+    throw new GitHubSkillSourceError(
+      'validation',
+      'The GitHub repository tree is too large or incomplete. Use a smaller repository.',
+    )
+  }
   const entries: GitTreeEntry[] = []
-  for (const record of text.split('\0')) {
-    if (!record) continue
-    const match = /^(\d{6}) (blob|commit) ([a-f0-9]{40})\t(.+)$/.exec(record)
-    if (!match || !isSafeRepositoryPath(match[4]!)) {
+  const paths = new Set<string>()
+  for (const value of parsed.tree) {
+    if (!isRecord(value)
+      || typeof value.path !== 'string'
+      || !isSafeRepositoryPath(value.path)
+      || typeof value.mode !== 'string'
+      || typeof value.type !== 'string'
+      || typeof value.sha !== 'string'
+      || !/^[a-f0-9]{40}$/.test(value.sha)
+      || paths.has(value.path)) {
       throw new GitHubSkillSourceError('validation', 'The repository contains an unsafe Git tree entry.')
     }
-    entries.push({ mode: match[1]!, type: match[2]!, object: match[3]!, path: match[4]! })
+    paths.add(value.path)
+    if (value.type === 'tree' && value.mode === '040000') continue
+    if ((value.type !== 'blob' && value.type !== 'commit')
+      || !['100644', '100755', '120000', '160000'].includes(value.mode)
+      || (value.size !== undefined
+        && (!Number.isSafeInteger(value.size) || Number(value.size) < 0))) {
+      throw new GitHubSkillSourceError('validation', 'The repository contains an unsupported Git tree entry.')
+    }
+    entries.push({
+      mode: value.mode,
+      type: value.type,
+      object: value.sha,
+      path: value.path,
+      size: value.size === undefined ? undefined : Number(value.size),
+    })
   }
   return entries
 }
@@ -768,6 +747,18 @@ function sha256Buffer(value: Buffer): string {
   return createHash('sha256').update(value).digest('hex')
 }
 
+function gitBlobObjectId(value: Buffer): string {
+  return createHash('sha1')
+    .update(`blob ${value.byteLength}\0`)
+    .update(value)
+    .digest('hex')
+}
+
+function rawGitHubFileUrl(resolved: ResolvedGitHubSource, path: string): string {
+  return `https://raw.githubusercontent.com/${resolved.owner}/${resolved.repository}`
+    + `/${resolved.requestedCommit}/${encodeGitHubPath(path)}`
+}
+
 function decodeUtf8(value: Buffer, label: string): string {
   try {
     return new TextDecoder('utf-8', { fatal: true }).decode(value)
@@ -776,7 +767,7 @@ function decodeUtf8(value: Buffer, label: string): string {
   }
 }
 
-function isolatedGitEnvironment(emptyGitConfig: string): NodeJS.ProcessEnv {
+function isolatedGitEnvironment(): NodeJS.ProcessEnv {
   const environment: NodeJS.ProcessEnv = {}
   for (const key of [
     'PATH',
@@ -805,7 +796,7 @@ function isolatedGitEnvironment(emptyGitConfig: string): NodeJS.ProcessEnv {
   // credential, TLS, proxy, repository, and future Git control variables all
   // change the trust boundary. Copying process.env and trying to enumerate
   // every dangerous spelling would silently regress when Git adds another.
-  environment.GIT_CONFIG_GLOBAL = emptyGitConfig
+  environment.GIT_CONFIG_GLOBAL = process.platform === 'win32' ? 'NUL' : '/dev/null'
   environment.GIT_CONFIG_NOSYSTEM = '1'
   environment.GIT_TERMINAL_PROMPT = '0'
   environment.GCM_INTERACTIVE = 'never'
@@ -859,79 +850,71 @@ function safeErrorMessage(error: unknown): string {
   return error instanceof Error && error.message ? error.message : String(error)
 }
 
-async function withAcquisitionBudget<T>(input: {
-  root: string
-  maxBytes: number
-  pollIntervalMs: number
-  operation: (signal: AbortSignal) => Promise<T>
-}): Promise<T> {
-  const controller = new AbortController()
-  let stopped = false
-  let budgetFailure: GitHubSkillSourceError | null = null
-  const monitor = (async (): Promise<never> => {
-    while (!stopped) {
-      if (await directoryExceedsBudget(input.root, input.maxBytes)) {
-        budgetFailure = new GitHubSkillSourceError(
-          'validation',
-          `GitHub acquisition exceeded the ${formatBytes(input.maxBytes)} temporary storage limit. Use a smaller repository or directory.`,
-        )
-        controller.abort(budgetFailure)
-        throw budgetFailure
-      }
-      await new Promise(resolve => setTimeout(resolve, input.pollIntervalMs))
-    }
-    // The operation always settles the race before setting stopped. This
-    // branch exists only to make the monitor's non-winning type explicit.
-    return await new Promise<never>(() => undefined)
-  })()
-  const operation = input.operation(controller.signal).catch(error => {
-    if (budgetFailure) throw budgetFailure
-    throw error
-  })
-  try {
-    return await Promise.race([operation, monitor])
-  } finally {
-    stopped = true
-    controller.abort()
-    // Cleanup must not race an aborted Git process that is still writing into
-    // the scratch directory. The production runner honors AbortSignal; waiting
-    // for its rejection makes the storage bound and subsequent recursive temp
-    // cleanup describe one ordered lifecycle.
-    if (budgetFailure) await operation.catch(() => undefined)
-  }
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-async function directoryExceedsBudget(root: string, maxBytes: number): Promise<boolean> {
-  const pending = [root]
-  let total = 0
-  while (pending.length > 0) {
-    const directory = pending.pop()!
-    const entries = await readdir(directory, { withFileTypes: true }).catch(error => {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
-      throw error
+export async function fetchBoundedGitHubBytes(url: string, maxBytes: number): Promise<Buffer> {
+  const parsed = new URL(url)
+  if (parsed.protocol !== 'https:'
+    || !['api.github.com', 'raw.githubusercontent.com'].includes(parsed.hostname)) {
+    throw new GitHubSkillSourceError('validation', 'Agent Code refused an unexpected download host.')
+  }
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 60_000)
+  try {
+    const response = await fetch(parsed, {
+      headers: {
+        Accept: 'application/vnd.github+json',
+        'User-Agent': 'agent-code',
+        'X-GitHub-Api-Version': '2022-11-28',
+      },
+      redirect: 'error',
+      signal: controller.signal,
     })
-    for (const entry of entries) {
-      const path = join(directory, entry.name)
-      if (entry.isDirectory()) {
-        pending.push(path)
-        continue
-      }
-      const stat = await lstat(path).catch(error => {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
-        throw error
-      })
-      if (!stat) continue
-      if (stat.isSymbolicLink() || !stat.isFile()) {
+    if (response.status === 404) {
+      throw new GitHubSkillSourceError('not-found', 'The public GitHub repository content was not found.')
+    }
+    if (!response.ok) {
+      throw new GitHubSkillSourceError(
+        'network',
+        `GitHub content acquisition failed with HTTP ${response.status}.`,
+      )
+    }
+    const declared = Number(response.headers.get('content-length'))
+    if (Number.isFinite(declared) && declared > maxBytes) {
+      throw new GitHubSkillSourceError(
+        'validation',
+        `A GitHub response exceeds the ${formatBytes(maxBytes)} acquisition limit.`,
+      )
+    }
+    if (!response.body) throw new GitHubSkillSourceError('network', 'GitHub returned no response body.')
+    const reader = response.body.getReader()
+    const chunks: Buffer[] = []
+    let total = 0
+    while (true) {
+      const read = await reader.read()
+      if (read.done) break
+      total += read.value.byteLength
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => undefined)
         throw new GitHubSkillSourceError(
           'validation',
-          'Git created an unsupported object inside the acquisition directory.',
+          `A GitHub response exceeds the ${formatBytes(maxBytes)} acquisition limit.`,
         )
       }
-      total += stat.size
-      if (total > maxBytes) return true
+      chunks.push(Buffer.from(read.value))
     }
+    return Buffer.concat(chunks, total)
+  } catch (error) {
+    if (error instanceof GitHubSkillSourceError) throw error
+    if (controller.signal.aborted) {
+      throw new GitHubSkillSourceError('network', 'GitHub content acquisition timed out.')
+    }
+    throw new GitHubSkillSourceError('network', safeErrorMessage(error))
+  } finally {
+    clearTimeout(timeout)
   }
-  return false
 }
 
 function runGitProcess(
@@ -941,7 +924,6 @@ function runGitProcess(
     maxBuffer?: number
     binary?: boolean
     environment: NodeJS.ProcessEnv
-    signal?: AbortSignal
   },
 ): Promise<string | Buffer> {
   return new Promise((resolvePromise, reject) => {
@@ -950,7 +932,6 @@ function runGitProcess(
       env: options.environment,
       encoding: options.binary ? 'buffer' : 'utf8',
       maxBuffer: options.maxBuffer ?? MAX_GIT_TEXT_BYTES,
-      signal: options.signal,
       timeout: 60_000,
       windowsHide: true,
     }, (error, stdout, stderr) => {

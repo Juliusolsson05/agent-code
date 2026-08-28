@@ -91,7 +91,7 @@ function payload(candidate: StagedInstalledSkillCandidate): GitHubSkillDiscovery
   }
 }
 
-async function harness(options: { now?: () => Date } = {}) {
+async function harness(options: { now?: () => Date; snapshotMaxBytes?: number } = {}) {
   const root = await temporaryDirectory()
   const currentTarget = target(root)
   const discoveries: GitHubSkillDiscoveryPayload[] = []
@@ -110,6 +110,7 @@ async function harness(options: { now?: () => Date } = {}) {
   const service = new AgentCodeConventionsService({
     stateFilePath: join(root, 'state', 'conventions.json'),
     installedSkillSnapshotRoot: join(root, 'state', 'managed-skill-snapshots'),
+    installedSkillSnapshotMaxBytes: options.snapshotMaxBytes,
     homeDirectory: root,
     resolveTargets: async () => resolved,
     githubSkillSource,
@@ -228,6 +229,44 @@ describe('AgentCode installed skills service', () => {
     })
     expect(removed).toMatchObject({ ok: true, snapshot: { skills: [] } })
     await expect(stat(join(skillDirectory, 'SKILL.md'))).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('bounds retained source snapshots before admitting another package', async () => {
+    const { root, service, discoveries } = await harness({ snapshotMaxBytes: 30 })
+    const first = stagedPackage({
+      commit: 'a'.repeat(40),
+      files: [{ path: 'SKILL.md', content: 'first instructions' }],
+    })
+    const firstDiscovery = await discoverOne(service, discoveries, first)
+    const installed = await service.installGitHubSkills({
+      expectedRevision: 0,
+      discoveryId: firstDiscovery.discoveryId,
+      candidateIds: [first.candidate.candidateId],
+    })
+    if (!installed.ok) throw new Error('installation failed')
+    const skillId = installed.snapshot.skills[0]!.id
+    const removed = await service.deleteInstalledSkill({
+      expectedRevision: installed.snapshot.revision,
+      skillId,
+    })
+    expect(removed).toMatchObject({ ok: true, snapshot: { skills: [] } })
+    if (!removed.ok) throw new Error('removal failed')
+
+    const second = stagedPackage({
+      commit: 'b'.repeat(40),
+      files: [{ path: 'SKILL.md', content: 'second instructions' }],
+    })
+    const secondDiscovery = await discoverOne(service, discoveries, second)
+    expect(await service.installGitHubSkills({
+      expectedRevision: removed.snapshot.revision,
+      discoveryId: secondDiscovery.discoveryId,
+      candidateIds: [second.candidate.candidateId],
+    })).toMatchObject({ ok: false, code: 'io-error', message: expect.stringMatching(/safety limit/) })
+    expect((await service.getInstalledSkillsSnapshot()).skills).toEqual([])
+    await expect(stat(join(root, 'state', 'managed-skill-snapshots', first.snapshotDigest)))
+      .resolves.toMatchObject({})
+    await expect(stat(join(root, 'state', 'managed-skill-snapshots', second.snapshotDigest)))
+      .rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   it('retains ownership and retry authority when provider-file removal fails', async () => {

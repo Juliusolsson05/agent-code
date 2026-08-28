@@ -12,7 +12,8 @@ export const AGENT_CODE_INSTALLED_SKILL_MAX_FILES = 256
 export const AGENT_CODE_INSTALLED_SKILL_MAX_FILE_BYTES = 5 * 1024 * 1024
 export const AGENT_CODE_INSTALLED_SKILL_MAX_TOTAL_BYTES = 10 * 1024 * 1024
 export const AGENT_CODE_INSTALLED_SKILL_MAX_DISCOVERY_BYTES = 25 * 1024 * 1024
-export const AGENT_CODE_INSTALLED_SKILL_MAX_ACQUISITION_BYTES = 64 * 1024 * 1024
+export const AGENT_CODE_INSTALLED_SKILL_SNAPSHOT_ROOT_MAX_BYTES = 256 * 1024 * 1024
+export const AGENT_CODE_INSTALLED_SKILL_SNAPSHOT_ROOT_MAX_ENTRIES = 32_768
 export const AGENT_CODE_INSTALLED_SKILL_MAX_SKILL_MD_BYTES = 128 * 1024
 export const AGENT_CODE_INSTALLED_SKILL_DISCOVERY_TTL_MS = 15 * 60 * 1_000
 export const AGENT_CODE_INSTALLED_SKILL_MAX_STAGED_DISCOVERIES = 5
@@ -50,6 +51,34 @@ export function agentCodeInstalledSkillPathCollisionKey(value: string): string {
   // Unicode spellings and/or case. The importer promises portability, so two
   // paths that could name one provider file must be rejected before review.
   return value.split('/').map(segment => segment.normalize('NFC').toLowerCase()).join('/')
+}
+
+export function findAgentCodeInstalledSkillPathCollision(
+  paths: string[],
+): { left: string; right: string } | null {
+  // WHY this tracks both files and implied parent directories: exact-key
+  // checks miss the equally destructive `Foo` + `foo/bar.txt` case. Git can
+  // store both paths, but a case-insensitive provider filesystem would need
+  // the same normalized name to be a file and a directory at once.
+  const files = new Map<string, string>()
+  const parents = new Map<string, string>()
+  for (const path of paths) {
+    const key = agentCodeInstalledSkillPathCollisionKey(path)
+    const exact = files.get(key)
+    if (exact) return { left: exact, right: path }
+    const descendant = parents.get(key)
+    if (descendant) return { left: descendant, right: path }
+    const segments = key.split('/')
+    let parent = ''
+    for (const segment of segments.slice(0, -1)) {
+      parent = parent ? `${parent}/${segment}` : segment
+      const parentFile = files.get(parent)
+      if (parentFile) return { left: parentFile, right: path }
+      if (!parents.has(parent)) parents.set(parent, path)
+    }
+    files.set(key, path)
+  }
+  return null
 }
 
 export function compareAgentCodeInstalledSkillPaths(left: string, right: string): number {

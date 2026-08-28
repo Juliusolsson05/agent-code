@@ -16,8 +16,10 @@ import {
   AGENT_CODE_INSTALLED_SKILL_MAX_FILES,
   AGENT_CODE_INSTALLED_SKILL_MAX_FILE_BYTES,
   AGENT_CODE_INSTALLED_SKILL_MAX_TOTAL_BYTES,
-  agentCodeInstalledSkillPathCollisionKey,
+  AGENT_CODE_INSTALLED_SKILL_SNAPSHOT_ROOT_MAX_BYTES,
+  AGENT_CODE_INSTALLED_SKILL_SNAPSHOT_ROOT_MAX_ENTRIES,
   compareAgentCodeInstalledSkillPaths,
+  findAgentCodeInstalledSkillPathCollision,
   isSafeAgentCodeInstalledSkillPath,
 } from '@shared/types/agentCodeInstalledSkills.js'
 import type { StagedInstalledSkillCandidate } from './githubSkillSource.js'
@@ -31,7 +33,10 @@ import type { StagedInstalledSkillCandidate } from './githubSkillSource.js'
  * provider write capable of destroying the only reviewed package snapshot.
  */
 export class InstalledSkillPackageStore {
-  constructor(private readonly root: string) {}
+  constructor(
+    private readonly root: string,
+    private readonly maxRootBytes = AGENT_CODE_INSTALLED_SKILL_SNAPSHOT_ROOT_MAX_BYTES,
+  ) {}
 
   async store(candidate: StagedInstalledSkillCandidate): Promise<void> {
     assertDigest(candidate.snapshotDigest)
@@ -49,6 +54,17 @@ export class InstalledSkillPackageStore {
     if (existing) {
       await this.verify(candidate.snapshotDigest, candidate.candidate.files)
       return
+    }
+
+    const usage = await this.rootUsage()
+    const candidateEntries = packageEntryCount(candidate.candidate.files) + 1
+    if (usage.bytes + candidate.candidate.totalBytes > this.maxRootBytes
+      || usage.entries + candidateEntries
+        > AGENT_CODE_INSTALLED_SKILL_SNAPSHOT_ROOT_MAX_ENTRIES) {
+      throw new Error(
+        `Installed skill source storage reached its ${formatBytes(this.maxRootBytes)} safety limit. `
+        + `Quit Agent Code and remove old snapshots from ${this.root} before installing another package.`,
+      )
     }
 
     // WHY failed staging directories are allowed to remain: recursively
@@ -147,8 +163,10 @@ export class InstalledSkillPackageStore {
     // the directory inode validated above. Between lstat and rm, an external
     // change could replace the private root with a link and redirect recursive
     // deletion into unmanaged data. Content-addressed snapshots are inert; a
-    // little retained storage is the safe failure mode until deletion can be
-    // expressed relative to a securely opened root handle.
+    // retained storage is the safe failure mode until deletion can be
+    // expressed relative to a securely opened root handle. `store()` accounts
+    // for every retained snapshot and failed staging file before admitting new
+    // bytes, so choosing safety here cannot grow the app-owned root forever.
   }
 
   private snapshotDirectory(digest: string): string {
@@ -200,6 +218,39 @@ export class InstalledSkillPackageStore {
     }
   }
 
+  private async rootUsage(): Promise<{ bytes: number; entries: number }> {
+    await this.assertRootIsSafe()
+    let bytes = 0
+    let entries = 0
+    const visit = async (directory: string): Promise<void> => {
+      if (bytes > this.maxRootBytes
+        || entries > AGENT_CODE_INSTALLED_SKILL_SNAPSHOT_ROOT_MAX_ENTRIES) return
+      const directoryEntries = await readdir(directory, { withFileTypes: true })
+      for (const entry of directoryEntries) {
+        const path = join(directory, entry.name)
+        const stat = await lstat(path)
+        entries += 1
+        if (stat.isSymbolicLink()) {
+          throw new Error('Installed skill source storage contains a symbolic link')
+        }
+        if (stat.isDirectory()) {
+          await visit(path)
+        } else if (stat.isFile()) {
+          bytes += stat.size
+        } else {
+          throw new Error('Installed skill source storage contains a non-regular filesystem object')
+        }
+        // WHY filesystem entries are capped independently of bytes: repeated
+        // failed staging attempts could otherwise fill the private root with
+        // empty files/directories and make every future audit unbounded.
+        if (bytes > this.maxRootBytes
+          || entries > AGENT_CODE_INSTALLED_SKILL_SNAPSHOT_ROOT_MAX_ENTRIES) return
+      }
+    }
+    await visit(this.root)
+    return { bytes, entries }
+  }
+
   private async ensureContainedDirectory(directory: string, containmentRoot: string): Promise<void> {
     const fromRoot = relative(resolve(containmentRoot), resolve(directory))
     if (fromRoot.startsWith(`..${sep}`) || fromRoot === '..' || isAbsolute(fromRoot)) {
@@ -228,13 +279,10 @@ function validateManifest(files: AgentCodeInstalledSkillFileRecord[]): void {
   let total = 0
   let previous = ''
   const paths = new Set<string>()
-  const portablePaths = new Set<string>()
   for (const file of files) {
-    const portablePath = agentCodeInstalledSkillPathCollisionKey(file.path)
     if (!isSafeAgentCodeInstalledSkillPath(file.path)
       || (previous !== '' && compareAgentCodeInstalledSkillPaths(previous, file.path) >= 0)
-      || paths.has(file.path)
-      || portablePaths.has(portablePath)) {
+      || paths.has(file.path)) {
       throw new Error('Installed skill manifest paths are unsafe or unsorted')
     }
     if (!Number.isSafeInteger(file.bytes) || file.bytes < 0
@@ -245,9 +293,10 @@ function validateManifest(files: AgentCodeInstalledSkillFileRecord[]): void {
     total += file.bytes
     previous = file.path
     paths.add(file.path)
-    portablePaths.add(portablePath)
   }
-  if (!paths.has('SKILL.md') || total > AGENT_CODE_INSTALLED_SKILL_MAX_TOTAL_BYTES) {
+  if (!paths.has('SKILL.md')
+    || findAgentCodeInstalledSkillPathCollision([...paths]) !== null
+    || total > AGENT_CODE_INSTALLED_SKILL_MAX_TOTAL_BYTES) {
     throw new Error('Installed skill manifest is incomplete or oversized')
   }
 }
@@ -263,6 +312,19 @@ function validateContents(
       throw new Error(`Installed skill package content does not match its manifest: ${file.path}`)
     }
   }
+}
+
+function packageEntryCount(files: AgentCodeInstalledSkillFileRecord[]): number {
+  const directories = new Set<string>()
+  for (const file of files) {
+    const segments = file.path.split('/')
+    let parent = ''
+    for (const segment of segments.slice(0, -1)) {
+      parent = parent ? `${parent}/${segment}` : segment
+      directories.add(parent)
+    }
+  }
+  return files.length + directories.size
 }
 
 async function verifyDirectory(
@@ -340,6 +402,10 @@ function assertDigest(digest: string): void {
 
 function sha256(value: Buffer): string {
   return createHash('sha256').update(value).digest('hex')
+}
+
+function formatBytes(bytes: number): string {
+  return `${Math.ceil(bytes / (1024 * 1024))} MiB`
 }
 
 export function installedSkillManifestDigest(files: AgentCodeInstalledSkillFileRecord[]): string {

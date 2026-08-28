@@ -1,6 +1,6 @@
 # GitHub Skill Installation
 
-> Status: implemented; two-agent PR review completed and remediation verification is in progress for issue #664.
+> Status: implemented; two-agent PR review feedback is incorporated and the remediation is locally verified for issue #664.
 
 ## Goal
 
@@ -48,15 +48,14 @@ V1 accepts public GitHub HTTPS URLs only. Private repository authentication,
 arbitrary Git remotes, plugin installation, and unattended updates are
 deliberate non-goals.
 
-Main acquires a repository through `git` without a shell, checkout, hooks,
-submodules, credential helpers, or interactive authentication. It reads the
-resolved commit tree and blobs directly from a temporary bare clone. Avoiding a
-working-tree checkout is load-bearing: repository-controlled attributes and
-filesystem links must not turn preview into code execution or path traversal.
-The Git subprocess receives an OS-variable allowlist rather than ambient Git,
-credential, proxy, or TLS controls. A live temporary-storage monitor cancels
-Git when acquisition crosses 64 MiB, before repository metadata can grow
-without a disk boundary.
+Main uses a hardened `git ls-remote` without a shell to resolve advertised
+branch/tag identity, but never clones repository content. The Git subprocess
+receives an OS-variable allowlist rather than ambient Git, credential, proxy,
+or TLS controls. The resolved commit's recursive tree and only selected raw
+blobs are fetched from allowlisted GitHub HTTPS endpoints through hard streaming
+memory limits. Every blob must match the Git object ID advertised by the exact
+commit tree. Repository-controlled bytes therefore cannot enter temporary Git
+packfiles or a working tree before the user has reviewed a bounded package.
 
 GitHub `/tree/` URLs are resolved against advertised heads and tags, choosing
 the longest matching ref so branch names containing slashes remain
@@ -124,7 +123,9 @@ partial bytes. Reconciliation verifies stored bytes against the persisted
 manifest before using them. Unreferenced snapshots are deliberately retained:
 portable Node APIs cannot recursively delete relative to a securely opened
 root handle, so automatic GC could be redirected into unmanaged data by an
-ancestor replacement race.
+ancestor replacement race. The entire root, including failed staging remnants,
+is capped at 256 MiB and 32,768 filesystem entries before another package is
+admitted, so safe retention cannot grow without bound.
 
 ## One managed-skill authority
 
@@ -215,7 +216,7 @@ the immutable source snapshot or provider copy for inspection.
 ## Implementation sequence
 
 1. Add typed installed-skill contracts, schema-v3 records, and v1/v2 migration.
-2. Add pure GitHub URL/ref parsing plus safe bare-repository discovery.
+2. Add pure GitHub URL/ref parsing plus bounded GitHub tree/blob discovery.
 3. Add immutable package snapshot storage and manifest verification.
 4. Add package path safety, ownership policy, write-ahead materialization, and
    reconciliation inside the shared managed-skills authority.
@@ -235,9 +236,12 @@ shape:
 - GitHub root and directory URLs normalize correctly, including slash refs;
 - unsupported hosts, credentials, malformed URLs, and ambiguous refs fail
   without launching acquisition;
+- streamed GitHub responses stop at their hard memory boundary and raw bytes
+  must match the reviewed commit tree;
 - discovery finds a single package and multi-skill repositories;
 - invalid frontmatter, directory/name mismatch, duplicate names, symlinks,
-  gitlinks, traversal paths, and package limits are rejected;
+  gitlinks, traversal paths, file/directory portability collisions, and package
+  limits are rejected;
 - executable and provider-specific content is visible before confirmation;
 - confirmed installation pins the resolved commit and exact manifest;
 - staged discovery ids expire and cannot be reused after mutation;
@@ -249,6 +253,8 @@ shape:
 - external edits are preserved during update, disable, and removal;
 - failed removal retains the skill, materialization, and pending operation so a
   later retry still has deletion authority;
+- retained and failed-staging snapshots cannot exceed the aggregate private
+  storage boundary;
 - update review reports deterministic file changes and applying it updates
   provenance only after confirmation;
 - schema-v1/v2 migration preserves prior managed-skill ownership;

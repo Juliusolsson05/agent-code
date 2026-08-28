@@ -139,7 +139,7 @@ describe('Agent Code conventions persistence', () => {
     })
   })
 
-  it('accepts only installed records whose immutable manifest matches its snapshot digest', async () => {
+  it('accepts only installed records with a trustworthy portable manifest identity', async () => {
     const root = await temporaryDirectory()
     const statePath = join(root, 'conventions.json')
     const document = createEmptyAgentCodeConventionsDocument()
@@ -179,6 +179,26 @@ describe('Agent Code conventions persistence', () => {
     expect(await readAgentCodeConventionsState(statePath)).toEqual({ kind: 'ok', document })
 
     document.installedSkills['skill-1']!.snapshotDigest = 'c'.repeat(64)
+    await writeFile(statePath, JSON.stringify(document))
+    expect(await readAgentCodeConventionsState(statePath)).toMatchObject({
+      kind: 'recovery-required',
+      document: { installedSkills: {} },
+    })
+
+    const collidingFiles = [
+      { path: 'Foo', bytes: 1, sha256: 'd'.repeat(64), executable: false },
+      file,
+      { path: 'foo/bar.txt', bytes: 1, sha256: 'e'.repeat(64), executable: false },
+    ]
+    const collidingDigest = createHash('sha256')
+    for (const entry of collidingFiles) {
+      collidingDigest
+        .update(entry.path).update('\0')
+        .update(entry.sha256).update('\0')
+        .update(entry.executable ? '1' : '0').update('\0')
+    }
+    document.installedSkills['skill-1']!.files = collidingFiles
+    document.installedSkills['skill-1']!.snapshotDigest = collidingDigest.digest('hex')
     await writeFile(statePath, JSON.stringify(document))
     expect(await readAgentCodeConventionsState(statePath)).toMatchObject({
       kind: 'recovery-required',

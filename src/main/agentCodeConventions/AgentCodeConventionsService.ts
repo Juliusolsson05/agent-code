@@ -113,6 +113,7 @@ type ServiceOptions = {
   operationId?: () => string
   githubSkillSource?: Pick<GitHubSkillSource, 'discover'>
   installedSkillSnapshotRoot?: string
+  installedSkillSnapshotMaxBytes?: number
   pathSafety?: SkillPathSafety
 }
 
@@ -187,6 +188,7 @@ export class AgentCodeManagedSkillsService {
     this.githubSkillSource = options.githubSkillSource ?? new GitHubSkillSource()
     this.installedSkillPackageStore = new InstalledSkillPackageStore(
       options.installedSkillSnapshotRoot ?? AGENT_CODE_INSTALLED_SKILL_SNAPSHOTS_DIR,
+      options.installedSkillSnapshotMaxBytes,
     )
     this.installedSkillMaterializer = new InstalledSkillMaterializer(
       this.pathSafety,

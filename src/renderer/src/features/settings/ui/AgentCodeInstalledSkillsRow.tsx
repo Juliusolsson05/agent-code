@@ -276,7 +276,7 @@ function InstalledSkillsModal({
   ) => {
     const wording = abandonTargets
       ? `Leave ${abandonTargets.length} external package${abandonTargets.length === 1 ? '' : 's'} untouched and forget ${skill.name}?`
-      : `Remove ${skill.name}? Agent Code-owned provider files and its immutable source snapshot will be removed.`
+      : `Remove ${skill.name}? Agent Code-owned provider files will be removed. Its reviewed source snapshot may remain in Agent Code's bounded local cache.`
     if (!window.confirm(wording)) return
     setBusy(true)
     setError(null)

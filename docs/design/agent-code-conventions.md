@@ -30,8 +30,9 @@ manifest digest; it never embeds binary assets or accepts a renderer path. A
 snapshot becomes durable before desired state can reference it, and every read
 rechecks its bounded manifest and hashes. Unreferenced snapshots are retained
 because portable Node APIs cannot anchor recursive deletion to a securely
-opened directory handle; bounded inert storage is safer than allowing an
-ancestor replacement race to redirect cleanup into unmanaged data.
+opened directory handle; the complete root is capped at 256 MiB and 32,768
+filesystem entries. Bounded inert storage is safer than allowing an ancestor
+replacement race to redirect cleanup into unmanaged data.
 
 The persisted revision is a compare-and-swap token for renderer mutations.
 Deployment health is separate from desired `enabled` state: an enabled document
@@ -106,13 +107,15 @@ adopted or replaced from the Custom Skills UI.
 ## GitHub-installed packages
 
 Installed Skills accepts public `https://github.com/<owner>/<repo>` URLs and
-GitHub `/tree/<ref>/<path>` URLs. Discovery uses Git without a shell, working
-tree, hooks, submodules, credential prompts, ambient Git configuration, or
-non-HTTPS transports. Its subprocess environment is allowlisted so askpass,
-credential, proxy, and TLS overrides cannot cross into acquisition. A blobless
-bare clone exposes paths and modes as inert tree data, while an active 64 MiB
-scratch budget cancels Git before repository metadata can consume unbounded
-disk. Only bounded regular blobs belonging to a selected package are read.
+GitHub `/tree/<ref>/<path>` URLs. Discovery uses a hardened `git ls-remote`
+without a shell to resolve advertised branch/tag identity; its subprocess
+environment is allowlisted so askpass, credential, proxy, and TLS overrides
+cannot cross into acquisition. Repository content is never cloned. The exact
+commit's recursive tree and only selected raw blobs come from allowlisted
+GitHub HTTPS endpoints through streaming in-memory limits, and every raw blob
+must match the Git object ID in that commit tree before review. This keeps
+repository-controlled acquisition off disk until the bounded, reviewed package
+is admitted to the private snapshot store.
 Symbolic links, gitlinks, unsafe or cross-platform-colliding paths, oversized
 packages, malformed YAML anywhere in bounded frontmatter, non-string portable
 identity fields, and directory/name mismatches are rejected before installation.

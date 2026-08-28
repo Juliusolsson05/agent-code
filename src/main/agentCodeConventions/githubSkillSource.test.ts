@@ -1,8 +1,8 @@
-import { mkdir, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { createHash } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
+  fetchBoundedGitHubBytes,
   GitHubSkillSource,
   GitHubSkillSourceError,
   parseGitHubSkillUrl,
@@ -13,7 +13,86 @@ const COMMIT = 'a'.repeat(40)
 
 afterEach(() => {
   vi.unstubAllEnvs()
+  vi.unstubAllGlobals()
 })
+
+function gitBlobId(content: Buffer): string {
+  return createHash('sha1')
+    .update(`blob ${content.byteLength}\0`)
+    .update(content)
+    .digest('hex')
+}
+
+function githubFixture(input: {
+  owner?: string
+  repository?: string
+  commit?: string
+  files: Array<{
+    path: string
+    content: string | Buffer
+    mode?: '100644' | '100755' | '120000'
+    sha?: string
+  }>
+  gitlinks?: Array<{ path: string; sha?: string }>
+  truncated?: boolean
+}) {
+  const owner = input.owner ?? 'example'
+  const repository = input.repository ?? 'skills'
+  const commit = input.commit ?? COMMIT
+  const raw = new Map<string, Buffer>()
+  const tree: Array<{
+    path: string
+    mode: string
+    type: string
+    sha: string
+    size?: number
+  }> = input.files.map(file => {
+    const content = Buffer.isBuffer(file.content) ? file.content : Buffer.from(file.content)
+    raw.set(
+      `https://raw.githubusercontent.com/${owner}/${repository}/${commit}/${file.path
+        .split('/').map(encodeURIComponent).join('/')}`,
+      content,
+    )
+    return {
+      path: file.path,
+      mode: file.mode ?? '100644',
+      type: 'blob',
+      sha: file.sha ?? gitBlobId(content),
+      size: content.byteLength,
+    }
+  })
+  for (const gitlink of input.gitlinks ?? []) {
+    tree.push({
+      path: gitlink.path,
+      mode: '160000',
+      type: 'commit',
+      sha: gitlink.sha ?? 'b'.repeat(40),
+      size: undefined,
+    })
+  }
+  const treeUrl = `https://api.github.com/repos/${owner}/${repository}/git/trees/${commit}?recursive=1`
+  const fetchBytes = vi.fn(async (url: string, maxBytes: number) => {
+    if (url === treeUrl) {
+      return Buffer.from(JSON.stringify({
+        sha: commit,
+        tree,
+        truncated: input.truncated ?? false,
+      }))
+    }
+    const content = raw.get(url)
+    if (!content) throw new Error(`Unexpected GitHub request: ${url}`)
+    if (content.byteLength > maxBytes) throw new Error('fixture exceeded requested bound')
+    return content
+  })
+  return { fetchBytes, treeUrl }
+}
+
+function defaultAdvertisement(extra = ''): string {
+  return `ref: refs/heads/main\tHEAD
+${COMMIT}\tHEAD
+${COMMIT}\trefs/heads/main
+${extra}`
+}
 
 describe('GitHub skill source parsing', () => {
   it('accepts only bounded public GitHub repository and tree URLs', () => {
@@ -39,7 +118,7 @@ describe('GitHub skill source parsing', () => {
     }
   })
 
-  it('reads portable identity fields while leaving nested standard metadata inert', () => {
+  it('reads portable identity fields while rejecting malformed nested metadata', () => {
     expect(parseSkillFrontmatter(`---
 name: review-code
 description: >-
@@ -79,55 +158,38 @@ description: true
 })
 
 describe('GitHub skill discovery', () => {
-  it('resolves the longest slash-containing ref and discovers multiple inert packages', async () => {
-    const review = Buffer.from(`---
+  it('resolves the longest slash-containing ref and acquires only selected commit blobs', async () => {
+    const review = `---
 name: review-code
 description: Review pull requests when asked.
 ---
 # Review
-`)
-    const run = Buffer.from(`---
+`
+    const run = `---
 name: run-checks
 description: Run meaningful repository checks.
 allowed-tools: Bash
 ---
 # Checks
-`)
-    const script = Buffer.from('#!/bin/sh\nnpm test\n')
-    const blobs = new Map([
-      ['1'.repeat(40), review],
-      ['2'.repeat(40), run],
-      ['3'.repeat(40), script],
-    ])
-    const runGit = vi.fn(async (args: string[], options: { binary?: boolean }) => {
-      if (args.includes('ls-remote')) {
-        return `ref: refs/heads/main\tHEAD
-${COMMIT}\tHEAD
-${COMMIT}\trefs/heads/main
-${COMMIT}\trefs/heads/feature/skills
 `
-      }
-      if (args.includes('clone')) return ''
-      if (args.includes('rev-parse')) return `${COMMIT}\n`
-      if (args.includes('ls-tree')) {
-        return [
-          `100644 blob ${'1'.repeat(40)}\tskills/review-code/SKILL.md`,
-          `100644 blob ${'2'.repeat(40)}\tskills/run-checks/SKILL.md`,
-          `100755 blob ${'3'.repeat(40)}\tskills/run-checks/scripts/check.sh`,
-          '',
-        ].join('\0')
-      }
-      if (args.includes('cat-file')) {
-        const value = blobs.get(args.at(-1)!)!
-        return options.binary ? value : value.toString('utf8')
+    const fixture = githubFixture({
+      files: [
+        { path: 'skills/review-code/SKILL.md', content: review },
+        { path: 'skills/run-checks/SKILL.md', content: run },
+        { path: 'skills/run-checks/scripts/check.sh', content: '#!/bin/sh\nnpm test\n', mode: '100755' },
+      ],
+    })
+    const runGit = vi.fn(async (args: string[]) => {
+      if (args.includes('ls-remote')) {
+        return defaultAdvertisement(`${COMMIT}\trefs/heads/feature/skills\n`)
       }
       throw new Error(`Unexpected git invocation: ${args.join(' ')}`)
     })
-    const source = new GitHubSkillSource({ runGit })
 
-    const result = await source.discover(
-      'https://github.com/example/skills/tree/feature/skills/skills',
-    )
+    const result = await new GitHubSkillSource({
+      runGit,
+      fetchBytes: fixture.fetchBytes,
+    }).discover('https://github.com/example/skills/tree/feature/skills/skills')
 
     expect(result.requestedRef).toBe('feature/skills')
     expect(result.requestedRefType).toBe('branch')
@@ -138,11 +200,14 @@ ${COMMIT}\trefs/heads/feature/skills
     expect(result.candidates[1]!.candidate.warnings).toEqual([
       'Contains 1 executable file: scripts/check.sh.',
     ])
-    expect(runGit.mock.calls.some(([args]) => args.includes('checkout'))).toBe(false)
-    const clone = runGit.mock.calls.find(([args]) => args.includes('clone'))?.[0]
-    expect(clone).toContain('--bare')
-    expect(clone).toContain('--filter=blob:none')
-    expect(clone).not.toContain('--no-tags')
+    expect(runGit).toHaveBeenCalledTimes(1)
+    expect(runGit.mock.calls[0]![0]).toContain('ls-remote')
+    expect(fixture.fetchBytes.mock.calls[0]![0]).toBe(fixture.treeUrl)
+    expect(fixture.fetchBytes.mock.calls.slice(1).map(call => call[0])).toEqual([
+      `https://raw.githubusercontent.com/example/skills/${COMMIT}/skills/review-code/SKILL.md`,
+      `https://raw.githubusercontent.com/example/skills/${COMMIT}/skills/run-checks/SKILL.md`,
+      `https://raw.githubusercontent.com/example/skills/${COMMIT}/skills/run-checks/scripts/check.sh`,
+    ])
   })
 
   it('does not inherit credential, TLS, proxy, or Git-control environment state', async () => {
@@ -151,86 +216,76 @@ ${COMMIT}\trefs/heads/feature/skills
     vi.stubEnv('GIT_SSL_NO_VERIFY', '1')
     vi.stubEnv('GIT_DIR', '/tmp/redirected-repository')
     vi.stubEnv('HTTPS_PROXY', 'https://credential@proxy.invalid')
-    const skill = Buffer.from(`---
-name: review-code
-description: Review code.
----
-# Review
-`)
-    const environments: NodeJS.ProcessEnv[] = []
+    const fixture = githubFixture({
+      repository: 'review-code',
+      files: [{
+        path: 'SKILL.md',
+        content: '---\nname: review-code\ndescription: Review code.\n---\n# Review\n',
+      }],
+    })
+    let environment: NodeJS.ProcessEnv | undefined
     const runGit = vi.fn(async (
       args: string[],
-      options: { binary?: boolean; environment: NodeJS.ProcessEnv },
+      options: { environment: NodeJS.ProcessEnv },
     ) => {
-      environments.push(options.environment)
-      if (args.includes('ls-remote')) {
-        return `ref: refs/heads/main\tHEAD\n${COMMIT}\trefs/heads/main\n`
-      }
-      if (args.includes('clone')) return ''
-      if (args.includes('rev-parse')) return `${COMMIT}\n`
-      if (args.includes('ls-tree')) return `100644 blob ${'1'.repeat(40)}\tSKILL.md\0`
-      if (args.includes('cat-file')) return options.binary ? skill : skill.toString('utf8')
+      environment = options.environment
+      if (args.includes('ls-remote')) return defaultAdvertisement()
       throw new Error('unexpected git call')
     })
 
-    await new GitHubSkillSource({ runGit }).discover('https://github.com/example/review-code')
+    await new GitHubSkillSource({
+      runGit,
+      fetchBytes: fixture.fetchBytes,
+    }).discover('https://github.com/example/review-code')
 
-    expect(environments.length).toBeGreaterThan(0)
-    for (const environment of environments) {
-      expect(environment).not.toHaveProperty('GIT_ASKPASS')
-      expect(environment).not.toHaveProperty('SSH_ASKPASS')
-      expect(environment).not.toHaveProperty('GIT_SSL_NO_VERIFY')
-      expect(environment).not.toHaveProperty('GIT_DIR')
-      expect(environment).not.toHaveProperty('HTTPS_PROXY')
-      expect(environment.GIT_TERMINAL_PROMPT).toBe('0')
-      expect(environment.GIT_CONFIG_NOSYSTEM).toBe('1')
-    }
+    expect(environment).not.toHaveProperty('GIT_ASKPASS')
+    expect(environment).not.toHaveProperty('SSH_ASKPASS')
+    expect(environment).not.toHaveProperty('GIT_SSL_NO_VERIFY')
+    expect(environment).not.toHaveProperty('GIT_DIR')
+    expect(environment).not.toHaveProperty('HTTPS_PROXY')
+    expect(environment).toMatchObject({
+      GIT_TERMINAL_PROMPT: '0',
+      GIT_CONFIG_NOSYSTEM: '1',
+    })
   })
 
   it('rejects a tree URL whose short ref names both a branch and a tag', async () => {
+    const fetchBytes = vi.fn()
     const runGit = vi.fn(async (args: string[]) => {
       if (args.includes('ls-remote')) {
-        return `ref: refs/heads/main\tHEAD
-${COMMIT}\trefs/heads/main
-${'b'.repeat(40)}\trefs/heads/release/v1
-${'c'.repeat(40)}\trefs/tags/release/v1
-`
+        return defaultAdvertisement(
+          `${'b'.repeat(40)}\trefs/heads/release/v1\n${'c'.repeat(40)}\trefs/tags/release/v1\n`,
+        )
       }
       throw new Error(`Unexpected git invocation: ${args.join(' ')}`)
     })
 
-    await expect(new GitHubSkillSource({ runGit }).discover(
+    await expect(new GitHubSkillSource({ runGit, fetchBytes }).discover(
       'https://github.com/example/skills/tree/release/v1/review-code',
     )).rejects.toThrow(/both a branch and tag/)
-    expect(runGit.mock.calls.some(([args]) => args.includes('clone'))).toBe(false)
+    expect(fetchBytes).not.toHaveBeenCalled()
   })
 
   it('retains tag identity, including the peeled commit of an annotated tag', async () => {
-    const tagObject = 'b'.repeat(40)
-    const skill = Buffer.from(`---
-name: review-code
-description: Review code.
----
-# Review
-`)
-    const runGit = vi.fn(async (args: string[], options: { binary?: boolean }) => {
+    const fixture = githubFixture({
+      files: [{
+        path: 'review-code/SKILL.md',
+        content: '---\nname: review-code\ndescription: Review code.\n---\n# Review\n',
+      }],
+    })
+    const runGit = vi.fn(async (args: string[]) => {
       if (args.includes('ls-remote')) {
-        return `ref: refs/heads/main\tHEAD
-${'c'.repeat(40)}\trefs/heads/main
-${tagObject}\trefs/tags/release/v1
-${COMMIT}\trefs/tags/release/v1^{}
-`
+        return defaultAdvertisement(
+          `${'b'.repeat(40)}\trefs/tags/release/v1\n${COMMIT}\trefs/tags/release/v1^{}\n`,
+        )
       }
-      if (args.includes('clone')) return ''
-      if (args.includes('rev-parse')) return `${COMMIT}\n`
-      if (args.includes('ls-tree')) return `100644 blob ${'1'.repeat(40)}\treview-code/SKILL.md\0`
-      if (args.includes('cat-file')) return options.binary ? skill : skill.toString('utf8')
       throw new Error(`Unexpected git invocation: ${args.join(' ')}`)
     })
 
-    const result = await new GitHubSkillSource({ runGit }).discover(
-      'https://github.com/example/skills/tree/release/v1/review-code',
-    )
+    const result = await new GitHubSkillSource({
+      runGit,
+      fetchBytes: fixture.fetchBytes,
+    }).discover('https://github.com/example/skills/tree/release/v1/review-code')
 
     expect(result).toMatchObject({
       requestedRef: 'release/v1',
@@ -241,90 +296,90 @@ ${COMMIT}\trefs/tags/release/v1^{}
   })
 
   it.each([
-    ['Unicode-normalized', 'assets/é.txt', 'assets/é.txt'],
-    ['case-folded', 'assets/Rule.txt', 'assets/rule.txt'],
-  ])('rejects %s package paths before reading blobs', async (_label, left, right) => {
-    const runGit = vi.fn(async (args: string[]) => {
-      if (args.includes('ls-remote')) {
-        return `ref: refs/heads/main\tHEAD\n${COMMIT}\trefs/heads/main\n`
-      }
-      if (args.includes('clone')) return ''
-      if (args.includes('rev-parse')) return `${COMMIT}\n`
-      if (args.includes('ls-tree')) {
-        return [
-          `100644 blob ${'1'.repeat(40)}\treview-code/SKILL.md`,
-          `100644 blob ${'2'.repeat(40)}\treview-code/${left}`,
-          `100644 blob ${'3'.repeat(40)}\treview-code/${right}`,
-          '',
-        ].join('\0')
-      }
-      throw new Error(`Unexpected git invocation: ${args.join(' ')}`)
+    ['Unicode-normalized files', 'assets/é.txt', 'assets/é.txt'],
+    ['case-folded files', 'assets/Rule.txt', 'assets/rule.txt'],
+    ['case-folded file and directory', 'Foo', 'foo/bar.txt'],
+    ['Unicode-normalized file and directory', 'assets/é', 'assets/é/child.txt'],
+  ])('rejects %s before reading package blobs', async (_label, left, right) => {
+    const fixture = githubFixture({
+      files: [
+        {
+          path: 'review-code/SKILL.md',
+          content: '---\nname: review-code\ndescription: Review code.\n---\n',
+        },
+        { path: `review-code/${left}`, content: 'left' },
+        { path: `review-code/${right}`, content: 'right' },
+      ],
     })
-
-    await expect(new GitHubSkillSource({ runGit }).discover(
-      'https://github.com/example/skills',
-    )).rejects.toThrow(/collide on a supported filesystem/)
-    expect(runGit.mock.calls.some(([args]) => args.includes('cat-file'))).toBe(false)
-  })
-
-  it('cancels acquisition while Git-controlled temporary storage crosses its budget', async () => {
-    let cloneObservedAbort = false
-    const runGit = vi.fn(async (args: string[], options: { signal?: AbortSignal }) => {
-      if (args.includes('ls-remote')) {
-        return `ref: refs/heads/main\tHEAD\n${COMMIT}\trefs/heads/main\n`
-      }
-      if (args.includes('clone')) {
-        const repository = args.at(-1)!
-        await mkdir(repository, { recursive: true })
-        for (let index = 0; index < 100; index += 1) {
-          if (options.signal?.aborted) {
-            cloneObservedAbort = true
-            throw options.signal.reason
-          }
-          await writeFile(join(repository, `pack-${index}`), Buffer.alloc(512))
-          await new Promise(resolve => setTimeout(resolve, 2))
-        }
-        throw new Error('acquisition was not cancelled')
-      }
-      throw new Error(`Unexpected git invocation: ${args.join(' ')}`)
-    })
+    const runGit = vi.fn(async () => defaultAdvertisement())
 
     await expect(new GitHubSkillSource({
       runGit,
-      maxAcquisitionBytes: 1_024,
-      acquisitionPollIntervalMs: 1,
-    }).discover('https://github.com/example/review-code'))
-      .rejects.toThrow(/temporary storage limit/)
-    expect(cloneObservedAbort).toBe(true)
+      fetchBytes: fixture.fetchBytes,
+    }).discover('https://github.com/example/skills')).rejects
+      .toThrow(/collide on a supported filesystem/)
+    expect(fixture.fetchBytes).toHaveBeenCalledTimes(1)
   })
 
   it('rejects links inside the selected package before reading their blobs', async () => {
-    const skill = Buffer.from(`---
-name: review-code
-description: Review code.
----
-# Review
-`)
-    const runGit = vi.fn(async (args: string[], options: { binary?: boolean }) => {
-      if (args.includes('ls-remote')) {
-        return `ref: refs/heads/main\tHEAD\n${COMMIT}\trefs/heads/main\n`
-      }
-      if (args.includes('clone')) return ''
-      if (args.includes('rev-parse')) return `${COMMIT}\n`
-      if (args.includes('ls-tree')) {
-        return [
-          `100644 blob ${'1'.repeat(40)}\tSKILL.md`,
-          `120000 blob ${'2'.repeat(40)}\tsecret-link`,
-          '',
-        ].join('\0')
-      }
-      if (args.includes('cat-file')) return options.binary ? skill : skill.toString('utf8')
-      throw new Error('unexpected git call')
+    const fixture = githubFixture({
+      repository: 'review-code',
+      files: [
+        {
+          path: 'SKILL.md',
+          content: '---\nname: review-code\ndescription: Review code.\n---\n# Review\n',
+        },
+        { path: 'secret-link', content: '../../secret', mode: '120000' },
+      ],
     })
 
-    await expect(new GitHubSkillSource({ runGit }).discover(
-      'https://github.com/example/review-code',
-    )).rejects.toThrow(/Links and submodules/)
-    expect(runGit.mock.calls.filter(([args]) => args.includes('cat-file'))).toHaveLength(0)
+    await expect(new GitHubSkillSource({
+      runGit: vi.fn(async () => defaultAdvertisement()),
+      fetchBytes: fixture.fetchBytes,
+    }).discover('https://github.com/example/review-code')).rejects
+      .toThrow(/Links and submodules/)
+    expect(fixture.fetchBytes).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects raw bytes that do not match the reviewed commit tree', async () => {
+    const fixture = githubFixture({
+      repository: 'review-code',
+      files: [{
+        path: 'SKILL.md',
+        content: '---\nname: review-code\ndescription: Review code.\n---\n',
+        sha: 'b'.repeat(40),
+      }],
+    })
+
+    await expect(new GitHubSkillSource({
+      runGit: vi.fn(async () => defaultAdvertisement()),
+      fetchBytes: fixture.fetchBytes,
+    }).discover('https://github.com/example/review-code')).rejects
+      .toThrow(/do not match the reviewed commit tree/)
+  })
+
+  it('rejects a truncated GitHub tree instead of reviewing an incomplete repository', async () => {
+    const fixture = githubFixture({ files: [], truncated: true })
+    await expect(new GitHubSkillSource({
+      runGit: vi.fn(async () => defaultAdvertisement()),
+      fetchBytes: fixture.fetchBytes,
+    }).discover('https://github.com/example/skills')).rejects
+      .toThrow(/too large or incomplete/)
+  })
+})
+
+describe('bounded GitHub transport', () => {
+  it('stops reading a response as soon as its streamed body crosses the hard limit', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(new Uint8Array(1_025))
+        controller.close()
+      },
+    }), { status: 200 })))
+
+    await expect(fetchBoundedGitHubBytes(
+      'https://api.github.com/repos/example/skills/git/trees/main',
+      1_024,
+    )).rejects.toThrow(/acquisition limit/)
   })
 })
