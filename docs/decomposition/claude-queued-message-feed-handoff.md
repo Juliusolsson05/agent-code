@@ -275,6 +275,40 @@ membership still needs a pure identity-free-operation/evidence join.
 Settlement order comes from recorded evidence. If watcher batch boundaries are
 not proven, retain conservative bounded debt rather than invent timing.
 
+### Stage 4b — preserve invisible reconciliation state across watcher bursts
+
+**Produces**
+
+- A recorded three-burst regression using the June enqueue, legacy remove, and
+  queued-command attachment without changing their raw order or contents.
+- Session-owned queue debt that commits even when a burst changes no visible
+  runtime field and therefore correctly returns the existing React runtime.
+
+**Verified by**
+
+- The recorded enqueue arrives first and makes the queue visible.
+- The recorded content-free remove arrives alone while `awaitingAssistant` is
+  already true; visible pending membership remains unchanged, but its debt
+  survives the runtime no-change return.
+- The recorded attachment arrives in a third burst, consumes that debt, removes
+  the queue item, and appends the durable user row exactly once.
+- The ordinary no-change path remains reference-stable and causes no extra
+  runtime render solely to persist internal queue attribution.
+
+**Why separate**
+
+Stage 4 proved the pure reconciler retains debt. It did not prove that the
+single IPC consumer commits queue-only state when React-visible fields are
+unchanged. Combining those concerns hid the ownership boundary: the pure state
+was correct, but its session-lifetime owner discarded it before the next burst.
+
+**Reality check**
+
+The exact June records already establish enqueue → remove → attachment. A
+watcher is allowed to split adjacent JSONL lines at any boundary, so the test
+changes only delivery batching—not provider data. No new recorder, synthetic
+queue record, prompt, UUID, or timestamp is introduced.
+
 ### Stage 5 — parity, heap verification, and delivery
 
 **Produces**
@@ -345,9 +379,9 @@ Forbidden directions:
 
 ## Unknowns
 
-1. **Live batch boundary:** bundles preserve raw order, not necessarily watcher
-   delivery batches. Legacy settlement therefore survives bursts and falls
-   back only at a later operation or idle boundary.
+1. **Live batch boundary:** bundles preserve raw order, not watcher delivery
+   batches. Stage 4b therefore requires every internal queue-state transition
+   to survive an otherwise React-visible no-op burst.
 2. **`source_uuid`:** semantics/coverage are not strong enough to require it.
 3. **Block arrays:** 14 recorded human prompts need supported text/image
    presentation without unproven flattening.
@@ -394,6 +428,8 @@ Red-first contracts:
 7. Remove without attachment follows bounded fallback.
 8. Live, cold history, older page, preview, and remote map identically.
 9. Trimming reclaims admitted attachments and pagination reloads them.
+10. The recorded June enqueue, legacy remove, and attachment still hand off
+    correctly when each arrives in its own watcher burst.
 
 If any semantic case lacks recorded evidence, stop at Stage 1 and use the
 existing collection/redaction path. Do not fill the gap with a plausible
