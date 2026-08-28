@@ -56,9 +56,10 @@ blobs are fetched from allowlisted GitHub HTTPS endpoints through hard streaming
 memory limits. Every blob must match the Git object ID advertised by the exact
 commit tree. Repository-controlled bytes therefore cannot enter temporary Git
 packfiles or a working tree before the user has reviewed a bounded package. A
-single fatal discovery-wide package-content budget includes candidates later
-rejected by validation, so hostile collections cannot multiply their transfer
-allowance through skippable invalid packages.
+single fatal discovery-wide package-content budget reserves tree-advertised
+blob sizes before transport and includes candidates later rejected by
+validation or transport, so hostile collections cannot multiply their transfer
+allowance through skippable failures.
 
 GitHub `/tree/` URLs are resolved against advertised heads and tags, choosing
 the longest matching ref so branch names containing slashes remain
@@ -241,8 +242,8 @@ shape:
   without launching acquisition;
 - streamed GitHub responses stop at their hard memory boundary and raw bytes
   must match the reviewed commit tree;
-- rejected candidates consume the same fatal acquisition budget as accepted
-  candidates;
+- rejected and transport-failed candidates consume the same fatal acquisition
+  budget as accepted candidates;
 - discovery finds a single package and multi-skill repositories;
 - invalid frontmatter, directory/name mismatch, duplicate names, symlinks,
   gitlinks, traversal paths, file/directory portability collisions, and package

@@ -116,8 +116,9 @@ GitHub HTTPS endpoints through streaming in-memory limits, and every raw blob
 must match the Git object ID in that commit tree before review. This keeps
 repository-controlled acquisition off disk until the bounded, reviewed package
 is admitted to the private snapshot store. One discovery-wide content budget
-charges both accepted and rejected candidate packages; an invalid collection
-cannot multiply its transfer allowance by failing validation late.
+reserves each tree-advertised blob before transport and charges accepted,
+rejected, and transport-failed candidates; an invalid collection cannot
+multiply its allowance by failing late.
 Symbolic links, gitlinks, unsafe or cross-platform-colliding paths, oversized
 packages, malformed YAML anywhere in bounded frontmatter, non-string portable
 identity fields, and directory/name mismatches are rejected before installation.

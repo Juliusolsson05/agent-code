@@ -354,27 +354,29 @@ export class GitHubSkillSource {
       if (entry.size === undefined || entry.size > remainingDiscoveryBytes) {
         throw new GitHubSkillDiscoveryLimitError(acquisitionBudget.maxBytes)
       }
-      const responseLimit = Math.min(
-        AGENT_CODE_INSTALLED_SKILL_MAX_FILE_BYTES + 1,
-        remainingDiscoveryBytes,
-      )
+      // WHY capacity is reserved before transport and never refunded: a
+      // response may deliver its body and then fail on the stream trailer or
+      // connection. Charging only resolved fetches would let the collection
+      // loop skip that candidate and spend the same allowance again. GitHub's
+      // commit tree supplies the exact blob size, and object-id verification
+      // below proves successful bytes against that same authority.
+      acquisitionBudget.usedBytes += entry.size
+      const responseLimit = entry.size
       let content: Buffer
       try {
         content = await this.fetchBytes(rawGitHubFileUrl(resolved, entry.path), responseLimit)
       } catch (error) {
-        // A narrowed per-response limit is the enforcement edge of the shared
-        // discovery budget. Preserve that fatal meaning rather than letting the
-        // outer collection loop misclassify the response as one skippable file.
-        if (responseLimit < AGENT_CODE_INSTALLED_SKILL_MAX_FILE_BYTES + 1
-          && error instanceof GitHubSkillSourceError
+        // Exceeding the tree-authoritative reservation is fatal. Preserve that
+        // meaning rather than letting the collection loop downgrade it to one
+        // skippable candidate notice.
+        if (error instanceof GitHubSkillSourceError
           && error.code === 'validation'
           && error.message.includes('acquisition limit')) {
           throw new GitHubSkillDiscoveryLimitError(acquisitionBudget.maxBytes)
         }
         throw error
       }
-      acquisitionBudget.usedBytes += content.byteLength
-      if (acquisitionBudget.usedBytes > acquisitionBudget.maxBytes) {
+      if (content.byteLength > entry.size) {
         throw new GitHubSkillDiscoveryLimitError(acquisitionBudget.maxBytes)
       }
       if (content.byteLength > AGENT_CODE_INSTALLED_SKILL_MAX_FILE_BYTES) {

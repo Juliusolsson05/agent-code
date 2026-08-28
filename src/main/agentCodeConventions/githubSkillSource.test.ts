@@ -241,6 +241,49 @@ description: This package name does not match its directory.
     ])
   })
 
+  it('does not refund reserved acquisition capacity when raw transport fails', async () => {
+    const first = `---
+name: first
+description: First package.
+---
+# First
+`
+    const second = `---
+name: second
+description: Second package.
+---
+# Second
+`
+    const fixture = githubFixture({
+      files: [
+        { path: 'skills/first/SKILL.md', content: first },
+        { path: 'skills/second/SKILL.md', content: second },
+      ],
+    })
+    const firstRawUrl = `https://raw.githubusercontent.com/example/skills/${COMMIT}/skills/first/SKILL.md`
+    const fetchBytes = vi.fn(async (url: string, maxBytes: number) => {
+      if (url === fixture.treeUrl) return await fixture.fetchBytes(url, maxBytes)
+      if (url === firstRawUrl) {
+        throw new GitHubSkillSourceError(
+          'network',
+          'The raw response failed after delivering its advertised body.',
+        )
+      }
+      throw new Error(`Unexpected request after failed reserved transport: ${url}`)
+    })
+
+    await expect(new GitHubSkillSource({
+      runGit: vi.fn(async () => defaultAdvertisement()),
+      fetchBytes,
+      maxDiscoveryBytes: Buffer.byteLength(first),
+    }).discover('https://github.com/example/skills')).rejects
+      .toThrow(/discovery exceeds/)
+    expect(fetchBytes.mock.calls.map(call => call[0])).toEqual([
+      fixture.treeUrl,
+      firstRawUrl,
+    ])
+  })
+
   it('does not inherit credential, TLS, proxy, or Git-control environment state', async () => {
     vi.stubEnv('GIT_ASKPASS', '/tmp/credential-program')
     vi.stubEnv('SSH_ASKPASS', '/tmp/ssh-credential-program')
