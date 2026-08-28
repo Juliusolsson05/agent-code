@@ -715,13 +715,34 @@ body,
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Make sure default browser rounding on form elements is gone too. */
-input,
-button,
-textarea,
-select {
-  border-radius: 0;
-  font-family: inherit;
+/* Kill the UA's default rounding on form controls, and inherit the app font.
+ *
+ * WHY THIS IS INSIDE `@layer base` AND MUST STAY THERE: `@import "tailwindcss"`
+ * declares `@layer theme, base, components, utilities` and emits every utility
+ * into `@layer utilities`. In the cascade, an UNLAYERED normal declaration beats
+ * a declaration in ANY layer, regardless of specificity — so while this block
+ * sat unlayered it silently won against `.rounded-control` on every element it
+ * matched. The effect was total and invisible: `<button>`, `<input>`,
+ * `<textarea>` and `<select>` rendered square app-wide no matter what class they
+ * carried, including the shared Button/Input/Textarea primitives, while the
+ * <div>/<span> cohort rounded normally. That is ~140 of the ~334 classified
+ * surfaces, and it is why the corner system looked half-applied rather than
+ * wrong: the whole `control` tier was dead code at every call site on a form tag.
+ *
+ * Inside `@layer base` the rule still does its actual job — UA stylesheet
+ * declarations lose to every author layer — but a `rounded-*` utility can now
+ * override it, which is the entire point of the token system.
+ *
+ * If you ever need to un-round a form control, use `rounded-none` at the call
+ * site. Do not move this block back out of the layer to do it. */
+@layer base {
+  input,
+  button,
+  textarea,
+  select {
+    border-radius: 0;
+    font-family: inherit;
+  }
 }
 
 /* ---------- Prose (react-markdown output) ---------- */

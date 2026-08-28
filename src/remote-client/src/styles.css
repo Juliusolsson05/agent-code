@@ -4,11 +4,18 @@
  *
  * THE AESTHETIC CONTRACT (same hard rules as @renderer/styles.css, which
  * this file must never fight):
- *   1. Radius marks detachment, and the phone shell has nothing detached:
- *      topbar, picker, composer, and condition bar are all structure, so
- *      they stay square at every Corners setting. (The connection dot is
- *      the ONE circle, mirroring the app's radius-full streaming-dot
- *      exception — circles are geometry, not corner policy.)
+ *   1. Radius marks detachment, and the phone SHELL has nothing detached:
+ *      topbar, picker, and composer are all structure, so they stay square at
+ *      every Corners setting. (The connection dot is the ONE circle, mirroring
+ *      the app's radius-full streaming-dot exception — circles are geometry,
+ *      not corner policy.)
+ *
+ *      The condition bar is NOT shell and is not covered by that claim: it
+ *      mounts the real desktop ConditionOutlet, so a Claude trust/permission
+ *      prompt renders the desktop components' own `rounded-slab` <pre> blocks
+ *      and those DO follow the user's Corners setting on the phone. That is
+ *      correct — a code plate is a plate on either device — but do not read
+ *      the rule above as "nothing in this view ever rounds".
  *
  *      The feed itself renders with the DESKTOP components, so its chips
  *      and code slabs pick up --theme-radius-* from @renderer/styles.css
@@ -50,9 +57,15 @@ html, body, #root {
   touch-action: manipulation;
 }
 
-button, input, textarea {
-  font-family: inherit;
-  border-radius: 0;
+/* Same cascade trap as @renderer/styles.css: this file is imported AFTER
+ * `@import "tailwindcss"`, so an unlayered `border-radius: 0` here outranks
+ * every `@layer utilities` radius class in the desktop feed components the
+ * phone mounts. Keep it layered. */
+@layer base {
+  button, input, textarea {
+    font-family: inherit;
+    border-radius: 0;
+  }
 }
 
 .app { display: flex; flex-direction: column; height: 100%; }
