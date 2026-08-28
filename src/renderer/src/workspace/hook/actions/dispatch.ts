@@ -2,7 +2,6 @@ import { useCallback, useRef } from 'react'
 
 import type { DispatchModeState, SessionId, SessionMeta, TabId } from '@renderer/workspace/types'
 import { collectLeaves, wrapRootWithLeaf } from '@renderer/workspace/tile-tree/treeOps'
-import { findTerminalSessionInTab } from '@renderer/workspace/dispatch/dispatchSelectors'
 import {
   buildAutoLanes,
   clampTileCount,
@@ -384,13 +383,4 @@ export function useDispatchActions(
     setTiledFocusedLane,
     setTiledRatios,
   }
-}
-
-function findTerminalInLatestTab(
-  refs: WorkspaceRefs,
-  tabId: TabId,
-): SessionId | null {
-  const latest = refs.stateRef.current
-  const tab = latest.tabs.find(item => item.id === tabId)
-  return findTerminalSessionInTab(tab ?? null, latest)
 }

@@ -1,7 +1,6 @@
 import type { SessionId, SessionKind, Tab, TabId, WorkspaceState } from '@renderer/workspace/types'
 import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 import { tabIndexLabel } from '@renderer/workspace/tile-tree/paneLabelFormat'
-import { resolveTabSessions } from '@renderer/workspace/queries'
 
 export type DispatchAgentRow = {
   key: string
@@ -221,21 +220,6 @@ export function selectVisibleDispatchRow(
   return rows[0] ?? null
 }
 
-export function findTerminalSessionInTab(
-  tab: Tab | null,
-  state: WorkspaceState,
-): SessionId | null {
-  if (!tab) return null
-  // WHY this uses the canonical tab-session resolver instead of scanning
-  // `tab.root`: the project terminal is allowed to be detached into Dispatch
-  // now. A grid-only scan makes the terminal disappear from the "does this tab
-  // already have a project terminal?" question, and the DispatchLayout effect
-  // will spawn a replacement PTY even though the original terminal is merely
-  // parked in `detachedSessions`. The terminal ownership question is "owned by
-  // this tab", not "currently mounted in the tile tree".
-  return resolveTabSessions(state, tab.id).find(id => state.sessions[id]?.kind === 'terminal') ?? null
-}
-
 /**
  * Build the rows that render in the "Pinned" section at the top of
  * DispatchAgentList. Order matches `state.pinnedSessionIds` exactly
@@ -390,45 +374,6 @@ export function resolveDispatchSpawnTarget(state: WorkspaceState): DispatchSpawn
     return { tabId: focusTab, cwdSessionId: dm.focusedSessionId ?? null, laneIndex: null }
   }
   return { tabId: state.activeTabId, cwdSessionId: null, laneIndex: null }
-}
-
-export type DispatchTerminalSplitTarget = DispatchSpawnTarget & {
-  splitAnchorSessionId: SessionId | null
-}
-
-export function resolveDispatchTerminalSplitTarget(
-  state: WorkspaceState,
-): DispatchTerminalSplitTarget {
-  const target = resolveDispatchSpawnTarget(state)
-  const tab = state.tabs.find(item => item.id === target.tabId)
-  if (!tab) return { ...target, splitAnchorSessionId: null }
-
-  const leafIds = collectLeaves(tab.root)
-  const focusedLeafId = leafIds.includes(tab.focusedSessionId)
-    ? tab.focusedSessionId
-    : null
-  const targetLeafId =
-    target.cwdSessionId && leafIds.includes(target.cwdSessionId)
-      ? target.cwdSessionId
-      : null
-
-  // WHY terminal splits need one extra resolution step beyond
-  // resolveDispatchSpawnTarget:
-  //
-  // Agents created from Dispatch are detached rows, so the focused lane/session
-  // can be both the cwd source and the visual placement target. A terminal split
-  // is different: terminals are still inserted into the owning tab's GRID tree
-  // (even when the command is fired from Dispatch) because terminal lifetime,
-  // tmux recovery, and normal pane persistence are leaf-based. The focused row
-  // can be a detached agent, so it may have the right cwd/project but no grid
-  // leaf to split beside. Keep cwd inheritance on target.cwdSessionId, but pick
-  // a real leaf in the SAME resolved tab as the insertion anchor. This is the
-  // terminal sibling of #266: cwd, project tab, and Dispatch lane must all come
-  // from the user's focused Dispatch context, not stale activeTabId.
-  return {
-    ...target,
-    splitAnchorSessionId: targetLeafId ?? focusedLeafId ?? leafIds[0] ?? null,
-  }
 }
 
 function sessionTitle(

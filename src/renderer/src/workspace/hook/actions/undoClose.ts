@@ -211,11 +211,12 @@ export function useUndoCloseAction(
       for (const detached of entry.detachedEntries ?? []) {
         try {
           const kind: SessionKind = detached.meta.kind ?? DEFAULT_PROVIDER
-          // Detached agents are never terminals in the current model
-          // (createDetachedDispatchAgent rejects 'terminal'), but we
-          // still gate the recover hint on kind for symmetry with the
-          // tile-tree loop above and so a future surface that allows
-          // detached terminals doesn't silently drop tmuxName.
+          // Detached dispatch sessions CAN be terminals: Dispatch terminal
+          // creation files a detached row like any other kind (#671), and
+          // `detachFocusedToDispatch` has always allowed a grid terminal to be
+          // parked in Dispatch. Gating the recover hint on kind is what lets a
+          // restored terminal re-attach its tmux session instead of coming back
+          // as a fresh shell with the user's scrollback gone.
           const newId = await sessionActions.spawn(detached.meta.cwd, {
             kind,
             resumeSessionId: kind !== 'terminal'

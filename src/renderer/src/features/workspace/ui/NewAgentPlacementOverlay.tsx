@@ -152,12 +152,13 @@ export function NewAgentPlacementOverlay({
       if (committingRef.current) return
       committingRef.current = true
       if (kind === 'terminal') {
-        // Terminals are the one Dispatch creation kind that still becomes a
-        // grid leaf: shell lifecycle/persistence is leaf-based, while
-        // provider Dispatch agents are detached rows. splitFocused owns the
-        // Dispatch-aware target resolution for terminals (#366), including
-        // the focused tiled lane / global row project context and overlay
-        // close.
+        // Terminals route through splitFocused rather than
+        // createDetachedDispatchAgent purely because that function's signature
+        // excludes 'terminal'. The BEHAVIOUR is now identical: splitFocused's
+        // Dispatch branch is kind-agnostic and files a terminal as a detached
+        // dispatch row in the focused lane's project, exactly like an agent
+        // (#671). It also owns the #366 target resolution and the overlay
+        // close, so there is nothing terminal-specific left to do here.
         void workspace.splitFocused('vertical', 'terminal')
         return
       }
