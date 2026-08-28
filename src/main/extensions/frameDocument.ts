@@ -253,6 +253,14 @@ function reportSize() {
 }
 
 let mounted = false;
+// The cleanup a view's mount() returned, if any. The ViewMount contract is
+// (element) => void | (() => void), and the authoring guide documents "a view
+// mount returns its own cleanup; it runs when the view closes" — but the return
+// value was DISCARDED here, so that promise was never kept. An extension whose
+// view starts an interval, an AudioContext or a listener leaked it on every close,
+// and the author had no way to notice, because the documented hook simply never
+// fired. Captured here, called from the pagehide teardown below.
+let unmountView = null;
 function mountView(viewId) {
   if (mounted) return;
   const mount = views.get(viewId);
@@ -260,7 +268,8 @@ function mountView(viewId) {
   mounted = true;
   const root = document.getElementById('root');
   if (!root) return;
-  mount(root);
+  const cleanup = mount(root);
+  if (typeof cleanup === 'function') unmountView = cleanup;
   // Report once now, then on every content change (a picker expands, digits
   // reflow), so the modal tracks the view instead of freezing at first paint.
   reportSize();
@@ -317,6 +326,15 @@ import('./' + ENTRY)
 // timer's engine.dispose()/removeStyles() are exactly this shape. Without this an
 // extension leaks its intervals/AudioContext/listeners every time its view closes.
 window.addEventListener('pagehide', () => {
+  // Innermost first: the view's own cleanup, then the module's deactivate(), then
+  // the registered subscriptions in reverse. That is the reverse of the order in
+  // which they were established, which is the only order in which a later hook
+  // cannot depend on something an earlier one already tore down.
+  try {
+    if (typeof unmountView === 'function') unmountView();
+  } catch (e) {
+    console.error('[extension] view cleanup failed:', e);
+  }
   try {
     if (extensionModule && typeof extensionModule.deactivate === 'function') extensionModule.deactivate();
   } catch (e) {
