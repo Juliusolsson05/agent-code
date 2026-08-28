@@ -7,17 +7,17 @@ committed `user` entries **is** the evidence, which is why they share one array.
 See `docs/decomposition/claude-queue-reconciliation.md` for the design this
 corpus exists to pin.
 
-## Measured over 876 local transcripts, of which 139 carry queue ops
+## Measured over 887 local transcripts, of which 143 carry queue ops
 
 Regenerate: `… scripts/extract-queue-operations.mts --measure`. These drift upward
 as the local corpus grows — a small delta is expected, a large one is a finding.
 
 ```
-enqueue: 2181 records / 1783 runs (13.7% multi-item)  content present: 2181/2181 = 100%
-dequeue:  589 records /  552 runs (4.0% multi-item)
-remove:  1558 records / 1246 runs (13.7% multi-item)  content present: 1203/1558 = 77.2%
+enqueue: 2196 records / 1798 runs (13.6% multi-item)  content present: 2196/2196 = 100%
+dequeue:  590 records /  553 runs (4.0% multi-item)
+remove:  1572 records / 1260 runs (13.6% multi-item)  content present: 1217/1572 = 77.4%
 popAll:     1 record  /    1 run                     content logged; unhandled pre-fix
-task-notifications carrying a correlation id: 1134/1134 = 100%
+task-notifications carrying a correlation id: 1144/1144 = 100%
 ```
 
 Two measurements that overturned the working hypothesis, recorded because both
@@ -29,7 +29,7 @@ thing:
 2. **`remove` outnumbers `dequeue`.** That ratio is what forced finding its real
    emit site (`query.ts:1642`, the mid-turn attachment drain) rather than
    assuming the Ctrl+B path was the only one.
-3. **`remove` is versioned evidence, not uniformly content-free.** 1,203/1,558
+3. **`remove` is versioned evidence, not uniformly content-free.** 1,217/1,572
    current-corpus records carry the exact removed content; 355 older records do
    not. Exact operation content must win when present. The durable
    `queued_command` attachment supplies adjacent identity for the legacy form.
@@ -48,16 +48,16 @@ Claude persists the dominant remove delivery directly as
 `--measure` path now counts that durable carrier:
 
 ```
-queued_command attachments: 1058
-  durable identity: uuid 1058/1058, timestamp 1058/1058, external user 1058/1058
-  mode: prompt 772, task-notification 286
-  prompt provenance: human 474, legacy-no-origin 296, peer-meta 2
-  prompt shape: string 1044, block-array 14
-  versions: 43 (2.1.100 → 2.1.247)
+queued_command attachments: 1072
+  durable identity: uuid 1072/1072, timestamp 1072/1072, external user 1072/1072
+  mode: prompt 777, task-notification 295
+  prompt provenance: human 479, legacy-no-origin 296, peer-meta 2
+  prompt shape: string 1058, block-array 14
+  versions: 45 (2.1.100 → 2.1.250)
 ```
 
 For feed ownership, the recorded admissible set is prompt mode, non-meta, and
-either human origin or the legacy absence of origin: 770 records in this
+either human origin or the legacy absence of origin: 775 records in this
 snapshot. Task notifications and the two peer/meta prompts are durable queue
 evidence but must not paint as user-authored chat.
 
@@ -92,7 +92,7 @@ queue drops the wrong item.
 | op | Emit site | Removes | Content logged |
 |---|---|---|---|
 | `dequeue` | `queueProcessor.processQueueIfReady` (mode cohort), `print.ts` loops, `killShellTasks` (agentId cohort) | delivered as its own turn input | no |
-| `remove` | `query.ts:1642` mid-turn attachment drain (priority ≤ next, or ≤ later after Sleep; `mode ∈ {prompt, task-notification}`; non-slash; thread-scoped) | delivered as attachments | versioned: 1,203/1,558 recorded removes carry content |
+| `remove` | `query.ts:1642` mid-turn attachment drain (priority ≤ next, or ≤ later after Sleep; `mode ∈ {prompt, task-notification}`; non-slash; thread-scoped) | delivered as attachments | versioned: 1,217/1,572 recorded removes carry content |
 | `remove` | `REPL.tsx:2532` Ctrl+B backgrounding | task-notifications only | same record grammar; no queued-command attachment follows |
 | `popAll` | `popAllEditable` (UP/ESC) | editable commands only — notifications deliberately stay | **yes** |
 | *(none)* | `clearCommandQueue()` — `useCancelRequest.ts:249`, ctrl+x ctrl+k | everything | n/a — **logs nothing** |
@@ -109,6 +109,7 @@ sessions (max 4 per session).
 | `divergence-agent-dominant.json` | The mirror: 87 agent completions against 10 background commands. Pins that the `later` cohort is not over-drained when it dominates. |
 | `remove-dominant-balanced-mix.json` | Remove-dominant (21 removes vs 15 dequeues) with a balanced mix — the profile that made `query.ts:1642` the real emit site rather than the Ctrl+B path. |
 | `remove-is-not-persisted.json` | Reduced queue-replay view: `dequeue` → a retained `user` identity event; `remove` → no retained event because this fixture format intentionally omits attachments. Full rendering bundles prove the durable queued-command carrier. |
+| `exact-remove-after-open-dequeue-debt.json` | A recorded 16-enqueue / 3-dequeue / 13-exact-remove run with three duplicate correlations. Pins that older inferred debt cannot preempt a later exact carrier. Published as a line-bounded hard-redacted projection because the provider-level shape occurred only in an unrelated project recording. |
 
 **No `popAll` fixture.** The single recorded `popAll` in the local corpus came
 from an unrelated project and is not publishable under the source rule below.
@@ -121,10 +122,14 @@ that needs no inference at all.
 These fixtures are committed to a **public** repository, so three rules bound
 what enters them. All three are enforced in the extractor, not by review.
 
-1. **Agent-code sessions only.** A transcript from any other project is
-   unrelated work — other codebases, other clients, personal material — and
-   none of it is evidence about Claude's queue that an agent-code session
-   cannot supply. The extractor throws on a non-agent-code source.
+1. **Full fixtures use Agent Code sessions only.** A transcript from any other
+   project is unrelated work — other codebases, other clients, personal
+   material — so the extractor throws before publishing it. The sole exception
+   is an explicit line-bounded hard-redacted projection for a provider-level
+   topology absent from every Agent Code recording. That stronger path also
+   removes the source project, task ids, task names, output paths, and result
+   text; only operation order, equality, duplicate topology, and priority
+   survive.
 2. **No free-typed prose.** Every prompt is replaced by a stable synthetic
    token, and the committed entry that delivered it gets the *same* token.
    Matching is `normalize(committed).includes(prefix48(enqueued))`, so

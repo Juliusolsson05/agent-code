@@ -37,6 +37,10 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { findSensitiveSurvivors } from '../src/renderer/src/rendering/replay/redact.js'
 import { derivePriority } from '../src/renderer/src/session-runtime/claudeQueue/priority.js'
+import {
+  PRIORITY_LATER,
+  PRIORITY_NEXT,
+} from '../src/renderer/src/session-runtime/claudeQueue/types.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const REPO = resolve(HERE, '..')
@@ -339,6 +343,98 @@ function stripResultBodies(text: string): string {
   return text.replace(/<result>[\s\S]*$/, REPLACEMENT)
 }
 
+type HardRedactedProjection = {
+  /** Inclusive one-based source line numbers, recorded during investigation. */
+  startLine: number
+  endLine: number
+}
+
+/**
+ * Reduce a notification to only the relationships the reconciler reads.
+ *
+ * WHY this is stronger than the ordinary fixture redaction: the default corpus
+ * accepts only Agent Code sessions, where machine-generated task summaries are
+ * in scope. A rare provider-level topology may exist only in an unrelated
+ * project recording. Publishing that task name, task id, output path, or
+ * project path would turn a useful structural fixture into a privacy leak.
+ *
+ * Stable token maps preserve equality and inequality from the recording: two
+ * copies with the same task id still correlate, and two different payloads do
+ * not become exact matches by accident. Priority is re-encoded through the
+ * same producer shapes `derivePriority` understands and is independently
+ * checked by `assertNoPriorityDrift` before emission.
+ */
+function hardRedactNotification(
+  text: string,
+  taskTokenById: Map<string, string>,
+  contentTokenByText: Map<string, string>,
+): string {
+  const idMatch = /<(task-id|tool-use-id)>([^<]+)<\/\1>/.exec(text)
+  const rawId = idMatch?.[2] ?? `missing-id:${text}`
+  let taskToken = taskTokenById.get(rawId)
+  if (!taskToken) {
+    taskToken = `recorded-task-${String(taskTokenById.size).padStart(3, '0')}`
+    taskTokenById.set(rawId, taskToken)
+  }
+
+  let contentToken = contentTokenByText.get(text)
+  if (!contentToken) {
+    contentToken = `recorded-notification-${String(contentTokenByText.size).padStart(3, '0')}`
+    contentTokenByText.set(text, contentToken)
+  }
+
+  const priority = derivePriority(text)
+  const summary =
+    priority === PRIORITY_LATER
+      ? `Agent "${contentToken}" finished`
+      : text.includes('appears to be waiting for interactive input')
+        ? `Background command "${contentToken}" appears to be waiting for interactive input`
+        : `Background command "${contentToken}" completed (exit code 0)`
+  if (priority !== PRIORITY_NEXT && priority !== PRIORITY_LATER) {
+    throw new Error(`hard-redacted projection cannot encode queue priority ${priority}`)
+  }
+
+  const idTag = idMatch?.[1] ?? 'task-id'
+  const status = /<status>[^<]*<\/status>/.test(text) ? '\n<status>completed</status>' : ''
+  return (
+    '<task-notification>\n' +
+    `<${idTag}>${taskToken}</${idTag}>\n` +
+    `<output-file>/tmp/${taskToken}</output-file>${status}\n` +
+    `<summary>${summary}</summary>\n` +
+    '</task-notification>'
+  )
+}
+
+function hardRedactFixture(fixture: QueueOperationFixture): QueueOperationFixture {
+  const taskTokenById = new Map<string, string>()
+  const contentTokenByText = new Map<string, string>()
+  const redact = (text: string): string =>
+    isNotification(text)
+      ? hardRedactNotification(text, taskTokenById, contentTokenByText)
+      : text
+  return {
+    ...fixture,
+    events: fixture.events.map(event =>
+      event.kind === 'op'
+        ? typeof event.content === 'string'
+          ? { ...event, content: redact(event.content) }
+          : event
+        : { ...event, text: redact(event.text) },
+    ),
+  }
+}
+
+function sliceRecordedLines(jsonl: string, projection: HardRedactedProjection): string {
+  const lines = jsonl.split('\n')
+  const { startLine, endLine } = projection
+  if (startLine < 1 || endLine < startLine || endLine > lines.length) {
+    throw new Error(
+      `invalid recorded projection L${startLine}-L${endLine}; source has ${lines.length} lines`,
+    )
+  }
+  return lines.slice(startLine - 1, endLine).join('\n')
+}
+
 export function buildFixture(
   jsonl: string,
   source: string,
@@ -475,7 +571,14 @@ function findTranscript(idPrefix: string): string | null {
 // The named cases from the plan (§4 divergence sessions + the one popAll
 // sighting). Each carries WHY it is in the corpus, because a fixture whose
 // purpose is not recorded gets deleted by the next person who sees it fail.
-const CASES: Array<{ id: string; slug: string; note: string }> = [
+type CorpusCase = {
+  id: string
+  slug: string
+  note: string
+  hardRedactedProjection?: HardRedactedProjection
+}
+
+const CASES: CorpusCase[] = [
   {
     id: '80473d26',
     slug: 'divergence-stranded-background-commands',
@@ -509,9 +612,19 @@ const CASES: Array<{ id: string; slug: string; note: string }> = [
       'by a retained user identity event; `remove` has no retained event because this fixture ' +
       'schema intentionally omits durable queued-command attachments.',
   },
+  {
+    id: '79daeead',
+    slug: 'exact-remove-after-open-dequeue-debt',
+    note:
+      'Recorded evidence-precedence failure: 16 notification enqueues and 3 dequeues ' +
+      'leave dequeue debt open before 13 content-bearing removes name exact targets. ' +
+      'Three correlation identities are duplicated. Inference must not consume an exact ' +
+      'remove target before the exact carrier is applied.',
+    hardRedactedProjection: { startLine: 1511, endLine: 1557 },
+  },
 ]
 
-// SOURCE GUARD: only this repository's own sessions may enter the corpus.
+// SOURCE GUARD: full fixtures may only use this repository's own sessions.
 //
 // The fixtures are committed to a public repository. A transcript from any
 // other project is the operator's unrelated work — different clients, different
@@ -519,6 +632,13 @@ const CASES: Array<{ id: string; slug: string; note: string }> = [
 // queue that an agent-code session cannot supply just as well. The first
 // version of this corpus drew from three unrelated projects; this guard is why
 // that cannot recur silently.
+//
+// The narrow exception is a line-bounded `hardRedactedProjection` for a
+// provider-level topology not present in any Agent Code recording. That path
+// replaces the source project, prompt prose, task ids, task names, result text,
+// and output paths while preserving only ordering/equality/priority. Requiring
+// the explicit line range and stronger transformer is what stops the exception
+// from becoming an easy way around the full-fixture policy.
 //
 // Combined with prose pseudonymization above, the published fixture carries
 // session STRUCTURE and machine-generated notification payloads, and no
@@ -715,7 +835,7 @@ function main(): void {
       console.log(`  (skip ${c.slug}: no local transcript matching ${c.id})`)
       continue
     }
-    if (!isAgentCodeTranscript(path)) {
+    if (!isAgentCodeTranscript(path) && !c.hardRedactedProjection) {
       throw new Error(
         `refusing to emit ${c.slug}: ${path} is not an agent-code session. ` +
           `The corpus is published; only this repository's own transcripts may enter it.`,
@@ -726,9 +846,19 @@ function main(): void {
       console.log(`  (skip ${c.slug}: transcript is ${Math.round(size / 1e6)}MB)`)
       continue
     }
-    const built = buildFixture(readFileSync(path, 'utf8'), path, c.note)
-    assertNoPriorityDrift(built.raw, built.fixture, c.slug)
-    emit(built.fixture, c.slug)
+    const rawJsonl = readFileSync(path, 'utf8')
+    const projection = c.hardRedactedProjection
+    const selectedJsonl = projection ? sliceRecordedLines(rawJsonl, projection) : rawJsonl
+    // A projected source deliberately carries no real project directory. The
+    // CASE id and line range keep it reproducible for the collector who owns
+    // the recording without publishing which unrelated codebase produced it.
+    const source = projection
+      ? `local-claude-corpus/${c.id}:L${projection.startLine}-L${projection.endLine}`
+      : path
+    const built = buildFixture(selectedJsonl, source, c.note)
+    const fixture = projection ? hardRedactFixture(built.fixture) : built.fixture
+    assertNoPriorityDrift(built.raw, fixture, c.slug)
+    emit(fixture, c.slug)
     emitted += 1
   }
   console.log(`\n${emitted}/${CASES.length} fixtures emitted.`)

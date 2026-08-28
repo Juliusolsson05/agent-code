@@ -222,6 +222,33 @@ describe('remove: the two upstream callers disagree, and we resolve safely', () 
     )
   })
 
+  it('applies recorded exact removes before settling older dequeue debt', () => {
+    const fixture = loadFixture('exact-remove-after-open-dequeue-debt')
+    const afterRecordedOperations = replay(fixture.events)
+
+    // This is one uninterrupted recorded run, not a constructed interleaving:
+    // 16 notifications are enqueued, 3 dequeue records create identity debt,
+    // then 13 content-bearing removes name the other departures exactly. Three
+    // task ids occur twice, which is why queue length or unique-id assertions
+    // would both bless the original bug.
+    const observedRemoves = afterRecordedOperations.decisions.filter(
+      decision => decision.reason === 'consumed-observed',
+    )
+    expect(observedRemoves).toHaveLength(13)
+    expect(afterRecordedOperations.debt?.count).toBe(3)
+    expect(afterRecordedOperations.pending).toHaveLength(3)
+
+    // The recording ends before committed delivery rows can identify the
+    // dequeue cohort, so idle is the independently bounded settlement point.
+    // Exact remove evidence owns thirteen items; dequeue inference owns three.
+    // Neither mechanism may consume an item on behalf of the other.
+    const settled = markStaleWhenIdle(afterRecordedOperations, true)
+    expect(settled.pending).toEqual([])
+    expect(settled.decisions.filter(d => d.reason === 'consumed-observed')).toHaveLength(13)
+    expect(settled.decisions.filter(d => d.reason === 'delivered-inferred')).toHaveLength(3)
+    expect(settled.decisions).toHaveLength(settled.nextSeq)
+  })
+
   it('never deletes a queued prompt when a notification is also removable', () => {
     // `remove` has two callers. query.ts:1642 selects by PRIORITY (so it would
     // take the prompt); REPL.tsx:2532 (Ctrl+B) selects by MODE and removes
@@ -428,6 +455,7 @@ describe('recorded corpus replay', () => {
     'divergence-agent-dominant',
     'remove-dominant-balanced-mix',
     'remove-is-not-persisted',
+    'exact-remove-after-open-dequeue-debt',
   ] as const
 
   it.each(CASES)('%s conserves every minted item exactly once', slug => {
