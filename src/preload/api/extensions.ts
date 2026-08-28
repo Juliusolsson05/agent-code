@@ -39,6 +39,12 @@ export const extensionsApi = {
   extensionsInstallPath: (): Promise<ExtensionInstallResult> =>
     ipcRenderer.invoke('extensions:install-path'),
 
+  // Reinstall a locally-loaded extension from the folder recorded at install time.
+  // Takes only the id — main reads the path from its own ledger, so the renderer
+  // never names a directory.
+  extensionsUpdateLocal: (id: string): Promise<ExtensionInstallResult> =>
+    ipcRenderer.invoke('extensions:update-local', id),
+
   extensionsRemove: (id: string): Promise<void> => ipcRenderer.invoke('extensions:remove', id),
 
   // Reads the set of capabilities a user granted an extension, for the frame broker

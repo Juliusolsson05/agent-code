@@ -95,9 +95,32 @@ export function AppsSettingsRow() {
   // only place the module actually exists.
   const update = useCallback(
     async (entry: ExtensionListEntry) => {
+      // Dispatch on how it was installed. A local extension's `repo` is an absolute
+      // folder path, so feeding it to the GitHub installer failed normalizeRepo every
+      // single time — and "rebuild, click Update" is the entire dev loop this install
+      // path exists for, so Update was broken for exactly the users who need it most.
+      if (entry.origin === 'local') {
+        setBusy(true)
+        setError(null)
+        setNotice(null)
+        try {
+          const result = await window.api.extensionsUpdateLocal(entry.manifest.id)
+          if (result.ok) {
+            setNotice(`Reloaded ${result.entry.manifest.name} ${result.entry.manifest.version}`)
+          } else {
+            setError(result.error)
+          }
+        } catch (updateError) {
+          setError(updateError instanceof Error ? updateError.message : String(updateError))
+        } finally {
+          setBusy(false)
+          await refresh()
+        }
+        return
+      }
       await install(entry.repo)
     },
-    [install],
+    [install, refresh],
   )
 
   const remove = useCallback(
@@ -220,7 +243,9 @@ export function AppsSettingsRow() {
                 </div>
                 <div className="truncate text-[12px] text-muted">{entry.manifest.description}</div>
                 <div className="truncate text-[11px] text-ink-dim">
-                  {entry.repo} @ {entry.ref}
+                  {/* A local install's `repo` is a folder path, and "…@ local" read
+                      as a broken ref. Say which kind of install it is instead. */}
+                  {entry.origin === 'local' ? `local folder · ${entry.repo}` : `${entry.repo} @ ${entry.ref}`}
                 </div>
                 {failures.find(failure => failure.id === entry.manifest.id) ? (
                   <div className="mt-1 text-[11px] text-ink">
@@ -235,7 +260,7 @@ export function AppsSettingsRow() {
                   disabled={busy}
                   className="border border-control-border bg-control-bg px-3 py-1 text-[12px] text-control-fg outline-none hover:border-control-border-hover disabled:opacity-40"
                 >
-                  Update
+                  {entry.origin === 'local' ? 'Reload' : 'Update'}
                 </button>
                 <button
                   type="button"

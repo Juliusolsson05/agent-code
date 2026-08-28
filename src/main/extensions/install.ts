@@ -1,6 +1,19 @@
 import { spawn } from 'child_process'
 import { createHash } from 'node:crypto'
-import { access, constants as fsConstants, cp, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from 'fs/promises'
+import {
+  access,
+  constants as fsConstants,
+  cp,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  writeFile,
+} from 'fs/promises'
 import { join, relative, resolve as resolvePath, sep } from 'path'
 
 import { EXTENSIONS_DIR } from '@main/storage/paths.js'
@@ -23,6 +36,11 @@ const MANIFEST_FILENAME = 'agent-code.extension.json'
 // mistake (someone committed node_modules) or hostile. The cap exists because the
 // download is buffered in memory to hash it — see downloadTarball.
 const MAX_TARBALL_BYTES = 32 * 1024 * 1024
+
+// Per-request deadline for every GitHub call. Generous enough for a slow link
+// against a 32 MB ceiling, short enough that a dead host surfaces as an error the
+// user can act on rather than a permanently disabled Install button.
+const NETWORK_TIMEOUT_MS = 30_000
 
 export class InstallError extends Error {
   constructor(message: string) {
@@ -48,7 +66,24 @@ export function normalizeRepo(input: string): string {
       `"${input}" is not a GitHub repository. Use owner/repo or a github.com URL.`,
     )
   }
-  return `${match[1]}/${match[2]}`
+
+  // ── A SEGMENT OF ONLY DOTS IS NOT A REPOSITORY NAME, IT IS PATH TRAVERSAL ──
+  // `[\w.-]+` matches `.` and `..`, so `../x` parsed happily into owner `..`. The
+  // result is interpolated into `https://api.github.com/repos/${repo}` and into the
+  // codeload URL, where the URL parser NORMALIZES the `..` away — so the request
+  // silently addressed a different GitHub API endpoint than the one this code
+  // believes it is calling, and the bogus value was then recorded in the ledger and
+  // rendered in Settings. GitHub allows neither name, so nothing legitimate is lost
+  // by rejecting them here rather than discovering it from a confusing 404.
+  const [, owner, repo] = match
+  for (const segment of [owner, repo]) {
+    if (/^\.+$/.test(segment)) {
+      throw new InstallError(
+        `"${input}" is not a GitHub repository. Use owner/repo or a github.com URL.`,
+      )
+    }
+  }
+  return `${owner}/${repo}`
 }
 
 type ResolvedSource = { ref: string; tarballUrl: string }
@@ -70,7 +105,7 @@ async function resolveSource(repo: string): Promise<ResolvedSource> {
   }
 
   try {
-    const res = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, { headers })
+    const res = await fetchWithDeadline(`https://api.github.com/repos/${repo}/releases/latest`, headers)
     if (res.ok) {
       const body = (await res.json()) as { tag_name?: string; tarball_url?: string }
       if (body.tag_name && body.tarball_url) {
@@ -83,7 +118,7 @@ async function resolveSource(repo: string): Promise<ResolvedSource> {
     // surface there with a better message.
   }
 
-  const res = await fetch(`https://api.github.com/repos/${repo}`, { headers })
+  const res = await fetchWithDeadline(`https://api.github.com/repos/${repo}`, headers)
   if (res.status === 404) {
     throw new InstallError(`Repository ${repo} not found, or it is private.`)
   }
@@ -100,26 +135,62 @@ async function resolveSource(repo: string): Promise<ResolvedSource> {
   }
 }
 
+/**
+ * Every network call in this module goes through here.
+ *
+ * WHY A DEADLINE IS NOT OPTIONAL: these are fetches to a host the USER named, made
+ * from the main process. Without one, a server that accepts the connection and then
+ * never responds leaves the install promise pending forever — the Settings row stays
+ * "Installing…", its button stays disabled, and there is no cancel affordance
+ * anywhere in the UI. A hung install is indistinguishable from a slow one and the
+ * only escape is restarting the app.
+ */
+async function fetchWithDeadline(url: string, headers: Record<string, string>): Promise<Response> {
+  try {
+    return await fetch(url, { headers, signal: AbortSignal.timeout(NETWORK_TIMEOUT_MS) })
+  } catch (error) {
+    // AbortSignal.timeout rejects with a TimeoutError DOMException, which reaches
+    // the user as "The operation was aborted" — true and useless. Name the host.
+    if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
+      throw new InstallError(`${new URL(url).host} did not respond within 30 seconds.`)
+    }
+    throw error
+  }
+}
+
 async function downloadTarball(url: string): Promise<{ bytes: Buffer; sha256: string }> {
-  const res = await fetch(url, { headers: { 'user-agent': 'agent-code' } })
+  const res = await fetchWithDeadline(url, { 'user-agent': 'agent-code' })
   if (!res.ok) throw new InstallError(`Download failed with HTTP ${res.status}.`)
 
-  // Buffered rather than streamed to disk because we need the hash of the exact
-  // bytes we are about to extract, and because MAX_TARBALL_BYTES keeps the ceiling
-  // small. A streaming hash would avoid the buffer but complicates the cap: a
-  // stream that exceeds the limit has already written part of a file we then have
-  // to clean up. If extensions ever get large enough for this to matter, switch to
-  // streaming with an abort-on-cap, not to a bigger buffer.
+  // ── THE CAP IS ENFORCED WHILE READING, NOT AFTER ──
+  // This used to check `content-length` and then call `res.arrayBuffer()`, which are
+  // two different things. The header is supplied by the server, so it is a HINT, not
+  // a bound: omit it (chunked encoding is enough) or lie about it, and arrayBuffer()
+  // allocates the entire body first — the size check then runs on an allocation that
+  // has already happened. A hostile or merely misconfigured host could therefore
+  // drive the MAIN PROCESS, the one holding every agent session, to an
+  // out-of-memory kill from a URL the user only pasted a repo name for.
+  //
+  // Counting while reading makes the limit real: the abort happens at the moment the
+  // cap is crossed, so peak allocation is bounded by MAX_TARBALL_BYTES plus one
+  // chunk no matter what the server claims.
   const declared = Number(res.headers.get('content-length') ?? '0')
-  if (declared > MAX_TARBALL_BYTES) {
+  if (Number.isFinite(declared) && declared > MAX_TARBALL_BYTES) {
+    // Still checked first when present: failing before transferring 2 GB is better
+    // than failing after. It is just not sufficient on its own.
     throw new InstallError(`Archive is ${Math.round(declared / 1e6)} MB; the limit is 32 MB.`)
   }
+  if (!res.body) throw new InstallError('Download returned an empty response.')
 
-  const bytes = Buffer.from(await res.arrayBuffer())
-  if (bytes.byteLength > MAX_TARBALL_BYTES) {
-    throw new InstallError(`Archive is ${Math.round(bytes.byteLength / 1e6)} MB; the limit is 32 MB.`)
+  const chunks: Buffer[] = []
+  let total = 0
+  for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
+    total += chunk.byteLength
+    if (total > MAX_TARBALL_BYTES) throw new InstallError('Archive exceeds the 32 MB limit.')
+    chunks.push(Buffer.from(chunk))
   }
 
+  const bytes = Buffer.concat(chunks)
   return { bytes, sha256: createHash('sha256').update(bytes).digest('hex') }
 }
 
@@ -141,9 +212,35 @@ async function extractTarball(archivePath: string, destDir: string): Promise<voi
     // --strip-components=1 removes GitHub's `<repo>-<sha>/` wrapper directory, so
     // the manifest lands at destDir/agent-code.extension.json rather than one level
     // down under a name that changes with every commit.
-    const child = spawn(tar, ['-xzf', archivePath, '-C', destDir, '--strip-components=1'], {
-      stdio: ['ignore', 'ignore', 'pipe'],
-    })
+    //
+    // --no-same-owner / --no-same-permissions: the archive is attacker-controlled,
+    // and its entries carry a uid/gid and a mode. Honouring either lets the archive
+    // decide what the extracted files look like on disk — a setuid bit, a
+    // group-writable directory, an owner that is not the running user. Neither is
+    // ever wanted for what is supposed to be a bundle of JavaScript. Both flags are
+    // accepted by bsdtar (macOS /usr/bin/tar) and GNU tar.
+    //
+    // NOT relied upon: the extractor's own traversal defences. bsdtar refuses `..`
+    // members and refuses to write THROUGH a symlink by default, and that was
+    // verified empirically — but `resolveTarBinary` can fall back to whatever `tar`
+    // is on PATH, which may be a different implementation with different defaults.
+    // assertBundleTreeIsSafe below is what actually holds the guarantee, because it
+    // does not depend on which binary ran.
+    const child = spawn(
+      tar,
+      [
+        '-xzf',
+        archivePath,
+        '-C',
+        destDir,
+        '--strip-components=1',
+        '--no-same-owner',
+        '--no-same-permissions',
+      ],
+      {
+        stdio: ['ignore', 'ignore', 'pipe'],
+      },
+    )
     let stderr = ''
     child.stderr.on('data', chunk => {
       stderr += String(chunk)
@@ -154,6 +251,75 @@ async function extractTarball(archivePath: string, destDir: string): Promise<voi
       else reject(new InstallError(`Could not unpack the archive (tar exit ${code}): ${stderr.trim()}`))
     })
   })
+}
+
+/**
+ * Reject a staged bundle that contains anything pointing outside itself.
+ *
+ * ── WHY THIS EXISTS EVEN THOUGH THREE OTHER CHECKS LOOK SIMILAR ──
+ * The scheme handler realpath-checks each file it SERVES, and
+ * verifyEntryInsideBundle realpath-checks the ENTRY. Both are per-file checks made
+ * later, and neither says anything about the rest of the tree. This one is about
+ * the bundle as a whole, and it runs at the only moment where refusing is still
+ * free: before the bundle is moved into place, before consent is asked, before a
+ * grant exists.
+ *
+ * What it stops:
+ * - An escaping symlink surviving into the installed directory. Serving it is
+ *   already blocked, but its mere presence means `computeBundleHash` is hashing a
+ *   link whose target the extension does not own, and every future reader of that
+ *   directory (a backup, a sync client, a future feature that walks the bundle)
+ *   inherits a pointer out of the sandbox that nobody put there deliberately.
+ * - The extractor's defences differing by implementation. bsdtar blocks `..`
+ *   members and symlink write-through by default; `resolveTarBinary` may fall back
+ *   to a `tar` on PATH that does not. Checking the RESULT rather than trusting the
+ *   tool makes the guarantee independent of which binary ran.
+ * - Entry types that have no business in a JavaScript bundle at all — sockets,
+ *   FIFOs, devices — which would otherwise be copied into place and then hashed.
+ *
+ * A dangling symlink is fine and stays allowed: it points nowhere, so it can leak
+ * nothing, and rejecting it would break bundles that ship optional artefacts.
+ */
+async function assertBundleTreeIsSafe(bundleDir: string): Promise<void> {
+  const rootReal = await realpath(bundleDir)
+
+  const walk = async (dir: string): Promise<void> => {
+    for (const dirent of await readdir(dir, { withFileTypes: true })) {
+      const absolute = join(dir, dirent.name)
+      const stats = await lstat(absolute)
+
+      if (stats.isSymbolicLink()) {
+        let targetReal: string
+        try {
+          targetReal = await realpath(absolute)
+        } catch {
+          // Dangling. Points at nothing, so it leaks nothing.
+          continue
+        }
+        if (targetReal !== rootReal && !targetReal.startsWith(rootReal + sep)) {
+          throw new InstallError(
+            `The repository contains a symlink ("${relative(rootReal, absolute)}") that points ` +
+              `outside the extension directory. Refusing to install it.`,
+          )
+        }
+        continue
+      }
+
+      if (stats.isDirectory()) {
+        await walk(absolute)
+        continue
+      }
+
+      if (!stats.isFile()) {
+        throw new InstallError(
+          `The repository contains a special file ("${relative(rootReal, absolute)}") that is not ` +
+            `a regular file, directory or symlink. Refusing to install it.`,
+        )
+      }
+    }
+  }
+
+  await walk(rootReal)
 }
 
 /**
@@ -231,7 +397,7 @@ async function makeStagingDir(): Promise<string> {
 async function finalizeInstall(
   manifest: ExtensionManifest,
   bundleDir: string,
-  provenance: { repo: string; ref: string; sha256: string },
+  provenance: { origin: 'github' | 'local'; repo: string; ref: string; sha256: string },
   promptConsent?: ConsentPrompt,
 ): Promise<InstalledExtension> {
   // Consent gate. If the extension requests capabilities beyond Tier 0, the user
@@ -268,6 +434,7 @@ async function finalizeInstall(
 
   const record: InstalledExtension = {
     manifest,
+    origin: provenance.origin,
     repo: provenance.repo,
     ref: provenance.ref,
     sha256: provenance.sha256,
@@ -319,11 +486,17 @@ export async function installExtension(
     await writeFile(archivePath, bytes)
     await mkdir(staging, { recursive: true })
     await extractTarball(archivePath, staging)
+    await assertBundleTreeIsSafe(staging)
 
     const manifest = await readManifestFrom(staging)
     await verifyEntryInsideBundle(staging, manifest.entry)
 
-    return await finalizeInstall(manifest, staging, { repo, ref: source.ref, sha256 }, promptConsent)
+    return await finalizeInstall(
+      manifest,
+      staging,
+      { origin: 'github', repo, ref: source.ref, sha256 },
+      promptConsent,
+    )
   } finally {
     await rm(work, { recursive: true, force: true })
   }
@@ -362,11 +535,26 @@ export async function installExtensionFromPath(
     // bundle"). This is the tarball path minus the download + strip-components.
     await cp(sourceReal, staging, {
       recursive: true,
+      // ── verbatimSymlinks: COPY THE LINK TEXT, DO NOT RESOLVE IT ──
+      // Node's default is `verbatimSymlinks: false`, which RESOLVES each symlink's
+      // target to an absolute path while copying. That silently rewrites a bundle's
+      // internal relative link (`alias.js -> dist/index.js`) into an absolute link
+      // into the AUTHOR'S source folder — so a perfectly ordinary bundle came out of
+      // the snapshot pointing at a directory outside itself, which the containment
+      // check below then correctly refuses. The install failed and the message
+      // blamed the author for a link they had written correctly.
+      //
+      // Copying verbatim is also the safer default, not just the working one: an
+      // escaping link stays exactly as escaping as the author wrote it, so
+      // assertBundleTreeIsSafe judges what the repository actually contains rather
+      // than an absolutised rewrite of it.
+      verbatimSymlinks: true,
       filter: src => {
         const rel = relative(sourceReal, src)
         return rel === '' || !rel.split(sep).some(part => part === 'node_modules' || part === '.git')
       },
     })
+    await assertBundleTreeIsSafe(staging)
 
     const manifest = await readManifestFrom(staging)
     await verifyEntryInsideBundle(staging, manifest.entry)
@@ -380,7 +568,7 @@ export async function installExtensionFromPath(
     return await finalizeInstall(
       manifest,
       staging,
-      { repo: sourceReal, ref: 'local', sha256 },
+      { origin: 'local', repo: sourceReal, ref: 'local', sha256 },
       promptConsent,
     )
   } finally {

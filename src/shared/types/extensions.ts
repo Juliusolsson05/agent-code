@@ -137,7 +137,19 @@ export type ExtensionManifest = {
 /** One row in the install ledger (`extensions.json`). */
 export type InstalledExtension = {
   manifest: ExtensionManifest
-  /** `owner/repo` as the user typed it, normalized. */
+  /**
+   * Where this extension came from, in a form the installer can re-run.
+   *
+   * WHY `origin` exists rather than sniffing `repo`: a GitHub install stores
+   * `owner/repo` here, and a local-folder install stores an ABSOLUTE PATH. Update
+   * fed this field straight back to `installExtension`, which calls
+   * `normalizeRepo` — so every Update of a locally-loaded extension failed with
+   * `"/Users/…/timer" is not a GitHub repository`, which is the one install path an
+   * author uses on every single rebuild. Making the origin explicit lets Update
+   * dispatch instead of guessing from the string's shape.
+   */
+  origin: 'github' | 'local'
+  /** `owner/repo` for a GitHub install; the absolute source folder for a local one. */
   repo: string
   /** The git ref actually installed — a release tag when one exists, else the
    *  default branch name. Recorded so an update can report what it is moving from. */

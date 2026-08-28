@@ -131,6 +131,34 @@ export function registerExtensionsIpc(): void {
     }
   })
 
+  // Reinstall a LOCAL extension from the folder already recorded in its ledger row,
+  // with no directory picker.
+  //
+  // WHY this is not a security regression: the path is not caller-supplied. It is
+  // read from the ledger, where it was written by a native picker the user drove
+  // themselves — so this re-runs a choice already made, exactly as the GitHub
+  // Update button re-runs `owner/repo`. Making the renderer pass a path instead
+  // WOULD be a regression: it would turn "reinstall what you chose" into "install
+  // any directory on this machine, on the renderer's say-so".
+  //
+  // The full validation pipeline still runs: manifest parse, tree containment,
+  // entry containment, and a fresh consent prompt if the rebuild changed the bytes.
+  ipcMain.handle('extensions:update-local', async (evt, id: string): Promise<ExtensionInstallResult> => {
+    if (!isValidExtensionId(id)) return { ok: false, error: 'Unknown extension.' }
+    const installed = await listInstalledExtensions()
+    const entry = installed.find(candidate => candidate.manifest.id === id)
+    if (!entry) return { ok: false, error: 'Extension is no longer installed.' }
+    if (entry.origin !== 'local') {
+      return { ok: false, error: 'This extension was installed from GitHub; use Update.' }
+    }
+    try {
+      const record = await installExtensionFromPath(entry.repo, consentPromptFor(evt))
+      return { ok: true, entry: { ...record, present: true } }
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
   ipcMain.handle('extensions:remove', async (_evt, id: string): Promise<void> => {
     await removeExtension(id)
     // A reinstall must re-consent; a lingering grant would silently re-arm.

@@ -29,6 +29,11 @@ import { apiVersionMismatch, extensionManifestSchema } from './manifest.js'
 // not orphan every other installed extension.
 const installedExtensionSchema = z.object({
   manifest: extensionManifestSchema,
+  // Defaulted rather than required: a row written before this field existed came
+  // from the GitHub installer, because that was the only installer that wrote a
+  // ledger row at the time. Defaulting is the accurate migration, and it keeps an
+  // upgrade from dropping every installed extension.
+  origin: z.enum(['github', 'local']).default('github'),
   repo: z.string().min(1),
   ref: z.string().min(1),
   sha256: z.string().regex(/^[a-f0-9]{64}$/),
