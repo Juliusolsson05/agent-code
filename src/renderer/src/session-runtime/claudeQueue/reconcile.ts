@@ -266,11 +266,6 @@ function applyEnqueue(state: ClaudeQueueState, op: QueueOperationRecord): Claude
 }
 
 function applyRemove(state: ClaudeQueueState, op: QueueOperationRecord): ClaudeQueueState {
-  // Settle any outstanding `dequeue` debt first: the earlier op definitively
-  // completed before this one began, so holding its debt open would let this
-  // removal consume the item that debt was owed.
-  const settled = settleDebtByCohort(state)
-
   // `remove` has TWO upstream callers with DIFFERENT selection rules, and
   // getting this wrong reproduced both halves of the original bug:
   //
@@ -302,22 +297,47 @@ function applyRemove(state: ClaudeQueueState, op: QueueOperationRecord): ClaudeQ
   if (typeof op.content === 'string') {
     const content = op.content
     const mode = deriveMode(content)
-    const victim = settled.pending.find(item =>
+    let attributionState = state
+    let victim = attributionState.pending.find(item =>
       removeCarrierClaims(item, { mode, text: content }),
     )
+
+    // Exact remove content and older dequeue debt account for DIFFERENT
+    // departures. Settling the inferred debt first can guess away the very
+    // item this record names; the exact lookup then no-ops and some unrelated
+    // item survives permanently. A recorded 16-enqueue / 3-dequeue /
+    // 13-exact-remove run does exactly that, including duplicate task ids that
+    // make count- or identity-set-based repair impossible after the fact.
+    //
+    // Preserve the stronger carrier first and leave the debt as a bounded
+    // count for its own later identity/idle settlement. Only a missing target
+    // permits the earlier debt to settle here. The retry is intentionally
+    // conservative and keeps the old partial-bootstrap/redelivery behavior if
+    // settlement rules ever gain a repair path that exposes a match.
+    if (!victim) {
+      attributionState = settleDebtByCohort(state)
+      victim = attributionState.pending.find(item =>
+        removeCarrierClaims(item, { mode, text: content }),
+      )
+    }
     // A content-bearing remove is its own proof. If redelivery or a partial
     // bootstrap means its target is absent, doing nothing is safer than
     // converting failed exact evidence into permission to remove a neighbor.
-    if (!victim) return settled
+    if (!victim) return attributionState
     return {
-      ...settled,
-      pending: without(settled.pending, [victim]),
+      ...attributionState,
+      pending: without(attributionState.pending, [victim]),
       decisions: [
-        ...settled.decisions,
+        ...attributionState.decisions,
         decide(victim, 'consumed-observed', ['queue-operation content'], op.timestamp ?? null),
       ],
     }
   }
+
+  // Content-free legacy records carry no competing exact evidence. The
+  // earlier dequeue completed first, so settle its bounded debt before opening
+  // a second inference debt for this remove.
+  const settled = settleDebtByCohort(state)
 
   // Older Claude versions logged no content. Do not guess immediately: the
   // durable queued-command attachment is recorded a few lines later and can
