@@ -57,14 +57,15 @@
     // assumptions, and selector API drift fail the normal typecheck instead of
     // surfacing only when someone refreshes the evidence months later.
     "scripts/extract-work-context-fixtures.mts",
-    // WHY this one large bundle is explicit instead of admitting the entire
-    // rendering-bundles corpus: the browser-owned IPC regression imports its
-    // recorded enqueue/remove/attachment sequence statically because Node fs
-    // builtins are not executable in the renderer test project. Composite tsc
-    // requires imported JSON in its file list, but pulling all bundles into the
-    // web program would spend typechecker heap on tens of megabytes of evidence
-    // that the corpus runner already owns.
+    // WHY these two large bundles are explicit instead of admitting the entire
+    // rendering-bundles corpus: browser-owned IPC regressions import their
+    // recorded enqueue/remove/attachment and no-op notification sequences
+    // statically because Node fs builtins are not executable in the renderer
+    // test project. Composite tsc requires imported JSON in its file list, but
+    // pulling all bundles into the web program would spend typechecker heap on
+    // tens of megabytes of evidence that the corpus runner already owns.
     "testing/fixtures/rendering-bundles/2026-06-14T14-25-07-012-a8ad1ebb.json",
+    "testing/fixtures/rendering-bundles/2026-06-21T20-14-23-131-62432945.json",
     // Curated rendering-shape fixtures are imported by provider adapter and
     // DOM contracts. Composite TypeScript refuses transitive JSON that is not
     // named in the project file list; keeping the fixture tree explicit makes
