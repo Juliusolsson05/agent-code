@@ -101,9 +101,9 @@ of your views opens — either directly, or because a contributed command with n
 matching view opened your single view in order to run. There is no background
 execution while every view of yours is closed.
 
-The practical consequence, using the reference timer as the example: a deadline
-stored in `api.storage` is correctly restored when the view opens, so no *time* is
-lost — but a reminder does not fire while the view is closed. If your extension
+The practical consequence, taking a timer as the example: a deadline stored in
+`api.storage` is correctly restored when the view opens, so no *time* is lost — but
+a reminder does not fire while the view is closed. If your extension
 needs to do work with no window open, v1 cannot support it. This is tracked as the
 background-frame follow-up; the fix has to be a hidden frame, because running an
 extension in the host realm is exactly what the sandbox exists to prevent.
@@ -157,6 +157,19 @@ context.registerView('timer.main', element => {
   return () => root.unmount()
 })
 ```
+
+### How a command reaches your code
+
+- A command whose id **equals a view id** opens that view. It is never dispatched to
+  a handler — opening a declared view is the host's job.
+- A command ending in **`.open`** opens your view too, but only if you declare
+  exactly one. With zero or several views the host cannot guess, so it dispatches
+  normally.
+- Any other command is delivered **into your running frame**. If no view of yours is
+  open and you declare exactly one, the host opens it and delivers the command as
+  soon as `activate()` resolves — so a cold "start" both opens and starts.
+- An extension with **no views** cannot run an action command cold. There is nowhere
+  to run it until one of your views is open.
 
 ### Where a view appears
 
@@ -316,6 +329,17 @@ api.panes.subscribe(listener)
 
 `subscribe` gives you a change *nudge* carrying no data — re-read with `observe()`
 when it fires. Calling `observe()` without the matching permission rejects.
+
+### Reading a contributed setting
+
+A `contributes.settings` entry renders a row in Agent Code's Settings, and the value
+the user picks is written to **your own storage under the setting's full id**. The
+manifest `default` is what the row displays before anything is stored; it is not
+written for you. So read it with the same default:
+
+```ts
+const minutes = (await api.storage.get('timer.defaultMinutes')) ?? 30
+```
 
 ### Storage notes
 

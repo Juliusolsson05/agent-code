@@ -166,7 +166,6 @@ function buildViewComponent(
             bootTimer = null
           }
           setStatus('ready')
-          clearFailure(extensionId)
         } else if (data.kind === 'agent-code-ext:escape') {
           // The frame saw an unhandled Escape. Close the view, which is what Escape
           // does everywhere else in the app — a modal's own Escape handler and a
@@ -188,6 +187,11 @@ function buildViewComponent(
           // publish the dispatcher and flush any queued commands. Distinct from
           // 'boot', which only says the document started.
           setFrameDispatch(extensionId, dispatch)
+          // Cleared HERE and not on 'boot'. Failures are keyed by extension, and two
+          // frames of one extension can be open at once — so a second frame merely
+          // STARTING would wipe a real activate() failure the first had just
+          // reported. Only a completed activation is evidence the extension is well.
+          clearFailure(extensionId)
         }
       }
       window.addEventListener('message', onChildMessage)

@@ -24,6 +24,11 @@ export type FrameDocumentInput = {
   viewId: string
   /** The manifest `entry`, relative to the bundle root (already path-validated). */
   entry: string
+  /** Contributed command ids from the manifest. The frame refuses to register a
+   *  handler for anything outside this list — see assertDeclared in the bootstrap. */
+  declaredCommands: string[]
+  /** Contributed view ids, same contract. */
+  declaredViews: string[]
   /** Per-load nonce authorizing exactly the one inline bootstrap script. */
   nonce: string
 }
@@ -47,6 +52,20 @@ export type FrameDocumentInput = {
  * Note what CSP still cannot do: it has no directive governing `window.open`
  * (`navigate-to` was never shipped). That hole is closed by the iframe's `sandbox`
  * attribute in viewBridge.tsx, not here.
+ *
+ * ── WHY THERE IS NO `frame-ancestors` ──
+ * Genuinely absent, not overlooked. It would name who may EMBED this document, and
+ * no value expresses "the Agent Code renderer": the host origin is
+ * `http://localhost:<port>` in dev and an opaque `file://` in production, so any
+ * literal list is either wrong in one mode or so wide it asserts nothing. (It also
+ * only takes effect as a response header — the meta form is ignored — so writing it
+ * into the document would silently do nothing.)
+ *
+ * What actually prevents cross-embedding is `default-src 'none'`: `frame-src` and
+ * `child-src` both fall back to it, so no extension frame can create a nested frame,
+ * and one extension therefore cannot embed another's view. The only embedder that
+ * exists is the host, which is trusted. If the host ever gains a stable origin, add
+ * the header — until then this is the record that the absence was reasoned about.
  */
 export function childFrameCsp(nonce: string, extensionId: string): string {
   const self = `agent-code-ext://${extensionId}`
@@ -63,25 +82,33 @@ export function childFrameCsp(nonce: string, extensionId: string): string {
 }
 
 export function buildFrameDocument(input: FrameDocumentInput): string {
-  const { extensionId, viewId, entry, nonce } = input
+  const { extensionId, viewId, entry, declaredCommands, declaredViews, nonce } = input
   // The bootstrap. Everything the child needs to (a) expose a Tier-0 API that
   // proxies to the parent over postMessage, (b) import and activate the extension,
   // (c) mount its view on the parent's signal. Kept in one nonced module.
   const bootstrap = `
 // ── CONFIG COMES FROM A JSON BLOCK, NOT FROM INTERPOLATED JS ──
-// These three values used to be spliced straight into this script as
+// These values used to be spliced straight into this script as
 // \`const VIEW_ID = \${JSON.stringify(viewId)}\`. JSON.stringify escapes quotes and
-// backslashes but NOT \`<\` or \`/\` — so a value containing \`</script>\` closed this
-// element from inside a string literal and everything after it became new markup.
+// backslashes but NOT \`<\` or \`/\`, so a value carrying a script CLOSING TAG ended
+// this element from inside a string literal and everything after it became markup.
 // The entry path passed all four of the manifest's negative refinements with that
 // payload embedded, and viewId was taken from the query string unchecked.
 //
-// Parsing a JSON island removes the sink entirely: a \`</script>\` inside JSON text is
+// Parsing a JSON island removes the sink entirely: a closing tag inside JSON text is
 // still just text to the JS parser, and the HTML tokenizer never sees it because
 // buildFrameDocument escapes \`<\` when emitting the block.
+//
+// NOTE TO ANYONE EDITING THIS FILE: never write a literal script closing tag
+// anywhere inside this template, not even in a comment. The HTML tokenizer ends a
+// script element at the first one it sees, with no regard for JavaScript context —
+// which is the entire bug described above, and which this very comment previously
+// caused by quoting the payload verbatim.
 const CFG = JSON.parse(document.getElementById('agent-code-ext-cfg').textContent);
 const VIEW_ID = CFG.viewId;
 const ENTRY = CFG.entry;
+const DECLARED_COMMANDS = CFG.declaredCommands;
+const DECLARED_VIEWS = CFG.declaredViews;
 
 // ── ANNOUNCE THAT THIS DOCUMENT IS THE REAL FRAME, IMMEDIATELY ──
 // The host cannot tell a successful load from a failed one any other way. An
@@ -207,13 +234,46 @@ function subscribeTopic(topic, cb) {
 const views = new Map();
 const commands = new Map();
 const subscriptions = [];
+// ── REGISTERING AN UNDECLARED ID IS AN ERROR, AND THE FRAME IS WHERE THAT LIVES ──
+// This check used to be in the host-realm ExtensionHost, which imported the module
+// and could compare against the manifest it already held. That host is gone — the
+// extension runs only here — and the check went with it, silently: the bootstrap
+// just wrote into the maps, while the type, moduleContract and the authoring guide
+// all still promised rejection.
+//
+// It matters because the failure it prevents is invisible. Contributions are
+// DECLARED in the manifest so the palette can list a command before the module is
+// imported; a handler registered under an id the manifest does not declare can
+// therefore never be invoked by anything. Without this, an author who typos an id
+// gets a command that does nothing, no error anywhere, and no way to tell the typo
+// from a broken host.
+//
+// The declared ids are passed in through the config island rather than fetched,
+// because the host already validated them at install and the frame has no way to
+// ask. Throwing here propagates to the import().catch below, which reports the
+// message to the host and shows it on the extension's Settings row.
+function assertDeclared(kind, id, declared) {
+  if (declared.indexOf(id) !== -1) return;
+  throw new Error(
+    'register' + kind + '("' + id + '") — not declared in contributes.' +
+      (kind === 'Command' ? 'commands' : 'views'),
+  );
+}
+
 const context = {
   api,
-  // Real now (was a no-op). Handlers are invoked by the host's 'command' push
-  // above — the frame is the ONE place an extension's command runs, so its
-  // handlers must actually be kept.
-  registerCommand: (id, run) => { commands.set(id, run); return { dispose() { commands.delete(id); } }; },
-  registerView: (id, mount) => { views.set(id, mount); return { dispose() { views.delete(id); } }; },
+  // Handlers are invoked by the host's 'command' push above — the frame is the ONE
+  // place an extension's command runs, so its handlers must actually be kept.
+  registerCommand: (id, run) => {
+    assertDeclared('Command', id, DECLARED_COMMANDS);
+    commands.set(id, run);
+    return { dispose() { commands.delete(id); } };
+  },
+  registerView: (id, mount) => {
+    assertDeclared('View', id, DECLARED_VIEWS);
+    views.set(id, mount);
+    return { dispose() { views.delete(id); } };
+  },
   subscriptions,
 };
 
@@ -393,6 +453,8 @@ window.addEventListener('pagehide', () => {
     `<script type="application/json" id="agent-code-ext-cfg">${JSON.stringify({
       viewId,
       entry,
+      declaredCommands,
+      declaredViews,
     }).replace(/</g, '\\u003c')}</script>`,
     `<script type="module" nonce="${nonce}">${bootstrap}</script>`,
     '</body>',

@@ -177,6 +177,10 @@ export function handleExtensionScheme(): void {
         extensionId,
         viewId,
         entry: record.manifest.entry,
+        // From the manifest this handler already validated, so the frame can
+        // enforce the declared-contributions contract without asking anyone.
+        declaredCommands: (record.manifest.contributes?.commands ?? []).map(c => c.id),
+        declaredViews: (record.manifest.contributes?.views ?? []).map(v => v.id),
         nonce,
       })
       return new Response(html, {
