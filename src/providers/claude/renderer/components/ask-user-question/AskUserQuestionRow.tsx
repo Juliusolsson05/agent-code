@@ -502,7 +502,7 @@ export function AskUserQuestionRow({
           <div className="text-[11px] text-muted italic">Answering…</div>
         ) : null}
         {resolveError ? (
-          <div className="border border-danger-border bg-danger-soft px-2 py-1 text-[11px] text-danger">
+          <div className="rounded-slab border border-danger-border bg-danger-soft px-2 py-1 text-[11px] text-danger">
             Answer failed: {resolveError}
           </div>
         ) : null}

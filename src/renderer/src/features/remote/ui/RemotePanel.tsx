@@ -162,7 +162,7 @@ export function RemotePanel({ onClose }: { onClose: () => void }): React.JSX.Ele
               </div>
             </div>
             <button
-              className={`border px-3 py-1.5 flex-shrink-0 ${
+              className={`rounded-control border px-3 py-1.5 flex-shrink-0 ${
                 status?.enabled
                   ? 'border-border bg-surface-hi text-ink'
                   : 'border-border bg-surface-hi text-ink-dim hover:text-ink'
@@ -203,7 +203,7 @@ export function RemotePanel({ onClose }: { onClose: () => void }): React.JSX.Ele
                 </div>
                 <div className="flex flex-shrink-0">
                   <button
-                    className={`border px-3 py-1.5 ${
+                    className={`rounded-control border px-3 py-1.5 ${
                       status.transport === 'lan'
                         ? 'border-border bg-surface-hi text-ink'
                         : 'border-border text-ink-dim hover:text-ink'
@@ -214,7 +214,7 @@ export function RemotePanel({ onClose }: { onClose: () => void }): React.JSX.Ele
                     LAN
                   </button>
                   <button
-                    className={`border border-l-0 px-3 py-1.5 ${
+                    className={`rounded-control border border-l-0 px-3 py-1.5 ${
                       status.transport === 'tunnel'
                         ? 'border-border bg-surface-hi text-ink'
                         : 'border-border text-ink-dim hover:text-ink'
@@ -235,7 +235,7 @@ export function RemotePanel({ onClose }: { onClose: () => void }): React.JSX.Ele
               <div className="flex items-center justify-between">
                 <div className="font-medium">Pair a device</div>
                 <button
-                  className="border border-border bg-surface-hi px-3 py-1.5 text-ink-dim hover:text-ink"
+                  className="rounded-control border border-border bg-surface-hi px-3 py-1.5 text-ink-dim hover:text-ink"
                   disabled={busy}
                   onClick={startPairing}
                 >
@@ -290,7 +290,7 @@ export function RemotePanel({ onClose }: { onClose: () => void }): React.JSX.Ele
                     </div>
                   </div>
                   <button
-                    className="border border-border px-2 py-1 text-ink-dim hover:text-danger flex-shrink-0"
+                    className="rounded-control border border-border px-2 py-1 text-ink-dim hover:text-danger flex-shrink-0"
                     disabled={busy}
                     onClick={() => revoke(device.deviceId)}
                   >

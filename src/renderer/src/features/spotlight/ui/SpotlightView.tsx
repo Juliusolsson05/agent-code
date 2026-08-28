@@ -46,7 +46,7 @@ export function SpotlightView({ workspace, agentViewMode }: Props) {
                 key={sessionId}
                 type="button"
                 onClick={() => workspace.setSpotlightSession(sessionId)}
-                className={`px-2 py-1 text-[11px] font-code border whitespace-nowrap ${
+                className={`rounded-control px-2 py-1 text-[11px] font-code border whitespace-nowrap ${
                   active
                     ? 'bg-accent text-accent-fg border-accent'
                     : 'bg-canvas text-ink-dim border-border hover:border-border-hi hover:text-ink'

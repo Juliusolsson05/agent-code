@@ -147,8 +147,16 @@ is literally `0px` — rather than a value someone can approximate.
 |  | `chip` | `control` | `slab` | `float` |
 |---|---|---|---|---|
 | **Sharp** | `0px` | `0px` | `0px` | `0px` |
-| **Soft** | `3px` | `3px` | `4px` | `6px` |
-| **Round** | `9999px` | `6px` | `8px` | `14px` |
+| **Soft** | `3px` | `4px` | `4px` | `6px` |
+| **Round** | `9999px` | `8px` | `8px` | `14px` |
+
+`control` was raised a step (Soft `3px`→`4px`, Round `6px`→`8px`) after the
+first build was reviewed on screen. At `6px` on a 28px button the arc was
+present but read as a manufacturing tolerance rather than a decision — the exact
+failure the "no 2px tier" rule was written to avoid, just one size up. `control`
+and `slab` now share a value at both tiers, which is correct rather than lazy:
+a button and the code block beside it are both objects sitting on the grid, and
+having them disagree by 2px was noise, not information.
 
 `Soft` is the restrained reading — visible, but it does not change the app's
 character. `Round` is the sudden one: chips become true capsules and floating
@@ -274,8 +282,74 @@ editor, or a feed row container, that is the review's fail condition.
   neither `electron-vite build` nor Vitest type-checks).
 - `npm test`.
 - A renderer test pinning the contract that actually matters: `Sharp` writes
-  `0px` to all three properties, `Round` writes the pill/8/14 set, and an
+  `0px` to all three properties, `Round` writes the pill/8/8/14 set, and an
   unknown persisted value coerces to the default rather than writing `undefined`.
+
+### Stage 5 — Widen the classification to bespoke call sites
+
+Stage 3 migrated the surfaces that already carried an accidental radius plus the
+obvious float/slab/capsule set. That left the app in a state the owner correctly
+read as half-finished: the shared `Button` / `Input` / `Textarea` / `Dialog`
+primitives round, but **246 bespoke `<button>` elements that never went through
+those primitives stayed square**, so a dialog's own footer buttons rounded while
+the toolbar above them did not.
+
+This stage classifies every remaining surface. The sweep is mechanical, and the
+discriminator is deliberately not taste:
+
+- **A single-edge border is a seam, not an object.** `border-b` / `border-t` /
+  `border-l` / `border-r` draws a divider between two things that must line up.
+  211 surfaces match, and every one of them stays square with no judgement call.
+- **A four-edge `border` encloses an object**, and an object may round. 230
+  surfaces match; those are the ones this stage decides.
+- **The colour token already carries the semantics.** `bg-control-bg` /
+  `border-control-border` names chrome, `bg-code-bg` names a plate,
+  `bg-popover-bg` names a detached surface. Reusing the palette's own vocabulary
+  as the classifier means the radius decision cannot drift away from the colour
+  decision.
+
+Resulting rule, applied in priority order:
+
+| test | token |
+|---|---|
+| tag is `button` / `input` / `textarea` / `select` | `control` |
+| `popover-*` colour, or a lifted `shadow-lg\|xl\|2xl\|[…]` | `float` |
+| tag is `pre`, or `bg-code-bg` / `whitespace-pre` / scrollable | `slab` |
+| any `control-*` colour token | `control` |
+| small box (`h-3.5\|4\|5`) with **no** text-size class | `control` |
+| content-sized `span` / `code` | `chip` |
+| anything else enclosed | `slab` |
+
+The fifth row exists because of a real bug caught in review: a checkbox is a
+small bordered box and would otherwise sort into `chip`, which goes fully
+pill-shaped at `Round` — turning every checkbox into a radio button. Presence of
+a text-size class is what separates a *label* (badge, index marker) from a
+*toggle*.
+
+**Hard exclusions, enforced by the sweep and not by review attention:** the three
+tile-leaf roots (`TileLeaf`, `TerminalLeaf`, `AgentTerminalLeaf`, all identified
+by `h-full min-h-0 min-w-0`) and any `gap-px` hairline grid, whose cells draw
+their dividers *as gaps* over a painted parent and would tear open at the
+corners.
+
+Fills with no border at all were judged individually rather than swept, because
+a background is not evidence of an object. Almost all of them stayed square:
+full-pane containers, drag handles and splitters, full-bleed menu and selection
+rows (rounding those needs an inset margin, which is a layout change, not a
+radius one), and the user-prompt band already excluded above. Four kinds were
+worth changing: progress/meter tracks and their fills (a meter is a capsule in
+every design language — and taking `chip` rather than `rounded-full` keeps
+`Sharp` honest), the tab count badge, the pane toast, and icon buttons whose
+only chrome is a hover fill, where a square fill on a 16px target reads as an
+artifact rather than a button.
+
+One dead class was closed while sweeping: the dictation waveform bar carried
+`rounded-sm`, which this branch pins to `0px`, so the build had been silently
+dropping an intent the source asserted. It becomes `rounded-full` alongside the
+other geometric circles.
+
+Coverage after this stage: 46 `chip`, 154 `control`, 118 `slab`, 16 `float` —
+334 classified surfaces, up from 98.
 
 ## Testing decisions
 

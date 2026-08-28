@@ -203,7 +203,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 
 function Pre({ children }: { children: React.ReactNode }) {
   return (
-    <pre className="
+    <pre className="rounded-slab
       bg-canvas border border-border px-2 py-1
       text-[10px] leading-[1.4] text-ink-dim
       whitespace-pre-wrap break-all

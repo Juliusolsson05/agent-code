@@ -48,7 +48,7 @@ export function AgentStatusPanel({ sessionId, workspace, onClose }: Props) {
         </div>
         <div className="flex items-center gap-2">
           {model ? (
-            <span className="
+            <span className="rounded-chip
               border border-border bg-surface-hi px-1.5 py-0.5
               text-[10px] font-code uppercase text-ink-dim
             ">
@@ -105,7 +105,7 @@ function EmptyState() {
 
 function Section({ title, fields }: { title: string; fields: AgentStatusField[] }) {
   return (
-    <section className="border border-border bg-canvas">
+    <section className="rounded-slab border border-border bg-canvas">
       <div className="
         border-b border-border px-2 py-1
         text-[10px] uppercase tracking-[0.14em] text-muted

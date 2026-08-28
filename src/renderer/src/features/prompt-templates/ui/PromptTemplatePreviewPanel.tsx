@@ -116,7 +116,7 @@ export const PromptTemplatePreviewPanel = memo(function PromptTemplatePreviewPan
         machinery in a hot path to improve two built-in rows.
       */}
       {template.buildBody && (
-        <p className="mb-3 border border-border bg-surface px-2 py-1.5 text-[10px] leading-[1.5] text-muted">
+        <p className="rounded-slab mb-3 border border-border bg-surface px-2 py-1.5 text-[10px] leading-[1.5] text-muted">
           This prompt is generated from live workspace state when you insert it.
           The text below is a placeholder — not the prompt you will get.
         </p>

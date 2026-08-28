@@ -112,7 +112,7 @@ export function SetupGate() {
       data-agent-code-interaction-owner="app"
       className="absolute inset-0 z-50 flex items-center justify-center bg-canvas/95 px-6"
     >
-      <div className="w-full max-w-3xl border border-border bg-surface">
+      <div className="rounded-slab w-full max-w-3xl border border-border bg-surface">
         <div className="border-b border-border px-5 py-4">
           <div className="text-[14px] text-ink">Agent Code Setup</div>
           <div className="mt-1 text-[11px] leading-5 text-muted">
@@ -147,7 +147,7 @@ export function SetupGate() {
               type="button"
               onClick={() => void refresh()}
               disabled={busy !== null}
-              className="border border-border px-3 py-2 text-[11px] text-ink-dim hover:border-border-hi hover:text-ink disabled:opacity-50"
+              className="rounded-control border border-border px-3 py-2 text-[11px] text-ink-dim hover:border-border-hi hover:text-ink disabled:opacity-50"
             >
               Retry
             </button>
@@ -155,7 +155,7 @@ export function SetupGate() {
               <button
                 type="button"
                 onClick={() => void continueWithOptionalSkipped()}
-                className="border border-accent bg-accent px-3 py-2 text-[11px] text-accent-fg"
+                className="rounded-control border border-accent bg-accent px-3 py-2 text-[11px] text-accent-fg"
               >
                 Continue
               </button>
@@ -227,7 +227,7 @@ function SetupRow({
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <span className="text-[12px] text-ink">{tool.label}</span>
-            <span className={`border px-1.5 py-0.5 text-[10px] ${statusBorder}`}>
+            <span className={`rounded-chip border px-1.5 py-0.5 text-[10px] ${statusBorder}`}>
               {statusLabel}
             </span>
           </div>
@@ -240,7 +240,7 @@ function SetupRow({
               type="button"
               disabled={busy !== null}
               onClick={() => setOverrideOpen(open => !open)}
-              className="border border-border px-3 py-2 text-[11px] text-ink-dim hover:border-border-hi hover:text-ink disabled:opacity-50"
+              className="rounded-control border border-border px-3 py-2 text-[11px] text-ink-dim hover:border-border-hi hover:text-ink disabled:opacity-50"
             >
               Enter path manually…
             </button>
@@ -250,7 +250,7 @@ function SetupRow({
               type="button"
               disabled={busy !== null}
               onClick={() => onInstall(target)}
-              className="border border-border px-3 py-2 text-[11px] text-ink-dim hover:border-border-hi hover:text-ink disabled:opacity-50"
+              className="rounded-control border border-border px-3 py-2 text-[11px] text-ink-dim hover:border-border-hi hover:text-ink disabled:opacity-50"
             >
               {installing ? 'Installing…' : 'Install'}
             </button>
@@ -270,13 +270,13 @@ function SetupRow({
               }}
               placeholder={`/absolute/path/to/${tool.id}`}
               spellCheck={false}
-              className="min-w-0 flex-1 border border-border bg-canvas px-2 py-1.5 text-[11px] text-ink placeholder:text-muted focus:border-border-hi focus:outline-none"
+              className="rounded-control min-w-0 flex-1 border border-border bg-canvas px-2 py-1.5 text-[11px] text-ink placeholder:text-muted focus:border-border-hi focus:outline-none"
             />
             <button
               type="button"
               disabled={busy !== null || !overridePath.trim()}
               onClick={() => void submitOverride()}
-              className="border border-border px-3 py-1.5 text-[11px] text-ink-dim hover:border-border-hi hover:text-ink disabled:opacity-50"
+              className="rounded-control border border-border px-3 py-1.5 text-[11px] text-ink-dim hover:border-border-hi hover:text-ink disabled:opacity-50"
             >
               Set
             </button>

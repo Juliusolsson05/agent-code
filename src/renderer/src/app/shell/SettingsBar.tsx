@@ -38,7 +38,7 @@ export function SettingsBar() {
         <button
           type="button"
           onClick={togglePerformancePanel}
-          className={`
+          className={`rounded-control
             px-2 py-1 border text-[10px] font-code transition-colors
             ${
               performancePanelOpen
@@ -60,7 +60,7 @@ export function SettingsBar() {
                 ? 'Caffeinate is active. Click to stop keeping the machine awake.'
                 : 'Start caffeinate to prevent idle sleep during long-running agent work.'
           }
-          className={`
+          className={`rounded-control
             px-2 py-1 border text-[10px] font-code transition-colors
             ${
               caffeinateStatus?.active

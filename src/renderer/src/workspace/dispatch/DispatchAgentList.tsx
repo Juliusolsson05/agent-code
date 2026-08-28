@@ -217,7 +217,7 @@ const DispatchGroupHeader = memo(function DispatchGroupHeader({
             aria-label={`New agent in ${title}`}
             title={`New agent in ${title}`}
             onClick={() => onCreateAgent(projectTabId, rows[0].sessionId)}
-            className="h-4 w-4 text-[12px] leading-none text-muted hover:bg-border hover:text-ink"
+            className="h-4 w-4 rounded-control text-[12px] leading-none text-muted hover:bg-border hover:text-ink"
           >
             +
           </button>
@@ -349,7 +349,7 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
           <DispatchAgentBadge kind={row.kind} />
           {projectChip && (
             <span
-              className="
+              className="rounded-chip
                 ml-auto flex-shrink-0 px-1.5 py-[1px] text-[9px] font-code
                 leading-none text-muted border border-border bg-surface-hi
                 truncate max-w-[140px]
@@ -460,7 +460,7 @@ function DispatchAgentBadge({ kind }: { kind: SessionKind | undefined }) {
     ? 'border-info-border bg-info-soft text-info'
     : 'border-border bg-surface-hi text-muted'
   return (
-    <span className={`flex-shrink-0 px-1.5 py-[1px] text-[9px] font-code leading-none border ${classes}`}>
+    <span className={`rounded-chip flex-shrink-0 px-1.5 py-[1px] text-[9px] font-code leading-none border ${classes}`}>
       {label}
     </span>
   )

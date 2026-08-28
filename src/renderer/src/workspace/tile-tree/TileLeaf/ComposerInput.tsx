@@ -187,7 +187,7 @@ export function ComposerInput({
           // draft. We intentionally don't set overflow-hidden in the
           // className anymore — that used to win against the inline
           // style and trap long pastes invisibly.
-          className={`
+          className={`rounded-control
             w-full bg-canvas border
             ${focused ? 'border-accent' : 'border-border'}
             text-ink text-[12px]
@@ -321,7 +321,7 @@ function ComposerDictationBars({
         return (
           <span
             key={phase}
-            className="w-[3px] rounded-sm bg-current transition-[height] duration-[28ms]"
+            className="w-[3px] rounded-full bg-current transition-[height] duration-[28ms]"
             style={{
               height,
               opacity: active ? 0.62 + Math.min(0.38, voice * 0.7) : 0.5,

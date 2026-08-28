@@ -199,7 +199,7 @@ export function WorkflowHistoryDialog({
                   key={reference.runId}
                   role="listitem"
                   data-workflow-activity={activity}
-                  className={`border border-border px-3 py-2.5 ${
+                  className={`rounded-slab border border-border px-3 py-2.5 ${
                     activity === 'active'
                       ? 'bg-accent/10'
                       : activity === 'inactive'
@@ -217,7 +217,7 @@ export function WorkflowHistoryDialog({
                       </div>
                     </div>
                     <span
-                      className={`shrink-0 border px-2 py-0.5 text-[10px] ${
+                      className={`rounded-chip shrink-0 border px-2 py-0.5 text-[10px] ${
                         activity === 'active'
                           ? 'border-accent/40 text-accent'
                           : 'border-border text-muted'
@@ -261,7 +261,7 @@ export function WorkflowHistoryDialog({
               <button
                 type="button"
                 onClick={() => setVisibleCount(current => current + HISTORY_PAGE_SIZE)}
-                className="border border-border px-2 py-1 text-ink hover:border-border-hi hover:bg-surface-hi focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-focus-ring"
+                className="rounded-control border border-border px-2 py-1 text-ink hover:border-border-hi hover:bg-surface-hi focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-focus-ring"
               >
                 Show {Math.min(HISTORY_PAGE_SIZE, newestFirst.length - visibleCount)} more
               </button>

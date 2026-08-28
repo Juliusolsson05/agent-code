@@ -24,7 +24,7 @@ function RowCell({ row, detailed }: { row: HeaderRow; detailed: boolean }) {
     <span className="inline-flex items-center gap-1">
       <span className="text-muted">{row.shortLabel}</span>
       {detailed ? (
-        <span className="inline-block h-[3px] w-7 overflow-hidden bg-surface-hi align-middle">
+        <span className="inline-block h-[3px] w-7 overflow-hidden rounded-chip bg-surface-hi align-middle">
           <span
             className="block h-full"
             style={{ width: `${width}%`, ...severityBarStyle(row.severity) }}

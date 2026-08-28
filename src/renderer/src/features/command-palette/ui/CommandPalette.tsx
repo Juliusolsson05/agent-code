@@ -1605,6 +1605,7 @@ function OpenCommandPalette({
     >
       <DialogContent
         className={`
+          rounded-float
           top-[12vh] translate-y-0 flex flex-col p-0
           bg-popover-bg border border-popover-border
           shadow-[0_16px_48px_var(--theme-shadow-color)]
@@ -2083,7 +2084,7 @@ function OpenCommandPalette({
                 {aiWorkspaceError ? (
                   <div
                     role="alert"
-                    className="mx-2 my-1 border border-danger/40 bg-danger/10 px-2 py-2 text-[11px] text-danger"
+                    className="rounded-slab mx-2 my-1 border border-danger/40 bg-danger/10 px-2 py-2 text-[11px] text-danger"
                   >
                     {aiWorkspaceError}
                   </div>
@@ -2145,7 +2146,7 @@ function OpenCommandPalette({
                 {aiWorkspaceError ? (
                   <div
                     role="alert"
-                    className="mb-3 border border-danger/40 bg-danger/10 px-2 py-2 text-[11px] text-danger"
+                    className="rounded-slab mb-3 border border-danger/40 bg-danger/10 px-2 py-2 text-[11px] text-danger"
                   >
                     {aiWorkspaceError}
                   </div>
@@ -2158,7 +2159,7 @@ function OpenCommandPalette({
                 <div className="flex justify-end gap-2">
                   <button
                     type="button"
-                    className="border border-control-border bg-control-hover-bg px-2 py-1 text-[11px] text-muted hover:text-ink"
+                    className="rounded-control border border-control-border bg-control-hover-bg px-2 py-1 text-[11px] text-muted hover:text-ink"
                     onClick={() => {
                       setMode('commands')
                       setQuery('')
@@ -2169,7 +2170,7 @@ function OpenCommandPalette({
                   </button>
                   <button
                     type="button"
-                    className="border border-accent bg-accent px-2 py-1 text-[11px] text-accent-fg disabled:opacity-40"
+                    className="rounded-control border border-accent bg-accent px-2 py-1 text-[11px] text-accent-fg disabled:opacity-40"
                     disabled={!query.trim() || aiWorkspacePending !== null}
                     onClick={() => void createAiWorkspace()}
                   >
@@ -2268,7 +2269,7 @@ function OpenCommandPalette({
                         <div className="flex flex-shrink-0 items-center gap-1">
                           <button
                             type="button"
-                            className="border border-border bg-surface px-1.5 py-0.5 text-[10px] text-muted hover:text-ink"
+                            className="rounded-control border border-border bg-surface px-1.5 py-0.5 text-[10px] text-muted hover:text-ink"
                             onClick={e => {
                               e.stopPropagation()
                               enterEditPromptTemplateMode(template)
@@ -2278,7 +2279,7 @@ function OpenCommandPalette({
                           </button>
                           <button
                             type="button"
-                            className="border border-danger-border bg-danger-soft px-1.5 py-0.5 text-[10px] text-danger hover:text-danger"
+                            className="rounded-control border border-danger-border bg-danger-soft px-1.5 py-0.5 text-[10px] text-danger hover:text-danger"
                             onClick={e => {
                               e.stopPropagation()
                               deletePromptTemplate(template)
@@ -2405,7 +2406,7 @@ const CommandDescriptionPanel = memo(function CommandDescriptionPanel({
             aria-label={starred ? 'Unstar command' : 'Star command'}
             title={starred ? 'Unstar command' : 'Star command'}
             onClick={() => onToggleStar(command.id)}
-            className={`
+            className={`rounded-control
               flex h-6 w-6 shrink-0 items-center justify-center border
               text-[16px] leading-none
               ${starred

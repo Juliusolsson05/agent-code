@@ -197,7 +197,7 @@ function BannerRow({
             aria-label={hintOpen ? 'Hide diagnostic hint' : 'Show diagnostic hint'}
             title={hintOpen ? 'Hide details' : 'Why did this fail?'}
             onClick={() => setHintOpen(open => !open)}
-            className="border border-current px-2 py-0.5 text-[10px] uppercase tracking-wide hover:bg-current/10"
+            className="rounded-control border border-current px-2 py-0.5 text-[10px] uppercase tracking-wide hover:bg-current/10"
           >
             {hintOpen ? '?—' : '?'}
           </button>
@@ -206,7 +206,7 @@ function BannerRow({
           <button
             type="button"
             onClick={entry.action.onClick}
-            className="border border-current px-2 py-0.5 text-[10px] uppercase tracking-wide hover:bg-current/10"
+            className="rounded-control border border-current px-2 py-0.5 text-[10px] uppercase tracking-wide hover:bg-current/10"
           >
             {entry.action.label}
           </button>
@@ -222,7 +222,7 @@ function BannerRow({
             // surfaces (TabBar, PathPickerModal). Keeping the same
             // font-code class so glyph baseline lines up with the rest
             // of the row.
-            className="border border-current px-2 py-0.5 text-[10px] uppercase tracking-wide hover:bg-current/10"
+            className="rounded-control border border-current px-2 py-0.5 text-[10px] uppercase tracking-wide hover:bg-current/10"
           >
             ×
           </button>

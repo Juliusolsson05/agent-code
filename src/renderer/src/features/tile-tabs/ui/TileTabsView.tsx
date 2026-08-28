@@ -91,7 +91,7 @@ export function TileTabsView({ workspace, agentViewMode }: Props) {
                   }`}
                 >
                   <div className="min-w-0 flex items-center gap-2">
-                    <span className="inline-flex items-center justify-center w-5 h-5 text-[10px] border border-border text-muted flex-shrink-0">
+                    <span className="rounded-chip inline-flex items-center justify-center w-5 h-5 text-[10px] border border-border text-muted flex-shrink-0">
                       {index + 1}
                     </span>
                     <div className="min-w-0">

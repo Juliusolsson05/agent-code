@@ -63,7 +63,7 @@ const DialogContent = React.forwardRef<
       {children}
       {showCloseButton ? (
         <DialogPrimitive.Close
-          className="absolute right-3 top-3 border border-transparent px-1.5 py-0.5 text-[14px] leading-none text-muted outline-none hover:border-border hover:text-ink focus-visible:border-focus-ring focus-visible:ring-1 focus-visible:ring-focus-ring"
+          className="rounded-slab absolute right-3 top-3 border border-transparent px-1.5 py-0.5 text-[14px] leading-none text-muted outline-none hover:border-border hover:text-ink focus-visible:border-focus-ring focus-visible:ring-1 focus-visible:ring-focus-ring"
         >
           <span aria-hidden="true">×</span>
           <span className="sr-only">Close</span>

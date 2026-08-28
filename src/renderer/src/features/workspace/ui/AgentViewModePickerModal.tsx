@@ -150,7 +150,7 @@ export function AgentViewModePickerModal({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="mx-4 my-4 border border-border bg-canvas">
+        <div className="rounded-slab mx-4 my-4 border border-border bg-canvas">
           {options.map(option => {
             const selected = option.value === currentValue
             const focused = option.value === cursor

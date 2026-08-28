@@ -125,7 +125,7 @@ export function DictationGuideModal() {
             screenshotAlt="Screenshot: Agent Code Voice Dictation settings row with a masked API key"
           />
 
-          <div className="border border-border bg-panel/40 px-3 py-2 text-[11px] text-muted">
+          <div className="rounded-slab border border-border bg-panel/40 px-3 py-2 text-[11px] text-muted">
             <p className="mb-1 font-semibold text-ink">A note on the hotkey.</p>
             <p>
               Dictation is triggered with{' '}
@@ -163,7 +163,7 @@ function GuideStep({
   return (
     <section className="flex flex-col gap-2">
       <h3 className="flex items-center gap-2 text-[13px] font-semibold">
-        <span className="flex h-5 w-5 items-center justify-center border border-accent bg-accent/10 text-[11px] text-accent">
+        <span className="rounded-chip flex h-5 w-5 items-center justify-center border border-accent bg-accent/10 text-[11px] text-accent">
           {number}
         </span>
         {title}
@@ -177,7 +177,7 @@ function GuideStep({
       <div
         role="img"
         aria-label={screenshotAlt}
-        className="
+        className="rounded-slab
           flex h-32 w-full items-center justify-center
           border border-dashed border-border bg-panel/40
           text-[10px] uppercase tracking-wider text-muted

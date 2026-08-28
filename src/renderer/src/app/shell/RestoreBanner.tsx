@@ -53,7 +53,7 @@ export function RestoreBanner() {
         <button
           type="button"
           onClick={() => setCollapsed(false)}
-          className="
+          className="rounded-control
             inline-flex items-center gap-2 border border-warning bg-warning/10
             px-2 py-0.5 text-[11px] font-code text-warning
             hover:bg-warning/20

@@ -51,7 +51,7 @@ export function SettingsList({
   if (definitions.length === 0) {
     return (
       <div className="flex-1 px-4 py-6">
-        <div className="border border-border px-4 py-4 text-[12px] text-muted">
+        <div className="rounded-slab border border-border px-4 py-4 text-[12px] text-muted">
           No settings matched this filter.
         </div>
       </div>
@@ -77,7 +77,7 @@ export function SettingsList({
     <div className="flex-1 overflow-auto px-4 py-4">
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-4">
         {grouped.map(group => (
-          <section key={group.category.id} className="border border-border bg-canvas">
+          <section key={group.category.id} className="rounded-slab border border-border bg-canvas">
             <div className="border-b border-border px-4 py-3">
               <div className="text-[13px] text-ink">{group.category.label}</div>
               <div className="mt-1 text-[11px] leading-5 text-muted">
@@ -138,7 +138,7 @@ function SettingRow({
             >
               <span>{control.getValue(settings) ? 'Enabled' : 'Disabled'}</span>
               <span
-                className={`flex h-3.5 w-3.5 border ${
+                className={`rounded-control flex h-3.5 w-3.5 border ${
                   control.getValue(settings)
                         ? 'border-control-active-bg bg-control-active-bg'
                         : 'border-control-border-hover bg-transparent'
@@ -161,7 +161,7 @@ function SettingRow({
                     key={option.value}
                     type="button"
                     onClick={() => void control.onSelect(context, option.value)}
-                    className={`border px-3 py-2 text-left ${
+                    className={`rounded-control border px-3 py-2 text-left ${
                       active
                         ? 'border-control-active-bg bg-control-active-bg text-control-active-fg'
                         : 'border-control-border bg-control-bg text-control-fg hover:border-control-border-hover hover:bg-control-hover-bg hover:text-ink'
@@ -270,7 +270,7 @@ function SettingMetadataBadges({ definition }: { definition: SettingDefinition }
       {badges.map(badge => (
         <span
           key={badge}
-          className="border border-panel-border bg-panel-elevated-bg px-1 py-0.5 text-[9px] uppercase tracking-wider text-muted"
+          className="rounded-chip border border-panel-border bg-panel-elevated-bg px-1 py-0.5 text-[9px] uppercase tracking-wider text-muted"
         >
           {badge}
         </span>

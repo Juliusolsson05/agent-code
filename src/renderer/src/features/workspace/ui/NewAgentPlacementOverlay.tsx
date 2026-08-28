@@ -434,7 +434,7 @@ export function NewAgentPlacementOverlay({
       )}
 
       <div className="absolute left-4 top-4 pointer-events-none">
-        <div className="border border-border bg-surface/95 px-3 py-2 text-[11px] text-ink-dim shadow-lg shadow-black/30">
+        <div className="rounded-float border border-border bg-surface/95 px-3 py-2 text-[11px] text-ink-dim shadow-lg shadow-black/30">
               {!selectedKind ? (
                 <div>{dispatchMode ? 'Choose dispatch agent type with ↑/↓ and press Enter' : 'Choose agent type with ↑/↓ and press Enter'}</div>
           ) : (
@@ -484,7 +484,7 @@ export function NewAgentPlacementOverlay({
         // Dispatch "+" leads straight here, so it would have shipped a button
         // whose only destination is a trap.
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-          <div className="pointer-events-auto w-[340px] border border-border bg-surface shadow-lg shadow-black/30">
+          <div className="rounded-float pointer-events-auto w-[340px] border border-border bg-surface shadow-lg shadow-black/30">
             <div className="border-b border-border px-4 py-3 text-[12px] uppercase tracking-wider text-muted">
               New Agent
             </div>
@@ -499,7 +499,7 @@ export function NewAgentPlacementOverlay({
                       setSelectedIndex(index)
                       commitKind(option.kind)
                     }}
-                    className={`flex w-full items-center justify-between border px-3 py-2 text-left ${
+                    className={`rounded-control flex w-full items-center justify-between border px-3 py-2 text-left ${
                       active
                         ? 'border-accent bg-accent text-accent-fg'
                         : 'border-border bg-canvas text-ink-dim hover:border-border-hi hover:text-ink'

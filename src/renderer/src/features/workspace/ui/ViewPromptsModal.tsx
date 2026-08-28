@@ -112,7 +112,7 @@ export function ViewPromptsModal({
           ) : (
             <div className="flex flex-col gap-3">
               {prompts.map((prompt, index) => (
-                <div key={`${prompt.timestamp ?? 'unknown'}:${index}`} className="border border-border bg-canvas/70 px-3 py-3">
+                <div key={`${prompt.timestamp ?? 'unknown'}:${index}`} className="rounded-slab border border-border bg-canvas/70 px-3 py-3">
                   <div className="flex items-center justify-between gap-3 text-[10px] uppercase tracking-[0.12em] text-muted">
                     <span>#{index + 1}</span>
                     <span>{formatPromptTimestamp(prompt.timestamp)}</span>
