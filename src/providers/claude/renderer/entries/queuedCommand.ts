@@ -20,6 +20,31 @@ export type ClaudeQueuedCommand = {
   sourceUuid: string | null
 }
 
+/**
+ * Read a meta-provenance flag conservatively.
+ *
+ * WHY absent and present-but-malformed are treated DIFFERENTLY: older Claude
+ * versions omit `isMeta` entirely for human prompts, so an absent field is the
+ * recorded legacy shape and must stay admissible — that shape is most of what
+ * this feature exists to render. A field that is PRESENT but not a boolean is
+ * a different thing: the record claims to carry provenance and the claim is
+ * unreadable.
+ *
+ * This previously compared with `=== true`, so `isMeta: "true"` read as false
+ * and the record was admitted as user-authored chat — automation text painted
+ * in the user's own voice, which is the one failure this gate exists to
+ * prevent. Unprovable provenance therefore resolves to "meta": a wrongly
+ * suppressed bubble is a visible, diagnosable gap, while a wrongly attributed
+ * one puts words in the user's mouth and looks entirely legitimate.
+ *
+ * This is the same rule `decodeClaudeQueuedUserPrompt` already applies to a
+ * present-but-unknown `origin`; only `isMeta` was left permissive.
+ */
+function readMetaFlag(value: unknown): boolean {
+  if (value === undefined) return false
+  return value !== false
+}
+
 function isContentBlockArray(value: unknown): value is ContentBlock[] {
   if (!Array.isArray(value)) return false
   for (const block of value) {
@@ -84,7 +109,7 @@ export function decodeClaudeQueuedCommand(entry: Entry): ClaudeQueuedCommand | n
     promptText: typeof prompt === 'string' ? prompt : null,
     originKind,
     originPresent,
-    isMeta: attachment.isMeta === true || raw.isMeta === true,
+    isMeta: readMetaFlag(attachment.isMeta) || readMetaFlag(raw.isMeta),
     sourceUuid:
       typeof attachment.source_uuid === 'string'
         ? attachment.source_uuid

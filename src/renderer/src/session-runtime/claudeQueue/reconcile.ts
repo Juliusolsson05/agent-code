@@ -372,10 +372,25 @@ function applyDequeue(state: ClaudeQueueState, op: QueueOperationRecord): Claude
 }
 
 function applyPopAll(state: ClaudeQueueState, op: QueueOperationRecord): ClaudeQueueState {
-  // `popAll` is the one departure that logs its content, so it needs no
-  // inference at all — match and remove exactly what was popped. Upstream pulls
-  // only EDITABLE commands into the composer and deliberately leaves
-  // task-notifications queued, so a content match is also the correct scope.
+  // `popAll` logs its content, so it needs no inference at all — match and
+  // remove exactly what was popped. Upstream pulls only EDITABLE commands into
+  // the composer and deliberately leaves task-notifications queued, so a
+  // content match is also the correct scope.
+  //
+  // WHY this receives the RAW state and settles no debt, exactly as
+  // applyRemove does: an open remove debt accounts for a DIFFERENT departure,
+  // and settling it first picks its victim by FIFO cohort order — which can be
+  // the very item this record names. The exact lookup then misses, returns
+  // early, and some unrelated item survives permanently while the debt has
+  // been spent on the wrong one. This path previously ran
+  // settleRemoveDebtByCohort(state) before matching and did exactly that; with
+  // a single queued item and one open debt it consumed that item by inference
+  // on behalf of a carrier naming something else entirely.
+  //
+  // On a miss, return the ORIGINAL state. A content-bearing carrier is its own
+  // proof: if its target is absent (redelivery, partial bootstrap), doing
+  // nothing is safer than converting failed exact evidence into permission to
+  // remove a neighbour by inference.
   const content = op.content
   if (typeof content !== 'string') return state
   const needle = normalizeForMatch(content)
@@ -414,7 +429,10 @@ export function applyQueueOperation(
     case 'remove':
       return applyRemove(state, op)
     case 'popAll':
-      return applyPopAll(settleRemoveDebtByCohort(state), op)
+      // Raw state, NOT settleRemoveDebtByCohort(state) — see applyPopAll.
+      // `remove` and `popAll` are the two carriers that log their own content,
+      // so both must apply that exact evidence before any inference runs.
+      return applyPopAll(state, op)
     default:
       // An unknown operation must not be guessed at. Upstream's vocabulary is
       // enqueue/dequeue/remove/popAll today; if a fifth appears, doing nothing

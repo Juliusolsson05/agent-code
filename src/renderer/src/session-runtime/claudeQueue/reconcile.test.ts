@@ -275,6 +275,68 @@ describe('remove: the two upstream callers disagree, and we resolve safely', () 
     expect(state.decisions[0]!.preview).toContain('Agent "audit" finished')
   })
 
+  it('applies popAll content before settling older remove debt', () => {
+    // `popAll` is the OTHER departure that logs its content, so the
+    // exact-before-inference rule the recorded fixture proves for `remove`
+    // must hold here too. It did not: `remove` was fixed to receive the raw
+    // state while `popAll` was still handed `settleRemoveDebtByCohort(state)`,
+    // so the guess ran first and could consume the very item popAll names.
+    //
+    // Sequence: two prompts queued, one content-free legacy remove (opens a
+    // debt of 1), then popAll naming the FIRST prompt. Upstream, the composer
+    // took 'first' and the earlier remove took something else. Settling first
+    // picks 'first' by FIFO cohort order, popAll then misses entirely, and
+    // 'second' is stranded with the debt already spent on the wrong item.
+    //
+    // NOTE this sequence is not in testing/fixtures/queue-operations — no
+    // recorded session there contains a popAll at all. It is asserted at the
+    // reducer level rather than dressed up as a recording, because the
+    // invariant under test is the one the recorded `remove` fixture already
+    // establishes; only the carrier differs.
+    let state = createClaudeQueueState()
+    state = applyQueueOperation(state, { operation: 'enqueue', content: 'first', timestamp: '1' })
+    state = applyQueueOperation(state, { operation: 'enqueue', content: 'second', timestamp: '2' })
+    state = applyQueueOperation(state, { operation: 'remove', timestamp: '3' })
+    expect(state.removeDebt?.count).toBe(1)
+
+    state = applyQueueOperation(state, {
+      operation: 'popAll',
+      content: 'first',
+      timestamp: '4',
+    })
+
+    // The exact carrier owns its own departure and must be recorded as
+    // observed, not inferred away by the older debt.
+    const popped = state.decisions.filter(d => d.reason === 'popped-to-composer')
+    expect(popped).toHaveLength(1)
+    expect(popped[0]!.preview).toContain('first')
+
+    // The debt accounts for a DIFFERENT departure and must survive for its own
+    // later settlement. Spending it here is what strands 'second'.
+    expect(state.removeDebt?.count).toBe(1)
+    expect(state.pending.map(i => i.content)).toEqual(['second'])
+  })
+
+  it('leaves remove debt untouched when popAll names an absent item', () => {
+    // Mirror of applyRemove's redelivery guard: a content-bearing carrier is
+    // its own proof, so a miss must be a conservative no-op rather than
+    // permission to settle the older debt by inference.
+    let state = createClaudeQueueState()
+    state = applyQueueOperation(state, { operation: 'enqueue', content: 'kept', timestamp: '1' })
+    state = applyQueueOperation(state, { operation: 'remove', timestamp: '2' })
+    const beforePop = state
+
+    state = applyQueueOperation(state, {
+      operation: 'popAll',
+      content: 'never queued here',
+      timestamp: '3',
+    })
+
+    expect(state).toBe(beforePop)
+    expect(state.removeDebt?.count).toBe(1)
+    expect(state.pending.map(i => i.content)).toEqual(['kept'])
+  })
+
   it('still takes the priority winner when no notification is queued', () => {
     // With no ambiguity the attachment-drain rule applies unchanged.
     let state = createClaudeQueueState()
