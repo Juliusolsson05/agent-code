@@ -255,6 +255,20 @@ export type SettingDefinition =
       description: string
       keywords: string[]
       metadata?: SettingMetadata
+      // GitHub packages are main-owned immutable snapshots plus generated
+      // provider files. Discovery and deployment health cannot live in the
+      // renderer's scalar Settings document.
+      control: {
+        type: 'agent-code-installed-skills'
+      }
+    }
+  | {
+      id: string
+      category: SettingCategoryId
+      title: string
+      description: string
+      keywords: string[]
+      metadata?: SettingMetadata
       // Marker for the built-in keybinding editor. Self-subscribing for the
       // same reason as cli-update-behavior: the row needs the live effective
       // binding set plus conflict lookup, and hoisting all of that into the
@@ -524,6 +538,18 @@ export function getSettingsRegistry(): SettingDefinition[] {
       ],
       metadata: { scope: 'app', apply: 'new-session', storage: 'external-files' },
       control: { type: 'agent-code-custom-skills' },
+    },
+    {
+      id: 'agent-code-installed-skills',
+      category: 'agents',
+      title: 'Installed Skills',
+      description: 'Review and install portable Agent Skills from public GitHub repositories.',
+      keywords: [
+        'installed', 'skills', 'github', 'repository', 'import', 'source', 'update',
+        'claude', 'codex', 'opencode', 'personal', 'packages',
+      ],
+      metadata: { scope: 'app', apply: 'new-session', storage: 'external-files' },
+      control: { type: 'agent-code-installed-skills' },
     },
     {
       id: 'default-orchestration-mcp',

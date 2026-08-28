@@ -3,8 +3,11 @@
 Agent Code can store machine-wide personal Agent Skills and expose them to every
 registered agent provider. Agent Code Conventions is the reserved, encouraged
 skill with its own Settings experience. Custom Skills is a separate manager for
-instruction-only skills authored inside Agent Code. Both publish through the
-same ownership and reconciliation authority.
+instruction-only skills authored inside Agent Code. Installed Skills is a third,
+source-management surface for reviewed packages imported from public GitHub
+repositories. All three publish through the same ownership and reconciliation
+authority; project, plugin, organization, and externally installed skills remain
+outside Agent Code ownership.
 
 The feature is intentionally a native skill rather than hidden prompt text.
 That keeps provider activation semantics honest: providers discover metadata
@@ -14,11 +17,22 @@ and the same CLI can discover the skill when launched outside Agent Code.
 ## Sources of truth
 
 `~/.config/agent-code/conventions.json` is the legacy-named, sole canonical
-collection and desired-state record. Schema v2 retains the Conventions fields
-and adds custom definitions plus skill-and-target artifact identities. Keeping
-the existing path lets schema-v1 Conventions ownership evidence migrate without
-creating two canonical stores. Provider `SKILL.md` files are generated
-artifacts. Editing one never imports content back into Agent Code.
+collection and desired-state record. Schema v3 retains the Conventions and
+custom-skill fields and adds GitHub source provenance, installed package
+manifests, and package-level pending operations. Keeping the existing path lets
+schema-v1 and schema-v2 ownership evidence migrate without creating competing
+canonical stores. Provider skill directories are generated artifacts. Editing
+one never imports content back into Agent Code.
+
+Reviewed package bytes live separately under the private, content-addressed
+`managed-skill-snapshots` state directory. The JSON document names an immutable
+manifest digest; it never embeds binary assets or accepts a renderer path. A
+snapshot becomes durable before desired state can reference it, and every read
+rechecks its bounded manifest and hashes. Unreferenced snapshots are retained
+because portable Node APIs cannot anchor recursive deletion to a securely
+opened directory handle; the complete root is capped at 256 MiB and 32,768
+filesystem entries. Bounded inert storage is safer than allowing an ancestor
+replacement race to redirect cleanup into unmanaged data.
 
 The persisted revision is a compare-and-swap token for renderer mutations.
 Deployment health is separate from desired `enabled` state: an enabled document
@@ -46,6 +60,12 @@ session manager may invoke the opaque pre-session reconciliation callback.
 Provider modules declare discovery capabilities only. This single-consumer
 shape is intentional: duplicating even one deletion or collision rule in a
 consumer would create a second source of ownership truth.
+
+`githubSkillSource.ts` and `installedSkillPackageStore.ts` are focused helpers,
+not additional authorities. Acquisition returns inert, bounded package bytes;
+the service alone decides whether those bytes may enter canonical state or a
+provider root. `installedSkillMaterializer.ts` receives only an already-durable
+package operation and returns evidence for the service to persist.
 
 ## Provider discovery capability
 
@@ -84,9 +104,46 @@ or assets. The service inspects only an exact destination it is about to
 publish. A pre-existing unmanaged destination is a collision and cannot be
 adopted or replaced from the Custom Skills UI.
 
+## GitHub-installed packages
+
+Installed Skills accepts public `https://github.com/<owner>/<repo>` URLs and
+GitHub `/tree/<ref>/<path>` URLs. Discovery uses a hardened `git ls-remote`
+without a shell to resolve advertised branch/tag identity; its subprocess
+environment is allowlisted so askpass, credential, proxy, and TLS overrides
+cannot cross into acquisition. Repository content is never cloned. The exact
+commit's recursive tree and only selected raw blobs come from allowlisted
+GitHub HTTPS endpoints through streaming in-memory limits, and every raw blob
+must match the Git object ID in that commit tree before review. This keeps
+repository-controlled acquisition off disk until the bounded, reviewed package
+is admitted to the private snapshot store. One discovery-wide content budget
+reserves each tree-advertised blob before transport and charges accepted,
+rejected, and transport-failed candidates; an invalid collection cannot
+multiply its allowance by failing late.
+Symbolic links, gitlinks, unsafe or cross-platform-colliding paths, oversized
+packages, malformed YAML anywhere in bounded frontmatter, non-string portable
+identity fields, and directory/name mismatches are rejected before installation.
+
+A reviewed installed record pins repository, requested ref and branch/tag
+namespace, exact source path,
+resolved commit, file hashes, sizes, and executable bits. All package files—not
+only `SKILL.md`—belong to its immutable snapshot. Executable files are disclosed
+in review and preserved for provider compatibility, but Agent Code never runs
+repository content during discovery or installation. Provider-specific and
+unrecognized metadata remains byte-for-byte intact and is surfaced as a warning.
+
+Update checks are explicit network actions. They reacquire the same repository,
+ref, source path, and skill name and return a deterministic added/changed/removed
+file review. Nothing changes until the user applies that staged review. There
+are no background checks or automatic updates, and source-managed packages are
+view-only rather than editable as Custom Skills.
+
 ## Ownership and crash recovery
 
-The state file records the path and hash for every successful materialization.
+The state file records the path and hash for every successful single-file
+materialization. Installed packages record the same evidence as a sorted
+per-target file manifest plus snapshot digest; package-level pending operations
+carry the previous and desired manifests so partial multi-file publication can
+be reconciled without claiming an unexpected sibling file.
 It deliberately records no leaf-directory ownership: portable APIs cannot make
 fixed-name directory creation atomic with app-state persistence, so any such
 claim could transfer to a concurrent or replacement directory. Before changing
@@ -112,7 +169,9 @@ Provider reads are bounded and reject symlinks, FIFOs, sockets, devices, and
 non-regular files. Existing unmanaged Conventions files are never overwritten
 without a target-specific approval tied to the exact observed filesystem
 version. Custom skills intentionally offer no overwrite path: a freely chosen
-name cannot grant Agent Code ownership of an external installation. Main
+name cannot grant Agent Code ownership of an external installation. GitHub-
+installed packages follow the same no-overwrite rule and additionally treat
+every unexpected sibling file or executable-mode change as external. Main
 rechecks every approved Conventions fingerprint under the mutation lock and the
 atomic writer checks the version again immediately before publication.
 
@@ -123,7 +182,10 @@ unverified replacement is restored with an atomic no-clobber link. It never
 removes the leaf directory. Portable filesystem APIs cannot atomically create a
 fixed-name directory and durably record who won that mkdir race, so retaining a
 harmless empty directory is safer than inventing deletion authority. Externally
-modified files remain conflicts.
+modified files remain conflicts. Any filesystem error leaves the installed
+record, materialization, and pending operation intact; removal cannot report
+success until every owned file is gone or the user explicitly abandons a
+fingerprint-reviewed conflict.
 
 Historical paths are preservation evidence, not mutation authority. If a
 provider root such as `CLAUDE_CONFIG_DIR` moves, Agent Code installs the current
@@ -144,7 +206,7 @@ external bytes.
 Agent Code reconciles before sessions it launches. It cannot gate a CLI started
 in another terminal, and existing sessions may require restart depending on the
 provider. No filesystem watcher or automatic running-session reload exists in
-v1 of the Custom Skills UI.
+v1 of the Custom or Installed Skills UI.
 
 The Markdown is plaintext and may be sent to a model provider when the skill is
 activated. Agent Code does not intentionally serialize it or content-derived

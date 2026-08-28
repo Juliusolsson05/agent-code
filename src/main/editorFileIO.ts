@@ -63,6 +63,22 @@ export async function readBoundedTextFile(
   stat: Stats
   version: EditorFsFileVersion
 }> {
+  const value = await readBoundedFile(absolutePath, maxBytes)
+  return {
+    text: decodeEditorText(value.bytes),
+    stat: value.stat,
+    version: value.version,
+  }
+}
+
+export async function readBoundedFile(
+  absolutePath: string,
+  maxBytes: number,
+): Promise<{
+  bytes: Buffer
+  stat: Stats
+  version: EditorFsFileVersion
+}> {
   // O_NOFOLLOW is unavailable on Windows. The lstat/open/lstat sandwich does
   // not claim to be a kernel-level no-follow primitive, but it does reject the
   // stable reparse-point case and detects a path swap around open. POSIX keeps
@@ -98,7 +114,7 @@ export async function readBoundedTextFile(
     const afterVersion = editorFileVersion(after)
     if (beforeVersion !== afterVersion) throw new Error('file changed while it was being read')
     return {
-      text: decodeEditorText(buffer.subarray(0, offset)),
+      bytes: buffer.subarray(0, offset),
       stat: after,
       version: afterVersion,
     }
@@ -147,6 +163,20 @@ export async function atomicWriteTextFile(params: {
   expectedSha256?: string
 }): Promise<AtomicTextWriteResult> {
   const bytes = Buffer.from(params.text, 'utf8')
+  return atomicWriteFile({ ...params, bytes })
+}
+
+export async function atomicWriteFile(params: {
+  absolutePath: string
+  bytes: Buffer
+  expectedVersion?: EditorFsFileVersion | null
+  maxBytes: number
+  mode?: number
+  temporaryPath?: string
+  captureDirectory?: string
+  expectedSha256?: string
+}): Promise<AtomicTextWriteResult> {
+  const bytes = params.bytes
   if (bytes.byteLength > params.maxBytes) throw new Error('file is too large')
 
   const before = await existingRegularFile(params.absolutePath)
@@ -246,7 +276,7 @@ export async function atomicWriteTextFile(params: {
       const captured = await existingRegularFile(captureFilePath)
       const capturedHash = captured && params.expectedSha256
         ? createHash('sha256')
-            .update((await readBoundedTextFile(captureFilePath, params.maxBytes)).text)
+            .update((await readBoundedFile(captureFilePath, params.maxBytes)).bytes)
             .digest('hex')
         : null
       // rename can legitimately advance ctime, so the opaque editor version

@@ -1,10 +1,11 @@
 import type { Stats } from 'fs'
+import { createHash } from 'crypto'
 import { link, lstat, mkdir, readdir, realpath, rename, unlink } from 'fs/promises'
 import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from 'path'
 
 import {
   editorFileVersion,
-  readBoundedTextFile,
+  readBoundedFile,
 } from '@main/editorFileIO.js'
 import {
   AGENT_CODE_CONVENTIONS_COLLISION_MAX_BYTES,
@@ -23,6 +24,8 @@ export type FileInspection =
       sha256: string | null
       version: string
       fingerprint: string
+      bytes: number
+      executable: boolean
       readError?: string
     }
   | { kind: 'conflict'; fingerprint: string; message: string }
@@ -87,7 +90,10 @@ export class SkillPathSafety {
     }
   }
 
-  async inspectExactFile(path: string): Promise<FileInspection> {
+  async inspectExactFile(
+    path: string,
+    maxBytes = AGENT_CODE_CONVENTIONS_COLLISION_MAX_BYTES,
+  ): Promise<FileInspection> {
     if (!isAbsolute(path)) return this.pathConflict(path, 'Persisted ownership path is not absolute.')
     try {
       await this.assertNoSymlinkComponents(dirname(path))
@@ -99,7 +105,7 @@ export class SkillPathSafety {
       throw error
     })
     if (!file) return { kind: 'missing', directoryExists: false, directoryEmpty: true }
-    return this.inspectRegularFile(path, file)
+    return this.inspectRegularFile(path, file, maxBytes)
   }
 
   async ensureTargetDirectory(target: AgentCodeConventionsTarget): Promise<void> {
@@ -144,9 +150,10 @@ export class SkillPathSafety {
     path: string,
     quarantinePath: string,
     expectedSha256: string,
+    maxBytes = AGENT_CODE_CONVENTIONS_COLLISION_MAX_BYTES,
   ): Promise<DeleteQuarantineRecovery> {
     this.assertSibling(path, quarantinePath)
-    const quarantined = await this.inspectExactFile(quarantinePath)
+    const quarantined = await this.inspectExactFile(quarantinePath, maxBytes)
     if (quarantined.kind === 'missing') return 'none'
     if (quarantined.kind !== 'file' || quarantined.sha256 === null) return 'conflict'
     const targetExists = await lstat(path).then(() => true).catch(error => {
@@ -170,6 +177,7 @@ export class SkillPathSafety {
     expectedVersion: string,
     expectedSha256: string,
     quarantinePath: string,
+    maxBytes = AGENT_CODE_CONVENTIONS_COLLISION_MAX_BYTES,
   ): Promise<OwnedUnlinkResult> {
     this.assertSibling(path, quarantinePath)
     await this.assertNoSymlinkComponents(dirname(path))
@@ -189,7 +197,11 @@ export class SkillPathSafety {
     // We verify the captured bytes before deleting them, so a replacement in
     // the lstat→rename window is restored rather than destroyed.
     await rename(path, quarantinePath)
-    const captured = await this.inspectExactFile(quarantinePath)
+    // The caller's ownership boundary also defines the largest file it can
+    // legitimately own. Reusing the smaller conventions collision limit here
+    // would make an installed skill asset safe to publish but impossible to
+    // remove once it crossed that unrelated threshold.
+    const captured = await this.inspectExactFile(quarantinePath, maxBytes)
     if (captured.kind !== 'file' || captured.sha256 !== expectedSha256) {
       if (!await this.restoreQuarantine(quarantinePath, path)) {
         throw new Error('Captured file changed and could not be restored without clobbering')
@@ -215,19 +227,25 @@ export class SkillPathSafety {
     }
   }
 
-  private async inspectRegularFile(path: string, stat: Stats): Promise<FileInspection> {
+  private async inspectRegularFile(
+    path: string,
+    stat: Stats,
+    maxBytes = AGENT_CODE_CONVENTIONS_COLLISION_MAX_BYTES,
+  ): Promise<FileInspection> {
     const version = editorFileVersion(stat)
     const fingerprint = sha256Text(`${path}\0${version}`)
     if (stat.isSymbolicLink() || !stat.isFile()) {
       return { kind: 'conflict', fingerprint, message: 'The target is not a regular file.' }
     }
     try {
-      const read = await readBoundedTextFile(path, AGENT_CODE_CONVENTIONS_COLLISION_MAX_BYTES)
+      const read = await readBoundedFile(path, maxBytes)
       return {
         kind: 'file',
-        sha256: sha256Text(read.text),
+        sha256: sha256Bytes(read.bytes),
         version: read.version,
         fingerprint: sha256Text(`${path}\0${read.version}`),
+        bytes: read.stat.size,
+        executable: (read.stat.mode & 0o111) !== 0,
       }
     } catch (error) {
       return {
@@ -235,6 +253,8 @@ export class SkillPathSafety {
         sha256: null,
         version,
         fingerprint,
+        bytes: stat.size,
+        executable: (stat.mode & 0o111) !== 0,
         readError: safeErrorMessage(error),
       }
     }
@@ -313,6 +333,10 @@ export class SkillPathSafety {
       segments: absolute.slice(root.length).split(sep).filter(Boolean),
     }
   }
+}
+
+function sha256Bytes(value: Buffer): string {
+  return createHash('sha256').update(value).digest('hex')
 }
 
 function safeErrorMessage(error: unknown): string {

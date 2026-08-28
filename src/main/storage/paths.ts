@@ -26,6 +26,15 @@ export const STATE_FILE = join(STATE_DIR, 'workspace.json')
 // of truth; keeping this beside workspace state gives recovery one stable path.
 export const AGENT_CODE_CONVENTIONS_STATE_FILE = join(STATE_DIR, 'conventions.json')
 
+// Immutable package bytes imported through Installed Skills live outside the
+// revisioned JSON document. The document records a content digest and manifest;
+// this private content-addressed root holds the corresponding binary files
+// without forcing assets through JSON/base64 or the renderer process.
+export const AGENT_CODE_INSTALLED_SKILL_SNAPSHOTS_DIR = join(
+  STATE_DIR,
+  'managed-skill-snapshots',
+)
+
 // Per-session feed-debug append-only logs, one JSONL file per session.
 // See storage/feedDebugLog.ts for the write-queue discipline.
 export const FEED_DEBUG_DIR = join(STATE_DIR, 'feed-debug')
