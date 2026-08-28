@@ -179,10 +179,11 @@ export function registerExtensionsIpc(): void {
   // did not exist, and editing a file under EXTENSIONS_DIR silently kept every
   // capability the user had approved for the original code.
   //
-  // Hashing the bundle here is what makes the check real. It costs one read of
-  // the bundle (capped at 32 MB by the installer, and typically a few hundred
-  // KB) per frame creation — once when a view opens, not per capability call,
-  // because frameHost caches the result for the frame's lifetime.
+  // Hashing the bundle here is what makes the check real. It costs one read of the
+  // bundle per frame creation — not one per capability call, because frameHost
+  // resolves this once and every consumer (including viewBridge's observe
+  // subscription) shares that one promise. The installer bounds the work on the
+  // other side: 32 MB compressed, 256 MB extracted, 10,000 files.
   //
   // Every failure path returns [] rather than throwing: an unreadable or missing
   // bundle must mean "no capabilities", never "unchanged". Fail closed.

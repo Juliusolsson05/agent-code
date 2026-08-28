@@ -29,11 +29,16 @@ import { apiVersionMismatch, extensionManifestSchema } from './manifest.js'
 // not orphan every other installed extension.
 const installedExtensionSchema = z.object({
   manifest: extensionManifestSchema,
-  // Defaulted rather than required: a row written before this field existed came
-  // from the GitHub installer, because that was the only installer that wrote a
-  // ledger row at the time. Defaulting is the accurate migration, and it keeps an
-  // upgrade from dropping every installed extension.
-  origin: z.enum(['github', 'local']).default('github'),
+  // Optional, and MIGRATED BELOW rather than defaulted here.
+  //
+  // An earlier version defaulted this to 'github' on the reasoning that any row
+  // predating the field came from the GitHub installer. That reasoning was simply
+  // false: `installExtensionFromPath` shipped on this same branch and has been
+  // writing rows with an absolute path in `repo` ever since. Defaulting them to
+  // 'github' sent every one of them down the GitHub Update path, straight into
+  // `normalizeRepo('/Users/…')` — reproducing the exact failure the `origin` field
+  // was added to fix, for precisely the users who had been using Load folder.
+  origin: z.enum(['github', 'local']).optional(),
   repo: z.string().min(1),
   ref: z.string().min(1),
   sha256: z.string().regex(/^[a-f0-9]{64}$/),
@@ -75,7 +80,16 @@ export async function readLedger(): Promise<InstalledExtension[]> {
         console.warn(`[extensions] skipping ${result.data.manifest.id}: ${mismatch}`)
         continue
       }
-      rows.push(result.data)
+      // Migrate a pre-`origin` row by the one field that actually distinguishes the
+      // two installers: `ref`. The local installer writes the literal 'local' there
+      // (it has no git ref to record), and the GitHub installer writes a tag or a
+      // branch name. A repository whose branch is literally named `local` would be
+      // misread — and would then simply take the Update path it already took before
+      // this field existed, so the migration is never worse than not having it.
+      rows.push({
+        ...result.data,
+        origin: result.data.origin ?? (result.data.ref === 'local' ? 'local' : 'github'),
+      })
     } else {
       // Surfaced, not silent: a dropped row means a corrupt/hand-edited ledger,
       // and the message names the field so it is diagnosable rather than an
@@ -86,6 +100,37 @@ export async function readLedger(): Promise<InstalledExtension[]> {
     }
   }
   return rows
+}
+
+/**
+ * Serialises every read-modify-write of the ledger.
+ *
+ * ── WHY temp+rename IS NOT ENOUGH ──
+ * `writeLedger` renames a temp file into place, which makes a write ATOMIC — an
+ * interrupted write leaves the previous ledger, never a truncated one. It does
+ * nothing about a LOST UPDATE, and the two were being conflated.
+ *
+ * Both `finalizeInstall` and `removeExtension` do read → mutate → write with no
+ * lock between them, so: two concurrent installs of different extensions both read
+ * `[]`, both write a one-row ledger, and the first extension's row is gone while
+ * its bundle sits on disk with nothing referencing it. An install racing a remove
+ * of the same id resurrects the extension the user just uninstalled — with a stale
+ * grant, because revokeGrant ran before the reinstall wrote a new row.
+ *
+ * A single module-scope chain is the right size for this: ledger writes are rare,
+ * they are all in main, and the contention window is a few milliseconds. A file
+ * lock would additionally guard a second Agent Code process, which the app's
+ * single-instance lock already prevents.
+ */
+let ledgerQueue: Promise<unknown> = Promise.resolve()
+
+export function withLedgerLock<T>(operation: () => Promise<T>): Promise<T> {
+  // `.then(op, op)` rather than `.then(op)`: a previous operation's REJECTION must
+  // not skip this one. The failure still reaches its own caller through the promise
+  // returned here; it just does not poison the queue.
+  const next = ledgerQueue.then(operation, operation)
+  ledgerQueue = next.catch(() => {})
+  return next
 }
 
 export async function writeLedger(rows: InstalledExtension[]): Promise<void> {
@@ -137,7 +182,13 @@ export async function removeExtension(id: string): Promise<void> {
   // site in this subsystem validates; this one did not, which is the whole reason the
   // shared validator now exists rather than a fifth copy of the regex.
   if (!isValidExtensionId(id)) throw new Error(`invalid extension id: ${id}`)
-  await rm(join(EXTENSIONS_DIR, id), { recursive: true, force: true })
-  const ledger = await readLedger()
-  await writeLedger(ledger.filter(row => row.manifest.id !== id))
+
+  // Under the lock as ONE unit, with the ledger row dropped BEFORE the bundle. An
+  // interruption between the two then leaves a bundle with no row — which the
+  // startup sweep reclaims — rather than a row with no bundle, which the user sees
+  // as a broken "files missing" entry they have to fix by hand.
+  await withLedgerLock(async () => {
+    await writeLedger((await readLedger()).filter(row => row.manifest.id !== id))
+    await rm(join(EXTENSIONS_DIR, id), { recursive: true, force: true })
+  })
 }

@@ -1,5 +1,5 @@
 import { spawn } from 'child_process'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import {
   access,
   constants as fsConstants,
@@ -19,7 +19,7 @@ import { join, relative, resolve as resolvePath, sep } from 'path'
 import { EXTENSIONS_DIR } from '@main/storage/paths.js'
 import { computeBundleHash } from '@main/extensions/bundleHash.js'
 import { ManifestError, parseExtensionManifest } from '@main/extensions/manifest.js'
-import { readLedger, writeLedger } from '@main/extensions/ledger.js'
+import { readLedger, withLedgerLock, writeLedger } from '@main/extensions/ledger.js'
 import { recordGrant, revokeGrant } from '@main/extensions/grants.js'
 import type { ExtensionManifest, InstalledExtension } from '@shared/types/extensions.js'
 
@@ -37,10 +37,22 @@ const MANIFEST_FILENAME = 'agent-code.extension.json'
 // download is buffered in memory to hash it — see downloadTarball.
 const MAX_TARBALL_BYTES = 32 * 1024 * 1024
 
-// Per-request deadline for every GitHub call. Generous enough for a slow link
-// against a 32 MB ceiling, short enough that a dead host surfaces as an error the
-// user can act on rather than a permanently disabled Install button.
+// How long a request may make NO progress before it is abandoned. Applied as a
+// total deadline to the two small metadata calls, and as an IDLE budget to the
+// download — see downloadTarball for why a total deadline is wrong there.
 const NETWORK_TIMEOUT_MS = 30_000
+
+// The EXTRACTED ceiling, which is a different quantity from MAX_TARBALL_BYTES and
+// the one that actually protects the disk. 256 MB is ~8x the compressed cap and
+// orders of magnitude above any real extension; anything past it is a bomb or a
+// mistake, and either way is not something to unpack into the user's home
+// directory.
+const MAX_EXTRACTED_BYTES = 256 * 1024 * 1024
+
+// A file-COUNT ceiling. Neither byte cap implies one — half a million empty files
+// compress to nothing — and every file costs a stat at install plus a read on every
+// bundle hash. See assertBundleTreeIsSafe.
+const MAX_BUNDLE_FILES = 10_000
 
 export class InstallError extends Error {
   constructor(message: string) {
@@ -145,21 +157,66 @@ async function resolveSource(repo: string): Promise<ResolvedSource> {
  * anywhere in the UI. A hung install is indistinguishable from a slow one and the
  * only escape is restarting the app.
  */
-async function fetchWithDeadline(url: string, headers: Record<string, string>): Promise<Response> {
+function isAbort(error: unknown): boolean {
+  return error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')
+}
+
+async function fetchWithDeadline(
+  url: string,
+  headers: Record<string, string>,
+  signal?: AbortSignal,
+): Promise<Response> {
   try {
-    return await fetch(url, { headers, signal: AbortSignal.timeout(NETWORK_TIMEOUT_MS) })
+    return await fetch(url, { headers, signal: signal ?? AbortSignal.timeout(NETWORK_TIMEOUT_MS) })
   } catch (error) {
-    // AbortSignal.timeout rejects with a TimeoutError DOMException, which reaches
+    // AbortSignal rejects with a TimeoutError/AbortError DOMException, which reaches
     // the user as "The operation was aborted" — true and useless. Name the host.
-    if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
-      throw new InstallError(`${new URL(url).host} did not respond within 30 seconds.`)
+    if (isAbort(error)) {
+      throw new InstallError(`${new URL(url).host} did not respond in time.`)
     }
     throw error
   }
 }
 
 async function downloadTarball(url: string): Promise<{ bytes: Buffer; sha256: string }> {
-  const res = await fetchWithDeadline(url, { 'user-agent': 'agent-code' })
+  // ── THE BODY GETS AN IDLE BUDGET, NOT A TOTAL ONE ──
+  // A single AbortSignal.timeout() covering the whole request is wrong here in two
+  // ways. First the arithmetic: 32 MB inside 30 s demands a sustained 8.7 Mbps, so
+  // a legitimate large-but-legal extension fails on an ordinary connection. Second
+  // the error handling: when that signal fires during the body read it throws out
+  // of the `for await` below, which is OUTSIDE fetchWithDeadline's try/catch — so
+  // the translation never ran and the user got exactly the "The operation was
+  // aborted" string the translation exists to prevent.
+  //
+  // An idle timer measures what actually matters — the connection has stopped
+  // making progress — and rearms on every chunk, so a slow but live download
+  // completes however long it legitimately takes.
+  const controller = new AbortController()
+  let idleTimer: ReturnType<typeof setTimeout> | null = null
+  const armIdleTimer = (): void => {
+    if (idleTimer) clearTimeout(idleTimer)
+    idleTimer = setTimeout(() => controller.abort(), NETWORK_TIMEOUT_MS)
+  }
+  armIdleTimer()
+
+  try {
+    return await readTarball(url, controller.signal, armIdleTimer)
+  } catch (error) {
+    if (isAbort(error)) {
+      throw new InstallError(`${new URL(url).host} stopped responding during the download.`)
+    }
+    throw error
+  } finally {
+    if (idleTimer) clearTimeout(idleTimer)
+  }
+}
+
+async function readTarball(
+  url: string,
+  signal: AbortSignal,
+  onProgress: () => void,
+): Promise<{ bytes: Buffer; sha256: string }> {
+  const res = await fetchWithDeadline(url, { 'user-agent': 'agent-code' }, signal)
   if (!res.ok) throw new InstallError(`Download failed with HTTP ${res.status}.`)
 
   // ── THE CAP IS ENFORCED WHILE READING, NOT AFTER ──
@@ -176,8 +233,9 @@ async function downloadTarball(url: string): Promise<{ bytes: Buffer; sha256: st
   // chunk no matter what the server claims.
   const declared = Number(res.headers.get('content-length') ?? '0')
   if (Number.isFinite(declared) && declared > MAX_TARBALL_BYTES) {
-    // Still checked first when present: failing before transferring 2 GB is better
-    // than failing after. It is just not sufficient on its own.
+    // A cheap early exit WHEN the header is present — which on the primary path it
+    // usually is not, because codeload generates the tarball on the fly and responds
+    // chunked. So this is a bonus, never the bound; the counter below is the bound.
     throw new InstallError(`Archive is ${Math.round(declared / 1e6)} MB; the limit is 32 MB.`)
   }
   if (!res.body) throw new InstallError('Download returned an empty response.')
@@ -185,6 +243,7 @@ async function downloadTarball(url: string): Promise<{ bytes: Buffer; sha256: st
   const chunks: Buffer[] = []
   let total = 0
   for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
+    onProgress()
     total += chunk.byteLength
     if (total > MAX_TARBALL_BYTES) throw new InstallError('Archive exceeds the 32 MB limit.')
     chunks.push(Buffer.from(chunk))
@@ -241,16 +300,79 @@ async function extractTarball(archivePath: string, destDir: string): Promise<voi
         stdio: ['ignore', 'ignore', 'pipe'],
       },
     )
+
+    // ── THE DOWNLOAD CAP DOES NOT BOUND THE EXTRACTION ──
+    // MAX_TARBALL_BYTES bounds COMPRESSED bytes. gzip on repetitive content runs
+    // 1000:1 and better, so a 32 MB archive that passes every check upstream can
+    // write tens of gigabytes here. EXTENSIONS_DIR is under $HOME, i.e. the boot
+    // volume, so filling it degrades the whole machine rather than just this app —
+    // and a Tier-0 manifest (which is what such a repository would ship) reaches
+    // this point with NO dialog of any kind, from a pasted `owner/repo`.
+    //
+    // Polled rather than streamed through a counting transform: the polling version
+    // is a dozen lines against a rewrite of the extraction path, it needs no
+    // in-process gunzip, and 500 ms of overshoot on a disk write is immaterial next
+    // to a cap this generous. On breach the child is SIGKILLed and the caller's
+    // `finally` removes the partial tree.
+    let settled = false
+    const finish = (run: () => void) => {
+      if (settled) return
+      settled = true
+      clearInterval(sizeTimer)
+      run()
+    }
+
+    const sizeTimer = setInterval(() => {
+      void directorySize(destDir).then(bytes => {
+        if (bytes <= MAX_EXTRACTED_BYTES) return
+        child.kill('SIGKILL')
+        finish(() =>
+          reject(
+            new InstallError(
+              `Archive expands to more than ${Math.round(MAX_EXTRACTED_BYTES / 1e6)} MB; ` +
+                `refusing to install it.`,
+            ),
+          ),
+        )
+      }).catch(() => {
+        // A stat failure mid-extraction is not evidence of a bomb (files come and
+        // go while tar writes); the next tick re-measures.
+      })
+    }, 500)
+
+    // Capped: stderr is attacker-influenced (tar echoes member names), and an
+    // archive with a million bad members would otherwise grow this string without
+    // bound in the main process while the extraction it is reporting on fails.
     let stderr = ''
     child.stderr.on('data', chunk => {
-      stderr += String(chunk)
+      if (stderr.length < 4096) stderr += String(chunk)
     })
-    child.once('error', reject)
+    child.once('error', error => finish(() => reject(error)))
     child.once('exit', code => {
-      if (code === 0) resolveExtract()
-      else reject(new InstallError(`Could not unpack the archive (tar exit ${code}): ${stderr.trim()}`))
+      finish(() => {
+        if (code === 0) resolveExtract()
+        else
+          reject(
+            new InstallError(`Could not unpack the archive (tar exit ${code}): ${stderr.trim()}`),
+          )
+      })
     })
   })
+}
+
+/** Total size of a directory tree, following nothing. Used only as a bomb guard. */
+async function directorySize(dir: string): Promise<number> {
+  let total = 0
+  const walk = async (current: string): Promise<void> => {
+    for (const dirent of await readdir(current, { withFileTypes: true })) {
+      const absolute = join(current, dirent.name)
+      const stats = await lstat(absolute)
+      if (stats.isDirectory()) await walk(absolute)
+      else total += stats.size
+    }
+  }
+  await walk(dir)
+  return total
 }
 
 /**
@@ -282,9 +404,23 @@ async function extractTarball(archivePath: string, destDir: string): Promise<voi
  */
 async function assertBundleTreeIsSafe(bundleDir: string): Promise<void> {
   const rootReal = await realpath(bundleDir)
+  let seen = 0
 
   const walk = async (dir: string): Promise<void> => {
     for (const dirent of await readdir(dir, { withFileTypes: true })) {
+      // ── A FILE-COUNT CAP, BECAUSE THE BYTE CAPS DO NOT IMPLY ONE ──
+      // 500,000 empty files compress to a couple of megabytes and extract to almost
+      // nothing, so they pass both the download and the extraction limits. They
+      // would then cost a readdir+lstat here, a readFile each in computeBundleHash
+      // at install, and another full hash on every frame open — all on the main
+      // process, which already has a documented saturation problem. 10,000 is ~50x
+      // any real bundle.
+      if (++seen > MAX_BUNDLE_FILES) {
+        throw new InstallError(
+          `The repository contains more than ${MAX_BUNDLE_FILES} files. An extension is a ` +
+            `built bundle; this looks like an unbuilt source tree.`,
+        )
+      }
       const absolute = join(dir, dirent.name)
       const stats = await lstat(absolute)
 
@@ -387,7 +523,12 @@ async function readManifestFrom(dir: string): Promise<ExtensionManifest> {
  * had". Staging as a sibling of the destination makes the rename same-filesystem by
  * construction, which is the only way to get atomicity out of it.
  *
- * The dot prefix keeps it out of the ledger's view of installed extension directories.
+ * The dot prefix is NOT "kept out of the ledger's view", as this comment used to
+ * claim — nothing in the app enumerates EXTENSIONS_DIR, so there was no scan for it
+ * to be excluded from. What the prefix actually buys is that `.staging-…` can never
+ * be a valid extension id (ids must start with a letter), so `scheme.ts` can never
+ * be tricked into serving a half-extracted tree, and the startup sweep can identify
+ * these directories unambiguously.
  */
 async function makeStagingDir(): Promise<string> {
   await mkdir(EXTENSIONS_DIR, { recursive: true })
@@ -417,20 +558,29 @@ async function finalizeInstall(
   await mkdir(EXTENSIONS_DIR, { recursive: true })
   const finalDir = join(EXTENSIONS_DIR, manifest.id)
 
-  // Remove any previous install of this id before renaming the new one in. This
-  // makes install idempotent and doubles as the update path. Extension STATE is
-  // untouched — it lives under EXTENSION_STATE_DIR precisely so an update cannot
-  // take a user's saved data with it.
-  await rm(finalDir, { recursive: true, force: true })
-  await rename(bundleDir, finalDir)
-
-  // Hashed AFTER the rename, from the FINAL location, on purpose: this value's
-  // only job is to be recomputable later from exactly the directory the scheme
-  // handler serves. Hashing the staging directory instead would produce the same
-  // digest today and quietly stop matching the moment the two ever diverge (a
-  // partial rename, a future post-install step), which is the failure mode a
-  // grant check must not have.
-  const bundleSha256 = await computeBundleHash(finalDir)
+  // ── EVERYTHING FALLIBLE HAPPENS BEFORE ANYTHING IS DESTROYED ──
+  //
+  // The previous ordering was rm(finalDir) → rename(staging) → computeBundleHash
+  // → writeLedger, i.e. it destroyed the installed version and committed the new
+  // one BEFORE its last two fallible steps. Three ordinary failures broke it:
+  //
+  //  - A crash between the rm and the rename left NO bundle and a surviving
+  //    ledger row: the row reads `present: false` and the only recovery is a
+  //    reinstall the user has to work out for themselves.
+  //  - computeBundleHash throwing (a concurrent remove deleting the directory
+  //    under it, ENOSPC, EACCES) left the new bundle on disk with no ledger row.
+  //    Nothing enumerates EXTENSIONS_DIR, so that directory is invisible to the
+  //    UI and unreachable by extensions:remove — a ghost nothing can delete.
+  //  - writeLedger throwing did the same, and is *reachable in combination with
+  //    a disk-filling archive*, which is exactly when it matters most.
+  //
+  // So: hash in staging, then swap. The hash is identical either way — staging is
+  // a sibling of the destination by construction (makeStagingDir), so the rename
+  // moves the same inodes and cannot alter content. The earlier comment argued the
+  // hash had to come from the final location; that was buying a property the
+  // same-filesystem guarantee already provides, at the cost of putting a throwing
+  // call after the point of no return.
+  const bundleSha256 = await computeBundleHash(bundleDir)
 
   const record: InstalledExtension = {
     manifest,
@@ -442,8 +592,45 @@ async function finalizeInstall(
     installedAt: Date.now(),
   }
 
-  const ledger = await readLedger()
-  await writeLedger([...ledger.filter(row => row.manifest.id !== manifest.id), record])
+  // The previous version is moved ASIDE rather than deleted, so a failure can put
+  // it back. This is what makes a failed update a no-op instead of an uninstall —
+  // the single most important property of an update path, and the one the old
+  // ordering did not have. Extension STATE is untouched throughout: it lives under
+  // EXTENSION_STATE_DIR precisely so neither an update nor a rollback can take a
+  // user's saved data with it.
+  // ── THE SWAP AND THE LEDGER WRITE ARE ONE CRITICAL SECTION ──
+  // Without the lock, two concurrent installs both read the ledger, both write it,
+  // and the first one's row is lost while its bundle sits on disk referenced by
+  // nothing. An install racing a remove of the same id resurrects the extension the
+  // user just uninstalled. See withLedgerLock for the full account.
+  await withLedgerLock(async () => {
+    const backupDir = `${finalDir}.replacing-${randomUUID()}`
+    let hadPrevious = true
+    try {
+      await rename(finalDir, backupDir)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      hadPrevious = false
+    }
+
+    try {
+      await rename(bundleDir, finalDir)
+      await writeLedger(
+        (await readLedger()).filter(row => row.manifest.id !== manifest.id).concat(record),
+      )
+    } catch (error) {
+      // Roll back to exactly what the user had. Best-effort: if the restore itself
+      // fails there is nothing further to try, and the original error is the one
+      // worth surfacing.
+      await rm(finalDir, { recursive: true, force: true }).catch(() => {})
+      if (hadPrevious) await rename(backupDir, finalDir).catch(() => {})
+      throw error
+    }
+
+    // Committed. The old bundle is now unreferenced; failing to delete it is not
+    // worth failing the install over, so it is swept at startup instead.
+    if (hadPrevious) await rm(backupDir, { recursive: true, force: true }).catch(() => {})
+  })
 
   // Bind the grant to the INSTALLED BYTES, not to the provenance hash.
   //
@@ -460,6 +647,45 @@ async function finalizeInstall(
   else await revokeGrant(manifest.id)
 
   return record
+}
+
+/**
+ * Reclaim directories under EXTENSIONS_DIR that no longer belong to anything.
+ *
+ * ── WHY THIS IS NEEDED AND WHY IT RUNS AT STARTUP ──
+ * Installs create two kinds of transient directory: `.staging-XXXX` while the
+ * bundle is being validated, and `<id>.replacing-<uuid>` while the swap is in
+ * flight. Both are removed on the happy path and on a handled failure — but a
+ * crash, a force-quit, or a kill during an install leaves them behind forever,
+ * because nothing else ever looks at this directory. Each one costs up to the
+ * extracted-size cap, so they are not a rounding error.
+ *
+ * Startup is the only safe moment: no install can be in flight, so anything
+ * matching these shapes is definitionally abandoned. Doing it opportunistically
+ * during an install would race a concurrent one.
+ *
+ * Deliberately conservative — it removes ONLY the two transient shapes. A bundle
+ * directory with no ledger row is left alone: that is a different problem with a
+ * different correct answer (the user may want to recover it), and silently deleting
+ * from a directory that holds installed code is not something a sweep should do.
+ */
+export async function sweepAbandonedInstallDirectories(): Promise<void> {
+  let entries: string[]
+  try {
+    entries = await readdir(EXTENSIONS_DIR)
+  } catch {
+    // No extensions directory yet. Nothing to reclaim.
+    return
+  }
+
+  for (const name of entries) {
+    if (!name.startsWith('.staging-') && !/\.replacing-[0-9a-f-]{36}$/.test(name)) continue
+    await rm(join(EXTENSIONS_DIR, name), { recursive: true, force: true }).catch(error => {
+      // Best-effort by design: this is housekeeping on a path that must never be
+      // able to prevent the app from starting.
+      console.warn(`[extensions] could not remove abandoned ${name}:`, error)
+    })
+  }
 }
 
 /**
@@ -498,7 +724,11 @@ export async function installExtension(
       promptConsent,
     )
   } finally {
-    await rm(work, { recursive: true, force: true })
+    // .catch: `force` only suppresses ENOENT. A staging tree containing a
+    // mode-0000 directory (reachable through Load folder…) makes this throw
+    // EACCES, and a throw in a `finally` REPLACES whatever the try threw — so a
+    // precise InstallError became a raw errno string and the real cause was lost.
+    await rm(work, { recursive: true, force: true }).catch(() => {})
   }
 }
 
@@ -572,6 +802,10 @@ export async function installExtensionFromPath(
       promptConsent,
     )
   } finally {
-    await rm(work, { recursive: true, force: true })
+    // .catch: `force` only suppresses ENOENT. A staging tree containing a
+    // mode-0000 directory (reachable through Load folder…) makes this throw
+    // EACCES, and a throw in a `finally` REPLACES whatever the try threw — so a
+    // precise InstallError became a raw errno string and the real cause was lost.
+    await rm(work, { recursive: true, force: true }).catch(() => {})
   }
 }

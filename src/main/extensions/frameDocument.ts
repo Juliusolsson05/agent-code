@@ -292,6 +292,29 @@ function mountView(viewId) {
   }
 }
 
+// ── ESCAPE IS FORWARDED TO THE HOST, EVERYTHING ELSE IS NOT ──
+// A cross-origin frame consumes every keystroke: the host document never sees
+// them, so while focus is inside an extension view NO application shortcut fires.
+// For most chords that is merely a limitation. For Escape it is a trap — Escape is
+// the universal "get me out of this" in this app, and a user pressing it inside an
+// extension modal got nothing at all, with no indication that the key had been
+// swallowed rather than ignored.
+//
+// Only Escape is forwarded. Forwarding arbitrary chords would mean reconstructing
+// the host's whole keybinding router across a postMessage boundary, and would let a
+// frame synthesize application commands — a capability nothing here should have.
+// Escape carries no argument and can only ever mean "close the thing in front of
+// me", so it is safe to hand over.
+//
+// defaultPrevented is the extension's opt-out and the reason this listens in the
+// BUBBLE phase: an extension that wants Escape for its own popover calls
+// preventDefault(), and the host never hears about it. An extension that does
+// nothing gets the behaviour the rest of the app has.
+window.addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape' || event.defaultPrevented) return;
+  window.parent.postMessage({ kind: 'agent-code-ext:escape' }, '*');
+});
+
 // Import, activate, mount, then announce readiness.
 let extensionModule = null;
 import('./' + ENTRY)

@@ -125,6 +125,8 @@ export function AppsSettingsRow() {
 
   const remove = useCallback(
     async (entry: ExtensionListEntry) => {
+      if (busy) return
+      setBusy(true)
       setError(null)
       setNotice(null)
       try {
@@ -133,10 +135,11 @@ export function AppsSettingsRow() {
       } catch (removeError) {
         setError(removeError instanceof Error ? removeError.message : String(removeError))
       } finally {
+        setBusy(false)
         await refresh()
       }
     },
-    [refresh],
+    [busy, refresh],
   )
 
   // "Load unpacked" — install from a local folder via the native picker (main
@@ -265,7 +268,13 @@ export function AppsSettingsRow() {
                 <button
                   type="button"
                   onClick={() => void remove(entry)}
-                  className="border border-control-border px-3 py-1 text-[12px] text-ink-dim outline-none hover:border-control-border-hover hover:text-ink"
+                  // Every other action here guards on `busy`; Remove did not, so it
+                  // stayed clickable during an in-flight install. Removing an
+                  // extension while its own reinstall is mid-swap is exactly the
+                  // race the ledger lock now serialises — this stops the UI from
+                  // inviting it in the first place.
+                  disabled={busy}
+                  className="border border-control-border px-3 py-1 text-[12px] text-ink-dim outline-none hover:border-control-border-hover hover:text-ink disabled:opacity-40"
                 >
                   Remove
                 </button>

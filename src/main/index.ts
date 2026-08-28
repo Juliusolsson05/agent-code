@@ -30,6 +30,7 @@ import {
   handleExtensionScheme,
   registerExtensionScheme,
 } from '@main/extensions/scheme.js'
+import { sweepAbandonedInstallDirectories } from '@main/extensions/install.js'
 import { STATE_DIR, STATE_FILE } from '@main/storage/paths.js'
 import {
   scheduleDebugStoragePrune,
@@ -465,6 +466,14 @@ async function startApp(): Promise<void> {
   // opened first could race a request against an unregistered handler and see a
   // spurious load failure that never reproduces on a warm run.
   handleExtensionScheme()
+
+  // Reclaim staging and replaced-bundle directories abandoned by an install that
+  // was interrupted by a crash or a force-quit. Startup is the only moment at which
+  // no install can be in flight, so anything matching those shapes is definitionally
+  // dead. Fire-and-forget: housekeeping must never delay or block launch.
+  void sweepAbandonedInstallDirectories().catch(err => {
+    console.warn('[extensions] staging sweep failed:', err)
+  })
 
   void performanceService.start().catch(err => {
     console.warn('[performance] failed to start:', err)

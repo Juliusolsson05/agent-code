@@ -23,6 +23,16 @@ import type { ExtensionCapability } from '@shared/types/extensions'
 export type FrameHostHandle = {
   /** Push theme tokens (or a mount command) into the child. */
   push: (message: FramePush) => void
+  /**
+   * The capabilities granted to this frame's extension, resolved once.
+   *
+   * Exposed so the view bridge can gate its observe subscription on the SAME
+   * promise the broker gates requests on. It previously made its own
+   * `extensionGrantedCapabilities` call, which meant every frame open recomputed
+   * the bundle hash TWICE in the main process — and the IPC handler's comment
+   * claimed it happened once, citing this cache.
+   */
+  granted: Promise<readonly ExtensionCapability[]>
   /** Detach the listener. Idempotent. */
   dispose: () => void
 }
@@ -164,6 +174,7 @@ export function createFrameHost(options: {
   let disposed = false
   return {
     push: post,
+    granted: grantPromise,
     dispose: () => {
       if (disposed) return
       disposed = true

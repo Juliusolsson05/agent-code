@@ -172,11 +172,26 @@ Both are implemented. A pane persists across restarts: Agent Code remembers whic
 view the pane hosts and rebuilds it on launch, showing a "not installed" message if
 the extension is gone.
 
-**Keyboard caveat for both shells:** because your view is a cross-origin frame,
-keystrokes inside it never reach Agent Code. While focus is inside your view, app
-shortcuts — including Escape and the command palette — do not fire. Give the user a
-visible way out: a close button, or call `api.ui.close()`. The host's own modal
-close button is always available.
+**Keyboard caveat for both shells.** Because your view is a cross-origin frame,
+keystrokes inside it never reach Agent Code, so application shortcuts — the command
+palette, pane navigation, everything — do not fire while focus is inside your view.
+
+**Escape is the one exception.** Agent Code forwards it, and an unhandled Escape
+closes your view. If you want Escape for something of your own (dismissing a
+popover, cancelling an edit), call `preventDefault()` on the event and the host
+never hears about it:
+
+```ts
+element.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && myPopoverIsOpen) {
+    event.preventDefault()   // the host will NOT close the view
+    closeMyPopover()
+  }
+})
+```
+
+For everything else, give the user a visible way out — a close button, or
+`api.ui.close()`. The host's own modal close button is always available.
 
 ---
 

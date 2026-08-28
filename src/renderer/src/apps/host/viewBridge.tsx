@@ -163,6 +163,13 @@ function buildViewComponent(
           }
           setStatus('ready')
           clearFailure(extensionId)
+        } else if (data.kind === 'agent-code-ext:escape') {
+          // The frame saw an unhandled Escape. Close the view, which is what Escape
+          // does everywhere else in the app — a modal's own Escape handler and a
+          // pane's Cmd+W both end at this same call. Routed through `api.ui.close`
+          // rather than a local close so the modal and pane hosts keep their single
+          // shared definition of what closing means.
+          void api.ui.close()
         } else if (data.kind === 'agent-code-ext:error') {
           // activate() or the dynamic import threw inside the frame. The frame is
           // the only place that can observe it — the extension does not run in this
@@ -203,7 +210,10 @@ function buildViewComponent(
       let storeUnsub: (() => void) | null = null
       let observeDisposed = false
       let nudgeTimer: ReturnType<typeof setTimeout> | null = null
-      void window.api.extensionGrantedCapabilities(extensionId).then(granted => {
+      // Reuses the broker's already-resolved grant instead of issuing a second IPC.
+      // Each call recomputes the bundle hash in main, so the duplicate doubled that
+      // work on every single frame open.
+      void frameHost.granted.then(granted => {
         if (observeDisposed) return
         const topics = (
           [
