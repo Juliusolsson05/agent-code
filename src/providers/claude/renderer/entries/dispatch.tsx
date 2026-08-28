@@ -5,6 +5,7 @@ import { compactionSummaryText } from '@providers/shared/renderer/protocols/comp
 import { taskNotificationFromEntry } from '@providers/claude/renderer/adapters/taskNotification'
 import { TaskNotificationRow } from '@providers/claude/renderer/components/task-notification'
 import { classifyClaudeDurableEntry } from '@providers/claude/renderer/entries/classify'
+import { QueuedUserPromptRow } from '@providers/claude/renderer/components/queued-user-prompt'
 
 export function renderClaudeDurableEntry(
   input: ProviderDurableEntryInput,
@@ -26,6 +27,16 @@ export function renderClaudeDurableEntry(
       // capability result, so make that proven refinement explicit here.
       node: <CompactionView model={{ kind: 'summary', text: compactionSummaryText(input.entry as CompactSummaryEntry) }} />,
       receipt: { rendererId: 'shared.compaction', protocolId: 'compaction.summary' },
+    }
+  }
+  if (kind === 'queued-user-prompt') {
+    return {
+      action: 'render',
+      node: <QueuedUserPromptRow entry={input.entry} />,
+      receipt: {
+        rendererId: 'claude.queued-user-prompt',
+        protocolId: 'queued-command.prompt',
+      },
     }
   }
   const notification = taskNotificationFromEntry(input.entry)

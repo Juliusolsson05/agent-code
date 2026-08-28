@@ -86,6 +86,7 @@ describe('Claude semantic provider boundary', () => {
     // the content decline specifically on input-complete because prefix already
     // has its own primary generic disposition.
     expect(globalGenericIds).toEqual([
+      'claude.entry.attachment.v1',
       'claude.semantic.askuserquestion.v1',
       'claude.semantic.mcp-orchestration-read-agent.v1',
       'claude.semantic.read.v1',

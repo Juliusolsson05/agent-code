@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 
 import { indexEntryIntoMaps } from '@renderer/session-runtime/entries'
 import {
@@ -194,6 +196,28 @@ describe('planLiveEntryTrim', () => {
     // The new historyOldestMarker is the FIRST RETAINED entry's marker, so
     // loadOlderHistory ("strictly before marker") re-fetches the trimmed span.
     expect(plan!.nextOldestMarker).toBe(`m-${plan!.cut}`)
+  })
+
+  it('reclaims a recorded queued-command attachment like any other durable entry', () => {
+    const bundle = JSON.parse(
+      readFileSync(
+        resolve(
+          process.cwd(),
+          'testing/fixtures/rendering-bundles/2026-06-14T14-25-07-012-a8ad1ebb.json',
+        ),
+        'utf8',
+      ),
+    ) as { input: { entries: Array<Record<string, unknown>> } }
+    const durable = bundle.input.entries[13] as unknown as Entry
+    stampHistoryMarker(durable, 'recorded-queued-command-marker')
+    const entries = [durable, ...windowEntries(MAX_LIVE_ENTRIES + 99)]
+
+    const plan = planLiveEntryTrim(entries, emptySemanticRuntime(), emptyGhosts)
+    expect(plan).not.toBeNull()
+    expect(plan!.trimmedUuids).toContain(durable.uuid)
+    // The UUID is provider-durable, not an optimistic prefix, so this row can
+    // leave the heap and later return through ordinary older-history paging.
+    expect(plan!.trimmedUuids[0]).toBe(durable.uuid)
   })
 
   it('freezes the window when any entry lacks a uuid (ingest-index id + reload-dedupe safety)', () => {

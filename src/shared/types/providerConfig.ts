@@ -84,7 +84,10 @@ export type ProviderDurableEntryInput = { entry: Entry }
  * durable row exists and how it orders, but it must not learn that Claude uses
  * `system.subtype` while another provider may use a different carrier.
  */
-export type ProviderDurableEntryKind = 'compact-boundary' | 'compact-summary'
+export type ProviderDurableEntryKind =
+  | 'compact-boundary'
+  | 'compact-summary'
+  | 'queued-user-prompt'
 export type ProviderDurableEntryDecision = Extract<
   ProviderVisibleDecision,
   { action: 'render' }

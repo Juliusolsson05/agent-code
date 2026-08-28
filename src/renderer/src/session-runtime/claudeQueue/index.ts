@@ -11,6 +11,7 @@
 
 export {
   applyCommittedUserEntry,
+  applyQueuedCommandObservation,
   applyQueueOperation,
   createClaudeQueueState,
   markStaleWhenIdle,
@@ -26,4 +27,5 @@ export {
   type QueueDecision,
   type QueueDecisionReason,
   type QueueOperationRecord,
+  type QueuedCommandObservation,
 } from './types'

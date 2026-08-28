@@ -28,6 +28,7 @@ export type VisibleDecision = {
   reason:
     | 'compact_boundary'
     | 'compact_summary'
+    | 'queued_user_prompt'
     | 'conversation'
     | 'not_conversation'
     | 'meta_filtered'
