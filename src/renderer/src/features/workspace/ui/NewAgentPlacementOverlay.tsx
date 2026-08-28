@@ -499,7 +499,7 @@ export function NewAgentPlacementOverlay({
                       setSelectedIndex(index)
                       commitKind(option.kind)
                     }}
-                    className={`rounded-control flex w-full items-center justify-between border px-3 py-2 text-left ${
+                    className={`flex w-full items-center justify-between border px-3 py-2 text-left ${
                       active
                         ? 'border-accent bg-accent text-accent-fg'
                         : 'border-border bg-canvas text-ink-dim hover:border-border-hi hover:text-ink'

@@ -209,7 +209,7 @@ function ThemeEditorModal({
         if (!nextOpen) onClose()
       }}
     >
-      <DialogContent className="flex h-[calc(100vh-3rem)] max-h-[760px] w-[calc(100vw-3rem)] max-w-4xl flex-col border-popover-border bg-popover-bg p-0">
+      <DialogContent className="flex h-[calc(100vh-3rem)] max-h-[760px] w-[calc(100vw-3rem)] max-w-4xl flex-col overflow-hidden border-popover-border bg-popover-bg p-0">
         <div className="flex items-center justify-between border-b border-panel-border bg-panel-header-bg px-4 py-3">
           <div>
             <DialogTitle>

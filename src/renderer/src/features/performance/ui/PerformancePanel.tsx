@@ -62,7 +62,7 @@ export function PerformancePanel({ open, workspace }: Props) {
 
   return (
     <div className="relative [-webkit-app-region:no-drag]">
-      <div className="rounded-float absolute right-0 top-full mt-1 w-[430px] max-w-[calc(100vw-24px)] border border-border bg-surface shadow-xl z-50">
+      <div className="rounded-float absolute right-0 top-full mt-1 w-[430px] max-w-[calc(100vw-24px)] overflow-hidden border border-border bg-surface shadow-xl z-50">
         <div className="grid grid-cols-[44px_58px_72px_74px_1fr] gap-2 px-3 py-1.5 border-b border-border text-[9px] uppercase text-muted">
           <span>pane</span>
           <span>cpu</span>

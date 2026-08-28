@@ -163,7 +163,7 @@ function GuideStep({
   return (
     <section className="flex flex-col gap-2">
       <h3 className="flex items-center gap-2 text-[13px] font-semibold">
-        <span className="rounded-chip flex h-5 w-5 items-center justify-center border border-accent bg-accent/10 text-[11px] text-accent">
+        <span className="rounded-control flex h-5 w-5 items-center justify-center border border-accent bg-accent/10 text-[11px] text-accent">
           {number}
         </span>
         {title}

@@ -138,7 +138,7 @@ function SettingRow({
             >
               <span>{control.getValue(settings) ? 'Enabled' : 'Disabled'}</span>
               <span
-                className={`rounded-control flex h-3.5 w-3.5 border ${
+                className={`flex h-3.5 w-3.5 border ${
                   control.getValue(settings)
                         ? 'border-control-active-bg bg-control-active-bg'
                         : 'border-control-border-hover bg-transparent'

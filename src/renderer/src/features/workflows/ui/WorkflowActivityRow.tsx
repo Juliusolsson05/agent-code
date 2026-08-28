@@ -92,7 +92,7 @@ function WorkflowActivityRowImpl({
           type="button"
           aria-expanded={expanded}
           onClick={() => setExpanded(current => !current)}
-          className="flex w-full min-w-0 cursor-pointer items-baseline gap-2 rounded-control text-left text-[12px] leading-[1.5] hover:bg-surface-hi focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+          className="flex w-full min-w-0 cursor-pointer items-baseline gap-2 text-left text-[12px] leading-[1.5] hover:bg-surface-hi focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
         >
           <span className="shrink-0 capitalize text-ink-dim">
             {activity.kind.replace(/_/g, ' ')}

@@ -140,7 +140,7 @@ export function AgentCodeConventionsRow() {
           onClick={() => void toggle()}
         >
           <span>{snapshot.enabled ? 'On' : 'Off'}</span>
-          <span className={`rounded-control h-3.5 w-3.5 border ${snapshot.enabled ? 'border-control-active-bg bg-control-active-bg' : 'border-control-border-hover'}`} />
+          <span className={`h-3.5 w-3.5 border ${snapshot.enabled ? 'border-control-active-bg bg-control-active-bg' : 'border-control-border-hover'}`} />
         </Button>
       </div>
 

@@ -179,7 +179,7 @@ export function WorkflowHistoryDialog({
           role="region"
           aria-label="Workflow history entries"
           tabIndex={0}
-          className="overflow-y-auto p-3 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ring"
+          className="rounded-b-float overflow-y-auto p-3 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ring"
         >
           <div role="list" aria-label="Previous workflow runs" className="space-y-2">
             {visibleReferences.map(reference => {

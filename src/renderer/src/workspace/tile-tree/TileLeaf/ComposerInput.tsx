@@ -159,7 +159,7 @@ export function ComposerInput({
               <img
                 src={image.previewUrl}
                 alt={image.filename}
-                className="h-16 w-full rounded-slab object-cover"
+                className="h-16 w-full object-cover"
               />
               <div className="mt-1 truncate text-[10px] font-code text-muted">
                 {image.filename}

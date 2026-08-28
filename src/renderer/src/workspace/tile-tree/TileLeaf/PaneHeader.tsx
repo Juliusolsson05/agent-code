@@ -134,7 +134,7 @@ export function PaneHeader({
                   onSelectRelatedSession?.(tab.sessionId)
                 }}
                 className={[
-                  'flex h-5 max-w-[160px] flex-shrink-0 items-center gap-1 rounded-chip border px-1.5',
+                  'flex h-5 max-w-[160px] flex-shrink-0 items-center gap-1 rounded-control border px-1.5',
                   'leading-none transition-colors',
                   active
                     ? 'border-accent bg-accent text-accent-fg'

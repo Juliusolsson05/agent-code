@@ -349,7 +349,7 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
           <DispatchAgentBadge kind={row.kind} />
           {projectChip && (
             <span
-              className="rounded-chip
+              className="rounded-control
                 ml-auto flex-shrink-0 px-1.5 py-[1px] text-[9px] font-code
                 leading-none text-muted border border-border bg-surface-hi
                 truncate max-w-[140px]

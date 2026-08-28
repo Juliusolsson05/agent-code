@@ -54,7 +54,7 @@ export function WorktreeBadge({
 
   return (
     <span
-      className={`${widthClasses} truncate rounded-chip px-1.5 py-[1px] text-[10px] font-code leading-none text-white`}
+      className={`${widthClasses} truncate rounded-control px-1.5 py-[1px] text-[10px] font-code leading-none text-white`}
       style={{ backgroundColor: color ?? undefined }}
       title={title}
     >

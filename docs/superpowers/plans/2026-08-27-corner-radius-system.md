@@ -147,16 +147,14 @@ is literally `0px` — rather than a value someone can approximate.
 |  | `chip` | `control` | `slab` | `float` |
 |---|---|---|---|---|
 | **Sharp** | `0px` | `0px` | `0px` | `0px` |
-| **Soft** | `3px` | `4px` | `4px` | `6px` |
-| **Round** | `9999px` | `8px` | `8px` | `14px` |
+| **Soft** | `3px` | `3px` | `4px` | `6px` |
+| **Round** | `9999px` | `6px` | `8px` | `14px` |
 
-`control` was raised a step (Soft `3px`→`4px`, Round `6px`→`8px`) after the
-first build was reviewed on screen. At `6px` on a 28px button the arc was
-present but read as a manufacturing tolerance rather than a decision — the exact
-failure the "no 2px tier" rule was written to avoid, just one size up. `control`
-and `slab` now share a value at both tiers, which is correct rather than lazy:
-a button and the code block beside it are both objects sitting on the grid, and
-having them disagree by 2px was noise, not information.
+`control` was briefly raised to `8px`/`4px` and then reverted — see Stage 6. The
+short version: `8px` is ≥ half the side of any box under 16px, and CSS clamps a
+radius that exceeds the box, so it turned every 14px checkbox into a circle. It
+was also never observable on the buttons it was raised for, because of the
+cascade bug Stage 6 documents.
 
 `Soft` is the restrained reading — visible, but it does not change the app's
 character. `Round` is the sudden one: chips become true capsules and floating
@@ -350,6 +348,130 @@ other geometric circles.
 
 Coverage after this stage: 46 `chip`, 154 `control`, 118 `slab`, 16 `float` —
 334 classified surfaces, up from 98.
+
+### Stage 6 — Removal pass, and the cascade bug that invalidated Stage 5
+
+Stage 5's coverage number (334 classified surfaces) was true of the source and
+false of the running app. A four-agent read-only audit found why.
+
+#### The blocker: `@layer` and an unlayered form reset
+
+`styles.css` had carried this since long before this branch:
+
+```css
+input, button, textarea, select { border-radius: 0; font-family: inherit; }
+```
+
+It was **unlayered**. `@import "tailwindcss"` declares
+`@layer theme, base, components, utilities` and emits every utility into
+`@layer utilities`, and in the CSS cascade an unlayered normal declaration beats
+a declaration in *any* layer regardless of specificity. So `border-radius: 0`
+won against `.rounded-control` on every element it matched.
+
+The effect was total and silent: **every `<button>`, `<input>`, `<textarea>` and
+`<select>` in the app rendered square at every tier**, including the shared
+`Button` / `Input` / `Textarea` primitives — roughly 140 of the ~334 classified
+surfaces, and 139 of the 152 `rounded-control` sites. Meanwhile the
+`<div>`/`<span>` cohort rounded normally.
+
+This is worth stating plainly because it inverts the branch's own narrative.
+Stage 5 was written to fix "a dialog's footer buttons round while the toolbar
+above them does not". In the app, *neither* rounded — and the `control` tier was
+dead code at 91% of its call sites. The fix is to move the reset inside
+`@layer base`, where it still beats the UA stylesheet (its actual job) but loses
+to a `rounded-*` utility. The same unlayered reset existed in the phone client's
+sheet and got the same treatment.
+
+**Why this was hard to see:** it is invisible in the diff (the rule is
+pre-existing and untouched), invisible to `tsc`, and invisible to the renderer
+tests, which assert what `applyTheme` *writes* rather than what an element
+computes. It was found by compiling the branch's real stylesheet and reading the
+layer each rule landed in.
+
+#### The value revert
+
+`control` went back to `6px`/`3px`. The `8px` bump was made in response to a
+button arc reading as a manufacturing tolerance — a real observation about
+`Button size="sm"` at `h-8`, but the wrong lever. Measured across the app,
+`8px` is 25–29% of the shared primitives it was tuned for and **40% on `h-5`,
+50% on `w-4 h-4`, and 50% on `h-3.5`**. Fifty percent is not "very round"; CSS
+clamps it and produces a **circle**. Agent Code is an 11–12px-font app whose
+bespoke chrome clusters at 13–20px, so the bump optimised the minority case and
+geometrically broke the majority — most visibly by turning every Settings
+checkbox into a radio button. It also, by construction, had never been seen on a
+button.
+
+Reverting re-aligns the `:root` fallback in `styles.css`, which the bump had left
+asserting `6px` while `CORNER_STYLES` said `8px`.
+
+#### What the removal pass changed
+
+**Structure that was rounding.** Members of welded groups and rows that stack
+flush: the LAN/Tunnel segmented toggle in `RemotePanel` (whose second button
+carries `border-l-0` precisely to collapse the shared edge — it now takes
+`rounded-l-control` / `rounded-r-control` so the *group* rounds at its ends and
+never at the seam), the `NewAgentPlacementOverlay` option rows, and the
+`WorkflowAgentRow` / `WorkflowActivityRow` hover fills in gapless columns.
+
+**Geometry that produced circles.** The `h-3.5` toggle indicators lost their
+radius outright: at 14px, any value at or above 7px is a circle, so no tier of
+`control` is safe there and the honest answer is that a checkbox's state box is
+square. The 20px index/step markers moved off `chip`, whose `9999px` made them
+indistinguishable from the status dots the system deliberately keeps *outside*
+the corner policy.
+
+**`chip` on things that are not small content-sized labels.** `chip` is the one
+token allowed to go fully pill, and the comment justifying that says it is "safe
+precisely because a label is always small and content-sized". Three kinds of site
+broke that premise: `<button>`s (`PaneHeader`'s related-session tab, the "Aa"
+toggle) which Stage 5's own rule 1 already assigns to `control`; badges with
+`truncate max-w-[140–180px]`, which are bounded rather than content-sized and
+rendered as 15:1 stadiums around an ellipsis; and `WorktreesBar`'s agent chip,
+which has no bound at all and wraps to two lines inside a 340px rail. The pane
+toast moved to `float`, where the token table always said toasts belong — at
+`chip` an unbounded error message became the chat bubble hard rule 3 bans.
+
+**Rounded shells that did not clip.** A rounded container whose flush child
+paints its own background needs `overflow-hidden`, or the child's square corner
+paints over the parent's arc. Four surfaces needed it, and in two of them the
+highlighted index initialises to `0`, so the artifact was on screen the moment
+the surface opened rather than on hover. The `WorkflowHistoryDialog` scroll
+region got `rounded-b-float` for the mirror-image problem: it is focused on open
+and drew an inset ring whose square bottom corners were sheared off by the
+dialog's own clipping.
+
+**Concentric radii.** The composer's image thumbnail had the same `slab` value on
+the frame and on the `<img>` inside it, separated by 4px of padding. Concentric
+geometry wants inner = outer − padding; equal radii leave a visibly fat crescent
+at each corner. The inner radius is gone and the padding does the work.
+
+#### Two system-level repairs
+
+`cn()` now registers the four names with `extendTailwindMerge`. `tailwind-merge`
+resolves `rounded-*` conflicts from Tailwind's own scale, so it did not know
+these classes and kept *both* sides of a conflict — leaving the winner to
+Tailwind's alphabetical emission order. The `rounded-none` opt-out documented in
+`styles.css` therefore worked against `control` purely because "none" sorts after
+"control", and would have silently lost against `slab`. An escape hatch that
+works four times in five by accident is worse than none, because the failure is
+invisible in review.
+
+The phone client's aesthetic contract claimed the condition bar stays square at
+every setting. It does not: that view mounts the real desktop `ConditionOutlet`,
+so a Claude trust/permission prompt renders the desktop components' own
+`rounded-slab` blocks. The behaviour is correct — a code plate is a plate on
+either device — but the comment asserted otherwise, which is exactly the drift
+hard rule 1 was rewritten to stop.
+
+#### Known limitation carried forward
+
+`control` and `slab` remain numerically identical at every tier (0/3-4/6-8 is
+now 0/3/6 vs 0/4/8 — they differ again at Soft and Round after the revert, which
+is an improvement over the 8/8 collision). `chip` and `control` still converge on
+anything under ~14px, because both clamp to half the box. That is inherent to
+radius-on-small-boxes rather than a defect in the token set, but it does mean the
+`chip`/`control` distinction is unobservable on badges — the population the split
+was invented for. Recorded here rather than "fixed" with a fifth token.
 
 ## Testing decisions
 

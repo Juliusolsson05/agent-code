@@ -12,7 +12,7 @@ export function PaneToast({ message }: { message: string | null }) {
   if (!message) return null
   return (
     <div className="flex-shrink-0 flex justify-center px-3 py-1.5 border-t border-border bg-surface">
-      <span className="toast-enter rounded-chip text-[11px] font-code text-white font-semibold bg-accent/80 px-3 py-0.5">
+      <span className="toast-enter rounded-float text-[11px] font-code text-white font-semibold bg-accent/80 px-3 py-0.5">
         {message}
       </span>
     </div>

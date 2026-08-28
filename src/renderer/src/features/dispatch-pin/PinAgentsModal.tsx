@@ -124,7 +124,7 @@ export function PinAgentsModal({
                     {row.title}
                   </span>
                   <span
-                    className="rounded-chip
+                    className="rounded-control
                       flex-shrink-0 px-1.5 py-[1px] text-[9px] font-code
                       leading-none text-muted border border-border bg-surface-hi
                       truncate max-w-[160px]

@@ -203,7 +203,7 @@ export function RemotePanel({ onClose }: { onClose: () => void }): React.JSX.Ele
                 </div>
                 <div className="flex flex-shrink-0">
                   <button
-                    className={`rounded-control border px-3 py-1.5 ${
+                    className={`rounded-l-control border px-3 py-1.5 ${
                       status.transport === 'lan'
                         ? 'border-border bg-surface-hi text-ink'
                         : 'border-border text-ink-dim hover:text-ink'
@@ -214,7 +214,7 @@ export function RemotePanel({ onClose }: { onClose: () => void }): React.JSX.Ele
                     LAN
                   </button>
                   <button
-                    className={`rounded-control border border-l-0 px-3 py-1.5 ${
+                    className={`rounded-r-control border border-l-0 px-3 py-1.5 ${
                       status.transport === 'tunnel'
                         ? 'border-border bg-surface-hi text-ink'
                         : 'border-border text-ink-dim hover:text-ink'

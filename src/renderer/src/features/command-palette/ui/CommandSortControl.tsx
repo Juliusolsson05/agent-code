@@ -203,7 +203,7 @@ export function CommandSortControl({
           role="menu"
           // Right-anchored: the control sits at the right edge of the header,
           // so a left-anchored menu would hang off the dialog.
-          className="rounded-float
+          className="rounded-float overflow-hidden
             absolute right-0 top-[calc(100%+4px)] z-50
             min-w-[168px]
             border border-popover-border bg-popover-bg

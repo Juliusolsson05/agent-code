@@ -55,7 +55,7 @@ function WorkflowAgentRowImpl({
         type="button"
         aria-expanded={expanded}
         onClick={() => onToggle(agent.id)}
-        className="grid w-full cursor-pointer grid-cols-[16px_minmax(0,1fr)_auto_14px] items-baseline gap-x-2 rounded-control px-1 py-1.5 text-left hover:bg-surface-hi focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+        className="grid w-full cursor-pointer grid-cols-[16px_minmax(0,1fr)_auto_14px] items-baseline gap-x-2 px-1 py-1.5 text-left hover:bg-surface-hi focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
       >
         <span
           aria-hidden="true"

@@ -124,7 +124,7 @@ export function AppearanceMenu({ settings, onChange }: Props) {
               >
                 <span>High Contrast</span>
                 <span
-                  className={`rounded-control
+                  className={`
                     flex h-3.5 w-3.5 border
                     ${settings.contrast ? 'bg-accent border-accent' : 'bg-transparent border-border-hi'}
                   `}

@@ -334,7 +334,7 @@ export function ContentSearchOverlay({ root, onClose }: Props) {
               setCaseSensitive(prev => !prev)
               inputRef.current?.focus()
             }}
-            className={`flex-shrink-0 rounded-chip border px-1.5 py-0.5 text-[10px] ${
+            className={`flex-shrink-0 rounded-control border px-1.5 py-0.5 text-[10px] ${
               caseSensitive ? 'border-accent text-ink' : 'border-border text-muted hover:text-ink'
             }`}
           >
