@@ -113,20 +113,34 @@ nextTiledRowIndex(currentIndex, delta, rows.length)
 // if (currentIndex < 0) return delta < 0 ? length - 1 : 0
 ```
 
-So from an empty lane ⌥↓ lands on index 0 (`a1`) and ⌥↑ lands on the last row.
-That is the requested behaviour for ⌥↓ and the sensible mirror for ⌥↑: the
-first press in either direction *lands on* a row rather than stepping past one,
-and the second press moves normally (`a1 → a2` going down).
+So ⌥↓ from an empty lane already landed on index 0 (`a1`) — but ⌥↑ landed on
+the **last row**, which this plan originally recorded incorrectly as also being
+`a1`. Reading the branch closed that: the direction of the very first keystroke
+decided whether a fresh lane opened at the top or the bottom of the index.
+
+That was defensible while an empty lane was a rare exhaustion state nobody asked
+for. It is wrong now that New Lane deliberately creates one every time, and it
+would make the lane's own placeholder copy conditional on which arrow the user
+happened to reach for. The branch now returns `0` in **both** directions:
+
+```ts
+if (currentIndex < 0) return 0
+```
+
+The model is that an empty lane behaves as though it were already sitting at
+`a1`. The first press in either direction COMMITS that position; every press
+after it navigates normally. So ⌥↓ ⌥↓ gives `a1` then `a2`, and ⌥↓ ⌥↑ gives
+`a1` then a wrap to the last row.
 
 The alternative reading — treat the virtual cursor as *being* a1 so the first
-press steps off it to a2 — was considered and rejected: it makes a1 unreachable
-by arrow from a fresh lane, and it means the first keypress can scroll past the
-thing the user most likely wanted.
+press steps off it to `a2` — was considered and rejected: it makes `a1`
+unreachable by arrow from a fresh lane, and it means the first keypress can
+scroll past the thing the user most likely wanted.
 
-No production change is needed. What is missing is **coverage**: no test
-currently asserts the empty-lane branch, so a future refactor of
-`nextTiledRowIndex` could flip it silently. Tests are added at the level that
-matters (see below).
+This is a small production change plus the coverage that was missing: no test
+asserted the empty-lane branch's *sequence*, so a regression that made it sticky
+(always returning 0) would strand the user on a1 and still pass a single-call
+assertion.
 
 ### 4. Command description
 

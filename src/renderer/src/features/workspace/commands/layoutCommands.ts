@@ -67,7 +67,7 @@ export const layoutCommands: CommandDef[] = [
     category: 'layout-dispatch',
     surface: 'dispatch',
     title: 'New Lane',
-    description: '**What it does:** Inserts a new lane immediately to the **right of the focused lane** in Tiled Dispatch.\n\n**Use when:** You want another live agent view without reopening the tile-count prompt or disturbing the lanes around it.\n\n**Notes:** The current lane stays focused. The new lane shows the first visible agent not already represented, or an empty selector when every agent already has a lane.',
+    description: '**What it does:** Inserts a new lane immediately to the **right of the focused lane** in Tiled Dispatch.\n\n**Use when:** You want another live agent view without reopening the tile-count prompt or disturbing the lanes around it.\n\n**Notes:** The current lane stays focused and the new lane arrives empty — adding a lane asks for space, not for a particular agent. Focus it and press ⌥↓ to put the first agent in it, or pick one from its strip.',
     keywords: ['new lane', 'add lane', 'insert lane', 'tiled dispatch', 'expand', 'right'],
     when: ({ workspace }) => {
       const tiled = workspace.state.dispatchMode?.tiled

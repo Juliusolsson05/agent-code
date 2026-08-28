@@ -119,13 +119,34 @@ export function dispatchFocusedSessionId(
   return dispatchMode.focusedSessionId ?? null
 }
 
+/**
+ * Step one row in `delta` direction, wrapping.
+ *
+ * WHY an empty lane resolves to row 0 in BOTH directions (#673): an empty lane
+ * has no cursor to move, so the first press cannot mean "move from here" — it
+ * has to mean "start here". The model is that an empty lane behaves as though
+ * it were already sitting at a1: the first press in either direction COMMITS
+ * that position, and every press after it navigates normally, so ⌥↓ ⌥↓ gives
+ * a1 then a2, and ⌥↓ ⌥↑ gives a1 then a wrap to the last row.
+ *
+ * This used to return `length - 1` for an upward press, which made the
+ * direction of the very first keystroke decide whether you landed at the top or
+ * the bottom of the index — defensible when an empty lane was a rare exhaustion
+ * state, but wrong now that New Lane deliberately creates one every time. The
+ * lane's placeholder promises ⌥↓ reaches a1 in one press; making ⌥↑ agree costs
+ * nothing and removes the only way to be surprised by a fresh lane.
+ *
+ * The rejected alternative was to treat the virtual cursor as ALREADY on a1 so
+ * the first press steps off it to a2. That makes a1 unreachable by arrow from a
+ * fresh lane and lets the first keystroke scroll past the likeliest target.
+ */
 export function nextTiledRowIndex(
   currentIndex: number,
   delta: number,
   length: number,
 ): number {
   if (length <= 0) return -1
-  if (currentIndex < 0) return delta < 0 ? length - 1 : 0
+  if (currentIndex < 0) return 0
   return (((currentIndex + delta) % length) + length) % length
 }
 
@@ -197,16 +218,32 @@ export function buildAutoLanes(
 }
 
 /**
- * Insert one lane immediately to the right of `laneIndex`.
+ * Insert one EMPTY lane immediately to the right of `laneIndex`.
  *
  * WHY this is not `setTiledLaneCount(current + 1)`: count growth always appends
  * at the tail, while this command is spatial — the user is asking for a new
- * view beside the lane they are currently commanding. Keeping the splice here
- * also makes the no-session-lifecycle invariant explicit: the new lane only
- * receives another pointer from the canonical Dispatch row list.
+ * view beside the lane they are currently commanding.
+ *
+ * WHY the new lane is empty, when `buildAutoLanes` exists and would happily
+ * fill it (issue #673): the two operations look alike and are not. Raising the
+ * tile count is a statement about how many agents you want VISIBLE, so
+ * pre-filling is right — landing the user on N empty pickers after they asked
+ * for N tiles is busywork, which is what `buildAutoLanes` documents. Inserting
+ * a lane is a statement about SPACE, and space does not imply an occupant.
+ *
+ * This previously routed through `buildAutoLanes` so insertion and count growth
+ * would "stay in lockstep as future row kinds evolve". That coupling was the
+ * bug: `buildAutoLanes` claims the first visible row not already shown in a
+ * lane, which in the common case is the top of the index, so asking for another
+ * view silently duplicated a1 into the slot beside you. The two paths are now
+ * deliberately decoupled — if a future row kind changes how lanes auto-fill,
+ * that should change count growth and leave this alone.
+ *
+ * Note there is no session lifecycle here and no `state` argument any more:
+ * splicing a slot, shifting focus, and re-weighting ratios are all purely
+ * structural, so the invariant is now true by signature rather than by comment.
  */
 export function insertLaneRightIntoTiled(
-  state: WorkspaceState,
   tiled: TiledDispatchState,
   laneIndex: number,
 ): TiledDispatchState | null {
@@ -214,19 +251,15 @@ export function insertLaneRightIntoTiled(
   if (!Number.isInteger(laneIndex)) return null
   if (laneIndex < 0 || laneIndex >= tiled.lanes.length) return null
 
-  // buildAutoLanes already owns the contract for choosing the first visible,
-  // unclaimed Dispatch row. Asking it for one appended lane lets insertion and
-  // ordinary count growth stay in lockstep as pinned rows, terminals, and
-  // future row kinds evolve; we only move that computed lane to the requested
-  // spatial position.
-  const expanded = buildAutoLanes(state, tiled.lanes.length + 1, tiled.lanes)
-  const insertedLane = expanded[tiled.lanes.length] ?? {}
   const insertAt = laneIndex + 1
 
   return {
     lanes: [
       ...tiled.lanes.slice(0, insertAt),
-      insertedLane,
+      // Empty: the user picks the occupant. ⌥↓ selects a1 in one press
+      // (see nextTiledRowIndex's empty-lane branch), so the old auto-fill
+      // result is still one keystroke away when that is what they wanted.
+      {},
       ...tiled.lanes.slice(insertAt),
     ],
     // The command inserts after focus, so its normal path keeps this index.

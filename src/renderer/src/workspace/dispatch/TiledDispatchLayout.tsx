@@ -277,7 +277,21 @@ export function TiledDispatchLayout({
                     resolved.paneLabel,
                   )
                 ) : (
-                  <DispatchEmpty message="select an agent" />
+                  // The index lane (0) has no mini-strip beside it, so only the
+                  // agent lanes get the hint — a pointer at a control the user
+                  // cannot see would be worse than no hint at all. The keystroke
+                  // is named because nextTiledRowIndex guarantees ONE press of
+                  // it lands on a1 from an empty lane — in either direction, so
+                  // the copy stays true even if the user reaches for ⌥↑. This
+                  // is a promise the reducer keeps, not a gesture at the UI.
+                  <DispatchEmpty
+                    message="Empty lane"
+                    hint={
+                      laneIndex > 0
+                        ? 'Pick an agent from the strip, or press ⌥↓'
+                        : undefined
+                    }
+                  />
                 )}
                 {!focused && (
                   <div className="absolute inset-0 pointer-events-none bg-canvas/34 ring-1 ring-inset ring-border" />

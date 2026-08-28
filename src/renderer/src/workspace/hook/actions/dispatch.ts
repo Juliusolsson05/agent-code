@@ -221,7 +221,7 @@ export function useDispatchActions(
       setState(prev => {
         const tiled = prev.dispatchMode?.tiled
         if (!tiled) return prev
-        const next = insertLaneRightIntoTiled(prev, tiled, laneIndex)
+        const next = insertLaneRightIntoTiled(tiled, laneIndex)
         if (!next) return prev
         inserted = true
         return { ...prev, dispatchMode: { ...prev.dispatchMode!, tiled: next } }
