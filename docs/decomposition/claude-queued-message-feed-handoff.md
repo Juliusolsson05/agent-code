@@ -355,6 +355,49 @@ prose, task id, output path, or task name may enter git. This is an extension of
 the existing collection/redaction path, not a second recorder or an imagined
 fixture.
 
+### Stage 4d — preserve state when exact evidence is absent or irrelevant
+
+**Produces**
+
+- A failed content-bearing remove lookup that returns the original queue state,
+  including any still-open dequeue debt, instead of committing an inferred
+  neighbor removal while claiming to no-op.
+- An IPC queued-command observation path that replaces `queuedMessages` only
+  when the pure reconciler actually changes state.
+- An explicit boundary for legacy remove debt when an unrelated queue operation
+  interleaves before its durable attachment, rather than speculative repair for
+  a sequence absent from the recorded corpus.
+
+**Verified by**
+
+- The exact-target-present Stage 4c fixture remains 13 observed removes plus 3
+  independently settled dequeues.
+- A recorded task-notification queued-command attachment with no remove debt
+  leaves the runtime map reference-identical: it paints no feed row, changes no
+  queue membership, and cannot cause a render solely by substituting one empty
+  array for another.
+- Typecheck and the focused pure/IPC suites preserve the existing no-op and
+  watcher-burst contracts.
+
+**Why separate**
+
+Stage 4c established precedence when an exact target exists. It did not prove
+the failed-lookup path or the React boundary consuming a pure no-op. Combining
+those with victim attribution would hide two different invariants: inference
+cannot masquerade as a failed exact no-op, and unchanged pure state cannot mint
+changed UI state through reference substitution.
+
+**Reality check**
+
+The no-op IPC contract uses the recorded task-notification attachment at index
+43 of `2026-06-21T20-14-23-131-62432945.json`; task notifications account for
+295 current-corpus queued-command attachments and are rejected as user rows.
+Across all 22 recorded legacy prompt attachments, no queue operation interleaves
+between the content-free remove and its attachment. Remove content is absent
+through Claude 2.1.139 and present from 2.1.207, with no mixed session, so the
+unobserved historical interleaving is documented as an unknown instead of being
+converted into an imagined fixture.
+
 ### Stage 5 — parity, heap verification, and delivery
 
 **Produces**
@@ -440,6 +483,11 @@ Forbidden directions:
    debt and later content-bearing removes. Stage 4c makes their independent
    departure ownership explicit instead of assuming operation order alone can
    attribute both.
+8. **Legacy attachment interleaving:** no recorded legacy prompt attachment has
+   another queue operation between its content-free remove and durable carrier.
+   The current bounded settlement point remains the next non-remove operation
+   or idle boundary; a future recorded counterexample returns the work to the
+   evidence stage instead of receiving a guessed hold window.
 
 ## Explicit non-goals
 
@@ -466,6 +514,9 @@ Primary sources:
   / 13-exact-remove run for evidence precedence. Its unrelated project name
   and content remain local; only operation order, duplicate topology, priority
   class, and pseudonymous correlation equality are published.
+- `2026-06-21T20-14-23-131-62432945.json` index 43 for a recorded
+  task-notification queued-command observation that changes neither feed nor
+  queue state and therefore must preserve the runtime map reference.
 - Existing transcripts through current redaction for provenance/block arrays
   absent from bundles.
 
@@ -486,6 +537,8 @@ Red-first contracts:
     correctly when each arrives in its own watcher burst.
 11. A content-bearing remove applies its exact carrier before older dequeue
     debt, and the still-open debt later settles a different recorded item.
+12. A recorded task-notification attachment with no remove debt is an end-to-end
+    runtime no-op, including reference identity.
 
 If any semantic case lacks recorded evidence, stop at Stage 1 and use the
 existing collection/redaction path. Do not fill the gap with a plausible
