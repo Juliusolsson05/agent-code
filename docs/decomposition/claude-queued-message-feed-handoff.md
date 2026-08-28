@@ -1,6 +1,7 @@
 # Claude Queued-Message Feed Handoff — Staged Decomposition
 
-> **Status:** corrected after recorded-data review; implementation approved on
+> **Status:** corrected after recorded-data review and again after independent
+> PR review found an exact-evidence ordering hole; implementation approved on
 > 2026-08-27.
 >
 > **Issue:** #665. Related umbrella: #339.
@@ -309,6 +310,51 @@ watcher is allowed to split adjacent JSONL lines at any boundary, so the test
 changes only delivery batching—not provider data. No new recorder, synthetic
 queue record, prompt, UUID, or timestamp is introduced.
 
+### Stage 4c — prevent inferred dequeue debt from preempting exact remove evidence
+
+**Produces**
+
+- A line-bounded, hard-redacted projection of the recorded
+  enqueue/dequeue/remove run whose content-bearing removes currently leave
+  permanent residue.
+- Exact-before-inference remove ordering: when `remove.content` names a pending
+  item, that observed departure is applied to the original pending set and the
+  older dequeue debt remains open for its own later settlement.
+- A conservation contract proving every recorded enqueue ends either pending
+  or in exactly one observed/inferred departure decision.
+
+**Verified by**
+
+- The untouched reconciler fails because the first content-bearing remove
+  settles three older dequeues by cohort, consumes the exact target as an
+  inference, and records no `consumed-observed` decision for that remove.
+- The corrected reconciler applies all thirteen recorded exact removes as
+  observed evidence, retains the three dequeue departures as debt, then
+  settles those three independently without residual pending items.
+- Replaying the complete queue corpus still satisfies exact conservation and
+  leaves no unretirable item.
+
+**Why separate**
+
+Dequeue debt and content-bearing remove records prove two different
+departures. Settling the older inference before inspecting the newer exact
+carrier lets a guess consume the very item the carrier names, after which the
+exact remove no-ops and another item survives forever. Evidence precedence is
+therefore an attribution invariant, not another victim-selection condition.
+
+**Reality check**
+
+A fresh replay over 143 queue-bearing local transcripts found this exact
+signature twice and in zero Agent Code project sessions. The primary recording
+contains sixteen notification enqueues, three content-free dequeues, thirteen
+content-bearing removes, and thirteen durable queued-command attachments; three
+correlation identities are duplicated. Because the source belongs to an
+unrelated project, the existing extractor must publish only lines 1511–1557 as
+an aggressively pseudonymized structural projection: no project path, free
+prose, task id, output path, or task name may enter git. This is an extension of
+the existing collection/redaction path, not a second recorder or an imagined
+fixture.
+
 ### Stage 5 — parity, heap verification, and delivery
 
 **Produces**
@@ -390,6 +436,10 @@ Forbidden directions:
 5. **No-attachment remove:** Ctrl+B/future shapes need explicit fallback.
 6. **Append-only decisions:** do not enlarge their payload; bounding the
    pre-existing array is separate unless measurement blocks this work.
+7. **Exact evidence with older debt:** recorded runs can interleave dequeue
+   debt and later content-bearing removes. Stage 4c makes their independent
+   departure ownership explicit instead of assuming operation order alone can
+   attribute both.
 
 ## Explicit non-goals
 
@@ -412,6 +462,10 @@ Primary sources:
   not mixed-queue proof.
 - The other 13 queue-bearing bundles for variants/regression.
 - Queue-operation fixtures for topology/fallback only.
+- A hard-redacted structural projection of the recorded 16-enqueue / 3-dequeue
+  / 13-exact-remove run for evidence precedence. Its unrelated project name
+  and content remain local; only operation order, duplicate topology, priority
+  class, and pseudonymous correlation equality are published.
 - Existing transcripts through current redaction for provenance/block arrays
   absent from bundles.
 
@@ -430,6 +484,8 @@ Red-first contracts:
 9. Trimming reclaims admitted attachments and pagination reloads them.
 10. The recorded June enqueue, legacy remove, and attachment still hand off
     correctly when each arrives in its own watcher burst.
+11. A content-bearing remove applies its exact carrier before older dequeue
+    debt, and the still-open debt later settles a different recorded item.
 
 If any semantic case lacks recorded evidence, stop at Stage 1 and use the
 existing collection/redaction path. Do not fill the gap with a plausible
