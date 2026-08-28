@@ -2,12 +2,16 @@ import type { AgentProviderKind } from '@shared/types/providerKind.js'
 
 // See docs/design/agent-code-conventions.md for the canonical subsystem design.
 
-export const AGENT_CODE_CONVENTIONS_SCHEMA_VERSION = 1 as const
+export const AGENT_CODE_CONVENTIONS_SCHEMA_VERSION = 2 as const
+export const AGENT_CODE_CONVENTIONS_LEGACY_SCHEMA_VERSION = 1 as const
 export const AGENT_CODE_CONVENTIONS_SKILL_NAME = 'agent-code-conventions'
 export const AGENT_CODE_CONVENTIONS_MANAGED_MARKER = '<!-- agent-code-managed:v1 -->'
 export const AGENT_CODE_CONVENTIONS_MAX_BYTES = 32 * 1024
 export const AGENT_CODE_CONVENTIONS_COLLISION_MAX_BYTES = 128 * 1024
-export const AGENT_CODE_CONVENTIONS_STATE_MAX_BYTES = 512 * 1024
+// Custom skills share this app-owned document with Conventions. Keep the read
+// bounded, but do not make a handful of valid 32 KiB skills exhaust a limit
+// chosen when this file held exactly one Markdown document.
+export const AGENT_CODE_CONVENTIONS_STATE_MAX_BYTES = 4 * 1024 * 1024
 
 export const AGENT_CODE_CONVENTIONS_STARTER = `# Development workflow
 
@@ -116,6 +120,13 @@ export type AgentCodeConventionsTextCounts = {
 export type AgentCodeConventionsMaterialization = {
   path: string
   sha256: string
+  /**
+   * V1 records omit identity because every artifact was Conventions. V2 custom
+   * records carry both fields so an opaque collection key never becomes the
+   * source of deletion authority.
+   */
+  skillId?: string
+  targetId?: string
 }
 
 export type AgentCodeConventionsPendingOperation = {
@@ -131,6 +142,17 @@ export type AgentCodeConventionsPendingOperation = {
    * that one approval into permission to replace later external edits.
    */
   expectedConflictFingerprint?: string
+  skillId?: string
+}
+
+export type AgentCodeCustomSkillRecord = {
+  id: string
+  name: string
+  description: string
+  markdown: string
+  enabled: boolean
+  createdAt: string
+  updatedAt: string
 }
 
 export type AgentCodeConventionsDocument = {
@@ -139,6 +161,7 @@ export type AgentCodeConventionsDocument = {
   enabled: boolean
   markdown: string
   updatedAt: string | null
+  customSkills: Record<string, AgentCodeCustomSkillRecord>
   materializations: Record<string, AgentCodeConventionsMaterialization>
   pendingOperations: Record<string, AgentCodeConventionsPendingOperation>
 }
@@ -150,6 +173,7 @@ export function createEmptyAgentCodeConventionsDocument(): AgentCodeConventionsD
     enabled: false,
     markdown: '',
     updatedAt: null,
+    customSkills: {},
     materializations: {},
     pendingOperations: {},
   }

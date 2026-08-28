@@ -64,8 +64,11 @@ function makeRefs(state: WorkspaceState): WorkspaceRefs {
   }
 }
 
-function mountNavigation(ensureSessionLive: ReturnType<typeof vi.fn>) {
-  const refs = makeRefs(makeState())
+function mountNavigation(
+  ensureSessionLive: ReturnType<typeof vi.fn>,
+  initialState: WorkspaceState = makeState(),
+) {
+  const refs = makeRefs(initialState)
   let state = refs.stateRef.current
   const setState: WorkspaceSetState = next => {
     state = typeof next === 'function' ? next(state) : next
@@ -108,6 +111,40 @@ describe('useAgentIndexNavigationActions', () => {
     expect(harness.getState().detachedSessions.a1?.sessionId).toBe('a1')
     expect(harness.getState().detachedSessions.a2).toBeUndefined()
     expect(harness.showToast).not.toHaveBeenCalled()
+    harness.mounted.unmount()
+  })
+
+  it('threads the bang intent through wake and commit into the focused lane', async () => {
+    const state = makeState()
+    state.dispatchMode = {
+      scope: 'global',
+      focusedSessionId: 'a1',
+      tiled: {
+        focusedLane: 0,
+        lanes: [
+          { selectedSessionId: 'a1' },
+          { selectedSessionId: 'a2' },
+        ],
+      },
+    }
+    const ensureSessionLive = vi.fn().mockResolvedValue('a2')
+    const harness = mountNavigation(ensureSessionLive, state)
+
+    await act(async () => {
+      expect(await harness.actions.focusAgentByPaneLabel(
+        'A2',
+        'open-in-focused-tiled-dispatch-lane',
+      )).toBe(true)
+    })
+
+    expect(ensureSessionLive).toHaveBeenCalledWith('a2', 'agent-index.navigate')
+    expect(harness.getState().dispatchMode?.tiled).toMatchObject({
+      focusedLane: 0,
+      lanes: [
+        { selectedSessionId: 'a2' },
+        { selectedSessionId: 'a2' },
+      ],
+    })
     harness.mounted.unmount()
   })
 

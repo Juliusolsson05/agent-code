@@ -196,6 +196,88 @@ export function buildAutoLanes(
   return lanes
 }
 
+/**
+ * Insert one lane immediately to the right of `laneIndex`.
+ *
+ * WHY this is not `setTiledLaneCount(current + 1)`: count growth always appends
+ * at the tail, while this command is spatial — the user is asking for a new
+ * view beside the lane they are currently commanding. Keeping the splice here
+ * also makes the no-session-lifecycle invariant explicit: the new lane only
+ * receives another pointer from the canonical Dispatch row list.
+ */
+export function insertLaneRightIntoTiled(
+  state: WorkspaceState,
+  tiled: TiledDispatchState,
+  laneIndex: number,
+): TiledDispatchState | null {
+  if (tiled.lanes.length >= MAX_DISPATCH_TILES) return null
+  if (!Number.isInteger(laneIndex)) return null
+  if (laneIndex < 0 || laneIndex >= tiled.lanes.length) return null
+
+  // buildAutoLanes already owns the contract for choosing the first visible,
+  // unclaimed Dispatch row. Asking it for one appended lane lets insertion and
+  // ordinary count growth stay in lockstep as pinned rows, terminals, and
+  // future row kinds evolve; we only move that computed lane to the requested
+  // spatial position.
+  const expanded = buildAutoLanes(state, tiled.lanes.length + 1, tiled.lanes)
+  const insertedLane = expanded[tiled.lanes.length] ?? {}
+  const insertAt = laneIndex + 1
+
+  return {
+    lanes: [
+      ...tiled.lanes.slice(0, insertAt),
+      insertedLane,
+      ...tiled.lanes.slice(insertAt),
+    ],
+    // The command inserts after focus, so its normal path keeps this index.
+    // The helper is deliberately more general, though: if a future caller
+    // inserts before the focused coordinate, preserve the focused SESSION by
+    // shifting its index just as removeLaneFromTiled does in reverse. Leaving
+    // the ordinal unchanged would silently retarget keyboard commands.
+    focusedLane: insertAt <= tiled.focusedLane
+      ? tiled.focusedLane + 1
+      : tiled.focusedLane,
+    ratios: insertLaneWeight(tiled.ratios, tiled.lanes.length, insertAt),
+  }
+}
+
+/**
+ * Add one lane weight without discarding unrelated sizing decisions.
+ *
+ * Relative weights are scale-free. Giving the newcomer the old average makes
+ * it exactly one equal share of the enlarged layout while preserving every
+ * existing lane's proportions relative to its peers. A generic count change
+ * has no spatial insertion contract and still resets ratios; New Lane does,
+ * so snapping a deliberately sized cockpit back to even columns would be an
+ * avoidable surprise.
+ */
+function insertLaneWeight(
+  ratios: number[] | undefined,
+  laneCount: number,
+  insertAt: number,
+): number[] | undefined {
+  if (!ratios || ratios.length === 0) return undefined
+  const [indexFraction, ...laneWeights] = ratios
+
+  // Malformed persisted weights already render as an even split. Materialize
+  // that same fallback at the new length so the index-sidebar fraction can
+  // survive instead of being lost along with the unusable lane slice.
+  if (
+    laneWeights.length !== laneCount ||
+    laneWeights.some(weight => !Number.isFinite(weight) || weight <= 0)
+  ) {
+    return [indexFraction, ...Array.from({ length: laneCount + 1 }, () => 1)]
+  }
+
+  const average = laneWeights.reduce((sum, weight) => sum + weight, 0) / laneCount
+  return [
+    indexFraction,
+    ...laneWeights.slice(0, insertAt),
+    average,
+    ...laneWeights.slice(insertAt),
+  ]
+}
+
 // NOTE: render still performs scope validation before mounting a lane, but the
 // durability boundary must not rely on a later React effect. Autosave routes
 // through keepTiledLaneSessions so stale lane ids do not survive to the next
@@ -250,10 +332,11 @@ export function removeLaneFromTiled(
     // default, undoing a width the user deliberately dragged and never asked
     // to change.
     //
-    // A count *increase* has no honest answer (there is a new lane with no
-    // weight to invent), which is why setTiledLaneCount resets wholesale. A
-    // removal does: keep the sidebar fraction, drop the removed lane's weight,
-    // and let normalizedLaneWeights re-normalize what is left.
+    // A generic count *increase* has no insertion position or adjacent-lane
+    // intent, which is why setTiledLaneCount resets wholesale. New Lane has an
+    // explicit insertion position and can assign an average share; a removal
+    // has an equally honest answer: keep the sidebar fraction, drop the removed
+    // lane's weight, and let normalizedLaneWeights re-normalize what is left.
     ratios: removeLaneWeight(tiled.ratios, laneIndex),
   }
 }

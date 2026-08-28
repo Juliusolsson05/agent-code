@@ -69,6 +69,18 @@ export const SESSION_LIFECYCLE_EVENT_NAMES = [
   'provider.start.begin',
   'provider.start.end',
 
+  // "Did an authorized same-pane Codex replacement retire the old exact
+  // rollout owner before the successor reached provider start?"
+  'replacement.handoff.begin',
+  'replacement.handoff.end',
+  // "Did the renderer make the successor's random local ID durable?" Spawn
+  // success alone cannot answer this because the invoking renderer may reload
+  // before its workspace remap reaches disk.
+  'replacement.commit',
+  // "Did a successor failure restore the predecessor's stable local ID?"
+  'replacement.rollback.begin',
+  'replacement.rollback.end',
+
   // "Why is the composer not accepting input?"
   //
   // `gate.eval` is the single most important name here, and it is worth being
@@ -212,6 +224,7 @@ export const SESSION_LIFECYCLE_DATA_KEYS = [
   'disposition',
   'lifecycle',
   'provider',
+  'predecessorSessionId',
   // Free-form sub-classification for events whose variant is not an outcome.
   // Exists so `ok` is never overloaded to mean something other than success.
   'source',
@@ -245,6 +258,14 @@ export const SESSION_LIFECYCLE_DATA_KEYS = [
   'buried',
   'expectedCount',
   'resolvedCount',
+  // Comma-joined session ids that were expected but never resolved. Ids are
+  // already first-class in this stream (`ids.sessionId`), so this adds no new
+  // category of data — it answers "which pane" for an event that previously
+  // only said "one pane", which cost three weeks of a frozen workspace to
+  // diagnose by hand. Joined into a string because payload values must stay
+  // flat: the sanitizer only inspects top-level keys, so an array would sail
+  // past the allowlist.
+  'unresolvedSessionIds',
   'entryCount',
   'suppressed',
 

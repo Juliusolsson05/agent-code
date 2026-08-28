@@ -51,12 +51,31 @@ export type SessionRecoverOptions = {
   useProxy?: boolean
   recoverTmuxName?: string
   builtInMcpDomains?: BuiltInMcpDomain[]
+  /**
+   * Opaque renderer-generated generation for this recovery admission.
+   *
+   * WHY the stable ownership tuple is insufficient: a timeout message for an
+   * earlier recovery can arrive after replacement compensation has published a
+   * new claim under the same sessionId/kind/cwd. Cancellation must name the
+   * generation whose deadline fired or it can tear down the later restore.
+   */
+  recoveryToken?: string
+  /**
+   * Bootstrap-only authority to reclaim an unpersisted Codex replacement.
+   * Ordinary wake/retry calls must remain fenced while a same-pane replacement
+   * is active; only rehydrate knows the predecessor ID is still durable.
+   */
+  reclaimPendingReplacement?: boolean
 }
 
 export type SessionOwnershipOptions = Pick<
   SessionRecoverOptions,
   'sessionId' | 'kind' | 'cwd'
 >
+
+export type SessionRecoveryCancellationOptions = SessionOwnershipOptions & {
+  recoveryToken: string
+}
 
 export type SessionRecoverFailureCode =
   | 'ownership-conflict'
@@ -254,6 +273,14 @@ export type AgentSessionEvents = {
   screen: [AgentScreenSnapshot]
   'jsonl-entry': [AgentTranscriptEntry, string]
   'jsonl-error': [Error]
+  /**
+   * Diagnostic-only explanation of transcript discovery/ownership decisions.
+   * Providers that do not expose one simply never emit it. Correctness must
+   * continue to use committed entries and errors; this channel exists so a
+   * held candidate is inspectable in a recording instead of looking like a
+   * silent transport failure.
+   */
+  'transcript-diagnostic': [unknown]
   'process-state': [AgentProcessState]
   'trust-dialog': [AgentTrustDialogState]
   conditions: [ProviderConditionSnapshot]
@@ -474,6 +501,20 @@ export type SessionOptions = {
    *  never the long-lived domain policy; the renderer/session metadata remains
    *  the source of truth for which domains should be enabled. */
   builtInMcpServers?: BuiltInMcpServerConfig[]
+  /**
+   * Main-owned one-shot boundary invoked by a resumed provider immediately
+   * before it acquires exclusive durable-transcript ownership.
+   *
+   * WHY this callback is internal launch material rather than renderer IPC:
+   * successor proxy/config/MCP setup does not conflict with a live predecessor,
+   * while Codex's exact rollout reservation does. Only the provider knows the
+   * last safe await before that reservation; only SessionManager may decide
+   * which local pane can be stopped or compensated. Passing a closure joins
+   * those two facts without teaching the provider about pane IDs or weakening
+   * the consumer-independent rollout coordinator. Providers without an exact
+   * ownership boundary ignore it.
+   */
+  beforeResumeOwnershipAcquire?: () => Promise<void>
 }
 
 export type SessionInfo = {

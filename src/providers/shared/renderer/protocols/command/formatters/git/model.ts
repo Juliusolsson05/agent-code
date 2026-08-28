@@ -7,7 +7,7 @@ import type { GitIntent } from './detect'
  * covers transports that deliver output without exit evidence. Verb-specific
  * cards parse under a success assumption and therefore remain generic in that
  * state; an all-Git workflow may keep its factual step structure while using
- * neutral bullets and an explicit `exit unknown` badge. */
+ * neutral bullets and an explicit `exit code unavailable` badge. */
 export type GitOperationModel = {
   command: string
   intent: GitIntent

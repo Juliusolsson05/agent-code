@@ -1,0 +1,70 @@
+{
+  "$fixture": {
+    "id": "claude-worktree-context",
+    "cutoff": "2026-08-26T21:38:22.000Z",
+    "sources": [
+      {
+        "alias": "claude-worktree-state-a",
+        "line": 283,
+        "sourceFingerprint": "73a00aed075b59f6"
+      },
+      {
+        "alias": "claude-worktree-conversation-a",
+        "line": 284,
+        "timestamp": "2026-04-27T10:58:46.239Z",
+        "sourceFingerprint": "8668e59e28cd528d"
+      },
+      {
+        "alias": "claude-current-conversation-a",
+        "line": 7,
+        "timestamp": "2026-07-27T18:03:59.805Z",
+        "sourceFingerprint": "1ee41b409df36172"
+      }
+    ]
+  },
+  "records": [
+    {
+      "type": "worktree-state",
+      "sessionId": "fixture-id-1",
+      "worktreeSession": {
+        "originalCwd": "/fixture/project-1",
+        "worktreePath": "/fixture/project-1/.worktrees/worktree-1",
+        "worktreeName": "⟨text:22⟩",
+        "worktreeBranch": "fixture/branch-1",
+        "sessionId": "fixture-id-1",
+        "enteredExisting": true
+      }
+    },
+    {
+      "type": "assistant",
+      "uuid": "fixture-id-2",
+      "parentUuid": "fixture-id-3",
+      "timestamp": "2026-04-27T10:58:46.239Z",
+      "sessionId": "fixture-id-1",
+      "cwd": "/fixture/project-1/.worktrees/worktree-1",
+      "gitBranch": "fixture/branch-1",
+      "message": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "⟨text:100⟩"
+          }
+        ]
+      }
+    },
+    {
+      "type": "user",
+      "uuid": "fixture-id-4",
+      "parentUuid": "fixture-id-5",
+      "timestamp": "2026-07-27T18:03:59.805Z",
+      "sessionId": "fixture-id-6",
+      "cwd": "/fixture/project-2",
+      "gitBranch": "fixture/branch-2",
+      "message": {
+        "role": "user",
+        "content": "⟨text:239⟩"
+      }
+    }
+  ]
+}

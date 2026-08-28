@@ -17,6 +17,11 @@ type SemanticCase = { expectedRoute: Route; semanticBlock: SemanticLiveBlock }
 type CommittedCase = {
   expectedRoute: Route
   expectedReceipt?: { rendererId: string; protocolId?: string }
+  expectedResultDecision?: {
+    action: 'absorb'
+    ownerRenderId: string
+    protocolId?: string
+  }
   toolUse: ToolUseBlock
   toolResult?: ToolResultBlock
 }
@@ -113,6 +118,9 @@ describe('Codex unified-exec evidence', () => {
         // receipt would erase the content-gated route this evidence exists to
         // protect.
         expect(decision.toolUse.receipt).toEqual(sample.expectedReceipt ?? SPECIALIZED_RECEIPT)
+      }
+      if (sample.expectedResultDecision) {
+        expect(decision.toolResult).toMatchObject(sample.expectedResultDecision)
       }
       if (sample.toolResult && decision.toolResult?.action === 'render') {
         const fingerprint = fingerprintRenderShape({

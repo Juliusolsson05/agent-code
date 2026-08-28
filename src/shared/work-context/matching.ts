@@ -56,5 +56,26 @@ export function fallbackContext(
 }
 
 export function normalizePath(path: string): string {
-  return path.replace(/\/+$/, '') || '/'
+  let filesystemPath = path
+
+  // WHY URL conversion belongs here instead of in the Codex adapter: the raw
+  // event must retain its literal provider representation for historical
+  // evidence and diagnostics, while every live matcher must compare the same
+  // filesystem coordinate. Current Codex CommandExecution records uniformly
+  // use non-hosted local file URLs. We intentionally reject hosted file URLs
+  // instead of guessing remote/UNC semantics that do not exist in the
+  // recorded corpus.
+  if (path.startsWith('file://')) {
+    try {
+      const url = new URL(path)
+      if (url.protocol === 'file:' && url.hostname === '') {
+        filesystemPath = decodeURIComponent(url.pathname)
+      }
+    } catch {
+      // A malformed provider URL is not safely equivalent to a local path.
+      // Leaving it unchanged makes matching fail closed against Git roots.
+    }
+  }
+
+  return filesystemPath.replace(/\/+$/, '') || '/'
 }

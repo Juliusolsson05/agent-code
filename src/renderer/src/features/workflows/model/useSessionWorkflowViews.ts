@@ -8,6 +8,8 @@ type ScopedReferences = {
   references: WorkflowRunReference[]
 }
 
+const MAX_VISIBLE_WORKFLOW_VIEWS = 3
+
 function mergeReferences(
   ...sources: ReadonlyArray<readonly WorkflowRunReference[]>
 ): WorkflowRunReference[] {
@@ -40,9 +42,11 @@ function mergeReferences(
     }
   }
 
-  return order
+  const lineageReferences = order
     .filter(runId => !superseded.has(runId))
     .map(runId => byRunId.get(runId)!)
+
+  return lineageReferences
 }
 
 /**
@@ -63,6 +67,7 @@ export function useSessionWorkflowViews({
   cwd: string | null
   transcriptReferences: readonly WorkflowRunReference[]
 }): {
+  allReferences: WorkflowRunReference[]
   references: WorkflowRunReference[]
   selectedRunId: string | null
   selectedReference: WorkflowRunReference | null
@@ -86,9 +91,21 @@ export function useSessionWorkflowViews({
 
   const transportReferences = transport.scopeKey === scopeKey ? transport.references : []
   const replacementReferences = replacements.scopeKey === scopeKey ? replacements.references : []
-  const references = useMemo(
-    () => mergeReferences(transcriptReferences, transportReferences, replacementReferences),
+  const allReferences = useMemo(
+    // WHY transport is last: a resume response must add its child immediately, before the bridge
+    // publishes the new session registry. Once that authoritative push arrives, however, its live
+    // status/cursor must supersede the renderer-local launch snapshot. Leaving replacements last
+    // made a completed resumed workflow remain visually Active for the rest of the session.
+    () => mergeReferences(transcriptReferences, replacementReferences, transportReferences),
     [replacementReferences, transcriptReferences, transportReferences],
+  )
+  // WHY the compact limit remains a state-model concern even though history needs the unbounded
+  // collection: selection and the rendered tabs must still describe the same three-run window.
+  // Returning a second, read-only history projection lets the dialog inspect older lineages without
+  // making an old run invisibly selectable beneath a selector that has no corresponding tab.
+  const references = useMemo(
+    () => allReferences.slice(-MAX_VISIBLE_WORKFLOW_VIEWS),
+    [allReferences],
   )
   const selectedRunId = selection.scopeKey === scopeKey ? selection.runId : null
   const selectedReference = selectedRunId === null
@@ -156,6 +173,7 @@ export function useSessionWorkflowViews({
   }, [scopeKey])
 
   return {
+    allReferences,
     references,
     selectedRunId,
     selectedReference,

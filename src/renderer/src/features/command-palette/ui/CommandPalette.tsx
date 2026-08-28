@@ -19,15 +19,23 @@ import {
 import {
   buildAgentIndexCommand,
   isAgentIndexCommand,
+  parseAgentIndexPaletteQuery,
 } from '@renderer/features/command-palette/lib/agentIndexCommand'
 import {
   buildHistoryScoreMap,
   loadRecentHistory,
 } from '@renderer/features/command-palette/lib/recentCommandHistory'
 import { useGlobalToast } from '@renderer/ui/GlobalToast'
-import { rankCommands } from '@renderer/features/command-palette/lib/rankCommands'
 import { CommandSortControl } from '@renderer/features/command-palette/ui/CommandSortControl'
 import type { CommandSortMode } from '@renderer/features/command-palette/lib/sortCommands'
+import {
+  rankPaletteRows,
+  type CommandPaletteRow,
+} from '@renderer/features/command-palette/lib/rankPaletteRows'
+import {
+  promptTemplateFillReturnState,
+  type PromptTemplateFillReturnState,
+} from '@renderer/features/command-palette/lib/promptTemplateFillReturn'
 import {
   body,
   primary,
@@ -67,6 +75,7 @@ import type {
   PromptTemplateInsertMode,
   PromptTemplateVariableValueMap,
 } from '@renderer/features/prompt-templates/types'
+import { promptTemplateTargetSessionId } from '@renderer/features/prompt-templates/targetSession'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import { deriveExtensionCommands, deriveExtensionKeybindings } from '@renderer/apps/host/derive'
 import { useExtensionHost } from '@renderer/apps/host/ExtensionHostProvider'
@@ -111,6 +120,7 @@ type PromptTemplateFillState = {
   template: PromptTemplate
   values: PromptTemplateVariableValueMap
   insertMode: PromptTemplateInsertMode
+  returnTo: PromptTemplateFillReturnState
 }
 
 // Global "reveal every command" escape hatch. Hard-coded false, moved
@@ -264,6 +274,7 @@ function OpenCommandPalette({
   const openRewindPrompt = useAppStore(state => state.openRewindPrompt)
   const openAgentViewModePicker = useAppStore(state => state.openAgentViewModePicker)
   const openColorFlagPicker = useAppStore(state => state.openColorFlagPicker)
+  const openAgentTitlePrompt = useAppStore(state => state.openAgentTitlePrompt)
   const closeUsageModal = useAppStore(state => state.closeUsageModal)
   const closeKeyboardShortcuts = useAppStore(state => state.closeKeyboardShortcuts)
   const closeAgentActivity = useAppStore(state => state.closeAgentActivity)
@@ -320,6 +331,8 @@ function OpenCommandPalette({
   const agentViewMode = settings.agentViewMode
   const commandVisibilityOverrides = settings.commandVisibilityOverrides
   const navigationCommandsEnabled = settings.navigationCommandsEnabled
+  const promptTemplatesInCommandSearchEnabled =
+    settings.promptTemplatesInCommandSearchEnabled
   const commandKeybindingOverrides = settings.commandKeybindingOverrides
   const showHiddenCommands = SHOW_HIDDEN_COMMANDS
   const statusModeEnabled = settings.showStatusMode
@@ -384,6 +397,9 @@ function OpenCommandPalette({
 
   const focusedSessionId = commandTargetSessionId(workspace)
   const focusedMeta = focusedSessionId ? workspace.state.sessions[focusedSessionId] : null
+  const promptTemplateSessionId = promptTemplateTargetSessionId(workspace)
+  const promptTemplatesInCommandSearch =
+    promptTemplatesInCommandSearchEnabled && promptTemplateSessionId !== null
   const focusedCwd = focusedMeta?.cwd ?? null
   const focusedProvider = focusedMeta?.kind ?? DEFAULT_PROVIDER
   const customPromptTemplates = settings.savedPromptTemplates
@@ -596,6 +612,7 @@ function OpenCommandPalette({
         openRewindPrompt,
         openAgentViewModePicker,
         openColorFlagPicker,
+        openAgentTitlePrompt,
         closeUsageModal,
         closeKeyboardShortcuts,
         closeAgentActivity,
@@ -708,6 +725,7 @@ function OpenCommandPalette({
       openBulkProviderSwitch,
       openRewindPrompt,
       openAgentViewModePicker,
+      openAgentTitlePrompt,
       closeUsageModal,
       closeKeyboardShortcuts,
       closeAgentActivity,
@@ -974,37 +992,90 @@ function OpenCommandPalette({
   // `headers` is the section map for `grouped` mode and empty for every other
   // mode. It comes back from the SAME call that produced the ordering, so a
   // header can never be drawn above the wrong row — see `browseOrder`.
-  const { commands: filteredCommands, headers: commandGroupHeaders } = useMemo(
-    () => rankCommands(commands, queryText, historyScoreMap, commandStarred, commandSortMode),
-    [commands, queryText, historyScoreMap, commandStarred, commandSortMode],
+  const { rows: rankedPaletteRows, headers: commandGroupHeaders } = useMemo(
+    () => rankPaletteRows({
+      commands,
+      promptTemplates,
+      query: queryText,
+      historyScore: historyScoreMap,
+      starred: commandStarred,
+      sortMode: commandSortMode,
+      // A terminal is a valid generic command target but has no agent
+      // composer. Hiding templates there matches the dedicated picker and
+      // prevents an actionable-looking result whose execution can only no-op.
+      includePromptTemplates: promptTemplatesInCommandSearch,
+    }),
+    [
+      commands,
+      promptTemplates,
+      queryText,
+      historyScoreMap,
+      commandStarred,
+      commandSortMode,
+      promptTemplatesInCommandSearch,
+    ],
+  )
+  const directAgentQuery = useMemo(
+    () => parseAgentIndexPaletteQuery(queryText),
+    [queryText],
   )
   const directAgentTarget = useMemo(
-    () => resolveAgentPaneLabel(workspace.state, queryText, workspace.tileTabs),
-    [queryText, workspace.state, workspace.tileTabs],
+    () => directAgentQuery
+      ? resolveAgentPaneLabel(
+          workspace.state,
+          directAgentQuery.label,
+          workspace.tileTabs,
+        )
+      : null,
+    [directAgentQuery, workspace.state, workspace.tileTabs],
   )
+  // WHY the syntax intent is normalized against the visible surface before we
+  // build the row: `A2!` can only mean "Here" when a Tiled Dispatch lane is on
+  // screen. Persisted state can contain a hidden Dispatch layout underneath
+  // Tiled Tabs, and grid/classic Dispatch deliberately retain ordinary
+  // coordinate navigation. Passing the raw bang there would make row zero
+  // promise "Open Here" while Enter actually switches to an existing pane.
+  const directAgentIntent =
+    directAgentQuery?.intent === 'open-in-focused-tiled-dispatch-lane' &&
+    !workspace.tileTabs &&
+    workspace.state.dispatchMode?.tiled
+      ? directAgentQuery.intent
+      : 'reuse-existing-view'
   const directAgentCommand = useMemo(
     () =>
-      directAgentTarget
-        ? buildAgentIndexCommand(directAgentTarget, workspace.focusAgentByPaneLabel)
+      directAgentTarget && directAgentQuery
+        ? buildAgentIndexCommand(
+            directAgentTarget,
+            workspace.focusAgentByPaneLabel,
+            directAgentIntent,
+          )
         : null,
-    [directAgentTarget, workspace.focusAgentByPaneLabel],
+    [
+      directAgentIntent,
+      directAgentQuery,
+      directAgentTarget,
+      workspace.focusAgentByPaneLabel,
+    ],
   )
   // The exact coordinate result is deliberately row zero. It is not part of
   // fuzzy command ranking and must win Enter even if a future command happens
   // to contain "A2" in its title or keywords.
-  const paletteCommands = useMemo(
-    () => (directAgentCommand ? [directAgentCommand, ...filteredCommands] : filteredCommands),
-    [directAgentCommand, filteredCommands],
+  const paletteRows = useMemo<CommandPaletteRow[]>(
+    () => directAgentCommand
+      ? [{ kind: 'command', command: directAgentCommand }, ...rankedPaletteRows]
+      : rankedPaletteRows,
+    [directAgentCommand, rankedPaletteRows],
   )
 
-  // `commandGroupHeaders` is keyed by index into `filteredCommands`, but the
-  // rendered list is `paletteCommands` — one longer whenever a direct agent
+  // `commandGroupHeaders` is keyed by index into `rankedPaletteRows`, but the
+  // rendered list is `paletteRows` — one longer whenever a direct agent
   // coordinate row is prepended. Shifting the lookup by that offset keeps the
   // two aligned.
   //
   // In practice the two are mutually exclusive: headers exist only for an EMPTY
-  // query, and `resolveAgentPaneLabel` needs a query matching /^[A-Z]+[1-9]\d*$/
-  // to produce a row at all. The offset is here anyway because relying on that
+  // query, and the agent-coordinate parser needs a query matching an exact
+  // label with an optional trailing bang to produce a row at all. The offset
+  // is here anyway because relying on that
   // coincidence would put a silent off-by-one behind any future change to
   // either rule, and the failure mode — every section heading sitting one row
   // too high — is exactly the kind of thing that ships unnoticed.
@@ -1033,13 +1104,13 @@ function OpenCommandPalette({
     if (queryText.length > 0) return -1
     if (commandSortMode === 'grouped') return -1
     let starredCount = 0
-    for (const command of paletteCommands) {
-      if (!commandStarred[command.id]) break
+    for (const row of paletteRows) {
+      if (row.kind !== 'command' || !commandStarred[row.command.id]) break
       starredCount += 1
     }
-    if (starredCount === 0 || starredCount === paletteCommands.length) return -1
+    if (starredCount === 0 || starredCount === paletteRows.length) return -1
     return starredCount - 1
-  }, [commandSortMode, commandStarred, paletteCommands, queryText])
+  }, [commandSortMode, commandStarred, paletteRows, queryText])
 
   const filteredLength =
     mode === 'resume'
@@ -1051,13 +1122,17 @@ function OpenCommandPalette({
           : mode === 'ai-workspace-open' || mode === 'ai-workspace-clear'
             ? filteredAiWorkspaces.length
             : mode === 'commands'
-              ? paletteCommands.length
+              ? paletteRows.length
               : 0
 
-  const selectedCommand = useMemo(() => {
+  const selectedPaletteRow = useMemo(() => {
     if (mode !== 'commands') return null
-    return paletteCommands[selectedIndex] ?? null
-  }, [mode, paletteCommands, selectedIndex])
+    return paletteRows[selectedIndex] ?? null
+  }, [mode, paletteRows, selectedIndex])
+
+  const selectedCommand = useMemo(() => {
+    return selectedPaletteRow?.kind === 'command' ? selectedPaletteRow.command : null
+  }, [selectedPaletteRow])
 
   // Focus the search input whenever the palette becomes VISIBLE.
   //
@@ -1108,12 +1183,12 @@ function OpenCommandPalette({
     if (el instanceof HTMLElement) {
       el.scrollIntoView({ block: 'nearest' })
     }
-    // `paletteCommands` is a dependency, not just `selectedIndex`: switching sort
+    // `paletteRows` is a dependency, not just `selectedIndex`: switching sort
     // mode moves the selected row to a different scroll offset (grouped mode
     // inserts headers, which shifts everything below them) while the index may
     // be unchanged. Keyed on the index alone, the effect would not re-run and
     // the highlighted row could sit off-screen with nothing visibly selected.
-  }, [selectedIndex, paletteCommands])
+  }, [selectedIndex, paletteRows])
 
   const executeCommand = useCallback(
     (command: ResolvedCommand) => {
@@ -1226,8 +1301,8 @@ function OpenCommandPalette({
   )
 
   const executePromptTemplate = useCallback(
-    async (template: PromptTemplate) => {
-      const sessionId = commandTargetSessionId(workspace)
+    async (template: PromptTemplate, originSelectedIndex = selectedIndex) => {
+      const sessionId = promptTemplateSessionId
       if (!sessionId) return
 
       try {
@@ -1239,6 +1314,7 @@ function OpenCommandPalette({
             template: template.buildBody ? { ...template, body } : template,
             values: {},
             insertMode: template.insertMode,
+            returnTo: promptTemplateFillReturnState(mode, query, originSelectedIndex),
           })
           setMode('fill-prompt-template')
           setQuery('')
@@ -1259,7 +1335,7 @@ function OpenCommandPalette({
         workspace.showPaneToast(sessionId, `Template failed: ${message}`)
       }
     },
-    [onClose, workspace],
+    [mode, onClose, promptTemplateSessionId, query, selectedIndex, workspace],
   )
 
   const savePromptTemplateForm = useCallback(() => {
@@ -1411,6 +1487,18 @@ function OpenCommandPalette({
     }
   }, [onClose, promptTemplateFillState, workspace])
 
+  const cancelPromptTemplateFill = useCallback(() => {
+    const returnTo = promptTemplateFillState?.returnTo ?? {
+      mode: 'prompt-template' as const,
+      query: '',
+      selectedIndex: 0,
+    }
+    setPromptTemplateFillState(null)
+    setMode(returnTo.mode)
+    setQuery(returnTo.query)
+    setSelectedIndex(returnTo.selectedIndex)
+  }, [promptTemplateFillState, setMode])
+
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (e.key === 'ArrowDown') {
@@ -1438,7 +1526,7 @@ function OpenCommandPalette({
         // an explicit no-op branch because it is the only template mode whose
         // input stays writable: save/edit/fill are readOnly, so their stray
         // keystrokes never reach here. Without this the mode fell through to
-        // the command-registry `else` below and ran paletteCommands[
+        // the command-registry `else` below and ran paletteRows[
         // selectedIndex] — typing "kill" to filter templates and pressing
         // Enter fired the Kill command instead of doing nothing.
         if (mode === 'manage-prompt-template') return
@@ -1467,8 +1555,9 @@ function OpenCommandPalette({
           const template = filteredPromptTemplates[selectedIndex]
           if (template) void executePromptTemplate(template)
         } else {
-          const command = paletteCommands[selectedIndex]
-          if (command) executeCommand(command)
+          const row = paletteRows[selectedIndex]
+          if (row?.kind === 'prompt-template') void executePromptTemplate(row.template)
+          else if (row?.kind === 'command') executeCommand(row.command)
         }
       }
     },
@@ -1477,7 +1566,7 @@ function OpenCommandPalette({
       aiWorkspacePending,
       filteredLength,
       filteredBuried,
-      paletteCommands,
+      paletteRows,
       filteredAiWorkspaces,
       filteredPromptTemplates,
       filteredSessions,
@@ -1592,7 +1681,10 @@ function OpenCommandPalette({
           if (mode === 'edit-prompt-template' || mode === 'save-prompt-template') {
             setMode('manage-prompt-template')
           } else if (mode === 'fill-prompt-template') {
-            setMode('prompt-template')
+            // Fill has two entry points now. Returning through the captured
+            // origin keeps Escape and the visible Cancel button identical.
+            cancelPromptTemplateFill()
+            return
           } else {
             setMode('commands')
           }
@@ -1611,7 +1703,9 @@ function OpenCommandPalette({
       >
         <DialogTitle className="sr-only">Command palette</DialogTitle>
         <DialogDescription className="sr-only">
-          Search application commands and related session workflows.
+          {mode === 'commands' && promptTemplatesInCommandSearch
+            ? 'Search application commands, prompt templates, and related session workflows.'
+            : 'Search application commands and related session workflows.'}
         </DialogDescription>
         <div className="flex-shrink-0 border-b border-border px-3 py-2 flex items-center gap-2">
           {mode === 'resume' && (
@@ -1834,27 +1928,82 @@ function OpenCommandPalette({
                   setPromptTemplateFillState(state => state ? { ...state, insertMode } : state)
                 }}
                 onCancel={() => {
-                  setPromptTemplateFillState(null)
-                  setMode('prompt-template')
+                  cancelPromptTemplateFill()
                 }}
                 onInsert={insertFilledPromptTemplate}
               />
             )}
 
             {mode === 'commands' &&
-              (paletteCommands.length === 0 ? (
+              (paletteRows.length === 0 ? (
                 <div className="px-3 py-4 text-muted text-[12px] text-center">
-                  No matching commands
+                  {promptTemplatesInCommandSearch && queryText.length > 0
+                    ? 'No matching commands or prompt templates'
+                    : 'No matching commands'}
                 </div>
               ) : (
-                paletteCommands.map((command, i) => {
+                paletteRows.map((row, i) => {
                   const groupHeader = commandGroupHeaders.get(i - directAgentRowOffset)
+                  if (row.kind === 'prompt-template') {
+                    const template = row.template
+                    return (
+                      <div
+                        key={`prompt-template:${template.id}`}
+                        data-palette-row={i}
+                        className={`
+                          flex items-center justify-between gap-3
+                          px-3 py-1.5
+                          cursor-pointer
+                          font-code
+                          ${
+                            i === selectedIndex
+                              ? 'bg-row-selected-bg text-row-selected-fg'
+                              : 'text-ink-dim hover:bg-row-hover-bg'
+                          }
+                        `}
+                        onMouseEnter={() => setSelectedIndex(i)}
+                        onClick={() => void executePromptTemplate(template, i)}
+                      >
+                        <div className="min-w-0 flex items-center gap-2">
+                          {/* The command rows reserve this column for a star.
+                              Keeping the same width prevents mixed search rows
+                              from zig-zagging horizontally, while a distinct
+                              glyph makes template insertion visually different
+                              from command execution before the user presses Enter. */}
+                          <span
+                            aria-hidden
+                            className="w-3 flex-shrink-0 text-center text-[12px] leading-none text-accent"
+                          >
+                            ›
+                          </span>
+                          <div className="min-w-0">
+                            <div className="flex min-w-0 items-center gap-2 text-[13px]">
+                              <span className="truncate">{template.title}</span>
+                              <span className="flex-shrink-0 border border-border bg-surface px-1 py-0.5 text-[9px] uppercase tracking-wider text-muted">
+                                Prompt template
+                              </span>
+                            </div>
+                            {template.description && (
+                              <div className="mt-0.5 truncate text-[10px] text-muted">
+                                {template.description}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        <span className="flex-shrink-0 text-[9px] uppercase tracking-wider text-muted">
+                          {template.scope}
+                        </span>
+                      </div>
+                    )
+                  }
+
+                  const command = row.command
                   return (
                     <Fragment key={command.id}>
                       {groupHeader && (
                         <div
                           // A section heading, not a selectable row: `selectedIndex`
-                          // indexes `paletteCommands`, and headings live outside that
+                          // indexes `paletteRows`, and headings live outside that
                           // array entirely. Arrow keys, Enter, hover and the clamp
                           // effect are all untouched by grouping — which is why the
                           // header map is keyed by command index rather than the list
@@ -2189,11 +2338,15 @@ function OpenCommandPalette({
           </div>
 
           {mode === 'commands' && (
-            <CommandDescriptionPanel
-              command={selectedCommand}
-              starred={selectedCommand ? commandStarred[selectedCommand.id] === true : false}
-              onToggleStar={handleToggleStar}
-            />
+            selectedPaletteRow?.kind === 'prompt-template' ? (
+              <PromptTemplatePreviewPanel template={selectedPaletteRow.template} />
+            ) : (
+              <CommandDescriptionPanel
+                command={selectedCommand}
+                starred={selectedCommand ? commandStarred[selectedCommand.id] === true : false}
+                onToggleStar={handleToggleStar}
+              />
+            )
           )}
 
           {/* Prompt-template mode — the full prompt body for the highlighted

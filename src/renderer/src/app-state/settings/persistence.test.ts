@@ -20,6 +20,14 @@ describe('coerceSettings agentViewMode', () => {
     expect(coerceSettings({}).savedPromptTemplates).toEqual([])
   })
 
+  it('keeps prompt templates out of command search unless explicitly enabled', () => {
+    expect(coerceSettings({}).promptTemplatesInCommandSearchEnabled).toBe(false)
+    expect(coerceSettings({ promptTemplatesInCommandSearchEnabled: 'yes' })
+      .promptTemplatesInCommandSearchEnabled).toBe(false)
+    expect(coerceSettings({ promptTemplatesInCommandSearchEnabled: true })
+      .promptTemplatesInCommandSearchEnabled).toBe(true)
+  })
+
   it('defaults missing built-in MCP defaults to an empty list', () => {
     expect(coerceSettings({}).defaultBuiltInMcpDomains).toEqual([])
   })

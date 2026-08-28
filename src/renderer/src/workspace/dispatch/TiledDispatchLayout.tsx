@@ -34,9 +34,10 @@ type Props = {
 //                    share the remaining width. A "unit" is one lane's
 //                    [mini-list?][agent view] pair. Weights are normalized
 //                    on read, so their absolute scale is irrelevant.
-// Absent / wrong-length => sensible defaults (even split). Reset to
-// undefined on tile-count change (a weight array sized for the old lane
-// count would mis-lay-out the new set).
+// Absent / wrong-length => sensible defaults (even split). The generic count
+// prompt resets the array because it supplies no position at which to map a
+// new weight; exact New Lane / Remove Lane operations do have that information
+// and preserve the sidebar plus every honestly mappable lane weight.
 const INDEX_MIN = 0.1
 const INDEX_MAX = 0.4
 const DEFAULT_INDEX_FRACTION = 0.18
@@ -61,7 +62,11 @@ function normalizedLaneWeights(ratios: number[] | undefined, laneCount: number):
   return raw.map(w => w / sum)
 }
 
-type LaneResolution = { sessionId: SessionId; tabId: TabId } | null
+type LaneResolution = {
+  sessionId: SessionId
+  tabId: TabId
+  paneLabel: string
+} | null
 
 export function TiledDispatchLayout({
   workspace,
@@ -95,32 +100,37 @@ export function TiledDispatchLayout({
     return map
   }, [rows])
 
-  // Resolve every lane to {sessionId, tabId} | null. A lane resolves iff its
+  // Resolve every lane from the canonical visible row. A lane resolves iff its
   // session is alive AND in the current dispatch scope (present in
-  // rowBySession) — the scope-correct liveness + tab source. We deliberately
-  // do NOT de-dup: the same session may resolve in multiple lanes and each
-  // renders it. Claude/Codex views mirror for free (shared per-session
-  // runtime, input keyed by sessionId); terminals mirror once multi-attach
-  // lands. An empty/dead/out-of-scope lane resolves to null and the heal
-  // effect re-homes it.
+  // rowBySession) — the scope-correct source for liveness, owning tab, and the
+  // visible Dispatch label. Carrying the label here matters because reducing
+  // the row to sessionId/tabId made pane chrome recompute the unrelated
+  // tab-local coordinate. We deliberately do NOT de-dup: the same session may
+  // resolve in multiple lanes and each renders it. Claude/Codex views mirror
+  // for free (shared per-session runtime, input keyed by sessionId); terminals
+  // mirror once multi-attach lands. An empty/dead/out-of-scope lane resolves
+  // to null and the heal effect re-homes it.
   const laneResolutions = useMemo<LaneResolution[]>(() => {
     return lanes.map(lane => {
       const id = lane.selectedSessionId
       if (!id) return null
       const row = rowBySession.get(id)
       if (!row) return null // dead, or not in the current dispatch scope
-      return { sessionId: id, tabId: row.tabId }
+      return { sessionId: id, tabId: row.tabId, paneLabel: row.label }
     })
   }, [lanes, rowBySession])
 
-  // Auto-fill / heal effect. Any lane that did NOT resolve (empty, dead,
-  // out-of-scope, or a de-duped duplicate) is handed the next visible agent
-  // not already resolved by another lane. Convergent: once every fillable
-  // lane holds a unique, in-scope, live agent there is nothing to assign.
-  // If there are more lanes than agents the surplus stay empty (picker
-  // prompt) and the effect settles. setTiledLaneSession overwrites the
-  // lane's stale id, so this also repairs the live-duplicate case (the
-  // second lane's old id is replaced rather than left double-mounted).
+  // Auto-fill / heal effect. Any lane that did NOT resolve (empty, dead, or
+  // out-of-scope) is handed the next visible agent not already resolved by
+  // another lane. Convergent: once every fillable lane holds an in-scope,
+  // live agent there is nothing to assign. If there are more lanes than
+  // agents the surplus stay empty (picker prompt) and the effect settles.
+  //
+  // WHY duplicates are absent from that invalid list: mirrored lanes are a
+  // supported view of one durable session, and `A2!` intentionally creates
+  // them. Both copies resolve above, so this healer must skip both; treating a
+  // duplicate as missing would make forced placement appear for one render
+  // and then silently replace it with an unrelated available agent.
   useEffect(() => {
     const resolvedIds = new Set<SessionId>()
     for (const r of laneResolutions) if (r) resolvedIds.add(r.sessionId)
@@ -263,6 +273,8 @@ export function TiledDispatchLayout({
                     showStatusMode,
                     showWorktreeBadges,
                     () => workspace.setTiledFocusedLane(laneIndex),
+                    false,
+                    resolved.paneLabel,
                   )
                 ) : (
                   <DispatchEmpty message="select an agent" />

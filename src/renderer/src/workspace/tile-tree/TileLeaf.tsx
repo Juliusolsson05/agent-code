@@ -648,6 +648,7 @@ export function TileLeaf({
       <PaneHeader
         sessionId={sessionId}
         paneLabel={paneLabel}
+        agentTitle={workspace.state.sessions[sessionId]?.title}
         projectDir={runtime.projectDir}
         statusMode={showStatusMode}
         isSessionLive={isSessionLive}
@@ -895,6 +896,8 @@ export function TileLeaf({
           only the feed-sized viewport above it. */}
       <WorkflowViewSelector
         references={workflowViews.references}
+        historyReferences={workflowViews.allReferences}
+        cwd={workflowCwd}
         selectedRunId={workflowViews.selectedRunId}
         onSelect={workflowViews.selectRun}
       />

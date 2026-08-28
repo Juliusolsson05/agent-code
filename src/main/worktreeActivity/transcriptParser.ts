@@ -1,11 +1,9 @@
-import type {
-  WorktreeActivityEvent,
-} from '@shared/work-context/types.js'
 import {
   extractWorktreeActivityEvents,
 } from '@shared/work-context/extractors.js'
 import { streamJsonl } from '@shared/runtime/streamJsonl.js'
 import type {
+  IndexedWorktreeActivityEvent,
   IndexedTranscript,
   TranscriptCandidate,
 } from '@main/worktreeActivity/types.js'
@@ -28,7 +26,7 @@ export async function parseTranscriptForActivity(
   // the system-perf popover every ~60 seconds. Streaming line-by-line
   // drops the transient peak to one line at a time (~tens of KB even
   // for large tool_use entries) at no semantic cost.
-  const events: WorktreeActivityEvent[] = []
+  const events: IndexedWorktreeActivityEvent[] = []
   let discoveredCwd = candidate.cwd
 
   for await (const raw of streamJsonl<Record<string, unknown>>(candidate.file)) {
@@ -36,23 +34,33 @@ export async function parseTranscriptForActivity(
     // truncations). Skip them — matches the prior catch-and-continue.
     if (raw === null) continue
     if (!discoveredCwd) discoveredCwd = extractCwd(raw)
-    events.push(...extractWorktreeActivityEvents(raw, candidate.mtimeMs))
-  }
+    for (const event of extractWorktreeActivityEvents(raw, candidate.mtimeMs)) {
+      if (!event.path) continue
 
-  return {
-    ...candidate,
-    cwd: discoveredCwd,
-    indexedAt: Date.now(),
-    events: events
-      .filter(event => event.path)
-      .map(event => ({
+      // WHY compact during iteration instead of filter/map after EOF: live
+      // events intentionally carry command text, file-path arrays, confidence,
+      // and stable dedupe keys. The historical index stores none of those.
+      // Retaining the rich objects for an entire multi-megabyte transcript and
+      // then allocating a second compact array briefly keeps both graphs alive,
+      // undermining the line-at-a-time heap guarantee above. Projecting here
+      // lets each parsed JSON line and rich event become collectible before the
+      // stream advances; only the compact data that must be returned survives.
+      events.push({
         path: event.path,
         branch: event.branch,
         ts: event.ts,
         kind: event.kind,
         source: event.source,
         primaryWeight: event.primaryWeight,
-      })),
+      })
+    }
+  }
+
+  return {
+    ...candidate,
+    cwd: discoveredCwd,
+    indexedAt: Date.now(),
+    events,
   }
 }
 

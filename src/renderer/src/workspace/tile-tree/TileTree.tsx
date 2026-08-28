@@ -3,15 +3,13 @@ import { useCallback, useRef } from 'react'
 
 import { getRendererProvider } from '@providers/registry.renderer'
 import type { AgentViewMode } from '@renderer/app-state/settings/types'
-import {
-  getEffectiveAgentSurface,
-  resolveConfiguredAgentViewMode,
-} from '@renderer/workspace/agentDisplayMode'
+import { getEffectiveAgentSurfaceForSession } from '@renderer/workspace/agentDisplayMode'
 import {
   buildGridRelatedAgentTabs,
   selectedGridRelatedSessionId,
 } from '@renderer/workspace/gridRelatedAgents'
 import { AgentTerminalLeaf } from '@renderer/workspace/tile-tree/AgentTerminalLeaf'
+import { MountedAgentTerminalOwner } from '@renderer/workspace/terminal/AgentTerminalOwnership'
 import { TerminalLeaf } from '@renderer/workspace/tile-tree/TerminalLeaf'
 import { ExtensionViewLeaf } from '@renderer/workspace/tile-tree/ExtensionViewLeaf'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
@@ -104,6 +102,7 @@ export function renderWorkspaceLeaf(
   showWorktreeBadges = true,
   onFocusRequest: () => void = () => workspace.focusSessionInTab(tabId, sessionId),
   showRelatedAgentTabs = false,
+  surfacePaneLabel?: string,
 ) {
   const relatedTabs = showRelatedAgentTabs
     ? buildGridRelatedAgentTabs(workspace.state, tabId, sessionId)
@@ -114,7 +113,14 @@ export function renderWorkspaceLeaf(
   const renderedSessionId = workspace.state.sessions[selectedSessionId] ? selectedSessionId : sessionId
   const meta = workspace.state.sessions[renderedSessionId]
   const kind = meta?.kind ?? DEFAULT_PROVIDER
-  const paneLabel = paneLabelForSession(workspace.state, tabId, sessionId)
+  // WHY a parent-owned label may override the tab-local coordinate: Dispatch
+  // renders one globally ordered visible-row stream, so its D23 identity can
+  // legitimately differ from this session's position inside its owning tab.
+  // The surface that selected the row is the only authority for that
+  // coordinate. Grid and Spotlight callers omit this value and keep the
+  // established paneLabelForSession behavior.
+  const paneLabel = surfacePaneLabel ??
+    paneLabelForSession(workspace.state, tabId, sessionId)
 
   if (kind === 'terminal') {
     return (
@@ -147,22 +153,26 @@ export function renderWorkspaceLeaf(
 
   const provider = getRendererProvider(kind)
   const runtime = workspace.getRuntime(renderedSessionId)
-  const configuredAgentViewMode = resolveConfiguredAgentViewMode(
-    agentViewMode,
-    meta?.agentViewModeOverride,
-  )
-  if (getEffectiveAgentSurface({ kind, mode: configuredAgentViewMode, runtime }) === 'terminal') {
+  if (getEffectiveAgentSurfaceForSession({
+    kind,
+    globalMode: agentViewMode,
+    override: meta?.agentViewModeOverride,
+    runtime,
+  }) === 'terminal') {
     return (
-      <AgentTerminalLeaf
-        sessionId={renderedSessionId}
-        paneLabel={paneLabel}
-        focused={sessionId === focusedSessionId}
-        onFocusRequest={onFocusRequest}
-        workspace={workspace}
-        runtime={runtime}
-        projectDir={runtime.projectDir ?? meta?.cwd ?? null}
-        provider={kind}
-      />
+      <MountedAgentTerminalOwner sessionId={renderedSessionId}>
+        <AgentTerminalLeaf
+          sessionId={renderedSessionId}
+          paneLabel={paneLabel}
+          agentTitle={meta?.title}
+          focused={sessionId === focusedSessionId}
+          onFocusRequest={onFocusRequest}
+          workspace={workspace}
+          runtime={runtime}
+          projectDir={runtime.projectDir ?? meta?.cwd ?? null}
+          provider={kind}
+        />
+      </MountedAgentTerminalOwner>
     )
   }
 

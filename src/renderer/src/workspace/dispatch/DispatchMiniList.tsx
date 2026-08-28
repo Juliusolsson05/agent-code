@@ -6,9 +6,9 @@ import type { DispatchAgentRow } from '@renderer/workspace/dispatch/dispatchSele
 import { DispatchColorFlagStrip } from '@renderer/workspace/dispatch/DispatchColorFlagStrip'
 import type { SessionId } from '@renderer/workspace/types'
 import {
-  cachedLatestPromptTitle,
   dispatchActivity,
   dispatchActivityClasses,
+  dispatchRowTitle,
 } from '@renderer/workspace/dispatch/DispatchAgentList'
 
 // The Tiled Dispatch lane selector, deliberately stripped to NOTHING but the
@@ -83,10 +83,11 @@ const DispatchMiniChip = memo(function DispatchMiniChip({
   // Same palette as the main index's chip cell: activity background, or
   // accent when this chip is the lane's current selection.
   const chipClasses = dispatchActivityClasses(activity, active).index
-  const isTerminal = row.kind === 'terminal'
-  const title = !isTerminal && runtime.entries
-    ? cachedLatestPromptTitle(runtime.entries, row.kind) ?? row.title
-    : row.title
+  // WHY this shares the rich index resolver instead of deriving another
+  // tooltip label here: the mini selector is the scanning control for Tiled
+  // Dispatch. If it keeps the historical latest-prompt-first rule, hover text
+  // contradicts the explicit title shown in the adjacent index and pane.
+  const title = dispatchRowTitle(row, runtime.entries)
 
   return (
     <button

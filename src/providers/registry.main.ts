@@ -3,7 +3,6 @@
 // sessionManager and IPC handlers import from HERE.
 
 import { join } from 'path'
-import { readdir, stat } from 'fs/promises'
 
 import type { MainProviderConfig } from '@shared/types/providerConfig'
 import { AGENT_PROVIDER_KINDS, isAgentProviderKind } from '@shared/types/providerKind'
@@ -16,73 +15,11 @@ import { CodexSession } from '@providers/codex/runtime/codexSession'
 import { deliverCodexPrompt } from '@providers/codex/runtime/promptDelivery'
 import { OpencodeSession } from '@providers/opencode/runtime/opencodeSession'
 import { deliverOpencodePrompt } from '@providers/opencode/runtime/promptDelivery'
-import { listCodexSessions, getCodexSessionsDir } from 'codex-headless'
-
-const CODEX_ROLLOUT_RE =
-  /^rollout-(.+)-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i
-
-/**
- * Find the newest Codex rollout whose structured filename owns `threadId`.
- *
- * WHY this lives behind MainProviderConfig instead of in historyLoader:
- * Codex durable history is global/date-bucketed while Claude durable history is
- * cwd/project-dir scoped. The shared history loader should ask the provider for
- * "the transcript path for this provider session" instead of carrying a
- * provider-specific directory walk and a Claude path join beside its paging
- * code. Keeping the exact filename parse here also preserves the important
- * invariant from the old loader: never substring-match a global rollout tree.
- */
-async function findCodexRolloutPathByThreadId(
-  sessionsDir: string,
-  threadId: string,
-): Promise<string | null> {
-  const matches: Array<{ path: string; mtimeMs: number }> = []
-  try {
-    await collectCodexRolloutMatches(sessionsDir, threadId, matches)
-  } catch {
-    return null
-  }
-  if (matches.length === 0) return null
-  // WHY mtime, not reverse date-dir / first readdir match: Codex can leave more
-  // than one rollout filename for the same thread id after resume/remap flows.
-  // Provider switching, duplicate, rewind, history pagination, and prompt
-  // templates must all agree on the newest durable transcript, and file mtime is
-  // the old shared tie-break those flows already relied on.
-  matches.sort((a, b) => b.mtimeMs - a.mtimeMs)
-  return matches[0]?.path ?? null
-}
-
-async function collectCodexRolloutMatches(
-  dir: string,
-  threadId: string,
-  matches: Array<{ path: string; mtimeMs: number }>,
-  depth = 0,
-): Promise<void> {
-  if (depth > 3) return
-  let entries: string[]
-  try {
-    entries = await readdir(dir)
-  } catch {
-    return
-  }
-  for (const entry of entries) {
-    const fullPath = join(dir, entry)
-    let entryStat
-    try {
-      entryStat = await stat(fullPath)
-    } catch {
-      continue
-    }
-    if (entryStat.isDirectory()) {
-      await collectCodexRolloutMatches(fullPath, threadId, matches, depth + 1)
-      continue
-    }
-    if (!entryStat.isFile()) continue
-    const parsed = CODEX_ROLLOUT_RE.exec(entry)
-    if (parsed?.[2] !== threadId) continue
-    matches.push({ path: fullPath, mtimeMs: entryStat.mtimeMs })
-  }
-}
+import {
+  findCodexRolloutPathByThreadId,
+  getCodexSessionsDir,
+  listCodexSessions,
+} from 'codex-headless'
 
 const claudeMain: MainProviderConfig = {
   id: 'claude',
@@ -134,6 +71,10 @@ const codexMain: MainProviderConfig = {
   listSessions: (cwd, limit) => listCodexSessions({ cwd, limit }),
   listAllSessions: (limit) => listCodexSessions({ limit }),
   getProjectDir: async () => getCodexSessionsDir(),
+  // WHY Agent Code delegates exact identity to codex-headless: live resume and
+  // offline history must validate requested ID, filename UUID, session_meta.id,
+  // and duplicate ordering with one rule. A second app-local directory walker
+  // previously disagreed with the runtime on which duplicate was authoritative.
   resolveTranscriptPath: async (_cwd, providerSessionId) =>
     findCodexRolloutPathByThreadId(await getCodexSessionsDir(), providerSessionId),
   deliverPrompt: deliverCodexPrompt,

@@ -82,6 +82,45 @@ describe('agent index navigation', () => {
     expect(result?.state.dispatchMode?.tiled?.ratios).toEqual([0.2, 0.4, 0.4])
   })
 
+  it('opens an already-visible agent in the focused Tiled Dispatch lane for the bang intent', () => {
+    const state = makeState()
+    state.dispatchMode = {
+      scope: 'global',
+      focusedSessionId: 'a1',
+      tiled: {
+        focusedLane: 0,
+        ratios: [0.2, 0.4, 0.4],
+        lanes: [
+          { selectedSessionId: 'a1' },
+          { selectedSessionId: 'a2' },
+          { selectedSessionId: 'b1' },
+        ],
+      },
+    }
+
+    const result = navigateToAgentIndexTarget(
+      state,
+      null,
+      target(state, 'A2'),
+      'open-in-focused-tiled-dispatch-lane',
+    )
+
+    expect(result?.kind).toBe('replace-focused-tiled-dispatch-lane')
+    expect(result?.state.dispatchMode?.tiled).toEqual({
+      focusedLane: 0,
+      ratios: [0.2, 0.4, 0.4],
+      lanes: [
+        { selectedSessionId: 'a2' },
+        { selectedSessionId: 'a2' },
+        { selectedSessionId: 'b1' },
+      ],
+    })
+    // Both lanes mirror one durable session. Forced placement is a view
+    // operation, so it must never rewrite provider ownership metadata.
+    expect(result?.state.sessions.a2).toBe(state.sessions.a2)
+    expect(result?.requiresWake).toBe(false)
+  })
+
   it('replaces only the focused Tiled Dispatch lane when the agent is absent', () => {
     const state = makeState()
     state.dispatchMode = {
@@ -135,6 +174,56 @@ describe('agent index navigation', () => {
     expect(result?.state.activeTabId).toBe('tab-b')
     expect(result?.state.dispatchMode?.focusedSessionId).toBe('b1')
     expect(result?.state.tabs[0].focusedSessionId).toBe('a1')
+  })
+
+  it('degrades the bang intent to ordinary navigation outside Tiled Dispatch', () => {
+    const state = makeState()
+    state.dispatchMode = { scope: 'global', focusedSessionId: 'a1' }
+
+    const result = navigateToAgentIndexTarget(
+      state,
+      null,
+      target(state, 'B1'),
+      'open-in-focused-tiled-dispatch-lane',
+    )
+
+    expect(result?.kind).toBe('focus-classic-dispatch')
+    expect(result?.state.activeTabId).toBe('tab-b')
+    expect(result?.state.dispatchMode?.focusedSessionId).toBe('b1')
+  })
+
+  it('keeps bang navigation equivalent to ordinary navigation in grid and Tiled Tabs', () => {
+    const gridState = makeState()
+    const gridTarget = target(gridState, 'B1')
+    expect(navigateToAgentIndexTarget(
+      gridState,
+      null,
+      gridTarget,
+      'open-in-focused-tiled-dispatch-lane',
+    )).toEqual(navigateToAgentIndexTarget(gridState, null, gridTarget))
+
+    const tiledTabsState = makeState()
+    const tileTabs: TileTabsState = {
+      tabIds: ['tab-a', 'tab-b'],
+      focusedTabId: 'tab-a',
+      direction: 'horizontal',
+      ratios: [0.41, 0.59],
+    }
+    const tiledTabsTarget = target(tiledTabsState, 'B1')
+    // WHY compare the complete reducer result instead of only its kind: the
+    // fallback contract includes tab membership, focus, ratios, wake state,
+    // and the workspace mutation. A future early bang branch must not drift
+    // any of those fields on surfaces where focused-lane placement is absent.
+    expect(navigateToAgentIndexTarget(
+      tiledTabsState,
+      tileTabs,
+      tiledTabsTarget,
+      'open-in-focused-tiled-dispatch-lane',
+    )).toEqual(navigateToAgentIndexTarget(
+      tiledTabsState,
+      tileTabs,
+      tiledTabsTarget,
+    ))
   })
 
   it('focuses an already tiled tab and preserves membership, direction, and ratios', () => {
@@ -314,6 +403,38 @@ describe('agent index navigation', () => {
       { selectedSessionId: 'b1' },
     ])
     expect(buildVisibleDispatchRows(result!.state).map(row => row.sessionId)).toContain('a1')
+  })
+
+  it('promotes a forced cross-project mirror while retaining the existing copy', () => {
+    const state = makeState()
+    state.dispatchMode = {
+      scope: 'project',
+      focusedSessionId: 'a1',
+      tiled: {
+        focusedLane: 0,
+        lanes: [
+          { selectedSessionId: 'a1' },
+          // Restored layouts can temporarily retain an out-of-scope lane. The
+          // forced intent must ignore this existing copy, then promote scope
+          // before the layout healer evaluates either mirrored lane.
+          { selectedSessionId: 'b1' },
+        ],
+      },
+    }
+
+    const result = navigateToAgentIndexTarget(
+      state,
+      null,
+      target(state, 'B1'),
+      'open-in-focused-tiled-dispatch-lane',
+    )
+
+    expect(result?.state.activeTabId).toBe('tab-b')
+    expect(result?.state.dispatchMode?.scope).toBe('global')
+    expect(result?.state.dispatchMode?.tiled?.lanes).toEqual([
+      { selectedSessionId: 'b1' },
+      { selectedSessionId: 'b1' },
+    ])
   })
 
   it('follows visible Tiled Tabs when stale restored state also contains Dispatch', () => {

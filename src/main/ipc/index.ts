@@ -45,6 +45,7 @@ import { registerCliUpdatesIpc } from '@main/ipc/cliUpdates.js'
 import type { CliUpdateOrchestrator } from '@main/setup/cliUpdateOrchestrator.js'
 import { registerWorkflowIpc } from '@main/ipc/workflows.js'
 import { registerAgentCodeConventionsIpc } from '@main/ipc/agentCodeConventions.js'
+import { registerAgentCodeCustomSkillsIpc } from '@main/ipc/agentCodeCustomSkills.js'
 import type { WorkflowBridge } from '@main/workflows/WorkflowBridge.js'
 import { registerExtensionsIpc } from '@main/ipc/extensions.js'
 
@@ -90,7 +91,7 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerLspIpc(deps.lspManager, editorFsRoots, deps.aiWorkspaceRegistry)
   registerFsIpc()
   registerSessionsIpc()
-  registerWorkspaceIpc()
+  registerWorkspaceIpc(deps.manager)
   registerGhostIpc(deps.ghostJournals)
   registerDebugIpc()
   registerGitIpc()
@@ -118,4 +119,5 @@ export function registerAllIpc(deps: IpcDeps): void {
   // it has stopped being storage and the Stage-2 sender-identity question applies.
   registerExtensionsIpc()
   registerAgentCodeConventionsIpc(deps.agentCodeConventionsService)
+  registerAgentCodeCustomSkillsIpc(deps.agentCodeConventionsService)
 }

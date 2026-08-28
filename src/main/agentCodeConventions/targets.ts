@@ -28,6 +28,23 @@ export type ResolveAgentCodeConventionsTargetsOptions = {
   environment?: Readonly<Record<string, string | undefined>>
 }
 
+export function targetsForSkillName(
+  resolved: ResolvedAgentCodeConventionsTargets,
+  skillName: string,
+): ResolvedAgentCodeConventionsTargets {
+  return {
+    unsupportedProviders: [...resolved.unsupportedProviders],
+    targets: resolved.targets.map(target => {
+      const skillDirectory = join(target.skillsDirectory, skillName)
+      return {
+        ...target,
+        skillDirectory,
+        skillFile: join(skillDirectory, 'SKILL.md'),
+      }
+    }),
+  }
+}
+
 async function canonicalPath(path: string): Promise<string> {
   const absolute = resolve(path)
   return normalize(await realpath(absolute).catch(() => absolute))

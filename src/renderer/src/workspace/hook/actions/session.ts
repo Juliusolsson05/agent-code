@@ -235,6 +235,7 @@ export function useSessionActions(
   refs: WorkspaceRefs,
 ): SessionActions {
   const wakeInFlightRef = useRef(new Map<SessionId, Promise<SessionWakeResult>>())
+  const pendingReplacementSuccessorsRef = useRef(new Set<SessionId>())
 
   // spawn — wrapped so callers don't have to touch window.api
   // directly. Updates state.sessions synchronously after main
@@ -251,6 +252,7 @@ export function useSessionActions(
       cwd: string,
       opts?: {
         resumeSessionId?: string
+        predecessorSessionId?: SessionId
         kind?: SessionKind
         dangerousMode?: boolean
         recoverTmuxName?: string
@@ -281,6 +283,9 @@ export function useSessionActions(
           kind,
           cwd,
           resumeSessionId: opts?.resumeSessionId,
+          ...(opts?.predecessorSessionId
+            ? { predecessorSessionId: opts.predecessorSessionId }
+            : {}),
           dangerousMode,
           useProxy,
           recoverTmuxName: opts?.recoverTmuxName,
@@ -288,6 +293,14 @@ export function useSessionActions(
         })
         sessionId = result.sessionId
         tmuxName = result.tmuxName
+        if (result.replacementTransactionId) {
+          // WHY presence, not renderer inference: only main can prove the
+          // successor targeted the predecessor's exact Codex rollout and
+          // therefore consumed the destructive handoff. replaceSession uses
+          // this marker to suppress its legacy predecessor kill; workspace
+          // persistence later commits the still-pending main transaction.
+          pendingReplacementSuccessorsRef.current.add(sessionId)
+        }
       } catch (err) {
         throw new Error(sessionSpawnErrorMessage(kind, err, useProxy === true))
       }
@@ -939,8 +952,18 @@ export function useSessionActions(
       const oldDraft = refs.latestRuntimesRef.current[oldId]?.draftInput ?? ''
       const newId = await spawn(cwd, {
         ...spawnOpts,
+        // WHY main needs the local predecessor even though the renderer kills
+        // it below: resumed Codex owns an exact rollout lease before its PTY
+        // starts. The historical start-success-before-old-stop ordering makes
+        // the successor collide with the pane it is replacing (#638). Naming
+        // this exact local owner lets main perform only the unavoidable
+        // same-rollout handoff; Claude, OpenCode, fresh Codex, and different-
+        // transcript swaps retain the rollback-friendly ordering here.
+        predecessorSessionId: oldId,
         ...(builtInMcpDomains !== undefined ? { builtInMcpDomains } : {}),
       })
+      const mainHandledPredecessor =
+        pendingReplacementSuccessorsRef.current.delete(newId)
       setRuntimes(prev => ({
         ...prev,
         [newId]: {
@@ -949,7 +972,9 @@ export function useSessionActions(
         },
       }))
 
-      await killSessionBackendIfOwned(refs, oldId)
+      if (!mainHandledPredecessor) {
+        await killSessionBackendIfOwned(refs, oldId)
+      }
       setRuntimes(prev => {
         const next = { ...prev }
         delete next[oldId]
@@ -966,6 +991,13 @@ export function useSessionActions(
 
       setState(prev => {
         const sessions = { ...prev.sessions }
+        // WHY read the title from `prev` here instead of the pre-spawn
+        // snapshot: provider switches and rewinds can wait on backend work,
+        // and the user may edit or clear the pane's title during that window.
+        // The replacement is the same logical pane with a fresh transport id,
+        // so its durable glance label must follow using the latest state rather
+        // than being lost—or resurrected from a stale snapshot—on completion.
+        const replacementTitle = prev.sessions[oldId]?.title
         delete sessions[oldId]
         // Persist the replacement provider metadata immediately
         // instead of waiting for the first transcript line to
@@ -991,6 +1023,7 @@ export function useSessionActions(
               }
             : {}),
           ...(builtInMcpDomains !== undefined ? { builtInMcpDomains } : {}),
+          ...(replacementTitle !== undefined ? { title: replacementTitle } : {}),
         }
         const detachedSessions = { ...prev.detachedSessions }
         const detached = detachedSessions[oldId]

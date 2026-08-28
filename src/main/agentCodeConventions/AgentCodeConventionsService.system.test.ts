@@ -245,7 +245,7 @@ describe('AgentCodeConventionsService', () => {
     expect((await stat(currentTarget.skillDirectory)).isDirectory()).toBe(true)
   })
 
-  it('cleans only the operation-bound crash temp before retrying publication', async () => {
+  it('preserves an unproven operation-bound crash temp and reports a conflict', async () => {
     const root = await temporaryDirectory()
     const currentTarget = target('agents-standard-personal-skills', join(root, '.agents', 'skills'), ['codex'])
     const stateFilePath = join(root, 'state', 'conventions.json')
@@ -278,9 +278,13 @@ describe('AgentCodeConventionsService', () => {
     })
     await service.initialize()
 
-    expect(await service.getSnapshot()).toMatchObject({ enabled: true, health: 'active' })
-    expect(await readFile(currentTarget.skillFile, 'utf8')).toBe(rendered)
-    await expect(stat(tempPath)).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(await service.getSnapshot()).toMatchObject({
+      enabled: true,
+      health: 'conflict',
+      targets: [{ state: 'conflict' }],
+    })
+    await expect(stat(currentTarget.skillFile)).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(await readFile(tempPath, 'utf8')).toBe('partially written bytes')
   })
 
   it('treats the leaf directory as harmless residue across a crash before publication', async () => {

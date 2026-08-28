@@ -1,12 +1,15 @@
-import { useCallback, useEffect } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 
 import type { PersistedWorkspace } from '@renderer/workspace/persistence'
 import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
-import { pruneSessionOwnership } from '@renderer/workspace/sessionOwnership'
+import { pruneSessionOwnership, repairPersistedTabs } from '@renderer/workspace/sessionOwnership'
 import { withNormalizedBuiltInMcpDomains } from '@renderer/workspace/mcpDomains'
 
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import * as perf from '@renderer/performance/client'
+
+const AUTOSAVE_DELAY_MS = 400
+const AUTOSAVE_RETRY_MAX_DELAY_MS = 30_000
 
 // Debounced workspace-save + beforeunload flush.
 //
@@ -37,6 +40,9 @@ export function useAutoSave(
   refs: WorkspaceRefs,
   bootstrapComplete: boolean,
 ): void {
+  const retryEnabledRef = useRef(false)
+  const retryAttemptRef = useRef(0)
+  const flushSaveRef = useRef<() => void>(() => undefined)
   const flushSave = useCallback(() => {
     const saveSpan = perf.span('workspace.autosave.flush')
     const s = refs.latestStateRef.current
@@ -53,6 +59,39 @@ export function useAutoSave(
       // eslint-disable-next-line no-console
       console.warn('[workspace] dropping unowned sessions during autosave:', pruned.droppedSessionIds)
     }
+    // Repair the tile trees BEFORE serializing them. `pruneSessionOwnership`
+    // above scrubs every pointer that aims at a session, but the trees are
+    // themselves an ownership surface and used to be written verbatim — so a
+    // leaf whose metadata had already been removed from `state.sessions` could
+    // become durable. That shape is not merely untidy: rehydrate counts such a
+    // leaf as a pane it must restore, can never restore it, and therefore
+    // reports `partial-restore` and holds autosave off on every subsequent
+    // launch. Since autosave is the only writer of workspace.json, the file
+    // then cannot be repaired by the app at all.
+    //
+    // WHY `pruned.sessions` and not `s.sessions`: they agree on exactly the
+    // question being asked. `pruned.sessions` keeps `ownedIds ∩ own keys of
+    // s.sessions`, and every tile leaf with metadata is owned by construction,
+    // so a leaf is missing here if and only if it was already an orphan in
+    // this same snapshot. Nothing `pruneSessionOwnership` drops for an
+    // unrelated reason (unowned metadata, a detached record whose parent tab
+    // is gone, a buried pane) can ever be a tile leaf — which is what stops
+    // this from deleting a live pane. If that ever stops holding, this call
+    // becomes destructive, so keep the two in step.
+    const repairedTabs = repairPersistedTabs({
+      tabs: s.tabs,
+      sessions: pruned.sessions,
+      activeTabId: s.activeTabId,
+      tileTabs: refs.latestTileTabsRef.current,
+    })
+    if (repairedTabs.droppedLeafSessionIds.length > 0) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        '[workspace] dropping tile leaves with no session metadata during autosave:',
+        { leaves: repairedTabs.droppedLeafSessionIds, tabs: repairedTabs.droppedTabIds },
+      )
+    }
+
     // Collect non-empty drafts so in-progress prompts survive crashes.
     const drafts: Record<SessionId, string> = {}
     for (const [id, rt] of Object.entries(refs.latestRuntimesRef.current)) {
@@ -69,13 +108,13 @@ export function useAutoSave(
       id => pruned.sessions[id] !== undefined,
     )
     const persisted: PersistedWorkspace = {
-      tabs: s.tabs.map(t => ({
+      tabs: repairedTabs.tabs.map(t => ({
         id: t.id,
         title: t.title,
         focusedSessionId: t.focusedSessionId,
         root: t.root,
       })),
-      activeTabId: s.activeTabId,
+      activeTabId: repairedTabs.activeTabId,
       dispatchMode: pruned.dispatchMode,
       // WHY normalize MCP domains at the persistence boundary:
       //
@@ -96,7 +135,7 @@ export function useAutoSave(
       pinnedSessionIds: persistedPinnedSessionIds.length > 0
         ? persistedPinnedSessionIds
         : undefined,
-      tileTabs: refs.latestTileTabsRef.current,
+      tileTabs: repairedTabs.tileTabs,
       drafts: Object.keys(drafts).length > 0 ? drafts : undefined,
     }
     let json = ''
@@ -108,6 +147,7 @@ export function useAutoSave(
     }
     void window.api.saveWorkspace(json)
       .then(() => {
+        retryAttemptRef.current = 0
         saveSpan.end({
           tabs: persisted.tabs.length,
           sessions: Object.keys(persisted.sessions).length,
@@ -119,15 +159,70 @@ export function useAutoSave(
         saveSpan.fail(err, { bytes: json.length })
         // eslint-disable-next-line no-console
         console.warn('[workspace] save failed:', err)
+        if (
+          retryEnabledRef.current &&
+          refs.saveTimerRef.current === null
+        ) {
+          // WHY persistence failure owns its own retry: a successful Codex
+          // replacement remains main-owned until this save acknowledges its
+          // successor ID. Requiring an unrelated UI mutation to schedule the
+          // next debounce leaves both ownership and a queued second reload
+          // blocked forever after one transient filesystem error. Re-entering
+          // flushSave through a ref serializes the latest state, not the stale
+          // JSON captured by the failed attempt.
+          const retryDelayMs = Math.min(
+            AUTOSAVE_DELAY_MS * (2 ** retryAttemptRef.current),
+            AUTOSAVE_RETRY_MAX_DELAY_MS,
+          )
+          retryAttemptRef.current += 1
+          refs.saveTimerRef.current = setTimeout(() => {
+            refs.saveTimerRef.current = null
+            flushSaveRef.current()
+          }, retryDelayMs)
+        }
       })
   }, [refs.latestRuntimesRef, refs.latestStateRef, refs.latestTileTabsRef])
 
+  // The retry callback must always execute the newest serializer closure, but
+  // adding flushSave to its own dependency graph would make the callback
+  // recursive at construction time. A ref expresses the real invariant: one
+  // timer may call the latest committed render's flush implementation.
+  flushSaveRef.current = flushSave
+
+  useEffect(() => {
+    retryEnabledRef.current = bootstrapComplete
+    return () => {
+      retryEnabledRef.current = false
+    }
+  }, [bootstrapComplete])
+
+  useEffect(() => () => {
+    // WHY this cleanup is not tied to the timer captured by the state effect:
+    // that original debounce may already have fired and installed a later
+    // retry. Unmount is the actual renderer-generation boundary and must cancel
+    // whichever timer the generation owns at that instant.
+    if (refs.saveTimerRef.current) {
+      clearTimeout(refs.saveTimerRef.current)
+      refs.saveTimerRef.current = null
+    }
+  }, [refs.saveTimerRef])
+
   useEffect(() => {
     if (!bootstrapComplete) return
+    // A newer state is a fresh durability attempt, not another failure of the
+    // same bytes. Reset backoff so user progress is persisted promptly.
+    retryAttemptRef.current = 0
     if (refs.saveTimerRef.current) clearTimeout(refs.saveTimerRef.current)
-    refs.saveTimerRef.current = setTimeout(flushSave, 400)
+    const timer = setTimeout(() => {
+      refs.saveTimerRef.current = null
+      flushSave()
+    }, AUTOSAVE_DELAY_MS)
+    refs.saveTimerRef.current = timer
     return () => {
-      if (refs.saveTimerRef.current) clearTimeout(refs.saveTimerRef.current)
+      if (refs.saveTimerRef.current === timer) {
+        clearTimeout(timer)
+        refs.saveTimerRef.current = null
+      }
     }
   }, [state, draftVersion, flushSave, refs.saveTimerRef, bootstrapComplete])
 
@@ -139,6 +234,11 @@ export function useAutoSave(
         clearTimeout(refs.saveTimerRef.current)
         refs.saveTimerRef.current = null
       }
+      // beforeunload is vetoable (for example, the editor's unsaved-changes
+      // guard). It is only an attempted teardown, so this flush must remain
+      // retry-capable if the renderer survives. Actual unmount flips the
+      // generation flag and cancels whichever retry timer is then current.
+      retryAttemptRef.current = 0
       flushSave()
     }
     window.addEventListener('beforeunload', onBeforeUnload)

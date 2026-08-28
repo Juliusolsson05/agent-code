@@ -766,7 +766,7 @@ function GitWorkflowCard({
         badges={allStepsProven
           ? <span className="text-[10.5px] uppercase tracking-wide text-muted">complete</span>
           : status === 'unknown'
-            ? <span className="text-[10.5px] uppercase tracking-wide text-muted">exit unknown</span>
+            ? <span className="text-[10.5px] uppercase tracking-wide text-muted">exit code unavailable</span>
             : null}
       />
       {summaries.length > 0 ? (

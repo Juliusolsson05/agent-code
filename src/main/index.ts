@@ -11,6 +11,7 @@ import { join } from 'path'
 import { performance } from 'perf_hooks'
 
 import { SessionManager } from '@main/sessionManager.js'
+import { installSessionShutdownGate } from '@main/sessionShutdownGate.js'
 import { LspManager } from '@main/lspManager.js'
 import { compactAllGhostLogs, GhostJournalRegistry } from '@main/ghostJournal.js'
 import {
@@ -45,7 +46,7 @@ import { SessionRecorderManager } from '@main/recording/SessionRecorderManager.j
 import { setOutboundObserver } from '@main/window/mainWindow.js'
 import { isSessionRecordingEnabled, isSessionRecordingAutoStart } from '@main/ipc/devDebug.js'
 import { registerAllIpc } from '@main/ipc/index.js'
-import { AgentCodeConventionsService } from '@main/agentCodeConventions/AgentCodeConventionsService.js'
+import { AgentCodeManagedSkillsService } from '@main/agentCodeConventions/AgentCodeManagedSkillsService.js'
 import { cleanupDictationIpcResources } from '@main/ipc/dictation.js'
 import { flushHistoryWrites } from '@main/dictation/historyStore.js'
 import { performanceService } from '@main/performance/PerformanceService.js'
@@ -657,7 +658,7 @@ async function startApp(): Promise<void> {
     appRunJournal.recordError('mcp_host.error', err)
     throw err
   }
-  const agentCodeConventionsService = new AgentCodeConventionsService()
+  const agentCodeConventionsService = new AgentCodeManagedSkillsService()
   await agentCodeConventionsService.initialize()
   manager = new SessionManager(
     tmuxAvailable ? tmuxRegistry : null,
@@ -787,44 +788,16 @@ async function startApp(): Promise<void> {
   performanceService.mark('app.main.window.created')
 
   app.on('activate', () => {
+    if (sessionShutdownGate.isTerminalShutdownAdmitted()) {
+      // WHY activation is suppressed only after will-quit admission: the gate
+      // has already made SessionManager terminal and is waiting to re-enter
+      // quit. A new renderer could add a fresh beforeunload veto and leave a
+      // visible window backed by a manager that can no longer recover or spawn.
+      return
+    }
     if (BrowserWindow.getAllWindows().length === 0) createMainWindow()
   })
 }
-
-app.on('window-all-closed', () => {
-  if (process.platform === 'darwin') {
-    // macOS treats closing windows as hiding the UI, not quitting the application. Workflow/MCP
-    // services are app-owned and may still be serving Codex turns; stopping them here made Dock
-    // activation create a fresh window backed by a permanently stopped host. The real quit path
-    // below remains the single lifecycle owner for these services.
-    return
-  }
-  void manager?.killAll()
-  // WHY we do NOT stop the built-in MCP host on macOS here (packaged-app fix):
-  //
-  // On macOS, closing the last window does not quit the app — Electron keeps
-  // the process alive so `activate` can create a fresh window (Dock icon
-  // click, reopen from Cmd-Tab, etc.). We previously called
-  // `builtInMcpHost.stop()` here unconditionally, which nulled the internal
-  // HTTP server. The next session:spawn on the reborn window then threw
-  // "Built-in MCP host must be started before registering a session" from
-  // BuiltInMcpHttpHost.registerSession, which cascaded into a partial
-  // workspace restore and the AUTOSAVE-OFF banner. There is no equivalent
-  // teardown path that restarts the host, so on macOS we simply keep it
-  // running while the process is alive; `before-quit` still stops it on
-  // real shutdown. On non-macOS platforms we're about to quit anyway, so
-  // stopping here is redundant with the `before-quit` handler.
-  void remoteController?.dispose()
-  void lspManager.dispose()
-  // WHY we release caffeinate here even though macOS keeps the app process
-  // alive after the last window closes:
-  // this same branch kills every live agent session. Keeping a sleep
-  // assertion after all windows and sessions are gone would keep the machine
-  // awake for an app that no longer has active work to protect. Cmd+Q also
-  // reaches before-quit below; this branch covers the close-window path.
-  caffeinateController.dispose()
-  app.quit()
-})
 
 app.on('before-quit', (event) => {
   // WHY Electron quit is gated on WorkflowService.stop(): the durable service
@@ -872,11 +845,11 @@ app.on('before-quit', (event) => {
   }
   appRunJournal?.record({ area: 'app.lifecycle', name: 'app.before_quit' })
   performanceService.mark('app.main.beforeQuit')
-  // WHY coalescers drain before killAll: provider shutdown can complete quickly enough that
-  // Electron exits before a pending 100 ms semantic/screen timer. Flushing here preserves the
-  // final admitted state and prevents a timer from sending after recorders have finalized.
+  // WHY coalescers drain on the initial quit attempt: their buffers are cheap
+  // and safe to flush even when a renderer veto keeps the app alive. Terminal
+  // SessionManager teardown is deliberately deferred to will-quit below,
+  // because unlike a coalescer flush it cannot be rolled back after Keep Editing.
   sessionForwarder?.flush()
-  void manager?.killAll()
   void builtInMcpHost.stop()
   void remoteController?.dispose()
   void lspManager.dispose()
@@ -907,10 +880,32 @@ app.on('before-quit', (event) => {
   performanceService.stop()
 })
 
-app.on('will-quit', () => {
-  appRunJournal?.record({ area: 'app.lifecycle', name: 'app.will_quit' })
-  appRunJournal?.markCleanShutdown('will-quit')
-  appRunJournal?.stop()
-  stateProcessLock?.releaseSync()
-  stateProcessLock = null
+const sessionShutdownGate = installSessionShutdownGate({
+  app,
+  getManager: () => manager,
+  platform: process.platform,
+  onLastWindowClosed: () => {
+    // WHY these provider-neutral resources still stop at last-window close on
+    // non-macOS: this preserves the established cleanup timing while the
+    // shutdown gate remains the exclusive owner of session/provider teardown.
+    // The built-in MCP host intentionally remains app-owned until before-quit.
+    void remoteController?.dispose()
+    void lspManager.dispose()
+    caffeinateController.dispose()
+  },
+  onQuitAllowed: () => {
+    appRunJournal?.record({ area: 'app.lifecycle', name: 'app.will_quit' })
+    appRunJournal?.markCleanShutdown('will-quit')
+    appRunJournal?.stop()
+    stateProcessLock?.releaseSync()
+    stateProcessLock = null
+  },
+  onShutdownError: error => {
+    // WHY a rejected terminal drain blocks quit: SessionManager owns exact
+    // transcript leases and in-flight recovery claims. Exiting while their
+    // teardown is uncertain recreates the cross-process ownership ambiguity
+    // this PR is designed to eliminate. A later explicit quit retries.
+    console.error('[sessions] graceful shutdown blocked:', error)
+    appRunJournal?.recordError('session_manager.kill_all.error', error)
+  },
 })

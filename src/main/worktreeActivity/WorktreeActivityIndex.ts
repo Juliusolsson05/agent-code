@@ -13,6 +13,7 @@ import {
   loadEntryFromDisk,
   loadWorktreeActivityIndex,
   saveWorktreeActivityIndex,
+  WORKTREE_ACTIVITY_INDEX_VERSION,
 } from '@main/worktreeActivity/indexStore.js'
 import { parseTranscriptForActivity } from '@main/worktreeActivity/transcriptParser.js'
 import { performanceService } from '@main/performance/PerformanceService.js'
@@ -290,7 +291,7 @@ export class WorktreeActivityIndex {
 
       const updatedAt = Date.now()
       const indexFile: WorktreeActivityIndexFile = {
-        version: 2,
+        version: WORKTREE_ACTIVITY_INDEX_VERSION,
         updatedAt,
         transcripts: nextTranscripts,
       }
@@ -358,7 +359,7 @@ export class WorktreeActivityIndex {
       transcriptMap = await loadAllTranscriptsFromDisk()
     }
     const file: WorktreeActivityIndexFile = {
-      version: 2,
+      version: WORKTREE_ACTIVITY_INDEX_VERSION,
       updatedAt: this.updatedAt,
       transcripts: transcriptMap,
     }

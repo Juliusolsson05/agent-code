@@ -165,6 +165,7 @@ export type {
   SessionBackendSnapshot,
   SessionInputReadiness,
   SessionOwnershipOptions,
+  SessionRecoveryCancellationOptions,
   SessionRecoverOptions,
   SessionRecoverResult,
 } from '@shared/types/session.js'
@@ -177,6 +178,19 @@ export type SessionSpawnOptions = {
   rows?: number
   /** Agent sessions only: provider session id to resume from durable history. */
   resumeSessionId?: string
+  /**
+   * Local pane backend this spawn intends to replace.
+   *
+   * WHY this intent crosses the IPC boundary instead of being inferred from
+   * `resumeSessionId`: many panes may legitimately refer to durable history,
+   * but only the renderer action that owns a particular live pane may authorize
+   * its teardown. Main uses this narrowly for a same-rollout Codex handoff,
+   * where the exact-path lease requires the predecessor to stop at the
+   * successor's ownership-acquire boundary. If later startup fails, main
+   * compensates by restoring this local ID. Other providers keep the safer
+   * start-before-stop order.
+   */
+  predecessorSessionId?: string
   /** Agent sessions only: opt into provider-specific dangerous mode. */
   dangerousMode?: boolean
   /** Agent sessions only: opt into provider-specific proxy/semantic streaming. */
@@ -191,6 +205,12 @@ export type SessionSpawnResult = {
   sessionId: string
   /** Set only for tmux-backed terminal sessions and persisted for recovery. */
   tmuxName?: string
+  /**
+   * Present only when main performed a destructive same-rollout Codex handoff.
+   * Renderer uses presence as proof that predecessor cleanup already happened;
+   * durable workspace persistence, not this response, commits the transaction.
+   */
+  replacementTransactionId?: string
 }
 
 export type { ConditionCustomAction }

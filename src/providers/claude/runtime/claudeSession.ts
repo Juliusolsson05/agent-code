@@ -74,6 +74,9 @@ export type ClaudeSessionEvents = {
   screen: [ScreenSnapshot]
   'jsonl-entry': [JsonlEntry, string]
   'jsonl-error': [Error]
+  // Declared for the provider-neutral AgentSession contract. Claude currently
+  // emits no transcript-discovery diagnostics, so this event never fires.
+  'transcript-diagnostic': [unknown]
   // Optional status: the spinner verb ("Cogitating…", "Cascading…",
   // …) so the renderer can label its activity indicator with what CC
   // is actually doing rather than a generic "thinking…" placeholder.

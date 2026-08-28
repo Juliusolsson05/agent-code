@@ -106,4 +106,21 @@ describe('settings metadata', () => {
     const row = getSettingsRegistry().find(r => r.id === 'default-workspace-mode')
     expect(row && settingMetadata(row).scope).toBe('fresh-install')
   })
+
+  it('marks both managed personal-skill surfaces as app-wide and new-session', () => {
+    const conventions = getSettingsRegistry().find(row => row.id === 'agent-code-conventions')
+    const custom = getSettingsRegistry().find(row => row.id === 'agent-code-custom-skills')
+    expect(conventions && settingMetadata(conventions)).toEqual({
+      scope: 'app',
+      apply: 'new-session',
+      storage: 'external-files',
+    })
+    expect(custom && settingMetadata(custom)).toEqual({
+      scope: 'app',
+      apply: 'new-session',
+      storage: 'external-files',
+    })
+    expect(conventions?.control.type).toBe('agent-code-conventions')
+    expect(custom?.control.type).toBe('agent-code-custom-skills')
+  })
 })

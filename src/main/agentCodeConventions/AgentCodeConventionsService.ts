@@ -10,12 +10,22 @@ import {
   writeAgentCodeConventionsState,
 } from './persistence.js'
 import {
+  previewAgentCodeCustomSkill,
+  normalizeAgentCodeCustomSkill,
+  renderAgentCodeCustomSkill,
+} from './renderCustomSkill.js'
+import {
+  AgentCodeCustomSkillOwnershipPolicy,
+  customArtifactKey,
+} from './customSkillOwnershipPolicy.js'
+import {
   normalizeAgentCodeConventionsMarkdown,
   previewAgentCodeConventions,
   renderAgentCodeConventionsSkill,
   sha256Text,
 } from './renderSkill.js'
 import {
+  journalCaptureDirectory,
   journalTemporaryPath,
   SkillPathSafety,
   type FileInspection,
@@ -26,6 +36,7 @@ import {
 } from './ownershipPolicy.js'
 import {
   resolveAgentCodeConventionsTargets,
+  targetsForSkillName,
   type AgentCodeConventionsTarget,
   type ResolvedAgentCodeConventionsTargets,
 } from './targets.js'
@@ -43,6 +54,19 @@ import {
   type ClearAgentCodeConventionsRequest,
   type SaveAgentCodeConventionsRequest,
 } from '@shared/types/agentCodeConventions.js'
+import {
+  AGENT_CODE_CUSTOM_SKILL_MAX_COUNT,
+  type AgentCodeCustomSkill,
+  type AgentCodeCustomSkillDraft,
+  type AgentCodeCustomSkillPreviewResult,
+  type AgentCodeCustomSkillsMutationResult,
+  type AgentCodeCustomSkillsSnapshot,
+  type CreateAgentCodeCustomSkillRequest,
+  type DeleteAgentCodeCustomSkillRequest,
+  type SetAgentCodeCustomSkillEnabledRequest,
+  type UpdateAgentCodeCustomSkillRequest,
+} from '@shared/types/agentCodeCustomSkills.js'
+import type { AgentCodeCustomSkillRecord } from '@shared/types/agentCodeConventions.js'
 
 // See docs/design/agent-code-conventions.md for the canonical ownership and
 // reconciliation invariants enforced by this service.
@@ -63,7 +87,14 @@ type PreflightTarget = {
   overwrite?: AgentCodeConventionsConflictResolution
 }
 
-export class AgentCodeConventionsService {
+type CustomPreflightTarget = {
+  target: AgentCodeConventionsTarget
+  inspection: FileInspection
+  key: string
+  existing: AgentCodeConventionsMaterialization | undefined
+}
+
+export class AgentCodeManagedSkillsService {
   private document = createEmptyAgentCodeConventionsDocument()
   private recovery: AgentCodeConventionsSnapshot['recovery']
   private targets: ResolvedAgentCodeConventionsTargets = {
@@ -71,7 +102,9 @@ export class AgentCodeConventionsService {
     unsupportedProviders: [],
   }
   private targetStatuses: AgentCodeConventionsTargetStatus[] = []
+  private customTargetStatuses = new Map<string, AgentCodeConventionsTargetStatus[]>()
   private targetResolutionError: string | null = null
+  private journalWriteCollisions = new Map<string, string>()
   private initialized = false
   private mutationTail: Promise<void> = Promise.resolve()
 
@@ -79,6 +112,7 @@ export class AgentCodeConventionsService {
   private readonly homeDirectory: string
   private readonly pathSafety: SkillPathSafety
   private readonly ownershipPolicy = new AgentCodeConventionsOwnershipPolicy()
+  private readonly customOwnershipPolicy = new AgentCodeCustomSkillOwnershipPolicy()
   private readonly resolveTargetsImpl: () => Promise<ResolvedAgentCodeConventionsTargets>
   private readonly now: () => Date
   private readonly operationId: () => string
@@ -106,7 +140,7 @@ export class AgentCodeConventionsService {
         }
         const targetsResolved = await this.resolveTargetsSafely()
         if (!this.recovery && targetsResolved) {
-          this.ownershipPolicy.rehomeMovedMaterializations(this.document, this.targets)
+          this.rehomeMovedMaterializations()
           this.enterRecoveryForUnsafeOwnership()
           if (!this.recovery) await this.reconcileLocked()
         }
@@ -122,6 +156,15 @@ export class AgentCodeConventionsService {
           state: 'error',
           message: safeErrorMessage(error),
         }]
+        for (const skill of Object.values(this.document.customSkills)) {
+          this.customTargetStatuses.set(skill.id, [{
+            id: 'managed-skills-initialization',
+            providers: [],
+            displayPath: this.displayPath(this.stateFilePath),
+            state: 'error',
+            message: safeErrorMessage(error),
+          }])
+        }
       }
       this.initialized = true
     })
@@ -143,7 +186,7 @@ export class AgentCodeConventionsService {
       await this.ensureInitializedLocked()
       const targetsResolved = await this.resolveTargetsSafely()
       if (!this.recovery && targetsResolved) {
-        this.ownershipPolicy.rehomeMovedMaterializations(this.document, this.targets)
+        this.rehomeMovedMaterializations()
         this.enterRecoveryForUnsafeOwnership()
         if (!this.recovery) await this.reconcileLocked()
       }
@@ -153,6 +196,274 @@ export class AgentCodeConventionsService {
 
   preview(markdown: string): AgentCodeConventionsPreviewResult {
     return previewAgentCodeConventions(markdown)
+  }
+
+  getCustomSkillsSnapshot(options: { audit?: boolean } = {}): Promise<AgentCodeCustomSkillsSnapshot> {
+    if (options.audit) {
+      return this.audit().then(() => this.customSnapshot())
+    }
+    return this.serialize(async () => {
+      await this.ensureInitializedLocked()
+      return this.customSnapshot()
+    })
+  }
+
+  previewCustomSkill(draft: AgentCodeCustomSkillDraft): AgentCodeCustomSkillPreviewResult {
+    return previewAgentCodeCustomSkill(draft)
+  }
+
+  createCustomSkill(
+    request: CreateAgentCodeCustomSkillRequest,
+  ): Promise<AgentCodeCustomSkillsMutationResult> {
+    return this.serialize(async () => {
+      await this.ensureInitializedLocked()
+      const unavailable = this.customMutationUnavailable(request.expectedRevision)
+      if (unavailable) return unavailable
+      if (Object.keys(this.document.customSkills).length >= AGENT_CODE_CUSTOM_SKILL_MAX_COUNT) {
+        return {
+          ok: false,
+          code: 'validation',
+          message: `Agent Code manages at most ${AGENT_CODE_CUSTOM_SKILL_MAX_COUNT} custom skills.`,
+        }
+      }
+      const normalized = normalizeAgentCodeCustomSkill(request, {
+        requireContent: request.enabled,
+      })
+      if (!normalized.ok) return { ok: false, code: 'validation', message: normalized.message }
+      if (Object.values(this.document.customSkills).some(skill =>
+        skill.name === normalized.value.name)) {
+        return { ok: false, code: 'validation', message: 'A managed custom skill already uses that name.' }
+      }
+
+      const targetsResolved = await this.prepareCustomMutation(request.enabled)
+      if (!targetsResolved.ok) return targetsResolved.result
+      const timestamp = this.now().toISOString()
+      const skill: AgentCodeCustomSkillRecord = {
+        id: this.operationId(),
+        name: normalized.value.name,
+        description: normalized.value.description,
+        markdown: normalized.value.markdown,
+        enabled: request.enabled,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      }
+      const rendered = renderAgentCodeCustomSkill(skill)
+      const desiredHash = sha256Text(rendered)
+      const preflight = request.enabled ? await this.preflightCustomTargets(skill) : []
+      const conflicts = preflight.filter(item => !this.canWriteCustomPreflight(item))
+      if (conflicts.length > 0) {
+        const statuses = preflight.map(item => this.customPreflightStatus(item, desiredHash))
+        return {
+          ok: false,
+          code: 'target-conflict',
+          message: 'A personal skill with this name already exists outside Agent Code.',
+          snapshot: this.customSnapshot(),
+          targets: statuses,
+        }
+      }
+
+      const next = structuredClone(this.document)
+      next.revision += 1
+      next.customSkills[skill.id] = skill
+      for (const item of preflight) {
+        if (item.existing?.sha256 === desiredHash && item.inspection.kind === 'file'
+          && item.inspection.sha256 === desiredHash) continue
+        next.pendingOperations[item.key] = this.pendingCustomWrite(skill, item, desiredHash)
+      }
+      try {
+        await writeAgentCodeConventionsState(this.stateFilePath, next)
+      } catch (error) {
+        return this.customIoError(error)
+      }
+      this.document = next
+      const statuses: AgentCodeConventionsTargetStatus[] = []
+      for (const item of preflight) {
+        if (!next.pendingOperations[item.key]) statuses.push(this.customStatus(item.target, 'installed'))
+        else statuses.push(await this.publishCustomTarget(skill, item, rendered, desiredHash))
+      }
+      this.customTargetStatuses.set(skill.id, request.enabled
+        ? statuses
+        : this.customTargets(skill).targets.map(target => this.customStatus(target, 'not-installed')))
+      await this.persistBestEffort(statuses)
+      return { ok: true, snapshot: this.customSnapshot() }
+    })
+  }
+
+  updateCustomSkill(
+    request: UpdateAgentCodeCustomSkillRequest,
+  ): Promise<AgentCodeCustomSkillsMutationResult> {
+    return this.serialize(async () => {
+      await this.ensureInitializedLocked()
+      const unavailable = this.customMutationUnavailable(request.expectedRevision)
+      if (unavailable) return unavailable
+      const existing = this.document.customSkills[request.skillId]
+      if (!existing) return this.customNotFound()
+      const normalized = normalizeAgentCodeCustomSkill({
+        name: existing.name,
+        description: request.description,
+        markdown: request.markdown,
+        enabled: request.enabled,
+      }, { requireContent: request.enabled })
+      if (!normalized.ok) return { ok: false, code: 'validation', message: normalized.message }
+
+      const targetsResolved = await this.prepareCustomMutation(request.enabled)
+      if (!targetsResolved.ok) return targetsResolved.result
+      if (!request.enabled) {
+        return this.saveDisabledCustomLocked(existing, {
+          revision: request.expectedRevision + 1,
+          description: normalized.value.description,
+          markdown: normalized.value.markdown,
+        })
+      }
+
+      const updated: AgentCodeCustomSkillRecord = {
+        ...existing,
+        description: normalized.value.description,
+        markdown: normalized.value.markdown,
+        enabled: true,
+        updatedAt: this.now().toISOString(),
+      }
+      const rendered = renderAgentCodeCustomSkill(updated)
+      const desiredHash = sha256Text(rendered)
+      const preflight = await this.preflightCustomTargets(existing)
+      const conflicts = preflight.filter(item => !this.canWriteCustomPreflight(item))
+      if (conflicts.length > 0) {
+        const statuses = preflight.map(item => this.customPreflightStatus(item, desiredHash))
+        this.customTargetStatuses.set(existing.id, statuses)
+        return {
+          ok: false,
+          code: 'target-conflict',
+          message: 'An installed copy changed outside Agent Code; the external file was preserved.',
+          snapshot: this.customSnapshot(),
+          targets: statuses,
+        }
+      }
+
+      const next = structuredClone(this.document)
+      next.revision += 1
+      next.customSkills[updated.id] = updated
+      for (const item of preflight) {
+        if (item.existing?.sha256 === desiredHash && item.inspection.kind === 'file'
+          && item.inspection.sha256 === desiredHash) continue
+        next.pendingOperations[item.key] = this.pendingCustomWrite(updated, item, desiredHash)
+      }
+      try {
+        await writeAgentCodeConventionsState(this.stateFilePath, next)
+      } catch (error) {
+        return this.customIoError(error)
+      }
+      this.document = next
+      const statuses: AgentCodeConventionsTargetStatus[] = []
+      for (const item of preflight) {
+        if (!next.pendingOperations[item.key]) statuses.push(this.customStatus(item.target, 'installed'))
+        else statuses.push(await this.publishCustomTarget(updated, item, rendered, desiredHash))
+      }
+      this.customTargetStatuses.set(updated.id, statuses)
+      await this.persistBestEffort(statuses)
+      return { ok: true, snapshot: this.customSnapshot() }
+    })
+  }
+
+  setCustomSkillEnabled(
+    request: SetAgentCodeCustomSkillEnabledRequest,
+  ): Promise<AgentCodeCustomSkillsMutationResult> {
+    return this.serialize(async () => {
+      await this.ensureInitializedLocked()
+      const unavailable = this.customMutationUnavailable(request.expectedRevision)
+      if (unavailable) return unavailable
+      const skill = this.document.customSkills[request.skillId]
+      if (!skill) return this.customNotFound()
+      if (skill.enabled === request.enabled) return { ok: true, snapshot: this.customSnapshot() }
+      if (request.enabled) {
+        return this.enableCustomLocked(skill, request.expectedRevision + 1)
+      }
+      return this.disableCustomLocked(skill, {
+        revision: request.expectedRevision + 1,
+        description: skill.description,
+        markdown: skill.markdown,
+      })
+    })
+  }
+
+  deleteCustomSkill(
+    request: DeleteAgentCodeCustomSkillRequest,
+  ): Promise<AgentCodeCustomSkillsMutationResult> {
+    return this.serialize(async () => {
+      await this.ensureInitializedLocked()
+      const unavailable = this.customMutationUnavailable(request.expectedRevision)
+      if (unavailable) return unavailable
+      let skill = this.document.customSkills[request.skillId]
+      if (!skill) return this.customNotFound()
+
+      if (skill.enabled || this.hasTrackedCustomArtifacts(skill.id)) {
+        const disabled = await this.disableCustomLocked(skill, {
+          revision: this.document.revision + 1,
+          description: skill.description,
+          markdown: skill.markdown,
+        })
+        if (!disabled.ok) return disabled
+        skill = this.document.customSkills[request.skillId]!
+      }
+
+      const statuses = await this.inspectRemainingCustomMaterializations(skill)
+      const approvals = new Map((request.abandonTargets ?? []).map(value => [value.targetId, value]))
+      const unresolved = statuses.filter(status => {
+        const approval = approvals.get(status.id)
+        return !approval || !status.conflictFingerprint
+          || approval.expectedConflictFingerprint !== status.conflictFingerprint
+      })
+      if (unresolved.length > 0) {
+        this.customTargetStatuses.set(skill.id, statuses)
+        return {
+          ok: false,
+          code: 'delete-blocked',
+          message: 'External changes must be reviewed before Agent Code forgets this skill.',
+          snapshot: this.customSnapshot(),
+          targets: statuses,
+        }
+      }
+
+      const next = structuredClone(this.document)
+      for (const status of statuses) this.abandonCustomStatus(next, skill, status.id)
+      delete next.customSkills[skill.id]
+      next.revision += 1
+      try {
+        await writeAgentCodeConventionsState(this.stateFilePath, next)
+      } catch (error) {
+        return this.customIoError(error)
+      }
+      this.document = next
+      this.customTargetStatuses.delete(skill.id)
+      return { ok: true, snapshot: this.customSnapshot() }
+    })
+  }
+
+  async resolveCustomSkillRevealTarget(skillId: string, targetId: string): Promise<string | null> {
+    await this.initialize()
+    const skill = this.document.customSkills[skillId]
+    if (!skill) return null
+    const current = this.customTargets(skill).targets.find(target => target.id === targetId)
+    if (current) return current.skillFile
+    const historical = Object.entries(this.document.materializations).find(([key, record]) =>
+      key === targetId && record.skillId === skill.id)
+    return historical?.[1].path ?? null
+  }
+
+  resetCustomSkillsRecovery(): Promise<AgentCodeCustomSkillsMutationResult> {
+    return this.serialize(async () => {
+      await this.ensureInitializedLocked()
+      if (!this.recovery) return { ok: true, snapshot: this.customSnapshot() }
+      try {
+        await resetAgentCodeConventionsState(this.stateFilePath)
+      } catch (error) {
+        return this.customIoError(error)
+      }
+      this.document = createEmptyAgentCodeConventionsDocument()
+      this.recovery = undefined
+      this.targetStatuses = this.targets.targets.map(target => this.status(target, 'not-installed'))
+      this.customTargetStatuses.clear()
+      return { ok: true, snapshot: this.customSnapshot() }
+    })
   }
 
   save(request: SaveAgentCodeConventionsRequest): Promise<AgentCodeConventionsMutationResult> {
@@ -182,7 +493,7 @@ export class AgentCodeConventionsService {
         ))
       }
       if (targetsResolved) {
-        this.ownershipPolicy.rehomeMovedMaterializations(this.document, this.targets)
+        this.rehomeMovedMaterializations()
         this.enterRecoveryForUnsafeOwnership()
         if (this.recovery) {
           return { ok: false, code: 'recovery-required', snapshot: this.snapshot() }
@@ -279,7 +590,7 @@ export class AgentCodeConventionsService {
       }
 
       const next = structuredClone(this.document)
-      if (Object.keys(this.document.materializations).length > 0) {
+      if (this.hasTrackedArtifacts(this.document)) {
         await this.inspectRemainingMaterializations()
         const approvals = new Map(
           (request.abandonTargets ?? []).map(value => [value.targetId, value]),
@@ -353,8 +664,184 @@ export class AgentCodeConventionsService {
       this.document = createEmptyAgentCodeConventionsDocument()
       this.recovery = undefined
       this.targetStatuses = this.targets.targets.map(target => this.status(target, 'not-installed'))
+      this.customTargetStatuses.clear()
       return { ok: true, snapshot: this.snapshot() }
     })
+  }
+
+  private customMutationUnavailable(
+    expectedRevision: number,
+  ): AgentCodeCustomSkillsMutationResult | null {
+    if (this.recovery) {
+      return { ok: false, code: 'recovery-required', snapshot: this.customSnapshot() }
+    }
+    if (expectedRevision !== this.document.revision) {
+      return { ok: false, code: 'revision-conflict', snapshot: this.customSnapshot() }
+    }
+    return null
+  }
+
+  private async prepareCustomMutation(enabled: boolean): Promise<
+    | { ok: true }
+    | { ok: false; result: AgentCodeCustomSkillsMutationResult }
+  > {
+    const targetsResolved = await this.resolveTargetsSafely()
+    if (!targetsResolved && enabled) {
+      return {
+        ok: false,
+        result: this.customIoError(new Error(
+          `Could not resolve provider skill targets: ${this.targetResolutionError ?? 'unknown error'}`,
+        )),
+      }
+    }
+    if (targetsResolved) {
+      this.rehomeMovedMaterializations()
+      this.enterRecoveryForUnsafeOwnership()
+      if (this.recovery) {
+        return {
+          ok: false,
+          result: { ok: false, code: 'recovery-required', snapshot: this.customSnapshot() },
+        }
+      }
+    }
+    if (enabled && this.targets.unsupportedProviders.length > 0) {
+      return {
+        ok: false,
+        result: { ok: false, code: 'unsupported', snapshot: this.customSnapshot() },
+      }
+    }
+    return { ok: true }
+  }
+
+  private async enableCustomLocked(
+    skill: AgentCodeCustomSkillRecord,
+    revision: number,
+  ): Promise<AgentCodeCustomSkillsMutationResult> {
+    const normalized = normalizeAgentCodeCustomSkill(skill, { requireContent: true })
+    if (!normalized.ok) return { ok: false, code: 'validation', message: normalized.message }
+    const prepared = await this.prepareCustomMutation(true)
+    if (!prepared.ok) return prepared.result
+    const updated: AgentCodeCustomSkillRecord = {
+      ...skill,
+      description: normalized.value.description,
+      markdown: normalized.value.markdown,
+      enabled: true,
+      updatedAt: this.now().toISOString(),
+    }
+    const rendered = renderAgentCodeCustomSkill(updated)
+    const desiredHash = sha256Text(rendered)
+    const preflight = await this.preflightCustomTargets(skill)
+    const conflicts = preflight.filter(item => !this.canWriteCustomPreflight(item))
+    if (conflicts.length > 0) {
+      const statuses = preflight.map(item => this.customPreflightStatus(item, desiredHash))
+      this.customTargetStatuses.set(skill.id, statuses)
+      return {
+        ok: false,
+        code: 'target-conflict',
+        message: 'A personal skill with this name already exists outside Agent Code.',
+        snapshot: this.customSnapshot(),
+        targets: statuses,
+      }
+    }
+
+    const next = structuredClone(this.document)
+    next.revision = revision
+    next.customSkills[skill.id] = updated
+    for (const item of preflight) {
+      if (item.existing?.sha256 === desiredHash && item.inspection.kind === 'file'
+        && item.inspection.sha256 === desiredHash) continue
+      next.pendingOperations[item.key] = this.pendingCustomWrite(updated, item, desiredHash)
+    }
+    try {
+      await writeAgentCodeConventionsState(this.stateFilePath, next)
+    } catch (error) {
+      return this.customIoError(error)
+    }
+    this.document = next
+    const statuses: AgentCodeConventionsTargetStatus[] = []
+    for (const item of preflight) {
+      if (!next.pendingOperations[item.key]) statuses.push(this.customStatus(item.target, 'installed'))
+      else statuses.push(await this.publishCustomTarget(updated, item, rendered, desiredHash))
+    }
+    this.customTargetStatuses.set(skill.id, statuses)
+    await this.persistBestEffort(statuses)
+    return { ok: true, snapshot: this.customSnapshot() }
+  }
+
+  private async saveDisabledCustomLocked(
+    skill: AgentCodeCustomSkillRecord,
+    options: { revision: number; description: string; markdown: string },
+  ): Promise<AgentCodeCustomSkillsMutationResult> {
+    if (skill.enabled || this.hasTrackedCustomArtifacts(skill.id)) {
+      return this.disableCustomLocked(skill, options)
+    }
+    const next = structuredClone(this.document)
+    next.revision = options.revision
+    next.customSkills[skill.id] = {
+      ...skill,
+      enabled: false,
+      description: options.description,
+      markdown: options.markdown,
+      updatedAt: this.now().toISOString(),
+    }
+    try {
+      await writeAgentCodeConventionsState(this.stateFilePath, next)
+    } catch (error) {
+      return this.customIoError(error)
+    }
+    this.document = next
+    this.customTargetStatuses.set(
+      skill.id,
+      this.customTargets(skill).targets.map(target => this.customStatus(target, 'not-installed')),
+    )
+    return { ok: true, snapshot: this.customSnapshot() }
+  }
+
+  private async disableCustomLocked(
+    skill: AgentCodeCustomSkillRecord,
+    options: { revision: number; description: string; markdown: string },
+  ): Promise<AgentCodeCustomSkillsMutationResult> {
+    const next = structuredClone(this.document)
+    next.revision = options.revision
+    const disabled = {
+      ...skill,
+      enabled: false,
+      description: options.description,
+      markdown: options.markdown,
+      updatedAt: this.now().toISOString(),
+    }
+    next.customSkills[skill.id] = disabled
+    this.adoptPendingCustomWritesForRemoval(next, disabled)
+    for (const [key, record] of this.customMaterializations(next, skill.id)) {
+      next.pendingOperations[key] = {
+        operationId: this.operationId(),
+        skillId: skill.id,
+        targetId: record.targetId!,
+        path: record.path,
+        kind: 'delete',
+        previousSha256: record.sha256,
+        desiredSha256: null,
+      }
+    }
+    try {
+      await writeAgentCodeConventionsState(this.stateFilePath, next)
+    } catch (error) {
+      return this.customIoError(error)
+    }
+    this.document = next
+
+    const statuses: AgentCodeConventionsTargetStatus[] = []
+    for (const [key, record] of this.customMaterializations(next, skill.id)) {
+      statuses.push(await this.removeCustomMaterialization(disabled, key, record))
+    }
+    for (const target of this.customTargets(disabled).targets) {
+      if (!statuses.some(status => status.id === target.id)) {
+        statuses.push(this.customStatus(target, 'not-installed'))
+      }
+    }
+    this.customTargetStatuses.set(skill.id, statuses)
+    await this.persistBestEffort(statuses)
+    return { ok: true, snapshot: this.customSnapshot() }
   }
 
   private async saveDisabledLocked(
@@ -392,6 +879,7 @@ export class AgentCodeConventionsService {
     next.revision = options.revision
     this.adoptPendingWritesForRemoval(next)
     for (const [key, record] of Object.entries(next.materializations)) {
+      if (record.skillId) continue
       next.pendingOperations[key] = {
         operationId: this.operationId(),
         targetId: key,
@@ -410,6 +898,7 @@ export class AgentCodeConventionsService {
 
     const statuses: AgentCodeConventionsTargetStatus[] = []
     for (const [key, record] of Object.entries(next.materializations)) {
+      if (record.skillId) continue
       statuses.push(await this.removeMaterialization(key, record))
     }
     for (const target of this.targets.targets) {
@@ -423,9 +912,14 @@ export class AgentCodeConventionsService {
   }
 
   private async reconcileLocked(): Promise<void> {
-    await this.cleanupJournaledWriteTemps()
+    await this.inspectJournaledWriteSidecars()
     if (this.document.enabled) await this.reconcileEnabledLocked()
     else await this.reconcileDisabledLocked()
+    for (const skill of Object.values(this.document.customSkills)
+      .sort((left, right) => left.name.localeCompare(right.name))) {
+      if (skill.enabled) await this.reconcileCustomEnabledLocked(skill)
+      else await this.reconcileCustomDisabledLocked(skill)
+    }
   }
 
   private async reconcileEnabledLocked(): Promise<void> {
@@ -446,6 +940,15 @@ export class AgentCodeConventionsService {
     const statuses: AgentCodeConventionsTargetStatus[] = []
 
     for (const target of this.targets.targets) {
+      const journalCollision = this.journalWriteCollisions.get(target.id)
+      if (journalCollision) {
+        statuses.push(this.status(
+          target,
+          'conflict',
+          `An unverified write sidecar was preserved at ${this.displayPath(journalCollision)}.`,
+        ))
+        continue
+      }
       const inspection = await this.pathSafety.inspectTarget(target)
       const record = this.document.materializations[target.id]
       const pending = this.document.pendingOperations[target.id]
@@ -497,6 +1000,7 @@ export class AgentCodeConventionsService {
     }
 
     for (const [key, record] of Object.entries(this.document.materializations)) {
+      if (record.skillId) continue
       if (!key.startsWith(RETIRED_CONVENTIONS_TARGET_PREFIX)) continue
       if (this.document.pendingOperations[key]?.kind !== 'delete') {
         this.document.pendingOperations[key] = {
@@ -523,6 +1027,7 @@ export class AgentCodeConventionsService {
     const statuses: AgentCodeConventionsTargetStatus[] = []
     this.adoptPendingWritesForRemoval(this.document)
     for (const [key, record] of Object.entries(this.document.materializations)) {
+      if (record.skillId) continue
       if (this.document.pendingOperations[key]?.kind !== 'delete') {
         this.document.pendingOperations[key] = {
           operationId: this.operationId(),
@@ -543,6 +1048,212 @@ export class AgentCodeConventionsService {
     }
     this.targetStatuses = statuses
     await this.persistBestEffort(statuses)
+  }
+
+  private async reconcileCustomEnabledLocked(skill: AgentCodeCustomSkillRecord): Promise<void> {
+    const targets = this.customTargets(skill)
+    if (targets.unsupportedProviders.length > 0) {
+      this.customTargetStatuses.set(skill.id, this.customUnsupportedStatuses())
+      return
+    }
+    const normalized = normalizeAgentCodeCustomSkill(skill, { requireContent: true })
+    if (!normalized.ok) {
+      this.customTargetStatuses.set(
+        skill.id,
+        targets.targets.map(target => this.customStatus(target, 'error', normalized.message)),
+      )
+      return
+    }
+    const rendered = renderAgentCodeCustomSkill(normalized.value)
+    const desiredHash = sha256Text(rendered)
+    const statuses: AgentCodeConventionsTargetStatus[] = []
+
+    for (const target of targets.targets) {
+      const key = customArtifactKey(skill.id, target.id)
+      const journalCollision = this.journalWriteCollisions.get(key)
+      if (journalCollision) {
+        statuses.push(this.customStatus(
+          target,
+          'conflict',
+          `An unverified write sidecar was preserved at ${this.displayPath(journalCollision)}.`,
+        ))
+        continue
+      }
+      const inspection = await this.pathSafety.inspectTarget(target)
+      const record = this.document.materializations[key]
+      const pending = this.document.pendingOperations[key]
+      if (inspection.kind === 'file' && inspection.sha256 === desiredHash) {
+        if (record?.skillId === skill.id && record.sha256 === desiredHash || (
+          pending?.skillId === skill.id
+          && pending.kind === 'write'
+          && pending.path === target.skillFile
+          && pending.desiredSha256 === desiredHash
+        )) {
+          this.document.materializations[key] = {
+            path: target.skillFile,
+            sha256: desiredHash,
+            skillId: skill.id,
+            targetId: target.id,
+          }
+          delete this.document.pendingOperations[key]
+          statuses.push(this.customStatus(target, 'installed'))
+          continue
+        }
+        statuses.push(this.customConflictStatus(
+          target,
+          inspection.fingerprint,
+          'A matching skill exists, but Agent Code has no write-ahead ownership proof.',
+        ))
+        continue
+      }
+      if (inspection.kind === 'file' && record?.skillId === skill.id
+        && record.sha256 === inspection.sha256) {
+        const item = { target, inspection, existing: record, key } satisfies CustomPreflightTarget
+        this.document.pendingOperations[key] = this.pendingCustomWrite(skill, item, desiredHash)
+        if (!await this.persistJournalBeforeExternalMutation(statuses, target)) continue
+        statuses.push(await this.publishCustomTarget(skill, item, rendered, desiredHash))
+        continue
+      }
+      if (inspection.kind === 'missing') {
+        const item = { target, inspection, existing: record, key } satisfies CustomPreflightTarget
+        this.document.pendingOperations[key] = this.pendingCustomWrite(skill, item, desiredHash)
+        if (!await this.persistJournalBeforeExternalMutation(statuses, target)) continue
+        statuses.push(await this.publishCustomTarget(skill, item, rendered, desiredHash))
+        continue
+      }
+      if (inspection.kind === 'conflict') {
+        statuses.push(this.customConflictStatus(
+          target,
+          inspection.fingerprint,
+          inspection.message,
+          false,
+        ))
+      } else {
+        statuses.push(this.customConflictStatus(
+          target,
+          inspection.fingerprint,
+          inspection.readError ?? 'The installed skill differs from Agent Code ownership state.',
+          false,
+        ))
+      }
+      delete this.document.pendingOperations[key]
+    }
+
+    for (const [key, record] of this.customMaterializations(this.document, skill.id)) {
+      if (!this.customOwnershipPolicy.isRetiredKey(key)) continue
+      if (this.document.pendingOperations[key]?.kind !== 'delete') {
+        this.document.pendingOperations[key] = {
+          operationId: this.operationId(),
+          skillId: skill.id,
+          targetId: record.targetId!,
+          path: record.path,
+          kind: 'delete',
+          previousSha256: record.sha256,
+          desiredSha256: null,
+        }
+        if (!await this.persistJournalBeforeExternalMutation(statuses)) continue
+      }
+      const removed = await this.removeCustomMaterialization(skill, key, record)
+      if (removed.state !== 'not-installed') statuses.push(removed)
+    }
+    this.customTargetStatuses.set(skill.id, statuses)
+    await this.persistBestEffort(statuses)
+  }
+
+  private async reconcileCustomDisabledLocked(skill: AgentCodeCustomSkillRecord): Promise<void> {
+    const statuses: AgentCodeConventionsTargetStatus[] = []
+    this.adoptPendingCustomWritesForRemoval(this.document, skill)
+    for (const [key, record] of this.customMaterializations(this.document, skill.id)) {
+      if (this.document.pendingOperations[key]?.kind !== 'delete') {
+        this.document.pendingOperations[key] = {
+          operationId: this.operationId(),
+          skillId: skill.id,
+          targetId: record.targetId!,
+          path: record.path,
+          kind: 'delete',
+          previousSha256: record.sha256,
+          desiredSha256: null,
+        }
+        if (!await this.persistJournalBeforeExternalMutation(statuses)) continue
+      }
+      statuses.push(await this.removeCustomMaterialization(skill, key, record))
+    }
+    for (const target of this.customTargets(skill).targets) {
+      if (!statuses.some(status => status.id === target.id)) {
+        statuses.push(this.customStatus(target, 'not-installed'))
+      }
+    }
+    this.customTargetStatuses.set(skill.id, statuses)
+    await this.persistBestEffort(statuses)
+  }
+
+  private async preflightCustomTargets(
+    skill: AgentCodeCustomSkillRecord,
+  ): Promise<CustomPreflightTarget[]> {
+    const result: CustomPreflightTarget[] = []
+    for (const target of this.customTargets(skill).targets) {
+      const key = customArtifactKey(skill.id, target.id)
+      result.push({
+        target,
+        key,
+        inspection: await this.pathSafety.inspectTarget(target),
+        existing: this.document.materializations[key],
+      })
+    }
+    return result
+  }
+
+  private canWriteCustomPreflight(item: CustomPreflightTarget): boolean {
+    if (item.inspection.kind === 'missing') return true
+    if (item.inspection.kind === 'conflict') return false
+    // Unlike Conventions, custom names are freely chosen and replacement is
+    // never offered. Only the exact path/hash pair already present in app state
+    // can make a non-empty destination writable.
+    return item.existing?.path === item.target.skillFile
+      && item.existing.sha256 === item.inspection.sha256
+  }
+
+  private customPreflightStatus(
+    item: CustomPreflightTarget,
+    desiredHash: string,
+  ): AgentCodeConventionsTargetStatus {
+    if (this.canWriteCustomPreflight(item)) {
+      if (item.inspection.kind === 'file' && item.inspection.sha256 === desiredHash) {
+        return this.customStatus(item.target, 'installed')
+      }
+      return this.customStatus(item.target, 'missing')
+    }
+    if (item.inspection.kind === 'conflict') {
+      return this.customConflictStatus(
+        item.target,
+        item.inspection.fingerprint,
+        item.inspection.message,
+        false,
+      )
+    }
+    if (item.inspection.kind === 'missing') return this.customStatus(item.target, 'missing')
+    return this.customConflictStatus(
+      item.target,
+      item.inspection.fingerprint,
+      item.inspection.readError ?? 'An unmanaged skill already exists at this path.',
+      false,
+    )
+  }
+
+  private pendingCustomWrite(
+    skill: AgentCodeCustomSkillRecord,
+    item: CustomPreflightTarget,
+    desiredHash: string,
+  ): AgentCodeConventionsPendingOperation {
+    return {
+      operationId: this.operationId(),
+      skillId: skill.id,
+      targetId: item.target.id,
+      path: item.target.skillFile,
+      kind: 'write',
+      previousSha256: item.existing?.sha256 ?? null,
+      desiredSha256: desiredHash,
+    }
   }
 
   private async preflightTargets(
@@ -611,18 +1322,46 @@ export class AgentCodeConventionsService {
     }
   }
 
-  private async cleanupJournaledWriteTemps(): Promise<void> {
+  private async inspectJournaledWriteSidecars(): Promise<void> {
+    this.journalWriteCollisions.clear()
     for (const [key, operation] of Object.entries(this.document.pendingOperations)) {
       if (operation.kind !== 'write') continue
-      if (!this.ownershipPolicy.isCurrentMutationPath(key, operation.path, this.targets)) continue
-      await this.pathSafety.cleanupJournaledTemporaryFile(
-        journalTemporaryPath(operation.path, operation.operationId),
-      )
+      if (operation.skillId) {
+        const skill = this.document.customSkills[operation.skillId]
+        if (!skill || !this.customOwnershipPolicy.isCurrentMutationPath(
+          key,
+          operation,
+          skill,
+          this.customTargets(skill),
+        )) continue
+      } else if (!this.ownershipPolicy.isCurrentMutationPath(key, operation.path, this.targets)) {
+        continue
+      }
+      const candidate = await this.journalWriteSidecar(operation)
+      if (!candidate) continue
+      // A journal proves that Agent Code intended to use a sidecar name; it
+      // cannot prove who won that pathname before a crash. Preserve the
+      // occupant and stop only this target until the user inspects it.
+      this.journalWriteCollisions.set(key, candidate)
     }
+  }
+
+  private async journalWriteSidecar(
+    operation: AgentCodeConventionsPendingOperation,
+  ): Promise<string | null> {
+    const candidates = [
+      journalTemporaryPath(operation.path, operation.operationId),
+      journalCaptureDirectory(operation.path, operation.operationId),
+    ]
+    for (const candidate of candidates) {
+      if (await this.pathSafety.journaledPathExists(candidate)) return candidate
+    }
+    return null
   }
 
   private adoptPendingWritesForRemoval(document: AgentCodeConventionsDocument): void {
     for (const [key, operation] of Object.entries(document.pendingOperations)) {
+      if (operation.skillId) continue
       if (operation.kind !== 'write' || document.materializations[key]) continue
       if (!operation.desiredSha256) continue
       // A pending write is the durable proof for a provider copy that may have
@@ -637,8 +1376,8 @@ export class AgentCodeConventionsService {
   }
 
   private hasTrackedArtifacts(document: AgentCodeConventionsDocument): boolean {
-    return Object.keys(document.materializations).length > 0
-      || Object.keys(document.pendingOperations).length > 0
+    return Object.values(document.materializations).some(record => !record.skillId)
+      || Object.values(document.pendingOperations).some(operation => !operation.skillId)
   }
 
   private async publishTarget(
@@ -651,9 +1390,6 @@ export class AgentCodeConventionsService {
       if (!pending || pending.kind !== 'write') {
         throw new Error('Missing write-ahead operation for conventions publication')
       }
-      await this.pathSafety.cleanupJournaledTemporaryFile(
-        journalTemporaryPath(item.target.skillFile, pending.operationId),
-      )
       await this.pathSafety.ensureTargetDirectory(item.target)
       const expectedVersion = item.inspection.kind === 'file'
         ? item.inspection.version
@@ -674,8 +1410,21 @@ export class AgentCodeConventionsService {
         expectedVersion,
         maxBytes: AGENT_CODE_CONVENTIONS_COLLISION_MAX_BYTES,
         temporaryPath: journalTemporaryPath(item.target.skillFile, pending.operationId),
+        captureDirectory: journalCaptureDirectory(item.target.skillFile, pending.operationId),
+        expectedSha256: item.inspection.kind === 'file'
+          ? item.inspection.sha256 ?? undefined
+          : undefined,
       })
       if (!result.ok) {
+        const sidecar = await this.journalWriteSidecar(pending)
+        if (sidecar) {
+          this.journalWriteCollisions.set(item.target.id, sidecar)
+          return this.status(
+            item.target,
+            'conflict',
+            `An unverified write sidecar was preserved at ${this.displayPath(sidecar)}.`,
+          )
+        }
         delete this.document.pendingOperations[item.target.id]
         const current = await this.pathSafety.inspectTarget(item.target)
         return current.kind === 'file'
@@ -778,22 +1527,185 @@ export class AgentCodeConventionsService {
     }
   }
 
+  private async publishCustomTarget(
+    skill: AgentCodeCustomSkillRecord,
+    item: CustomPreflightTarget,
+    rendered: string,
+    desiredHash: string,
+  ): Promise<AgentCodeConventionsTargetStatus> {
+    try {
+      const pending = this.document.pendingOperations[item.key]
+      if (!pending || pending.kind !== 'write' || pending.skillId !== skill.id) {
+        throw new Error('Missing write-ahead operation for custom skill publication')
+      }
+      await this.pathSafety.ensureTargetDirectory(item.target)
+      const expectedVersion = item.inspection.kind === 'file' ? item.inspection.version : null
+      const result = await atomicWriteTextFile({
+        absolutePath: item.target.skillFile,
+        text: rendered,
+        expectedVersion,
+        maxBytes: AGENT_CODE_CONVENTIONS_COLLISION_MAX_BYTES,
+        temporaryPath: journalTemporaryPath(item.target.skillFile, pending.operationId),
+        captureDirectory: journalCaptureDirectory(item.target.skillFile, pending.operationId),
+        expectedSha256: item.inspection.kind === 'file'
+          ? item.inspection.sha256 ?? undefined
+          : undefined,
+      })
+      if (!result.ok) {
+        const sidecar = await this.journalWriteSidecar(pending)
+        if (sidecar) {
+          this.journalWriteCollisions.set(item.key, sidecar)
+          return this.customStatus(
+            item.target,
+            'conflict',
+            `An unverified write sidecar was preserved at ${this.displayPath(sidecar)}.`,
+          )
+        }
+        delete this.document.pendingOperations[item.key]
+        const current = await this.pathSafety.inspectTarget(item.target)
+        return current.kind === 'file'
+          ? this.customConflictStatus(
+            item.target,
+            current.fingerprint,
+            'The file changed while Agent Code was saving.',
+            false,
+          )
+          : this.customStatus(item.target, 'conflict', 'The target changed while Agent Code was saving.')
+      }
+      this.document.materializations[item.key] = {
+        path: item.target.skillFile,
+        sha256: desiredHash,
+        skillId: skill.id,
+        targetId: item.target.id,
+      }
+      delete this.document.pendingOperations[item.key]
+      return this.customStatus(item.target, 'installed')
+    } catch (error) {
+      return this.customStatus(item.target, 'error', safeErrorMessage(error))
+    }
+  }
+
+  private async removeCustomMaterialization(
+    skill: AgentCodeCustomSkillRecord,
+    key: string,
+    record: AgentCodeConventionsMaterialization,
+  ): Promise<AgentCodeConventionsTargetStatus> {
+    const targets = this.customTargets(skill)
+    const target = record.targetId
+      ? targets.targets.find(value => value.id === record.targetId)
+      : undefined
+    const baseStatus = (state: AgentCodeConventionsTargetStatus['state'], message?: string) =>
+      target
+        ? this.customStatus(target, state, message)
+        : {
+            id: key,
+            providers: [],
+            displayPath: this.displayPath(record.path),
+            state,
+            message,
+          }
+    if (!this.customOwnershipPolicy.isCurrentMutationPath(key, record, skill, targets)) {
+      delete this.document.pendingOperations[key]
+      return {
+        ...baseStatus(
+          'retired',
+          'This historical provider-root copy was preserved for manual review.',
+        ),
+        id: key,
+        conflictFingerprint: this.customOwnershipPolicy.retiredFingerprint(key, record),
+      }
+    }
+    try {
+      const pending = this.document.pendingOperations[key]
+      if (!pending || pending.kind !== 'delete' || pending.skillId !== skill.id) {
+        throw new Error('Missing write-ahead operation for custom skill removal')
+      }
+      const quarantinePath = journalTemporaryPath(record.path, pending.operationId)
+      const recovery = await this.pathSafety.recoverJournaledDelete(
+        record.path,
+        quarantinePath,
+        record.sha256,
+      )
+      if (recovery === 'conflict') {
+        return baseStatus('conflict', 'A journaled removal quarantine could not be restored safely.')
+      }
+      if (recovery === 'completed') {
+        delete this.document.materializations[key]
+        delete this.document.pendingOperations[key]
+        return baseStatus('not-installed')
+      }
+      const inspected = await this.pathSafety.inspectExactFile(record.path)
+      if (inspected.kind === 'missing') {
+        delete this.document.materializations[key]
+        delete this.document.pendingOperations[key]
+        return baseStatus('not-installed')
+      }
+      if (inspected.kind !== 'file' || inspected.sha256 !== record.sha256) {
+        delete this.document.pendingOperations[key]
+        return {
+          ...baseStatus(
+            'conflict',
+            inspected.kind === 'conflict'
+              ? inspected.message
+              : 'External changes were preserved; Agent Code did not delete this file.',
+          ),
+          conflictFingerprint: inspected.fingerprint,
+        }
+      }
+      const removal = await this.pathSafety.unlinkOwnedRegularFile(
+        record.path,
+        inspected.version,
+        record.sha256,
+        quarantinePath,
+      )
+      if (removal === 'changed') {
+        delete this.document.pendingOperations[key]
+        return {
+          ...baseStatus('conflict', 'The file changed immediately before removal.'),
+          conflictFingerprint: inspected.fingerprint,
+        }
+      }
+      delete this.document.materializations[key]
+      delete this.document.pendingOperations[key]
+      return baseStatus('not-installed')
+    } catch (error) {
+      return baseStatus('error', safeErrorMessage(error))
+    }
+  }
+
   private enterRecoveryForUnsafeOwnership(): void {
     const problem = this.ownershipPolicy.persistedOwnershipProblem(this.document, this.targets)
+      ?? this.customOwnershipPolicy.persistedOwnershipProblem(
+        this.document,
+        this.document.customSkills,
+        skill => this.customTargets(skill),
+      )
     if (!problem) return
     // A syntactically valid state file can still contain a path that is too
     // broad to use as deletion authority. Treat it exactly like a newer schema:
     // preserve the original bytes, expose recovery, and perform no provider
     // mutation until the user deliberately resets the state.
     this.recovery = {
-      message: `Conventions ownership state is unsafe: ${problem} The original file was preserved.`,
+      message: `Managed skill ownership state is unsafe: ${problem} The original file was preserved.`,
       stateFilePath: this.stateFilePath,
+    }
+  }
+
+  private rehomeMovedMaterializations(): void {
+    this.ownershipPolicy.rehomeMovedMaterializations(this.document, this.targets)
+    for (const skill of Object.values(this.document.customSkills)) {
+      this.customOwnershipPolicy.rehomeMovedMaterializations(
+        this.document,
+        skill,
+        this.customTargets(skill),
+      )
     }
   }
 
   private async inspectRemainingMaterializations(): Promise<void> {
     const statuses: AgentCodeConventionsTargetStatus[] = []
     for (const [key, record] of Object.entries(this.document.materializations)) {
+      if (record.skillId) continue
       const state = key.startsWith(RETIRED_CONVENTIONS_TARGET_PREFIX) ? 'retired' : 'conflict'
       const target = this.targets.targets.find(value => value.id === key)
       const status: AgentCodeConventionsTargetStatus = target
@@ -819,6 +1731,79 @@ export class AgentCodeConventionsService {
     this.targetStatuses = statuses
   }
 
+  private async inspectRemainingCustomMaterializations(
+    skill: AgentCodeCustomSkillRecord,
+  ): Promise<AgentCodeConventionsTargetStatus[]> {
+    const targets = this.customTargets(skill)
+    const statuses: AgentCodeConventionsTargetStatus[] = []
+    for (const [key, record] of this.customMaterializations(this.document, skill.id)) {
+      const target = record.targetId
+        ? targets.targets.find(value => value.id === record.targetId)
+        : undefined
+      const retired = !this.customOwnershipPolicy.isCurrentMutationPath(key, record, skill, targets)
+      const status: AgentCodeConventionsTargetStatus = target && !retired
+        ? this.customStatus(target, 'conflict', 'External changes remain on disk.')
+        : {
+            id: key,
+            providers: target?.providers ?? [],
+            displayPath: this.displayPath(record.path),
+            state: 'retired',
+            message: 'Historical provider-root copy was preserved and must be handled manually.',
+          }
+      if (retired) {
+        status.conflictFingerprint = this.customOwnershipPolicy.retiredFingerprint(key, record)
+      } else {
+        const inspection = await this.pathSafety.inspectExactFile(record.path)
+        if (inspection.kind === 'file' || inspection.kind === 'conflict') {
+          status.conflictFingerprint = inspection.fingerprint
+        }
+      }
+      statuses.push(status)
+    }
+    return statuses
+  }
+
+  private abandonCustomStatus(
+    document: AgentCodeConventionsDocument,
+    skill: AgentCodeCustomSkillRecord,
+    statusId: string,
+  ): void {
+    for (const [key, record] of this.customMaterializations(document, skill.id)) {
+      if (key !== statusId && record.targetId !== statusId) continue
+      delete document.materializations[key]
+      delete document.pendingOperations[key]
+    }
+  }
+
+  private adoptPendingCustomWritesForRemoval(
+    document: AgentCodeConventionsDocument,
+    skill: AgentCodeCustomSkillRecord,
+  ): void {
+    for (const [key, operation] of Object.entries(document.pendingOperations)) {
+      if (operation.skillId !== skill.id || operation.kind !== 'write'
+        || document.materializations[key] || !operation.desiredSha256) continue
+      document.materializations[key] = {
+        path: operation.path,
+        sha256: operation.desiredSha256,
+        skillId: skill.id,
+        targetId: operation.targetId,
+      }
+    }
+  }
+
+  private customMaterializations(document: AgentCodeConventionsDocument, skillId: string) {
+    return Object.entries(document.materializations).filter(([, record]) => record.skillId === skillId)
+  }
+
+  private hasTrackedCustomArtifacts(skillId: string): boolean {
+    return Object.values(this.document.materializations).some(record => record.skillId === skillId)
+      || Object.values(this.document.pendingOperations).some(operation => operation.skillId === skillId)
+  }
+
+  private customTargets(skill: AgentCodeCustomSkillRecord): ResolvedAgentCodeConventionsTargets {
+    return targetsForSkillName(this.targets, skill.name)
+  }
+
   private async resolveTargetsSafely(): Promise<boolean> {
     try {
       this.targets = await this.resolveTargetsImpl()
@@ -834,6 +1819,19 @@ export class AgentCodeConventionsService {
         state: 'error',
         message: safeErrorMessage(error),
       }]
+      // A previous successful audit may have left every custom target marked
+      // Installed. Once discovery itself fails, those paths are no longer a
+      // trustworthy statement about the current provider configuration; keep
+      // the desired definitions but invalidate deployment health together.
+      for (const skill of Object.values(this.document.customSkills)) {
+        this.customTargetStatuses.set(skill.id, [{
+          id: 'provider-target-resolution',
+          providers: [],
+          displayPath: '',
+          state: 'error',
+          message: safeErrorMessage(error),
+        }])
+      }
       return false
     }
   }
@@ -843,7 +1841,7 @@ export class AgentCodeConventionsService {
       await writeAgentCodeConventionsState(this.stateFilePath, this.document)
     } catch (error) {
       statuses.push({
-        id: 'conventions-state',
+        id: 'managed-skills-state',
         providers: [],
         displayPath: this.displayPath(this.stateFilePath),
         state: 'error',
@@ -867,7 +1865,7 @@ export class AgentCodeConventionsService {
       statuses.push(target
         ? this.status(target, 'error', safeErrorMessage(error))
         : {
-            id: 'conventions-state',
+            id: 'managed-skills-state',
             providers: [],
             displayPath: this.displayPath(this.stateFilePath),
             state: 'error',
@@ -892,6 +1890,43 @@ export class AgentCodeConventionsService {
       recovery: this.recovery,
       targets: [...this.targetStatuses].sort((left, right) => left.id.localeCompare(right.id)),
     }
+  }
+
+  private customSnapshot(): AgentCodeCustomSkillsSnapshot {
+    return {
+      revision: this.document.revision,
+      unsupportedProviders: this.targets.unsupportedProviders,
+      recovery: this.recovery,
+      skills: Object.values(this.document.customSkills)
+        .sort((left, right) => left.name.localeCompare(right.name))
+        .map(skill => {
+          const targets = [...(this.customTargetStatuses.get(skill.id) ?? [])]
+            .sort((left, right) => left.id.localeCompare(right.id))
+          return {
+            ...skill,
+            health: this.customHealth(skill, targets),
+            targets,
+          } satisfies AgentCodeCustomSkill
+        }),
+    }
+  }
+
+  private customHealth(
+    skill: AgentCodeCustomSkillRecord,
+    targets: AgentCodeConventionsTargetStatus[],
+  ): AgentCodeCustomSkill['health'] {
+    if (this.recovery) return 'recovery-required'
+    if (skill.enabled && this.targets.unsupportedProviders.length > 0) return 'unsupported'
+    if (targets.some(status => status.state === 'conflict' || status.state === 'retired')) {
+      return 'conflict'
+    }
+    if (targets.some(status => status.state === 'error' || status.state === 'missing')) {
+      return 'degraded'
+    }
+    if (!skill.enabled) return 'disabled'
+    return targets.length > 0 && targets.every(status => status.state === 'installed')
+      ? 'active'
+      : 'degraded'
   }
 
   private health(): AgentCodeConventionsSnapshot['health'] {
@@ -922,6 +1957,16 @@ export class AgentCodeConventionsService {
     }))
   }
 
+  private customUnsupportedStatuses(): AgentCodeConventionsTargetStatus[] {
+    return this.targets.unsupportedProviders.map(provider => ({
+      id: `unsupported:${provider}`,
+      providers: [provider],
+      displayPath: '',
+      state: 'unsupported',
+      message: 'This provider does not declare personal Agent Skill support.',
+    }))
+  }
+
   private status(
     target: AgentCodeConventionsTarget,
     state: AgentCodeConventionsTargetStatus['state'],
@@ -933,6 +1978,33 @@ export class AgentCodeConventionsService {
       displayPath: this.displayPath(target.skillDirectory),
       state,
       message,
+    }
+  }
+
+  private customStatus(
+    target: AgentCodeConventionsTarget,
+    state: AgentCodeConventionsTargetStatus['state'],
+    message?: string,
+  ): AgentCodeConventionsTargetStatus {
+    return {
+      id: target.id,
+      providers: target.providers,
+      displayPath: this.displayPath(target.skillDirectory),
+      state,
+      message,
+    }
+  }
+
+  private customConflictStatus(
+    target: AgentCodeConventionsTarget,
+    fingerprint: string,
+    message: string,
+    canOverwrite = false,
+  ): AgentCodeConventionsTargetStatus {
+    return {
+      ...this.customStatus(target, 'conflict', message),
+      canOverwrite,
+      conflictFingerprint: fingerprint,
     }
   }
 
@@ -966,6 +2038,24 @@ export class AgentCodeConventionsService {
     }
   }
 
+  private customIoError(error: unknown): AgentCodeCustomSkillsMutationResult {
+    return {
+      ok: false,
+      code: 'io-error',
+      message: safeErrorMessage(error),
+      snapshot: this.customSnapshot(),
+    }
+  }
+
+  private customNotFound(): AgentCodeCustomSkillsMutationResult {
+    return {
+      ok: false,
+      code: 'not-found',
+      message: 'The custom skill no longer exists.',
+      snapshot: this.customSnapshot(),
+    }
+  }
+
   private serialize<T>(task: () => Promise<T>): Promise<T> {
     const run = this.mutationTail.then(task, task)
     this.mutationTail = run.then(() => undefined, () => undefined)
@@ -981,13 +2071,19 @@ export class AgentCodeConventionsService {
     }
     const targetsResolved = await this.resolveTargetsSafely()
     if (!this.recovery && targetsResolved) {
-      this.ownershipPolicy.rehomeMovedMaterializations(this.document, this.targets)
+      this.rehomeMovedMaterializations()
       this.enterRecoveryForUnsafeOwnership()
       if (!this.recovery) await this.reconcileLocked()
     }
     this.initialized = true
   }
 }
+
+// Existing tests and the Conventions IPC imported this public name before the
+// service became collection-shaped. Keep a source-compatible alias so the
+// product can separate its two Settings experiences without forcing unrelated
+// consumers to migrate in the same feature diff.
+export { AgentCodeManagedSkillsService as AgentCodeConventionsService }
 
 function safeErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message) return error.message

@@ -87,6 +87,9 @@ export function wireSessionForwarder(
       message: String(error.message ?? error),
     }),
   )
+  manager.on('transcript-diagnostic', payload =>
+    sendToMainWindow('session:transcript-diagnostic', payload),
+  )
   manager.on('terminal-data', payload =>
     sendToMainWindow('session:terminal-data', payload),
   )

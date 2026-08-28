@@ -1,7 +1,8 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { AgentCodeConventionsSnapshot } from '@shared/types/agentCodeConventions.js'
+import { announceAgentCodeManagedSkillsChange } from '@renderer/features/settings/lib/agentCodeManagedSkillsEvents'
 import { AgentCodeConventionsRow } from './AgentCodeConventionsRow'
 
 const originalApi = Object.getOwnPropertyDescriptor(window, 'api')
@@ -76,5 +77,27 @@ describe('AgentCodeConventionsRow', () => {
       markdown: '# Rules',
     }))
     expect(await screen.findByText('Status: Active')).toBeTruthy()
+  })
+
+  it('refreshes its shared revision after a Custom Skills mutation', async () => {
+    const initial = { ...disabledSnapshot(), markdown: '# Rules' }
+    const refreshed = { ...initial, revision: 1 }
+    const active = { ...refreshed, revision: 2, enabled: true, health: 'active' as const }
+    const audit = vi.fn()
+      .mockResolvedValueOnce(initial)
+      .mockResolvedValueOnce(refreshed)
+    const save = vi.fn().mockResolvedValue({ ok: true, snapshot: active })
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: { auditAgentCodeConventions: audit, saveAgentCodeConventions: save },
+    })
+    render(<AgentCodeConventionsRow />)
+    await screen.findByText('Status: Disabled')
+    act(() => announceAgentCodeManagedSkillsChange({ source: 'custom-skills', revision: 1 }))
+    await waitFor(() => expect(audit).toHaveBeenCalledTimes(2))
+    fireEvent.click(screen.getByRole('button', { name: /Off/ }))
+    await waitFor(() => expect(save).toHaveBeenCalledWith(expect.objectContaining({
+      expectedRevision: 1,
+    })))
   })
 })

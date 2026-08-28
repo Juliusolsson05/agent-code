@@ -282,6 +282,20 @@ export type SettingDefinition =
       description: string
       keywords: string[]
       metadata?: SettingMetadata
+      // Custom skills are a collection in main-owned state plus generated
+      // provider files. A marker row keeps the list and its deployment health
+      // out of the ordinary scalar renderer Settings store.
+      control: {
+        type: 'agent-code-custom-skills'
+      }
+    }
+  | {
+      id: string
+      category: SettingCategoryId
+      title: string
+      description: string
+      keywords: string[]
+      metadata?: SettingMetadata
       // Marker for the built-in keybinding editor. Self-subscribing for the
       // same reason as cli-update-behavior: the row needs the live effective
       // binding set plus conflict lookup, and hoisting all of that into the
@@ -590,9 +604,23 @@ export function getSettingsRegistry(
         'conventions', 'rules', 'instructions', 'agents', 'claude', 'codex',
         'opencode', 'skills', 'commits', 'git', 'testing', 'development practices',
       ],
-      // Deploys a file into the project on disk.
-      metadata: { scope: 'project', apply: 'immediate', storage: 'external-files' },
+      // Personal provider skills are machine-wide and are guaranteed for newly
+      // spawned agents. A live provider may cache skill discovery, so calling
+      // this immediate would promise more than the integration can enforce.
+      metadata: { scope: 'app', apply: 'new-session', storage: 'external-files' },
       control: { type: 'agent-code-conventions' },
+    },
+    {
+      id: 'agent-code-custom-skills',
+      category: 'agents',
+      title: 'Custom Skills',
+      description: 'Create and manage portable personal Agent Skills authored in Agent Code.',
+      keywords: [
+        'custom', 'skills', 'instructions', 'agents', 'claude', 'codex', 'opencode',
+        'personal', 'manage', 'editor',
+      ],
+      metadata: { scope: 'app', apply: 'new-session', storage: 'external-files' },
+      control: { type: 'agent-code-custom-skills' },
     },
     {
       id: 'default-orchestration-mcp',
@@ -720,6 +748,21 @@ export function getSettingsRegistry(
         // way that costs them their arrow keys.
         getValue: settings => settings.navigationCommandsEnabled,
         onToggle: (ctx, value) => ctx.onChange({ navigationCommandsEnabled: value }),
+      },
+    },
+    {
+      id: 'prompt-templates-in-command-search',
+      category: 'commands',
+      title: 'Prompt Templates in Command Search',
+      description:
+        'Include matching prompt templates after you type in the command palette. The default menu stays command-only.',
+      keywords: ['prompt', 'template', 'command', 'palette', 'picker', 'search', 'launcher'],
+      control: {
+        type: 'toggle',
+        getValue: settings => settings.promptTemplatesInCommandSearchEnabled,
+        onToggle: (ctx, value) => ctx.onChange({
+          promptTemplatesInCommandSearchEnabled: value,
+        }),
       },
     },
     {

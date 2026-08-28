@@ -82,3 +82,27 @@ describe('built-in MCP default settings', () => {
     })
   })
 })
+
+describe('prompt templates in command search setting', () => {
+  it('is an off-by-default toggle that patches only its search preference', async () => {
+    const setting = getSettingsRegistry().find(
+      candidate => candidate.id === 'prompt-templates-in-command-search',
+    )
+    if (!setting || setting.control.type !== 'toggle') {
+      throw new Error('Missing prompt template command-search toggle')
+    }
+
+    expect(setting.control.getValue(DEFAULT_SETTINGS)).toBe(false)
+    expect(setting.description).toContain('after you type')
+    expect(setting.description).toContain('default menu stays command-only')
+
+    const onChange = vi.fn()
+    await setting.control.onToggle({
+      settings: DEFAULT_SETTINGS,
+      onChange,
+    } as unknown as SettingActionContext, true)
+    expect(onChange).toHaveBeenCalledWith({
+      promptTemplatesInCommandSearchEnabled: true,
+    })
+  })
+})

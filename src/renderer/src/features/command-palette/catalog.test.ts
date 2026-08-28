@@ -9,9 +9,9 @@ import type { CommandDef } from '@renderer/features/command-palette/types'
 // Phase 0 of the command-governance plan (docs/superpowers/plans/
 // 2026-07-23-command-surface-audit.md): CHARACTERIZE THE CURRENT CATALOG.
 //
-// This file pinned the exact 102-id before-state, and now pins the 104-id
-// after-state: five durable preferences retired to Settings, seven approved
-// additions (102 - 5 + 7 = 104). Keeping ONE snapshot that moved — rather
+// This file pinned the exact 102-id before-state, and now pins the 106-id
+// after-state: five durable preferences retired to Settings, nine approved
+// additions (102 - 5 + 9 = 106). Keeping ONE snapshot that moved — rather
 // than a "baseline" file and an "after" file — is what makes the plan's
 // headline count an assertion anyone can check against running code instead of
 // prose.
@@ -67,11 +67,11 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   'clear-composer',
   'undo-clear-composer',
   'send-composer',
-  // layoutCommands (10, was 9: toggle-status-mode retired, two lane-removal
-  // commands added)
+  // layoutCommands (11: New Lane joins the two lane-removal commands)
   'dispatch-mode',
   'global-dispatch',
   'tiled-dispatch',
+  'new-tiled-lane',
   'remove-tiled-lane',
   'close-agent-remove-lane',
   'normalize-layout',
@@ -120,6 +120,8 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   'toggle-rendering-debug-mode',
   'toggle-html-debug-panel',
   'toggle-dev-debug-panel',
+  // agentTitleCommands (1)
+  'agent.title.set',
   // dispatchColorFlagCommands (1)
   'dispatch.color-flag.set',
   // spotlight / reader / tile-tabs (3)
@@ -176,22 +178,23 @@ const NAVIGATION_COMMAND_GROUP: readonly string[] = [
 const ids = (): string[] => builtInCommandCatalog.map(c => c.id)
 
 describe('built-in command catalog — baseline characterization', () => {
-  it('contains exactly the 104 governed commands in registration order', () => {
+  it('contains exactly the 106 governed commands in registration order', () => {
     // Order matters: this is the palette's empty-query browse order.
     expect(ids()).toEqual([...BASELINE_COMMAND_IDS])
   })
 
-  it('has exactly 104 commands', () => {
+  it('has exactly 106 commands', () => {
     // Stated separately from the order assertion because this number is the
     // thing that moves, and a bare count failure is a clearer signal than a
     // 99-line array diff.
     //
     // 102 baseline → 98 after governance (5 retirements, 1 addition) → 99 with
     // `open-keyboard-shortcuts` → 102 with the three composer commands → 104
-    // with the two lane-removal commands. Each
+    // with the two lane-removal commands → 105 with Set Agent Title → 106 with
+    // New Lane. Each
     // step of that arithmetic was a deliberate edit to this line, which is the
     // entire point of pinning it.
-    expect(builtInCommandCatalog).toHaveLength(104)
+    expect(builtInCommandCatalog).toHaveLength(106)
   })
 
   it('reports no structural defects', () => {
@@ -208,7 +211,7 @@ describe('built-in command catalog — baseline characterization', () => {
 })
 
 describe('generated per-provider split commands', () => {
-  // The arithmetic is 100 literal ids + 4 generated = 104. If a provider
+  // The arithmetic is 102 literal ids + 4 generated = 106. If a provider
   // is ever added to AGENT_PROVIDER_KINDS, this invariant is what tells the
   // author that the catalog count moved for a legitimate reason, and forces the
   // baseline snapshot above to be updated deliberately.
@@ -222,10 +225,10 @@ describe('generated per-provider split commands', () => {
   })
 
   it('accounts for the difference between literal and total command count', () => {
-    // 104 total - 4 generated = 100 literal `id:` fields across the command
+    // 106 total - 4 generated = 102 literal `id:` fields across the command
     // modules. At the original baseline this read 102 - 4 = 98; it moved down by
-    // the five retirements, then back up by the seven additions.
-    expect(builtInCommandCatalog.length - nonDefaultProviders.length * 2).toBe(100)
+    // the five retirements, then back up by the nine additions.
+    expect(builtInCommandCatalog.length - nonDefaultProviders.length * 2).toBe(102)
   })
 
   it('emits both directions for every non-default provider', () => {
@@ -324,7 +327,7 @@ describe('governance targets', () => {
   })
 
   it('lands on the arithmetic the plan predicted', () => {
-    // 102 baseline - 5 retirements + 7 additions = 104, checked against the
+    // 102 baseline - 5 retirements + 9 additions = 106, checked against the
     // real catalog rather than trusted as prose.
     //
     // The subtracted term is the count of APPROVED ADDITIONS and the expected
@@ -336,10 +339,11 @@ describe('governance targets', () => {
     // Additions so far: `open-command-palette` (governance: the palette could
     // not be rebound because it had no command id), `open-keyboard-shortcuts`,
     // and the three composer commands (`clear-composer`,
-    // `undo-clear-composer`, `send-composer`) and the two lane-removal
-    // commands (`remove-tiled-lane`, `close-agent-remove-lane`).
-    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 7).toBe(102)
-    expect(builtInCommandCatalog).toHaveLength(104)
+    // `undo-clear-composer`, `send-composer`), the two lane-removal commands
+    // (`remove-tiled-lane`, `close-agent-remove-lane`), `agent.title.set`, and
+    // `new-tiled-lane`.
+    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 9).toBe(102)
+    expect(builtInCommandCatalog).toHaveLength(106)
   })
 })
 

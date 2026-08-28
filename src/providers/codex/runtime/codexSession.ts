@@ -6,8 +6,21 @@ import { spawn as ptySpawn } from 'node-pty'
 import type { SlashPickerState } from '@preload/index.js'
 import { PROXY_EVENTS_DIR } from '@main/storage/paths.js'
 import { scheduleDebugStoragePrune } from '@main/storage/debugRetention.js'
-import { CodexHeadless, CodexResponsesAdapter, ResponsesProxy } from 'codex-headless'
-import type { CodexConditionSnapshot, CodexRolloutLine, CodexSemanticEvent } from 'codex-headless'
+import {
+  CodexHeadless,
+  CodexResponsesAdapter,
+  ResponsesProxy,
+  prepareCodex01491PromptInputProfile,
+  prepareCodexResumeRollout,
+} from 'codex-headless'
+import type {
+  CodexConditionSnapshot,
+  CodexPromptInputProfile,
+  CodexResumeRolloutPreparation,
+  CodexRolloutDiagnostic,
+  CodexRolloutLine,
+  CodexSemanticEvent,
+} from 'codex-headless'
 import { canonicalizePath, sanitizePathSegment } from '@shared/runtime/projectDir.js'
 import type { BuiltInMcpServerConfig } from '@mcp/shared/types.js'
 import type {
@@ -98,6 +111,7 @@ export type CodexSessionOptions = {
   shellSessionId?: string
   useProxy?: boolean
   builtInMcpServers?: BuiltInMcpServerConfig[]
+  beforeResumeOwnershipAcquire?: () => Promise<void>
 }
 
 export type CodexScreenSnapshot = {
@@ -126,6 +140,7 @@ export type CodexSessionEvents = {
   screen: [CodexScreenSnapshot]
   'jsonl-entry': [CodexRolloutLine, string]
   'jsonl-error': [Error]
+  'transcript-diagnostic': [CodexRolloutDiagnostic]
   // process-state carries the optional spinner-derived status string
   // (e.g. "working… 12s") so the renderer can show provider-specific
   // verbiage in its activity indicator. Without this, the renderer
@@ -171,6 +186,18 @@ export interface CodexSession {
   ): Promise<PromptReadinessOutcome>
 }
 
+type CodexStartAttempt = {
+  generation: number
+  cancelled: boolean
+  proxyServer: ResponsesProxy | null
+  proxyAdapter: CodexResponsesAdapter | null
+  resumeRolloutPreparationTask: Promise<CodexResumeRolloutPreparation> | null
+  resumeRolloutPreparation: CodexResumeRolloutPreparation | null
+  pty: ReturnType<typeof ptySpawn> | null
+  headless: CodexHeadless | null
+  rollbackPromise: Promise<void> | null
+}
+
 export class CodexSession extends EventEmitter {
   private headless: CodexHeadless | null = null
   private pty: ReturnType<typeof ptySpawn> | null = null
@@ -188,8 +215,15 @@ export class CodexSession extends EventEmitter {
   private readonly shellSessionId: string | null
   private readonly useProxy: boolean
   private readonly builtInMcpServers: BuiltInMcpServerConfig[]
+  private readonly beforeResumeOwnershipAcquire: (() => Promise<void>) | null
   private proxyServer: ResponsesProxy | null = null
   private proxyAdapter: CodexResponsesAdapter | null = null
+  private nextStartGeneration = 0
+  private activeStartAttempt: CodexStartAttempt | null = null
+  // Exists only across prepare -> PTY spawn -> event wiring. The parent keeps
+  // rollback authority until the exact `headless.start()` call boundary; after
+  // that call begins, the headless prepared-tail path owns lease retirement.
+  private resumeRolloutPreparation: CodexResumeRolloutPreparation | null = null
 
   constructor(options: CodexSessionOptions = {}) {
     super()
@@ -202,6 +236,8 @@ export class CodexSession extends EventEmitter {
     this.shellSessionId = options.shellSessionId ?? null
     this.useProxy = options.useProxy === true
     this.builtInMcpServers = options.builtInMcpServers ?? []
+    this.beforeResumeOwnershipAcquire =
+      options.beforeResumeOwnershipAcquire ?? null
     // Fallback matches sessionManager's explicit 100ms (~10Hz) — see
     // the WHY comment there (#390). Keeping this default in sync
     // matters because a `?? 16` here would silently restore the 60Hz
@@ -224,6 +260,30 @@ export class CodexSession extends EventEmitter {
   }
 
   async start(): Promise<void> {
+    const previousAttempt = this.activeStartAttempt
+    if (previousAttempt) previousAttempt.cancelled = true
+    const attempt: CodexStartAttempt = {
+      generation: ++this.nextStartGeneration,
+      cancelled: false,
+      proxyServer: null,
+      proxyAdapter: null,
+      resumeRolloutPreparationTask: null,
+      resumeRolloutPreparation: null,
+      pty: null,
+      headless: null,
+      rollbackPromise: null,
+    }
+    // WHY generation identity, rather than a permanent `stopped` boolean, is
+    // the cancellation authority. CodexSession is restartable: stop may cancel
+    // generation A while A is inside config/read, then generation B may begin
+    // before A's promise resumes. Object identity lets A observe cancellation
+    // without mistaking B's legitimate start for its own continuation.
+    this.activeStartAttempt = attempt
+    if (previousAttempt) {
+      await this.rollbackStart(previousAttempt)
+      if (!this.isStartAttemptActive(attempt)) return
+    }
+    this.exited = false
     this.composerReady = false
     this.emit('input-readiness', {
       ready: false,
@@ -275,133 +335,245 @@ export class CodexSession extends EventEmitter {
               ? `shell-${this.shellSessionId}`
               : `shell-${new Date().toISOString().replace(/[:.]/g, '-')}`),
       })
+      if (!this.isStartAttemptActive(attempt)) return
       const proxy = await ResponsesProxy.create({ eventsFile })
+      if (!this.isStartAttemptActive(attempt)) {
+        // WHY stop can win while create() is awaiting a listening socket. The
+        // returned proxy did not exist when stop snapshotted the attempt, so the
+        // continuation that receives it must close it locally and must never
+        // publish it into fields now owned by a later generation.
+        try { await proxy.stop() } catch { /* best-effort */ }
+        return
+      }
+      attempt.proxyServer = proxy
       this.proxyServer = proxy
       args.push('--config', `openai_base_url=${JSON.stringify(proxy.info.proxyBaseUrl)}`)
     }
-    if (this.resumeSessionId) {
-      args.push('resume', this.resumeSessionId)
-    }
-
     // From here on we have a listening proxy (if useProxy was set) but
     // no PTY, no CodexHeadless, and therefore no exit/stop plumbing.
     // Any throw between the proxy-create above and the end of start()
     // leaks the proxy HTTP server — nothing else would ever call
     // stop() on it. Wrap everything in a try/catch that rolls back.
+    let promptInputProfile: CodexPromptInputProfile | null = null
     try {
+      if (this.resumeSessionId) {
+        // WHY app-level replacement waits until this exact boundary: proxy
+        // allocation, launch-argument assembly, and manager-owned MCP setup do
+        // not need the rollout lease and can fail while the predecessor remains
+        // healthy. The next operation reserves the exact transcript, so this is
+        // the last point where main can retire the authorized predecessor
+        // without creating the #638 overlap. The callback knows pane ownership;
+        // this provider deliberately does not.
+        await this.beforeResumeOwnershipAcquire?.()
+        if (!this.isStartAttemptActive(attempt)) return
+        // WHY this must precede ptySpawn: Codex can reconstruct a resume fork
+        // immediately after process creation. Locating X and registering its
+        // lineage afterwards leaves a real interval where a same-cwd fresh
+        // sibling can lease Y. The capability makes the ordering auditable and
+        // gives rollback one object that owns every pre-spawn reservation.
+        const preparationTask = prepareCodexResumeRollout({
+          cwd: this.cwd,
+          resumeThreadId: this.resumeSessionId,
+          onError: error => this.emit('jsonl-error', error),
+        })
+        // WHY the factory reserves exact X before its returned capability
+        // exists. The promise is therefore an owned resource, not merely an
+        // implementation detail of this await: stop must join it and dispose
+        // what it produces before a replacement generation may reserve X.
+        attempt.resumeRolloutPreparationTask = preparationTask
+        const preparation = await preparationTask
+        attempt.resumeRolloutPreparationTask = null
+        if (!this.isStartAttemptActive(attempt)) {
+          // WHY this capability may materialize after stop already found the
+          // attempt empty. The awaiting start continuation is then its sole
+          // owner and must dispose it directly; a shared-field rollback cannot
+          // see it and would leak exact-path/lineage authority.
+          try { await preparation.dispose(true) } catch { /* best-effort */ }
+          return
+        }
+        attempt.resumeRolloutPreparation = preparation
+        this.resumeRolloutPreparation = preparation
+      }
+      // WHY config/read must be the final awaited operation before ptySpawn.
+      // Resume preparation recursively locates and reads exact X; running it
+      // after attestation left a material interval where managed keymap policy
+      // could change while the stale profile still authorized Enter/Tab prompt
+      // evidence. All ownership preparation now completes first. From this
+      // point through spawn there is no application await.
+      promptInputProfile = await this.preparePromptInputProfile(args, cleanEnv)
+      if (!this.isStartAttemptActive(attempt)) return
+      if (promptInputProfile) {
+        // These immutable overrides were resolved by the same binary/cwd/env
+        // and exact base prefix. Keep them as the last global configuration
+        // arguments immediately before the selected TUI subcommand.
+        args.push(...promptInputProfile.cliArgs)
+      }
+      if (this.resumeSessionId) {
+        args.push('resume', this.resumeSessionId)
+      }
+      // WHY keep a distinct check at the synchronous boundary even though the
+      // config/read check is immediately above. Config/read must remain the final
+      // await before spawn, while this line documents and enforces the stronger
+      // invariant: only the still-current generation may enter ptySpawn at all.
+      if (!this.isStartAttemptActive(attempt)) return
       // Spawn the PTY.
-      this.pty = ptySpawn(this.binary, args, {
+      const pty = ptySpawn(this.binary, args, {
         name: 'xterm-256color',
         cols: this.cols,
         rows: this.rows,
         cwd: this.cwd,
         env: cleanEnv,
       })
+      attempt.pty = pty
+      this.pty = pty
     } catch (err) {
-      await this.rollbackStart()
+      await this.rollbackStart(attempt)
       throw err
     }
 
     // Create CodexHeadless — it attaches to the PTY and does all
     // the headless terminal + parser + transcript work.
-    this.headless = new CodexHeadless({
-      pty: this.pty,
-      cwd: this.cwd,
-      cols: this.cols,
-      rows: this.rows,
-      snapshotIntervalMs: this.snapshotIntervalMs,
-      resumeThreadId: this.resumeSessionId ?? undefined,
-    })
-
-    // Forward raw PTY bytes — SessionManager expects this event.
-    this.pty.onData((data: string) => {
-      this.emit('pty-data', data)
-    })
-
-    // Forward screen snapshots.
-    this.headless.on('screen', snap => {
-      this.markComposerReady(snap.plain)
-      this.emit('screen', {
-        plain: snap.plain,
-        markdown: snap.markdown,
-        recent: snap.recent,
-        recentMarkdown: snap.recentMarkdown,
-        // Codex doesn't have a slash picker yet — static "not visible"
-        // so the renderer's picker component stays hidden.
-        picker: { visible: false, items: [] },
-      })
-    })
-
-    // Forward the activity status string (the bottom Working row text
-    // parsed by codex-headless). Without `status`, the renderer's
-    // ActivityIndicator falls back to detectActivity on the screen
-    // plaintext, which is a Claude-specific spinner detector and
-    // returns null for Codex panes — leaving them with the generic
-    // "thinking…" placeholder despite the working state being known.
-    this.headless.on('activity', status => {
-      this.emit('process-state', { active: true, status })
-    })
-
-    this.headless.on('idle', () => {
-      this.emit('process-state', { active: false })
-    })
-
-    // Forward trust dialog state. The headless emits on every
-    // transition (visible + hidden) so the renderer can mount and
-    // unmount the modal in lockstep with Codex's own dialog.
-    this.headless.on('trust-dialog', state => {
-      this.emit('trust-dialog', state)
-    })
-
-    this.headless.on('conditions', snapshot => {
-      this.emit('conditions', snapshot)
-    })
-
-    // Forward rollout entries as jsonl-entry (matches Claude's event name).
-    this.headless.on('rollout-entry', (line, file) => {
-      this.emit('jsonl-entry', line, file)
-    })
-
-    this.headless.on('rollout-error', err => {
-      this.emit('jsonl-error', err)
-    })
-
-    this.headless.semantic.on('event', (ev: CodexSemanticEvent) => {
-      this.emit('semantic-event', ev)
-    })
-
-    if (this.proxyServer) {
-      // The adapter parses OpenAI Responses SSE and publishes to the
-      // same SemanticChannel the rollout reducer writes to. When both
-      // sources overlap, the channel emits `source_changed` so the
-      // renderer can see which source is driving the live text. The
-      // proxy wins the first-chunk race; rollout later reconciles
-      // with the authoritative text at task_complete.
-      this.proxyAdapter = new CodexResponsesAdapter(this.proxyServer, this.headless)
-      this.proxyAdapter.attach()
+    try {
+      const common = {
+        pty: this.pty,
+        cwd: this.cwd,
+        cols: this.cols,
+        rows: this.rows,
+        snapshotIntervalMs: this.snapshotIntervalMs,
+        promptInputProfile: promptInputProfile ?? undefined,
+      }
+      if (this.resumeSessionId) {
+        const preparation = this.resumeRolloutPreparation
+        if (!preparation) {
+          throw new Error('Codex resume ownership was not prepared before spawn')
+        }
+        const headless = new CodexHeadless({
+          ...common,
+          resumeThreadId: this.resumeSessionId,
+          resumeRolloutPreparation: preparation,
+        })
+        attempt.headless = headless
+        this.headless = headless
+      } else {
+        const headless = new CodexHeadless(common)
+        attempt.headless = headless
+        this.headless = headless
+      }
+    } catch (err) {
+      await this.rollbackStart(attempt)
+      throw err
     }
 
-    this.headless.on('exit', ({ exitCode, signal }) => {
-      this.exited = true
-      this.composerReady = false
-      this.emit('input-readiness', { ready: false, reason: 'provider-not-ready' })
-      this.emit('exit', { exitCode, signal })
-    })
-
-    // Start the transcript tailer BEFORE we emit started — same
-    // ordering as ClaudeSession to avoid missing early entries.
-    //
-    // If headless.start() throws we're in the same leak shape as a
-    // pty-spawn failure: a listening proxy server, a live PTY, and
-    // a partially-constructed CodexHeadless. Roll back all three so
-    // the caller can retry cleanly instead of being told "start
-    // failed" while a port quietly stays bound.
     let sessionsDir: string
     try {
+      // Forward raw PTY bytes — SessionManager expects this event.
+      this.pty.onData((data: string) => {
+        this.emit('pty-data', data)
+      })
+
+      // Forward screen snapshots.
+      this.headless.on('screen', snap => {
+        this.markComposerReady(snap.plain)
+        this.emit('screen', {
+          plain: snap.plain,
+          markdown: snap.markdown,
+          recent: snap.recent,
+          recentMarkdown: snap.recentMarkdown,
+          // Codex doesn't have a slash picker yet — static "not visible"
+          // so the renderer's picker component stays hidden.
+          picker: { visible: false, items: [] },
+        })
+      })
+
+      // Forward the activity status string (the bottom Working row text
+      // parsed by codex-headless). Without `status`, the renderer's
+      // ActivityIndicator falls back to detectActivity on the screen
+      // plaintext, which is a Claude-specific spinner detector and
+      // returns null for Codex panes — leaving them with the generic
+      // "thinking…" placeholder despite the working state being known.
+      this.headless.on('activity', status => {
+        this.emit('process-state', { active: true, status })
+      })
+
+      this.headless.on('idle', () => {
+        this.emit('process-state', { active: false })
+      })
+
+      // Forward trust dialog state. The headless emits on every
+      // transition (visible + hidden) so the renderer can mount and
+      // unmount the modal in lockstep with Codex's own dialog.
+      this.headless.on('trust-dialog', state => {
+        this.emit('trust-dialog', state)
+      })
+
+      this.headless.on('conditions', snapshot => {
+        this.emit('conditions', snapshot)
+      })
+
+      // Forward rollout entries as jsonl-entry (matches Claude's event name).
+      this.headless.on('rollout-entry', (line, file) => {
+        this.emit('jsonl-entry', line, file)
+      })
+
+      this.headless.on('rollout-error', err => {
+        this.emit('jsonl-error', err)
+      })
+
+      // WHY this is a diagnostic channel instead of jsonl-error: a held fresh
+      // candidate is the safe fail-closed outcome when ownership is not proven.
+      // Calling it an error makes a healthy sibling rollout look fatal; dropping
+      // it made #632 indistinguishable from failed PTY delivery. The main process
+      // records this content-safe evidence but no renderer correctness path uses
+      // it.
+      this.headless.on('rollout-diagnostic', diagnostic => {
+        this.emit('transcript-diagnostic', diagnostic)
+      })
+
+      this.headless.semantic.on('event', (ev: CodexSemanticEvent) => {
+        this.emit('semantic-event', ev)
+      })
+
+      if (this.proxyServer) {
+        // The adapter parses OpenAI Responses SSE and publishes to the
+        // same SemanticChannel the rollout reducer writes to. When both
+        // sources overlap, the channel emits `source_changed` so the
+        // renderer can see which source is driving the live text. The
+        // proxy wins the first-chunk race; rollout later reconciles
+        // with the authoritative text at task_complete.
+        const proxyAdapter = new CodexResponsesAdapter(
+          this.proxyServer,
+          this.headless,
+        )
+        attempt.proxyAdapter = proxyAdapter
+        this.proxyAdapter = proxyAdapter
+        proxyAdapter.attach()
+      }
+
+      this.headless.on('exit', ({ exitCode, signal }) => {
+        this.exited = true
+        this.composerReady = false
+        this.emit('input-readiness', { ready: false, reason: 'provider-not-ready' })
+        this.emit('exit', { exitCode, signal })
+      })
+
+      // Start the transcript tailer BEFORE we emit started — same ordering as
+      // ClaudeSession to avoid missing early entries. Ownership crosses from
+      // the parent to CodexHeadless at this exact call boundary: every setup
+      // throw above still leaves rollbackStart a preparation to dispose, while
+      // every throw inside start is cleaned by the prepared tail path itself.
+      // Clearing the alias before awaiting also prevents both layers from
+      // independently deciding the physical tail's close outcome.
+      const preparedOwnership = attempt.resumeRolloutPreparation
+      attempt.resumeRolloutPreparation = null
+      if (preparedOwnership &&
+        this.resumeRolloutPreparation === preparedOwnership) {
+        this.resumeRolloutPreparation = null
+      }
       const res = await this.headless.start()
+      if (!this.isStartAttemptActive(attempt)) return
       sessionsDir = res.sessionsDir
     } catch (err) {
-      await this.rollbackStart()
+      await this.rollbackStart(attempt)
       throw err
     }
 
@@ -415,22 +587,127 @@ export class CodexSession extends EventEmitter {
     })
   }
 
+  private async preparePromptInputProfile(
+    baseArgs: readonly string[],
+    env: Readonly<Record<string, string>>,
+  ): Promise<CodexPromptInputProfile | null> {
+    const preparation = await prepareCodex01491PromptInputProfile({
+      binary: this.binary,
+      cwd: this.cwd,
+      env,
+      baseArgs,
+    })
+    if (preparation.ok) return preparation.profile
+
+    // WHY profile refusal must not make the terminal unusable. Custom/new
+    // binaries and user policy still launch with their untouched keymap; only
+    // fresh-rollout prompt ownership is disabled, because a plausible but
+    // unverified prompt is more dangerous than a missing transcript edge.
+    this.emit(
+      'jsonl-error',
+      new Error(
+        `Codex prompt evidence disabled: ${preparation.reason}`,
+      ),
+    )
+    return null
+  }
+
   // Unified cleanup for start() failure paths. Must be safe to call
   // regardless of how far start() got — each field is guarded with
   // optional chaining and try/catch so a failure mid-construction
   // (e.g. proxy up, PTY up, headless half-attached) doesn't cascade
   // into a second throw that masks the original error.
-  private async rollbackStart(): Promise<void> {
-    try { this.proxyAdapter?.detach() } catch { /* best-effort */ }
-    this.proxyAdapter = null
-    try { await this.proxyServer?.stop() } catch { /* best-effort */ }
-    this.proxyServer = null
-    try { this.pty?.kill() } catch { /* best-effort */ }
-    this.pty = null
-    // Intentionally no headless teardown here: if headless.start()
-    // threw, its internal state is undefined; calling stop() on it
-    // risks a second throw. Let GC collect it.
-    this.headless = null
+  private isStartAttemptActive(attempt: CodexStartAttempt): boolean {
+    return !attempt.cancelled && this.activeStartAttempt === attempt
+  }
+
+  private async rollbackStart(attempt?: CodexStartAttempt): Promise<void> {
+    // Direct lifecycle tests and defensive callers can still invoke rollback on
+    // manually installed fields. Production always supplies its generation so
+    // cleanup cannot mistake a later start's objects for the cancelled one's.
+    const owned: CodexStartAttempt = attempt ?? {
+      generation: 0,
+      cancelled: true,
+      proxyServer: this.proxyServer,
+      proxyAdapter: this.proxyAdapter,
+      resumeRolloutPreparationTask: null,
+      resumeRolloutPreparation: this.resumeRolloutPreparation,
+      pty: this.pty,
+      headless: this.headless,
+      rollbackPromise: null,
+    }
+    owned.cancelled = true
+    if (owned.rollbackPromise) {
+      await owned.rollbackPromise
+      if (this.activeStartAttempt === owned) this.activeStartAttempt = null
+      return
+    }
+
+    const proxyAdapter = owned.proxyAdapter
+    const proxyServer = owned.proxyServer
+    const headless = owned.headless
+    const preparationTask = owned.resumeRolloutPreparationTask
+    const preparation = owned.resumeRolloutPreparation
+    const pty = owned.pty
+    owned.proxyAdapter = null
+    owned.proxyServer = null
+    owned.headless = null
+    owned.resumeRolloutPreparationTask = null
+    owned.resumeRolloutPreparation = null
+    owned.pty = null
+
+    // WHY clear shared aliases only by object identity. Generation A may resume
+    // from an old await after generation B has already published its own proxy,
+    // capability, PTY, or headless. Unconditional null assignments are a
+    // delayed cross-generation teardown even if every individual stop is
+    // otherwise idempotent.
+    if (proxyAdapter && this.proxyAdapter === proxyAdapter) this.proxyAdapter = null
+    if (proxyServer && this.proxyServer === proxyServer) this.proxyServer = null
+    if (headless && this.headless === headless) this.headless = null
+    if (preparation && this.resumeRolloutPreparation === preparation) {
+      this.resumeRolloutPreparation = null
+    }
+    if (pty && this.pty === pty) this.pty = null
+
+    owned.rollbackPromise = (async () => {
+      try { proxyAdapter?.detach() } catch { /* best-effort */ }
+      // WHY begin pre-spawn capability disposal before any cleanup await. A
+      // proxy can take time to drain sockets, but exact-path/lineage authority
+      // must be revoked as soon as stop closes launch admission. Starting the
+      // promise here preserves adapter -> proxy -> headless teardown for running
+      // sessions (their preparation has already transferred and is null) while
+      // preventing a blocked proxy stop from extending pre-spawn ownership.
+      const preparationDisposal = (async () => {
+        let materializedPreparation = preparation
+        if (!materializedPreparation && preparationTask) {
+          // WHY cancellation cannot revoke the factory's filesystem work. It
+          // may already have reserved X and still be reading lineage. Joining
+          // converts that hidden interval into explicit generation-owned
+          // cleanup; a rejection needs no disposal and remains owned by the
+          // original start caller.
+          try { materializedPreparation = await preparationTask } catch {
+            materializedPreparation = null
+          }
+        }
+        try { await materializedPreparation?.dispose(true) } catch {
+          /* best-effort */
+        }
+      })()
+      try { await proxyServer?.stop() } catch { /* best-effort */ }
+      // WHY a partially started headless must stop before its PTY is discarded:
+      // codex-headless registers path leases in a shared process-wide graph.
+      // Skipping its transactional stop leaks live membership; killing the PTY
+      // first admits final provider flushes while ownership is still callback-live.
+      try { await headless?.stop() } catch { /* best-effort */ }
+      await preparationDisposal
+      try { pty?.kill() } catch { /* best-effort */ }
+    })()
+    await owned.rollbackPromise
+    // WHY keep a cancelled generation discoverable while cleanup is pending.
+    // A concurrent restart will replace this identity but first join its
+    // rollback; clearing it before the join recreates the exact lease collision
+    // even though rollback eventually disposes the late capability correctly.
+    if (this.activeStartAttempt === owned) this.activeStartAttempt = null
   }
 
   write(data: string): void {
@@ -597,37 +874,21 @@ export class CodexSession extends EventEmitter {
   }
 
   async stop(): Promise<void> {
-    // Teardown order matters. The adapter is a listener on the proxy
-    // that writes into `this.headless.semantic`. If we stop() the
-    // headless first while the proxy is still listening, any trailing
-    // SSE chunk the upstream has already flushed will fire the
-    // listener and mutate a post-stop headless — observable as
-    // "semantic events keep arriving after stop()" in debug logs.
-    //
-    // Correct order:
-    //   1. Detach the adapter so no new mutations reach headless.
-    //   2. Stop the proxy so upstream sockets are torn down (see
-    //      ResponsesProxy.stop() — it force-destroys sockets so we
-    //      don't wait for a long-running SSE turn).
-    //   3. Stop headless, which tears down its transcript tailer
-    //      and semantic reducer cleanly.
-    //   4. Kill the PTY last; headless.stop() may still want to
-    //      drain final output from the terminal stream.
-    try { this.proxyAdapter?.detach() } catch { /* best-effort */ }
-    this.proxyAdapter = null
-    try {
-      await this.proxyServer?.stop()
-    } catch (err) {
-      console.warn(
-        `[codexSession] proxy.stop() failed:`,
-        err,
-      )
+    const attempt = this.activeStartAttempt
+    if (attempt) {
+      // WHY cancellation becomes visible before the first cleanup await. A safe
+      // config/read or proxy create may complete while stop is draining another
+      // resource; its continuation must already see admission closed and return
+      // without spawning. Clearing only at the end recreates the late-provider
+      // resurrection recorded by the eleventh gate.
+      attempt.cancelled = true
+      await this.rollbackStart(attempt)
+      return
     }
-    this.proxyServer = null
-    try { await this.headless?.stop() } catch (err) {
-      console.warn(`[codexSession] headless.stop() failed:`, err)
-    }
-    try { this.pty?.kill() } catch { /* already gone */ }
-    this.pty = null
+
+    // Defensive legacy path for manually installed/direct-test resources. The
+    // same identity-scoped rollback preserves the adapter -> proxy -> headless ->
+    // preparation -> PTY order and remains idempotent across repeated stop calls.
+    await this.rollbackStart()
   }
 }

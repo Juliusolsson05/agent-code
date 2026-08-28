@@ -4,6 +4,7 @@ import type { GridRelatedAgentTab } from '@renderer/workspace/gridRelatedAgents'
 import { dispatchAttentionLabelFromConditions } from '@renderer/workspace/conditions/selectors'
 import type { SessionId } from '@renderer/workspace/types'
 import type { SessionRuntime } from '@renderer/workspace/workspaceStore'
+import { AgentTitleHeader } from '@renderer/workspace/tile-tree/AgentTitleHeader'
 
 // Pane header: compact status strip.
 //
@@ -31,6 +32,7 @@ import type { SessionRuntime } from '@renderer/workspace/workspaceStore'
 export function PaneHeader({
   sessionId,
   paneLabel,
+  agentTitle,
   projectDir,
   statusMode,
   isSessionLive,
@@ -42,6 +44,7 @@ export function PaneHeader({
 }: {
   sessionId: SessionId
   paneLabel?: string
+  agentTitle?: string
   projectDir: string | null
   statusMode: boolean
   isSessionLive: boolean
@@ -103,6 +106,13 @@ export function PaneHeader({
         </div>
         <PaneHeaderColorFlag sessionId={sessionId} />
       </div>
+      {/* WHY this is a distinct row rather than appended beside cwd/index:
+          the existing strip is a dense identity + liveness surface whose
+          available width is also shared with color flags. The user-authored
+          title is the scanning aid; giving it an independent truncation slot
+          keeps five narrow Tiled Dispatch lanes legible without weakening the
+          existing header contract. Untitled agents render no row at all. */}
+      <AgentTitleHeader title={agentTitle} />
       {relatedAgentTabs.length > 0 && (
         <div className="flex items-center gap-1 overflow-x-auto border-t border-border/70 px-2 py-1 text-[10px]">
           {relatedAgentTabs.map(tab => {

@@ -1,10 +1,10 @@
-# Agent Code conventions
+# Agent Code managed personal skills
 
-Agent Code can store one machine-wide Markdown document of personal development
-conventions and expose it to every registered agent provider as a native Agent
-Skill. The setting is off by default. Saving while disabled writes only
-Agent Code's app-owned state; enabling materializes deterministic `SKILL.md`
-copies in provider-owned personal skill roots.
+Agent Code can store machine-wide personal Agent Skills and expose them to every
+registered agent provider. Agent Code Conventions is the reserved, encouraged
+skill with its own Settings experience. Custom Skills is a separate manager for
+instruction-only skills authored inside Agent Code. Both publish through the
+same ownership and reconciliation authority.
 
 The feature is intentionally a native skill rather than hidden prompt text.
 That keeps provider activation semantics honest: providers discover metadata
@@ -13,9 +13,12 @@ and the same CLI can discover the skill when launched outside Agent Code.
 
 ## Sources of truth
 
-`~/.config/agent-code/conventions.json` is the sole canonical document and
-desired-state record. Provider `SKILL.md` files are generated artifacts. Editing
-one of those artifacts never imports content back into Agent Code.
+`~/.config/agent-code/conventions.json` is the legacy-named, sole canonical
+collection and desired-state record. Schema v2 retains the Conventions fields
+and adds custom definitions plus skill-and-target artifact identities. Keeping
+the existing path lets schema-v1 Conventions ownership evidence migrate without
+creating two canonical stores. Provider `SKILL.md` files are generated
+artifacts. Editing one never imports content back into Agent Code.
 
 The persisted revision is a compare-and-swap token for renderer mutations.
 Deployment health is separate from desired `enabled` state: an enabled document
@@ -27,16 +30,17 @@ product-owned wrapper has one implementation.
 
 ## Isolation boundary
 
-`AgentCodeConventionsService` is the subsystem's single writer and the only
+`AgentCodeManagedSkillsService` is the subsystem's single writer and the only
 production consumer of `persistence.ts`, `ownershipPolicy.ts`, and
 `skillPathSafety.ts`. The ownership policy is pure and reconciles untrusted
 state identities with current registry targets without touching disk. Path
 safety owns bounded inspection, link rejection, directory creation,
 journal-temp cleanup, and capture-before-delete mechanics; it does not know
-providers or UI. The service consumes both and emits one typed snapshot.
+providers or UI. The service consumes both and emits typed, surface-specific
+snapshots over one canonical collection.
 
 Production code outside `src/main/agentCodeConventions/` must not import those
-low-level modules, mutate conventions state, or arbitrate between provider
+low-level modules, mutate managed skill state, or arbitrate between provider
 roots. IPC may call the service, renderer code may consume snapshots, and the
 session manager may invoke the opaque pre-session reconciliation callback.
 Provider modules declare discovery capabilities only. This single-consumer
@@ -67,6 +71,19 @@ caps the UTF-8 body at 32 KiB, and produces one trailing newline.
 The management marker is identification, not ownership proof. Anyone can copy
 public marker text.
 
+Custom skill names are immutable lowercase kebab-case identifiers no longer
+than 64 characters. Descriptions are structured single-line values no longer
+than 1,024 characters, and instructions have the same bounded, normalized
+Markdown treatment as Conventions. Agent Code serializes `name` and
+`description` frontmatter itself; the editor never accepts raw YAML. Custom
+names cannot claim the reserved `agent-code-conventions` destination.
+
+Custom management deliberately excludes personal skills installed by other
+tools, repository-local skills, plugins, and skills with scripts, references,
+or assets. The service inspects only an exact destination it is about to
+publish. A pre-existing unmanaged destination is a collision and cannot be
+adopted or replaced from the Custom Skills UI.
+
 ## Ownership and crash recovery
 
 The state file records the path and hash for every successful materialization.
@@ -92,10 +109,12 @@ and enter Recovery required until the user reveals or explicitly resets it.
 ## Collision and removal policy
 
 Provider reads are bounded and reject symlinks, FIFOs, sockets, devices, and
-non-regular files. Existing unmanaged files are never overwritten without a
-target-specific approval tied to the exact observed filesystem version. Main
-rechecks that fingerprint under the mutation lock and the atomic writer checks
-the version again immediately before publication.
+non-regular files. Existing unmanaged Conventions files are never overwritten
+without a target-specific approval tied to the exact observed filesystem
+version. Custom skills intentionally offer no overwrite path: a freely chosen
+name cannot grant Agent Code ownership of an external installation. Main
+rechecks every approved Conventions fingerprint under the mutation lock and the
+atomic writer checks the version again immediately before publication.
 
 Disable persists `enabled: false` and pending deletes before touching provider
 files. Removal first renames the target into an operation-derived quarantine,
@@ -125,7 +144,7 @@ external bytes.
 Agent Code reconciles before sessions it launches. It cannot gate a CLI started
 in another terminal, and existing sessions may require restart depending on the
 provider. No filesystem watcher or automatic running-session reload exists in
-v1.
+v1 of the Custom Skills UI.
 
 The Markdown is plaintext and may be sent to a model provider when the skill is
 activated. Agent Code does not intentionally serialize it or content-derived

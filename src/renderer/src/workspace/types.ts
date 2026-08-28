@@ -81,7 +81,14 @@ export type AgentViewModeOverride = 'agent' | 'terminal'
 export type SessionMeta = {
   /** cwd the session was spawned with — needed to respawn on relaunch. */
   cwd: string
-  /** Optional user-provided or derived label shown in tab titles. */
+  /**
+   * Durable glance label shown in agent headers and index/status surfaces.
+   *
+   * WHY this stays on SessionMeta instead of a view-specific preference:
+   * titles describe the agent's purpose, so Grid, Dispatch, and Tiled Dispatch
+   * must all observe the same value and workspace autosave must carry it across
+   * restarts. Some creators also seed this field before the user edits it.
+   */
   title?: string
   /**
    * Which backend runs in this pane. Defaults to 'claude' when
@@ -302,10 +309,11 @@ export type TiledDispatchState = {
    * Column widths. Index 0 is the pinned index lane's fraction of the whole
    * row (clamped 0.1..0.4 in the layout). Indices 1..N are relative weights
    * for the N agent-view lane units sharing the remaining width (normalized
-   * on read; absolute scale irrelevant). Absent => even distribution. Reset
-   * to undefined on tile-count change because a weight array sized for the
-   * old lane count would mis-lay-out the new set. (See TiledDispatchLayout's
-   * column-width convention comment, which is the load-bearing spec.)
+   * on read; absolute scale irrelevant). Absent => even distribution. The
+   * generic tile-count prompt resets this because it has no positional intent;
+   * exact insert/remove operations can preserve the sidebar and map individual
+   * weights honestly. (See TiledDispatchLayout's column-width convention
+   * comment, which is the load-bearing spec.)
    */
   ratios?: number[]
 }

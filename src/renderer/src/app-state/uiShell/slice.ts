@@ -20,6 +20,7 @@ export const createUiShellSlice: StateCreator<
   reorderTabsOpen: false,
   pinAgentsOpen: false,
   settingsPageOpen: false,
+  agentTitlePromptSessionId: null,
   buryPromptSessionId: null,
   debugBundleNotePrompt: null,
   recordingNotePrompt: null,
@@ -130,6 +131,11 @@ export const createUiShellSlice: StateCreator<
     set({ settingsPageOpen: true }, false, 'uiShell/openSettingsPage'),
   closeSettingsPage: () =>
     set({ settingsPageOpen: false }, false, 'uiShell/closeSettingsPage'),
+
+  openAgentTitlePrompt: sessionId =>
+    set({ agentTitlePromptSessionId: sessionId }, false, 'uiShell/openAgentTitlePrompt'),
+  closeAgentTitlePrompt: () =>
+    set({ agentTitlePromptSessionId: null }, false, 'uiShell/closeAgentTitlePrompt'),
 
   openBuryPrompt: sessionId =>
     set({ buryPromptSessionId: sessionId }, false, 'uiShell/openBuryPrompt'),

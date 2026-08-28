@@ -2,6 +2,7 @@ import { render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 
 import { renderCodexOperation } from './rows/dispatch'
+import committedExecFixture from '../../../../testing/fixtures/rendering-shapes/codex/exec/committed.json'
 import { CommandView } from '@providers/shared/renderer/protocols/command/CommandView'
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 
@@ -16,6 +17,35 @@ function result(toolUse: ToolUseBlock, output: string): ToolResultBlock {
 }
 
 describe('systemic Codex operation rendering', () => {
+  it('renders the recorded repository-wide rg operation as Search with honest status', () => {
+    const sample = committedExecFixture.cases.find(
+      candidate => candidate.expectedReceipt?.protocolId === 'command.search',
+    )
+    if (!sample?.toolResult) throw new Error('recorded Search fixture missing')
+    const decision = renderCodexOperation({
+      toolUse: sample.toolUse as ToolUseBlock,
+      result: sample.toolResult as ToolResultBlock,
+      live: false,
+      streaming: false,
+    })
+    expect(decision.toolUse).toMatchObject({
+      action: 'render',
+      receipt: { rendererId: 'shared.command', protocolId: 'command.search' },
+    })
+    expect(decision.toolResult).toMatchObject({
+      action: 'absorb',
+      ownerRenderId: 'shared.command',
+      protocolId: 'command.search',
+    })
+    if (decision.toolUse.action !== 'render') throw new Error('expected Search operation')
+
+    const rendered = render(decision.toolUse.node)
+    expect(rendered.getByText('Search')).toBeInTheDocument()
+    expect(rendered.getByText('exit code unavailable')).toBeInTheDocument()
+    expect(rendered.container.textContent).toContain('Total output lines: 877')
+    expect(rendered.container.textContent).toContain('yield 10000ms · max 50000 tok')
+  })
+
   it('names a projected workflow status call and keeps its paired output visible', () => {
     const toolUse: ToolUseBlock = {
       type: 'tool_use', id: 'status-1', name: 'exec',

@@ -26,6 +26,7 @@ import { AgentViewModePickerSurface } from '@renderer/features/workspace/surface
 import { ColorFlagPickerSurface } from '@renderer/features/workspace/surfaces/ColorFlagPickerSurface'
 import { KeyboardShortcutsSurface } from '@renderer/features/settings/surfaces/KeyboardShortcutsSurface'
 import { RewindToPromptSurface } from '@renderer/features/workspace/surfaces/RewindToPromptSurface'
+import { AgentTitlePromptSurface } from '@renderer/features/workspace/surfaces/AgentTitlePromptSurface'
 import { AppHostSurface } from '@renderer/apps/surfaces/AppHostSurface'
 
 // The surface registry (issue #494). Adding a surface = write a wrapper
@@ -79,6 +80,7 @@ export const modalSurfaces: SurfaceEntry[] = [
   { id: 'agent-view-mode-picker', Component: AgentViewModePickerSurface },
   { id: 'color-flag-picker', Component: ColorFlagPickerSurface },
   { id: 'rewind-to-prompt', Component: RewindToPromptSurface },
+  { id: 'agent-title-prompt', Component: AgentTitlePromptSurface },
   { id: 'usage', Component: UsageModalSurface },
   // Built-in apps host. Last in the array, which per the paint-order contract
   // above means it paints above every modal already mounted. That placement is
