@@ -4,6 +4,7 @@ import { act } from 'react'
 import { useRef } from 'react'
 import type { MutableRefObject } from 'react'
 import recordedQueueHandoffBundle from '../../../../../../testing/fixtures/rendering-bundles/2026-06-14T14-25-07-012-a8ad1ebb.json'
+import recordedTaskNotificationBundle from '../../../../../../testing/fixtures/rendering-bundles/2026-06-21T20-14-23-131-62432945.json'
 
 import { createFakeSessionFeed } from '@renderer/features/sessionFeed/FakeSessionFeed'
 import { UndoCloseStack } from '@renderer/lib/undoClose'
@@ -153,6 +154,65 @@ describe('useIpcSubscriptions with an injected SessionFeed', () => {
     // prompt clone is manufactured by the handoff.
     expect(runtimes[sessionId]?.queuedMessages).toEqual([])
     expect(runtimes[sessionId]?.entries).toContain(durable)
+  })
+
+  it('keeps runtime identity for a recorded queued notification with no remove debt', () => {
+    const fake = createFakeSessionFeed()
+    const sessionId = 'recorded-queue-notification-noop'
+    const state = {
+      sessions: { [sessionId]: { cwd: '/repo', kind: 'claude' } },
+    } as unknown as WorkspaceState
+    let runtimes: Record<SessionId, SessionRuntime> = {}
+    const runtimesBefore = runtimes
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: { gitWorktrees: vi.fn(async () => ({ ok: false })) },
+    })
+    const bundle = recordedTaskNotificationBundle as {
+      input: { entries: Array<Record<string, unknown>> }
+    }
+    const notification = bundle.input.entries[43]!
+    const attachment = notification.attachment as Record<string, unknown>
+    if (
+      notification.type !== 'attachment' ||
+      attachment.type !== 'queued_command' ||
+      attachment.commandMode !== 'task-notification'
+    ) {
+      throw new Error('recorded queued-notification fixture index drifted')
+    }
+
+    function Harness(): React.JSX.Element {
+      const refs = useRef<WorkspaceRefs | null>(null)
+      if (refs.current === null) refs.current = makeRefs(state)
+      useIpcSubscriptions(
+        fake,
+        refs.current,
+        () => {},
+        updater => {
+          runtimes = typeof updater === 'function' ? updater(runtimes) : updater
+          refs.current!.latestRuntimesRef.current = runtimes
+        },
+        () => {},
+        () => {},
+      )
+      return <div />
+    }
+
+    render(<Harness />)
+    act(() => {
+      fake.emitJsonlEntries({
+        sessionId,
+        entries: [{ file: 'recorded.jsonl', entry: notification }],
+      })
+    })
+
+    // This durable carrier is queue evidence, not a human feed row. With no
+    // legacy remove debt it changes neither pure queue state nor mapped feed
+    // entries. Replacing emptyRuntime()'s [] with claudeQueue's distinct []
+    // would manufacture a visible runtime update from a pure no-op and defeat
+    // the same reference-stability contract that protects queue-only bursts.
+    expect(runtimes).toBe(runtimesBefore)
+    expect(runtimes[sessionId]).toBeUndefined()
   })
 
   it('folds a cumulative semantic burst at preview cadence instead of once per transport event', () => {
