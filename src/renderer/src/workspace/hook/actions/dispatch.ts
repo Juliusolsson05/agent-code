@@ -1,7 +1,6 @@
-import { useCallback, useRef } from 'react'
+import { useCallback } from 'react'
 
 import type { DispatchModeState, SessionId, SessionMeta, TabId } from '@renderer/workspace/types'
-import { collectLeaves, wrapRootWithLeaf } from '@renderer/workspace/tile-tree/treeOps'
 import {
   buildAutoLanes,
   clampTileCount,
@@ -42,8 +41,6 @@ export function useDispatchActions(
   setTiledFocusedLane: (laneIndex: number) => void
   setTiledRatios: (ratios: number[]) => void
 } {
-  const pendingTerminalByTabRef = useRef(new Map<TabId, Promise<SessionId | null>>())
-
   const enterDispatchMode = useCallback(
     async (scope: DispatchModeState['scope'] = state.dispatchMode?.scope ?? 'project') => {
       closeNewAgentPlacement()
@@ -55,8 +52,6 @@ export function useDispatchActions(
         },
       }))
       setTileTabs(null)
-      // would spawn a terminal even with the setting OFF, which is the
-      // exact bug shape we're fixing.
     },
     [closeNewAgentPlacement, setState, setTileTabs, state.dispatchMode?.scope],
   )

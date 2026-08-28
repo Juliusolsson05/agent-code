@@ -408,10 +408,10 @@ export function usePaneActions(
       // rows. `buildDispatchGroups` emits every project group as
       // `[...gridSessionIds, ...detachedSessionIds]`, so a Dispatch terminal was
       // STRUCTURALLY guaranteed to sort above every agent no matter when it was
-      // created — and because the split anchor degraded to `leafIds[0]` (the
-      // focused Dispatch row is normally a detached agent with no grid leaf),
-      // it landed beside the FIRST leaf, i.e. pinned to the very top of the
-      // list. See #671.
+      // created. That concatenation is the whole cause and it is sufficient on
+      // its own — the terminal's position WITHIN the grid slice never mattered,
+      // because the entire grid slice precedes the detached rows the user's
+      // agents live in. See #671.
       //
       // The old justification was that a shell's durable shape is leaf-based
       // (tmux name, resize lifecycle, undo/close history, persistence). Every
@@ -465,10 +465,22 @@ export function usePaneActions(
         let sessionId: SessionId
         try {
           // `resumeSessionId` and `builtInMcpDomains` are passed through
-          // unguarded on purpose: `sessionActions.spawn` already drops both for
-          // `kind === 'terminal'`. A second guard here would be a copy of that
-          // rule which can drift out of agreement with the one that actually
-          // reaches main.
+          // unguarded, but the two are NOT symmetric and it is worth being
+          // precise about which is which:
+          //
+          //  - `builtInMcpDomains` really is dropped for a terminal —
+          //    `sessionActions.spawn` gates it behind `isAgentProviderKind`.
+          //  - `resumeSessionId` is NOT dropped. It is forwarded to
+          //    `window.api.spawnSession` for every kind; only the value written
+          //    back into the durable `SessionMeta` is kind-gated. It is inert
+          //    for a terminal because main re-gates on kind before resolving a
+          //    transcript, not because anything here filtered it.
+          //
+          // Neither can be reached today regardless: `continuation` is only
+          // supplied by agent-gated callers, so no terminal spawn carries one.
+          // Adding a local guard would state a rule this call site does not
+          // actually own, which is exactly the kind of comment that outlives
+          // the code it describes.
           sessionId = await sessionActions.spawn(cwd, {
             kind,
             resumeSessionId,
@@ -526,6 +538,17 @@ export function usePaneActions(
         })
 
         if (!filed) {
+          // Kill the backend with the kind/cwd THIS call already resolved
+          // rather than leaving it to killSession's ownership proof, which
+          // re-reads them from `refs.stateRef`. That ref is refreshed on React
+          // render, so an awaited continuation can observe it lagging (the
+          // hazard session.ts documents at its own replace path); a lagging
+          // read makes the proof fail, the kill silently no-op, and the very
+          // orphan this guard exists to prevent survive in main with no
+          // renderer row pointing at it. killSession still runs for the
+          // renderer-side cleanup — spawn already registered SessionMeta — and
+          // its second ownership check simply finds nothing left to kill.
+          await window.api.killOwnedSession({ sessionId, kind, cwd })
           await sessionActions.killSession(sessionId)
           return
         }
@@ -1512,6 +1535,33 @@ export function usePaneActions(
       const closeSnapshot = refs.stateRef.current
 
       if (!owningTab && detached) {
+        // WHY a detached close captures undo history too:
+        //
+        // Undo capture used to live only in the `owningTab` arms below, which
+        // was survivable while every detached row was an agent whose transcript
+        // is durable on disk. It stopped being survivable once Dispatch
+        // TERMINALS became detached rows (#671): closing one stops the attach
+        // PTY but leaves the tmux session alive, and because the session row is
+        // gone from workspace.json the next launch's tmux reconcile sees a live
+        // session with no persisted owner, classifies it as an orphan, and
+        // silently kills it (src/main/tmux/tmuxRecovery.ts). The scrollback was
+        // then unrecoverable — where before #671 the same terminal was a grid
+        // leaf and ⌘⇧T restored it with `recoverTmuxName`.
+        //
+        // Capturing here restores that affordance and extends it to detached
+        // agents, which never had it. The record is stored verbatim so
+        // `detachedAt` — the only thing ordering rows inside a project group —
+        // survives, and undo puts the row back where it was rather than at the
+        // bottom of the list.
+        if (sessionMeta) {
+          refs.undoStackRef.current.push({
+            type: 'detached',
+            closedAt: Date.now(),
+            sessionMeta,
+            record: detached,
+          })
+        }
+
         await killSessionBackendIfOwned(refs, targetId)
 
         setRuntimes(prev => {
@@ -1538,7 +1588,14 @@ export function usePaneActions(
         })
         const kindLabel = sessionMeta?.kind ?? DEFAULT_PROVIDER
         const cwdBase = sessionMeta?.cwd.split('/').filter(Boolean).pop() ?? sessionMeta?.cwd ?? 'session'
-        showToast(`Closed detached ${kindLabel} session (${cwdBase})`)
+        // The undo hint is conditional on having actually captured an entry:
+        // promising ⌘⇧T when `sessionMeta` was missing would advertise a
+        // recovery that cannot happen.
+        showToast(
+          sessionMeta
+            ? `Closed detached ${kindLabel} session (${cwdBase}) — ⌘⇧T Undo Close; repeat for earlier closes`
+            : `Closed detached ${kindLabel} session (${cwdBase})`,
+        )
         return true
       }
       if (!owningTab) return false
@@ -1682,10 +1739,30 @@ export function usePaneActions(
   // copy-assistant, scroll-to-latest, switch-provider, reload, rewind,
   // soft-reload-view — all already use this resolver).
   const requestBuryFocused = useCallback(() => {
-    const sessionId = commandTargetSessionIdForState(refs.stateRef.current)
+    const snapshot = refs.stateRef.current
+    const sessionId = commandTargetSessionIdForState(snapshot)
     if (!sessionId) return
+    // Bury moves a GRID PANE out of the layout: `buryFocused` resolves the
+    // owning tab, records the split position needed to revive it, and bails
+    // when the target has no tab. A detached Dispatch row has none, so the
+    // prompt would open, accept a note, and then silently do nothing.
+    //
+    // WHY the check is here rather than in `buryFocused`: failing at confirm
+    // time means the user has already typed the note. Refusing before the
+    // modal opens is the same judgement, made where it still costs nothing.
+    //
+    // WHY a toast rather than hiding the command: bury is a reasonable thing
+    // to WANT for a Dispatch row, and detached sessions are already parked
+    // out of the layout, so the honest answer is "this does not apply here" —
+    // not a command that vanishes with no explanation. This became reachable
+    // for terminals when Dispatch terminals stopped being grid leaves (#671);
+    // detached agents always had it.
+    if (!snapshot.tabs.some(tab => collectLeaves(tab.root).includes(sessionId))) {
+      showToast('Bury applies to grid panes — this session is already parked in Dispatch')
+      return
+    }
     openBuryPrompt(sessionId)
-  }, [openBuryPrompt, refs.stateRef])
+  }, [openBuryPrompt, refs.stateRef, showToast])
 
   const buryFocused = useCallback(
     (note?: string, targetSessionId?: SessionId) => {

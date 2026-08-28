@@ -12,7 +12,7 @@ import type {
 import { collectLeaves, remapTileTreeSessionIds } from '@renderer/workspace/tile-tree/treeOps'
 import { remapTiledLanes } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import { missingClosedTabLeafMetaIds, reinsertPane } from '@renderer/lib/undoClose'
-import type { ClosedPane, ClosedTab } from '@renderer/lib/undoClose'
+import type { ClosedDetached, ClosedPane, ClosedTab } from '@renderer/lib/undoClose'
 
 import type { WorkspaceSetState } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
@@ -32,6 +32,10 @@ type RestoreResult = 'restored' | 'stale' | 'retryable-failure'
 // For tabs: respawns every session in the tab, remaps the session
 // ids in the tree (since the new spawn produces new ids), and
 // re-inserts the tab at its original index (clamped to bounds).
+//
+// For detached Dispatch rows: respawns the session and re-files its
+// `detachedSessions` record. There is no tree work to do — the record IS the
+// placement — so the only anchor that has to still exist is the project tab.
 
 export function useUndoCloseAction(
   _state: { tabs: Tab[] },
@@ -266,6 +270,96 @@ export function useUndoCloseAction(
     [sessionActions, setState],
   )
 
+  const restoreDetachedEntry = useCallback(
+    async (entry: ClosedDetached): Promise<RestoreResult> => {
+      // The project tab is a detached row's only anchor. `buildDispatchGroups`
+      // walks `state.tabs` and files each detached record under its
+      // `projectTabId`, so a record whose tab is gone renders in no group at
+      // all — restoring it would spawn a live backend the user can never see
+      // or close. Treat that as stale, the same judgement restorePaneEntry
+      // makes when its sibling anchor is gone.
+      //
+      // We deliberately do NOT re-home the row into some surviving tab: the
+      // tab-close undo path already restores detached children as part of
+      // restoring their tab, so a missing tab here means the user closed the
+      // project itself and undoing THAT is the correct recovery.
+      const targetTab = refs.stateRef.current.tabs.find(
+        tab => tab.id === entry.record.projectTabId,
+      )
+      if (!targetTab) return 'stale'
+
+      const meta = entry.sessionMeta
+      const kind: SessionKind = meta.kind ?? DEFAULT_PROVIDER
+      let newSessionId: SessionId
+      try {
+        // Same respawn contract as restorePaneEntry: --resume for an agent with
+        // a durable transcript, `recoverTmuxName` for a terminal so the still
+        // alive tmux session is re-attached rather than replaced by an empty
+        // shell. The latter is the whole reason this entry type exists.
+        newSessionId = await sessionActions.spawn(meta.cwd, {
+          kind,
+          resumeSessionId: kind !== 'terminal'
+            ? resumableProviderSessionId(meta)
+            : undefined,
+          recoverTmuxName: kind === 'terminal' ? meta.tmuxName : undefined,
+          builtInMcpDomains: meta.builtInMcpDomains,
+        })
+      } catch {
+        return 'retryable-failure'
+      }
+
+      // Set inside the updater and read after. Sound because setState is the
+      // zustand store setter, which applies updaters synchronously — NOT a
+      // React useState setter, whose updater would still be pending here.
+      // Deliberately not a `refs.stateRef` read: that ref only refreshes on a
+      // React render, so it can lag an awaited continuation and would report a
+      // successful restore as a failure, killing the session we just revived.
+      let refiled = false
+      setState(prev => {
+        // Re-check inside the updater: the tab can be closed between the
+        // awaited spawn and here. Returning `prev` unchanged would strand the
+        // session, so fall through to the kill below instead.
+        const tabIndex = prev.tabs.findIndex(tab => tab.id === entry.record.projectTabId)
+        if (tabIndex < 0) return prev
+        refiled = true
+        return {
+          ...prev,
+          detachedSessions: {
+            ...prev.detachedSessions,
+            [newSessionId]: {
+              ...entry.record,
+              // The spawn minted a new local id; everything else about the
+              // record — project affinity and, critically, `detachedAt` —
+              // is restored verbatim so the row returns to its old position
+              // in the Dispatch list rather than jumping to the bottom.
+              sessionId: newSessionId,
+              // projectTabIndex is a display ordinal recomputed on render;
+              // refresh it so a record read before the next render is not
+              // stale if tabs moved while the entry sat on the stack.
+              projectTabIndex: tabIndex,
+            },
+          },
+          // Focus the restored row when Dispatch is up, so undo has a visible
+          // result. When it is not, leave focus alone — the row is still in
+          // the list and entering Dispatch will land on it normally.
+          dispatchMode: prev.dispatchMode
+            ? { ...prev.dispatchMode, focusedSessionId: newSessionId }
+            : prev.dispatchMode,
+        }
+      })
+
+      if (!refiled) {
+        // Mirror restorePaneEntry's bail: the spawn already registered a live
+        // backend, so a placement that did not happen must not leave it
+        // running with no row pointing at it.
+        await sessionActions.killSession(newSessionId)
+        return 'stale'
+      }
+      return 'restored'
+    },
+    [refs.stateRef, sessionActions, setState],
+  )
+
   const undoClose = useCallback(async () => {
     // Undo Close is a small LIFO recovery history, not a one-shot
     // toast action. Pane entries can go stale during normal cleanup
@@ -289,7 +383,9 @@ export function useUndoCloseAction(
       }
       const result = entry.type === 'pane'
         ? await restorePaneEntry(entry)
-        : await restoreTabEntry(entry)
+        : entry.type === 'detached'
+          ? await restoreDetachedEntry(entry)
+          : await restoreTabEntry(entry)
       if (result === 'restored') return
       if (result === 'retryable-failure') {
         refs.undoStackRef.current.push(entry)
@@ -300,7 +396,7 @@ export function useUndoCloseAction(
       }
       staleEntryConsumed = true
     }
-  }, [bumpUndoCloseVersion, refs.undoStackRef, restorePaneEntry, restoreTabEntry])
+  }, [bumpUndoCloseVersion, refs.undoStackRef, restoreDetachedEntry, restorePaneEntry, restoreTabEntry])
 
   // Peek at the undo stack length — used by the command palette to
   // show/hide the "Undo Close" command.

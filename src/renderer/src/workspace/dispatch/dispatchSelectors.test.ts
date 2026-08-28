@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  buildVisibleDispatchRows,
   dispatchSessionIdsForTab,
   resolveDispatchSpawnTarget,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
@@ -77,105 +76,38 @@ describe('resolveDispatchSpawnTarget', () => {
   })
 })
 
-describe('Dispatch terminal placement (#671)', () => {
-  // The bug: Dispatch terminals used to be inserted into the owning tab's GRID
-  // tree while Dispatch agents became detached rows, and buildDispatchGroups
-  // emits every project group as [...grid, ...detached]. That made a terminal
-  // sort above every agent no matter when it was created — the "terminal is
-  // pinned to the top of the list" symptom. These tests pin the ordering
-  // contract itself, because target resolution being right is not what the
-  // user was complaining about.
+describe('resolveDispatchSpawnTarget with a detached focused lane', () => {
+  // WHY this case is called out separately from the tiled tests above: the
+  // focused Dispatch lane normally holds a DETACHED agent, not a grid leaf, and
+  // since #671 that resolver is what terminals use too. Its cwd is the one a
+  // new terminal inherits, so a resolver that quietly preferred grid leaves
+  // would spawn the shell in the parent repo while the user is looking at a
+  // worktree agent — a wrong-directory bug with no visible symptom.
   //
-  // The fixture mirrors what the merged splitFocused branch writes: a terminal
-  // filed as a detached dispatch row with the newest detachedAt.
-  function withDispatchSessions(): WorkspaceState {
-    const state = makeState({ scope: 'project', focusedSessionId: 'a1' })
-    state.activeTabId = 'tabA'
-    state.sessions.a2 = { cwd: '/work/project-a', kind: 'claude' }
-    state.sessions.a3 = { cwd: '/work/project-a', kind: 'codex' }
-    state.detachedSessions.a2 = {
-      sessionId: 'a2',
-      surface: 'dispatch',
-      projectTabId: 'tabA',
-      projectTabTitle: 'project-a',
-      projectTabIndex: 0,
-      detachedAt: 100,
-    }
-    state.detachedSessions.a3 = {
-      sessionId: 'a3',
-      surface: 'dispatch',
-      projectTabId: 'tabA',
-      projectTabTitle: 'project-a',
-      projectTabIndex: 0,
-      detachedAt: 200,
-    }
-    return state
-  }
-
-  it('a Dispatch-created terminal sorts after the agents, in creation order', () => {
-    const state = withDispatchSessions()
-    state.sessions.aTerm = { cwd: '/work/project-a', kind: 'terminal' }
-    state.detachedSessions.aTerm = {
-      sessionId: 'aTerm',
-      surface: 'dispatch',
-      projectTabId: 'tabA',
-      projectTabTitle: 'project-a',
-      projectTabIndex: 0,
-      // Newest: created after both agents.
-      detachedAt: 300,
-    }
-
-    expect(buildVisibleDispatchRows(state).map(row => row.sessionId)).toEqual([
-      'a1',
-      'a2',
-      'a3',
-      'aTerm',
-    ])
-  })
-
-  it('regression: a terminal inserted as a grid leaf pins itself above every agent', () => {
-    // The pre-fix shape, kept as an executable statement of WHY the flow was
-    // merged. If someone reintroduces a grid insert for Dispatch terminals,
-    // the test above fails and this one explains what they reintroduced.
-    const state = withDispatchSessions()
-    state.sessions.aTerm = { cwd: '/work/project-a', kind: 'terminal' }
-    state.tabs[0] = {
-      ...state.tabs[0]!,
-      root: {
-        type: 'split',
-        direction: 'vertical',
-        ratio: 0.5,
-        a: leaf('aTerm'),
-        b: leaf('a1'),
-      },
-    }
-
-    expect(buildVisibleDispatchRows(state).map(row => row.sessionId)).toEqual([
-      'aTerm',
-      'a1',
-      'a2',
-      'a3',
-    ])
-  })
-
-  it('resolves a terminal target from the focused lane, not the stale active tab (#366)', () => {
-    // resolveDispatchTerminalSplitTarget used to own this invariant with its
-    // own grid-anchor resolution. Terminals now share resolveDispatchSpawnTarget
-    // with agents, so the #366 guarantee has to be proven on that path: the
-    // detached record must be filed under the FOCUSED LANE's project even when
-    // activeTabId and the classic focus both still point at project A.
+  // This replaces the equivalent coverage that lived on
+  // `resolveDispatchTerminalSplitTarget` before the creation flows merged.
+  it('keeps the detached lane session as the cwd source, not a grid leaf in the same tab', () => {
     const state = makeState({
       scope: 'global',
       focusedSessionId: 'a1',
       tiled: {
         focusedLane: 1,
-        lanes: [{ selectedSessionId: 'a1' }, { selectedSessionId: 'b1' }],
+        lanes: [{ selectedSessionId: 'a1' }, { selectedSessionId: 'b2' }],
       },
     })
+    state.sessions.b2 = { cwd: '/work/project-b/subtask', kind: 'codex' }
+    state.detachedSessions.b2 = {
+      sessionId: 'b2',
+      surface: 'dispatch',
+      projectTabId: 'tabB',
+      projectTabTitle: 'project-b',
+      projectTabIndex: 1,
+      detachedAt: 10,
+    }
 
     expect(resolveDispatchSpawnTarget(state)).toEqual({
       tabId: 'tabB',
-      cwdSessionId: 'b1',
+      cwdSessionId: 'b2',
       laneIndex: 1,
     })
   })

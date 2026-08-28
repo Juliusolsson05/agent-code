@@ -24,11 +24,20 @@ Two independent facts combine:
 Every Dispatch agent is detached; every Dispatch terminal is a grid leaf.
 The ordering is structural, not incidental.
 
-It is worse than "last in the grid slice": `resolveDispatchTerminalSplitTarget`
-resolves the split anchor as `targetLeafId ?? focusedLeafId ?? leafIds[0]`. The
-focused Dispatch row is normally a *detached* agent with no grid leaf, so the
-anchor degrades to `leafIds[0]` and the terminal is spliced beside the FIRST
-grid leaf. That is the literal "pinned to the top" the user reports.
+The concatenation is the entire cause, and it is sufficient on its own: the
+terminal's position *within* the grid slice never mattered, because the whole
+grid slice precedes the detached rows the user's agents live in.
+
+An earlier draft of this plan blamed `resolveDispatchTerminalSplitTarget`
+degrading its anchor to `leafIds[0]`. That was wrong and is recorded here so it
+is not re-derived: the anchor is `targetLeafId ?? focusedLeafId ?? leafIds[0]`,
+and `focusedLeafId` is `tab.focusedSessionId`, which `focusDispatchSession`
+deliberately never writes — so it stays a real grid leaf and the `leafIds[0]`
+fallback is effectively unreachable. `splitLeaf` also inserts *after* its
+anchor, so a Dispatch terminal could not occupy the first leaf position even
+then. Verified by executing the pre-fix path: with grid `[g1,g2,g3]` the
+terminal lands at the END of the grid slice — still above every detached agent,
+which is the actual complaint.
 
 ## Why the old justification no longer holds
 
@@ -109,28 +118,74 @@ merged branch is one of the two copies) and removes a real duplication.
 
 Behaviour worth protecting, and the plausible failure each test catches:
 
-1. **Ordering (the actual bug).** A selector test over
-   `buildVisibleDispatchRows`: given a grid agent plus two detached agents,
-   a terminal created through the Dispatch flow must sort *after* the agents,
-   not before. Fails if anyone reintroduces a grid insert for Dispatch
-   terminals, or flips the grid/detached concatenation order.
+These MUST drive `splitFocused` itself, not assert selector output over a
+hand-written fixture. A first attempt did the latter and was worthless: it
+built the detached record by hand and then checked that `buildDispatchGroups`
+concatenates, which passes identically against the unfixed code. The bug was
+never in the selectors — `[...grid, ...detached]` was always correct — so the
+spawn action is the only unit whose behaviour actually changed. Every test
+below was confirmed to FAIL on `main` and pass on this branch.
 
-2. **#366 target resolution survives the deleted resolver.** The existing
-   `resolveDispatchSpawnTarget` tiled-lane tests already assert project/cwd
-   come from the focused lane. Extend the terminal-specific coverage that
-   `resolveDispatchTerminalSplitTarget` used to own into a case proving the
-   detached record is filed under the focused lane's tab with that lane's cwd
-   — the same regression #366 was opened for, one layer down.
+`mcpDomainContinuity.renderer.test.tsx` already mounts `usePaneActions`; that
+setup is extracted to `hook/actions/testing/paneActionsHarness.tsx` so both
+suites share one copy. Its mock `spawn` registers `SessionMeta` the way the
+real one does — without that, every selector filtering on
+`state.sessions[...] !== undefined` drops the new session and placement
+assertions pass against a session that never appeared.
 
-3. **Lane placement.** A Dispatch terminal created with a focused tiled lane
-   must occupy that lane (`applyDispatchSpawnFocus`), not lane 0.
+1. **Ordering (the actual bug).** ⌥T in Dispatch must leave `tab.root`
+   untouched, file a detached record, and land the terminal *after* the agents
+   in `buildVisibleDispatchRows`. Fails if anyone reintroduces the grid insert.
+
+2. **Lane placement.** A Dispatch terminal created with a focused tiled lane
+   must occupy THAT lane (`applyDispatchSpawnFocus`), leaving lane 0 alone.
+
+3. **Normal mode is untouched.** ⌥T outside Dispatch still splits the grid, so
+   "merge the flows" cannot quietly become "terminals never enter the grid".
+
+4. **#366 survives the deleted resolver.** `resolveDispatchSpawnTarget` with a
+   DETACHED session in the focused lane must keep that session's cwd — the
+   normal Dispatch state, and the case the deleted
+   `resolveDispatchTerminalSplitTarget` test used to own. Without it, a ⌥T
+   fired beside a worktree agent could silently spawn in the parent repo.
+
+5. **Undo-close for detached sessions** (see below).
 
 No test is added merely to cover the deleted functions; deleting dead code
-does not need its own assertion.
+does not need its own assertion. An earlier draft also shipped a test asserting
+that a grid-inserted terminal sorts first — dropped, because it only restated
+`buildDispatchGroups`' concatenation and froze a residual behaviour as a
+contract.
 
 Full check: `npx tsc -p tsconfig.node.json --noEmit` and
 `npx tsc -p tsconfig.web.json --noEmit` (electron-vite build and vitest do not
 type-check), plus the workspace/dispatch vitest suites.
+
+## Undo-close, and why this change forced it
+
+Review caught that moving Dispatch terminals onto the detached path silently
+removed a recovery affordance. `closeSession` captured undo entries only in its
+`owningTab` arms; the detached arm pushed nothing.
+
+For an agent that was merely inconvenient. For a terminal it is data loss:
+closing one stops the attach PTY but leaves the tmux session alive, and because
+the session row is gone from `workspace.json`, the next launch's tmux reconcile
+sees a live session with no persisted owner, classifies it as an orphan, and
+kills it (`src/main/tmux/tmuxRecovery.ts`). Before this change the same terminal
+was a grid leaf, so ⌘⇧T restored it with `recoverTmuxName` and the scrollback
+came back.
+
+The fix adds a third `ClosedEntry` variant, `'detached'`, carrying the
+`SessionMeta` and the `DetachedSessionRecord` verbatim. It could not reuse
+`ClosedPane`, whose every placement field (direction, ratio, sibling anchor) is
+a grid concept a detached row has no answer for. Storing the record verbatim is
+what preserves `detachedAt` — the only thing ordering rows inside a project
+group — so undo puts the row back where it was instead of at the bottom of the
+list. Restoring is refused as `stale` when the project tab is gone, because a
+record filed under a dead tab renders in no Dispatch group at all and would
+leave a live backend the user cannot see or close.
+
+This also gives detached AGENTS an undo they never had.
 
 ## Risks and limitations
 
