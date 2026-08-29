@@ -67,7 +67,11 @@ rewritten rather than left asserting a coupling we deliberately broke.
 
 ### 1. Insert an empty lane
 
-`insertLaneRightIntoTiled` stops calling `buildAutoLanes` and splices `{}`.
+`insertLaneRightIntoTiled` stops calling `buildAutoLanes` and splices an empty
+lane. It splices `{ userEmptied: true }` rather than a bare `{}` — see §5 for
+why the marker is load-bearing, and §7 for the two helpers that own its
+lifecycle. The rest of this section predates that discovery and describes the
+splice itself, which is unchanged.
 
 This removes the only reason that function needed `state`, so the parameter
 goes with it. That is a real simplification rather than churn: the helper's
@@ -92,8 +96,11 @@ condition and then the affordance, in that order:
 
 ```
 Empty lane
-Pick an agent from the strip, or press ⌥↓
+Pick an agent from the strip, or press ⌥↓ for the top of the index
 ```
+
+(The second line is shown only in the FOCUSED lane — see §6. And it says "top of
+the index" rather than a row coordinate because pinned rows sort first.)
 
 Per `docs/command-style.md` the copy names what the user controls and stays in
 sentence case. It cites `⌥↓` specifically because that is now a guaranteed
@@ -208,6 +215,34 @@ were working with, leaving the new lane untouched. The hint is now gated on
 `buildVisibleDispatchRows`, which puts pinned rows first — labelled ★1, not a1.
 True of the downward press before this change too, but the placeholder now makes
 a promise about the key, so the copy and the comments say "top of the index".
+
+### 7 — Two helpers own the marker's lifecycle
+
+The final shape is not the single strip §5 implies. `userEmptied` is touched at
+four places, and every one of them must agree, so each side gets one helper in
+`tiledDispatchSelectors.ts`:
+
+| helper | used by | rule |
+|---|---|---|
+| `withLaneSession(lane, id)` | `setTiledLaneSession`, `applyDispatchSpawnFocus`, the `A2!` index path | filling a lane DROPS the marker |
+| `withLaneCleared(lane)` | `clearTiledLaneSessions`, `keepTiledLaneSessions` | blanking a lane that HELD a session drops it too |
+
+Both were found the same way, in successive review rounds: the marker was
+introduced with one strip, in `setTiledLaneSession`, and everything else spread
+the lane. That left two live leaks on the filling side and one on the blanking
+side, and the blanking one was the worst of the three because
+`keepTiledLaneSessions` is the autosave prune — the flag would have been written
+to `workspace.json` and the slot would come back dead after a restart.
+
+The invariant to hold on to: **a lane that has never held a session keeps its
+marker; a lane that has held one does not.** Neither blanking helper touches a
+lane with no `selectedSessionId`, which is what lets a deliberately empty lane
+survive an unrelated agent exiting elsewhere.
+
+The reason both helpers exist rather than four inline destructures is the rule
+this file's own header already states — the lane helpers must be applied at
+every remap, removal, and focus-read site. A hand-rolled spread at any one of
+them is how the marker leaks, and that is exactly how it leaked twice.
 
 ## Testing
 

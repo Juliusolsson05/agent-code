@@ -184,9 +184,11 @@ export function dispatchFocusedSessionId(
  * lane's placeholder promises ⌥↓ reaches the top row in one press; making ⌥↑
  * agree costs nothing and removes the only way to be surprised by a fresh lane.
  *
- * The rejected alternative was to treat the virtual cursor as ALREADY on a1 so
- * the first press steps off it to a2. That makes a1 unreachable by arrow from a
- * fresh lane and lets the first keystroke scroll past the likeliest target.
+ * The rejected alternative was to treat the virtual cursor as ALREADY on the top
+ * row so the first press steps off it to the second. That makes the top row
+ * unreachable by arrow from a fresh lane and lets the first keystroke scroll
+ * past the likeliest target. (Said as rows, not a1/a2, for the same reason as
+ * above: with anything pinned the first two rows are ★1 and ★2.)
  */
 export function nextTiledRowIndex(
   currentIndex: number,
