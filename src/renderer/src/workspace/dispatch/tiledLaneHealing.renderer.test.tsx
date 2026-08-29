@@ -5,6 +5,7 @@ import { DispatchLayout } from '@renderer/workspace/dispatch/DispatchLayout'
 import {
   clearTiledLaneSessions,
   insertLaneRightIntoTiled,
+  keepTiledLaneSessions,
   withLaneSession,
 } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import type { SessionId, TiledDispatchState, WorkspaceState } from '@renderer/workspace/types'
@@ -209,5 +210,36 @@ describe('Tiled Dispatch lane healing vs. deliberate emptiness (#673)', () => {
     // ALL, which it would not be if the flag had survived being filled.
     const { setTiledLaneSession } = renderLayout({ lanes, focusedLane: 0 })
     expect(setTiledLaneSession).toHaveBeenCalledWith(1, 'a2')
+  })
+
+  it('does not persist a dead slot when the autosave prune blanks a filled lane', () => {
+    // keepTiledLaneSessions is the AUTOSAVE boundary, so a leak here is worse
+    // than the one at clearTiledLaneSessions: the stale flag would be written
+    // into workspace.json and the lane would come back a permanent hole after
+    // a restart, healing never again.
+    const filled = withLaneSession({ userEmptied: true }, 'a2' as SessionId)
+    const pruned = keepTiledLaneSessions(
+      { scope: 'project', tiled: { lanes: [{ selectedSessionId: 'a1' as SessionId }, filled], focusedLane: 0 } },
+      new Set(['a1' as SessionId]),
+    )
+    const lanes = pruned?.tiled?.lanes ?? []
+    expect(lanes[1]).not.toHaveProperty('userEmptied')
+
+    const { setTiledLaneSession } = renderLayout({ lanes, focusedLane: 0 })
+    expect(setTiledLaneSession).toHaveBeenCalledWith(1, 'a2')
+  })
+
+  it('leaves a never-filled deliberate lane alone through both blanking paths', () => {
+    // The other side of withLaneCleared: neither helper touches a lane that has
+    // no selectedSessionId, so a lane the user emptied and never filled keeps
+    // its flag. If this ever fails, the flag is being cleared too eagerly and
+    // New Lane silently goes back to auto-filling.
+    const deliberate = { userEmptied: true } as const
+    const tiled = { lanes: [{ selectedSessionId: 'a1' as SessionId }, deliberate], focusedLane: 0 }
+
+    expect(clearTiledLaneSessions({ scope: 'project', tiled }, 'a1' as SessionId)
+      ?.tiled?.lanes[1]).toEqual({ userEmptied: true })
+    expect(keepTiledLaneSessions({ scope: 'project', tiled }, new Set<SessionId>())
+      ?.tiled?.lanes[1]).toEqual({ userEmptied: true })
   })
 })

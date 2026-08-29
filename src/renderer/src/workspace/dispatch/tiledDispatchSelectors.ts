@@ -75,6 +75,25 @@ export function withLaneSession(lane: DispatchLane, sessionId: SessionId): Dispa
   return { ...rest, selectedSessionId: sessionId }
 }
 
+/**
+ * Blank a lane's selection.
+ *
+ * WHY this drops `userEmptied` as well: both callers only reach this branch for
+ * a lane that HELD a session, which is exactly the case where the user had
+ * filled it — so it must go back to healing like any other lane. Leaving the
+ * flag behind turns "your agent exited" into "this slot is dead forever", and
+ * `keepTiledLaneSessions` is the AUTOSAVE boundary, so the dead slot would be
+ * written into workspace.json and survive restarts.
+ *
+ * A lane the user emptied deliberately and never filled has no
+ * `selectedSessionId`, so neither caller touches it and its flag survives —
+ * which is the whole point of the flag.
+ */
+function withLaneCleared(lane: DispatchLane): DispatchLane {
+  const { userEmptied: _noLongerDeliberate, ...rest } = lane
+  return { ...rest, selectedSessionId: undefined }
+}
+
 export function clearTiledLaneSessions(
   dispatchMode: DispatchModeState | null,
   removed: ReadonlySet<SessionId> | SessionId,
@@ -86,14 +105,7 @@ export function clearTiledLaneSessions(
   const lanes = dispatchMode.tiled.lanes.map(lane => {
     if (lane.selectedSessionId && isRemoved(lane.selectedSessionId)) {
       changed = true
-      // Drop userEmptied too. This branch only fires for a lane that HELD a
-      // session, which is precisely the case where the user had filled it, so
-      // the lane must go back to healing normally. Redundant while every
-      // writer goes through withLaneSession — kept because this is the
-      // boundary that decides whether a lane heals, and it should not depend
-      // on a future writer remembering.
-      const { userEmptied: _noLongerDeliberate, ...rest } = lane
-      return { ...rest, selectedSessionId: undefined }
+      return withLaneCleared(lane)
     }
     return lane
   })
@@ -120,7 +132,7 @@ export function keepTiledLaneSessions(
   const lanes = dispatchMode.tiled.lanes.map(lane => {
     if (lane.selectedSessionId && !keep.has(lane.selectedSessionId)) {
       changed = true
-      return { ...lane, selectedSessionId: undefined }
+      return withLaneCleared(lane)
     }
     return lane
   })
