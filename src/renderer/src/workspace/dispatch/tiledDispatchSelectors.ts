@@ -53,6 +53,28 @@ export function remapTiledLanes(
  * undefined). The layout's auto-fill effect then re-homes the emptied lane.
  * Apply wherever a session is destroyed/hidden (killSession, close, bury).
  */
+/**
+ * Put a session into a lane.
+ *
+ * WHY this exists rather than three hand-rolled `{ ...lane, selectedSessionId }`
+ * spreads: `userEmptied` must be dropped whenever a lane is filled, and the
+ * spread preserves it. There are three writers — setTiledLaneSession,
+ * applyDispatchSpawnFocus, and the A2!/agent-index navigation path — and the
+ * last two are the ORDINARY way a user fills the lane New Lane just created
+ * (`resolveDispatchSpawnTarget` deliberately places a new agent into an empty
+ * focused lane). Missing them left the flag on a lane that now held an agent,
+ * so when that agent later exited the lane became a permanent hole the healer
+ * would never re-home — durable across restarts, since the flag persists.
+ *
+ * This file's header already says the lane helpers must be applied at EVERY
+ * id-remap, removal, and focus-read site; a fourth hand-rolled spread is how
+ * that class of bug keeps coming back.
+ */
+export function withLaneSession(lane: DispatchLane, sessionId: SessionId): DispatchLane {
+  const { userEmptied: _filledByTheUserNow, ...rest } = lane
+  return { ...rest, selectedSessionId: sessionId }
+}
+
 export function clearTiledLaneSessions(
   dispatchMode: DispatchModeState | null,
   removed: ReadonlySet<SessionId> | SessionId,
@@ -64,7 +86,14 @@ export function clearTiledLaneSessions(
   const lanes = dispatchMode.tiled.lanes.map(lane => {
     if (lane.selectedSessionId && isRemoved(lane.selectedSessionId)) {
       changed = true
-      return { ...lane, selectedSessionId: undefined }
+      // Drop userEmptied too. This branch only fires for a lane that HELD a
+      // session, which is precisely the case where the user had filled it, so
+      // the lane must go back to healing normally. Redundant while every
+      // writer goes through withLaneSession — kept because this is the
+      // boundary that decides whether a lane heals, and it should not depend
+      // on a future writer remembering.
+      const { userEmptied: _noLongerDeliberate, ...rest } = lane
+      return { ...rest, selectedSessionId: undefined }
     }
     return lane
   })

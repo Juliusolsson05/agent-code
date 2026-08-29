@@ -129,9 +129,11 @@ export function TiledDispatchLayout({
   // agent the user asked not to have — reproducing the bug the flag exists to
   // fix. The flag is the only thing separating "empty because you asked" from
   // "empty because the agent died", and the second case still must heal: the
-  // close path blanks a lane precisely so another agent moves in. Convergent: once every fillable lane holds an in-scope,
-  // live agent there is nothing to assign. If there are more lanes than
-  // agents the surplus stay empty (picker prompt) and the effect settles.
+  // close path blanks a lane precisely so another agent moves in.
+  //
+  // Convergent: once every fillable lane holds an in-scope, live agent there is
+  // nothing to assign. If there are more lanes than agents the surplus stay
+  // empty (picker prompt) and the effect settles.
   //
   // WHY duplicates are absent from that invalid list: mirrored lanes are a
   // supported view of one durable session, and `A2!` intentionally creates

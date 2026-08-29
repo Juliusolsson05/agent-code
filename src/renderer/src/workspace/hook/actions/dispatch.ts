@@ -9,6 +9,7 @@ import {
   dispatchFocusedSessionId,
   insertLaneRightIntoTiled,
   removeLaneFromTiled,
+  withLaneSession,
 } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import type {
   WorkspaceSetState,
@@ -166,14 +167,9 @@ export function useDispatchActions(
         if (!tiled) return prev
         if (laneIndex < 0 || laneIndex >= tiled.lanes.length) return prev
         if (tiled.lanes[laneIndex]?.selectedSessionId === sessionId) return prev
-        const lanes = tiled.lanes.map((lane, i) => {
-          if (i !== laneIndex) return lane
-          // Drop `userEmptied` on assignment: the lane the user deliberately
-          // left blank has now been filled by them, so from here it is an
-          // ordinary lane and must heal like one if this agent later exits.
-          const { userEmptied: _wasUserEmptied, ...rest } = lane
-          return { ...rest, selectedSessionId: sessionId }
-        })
+        const lanes = tiled.lanes.map((lane, i) =>
+          i === laneIndex ? withLaneSession(lane, sessionId) : lane,
+        )
         return {
           ...prev,
           dispatchMode: { ...prev.dispatchMode!, tiled: { ...tiled, lanes } },

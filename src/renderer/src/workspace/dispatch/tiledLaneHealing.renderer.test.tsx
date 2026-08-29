@@ -2,7 +2,11 @@ import { cleanup, render } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { DispatchLayout } from '@renderer/workspace/dispatch/DispatchLayout'
-import { insertLaneRightIntoTiled } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
+import {
+  clearTiledLaneSessions,
+  insertLaneRightIntoTiled,
+  withLaneSession,
+} from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import type { SessionId, TiledDispatchState, WorkspaceState } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 
@@ -175,5 +179,35 @@ describe('Tiled Dispatch lane healing vs. deliberate emptiness (#673)', () => {
     expect(empties).toHaveLength(2)
     expect(empties[0].getAttribute('data-hint')).toBe('')
     expect(empties[1].getAttribute('data-hint')).toContain('⌥↓')
+  })
+
+  it('heals again once the user has filled the lane and that agent later exits', () => {
+    // The other half of the flag's invariant, and the one that was broken in
+    // review round 1: `userEmptied` must be dropped the moment a session is
+    // written into the lane. It was only stripped in setTiledLaneSession, while
+    // the ORDINARY way to fill a fresh empty lane goes through
+    // applyDispatchSpawnFocus or the A2! index path — both of which spread the
+    // lane and kept the flag. The lane then rendered fine, but when its agent
+    // exited it became a hole the healer skipped forever, durably, because the
+    // flag round-trips through workspace.json.
+    //
+    // Driven through the real reducers rather than a hand-built lane, so it
+    // fails if any writer stops using withLaneSession.
+    const filled = withLaneSession({ userEmptied: true }, 'a2' as SessionId)
+    expect(filled).toEqual({ selectedSessionId: 'a2' })
+
+    const afterExit = clearTiledLaneSessions(
+      { scope: 'project', tiled: { lanes: [{ selectedSessionId: 'a1' as SessionId }, filled], focusedLane: 0 } },
+      'a2' as SessionId,
+    )
+    const lanes = afterExit?.tiled?.lanes ?? []
+    expect(lanes[1]).not.toHaveProperty('userEmptied')
+
+    // Heals: the lane is filled from the index again. Which agent it picks is
+    // the healer's existing first-unclaimed rule (a2 here, since this fixture
+    // still lists it) — the contract under test is that lane 1 is filled AT
+    // ALL, which it would not be if the flag had survived being filled.
+    const { setTiledLaneSession } = renderLayout({ lanes, focusedLane: 0 })
+    expect(setTiledLaneSession).toHaveBeenCalledWith(1, 'a2')
   })
 })

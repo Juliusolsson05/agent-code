@@ -43,7 +43,10 @@ import {
   resolveDispatchSpawnTarget,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
 import type { DispatchAgentRow } from '@renderer/workspace/dispatch/dispatchSelectors'
-import { clearTiledLaneSessions } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
+import {
+  clearTiledLaneSessions,
+  withLaneSession,
+} from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import { commandTargetSessionIdForState } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import type { PlacementTarget } from '@renderer/features/workspace/lib/newAgentPlacement'
 import type { BuiltInMcpDomain } from '@mcp/shared/types'
@@ -274,7 +277,7 @@ function applyDispatchSpawnFocus(
   const tiled = dispatchMode.tiled
   if (laneIndex !== null && tiled && laneIndex >= 0 && laneIndex < tiled.lanes.length) {
     const lanes = tiled.lanes.map((lane, i) =>
-      i === laneIndex ? { ...lane, selectedSessionId: sessionId } : lane,
+      i === laneIndex ? withLaneSession(lane, sessionId) : lane,
     )
     return {
       ...dispatchMode,
