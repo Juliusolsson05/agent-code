@@ -120,9 +120,16 @@ export function TiledDispatchLayout({
     })
   }, [lanes, rowBySession])
 
-  // Auto-fill / heal effect. Any lane that did NOT resolve (empty, dead, or
+  // Auto-fill / heal effect. Any lane that did NOT resolve (dead or
   // out-of-scope) is handed the next visible agent not already resolved by
-  // another lane. Convergent: once every fillable lane holds an in-scope,
+  // another lane.
+  //
+  // EXCEPT a lane the user deliberately emptied (`userEmptied`, #673). New Lane
+  // inserts one of those on purpose, and healing it would hand back the very
+  // agent the user asked not to have — reproducing the bug the flag exists to
+  // fix. The flag is the only thing separating "empty because you asked" from
+  // "empty because the agent died", and the second case still must heal: the
+  // close path blanks a lane precisely so another agent moves in. Convergent: once every fillable lane holds an in-scope,
   // live agent there is nothing to assign. If there are more lanes than
   // agents the surplus stay empty (picker prompt) and the effect settles.
   //
@@ -140,13 +147,14 @@ export function TiledDispatchLayout({
     let cursor = 0
     for (let i = 0; i < laneResolutions.length; i++) {
       if (laneResolutions[i]) continue
+      if (lanes[i]?.userEmptied) continue
       const next = available[cursor]
       if (next === undefined) break // no more agents to hand out
       cursor++
       resolvedIds.add(next)
       workspace.setTiledLaneSession(i, next)
     }
-  }, [laneResolutions, rows, workspace.setTiledLaneSession])
+  }, [lanes, laneResolutions, rows, workspace.setTiledLaneSession])
 
   const indexFraction = clampIndexFraction(tiled.ratios?.[0] ?? DEFAULT_INDEX_FRACTION)
   const laneWeights = normalizedLaneWeights(tiled.ratios, lanes.length)
@@ -277,18 +285,25 @@ export function TiledDispatchLayout({
                     resolved.paneLabel,
                   )
                 ) : (
-                  // The index lane (0) has no mini-strip beside it, so only the
-                  // agent lanes get the hint — a pointer at a control the user
-                  // cannot see would be worse than no hint at all. The keystroke
-                  // is named because nextTiledRowIndex guarantees ONE press of
-                  // it lands on a1 from an empty lane — in either direction, so
-                  // the copy stays true even if the user reaches for ⌥↑. This
-                  // is a promise the reducer keeps, not a gesture at the UI.
+                  // Two conditions on the hint, both about not lying.
+                  //
+                  // `laneIndex > 0`: the index lane has no mini-strip beside
+                  // it, so pointing at a control the user cannot see would be
+                  // worse than no hint.
+                  //
+                  // `focused`: New Lane deliberately KEEPS focus on the source
+                  // lane, and ⌥↓ acts on `tiled.focusedLane` — so advertising
+                  // the key inside an unfocused lane would tell the user to
+                  // press something that yanks the agent they were working
+                  // with, leaving this lane untouched. Unfocused lanes get the
+                  // bare "Empty lane" until clicking one makes the keystroke
+                  // true. The wording says "top of the index" rather than "a1"
+                  // because pinned rows sort first and are labelled ★1.
                   <DispatchEmpty
                     message="Empty lane"
                     hint={
-                      laneIndex > 0
-                        ? 'Pick an agent from the strip, or press ⌥↓'
+                      laneIndex > 0 && focused
+                        ? 'Pick an agent from the strip, or press ⌥↓ for the top of the index'
                         : undefined
                     }
                   />

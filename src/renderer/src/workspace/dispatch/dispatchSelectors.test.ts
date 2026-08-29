@@ -290,8 +290,11 @@ describe('nextTiledRowIndex', () => {
     // single-call assertion cannot cover: the first press must SELECT a1 and
     // the second must MOVE. A regression that made the empty branch sticky
     // (always returning 0) would pass the case above and strand the user on a1.
-    // Composed the way moveTiledLaneSelection composes it — feeding each result
-    // back in as the next current index.
+    // moveTiledLaneSelection does not literally feed the result back in: it
+    // writes the session id, then re-derives the index with
+    // rows.findIndex(...) on the next press. That is equivalent only because
+    // buildVisibleDispatchRows' order is stable between the two presses, which
+    // is the assumption this sequence encodes.
     const down = nextTiledRowIndex(-1, 1, 4)
     expect(down).toBe(0)
     expect(nextTiledRowIndex(down, 1, 4)).toBe(1)

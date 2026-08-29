@@ -125,16 +125,22 @@ export function dispatchFocusedSessionId(
  * WHY an empty lane resolves to row 0 in BOTH directions (#673): an empty lane
  * has no cursor to move, so the first press cannot mean "move from here" — it
  * has to mean "start here". The model is that an empty lane behaves as though
- * it were already sitting at a1: the first press in either direction COMMITS
- * that position, and every press after it navigates normally, so ⌥↓ ⌥↓ gives
- * a1 then a2, and ⌥↓ ⌥↑ gives a1 then a wrap to the last row.
+ * it were already sitting at the TOP of the index: the first press in either
+ * direction COMMITS that position, and every press after it navigates normally,
+ * so ⌥↓ ⌥↓ gives row 1 then row 2, and ⌥↓ ⌥↑ gives row 1 then a wrap to the
+ * last row.
+ *
+ * "Top of the index" and not "a1": buildVisibleDispatchRows puts pinned rows
+ * first (labelled ★1, ★2…), so with anything pinned row 0 is ★1. That was
+ * already true of the downward press before this change; it is called out here
+ * because the lane's placeholder copy now makes a promise about the key.
  *
  * This used to return `length - 1` for an upward press, which made the
  * direction of the very first keystroke decide whether you landed at the top or
  * the bottom of the index — defensible when an empty lane was a rare exhaustion
  * state, but wrong now that New Lane deliberately creates one every time. The
- * lane's placeholder promises ⌥↓ reaches a1 in one press; making ⌥↑ agree costs
- * nothing and removes the only way to be surprised by a fresh lane.
+ * lane's placeholder promises ⌥↓ reaches the top row in one press; making ⌥↑
+ * agree costs nothing and removes the only way to be surprised by a fresh lane.
  *
  * The rejected alternative was to treat the virtual cursor as ALREADY on a1 so
  * the first press steps off it to a2. That makes a1 unreachable by arrow from a
@@ -256,10 +262,15 @@ export function insertLaneRightIntoTiled(
   return {
     lanes: [
       ...tiled.lanes.slice(0, insertAt),
-      // Empty: the user picks the occupant. ⌥↓ selects a1 in one press
-      // (see nextTiledRowIndex's empty-lane branch), so the old auto-fill
-      // result is still one keystroke away when that is what they wanted.
-      {},
+      // Empty, and MARKED empty. The bare `{}` is not enough: the layout's
+      // heal effect fills any unresolved lane with the next available agent,
+      // so an unmarked empty lane is refilled on the next render and this
+      // whole change becomes a no-op. `userEmptied` is what the healer skips.
+      //
+      // The user picks the occupant; one press of ⌥↓ in the focused lane
+      // selects the top row of the index (★1 if anything is pinned, else a1),
+      // so the old auto-fill result is still one keystroke away.
+      { userEmptied: true },
       ...tiled.lanes.slice(insertAt),
     ],
     // The command inserts after focus, so its normal path keeps this index.

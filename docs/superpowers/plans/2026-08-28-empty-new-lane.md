@@ -150,6 +150,62 @@ empty selector when every agent already has a lane"). It is rewritten. A stale
 description is worse than none because the palette is where users learn what a
 command does.
 
+### 5 — The healer (found in review; the reason the first attempt was a no-op)
+
+The design above is necessary and was not sufficient. `TiledDispatchLayout` runs
+an unconditional auto-fill effect:
+
+```ts
+for (let i = 0; i < laneResolutions.length; i++) {
+  if (laneResolutions[i]) continue
+  const next = available[cursor]; if (next === undefined) break
+  workspace.setTiledLaneSession(i, next)   // fills the brand-new empty lane
+}
+```
+
+Inserting a lane produces a new `lanes` array, which produces a new
+`laneResolutions` memo, which fires the effect on the very next render. It hands
+the new lane the first unclaimed agent — the same one `buildAutoLanes` would
+have chosen. **The first implementation of this plan was therefore a behavioural
+no-op**: identical final state, one extra render frame of the placeholder, one
+extra store write. It survived only in the pre-existing exhaustion case, where
+`available` is empty and the old code also produced `{}`.
+
+The codebase said so in three comments the first attempt did not read
+(`types.ts`, and twice in `tiledDispatchSelectors.ts`): empty was modelled as a
+**transient** state that always heals.
+
+#### Why a flag, and not a smarter healer
+
+The close path depends on healing. When an agent exits, `clearTiledLaneSessions`
+blanks its lane *precisely so* the healer re-homes another agent into the hole.
+So "empty because the user asked" and "empty because the agent died" are the
+same shape (`selectedSessionId === undefined`) and must behave differently. The
+distinction has to be recorded, not inferred.
+
+Rejected alternative: "only heal lanes that previously resolved." That reads
+history the reducer does not keep, and it breaks the close-heal contract for any
+lane whose agent dies before it ever resolved.
+
+`DispatchLane.userEmptied?: true` is set only by insertion and cleared by any
+explicit selection — once the user puts an agent in the lane it is an ordinary
+lane and must heal like one. It survives autosave and rehydrate by spread, which
+is intended: a lane deliberately left empty should still be empty after a
+restart.
+
+### 6 — Two other review corrections
+
+**The hint pointed at the wrong lane.** New Lane deliberately keeps focus on the
+*source* lane, and ⌥↓ acts on `tiled.focusedLane`. Rendering the hint in every
+unfocused empty lane told the user to press a key that would yank the agent they
+were working with, leaving the new lane untouched. The hint is now gated on
+`focused`.
+
+**"a1" was inaccurate.** `nextTiledRowIndex` returns row 0 of
+`buildVisibleDispatchRows`, which puts pinned rows first — labelled ★1, not a1.
+True of the downward press before this change too, but the placeholder now makes
+a promise about the key, so the copy and the comments say "top of the index".
+
 ## Testing
 
 Following the repository's rule that a test must defend a contract with a
@@ -162,11 +218,24 @@ plausible failure mode, not restate the implementation:
    change `buildAutoLanes`, which would break entering Tiled Dispatch at N. This
    test is the guard on that blast radius, and it is the reason the two paths
    are worth separate coverage.
-3. **⌥↓ from an empty lane selects a1, and a second press selects a2.** Driven
-   through `moveTiledLaneSelection` rather than by asserting
-   `nextTiledRowIndex(-1, 1, n) === 0`, which would only restate the branch.
+3. **⌥↓ from an empty lane selects the top row, and a second press advances.**
+   Asserted as a SEQUENCE through `nextTiledRowIndex`, not a single call: a
+   regression making the empty branch sticky would strand the user on row 0 and
+   still satisfy a one-call assertion. (`moveTiledLaneSelection` is not exported
+   and should not be exported merely to be tested; it re-derives the index via
+   `rows.findIndex` on the written session id, which is equivalent to the
+   sequence here as long as row order is stable between presses.)
 4. **⌥↑ from an empty lane selects a1, and a second press wraps to the last
    row.** Same reasoning; also pins the mirror case the issue names.
+
+5. **The layout does not refill a `userEmptied` lane, and still refills one
+   whose agent went away.** This is the test that had to exist: the pure-splice
+   tests all passed while the feature did nothing, because the override happens
+   in a `useEffect` no unit test mounts. Verified to fail without the healer
+   guard ("expected vi.fn() to not be called at all, but actually been called 1
+   times"). Its second case pins the tension — the deliberate hole survives, the
+   accidental one still heals — so a future fix for one cannot silently break
+   the other.
 
 Existing `tiledLaneInsertion.test.ts` coverage of focus shifting, the lane
 ceiling, and ratio weighting must keep passing unchanged — those contracts are
