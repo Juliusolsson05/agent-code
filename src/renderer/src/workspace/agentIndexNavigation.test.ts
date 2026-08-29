@@ -82,6 +82,38 @@ describe('agent index navigation', () => {
     expect(result?.state.dispatchMode?.tiled?.ratios).toEqual([0.2, 0.4, 0.4])
   })
 
+  it('clears userEmptied when the bang intent fills a deliberately empty lane', () => {
+    // This path is one of the three writers of a lane's selectedSessionId, and
+    // it is an ORDINARY way to fill the lane New Lane just created: create the
+    // empty lane, focus it, type A2!. It used to spread the lane and keep
+    // `userEmptied`, so the lane rendered fine but became a permanent hole the
+    // healer skipped once that agent exited — durably, since the flag persists
+    // to workspace.json.
+    //
+    // Pinned here rather than only at the helper because the helper cannot
+    // notice a caller that stops using it. This case fails against the
+    // pre-fix code.
+    const state = makeState()
+    state.dispatchMode = {
+      scope: 'global',
+      focusedSessionId: 'a1',
+      tiled: {
+        focusedLane: 1,
+        lanes: [{ selectedSessionId: 'a1' }, { userEmptied: true }],
+      },
+    }
+
+    const result = navigateToAgentIndexTarget(
+      state,
+      null,
+      target(state, 'A2'),
+      'open-in-focused-tiled-dispatch-lane',
+    )
+
+    expect(result?.state.dispatchMode?.tiled?.lanes[1])
+      .toEqual({ selectedSessionId: 'a2' })
+  })
+
   it('opens an already-visible agent in the focused Tiled Dispatch lane for the bang intent', () => {
     const state = makeState()
     state.dispatchMode = {

@@ -49,11 +49,6 @@ export function remapTiledLanes(
 }
 
 /**
- * Clear any tiled lane pointing at a removed session (selectedSessionId ->
- * undefined). The layout's auto-fill effect then re-homes the emptied lane.
- * Apply wherever a session is destroyed/hidden (killSession, close, bury).
- */
-/**
  * Put a session into a lane.
  *
  * WHY this exists rather than three hand-rolled `{ ...lane, selectedSessionId }`
@@ -94,6 +89,12 @@ function withLaneCleared(lane: DispatchLane): DispatchLane {
   return { ...rest, selectedSessionId: undefined }
 }
 
+/**
+ * Clear any tiled lane pointing at a removed session (selectedSessionId ->
+ * undefined). The layout's auto-fill effect then re-homes the emptied lane,
+ * unless the lane is `userEmptied` (see withLaneCleared).
+ * Apply wherever a session is destroyed/hidden (killSession, close, bury).
+ */
 export function clearTiledLaneSessions(
   dispatchMode: DispatchModeState | null,
   removed: ReadonlySet<SessionId> | SessionId,

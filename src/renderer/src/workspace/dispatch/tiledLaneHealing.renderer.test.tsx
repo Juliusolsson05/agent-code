@@ -192,10 +192,16 @@ describe('Tiled Dispatch lane healing vs. deliberate emptiness (#673)', () => {
     // exited it became a hole the healer skipped forever, durably, because the
     // flag round-trips through workspace.json.
     //
-    // Driven through the real reducers rather than a hand-built lane, so it
-    // fails if any writer stops using withLaneSession.
-    const filled = withLaneSession({ userEmptied: true }, 'a2' as SessionId)
-    expect(filled).toEqual({ selectedSessionId: 'a2' })
+    // The fixture is hand-built carrying BOTH fields, which is the only state
+    // withLaneCleared's strip can ever see. Building it with withLaneSession
+    // instead would strip the flag before the blanking helper ran, and the
+    // assertions below would hold whether or not the helper stripped anything —
+    // a test that cannot fail. The lane arrives in this shape from a writer
+    // that forgot the helper, or from a workspace.json written by an older
+    // build, which is exactly the defence-in-depth withLaneCleared is for.
+    //
+    // withLaneSession's own contract is asserted separately below.
+    const filled = { userEmptied: true, selectedSessionId: 'a2' as SessionId } as const
 
     const afterExit = clearTiledLaneSessions(
       { scope: 'project', tiled: { lanes: [{ selectedSessionId: 'a1' as SessionId }, filled], focusedLane: 0 } },
@@ -217,7 +223,8 @@ describe('Tiled Dispatch lane healing vs. deliberate emptiness (#673)', () => {
     // than the one at clearTiledLaneSessions: the stale flag would be written
     // into workspace.json and the lane would come back a permanent hole after
     // a restart, healing never again.
-    const filled = withLaneSession({ userEmptied: true }, 'a2' as SessionId)
+    // Hand-built for the same reason as the case above.
+    const filled = { userEmptied: true, selectedSessionId: 'a2' as SessionId } as const
     const pruned = keepTiledLaneSessions(
       { scope: 'project', tiled: { lanes: [{ selectedSessionId: 'a1' as SessionId }, filled], focusedLane: 0 } },
       new Set(['a1' as SessionId]),
@@ -227,6 +234,14 @@ describe('Tiled Dispatch lane healing vs. deliberate emptiness (#673)', () => {
 
     const { setTiledLaneSession } = renderLayout({ lanes, focusedLane: 0 })
     expect(setTiledLaneSession).toHaveBeenCalledWith(1, 'a2')
+  })
+
+  it('strips the flag when a session is written into the lane', () => {
+    // withLaneSession's own contract, asserted directly rather than leaned on
+    // as a fixture builder. This is the one that fails if the strip is removed
+    // from the filling side.
+    expect(withLaneSession({ userEmptied: true }, 'a2' as SessionId))
+      .toEqual({ selectedSessionId: 'a2' })
   })
 
   it('leaves a never-filled deliberate lane alone through both blanking paths', () => {
