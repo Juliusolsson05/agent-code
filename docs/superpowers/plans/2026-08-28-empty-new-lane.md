@@ -6,8 +6,10 @@
 
 **New Lane** stops claiming an agent. The inserted lane arrives empty with
 placeholder copy that names the state and the way out of it, and keyboard
-navigation from that lane behaves as though it had been sitting at `a1` — the
-first ⌥↓ or ⌥↑ selects `a1`, the second moves on normally.
+navigation from that lane behaves as though it had been sitting at the top of
+the index — the first ⌥↓ or ⌥↑ selects the top row, the second moves on
+normally. ("Top of the index", not `a1`: pinned rows sort first and are labelled
+★1. See §6.)
 
 ## The problem
 
@@ -95,7 +97,8 @@ Pick an agent from the strip, or press ⌥↓
 
 Per `docs/command-style.md` the copy names what the user controls and stays in
 sentence case. It cites `⌥↓` specifically because that is now a guaranteed
-one-press route to a1 (design point 3), so the hint is a promise the code keeps
+one-press route to the top row (design point 3), so the hint is a promise the
+code keeps
 rather than a general gesture at the UI.
 
 The hint is rendered only where it is true. The index lane (`laneIndex === 0`)
@@ -113,9 +116,9 @@ nextTiledRowIndex(currentIndex, delta, rows.length)
 // if (currentIndex < 0) return delta < 0 ? length - 1 : 0
 ```
 
-So ⌥↓ from an empty lane already landed on index 0 (`a1`) — but ⌥↑ landed on
+So ⌥↓ from an empty lane already landed on index 0 (the top row) — but ⌥↑ landed on
 the **last row**, which this plan originally recorded incorrectly as also being
-`a1`. Reading the branch closed that: the direction of the very first keystroke
+the top row. Reading the branch closed that: the direction of the very first keystroke
 decided whether a fresh lane opened at the top or the bottom of the index.
 
 That was defensible while an empty lane was a rare exhaustion state nobody asked
@@ -128,18 +131,18 @@ if (currentIndex < 0) return 0
 ```
 
 The model is that an empty lane behaves as though it were already sitting at
-`a1`. The first press in either direction COMMITS that position; every press
-after it navigates normally. So ⌥↓ ⌥↓ gives `a1` then `a2`, and ⌥↓ ⌥↑ gives
-`a1` then a wrap to the last row.
+the top row. The first press in either direction COMMITS that position; every
+press after it navigates normally. So ⌥↓ ⌥↓ gives row 1 then row 2, and ⌥↓ ⌥↑
+gives row 1 then a wrap to the last row.
 
-The alternative reading — treat the virtual cursor as *being* a1 so the first
-press steps off it to `a2` — was considered and rejected: it makes `a1`
-unreachable by arrow from a fresh lane, and it means the first keypress can
-scroll past the thing the user most likely wanted.
+The alternative reading — treat the virtual cursor as *being* the top row so the
+first press steps off it to row 2 — was considered and rejected: it makes the
+top row unreachable by arrow from a fresh lane, and it means the first keypress
+can scroll past the thing the user most likely wanted.
 
 This is a small production change plus the coverage that was missing: no test
 asserted the empty-lane branch's *sequence*, so a regression that made it sticky
-(always returning 0) would strand the user on a1 and still pass a single-call
+(always returning 0) would strand the user on the top row and still pass a single-call
 assertion.
 
 ### 4. Command description
@@ -225,7 +228,7 @@ plausible failure mode, not restate the implementation:
    and should not be exported merely to be tested; it re-derives the index via
    `rows.findIndex` on the written session id, which is equivalent to the
    sequence here as long as row order is stable between presses.)
-4. **⌥↑ from an empty lane selects a1, and a second press wraps to the last
+4. **⌥↑ from an empty lane selects the top row, and a second press wraps to the last
    row.** Same reasoning; also pins the mirror case the issue names.
 
 5. **The layout does not refill a `userEmptied` lane, and still refills one
