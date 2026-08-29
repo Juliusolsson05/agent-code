@@ -106,7 +106,7 @@ export function AgentCodeCustomSkillsRow() {
 
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex items-center justify-between border border-control-border bg-control-bg px-3 py-2">
+      <div className="rounded-control flex items-center justify-between border border-control-border bg-control-bg px-3 py-2">
         <div className="text-[11px] text-ink">
           {snapshot.skills.length === 0
             ? 'No Agent Code-authored skills'
@@ -341,7 +341,7 @@ function AgentCodeCustomSkillsModal({
                 <span>Name {draft.skillId ? '(immutable)' : ''}</span>
                 <input
                   aria-label="Skill name"
-                  className="border border-input-border bg-input-bg px-2 py-1.5 text-ink"
+                  className="rounded-control border border-input-border bg-input-bg px-2 py-1.5 text-ink"
                   value={draft.name}
                   disabled={busy}
                   readOnly={draft.skillId !== null}
@@ -353,14 +353,14 @@ function AgentCodeCustomSkillsModal({
                 <span>Description</span>
                 <input
                   aria-label="Skill description"
-                  className="border border-input-border bg-input-bg px-2 py-1.5 text-ink"
+                  className="rounded-control border border-input-border bg-input-bg px-2 py-1.5 text-ink"
                   value={draft.description}
                   disabled={busy}
                   placeholder="Review a pull request when the user asks for code review."
                   onChange={event => setDraft({ ...draft, description: event.target.value })}
                 />
               </label>
-              <label className="flex items-center justify-between border border-control-border px-3 py-2 text-[11px]">
+              <label className="rounded-control flex items-center justify-between border border-control-border px-3 py-2 text-[11px]">
                 <span>Enable for new agent sessions</span>
                 <input type="checkbox" disabled={busy} checked={draft.enabled} onChange={event => setDraft({ ...draft, enabled: event.target.checked })} />
               </label>
@@ -368,9 +368,9 @@ function AgentCodeCustomSkillsModal({
                 <div className="flex min-h-0 flex-col gap-2">
                   <div className="flex items-center justify-between text-[11px] text-muted">
                     <span>Generated SKILL.md preview</span>
-                    <button type="button" disabled={busy} className="border border-control-border px-2 py-1 disabled:opacity-50" onClick={() => setPreview(null)}>Back to editor</button>
+                    <button type="button" disabled={busy} className="rounded-control border border-control-border px-2 py-1 disabled:opacity-50" onClick={() => setPreview(null)}>Back to editor</button>
                   </div>
-                  <pre className="max-h-[360px] overflow-auto whitespace-pre-wrap border border-input-border bg-input-bg p-3 text-[11px] text-ink">{preview}</pre>
+                  <pre className="rounded-slab max-h-[360px] overflow-auto whitespace-pre-wrap border border-input-border bg-input-bg p-3 text-[11px] text-ink">{preview}</pre>
                 </div>
               ) : (
                 <Textarea
@@ -391,10 +391,10 @@ function AgentCodeCustomSkillsModal({
                 </ul>
               ) : null}
               <div className="flex flex-wrap gap-2">
-                <button type="button" disabled={busy} className="border border-control-border px-2 py-1 text-[11px] disabled:opacity-50" onClick={() => void showPreview()}>
+                <button type="button" disabled={busy} className="rounded-control border border-control-border px-2 py-1 text-[11px] disabled:opacity-50" onClick={() => void showPreview()}>
                   Preview generated skill
                 </button>
-                <button type="button" disabled={busy} className="border border-control-border px-2 py-1 text-[11px] disabled:opacity-50" onClick={() => {
+                <button type="button" disabled={busy} className="rounded-control border border-control-border px-2 py-1 text-[11px] disabled:opacity-50" onClick={() => {
                   if (dirty && !window.confirm('Discard unsaved custom skill changes?')) return
                   setDraft(null)
                   setBaseDraft(null)
@@ -403,22 +403,22 @@ function AgentCodeCustomSkillsModal({
                 }}>Back to skills</button>
               </div>
               {revisionConflict ? (
-                <div role="status" className="flex flex-wrap items-center gap-2 border border-warning p-2 text-[10px] text-warning">
+                <div role="status" className="rounded-slab flex flex-wrap items-center gap-2 border border-warning p-2 text-[10px] text-warning">
                   <span>A newer managed-skill revision exists. Choose how to continue.</span>
                   {draft.skillId && current.skills.some(skill => skill.id === draft.skillId) ? (
                     <>
-                      <button type="button" className="border border-warning px-2 py-1" onClick={() => {
+                      <button type="button" className="rounded-control border border-warning px-2 py-1" onClick={() => {
                         const latest = current.skills.find(skill => skill.id === draft.skillId)
                         if (latest) edit(draftFromSkill(latest), current.revision)
                       }}>Reload saved skill</button>
-                      <button type="button" className="border border-warning px-2 py-1" onClick={() => {
+                      <button type="button" className="rounded-control border border-warning px-2 py-1" onClick={() => {
                         setBaseRevision(current.revision)
                         setRevisionConflict(false)
                         setError(null)
                       }}>Keep my draft</button>
                     </>
                   ) : (
-                    <button type="button" className="border border-warning px-2 py-1" onClick={() => {
+                    <button type="button" className="rounded-control border border-warning px-2 py-1" onClick={() => {
                       setBaseRevision(current.revision)
                       setRevisionConflict(false)
                       setError(null)
@@ -437,7 +437,7 @@ function AgentCodeCustomSkillsModal({
                 <Button variant="outline" size="sm" disabled={busy} onClick={() => edit(emptyDraft())}>New skill…</Button>
               </div>
               {current.skills.length === 0 ? (
-                <div className="border border-panel-border p-4 text-[11px] text-muted">Create an instruction-only personal skill. Installed and project-local skills are intentionally not imported here.</div>
+                <div className="rounded-slab border border-panel-border p-4 text-[11px] text-muted">Create an instruction-only personal skill. Installed and project-local skills are intentionally not imported here.</div>
               ) : (
                 <div className="flex flex-col gap-2">
                   {current.skills.map(skill => {
@@ -446,7 +446,7 @@ function AgentCodeCustomSkillsModal({
                       ? [{ targetId: target.id, expectedConflictFingerprint: target.conflictFingerprint }]
                       : [])
                     return (
-                      <div key={skill.id} role="group" aria-label={`Custom skill ${skill.name}`} className="flex flex-col gap-2 border border-panel-border p-3">
+                      <div key={skill.id} role="group" aria-label={`Custom skill ${skill.name}`} className="rounded-slab flex flex-col gap-2 border border-panel-border p-3">
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
                             <div className="text-[12px] text-ink">{skill.name}</div>
@@ -458,16 +458,16 @@ function AgentCodeCustomSkillsModal({
                             <Button aria-label={`${skill.enabled ? 'Disable' : 'Enable'} ${skill.name}`} variant="outline" size="sm" disabled={busy || skill.health === 'recovery-required' || skill.health === 'unsupported'} onClick={() => void toggle(skill)}>
                               {skill.enabled ? 'Disable' : 'Enable'}
                             </Button>
-                            <button type="button" aria-label={`Delete ${skill.name}`} disabled={busy} className="border border-danger px-2 py-1 text-[10px] text-danger disabled:opacity-50" onClick={() => void remove(skill)}>Delete</button>
+                            <button type="button" aria-label={`Delete ${skill.name}`} disabled={busy} className="rounded-control border border-danger px-2 py-1 text-[10px] text-danger disabled:opacity-50" onClick={() => void remove(skill)}>Delete</button>
                           </div>
                         </div>
                         {skill.targets.length ? (
                           <TargetList skill={skill} targets={skill.targets} onError={setError} />
                         ) : null}
                         {abandon.length > 0 ? (
-                          <div className="flex items-center justify-between gap-2 border border-danger p-2 text-[10px] text-danger">
+                          <div className="rounded-slab flex items-center justify-between gap-2 border border-danger p-2 text-[10px] text-danger">
                             <span>Modified or historical files were preserved.</span>
-                            <button type="button" aria-label={`Leave files and forget ${skill.name}`} className="border border-danger px-2 py-1" onClick={() => void remove(skill, abandon)}>
+                            <button type="button" aria-label={`Leave files and forget ${skill.name}`} className="rounded-control border border-danger px-2 py-1" onClick={() => void remove(skill, abandon)}>
                               Leave files and forget skill
                             </button>
                           </div>
@@ -481,29 +481,29 @@ function AgentCodeCustomSkillsModal({
           )}
 
           {conflictTargets.length > 0 ? (
-            <div className="border border-danger p-2 text-[10px] text-danger">
+            <div className="rounded-slab border border-danger p-2 text-[10px] text-danger">
               {conflictTargets.map(target => <div key={target.id}>{target.displayPath || target.id} · {target.state}</div>)}
             </div>
           ) : null}
           {current.recovery ? (
-            <div className="flex flex-col gap-2 border border-danger p-2 text-[10px] text-danger">
+            <div className="rounded-slab flex flex-col gap-2 border border-danger p-2 text-[10px] text-danger">
               <span>{current.recovery.message}</span>
               <div className="flex gap-2">
-                <button type="button" className="border border-danger px-2 py-1" onClick={() => void window.api.revealAgentCodeCustomSkillsRecoveryFile()}>Reveal state file</button>
-                <button type="button" className="border border-danger px-2 py-1" onClick={() => {
+                <button type="button" className="rounded-control border border-danger px-2 py-1" onClick={() => void window.api.revealAgentCodeCustomSkillsRecoveryFile()}>Reveal state file</button>
+                <button type="button" className="rounded-control border border-danger px-2 py-1" onClick={() => {
                   if (!window.confirm('Reset all unreadable Agent Code-managed skill state? Existing provider copies will be left untouched.')) return
                   void window.api.resetAgentCodeCustomSkillsRecovery().then(applyResult)
                 }}>Reset state</button>
               </div>
             </div>
           ) : null}
-          {error ? <div role="alert" className="border border-danger px-2 py-1 text-[11px] text-danger">{error}</div> : null}
+          {error ? <div role="alert" className="rounded-slab border border-danger px-2 py-1 text-[11px] text-danger">{error}</div> : null}
         </div>
 
         <DialogFooter>
-          <button type="button" disabled={busy} className="border border-control-border px-2 py-1 text-[11px] disabled:opacity-50" onClick={() => requestClose(false)}>Close</button>
+          <button type="button" disabled={busy} className="rounded-control border border-control-border px-2 py-1 text-[11px] disabled:opacity-50" onClick={() => requestClose(false)}>Close</button>
           {draft ? (
-            <button type="button" disabled={busy || revisionConflict} className="border border-control-active-bg bg-control-active-bg px-3 py-1 text-[11px] text-control-active-fg disabled:opacity-50" onClick={() => void save()}>
+            <button type="button" disabled={busy || revisionConflict} className="rounded-control border border-control-active-bg bg-control-active-bg px-3 py-1 text-[11px] text-control-active-fg disabled:opacity-50" onClick={() => void save()}>
               {draft.enabled ? 'Save & Enable' : 'Save draft'}
             </button>
           ) : null}
@@ -527,7 +527,7 @@ function TargetList({ skill, targets, onError }: {
             <button
               type="button"
               aria-label={`Reveal ${skill.name} at ${target.displayPath || target.id}`}
-              className="border border-control-border px-1.5 py-0.5"
+              className="rounded-control border border-control-border px-1.5 py-0.5"
               onClick={() => {
                 void window.api.revealAgentCodeCustomSkillTarget(skill.id, target.id)
                   .then(result => onError(result.ok

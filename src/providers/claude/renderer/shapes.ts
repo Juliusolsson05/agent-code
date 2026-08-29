@@ -50,7 +50,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.entry.attachment.v1': defineRenderShape({
     id: 'claude.entry.attachment.v1',
     provider: 'claude',
-    fingerprints: ["fp2-17325b53","fp2-1f43958e","fp2-20f22b8f","fp2-38e7ef3d","fp2-3ae4cf2b","fp2-40425c51","fp2-43858260","fp2-4d79e5d3","fp2-581ac6d5","fp2-60e3d224","fp2-6399aefe","fp2-69882ce4","fp2-753c33b9","fp2-83a3fbfd","fp2-8628c635","fp2-8feef6e3","fp2-abe64889","fp2-b0d9d248","fp2-b4071732","fp2-b8a64f27","fp2-bc298de8","fp2-c1d8a2a6","fp2-cdb2f73a","fp2-d192dbac","fp2-dd5cff49","fp2-e4e63295","fp2-f08b1406","fp2-f30522fc","fp2-f7b66ff2"],
+    fingerprints: ["fp2-17325b53","fp2-1f43958e","fp2-20f22b8f","fp2-38e7ef3d","fp2-3ae4cf2b","fp2-40425c51","fp2-43858260","fp2-4d79e5d3","fp2-581ac6d5","fp2-60e3d224","fp2-6399aefe","fp2-69882ce4","fp2-753c33b9","fp2-83a3fbfd","fp2-8628c635","fp2-8feef6e3","fp2-abe64889","fp2-b0d9d248","fp2-b4071732","fp2-b8a64f27","fp2-bb8a6730","fp2-bc298de8","fp2-c1d8a2a6","fp2-cdb2f73a","fp2-d192dbac","fp2-dd5cff49","fp2-e226a9ee","fp2-e4e63295","fp2-f08b1406","fp2-f30522fc","fp2-f7b66ff2"],
     eventTypes: ["attachment"],
     planes: ["transcript-entry"] as const,
     lifecycles: ["durable"] as const,
@@ -60,9 +60,10 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
       firstSeen: '2026-07-16',
       lastSeen: '2026-07-16',
     },
-    fixtures: { final: ["rendering-bundles/2026-06-04T09-09-57-625-4177cefb.json","rendering-bundles/2026-06-04T09-14-29-649-4177cefb.json","rendering-bundles/2026-06-14T13-59-16-931-4757ae44.json"], prefixes: [] },
-    disposition: { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'Hook and provider attachment records are intentionally excluded by the feed ownership ledger; if admitted by another transcript surface, the bounded muted system fallback remains total.' },
-    why: 'Phase 8 classifies the 121 observed attachment variants as diagnostic transcript metadata, not conversation. TODO(system-attachment-grammar): promote a specific hook/provider notice only after a fixture proves it belongs in the user-facing feed rather than the debug transcript.',
+    fixtures: { final: ["rendering-shapes/claude/queued-command/final.json","rendering-bundles/2026-06-04T09-09-57-625-4177cefb.json","rendering-bundles/2026-06-04T09-14-29-649-4177cefb.json","rendering-bundles/2026-06-14T14-25-07-012-a8ad1ebb.json"], prefixes: [] },
+    disposition: { kind: 'specialized', rendererId: 'claude.queued-user-prompt', protocolId: 'queued-command.prompt' },
+    alternateDispositions: [{ kind: 'generic', rendererId: 'shared.generic-tool', reason: 'Only provenance-validated human prompt attachments enter the conversation ledger; task, peer/meta, hook, and malformed attachment variants retain the bounded generic route if another surface admits them.' }],
+    why: 'GRADUATED from the recorded queue-bearing bundle corpus plus hard-redacted human-block and peer/meta recordings. Fingerprints describe attachment structure, not commandMode/provenance values (fp2-581ac6d5 is shared by prompt and task-notification), so the Claude adapter performs the recorded content gate: human/legacy non-meta prompts specialize, all other attachments remain outside conversation ownership.',
   }),
   'claude.entry.pr-link.v1': defineRenderShape({
     id: 'claude.entry.pr-link.v1',

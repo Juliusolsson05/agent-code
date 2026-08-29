@@ -23,7 +23,7 @@ function ExactSourceDisclosure({ source, isError }: { source: string; isError: b
           viewer while this nested disclosure is closed would retain the very
           payload the two-stage card is meant to keep out of the hot feed. */}
       {open ? (
-        <div className="mt-1 rounded border border-border bg-surface px-2 py-1.5">
+        <div className="mt-1 rounded-slab border border-border bg-surface px-2 py-1.5">
           <PagedTextViewer source={source} isError={isError} />
         </div>
       ) : null}
@@ -61,7 +61,7 @@ export function AgentCodeWorkspaceView({ model }: { model: AgentCodeWorkspaceMod
           onClick={() => setOpen(current => !current)}
           className="flex w-full min-w-0 items-center gap-2 cursor-pointer text-left text-[13px] leading-[1.65]"
         >
-          <span className="shrink-0 rounded border border-border px-1 text-[10px] uppercase tracking-wider text-muted">
+          <span className="shrink-0 rounded-chip border border-border px-1 text-[10px] uppercase tracking-wider text-muted">
             Agent Code MCP
           </span>
           <span className="shrink-0 text-accent font-semibold">AI Workspace</span>

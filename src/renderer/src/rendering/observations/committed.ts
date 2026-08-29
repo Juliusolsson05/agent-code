@@ -207,6 +207,8 @@ function contentKindOf(
       return 'compact-boundary'
     case 'compact-summary':
       return 'compact-summary'
+    case 'queued-user-prompt':
+      return 'user-text'
     case null:
       break
     default: {

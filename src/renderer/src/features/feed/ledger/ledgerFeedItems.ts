@@ -113,6 +113,8 @@ function visibleDecisionFor(
     ? 'compact_boundary'
     : durableKind === 'compact-summary'
       ? 'compact_summary'
+      : durableKind === 'queued-user-prompt'
+        ? 'queued_user_prompt'
       : 'conversation'
   return {
     key: typeof entry.uuid === 'string' ? entry.uuid : 'no-uuid',

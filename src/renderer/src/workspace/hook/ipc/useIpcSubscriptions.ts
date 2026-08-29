@@ -60,11 +60,13 @@ import {
 } from '@renderer/workspace/hook/actions/streaming'
 import {
   applyCommittedUserEntry,
+  applyQueuedCommandObservation,
   applyQueueOperation,
   createClaudeQueueState,
   markStaleWhenIdle,
   type ClaudeQueueState,
 } from '@renderer/session-runtime/claudeQueue'
+import { decodeClaudeQueuedCommand } from '@providers/claude/renderer/entries/queuedCommand'
 import { shouldClearIdleQueuedMessages } from '@renderer/session-runtime/queueInvariants'
 import type { StreamPhase } from '@renderer/session-runtime/state'
 import { conditionStateByKind } from '@shared/types/providerConditions'
@@ -1610,7 +1612,10 @@ export function useIpcSubscriptions(
           // must never decide membership itself. See
           // docs/decomposition/claude-queue-reconciliation.md.
           const entryType = (raw as { type?: string }).type
-          if (entryType === 'queue-operation') {
+          const shapeSaysCodex = isCodexRolloutEntry(raw)
+          const routedKind: AgentProviderKind =
+            mappingKind ?? (shapeSaysCodex ? 'codex' : 'claude')
+          if (entryType === 'queue-operation' && routedKind === 'claude') {
             const op = raw as { operation?: string; content?: string; timestamp?: string }
             claudeQueue = applyQueueOperation(claudeQueue, {
               operation: op.operation ?? '',
@@ -1626,6 +1631,34 @@ export function useIpcSubscriptions(
             // between turns while CC is draining queued work.
             if (queuedMessages.length > 0) awaitingAssistant = true
             continue
+          }
+
+          // ---- Claude legacy-remove identity pass ----
+          // Modern remove records carry content directly. Older records do
+          // not, but Claude persists the consumed command a few JSONL lines
+          // later as attachment/queued_command. Project provider grammar once
+          // through the adapter and let the pure queue reconciler join it to
+          // bounded remove debt; this live site must never choose a victim.
+          const queuedCommand =
+            routedKind === 'claude'
+              ? decodeClaudeQueuedCommand(raw as Entry)
+              : null
+          if (queuedCommand !== null && queuedCommand.promptText !== null) {
+            const nextClaudeQueue = applyQueuedCommandObservation(claudeQueue, {
+              uuid: queuedCommand.uuid,
+              mode: queuedCommand.mode,
+              text: queuedCommand.promptText,
+            })
+            // Most modern queued-command attachments carry no legacy remove
+            // debt. The pure reconciler deliberately returns the SAME object
+            // for that no-op; copying its separately-created empty pending
+            // array into queuedMessages would manufacture a React-visible
+            // change from nothing and bypass the noChange guard below. Only a
+            // real attribution transition owns a new queue array/reference.
+            if (nextClaudeQueue !== claudeQueue) {
+              claudeQueue = nextClaudeQueue
+              queuedMessages = claudeQueue.pending
+            }
           }
 
           // ---- Claude queue identity pass ----
@@ -1650,9 +1683,6 @@ export function useIpcSubscriptions(
           }
 
           // ---- Unified mapper routing ----
-          const shapeSaysCodex = isCodexRolloutEntry(raw)
-          const routedKind: AgentProviderKind =
-            mappingKind ?? (shapeSaysCodex ? 'codex' : 'claude')
           if (mappingKind !== null && shapeSaysCodex !== (mappingKind === 'codex')) {
             routeShadowMismatches += 1
             if (!routeShadowSample) {
@@ -1877,6 +1907,19 @@ export function useIpcSubscriptions(
           }
         }
 
+        // Queue attribution and React-visible runtime state have different
+        // commit boundaries. A legacy content-free remove changes only
+        // `removeDebt`: pending membership stays the same and the queue has
+        // already forced awaitingAssistant on. That burst is correctly a
+        // React no-op, but the NEXT watcher burst needs its debt to join the
+        // durable queued-command attachment to the pending item. Capturing the
+        // pure state before the no-change return lets the post-updater commit
+        // below preserve that invisible handoff without cloning the runtime or
+        // forcing a render. Keep the map write outside this updater—React may
+        // invoke an updater twice, and reading our own first write would count
+        // the same departure twice.
+        pendingClaudeQueue = claudeQueue
+
         // Bail only when literally nothing changed. Approval,
         // queue, and compaction transitions can fire on bursts
         // that don't append any feed entries at all. Include ghost
@@ -1987,8 +2030,6 @@ export function useIpcSubscriptions(
             toolIndexChanged = true
           }
         }
-
-        pendingClaudeQueue = claudeQueue
 
         const nextRuntimeBase = withDerivedSessionStatus(
           appendFeedDebugLog(

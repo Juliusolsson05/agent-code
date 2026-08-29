@@ -146,7 +146,7 @@ export function AgentInlineTerminal({ sessionId, active }: Props) {
 
   return (
     <div
-      className="
+      className="rounded-slab
         h-[260px] min-h-[180px] w-full
         border border-border bg-canvas
         overflow-hidden relative

@@ -57,7 +57,7 @@ export function ClaudeAnsweredQuestionRow({
         {model.questions.map((question, index) => (
           <div key={index} className="mt-0.5">
             {question.header ? (
-              <span className="text-[11px] text-ink-dim border border-border rounded px-1 py-px mr-2">
+              <span className="text-[11px] text-ink-dim border border-border rounded-chip px-1 py-px mr-2">
                 {question.header}
               </span>
             ) : null}

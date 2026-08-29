@@ -82,7 +82,7 @@ export function PinAgentsModal({
           Choose the agents pinned in Dispatch. Space toggles and Enter commits.
         </DialogDescription>
 
-        <div className="flex-1 min-h-0 overflow-auto border border-border bg-canvas">
+        <div className="rounded-slab flex-1 min-h-0 overflow-auto border border-border bg-canvas">
           {rows.length === 0 ? (
             <div className="px-3 py-4 text-[12px] text-muted">
               No agents available to pin.
@@ -124,7 +124,7 @@ export function PinAgentsModal({
                     {row.title}
                   </span>
                   <span
-                    className="
+                    className="rounded-control
                       flex-shrink-0 px-1.5 py-[1px] text-[9px] font-code
                       leading-none text-muted border border-border bg-surface-hi
                       truncate max-w-[160px]

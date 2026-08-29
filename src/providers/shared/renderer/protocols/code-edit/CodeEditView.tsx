@@ -97,7 +97,7 @@ export const CodeEditView = memo(function CodeEditView({ model }: { model: CodeE
                 <summary className="cursor-pointer select-none">
                   Rich preview is partial · view exact paged content
                 </summary>
-                <div className="mt-1 flex flex-col gap-2 rounded border border-border bg-surface px-2 py-1.5">
+                <div className="mt-1 flex flex-col gap-2 rounded-slab border border-border bg-surface px-2 py-1.5">
                   {file.exactSections.map((section, sectionIndex) => (
                     // Labels are presentation vocabulary (for example two
                     // "Content" sections), not guaranteed identifiers.

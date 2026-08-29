@@ -19,7 +19,7 @@ export function CaffeinateToastSurface() {
   return (
     <div
       role="status"
-      className="
+      className="rounded-float
         fixed bottom-3 right-3 z-50 max-w-[360px]
         border border-border bg-surface-hi px-3 py-2
         text-[11px] leading-snug text-ink shadow-lg

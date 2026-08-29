@@ -44,8 +44,10 @@ export type QueueDecisionReason =
   | 'delivered-observed'
   /** A `dequeue` departed and no committed entry claimed it inside the settle window. */
   | 'delivered-inferred'
-  /** A `remove` run consumed it as a mid-turn attachment — never persisted, so never observable. */
-  | 'consumed-as-attachment'
+  /** `remove.content` or a durable queued-command attachment identified it. */
+  | 'consumed-observed'
+  /** A legacy content-free `remove` had no durable attachment before settlement. */
+  | 'consumed-inferred'
   /** `popAll` pulled it back into the composer. Content is logged, so this is proof. */
   | 'popped-to-composer'
   /** Still held, but no departure has attributed it and the session went idle. */
@@ -102,11 +104,27 @@ export type QueueDebt = {
   at: string | null
 }
 
+/**
+ * Legacy content-free `remove` records waiting for durable attachment proof.
+ *
+ * WHY this stores only a count: the pending queue already owns the strings.
+ * Copying candidate content into debt would retain pasted documents twice and
+ * make heap use proportional to queue churn rather than current queue size.
+ * The count is capped by eligible pending items at creation and settles at the
+ * next non-remove queue operation or idle boundary, so it cannot grow without
+ * a corresponding bounded pending queue.
+ */
+export type QueueRemoveDebt = {
+  count: number
+  at: string | null
+}
+
 export type ClaudeQueueState = {
   pending: PendingItem[]
   /** Append-only within a session. The diagnosis IS this record (principle P4). */
   decisions: QueueDecision[]
   debt: QueueDebt | null
+  removeDebt: QueueRemoveDebt | null
   nextSeq: number
 }
 
@@ -118,5 +136,12 @@ export type QueueOperationRecord = {
 
 export type CommittedUserEntry = {
   uuid?: string
+  text: string
+}
+
+/** Provider-neutral identity projected from Claude's durable attachment. */
+export type QueuedCommandObservation = {
+  uuid?: string
+  mode: QueueMode
   text: string
 }

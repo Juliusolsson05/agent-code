@@ -277,7 +277,7 @@ export function HtmlDebugPanel({ sessionId, kind, onClose }: Props) {
           ownership is local to the preview. */}
       <div className="flex-1 min-h-0 overflow-hidden p-2">
         {capture.found ? (
-          <pre className="
+          <pre className="rounded-slab
             h-full w-full m-0
             bg-canvas border border-border
             px-2 py-1.5

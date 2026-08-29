@@ -140,6 +140,81 @@ export const AGENT_VIEW_MODES: AgentViewModeMeta[] = [
   },
 ]
 
+/* ---------- Corner radius ----------
+ *
+ * The app's corner language as one three-value axis. See hard rule 1 in
+ * styles.css for what each token class means and why the tiling grid is
+ * excluded from all of them.
+ *
+ * WHY a closed enum of presets and not a number input per token: the
+ * interesting question is "which corner language does this app speak", not
+ * "is 7px better than 8px". A free length invites the three tokens to drift
+ * apart and, worse, removes the fixed point that makes this safe to ship —
+ * `sharp` is a GUARANTEE that every token is literally 0px, restoring the
+ * historical square app exactly, and a guarantee is testable in a way that an
+ * approximation is not.
+ *
+ * WHY this is a top-level setting and not part of customAppearance: that
+ * contract is CUSTOM_APPEARANCE_COLOR_KEYS — 80 keys, all colours, validated
+ * as colours and surfaced in the theme editor as colour fields. Threading
+ * three lengths through a colour pipeline means either weakening that
+ * validation or special-casing three keys in every consumer, to buy an axis
+ * nobody wants 80 values of.
+ *
+ * This array is the SINGLE source of truth for the numbers. `applyTheme`
+ * reads them from here; styles.css carries a matching `:root` fallback for
+ * the default tier only, and that duplication is the one copy allowed.
+ */
+export type CornerStyleId = 'sharp' | 'soft' | 'round'
+
+export type CornerStyleMeta = {
+  id: CornerStyleId
+  label: string
+  description: string
+  /** Non-interactive capsule labels: badges, keycaps, counters, scope tags.
+   *  The only class that goes fully pill-shaped — safe because a label is
+   *  always content-sized. */
+  chip: string
+  /** Interactive chrome: buttons, inputs, textareas, option rows, hover
+   *  targets. Kept modest at every tier because controls come in every
+   *  width and a full-width pill is a stadium, not a button. */
+  control: string
+  /** Inset content plates: code blocks, tool output, diffs, thumbnails. */
+  slab: string
+  /** Detached surfaces: dialogs, palette, popovers, menus, toasts. */
+  float: string
+}
+
+export const CORNER_STYLES: CornerStyleMeta[] = [
+  {
+    id: 'round',
+    label: 'Round',
+    description: 'Pill-shaped badges and clearly detached panels.',
+    chip: '9999px',
+    control: '6px',
+    slab: '8px',
+    float: '14px',
+  },
+  {
+    id: 'soft',
+    label: 'Soft',
+    description: 'Visible corners that keep the terminal character.',
+    chip: '3px',
+    control: '3px',
+    slab: '4px',
+    float: '6px',
+  },
+  {
+    id: 'sharp',
+    label: 'Sharp',
+    description: 'Square everywhere. The original Agent Code look.',
+    chip: '0px',
+    control: '0px',
+    slab: '0px',
+    float: '0px',
+  },
+]
+
 export type DictationProviderId = DictationProvider
 
 // Font choice for the entire app. This is the single source of truth for
@@ -380,6 +455,16 @@ export type Settings = {
    *  rendering — `coerceSettings` falls back to the default on any
    *  unknown id. */
   fontFamily: FontFamilyId
+  /** Corner radius language for the whole app (see `CORNER_STYLES`).
+   *
+   *  Applied live by `applyTheme`, which writes the tier's three lengths as
+   *  inline custom properties on <html> — the same mechanism as accent and
+   *  font, so a change cascades through every `rounded-chip/slab/float`
+   *  utility with no React re-render.
+   *
+   *  Never reaches the tiling grid: pane, tab, terminal, editor, and feed-row
+   *  surfaces carry no radius class at any tier. */
+  cornerStyle: CornerStyleId
   /** Sparse per-command picker-visibility overrides, keyed by each
    *  command's STABLE string `id`. Present boolean wins over the
    *  command's declared `pickerVisibility`: `true` = force into the
@@ -553,6 +638,13 @@ export const DEFAULT_SETTINGS: Settings = {
   defaultBuiltInMcpDomains: [],
   autoSendPromptSuggestion: true,
   fontFamily: 'jetbrains-mono',
+  // WHY `round` and not the historical `sharp`: this axis exists because the
+  // blanket square look was retired deliberately, and defaulting to the tier
+  // that changes nothing would ship the feature switched off. `sharp` remains
+  // one click away and is a byte-for-byte return to the old app — strictly
+  // MORE square than before, since the token floor also closes the bare
+  // `rounded` 4px leak this work uncovered.
+  cornerStyle: 'round',
   // Empty by default: nothing is hidden until the user opts in per
   // command. This keeps the whole feature purely additive — fresh
   // installs and existing users see the exact same picker they do today.

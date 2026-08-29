@@ -56,14 +56,14 @@ const DialogContent = React.forwardRef<
       // marker without mirroring open state into a second modal manager.
       {...{ [APP_INTERACTION_OWNER_ATTRIBUTE]: 'app' }}
       className={cn(
-        'fixed left-1/2 top-1/2 z-[1100] grid w-[min(520px,92vw)] -translate-x-1/2 -translate-y-1/2 border border-border-hi bg-surface text-ink shadow-2xl outline-none',
+        'fixed left-1/2 top-1/2 z-[1100] grid w-[min(520px,92vw)] -translate-x-1/2 -translate-y-1/2 rounded-float border border-border-hi bg-surface text-ink shadow-2xl outline-none',
         className,
       )}
     >
       {children}
       {showCloseButton ? (
         <DialogPrimitive.Close
-          className="absolute right-3 top-3 border border-transparent px-1.5 py-0.5 text-[14px] leading-none text-muted outline-none hover:border-border hover:text-ink focus-visible:border-focus-ring focus-visible:ring-1 focus-visible:ring-focus-ring"
+          className="rounded-slab absolute right-3 top-3 border border-transparent px-1.5 py-0.5 text-[14px] leading-none text-muted outline-none hover:border-border hover:text-ink focus-visible:border-focus-ring focus-visible:ring-1 focus-visible:ring-focus-ring"
         >
           <span aria-hidden="true">×</span>
           <span className="sr-only">Close</span>

@@ -1,6 +1,6 @@
 {
   "source": "~/.claude/projects/~user-Desktop-Development-agent-code/4d4c8b1a-5263-4bdc-8e24-14fc7c2bd543.jsonl",
-  "note": "Ground truth for the dequeue/remove asymmetry: `dequeue` is followed by a user entry carrying the notification verbatim; `remove` is followed by nothing, because the mid-turn attachment drain is never written to the transcript.",
+  "note": "Reduced-fixture ground truth for the dequeue/remove asymmetry: `dequeue` is followed by a retained user identity event; `remove` has no retained event because this fixture schema intentionally omits durable queued-command attachments.",
   "events": [
     {
       "kind": "op",

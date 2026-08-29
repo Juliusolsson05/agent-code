@@ -88,7 +88,7 @@ export function PromptTemplateEditorPane({ form, onChange, onCancel, onSave }: P
             </div>
             <div className="space-y-2">
               {form.variables.map((variable, index) => (
-                <div key={variable.name} className="border border-border bg-surface px-3 py-3">
+                <div key={variable.name} className="rounded-slab border border-border bg-surface px-3 py-3">
                   <div className="mb-2 text-[11px] text-ink">{`{{${variable.name}}}`}</div>
                   <div className="grid gap-2 md:grid-cols-2">
                     <Field label="Label">

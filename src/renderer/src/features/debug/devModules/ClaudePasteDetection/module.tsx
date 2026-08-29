@@ -77,7 +77,7 @@ function ClaudePasteDetection({ sessionId, runtime, kind }: DevDebugModuleProps)
   const stats = useMemo(() => buildStats(rows), [rows])
 
   return (
-    <div className="border border-border bg-canvas">
+    <div className="rounded-slab border border-border bg-canvas">
       <div className="border-b border-border px-3 py-2 flex items-center justify-between gap-3">
         <div className="text-[10px] text-danger uppercase tracking-[0.12em]">
           claude paste / submit detection
@@ -102,7 +102,7 @@ function ClaudePasteDetection({ sessionId, runtime, kind }: DevDebugModuleProps)
               {plain.length} chars · {(plain.match(/\[Pasted text #\d+/g) ?? []).length} placeholders
             </span>
           </div>
-          <pre className="max-h-[140px] overflow-auto whitespace-pre-wrap break-words border border-border bg-canvas px-2 py-1 text-[10px] leading-[1.45] text-ink-dim">
+          <pre className="rounded-slab max-h-[140px] overflow-auto whitespace-pre-wrap break-words border border-border bg-canvas px-2 py-1 text-[10px] leading-[1.45] text-ink-dim">
             {plain.slice(-600) || '(screen empty)'}
           </pre>
         </section>
@@ -115,7 +115,7 @@ function ClaudePasteDetection({ sessionId, runtime, kind }: DevDebugModuleProps)
               const plainHit = matches(plain, rule.pattern, rule.flags)
               const mdHit = matches(markdown, rule.pattern, rule.flags)
               return (
-                <div key={rule.label} className="border border-border bg-canvas px-2 py-1">
+                <div key={rule.label} className="rounded-slab border border-border bg-canvas px-2 py-1">
                   <div className="text-[9px] text-muted uppercase tracking-[0.12em] truncate">
                     {rule.label}
                   </div>
@@ -144,7 +144,7 @@ function ClaudePasteDetection({ sessionId, runtime, kind }: DevDebugModuleProps)
               </span>
             </span>
           </div>
-          <div className="overflow-auto max-h-[260px] border border-border bg-canvas">
+          <div className="rounded-slab overflow-auto max-h-[260px] border border-border bg-canvas">
             <table className="w-full text-[10px] tabular-nums">
               <thead className="text-muted">
                 <tr className="border-b border-border">

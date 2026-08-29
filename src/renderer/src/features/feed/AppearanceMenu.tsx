@@ -51,7 +51,7 @@ export function AppearanceMenu({ settings, onChange }: Props) {
         title="Appearance"
         aria-haspopup="menu"
         aria-expanded={open}
-        className="
+        className="rounded-control
           flex items-center justify-center
           w-7 h-7
           text-ink-dim hover:text-ink
@@ -66,7 +66,7 @@ export function AppearanceMenu({ settings, onChange }: Props) {
       {open && (
         <div
           role="menu"
-          className="
+          className="rounded-float
             modal-pop absolute right-0 top-full mt-2 z-50
             w-[280px]
             bg-surface border border-border-hi
@@ -95,7 +95,7 @@ export function AppearanceMenu({ settings, onChange }: Props) {
               ))}
             </div>
             {isSavedThemeId(settings.mode) ? (
-              <div className="mt-2 border border-border bg-canvas px-2 py-2 text-[10px] leading-4 text-muted">
+              <div className="rounded-slab mt-2 border border-border bg-canvas px-2 py-2 text-[10px] leading-4 text-muted">
                 Saved theme colors are edited in Settings.
               </div>
             ) : null}
@@ -120,7 +120,7 @@ export function AppearanceMenu({ settings, onChange }: Props) {
               <button
                 type="button"
                 onClick={() => onChange({ contrast: !settings.contrast })}
-                className="mt-3 flex w-full items-center justify-between border border-border px-2.5 py-2 text-left text-[11px] text-ink-dim hover:border-border-hi hover:text-ink"
+                className="rounded-control mt-3 flex w-full items-center justify-between border border-border px-2.5 py-2 text-left text-[11px] text-ink-dim hover:border-border-hi hover:text-ink"
               >
                 <span>High Contrast</span>
                 <span
@@ -165,7 +165,7 @@ function ModeButton({
     <button
       type="button"
       onClick={() => onPick(mode)}
-      className={`
+      className={`rounded-control
         flex-1 px-3 py-1.5 text-[11px] uppercase tracking-wider
         border border-border
         transition-colors duration-120

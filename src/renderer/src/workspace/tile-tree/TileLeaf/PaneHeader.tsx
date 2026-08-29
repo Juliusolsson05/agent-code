@@ -96,7 +96,7 @@ export function PaneHeader({
             `pl-3` still on the row the chunk was 25% of (W − 12px). */}
         <div className={`flex items-center gap-2 min-w-0 px-3 ${statusMode ? 'py-0' : 'py-1'}`}>
           {paneLabel && (
-            <span className="flex-shrink-0 rounded-[3px] border border-current/30 px-1 leading-[14px] text-[9px] font-semibold tabular-nums">
+            <span className="flex-shrink-0 rounded-chip border border-current/30 px-1 leading-[14px] text-[9px] font-semibold tabular-nums">
               {paneLabel}
             </span>
           )}
@@ -134,7 +134,7 @@ export function PaneHeader({
                   onSelectRelatedSession?.(tab.sessionId)
                 }}
                 className={[
-                  'flex h-5 max-w-[160px] flex-shrink-0 items-center gap-1 rounded-[3px] border px-1.5',
+                  'flex h-5 max-w-[160px] flex-shrink-0 items-center gap-1 rounded-control border px-1.5',
                   'leading-none transition-colors',
                   active
                     ? 'border-accent bg-accent text-accent-fg'

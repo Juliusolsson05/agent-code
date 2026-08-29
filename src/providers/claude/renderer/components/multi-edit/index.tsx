@@ -196,7 +196,7 @@ const MalformedMultiEditChunk = memo(function MalformedMultiEditChunk({
   raw: unknown
 }) {
   return (
-    <div className="rounded border border-border bg-surface px-2.5 py-2">
+    <div className="rounded-slab border border-border bg-surface px-2.5 py-2">
       <div className="text-[10px] uppercase tracking-wider text-warning select-none">
         unrecognized change {index + 1} / {total}
       </div>
@@ -253,7 +253,7 @@ const OversizedEditSlab = memo(function OversizedEditSlab({
   const [open, setOpen] = useState(false)
   return (
     <details
-      className="rounded border border-border bg-surface px-2.5 py-2 text-[12px]"
+      className="rounded-slab border border-border bg-surface px-2.5 py-2 text-[12px]"
       onToggle={event => setOpen(event.currentTarget.open)}
     >
       <summary className="cursor-pointer select-none text-ink-dim">

@@ -429,7 +429,7 @@ function ReaderHeader({
             type="button"
             onClick={onSelectOlder}
             disabled={!canSelectOlder}
-            className={`px-2 py-1 text-[11px] font-code border ${
+            className={`rounded-control px-2 py-1 text-[11px] font-code border ${
               canSelectOlder
                 ? 'bg-canvas text-ink-dim border-border hover:border-border-hi hover:text-ink'
                 : 'bg-canvas text-muted border-border opacity-50 cursor-default'
@@ -442,7 +442,7 @@ function ReaderHeader({
             type="button"
             onClick={onSelectNewer}
             disabled={!canSelectNewer}
-            className={`px-2 py-1 text-[11px] font-code border ${
+            className={`rounded-control px-2 py-1 text-[11px] font-code border ${
               canSelectNewer
                 ? 'bg-canvas text-ink-dim border-border hover:border-border-hi hover:text-ink'
                 : 'bg-canvas text-muted border-border opacity-50 cursor-default'
@@ -466,7 +466,7 @@ function ReaderHeader({
                   key={sessionId}
                   type="button"
                   onClick={() => workspace.setReaderModeSession(sessionId)}
-                  className={`px-2 py-1 text-[11px] font-code border whitespace-nowrap ${
+                  className={`rounded-control px-2 py-1 text-[11px] font-code border whitespace-nowrap ${
                     active
                       ? 'bg-accent text-accent-fg border-accent'
                       : 'bg-canvas text-ink-dim border-border hover:border-border-hi hover:text-ink'

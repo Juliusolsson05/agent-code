@@ -9,7 +9,7 @@ export function WelcomeEmpty({ onNewTabRequest }: { onNewTabRequest: () => void 
         <button
           type="button"
           onClick={onNewTabRequest}
-          className="
+          className="rounded-control
             px-4 py-2 text-[12px]
             bg-accent text-accent-fg
             border border-accent

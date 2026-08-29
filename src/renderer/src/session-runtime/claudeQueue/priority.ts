@@ -80,7 +80,8 @@ export function derivePriority(content: string): QueuePriority {
 }
 
 /**
- * Correlation identity for a notification: 1045/1045 of them carry `<task-id>`
+ * Correlation identity for a notification: 1144/1144 current-corpus records
+ * carry `<task-id>` or `<tool-use-id>`
  * in the corpus, and `<tool-use-id>` backs it up. This is what makes the
  * identity pass proof rather than fuzzy text matching.
  */

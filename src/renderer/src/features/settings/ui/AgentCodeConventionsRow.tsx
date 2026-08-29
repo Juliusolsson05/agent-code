@@ -123,7 +123,7 @@ export function AgentCodeConventionsRow() {
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex items-center justify-between border border-control-border bg-control-bg px-3 py-2">
+      <div className="rounded-control flex items-center justify-between border border-control-border bg-control-bg px-3 py-2">
         <div>
           <div className="text-[11px] text-ink">Status: {HEALTH_LABELS[snapshot.health]}</div>
           <div className="mt-1 text-[10px] text-muted">
@@ -154,7 +154,7 @@ export function AgentCodeConventionsRow() {
       </div>
 
       {snapshot.targets.length > 0 ? (
-        <div className="flex flex-col gap-1 border border-panel-border px-2 py-2">
+        <div className="rounded-slab flex flex-col gap-1 border border-panel-border px-2 py-2">
           {snapshot.targets.map(target => (
             <div key={target.id} className="flex items-start justify-between gap-3 text-[10px]">
               <span className="text-muted">
@@ -174,21 +174,21 @@ export function AgentCodeConventionsRow() {
       ) : null}
 
       {snapshot.health === 'unsupported' ? (
-        <div role="status" className="border border-warning px-2 py-1 text-[10px] text-warning">
+        <div role="status" className="rounded-slab border border-warning px-2 py-1 text-[10px] text-warning">
           Personal Agent Skills are unavailable for: {snapshot.unsupportedProviders.join(', ')}.
         </div>
       ) : null}
 
       {snapshot.recovery ? (
-        <div className="flex flex-col gap-2 border border-danger px-2 py-2 text-[10px] text-danger">
+        <div className="rounded-slab flex flex-col gap-2 border border-danger px-2 py-2 text-[10px] text-danger">
           <span>{snapshot.recovery.message}</span>
           <div className="flex gap-2">
-            <button type="button" className="border border-danger px-2 py-1" onClick={() => void window.api.revealAgentCodeConventionsRecoveryFile()}>
+            <button type="button" className="rounded-control border border-danger px-2 py-1" onClick={() => void window.api.revealAgentCodeConventionsRecoveryFile()}>
               Reveal state file
             </button>
             <button
               type="button"
-              className="border border-danger px-2 py-1"
+              className="rounded-control border border-danger px-2 py-1"
               onClick={() => {
                 if (!window.confirm('Reset all unreadable Agent Code-managed skill state? The shared state file will be removed, and any existing provider copies will be left untouched.')) return
                 void window.api.resetAgentCodeConventionsRecovery().then(applyResult)

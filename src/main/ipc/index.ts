@@ -46,6 +46,7 @@ import type { CliUpdateOrchestrator } from '@main/setup/cliUpdateOrchestrator.js
 import { registerWorkflowIpc } from '@main/ipc/workflows.js'
 import { registerAgentCodeConventionsIpc } from '@main/ipc/agentCodeConventions.js'
 import { registerAgentCodeCustomSkillsIpc } from '@main/ipc/agentCodeCustomSkills.js'
+import { registerAgentCodeInstalledSkillsIpc } from '@main/ipc/agentCodeInstalledSkills.js'
 import type { WorkflowBridge } from '@main/workflows/WorkflowBridge.js'
 
 // IPC registration aggregator.
@@ -115,4 +116,5 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerWorkflowIpc(deps.workflowBridge)
   registerAgentCodeConventionsIpc(deps.agentCodeConventionsService)
   registerAgentCodeCustomSkillsIpc(deps.agentCodeConventionsService)
+  registerAgentCodeInstalledSkillsIpc(deps.agentCodeConventionsService)
 }

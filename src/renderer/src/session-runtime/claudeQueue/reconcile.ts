@@ -14,6 +14,7 @@ import type {
   QueueDecision,
   QueueDecisionReason,
   QueueOperationRecord,
+  QueuedCommandObservation,
 } from './types'
 
 // Reconciling Claude's provider-owned message queue from a lossy operation log.
@@ -21,10 +22,11 @@ import type {
 // See docs/decomposition/claude-queue-reconciliation.md. The one-paragraph
 // version of WHY this module exists at all:
 //
-// Claude logs `{ operation, timestamp, content? }`. `enqueue` and `popAll`
-// carry content; `dequeue` and `remove` carry NOTHING — no content, no id, no
-// priority. So a departure has to be attributed by something other than the
-// record itself. The previous implementation guessed, by scoring content into a
+// Claude logs `{ operation, timestamp, content? }`. Every enqueue and 77.4% of
+// recorded removes carry content; older removes and every dequeue omit it. So
+// some departures are self-identifying while legacy ones need the durable
+// evidence that follows. The previous implementation ignored remove content
+// and guessed, by scoring pending content into a
 // priority bucket and removing the lowest — and because nothing ever repairs
 // Claude's queue (the idle-clear invariant is capability-gated OFF for Claude,
 // and queuedMessages resets only on session exit) every wrong guess was
@@ -32,18 +34,19 @@ import type {
 // "forever" rather than "briefly wrong".
 //
 // The fix is not a better guess. It is using the evidence that actually exists,
-// which differs per operation — measured over 220 op-carrying transcripts:
+// which differs per operation — measured from the recorded corpus:
 //
 //   dequeue -> delivered as a turn input, lands as a committed `user` entry
-//              carrying the content verbatim.        98.5% observable
-//   remove  -> consumed as a mid-turn ATTACHMENT (query.ts:1642), and
-//              attachments are never written to the JSONL.  3.2% observable
+//              carrying the content in the dominant recorded shape
+//   remove  -> exact record content in newer Claude; otherwise a durable
+//              attachment/queued_command with UUID + prompt follows
 //
 // So: `dequeue` is settled by IDENTITY (task-id for notifications, normalized
 // text for prompts) and only falls back to inference when no entry claims it.
-// `remove` has no identity available in principle, so it is settled by
-// upstream's cohort rule — which is deterministic and fully known — and is
-// RECORDED as inference so a debug bundle never presents it as proof.
+// Legacy `remove` records wait for the queued-command attachment and only use
+// the upstream cohort rule at a later operation/idle boundary. Observed and
+// inferred removals have distinct reasons so debug output never upgrades a
+// fallback into proof.
 //
 // Both paths emit a QueueDecision. The decision record IS the diagnosis; there
 // is deliberately no second "why is this still queued" derivation that could
@@ -68,7 +71,7 @@ function previewOf(content: string): string {
 }
 
 export function createClaudeQueueState(): ClaudeQueueState {
-  return { pending: [], decisions: [], debt: null, nextSeq: 0 }
+  return { pending: [], decisions: [], debt: null, removeDebt: null, nextSeq: 0 }
 }
 
 function decide(
@@ -135,7 +138,8 @@ function without(pending: PendingItem[], removed: readonly PendingItem[]): Pendi
 /**
  * Does this committed entry carry the identity of that pending item?
  *
- * Notifications match on `<task-id>` (present on 1045/1045 in the corpus).
+ * Notifications match on a correlation id (present on 1144/1144 in the
+ * current corpus).
  * Prompts have no id, so they match on a normalized prefix — see
  * `normalizeForMatch` for why raw comparison loses ~28% of real deliveries.
  */
@@ -156,6 +160,94 @@ function entryClaims(item: PendingItem, entry: CommittedUserEntry): boolean {
   return hay.includes(needle.slice(0, PROMPT_MATCH_PREFIX))
 }
 
+/**
+ * Resolve which pending item a remove carrier names.
+ *
+ * WHY this is a two-pass resolve and not a single `find`: notification identity
+ * falls back to a correlation id, and the recorded corpus proves that id is NOT
+ * unique. In divergence-stranded-background-commands.json, 2 of 126 enqueued
+ * task ids carry two DIFFERENT bodies — upstream reuses the id when it
+ * reconciles a background shell from a previous session, so the queue can hold
+ * both "...was stopped" and "No completion record was found..." under one id.
+ *
+ * A plain `find` returns whichever twin was enqueued first. When a carrier named
+ * the SECOND exactly, that retired the first using the second's evidence and
+ * stranded the one that actually departed — the precise wrong-item failure this
+ * module exists to end, wearing a convincing-looking cause.
+ *
+ * Exact normalized text is the stronger evidence, so it is tried first. The id
+ * pass stays as a fallback because it is what survives upstream reformatting of
+ * a notification body — but it applies ONLY when exactly one pending item
+ * carries the id. With two twins and no exact match, the id cannot say which
+ * one left, and returning the first by array order would mislabel a coin flip
+ * as `consumed-observed`, which this module's header forbids ("debug output
+ * never upgrades a fallback into proof") and which strands the item that
+ * actually departed.
+ *
+ * WHAT DECLINING COSTS, AND WHY IT IS STILL RIGHT — the two carriers recover
+ * differently, so do not assume the attachment path's behaviour holds for both:
+ *
+ *   applyQueuedCommandObservation declines against a removeDebt that its
+ *   earlier content-free `remove` already opened. The debt survives untouched
+ *   and the next enqueue/dequeue settles it, so one item is retired as an
+ *   honest `consumed-inferred`.
+ *
+ *   applyRemove's content-bearing branch has NO debt to preserve — the
+ *   debt-opening code is in the content-free branch below it. Declining there
+ *   records nothing at all, so an item that really did depart upstream stays
+ *   visible until some other departure signal arrives, or for the session.
+ *
+ * That asymmetry is deliberate, and opening a debt to "fix" it would be a
+ * regression: this branch's own rule (see applyRemove) is that failed exact
+ * evidence must not be converted into permission to remove a neighbour, because
+ * the carrier may be a redelivery or a partial bootstrap. A visibly-pending row
+ * that never departed is diagnosable; an irreversibly deleted queued item is
+ * not. The decline is byte-identical in behaviour to the absent-target decline
+ * that rule already shipped.
+ *
+ * Prompts are unaffected throughout: their branch in removeCarrierClaims
+ * already required exact text equality, so pass 1 reproduces it and pass 2 can
+ * only ever agree.
+ */
+function resolveRemoveCarrierTarget(
+  pending: readonly PendingItem[],
+  observation: Pick<QueuedCommandObservation, 'mode' | 'text'>,
+): PendingItem | undefined {
+  const needle = normalizeForMatch(observation.text)
+  if (needle.length > 0) {
+    const exact = pending.find(
+      item => item.mode === observation.mode && normalizeForMatch(item.content) === needle,
+    )
+    if (exact) return exact
+  }
+  // Ambiguity is decided by COUNT, not by taking the first: two candidates mean
+  // the carrier's id is not identifying, so no removal is provable here.
+  const byId = pending.filter(item => removeCarrierClaims(item, observation))
+  return byId.length === 1 ? byId[0] : undefined
+}
+
+/**
+ * Exact identity for a remove carrier.
+ *
+ * WHY this is stricter than dequeue matching: dequeue's committed user row can
+ * wrap the prompt and therefore needs prefix containment. Both remove.content
+ * and queued-command.prompt are queue-native carriers. Treating a mere prefix
+ * as exact here would let two similar queued prompts remove one another.
+ */
+function removeCarrierClaims(
+  item: PendingItem,
+  observation: Pick<QueuedCommandObservation, 'mode' | 'text'>,
+): boolean {
+  if (item.mode !== observation.mode) return false
+  if (item.mode === 'task-notification') {
+    const itemId = notificationIdOf(item.content)
+    const observedId = notificationIdOf(observation.text)
+    return itemId !== null && observedId !== null && itemId === observedId
+  }
+  const itemText = normalizeForMatch(item.content)
+  return itemText.length > 0 && itemText === normalizeForMatch(observation.text)
+}
+
 function settleDebtByCohort(state: ClaudeQueueState): ClaudeQueueState {
   const debt = state.debt
   if (debt === null || debt.count <= 0) {
@@ -171,6 +263,48 @@ function settleDebtByCohort(state: ClaudeQueueState): ClaudeQueueState {
       ...removed.map(i => decide(i, 'delivered-inferred', [], debt.at)),
     ],
     debt: null,
+  }
+}
+
+/** Find one fallback victim without sorting or allocating candidate arrays. */
+function removeFallbackVictim(pending: readonly PendingItem[]): PendingItem | undefined {
+  let best: PendingItem | undefined
+  let notification: PendingItem | undefined
+  for (const item of pending) {
+    if (!isCohortEligible(item, 'remove')) continue
+    if (!best || cohortOrder(item, best) < 0) best = item
+    if (
+      item.mode === 'task-notification' &&
+      (!notification || cohortOrder(item, notification) < 0)
+    ) {
+      notification = item
+    }
+  }
+  // Content-free remove has two upstream callers with conflicting rules.
+  // Preserve user work in the ambiguous case; the rationale is expanded at
+  // applyRemove where the debt is created.
+  return best?.mode === 'prompt' && notification ? notification : best
+}
+
+function settleRemoveDebtByCohort(state: ClaudeQueueState): ClaudeQueueState {
+  const debt = state.removeDebt
+  if (debt === null || debt.count <= 0) {
+    return debt === null ? state : { ...state, removeDebt: null }
+  }
+
+  let pending = state.pending
+  const decisions: QueueDecision[] = []
+  for (let remaining = debt.count; remaining > 0; remaining -= 1) {
+    const victim = removeFallbackVictim(pending)
+    if (!victim) break
+    pending = without(pending, [victim])
+    decisions.push(decide(victim, 'consumed-inferred', [], debt.at))
+  }
+  return {
+    ...state,
+    pending,
+    decisions: decisions.length > 0 ? [...state.decisions, ...decisions] : state.decisions,
+    removeDebt: null,
   }
 }
 
@@ -198,12 +332,6 @@ function applyEnqueue(state: ClaudeQueueState, op: QueueOperationRecord): Claude
 }
 
 function applyRemove(state: ClaudeQueueState, op: QueueOperationRecord): ClaudeQueueState {
-  // A `remove` never becomes observable, so there is nothing to wait for.
-  // Settle any outstanding `dequeue` debt first: the earlier op definitively
-  // completed before this one began, so holding its debt open would let this
-  // removal consume the item that debt was owed.
-  const settled = settleDebtByCohort(state)
-
   // `remove` has TWO upstream callers with DIFFERENT selection rules, and
   // getting this wrong reproduced both halves of the original bug:
   //
@@ -220,9 +348,9 @@ function applyRemove(state: ClaudeQueueState, op: QueueOperationRecord): ClaudeQ
   // the exact pair of symptoms this module exists to end, reintroduced by the
   // fix.
   //
-  // The record cannot tell us which caller fired. But the two rules only
-  // disagree when the best-priority item is a PROMPT and a notification is also
-  // queued, and in that situation the two candidates are:
+  // A legacy content-free record cannot tell us which caller fired. The two
+  // rules only disagree when the best-priority item is a PROMPT and a
+  // notification is also queued, and in that situation the candidates are:
   //   attachment-drain  -> the prompt
   //   Ctrl+B            -> the oldest notification
   // We resolve toward the NOTIFICATION, because the asymmetry of being wrong is
@@ -232,28 +360,60 @@ function applyRemove(state: ClaudeQueueState, op: QueueOperationRecord): ClaudeQ
   // the irreversible direction. Prompts are additionally the case where
   // evidence usually arrives anyway (87% observable on `dequeue`), so deferring
   // on them costs little.
-  const eligible = settled.pending.filter(i => isCohortEligible(i, 'remove'))
-  const best = [...eligible].sort(cohortOrder)[0]
-  const ambiguous =
-    best !== undefined &&
-    best.mode === 'prompt' &&
-    eligible.some(i => i.mode === 'task-notification')
-  const victim = ambiguous
-    ? [...eligible].filter(i => i.mode === 'task-notification').sort(cohortOrder)[0]
-    : best
+  if (typeof op.content === 'string') {
+    const content = op.content
+    const mode = deriveMode(content)
+    const victim = resolveRemoveCarrierTarget(state.pending, { mode, text: content })
 
-  // One record, one item. Upstream's `removeByFilter`/`removeFromQueue` log one
-  // `remove` per removed command, so per-record take-1 is exactly equivalent to
-  // per-run take-N under a stable ordering — and needs no run grouping, and so
-  // no timestamp heuristic to decide where a run begins.
-  if (victim === undefined) return settled
+    // Exact remove content and older dequeue debt account for DIFFERENT
+    // departures. Settling the inferred debt first can guess away the very
+    // item this record names; the exact lookup then no-ops and some unrelated
+    // item survives permanently. A recorded 16-enqueue / 3-dequeue /
+    // 13-exact-remove run does exactly that, including duplicate task ids that
+    // make count- or identity-set-based repair impossible after the fact.
+    //
+    // Preserve the stronger carrier first and leave the debt as a bounded
+    // count for its own later identity/idle settlement. If this exact target
+    // is absent (partial bootstrap or redelivery), return the ORIGINAL state:
+    // settling debt here would remove a neighbor by inference while the caller
+    // believes this carrier was a conservative no-op. There is deliberately no
+    // settle-then-retry scan — settlement only removes pending items, so it
+    // cannot expose a match and would spend heap/CPU to weaken the invariant.
+    // A content-bearing remove is its own proof. If redelivery or a partial
+    // bootstrap means its target is absent, doing nothing is safer than
+    // converting failed exact evidence into permission to remove a neighbor.
+    if (!victim) return state
+    return {
+      ...state,
+      pending: without(state.pending, [victim]),
+      decisions: [
+        ...state.decisions,
+        decide(victim, 'consumed-observed', ['queue-operation content'], op.timestamp ?? null),
+      ],
+    }
+  }
+
+  // Content-free legacy records carry no competing exact evidence. The
+  // earlier dequeue completed first, so settle its bounded debt before opening
+  // a second inference debt for this remove.
+  const settled = settleDebtByCohort(state)
+
+  // Older Claude versions logged no content. Do not guess immediately: the
+  // durable queued-command attachment is recorded a few lines later and can
+  // cross watcher bursts. Debt retains only a count and is capped by eligible
+  // pending membership, so waiting does not duplicate or unbound prompt data.
+  const eligibleCount = settled.pending.reduce(
+    (count, item) => count + (isCohortEligible(item, 'remove') ? 1 : 0),
+    0,
+  )
+  const priorCount = settled.removeDebt?.count ?? 0
+  if (eligibleCount <= priorCount) return settled
   return {
     ...settled,
-    pending: without(settled.pending, [victim]),
-    decisions: [
-      ...settled.decisions,
-      decide(victim, 'consumed-as-attachment', [], op.timestamp ?? null),
-    ],
+    removeDebt: {
+      count: priorCount + 1,
+      at: settled.removeDebt?.at ?? op.timestamp ?? null,
+    },
   }
 }
 
@@ -276,10 +436,25 @@ function applyDequeue(state: ClaudeQueueState, op: QueueOperationRecord): Claude
 }
 
 function applyPopAll(state: ClaudeQueueState, op: QueueOperationRecord): ClaudeQueueState {
-  // `popAll` is the one departure that logs its content, so it needs no
-  // inference at all — match and remove exactly what was popped. Upstream pulls
-  // only EDITABLE commands into the composer and deliberately leaves
-  // task-notifications queued, so a content match is also the correct scope.
+  // `popAll` logs its content, so it needs no inference at all — match and
+  // remove exactly what was popped. Upstream pulls only EDITABLE commands into
+  // the composer and deliberately leaves task-notifications queued, so a
+  // content match is also the correct scope.
+  //
+  // WHY this receives the RAW state and settles no debt, exactly as
+  // applyRemove does: an open remove debt accounts for a DIFFERENT departure,
+  // and settling it first picks its victim by FIFO cohort order — which can be
+  // the very item this record names. The exact lookup then misses, returns
+  // early, and some unrelated item survives permanently while the debt has
+  // been spent on the wrong one. This path previously ran
+  // settleRemoveDebtByCohort(state) before matching and did exactly that; with
+  // a single queued item and one open debt it consumed that item by inference
+  // on behalf of a carrier naming something else entirely.
+  //
+  // On a miss, return the ORIGINAL state. A content-bearing carrier is its own
+  // proof: if its target is absent (redelivery, partial bootstrap), doing
+  // nothing is safer than converting failed exact evidence into permission to
+  // remove a neighbour by inference.
   const content = op.content
   if (typeof content !== 'string') return state
   const needle = normalizeForMatch(content)
@@ -312,12 +487,15 @@ export function applyQueueOperation(
 ): ClaudeQueueState {
   switch (op.operation) {
     case 'enqueue':
-      return applyEnqueue(state, op)
+      return applyEnqueue(settleRemoveDebtByCohort(state), op)
     case 'dequeue':
-      return applyDequeue(state, op)
+      return applyDequeue(settleRemoveDebtByCohort(state), op)
     case 'remove':
       return applyRemove(state, op)
     case 'popAll':
+      // Raw state, NOT settleRemoveDebtByCohort(state) — see applyPopAll.
+      // `remove` and `popAll` are the two carriers that log their own content,
+      // so both must apply that exact evidence before any inference runs.
       return applyPopAll(state, op)
     default:
       // An unknown operation must not be guessed at. Upstream's vocabulary is
@@ -325,6 +503,38 @@ export function applyQueueOperation(
       // leaves an item visible (diagnosable) rather than removing the wrong one
       // (silent and permanent).
       return state
+  }
+}
+
+/**
+ * Feed one durable queued-command carrier into legacy remove attribution.
+ *
+ * The caller projects Claude grammar through the provider adapter; this pure
+ * layer sees only mode/text/UUID. Matching scans the bounded pending queue once
+ * and retains none of the observation after the call.
+ */
+export function applyQueuedCommandObservation(
+  state: ClaudeQueueState,
+  observation: QueuedCommandObservation,
+): ClaudeQueueState {
+  const debt = state.removeDebt
+  if (debt === null || debt.count <= 0) return state
+  const claimed = resolveRemoveCarrierTarget(state.pending, observation)
+  if (!claimed) return state
+  const remaining = debt.count - 1
+  return {
+    ...state,
+    pending: without(state.pending, [claimed]),
+    decisions: [
+      ...state.decisions,
+      decide(
+        claimed,
+        'consumed-observed',
+        [observation.uuid ?? 'queued-command attachment'],
+        debt.at,
+      ),
+    ],
+    removeDebt: remaining > 0 ? { ...debt, count: remaining } : null,
   }
 }
 
@@ -374,16 +584,17 @@ export function applyCommittedUserEntry(
  */
 export function markStaleWhenIdle(state: ClaudeQueueState, idle: boolean): ClaudeQueueState {
   if (!idle) return state
+  const settled = settleRemoveDebtByCohort(settleDebtByCohort(state))
   // Only items that have already survived at least one departure are suspect.
   // A queue that has simply never been drained is not stale, it is waiting.
-  if (state.decisions.length === 0) return state
-  if (state.pending.every(i => i.stale)) return state
+  if (settled.decisions.length === 0) return settled
+  if (settled.pending.every(i => i.stale)) return settled
   return {
-    ...state,
-    pending: state.pending.map(i => (i.stale ? i : { ...i, stale: true })),
+    ...settled,
+    pending: settled.pending.map(i => (i.stale ? i : { ...i, stale: true })),
     decisions: [
-      ...state.decisions,
-      ...state.pending.filter(i => !i.stale).map(i => decide(i, 'stale-unattributed', [], null)),
+      ...settled.decisions,
+      ...settled.pending.filter(i => !i.stale).map(i => decide(i, 'stale-unattributed', [], null)),
     ],
   }
 }

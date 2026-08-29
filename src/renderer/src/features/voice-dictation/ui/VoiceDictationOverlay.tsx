@@ -4,17 +4,18 @@ import { useDictationOverlayState } from '@renderer/features/voice-dictation/dic
 // Rendered Agent mode keeps the old inline composer mic affordance; only
 // AgentTerminalLeaf publishes visible state to this store.
 //
-// WHY a sharp rectangle instead of the rounded pill that flow-electron's
-// MicPill uses: agent-code's design language (see src/renderer/src/styles.css
-// hard rules block) bans border-radius across the app — Tailwind's
-// `--radius-*` tokens are all forced to 0 except `--radius-full` which is
-// preserved for the streaming dot. Copying flow-electron's pill verbatim
-// would clash with the rest of the chrome. Instead we keep the chip's
-// information shape (energy bars, dots, short status text, optional preview)
-// and lay it inside a sharp-edged rectangle that picks up surface/border/ink
-// tokens from the active theme. Dark, light, custom, high-contrast — they
-// all just work because every color is `var(--theme-*)` via Tailwind utility
-// classes; the overlay never embeds raw hex.
+// WHY `rounded-float` and not the sharp rectangle this used to be: the
+// original comment here explained that agent-code's design language banned
+// border-radius app-wide, so flow-electron's rounded MicPill was flattened to
+// match the chrome. That ban is gone — radius now marks DETACHMENT (styles.css
+// hard rule 1), and a fixed-position chip floating over the terminal is the
+// textbook case: it shares an edge with nothing and already carries a drop
+// shadow saying so. At the Sharp tier it renders exactly as it always did.
+//
+// The chip keeps its information shape (energy bars, dots, short status text,
+// optional preview) and every color stays `var(--theme-*)` via Tailwind
+// utility classes — dark, light, custom, high-contrast all just work because
+// the overlay never embeds raw hex.
 //
 // WHY position:fixed at bottom-center: matches the Whispr-Flow muscle memory
 // the user asked for, and `position: fixed` escapes AgentTerminalLeaf's
@@ -49,7 +50,7 @@ export function VoiceDictationOverlay() {
     <div
       className={`
         pointer-events-none fixed bottom-4 left-1/2 z-40 -translate-x-1/2
-        flex items-center gap-3 border bg-surface px-3 py-2
+        flex items-center gap-3 rounded-float border bg-surface px-3 py-2
         font-code text-[11px] leading-none
         ${isError ? 'border-danger' : 'border-border'}
       `}
@@ -134,10 +135,10 @@ function DictationDots() {
       {[0, 1, 2].map(i => (
         <span
           key={i}
-          // rounded-full is the one radius utility that survives the
-          // app-wide radius reset (styles.css preserves --radius-full
-          // specifically for the streaming dot). The dictation dots share
-          // that same exception by intent: they ARE the equivalent
+          // rounded-full sits OUTSIDE the corner-style system on purpose:
+          // these are circles by geometry, not corners by policy, so they
+          // must stay round even at the Sharp tier. Same exception the
+          // streaming dot has — the dictation dots ARE the equivalent
           // affordance for the dictation pipeline.
           className="h-1.5 w-1.5 rounded-full bg-current"
           style={{

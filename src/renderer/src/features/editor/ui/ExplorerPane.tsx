@@ -638,7 +638,7 @@ export function ExplorerPane({
               queuedLoadsRef.current.clear()
               for (const path of expandedRef.current) void loadDirectory(path)
             }}
-            className="flex h-5 w-5 items-center justify-center rounded text-muted hover:bg-surface-hi hover:text-ink"
+            className="flex h-5 w-5 items-center justify-center rounded-control text-muted hover:bg-surface-hi hover:text-ink"
           >
             ↻
           </button>
@@ -649,7 +649,7 @@ export function ExplorerPane({
               showHidden ? 'Hide hidden and ignored files' : 'Show hidden and ignored files'
             }
             onClick={() => setShowHidden(prev => !prev)}
-            className={`flex h-5 w-5 items-center justify-center rounded hover:bg-surface-hi ${
+            className={`flex h-5 w-5 items-center justify-center rounded-control hover:bg-surface-hi ${
               showHidden ? 'text-ink' : 'text-muted hover:text-ink'
             }`}
           >
@@ -664,7 +664,7 @@ export function ExplorerPane({
               menuInvokerRef.current = event.currentTarget
               setMenu(clampedMenu(event.clientX, event.clientY, null))
             }}
-            className="flex h-5 w-5 items-center justify-center rounded text-muted hover:bg-surface-hi hover:text-ink"
+            className="flex h-5 w-5 items-center justify-center rounded-control text-muted hover:bg-surface-hi hover:text-ink"
           >
             +
           </button>
@@ -761,7 +761,7 @@ export function ExplorerPane({
           ref={menuRef}
           role="menu"
           aria-label={menu.entry ? `Actions for ${menu.entry.name}` : 'Explorer actions'}
-          className="fixed z-30 min-w-[160px] rounded border border-border bg-surface py-1 shadow-lg"
+          className="fixed z-30 min-w-[160px] rounded-float overflow-hidden border border-border bg-surface py-1 shadow-lg"
           style={{ left: menu.x, top: menu.y }}
           onMouseDown={event => event.stopPropagation()}
           onBlur={event => {
@@ -907,7 +907,7 @@ function InlineEditRow({
         onBlur={() => {
           if (!disabled) onCancel()
         }}
-        className="w-full rounded border border-border-hi bg-canvas px-1 py-0.5 text-[11px] text-ink outline-none"
+        className="w-full rounded-control border border-border-hi bg-canvas px-1 py-0.5 text-[11px] text-ink outline-none"
       />
       {error ? (
         <span id="explorer-inline-edit-error" className="py-0.5 text-[9px] text-danger">

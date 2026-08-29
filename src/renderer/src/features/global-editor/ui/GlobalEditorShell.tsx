@@ -1017,7 +1017,7 @@ export function GlobalEditorShell({ children, workspace }: Props) {
   // explorer pointed at nowhere.
   const leftPercent = (splitterRatio * 100).toFixed(2)
   const rightPercent = ((1 - splitterRatio) * 100).toFixed(2)
-  const toolbarButtonClass = 'rounded px-1.5 py-0.5 text-muted hover:bg-surface-hi hover:text-ink'
+  const toolbarButtonClass = 'rounded-control px-1.5 py-0.5 text-muted hover:bg-surface-hi hover:text-ink'
   const editorToolbarActions = (
     <>
       <button

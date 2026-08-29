@@ -50,7 +50,7 @@ function SidebarButton({
     <button
       type="button"
       onClick={onClick}
-      className={`flex items-center justify-between border px-3 py-2 text-left text-[12px] ${
+      className={`rounded-control flex items-center justify-between border px-3 py-2 text-left text-[12px] ${
         active
           ? 'border-control-active-bg bg-control-active-bg text-control-active-fg'
           : 'border-control-border bg-control-bg text-control-fg hover:border-control-border-hover hover:bg-control-hover-bg hover:text-ink'
