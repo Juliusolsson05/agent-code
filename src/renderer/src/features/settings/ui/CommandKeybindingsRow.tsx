@@ -391,11 +391,11 @@ export function CommandKeybindingsRow() {
         value={query}
         onChange={event => setQuery(event.target.value)}
         placeholder="Search commands, shortcuts, or keywords…"
-        className="w-full bg-input-bg border border-border px-2 py-1 text-xs text-ink outline-none focus:border-accent"
+        className="rounded-control w-full bg-input-bg border border-border px-2 py-1 text-xs text-ink outline-none focus:border-accent"
       />
 
       {conflict ? (
-        <div className="border border-danger/50 bg-danger/10 px-2 py-1.5 text-xs text-ink">
+        <div className="rounded-slab border border-danger/50 bg-danger/10 px-2 py-1.5 text-xs text-ink">
           <div>
             <span className="font-mono">{displayKeybinding(conflict.binding)}</span>{' '}
             is already used by {conflict.owners.join(', ')}.
@@ -404,7 +404,7 @@ export function CommandKeybindingsRow() {
             {conflict.replaceableCommandIds.length > 0 && !conflict.hasReservedOwner ? (
               <button
                 onClick={applyReplace}
-                className="border border-border px-1.5 py-0.5 hover:bg-surface"
+                className="rounded-control border border-border px-1.5 py-0.5 hover:bg-surface"
               >
                 Replace
               </button>
@@ -415,7 +415,7 @@ export function CommandKeybindingsRow() {
             )}
             <button
               onClick={() => setConflict(null)}
-              className="border border-border px-1.5 py-0.5 hover:bg-surface"
+              className="rounded-control border border-border px-1.5 py-0.5 hover:bg-surface"
             >
               Cancel
             </button>
@@ -449,7 +449,7 @@ export function CommandKeybindingsRow() {
             {group.rows.map(row => (
               <div
                 key={row.id}
-                className="flex items-center gap-2 border border-border/40 px-2 py-1 text-xs"
+                className="rounded-slab flex items-center gap-2 border border-border/40 px-2 py-1 text-xs"
               >
                 <div className="min-w-0 flex-1 truncate text-ink" title={row.id}>
                   {row.title}
@@ -466,7 +466,7 @@ export function CommandKeybindingsRow() {
                         onClick={() =>
                           commit(row.id, row.bindings.filter(b => b !== binding))
                         }
-                        className="border border-border px-1 py-0.5 font-mono hover:border-danger hover:text-danger"
+                        className="rounded-control border border-border px-1 py-0.5 font-mono hover:border-danger hover:text-danger"
                       >
                         {displayKeybinding(binding)} ×
                       </button>
@@ -478,7 +478,7 @@ export function CommandKeybindingsRow() {
                       setConflict(null)
                       setCapturingFor(capturingFor === row.id ? null : row.id)
                     }}
-                    className="border border-border px-1.5 py-0.5 hover:bg-surface"
+                    className="rounded-control border border-border px-1.5 py-0.5 hover:bg-surface"
                   >
                     {capturingFor === row.id ? 'Press keys… (Esc)' : 'Add'}
                   </button>
@@ -491,7 +491,7 @@ export function CommandKeybindingsRow() {
                           commandKeybindingOverrides: resetCommandKeybindings(overrides, row.id),
                         })
                       }
-                      className="border border-border px-1.5 py-0.5 hover:bg-surface"
+                      className="rounded-control border border-border px-1.5 py-0.5 hover:bg-surface"
                     >
                       Reset
                     </button>
@@ -525,13 +525,13 @@ export function CommandKeybindingsRow() {
       <div className="flex items-center gap-2">
         <button
           onClick={() => setSettings({ commandKeybindingOverrides: {} })}
-          className="self-start border border-border px-1.5 py-0.5 text-xs hover:bg-surface"
+          className="rounded-control self-start border border-border px-1.5 py-0.5 text-xs hover:bg-surface"
         >
           Reset all bindings
         </button>
         <button
           onClick={() => setSettings({ commandVisibilityOverrides: {} })}
-          className="self-start border border-border px-1.5 py-0.5 text-xs hover:bg-surface"
+          className="rounded-control self-start border border-border px-1.5 py-0.5 text-xs hover:bg-surface"
           title="Return every command to its shipped palette visibility. Shortcuts are untouched."
         >
           Reset palette visibility

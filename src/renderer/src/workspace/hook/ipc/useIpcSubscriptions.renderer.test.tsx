@@ -3,6 +3,8 @@ import { render } from '@testing-library/react'
 import { act } from 'react'
 import { useRef } from 'react'
 import type { MutableRefObject } from 'react'
+import recordedQueueHandoffBundle from '../../../../../../testing/fixtures/rendering-bundles/2026-06-14T14-25-07-012-a8ad1ebb.json'
+import recordedTaskNotificationBundle from '../../../../../../testing/fixtures/rendering-bundles/2026-06-21T20-14-23-131-62432945.json'
 
 import { createFakeSessionFeed } from '@renderer/features/sessionFeed/FakeSessionFeed'
 import { UndoCloseStack } from '@renderer/lib/undoClose'
@@ -74,6 +76,145 @@ function makeRefs(state: WorkspaceState): WorkspaceRefs {
 }
 
 describe('useIpcSubscriptions with an injected SessionFeed', () => {
+  it('hands a legacy queued prompt from the queue strip to its durable feed row across bursts', () => {
+    const fake = createFakeSessionFeed()
+    const sessionId = 'recorded-queue-handoff'
+    const state = {
+      sessions: { [sessionId]: { cwd: '/repo', kind: 'claude' } },
+    } as unknown as WorkspaceState
+    let runtimes: Record<SessionId, SessionRuntime> = {}
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: { gitWorktrees: vi.fn(async () => ({ ok: false })) },
+    })
+    const bundle = recordedQueueHandoffBundle as {
+      input: { entries: Array<Record<string, unknown>> }
+    }
+    const enqueue = bundle.input.entries[7]!
+    const remove = bundle.input.entries[8]!
+    const durable = bundle.input.entries[13]!
+
+    function Harness(): React.JSX.Element {
+      const refs = useRef<WorkspaceRefs | null>(null)
+      if (refs.current === null) refs.current = makeRefs(state)
+      useIpcSubscriptions(
+        fake,
+        refs.current,
+        () => {},
+        updater => {
+          runtimes = typeof updater === 'function' ? updater(runtimes) : updater
+          refs.current!.latestRuntimesRef.current = runtimes
+        },
+        () => {},
+        () => {},
+      )
+      return <div />
+    }
+
+    render(<Harness />)
+    act(() => {
+      fake.emitJsonlEntries({
+        sessionId,
+        entries: [{ file: 'recorded.jsonl', entry: enqueue }],
+      })
+    })
+
+    expect(runtimes[sessionId]?.queuedMessages.map(item => item.content)).toEqual([
+      enqueue.content,
+    ])
+    expect(runtimes[sessionId]?.awaitingAssistant).toBe(true)
+    const runtimeAfterEnqueue = runtimes
+
+    act(() => {
+      fake.emitJsonlEntries({
+        sessionId,
+        entries: [{ file: 'recorded.jsonl', entry: remove }],
+      })
+    })
+
+    // The old content-free remove is deliberately not guessed away at the IPC
+    // boundary. This record changes only hidden reconciliation debt: the queue
+    // still owns the prompt and awaitingAssistant was already true. Returning
+    // the existing runtime is therefore correct, but that invisible debt must
+    // still survive outside React until the recorded durable identity arrives.
+    expect(runtimes).toBe(runtimeAfterEnqueue)
+    expect(runtimes[sessionId]?.queuedMessages.map(item => item.content)).toEqual([
+      enqueue.content,
+    ])
+
+    act(() => {
+      fake.emitJsonlEntries({
+        sessionId,
+        entries: [{ file: 'recorded.jsonl', entry: durable }],
+      })
+    })
+
+    // One transition, two planes: the queue item retires and the very same raw
+    // durable attachment enters the shared feed window. No optimistic copy or
+    // prompt clone is manufactured by the handoff.
+    expect(runtimes[sessionId]?.queuedMessages).toEqual([])
+    expect(runtimes[sessionId]?.entries).toContain(durable)
+  })
+
+  it('keeps runtime identity for a recorded queued notification with no remove debt', () => {
+    const fake = createFakeSessionFeed()
+    const sessionId = 'recorded-queue-notification-noop'
+    const state = {
+      sessions: { [sessionId]: { cwd: '/repo', kind: 'claude' } },
+    } as unknown as WorkspaceState
+    let runtimes: Record<SessionId, SessionRuntime> = {}
+    const runtimesBefore = runtimes
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: { gitWorktrees: vi.fn(async () => ({ ok: false })) },
+    })
+    const bundle = recordedTaskNotificationBundle as {
+      input: { entries: Array<Record<string, unknown>> }
+    }
+    const notification = bundle.input.entries[43]!
+    const attachment = notification.attachment as Record<string, unknown>
+    if (
+      notification.type !== 'attachment' ||
+      attachment.type !== 'queued_command' ||
+      attachment.commandMode !== 'task-notification'
+    ) {
+      throw new Error('recorded queued-notification fixture index drifted')
+    }
+
+    function Harness(): React.JSX.Element {
+      const refs = useRef<WorkspaceRefs | null>(null)
+      if (refs.current === null) refs.current = makeRefs(state)
+      useIpcSubscriptions(
+        fake,
+        refs.current,
+        () => {},
+        updater => {
+          runtimes = typeof updater === 'function' ? updater(runtimes) : updater
+          refs.current!.latestRuntimesRef.current = runtimes
+        },
+        () => {},
+        () => {},
+      )
+      return <div />
+    }
+
+    render(<Harness />)
+    act(() => {
+      fake.emitJsonlEntries({
+        sessionId,
+        entries: [{ file: 'recorded.jsonl', entry: notification }],
+      })
+    })
+
+    // This durable carrier is queue evidence, not a human feed row. With no
+    // legacy remove debt it changes neither pure queue state nor mapped feed
+    // entries. Replacing emptyRuntime()'s [] with claudeQueue's distinct []
+    // would manufacture a visible runtime update from a pure no-op and defeat
+    // the same reference-stability contract that protects queue-only bursts.
+    expect(runtimes).toBe(runtimesBefore)
+    expect(runtimes[sessionId]).toBeUndefined()
+  })
+
   it('folds a cumulative semantic burst at preview cadence instead of once per transport event', () => {
     vi.useFakeTimers()
     const fake = createFakeSessionFeed()

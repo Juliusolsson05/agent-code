@@ -40,7 +40,7 @@ const CompactionSummaryView = memo(function CompactionSummaryView({ text }: { te
   const compact = useMemo(() => boundedTextPage(text, 0, 2_400, 24).hasNext, [text])
   const visibleText = compact && !expanded ? compactionSummaryPreview(text) : text
   return (
-    <div className="border border-border bg-surface">
+    <div className="rounded-slab border border-border bg-surface">
       <div className="border-b border-border px-4 py-2 flex items-center justify-between gap-3">
         <div className="text-[11px] uppercase tracking-wider text-accent font-semibold">
           Conversation Summary

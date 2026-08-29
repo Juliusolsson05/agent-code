@@ -192,7 +192,7 @@ export function KeyboardShortcutsModal({ open, onClose }: Props) {
             value={query}
             onChange={event => setQuery(event.target.value)}
             placeholder="Search by command or chord…"
-            className="mt-2 w-full border border-border bg-input-bg px-2 py-1 text-xs text-ink outline-none focus:border-accent"
+            className="rounded-control mt-2 w-full border border-border bg-input-bg px-2 py-1 text-xs text-ink outline-none focus:border-accent"
           />
         </div>
 
@@ -210,7 +210,7 @@ export function KeyboardShortcutsModal({ open, onClose }: Props) {
                 {group.rows.map(row => (
                   <div
                     key={row.id}
-                    className="flex items-center gap-2 border border-border/40 px-2 py-1 text-xs"
+                    className="rounded-slab flex items-center gap-2 border border-border/40 px-2 py-1 text-xs"
                   >
                     <div className="min-w-0 flex-1 truncate text-ink" title={row.id}>
                       {row.title}
@@ -227,7 +227,7 @@ export function KeyboardShortcutsModal({ open, onClose }: Props) {
                       {row.bindings.map(binding => (
                         <span
                           key={binding}
-                          className="border border-border bg-surface px-1.5 py-0.5 font-mono text-ink"
+                          className="rounded-chip border border-border bg-surface px-1.5 py-0.5 font-mono text-ink"
                         >
                           {displayKeybinding(binding)}
                         </span>

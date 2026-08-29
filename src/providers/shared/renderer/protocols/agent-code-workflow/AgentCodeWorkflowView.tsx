@@ -24,7 +24,7 @@ function ExactInput({ input }: { input: Record<string, unknown> }) {
     <details className="text-[11px] text-muted" onToggle={event => setOpen(event.currentTarget.open)}>
       <summary className="cursor-pointer select-none">Exact workflow input</summary>
       {open ? (
-        <div className="mt-1 rounded border border-border bg-surface px-2 py-1.5">
+        <div className="mt-1 rounded-slab border border-border bg-surface px-2 py-1.5">
           {source === null ? 'Exact input unavailable.' : <PagedTextViewer source={source} />}
         </div>
       ) : null}
@@ -61,7 +61,7 @@ export function AgentCodeWorkflowView({ model }: { model: AgentCodeWorkflowModel
           onClick={() => setOpen(current => !current)}
           className="flex w-full min-w-0 items-center gap-2 cursor-pointer text-left text-[13px] leading-[1.65]"
         >
-          <span className="shrink-0 rounded border border-border px-1 text-[10px] uppercase tracking-wider text-muted">
+          <span className="shrink-0 rounded-chip border border-border px-1 text-[10px] uppercase tracking-wider text-muted">
             Agent Code MCP
           </span>
           <span className="shrink-0 text-accent font-semibold">Workflow</span>

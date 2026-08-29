@@ -113,7 +113,7 @@ export function SystemPerfBadge({ current, buffer, onClick, open }: Props) {
       aria-expanded={open}
       aria-label="System performance"
       title="Main-process heap + RSS · click to expand"
-      className={`flex items-center gap-2 px-2 py-0.5 text-[10px] tabular-nums [-webkit-app-region:no-drag] hover:bg-surface/60 border border-transparent ${
+      className={`rounded-control flex items-center gap-2 px-2 py-0.5 text-[10px] tabular-nums [-webkit-app-region:no-drag] hover:bg-surface/60 border border-transparent ${
         open ? 'bg-surface border-border' : ''
       }`}
     >

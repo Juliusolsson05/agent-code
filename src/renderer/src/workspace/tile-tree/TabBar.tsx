@@ -103,7 +103,7 @@ export function TabBar({ workspace, onNewTabRequest }: Props) {
                   session is alive, red when all have exited. */}
               <span
                 className={`
-                  flex-shrink-0
+                  flex-shrink-0 rounded-chip
                   text-[9px] font-code font-semibold tabular-nums
                   px-1.5 py-0.5 leading-none
                   ${allDone ? 'bg-danger text-danger-fg' : 'bg-success text-success-fg'}
@@ -121,7 +121,7 @@ export function TabBar({ workspace, onNewTabRequest }: Props) {
                 className="
                   opacity-0 group-hover:opacity-100
                   transition-opacity duration-120
-                  w-4 h-4 flex items-center justify-center
+                  w-4 h-4 flex items-center justify-center rounded-control
                   text-muted hover:text-ink hover:bg-border
                   text-[14px] leading-none
                 "

@@ -116,7 +116,7 @@ export function NumberInput({
   const atMax = draft === null && value >= max
 
   return (
-    <div className={cn('flex items-stretch border border-control-border bg-control-bg', className)}>
+    <div className={cn('flex items-stretch overflow-hidden rounded-control border border-control-border bg-control-bg', className)}>
       <button
         type="button"
         aria-label="Decrease"

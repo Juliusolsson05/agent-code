@@ -87,14 +87,14 @@ export function FeedDebugPanel({ sessionId, runtime, kind, onClose }: Props) {
           <button
             type="button"
             onClick={() => void copyItems(filtered.slice(-50), 'last 50')}
-            className="border border-border/80 text-ink-dim hover:text-ink hover:border-border-hi px-1.5 py-0.5"
+            className="rounded-control border border-border/80 text-ink-dim hover:text-ink hover:border-border-hi px-1.5 py-0.5"
           >
             copy 50
           </button>
           <button
             type="button"
             onClick={() => void copyItems(filtered, 'all visible')}
-            className="border border-border/80 text-ink-dim hover:text-ink hover:border-border-hi px-1.5 py-0.5"
+            className="rounded-control border border-border/80 text-ink-dim hover:text-ink hover:border-border-hi px-1.5 py-0.5"
           >
             copy all
           </button>
@@ -107,7 +107,7 @@ export function FeedDebugPanel({ sessionId, runtime, kind, onClose }: Props) {
             key={layer}
             type="button"
             onClick={() => setEnabled(prev => ({ ...prev, [layer]: !prev[layer] }))}
-            className={`px-1.5 py-0.5 border tracking-[0.12em] uppercase ${
+            className={`rounded-control px-1.5 py-0.5 border tracking-[0.12em] uppercase ${
               enabled[layer]
                 ? 'border-accent/70 text-accent'
                 : 'border-border/60 text-muted'

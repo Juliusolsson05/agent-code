@@ -218,7 +218,7 @@ export function SystemPerfPopover({ open, current, buffer }: Props) {
   return (
     <div className="relative [-webkit-app-region:no-drag]">
       <div
-        className={`absolute right-0 top-full mt-1 ${POPOVER_WIDTH_CLASS} border border-border bg-surface shadow-xl z-50`}
+        className={`rounded-float absolute right-0 top-full mt-1 ${POPOVER_WIDTH_CLASS} border border-border bg-surface shadow-xl z-50`}
       >
         {/* Top headline: current/peak/Δ60s for heap, rss, native. Same
             shape as before — this is the at-a-glance "are we OK?". */}
@@ -345,9 +345,9 @@ export function SystemPerfPopover({ open, current, buffer }: Props) {
                     className="grid grid-cols-[120px_1fr_70px_70px] gap-2 items-center"
                   >
                     <span className="text-ink">{prettySpaceName(space.spaceName)}</span>
-                    <span className="bg-surface-hi h-1.5 relative">
+                    <span className="bg-surface-hi h-1.5 relative rounded-chip">
                       <span
-                        className="absolute left-0 top-0 bottom-0 bg-success/60"
+                        className="absolute left-0 top-0 bottom-0 rounded-chip bg-success/60"
                         style={{ width: `${widthPct}%` }}
                       />
                     </span>
@@ -450,7 +450,7 @@ export function SystemPerfPopover({ open, current, buffer }: Props) {
             type="button"
             onClick={() => void handleCapture()}
             disabled={snapshot.kind === 'pending'}
-            className="px-2 py-1 text-[10px] border border-border bg-surface-hi hover:bg-surface disabled:opacity-50 disabled:cursor-not-allowed"
+            className="rounded-control px-2 py-1 text-[10px] border border-border bg-surface-hi hover:bg-surface disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {snapshot.kind === 'pending' ? 'capturing…' : 'capture heap snapshot'}
           </button>
@@ -458,7 +458,7 @@ export function SystemPerfPopover({ open, current, buffer }: Props) {
             <button
               type="button"
               onClick={handleReveal}
-              className="px-2 py-1 text-[10px] border border-success-border text-success hover:bg-surface"
+              className="rounded-control px-2 py-1 text-[10px] border border-success-border text-success hover:bg-surface"
               title={snapshot.path}
             >
               reveal in Finder

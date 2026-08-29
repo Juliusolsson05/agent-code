@@ -28,12 +28,14 @@ import {
   claudeHistoryMarker,
   extractEmbeddedClaudeProgressEntry,
 } from './history'
+import { classifyClaudeDurableEntry } from '@providers/claude/renderer/entries/classify'
 
 export function createClaudeTranscriptEntryMapper(): TranscriptEntryMapper {
   return {
     map(raw: Record<string, unknown>): MappedTranscriptEntry {
       const feedEntry = extractEmbeddedClaudeProgressEntry(raw) ?? (raw as Entry)
       const marker = claudeHistoryMarker(raw)
+      const durableKind = classifyClaudeDurableEntry(feedEntry)
       // The conversation/compact filter lives HERE (not at call sites)
       // so all four ingestion paths inherit identical semantics — the
       // old duplication had already drifted (live ingest cleared
@@ -43,7 +45,8 @@ export function createClaudeTranscriptEntryMapper(): TranscriptEntryMapper {
       if (
         !isConversationEntry(feedEntry) &&
         !isCompactBoundaryEntry(feedEntry) &&
-        !isCompactSummaryEntry(feedEntry)
+        !isCompactSummaryEntry(feedEntry) &&
+        durableKind === null
       ) {
         return { entries: [], historyMarker: marker }
       }

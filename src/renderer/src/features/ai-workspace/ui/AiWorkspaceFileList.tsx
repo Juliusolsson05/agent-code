@@ -80,7 +80,7 @@ export function AiWorkspaceFileList({
             aria-label="Close AI Workspace"
             title="Close AI Workspace"
             onClick={onClose}
-            className="border border-border bg-surface-hi px-1.5 py-0.5 text-muted hover:border-accent hover:text-ink"
+            className="rounded-control border border-border bg-surface-hi px-1.5 py-0.5 text-muted hover:border-accent hover:text-ink"
           >
             close
           </button>
@@ -90,7 +90,7 @@ export function AiWorkspaceFileList({
         {error ? (
           <div
             role="alert"
-            className="mx-2 mb-1 border border-danger/40 bg-danger/10 px-2 py-1 text-danger"
+            className="rounded-slab mx-2 mb-1 border border-danger/40 bg-danger/10 px-2 py-1 text-danger"
           >
             {error}
           </div>

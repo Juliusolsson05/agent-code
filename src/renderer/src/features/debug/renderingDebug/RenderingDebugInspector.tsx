@@ -347,7 +347,7 @@ export function RenderingDebugInspector({ sessionId, provider, onSave, onClose }
               type="button"
               disabled={!selection || saving}
               onClick={() => void save()}
-              className="border border-border rounded px-2 py-1 text-ink-dim hover:bg-canvas disabled:opacity-40"
+              className="border border-border rounded-control px-2 py-1 text-ink-dim hover:bg-canvas disabled:opacity-40"
             >
               {saving ? 'Saving…' : 'Save'}
             </button>
@@ -355,7 +355,7 @@ export function RenderingDebugInspector({ sessionId, provider, onSave, onClose }
               type="button"
               disabled={!selection}
               onClick={() => void copy('all JSON', allJson)}
-              className="border border-red-500/50 rounded px-2 py-1 text-red-300 hover:bg-red-500/10 disabled:opacity-40"
+              className="border border-red-500/50 rounded-control px-2 py-1 text-red-300 hover:bg-red-500/10 disabled:opacity-40"
             >
               Copy All as JSON
             </button>
@@ -424,7 +424,7 @@ function Disclosure({
   children: React.ReactNode
 }) {
   return (
-    <details className="border border-border rounded bg-canvas">
+    <details className="border border-border rounded-slab bg-canvas">
       <summary className="cursor-pointer select-none px-2 py-1.5 text-ink-dim">
         {title}
         {onCopy ? (

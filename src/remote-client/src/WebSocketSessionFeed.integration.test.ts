@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events'
 import { randomBytes } from 'node:crypto'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { WebSocket as NodeWebSocket } from 'ws'
@@ -255,6 +256,16 @@ describe('WebSocketSessionFeed against a live RemoteServer', () => {
       // Deliberately ALSO delivered live below — the seen-set must dedupe.
       { type: 'user', uuid: 'u-live', message: { role: 'user', content: 'do the thing' } },
     ]
+    const recordedBundle = JSON.parse(
+      readFileSync(
+        join(
+          process.cwd(),
+          'testing/fixtures/rendering-bundles/2026-06-14T14-25-07-012-a8ad1ebb.json',
+        ),
+        'utf8',
+      ),
+    ) as { input: { entries: Array<Record<string, unknown>> } }
+    const durableQueuedPrompt = recordedBundle.input.entries[13]!
     await writeFile(transcript, disk.map(d => JSON.stringify(d)).join('\n') + '\n', 'utf8')
     ;(manager.resolveTranscriptFile as ReturnType<typeof vi.fn>).mockResolvedValue(transcript)
 
@@ -273,11 +284,27 @@ describe('WebSocketSessionFeed against a live RemoteServer', () => {
       expect(store.getSnapshot('s1').entries.map(e => e.uuid)).toEqual(['u-live']),
     )
 
+    // The phone store deliberately shares the desktop provider mapper. A
+    // recorded queued-command attachment must therefore survive live remote
+    // transport too; otherwise desktop reload would show the user bubble while
+    // the same session on mobile silently dropped it.
+    manager.emit('jsonl-entry', {
+      sessionId: 's1',
+      entry: durableQueuedPrompt,
+      file: transcript,
+    })
+    await vi.waitFor(() =>
+      expect(store.getSnapshot('s1').entries.map(e => e.uuid)).toEqual([
+        'u-live',
+        durableQueuedPrompt.uuid,
+      ]),
+    )
+
     // Backfill prepends the older records and skips the duplicate.
     await store.loadInitialHistory('s1')
     await vi.waitFor(() =>
       expect(store.getSnapshot('s1').entries.map(e => e.uuid)).toEqual([
-        'u-old', 'a-old', 'u-live',
+        'u-old', 'a-old', 'u-live', durableQueuedPrompt.uuid,
       ]),
     )
     expect(store.getSnapshot('s1').hasOlderHistory).toBe(false)

@@ -1,6 +1,7 @@
 import {
   ACCENTS,
   AGENT_VIEW_MODES,
+  CORNER_STYLES,
   DEFAULT_SETTINGS,
   FONT_FAMILIES,
   isBuiltInThemeMode,
@@ -117,6 +118,16 @@ export function coerceSettings(value: unknown): Settings {
     agentViewMode: AGENT_VIEW_MODES.some(m => m.id === parsed.agentViewMode)
       ? (parsed.agentViewMode as Settings['agentViewMode'])
       : DEFAULT_SETTINGS.agentViewMode,
+    // Corner style must be coerced for a sharper reason than most enums here:
+    // applyTheme looks the tier up by id and writes its three lengths onto
+    // <html>. An id that resolves to nothing would write `undefined` into
+    // three custom properties, and every rounded-chip/slab/float utility in
+    // the app would resolve to an invalid value at once. The fallback keeps a
+    // blob from a newer build, or a hand-edited one, merely wrong rather than
+    // globally unstyled.
+    cornerStyle: CORNER_STYLES.some(c => c.id === parsed.cornerStyle)
+      ? (parsed.cornerStyle as Settings['cornerStyle'])
+      : DEFAULT_SETTINGS.cornerStyle,
     // WHY this is a closed configurable-domain normalizer instead of the
     // broader session normalizer: persisted Settings must never promote the
     // diagnostic `ping` domain into every future agent. Provider filtering is

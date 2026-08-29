@@ -19,7 +19,7 @@ export function PromptSuggestionChip({ text, onApply, onDismiss }: Props) {
       <button
         type="button"
         onClick={() => onApply(text)}
-        className="
+        className="rounded-control
           flex items-center gap-1.5 max-w-full truncate
           px-2 py-1 text-[11px] font-code text-ink-dim
           border border-border bg-surface

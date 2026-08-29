@@ -1,5 +1,6 @@
 import {
   ACCENTS,
+  CORNER_STYLES,
   DEFAULT_SETTINGS,
   FONT_FAMILIES,
   isBuiltInThemeMode,
@@ -47,6 +48,14 @@ const LEGACY_CODE_FONT_CSS_VAR = '--theme-font-code'
 // Matches the historical default (JetBrains Mono with system-mono
 // fallbacks) so reading this in a degenerate state always produces a
 // visually-correct monospace face.
+// The three semantic radius tokens. Exported so the applyTheme test can assert
+// the contract by name instead of restating the literal strings, and so a
+// rename cannot silently half-land.
+export const CORNER_CHIP_CSS_VAR = '--theme-radius-chip'
+export const CORNER_CONTROL_CSS_VAR = '--theme-radius-control'
+export const CORNER_SLAB_CSS_VAR = '--theme-radius-slab'
+export const CORNER_FLOAT_CSS_VAR = '--theme-radius-float'
+
 const FALLBACK_APP_FONT_FAMILY =
   "'JetBrains Mono', ui-monospace, Menlo, Monaco, monospace"
 
@@ -131,6 +140,26 @@ export function applyTheme(settings: Settings): void {
   root.style.setProperty(APP_FONT_CSS_VAR, fontMeta.family)
   root.style.setProperty(LEGACY_CODE_FONT_CSS_VAR, fontMeta.family)
   root.style.setProperty('--monaco-monospace-font', fontMeta.family)
+  // Corner radius: three lengths written inline for the same reason the accent
+  // and font tokens are — inline custom properties on <html> outrank the
+  // [data-mode] blocks, so the whole app's `rounded-chip/slab/float` utilities
+  // re-resolve with no React work and no per-component subscription.
+  //
+  // WHY the `?? CORNER_STYLES[0]` fallback repeats the font lookup's shape
+  // rather than trusting coerceSettings: this function is also called by the
+  // phone client on an UNCOERCED settings blob (see the data-mode comment
+  // above). Resolving to undefined here would write three invalid values and
+  // break every rounded surface at once, so the defensive read stays local.
+  //
+  // All four are always written together. A partially applied tier is the
+  // shape a copy-paste error takes here, and it produces an app whose chips
+  // and panels disagree about the corner language.
+  const corners =
+    CORNER_STYLES.find(c => c.id === settings.cornerStyle) ?? CORNER_STYLES[0]
+  root.style.setProperty(CORNER_CHIP_CSS_VAR, corners.chip)
+  root.style.setProperty(CORNER_CONTROL_CSS_VAR, corners.control)
+  root.style.setProperty(CORNER_SLAB_CSS_VAR, corners.slab)
+  root.style.setProperty(CORNER_FLOAT_CSS_VAR, corners.float)
   window.dispatchEvent(new CustomEvent(THEME_CHANGED_EVENT, { detail: settings }))
 }
 

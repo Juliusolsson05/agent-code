@@ -57,8 +57,14 @@ import { cn } from '@renderer/lib/utils'
 // feature-specific layout. It is the filled `destructive`'s quieter sibling:
 // use it when the click OPENS a confirmation, and `destructive` when the click
 // IS the destructive act.
+// WHY the base takes `rounded-control` and not `rounded-chip`, even though a
+// small icon button is visually a capsule: this primitive is width-agnostic by
+// contract. SettingsList stretches it to a full-width two-line row, and at the
+// Round tier a chip radius would render those as stadiums. `control` is the
+// class that stays modest at every width, which is exactly what a primitive
+// used at five sizes needs. Callers wanting a true pill say so themselves.
 const buttonVariants = cva(
-  'inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap border font-code font-medium transition-colors outline-none focus-visible:border-focus-ring focus-visible:ring-1 focus-visible:ring-focus-ring disabled:pointer-events-none disabled:opacity-50',
+  'inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-control border font-code font-medium transition-colors outline-none focus-visible:border-focus-ring focus-visible:ring-1 focus-visible:ring-focus-ring disabled:pointer-events-none disabled:opacity-50',
   {
     variants: {
       variant: {

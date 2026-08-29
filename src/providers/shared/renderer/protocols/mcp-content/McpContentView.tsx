@@ -47,7 +47,7 @@ function McpBlockView({ block }: { block: McpContentBlock }) {
       : typeof value.name === 'string' ? value.name : uri || 'Resource link'
     const name = shortText(rawName, 280)
     return (
-      <div className="rounded border border-border/70 px-2 py-1.5 text-[12px]">
+      <div className="rounded-slab border border-border/70 px-2 py-1.5 text-[12px]">
         <div className="text-ink-dim">Resource link</div>
         {isHttpUrl(uri) ? (
           <a href={uri} target="_blank" rel="noreferrer" className="text-accent hover:underline break-all">
@@ -80,7 +80,7 @@ function McpBlockView({ block }: { block: McpContentBlock }) {
 
   return (
     <details
-      className="rounded border border-border/70 px-2 py-1 text-[12px] text-ink-dim"
+      className="rounded-slab border border-border/70 px-2 py-1 text-[12px] text-ink-dim"
       onToggle={event => setOpen(event.currentTarget.open)}
     >
       <summary className="cursor-pointer select-none break-all">{label}</summary>
@@ -89,7 +89,7 @@ function McpBlockView({ block }: { block: McpContentBlock }) {
           {text !== null ? <PagedTextViewer source={text} /> : null}
           {block.type === 'image' ? (
             media ? (
-              <img src={base64MediaDataUrl(media)} alt="MCP image result" className="max-h-[420px] max-w-full rounded border border-border object-contain" />
+              <img src={base64MediaDataUrl(media)} alt="MCP image result" className="max-h-[420px] max-w-full rounded-slab border border-border object-contain" />
             ) : (
               <div className="text-[11px] text-muted">Image preview unavailable or above the 8 MiB inline-media budget.</div>
             )
@@ -127,7 +127,7 @@ function ExactMcpSource({ raw, source, isError }: { raw: unknown; source?: strin
     <details className="text-[11px] text-muted" onToggle={event => setOpen(event.currentTarget.open)}>
       <summary className="cursor-pointer select-none">View exact MCP result</summary>
       {open ? (
-        <div className="mt-1 rounded border border-border bg-surface px-2 py-1.5">
+        <div className="mt-1 rounded-slab border border-border bg-surface px-2 py-1.5">
           {resolvedSource === null ? 'Exact result unavailable.' : <PagedTextViewer source={resolvedSource} isError={isError} />}
         </div>
       ) : null}

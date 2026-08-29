@@ -141,7 +141,7 @@ export function DevDebugPanel({ sessionId, runtime, kind, workspace, onClose }: 
                   key={module.id}
                   type="button"
                   onClick={() => toggleModule(module)}
-                  className={`border px-2 py-1 text-left transition-colors ${
+                  className={`rounded-control border px-2 py-1 text-left transition-colors ${
                     enabled
                       ? 'border-accent/70 bg-accent/10 text-ink'
                       : 'border-border/70 bg-canvas text-ink-dim hover:border-border-hi hover:text-ink'
@@ -167,7 +167,7 @@ export function DevDebugPanel({ sessionId, runtime, kind, workspace, onClose }: 
 
       <div className="flex-1 min-h-0 overflow-auto p-3 flex flex-col gap-3">
         {enabledModules.length === 0 ? (
-          <div className="border border-border bg-canvas px-3 py-4 text-center text-[11px] text-muted">
+          <div className="rounded-slab border border-border bg-canvas px-3 py-4 text-center text-[11px] text-muted">
             no dev debug modules enabled
           </div>
         ) : (
@@ -213,7 +213,7 @@ function CopyButton({
     <button
       type="button"
       onClick={onClick}
-      className="border border-border/80 px-1.5 py-0.5 text-[10px] text-ink-dim hover:border-border-hi hover:text-ink"
+      className="rounded-control border border-border/80 px-1.5 py-0.5 text-[10px] text-ink-dim hover:border-border-hi hover:text-ink"
     >
       {label}
     </button>

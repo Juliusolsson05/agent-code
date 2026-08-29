@@ -112,7 +112,7 @@ export function ConfigureDictationCard() {
       <button
         type="button"
         onClick={openGuide}
-        className="border border-accent px-2 py-0.5 text-[11px] text-accent hover:bg-accent/20"
+        className="rounded-control border border-accent px-2 py-0.5 text-[11px] text-accent hover:bg-accent/20"
       >
         Show me how
       </button>

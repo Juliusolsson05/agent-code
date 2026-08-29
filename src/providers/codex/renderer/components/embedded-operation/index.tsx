@@ -32,7 +32,7 @@ export function CodexEmbeddedOperationRow({
           onClick={() => setOpen(value => !value)}
           className="flex w-full min-w-0 items-center gap-2 text-left text-[13px] leading-[1.65]"
         >
-          <span className="shrink-0 rounded border border-border px-1 text-[10px] uppercase tracking-wider text-muted">
+          <span className="shrink-0 rounded-chip border border-border px-1 text-[10px] uppercase tracking-wider text-muted">
             Agent Code MCP
           </span>
           <span className="shrink-0 text-accent font-semibold">{model.action}</span>
@@ -52,7 +52,7 @@ export function CodexEmbeddedOperationRow({
             <LazyJsonDisclosure label="Operation input" value={model.input} />
             <details className="text-[11px] text-muted">
               <summary className="cursor-pointer select-none">Exact Codex script</summary>
-              <div className="mt-1 rounded border border-border bg-surface px-2 py-1.5">
+              <div className="mt-1 rounded-slab border border-border bg-surface px-2 py-1.5">
                 <PagedTextViewer source={model.exactScript} />
               </div>
             </details>

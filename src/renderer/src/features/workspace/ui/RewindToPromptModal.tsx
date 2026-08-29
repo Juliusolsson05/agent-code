@@ -202,7 +202,7 @@ export function RewindToPromptModal({
                       void confirm()
                     }}
                     className={
-                      'text-left border px-3 py-3 cursor-pointer transition-colors ' +
+                      'rounded-control text-left border px-3 py-3 cursor-pointer transition-colors ' +
                       (isSelected
                         ? 'border-accent bg-canvas'
                         : 'border-border bg-canvas/70 hover:border-border-hi')

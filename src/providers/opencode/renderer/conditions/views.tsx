@@ -156,7 +156,7 @@ export const opencodeQuestionView = defineView<
     return (
       <ConditionShell heading="OpenCode is asking" actions={actions} dispatch={dispatch}>
         {state.text ? (
-          <pre className="bg-code-bg text-code-ink px-3 py-2 mb-1 overflow-x-auto whitespace-pre-wrap text-[11.5px]">
+          <pre className="bg-code-bg rounded-slab text-code-ink px-3 py-2 mb-1 overflow-x-auto whitespace-pre-wrap text-[11.5px]">
             {state.text}
           </pre>
         ) : (

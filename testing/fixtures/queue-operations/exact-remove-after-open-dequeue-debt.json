@@ -1,0 +1,195 @@
+{
+  "source": "local-claude-corpus/79daeead:L1511-L1557",
+  "note": "Recorded evidence-precedence failure: 16 notification enqueues and 3 dequeues leave dequeue debt open before 13 content-bearing removes name exact targets. Three correlation identities are duplicated. Inference must not consume an exact remove target before the exact carrier is applied.",
+  "events": [
+    {
+      "kind": "op",
+      "op": "enqueue",
+      "content": "<task-notification>\n<task-id>recorded-task-000</task-id>\n<output-file>/tmp/recorded-task-000</output-file>\n<status>completed</status>\n<summary>Agent \"recorded-notification-000\" finished</summary>\n</task-notification>",
+      "timestamp": "2026-08-24T23:47:23.062Z"
+    },
+    {
+      "kind": "op",
+      "op": "enqueue",
+      "content": "<task-notification>\n<task-id>recorded-task-001</task-id>\n<output-file>/tmp/recorded-task-001</output-file>\n<status>completed</status>\n<summary>Agent \"recorded-notification-001\" finished</summary>\n</task-notification>",
+      "timestamp": "2026-08-24T23:47:23.063Z"
+    },
+    {
+      "kind": "op",
+      "op": "enqueue",
+      "content": "<task-notification>\n<task-id>recorded-task-002</task-id>\n<output-file>/tmp/recorded-task-002</output-file>\n<status>completed</status>\n<summary>Agent \"recorded-notification-002\" finished</summary>\n</task-notification>",
+      "timestamp": "2026-08-24T23:47:23.065Z"
+    },
+    {
+      "kind": "op",
+      "op": "enqueue",
+      "content": "<task-notification>\n<task-id>recorded-task-003</task-id>\n<output-file>/tmp/recorded-task-003</output-file>\n<status>completed</status>\n<summary>Agent \"recorded-notification-003\" finished</summary>\n</task-notification>",
+      "timestamp": "2026-08-24T23:47:23.067Z"
+    },
+    {
+      "kind": "op",
+      "op": "dequeue",
+      "timestamp": "2026-08-24T23:47:23.067Z"
+    },
+    {
+      "kind": "op",
+      "op": "enqueue",
+      "content": "<task-notification>\n<task-id>recorded-task-001</task-id>\n<output-file>/tmp/recorded-task-001</output-file>\n<status>completed</status>\n<summary>Agent \"recorded-notification-001\" finished</summary>\n</task-notification>",
+      "timestamp": "2026-08-24T23:47:23.067Z"
+    },
+    {
+      "kind": "op",
+      "op": "enqueue",
+      "content": "<task-notification>\n<task-id>recorded-task-004</task-id>\n<output-file>/tmp/recorded-task-004</output-file>\n<status>completed</status>\n<summary>Agent \"recorded-notification-004\" finished</summary>\n</task-notification>",
+      "timestamp": "2026-08-24T23:47:23.068Z"
+    },
+    {
+      "kind": "op",
+      "op": "enqueue",
+      "content": "<task-notification>\n<task-id>recorded-task-005</task-id>\n<output-file>/tmp/recorded-task-005</output-file>\n<status>completed</status>\n<summary>Agent \"recorded-notification-005\" finished</summary>\n</task-notification>",
+      "timestamp": "2026-08-24T23:47:23.068Z"
+    },
+    {
+      "kind": "op",
+      "op": "dequeue",
+      "timestamp": "2026-08-24T23:47:23.070Z"
+    },
+    {
+      "kind": "op",
+      "op": "enqueue",
+      "content": "<task-notification>\n<task-id>recorded-task-005</task-id>\n<output-file>/tmp/recorded-task-005</output-file>\n<status>completed</status>\n<summary>Agent \"recorded-notification-005\" finished</summary>\n</task-notification>",
+      "timestamp": "2026-08-24T23:47:23.070Z"
+    },
+    {
+      "kind": "op",
+      "op": "enqueue",
+      "content": "<task-notification>\n<task-id>recorded-task-006</task-id>\n<output-file>/tmp/recorded-task-006</output-file>\n<status>completed</status>\n<summary>Agent \"recorded-notification-006\" finished</summary>\n</task-notification>",
+      "timestamp": "2026-08-24T23:47:23.070Z"
+    },
+    {
+      "kind": "op",
+      "op": "enqueue",
+      "content": "<task-notification>\n<task-id>recorded-task-007</task-id>\n<output-file>/tmp/recorded-task-007</output-file>\n<status>completed</status>\n<summary>Agent \"recorded-notification-007\" finished</summary>\n</task-notification>",
+      "timestamp": "2026-08-24T23:47:23.075Z"
+    },
+    {
+      "kind": "op",
+      "op": "dequeue",
+      "timestamp": "2026-08-24T23:47:23.076Z"
+    },
+    {
+      "kind": "op",
+      "op": "enqueue",
+      "content": "<task-notification>\n<task-id>recorded-task-006</task-id>\n<output-file>/tmp/recorded-task-006</output-file>\n<status>completed</status>\n<summary>Agent \"recorded-notification-006\" finished</summary>\n</task-notification>",
+      "timestamp": "2026-08-24T23:47:23.076Z"
+    },
+    {
+      "kind": "op",
+      "op": "enqueue",
+      "content": "<task-notification>\n<task-id>recorded-task-008</task-id>\n<output-file>/tmp/recorded-task-008</output-file>\n<status>completed</status>\n<summary>Agent \"recorded-notification-008\" finished</summary>\n</task-notification>",
+      "timestamp": "2026-08-24T23:47:23.076Z"
+    },
+    {
+      "kind": "op",
+      "op": "enqueue",
+      "content": "<task-notification>\n<task-id>recorded-task-009</task-id>\n<output-file>/tmp/recorded-task-009</output-file>\n<status>completed</status>\n<summary>Agent \"recorded-notification-009\" finished</summary>\n</task-notification>",
+      "timestamp": "2026-08-24T23:47:23.077Z"
+    },
+    {
+      "kind": "op",
+      "op": "enqueue",
+      "content": "<task-notification>\n<task-id>recorded-task-010</task-id>\n<output-file>/tmp/recorded-task-010</output-file>\n<status>completed</status>\n<summary>Agent \"recorded-notification-010\" finished</summary>\n</task-notification>",
+      "timestamp": "2026-08-24T23:47:23.078Z"
+    },
+    {
+      "kind": "op",
+      "op": "enqueue",
+      "content": "<task-notification>\n<task-id>recorded-task-011</task-id>\n<output-file>/tmp/recorded-task-011</output-file>\n<status>completed</status>\n<summary>Agent \"recorded-notification-011\" finished</summary>\n</task-notification>",
+      "timestamp": "2026-08-24T23:47:23.079Z"
+    },
+    {
+      "kind": "op",
+      "op": "enqueue",
+      "content": "<task-notification>\n<task-id>recorded-task-012</task-id>\n<output-file>/tmp/recorded-task-012</output-file>\n<status>completed</status>\n<summary>Agent \"recorded-notification-012\" finished</summary>\n</task-notification>",
+      "timestamp": "2026-08-24T23:47:23.080Z"
+    },
+    {
+      "kind": "op",
+      "op": "remove",
+      "content": "<task-notification>\n<task-id>recorded-task-000</task-id>\n<output-file>/tmp/recorded-task-000</output-file>\n<status>completed</status>\n<summary>Agent \"recorded-notification-000\" finished</summary>\n</task-notification>",
+      "timestamp": "2026-08-24T23:47:58.906Z"
+    },
+    {
+      "kind": "op",
+      "op": "remove",
+      "content": "<task-notification>\n<task-id>recorded-task-002</task-id>\n<output-file>/tmp/recorded-task-002</output-file>\n<status>completed</status>\n<summary>Agent \"recorded-notification-002\" finished</summary>\n</task-notification>",
+      "timestamp": "2026-08-24T23:47:58.907Z"
+    },
+    {
+      "kind": "op",
+      "op": "remove",
+      "content": "<task-notification>\n<task-id>recorded-task-003</task-id>\n<output-file>/tmp/recorded-task-003</output-file>\n<status>completed</status>\n<summary>Agent \"recorded-notification-003\" finished</summary>\n</task-notification>",
+      "timestamp": "2026-08-24T23:47:58.907Z"
+    },
+    {
+      "kind": "op",
+      "op": "remove",
+      "content": "<task-notification>\n<task-id>recorded-task-001</task-id>\n<output-file>/tmp/recorded-task-001</output-file>\n<status>completed</status>\n<summary>Agent \"recorded-notification-001\" finished</summary>\n</task-notification>",
+      "timestamp": "2026-08-24T23:47:58.907Z"
+    },
+    {
+      "kind": "op",
+      "op": "remove",
+      "content": "<task-notification>\n<task-id>recorded-task-004</task-id>\n<output-file>/tmp/recorded-task-004</output-file>\n<status>completed</status>\n<summary>Agent \"recorded-notification-004\" finished</summary>\n</task-notification>",
+      "timestamp": "2026-08-24T23:47:58.907Z"
+    },
+    {
+      "kind": "op",
+      "op": "remove",
+      "content": "<task-notification>\n<task-id>recorded-task-005</task-id>\n<output-file>/tmp/recorded-task-005</output-file>\n<status>completed</status>\n<summary>Agent \"recorded-notification-005\" finished</summary>\n</task-notification>",
+      "timestamp": "2026-08-24T23:47:58.907Z"
+    },
+    {
+      "kind": "op",
+      "op": "remove",
+      "content": "<task-notification>\n<task-id>recorded-task-007</task-id>\n<output-file>/tmp/recorded-task-007</output-file>\n<status>completed</status>\n<summary>Agent \"recorded-notification-007\" finished</summary>\n</task-notification>",
+      "timestamp": "2026-08-24T23:47:58.907Z"
+    },
+    {
+      "kind": "op",
+      "op": "remove",
+      "content": "<task-notification>\n<task-id>recorded-task-006</task-id>\n<output-file>/tmp/recorded-task-006</output-file>\n<status>completed</status>\n<summary>Agent \"recorded-notification-006\" finished</summary>\n</task-notification>",
+      "timestamp": "2026-08-24T23:47:58.907Z"
+    },
+    {
+      "kind": "op",
+      "op": "remove",
+      "content": "<task-notification>\n<task-id>recorded-task-008</task-id>\n<output-file>/tmp/recorded-task-008</output-file>\n<status>completed</status>\n<summary>Agent \"recorded-notification-008\" finished</summary>\n</task-notification>",
+      "timestamp": "2026-08-24T23:47:58.907Z"
+    },
+    {
+      "kind": "op",
+      "op": "remove",
+      "content": "<task-notification>\n<task-id>recorded-task-009</task-id>\n<output-file>/tmp/recorded-task-009</output-file>\n<status>completed</status>\n<summary>Agent \"recorded-notification-009\" finished</summary>\n</task-notification>",
+      "timestamp": "2026-08-24T23:47:58.907Z"
+    },
+    {
+      "kind": "op",
+      "op": "remove",
+      "content": "<task-notification>\n<task-id>recorded-task-010</task-id>\n<output-file>/tmp/recorded-task-010</output-file>\n<status>completed</status>\n<summary>Agent \"recorded-notification-010\" finished</summary>\n</task-notification>",
+      "timestamp": "2026-08-24T23:47:58.907Z"
+    },
+    {
+      "kind": "op",
+      "op": "remove",
+      "content": "<task-notification>\n<task-id>recorded-task-011</task-id>\n<output-file>/tmp/recorded-task-011</output-file>\n<status>completed</status>\n<summary>Agent \"recorded-notification-011\" finished</summary>\n</task-notification>",
+      "timestamp": "2026-08-24T23:47:58.907Z"
+    },
+    {
+      "kind": "op",
+      "op": "remove",
+      "content": "<task-notification>\n<task-id>recorded-task-012</task-id>\n<output-file>/tmp/recorded-task-012</output-file>\n<status>completed</status>\n<summary>Agent \"recorded-notification-012\" finished</summary>\n</task-notification>",
+      "timestamp": "2026-08-24T23:47:58.907Z"
+    }
+  ]
+}

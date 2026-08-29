@@ -38,7 +38,7 @@ export function TrustDialogModal({ state, onSend }: Props) {
         <div className="text-[12px] leading-[1.65] text-ink-dim pl-6">
           <p className="mb-3">Claude Code is about to access:</p>
           {state.workspace && (
-            <pre className="bg-code-bg text-accent px-3 py-2 mb-3 overflow-x-auto whitespace-nowrap text-[11.5px]">
+            <pre className="bg-code-bg rounded-slab text-accent px-3 py-2 mb-3 overflow-x-auto whitespace-nowrap text-[11.5px]">
               {state.workspace}
             </pre>
           )}
