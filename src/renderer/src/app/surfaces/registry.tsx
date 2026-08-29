@@ -27,6 +27,7 @@ import { ColorFlagPickerSurface } from '@renderer/features/workspace/surfaces/Co
 import { KeyboardShortcutsSurface } from '@renderer/features/settings/surfaces/KeyboardShortcutsSurface'
 import { RewindToPromptSurface } from '@renderer/features/workspace/surfaces/RewindToPromptSurface'
 import { AgentTitlePromptSurface } from '@renderer/features/workspace/surfaces/AgentTitlePromptSurface'
+import { AppHostSurface } from '@renderer/apps/surfaces/AppHostSurface'
 
 // The surface registry (issue #494). Adding a surface = write a wrapper
 // in the owning feature's surfaces/ folder + add ONE import + ONE array
@@ -81,6 +82,13 @@ export const modalSurfaces: SurfaceEntry[] = [
   { id: 'rewind-to-prompt', Component: RewindToPromptSurface },
   { id: 'agent-title-prompt', Component: AgentTitlePromptSurface },
   { id: 'usage', Component: UsageModalSurface },
+  // Built-in apps host. Last in the array, which per the paint-order contract
+  // above means it paints above every modal already mounted. That placement is
+  // reasoned, not defaulted: an app is always user-initiated from the palette and
+  // is the thing awaiting input for as long as it is open, so nothing already on
+  // screen has a claim to cover it. No app has a reason to sit *under* another
+  // modal — if one ever does, that is a signal it should not be an app.
+  { id: 'app-host', Component: AppHostSurface },
 ]
 
 /**

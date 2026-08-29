@@ -86,6 +86,10 @@ const CATEGORY_ORDER: readonly CommandCategory[] = [
   'workspace-tools',
   'preferences',
   'developer',
+  // Third-party last. Extension commands are the only category whose membership the
+  // app does not control, so they browse after everything first-party rather than
+  // interleaving — the same reasoning that puts them last in the registry concat.
+  'extensions',
 ]
 
 const CATEGORY_LABELS: Record<CommandCategory, string> = {
@@ -97,16 +101,23 @@ const CATEGORY_LABELS: Record<CommandCategory, string> = {
   'workspace-tools': 'Workspace Tools',
   preferences: 'Preferences',
   developer: 'Developer',
+  extensions: 'Extensions',
 }
 
 /**
  * Section for commands that declare no category.
  *
  * `CommandDef.category` is optional until the governance migration makes it
- * required, and extension-contributed commands have no way to declare one at
- * all. Dropping those rows would silently hide working commands from a browse
- * mode — the worst possible failure for a feature whose entire purpose is
- * discovery — so they get a labelled home at the end instead.
+ * required, so first-party commands that predate the migration land here.
+ * Dropping those rows would silently hide working commands from a browse mode —
+ * the worst possible failure for a feature whose entire purpose is discovery —
+ * so they get a labelled home at the end instead.
+ *
+ * Extension commands are NOT among them, despite an earlier version of this
+ * comment saying they "have no way to declare one at all". A manifest indeed
+ * cannot set a category — deliberately, so a third party cannot file itself under
+ * a first-party heading — but deriveExtensionCommands assigns 'extensions' to
+ * every command it builds, so they group under their own section.
  */
 const UNCATEGORIZED_LABEL = 'Other'
 

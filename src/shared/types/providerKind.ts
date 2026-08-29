@@ -38,16 +38,28 @@ export const AGENT_PROVIDER_KINDS = ['claude', 'codex', 'opencode'] as const
 export type AgentProviderKind = (typeof AGENT_PROVIDER_KINDS)[number]
 
 /**
- * A kind of pane the shell can host. Superset of AgentProviderKind:
- * `'terminal'` is a plain shell pane with no agent transcript/conditions.
- * Terminal is deliberately NOT an AgentProviderKind so code that only
- * makes sense for agents (resume listing, prompt indexing, condition
- * snapshots) cannot accidentally be handed `'terminal'`.
+ * A kind of pane the shell can host. Strict superset of AgentProviderKind, with
+ * two members that are deliberately NOT agents:
+ *
+ *   'terminal'        a plain shell pane. Has a PTY, no agent transcript.
+ *   'extension-view'  a contributed extension view rendered as a tile leaf.
+ *                     Has NO backing process at all — no PTY, no agent — and is
+ *                     reconstructed purely from SessionMeta.extensionViewId.
+ *
+ * Neither is an AgentProviderKind, so code that only makes sense for agents
+ * (resume listing, prompt indexing, condition snapshots, composer drafts) cannot
+ * be handed one by the type system.
+ *
+ * ── HOW TO TEST FOR "IS THIS AN AGENT" ──
+ * Use `isAgentSessionKind`, never `kind !== 'terminal'`. The negative spelling
+ * was correct only while 'terminal' was the ONLY non-agent kind; adding
+ * 'extension-view' silently reclassified every extension pane as an agent at
+ * ~30 call sites at once. See that function for the full account.
  */
-export type SessionKind = AgentProviderKind | 'terminal'
+export type SessionKind = AgentProviderKind | 'terminal' | 'extension-view'
 
 /** All session kinds, runtime form. Kept derived so it never drifts. */
-export const SESSION_KINDS = [...AGENT_PROVIDER_KINDS, 'terminal'] as const
+export const SESSION_KINDS = [...AGENT_PROVIDER_KINDS, 'terminal', 'extension-view'] as const
 
 /**
  * Narrow an untrusted string (IPC arg, persisted metadata, MCP input)
@@ -61,9 +73,41 @@ export function isAgentProviderKind(value: unknown): value is AgentProviderKind 
   return typeof value === 'string' && (AGENT_PROVIDER_KINDS as readonly string[]).includes(value)
 }
 
-/** Narrow an untrusted string to a SessionKind (includes 'terminal'). */
+/** Narrow an untrusted string to a SessionKind (any pane kind, agent or not). */
 export function isSessionKind(value: unknown): value is SessionKind {
   return typeof value === 'string' && (SESSION_KINDS as readonly string[]).includes(value)
+}
+
+/**
+ * Does this pane run an agent — i.e. does it have a transcript, a composer,
+ * conditions, a resumable provider session?
+ *
+ * ── WHY THIS EXISTS, AND WHY `kind !== 'terminal'` IS BANNED ──
+ * For most of this codebase's history 'terminal' was the only non-agent kind, so
+ * "is an agent" was spelled `kind !== 'terminal'` in about thirty places: pane
+ * command `when` guards, the Dispatch pin filter, rehydrate's spawn options,
+ * Reader Mode's session list, the activity modal, invalidation effects.
+ *
+ * Adding 'extension-view' to SessionKind reclassified every one of them at once,
+ * and the compiler could not see it — the expression stayed perfectly valid and
+ * silently changed meaning. Concretely, an extension pane became eligible for
+ * "Copy Last Response" (which then calls getRuntime on a pane that has no
+ * runtime), got pinned into Dispatch as an agent, was offered a composer it does
+ * not have, and rendered a "Claude Code" provider label in its header.
+ *
+ * The positive spelling cannot fail that way: a new non-agent kind is simply not
+ * in AGENT_PROVIDER_KINDS, so it is excluded by construction everywhere at once.
+ *
+ * ── WHY `undefined` COUNTS AS AN AGENT ──
+ * Not a shortcut — it is the same back-compat truth DEFAULT_PROVIDER encodes.
+ * `SessionMeta.kind` is optional because it postdates the workspace format, and
+ * every session persisted before it existed genuinely was Claude. Every call site
+ * this replaced already treated `undefined` as an agent (an absent kind is not
+ * equal to 'terminal'), so preserving that here is what makes the substitution
+ * behaviour-preserving for real sessions while fixing extension panes.
+ */
+export function isAgentSessionKind(value: SessionKind | undefined): boolean {
+  return value === undefined || isAgentProviderKind(value)
 }
 
 /**

@@ -1,0 +1,307 @@
+import { useCallback, useEffect, useState } from 'react'
+
+import { useAppStore } from '@renderer/app-state/hooks'
+
+import type { ExtensionListEntry } from '@shared/types/extensions'
+
+/**
+ * Settings → Extensions. Install from a GitHub repository, list what is installed,
+ * remove.
+ *
+ * WHY this row owns its own state and IPC rather than reading a store: same
+ * self-subscribing marker pattern as CliUpdateBehaviorRow and DictationApiKeyRow —
+ * the truth lives in main (`extensions.json` plus the bundle directories), not in
+ * the renderer's Settings, and mirroring it into zustand-persist would put
+ * third-party-derived data into the blob whose version bumps have black-screened
+ * launch twice (#249).
+ *
+ * WHY installing is deliberately a paste-a-repo box and not a browsable directory:
+ * there is no registry to browse, and inventing one would mean hosting an index
+ * before a single extension exists. The repo name IS the trust decision — the user
+ * typing `owner/repo` is the consent step, which is why there is no second
+ * confirmation dialog for a first install.
+ */
+export function AppsSettingsRow() {
+  const [entries, setEntries] = useState<ExtensionListEntry[] | null>(null)
+  const [repo, setRepo] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+
+  // Push the refreshed list into the store as well as local state: the palette
+  // and the view host read from the store, so an install that only updated this
+  // component would add an extension nobody else could see until a reload.
+  const setInstalledExtensions = useAppStore(state => state.setInstalledExtensions)
+  const failures = useAppStore(state => state.extensionFailures)
+
+  const refresh = useCallback(async () => {
+    try {
+      const listed = await window.api.extensionsList()
+      setEntries(listed)
+      setInstalledExtensions(listed)
+      return true
+    } catch (listError) {
+      // A failed list is not the same as an empty list, and rendering "no
+      // extensions" over an IPC failure would be a lie the user acts on. The STORE
+      // is deliberately left untouched for the same reason — but see `remove`,
+      // where leaving it untouched has a consequence this comment used to miss.
+      setEntries([])
+      setError(listError instanceof Error ? listError.message : String(listError))
+      return false
+    }
+  }, [setInstalledExtensions])
+
+  useEffect(() => {
+    void refresh()
+  }, [refresh])
+
+  // `target` is explicit rather than always read from `repo` so the Update button
+  // can install a specific entry's repo. The previous version did
+  // `setRepo(entry.repo); void install()`, but `setRepo` is async and `install`
+  // closed over the OLD `repo`, so Update installed the empty/last-typed value —
+  // the no-op bug. Passing the target directly removes the closure dependency.
+  const install = useCallback(
+    async (target?: string) => {
+      const repoTarget = (target ?? repo).trim()
+      if (!repoTarget || busy) return
+
+      setBusy(true)
+      setError(null)
+      setNotice(null)
+      try {
+        const result = await window.api.extensionsInstall(repoTarget)
+        if (result.ok) {
+          if (target === undefined) setRepo('')
+          setNotice(`Installed ${result.entry.manifest.name} ${result.entry.manifest.version}`)
+        } else {
+          setError(result.error)
+        }
+      } catch (installError) {
+        // installExtension returns {ok:false} for every anticipated failure, so
+        // reaching here means the IPC itself broke — worth showing distinctly rather
+        // than swallowing.
+        setError(installError instanceof Error ? installError.message : String(installError))
+      } finally {
+        setBusy(false)
+        await refresh()
+      }
+    },
+    [repo, busy, refresh],
+  )
+
+  // Update = reinstall over the existing bundle (install.ts does rm+rename).
+  //
+  // There is deliberately no host-side deactivate() call here any more. The old one
+  // read as a safeguard but was a no-op: it drove ExtensionHost's loaded-module map,
+  // which is always empty under the frame model because the extension never runs in
+  // this realm. A live frame keeps running against the replaced bundle until it is
+  // closed; its own pagehide handler runs deactivate() at that point, which is the
+  // only place the module actually exists.
+  const update = useCallback(
+    async (entry: ExtensionListEntry) => {
+      // Dispatch on how it was installed. A local extension's `repo` is an absolute
+      // folder path, so feeding it to the GitHub installer failed normalizeRepo every
+      // single time — and "rebuild, click Update" is the entire dev loop this install
+      // path exists for, so Update was broken for exactly the users who need it most.
+      if (entry.origin === 'local') {
+        setBusy(true)
+        setError(null)
+        setNotice(null)
+        try {
+          const result = await window.api.extensionsUpdateLocal(entry.manifest.id)
+          if (result.ok) {
+            setNotice(`Reloaded ${result.entry.manifest.name} ${result.entry.manifest.version}`)
+          } else {
+            setError(result.error)
+          }
+        } catch (updateError) {
+          setError(updateError instanceof Error ? updateError.message : String(updateError))
+        } finally {
+          setBusy(false)
+          await refresh()
+        }
+        return
+      }
+      await install(entry.repo)
+    },
+    [install, refresh],
+  )
+
+  const remove = useCallback(
+    async (entry: ExtensionListEntry) => {
+      if (busy) return
+      setBusy(true)
+      setError(null)
+      setNotice(null)
+      try {
+        await window.api.extensionsRemove(entry.manifest.id)
+        setNotice(`Removed ${entry.manifest.name}`)
+      } catch (removeError) {
+        setError(removeError instanceof Error ? removeError.message : String(removeError))
+      } finally {
+        setBusy(false)
+        // ── TEARDOWN MUST NOT DEPEND ON THE REFRESH SUCCEEDING ──
+        // Unmounting a removed extension's live frames is a side effect of the
+        // store losing its entry, and `refresh` deliberately leaves the store
+        // untouched when the list IPC fails. So one failed list after a successful
+        // remove left the pane mounted, the iframe running, and frameHost's grant
+        // promise still resolved to the full capability set — against a bundle main
+        // had already deleted and a grant it had already revoked. The frame went on
+        // answering sessions.observe for an uninstalled extension.
+        //
+        // Dropping the row locally is not a guess: `extensionsRemove` resolved, so
+        // the extension IS gone. Refresh is how we learn about everything else.
+        if (!(await refresh())) {
+          setInstalledExtensions(
+            (entries ?? []).filter(candidate => candidate.manifest.id !== entry.manifest.id),
+          )
+        }
+      }
+    },
+    [busy, entries, refresh, setInstalledExtensions],
+  )
+
+  // "Load unpacked" — install from a local folder via the native picker (main
+  // opens it). The dev loop for an unpublished extension: rebuild, click, reload —
+  // instead of cutting a GitHub release for every change.
+  const loadFromFolder = useCallback(async () => {
+    if (busy) return
+    setBusy(true)
+    setError(null)
+    setNotice(null)
+    try {
+      const result = await window.api.extensionsInstallPath()
+      if (result.ok) {
+        setNotice(`Loaded ${result.entry.manifest.name} ${result.entry.manifest.version}`)
+        await refresh()
+      } else {
+        setError(result.error)
+      }
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : String(loadError))
+    } finally {
+      setBusy(false)
+    }
+  }, [busy, refresh])
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex gap-2">
+        <input
+          value={repo}
+          onChange={event => setRepo(event.target.value)}
+          onKeyDown={event => {
+            if (event.key === 'Enter') {
+              // Stop the Enter reaching Settings' own handlers or, worse, a
+              // background composer. The interaction-ownership marker on the
+              // Settings takeover root covers the global routers, but the local
+              // keydown still needs to not bubble into Settings itself.
+              event.preventDefault()
+              event.stopPropagation()
+              void install()
+            }
+          }}
+          placeholder="owner/repo or a github.com URL"
+          spellCheck={false}
+          autoCapitalize="off"
+          autoCorrect="off"
+          disabled={busy}
+          className="min-w-0 flex-1 border border-input-border bg-input-bg px-2 py-1.5 text-[13px] text-ink outline-none placeholder:text-input-placeholder focus:border-input-border-focus disabled:opacity-50"
+        />
+        <button
+          type="button"
+          onClick={() => void install()}
+          disabled={busy || repo.trim().length === 0}
+          className="shrink-0 border border-control-border bg-control-bg px-3 py-1.5 text-[12px] text-control-fg outline-none hover:border-control-border-hover disabled:opacity-40"
+        >
+          {busy ? 'Installing…' : 'Install'}
+        </button>
+        <button
+          type="button"
+          onClick={() => void loadFromFolder()}
+          disabled={busy}
+          title="Install from a local folder — for developing an unpublished extension"
+          className="shrink-0 border border-control-border bg-control-bg px-3 py-1.5 text-[12px] text-control-fg outline-none hover:border-control-border-hover disabled:opacity-40"
+        >
+          Load folder…
+        </button>
+      </div>
+
+      {error ? (
+        <div className="border border-border bg-row-bg px-3 py-2 text-[12px] text-ink">{error}</div>
+      ) : null}
+      {notice ? <div className="text-[12px] text-muted">{notice}</div> : null}
+
+      {entries === null ? (
+        <div className="text-[12px] text-muted">Loading…</div>
+      ) : entries.length === 0 ? (
+        <div className="text-[12px] text-muted">
+          No extensions installed. Paste a repository above to install one.
+        </div>
+      ) : (
+        <div className="flex flex-col gap-1">
+          {entries.map(entry => (
+            <div
+              key={entry.manifest.id}
+              className="flex items-center justify-between gap-4 border border-border bg-row-bg px-3 py-2"
+            >
+              <div className="min-w-0">
+                <div className="flex items-baseline gap-2">
+                  <span className="text-[13px] text-ink">{entry.manifest.name}</span>
+                  <span className="text-[11px] text-muted">{entry.manifest.version}</span>
+                  {/* A ledger row whose bundle is gone. Shown rather than filtered:
+                      the fix is reinstalling from the recorded repo, and hiding it
+                      would leave the user wondering where the extension went. */}
+                  {!entry.present ? (
+                    <span className="text-[11px] text-ink-dim">· files missing</span>
+                  ) : null}
+                  {/* An extension whose module threw during import or activate.
+                      Shown here rather than only in the console: a silently
+                      missing extension is undiagnosable for whoever installed
+                      it, and the message names the actual fault. */}
+                  {failures.some(failure => failure.id === entry.manifest.id) ? (
+                    <span className="text-[11px] text-ink-dim">· failed to start</span>
+                  ) : null}
+                </div>
+                <div className="truncate text-[12px] text-muted">{entry.manifest.description}</div>
+                <div className="truncate text-[11px] text-ink-dim">
+                  {/* A local install's `repo` is a folder path, and "…@ local" read
+                      as a broken ref. Say which kind of install it is instead. */}
+                  {entry.origin === 'local' ? `local folder · ${entry.repo}` : `${entry.repo} @ ${entry.ref}`}
+                </div>
+                {failures.find(failure => failure.id === entry.manifest.id) ? (
+                  <div className="mt-1 text-[11px] text-ink">
+                    {failures.find(failure => failure.id === entry.manifest.id)?.error}
+                  </div>
+                ) : null}
+              </div>
+              <div className="flex shrink-0 gap-2">
+                <button
+                  type="button"
+                  onClick={() => void update(entry)}
+                  disabled={busy}
+                  className="border border-control-border bg-control-bg px-3 py-1 text-[12px] text-control-fg outline-none hover:border-control-border-hover disabled:opacity-40"
+                >
+                  {entry.origin === 'local' ? 'Reload' : 'Update'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void remove(entry)}
+                  // Every other action here guards on `busy`; Remove did not, so it
+                  // stayed clickable during an in-flight install. Removing an
+                  // extension while its own reinstall is mid-swap is exactly the
+                  // race the ledger lock now serialises — this stops the UI from
+                  // inviting it in the first place.
+                  disabled={busy}
+                  className="border border-control-border px-3 py-1 text-[12px] text-ink-dim outline-none hover:border-control-border-hover hover:text-ink disabled:opacity-40"
+                >
+                  Remove
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}

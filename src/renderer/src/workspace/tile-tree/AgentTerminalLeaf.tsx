@@ -17,6 +17,7 @@ import { PaneToast } from '@renderer/workspace/tile-tree/TileLeaf/PaneToast'
 import { useComposerDictation } from '@renderer/workspace/tile-tree/TileLeaf/useComposerDictation'
 import { useAgentTerminalDimensionActive } from '@renderer/workspace/terminal/AgentTerminalOwnership'
 import { AgentTitleHeader } from '@renderer/workspace/tile-tree/AgentTitleHeader'
+import type { AgentProviderKind } from '@shared/types/providerKind'
 
 type Props = {
   sessionId: SessionId
@@ -27,7 +28,7 @@ type Props = {
   workspace: Workspace
   runtime: SessionRuntime
   projectDir: string | null
-  provider: Exclude<SessionKind, 'terminal'>
+  provider: AgentProviderKind
 }
 
 // AgentTerminalLeaf — full-pane raw provider terminal for Claude/Codex agents.

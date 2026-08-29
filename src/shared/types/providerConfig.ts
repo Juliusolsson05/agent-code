@@ -15,7 +15,7 @@
 
 import type { ComponentType, ReactNode } from 'react'
 import type { SessionOptions, SessionInfo, AgentSession } from '@shared/types/session.js'
-import type { AgentProviderKind } from '@shared/types/providerKind.js'
+import type { AgentProviderKind, SessionKind } from '@shared/types/providerKind.js'
 import type { Entry, ToolResultBlock, ToolUseBlock } from '@shared/types/transcript.js'
 
 /**
@@ -112,7 +112,14 @@ export type TileLeafRelatedAgentTab = {
   relation: 'parent' | 'linked' | 'orchestration'
   label: string
   title: string
-  kind: AgentProviderKind | 'terminal' | undefined
+  // Typed SessionKind because the value flows from SessionMeta.kind, which is a
+  // SessionKind. buildGridRelatedAgentTabs guarantees at runtime that only agent
+  // kinds actually arrive here (it drops every non-agent owner and candidate via
+  // isAgentSessionKind), so the wider type is a plumbing artifact, not a claim
+  // that a terminal or extension-view pane can be a related-agent tab. Narrowing
+  // it to AgentProviderKind would need a cast at the one construction site and
+  // would move the guarantee from a readable filter into an assertion.
+  kind: SessionKind | undefined
   placement: 'grid' | 'detached'
 }
 

@@ -1,4 +1,4 @@
-import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
+import { DEFAULT_PROVIDER, isAgentSessionKind } from '@shared/types/providerKind'
 import type { CommandDef } from '@renderer/features/command-palette/types'
 import { prefixDraftWithQuote, quoteSnippet } from '@renderer/features/reply-to-selection/lib/formatQuote'
 import { parkComposerCaretAtEnd } from '@renderer/features/reply-to-selection/lib/parkComposerCaret'
@@ -19,15 +19,16 @@ import type { Workspace } from '@renderer/workspace/workspaceStore'
 //
 // Two things still have to be checked, because the stash is module state
 // that outlives any given render: the session must still exist (it could
-// have been closed between the drag and the palette), and it must not be
-// a terminal (no composer draft to insert into, and xterm owns its own
-// selection model rather than the DOM this feature captures from).
+// have been closed between the drag and the palette), and it must still be
+// an agent pane — a terminal has no composer draft to insert into (and xterm
+// owns its own selection model rather than the DOM this feature captures
+// from), and an extension-view pane has no composer at all.
 function validPendingSelection(workspace: Workspace): PendingSelection | null {
   const pending = peekPendingSelection()
   if (!pending) return null
   const meta = workspace.state.sessions[pending.sessionId]
   if (!meta) return null
-  if ((meta.kind ?? DEFAULT_PROVIDER) === 'terminal') return null
+  if (!isAgentSessionKind(meta.kind)) return null
   return pending
 }
 

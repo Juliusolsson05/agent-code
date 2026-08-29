@@ -92,7 +92,7 @@ jobs:
           fi
 
           # WHY no hard-fail when both secrets are absent: every submodule
-          # repo (the five Juliusolsson05 packages/* repos and openai/codex)
+          # repo (every Juliusolsson05 packages/* repo and openai/codex)
           # is PUBLIC, so the plain HTTPS URLs in .gitmodules clone fine
           # anonymously. The exit-1 here predated the repos going public and
           # contradicted README.md's "no special access needed" (#506
@@ -198,7 +198,7 @@ jobs:
           fi
 
           # WHY no hard-fail when both secrets are absent: every submodule
-          # repo (the five Juliusolsson05 packages/* repos and openai/codex)
+          # repo (every Juliusolsson05 packages/* repo and openai/codex)
           # is PUBLIC, so the plain HTTPS URLs in .gitmodules clone fine
           # anonymously. The exit-1 here predated the repos going public and
           # contradicted README.md's "no special access needed" (#506

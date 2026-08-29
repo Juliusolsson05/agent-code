@@ -1,4 +1,4 @@
-import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
+import { DEFAULT_PROVIDER, isAgentSessionKind } from '@shared/types/providerKind'
 import { useCallback, useState } from 'react'
 
 import type {
@@ -79,18 +79,34 @@ export function useUndoCloseAction(
       //     point of having a tmux backing.
       const meta = entry.sessionMeta
       let newSessionId: SessionId
-      try {
-        newSessionId = await sessionActions.spawn(meta.cwd, {
+      if (meta.kind === 'extension-view') {
+        // ── A PROCESS-LESS LEAF IS RESTORED, NOT SPAWNED ──
+        // Undo previously called spawn() for every kind. Main rejects an
+        // extension-view spawn outright, the catch below turned that into
+        // 'retryable-failure', and undoClose PUSHES A FAILED ENTRY BACK — so the
+        // stack head became permanently poisoned. Every later Cmd+Shift+T popped the
+        // same entry, failed, re-pushed, and returned: all older undo history became
+        // unreachable for the rest of the session.
+        //
+        // Minting the id mirrors openExtensionViewInPane; there is nothing to
+        // recover because there was never a process. The METADATA is written in the
+        // setState below — see the note there, because getting that half wrong is
+        // worse than the bug this branch was added to fix.
+        newSessionId = crypto.randomUUID() as SessionId
+      } else {
+        try {
+          newSessionId = await sessionActions.spawn(meta.cwd, {
           kind: meta.kind ?? DEFAULT_PROVIDER,
           resumeSessionId: resumableProviderSessionId(meta),
           recoverTmuxName: meta.kind === 'terminal' ? meta.tmuxName : undefined,
           // WHY capability intent is restored but credentials are not: closing a pane revokes its
           // session token. Undo must ask main to mint a fresh token from these durable domain names;
           // dropping them makes an undo-restored transcript silently lose tools after restart.
-          builtInMcpDomains: meta.builtInMcpDomains,
-        })
-      } catch {
-        return 'retryable-failure'
+            builtInMcpDomains: meta.builtInMcpDomains,
+          })
+        } catch {
+          return 'retryable-failure'
+        }
       }
 
       let inserted = false
@@ -113,7 +129,29 @@ export function useUndoCloseAction(
             focusedSessionId: newSessionId,
           }
         })
-        return { ...prev, tabs }
+        // ── THE LEAF MUST ARRIVE WITH ITS SessionMeta, IN THE SAME UPDATE ──
+        // For every other kind, `sessionActions.spawn` wrote `sessions[newId]`
+        // before we got here. The extension branch skips spawn, so it has to write
+        // it itself — and the first version did not, which put a leaf into the tile
+        // tree with no row in `sessions`.
+        //
+        // That is not a cosmetic gap. renderWorkspaceLeaf has no missing-meta guard:
+        // `kind = meta?.kind ?? DEFAULT_PROVIDER` resolved to 'claude', so the
+        // extension-view short-circuit was skipped and the restored pane came back as
+        // a dead Claude pane with a live composer sending into nothing. Then, on the
+        // next 400 ms autosave, repairPersistedTabs classified the leaf as an orphan
+        // and closed it out of the serialized tree — and if it was the tab's only
+        // leaf, dropped the whole tab. On-screen and on-disk diverged until relaunch,
+        // after which the pane was simply gone.
+        //
+        // In the SAME updater as the tree edit, deliberately: two setState calls
+        // would leave a window in which a render sees the leaf without its metadata,
+        // which is the same orphan state one tick wide.
+        const sessions =
+          meta.kind === 'extension-view'
+            ? { ...prev.sessions, [newSessionId]: meta }
+            : prev.sessions
+        return { ...prev, tabs, sessions }
       })
 
       if (!inserted) {
@@ -151,6 +189,20 @@ export function useUndoCloseAction(
         if (!meta) {
           return 'stale'
         }
+        // Same process-less restore as the pane branch, and it matters MORE here:
+        // this loop spawns leaves in order, so hitting an extension-view leaf used to
+        // throw partway through, and the catch below then killed every sibling it had
+        // just spawned. Undoing a tab that contained one extension pane started N real
+        // claude/codex processes and their proxies, killed them all, restored nothing,
+        // and poisoned the undo stack.
+        if (meta.kind === 'extension-view') {
+          const newId = crypto.randomUUID() as SessionId
+          idMap.set(oldId, newId)
+          freshSessions[newId] = meta
+          // Deliberately NOT pushed to spawnedIds: there is no process to kill on
+          // rollback, and adding it would make the failure path try to terminate one.
+          continue
+        }
         try {
           const kind: SessionKind = meta.kind ?? DEFAULT_PROVIDER
           // Same per-kind recover hint as the pane-undo branch
@@ -158,7 +210,7 @@ export function useUndoCloseAction(
           // agents.
           const newId = await sessionActions.spawn(meta.cwd, {
             kind,
-            resumeSessionId: kind !== 'terminal' ? resumableProviderSessionId(meta) : undefined,
+            resumeSessionId: isAgentSessionKind(kind) ? resumableProviderSessionId(meta) : undefined,
             recoverTmuxName: kind === 'terminal' ? meta.tmuxName : undefined,
             builtInMcpDomains: meta.builtInMcpDomains,
           })
@@ -218,7 +270,7 @@ export function useUndoCloseAction(
           // detached terminals doesn't silently drop tmuxName.
           const newId = await sessionActions.spawn(detached.meta.cwd, {
             kind,
-            resumeSessionId: kind !== 'terminal'
+            resumeSessionId: isAgentSessionKind(kind)
               ? resumableProviderSessionId(detached.meta)
               : undefined,
             recoverTmuxName: kind === 'terminal' ? detached.meta.tmuxName : undefined,
@@ -253,6 +305,14 @@ export function useUndoCloseAction(
           ...prev,
           tabs,
           activeTabId: restoredTab.id,
+          // `freshSessions` holds metadata for every leaf this restore minted an id
+          // for WITHOUT going through spawn — today that is exactly the
+          // extension-view leaves. It was being populated and then dropped on the
+          // floor: the comment further up explains the merge is unnecessary because
+          // "spawn registers SessionMeta itself", which is true for every branch
+          // except the one that skips spawn. The result was an orphan leaf that
+          // autosave then deleted from the restored tab.
+          sessions: { ...prev.sessions, ...freshSessions },
           detachedSessions: { ...prev.detachedSessions, ...restoredDetached },
           // Restored sessions get fresh ids (idMap); remap any tiled lane that
           // pointed at the closed tab's sessions so the lane follows the

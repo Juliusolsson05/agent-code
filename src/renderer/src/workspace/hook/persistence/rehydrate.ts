@@ -1,6 +1,7 @@
 import {
   DEFAULT_PROVIDER,
   isAgentProviderKind,
+  isAgentSessionKind,
   isSessionKind,
 } from '@shared/types/providerKind'
 import type {
@@ -683,15 +684,15 @@ export async function rehydrateWorkspace(
           // loopback URLs/tokens for every new provider process. If rehydrate
           // respawns without the saved domains, the pane visually restores but
           // its tool surface silently changes underneath the user.
-          const resumeSessionId = kind !== 'terminal' ? resumableProviderSessionId(meta) : undefined
+          const resumeSessionId = isAgentSessionKind(kind) ? resumableProviderSessionId(meta) : undefined
           const restoredMeta = withoutProvisionalProviderSession(meta)
           const recovery = await recoverSessionBeforeDeadline(recoveryApi, {
             sessionId: oldId,
             kind,
             cwd: meta.cwd,
             resumeSessionId,
-            dangerousMode: kind !== 'terminal' ? refs.dangerousAgentsRef.current : undefined,
-            useProxy: kind !== 'terminal' ? refs.useProxyStreamingRef.current : undefined,
+            dangerousMode: isAgentSessionKind(kind) ? refs.dangerousAgentsRef.current : undefined,
+            useProxy: isAgentSessionKind(kind) ? refs.useProxyStreamingRef.current : undefined,
             recoverTmuxName: kind === 'terminal' ? meta.tmuxName : undefined,
             builtInMcpDomains,
             // Only bootstrap can prove the predecessor ID still came from the
@@ -765,7 +766,7 @@ export async function rehydrateWorkspace(
           syncRecoveryProjection()
           commitRehydratedState(newId)
           if (
-            kind !== 'terminal' &&
+            isAgentSessionKind(kind) &&
             resumeSessionId &&
             refs.stateRef.current.sessions[newId] &&
             refs.latestRuntimesRef.current[newId]

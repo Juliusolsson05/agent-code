@@ -1,4 +1,9 @@
-import { AGENT_PROVIDER_KINDS, DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
+import {
+  AGENT_PROVIDER_KINDS,
+  DEFAULT_PROVIDER,
+  isAgentProviderKind,
+  isAgentSessionKind,
+} from '@shared/types/providerKind'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { extractLastAssistantText } from '@renderer/lib/copyAssistant'
 import type { CommandContext, CommandDef } from '@renderer/features/command-palette/types'
@@ -509,10 +514,10 @@ export const paneCommands: CommandDef[] = [
       if (!sessionId) return false
       // WHY tail is agent-only even though terminals are Dispatch rows:
       // tailMode controls the rendered transcript/feed scroll container.
-      // Terminal panes delegate scrollback to xterm.js, so toggling this
-      // runtime flag on a terminal would present a command that appears to
-      // work while changing nothing visible.
-      return workspace.state.sessions[sessionId]?.kind !== 'terminal'
+      // Terminal panes delegate scrollback to xterm.js, and extension-view panes
+      // have no feed at all, so toggling this runtime flag on either would
+      // present a command that appears to work while changing nothing visible.
+      return isAgentSessionKind(workspace.state.sessions[sessionId]?.kind)
     },
     run: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
@@ -555,8 +560,7 @@ export const paneCommands: CommandDef[] = [
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return false
-      const kind = workspace.state.sessions[sessionId]?.kind ?? DEFAULT_PROVIDER
-      return kind !== 'terminal'
+      return isAgentSessionKind(workspace.state.sessions[sessionId]?.kind)
     },
     run: ({ workspace }) => {
       workspace.scrollFocusedToLatest()
@@ -571,11 +575,13 @@ export const paneCommands: CommandDef[] = [
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return false
-      // WHY hide this for terminals: terminal output is not an assistant
+      // WHY hide this on non-agent panes: terminal output is not an assistant
       // transcript, and extractLastAssistantText intentionally reads provider
       // entries. Showing the command on a shell row would imply there is an
-      // assistant response to copy when there is only PTY scrollback.
-      return workspace.state.sessions[sessionId]?.kind !== 'terminal'
+      // assistant response to copy when there is only PTY scrollback — and on an
+      // extension-view pane `run` would call getRuntime() for a session that has
+      // no runtime at all.
+      return isAgentSessionKind(workspace.state.sessions[sessionId]?.kind)
     },
     run: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
@@ -606,12 +612,13 @@ export const paneCommands: CommandDef[] = [
       '**What it does:** Empties the composer draft for the focused agent.\n\n**Use when:** You typed or dictated something you want to start over from — with a mouse there is no select-all-and-delete.\n\n**Notes:** Reversible with **Undo Clear Composer**. Attached images are removed but not restored by the undo.',
     keywords: ['clear', 'composer', 'draft', 'erase', 'reset', 'prompt', 'delete'],
     // Terminals have no composer draft — their input goes straight to the PTY —
-    // so offering this on a shell row would imply a draft that cannot exist.
-    // Same reasoning as copy-last-assistant above.
+    // and extension-view panes have no composer at all, so offering this on
+    // either would imply a draft that cannot exist. Same reasoning as
+    // copy-last-assistant above.
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return false
-      return workspace.state.sessions[sessionId]?.kind !== 'terminal'
+      return isAgentSessionKind(workspace.state.sessions[sessionId]?.kind)
     },
     run: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
@@ -671,7 +678,7 @@ export const paneCommands: CommandDef[] = [
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return false
-      return workspace.state.sessions[sessionId]?.kind !== 'terminal'
+      return isAgentSessionKind(workspace.state.sessions[sessionId]?.kind)
     },
     // Routed through the Enter registry rather than reimplemented: `submit` is
     // built from `submitCurrentDraft`, which owns provider capability dispatch,

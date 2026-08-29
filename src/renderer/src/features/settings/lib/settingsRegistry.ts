@@ -14,6 +14,7 @@ import type {
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { SETTING_CATEGORIES } from '@renderer/features/settings/lib/settingsCategories'
 import type { SettingCategoryId } from '@renderer/features/settings/lib/settingsCategories'
+import type { ExtensionListEntry } from '@shared/types/extensions'
 import type { ConfigurableBuiltInMcpDomain } from '@mcp/shared/types'
 import type { MouseButtonBinding } from '@renderer/lib/mouseBinding'
 import { coerceMouseChordBinding } from '@renderer/lib/mouseBinding'
@@ -210,6 +211,46 @@ export type SettingDefinition =
       description: string
       keywords: string[]
       metadata?: SettingMetadata
+      // Marker for the extension installer. Same escape hatch as
+      // cli-update-behavior: the truth lives in main (extensions.json plus the
+      // bundle directories on disk), not in Settings, so the row owns its own
+      // IPC round-trip. It is also the only row that is a whole interactive
+      // surface — a text input, an install action, and a list with per-row
+      // update/remove — which no generic control type can express.
+      // See apps/ui/AppsSettingsRow.tsx.
+      control: {
+        type: 'apps'
+      }
+    }
+  | {
+      id: string
+      category: SettingCategoryId
+      title: string
+      description: string
+      keywords: string[]
+      metadata?: SettingMetadata
+      // Marker for one extension-contributed setting. Self-subscribing like the
+      // other markers, because the VALUE lives in the extension's main-owned
+      // storage (EXTENSION_STATE_DIR), never the zustand-persist blob (#249). The
+      // payload is everything the row needs to read/write that store; the row owns
+      // its own IPC round-trip. See apps/ui/ExtensionSettingRow.tsx.
+      control: {
+        type: 'extension'
+        /** Storage namespace (appId) — the owning extension's id. */
+        extensionId: string
+        /** Storage key — the setting's `<extensionId>.<name>` contribution id. */
+        settingId: string
+        valueType: 'boolean' | 'number' | 'string'
+        default: boolean | number | string
+      }
+    }
+  | {
+      id: string
+      category: SettingCategoryId
+      title: string
+      description: string
+      keywords: string[]
+      metadata?: SettingMetadata
       // Marker for the dictation history + stats panel. Same rationale as
       // dictation-api-key above: the data lives in a main-owned JSON store
       // (src/main/dictation/historyStore.ts), not in Settings, so there is no
@@ -333,8 +374,64 @@ function updateDefaultBuiltInMcpDomain(
   ctx.onChange({ defaultBuiltInMcpDomains: next })
 }
 
-export function getSettingsRegistry(): SettingDefinition[] {
+/**
+ * `SettingDefinition`s for every contributed extension setting. Reads manifests
+ * only (no bundle import), the settings sibling of deriveExtensionCommands. Rows
+ * are the self-subscribing 'extension' marker; the value lives in per-extension
+ * storage, never the Settings blob. First-wins on a cross-extension id collision,
+ * matching the command/keybinding derivations.
+ */
+function deriveExtensionSettings(
+  installed: readonly ExtensionListEntry[],
+): SettingDefinition[] {
+  const seen = new Set<string>()
+  const rows: SettingDefinition[] = []
+
+  for (const entry of installed) {
+    if (!entry.present) continue
+    for (const setting of entry.manifest.contributes?.settings ?? []) {
+      if (seen.has(setting.id)) continue
+      seen.add(setting.id)
+      rows.push({
+        id: setting.id,
+        category: 'apps',
+        // Prefix with the extension name so a flat Extensions category still reads
+        // as grouped by owner, and two extensions' identically-titled settings stay
+        // distinguishable.
+        title: `${entry.manifest.name}: ${setting.title}`,
+        description: setting.description ?? '',
+        keywords: [entry.manifest.name, setting.title, entry.manifest.id],
+        control: {
+          type: 'extension',
+          extensionId: entry.manifest.id,
+          settingId: setting.id,
+          valueType: setting.type,
+          default: setting.default,
+        },
+      })
+    }
+  }
+
+  return rows
+}
+
+export function getSettingsRegistry(
+  // Installed extensions, so contributed settings render as rows. An empty default keeps
+  // every non-extension caller (the tests, mainly) unchanged. The extension set changes
+  // on install/remove, so this is not a per-lifetime constant and must be recomputed
+  // when the caller's list changes.
+  //
+  // NOTE: this used to also take `extensionCommands` for the Commands settings category.
+  // That category was replaced upstream by the unified command list in
+  // CommandKeybindingsRow, which derives extension commands itself — so the parameter
+  // was removed rather than left dangling.
+  installedExtensions: readonly ExtensionListEntry[] = [],
+): SettingDefinition[] {
   return [
+    // Extension-contributed settings, one row each, under the Extensions category.
+    // Derived from manifests (no bundle import); an uninstall drops the manifest
+    // from installedExtensions and the rows vanish with it, leaving a clean block.
+    ...deriveExtensionSettings(installedExtensions),
     {
       id: 'theme-mode',
       category: 'appearance',
@@ -941,6 +1038,20 @@ export function getSettingsRegistry(): SettingDefinition[] {
       // Owned by main's setup.json, not renderer Settings.
       metadata: { scope: 'app', apply: 'immediate', storage: 'setup' },
       control: { type: 'cli-update-behavior' },
+    },
+    {
+      // Built-in apps listing. A marker row with no value — the content is
+      // apps/registry.ts, which is compile-time data. Deliberately NOT mirrored
+      // into Settings: extension-adjacent state must stay out of the
+      // zustand-persist blob (a forgotten version bump there black-screened
+      // launch twice, #249), and here there is nothing to persist anyway.
+      // See apps/ui/AppsSettingsRow.tsx.
+      id: 'apps-installed',
+      category: 'apps',
+      title: 'Extensions',
+      description: 'Install, update, and remove extensions from GitHub repositories.',
+      keywords: ['apps', 'extensions', 'plugins', 'install', 'github', 'tools'],
+      control: { type: 'apps' },
     },
     {
       id: 'reset-settings',

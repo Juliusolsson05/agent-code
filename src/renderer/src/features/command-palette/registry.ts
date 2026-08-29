@@ -1,6 +1,8 @@
 import { builtInCommandCatalog } from '@renderer/features/command-palette/catalog'
 import { PALETTE_SELF_EXCLUDED_COMMAND_IDS } from '@renderer/features/command-palette/commands/paletteCommands'
 import { isVisibleInPicker } from '@renderer/features/command-palette/pickerVisibility'
+import { buildDefaultKeybindings } from '@renderer/features/command-keybindings/defaults'
+import type { CommandBindingDefault } from '@renderer/features/command-keybindings/defaults'
 import { displayKeybinding } from '@renderer/features/command-keybindings/normalize'
 import { resolveEffectiveKeybindings } from '@renderer/features/command-keybindings/resolve'
 import { commandAllowedByRenderedViewPolicy } from '@renderer/workspace/agentDisplayMode'
@@ -12,9 +14,16 @@ import type {
   ResolvedCommand,
 } from '@renderer/features/command-palette/types'
 
-// The ordered command list now lives in `catalog.ts`, which is context-free by
-// contract. This module keeps only the question that NEEDS a context: what
-// should the picker show right now. See catalog.ts for why the split exists.
+// The ordered first-party command list now lives in `catalog.ts`, which is
+// context-free by contract. This module keeps only the question that NEEDS a
+// context: what should the picker show right now. See catalog.ts for why the split
+// exists.
+//
+// Extension commands are deliberately NOT in the catalog — they are derived from
+// installed manifests and concatenated per call (see allCommandDefs). A frozen
+// module-scope array cannot gain a command when an extension is installed without a
+// reload, which is exactly the module-scope-snapshot mistake an adversarial audit
+// flagged; the per-call concat is the fix.
 const commandDefs: readonly CommandDef[] = builtInCommandCatalog
 
 /**
@@ -148,16 +157,38 @@ function renderedViewAvailable(command: CommandDef, ctx: CommandContext): boolea
   })
 }
 
-export function buildCommandRegistry(ctx: CommandContext): ResolvedCommand[] {
+/**
+ * Every command available right now: the first-party catalog plus whatever the
+ * installed extensions declare.
+ *
+ * Extension commands go LAST so they browse after first-party ones in the
+ * empty-query list — registry order is the palette's browse order, and putting
+ * third-party entries above the app's own would reshuffle a list people navigate
+ * by position.
+ */
+function allCommandDefs(extensionCommands: readonly CommandDef[]): readonly CommandDef[] {
+  return extensionCommands.length === 0
+    ? commandDefs
+    : [...commandDefs, ...extensionCommands]
+}
+
+export function buildCommandRegistry(
+  ctx: CommandContext,
+  extensionCommands: readonly CommandDef[] = [],
+  // Extension keybinding defaults, so an extension command's row shows its shipped
+  // chord — the same combined table the router fires from and the editor displays.
+  extensionKeybindings: readonly CommandBindingDefault[] = [],
+): ResolvedCommand[] {
   // Built once per registry pass rather than per command: resolving the
   // effective set walks every default, so doing it inside the map would be
   // O(commands x defaults) on every palette keystroke.
   const effective = new Map(
-    resolveEffectiveKeybindings(ctx.flags.commandKeybindingOverrides).map(
-      entry => [entry.commandId, entry.bindings],
-    ),
+    resolveEffectiveKeybindings(ctx.flags.commandKeybindingOverrides, [
+      ...buildDefaultKeybindings(),
+      ...extensionKeybindings,
+    ]).map(entry => [entry.commandId, entry.bindings]),
   )
-  return commandDefs
+  return allCommandDefs(extensionCommands)
     .filter(command => !PALETTE_SELF_EXCLUDED_COMMAND_IDS.has(command.id))
     .filter(command => commandApplicable(command, ctx) && commandVisible(command, ctx))
     .map(command => {

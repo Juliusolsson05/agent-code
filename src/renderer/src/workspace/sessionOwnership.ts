@@ -198,7 +198,22 @@ export function collectOwnedSessionIds(input: SessionOwnershipInput): Set<Sessio
 // nowhere else. Narrowing `collectTileLeafIds` instead would drop its metadata
 // on the next save — see the comment on that function.
 export function collectLiveProcessIds(input: SessionOwnershipInput): Set<SessionId> {
-  return collectTileLeafIds(input)
+  const live = collectTileLeafIds(input)
+  for (const id of live) {
+    // Extension-view leaves have NO backing process (no PTY, no agent). They ARE
+    // tile leaves — owned and persisted like any other — but they must never enter
+    // the live-process set: rehydrate spawns or recovers a process for every id in
+    // here, and an `extension-view` kind would fall through SessionManager's
+    // provider switch into the terminal-spawn branch and start a stray shell.
+    // Their pane is reconstructed purely from SessionMeta.extensionViewId by
+    // ExtensionViewLeaf, so there is nothing to spawn.
+    //
+    // Narrowed HERE and nowhere else, exactly as the comment above instructs:
+    // narrowing collectTileLeafIds instead would drop these panes from the OWNED
+    // set, and pickOwnedSessions would delete their metadata on the next autosave.
+    if (input.sessions[id]?.kind === 'extension-view') live.delete(id)
+  }
+  return live
 }
 
 export function collectUnownedSessionIds(input: SessionOwnershipInput): SessionId[] {

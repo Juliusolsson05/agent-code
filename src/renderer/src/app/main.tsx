@@ -16,6 +16,7 @@ import { AppErrorBoundary } from '@renderer/app/AppErrorBoundary'
 import { WorkflowClientProvider } from '@renderer/features/workflows/client/WorkflowClientContext'
 import { ipcWorkflowClient } from '@renderer/features/workflows/client/IpcWorkflowClient'
 import { startRendererFreezeHeartbeat } from '@renderer/performance/freezeHeartbeat'
+import { InstalledExtensionsLoader } from '@renderer/apps/host/InstalledExtensionsLoader'
 
 void initializePerformance().then(() => {
   mark('app.renderer.reactRenderCalled')
@@ -85,8 +86,16 @@ createRoot(document.getElementById('root')!).render(
     <WorkflowClientProvider value={ipcWorkflowClient}>
       <SessionFeedProvider value={ipcSessionFeed}>
         <GlobalToastProvider>
+          {/* INSIDE AppErrorBoundary, not wrapped around it. The previous
+              placement put the loader OUTSIDE the boundary while its comment
+              claimed the opposite, so a throw during its render would have
+              blanked the whole app instead of being caught. It reads the store
+              and runs one IPC effect, so there is nothing it needs from being
+              higher in the tree. */}
           <AppErrorBoundary>
-            <App />
+            <InstalledExtensionsLoader>
+              <App />
+            </InstalledExtensionsLoader>
           </AppErrorBoundary>
         </GlobalToastProvider>
       </SessionFeedProvider>

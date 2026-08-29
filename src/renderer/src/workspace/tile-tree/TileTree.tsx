@@ -11,6 +11,7 @@ import {
 import { AgentTerminalLeaf } from '@renderer/workspace/tile-tree/AgentTerminalLeaf'
 import { MountedAgentTerminalOwner } from '@renderer/workspace/terminal/AgentTerminalOwnership'
 import { TerminalLeaf } from '@renderer/workspace/tile-tree/TerminalLeaf'
+import { ExtensionViewLeaf } from '@renderer/workspace/tile-tree/ExtensionViewLeaf'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { SessionId, TabId, TileNode } from '@renderer/workspace/types'
 import { paneLabelForSession } from '@renderer/workspace/tile-tree/paneLabels'
@@ -127,6 +128,21 @@ export function renderWorkspaceLeaf(
         sessionId={sessionId}
         paneLabel={paneLabel}
         focused={sessionId === focusedSessionId}
+        onFocusRequest={onFocusRequest}
+        workspace={workspace}
+      />
+    )
+  }
+
+  // Extension-view pane. Short-circuited BEFORE getRendererProvider(kind), which
+  // throws on any non-agent kind — the single edit that lights this up in grid,
+  // both dispatch layouts, spotlight, and tile-tabs at once, because they all funnel
+  // here. Uses `sessionId` (the physical leaf) not `renderedSessionId`: an extension
+  // pane has no related-agent tab selection.
+  if (kind === 'extension-view') {
+    return (
+      <ExtensionViewLeaf
+        sessionId={sessionId}
         onFocusRequest={onFocusRequest}
         workspace={workspace}
       />

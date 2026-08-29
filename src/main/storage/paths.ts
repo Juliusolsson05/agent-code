@@ -21,6 +21,38 @@ export const STATE_DIR = join(homedir(), '.config', APP_SLUG)
 // The renderer owns the JSON shape; main is a byte mover.
 export const STATE_FILE = join(STATE_DIR, 'workspace.json')
 
+// Installed extension bundles — one directory per extension id, each holding the
+// unpacked repository contents (manifest + built entry + assets).
+//
+// This is CODE, fetched from a remote repository. It is disposable in the sense
+// that reinstalling restores it, and it is the directory a future privileged
+// scheme serves from.
+export const EXTENSIONS_DIR = join(STATE_DIR, 'extensions')
+
+// The install ledger: which extensions are installed, from which repo and ref, at
+// which content hash. Separate from the bundles so a corrupt or half-extracted
+// bundle directory can never make the app forget what is supposed to be installed.
+export const EXTENSIONS_LOCKFILE = join(STATE_DIR, 'extensions.json')
+
+// Per-extension state, one JSON file per extension id.
+//
+// WHY this is a SIBLING of EXTENSIONS_DIR rather than living inside each bundle:
+// the bundle directory is replaced wholesale on install and update — extracting a
+// new version over it, or removing it first, would take the user's saved state with
+// it. Keeping state outside means an update never touches it and an uninstall can
+// choose whether to. It also means the scheme that serves extension code can be
+// pointed at EXTENSIONS_DIR without ever exposing state files over that origin.
+//
+// WHY main-owned rather than the renderer's zustand-persist blob: app-state/store.ts
+// records that adding a field without bumping the persist version black-screened
+// launch twice (#249). Extension state is authored outside the app's release cycle —
+// by definition nobody bumps a version for it — so it must not be able to reach that
+// failure mode at all.
+//
+// WHY deliberately NOT registered with debugRetention, unlike every debug root
+// below: those are disposable forensic caches with a disk budget, and this is *user
+// data*. A retention sweep would silently delete an extension's saved state.
+export const EXTENSION_STATE_DIR = join(STATE_DIR, 'extension-state')
 // Main-owned desired state and ownership journal for the optional personal
 // conventions skill. Provider copies are integration surfaces, never the source
 // of truth; keeping this beside workspace state gives recovery one stable path.

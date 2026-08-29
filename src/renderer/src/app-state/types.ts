@@ -8,6 +8,8 @@ import type {
 import type { SessionId, TabId } from '@renderer/workspace/types'
 import type { WorkspaceState } from '@renderer/workspace/types'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
+import type { ExtensionListEntry } from '@shared/types/extensions'
+import type { ExtensionFailure } from '@renderer/apps/types'
 import type {
   ReaderModeState,
   SpotlightState,
@@ -118,6 +120,10 @@ export type UiShellSlice = UiShellState & {
   closeUsageModal: () => void
   openRewindPrompt: (sessionId: SessionId) => void
   closeRewindPrompt: () => void
+  openApp: (appId: string) => void
+  closeApp: () => void
+  setInstalledExtensions: (entries: ExtensionListEntry[]) => void
+  setExtensionFailures: (failures: ExtensionFailure[]) => void
   openAgentViewModePicker: (sessionId: SessionId) => void
   closeAgentViewModePicker: () => void
   openColorFlagPicker: (sessionId: SessionId) => void

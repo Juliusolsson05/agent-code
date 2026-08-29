@@ -1,4 +1,4 @@
-import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
+import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import { DebugPanel } from '@renderer/features/debug/ui/DebugPanel'
 import { FeedDebugPanel } from '@renderer/features/debug/ui/FeedDebugPanel'
 import { ProxyDebugPanel } from '@renderer/features/debug/ui/ProxyDebugPanel'
@@ -111,7 +111,7 @@ export function DebugSurfacesImpl() {
       {renderingDebugMode && (
         <RenderingDebugInspector
           sessionId={targetId}
-          provider={kind === 'terminal' ? 'unknown' : kind}
+          provider={isAgentProviderKind(kind) ? kind : 'unknown'}
           onSave={saveRenderingElement}
           onClose={toggleRenderingDebugMode}
         />

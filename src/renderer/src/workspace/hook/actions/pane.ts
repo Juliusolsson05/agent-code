@@ -1,4 +1,4 @@
-import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
+import { DEFAULT_PROVIDER, isAgentSessionKind } from '@shared/types/providerKind'
 import {
   expandSessionCloseTargets,
   expandTabCloseTargets,
@@ -65,6 +65,7 @@ import {
   killSessionBackendIfOwned,
   type SessionActions,
 } from '@renderer/workspace/hook/actions/session'
+import type { AgentProviderKind } from '@shared/types/providerKind'
 
 // -----------------------------------------------------------------------------
 // Pane / focus / navigation actions.
@@ -322,11 +323,11 @@ export function usePaneActions(
   startNewAgentPlacement: () => void
   commitNewAgentPlacement: (kind: SessionKind, target: PlacementTarget) => Promise<void>
   createDetachedDispatchAgent: (
-    kind: Exclude<SessionKind, 'terminal'>,
+    kind: AgentProviderKind,
     projectOverride?: { tabId: TabId; anchorSessionId: SessionId },
   ) => Promise<void>
   createLinkedAgent: (
-    kind: Exclude<SessionKind, 'terminal'>,
+    kind: AgentProviderKind,
     parentId: SessionId,
   ) => Promise<void>
   createOrchestrationAgent: (params: {
@@ -355,6 +356,7 @@ export function usePaneActions(
   focusSession: (sessionId: SessionId) => void
   focusSessionInTab: (tabId: string, sessionId: SessionId) => void
   navigate: (direction: 'left' | 'right' | 'up' | 'down') => void
+  openExtensionViewInPane: (viewId: string, direction?: SplitDirection) => void
 } {
   const closeSessionRef = useRef<
     ((targetId: SessionId, options?: CloseSessionOptions) => Promise<boolean>) | null
@@ -371,7 +373,7 @@ export function usePaneActions(
       const resumeSessionId = continuation?.resumeSessionId
       const builtInMcpDomains = continuation?.builtInMcpDomains
       const dispatchSnapshot = refs.stateRef.current
-      if (dispatchSnapshot.dispatchMode && kind !== 'terminal') {
+      if (dispatchSnapshot.dispatchMode && isAgentSessionKind(kind)) {
         // Same target resolution as createDetachedDispatchAgent: follow the
         // focused lane in Tiled Dispatch so cwd and projectTab agree on the
         // project the user is commanding (issue #266 / #248).
@@ -576,7 +578,7 @@ export function usePaneActions(
 
   const createDetachedDispatchAgent = useCallback(
     async (
-      kind: Exclude<SessionKind, 'terminal'>,
+      kind: AgentProviderKind,
       // Explicit project override, supplied by the Dispatch header "+".
       //
       // WHY it must override BOTH halves rather than just the tab: cwd is
@@ -675,7 +677,7 @@ export function usePaneActions(
   // route through applyDispatchSpawnFocus so Tiled lanes and classic
   // focus cannot drift.
   const createLinkedAgent = useCallback(
-    async (kind: Exclude<SessionKind, 'terminal'>, parentId: SessionId) => {
+    async (kind: AgentProviderKind, parentId: SessionId) => {
       const snapshot = refs.stateRef.current
       const parentMeta = snapshot.sessions[parentId]
       if (!parentMeta) {
@@ -2124,6 +2126,62 @@ export function usePaneActions(
     [focusSession, state.activeTabId, state.tabs],
   )
 
+  // Open a contributed extension view as a PANE (a tile leaf), not a modal.
+  //
+  // Unlike every other pane this creates NO backing process: an extension view is
+  // pure renderer UI reconstructed from SessionMeta.extensionViewId by
+  // ExtensionViewLeaf. So it deliberately does NOT call sessionActions.spawn (which
+  // mints the SessionId in MAIN by starting a PTY/agent). It mints its own id — the
+  // one place the renderer is allowed to, the same as tab ids — writes the meta
+  // directly, and splits beside the focused pane. collectLiveProcessIds excludes
+  // 'extension-view', so rehydrate reconstructs this leaf from metadata and never
+  // tries to recover a process for it.
+  const openExtensionViewInPane = useCallback(
+    (viewId: string, direction: SplitDirection = 'vertical') => {
+      const snapshot = refs.stateRef.current
+      const tab = snapshot.tabs.find(t => t.id === snapshot.activeTabId)
+      if (!tab) return
+      // commandTargetSessionIdForState, NOT tab.focusedSessionId. Grid focus is
+      // grid-only: while Dispatch is active it names the hidden pane behind the
+      // Dispatch surface, so anchoring to it split a pane the user could not see
+      // (the #94 class every other action in this file already routes around).
+      const parentSessionId = commandTargetSessionIdForState(snapshot)
+      if (!parentSessionId) return
+      // Cosmetic for a process-less view, but SessionMeta carries a cwd and the
+      // parent pane's is the honest inheritance (mirrors splitFocused).
+      const cwd = snapshot.sessions[parentSessionId]?.cwd ?? ''
+      const sessionId = crypto.randomUUID() as SessionId
+      setState(prev => ({
+        ...prev,
+        ...(() => {
+          // The metadata is committed ONLY if the tree actually took the leaf.
+          // splitLeaf returns the root UNCHANGED when the anchor is not a leaf, and
+          // writing sessions[sessionId] unconditionally then left a row owned by
+          // nothing — dropped on the next autosave with a "dropping unowned
+          // sessions" warning, i.e. a silent no-op the user reads as a broken
+          // command. attachDetachedToGrid guards the same way.
+          let inserted = false
+          const tabs = prev.tabs.map(t => {
+            if (t.id !== prev.activeTabId) return t
+            const root = splitLeaf(t.root, parentSessionId, direction, sessionId)
+            if (root === t.root) return t
+            inserted = true
+            return { ...t, root, focusedSessionId: sessionId }
+          })
+          if (!inserted) return {}
+          return {
+            tabs,
+            sessions: {
+              ...prev.sessions,
+              [sessionId]: { cwd, kind: 'extension-view' as const, extensionViewId: viewId },
+            },
+          }
+        })(),
+      }))
+    },
+    [refs.stateRef, setState],
+  )
+
   return {
     splitFocused,
     startNewAgentPlacement,
@@ -2143,6 +2201,7 @@ export function usePaneActions(
     focusSession,
     focusSessionInTab,
     navigate,
+    openExtensionViewInPane,
   }
 }
 
