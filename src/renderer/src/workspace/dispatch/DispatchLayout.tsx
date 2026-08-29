@@ -119,11 +119,11 @@ function ClassicDispatchLayout({
     workspace.state.dispatchMode?.focusedSessionId,
   ])
 
-  // List width is the ratio * row width. Active-agent pane absorbs
-  // the remainder via `flex-1`. When the project terminal is on, we
-  // give it a fixed-percentage column (25%) that doesn't move with
-  // the splitter — the splitter only controls the list/active
-  // boundary, never the terminal column.
+  // List width is the ratio * row width; the active-agent pane absorbs the
+  // remainder via `flex-1`. This used to also describe a dedicated
+  // project-terminal column pinned at 25%; that column was removed, and
+  // terminals are ordinary Dispatch rows rendered in the active pane like any
+  // other session (#671).
   const listWidthPct = (dispatchListRatio * 100).toFixed(2)
 
   return (

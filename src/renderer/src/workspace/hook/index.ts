@@ -834,10 +834,7 @@ export function useWorkspace(
     state,
     setState,
     setTileTabs,
-    refs,
-    showToast,
     closeNewAgentPlacement,
-    sessionActions,
   )
 
   // ---- Side-effects (subscriptions, persistence, invalidation) ----

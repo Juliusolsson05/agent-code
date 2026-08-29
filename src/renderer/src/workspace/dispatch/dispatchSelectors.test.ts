@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 
 import {
   dispatchSessionIdsForTab,
-  resolveDispatchTerminalSplitTarget,
   resolveDispatchSpawnTarget,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
 import { resolveDispatchAttachTarget } from '@renderer/workspace/dispatch/dispatchTarget'
@@ -77,26 +76,17 @@ describe('resolveDispatchSpawnTarget', () => {
   })
 })
 
-describe('resolveDispatchTerminalSplitTarget', () => {
-  it('Tiled Dispatch: uses the focused lane project for terminal cwd and grid insertion (#366)', () => {
-    const state = makeState({
-      scope: 'global',
-      focusedSessionId: 'a1',
-      tiled: {
-        focusedLane: 1,
-        lanes: [{ selectedSessionId: 'a1' }, { selectedSessionId: 'b1' }],
-      },
-    })
-
-    expect(resolveDispatchTerminalSplitTarget(state)).toEqual({
-      tabId: 'tabB',
-      cwdSessionId: 'b1',
-      laneIndex: 1,
-      splitAnchorSessionId: 'b1',
-    })
-  })
-
-  it('Tiled Dispatch: detached focused lane keeps cwd but splits a real leaf in the same tab', () => {
+describe('resolveDispatchSpawnTarget with a detached focused lane', () => {
+  // WHY this case is called out separately from the tiled tests above: the
+  // focused Dispatch lane normally holds a DETACHED agent, not a grid leaf, and
+  // since #671 that resolver is what terminals use too. Its cwd is the one a
+  // new terminal inherits, so a resolver that quietly preferred grid leaves
+  // would spawn the shell in the parent repo while the user is looking at a
+  // worktree agent — a wrong-directory bug with no visible symptom.
+  //
+  // This replaces the equivalent coverage that lived on
+  // `resolveDispatchTerminalSplitTarget` before the creation flows merged.
+  it('keeps the detached lane session as the cwd source, not a grid leaf in the same tab', () => {
     const state = makeState({
       scope: 'global',
       focusedSessionId: 'a1',
@@ -115,11 +105,10 @@ describe('resolveDispatchTerminalSplitTarget', () => {
       detachedAt: 10,
     }
 
-    expect(resolveDispatchTerminalSplitTarget(state)).toEqual({
+    expect(resolveDispatchSpawnTarget(state)).toEqual({
       tabId: 'tabB',
       cwdSessionId: 'b2',
       laneIndex: 1,
-      splitAnchorSessionId: 'b1',
     })
   })
 })

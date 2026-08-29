@@ -12,7 +12,7 @@ import type {
 import { collectLeaves, remapTileTreeSessionIds } from '@renderer/workspace/tile-tree/treeOps'
 import { remapTiledLanes } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import { missingClosedTabLeafMetaIds, reinsertPane } from '@renderer/lib/undoClose'
-import type { ClosedPane, ClosedTab } from '@renderer/lib/undoClose'
+import type { ClosedDetached, ClosedPane, ClosedTab } from '@renderer/lib/undoClose'
 
 import type { WorkspaceSetState } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
@@ -32,6 +32,10 @@ type RestoreResult = 'restored' | 'stale' | 'retryable-failure'
 // For tabs: respawns every session in the tab, remaps the session
 // ids in the tree (since the new spawn produces new ids), and
 // re-inserts the tab at its original index (clamped to bounds).
+//
+// For detached Dispatch rows: respawns the session and re-files its
+// `detachedSessions` record. There is no tree work to do — the record IS the
+// placement — so the only anchor that has to still exist is the project tab.
 
 export function useUndoCloseAction(
   _state: { tabs: Tab[] },
@@ -211,11 +215,12 @@ export function useUndoCloseAction(
       for (const detached of entry.detachedEntries ?? []) {
         try {
           const kind: SessionKind = detached.meta.kind ?? DEFAULT_PROVIDER
-          // Detached agents are never terminals in the current model
-          // (createDetachedDispatchAgent rejects 'terminal'), but we
-          // still gate the recover hint on kind for symmetry with the
-          // tile-tree loop above and so a future surface that allows
-          // detached terminals doesn't silently drop tmuxName.
+          // Detached dispatch sessions CAN be terminals: Dispatch terminal
+          // creation files a detached row like any other kind (#671), and
+          // `detachFocusedToDispatch` has always allowed a grid terminal to be
+          // parked in Dispatch. Gating the recover hint on kind is what lets a
+          // restored terminal re-attach its tmux session instead of coming back
+          // as a fresh shell with the user's scrollback gone.
           const newId = await sessionActions.spawn(detached.meta.cwd, {
             kind,
             resumeSessionId: kind !== 'terminal'
@@ -265,6 +270,169 @@ export function useUndoCloseAction(
     [sessionActions, setState],
   )
 
+  const restoreDetachedEntry = useCallback(
+    async (entry: ClosedDetached): Promise<RestoreResult> => {
+      // The project tab is a detached row's only anchor. `buildDispatchGroups`
+      // walks `state.tabs` and files each detached record under its
+      // `projectTabId`, so a record whose tab is gone renders in no group at
+      // all — restoring it would spawn a live backend the user can never see
+      // or close. Treat that as stale, the same judgement restorePaneEntry
+      // makes when its sibling anchor is gone.
+      //
+      // We deliberately do NOT re-home the row into some surviving tab: the
+      // tab-close undo path already restores detached children as part of
+      // restoring their tab, so a missing tab here means the user closed the
+      // project itself and undoing THAT is the correct recovery.
+      const targetTab = refs.stateRef.current.tabs.find(
+        tab => tab.id === entry.record.projectTabId,
+      )
+      if (!targetTab) return 'stale'
+
+      const meta = entry.sessionMeta
+      const kind: SessionKind = meta.kind ?? DEFAULT_PROVIDER
+      let newSessionId: SessionId
+      try {
+        // Same respawn contract as restorePaneEntry: --resume for an agent with
+        // a durable transcript, `recoverTmuxName` for a terminal so the still
+        // alive tmux session is re-attached rather than replaced by an empty
+        // shell. The latter is the whole reason this entry type exists.
+        newSessionId = await sessionActions.spawn(meta.cwd, {
+          kind,
+          resumeSessionId: kind !== 'terminal'
+            ? resumableProviderSessionId(meta)
+            : undefined,
+          recoverTmuxName: kind === 'terminal' ? meta.tmuxName : undefined,
+          builtInMcpDomains: meta.builtInMcpDomains,
+        })
+      } catch {
+        return 'retryable-failure'
+      }
+
+      // Set inside the updater and read after. Sound because setState is the
+      // zustand store setter, which applies updaters synchronously — NOT a
+      // React useState setter, whose updater would still be pending here.
+      // Deliberately not a `refs.stateRef` read: that ref only refreshes on a
+      // React render, so it can lag an awaited continuation and would report a
+      // successful restore as a failure, killing the session we just revived.
+      let refiled = false
+      setState(prev => {
+        // Re-check inside the updater: the tab can be closed between the
+        // awaited spawn and here. Returning `prev` unchanged would strand the
+        // session, so fall through to the kill below instead.
+        const tabIndex = prev.tabs.findIndex(tab => tab.id === entry.record.projectTabId)
+        if (tabIndex < 0) return prev
+        refiled = true
+        return {
+          ...prev,
+          // Every other path that files a detached row makes its tab active in
+          // the same updater — splitFocused's Dispatch branch,
+          // createDetachedDispatchAgent, and restoreTabEntry above — because
+          // buildDispatchGroups filters `sourceTabs` to `activeTabId` outside
+          // global scope. Without this, undoing a row that belongs to a
+          // different project tab spawns a live backend that renders NOWHERE:
+          // the row is filed correctly but filtered out of the list, and
+          // ClassicDispatchLayout's focus effect immediately overwrites the
+          // focus we set below with whatever row is actually visible. There is
+          // no toast on this path, so the user sees undo do nothing while an
+          // agent (or a re-attached tmux session) runs invisibly.
+          activeTabId: entry.record.projectTabId,
+          // `spawn` builds SessionMeta from {cwd, kind, tmuxName, providerSessionId,
+          // builtInMcpDomains} only. The fields that make a session a LINKED or
+          // ORCHESTRATION child — and any user-authored title — are durable
+          // metadata it never sees. Those children are always detached, so they
+          // are precisely the population this undo path covers: without this
+          // patch an undone linked child returns un-nested (buildDispatchGroups
+          // reads `linkedParentId` to indent it) and stops cascading when its
+          // parent closes, and a titled row silently relabels to its cwd
+          // basename. Carry them from the captured meta, which is the only
+          // record of them left once the session is gone.
+          sessions: {
+            ...prev.sessions,
+            [newSessionId]: {
+              ...(prev.sessions[newSessionId] ?? { cwd: meta.cwd, kind }),
+              ...(meta.title ? { title: meta.title } : {}),
+              ...(meta.linkedParentId ? { linkedParentId: meta.linkedParentId } : {}),
+              ...(meta.orchestrationParentId
+                ? { orchestrationParentId: meta.orchestrationParentId }
+                : {}),
+              ...(meta.orchestrationRootId
+                ? { orchestrationRootId: meta.orchestrationRootId }
+                : {}),
+              ...(meta.orchestrationRunId
+                ? { orchestrationRunId: meta.orchestrationRunId }
+                : {}),
+              ...(meta.orchestrationRole
+                ? { orchestrationRole: meta.orchestrationRole }
+                : {}),
+              ...(meta.agentViewModeOverride
+                ? { agentViewModeOverride: meta.agentViewModeOverride }
+                : {}),
+              // Its own doc comment says this "must survive with the child".
+              // spawn never sets it, so without carrying it an undone
+              // orchestration child would re-run its bootstrap handoff.
+              ...(meta.orchestrationBootstrapPromptDelivered
+                ? { orchestrationBootstrapPromptDelivered: true }
+                : {}),
+            },
+          },
+          detachedSessions: {
+            ...prev.detachedSessions,
+            [newSessionId]: {
+              ...entry.record,
+              // The spawn minted a new local id; everything else about the
+              // record — project affinity and, critically, `detachedAt` —
+              // is restored verbatim so the row returns to its old position
+              // in the Dispatch list rather than jumping to the bottom.
+              sessionId: newSessionId,
+              // projectTabIndex is a display ordinal recomputed on render;
+              // refresh it so a record read before the next render is not
+              // stale if tabs moved while the entry sat on the stack.
+              projectTabIndex: tabIndex,
+            },
+          },
+          // Focus the restored row when Dispatch is up. NOTE this is the
+          // classic focus only: in Tiled Dispatch `dispatchFocusedSessionId`
+          // reads the focused LANE first, and the close already cleared that
+          // lane (dispatchModeAfterSessionRemoval) and the heal effect refilled
+          // it with another agent. So the visible result there is the row
+          // reappearing at its old position in the index, not a lane takeover.
+          // Restoring the lane would need the lane index captured on the entry
+          // at close time; deliberately not done, because a lane the user has
+          // since re-aimed should not be yanked back by an undo.
+          dispatchMode: prev.dispatchMode
+            ? { ...prev.dispatchMode, focusedSessionId: newSessionId }
+            : prev.dispatchMode,
+        }
+      })
+
+      if (!refiled) {
+        // Mirror restorePaneEntry's bail: the spawn already registered a live
+        // backend, so a placement that did not happen must not leave it
+        // running with no row pointing at it.
+        //
+        // Kill with the kind/cwd resolved above rather than leaving it to
+        // killSession's ownership proof, which re-reads them from
+        // `refs.stateRef`. That ref is a RENDER-BODY mirror, so immediately
+        // after an awaited spawn it does not yet contain the new session and
+        // the proof fails — meaning the kill would silently no-op and strand
+        // exactly the backend this bail exists to reclaim. killSession still
+        // runs for the renderer-side cleanup.
+        await window.api
+          .killOwnedSession({ sessionId: newSessionId, kind, cwd: meta.cwd })
+          .catch(() => undefined)
+        // `.catch` mirrors restorePaneEntry's guard. killSession reaches an IPC
+        // invoke that can reject, and this bail runs with the entry already
+        // POPPED — a throw here would lose the entry (the push-back only
+        // happens for 'retryable-failure'), skip bumpUndoCloseVersion so the
+        // palette's count stays stale, and escape into the keybinding handler.
+        await sessionActions.killSession(newSessionId).catch(() => undefined)
+        return 'stale'
+      }
+      return 'restored'
+    },
+    [refs.stateRef, sessionActions, setState],
+  )
+
   const undoClose = useCallback(async () => {
     // Undo Close is a small LIFO recovery history, not a one-shot
     // toast action. Pane entries can go stale during normal cleanup
@@ -288,7 +456,9 @@ export function useUndoCloseAction(
       }
       const result = entry.type === 'pane'
         ? await restorePaneEntry(entry)
-        : await restoreTabEntry(entry)
+        : entry.type === 'detached'
+          ? await restoreDetachedEntry(entry)
+          : await restoreTabEntry(entry)
       if (result === 'restored') return
       if (result === 'retryable-failure') {
         refs.undoStackRef.current.push(entry)
@@ -299,7 +469,7 @@ export function useUndoCloseAction(
       }
       staleEntryConsumed = true
     }
-  }, [bumpUndoCloseVersion, refs.undoStackRef, restorePaneEntry, restoreTabEntry])
+  }, [bumpUndoCloseVersion, refs.undoStackRef, restoreDetachedEntry, restorePaneEntry, restoreTabEntry])
 
   // Peek at the undo stack length — used by the command palette to
   // show/hide the "Undo Close" command.

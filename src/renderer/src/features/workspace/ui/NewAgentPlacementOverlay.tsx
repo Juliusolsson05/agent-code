@@ -152,12 +152,27 @@ export function NewAgentPlacementOverlay({
       if (committingRef.current) return
       committingRef.current = true
       if (kind === 'terminal') {
-        // Terminals are the one Dispatch creation kind that still becomes a
-        // grid leaf: shell lifecycle/persistence is leaf-based, while
-        // provider Dispatch agents are detached rows. splitFocused owns the
-        // Dispatch-aware target resolution for terminals (#366), including
-        // the focused tiled lane / global row project context and overlay
-        // close.
+        // DEAD BRANCH, kept as a guard rather than removed.
+        //
+        // `kindOnly` is true whenever `dispatchMode` is set, and that filters
+        // KIND_OPTIONS down to agent providers only — both commitKind call
+        // sites read the filtered list, so Terminal is never offered here in
+        // Dispatch and this cannot fire. (See the "no placement step, no
+        // terminal option" note above, which says the same thing.)
+        //
+        // It stays because the handler is typed against the full SessionKind
+        // union: if a future change reintroduces Terminal to the Dispatch kind
+        // picker, falling through would hand 'terminal' to
+        // createDetachedDispatchAgent, whose signature excludes it. Routing to
+        // splitFocused is the correct behaviour if this ever becomes live —
+        // its Dispatch branch is kind-agnostic and files a terminal as a
+        // detached row (#671).
+        //
+        // NOT equivalent to the agent path in one respect: that path forwards
+        // `projectIntent`, the project-header "+" override that exists because
+        // lane focus does not identify the clicked project. splitFocused has no
+        // such override, so a revived Terminal option would resolve its project
+        // from focus alone.
         void workspace.splitFocused('vertical', 'terminal')
         return
       }

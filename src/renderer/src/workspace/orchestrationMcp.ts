@@ -146,7 +146,10 @@ export function readOrchestrationRunOutputs(params: {
  */
 export type OrchestrationCloseSession = (
   sessionId: SessionId,
-  options?: { silentIfSoleTarget?: { headline: string } },
+  options?: {
+    silentIfSoleTarget?: { headline: string }
+    captureUndo?: boolean
+  },
 ) => Promise<boolean>
 
 /** "Agent “Reviewer” is asking to close an agent it started." — the sentence
@@ -219,8 +222,15 @@ export async function closeOrchestrationRun(params: {
       // include "already closed by this very operation". The error direction is
       // the safe one (it over-reports survival, where the old code
       // over-reported success), but do not read skipped as "still running".
+      // captureUndo: false — a run close is a fleet reaping its own children,
+      // often a dozen at once. Those are agent-created sessions the user never
+      // opened by hand, so pushing one undo entry each would evict the user's
+      // own close history from the 10-entry stack in favour of rows they never
+      // asked for. Single-agent closes (closeOrchestrationAgent) still capture:
+      // that is one deliberate act, at human scale.
       const closed = await params.closeSession(sessionId, {
         silentIfSoleTarget: { headline },
+        captureUndo: false,
       })
       if (closed) closedSessionIds.push(sessionId)
       else skippedSessionIds.push(sessionId)

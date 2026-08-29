@@ -77,9 +77,7 @@ can differ from focusedLane/classic focus.
 | dispatchTarget.ts:43-65 resolveDispatchVisualTarget | strict lane, else classic + grid | destructive/lifecycle command target | wrong agent or no-op |
 | commandTargetSessionId.ts:35-60 | via above | ~60 commands (close/reload/switch/bury/copy/reader/paste/templates; consumers: App.tsx:454, useKeybinds 235/419/692, provider.ts 43/103/170/299, pane.ts 866/1008/1035/1334, session.ts 608/965, sessionCommands 30+, paneCommands 90-440, PromptSearchModal:101) | all hit wrong session |
 | dispatchSelectors.ts:351-389 resolveDispatchSpawnTarget | lane strict, classic fallback | new-agent project/lane | #266 class |
-| dispatchSelectors.ts:395-419 resolveDispatchTerminalSplitTarget | + grid focus | terminal split target | wrong project grid |
 | dispatchTarget.ts:74-83 resolveDispatchAttachTarget | strict | attach target (paneCommands 119/125) | wrong agent attached |
-| dispatch.ts:59 ensureDispatchTerminal | dispatchFocusedSessionId ?? grid | terminal cwd anchor | wrong project cwd |
 | paneCommands.ts:461-467 dispatchCommandTabId | + grid | attach-all tab | wrong tab |
 | useKeybinds.ts:803-813 | focusedLane + lane selection | tiled nav cursor | steps from wrong agent |
 | useKeybinds.ts:830-834 | classic + grid | classic nav cursor | wrong row |
@@ -90,6 +88,11 @@ can differ from focusedLane/classic focus.
 | agentStatusModel.ts:114 | commandTarget | status highlight | wrong highlight |
 | App.tsx:454 | commandTarget | paste/image/drag-drop routing | paste to wrong agent |
 | dictationHotkeyRegistry.ts:87-97 | DOM focus only (none of the 4) | Fn dictation target | independent of lane focus (D10) |
+
+> Removed 2026-08-27 (#671): `resolveDispatchTerminalSplitTarget` and
+> `ensureDispatchTerminal` are gone. Dispatch terminal creation now shares
+> `resolveDispatchSpawnTarget` with agents, so there is no separate terminal
+> focus reader left to diverge.
 
 ## Divergence windows (concrete repro sequences)
 

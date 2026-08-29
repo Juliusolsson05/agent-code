@@ -1,19 +1,14 @@
 import { act } from 'react'
-import type { MutableRefObject } from 'react'
 import { render } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
-import { UndoCloseStack } from '@renderer/lib/undoClose'
-import type { SessionActions } from '@renderer/workspace/hook/actions/session'
-import { usePaneActions } from '@renderer/workspace/hook/actions/pane'
 import { useUndoCloseAction } from '@renderer/workspace/hook/actions/undoClose'
-import type {
-  WorkspaceSetRuntimes,
-  WorkspaceSetSpotlight,
-  WorkspaceSetState,
-  WorkspaceSetTileTabs,
-} from '@renderer/workspace/hook/context'
-import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
+import {
+  makeRefs,
+  mountPaneActions,
+  sessionActionsWithSpawn,
+  stateWriter,
+} from '@renderer/workspace/hook/actions/testing/paneActionsHarness'
 import type { DispatchModeState, WorkspaceState } from '@renderer/workspace/types'
 
 function makeState(dispatchMode: DispatchModeState | null): WorkspaceState {
@@ -33,82 +28,6 @@ function makeState(dispatchMode: DispatchModeState | null): WorkspaceState {
     buried: [],
     pinnedSessionIds: [],
   } as WorkspaceState
-}
-
-function makeRefs(state: WorkspaceState): WorkspaceRefs {
-  const ref = <T,>(value: T): MutableRefObject<T> => ({ current: value })
-  return {
-    stateRef: ref(state),
-    latestStateRef: ref(state),
-    latestRuntimesRef: ref({}),
-    latestTileTabsRef: ref(null),
-    dangerousAgentsRef: ref(false),
-    useProxyStreamingRef: ref(false),
-    defaultBuiltInMcpDomainsRef: ref([]),
-    seenUuidsRef: ref({}),
-    latestScreenRef: ref({}),
-    undoStackRef: ref(new UndoCloseStack()),
-    bootstrapTimersRef: ref(new Map()),
-    persistedFeedDebugIdRef: ref({}),
-    inFlightFeedDebugIdRef: ref({}),
-    paneToastTimers: ref({}),
-    saveTimerRef: ref(null),
-    bootRef: ref(false),
-  }
-}
-
-function stateWriter(
-  initialState: WorkspaceState,
-  refs: WorkspaceRefs,
-): { getState: () => WorkspaceState; setState: WorkspaceSetState } {
-  let state = initialState
-  return {
-    getState: () => state,
-    setState: next => {
-      state = typeof next === 'function' ? next(state) : next
-      refs.stateRef.current = state
-      refs.latestStateRef.current = state
-    },
-  }
-}
-
-function sessionActionsWithSpawn(spawn: ReturnType<typeof vi.fn>): SessionActions {
-  return {
-    spawn,
-    ensureSessionLive: vi.fn(),
-    killSession: vi.fn().mockResolvedValue(undefined),
-    replaceSession: vi.fn(),
-    reloadAgentSessions: vi.fn(),
-    softReloadAgentView: vi.fn(),
-  } as unknown as SessionActions
-}
-
-function mountPaneActions(initialState: WorkspaceState) {
-  const refs = makeRefs(initialState)
-  const writer = stateWriter(initialState, refs)
-  const spawn = vi.fn().mockResolvedValue('clone')
-  let actions!: ReturnType<typeof usePaneActions>
-
-  function Harness(): React.JSX.Element {
-    actions = usePaneActions(
-      initialState,
-      writer.setState,
-      (() => undefined) as WorkspaceSetRuntimes,
-      (() => undefined) as WorkspaceSetSpotlight,
-      (() => undefined) as WorkspaceSetTileTabs,
-      refs,
-      vi.fn(),
-      vi.fn(),
-      vi.fn(),
-      vi.fn(),
-      vi.fn(),
-      sessionActionsWithSpawn(spawn),
-    )
-    return <div />
-  }
-
-  const mounted = render(<Harness />)
-  return { actions, mounted, spawn, getState: writer.getState }
 }
 
 describe('built-in MCP continuity at session resurrection boundaries', () => {

@@ -376,7 +376,14 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
           // would otherwise fire once per agent and turn a twelve-agent cleanup
           // into twelve modals. The per-kill revalidation above is what keeps
           // that grant honest.
-          await workspaceRef.current.closeSession(target.sessionId, { preConfirmed: true })
+          // captureUndo: false — this surface exists to PURGE N stale agents, which in a
+          // Dispatch-heavy workspace are overwhelmingly detached rows. Capturing one
+          // entry each would flush the user's real close history out of the 10-entry
+          // stack, so ⌘⇧T would resurrect something they just deliberately cleared.
+          await workspaceRef.current.closeSession(target.sessionId, {
+            preConfirmed: true,
+            captureUndo: false,
+          })
           outcome.closed.push(target.sessionId)
         } catch (error) {
           // One backend refusing must not abandon the rest of the batch — the

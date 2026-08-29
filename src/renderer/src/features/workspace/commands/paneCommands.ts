@@ -301,22 +301,29 @@ export const paneCommands: CommandDef[] = [
   {
     id: 'terminal-horizontal',
     category: 'create',
-    // `app`. A terminal split from Dispatch lands in a grid the user cannot see
-    // immediately and the "Right" label points at nothing visible, which is why
-    // this was `grid` — the intent was to hide the palette ROW while, as the
-    // old comment here put it, "power-user keybinds still work because they
-    // route through splitFocused".
+    // `app`, and the two reasons for that have accumulated:
     //
-    // They stopped working. Keybinds now route through the execution gateway,
-    // which applies `surfaceAvailable`, so `grid` refused ⌥T in Dispatch as well
-    // as hiding it. Between a slightly odd palette row and a dead chord the user
-    // has muscle memory for, the row is the cheaper cost — and `surface` is an
-    // APPLICABILITY declaration, which this command genuinely satisfies in both
-    // modes. Mode-conditional row hiding, if it is still wanted, needs its own
-    // mechanism rather than borrowing this one.
+    // 1. This was originally `grid` because a terminal split from Dispatch
+    //    landed in a grid the user could not see immediately, so the "Right"
+    //    label pointed at nothing visible. The intent was to hide the palette
+    //    ROW while, as the old comment put it, "power-user keybinds still work
+    //    because they route through splitFocused". They stopped working:
+    //    keybinds now go through the execution gateway, which applies
+    //    `surfaceAvailable`, so `grid` refused ⌥T in Dispatch as well as hiding
+    //    it. Between a slightly odd palette row and a dead chord the user has
+    //    muscle memory for, the row is the cheaper cost — and `surface` is an
+    //    APPLICABILITY declaration, which this command genuinely satisfies in
+    //    both modes. Mode-conditional row hiding, if it is still wanted, needs
+    //    its own mechanism rather than borrowing this one.
+    //
+    // 2. The "points at nothing visible" premise is gone anyway (#671): a
+    //    Dispatch terminal is now a detached Dispatch row that lands in the
+    //    focused lane, so the command has a visible result in both modes. Only
+    //    the direction argument is inert under Dispatch — same as every other
+    //    creation command there.
     surface: 'app',
     title: 'New Terminal Right',
-    description: '**What it does:** Opens a **terminal on the right**.\n\n**Use when:** You need a shell beside the current pane.\n\n**Notes:** From **Dispatch**, the terminal attaches to the focused row or lane’s project grid.',
+    description: '**What it does:** Opens a **terminal on the right**.\n\n**Use when:** You need a shell beside the current pane.\n\n**Notes:** From **Dispatch**, the terminal becomes a Dispatch row in the focused row or lane’s project.',
     run: ({ workspace }) => workspace.splitFocused('vertical', 'terminal'),
   },
   {
@@ -324,7 +331,7 @@ export const paneCommands: CommandDef[] = [
     category: 'create',
     surface: 'app',
     title: 'New Terminal Below',
-    description: '**What it does:** Opens a **terminal below**.\n\n**Use when:** You need a shell under the current pane.\n\n**Notes:** From **Dispatch**, the terminal attaches to the focused row or lane’s project grid.',
+    description: '**What it does:** Opens a **terminal below**.\n\n**Use when:** You need a shell under the current pane.\n\n**Notes:** From **Dispatch**, the terminal becomes a Dispatch row in the focused row or lane’s project.',
     run: ({ workspace }) => workspace.splitFocused('horizontal', 'terminal'),
   },
   // Per-provider split commands, generated for every registered agent
@@ -415,7 +422,7 @@ export const paneCommands: CommandDef[] = [
     category: 'session',
     surface: 'app',
     title: 'Undo Close',
-    description: '**What it does:** Restores the most recent closed **pane or tab** from a small recent-close history.\n\n**Use when:** You closed something by mistake, or repeat it to walk back through earlier closes.\n\n**Notes:** Also restores detached **Dispatch** agents captured with a closed tab.',
+    description: '**What it does:** Restores the most recent closed **pane, tab, or Dispatch row** from a small recent-close history.\n\n**Use when:** You closed something by mistake, or repeat it to walk back through earlier closes.\n\n**Notes:** A restored **Dispatch** terminal re-attaches its tmux session, so its scrollback comes back.',
     run: ({ workspace }) => workspace.undoClose(),
   },
   {

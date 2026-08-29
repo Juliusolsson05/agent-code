@@ -1,4 +1,5 @@
 import type {
+  DetachedSessionRecord,
   SessionId,
   SessionMeta,
   SplitDirection,
@@ -19,6 +20,11 @@ import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 //   'tab'  — an entire tab was closed. To undo we respawn every session
 //            in the tab, rebuild the tree, and re-insert the tab at its
 //            original index.
+//
+//   'detached' — a single DETACHED Dispatch row was closed. It has no
+//            place in any tile tree, so there is no split to rebuild;
+//            undo respawns the session and re-files its
+//            `detachedSessions` record instead.
 //
 // The stack is LIFO — the user undoes the most recent close first, which
 // matches Cmd+Shift+T muscle memory from every browser ever. Multiple
@@ -124,7 +130,38 @@ export type ClosedTab = {
   detachedEntries?: ClosedTabDetachedEntry[]
 }
 
-export type ClosedEntry = ClosedPane | ClosedTab
+/**
+ * Captured when a single detached Dispatch session is closed.
+ *
+ * WHY this needed its own entry shape rather than reusing ClosedPane:
+ * ClosedPane restores by finding a surviving sibling leaf and rebuilding the
+ * split around it. A detached session was never in `tab.root`, so it has no
+ * sibling, no direction, and no ratio — every placement field ClosedPane
+ * carries would be a lie. What it does have is a `DetachedSessionRecord`,
+ * which is the whole of its placement.
+ *
+ * WHY the record is stored verbatim instead of being rebuilt at restore time:
+ * `detachedAt` is what orders rows inside a Dispatch project group. Minting a
+ * fresh one on undo would silently move the restored row to the bottom of the
+ * list — the user pressed undo to put things BACK, not to reorder them. The
+ * same reasoning `ClosedTabDetachedEntry` documents for its own `detachedAt`.
+ *
+ * This shape matters most for terminals. Closing one stops its attach PTY but
+ * leaves the tmux session alive; if no undo entry captures `tmuxName`, the
+ * next launch's tmux reconcile sees a live session with no matching row in
+ * workspace.json, classifies it as an orphan, and silently kills it. Without
+ * this entry a closed Dispatch terminal's scrollback is unrecoverable.
+ */
+export type ClosedDetached = {
+  type: 'detached'
+  closedAt: number
+  /** Session metadata — cwd, kind, providerSessionId, tmuxName. */
+  sessionMeta: SessionMeta
+  /** The detached record as it stood at close time, `detachedAt` included. */
+  record: DetachedSessionRecord
+}
+
+export type ClosedEntry = ClosedPane | ClosedTab | ClosedDetached
 
 export function missingClosedTabLeafMetaIds(entry: ClosedTab): SessionId[] {
   // WHY this validation lives beside the entry type instead of being inlined
