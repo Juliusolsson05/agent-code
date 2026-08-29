@@ -588,10 +588,21 @@ export function dispatchActivityDotClass(activity: DispatchAgentActivity): strin
   }
 }
 
-export function DispatchEmpty({ message }: { message: string }) {
+/**
+ * The empty state for a lane or list with nothing in it.
+ *
+ * WHY `hint` is optional rather than always shown: this renders for two
+ * different situations. One is exhaustion — every agent is already in a lane,
+ * and the user did not ask for this — where a second line telling them to press
+ * a key would be noise. The other is a lane the user just deliberately created
+ * (#673), where naming the state and the way out of it is the whole job. Only
+ * the caller knows which one it is looking at.
+ */
+export function DispatchEmpty({ message, hint }: { message: string; hint?: string }) {
   return (
-    <div className="h-full flex items-center justify-center text-[12px] text-muted">
-      {message}
+    <div className="h-full flex flex-col items-center justify-center gap-1 px-4 text-center text-[12px] text-muted">
+      <span>{message}</span>
+      {hint && <span className="text-[11px] text-muted/70">{hint}</span>}
     </div>
   )
 }

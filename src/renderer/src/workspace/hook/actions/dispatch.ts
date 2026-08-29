@@ -7,6 +7,7 @@ import {
   dispatchFocusedSessionId,
   insertLaneRightIntoTiled,
   removeLaneFromTiled,
+  withLaneSession,
 } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import type {
   WorkspaceSetState,
@@ -156,7 +157,7 @@ export function useDispatchActions(
         if (laneIndex < 0 || laneIndex >= tiled.lanes.length) return prev
         if (tiled.lanes[laneIndex]?.selectedSessionId === sessionId) return prev
         const lanes = tiled.lanes.map((lane, i) =>
-          i === laneIndex ? { ...lane, selectedSessionId: sessionId } : lane,
+          i === laneIndex ? withLaneSession(lane, sessionId) : lane,
         )
         return {
           ...prev,
@@ -210,7 +211,7 @@ export function useDispatchActions(
       setState(prev => {
         const tiled = prev.dispatchMode?.tiled
         if (!tiled) return prev
-        const next = insertLaneRightIntoTiled(prev, tiled, laneIndex)
+        const next = insertLaneRightIntoTiled(tiled, laneIndex)
         if (!next) return prev
         inserted = true
         return { ...prev, dispatchMode: { ...prev.dispatchMode!, tiled: next } }

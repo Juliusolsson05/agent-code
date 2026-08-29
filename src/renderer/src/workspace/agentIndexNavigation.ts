@@ -1,6 +1,7 @@
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 
 import { selectedGridRelatedSessionId } from '@renderer/workspace/gridRelatedAgents'
+import { withLaneSession } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import {
   collectLeaves,
   remapTileTreeSessionIds,
@@ -91,7 +92,7 @@ export function navigateToAgentIndexTarget(
       ? tiled.lanes
       : tiled.lanes.map((lane, index) => (
           index === focusedLane
-            ? { ...lane, selectedSessionId: target.sessionId }
+            ? withLaneSession(lane, target.sessionId)
             : lane
         ))
     const crossesProjectScope =

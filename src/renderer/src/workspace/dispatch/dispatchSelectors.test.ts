@@ -261,16 +261,35 @@ describe('resolveDispatchAttachTarget', () => {
 })
 
 describe('nextTiledRowIndex', () => {
-  it('moves down from no selection to the first row', () => {
+  it('lands on the first row from no selection, whichever direction is pressed', () => {
+    // An empty lane behaves as though it already sat at a1, so the first press
+    // commits that position rather than moving off it. Direction must not decide
+    // whether a fresh lane opens at the top or the bottom of the index (#673).
     expect(nextTiledRowIndex(-1, 1, 4)).toBe(0)
-  })
-
-  it('moves up from no selection to the last row', () => {
-    expect(nextTiledRowIndex(-1, -1, 4)).toBe(3)
+    expect(nextTiledRowIndex(-1, -1, 4)).toBe(0)
   })
 
   it('wraps valid row movement in both directions', () => {
     expect(nextTiledRowIndex(0, -1, 4)).toBe(3)
     expect(nextTiledRowIndex(3, 1, 4)).toBe(0)
+  })
+
+  it('advances normally on the press after an empty lane commits a1', () => {
+    // The sequence is what the user actually feels, and it is the half a
+    // single-call assertion cannot cover: the first press must SELECT a1 and
+    // the second must MOVE. A regression that made the empty branch sticky
+    // (always returning 0) would pass the case above and strand the user on a1.
+    // moveTiledLaneSelection does not literally feed the result back in: it
+    // writes the session id, then re-derives the index with
+    // rows.findIndex(...) on the next press. That is equivalent only because
+    // buildVisibleDispatchRows' order is stable between the two presses, which
+    // is the assumption this sequence encodes.
+    const down = nextTiledRowIndex(-1, 1, 4)
+    expect(down).toBe(0)
+    expect(nextTiledRowIndex(down, 1, 4)).toBe(1)
+
+    const up = nextTiledRowIndex(-1, -1, 4)
+    expect(up).toBe(0)
+    expect(nextTiledRowIndex(up, -1, 4)).toBe(3)
   })
 })

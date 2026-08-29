@@ -49,8 +49,50 @@ export function remapTiledLanes(
 }
 
 /**
+ * Put a session into a lane.
+ *
+ * WHY this exists rather than three hand-rolled `{ ...lane, selectedSessionId }`
+ * spreads: `userEmptied` must be dropped whenever a lane is filled, and the
+ * spread preserves it. There are three writers — setTiledLaneSession,
+ * applyDispatchSpawnFocus, and the A2!/agent-index navigation path — and the
+ * last two are the ORDINARY way a user fills the lane New Lane just created
+ * (`resolveDispatchSpawnTarget` deliberately places a new agent into an empty
+ * focused lane). Missing them left the flag on a lane that now held an agent,
+ * so when that agent later exited the lane became a permanent hole the healer
+ * would never re-home — durable across restarts, since the flag persists.
+ *
+ * This file's header already says the lane helpers must be applied at EVERY
+ * id-remap, removal, and focus-read site; a fourth hand-rolled spread is how
+ * that class of bug keeps coming back.
+ */
+export function withLaneSession(lane: DispatchLane, sessionId: SessionId): DispatchLane {
+  const { userEmptied: _filledByTheUserNow, ...rest } = lane
+  return { ...rest, selectedSessionId: sessionId }
+}
+
+/**
+ * Blank a lane's selection.
+ *
+ * WHY this drops `userEmptied` as well: both callers only reach this branch for
+ * a lane that HELD a session, which is exactly the case where the user had
+ * filled it — so it must go back to healing like any other lane. Leaving the
+ * flag behind turns "your agent exited" into "this slot is dead forever", and
+ * `keepTiledLaneSessions` is the AUTOSAVE boundary, so the dead slot would be
+ * written into workspace.json and survive restarts.
+ *
+ * A lane the user emptied deliberately and never filled has no
+ * `selectedSessionId`, so neither caller touches it and its flag survives —
+ * which is the whole point of the flag.
+ */
+function withLaneCleared(lane: DispatchLane): DispatchLane {
+  const { userEmptied: _noLongerDeliberate, ...rest } = lane
+  return { ...rest, selectedSessionId: undefined }
+}
+
+/**
  * Clear any tiled lane pointing at a removed session (selectedSessionId ->
- * undefined). The layout's auto-fill effect then re-homes the emptied lane.
+ * undefined). The layout's auto-fill effect then re-homes the emptied lane,
+ * unless the lane is `userEmptied` (see withLaneCleared).
  * Apply wherever a session is destroyed/hidden (killSession, close, bury).
  */
 export function clearTiledLaneSessions(
@@ -64,7 +106,7 @@ export function clearTiledLaneSessions(
   const lanes = dispatchMode.tiled.lanes.map(lane => {
     if (lane.selectedSessionId && isRemoved(lane.selectedSessionId)) {
       changed = true
-      return { ...lane, selectedSessionId: undefined }
+      return withLaneCleared(lane)
     }
     return lane
   })
@@ -91,7 +133,7 @@ export function keepTiledLaneSessions(
   const lanes = dispatchMode.tiled.lanes.map(lane => {
     if (lane.selectedSessionId && !keep.has(lane.selectedSessionId)) {
       changed = true
-      return { ...lane, selectedSessionId: undefined }
+      return withLaneCleared(lane)
     }
     return lane
   })
@@ -119,13 +161,42 @@ export function dispatchFocusedSessionId(
   return dispatchMode.focusedSessionId ?? null
 }
 
+/**
+ * Step one row in `delta` direction, wrapping.
+ *
+ * WHY an empty lane resolves to row 0 in BOTH directions (#673): an empty lane
+ * has no cursor to move, so the first press cannot mean "move from here" — it
+ * has to mean "start here". The model is that an empty lane behaves as though
+ * it were already sitting at the TOP of the index: the first press in either
+ * direction COMMITS that position, and every press after it navigates normally,
+ * so ⌥↓ ⌥↓ gives row 1 then row 2, and ⌥↓ ⌥↑ gives row 1 then a wrap to the
+ * last row.
+ *
+ * "Top of the index" and not "a1": buildVisibleDispatchRows puts pinned rows
+ * first (labelled ★1, ★2…), so with anything pinned row 0 is ★1. That was
+ * already true of the downward press before this change; it is called out here
+ * because the lane's placeholder copy now makes a promise about the key.
+ *
+ * This used to return `length - 1` for an upward press, which made the
+ * direction of the very first keystroke decide whether you landed at the top or
+ * the bottom of the index — defensible when an empty lane was a rare exhaustion
+ * state, but wrong now that New Lane deliberately creates one every time. The
+ * lane's placeholder promises ⌥↓ reaches the top row in one press; making ⌥↑
+ * agree costs nothing and removes the only way to be surprised by a fresh lane.
+ *
+ * The rejected alternative was to treat the virtual cursor as ALREADY on the top
+ * row so the first press steps off it to the second. That makes the top row
+ * unreachable by arrow from a fresh lane and lets the first keystroke scroll
+ * past the likeliest target. (Said as rows, not a1/a2, for the same reason as
+ * above: with anything pinned the first two rows are ★1 and ★2.)
+ */
 export function nextTiledRowIndex(
   currentIndex: number,
   delta: number,
   length: number,
 ): number {
   if (length <= 0) return -1
-  if (currentIndex < 0) return delta < 0 ? length - 1 : 0
+  if (currentIndex < 0) return 0
   return (((currentIndex + delta) % length) + length) % length
 }
 
@@ -197,16 +268,32 @@ export function buildAutoLanes(
 }
 
 /**
- * Insert one lane immediately to the right of `laneIndex`.
+ * Insert one EMPTY lane immediately to the right of `laneIndex`.
  *
  * WHY this is not `setTiledLaneCount(current + 1)`: count growth always appends
  * at the tail, while this command is spatial — the user is asking for a new
- * view beside the lane they are currently commanding. Keeping the splice here
- * also makes the no-session-lifecycle invariant explicit: the new lane only
- * receives another pointer from the canonical Dispatch row list.
+ * view beside the lane they are currently commanding.
+ *
+ * WHY the new lane is empty, when `buildAutoLanes` exists and would happily
+ * fill it (issue #673): the two operations look alike and are not. Raising the
+ * tile count is a statement about how many agents you want VISIBLE, so
+ * pre-filling is right — landing the user on N empty pickers after they asked
+ * for N tiles is busywork, which is what `buildAutoLanes` documents. Inserting
+ * a lane is a statement about SPACE, and space does not imply an occupant.
+ *
+ * This previously routed through `buildAutoLanes` so insertion and count growth
+ * would "stay in lockstep as future row kinds evolve". That coupling was the
+ * bug: `buildAutoLanes` claims the first visible row not already shown in a
+ * lane, which in the common case is the top of the index, so asking for another
+ * view silently duplicated a1 into the slot beside you. The two paths are now
+ * deliberately decoupled — if a future row kind changes how lanes auto-fill,
+ * that should change count growth and leave this alone.
+ *
+ * Note there is no session lifecycle here and no `state` argument any more:
+ * splicing a slot, shifting focus, and re-weighting ratios are all purely
+ * structural, so the invariant is now true by signature rather than by comment.
  */
 export function insertLaneRightIntoTiled(
-  state: WorkspaceState,
   tiled: TiledDispatchState,
   laneIndex: number,
 ): TiledDispatchState | null {
@@ -214,19 +301,20 @@ export function insertLaneRightIntoTiled(
   if (!Number.isInteger(laneIndex)) return null
   if (laneIndex < 0 || laneIndex >= tiled.lanes.length) return null
 
-  // buildAutoLanes already owns the contract for choosing the first visible,
-  // unclaimed Dispatch row. Asking it for one appended lane lets insertion and
-  // ordinary count growth stay in lockstep as pinned rows, terminals, and
-  // future row kinds evolve; we only move that computed lane to the requested
-  // spatial position.
-  const expanded = buildAutoLanes(state, tiled.lanes.length + 1, tiled.lanes)
-  const insertedLane = expanded[tiled.lanes.length] ?? {}
   const insertAt = laneIndex + 1
 
   return {
     lanes: [
       ...tiled.lanes.slice(0, insertAt),
-      insertedLane,
+      // Empty, and MARKED empty. The bare `{}` is not enough: the layout's
+      // heal effect fills any unresolved lane with the next available agent,
+      // so an unmarked empty lane is refilled on the next render and this
+      // whole change becomes a no-op. `userEmptied` is what the healer skips.
+      //
+      // The user picks the occupant; one press of ⌥↓ in the focused lane
+      // selects the top row of the index (★1 if anything is pinned, else a1),
+      // so the old auto-fill result is still one keystroke away.
+      { userEmptied: true },
       ...tiled.lanes.slice(insertAt),
     ],
     // The command inserts after focus, so its normal path keeps this index.

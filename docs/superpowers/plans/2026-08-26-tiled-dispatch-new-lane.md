@@ -1,3 +1,10 @@
+> **SUPERSEDED IN PART (2026-08-28, #673).** The auto-fill contract described
+> below — "the new lane shows the first visible agent not already represented"
+> — was removed. New Lane now inserts a lane marked `userEmptied`, which the
+> layout's heal effect skips. Everything else here (spatial insertion beside the
+> focused lane, focus preservation, ratio weighting, the lane ceiling) still
+> holds. See `2026-08-28-empty-new-lane.md`.
+
 # Tiled Dispatch New Lane Implementation Plan
 
 ## Outcome
