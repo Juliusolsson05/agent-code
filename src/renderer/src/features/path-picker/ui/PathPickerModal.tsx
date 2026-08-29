@@ -230,7 +230,7 @@ export function PathPickerModal({
               key={p}
               type="button"
               onClick={() => setProvider(p)}
-              className={`
+              className={`rounded-control
                 px-3 py-1 text-[11px] font-semibold uppercase tracking-wider
                 border transition-colors duration-120
                 ${provider === p

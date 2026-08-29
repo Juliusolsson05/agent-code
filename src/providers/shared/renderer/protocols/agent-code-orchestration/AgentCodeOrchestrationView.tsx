@@ -114,7 +114,7 @@ function AgentOutputDisclosure({ value }: { value: unknown }) {
   const state = boundedLabel(agent.lifecycleState) ?? 'unknown'
   return (
     <details
-      className="rounded border border-border/60 px-2 py-1"
+      className="rounded-slab border border-border/60 px-2 py-1"
       onToggle={event => setOpen(event.currentTarget.open)}
     >
       <summary className="cursor-pointer select-none text-[11px] text-ink-dim">
@@ -326,7 +326,7 @@ export function AgentCodeOrchestrationView({
       >
         <summary className="cursor-pointer select-none list-none">
           <span className="text-accent font-semibold">{OPERATION_LABELS[model.operation]}</span>
-          <span className="ml-2 text-[10px] text-ink-dim border border-border rounded px-1 py-px">
+          <span className="ml-2 text-[10px] text-ink-dim border border-border rounded-chip px-1 py-px">
             Agent Code MCP
           </span>
           {subject ? <span className="ml-2 text-ink-dim break-all">{subject}</span> : null}

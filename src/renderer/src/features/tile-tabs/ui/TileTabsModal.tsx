@@ -65,7 +65,7 @@ export function TileTabsModal({
           <DialogDescription>Select two or more tabs to show side by side.</DialogDescription>
         </DialogHeader>
 
-        <div className="mx-4 my-4 min-h-0 flex-1 overflow-auto border border-border bg-canvas">
+        <div className="rounded-slab mx-4 my-4 min-h-0 flex-1 overflow-auto border border-border bg-canvas">
           {tabs.map(tab => {
             const checked = selectedSet.has(tab.id)
             return (

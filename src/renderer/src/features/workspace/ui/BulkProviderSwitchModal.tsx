@@ -253,14 +253,14 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
               type="button"
               onClick={requestClose}
               disabled={busy}
-              className="px-2 py-1 text-[10px] border border-border text-ink-dim hover:text-ink hover:border-border-hi disabled:opacity-50"
+              className="rounded-control px-2 py-1 text-[10px] border border-border text-ink-dim hover:text-ink hover:border-border-hi disabled:opacity-50"
             >
               Esc
             </button>
           </div>
 
           {batch && (
-            <div className="mt-3 flex items-center justify-between gap-3 border border-border bg-canvas px-3 py-2">
+            <div className="rounded-slab mt-3 flex items-center justify-between gap-3 border border-border bg-canvas px-3 py-2">
               <div className="min-w-0 text-[11px] text-ink-dim">
                 <span className="text-ink">↩ Last batch</span> — {batch.agents.length} agent
                 {batch.agents.length === 1 ? '' : 's'} · {providerLabel(batch.sourceKind)} →{' '}
@@ -270,7 +270,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
                 type="button"
                 onClick={() => void runReturn()}
                 disabled={busy}
-                className="flex-shrink-0 px-2.5 py-1 text-[11px] border border-accent/60 bg-accent/10 text-accent hover:bg-accent/20 disabled:opacity-50"
+                className="rounded-control flex-shrink-0 px-2.5 py-1 text-[11px] border border-accent/60 bg-accent/10 text-accent hover:bg-accent/20 disabled:opacity-50"
               >
                 {busy ? 'Working…' : `Return ${batch.agents.length}`}
               </button>
@@ -286,7 +286,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
                 <select
                   value={target}
                   onChange={e => setTarget(e.target.value as AgentProviderKind)}
-                  className="px-2 py-1.5 bg-canvas border border-border text-[12px] text-ink outline-none focus:border-accent"
+                  className="rounded-control px-2 py-1.5 bg-canvas border border-border text-[12px] text-ink outline-none focus:border-accent"
                 >
                   <option value="claude">Codex → Claude</option>
                   <option value="codex">Claude → Codex</option>
@@ -300,7 +300,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
                 <button
                   type="button"
                   onClick={() => setScopeMode('all')}
-                  className={`px-2.5 py-1.5 text-[11px] border ${
+                  className={`rounded-control px-2.5 py-1.5 text-[11px] border ${
                     scopeMode === 'all'
                       ? 'border-accent text-accent bg-accent/10'
                       : 'border-border text-ink-dim hover:text-ink hover:border-border-hi'
@@ -311,7 +311,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
                 <button
                   type="button"
                   onClick={() => setScopeMode('selected')}
-                  className={`px-2.5 py-1.5 text-[11px] border ${
+                  className={`rounded-control px-2.5 py-1.5 text-[11px] border ${
                     scopeMode === 'selected'
                       ? 'border-accent text-accent bg-accent/10'
                       : 'border-border text-ink-dim hover:text-ink hover:border-border-hi'
@@ -354,7 +354,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
                   value={projectFilter}
                   onChange={e => setProjectFilter(e.target.value)}
                   placeholder="Filter projects"
-                  className="mt-2 w-full px-2 py-1 bg-canvas border border-border text-[11px] text-ink outline-none focus:border-accent"
+                  className="rounded-control mt-2 w-full px-2 py-1 bg-canvas border border-border text-[11px] text-ink outline-none focus:border-accent"
                 />
               )}
             </div>
@@ -465,7 +465,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
               type="button"
               onClick={requestClose}
               disabled={busy}
-              className="px-3 py-1.5 text-[11px] border border-border text-ink-dim hover:text-ink hover:border-border-hi disabled:opacity-50"
+              className="rounded-control px-3 py-1.5 text-[11px] border border-border text-ink-dim hover:text-ink hover:border-border-hi disabled:opacity-50"
             >
               Cancel
             </button>
@@ -473,7 +473,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
               type="button"
               onClick={() => void runSwitch()}
               disabled={busy || matchingRows.length === 0}
-              className={`
+              className={`rounded-control
                 px-3 py-1.5 text-[11px] border
                 ${matchingRows.length > 0
                   ? 'border-accent/60 bg-accent/10 text-accent hover:bg-accent/20'

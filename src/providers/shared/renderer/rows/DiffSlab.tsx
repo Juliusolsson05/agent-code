@@ -45,14 +45,14 @@ export function DiffSlab({
 
   if (visibleLines.length === 0) {
     return (
-      <div className="bg-code-bg text-muted text-[11px] font-code px-3 py-2">
+      <div className="bg-code-bg rounded-slab text-muted text-[11px] font-code px-3 py-2">
         {emptyLabel}
       </div>
     )
   }
 
   return (
-    <div className="bg-code-bg font-code text-[12px] leading-[1.55] overflow-x-auto">
+    <div className="bg-code-bg rounded-slab font-code text-[12px] leading-[1.55] overflow-x-auto">
       {/* Sizer wrapper — makes the block containing the lines as wide as the
           widest line (`w-max`) AND at least as wide as the viewport
           (`min-w-full`). Without this, each line div is block-level inside an

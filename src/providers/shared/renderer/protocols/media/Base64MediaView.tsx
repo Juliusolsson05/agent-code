@@ -35,7 +35,7 @@ export function Base64MediaView({
               src={base64MediaDataUrl(model)}
               alt={alt}
               title={model.mimeType}
-              className="max-h-[28rem] max-w-full rounded border border-border object-contain bg-surface"
+              className="max-h-[28rem] max-w-full rounded-slab border border-border object-contain bg-surface"
             />
           ) : model?.kind === 'audio' ? (
             <audio

@@ -208,7 +208,7 @@ export function ReorderTabsModal({
           Select a tab, then use arrow keys to move it. Enter confirms the order.
         </DialogDescription>
 
-        <div className="flex-1 min-h-0 overflow-auto border border-border bg-canvas">
+        <div className="rounded-slab flex-1 min-h-0 overflow-auto border border-border bg-canvas">
           {draftTabs.map((tab, index) => {
             const cursor = tab.id === cursorTabId
             const moving = tab.id === movingTabId

@@ -37,7 +37,7 @@ export function EditorStatusBanner({
         <button
           type="button"
           onClick={onReload}
-          className="flex-shrink-0 rounded border border-border px-2 py-0.5 text-ink-dim hover:text-ink"
+          className="flex-shrink-0 rounded-control border border-border px-2 py-0.5 text-ink-dim hover:text-ink"
         >
           Reload from disk
         </button>
@@ -46,7 +46,7 @@ export function EditorStatusBanner({
         <button
           type="button"
           onClick={onOverwrite}
-          className="flex-shrink-0 rounded border border-border px-2 py-0.5 text-ink-dim hover:text-ink"
+          className="flex-shrink-0 rounded-control border border-border px-2 py-0.5 text-ink-dim hover:text-ink"
         >
           {externalChange === 'deleted' ? 'Recreate file' : 'Overwrite'}
         </button>

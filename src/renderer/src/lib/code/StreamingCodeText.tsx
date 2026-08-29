@@ -69,7 +69,7 @@ export const StreamingCodeText = memo(function StreamingCodeText({
     // DiffSlab's exact per-line grammar (bg + gutter + hljs body) so the
     // streaming preview and the committed diff card are the same picture.
     return (
-      <div className="bg-code-bg font-code text-[12px] leading-[1.55] overflow-auto max-h-[360px]">
+      <div className="bg-code-bg rounded-slab font-code text-[12px] leading-[1.55] overflow-auto max-h-[360px]">
         <div className="w-max min-w-full">
           {lines.map((text, i) => (
             <div key={i} className="bg-diff-add-bg flex items-start px-3 whitespace-pre">

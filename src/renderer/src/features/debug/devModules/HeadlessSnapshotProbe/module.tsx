@@ -36,7 +36,7 @@ function HeadlessSnapshotProbe({ sessionId, runtime, kind }: DevDebugModuleProps
   )
 
   return (
-    <div className="border border-border bg-canvas">
+    <div className="rounded-slab border border-border bg-canvas">
       <div className="border-b border-border px-3 py-2 flex items-center justify-between gap-3">
         <div className="min-w-0">
           <div className="text-[10px] text-danger uppercase tracking-[0.12em]">
@@ -58,7 +58,7 @@ function HeadlessSnapshotProbe({ sessionId, runtime, kind }: DevDebugModuleProps
             <input
               value={pattern}
               onChange={event => setPattern(event.target.value)}
-              className="bg-canvas border border-border px-2 py-1 text-[11px] text-ink outline-none focus:border-accent"
+              className="rounded-control bg-canvas border border-border px-2 py-1 text-[11px] text-ink outline-none focus:border-accent"
               spellCheck={false}
             />
           </label>
@@ -67,14 +67,14 @@ function HeadlessSnapshotProbe({ sessionId, runtime, kind }: DevDebugModuleProps
             <input
               value={flags}
               onChange={event => setFlags(event.target.value)}
-              className="bg-canvas border border-border px-2 py-1 text-[11px] text-ink outline-none focus:border-accent"
+              className="rounded-control bg-canvas border border-border px-2 py-1 text-[11px] text-ink outline-none focus:border-accent"
               spellCheck={false}
             />
           </label>
         </div>
 
         {!regex.ok && (
-          <div className="border border-danger-border bg-danger-soft px-2 py-1 text-[11px] text-danger">
+          <div className="rounded-slab border border-danger-border bg-danger-soft px-2 py-1 text-[11px] text-danger">
             {regex.message}
           </div>
         )}
@@ -113,7 +113,7 @@ function MatchCard({
 }) {
   const matched = Boolean(result?.matched)
   return (
-    <div className="border border-border bg-canvas px-2 py-1">
+    <div className="rounded-slab border border-border bg-canvas px-2 py-1">
       <div className="flex items-center justify-between gap-2 text-[9px] uppercase tracking-[0.12em]">
         <span className="text-muted">{title}</span>
         <span className={matched ? 'text-success' : 'text-danger'}>
@@ -135,12 +135,12 @@ function Snapshot({ title, value }: { title: string; value: string }) {
         <button
           type="button"
           onClick={() => void navigator.clipboard.writeText(value)}
-          className="border border-border/80 px-1.5 py-0.5 text-[10px] text-ink-dim hover:border-border-hi hover:text-ink"
+          className="rounded-control border border-border/80 px-1.5 py-0.5 text-[10px] text-ink-dim hover:border-border-hi hover:text-ink"
         >
           copy
         </button>
       </div>
-      <pre className="max-h-[220px] overflow-auto whitespace-pre-wrap break-words border border-border bg-canvas px-2 py-1 text-[10px] leading-[1.45] text-ink-dim">
+      <pre className="rounded-slab max-h-[220px] overflow-auto whitespace-pre-wrap break-words border border-border bg-canvas px-2 py-1 text-[10px] leading-[1.45] text-ink-dim">
         {value}
       </pre>
     </section>

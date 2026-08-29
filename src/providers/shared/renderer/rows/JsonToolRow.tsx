@@ -111,7 +111,7 @@ export const JsonToolRow = memo(function JsonToolRow({
         <div className="text-[13px] leading-[1.65]">
           <span className="text-accent font-semibold">{display}</span>
           {mcpServer && (
-            <span className="ml-2 text-[11px] text-ink-dim border border-border rounded px-1 py-px align-middle">
+            <span className="ml-2 text-[11px] text-ink-dim border border-border rounded-chip px-1 py-px align-middle">
               MCP · {mcpServer}
             </span>
           )}

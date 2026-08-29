@@ -413,7 +413,7 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
             <button
               type="button"
               onClick={onClose}
-              className="px-2 py-1 text-[10px] border border-border text-ink-dim hover:text-ink hover:border-border-hi"
+              className="rounded-control px-2 py-1 text-[10px] border border-border text-ink-dim hover:text-ink hover:border-border-hi"
             >
               Esc
             </button>
@@ -432,12 +432,12 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
                   step="1"
                   value={thresholdValue}
                   onChange={e => setThresholdValue(e.target.value)}
-                  className="w-24 px-2 py-1.5 bg-canvas border border-border text-[12px] text-ink outline-none focus:border-accent"
+                  className="rounded-control w-24 px-2 py-1.5 bg-canvas border border-border text-[12px] text-ink outline-none focus:border-accent"
                 />
                 <select
                   value={thresholdUnit}
                   onChange={e => setThresholdUnit(e.target.value as ThresholdUnit)}
-                  className="px-2 py-1.5 bg-canvas border border-border text-[12px] text-ink outline-none focus:border-accent"
+                  className="rounded-control px-2 py-1.5 bg-canvas border border-border text-[12px] text-ink outline-none focus:border-accent"
                 >
                   <option value="minutes">minutes</option>
                   <option value="hours">hours</option>
@@ -459,7 +459,7 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
                 <button
                   type="button"
                   onClick={() => setScopeMode('all')}
-                  className={`px-2.5 py-1.5 text-[11px] border ${
+                  className={`rounded-control px-2.5 py-1.5 text-[11px] border ${
                     scopeMode === 'all'
                       ? 'border-accent text-accent bg-accent/10'
                       : 'border-border text-ink-dim hover:text-ink hover:border-border-hi'
@@ -470,7 +470,7 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
                 <button
                   type="button"
                   onClick={() => setScopeMode('selected')}
-                  className={`px-2.5 py-1.5 text-[11px] border ${
+                  className={`rounded-control px-2.5 py-1.5 text-[11px] border ${
                     scopeMode === 'selected'
                       ? 'border-accent text-accent bg-accent/10'
                       : 'border-border text-ink-dim hover:text-ink hover:border-border-hi'
@@ -522,7 +522,7 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
                   value={projectFilter}
                   onChange={e => setProjectFilter(e.target.value)}
                   placeholder="Filter projects"
-                  className="mt-2 w-full px-2 py-1 bg-canvas border border-border text-[11px] text-ink outline-none focus:border-accent"
+                  className="rounded-control mt-2 w-full px-2 py-1 bg-canvas border border-border text-[11px] text-ink outline-none focus:border-accent"
                 />
               )}
             </div>
@@ -647,7 +647,7 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
               type="button"
               onClick={onClose}
               disabled={closing}
-              className="px-3 py-1.5 text-[11px] border border-border text-ink-dim hover:text-ink hover:border-border-hi disabled:opacity-50"
+              className="rounded-control px-3 py-1.5 text-[11px] border border-border text-ink-dim hover:text-ink hover:border-border-hi disabled:opacity-50"
             >
               Cancel
             </button>
@@ -655,7 +655,7 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
               type="button"
               onClick={() => void closeMatchingAgents()}
               disabled={closing || matchingRows.length === 0 || !thresholdValid}
-              className={`
+              className={`rounded-control
                 px-3 py-1.5 text-[11px] border
                 ${matchingRows.length > 0 && thresholdValid
                   ? 'border-danger-border bg-danger-soft text-danger hover:bg-danger-soft/80'

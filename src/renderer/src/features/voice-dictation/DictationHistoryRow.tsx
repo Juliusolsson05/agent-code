@@ -101,7 +101,7 @@ export function DictationHistoryRow() {
       <div className="grid grid-cols-3 gap-2">
         <StatTile label="Words" value={formatNumber(stats.lifetimeWords)} />
         <StatTile label="Sessions" value={formatNumber(stats.lifetimeSessions)} />
-        <div className="border border-control-border bg-control-bg px-2 py-1.5">
+        <div className="rounded-control border border-control-border bg-control-bg px-2 py-1.5">
           <div className="text-[10px] uppercase tracking-wide text-muted">Words/min</div>
           <div
             className="font-code text-[15px] text-ink"
@@ -112,9 +112,9 @@ export function DictationHistoryRow() {
           >
             {wpm > 0 ? wpm : '—'}
           </div>
-          <div className="mt-1 h-[3px] w-full bg-control-border">
+          <div className="mt-1 h-[3px] w-full rounded-chip bg-control-border">
             <div
-              className="h-full bg-accent"
+              className="h-full rounded-chip bg-accent"
               style={{ width: `${Math.min(100, Math.round((wpm / WPM_METER_CEILING) * 100))}%` }}
             />
           </div>
@@ -256,7 +256,7 @@ export function DictationHistoryRow() {
 
 function StatTile({ label, value }: { label: string; value: string }) {
   return (
-    <div className="border border-control-border bg-control-bg px-2 py-1.5">
+    <div className="rounded-control border border-control-border bg-control-bg px-2 py-1.5">
       <div className="text-[10px] uppercase tracking-wide text-muted">{label}</div>
       <div className="font-code text-[15px] text-ink">{value}</div>
     </div>
@@ -312,7 +312,7 @@ function HistoryRow({
   }, [entry.text])
 
   return (
-    <li className="border border-control-border bg-control-bg">
+    <li className="rounded-control border border-control-border bg-control-bg">
       <button
         type="button"
         onClick={() => setExpanded(value => !value)}

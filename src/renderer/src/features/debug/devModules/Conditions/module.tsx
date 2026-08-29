@@ -174,7 +174,7 @@ function ConditionsDebug({ sessionId, runtime, kind }: DevDebugModuleProps) {
       </div>
 
       <Section title="what this module expects">
-        <div className="overflow-auto border border-border bg-canvas">
+        <div className="rounded-slab overflow-auto border border-border bg-canvas">
           <table className="w-full text-[10px]">
             <thead className="text-muted">
               <tr className="border-b border-border">
@@ -233,7 +233,7 @@ function ConditionsDebug({ sessionId, runtime, kind }: DevDebugModuleProps) {
             <EmptyLine text="no AskUserQuestion semantic blocks in current/history semantic state" />
           ) : (
             auqBlocks.map(block => (
-              <div key={`${block.turnId}:${block.blockIndex}`} className="border border-border bg-canvas px-2 py-1">
+              <div key={`${block.turnId}:${block.blockIndex}`} className="rounded-slab border border-border bg-canvas px-2 py-1">
                 <div className="grid grid-cols-2 gap-2">
                   <Metric label="turn/block" value={`${block.turnId}:${block.blockIndex}`} />
                   <Metric label="resultAt" value={block.resultAt == null ? 'unresolved' : formatTime(block.resultAt)} tone={block.resultAt == null ? 'warn' : 'good'} />
@@ -254,7 +254,7 @@ function ConditionsDebug({ sessionId, runtime, kind }: DevDebugModuleProps) {
         </div>
         <div className="grid grid-cols-2 gap-2">
           {screenProbeRows.map(row => (
-            <div key={row.label} className="border border-border bg-canvas px-2 py-1">
+            <div key={row.label} className="rounded-slab border border-border bg-canvas px-2 py-1">
               <div className="flex items-center justify-between gap-2">
                 <span className="text-[10px] text-ink-dim">{row.label}</span>
                 <span className={row.result.matched ? 'text-success' : 'text-danger'}>
@@ -437,7 +437,7 @@ function formatTime(ts: number | null | undefined): string {
 
 function Panel({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <div className="border border-border bg-canvas">
+    <div className="rounded-slab border border-border bg-canvas">
       <div className="border-b border-border px-3 py-2 text-[10px] text-danger uppercase tracking-[0.12em]">
         {title}
       </div>
@@ -483,7 +483,7 @@ function Metric({
           ? 'text-danger'
           : 'text-ink-dim'
   return (
-    <div className={`border border-border bg-canvas px-2 py-1 min-w-0 ${wide ? 'col-span-2' : ''}`}>
+    <div className={`rounded-slab border border-border bg-canvas px-2 py-1 min-w-0 ${wide ? 'col-span-2' : ''}`}>
       <div className="text-[9px] text-muted uppercase tracking-[0.12em]">{label}</div>
       <div className={`mt-0.5 truncate text-[10px] ${toneClass}`} title={value}>
         {value}
@@ -509,12 +509,12 @@ function JsonBlock({
         <button
           type="button"
           onClick={() => void navigator.clipboard.writeText(json)}
-          className="border border-border/80 px-1.5 py-0.5 text-[10px] text-ink-dim hover:border-border-hi hover:text-ink"
+          className="rounded-control border border-border/80 px-1.5 py-0.5 text-[10px] text-ink-dim hover:border-border-hi hover:text-ink"
         >
           copy
         </button>
       </div>
-      <pre className={`${compact ? 'max-h-[130px]' : 'max-h-[300px]'} overflow-auto whitespace-pre-wrap break-words border border-border bg-canvas px-2 py-1 text-[10px] leading-[1.45] text-ink-dim`}>
+      <pre className={`rounded-slab ${compact ? 'max-h-[130px]' : 'max-h-[300px]'} overflow-auto whitespace-pre-wrap break-words border border-border bg-canvas px-2 py-1 text-[10px] leading-[1.45] text-ink-dim`}>
         {json}
       </pre>
     </div>
@@ -529,12 +529,12 @@ function Snapshot({ title, value }: { title: string; value: string }) {
         <button
           type="button"
           onClick={() => void navigator.clipboard.writeText(value)}
-          className="border border-border/80 px-1.5 py-0.5 text-[10px] text-ink-dim hover:border-border-hi hover:text-ink"
+          className="rounded-control border border-border/80 px-1.5 py-0.5 text-[10px] text-ink-dim hover:border-border-hi hover:text-ink"
         >
           copy
         </button>
       </div>
-      <pre className="max-h-[220px] overflow-auto whitespace-pre-wrap break-words border border-border bg-canvas px-2 py-1 text-[10px] leading-[1.45] text-ink-dim">
+      <pre className="rounded-slab max-h-[220px] overflow-auto whitespace-pre-wrap break-words border border-border bg-canvas px-2 py-1 text-[10px] leading-[1.45] text-ink-dim">
         {value}
       </pre>
     </div>
@@ -546,7 +546,7 @@ function EventList({ entries }: { entries: FeedDebugEntry[] }) {
   return (
     <div className="flex flex-col gap-1">
       {entries.map(entry => (
-        <div key={entry.id} className="border border-border bg-canvas px-2 py-1">
+        <div key={entry.id} className="rounded-slab border border-border bg-canvas px-2 py-1">
           <div className="flex items-center justify-between gap-2 text-[9px] uppercase tracking-[0.12em]">
             <span className="text-muted">{entry.layer} / {entry.kind}</span>
             <span className="text-muted tabular-nums">{formatTime(entry.ts)}</span>
@@ -565,7 +565,7 @@ function EventList({ entries }: { entries: FeedDebugEntry[] }) {
 
 function EmptyLine({ text }: { text: string }) {
   return (
-    <div className="border border-border bg-canvas px-2 py-1 text-[11px] text-muted">
+    <div className="rounded-slab border border-border bg-canvas px-2 py-1 text-[11px] text-muted">
       {text}
     </div>
   )

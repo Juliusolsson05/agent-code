@@ -57,7 +57,7 @@ export function CloseConfirmationDialog() {
         </DialogHeader>
 
         {request && request.targets.length > 1 ? (
-          <div className="max-h-56 overflow-auto border border-border">
+          <div className="rounded-slab max-h-56 overflow-auto border border-border">
             {request.targets.map(target => (
               <div
                 key={target.sessionId}

@@ -46,7 +46,7 @@ function ExactJsonDetails({
     >
       <summary className="cursor-pointer select-none">View exact paged source</summary>
       {open ? (
-        <div className="mt-1 rounded border border-border bg-surface px-2 py-1.5">
+        <div className="mt-1 rounded-slab border border-border bg-surface px-2 py-1.5">
           {exactSource === null ? (
             <span>Exact JSON is unavailable for this non-serializable value.</span>
           ) : (

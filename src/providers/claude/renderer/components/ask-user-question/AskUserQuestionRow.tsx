@@ -404,7 +404,7 @@ export function AskUserQuestionRow({
           return (
             <div key={qi} className="flex flex-col gap-1.5">
               {q.header ? (
-                <span className="self-start text-[10px] uppercase tracking-wider text-muted bg-surface-hi rounded px-1.5 py-0.5">
+                <span className="self-start text-[10px] uppercase tracking-wider text-muted bg-surface-hi rounded-chip px-1.5 py-0.5">
                   {q.header}
                 </span>
               ) : null}
@@ -432,7 +432,7 @@ export function AskUserQuestionRow({
                             : toggleOption(qi, optionNumber)
                       }
                       className={`
-                        group flex w-full items-baseline gap-2 rounded border px-2.5 py-1.5
+                        group flex w-full items-baseline gap-2 rounded-control border px-2.5 py-1.5
                         text-left text-[13px] leading-[1.55] transition-colors
                         ${
                           isSelected
@@ -475,7 +475,7 @@ export function AskUserQuestionRow({
                     onFocus={() => activateCustomText(qi)}
                     onChange={event => updateCustomText(qi, event.target.value)}
                     placeholder="Type something"
-                    className="rounded border border-border bg-surface px-2.5 py-1.5 text-[13px] text-ink outline-none focus:border-accent disabled:opacity-60"
+                    className="rounded-control border border-border bg-surface px-2.5 py-1.5 text-[13px] text-ink outline-none focus:border-accent disabled:opacity-60"
                   />
                 </div>
               </div>
@@ -488,7 +488,7 @@ export function AskUserQuestionRow({
             disabled={!structuredReady || answering}
             onClick={submitStructuredAnswers}
             className={`
-              self-start rounded border border-border px-3 py-1.5 text-[13px] transition-colors
+              self-start rounded-control border border-border px-3 py-1.5 text-[13px] transition-colors
               ${
                 !structuredReady || answering
                   ? 'cursor-default opacity-60'
@@ -502,7 +502,7 @@ export function AskUserQuestionRow({
           <div className="text-[11px] text-muted italic">Answering…</div>
         ) : null}
         {resolveError ? (
-          <div className="border border-danger-border bg-danger-soft px-2 py-1 text-[11px] text-danger">
+          <div className="rounded-slab border border-danger-border bg-danger-soft px-2 py-1 text-[11px] text-danger">
             Answer failed: {resolveError}
           </div>
         ) : null}

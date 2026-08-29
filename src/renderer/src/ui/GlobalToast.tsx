@@ -57,7 +57,7 @@ export function GlobalToastProvider({ children }: { children: React.ReactNode })
             fixed top-3 right-3 z-50
             toast-enter
             cursor-pointer
-            bg-accent/80 border border-accent/40
+            bg-accent/80 border border-accent/40 rounded-float
             shadow-lg shadow-black/20
             px-4 py-2
             max-w-[420px]

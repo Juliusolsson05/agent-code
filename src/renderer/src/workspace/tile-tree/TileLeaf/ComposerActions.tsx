@@ -112,7 +112,7 @@ export function ComposerActions({
         disabled={sendDisabled}
         onMouseDown={event => event.preventDefault()}
         onClick={onSend}
-        className="border border-control-border bg-control-active-bg px-3 py-1 text-[11px] leading-none text-control-active-fg hover:bg-control-hover-bg disabled:opacity-40 disabled:hover:bg-control-active-bg"
+        className="rounded-control border border-control-border bg-control-active-bg px-3 py-1 text-[11px] leading-none text-control-active-fg hover:bg-control-hover-bg disabled:opacity-40 disabled:hover:bg-control-active-bg"
       >
         {sending ? '…' : 'Send'}
       </button>

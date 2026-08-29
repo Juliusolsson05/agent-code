@@ -52,7 +52,7 @@ function LoadingSnapshot(): UsageSnapshot {
 function SpendPill({ label, spend }: { label: string; spend: UsageSpend | null }) {
   if (!spend) return null
   return (
-    <div className="border border-border bg-surface-hi px-2 py-1 text-[10px] leading-none">
+    <div className="rounded-slab border border-border bg-surface-hi px-2 py-1 text-[10px] leading-none">
       <span className="text-muted">{label}</span>{' '}
       <span className="text-ink">{formatMoney(spend.amount, spend.currency)}</span>
     </div>
@@ -63,7 +63,7 @@ function UsageProviderSection({ provider }: { provider: UsageProviderSnapshot })
   const title = providerLabel(provider.provider)
   if (provider.status === 'error') {
     return (
-      <section className="border border-border bg-surface">
+      <section className="rounded-slab border border-border bg-surface">
         <div className="flex items-center justify-between border-b border-border px-3 py-2">
           <div>
             <div className="text-[12px] font-semibold text-ink">{title}</div>
@@ -79,7 +79,7 @@ function UsageProviderSection({ provider }: { provider: UsageProviderSnapshot })
   }
 
   return (
-    <section className="border border-border bg-surface">
+    <section className="rounded-slab border border-border bg-surface">
       <div className="flex items-start justify-between gap-3 border-b border-border px-3 py-2">
         <div>
           <div className="text-[12px] font-semibold text-ink">{title}</div>
@@ -106,7 +106,7 @@ function UsageProviderSection({ provider }: { provider: UsageProviderSnapshot })
                     {formatPercent(row.percent)}
                   </div>
                 </div>
-                <div className="h-2 w-full overflow-hidden bg-surface-hi">
+                <div className="h-2 w-full overflow-hidden rounded-chip bg-surface-hi">
                   <div className="h-full" style={{ width: `${width}%`, ...severityBarStyle(row.severity) }} />
                 </div>
                 {(reset || row.detail) ? (
@@ -197,7 +197,7 @@ export function UsageModal({ open, onClose }: Props) {
 
         <div className="overflow-auto p-4">
           {error ? (
-            <div className="mb-3 border border-danger bg-danger/10 px-3 py-2 text-[11px] text-danger">
+            <div className="rounded-slab mb-3 border border-danger bg-danger/10 px-3 py-2 text-[11px] text-danger">
               {error}
             </div>
           ) : null}

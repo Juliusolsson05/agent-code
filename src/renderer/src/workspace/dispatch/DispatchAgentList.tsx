@@ -217,7 +217,7 @@ const DispatchGroupHeader = memo(function DispatchGroupHeader({
             aria-label={`New agent in ${title}`}
             title={`New agent in ${title}`}
             onClick={() => onCreateAgent(projectTabId, rows[0].sessionId)}
-            className="h-4 w-4 text-[12px] leading-none text-muted hover:bg-border hover:text-ink"
+            className="h-4 w-4 rounded-control text-[12px] leading-none text-muted hover:bg-border hover:text-ink"
           >
             +
           </button>
@@ -349,7 +349,7 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
           <DispatchAgentBadge kind={row.kind} />
           {projectChip && (
             <span
-              className="
+              className="rounded-control
                 ml-auto flex-shrink-0 px-1.5 py-[1px] text-[9px] font-code
                 leading-none text-muted border border-border bg-surface-hi
                 truncate max-w-[140px]
@@ -460,7 +460,7 @@ function DispatchAgentBadge({ kind }: { kind: SessionKind | undefined }) {
     ? 'border-info-border bg-info-soft text-info'
     : 'border-border bg-surface-hi text-muted'
   return (
-    <span className={`flex-shrink-0 px-1.5 py-[1px] text-[9px] font-code leading-none border ${classes}`}>
+    <span className={`rounded-chip flex-shrink-0 px-1.5 py-[1px] text-[9px] font-code leading-none border ${classes}`}>
       {label}
     </span>
   )
@@ -477,7 +477,7 @@ function DispatchUnreadBadge({
     return (
       <span
         className="
-          flex-shrink-0 rounded-sm border border-warning-border bg-warning-soft
+          flex-shrink-0 rounded-chip border border-warning-border bg-warning-soft
           px-1.5 py-[1px] text-[9px] font-semibold leading-none text-warning
         "
       >
@@ -488,7 +488,7 @@ function DispatchUnreadBadge({
   return (
     <span
       className="
-        flex-shrink-0 rounded-sm border border-accent/70 bg-accent/20
+        flex-shrink-0 rounded-chip border border-accent/70 bg-accent/20
         px-1.5 py-[1px] text-[9px] font-semibold leading-none text-accent
       "
     >

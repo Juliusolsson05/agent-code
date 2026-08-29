@@ -88,14 +88,14 @@ export function ThemePickerRow({ settings, onSelect, onCreate, onEdit, onDelete 
             <button
               type="button"
               onClick={() => onEdit(theme)}
-              className="border border-border bg-surface px-1.5 py-0.5 text-[10px] text-muted hover:text-ink"
+              className="rounded-control border border-border bg-surface px-1.5 py-0.5 text-[10px] text-muted hover:text-ink"
             >
               Edit
             </button>
             <button
               type="button"
               onClick={() => onDelete(theme)}
-              className="border border-danger-border bg-danger-soft px-1.5 py-0.5 text-[10px] text-danger"
+              className="rounded-control border border-danger-border bg-danger-soft px-1.5 py-0.5 text-[10px] text-danger"
             >
               Delete
             </button>

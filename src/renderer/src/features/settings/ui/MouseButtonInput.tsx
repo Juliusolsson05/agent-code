@@ -114,7 +114,7 @@ export function MouseButtonInput({ value, onChange }: Props) {
             if (capturing) stop()
             else setCapturing(true)
           }}
-          className={`
+          className={`rounded-control
             min-w-0 flex-1 border px-3 py-2 text-left font-code text-[12px]
             ${capturing
               ? 'border-input-border-focus bg-row-selected-bg text-accent'

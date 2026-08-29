@@ -182,7 +182,7 @@ export function CommandSortControl({
         }
         onMouseDown={keepFocusInSearchInput}
         onClick={() => (open ? setOpen(false) : openMenu())}
-        className="
+        className="rounded-control
           flex items-center gap-1
           border border-control-border bg-control-bg
           px-2 py-1
@@ -203,7 +203,7 @@ export function CommandSortControl({
           role="menu"
           // Right-anchored: the control sits at the right edge of the header,
           // so a left-anchored menu would hang off the dialog.
-          className="
+          className="rounded-float overflow-hidden
             absolute right-0 top-[calc(100%+4px)] z-50
             min-w-[168px]
             border border-popover-border bg-popover-bg

@@ -77,7 +77,7 @@ function TranscriptSync({ sessionId, runtime, kind, workspace }: DevDebugModuleP
       <section>
         <Header label="mismatch checks" />
         {diagnostics.length === 0 ? (
-          <div className="border border-border bg-canvas px-2 py-1 text-[11px] text-success">
+          <div className="rounded-slab border border-border bg-canvas px-2 py-1 text-[11px] text-success">
             no focused-session mismatch detected
           </div>
         ) : (
@@ -85,7 +85,7 @@ function TranscriptSync({ sessionId, runtime, kind, workspace }: DevDebugModuleP
             {diagnostics.map(item => (
               <div
                 key={item.id}
-                className={`border px-2 py-1 text-[11px] ${
+                className={`rounded-slab border px-2 py-1 text-[11px] ${
                   item.severity === 'bad'
                     ? 'border-danger-border bg-danger-soft text-danger'
                     : 'border-warning-border bg-warning-soft text-warning'
@@ -108,7 +108,7 @@ function TranscriptSync({ sessionId, runtime, kind, workspace }: DevDebugModuleP
           <Metric label="duplicate provider ids" value={String(duplicateProviderSessions.length)} tone={duplicateProviderSessions.length > 0 ? 'bad' : 'good'} />
         </div>
         {duplicateForFocused && (
-          <pre className="mt-2 max-h-[90px] overflow-auto whitespace-pre-wrap break-words border border-danger-border bg-danger-soft px-2 py-1 text-[10px] text-danger">
+          <pre className="rounded-slab mt-2 max-h-[90px] overflow-auto whitespace-pre-wrap break-words border border-danger-border bg-danger-soft px-2 py-1 text-[10px] text-danger">
             {duplicateForFocused.sessionIds.join('\n')}
           </pre>
         )}
@@ -128,7 +128,7 @@ function TranscriptSync({ sessionId, runtime, kind, workspace }: DevDebugModuleP
             {latestSemantic.map(entry => (
               <pre
                 key={entry.id}
-                className="max-h-[72px] overflow-auto whitespace-pre-wrap break-words border border-border bg-canvas px-2 py-1 text-[10px] text-ink-dim"
+                className="rounded-slab max-h-[72px] overflow-auto whitespace-pre-wrap break-words border border-border bg-canvas px-2 py-1 text-[10px] text-ink-dim"
               >
                 {JSON.stringify(entry, null, 2)}
               </pre>
@@ -142,7 +142,7 @@ function TranscriptSync({ sessionId, runtime, kind, workspace }: DevDebugModuleP
 
 function Panel({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <div className="border border-border bg-canvas">
+    <div className="rounded-slab border border-border bg-canvas">
       <div className="border-b border-border px-3 py-2 text-[10px] text-danger uppercase tracking-[0.12em]">
         {title}
       </div>
@@ -179,7 +179,7 @@ function Metric({
           ? 'text-danger'
           : 'text-ink-dim'
   return (
-    <div className={`border border-border bg-canvas px-2 py-1 min-w-0 ${wide ? 'col-span-2' : ''}`}>
+    <div className={`rounded-slab border border-border bg-canvas px-2 py-1 min-w-0 ${wide ? 'col-span-2' : ''}`}>
       <div className="text-[9px] text-muted uppercase tracking-[0.12em]">{label}</div>
       <div className={`mt-0.5 truncate text-[10px] ${toneClass}`} title={value}>
         {value}
@@ -193,7 +193,7 @@ function EventList({ entries }: { entries: FeedDebugEntry[] }) {
   return (
     <div className="flex flex-col gap-1">
       {entries.map(entry => (
-        <div key={entry.id} className="border border-border bg-canvas px-2 py-1">
+        <div key={entry.id} className="rounded-slab border border-border bg-canvas px-2 py-1">
           <div className="flex items-center justify-between gap-2 text-[9px] uppercase tracking-[0.12em]">
             <span className="text-muted">{entry.layer} · {entry.kind}</span>
             <span className="text-muted tabular-nums">{formatTime(entry.ts)}</span>
@@ -212,7 +212,7 @@ function EventList({ entries }: { entries: FeedDebugEntry[] }) {
 
 function EmptyLine() {
   return (
-    <div className="border border-border bg-canvas px-2 py-1 text-[11px] text-muted">
+    <div className="rounded-slab border border-border bg-canvas px-2 py-1 text-[11px] text-muted">
       none
     </div>
   )

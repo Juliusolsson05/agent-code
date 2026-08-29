@@ -87,7 +87,7 @@ export function DictationApiKeyRow() {
       {availableCopy ? (
         <div
           role="status"
-          className="border border-warning bg-warning/15 px-2 py-1 text-[11px] text-warning"
+          className="rounded-slab border border-warning bg-warning/15 px-2 py-1 text-[11px] text-warning"
         >
           {availableCopy}
         </div>

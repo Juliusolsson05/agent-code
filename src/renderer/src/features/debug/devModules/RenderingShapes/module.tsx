@@ -91,7 +91,7 @@ function RenderingShapesPanel({ sessionId }: DevDebugModuleProps) {
         </span>
         <button
           type="button"
-          className="border border-current/30 rounded px-1.5 py-0.5 text-[11px] hover:bg-current/10"
+          className="border border-current/30 rounded-control px-1.5 py-0.5 text-[11px] hover:bg-current/10"
           onClick={refresh}
         >
           refresh

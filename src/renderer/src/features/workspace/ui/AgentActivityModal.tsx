@@ -438,7 +438,7 @@ export function AgentActivityModal({ open, workspace, onClose }: Props) {
             <button
               type="button"
               onClick={() => buryRow(row)}
-              className="px-2 py-0.5 text-[10px] border border-border text-ink-dim hover:border-border-hi hover:text-ink"
+              className="rounded-control px-2 py-0.5 text-[10px] border border-border text-ink-dim hover:border-border-hi hover:text-ink"
               title="Bury (b)"
             >
               bury
@@ -447,7 +447,7 @@ export function AgentActivityModal({ open, workspace, onClose }: Props) {
           <button
             type="button"
             onClick={() => void closeRow(row)}
-            className="px-2 py-0.5 text-[10px] border border-danger-border text-danger hover:bg-danger-soft"
+            className="rounded-control px-2 py-0.5 text-[10px] border border-danger-border text-danger hover:bg-danger-soft"
             title="Close (del)"
           >
             close
@@ -483,7 +483,7 @@ export function AgentActivityModal({ open, workspace, onClose }: Props) {
             <button
               type="button"
               onClick={() => switchSortMode('activity')}
-              className={`px-2.5 py-1 text-[10px] border ${
+              className={`rounded-control px-2.5 py-1 text-[10px] border ${
                 sortMode === 'activity'
                   ? 'border-accent text-accent bg-accent/10'
                   : 'border-border text-ink-dim hover:text-ink hover:border-border-hi'
@@ -494,7 +494,7 @@ export function AgentActivityModal({ open, workspace, onClose }: Props) {
             <button
               type="button"
               onClick={() => switchSortMode('tabs')}
-              className={`px-2.5 py-1 text-[10px] border ${
+              className={`rounded-control px-2.5 py-1 text-[10px] border ${
                 sortMode === 'tabs'
                   ? 'border-accent text-accent bg-accent/10'
                   : 'border-border text-ink-dim hover:text-ink hover:border-border-hi'
@@ -545,7 +545,7 @@ export function AgentActivityModal({ open, workspace, onClose }: Props) {
           <button
             type="button"
             onClick={onClose}
-            className="px-3 py-1 text-[11px] border border-border text-ink-dim hover:text-ink hover:border-border-hi"
+            className="rounded-control px-3 py-1 text-[11px] border border-border text-ink-dim hover:text-ink hover:border-border-hi"
           >
             Close
           </button>
