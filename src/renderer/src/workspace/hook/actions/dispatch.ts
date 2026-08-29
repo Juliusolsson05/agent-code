@@ -12,17 +12,12 @@ import type {
   WorkspaceSetState,
   WorkspaceSetTileTabs,
 } from '@renderer/workspace/hook/context'
-import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
-import type { SessionActions } from '@renderer/workspace/hook/actions/session'
 
 export function useDispatchActions(
   state: { activeTabId: TabId; dispatchMode: DispatchModeState | null; sessions: Record<SessionId, SessionMeta> },
   setState: WorkspaceSetState,
   setTileTabs: WorkspaceSetTileTabs,
-  refs: WorkspaceRefs,
-  showToast: (message: string, durationMs?: number) => void,
   closeNewAgentPlacement: () => void,
-  sessionActions: SessionActions,
 ): {
   enterDispatchMode: (scope?: DispatchModeState['scope']) => Promise<void>
   exitDispatchMode: () => void

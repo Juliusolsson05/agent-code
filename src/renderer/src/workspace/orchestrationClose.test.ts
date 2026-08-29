@@ -139,6 +139,13 @@ describe('closeOrchestrationRun', () => {
     for (const call of closeSession.mock.calls) {
       expect(call[1]).toEqual({
         silentIfSoleTarget: { headline: expect.stringContaining('asking to close') },
+        // A run close is a fleet reaping its own children, often a dozen at
+        // once. Capturing an undo entry each would evict the user's own close
+        // history from the 10-entry stack in favour of rows they never opened
+        // by hand (#672 review). Asserted as an exact object on purpose: this
+        // is a deliberate opt-out, and it should have to be re-stated here if
+        // anyone changes it.
+        captureUndo: false,
       })
     }
   })

@@ -112,6 +112,27 @@ function forgetClosedSessionDebugState(refs: WorkspaceRefs, sessionId: SessionId
 export type CloseSessionOptions = {
   preConfirmed?: boolean
   /**
+   * Skip pushing an Undo Close entry for this close. Defaults to capturing.
+   *
+   * WHY this exists (#672 review): the undo stack is a 10-entry LIFO, and since
+   * Dispatch terminals became detached rows EVERY detached close captures one.
+   * That is right for a close the user performed — it is the affordance that
+   * makes a closed terminal's tmux scrollback recoverable. It is wrong for the
+   * bulk and programmatic paths, where a single operation closes N sessions and
+   * pushes N entries, silently evicting the pane the user closed by mistake ten
+   * minutes ago. ⌘⇧T would then respawn an agent they had deliberately purged
+   * instead of restoring the thing they wanted back.
+   *
+   * It also removes a dangling-reference hazard on cascades. `closeSession`
+   * runs `closeLinkedChildren` BEFORE pushing the parent's entry, so a parent
+   * with two children left three entries. Undo restores the parent under a NEW
+   * session id, and the children's entries still carry the OLD `linkedParentId`
+   * — so they came back un-nested, stopped cascading, and wrote a dead parent
+   * id into workspace.json that nothing scrubs. Not capturing cascade children
+   * means the only entry is the parent's, which is the unit the user closed.
+   */
+  captureUndo?: boolean
+  /**
    * Skip the dialog ONLY IF this close kills exactly the session named, and
    * confirm with `headline` otherwise.
    *
@@ -937,7 +958,14 @@ export function usePaneActions(
       // and — worse — each re-prompt would re-enumerate a workspace the
       // preceding kills had already changed, so a long cascade would abort
       // itself halfway through with "these sessions changed".
-      await closeSessionRef.current?.(childId, { preConfirmed: true })
+      // captureUndo: false — the cascade is one user decision, so the parent's
+      // entry is the whole unit. Capturing children too would both flood the
+      // 10-entry stack and let them be restored pointing at a parent id that no
+      // longer exists (see CloseSessionOptions.captureUndo).
+      await closeSessionRef.current?.(childId, {
+        preConfirmed: true,
+        captureUndo: false,
+      })
     }
   }, [refs.stateRef])
 
@@ -1557,7 +1585,7 @@ export function usePaneActions(
         // `detachedAt` — the only thing ordering rows inside a project group —
         // survives, and undo puts the row back where it was rather than at the
         // bottom of the list.
-        if (sessionMeta) {
+        if (sessionMeta && options?.captureUndo !== false) {
           refs.undoStackRef.current.push({
             type: 'detached',
             closedAt: Date.now(),

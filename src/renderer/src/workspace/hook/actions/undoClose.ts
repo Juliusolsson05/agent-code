@@ -324,6 +324,18 @@ export function useUndoCloseAction(
         refiled = true
         return {
           ...prev,
+          // Every other path that files a detached row makes its tab active in
+          // the same updater — splitFocused's Dispatch branch,
+          // createDetachedDispatchAgent, and restoreTabEntry above — because
+          // buildDispatchGroups filters `sourceTabs` to `activeTabId` outside
+          // global scope. Without this, undoing a row that belongs to a
+          // different project tab spawns a live backend that renders NOWHERE:
+          // the row is filed correctly but filtered out of the list, and
+          // ClassicDispatchLayout's focus effect immediately overwrites the
+          // focus we set below with whatever row is actually visible. There is
+          // no toast on this path, so the user sees undo do nothing while an
+          // agent (or a re-attached tmux session) runs invisibly.
+          activeTabId: entry.record.projectTabId,
           // `spawn` builds SessionMeta from {cwd, kind, tmuxName, providerSessionId,
           // builtInMcpDomains} only. The fields that make a session a LINKED or
           // ORCHESTRATION child — and any user-authored title — are durable
@@ -354,6 +366,12 @@ export function useUndoCloseAction(
                 : {}),
               ...(meta.agentViewModeOverride
                 ? { agentViewModeOverride: meta.agentViewModeOverride }
+                : {}),
+              // Its own doc comment says this "must survive with the child".
+              // spawn never sets it, so without carrying it an undone
+              // orchestration child would re-run its bootstrap handoff.
+              ...(meta.orchestrationBootstrapPromptDelivered
+                ? { orchestrationBootstrapPromptDelivered: true }
                 : {}),
             },
           },
@@ -402,7 +420,12 @@ export function useUndoCloseAction(
         await window.api
           .killOwnedSession({ sessionId: newSessionId, kind, cwd: meta.cwd })
           .catch(() => undefined)
-        await sessionActions.killSession(newSessionId)
+        // `.catch` mirrors restorePaneEntry's guard. killSession reaches an IPC
+        // invoke that can reject, and this bail runs with the entry already
+        // POPPED — a throw here would lose the entry (the push-back only
+        // happens for 'retryable-failure'), skip bumpUndoCloseVersion so the
+        // palette's count stays stale, and escape into the keybinding handler.
+        await sessionActions.killSession(newSessionId).catch(() => undefined)
         return 'stale'
       }
       return 'restored'

@@ -263,6 +263,85 @@ describe('closing a detached Dispatch session is undoable (#671)', () => {
     undo.mounted.unmount()
   })
 
+  it('makes the restored row VISIBLE when another project tab is active', async () => {
+    // The #672 review's blocker. Every other path that files a detached row
+    // sets activeTabId in the same updater; restoreDetachedEntry did not. Since
+    // buildDispatchGroups filters sourceTabs to activeTabId outside global
+    // scope, undoing a row that belongs to a different tab spawned a live
+    // backend into a list it was filtered out of — no toast, no visible row, a
+    // claude/codex process or a re-attached tmux session running invisibly.
+    //
+    // The existing fixture has ONE tab, so the restore target was always the
+    // active tab and the bug could not surface. This one adds the second tab
+    // and asserts VISIBILITY rather than the field, because the field is the
+    // mechanism and the visible row is the contract.
+    const state = detachedTerminalState()
+    state.tabs.push({
+      id: 'tabB',
+      title: 'project-b',
+      root: { type: 'leaf', sessionId: 'b1' as SessionId },
+      focusedSessionId: 'b1' as SessionId,
+    })
+    state.sessions['b1' as SessionId] = { cwd: '/work/project-b', kind: 'claude' }
+    // The user has switched away from the project the closed row belonged to.
+    state.activeTabId = 'tabB'
+
+    const refs = makeRefs(state)
+    refs.undoStackRef.current.push({
+      type: 'detached',
+      closedAt: Date.now(),
+      sessionMeta: {
+        cwd: '/work/project-a',
+        kind: 'terminal',
+        tmuxName: 'agent-code-aTerm',
+      },
+      record: {
+        sessionId: 'aTerm' as SessionId,
+        surface: 'dispatch',
+        projectTabId: 'tabA',
+        projectTabTitle: 'project-a',
+        projectTabIndex: 0,
+        detachedAt: 300,
+      },
+    })
+    delete state.sessions['aTerm' as SessionId]
+    delete state.detachedSessions['aTerm' as SessionId]
+
+    const spawn = vi.fn().mockResolvedValue('aTerm2')
+    const undo = mountUndoCloseAction(state, refs, spawn)
+
+    await act(async () => {
+      await undo.actions.undoClose()
+    })
+
+    const next = undo.getState()
+    expect(spawn).toHaveBeenCalled()
+    expect(next.activeTabId).toBe('tabA')
+    // The assertion that would have caught the bug: the restored session is in
+    // the rows Dispatch actually renders, in project scope.
+    const visible = buildVisibleDispatchRows(next).map(row => row.sessionId)
+    expect(visible).toContain('aTerm2')
+    undo.mounted.unmount()
+  })
+
+  it('does not capture an undo entry when the caller opts out', async () => {
+    // Bulk and programmatic closes (Close Old Agents, closeOrchestrationRun,
+    // cascade children) opt out so a single operation closing a dozen sessions
+    // cannot flush the user's own close history out of the 10-entry stack.
+    const state = detachedTerminalState()
+    const refs = makeRefs(state)
+    const harness = mountPaneActions(state, { refs })
+
+    await act(async () => {
+      await harness.actions.closeSession('aTerm' as SessionId, {
+        preConfirmed: true,
+        captureUndo: false,
+      })
+    })
+
+    expect(refs.undoStackRef.current.length).toBe(0)
+  })
+
   it('treats the entry as stale when its project tab is gone, instead of stranding a backend', async () => {
     const state = detachedTerminalState()
     const refs = makeRefs(state)
