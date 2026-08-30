@@ -72,7 +72,7 @@ export const DispatchAgentList = memo(function DispatchAgentList({
   // Sessions that must render as unselectable in this index. Used by Tiled
   // Dispatch's lane-0 index to grey out agents already shown in another lane
   // (the one-session-per-lane invariant — without this, clicking a claimed
-  // agent looks selectable but silently no-ops in setTiledLaneSession).
+  // agent looks selectable but silently no-ops in selectTiledLaneSession).
   // Undefined/absent in classic Dispatch, so its rows stay fully clickable.
   disabledSessionIds?: Set<SessionId>
 }) {

@@ -969,8 +969,9 @@ function focusDispatchRowByIndex(workspace: Workspace, index: number) {
 //
 // When a tiled layout is active, dispatch selection targets the FOCUSED
 // LANE rather than the single dispatch focus. These mirror the classic
-// helpers above but write through setTiledLaneSession, so cmd-N / arrows
-// fill the focused lane (duplicates across lanes are allowed).
+// helpers above but write through selectTiledLaneSession, so cmd-N / arrows
+// fill the focused lane (duplicates across lanes are allowed) — and wake a
+// hibernated agent first, which the raw lane writer never did (#690).
 
 function focusedTiledLane(workspace: Workspace): number {
   return workspace.dispatchMode?.tiled?.focusedLane ?? 0
@@ -1008,7 +1009,8 @@ function focusTiledRowByIndex(workspace: Workspace, index: number) {
   // in an agent the row's own selector excludes.
   const row = tiledRowScopedRows(workspace).find(candidate => candidate.globalIndex === index + 1)
   if (!row) return
-  workspace.setTiledLaneSession(focusedTiledLane(workspace), row.sessionId)
+  // Wakes a hibernated detached agent before placing it (#690).
+  void workspace.selectTiledLaneSession(focusedTiledLane(workspace), row.sessionId)
 }
 
 function moveTiledLaneSelection(workspace: Workspace, delta: number) {
@@ -1024,7 +1026,7 @@ function moveTiledLaneSelection(workspace: Workspace, delta: number) {
   // that agent into this lane too.
   const probe = nextTiledRowIndex(currentIndex, delta, rows.length)
   const row = rows[probe]
-  if (row) workspace.setTiledLaneSession(laneIndex, row.sessionId)
+  if (row) void workspace.selectTiledLaneSession(laneIndex, row.sessionId)
 }
 
 /**

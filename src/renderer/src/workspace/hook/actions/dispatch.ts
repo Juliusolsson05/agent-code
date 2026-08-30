@@ -26,12 +26,15 @@ import {
   removeLaneFromGrid,
   removeRowFromGrid,
   rowIndexForLane,
+  rowStartIndex,
   setGridShape,
 } from '@renderer/workspace/dispatch/gridShape'
 import type {
   WorkspaceSetState,
   WorkspaceSetTileTabs,
 } from '@renderer/workspace/hook/context'
+import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
+import type { SessionActions } from '@renderer/workspace/hook/actions/session'
 
 /**
  * Write row METADATA without touching any row length.
@@ -90,6 +93,9 @@ export function useDispatchActions(
   setState: WorkspaceSetState,
   setTileTabs: WorkspaceSetTileTabs,
   closeNewAgentPlacement: () => void,
+  refs: WorkspaceRefs,
+  ensureSessionLive: SessionActions['ensureSessionLive'],
+  showToast: (message: string, durationMs?: number) => void,
 ): {
   enterDispatchMode: (scope?: DispatchModeState['scope']) => Promise<void>
   exitDispatchMode: () => void
@@ -101,7 +107,7 @@ export function useDispatchActions(
   // ---- Tiled Dispatch (issue #248) ----
   enterTiledDispatch: (rowLengths: number[]) => Promise<void>
   exitTiledDispatch: () => void
-  setTiledLaneSession: (laneIndex: number, sessionId: SessionId) => void
+  selectTiledLaneSession: (laneIndex: number, sessionId: SessionId) => Promise<void>
   insertTiledLaneRight: (laneIndex: number) => boolean
   removeTiledLane: (laneIndex: number) => void
   setTiledFocusedLane: (laneIndex: number) => void
@@ -249,7 +255,13 @@ export function useDispatchActions(
     })
   }, [setState])
 
-  // Assign a lane's agent. Duplicates ARE allowed — the same session may sit
+  // Assign a lane's agent. NOT exposed on the workspace: every caller must go
+  // through `selectTiledLaneSession` below, which wakes a hibernated agent
+  // first. Handing out the raw writer is what let four separate call sites
+  // place a dead backend in a lane (#690), and a wrapper that can be bypassed
+  // only fixes the callers that exist today.
+  //
+  // Duplicates ARE allowed — the same session may sit
   // in multiple lanes (the views mirror; see DispatchLane). No-op for
   // out-of-range indexes so a stale keybind targeting a since-removed lane is
   // harmless, and a no-op when the lane already shows this session.
@@ -270,6 +282,114 @@ export function useDispatchActions(
       })
     },
     [setState],
+  )
+
+  /**
+   * Put a session into a lane, WAKING it first when it is detached.
+   *
+   * Rehydrate deliberately does not respawn detached sessions — they survive a
+   * restart as metadata with no provider process (see rehydrate.ts). Something
+   * has to wake them before they are used, and agent-index navigation already
+   * says exactly why:
+   *
+   *   "Wake under the SAME SessionId before exposing one in a lane/grid slot;
+   *    otherwise the navigation appears to work but the first keystroke lands
+   *    on a dead backend."
+   *
+   * That was true of every OTHER way a session reaches a lane. The index click,
+   * the strip click, ⌥↑/↓ and ⌘N all wrote straight through
+   * `setTiledLaneSession`, so a hibernated agent could be selected, rendered,
+   * and typed into — and main rejected the prompt as "not a live agent session"
+   * with `reason: never-owned` (#690). The composer's own retry papers over it
+   * inconsistently, which made the failure look intermittent.
+   *
+   * WHY the wake completes BEFORE the lane is written: writing first exposes a
+   * dead pane the user can type into during the gap, which is the very state
+   * this is fixing.
+   *
+   * Be honest about the cost. `DetachedSessionRecord` means "live but not
+   * grid-placed", so in an ordinary session EVERY dispatch agent is detached —
+   * this is the common path, not the exception. `ensureSessionLive` joins an
+   * in-flight wake and adopts rather than restarts a running agent, but it is
+   * not free: one `session:recover` round-trip and a transient `spawning` flip
+   * per gesture. Sub-frame in practice; not "nothing".
+   */
+  const selectTiledLaneSession = useCallback(
+    async (laneIndex: number, sessionId: SessionId) => {
+      const detached = refs.stateRef.current.detachedSessions[sessionId] !== undefined
+      if (!detached) {
+        // Grid-placed: stays synchronous, so no coordinate can shift underneath
+        // it. NOT a guarantee that it is live — a tile leaf whose respawn failed
+        // at rehydrate, or whose process died since, is still selectable here
+        // and still needs the pane's own Retry. That gap is shared verbatim with
+        // agent-index navigation, which uses the identical predicate; widening
+        // both is its own change, not this one.
+        setTiledLaneSession(laneIndex, sessionId)
+        return
+      }
+
+      // The gesture targets a (row, column), not a flat index.
+      //
+      // WHY that distinction matters once the write is async: `lanes` is flat
+      // and row-major, so a lane added or removed in an EARLIER row shifts
+      // every later index. `setTiledLaneSession`'s bounds check catches an
+      // index that fell off the end, but an index that is merely now a
+      // DIFFERENT row's lane is still in range — the write would land in the
+      // wrong row. Re-deriving from the coordinate after the wake fixes that.
+      //
+      // The follow is gated on the ROW DESCRIPTOR surviving by reference, not
+      // on its index still being in range.
+      //
+      // WHY reference identity is the right test: a row index is positional and
+      // is only stable against changes to row LENGTHS, never to row MEMBERSHIP.
+      // Checking range alone drops correctly in a 2-row grid (the stale index
+      // falls off the end) and silently writes into the WRONG row from three
+      // rows up — removing row 0 of [1,2,2] would have written the agent into
+      // what used to be row 2. Every grid mutation preserves untouched row
+      // objects (`insertLaneRightIntoGrid`/`removeLaneFromGrid` map, the row ops
+      // slice/filter), so identity follows exactly the grow/shrink cases and
+      // drops every membership change.
+      //
+      // Dropping is the honest outcome for a membership change — silently
+      // retargeting a slot the user did not choose is the surprise this whole
+      // change removes. If rows ever gain durable ids this becomes a real
+      // follow instead.
+      //
+      // The window is NOT narrow, which is why this matters: a cold wake allows
+      // up to 30s, and Remove Row / Close Agent sit on a confirmation dialog
+      // inside it.
+      const before = normalizeGridShape(refs.stateRef.current.dispatchMode?.tiled ?? {
+        lanes: [], focusedLane: 0,
+      })
+      const rowIndex = rowIndexForLane(before.rows, laneIndex)
+      const column = rowIndex >= 0 ? laneIndex - rowStartIndex(before.rows, rowIndex) : -1
+      // Checked BEFORE the wake: an unresolvable coordinate can never produce a
+      // write, and spawning a provider process only to discard it is waste.
+      if (rowIndex < 0 || column < 0) return
+
+      try {
+        await ensureSessionLive(sessionId, 'dispatch-lane.select')
+      } catch (error) {
+        // Do NOT place a session we could not wake: leaving the lane on its
+        // previous occupant is honest, where showing a dead pane is not.
+        showToast(
+          error instanceof Error && error.message.length > 0
+            ? error.message
+            : 'Could not wake agent',
+        )
+        return
+      }
+
+      const after = normalizeGridShape(refs.stateRef.current.dispatchMode?.tiled ?? {
+        lanes: [], focusedLane: 0,
+      })
+      const row = after.rows[rowIndex]
+      // Not the same row any more (removed, or displaced by an insert above),
+      // or it shrank past the column the user aimed at.
+      if (!row || row !== before.rows[rowIndex] || column >= row.length) return
+      setTiledLaneSession(rowStartIndex(after.rows, rowIndex) + column, sessionId)
+    },
+    [refs, ensureSessionLive, showToast, setTiledLaneSession],
   )
 
   /**
@@ -583,7 +703,7 @@ export function useDispatchActions(
     setPinnedSessionIds,
     enterTiledDispatch,
     exitTiledDispatch,
-    setTiledLaneSession,
+    selectTiledLaneSession,
     insertTiledLaneRight,
     removeTiledLane,
     setTiledFocusedLane,
