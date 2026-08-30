@@ -13,6 +13,7 @@ import { registerLspIpc } from '@main/ipc/lsp.js'
 import { registerFsIpc } from '@main/ipc/fs.js'
 import { registerSessionsIpc } from '@main/ipc/sessions.js'
 import { registerWorkspaceIpc } from '@main/ipc/workspace.js'
+import type { WorkspaceFileStore } from '@main/storage/workspaceFileStore.js'
 import { registerGhostIpc } from '@main/ipc/ghost.js'
 import { registerDebugIpc } from '@main/ipc/debug.js'
 import { registerGitIpc } from '@main/ipc/git.js'
@@ -78,6 +79,7 @@ export type IpcDeps = {
   cliUpdateOrchestrator: CliUpdateOrchestrator
   workflowBridge: WorkflowBridge
   agentCodeConventionsService: AgentCodeConventionsService
+  workspaceFileStore: WorkspaceFileStore
 }
 
 export function registerAllIpc(deps: IpcDeps): void {
@@ -91,7 +93,7 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerLspIpc(deps.lspManager, editorFsRoots, deps.aiWorkspaceRegistry)
   registerFsIpc()
   registerSessionsIpc()
-  registerWorkspaceIpc(deps.manager)
+  registerWorkspaceIpc(deps.manager, deps.workspaceFileStore)
   registerGhostIpc(deps.ghostJournals)
   registerDebugIpc()
   registerGitIpc()

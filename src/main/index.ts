@@ -47,6 +47,8 @@ import { wireSessionForwarder } from '@main/sessions/forwarder.js'
 import type { SessionForwarderControl } from '@main/sessions/forwarder.js'
 import { SessionRecorderManager } from '@main/recording/SessionRecorderManager.js'
 import { setOutboundObserver } from '@main/window/windowRegistry.js'
+import { restorableBounds } from '@main/window/windowGeometry.js'
+import { WorkspaceFileStore } from '@main/storage/workspaceFileStore.js'
 import { isSessionRecordingEnabled, isSessionRecordingAutoStart } from '@main/ipc/devDebug.js'
 import { registerAllIpc } from '@main/ipc/index.js'
 import { AgentCodeManagedSkillsService } from '@main/agentCodeConventions/AgentCodeManagedSkillsService.js'
@@ -748,6 +750,11 @@ async function startApp(): Promise<void> {
     },
   })
   await cliUpdateOrchestrator.loadInitialBehavior()
+  // WHY the workspace file is read here, before any window exists: it now holds
+  // the window list, so it is what decides how many windows to create. The old
+  // renderer-driven `workspace:load` could not answer that — it required a
+  // renderer, which requires a window.
+  const workspaceFileStore = await WorkspaceFileStore.open()
   registerAllIpc({
     manager,
     remoteController,
@@ -765,13 +772,29 @@ async function startApp(): Promise<void> {
     cliUpdateOrchestrator,
     workflowBridge: activeWorkflowBridge,
     agentCodeConventionsService,
+    workspaceFileStore,
   })
   // Boot probe runs after the IPC is wired so its first `state` push
   // has a live subscriber to receive it on the renderer side.
   cliUpdateOrchestrator.scheduleBootProbe()
   performanceService.mark('app.main.ipc.registered')
   appRunJournal.record({ area: 'window.main', name: 'window.create.start' })
-  createAppWindow()
+  // Restore every persisted window, or create one on a fresh install. A
+  // window whose saved bounds no longer land on an attached display is created
+  // with default placement instead — see windowGeometry.ts for why that is the
+  // common case rather than an edge case.
+  const persistedWindows = workspaceFileStore.windows()
+  if (persistedWindows.length === 0) {
+    createAppWindow()
+  } else {
+    for (const record of persistedWindows) {
+      createAppWindow({
+        windowId: record.windowId,
+        bounds: restorableBounds(record.bounds),
+        fullScreen: record.fullScreen,
+      })
+    }
+  }
   appRunJournal.record({
     area: 'window.main',
     name: 'window.create.end',

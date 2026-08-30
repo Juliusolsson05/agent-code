@@ -1,100 +1,79 @@
-import { ipcMain } from 'electron'
-import { mkdir, readFile, writeFile, rename, unlink } from 'fs/promises'
+import { ipcMain, screen } from 'electron'
 
-import { STATE_DIR, STATE_FILE } from '@main/storage/paths.js'
 import type { SessionManager } from '@main/sessionManager.js'
+import type { WorkspaceFileStore, WindowGeometry } from '@main/storage/workspaceFileStore.js'
+import { getBrowserWindow, windowIdFor } from '@main/window/windowRegistry.js'
 
 // Workspace state persistence.
 //
-// The renderer is the source of truth for the tile tree. Main just
-// reads / writes bytes — we don't interpret the JSON here. The
-// atomic-write pattern (temp sibling + rename) keeps us from
-// corrupting the file if the process dies mid-write.
+// The renderer is still the source of truth for the tile tree, and the payload
+// it sends is still stored verbatim. What changed with multi-window is only
+// ADDRESSING: main resolves which window a payload belongs to and writes it
+// into that window's slot, leaving every other window's slot untouched.
+//
+// WHY that addressing is a correctness requirement and not tidiness:
+//
+// `useAutoSave` prunes. It drops any session it cannot trace to a tile leaf, a
+// detached record, or a buried pane — deliberately, so orphan metadata cannot
+// make itself durable. If each window wrote the WHOLE file, each would classify
+// the other's agents as orphans and delete them, every 400ms, in both
+// directions, with the file's only writer being the thing doing the deleting.
+// Per-window slices make that impossible by construction rather than by
+// agreement.
+//
+// The durability machinery (unique temp + rename, one admission-ordered queue
+// for reads and writes) moved to WorkspaceFileStore with its reasoning intact.
 
-export function registerWorkspaceIpc(manager: SessionManager): void {
-  // WHY the whole save transaction is queued, not just writeFile: unique temp
-  // names prevent scratch-path ENOENT races, but they do not order the final
-  // renames. An older renderer save can be delayed, rename after a newer save,
-  // and then acknowledge an ownership map that is no longer the newest one.
-  // Keeping write + rename + acknowledgement on one admission-ordered tail
-  // makes the bytes on disk and SessionManager's ownership commit one atomic
-  // logical sequence. A rejected save is still surfaced to its IPC caller;
-  // only the private tail absorbs it so later saves are not poisoned forever.
-  let saveTail: Promise<void> = Promise.resolve()
+function geometryOf(windowId: string): WindowGeometry {
+  const window = getBrowserWindow(windowId)
+  if (!window) return { bounds: null, displayId: null, fullScreen: false }
+  // getNormalBounds, not getBounds: a maximized or full-screened window reports
+  // screen-sized bounds, and restoring those on a smaller display would strand
+  // the window off-screen. The normal bounds are what "put it back where it
+  // was" actually means.
+  const bounds = window.getNormalBounds()
+  let displayId: number | null = null
+  try {
+    displayId = screen.getDisplayMatching(bounds).id
+  } catch {
+    // The display list can be momentarily unavailable during a monitor change.
+    // Geometry restore already validates against attached displays, so a null
+    // hint costs nothing.
+  }
+  return { bounds, displayId, fullScreen: window.isFullScreen() }
+}
 
-  ipcMain.handle('workspace:load', async () => {
-    // WHY reads join the same tail even though they do not mutate the file: an
-    // unload save can be admitted before the replacement renderer asks to load
-    // but still be blocked before rename. Reading around that admitted save
-    // lets the new renderer reclaim old predecessor bytes just before the old
-    // renderer durably writes/acknowledges the now-killed successor. Atomic
-    // rename prevents corrupt bytes; this ordering prevents a valid-but-stale
-    // ownership snapshot. saveTail absorbs failures, so a rejected save delays
-    // the read until settlement without changing workspace:load's error shape.
-    await saveTail
-    try {
-      const text = await readFile(STATE_FILE, 'utf8')
-      return text
-    } catch (err) {
-      const e = err as NodeJS.ErrnoException
-      if (e.code === 'ENOENT') return null // fresh install, no state yet
-      throw err
-    }
+export function registerWorkspaceIpc(
+  manager: SessionManager,
+  store: WorkspaceFileStore,
+): void {
+  ipcMain.handle('workspace:load', async evt => {
+    const windowId = windowIdFor(evt.sender)
+    if (!windowId) return null
+    return await store.loadSlice(windowId)
   })
 
-  ipcMain.handle('workspace:save', (_evt, json: string) => {
-    const save = saveTail.then(async () => {
-      await mkdir(STATE_DIR, { recursive: true })
-      // WHY this temp file is still unique even though saves are serialized:
-      // the queue is process-local ordering, while the nonce is crash-safety
-      // and protection from stale scratch files left by an interrupted run.
-      // The final destination remains one atomic rename target.
-      const tmp = `${STATE_FILE}.${process.pid}.${Date.now()}.${Math.random()
-        .toString(36)
-        .slice(2)}.tmp`
-      try {
-        await writeFile(tmp, json, 'utf8')
-        await rename(tmp, STATE_FILE)
-      } catch (error) {
-        // WHY cleanup is scoped to this exact nonce path: a rename failure can
-        // leave a complete scratch file behind, and durability retry creates a
-        // new nonce on every attempt. Without unlink, a persistent destination
-        // error converts eventual-success retry into unbounded disk/inode use.
-        // Never scan the directory or infer sibling names—another admitted
-        // save may own them. Cleanup remains best-effort so the caller receives
-        // the original write/rename failure that explains why commit did not
-        // happen.
-        try {
-          await unlink(tmp)
-        } catch {
-          // Missing/locked scratch cleanup cannot make the failed save durable.
-        }
-        throw error
-      }
-      // WHY replacement commit follows the rename: a successful spawn response
-      // is not durable renderer ownership. If reload destroys the renderer before
-      // its remapped local ID reaches workspace.json, main must retain the
-      // predecessor transaction so rehydrate can stop the hidden successor and
-      // restore the still-owned predecessor ID. Parsing is deliberately narrow;
-      // main does not otherwise interpret renderer workspace state.
-      try {
-        const parsed = JSON.parse(json) as {
-          workspace?: { sessions?: Record<string, unknown> }
-        }
-        const sessions = parsed.workspace?.sessions
-        if (sessions && typeof sessions === 'object') {
-          manager.acknowledgePersistedSessionOwnership(
-            new Set(Object.keys(sessions)),
-          )
-        }
-      } catch {
-        // workspace:save historically accepts opaque bytes. A malformed payload
-        // must not gain transaction authority; leaving the handoff pending is the
-        // safe outcome and preserves the existing persistence error surface.
-      }
-    })
-    saveTail = save.catch(() => undefined)
-    return save
+  ipcMain.handle('workspace:save', async (evt, json: string) => {
+    const windowId = windowIdFor(evt.sender)
+    if (!windowId) {
+      // WHY this rejects rather than guessing a slot: a save from an
+      // unregistered sender has no defensible destination, and picking one
+      // would overwrite a real window's workspace with a stranger's. The
+      // renderer's autosave already surfaces and retries save failures.
+      throw new Error('workspace:save from a sender that owns no window')
+    }
+    await store.saveSlice(windowId, json, geometryOf(windowId))
+    // WHY replacement commit follows the write: a successful spawn response
+    // is not durable renderer ownership. If reload destroys the renderer before
+    // its remapped local ID reaches workspace.json, main must retain the
+    // predecessor transaction so rehydrate can stop the hidden successor and
+    // restore the still-owned predecessor ID.
+    //
+    // WHY the union across every window rather than this window's ids: the
+    // manager is asking a process-wide question — "which local ids has SOME
+    // renderer committed" — and answering it with one window's set would tell
+    // the manager that another window's live, persisted sessions are unclaimed.
+    manager.acknowledgePersistedSessionOwnership(store.sessionIds())
   })
 
   // Renderer calls this on first launch when there's no saved state
