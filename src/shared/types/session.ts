@@ -20,7 +20,30 @@ export type { AgentProviderKind, SessionKind } from '@shared/types/providerKind.
 export type SessionInputReadiness = {
   ready: boolean
   revision: number
-  reason?: 'starting' | 'replaying-history' | 'provider-not-ready' | 'ready'
+  /**
+   * Why input is unavailable, specific enough to act on.
+   *
+   * WHY `composer-occupied` is carried separately rather than folded into the
+   * catch-all `provider-not-ready` (#683): every non-ready verdict used to
+   * collapse here, so a session blocked because the user's own text is sitting
+   * in the provider's composer looked exactly like one that was merely slow to
+   * boot. Both rendered as "waiting for agent". That state does not clear on
+   * its own — deliberately, because the gate must never overwrite a human
+   * draft — so the only signal the user got was a pane that stayed dead, with
+   * the actual cause and the way out both invisible. Measured before this
+   * change: 19 of 216 sessions ended still blocked, the longest for 47 hours.
+   *
+   * The distinction has to survive the main -> renderer boundary because it is
+   * the difference between "wait" and "there is something you need to clear".
+   * Everything else stays collapsed: a caller cannot do anything differently
+   * about replay-pending versus composer-unpainted.
+   */
+  reason?:
+    | 'starting'
+    | 'replaying-history'
+    | 'provider-not-ready'
+    | 'composer-occupied'
+    | 'ready'
 }
 
 // Provider runtimes know *when* their composer is safe, but they do not own

@@ -197,10 +197,33 @@ describe('deliverClaudePrompt routing', () => {
     vi.useFakeTimers()
     const { io, writes } = makeIo('line one\nline two', '') // screen never reflects the paste
     const p = deliverClaudePrompt(io)
-    await vi.advanceTimersByTimeAsync(2100)
+    // Past CONFIRM_TIMEOUT_MS (5s) plus the bounded rollback that now follows
+    // an unconfirmed write.
+    await vi.advanceTimersByTimeAsync(7000)
     const result = await p
     expect(result.ok).toBe(false)
-    // Critically: Enter must NOT be sent after an unconfirmed paste.
+    // The contract this test exists for: Enter must NOT be sent after an
+    // unconfirmed paste. Asserted directly rather than by comparing the whole
+    // write list, because the list is no longer just the paste — a failed
+    // write is now rolled back (#679), so it is followed by kill/yank bytes.
+    // Pinning the exact array made this test fail for the rollback rather than
+    // for the thing it is guarding.
+    expect(writes).not.toContain('\r')
+    // Exactly the paste, and NOTHING after it — no kill, no yank.
+    //
+    // This fixture's screen never reflects the paste, so the delivery cannot
+    // see its own bytes. That is precisely when rollback must do nothing:
+    // pressing Ctrl+U against a composer we cannot read would destroy whatever
+    // is actually in it, and the whole reason this state is dangerous is that
+    // the thing in it might be a human's draft. An earlier version of the
+    // rollback pressed anyway and reported `cleared`, which review caught — it
+    // turned an honest "do not retry" into a false success on top of a
+    // composer it had never observed.
+    //
+    // So the correct outcome here is an unrecoverable failure with no
+    // keystrokes, and the assertion is the exact array: a rollback that starts
+    // firing blind again must fail this test rather than pass a weaker
+    // "every write is a kill byte" check that is vacuously true when empty.
     expect(writes).toEqual(['\x1b[200~line one\nline two\x1b[201~'])
   })
 

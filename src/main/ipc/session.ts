@@ -158,8 +158,18 @@ export function registerSessionIpc(
       // between and reports the wrong cause — the same misdiagnosis this
       // replaces, just narrower.
       const deliveryInFlight = manager.isDeliveryInFlight(sessionId)
-      const ok = manager.write(sessionId, data)
-      if (typeof pasteId === 'string' && pasteId.length > 0) {
+      // `pasteId` is set only by the Agent Code paste flow (claudePaste.ts) and
+      // never by keystrokes, so it is also the exact renderer-side attribution
+      // signal required by SessionManager's prompt-delivery ownership fence.
+      const attributedPasteId = typeof pasteId === 'string' && pasteId.length > 0
+        ? pasteId
+        : null
+      const ok = manager.write(
+        sessionId,
+        data,
+        attributedPasteId ? 'renderer-paste' : 'renderer',
+      )
+      if (attributedPasteId) {
         // WHY the combined phase exists: Codex's zero-delay bracketed-paste
         // path writes `body + paste-end + Enter` in ONE PTY call, while Claude
         // can use separate writes. Labelling every non-bare-CR write as `body`
@@ -174,7 +184,7 @@ export function registerSessionIpc(
               : 'body',
           ok,
           deliveryInFlight,
-        }, { submissionId: pasteId })
+        }, { submissionId: attributedPasteId })
       }
       if (!ok) {
         // WHY both facts instead of one verdict: this used to log "missing

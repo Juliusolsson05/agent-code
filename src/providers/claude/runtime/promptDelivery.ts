@@ -2,6 +2,7 @@ import type {
   PromptDeliveryIo,
   PromptDeliveryResult,
 } from '@shared/types/providerConfig.js'
+import { parseClaudeComposerState } from 'claude-code-headless'
 import {
   isPasteLike,
   pollClaudeImagesAbsorbed,
@@ -9,7 +10,22 @@ import {
 } from '@shared/claude/pasteConfirm.js'
 import type { PromptAcceptanceOutcome, PromptReadinessOutcome } from '@shared/types/session.js'
 
-const CONFIRM_TIMEOUT_MS = 2000
+// Text absorption budget. Was 2000ms, and every one of the ten recorded
+// delivery failures ended at 2002-2034ms — the cap fired every single time,
+// never the underlying operation. The one failure with a PTY recording shows
+// the prompt actually reaching the composer at 2575ms: Claude was mid-turn, so
+// its repaint lagged. A 5s budget would have confirmed it.
+//
+// WHY raising this is close to free: pollPasteAbsorbed exits on the first
+// match, so a healthy send still returns in tens of milliseconds. The cap is
+// only paid when we are about to fail, and failing here is expensive — it
+// leaves bytes in the composer that the prompt gate then reads as a human
+// draft (#679).
+//
+// Matched to IMAGE_CONFIRM_TIMEOUT_MS rather than invented: image absorption
+// already needed five seconds for the same reason, and there is no argument for
+// text being quicker to repaint than an image pill.
+const CONFIRM_TIMEOUT_MS = 5_000
 const CONFIRM_POLL_INTERVAL_MS = 10
 const IMAGE_CONFIRM_TIMEOUT_MS = 5_000
 // One wall-clock budget covers readiness, absorption, and durable acceptance.
@@ -136,12 +152,31 @@ export async function deliverClaudePrompt(
   if (absorbed.kind !== 'absorbed') {
     acceptance.cancel()
     // Prompt bytes are already editable in Claude even when our detector times
-    // out. Automatic retry is unsafe: it would append/duplicate those bytes.
+    // out, and automatic retry remains unsafe because it would append to them.
+    //
+    // But abandoning them in place is what deadlocked sessions (#679): the gate
+    // then reads OUR stranded bytes as a human draft, and that state has no
+    // timeout by design, so every later delivery is refused. Roll them back
+    // while the reservation still guarantees the composer is ours alone.
+    const rollback = await rollbackWrittenPrompt(io)
+    if (rollback === 'cleared') {
+      // Nothing of ours is left in the composer, so retrying cannot duplicate
+      // anything — the reason `do-not-retry` existed is gone. The caller's
+      // draft is untouched in the app composer; only Claude's copy was removed.
+      return failure({
+        stage: 'absorption', code: 'absorption-timeout', retrySafe: true,
+        disposition: 'retry-same-session',
+        promptWritten: false, enterWritten: false,
+        message: `Claude session ${io.sessionId} did not visibly absorb the prompt; it was not sent and the draft was cleared from Claude's composer`,
+      })
+    }
     return failure({
       stage: 'absorption', code: 'absorption-timeout', retrySafe: false,
       disposition: 'do-not-retry',
       promptWritten: true, enterWritten: false,
-      message: `Claude session ${io.sessionId} did not visibly absorb the prompt`,
+      message: rollback === 'restored'
+        ? `Claude session ${io.sessionId} did not visibly absorb the prompt, and it is still in Claude's composer — clear it there before sending again`
+        : `Claude session ${io.sessionId} did not visibly absorb the prompt and its composer could not be recovered`,
     })
   }
   io.record?.(pasteLike ? 'paste-absorbed' : 'prompt-absorbed', {
@@ -199,11 +234,23 @@ async function deliverClaudeImagePrompt(
         },
       )
       if (textAbsorbed.kind !== 'absorbed') {
+        // Same stranded-bytes hazard as the text-only path (#679). Only the
+        // TEXT has been written at this point — the image paths follow below —
+        // so a kill-to-line-start rollback can still fully clear the composer.
+        const rollback = await rollbackWrittenPrompt(io)
+        if (rollback === 'cleared') {
+          return failure({
+            stage: 'absorption', code: 'absorption-timeout', retrySafe: true,
+            disposition: 'retry-same-session',
+            promptWritten: false, enterWritten: false,
+            message: `Claude session ${io.sessionId} did not absorb image prompt text; it was not sent and the draft was cleared from Claude's composer`,
+          })
+        }
         return failure({
           stage: 'absorption', code: 'absorption-timeout', retrySafe: false,
           disposition: 'do-not-retry',
           promptWritten: true, enterWritten: false,
-          message: `Claude session ${io.sessionId} did not absorb image prompt text`,
+          message: `Claude session ${io.sessionId} did not absorb image prompt text, and it is still in Claude's composer`,
         })
       }
     } else if (!io.write(io.prompt)) {
@@ -242,11 +289,24 @@ async function deliverClaudeImagePrompt(
     },
   )
   if (imagesAbsorbed.kind !== 'absorbed') {
+    // Deliberately NOT rolled back, and this is the honest limitation.
+    //
+    // By this point the composer holds prompt text AND however many image pills
+    // Claude did manage to render. Ctrl+U kills text to the start of a visual
+    // line; whether it removes an image pill is not established, and a rollback
+    // that strips the text while leaving orphaned pills is worse than leaving
+    // both — it produces a composer whose content matches nothing either side
+    // believes it wrote.
+    //
+    // So this path can still strand bytes and still latch the gate. It is
+    // reachable only with attachments, and none of the recorded #679 failures
+    // involved images. Closing it needs the pill-clearing behaviour established
+    // against a real composer first.
     return failure({
       stage: 'absorption', code: 'absorption-timeout', retrySafe: false,
       disposition: 'do-not-retry',
       promptWritten: true, enterWritten: false,
-      message: `Claude session ${io.sessionId} did not render all image attachments`,
+      message: `Claude session ${io.sessionId} did not render all image attachments; the prompt is still in Claude's composer`,
     })
   }
   io.record?.('images-absorbed', {
@@ -301,6 +361,131 @@ function acceptanceResult(
       ? `Claude session ${sessionId} exited before accepting the prompt`
       : `Claude session ${sessionId} did not record prompt acceptance`,
   })
+}
+
+// Ctrl+U. Kill-to-line-start in Claude's input, and deliberately NOT Escape.
+//
+// WHY NOT `\x1b`, which upstream turns into a full composer clear that even
+// saves the text to Claude's own history first: `\x1b` is the byte Agent Code's
+// Stop button sends (TileLeaf.tsx, onStop). Escape only clears the composer when
+// Claude is IDLE; while it is RUNNING the same byte interrupts the turn. Every
+// rollback below happens because absorption timed out, and absorption times out
+// precisely BECAUSE Claude is mid-turn — the recorded case shows the prompt
+// repainting 2.6s after the write while Claude was busy. Sending Escape there
+// would abort the agent's work, which is strictly worse than the stranded bytes
+// we are trying to clean up. Ctrl+U is correct here for the narrow reason that
+// it carries no second meaning.
+const KILL_TO_LINE_START = '\x15'
+// Ctrl+Y. Consecutive kills accumulate into ONE kill-ring entry, so a single
+// yank restores everything the loop removed.
+const YANK = '\x19'
+// Claude kills to the start of the VISUAL line, so a wrapped prompt needs one
+// press per wrapped row and the count depends on terminal width, which we do
+// not know here. Bounded rather than computed: we verify after every press
+// instead of predicting how many are needed.
+const MAX_KILL_PRESSES = 64
+// Each kill must arrive as its own PTY read — see rollbackWrittenPrompt step 2.
+// Also gives the composer a frame to repaint before we re-read it.
+const KILL_KEYSTROKE_GAP_MS = 25
+// How long to wait for our own write to become visible before concluding we
+// cannot see it. Bounded well under the delivery deadline: this runs after a
+// failure, and a slow answer here delays the error the user is waiting for.
+const ROLLBACK_OBSERVE_ATTEMPTS = 40
+
+const sleep = (ms: number): Promise<void> =>
+  new Promise(resolve => { setTimeout(resolve, ms) })
+
+/**
+ * Remove bytes THIS delivery wrote from Claude's composer after a write that
+ * could not be completed with Enter.
+ *
+ * WHY this is safe to do at all — the ownership proof is structural, not a
+ * guess: `SessionManager.write()` refuses raw input for the whole time a
+ * delivery holds the session's reservation (`promptDeliveriesInFlight`, taken
+ * before `deliverPrompt` and released in a `finally`). So while this runs, no
+ * human keystroke can have reached this composer. Anything in it is ours.
+ *
+ * That is what makes this different from the first design of #679, which tried
+ * to prove ownership by comparing the composer's rendered text to the prompt we
+ * sent. That comparison cannot work: the screen is viewport-clipped and
+ * wrap-lossy, and Claude collapses paste-like input — anything with a newline or
+ * over 100 characters, which is most agent traffic — to `[Pasted text #N +M
+ * lines]`, so the text on screen is not the text we wrote.
+ *
+ * Returns what actually happened so the caller can classify honestly rather
+ * than assume.
+ */
+async function rollbackWrittenPrompt(
+  io: PromptDeliveryIo,
+): Promise<'cleared' | 'restored' | 'unrecoverable'> {
+  const readComposer = (): 'empty' | 'drafted' | 'unpainted' =>
+    // Classified WITHOUT cell attributes, which is the fail-closed path: with
+    // no attributes an unrecognised row is reported as 'drafted'. That error
+    // direction is the safe one here — a false 'drafted' aborts and restores,
+    // whereas a false 'empty' would let us report success over a composer still
+    // holding half a prompt.
+    parseClaudeComposerState(io.session.snapshotScreen?.() ?? '', null)
+
+  // STEP 1 — wait until our bytes are actually VISIBLE before touching anything.
+  //
+  // WHY this exists, and why the obvious shape was dangerous: the first cut read
+  // the composer and returned 'cleared' if it saw 'empty'. But we arrive here
+  // BECAUSE absorption timed out, and absorption times out precisely when the
+  // screen does not yet show what we wrote. So 'empty' is the EXPECTED reading
+  // at this instant, not evidence of anything — and an empty composer usually
+  // paints a bare `❯`, which classifies as 'empty' exactly.
+  //
+  // The old shape therefore returned `cleared` after writing zero bytes and told
+  // the caller `promptWritten: false, retrySafe: true` — "it was not sent". The
+  // user resends, Claude finishes repainting and lands prompt #1 in the
+  // composer, prompt #2 is written after it, and Claude submits BOTH
+  // concatenated. That is strictly worse than the stranded draft this function
+  // exists to clean up, and worse than main's honest `do-not-retry`.
+  //
+  // Absence cannot be proven from a surface known to lag. Only a
+  // drafted -> empty TRANSITION proves we removed something, so we refuse to
+  // act until we have observed the `drafted` half.
+  let sawOurBytes = false
+  for (let wait = 0; wait < ROLLBACK_OBSERVE_ATTEMPTS; wait += 1) {
+    if (readComposer() === 'drafted') { sawOurBytes = true; break }
+    await sleep(CONFIRM_POLL_INTERVAL_MS)
+  }
+  if (!sawOurBytes) {
+    // Never observed. The bytes may be in flight, already consumed, or never
+    // landed — we cannot tell, so we make no claim and change nothing. This is
+    // main's behaviour, which is honest: "it may already be submitted".
+    io.record?.('rollback-unobserved')
+    return 'unrecoverable'
+  }
+
+  // STEP 2 — clear, one keypress at a time.
+  //
+  // WHY each press must arrive alone: Claude's input tokeniser accumulates a run
+  // of non-ESC bytes into ONE text token, and its control-letter branch only
+  // matches a single-character string. Two `\x15` bytes in one read are
+  // therefore not two kills — they are the literal text "\x15\x15" inserted
+  // into the composer. A tight loop would type garbage into the very draft it
+  // is trying to remove.
+  for (let press = 0; press < MAX_KILL_PRESSES; press += 1) {
+    if (!io.write(KILL_TO_LINE_START)) {
+      io.record?.('rollback-write-failed', { presses: press })
+      return 'unrecoverable'
+    }
+    await sleep(KILL_KEYSTROKE_GAP_MS)
+    if (readComposer() === 'empty') {
+      io.record?.('rollback-cleared', { presses: press + 1 })
+      return 'cleared'
+    }
+  }
+
+  // Bounded out with content still present. Put it back rather than leave a
+  // partially killed prompt: a later Enter — the user's, or another delivery's
+  // — would submit a mangled fragment, which is the exact failure this whole
+  // subsystem exists to prevent. One yank suffices because consecutive kills
+  // accumulate into a single kill-ring entry.
+  const restored = io.write(YANK)
+  io.record?.('rollback-exhausted', { presses: MAX_KILL_PRESSES, restored })
+  return restored ? 'restored' : 'unrecoverable'
 }
 
 function remainingBudget(deadlineAt: number, stageCapMs: number): number {

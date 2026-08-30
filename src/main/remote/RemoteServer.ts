@@ -68,7 +68,12 @@ export type RemoteSessionControl = {
   resolveTranscriptFile(sessionId: string): Promise<string | null>
   getSpawnCwd(sessionId: string): string | null
   getLastActivityAt(sessionId: string): number | null
-  write(sessionId: string, data: string): boolean
+  // Third arg is the write's origin. Widened to a bare string rather than
+  // importing SessionManager's union: this interface exists so the remote
+  // server depends on a narrow shape instead of the whole manager, and pulling
+  // the union across would undo that. The manager's own signature is what
+  // type-checks the value passed at the call site.
+  write(sessionId: string, data: string, origin?: 'remote'): boolean
   submitStagedPrompt(sessionId: string): boolean
   resolveCondition(
     sessionId: string,
@@ -641,7 +646,7 @@ export class RemoteServer extends EventEmitter {
       }
 
       case 'interrupt': {
-        const wrote = this.deps.manager.write(msg.sessionId, INTERRUPT_BYTES)
+        const wrote = this.deps.manager.write(msg.sessionId, INTERRUPT_BYTES, 'remote')
         return wrote ? { ok: true } : { ok: false, error: 'session not writable' }
       }
 
@@ -717,7 +722,7 @@ export class RemoteServer extends EventEmitter {
     if (!offered) {
       return { ok: false, error: 'action does not match any live condition' }
     }
-    const wrote = this.deps.manager.write(sessionId, action.data)
+    const wrote = this.deps.manager.write(sessionId, action.data, 'remote')
     return wrote ? { ok: true } : { ok: false, error: 'session not writable' }
   }
 

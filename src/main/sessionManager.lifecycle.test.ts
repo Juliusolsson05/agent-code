@@ -97,6 +97,123 @@ describe('SessionManager lifecycle journal', () => {
     expect(typeof spy.find('provider.start.end')?.data?.durationMs).toBe('number')
   })
 
+  describe('input.write — composer authorship', () => {
+    // WHY these exist: the prompt gate refuses delivery while the composer holds
+    // a draft, and decides that by classifying rendered characters. That can see
+    // characters; it cannot see who wrote them. This event is the only record of
+    // authorship, so if it stops being emitted — or starts carrying content —
+    // the failure is silent in exactly the way that made #683 take a full
+    // journal dig to diagnose.
+
+    it('defaults an unlabelled write to renderer rather than inventing an origin', async () => {
+      const { SessionManager } = await import('./sessionManager')
+      const spy = journalSpy()
+      const manager = new SessionManager(null, null, spy.journal as never)
+      await manager.recover({ sessionId: 's1', kind: 'claude', cwd: '/tmp/project' })
+
+      // A caller that does not declare an origin must get the honest bucket.
+      // The alternative — guessing a specific surface — would put a fabricated
+      // attribution in the one record that exists to answer "who wrote this",
+      // which is worse than admitting the surfaces are merged.
+      manager.write('s1', 'hello\r')
+
+      const writes = spy.lifecycle().filter(r => r.name === 'input.write')
+      expect(writes).toHaveLength(1)
+      expect(writes[0]?.data).toMatchObject({ origin: 'renderer', hadSubmit: true })
+    })
+
+    it('separates the origins the write boundary already knows', async () => {
+      // These three are distinguishable for free — `remote` is its own manager
+      // entry point and `renderer-paste` is the existing pasteId read as the
+      // signal it already is. The test pins them because the value of this
+      // event is entirely in the distinctions it preserves; a refactor that
+      // collapsed them back would leave the event still firing and still
+      // useless.
+      const { SessionManager } = await import('./sessionManager')
+      const spy = journalSpy()
+      const manager = new SessionManager(null, null, spy.journal as never)
+      await manager.recover({ sessionId: 's1', kind: 'claude', cwd: '/tmp/project' })
+
+      manager.write('s1', 'from-phone\r', 'remote')
+      manager.write('s1', 'pasted-text\r', 'renderer-paste')
+
+      const origins = spy.lifecycle()
+        .filter(r => r.name === 'input.write')
+        .map(r => (r.data as { origin?: string }).origin)
+      expect(origins).toEqual(['remote', 'renderer-paste'])
+    })
+
+    it('records a write it is about to make, not one it has confirmed', async () => {
+      // Ordering is the assertion. node-pty's write is not transactional, so a
+      // throw does not prove zero bytes reached the child. Recording after the
+      // crossing would drop exactly the half-failed writes most likely to
+      // orphan a prompt — the case this event exists to explain. A thrown write
+      // must still leave a record.
+      const { SessionManager } = await import('./sessionManager')
+      const spy = journalSpy()
+      const manager = new SessionManager(null, null, spy.journal as never)
+      await manager.recover({ sessionId: 's1', kind: 'claude', cwd: '/tmp/project' })
+
+      const entry = (manager as never as {
+        sessions: Map<string, { session: { write: (d: string) => void } }>
+      }).sessions.get('s1')
+      expect(entry).toBeDefined()
+      entry!.session.write = () => { throw new Error('pty gone') }
+
+      expect(() => manager.write('s1', 'lost\r')).toThrow('pty gone')
+
+      const writes = spy.lifecycle().filter(r => r.name === 'input.write')
+      expect(writes).toHaveLength(1)
+      expect(writes[0]?.data).toMatchObject({ origin: 'renderer', bytes: 5 })
+    })
+
+    it('never journals what was typed', async () => {
+      // The safety boundary. Counts answer "who wrote, and when", which is the
+      // question; the text would make a diagnostic into a privacy problem and
+      // add nothing. Asserted against the WHOLE record, because a future field
+      // carrying content would otherwise pass every other test here.
+      const { SessionManager } = await import('./sessionManager')
+      const spy = journalSpy()
+      const manager = new SessionManager(null, null, spy.journal as never)
+      await manager.recover({ sessionId: 's1', kind: 'claude', cwd: '/tmp/project' })
+
+      manager.write('s1', 'my secret api key is sk-abc123\r')
+
+      const write = spy.lifecycle().find(r => r.name === 'input.write')
+      expect(write).toBeDefined()
+      expect(JSON.stringify(write)).not.toContain('secret')
+      expect(JSON.stringify(write)).not.toContain('sk-abc123')
+      expect(write?.data).toMatchObject({ bytes: 31 })
+    })
+
+    it('coalesces keystroke traffic instead of one event per write', async () => {
+      // A raw terminal view sends one write per keystroke. Without coalescing
+      // this event would bury the journal it exists to inform — and the journal
+      // is bounded, so it would also evict the gate.eval records needed to
+      // correlate against.
+      const { SessionManager } = await import('./sessionManager')
+      const spy = journalSpy()
+      const manager = new SessionManager(null, null, spy.journal as never)
+      await manager.recover({ sessionId: 's1', kind: 'claude', cwd: '/tmp/project' })
+
+      for (const ch of 'typing') manager.write('s1', ch)
+
+      expect(spy.lifecycle().filter(r => r.name === 'input.write')).toHaveLength(0)
+
+      manager.write('s1', '\r')
+
+      // Two events, not one, and deliberately so: the six keystrokes collapse
+      // into a single "someone typed here" record, and the submit gets its own
+      // because it is the boundary between "text is accumulating" and "the
+      // composer should now be empty" — the exact transition needed to
+      // reconstruct why a composer is occupied later.
+      const flushed = spy.lifecycle().filter(r => r.name === 'input.write')
+      expect(flushed).toHaveLength(2)
+      expect(flushed[0]?.data).toMatchObject({ writes: 6, bytes: 6, hadSubmit: false })
+      expect(flushed[1]?.data).toMatchObject({ writes: 1, hadSubmit: true })
+    })
+  })
+
   it('records hasResumeId on the claim so cold resume is separable from a fresh pane', async () => {
     const { SessionManager } = await import('./sessionManager')
     const spy = journalSpy()
