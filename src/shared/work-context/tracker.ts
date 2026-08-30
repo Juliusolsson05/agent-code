@@ -95,7 +95,10 @@ export function ingestWorktreeActivityEvent(params: {
       event.source,
     )
     if (!fallback) return rememberEvent(params.state, event, now)
-    const nextState = rememberEvent(params.state, event, now)
+    const nextState = rememberEvent(params.state, {
+      ...event,
+      resolvedWorktreePath: fallback.worktreePath ?? undefined,
+    }, now)
     return {
       ...nextState,
       active: { ...fallback, confidence: 'medium', source: event.source },
@@ -140,7 +143,10 @@ export function ingestWorktreeActivityEvent(params: {
   const nextState = rememberEvent({
     ...params.state,
     touched,
-  }, event, now)
+  }, {
+    ...event,
+    resolvedWorktreePath: context.worktreePath ?? undefined,
+  }, now)
 
   const currentPrimaryPath = nextState.primary?.worktreePath ?? null
   const currentPrimaryScore =

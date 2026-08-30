@@ -43,6 +43,16 @@ export type WorktreeActivityEvent = {
   requiresWorktreeMatch?: boolean
   command?: string
   filePaths?: string[]
+  /**
+   * The checkout selected when this event was ingested.
+   *
+   * WHY retain this provenance beside the raw evidence path: a later Git
+   * catalog can reveal that an earlier, smaller catalog attributed the event
+   * to the parent checkout. Reconciliation must be able to reverse that exact
+   * touch contribution before replay; the raw path alone cannot tell us which
+   * checkout received the old score.
+   */
+  resolvedWorktreePath?: string
 }
 
 export type WorktreeTouchSummary = {

@@ -249,15 +249,76 @@ export class LiveWorktreeReconciler {
       extractWorktreeActivityEvents(raw, this.now()).map(event => event.key)
     )))
     if (retainedKeys.size === 0) return projection
+    const releasedEvents = projection.workActivity.timeline.filter(
+      event => retainedKeys.has(event.key),
+    )
+    const timeline = projection.workActivity.timeline.filter(
+      event => !retainedKeys.has(event.key),
+    )
+    const touched = { ...projection.workActivity.touched }
+    for (const event of releasedEvents) {
+      const path = event.resolvedWorktreePath
+      if (!path) continue
+      const touch = touched[path]
+      if (!touch) continue
+      const eventCount = touch.eventCount - 1
+      if (eventCount <= 0) {
+        delete touched[path]
+        continue
+      }
+      let latestSurvivor: (typeof timeline)[number] | null = null
+      for (let index = timeline.length - 1; index >= 0; index -= 1) {
+        if (timeline[index]?.resolvedWorktreePath === path) {
+          latestSurvivor = timeline[index]!
+          break
+        }
+      }
+      touched[path] = {
+        ...touch,
+        score: Math.max(0, touch.score - event.primaryWeight),
+        eventCount,
+        writeCount: Math.max(
+          0,
+          touch.writeCount - (event.kind === 'file-write' ? 1 : 0),
+        ),
+        commandCount: Math.max(
+          0,
+          touch.commandCount - (event.command ? 1 : 0),
+        ),
+        // If the released observation supplied the summary's latest source,
+        // prefer surviving event provenance. Older events may already have
+        // rotated out of the bounded timeline, so retaining the existing
+        // source is more honest than inventing one when no survivor remains.
+        source: touch.source === event.source && latestSurvivor
+          ? latestSurvivor.source
+          : touch.source,
+        lastAt: touch.source === event.source && latestSurvivor
+          ? latestSurvivor.ts
+          : touch.lastAt,
+      }
+    }
+    const releasedOwnsContext = (
+      context: typeof projection.workActivity.active,
+    ): boolean => !!context && releasedEvents.some(event => (
+      event.resolvedWorktreePath === context.worktreePath &&
+      event.source === context.source
+    ))
     const workActivity = {
       ...projection.workActivity,
-      // WHY remove matching timeline rows as well as dedupe keys: the event's
-      // raw path is replayed immediately against the renderer's authoritative
-      // Git catalog. Keeping the stale-catalog copy would duplicate one
-      // observation in diagnostics even though only one provider record exists.
-      timeline: projection.workActivity.timeline.filter(
-        event => !retainedKeys.has(event.key),
-      ),
+      // WHY reversal covers aggregates and contexts, not only dedupe keys: a
+      // stale history catalog may have awarded the retained write's score to
+      // main. Replaying without first subtracting that exact contribution
+      // leaves primary/workContext corrupted even when active becomes correct.
+      // resolvedWorktreePath is captured at ingestion specifically so this
+      // transaction can identify the checkout that received the old score.
+      active: releasedOwnsContext(projection.workActivity.active)
+        ? null
+        : projection.workActivity.active,
+      primary: releasedOwnsContext(projection.workActivity.primary)
+        ? null
+        : projection.workActivity.primary,
+      touched,
+      timeline,
       recentKeys: projection.workActivity.recentKeys.filter(
         key => !retainedKeys.has(key),
       ),
