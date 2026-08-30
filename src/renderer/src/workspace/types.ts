@@ -320,14 +320,33 @@ export type DispatchGridRow = {
   /** This row's index-list fraction of the row width. Absent => default. */
   indexFraction?: number
   /**
-   * Restrict this row to one project. Absent => the row follows
+   * Restrict this row to these projects. Absent (or empty) => the row follows
    * `DispatchModeState.scope` like the whole layout used to.
+   *
+   * WHY a set rather than the single `projectTabId` this replaced: a row is a
+   * working context, and a working context routinely spans two repos — an app
+   * and the service it calls, a package and its consumer. One was simply the
+   * wrong number.
+   *
+   * It stays cheap because `buildDispatchGroups` already groups dispatch rows
+   * by tab, so a two-project row renders as two labelled sections in its index
+   * with no new rendering code.
+   *
+   * INVARIANT: empty normalizes to absent. "Any project" must have exactly one
+   * representation, or every reader needs to test for both.
    *
    * A binding FILTERS, it never fills: the user named a constraint, not an
    * occupant. Binding also promotes scope to 'global', because a project-scoped
    * row set is built from activeTabId alone and would leave any other project's
    * row with an empty index (the same promotion, for the same reason, that
    * agentIndexNavigation applies to a cross-project label).
+   */
+  projectTabIds?: TabId[]
+  /**
+   * LEGACY single binding. `normalizeGridShape` folds a persisted one into
+   * `projectTabIds` on read and nothing writes it again — the same read-time
+   * migration the legacy `ratios` array gets. Kept on the type only so old
+   * persisted state type-checks through that one normalization.
    */
   projectTabId?: TabId
   /**

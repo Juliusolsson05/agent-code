@@ -96,22 +96,22 @@ describe('scrubbing row metadata at the autosave boundary', () => {
 
   it('drops a binding to a project that no longer exists', () => {
     const scrubbed = scrubGridRowMetadata(
-      gridMode({ projectTabId: 'tab-gone' }),
+      gridMode({ projectTabIds: ['tab-gone'] }),
       new Set(['tab-live']),
       new Set<SessionId>(),
     )
 
-    expect(scrubbed!.tiled!.rows![0]!.projectTabId).toBeUndefined()
+    expect(scrubbed!.tiled!.rows![0]!.projectTabIds).toBeUndefined()
   })
 
   it('keeps a binding to a project that survives', () => {
     const scrubbed = scrubGridRowMetadata(
-      gridMode({ projectTabId: 'tab-live' }),
+      gridMode({ projectTabIds: ['tab-live'] }),
       new Set(['tab-live']),
       new Set<SessionId>(),
     )
 
-    expect(scrubbed!.tiled!.rows![0]!.projectTabId).toBe('tab-live')
+    expect(scrubbed!.tiled!.rows![0]!.projectTabIds).toEqual(['tab-live'])
   })
 
   it('drops expanded parents whose sessions are gone, keeping the rest', () => {
@@ -137,7 +137,7 @@ describe('scrubbing row metadata at the autosave boundary', () => {
   })
 
   it('returns the same reference when nothing needed scrubbing', () => {
-    const clean = gridMode({ projectTabId: 'tab-live' })
+    const clean = gridMode({ projectTabIds: ['tab-live'] })
 
     expect(scrubGridRowMetadata(clean, new Set(['tab-live']), new Set<SessionId>()))
       .toBe(clean)
@@ -192,5 +192,80 @@ describe('ragged shapes survive persistence', () => {
     const restored = normalizeDispatchModeGrid(corrupt)
 
     expect(restored!.tiled!.rows!.map(row => row.length)).toEqual([4, 2])
+  })
+})
+
+describe('row project bindings become a set', () => {
+  // "Any project" must have exactly ONE representation. With `undefined`, `[]`,
+  // and a stale single `projectTabId` all reachable, every reader would need to
+  // test for three things and one would eventually forget.
+  const rowMode = (row: Record<string, unknown>): DispatchModeState => ({
+    scope: 'global',
+    tiled: { lanes: [{}], rows: [{ length: 1, ...row }], focusedLane: 0 },
+  })
+  const rowOf = (mode: DispatchModeState | null | undefined) => mode!.tiled!.rows![0]!
+
+  it('folds a legacy single binding into the set and stops writing the old field', () => {
+    const restored = normalizeDispatchModeGrid(rowMode({ projectTabId: 'tab-a' }))
+
+    expect(rowOf(restored).projectTabIds).toEqual(['tab-a'])
+    expect(rowOf(restored).projectTabId).toBeUndefined()
+  })
+
+  it('prefers an explicit set over a stale legacy field', () => {
+    // Both surviving means a partial write or an upgrade/downgrade cycle; the
+    // plural field is the one the user's last edit produced.
+    const restored = normalizeDispatchModeGrid(
+      rowMode({ projectTabId: 'tab-stale', projectTabIds: ['tab-a', 'tab-b'] }),
+    )
+
+    expect(rowOf(restored).projectTabIds).toEqual(['tab-a', 'tab-b'])
+    expect(rowOf(restored).projectTabId).toBeUndefined()
+  })
+
+  it('collapses an empty set to absent', () => {
+    const restored = normalizeDispatchModeGrid(rowMode({ projectTabIds: [] }))
+
+    expect(rowOf(restored).projectTabIds).toBeUndefined()
+  })
+
+  it('leaves an UNBOUND row untouched by reference', () => {
+    // The common case, and the one that would break everything quietly: if
+    // normalization rebuilt plain rows, the lane-selection race check — which
+    // compares row objects across an async wake — would see a different object
+    // every time and drop every selection.
+    const plain: DispatchModeState = {
+      scope: 'global',
+      tiled: { lanes: [{}], rows: [{ length: 1 }], focusedLane: 0 },
+    }
+
+    expect(normalizeDispatchModeGrid(plain)).toBe(plain)
+  })
+
+  it('leaves a healthy multi-project row untouched by reference', () => {
+    // Row identity is load-bearing: the lane-selection race check compares row
+    // objects across a wake, so a normalization that rebuilt every row would
+    // make every selection drop.
+    const healthy = rowMode({ projectTabIds: ['tab-a', 'tab-b'] })
+
+    expect(normalizeDispatchModeGrid(healthy)).toBe(healthy)
+  })
+
+  it('scrubs dead bindings and unbinds a row that loses all of them', () => {
+    const partial = scrubGridRowMetadata(
+      rowMode({ projectTabIds: ['tab-live', 'tab-gone'] }),
+      new Set(['tab-live']),
+      new Set<SessionId>(),
+    )
+    expect(rowOf(partial).projectTabIds).toEqual(['tab-live'])
+
+    // All bindings dead: an empty set would filter the index to nothing with no
+    // UI path back, since the picker only offers tabs that exist.
+    const total = scrubGridRowMetadata(
+      rowMode({ projectTabIds: ['tab-gone', 'tab-also-gone'] }),
+      new Set(['tab-live']),
+      new Set<SessionId>(),
+    )
+    expect(rowOf(total).projectTabIds).toBeUndefined()
   })
 })

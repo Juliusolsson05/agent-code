@@ -197,7 +197,20 @@ export function scrubGridRowMetadata(
   let changed = false
   const rows = tiled.rows.map(row => {
     const next = { ...row }
-    if (next.projectTabId !== undefined && !liveTabIds.has(next.projectTabId)) {
+    if (next.projectTabIds) {
+      const surviving = next.projectTabIds.filter(id => liveTabIds.has(id))
+      if (surviving.length !== next.projectTabIds.length) {
+        changed = true
+        // A row whose every binding died becomes UNBOUND rather than keeping an
+        // empty set: an empty set would filter its index to nothing with no UI
+        // path back, since the picker only offers tabs that exist.
+        if (surviving.length > 0) next.projectTabIds = surviving
+        else delete next.projectTabIds
+      }
+    }
+    if (next.projectTabId !== undefined) {
+      // Legacy field: normalizeGridShape folds it away on read, but the prune
+      // can see state that has not been through a rehydrate this run.
       delete next.projectTabId
       changed = true
     }
