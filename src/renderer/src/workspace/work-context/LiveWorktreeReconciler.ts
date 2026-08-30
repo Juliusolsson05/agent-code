@@ -7,6 +7,7 @@ import {
   ingestWorktreeRawEvent,
   withFallbackWorktreeActivity,
 } from '@shared/work-context/tracker'
+import { extractWorktreeActivityEvents } from '@shared/work-context/extractors'
 import type { WorktreeIdentity } from '@shared/work-context/types'
 
 export type GitWorktreeCatalogResult =
@@ -61,6 +62,7 @@ export class LiveWorktreeReconciler {
   private readonly evidenceBySession = new Map<SessionId, {
     baseline: WorktreeRuntimeProjection
     recentRaw: unknown[]
+    lastEmitted: WorktreeRuntimeProjection
   }>()
   private readonly loadWorktrees: Options['loadWorktrees']
   private readonly onCatalogReady: Options['onCatalogReady']
@@ -83,8 +85,23 @@ export class LiveWorktreeReconciler {
     entries: ReadonlyArray<{ entry: unknown }>,
     projection: WorktreeRuntimeProjection,
   ): WorktreeRuntimeProjection {
-    if (this.disposed || entries.length === 0) return projection
-    const evidence = this.evidenceBySession.get(sessionId) ?? {
+    if (this.disposed) return projection
+    let evidence = this.evidenceBySession.get(sessionId)
+    if (evidence && !sameProjection(projection, evidence.lastEmitted)) {
+      // WHY an external projection is authoritative here: initial-history
+      // hydration runs independently from live SessionFeed subscriptions and
+      // may finish after the first live burst. That loader folds the current
+      // runtime plus the durable tail, so retaining our old baseline/recent
+      // window would both discard history and replay entries already included
+      // in the hydrated state. Rebase atomically whenever the caller presents
+      // work fields other than the last projection this reconciler emitted.
+      evidence = {
+        baseline: projection,
+        recentRaw: [],
+        lastEmitted: projection,
+      }
+    }
+    evidence ??= {
       // WHY retain the pre-window baseline instead of replaying onto the latest
       // runtime: a stale catalog can initially collapse a linked-worktree path
       // into its parent checkout. Replaying the same event onto that state hits
@@ -94,8 +111,18 @@ export class LiveWorktreeReconciler {
       // already-lossy projection.
       baseline: projection,
       recentRaw: [],
+      lastEmitted: projection,
     }
-    evidence.recentRaw.push(...entries.map(({ entry }) => entry))
+
+    // WHY the bound counts evidence rather than transport records: most JSONL
+    // entries cannot affect worktree attribution. Letting hundreds of assistant
+    // messages evict one direct write made a later Git-catalog expansion
+    // irreversible even though the advertised 500-record "evidence" window had
+    // actually held only one relevant observation.
+    const relevantRaw = entries
+      .map(({ entry }) => entry)
+      .filter(entry => extractWorktreeActivityEvents(entry, this.now()).length > 0)
+    evidence.recentRaw.push(...relevantRaw)
     if (evidence.recentRaw.length > this.recentRawLimit) {
       const evicted = evidence.recentRaw.splice(
         0,
@@ -108,7 +135,9 @@ export class LiveWorktreeReconciler {
       )
     }
     this.evidenceBySession.set(sessionId, evidence)
-    return this.rebuild(cwd, evidence)
+    const next = this.rebuild(cwd, evidence)
+    evidence.lastEmitted = next
+    return next
   }
 
   forgetSession(sessionId: SessionId): void {
@@ -166,7 +195,7 @@ export class LiveWorktreeReconciler {
       return params.projection
     }
 
-    const evidence = this.evidenceBySession.get(params.sessionId)
+    let evidence = this.evidenceBySession.get(params.sessionId)
     if (!evidence) {
       return this.canonicalProjection(
         params.cwd,
@@ -174,7 +203,17 @@ export class LiveWorktreeReconciler {
         cached.worktrees,
       )
     }
-    return this.rebuild(params.cwd, evidence)
+    if (!sameProjection(params.projection, evidence.lastEmitted)) {
+      evidence = {
+        baseline: params.projection,
+        recentRaw: [],
+        lastEmitted: params.projection,
+      }
+      this.evidenceBySession.set(params.sessionId, evidence)
+    }
+    const next = this.rebuild(params.cwd, evidence)
+    evidence.lastEmitted = next
+    return next
   }
 
   private rebuild(
@@ -273,4 +312,12 @@ export class LiveWorktreeReconciler {
     this.cache.clear()
     this.evidenceBySession.clear()
   }
+}
+
+function sameProjection(
+  left: WorktreeRuntimeProjection,
+  right: WorktreeRuntimeProjection,
+): boolean {
+  return left.workActivity === right.workActivity &&
+    left.workContext === right.workContext
 }

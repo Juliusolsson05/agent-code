@@ -3,6 +3,11 @@ import { resolve } from 'node:path'
 
 import { describe, expect, it, vi } from 'vitest'
 
+import {
+  deriveAgentWorkContext,
+  ingestWorktreeRawEvent,
+} from '@shared/work-context/tracker'
+
 import type { WorktreeRuntimeProjection } from './LiveWorktreeReconciler'
 import { LiveWorktreeReconciler } from './LiveWorktreeReconciler'
 
@@ -150,6 +155,7 @@ describe('LiveWorktreeReconciler recorded cache ordering', () => {
       loadWorktrees,
       now: () => now,
       cacheTtlMs: 100,
+      recentRawLimit: 2,
       onCatalogReady: cwd => {
         projection = reconciler.project({
           sessionId: 'catalog-expanded',
@@ -161,7 +167,11 @@ describe('LiveWorktreeReconciler recorded cache ordering', () => {
 
     expect(await reconciler.refresh(claude.git.main.path)).toBe('failed')
     expect(await reconciler.refresh(claude.git.main.path)).toBe('ready')
-    const wrapped = [{ entry: claude.records[0] }]
+    const wrapped = [
+      { entry: claude.records[0] },
+      { entry: { type: 'event_msg', payload: { type: 'assistant_message' } } },
+      { entry: { type: 'event_msg', payload: { type: 'token_count' } } },
+    ]
     projection = reconciler.observe(
       'catalog-expanded',
       claude.git.main.path,
@@ -196,6 +206,57 @@ describe('LiveWorktreeReconciler recorded cache ordering', () => {
       confidence: 'strong',
     })
     expect(loadWorktrees).toHaveBeenCalledTimes(3)
+  })
+
+  it('adopts initial-history attribution that resolves after live observation', async () => {
+    const codex = fixture<RecordedFixture>('codex-0151-worktree-window.json')
+    const claude = fixture<RecordedFixture>(
+      'claude-cwd-tool-branch-conflict.json',
+    )
+    const worktrees = catalog()
+    const reconciler = new LiveWorktreeReconciler({
+      loadWorktrees: async () => ({ ok: true, worktrees }),
+      onCatalogReady: () => undefined,
+    })
+    await reconciler.refresh(codex.git.main.path)
+
+    const liveProjection = reconciler.observe(
+      'history-race',
+      codex.git.main.path,
+      [{ entry: codex.records[0] }],
+      emptyProjection(),
+    )
+    const hydratedActivity = ingestWorktreeRawEvent({
+      state: liveProjection.workActivity,
+      raw: claude.records[0],
+      worktrees,
+      sessionCwd: codex.git.main.path,
+    })
+    const hydratedProjection = {
+      workActivity: hydratedActivity,
+      workContext: deriveAgentWorkContext(hydratedActivity),
+    }
+
+    const projected = reconciler.project({
+      sessionId: 'history-race',
+      cwd: codex.git.main.path,
+      projection: hydratedProjection,
+    })
+    expect(projected.workActivity?.active).toMatchObject({
+      worktreePath: claude.git.grid?.path,
+      source: 'tool:Write:path',
+    })
+
+    const afterAnotherBurst = reconciler.observe(
+      'history-race',
+      codex.git.main.path,
+      [{ entry: { type: 'event_msg', payload: { type: 'token_count' } } }],
+      projected,
+    )
+    expect(afterAnotherBurst.workActivity?.active).toMatchObject({
+      worktreePath: claude.git.grid?.path,
+      source: 'tool:Write:path',
+    })
   })
 
   it('bounds metadata-only diagnostics and suppresses late callbacks after dispose', async () => {

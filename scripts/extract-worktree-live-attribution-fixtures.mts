@@ -19,6 +19,7 @@ import { createInterface } from 'node:readline'
 import { promisify } from 'node:util'
 import * as zlib from 'node:zlib'
 
+import { decompressZstdBounded } from '../packages/codex-headless/src/proxy/zstd.js'
 import { findSensitiveSurvivors } from '../src/renderer/src/rendering/replay/redact.js'
 import { sanitizePathSegment } from '../src/shared/runtime/projectDir.js'
 
@@ -50,8 +51,7 @@ const exec = promisify(execFile)
 // weakening the whole script to `any` or shelling out to a machine-specific
 // zstd binary that packaged verification cannot assume exists.
 const zstd = zlib as typeof zlib & {
-  zstdCompressSync(input: Uint8Array): Buffer
-  zstdDecompressSync(input: Uint8Array): Buffer
+  zstdCompressSync?: (input: Uint8Array) => Buffer
 }
 const HOME = homedir()
 const REPO = resolve(import.meta.dirname, '..')
@@ -86,6 +86,14 @@ const FIXTURE_NAMES = [
 const CUTOFF = '2026-08-30T18:37:55.388Z'
 const CUTOFF_MS = Date.parse(CUTOFF)
 const PROXY_REQUEST_PREFIX = 128
+const PROXY_DECOMPRESSED_CAP = 16 * 1024 * 1024
+// WHY the public compressed frame has an independent code-owned digest: on a
+// Node runtime older than 22.15 we can decode it through the bounded package
+// fallback but cannot deterministically recompress zstd. Pinning the reviewed
+// frame bytes keeps `--verify-checked-in` meaningful on every declared Node
+// version instead of either crashing or silently skipping the transport check.
+const PUBLIC_PROXY_BODY_SHA256 =
+  '07cbfdf60b718ed548f7fec89f0b66034165f6038e42f38c5e859beee41f85ac'
 
 const UUID = /\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/i
 const SHA = /^[0-9a-f]{16}$/
@@ -200,6 +208,10 @@ function fingerprint(values: readonly unknown[]): string {
   const hash = createHash('sha256')
   for (const value of values) hash.update(JSON.stringify(value))
   return hash.digest('hex').slice(0, 16)
+}
+
+function sha256Bytes(value: Uint8Array): string {
+  return createHash('sha256').update(value).digest('hex')
 }
 
 function mapCounts(counts: Map<string, number>): Record<string, number> {
@@ -651,7 +663,7 @@ function decodeProxyBody(event: JsonRecord): {
     bytes[0] === 0x28 && bytes[1] === 0xb5 &&
     bytes[2] === 0x2f && bytes[3] === 0xfd
   ) {
-    bytes = Buffer.from(zstd.zstdDecompressSync(bytes))
+    bytes = Buffer.from(decompressZstdBounded(bytes, PROXY_DECOMPRESSED_CAP))
     encoding = 'zstd'
   }
   try {
@@ -794,8 +806,18 @@ async function collectProxy(
       root_turn_id: tokens.id(rootTurnId),
     },
   }
-  const compressed = zstd.zstdCompressSync(Buffer.from(JSON.stringify(minimizedBody)))
-  const roundTrip = JSON.parse(zstd.zstdDecompressSync(compressed).toString('utf8'))
+  const compress = zstd.zstdCompressSync
+  if (typeof compress !== 'function') {
+    // Source extraction is a generation operation, unlike the offline verifier
+    // below. It must reproduce the exact transport bytes, so an older Node may
+    // not substitute a different compressor or claim success without writing
+    // the promised deterministic zstd fixture.
+    throw new Error('raw fixture extraction requires Node >=22.15 zstd compression')
+  }
+  const compressed = compress(Buffer.from(JSON.stringify(minimizedBody)))
+  const roundTrip = JSON.parse(
+    decompressZstdBounded(compressed, PROXY_DECOMPRESSED_CAP).toString('utf8'),
+  )
   if (JSON.stringify(roundTrip) !== JSON.stringify(minimizedBody)) {
     throw new Error('minimized proxy identity did not survive zstd round trip')
   }
@@ -968,12 +990,15 @@ function gitFixture(git: SelectedGit, tokens: Tokenizer): JsonRecord {
   }
 }
 
-function allowedFixtureString(value: string, path: string): boolean {
+function allowedFixtureString(value: string, path: string, label: string): boolean {
   // WHY base64 is allowed only at this one reviewed field: a global base64
   // regex also accepts ordinary alphanumeric prose and would turn the string
   // allowlist into theater. The encoded bytes are generated above from the
   // minimized token-only object and immediately round-tripped before emission.
-  if (path.endsWith('.body_b64')) return /^[A-Za-z0-9+/]+={0,2}$/.test(value)
+  if (
+    label === 'codex-proxy-exact-identity-zstd.json' &&
+    path === 'event.body_b64'
+  ) return /^[A-Za-z0-9+/]+={0,2}$/.test(value)
   return ALLOWED_STRINGS.has(value) ||
     /^2026-08-30T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(value) ||
     /^0\.151\.0$/.test(value) ||
@@ -1001,7 +1026,9 @@ function assertPublishable(value: unknown, label: string): void {
   const rejected: string[] = []
   const walk = (item: unknown, path: string): void => {
     if (typeof item === 'string') {
-      if (!allowedFixtureString(item, path)) rejected.push(`${path}=${item.slice(0, 80)}`)
+      if (!allowedFixtureString(item, path, label)) {
+        rejected.push(`${path}=${item.slice(0, 80)}`)
+      }
       return
     }
     if (Array.isArray(item)) {
@@ -1158,6 +1185,25 @@ async function verifyCheckedInArtifacts(): Promise<void> {
   // durable claims that remain independently checkable (privacy, canonical
   // serialization, manifest fingerprints, and exact zstd transport bytes),
   // while default extraction still fails if the original source has vanished.
+  const expectedCorpusFiles = [...FIXTURE_NAMES, 'MANIFEST.md'].sort()
+  const corpusEntries = await readdir(FIXTURE_DIR, { withFileTypes: true })
+  const actualCorpusFiles = corpusEntries.map(entry => {
+    if (!entry.isFile()) {
+      throw new Error(`unexpected non-file fixture corpus entry: ${entry.name}`)
+    }
+    return entry.name
+  }).sort()
+  if (JSON.stringify(actualCorpusFiles) !== JSON.stringify(expectedCorpusFiles)) {
+    // WHY reject rather than merely ignore extras: this command is the public
+    // privacy gate for the directory. An unmanifested JSON file containing a
+    // prompt or home path is still shipped even if no production test imports
+    // it, so corpus membership itself is security-relevant evidence.
+    throw new Error(
+      `fixture corpus membership mismatch: expected ${expectedCorpusFiles.join(', ')}; ` +
+      `found ${actualCorpusFiles.join(', ')}`,
+    )
+  }
+
   const outputs: Array<{ name: string; value: JsonRecord }> = []
   for (const name of FIXTURE_NAMES) {
     const path = join(FIXTURE_DIR, name)
@@ -1190,10 +1236,21 @@ async function verifyCheckedInArtifacts(): Promise<void> {
   ) {
     throw new Error('checked-in proxy body does not preserve only the expected identity')
   }
-  const deterministicBody = zstd.zstdCompressSync(
-    Buffer.from(JSON.stringify(expectedBody)),
-  ).toString('base64')
-  if (deterministicBody !== stringField(event, 'body_b64')) {
+  assertPublishable(decoded.body, 'decoded proxy identity body')
+  const bodyBase64 = stringField(event, 'body_b64')
+  if (!bodyBase64) throw new Error('checked-in proxy body is missing')
+  const compressedBody = Buffer.from(bodyBase64, 'base64')
+  if (sha256Bytes(compressedBody) !== PUBLIC_PROXY_BODY_SHA256) {
+    throw new Error('checked-in proxy body bytes do not match the reviewed zstd frame')
+  }
+  const compress = zstd.zstdCompressSync
+  const deterministicBody = typeof compress === 'function'
+    ? compress(Buffer.from(JSON.stringify(expectedBody))).toString('base64')
+    : null
+  if (
+    deterministicBody !== null &&
+    deterministicBody !== bodyBase64
+  ) {
     throw new Error('checked-in proxy body is not the deterministic minimized zstd frame')
   }
 
