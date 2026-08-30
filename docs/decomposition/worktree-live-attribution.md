@@ -296,6 +296,28 @@ The authority is the exact id repeated in every recorded private proxy request
 and independently confirmed by the rollout filename and `session_meta`. Cwd and
 file recency are deliberately absent from the proof.
 
+### Stage 3 completion record
+
+The Responses proxy now recognizes the recorded zstd magic, performs only a
+bounded 16 MiB projection decode, and emits an exact identity candidate only
+when `client_metadata.thread_id` and `session_id` agree. Original bytes continue
+upstream unchanged. Malformed/truncated zstd, a mechanically expanded frame,
+and unequal metadata all preserve request forwarding while yielding no exact
+candidate.
+
+The existing proxy adapter is the sole transport handoff and ignores subagent
+requests. `CodexHeadless` validates a candidate with `RolloutLocator`, reserves
+the generation through the existing process-wide coordinator as `exact-id`,
+and opens the same generation-bound tail used by other ownership paths. No cwd,
+mtime, command argument, or renderer state enters that decision. A proved id is
+pinned only after the tail opens; repeated requests coalesce while pending.
+
+Package typecheck and all 174 headless tests pass. The recorded 0.151 contract
+now tails without a prompt profile, filename/metadata mismatch and subagent
+negatives remain unattached, and two simultaneous same-cwd identities open only
+their own respective rollouts. The parent application typecheck also passes
+against the updated package source.
+
 ## Stage 4 — canonicalize provider activity against Git identity
 
 **Produces**
