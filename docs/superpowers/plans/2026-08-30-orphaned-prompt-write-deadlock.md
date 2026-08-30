@@ -1,161 +1,153 @@
 # Recovering from an orphaned prompt write
 
-> Fixes #679
+> Refs #679
 
-## Outcome
+## Status: rewritten after review
 
-A prompt delivery that writes bytes into Claude's composer but cannot send Enter
-must no longer deadlock the session. Today it does, permanently, and the only
-escape is for the user to know they can press Ctrl+U in the raw terminal.
+The first version of this plan was reviewed by three agents and was wrong in
+three ways. It is replaced rather than patched, because the shape changed.
+What the review established is recorded below, because the discarded reasoning
+is the most useful part of this document.
 
-## The deadlock
+**The diagnosis was over-claimed.** "Every subsequent delivery is refused,
+forever" is not what the data shows. Of 10 recorded orphaned writes, **7
+recovered on their own** (6.7s–221s, no restart); exactly one latched. Worse,
+**52 of 57 `not-ready` refusals have no orphaned write anywhere on their
+session** — this mechanism explains at most 5 of them. The session that actually
+matches the user's report (five consecutive refusals in four seconds, then the
+pane killed) has **no orphaned write**, and the three longest occupied episodes
+(47.5h, 23.5h, 11.5h) have none either.
 
-Three individually-correct decisions compose into a trap.
+So: this bug is real, reproduced from a PTY recording, and worth fixing. It is
+**not** the whole of what the user hit. The remaining producer of a latched
+`human-draft` is unidentified and tracked separately.
 
-**1. Delivery abandons bytes in place, by design.**
-`deliverClaudePrompt` writes the body, then waits up to `CONFIRM_TIMEOUT_MS`
-(2s) to *see* it absorbed. On timeout:
+**"Nothing clears the composer" was literally false.** `useComposerKeybinds.ts`
+already sends `\x15`, and `TileLeaf.tsx` sends `\x1b`. The substance held — none
+is automatic, and the composer-keybind paths are gated on `inputReady`, which is
+exactly what an occupied gate clears — but the claim as written was wrong.
 
-```ts
-return failure({
-  stage: 'absorption', code: 'absorption-timeout', retrySafe: false,
-  disposition: 'do-not-retry',
-  promptWritten: true, enterWritten: false,
-  ...
-})
-```
+**The proposed design would have destroyed user input.** It gated clearing on
+"composer text still equals what we wrote", which is not proof of anything: the
+extractor reads a viewport-clipped, wrap-lossy projection, the orphan record
+never expired (becoming a standing licence to delete that string whenever it
+reappeared — e.g. recalled with ↑), and for the dominant prompt shape equality
+can never hold at all, because Claude collapses paste-like input to
+`[Pasted text #N +M lines]`.
 
-with the comment: *"Prompt bytes are already editable in Claude even when our
-detector times out. Automatic retry is unsafe: it would append/duplicate those
-bytes."* That reasoning is right — retrying would duplicate. But **nothing then
-clears them**, and no composer-clearing code path exists anywhere in the repo.
+## What replaces it
 
-**2. The gate correctly reads those bytes as a draft.**
-`parseClaudeComposerState` sees real characters and returns `drafted`. It is not
-malfunctioning; the composer genuinely contains text.
+The review supplied a strictly better ownership proof than text equality.
 
-**3. The gate deliberately never times out.**
-`derivePromptGateState` returns `{ kind: 'occupied', reason: 'human-draft' }`,
-and its comment records that a 10s staleness bound was tried and **removed**
-because it expired mid-sentence and let an agent type over a human's draft:
-*"any purely temporal escape hatch trades a recoverable stall for unrecoverable
-data loss."*
+`SessionManager.write()` **refuses raw input while a delivery holds the
+session's reservation** (`promptDeliveriesInFlight`, taken before
+`deliverPrompt` and released in a `finally`). So for the entire duration of
+`deliverClaudePrompt`, no human keystroke can reach that composer.
 
-So the system writes bytes it cannot confirm, abandons them by design, then
-treats its own abandoned bytes as a human draft it must never overwrite — with
-no exit. **The "human" is Agent Code.**
+Anything in the composer during delivery is therefore **provably ours**, by
+construction. No text comparison, no orphan record, no composer-text extractor,
+no new gate state. The old plan's Stages 0–2 are deleted outright.
 
-Evidence (`incidents/runs/*/events.jsonl`): 10 orphaned writes recorded;
-`not-ready` is the most common submit failure at 57; 833 of 2,319 `gate.eval`
-verdicts are `occupied/human-draft`; 56 lasted >60s, 24 >300s, longest 47h; and
-**19 of 216 sessions ended still occupied**.
+### The clear primitive: Ctrl+U, and NOT Esc
 
-## What this must NOT do
+Both reviewers recommended double-Esc, because upstream it clears the whole
+composer and — importantly — calls `addToHistory(originalValue)` first, so the
+text is recoverable with ↑ (`vendor/.../hooks/useTextInput.ts:126-152`).
 
-- **Must not reintroduce a timeout on the gate.** That was tried and it destroys
-  user input. This plan does not touch the temporal behaviour at all.
-- **Must not clear a composer that holds a human's text.** The gate exists to
-  protect exactly that, and a fix that trades a stall for lost typing is worse
-  than the bug.
-- **Must not auto-retry the delivery.** Duplicate submission is the failure the
-  `do-not-retry` disposition was chosen to prevent.
+**That recommendation is wrong here, and the reason is specific to when we would
+send it.** `\x1b` is the byte Agent Code's own Stop button sends
+(`TileLeaf.tsx:889`: *"Same escape byte the keyboard interrupt sends… interrupting
+is the provider's own protocol"*). Esc clears the composer only when Claude is
+IDLE; when Claude is RUNNING it interrupts the turn. Absorption times out
+precisely **because Claude is mid-turn** — the confirmed case shows the prompt
+repainting 2.6s after the write while Claude was busy. Sending Esc there would
+abort the agent's work: strictly worse than the deadlock.
+
+`Ctrl+U` (`\x15`) is correct precisely because it is *not* overloaded with
+interrupt. Its cost is that it is kill-to-**visual**-line-start
+(`vendor/.../utils/Cursor.ts:880-893`), so a wrapped prompt needs several
+presses and the count is width-dependent. That is a bounded-loop problem, which
+is tractable; Esc's problem is not.
+
+The loop is safe to abort because consecutive kills accumulate into a single
+kill-ring entry with `'prepend'` (`Cursor.ts:26-48`; `lastActionWasKill` is
+reset only by a non-kill key), so **one `Ctrl+Y` restores everything** the loop
+removed.
 
 ## Design
 
-### Stage 0 — Read the composer's text
+### Stage 1 — Stop manufacturing orphans
 
-There is no way today to ask "what is in the composer" — only
-`empty | drafted | unpainted`. Every safe version of this fix needs the content,
-because the only sound licence to clear is *"these are provably the bytes we
-wrote"*.
+`CONFIRM_TIMEOUT_MS` is 2000ms. All ten recorded failures ended at 2002–2034ms:
+the cap fired every time. In the one case with a PTY recording, the prompt
+actually appeared at **2575ms** — it would have been confirmed by a 5s budget.
 
-`ScreenParser` already locates the composer box and its marker row; extracting
-the text between marker and lower rule is a small addition beside
-`parseClaudeComposerState`, reusing the same box search so the two can never
-disagree about which rows they describe.
+Raise text absorption to 5s, matching the existing image path
+(`IMAGE_CONFIRM_TIMEOUT_MS`). Normal sends pay nothing: the poller exits on
+first match.
 
-### Stage 1 — Record the orphan on the session
+This is the highest-value change in the plan and it is one constant. It does not
+*fix* the deadlock; it stops walking into it.
 
-When delivery returns `promptWritten && !enterWritten`, the session records
-`{ at, text }` for what it believes it left behind. This is the difference
-between "someone typed" and "we failed halfway", which is precisely the
-distinction the gate cannot currently make.
+Note a real budget inconsistency to address or explicitly refuse: 12s readiness
++ 7s absorption leaves 9s for an acceptance waiter documented as needing 20s to
+outlast a 15s watchdog. Delivery should refuse to cross the write boundary
+without the minimum post-write budget rather than starting a write it cannot
+confirm.
 
-### Stage 2 — A distinct, recoverable gate state
+### Stage 2 — Roll back inside the reservation
 
-`derivePromptGateState` gains a branch **before** `human-draft`: composer is
-`drafted`, an orphan is recorded, and the composer's current text still equals
-the orphaned text → `{ kind: 'occupied', reason: 'stale-write' }`.
+Every path in `deliverClaudePrompt` that returns with bytes written and Enter
+not sent must first attempt rollback, while the reservation is still held:
 
-Blocking behaviour is unchanged — it still refuses delivery. The point is that
-the state is now *nameable and recoverable*, where `human-draft` is a dead end.
+1. Send `\x15`.
+2. Re-read composer state. Require strict progress — each read must shrink.
+3. Repeat to a bounded press count.
+4. **Reached `empty`** → return `retrySafe: true`, `disposition: 'retry-same-session'`,
+   with a message stating the prompt was not sent and the draft is preserved in
+   the app composer. The renderer does not clear its textarea on failure, so the
+   user's text is never the only copy.
+5. **Did not reach `empty`** → send `\x1b`… **no**: send `Ctrl+Y` to restore, then
+   return the existing `do-not-retry` failure. Never leave a partially cleared
+   composer, which would produce exactly the mangled submission this subsystem
+   exists to prevent.
 
-If the text has *diverged* — the human typed after our orphan — it falls through
-to `human-draft` and stays blocked. That is the safety property: **we only ever
-claim bytes we can prove are ours.**
+The paths to cover, not just the observed one: text absorption timeout, Enter
+write-failed, image-prompt text absorption timeout, separator write failed,
+image paste write failed with a non-empty prompt, image absorption timeout, and
+image Enter write-failed.
 
-### Stage 3 — Recover on the next explicit send
+### Stage 3 — Make a latched gate visible
 
-When a new delivery begins and readiness reports `stale-write`, delivery clears
-the composer, drops the orphan record, re-evaluates readiness once, and proceeds.
-
-**Why clear here and not at the moment of failure:** clearing at failure time
-destroys the prompt while the user is still looking at it, with no signal. At
-the *next* send the user (or an agent) is explicitly asking to submit something
-new, which is consent-by-action that the stale content is unwanted. It also
-means a session that is never used again is never mutated.
-
-**Why the clear must be verified, not assumed:** `Ctrl+U` (`\x15`) is a real
-kill key upstream (`useTextInput.ts:417` — `isKillKey` handles ctrl+k/u/w), but
-it is readline kill-to-line-start, so a multi-line orphan may need more than one.
-The implementation must confirm the composer actually reached `empty` before
-continuing, and fail loudly rather than writing a new prompt on top of a
-partially-cleared one — that would produce exactly the mangled submission this
-whole subsystem exists to prevent.
-
-### Stage 4 — Make the state visible
-
-`readiness.ts` maps every non-ready verdict to `'waiting for agent'`, and
-`session-runtime/state.ts` records that the detailed verdict is collapsed to
-`provider-not-ready` before leaving main. Both flag it as a known deliberate
-gap. It is why this bug needed a journal dig to identify: a latched gate and a
-slow boot look identical.
-
-Widening `SessionInputReadiness` is Tier-3 transport. If it proves larger than
-the fix itself it ships separately, but the bug is materially harder to diagnose
-without it and the issue lists it as an acceptance criterion.
+`readiness.ts` maps every non-ready verdict to `'waiting for agent'`, and the
+detailed reason is collapsed to `provider-not-ready` before leaving main. Both
+files flag this as a known deliberate gap. It is why this bug needed a journal
+dig to find, and #679 lists it as an acceptance criterion, so it ships here
+rather than being deferred — if it proves large enough to split, this plan's PR
+says `Refs #679` and the issue stays open.
 
 ## Testing
 
-Recorded-data first, per the repo's convention:
-
-1. **The deadlock itself.** Drive `deliverClaudePrompt` to an absorption timeout,
-   then attempt a second delivery, and assert it is *not* refused forever. This
-   is the regression; it must fail against `main`.
-2. **Orphan text divergence keeps blocking.** Orphan recorded, but the composer
-   text has changed → gate stays `human-draft`, nothing is cleared. This is the
-   safety property and the one most likely to be broken by a later "simplifying"
-   refactor.
-3. **No orphan record → unchanged behaviour.** A genuine human draft with no
-   orphan still blocks. Guards against the fix widening into "clear whenever
-   blocked".
-4. **Partial clear does not proceed.** If the composer is still non-empty after
-   the clear, delivery fails rather than writing on top.
-5. **Composer text extraction** against real captured screens from
-   `session-recordings`, including the `❯ ` empty marker and a real
-   multi-line draft, so extraction is pinned to observed renderings rather than
-   invented ones.
+1. **Rollback returns the composer to empty and reports retry-safe.** Drive an
+   absorption timeout; assert the composer is empty and the result is
+   retryable. Must fail against `main`.
+2. **A failed rollback restores rather than mangles.** Force the clear to stall;
+   assert `Ctrl+Y` is sent and the result is `do-not-retry`. This is the
+   safety property and the one a later refactor is most likely to drop.
+3. **Bounded.** The loop cannot spin indefinitely on a composer that never
+   shrinks.
+4. **The 5s budget confirms the recorded slow case.** Use the real 2575ms
+   appearance from the `d71c40a4` recording, not an invented delay.
+5. **Every orphan path rolls back**, not only absorption timeout.
 
 ## Risks
 
-- **Clearing is a destructive act on a live PTY.** Contained by Stage 2's
-  equality check and Stage 3's fail-loud-if-not-empty rule.
-- **The kill key's scope is not fully verified.** Confirmed present upstream;
-  multi-line behaviour must be established empirically before relying on it.
-- **A second, independent bug shares this symptom.** When
-  `snapshotComposerAttributes()` returns null, the string fallback fails closed
-  and reads Claude's dim placeholder as a draft — reproduced on a real captured
-  screen (same screen: `drafted` without attrs, `empty` with). That accounts for
-  the ~52% of `human-draft` verdicts that fire nowhere near a submit. It is NOT
-  what produces the reported "every prompt is refused" symptom and is tracked
-  separately; fixing only it would leave this deadlock intact.
+- **Writing destructive bytes into a live PTY.** Contained by the reservation
+  (no human bytes can be present), the strict-progress requirement, and the
+  `Ctrl+Y` restore.
+- **Press count is width-dependent and not knowable in advance.** Handled by
+  verify-after-each-press rather than by computing a count.
+- **`Ctrl+Y` restore is inferred from upstream source, not yet observed.** It
+  must be proven against a real composer before the rollback path is trusted;
+  if it cannot be, the loop must not run at all.
+- **This does not explain the other 52 refusals.** Separate investigation.
