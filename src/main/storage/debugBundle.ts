@@ -408,6 +408,8 @@ async function exportCodexTranscriptObservations(params: {
   let attachmentSuppressionObserved = false
   let malformedJsonRows = 0
   let invalidChronologyRows = 0
+  let lastChronologySeq: number | null = null
+  let lastChronologyMonotonicMs: number | null = null
 
   try {
     if (!scopeAccepted) throw new Error('invalid Codex transcript observation session scope')
@@ -500,6 +502,22 @@ async function exportCodexTranscriptObservations(params: {
         invalidChronologyRows += 1
         continue
       }
+      if (
+        (lastChronologySeq !== null && event.seq <= lastChronologySeq) ||
+        (lastChronologyMonotonicMs !== null &&
+          event.monotonicMs < lastChronologyMonotonicMs)
+      ) {
+        // Shape-valid coordinates are not enough: AppRunJournal has a
+        // crash-adjacent synchronous flush path, and a previously-started
+        // asynchronous append can land after it. That produces individually
+        // valid rows in reversed file order. Keep the already-ordered prefix,
+        // reject the descending row, and mark the source incomplete instead of
+        // certifying a reordered file as a trustworthy chronology.
+        invalidChronologyRows += 1
+        continue
+      }
+      lastChronologySeq = event.seq
+      lastChronologyMonotonicMs = event.monotonicMs
       matchedEvents += 1
       if (truncated) continue
       const data = pickCodexTranscriptObservationData(event.name, event.data)

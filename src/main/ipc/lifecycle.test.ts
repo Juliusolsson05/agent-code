@@ -132,7 +132,7 @@ describe('registerLifecycleIpc', () => {
     expect(lifecycle()[0].ids).not.toHaveProperty('promptId')
   })
 
-  it('preserves stale renderer run identity without joining the successor recording', async () => {
+  it('routes exact retired renderer identity without joining the successor recording', async () => {
     bus.removeAllListeners()
     records = []
     const recordCodexTranscriptObservation = vi.fn()
@@ -178,7 +178,14 @@ describe('registerLifecycleIpc', () => {
       submissionId: 'sub-1',
     })
     expect(lifecycle()[0]?.data).toMatchObject({ runDisposition: 'stale' })
-    expect(recordCodexTranscriptObservation).not.toHaveBeenCalled()
+    expect(recordCodexTranscriptObservation).toHaveBeenCalledWith(
+      codexSessionId,
+      staleRunId,
+      expect.objectContaining({
+        ids: expect.objectContaining({ sessionRunId: staleRunId }),
+        data: expect.objectContaining({ runDisposition: 'stale' }),
+      }),
+    )
 
     send({
       name: 'submit.surface',
@@ -195,8 +202,9 @@ describe('registerLifecycleIpc', () => {
       submissionId: 'sub-2',
     })
     expect(lifecycle()[1]?.data).toMatchObject({ runDisposition: 'current' })
-    expect(recordCodexTranscriptObservation).toHaveBeenCalledTimes(1)
-    expect(recordCodexTranscriptObservation).toHaveBeenCalledWith(
+    expect(recordCodexTranscriptObservation).toHaveBeenCalledTimes(2)
+    expect(recordCodexTranscriptObservation).toHaveBeenNthCalledWith(
+      2,
       codexSessionId,
       currentRunId,
       expect.objectContaining({
@@ -207,9 +215,9 @@ describe('registerLifecycleIpc', () => {
       }),
     )
 
-    // Exit removes the registry entry before renderer effects and durable debug
-    // flushing necessarily finish. The old run stays attributable in the app
-    // journal but cannot be appended to a recorder selected only by pane id.
+    // Exit removes the live registry entry before renderer effects and durable
+    // debug flushing necessarily finish. The exact retired run remains a safe
+    // recorder target because SessionRecorderManager rechecks the run fence.
     activeRunId = null
     activeCodexKind = null
     send({
@@ -227,7 +235,16 @@ describe('registerLifecycleIpc', () => {
       cause: 'session-exit',
       runDisposition: 'retired-or-unknown',
     })
-    expect(recordCodexTranscriptObservation).toHaveBeenCalledTimes(1)
+    expect(recordCodexTranscriptObservation).toHaveBeenCalledTimes(3)
+    expect(recordCodexTranscriptObservation).toHaveBeenNthCalledWith(
+      3,
+      codexSessionId,
+      currentRunId,
+      expect.objectContaining({
+        name: 'submit.release',
+        data: expect.objectContaining({ runDisposition: 'retired-or-unknown' }),
+      }),
+    )
   })
 
   it('does not guess a current run for an unattributed renderer observation', async () => {
@@ -568,10 +585,18 @@ describe('registerLifecycleIpc', () => {
       }),
     ])
     const recorderNames = recordCodexTranscriptObservation.mock.calls.map(call => call[2].name)
-    expect(recorderNames).toEqual(['transcript.observation-gap', 'submit.surface'])
+    // A's opening and delayed close/final row remain fenced to A, while B's
+    // admitted row is independently fenced to B. The recorder manager is the
+    // final authority that maps those exact run ids to separate files.
+    expect(recorderNames).toEqual([
+      'transcript.observation-gap',
+      'submit.surface',
+      'transcript.observation-gap',
+      'submit.surface',
+    ])
   })
 
-  it('lets an exact retired run close its own gap without touching a live recorder', async () => {
+  it('lets an exact retired run record its own gap close and final row', async () => {
     bus.removeAllListeners()
     records = []
     const recordCodexTranscriptObservation = vi.fn()
@@ -612,9 +637,15 @@ describe('registerLifecycleIpc', () => {
         data: { phase: 'closed', suppressed: 1, runDisposition: 'retired-or-unknown' },
       }),
     ])
-    // Only the opening happened while this exact run was live. Neither the
-    // retired close nor its following row may leak into a successor recorder.
-    expect(recordCodexTranscriptObservation).toHaveBeenCalledTimes(1)
+    // The exact retired pair remains generation-addressable during the stop
+    // handshake. Both the gap close and the following release belong there;
+    // SessionRecorderManager refuses them if no matching retiring recorder
+    // exists, so lifecycle never guesses a successor from pane id alone.
+    expect(recordCodexTranscriptObservation.mock.calls.map(call => call[2].name)).toEqual([
+      'transcript.observation-gap',
+      'transcript.observation-gap',
+      'submit.release',
+    ])
   })
 
   it('keeps missing-run loss in a separate bucket and never substitutes the current run', async () => {

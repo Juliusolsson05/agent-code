@@ -1675,12 +1675,13 @@ export function useIpcSubscriptions(
         const cachedWorktrees = sessionCwd ? worktreeCache.get(sessionCwd) : undefined
         const hasWorktreeCache = !!cachedWorktrees && cachedWorktrees.refreshedAt > 0
         const worktrees = cachedWorktrees?.worktrees ?? []
-        // Set when a Codex user entry mapped from rollout matches an
-        // optimistic row already in the feed. Codex can commit tool
-        // outputs before the real user message in the same burst, so
-        // the optimistic row is not guaranteed to still be the tail by
-        // the time the committed user entry arrives.
-        let reconciledOptimisticText: string | null = null
+        // Every distinct Codex user entry in one coalesced burst can reconcile
+        // a different optimistic row. A single "last text" slot made the
+        // observation stream claim prompt A was released while the product
+        // state removed only prompt B, leaving A duplicated beside its durable
+        // rollout row. Retain the complete burst set so mutation, rendering,
+        // and the Stage 0 evidence all describe the same handoff.
+        const reconciledOptimisticTexts = new Set<string>()
 
         // Reuse the existing map references so downstream consumers
         // that hold them live (Feed contexts) keep working without
@@ -1918,7 +1919,7 @@ export function useIpcSubscriptions(
                     )
                   }
                   appended.splice(idx, 1)
-                  reconciledOptimisticText = mappedText
+                  if (mappedText !== null) reconciledOptimisticTexts.add(mappedText)
                 }
               }
               const reconciledCurrentEntries = current.entries.filter(entry =>
@@ -1936,7 +1937,7 @@ export function useIpcSubscriptions(
                     )
                   }
                 }
-                reconciledOptimisticText = mappedText
+                if (mappedText !== null) reconciledOptimisticTexts.add(mappedText)
               }
               // Mid-turn Codex submits are intentionally kept in
               // queuedMessages instead of appended to entries (see
@@ -1971,7 +1972,7 @@ export function useIpcSubscriptions(
                 queuedMessages = queuedMessages.filter(q =>
                   !codexPromptsMatchForOwnership(q.content, mappedText),
                 )
-                reconciledOptimisticText = mappedText
+                if (mappedText !== null) reconciledOptimisticTexts.add(mappedText)
               }
             }
           }
@@ -2009,13 +2010,15 @@ export function useIpcSubscriptions(
           }
         }
 
-        const baseEntries = reconciledOptimisticText !== null
-          ? current.entries.filter(entry =>
-              !(
+        const baseEntries = reconciledOptimisticTexts.size > 0
+          ? current.entries.filter(entry => {
+              const optimisticText = entryTextContent(entry)
+              return !(
                 isOptimisticCodexUserEntry(entry) &&
-                entryTextContent(entry) === reconciledOptimisticText
-              ),
-            )
+                optimisticText !== null &&
+                reconciledOptimisticTexts.has(optimisticText)
+              )
+            })
           : current.entries
 
         // Track the newest JSONL entry timestamp this session has
@@ -2113,7 +2116,7 @@ export function useIpcSubscriptions(
         const lastJsonlChanged = lastJsonlEntryAt !== current.lastJsonlEntryAt
         const noChange =
           appended.length === 0 &&
-          reconciledOptimisticText === null &&
+          reconciledOptimisticTexts.size === 0 &&
           queuedMessages === current.queuedMessages &&
           awaitingAssistant === current.awaitingAssistant &&
           workContext === current.workContext &&
@@ -2135,7 +2138,7 @@ export function useIpcSubscriptions(
           return prev
         }
 
-        const nextEntries = appended.length > 0 || reconciledOptimisticText !== null
+        const nextEntries = appended.length > 0 || reconciledOptimisticTexts.size > 0
           ? [...baseEntries, ...appended]
           : current.entries
 
@@ -2266,13 +2269,13 @@ export function useIpcSubscriptions(
               layer: 'JSONL',
               kind: 'jsonl_entries',
               summary:
-                appended.length > 0 || reconciledOptimisticText !== null
-                  ? `entries +${appended.length}${reconciledOptimisticText !== null ? ' · reconciled optimistic user' : ''}`
+                appended.length > 0 || reconciledOptimisticTexts.size > 0
+                  ? `entries +${appended.length}${reconciledOptimisticTexts.size > 0 ? ` · reconciled optimistic users ${reconciledOptimisticTexts.size}` : ''}`
                   : 'jsonl side-effects only',
               data: {
                 burstSize: entries.length,
                 appendedCount: appended.length,
-                reconciledOptimisticUser: reconciledOptimisticText !== null,
+                reconciledOptimisticUser: reconciledOptimisticTexts.size > 0,
                 // WHY these counts are more important than they look:
                 // optimistic Codex user rows intentionally disappear
                 // when the durable rollout user message arrives. In
@@ -2286,7 +2289,7 @@ export function useIpcSubscriptions(
                 entryCountBefore: current.entries.length,
                 entryCountBaseAfterOptimisticReconcile: baseEntries.length,
                 entryCountAfter: nextEntries.length,
-                reconciledOptimisticText,
+                reconciledOptimisticTexts: [...reconciledOptimisticTexts],
                 appended: appended.slice(-8).map(summarizeEntryForDebug),
                 queuedMessages: queuedMessages.length,
                 workContext,
@@ -2345,7 +2348,7 @@ export function useIpcSubscriptions(
           sessionId,
           burstSize: entries.length,
           appendedCount: appended.length,
-          reconciledOptimisticUser: reconciledOptimisticText !== null,
+          reconciledOptimisticUser: reconciledOptimisticTexts.size > 0,
           ghostsChanged,
           queuedMessages: queuedMessages.length,
           entriesTrimmed,

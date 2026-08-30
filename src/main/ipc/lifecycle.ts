@@ -114,7 +114,7 @@ export function registerLifecycleIpc(
     phase: 'opened' | 'closed'
     gap: ObservationGap
     runDisposition: 'current' | 'stale' | 'missing' | 'retired-or-unknown'
-    registeredSessionKind: string | null | undefined
+    recorderRunEligible: boolean
   }): void => {
     const rawIds = {
       // Missing is a real, separate attribution bucket. Never substitute the
@@ -147,8 +147,7 @@ export function registerLifecycleIpc(
     }
     lifecycle.record(MAIN_OWNED_OBSERVATION_GAP_EVENT, ids, data)
     if (
-      params.registeredSessionKind === 'codex' &&
-      params.runDisposition === 'current' &&
+      params.recorderRunEligible &&
       params.gap.sessionRunId
     ) {
       sessionRecorders?.recordCodexTranscriptObservation(
@@ -280,14 +279,6 @@ export function registerLifecycleIpc(
             observationGapTrackingCapped = true
             return
           }
-          if (observationGaps.size >= MAX_TRACKED_OBSERVATION_GAP_KEYS) {
-            // Do not invent a close for eviction. The already-written `opened`
-            // row must remain unclosed, honestly saying its eventual count is
-            // unknowable. This branch is reachable only while the lifetime
-            // opening budget can still admit a replacement.
-            const oldest = observationGaps.keys().next().value
-            if (oldest !== undefined) observationGaps.delete(oldest)
-          }
           const gap: ObservationGap = {
             sessionId,
             ...(rendererSessionRunId ? { sessionRunId: rendererSessionRunId } : {}),
@@ -299,7 +290,7 @@ export function registerLifecycleIpc(
             phase: 'opened',
             gap,
             runDisposition: runDisposition ?? 'retired-or-unknown',
-            registeredSessionKind,
+            recorderRunEligible: exactCurrentCodexRun || exactRetiredCodexRun,
           })
         }
       }
@@ -326,7 +317,7 @@ export function registerLifecycleIpc(
           phase: 'closed',
           gap,
           runDisposition,
-          registeredSessionKind,
+          recorderRunEligible: exactCurrentCodexRun || exactRetiredCodexRun,
         })
       }
     }
@@ -391,8 +382,7 @@ export function registerLifecycleIpc(
     if (
       sessionId &&
       isCodexTranscriptObservation &&
-      registeredSessionKind === 'codex' &&
-      runDisposition === 'current' &&
+      (exactCurrentCodexRun || exactRetiredCodexRun) &&
       rendererSessionRunId
     ) {
       sessionRecorders?.recordCodexTranscriptObservation(sessionId, rendererSessionRunId, {

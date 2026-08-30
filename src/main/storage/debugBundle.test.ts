@@ -55,6 +55,7 @@ const { saveDebugBundle } = await import('./debugBundle.js')
 
 function journalEvent(params: {
   seq: number
+  monotonicMs?: number
   sessionId: string
   name: string
   data?: Record<string, unknown>
@@ -66,7 +67,7 @@ function journalEvent(params: {
     seq: params.seq,
     ts,
     tsIso: new Date(ts).toISOString(),
-    monotonicMs: params.seq,
+    monotonicMs: params.monotonicMs ?? params.seq,
     appRunId: APP_RUN_ID,
     area: 'session.lifecycle',
     name: params.name,
@@ -460,6 +461,48 @@ describe('Codex transcript observation bundle export', () => {
       invalidChronologyRows: 1,
       matchedEvents: 0,
       writtenEvents: 0,
+      sourceHasGaps: true,
+    })
+  })
+
+  it('marks descending scoped chronology rows as a source gap', async () => {
+    writeFileSync(
+      join(INCIDENT_ROOT, APP_RUN_ID, 'events.jsonl'),
+      [
+        journalEvent({
+          seq: 8,
+          monotonicMs: 80,
+          sessionId: CODEX_PANE_ID,
+          name: 'transcript.snapshot',
+          data: { entryCount: 8, totalEntries: 8 },
+        }),
+        journalEvent({
+          seq: 7,
+          monotonicMs: 70,
+          sessionId: CODEX_PANE_ID,
+          name: 'transcript.snapshot',
+          data: { entryCount: 7, totalEntries: 7 },
+        }),
+      ].map(row => JSON.stringify(row)).join('\n') + '\n',
+    )
+
+    const { bundlePath } = await saveDebugBundle({
+      sessionId: CODEX_PANE_ID,
+      kind: 'codex',
+      reason: 'manual',
+      files: bundleFiles(),
+    }, COMPLETE_JOURNAL_SOURCE)
+
+    const observations = readFileSync(
+      join(bundlePath, 'codex-transcript-observations.jsonl'),
+      'utf8',
+    ).trim().split('\n').filter(Boolean).map(line => JSON.parse(line))
+    expect(observations.map(row => row.seq)).toEqual([8])
+    const manifest = JSON.parse(readFileSync(join(bundlePath, 'manifest.json'), 'utf8'))
+    expect(manifest.codexTranscriptObservations).toMatchObject({
+      invalidChronologyRows: 1,
+      matchedEvents: 1,
+      writtenEvents: 1,
       sourceHasGaps: true,
     })
   })

@@ -316,6 +316,64 @@ describe('SessionRecorderManager', () => {
     expect(meta.eventCount).toBe(0)
   })
 
+  it('routes final observations to the exact retiring run while a successor is active', async () => {
+    const m = mgr()
+    const sessionId = '49494949-4949-4949-8949-494949494949'
+    const runA = '50505050-5050-4050-8050-505050505050'
+    const runB = '51515151-5151-4151-8151-515151515151'
+    m.startRecording(sessionId, { kind: 'codex', sessionRunId: runA })
+
+    // A started event from a compatibility transport may omit the run id. It
+    // can enrich provider/cwd, but must not erase the explicit run fence that
+    // already protects the sidecar writer.
+    m.observe('session:started', [{ sessionId, kind: 'codex' }])
+    expect(m.recordCodexTranscriptObservation(sessionId, runA, {
+      schemaVersion: 1,
+      name: 'submit.surface',
+      data: { surface: 'render-selected', visible: true },
+    })).toBe(true)
+
+    m.observe('session:exit', [{ sessionId, code: 0 }])
+    const generationA = m.recordingGeneration(sessionId)
+    expect(generationA).toEqual(expect.any(String))
+    m.startRecording(sessionId, { kind: 'codex', sessionRunId: runB })
+
+    expect(m.recordCodexTranscriptObservation(sessionId, runA, {
+      schemaVersion: 1,
+      name: 'submit.release',
+      data: { cause: 'session-exit' },
+    })).toBe(true)
+    expect(m.recordCodexTranscriptObservation(sessionId, runB, {
+      schemaVersion: 1,
+      name: 'submit.surface',
+      data: { surface: 'render-selected', visible: true },
+    })).toBe(true)
+
+    await m.finishStopping(sessionId, generationA ?? undefined)
+    await m.stopRecording(sessionId)
+
+    const dirs = readdirSync(TMP)
+      .filter(dir => dir.endsWith(`-${sessionId}`))
+      .map(dir => join(TMP, dir))
+    expect(dirs).toHaveLength(2)
+    const namesByRun = new Map<string, string[]>()
+    for (const dir of dirs) {
+      const observations = readFileSync(join(dir, 'events.jsonl'), 'utf8')
+        .trim()
+        .split('\n')
+        .filter(Boolean)
+        .map(line => JSON.parse(line))
+        .filter(line => line.ch === '__codex_transcript_observation')
+        .map(line => line.observation)
+      const runId = observations[0]?.ids?.sessionRunId
+      if (typeof runId === 'string') {
+        namesByRun.set(runId, observations.map(observation => observation.name))
+      }
+    }
+    expect(namesByRun.get(runA)).toEqual(['submit.surface', 'submit.release'])
+    expect(namesByRun.get(runB)).toEqual(['submit.surface'])
+  })
+
   it('flushAll finalizes every open recording', async () => {
     const m = mgr()
     m.startRecording('a')

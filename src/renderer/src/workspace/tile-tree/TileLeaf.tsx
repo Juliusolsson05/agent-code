@@ -51,8 +51,7 @@ import {
   queuedMessageSubmissionRunId,
 } from '@renderer/workspace/hook/actions/streaming'
 import {
-  reportHiddenSubmitSurface,
-  reportHiddenSubmitSurfaces,
+  commitVisibleSubmitSurfaceOwner,
   useVisibleSubmitSurfaceUnmountCleanup,
   type VisibleSubmitSurface,
 } from '@renderer/workspace/tile-tree/TileLeaf/useVisibleSubmitSurfaceUnmountCleanup'
@@ -488,21 +487,17 @@ export function TileLeaf({
   const visibleSubmitSurfacesRef = useRef(new Map<string, VisibleSubmitSurface>())
   const visibleSubmitSurfaceSessionIdRef = useRef(sessionId)
   const suppressedVisibleSurfaceCountRef = useRef(0)
-  useVisibleSubmitSurfaceUnmountCleanup(
+  const visibleSubmitSurfaceOwner = useVisibleSubmitSurfaceUnmountCleanup(
     visibleSubmitSurfaceSessionIdRef,
     visibleSubmitSurfacesRef,
   )
   useEffect(() => {
-    let previous = visibleSubmitSurfacesRef.current
     if (visibleSubmitSurfaceSessionIdRef.current !== sessionId) {
-      // TileLeaf instances can be reused during layout changes. Closing the
-      // old session's exact captured surfaces before changing scope preserves
-      // the chronology; blindly clearing here left every old row apparently
-      // visible forever and also suppressed the first transition in the new
-      // pane. Retired-run proof in main safely accepts these late false edges.
-      reportHiddenSubmitSurfaces(visibleSubmitSurfaceSessionIdRef.current, previous)
+      // TileLeaf instances can be reused during layout changes. Clear the
+      // component-local capacity ledger before rebuilding it for the new pane;
+      // commitVisibleSubmitSurfaceOwner owns the cross-session close/open
+      // transition because it still retains this owner's prior global claims.
       visibleSubmitSurfacesRef.current = new Map()
-      previous = visibleSubmitSurfacesRef.current
       visibleSubmitSurfaceSessionIdRef.current = sessionId
       suppressedVisibleSurfaceCountRef.current = 0
     }
@@ -511,7 +506,7 @@ export function TileLeaf({
       // visibility observer must close those captured Codex candidates before
       // dropping its ledger; otherwise a Codex→Claude switch creates an
       // unmarked terminal gap in the named evidence stream.
-      reportHiddenSubmitSurfaces(sessionId, previous)
+      commitVisibleSubmitSurfaceOwner(visibleSubmitSurfaceOwner, sessionId, new Map())
       visibleSubmitSurfacesRef.current = new Map()
       suppressedVisibleSurfaceCountRef.current = 0
       return
@@ -542,7 +537,7 @@ export function TileLeaf({
     // second renderer. A selected WorkflowRunView replaces Feed entirely;
     // treating a hidden ledger candidate as painted would manufacture the very
     // visibility proof this observation is supposed to test.
-    if (feedIsMounted) {
+    if (feedIsMounted && !workspaceHiddenByEditor) {
       for (const item of ledgerFeedPlan.items) {
         if (item.type !== 'entry') continue
         const submissionId = optimisticEntrySubmissionId(item.entry)
@@ -567,33 +562,18 @@ export function TileLeaf({
     // WorkflowRunView owns the central cell. Recording from the exact array
     // handed to QueueStrip closes that observational blind spot without
     // pretending the queue has a provider or rollout identity.
-    for (const message of runtime.queuedMessages) {
-      const submissionId = queuedMessageSubmissionId(message)
-      if (!submissionId) continue
-      const renderCandidateId = `queued:${submissionId}`
-      addVisible({
-        surface: 'queue-strip',
-        sessionRunId: queuedMessageSubmissionRunId(message),
-        submissionId,
-        renderCandidateId,
-      })
-    }
-
-    for (const [key, prior] of previous) {
-      if (next.has(key)) continue
-      reportHiddenSubmitSurface(sessionId, prior)
-    }
-    for (const [key, current] of next) {
-      if (previous.has(key)) continue
-      reportLifecycle('submit.surface', sessionId, {
-        surface: current.surface,
-        visible: true,
-        ...(current.entryOrdinal === undefined ? {} : { entryOrdinal: current.entryOrdinal }),
-      }, {
-        submissionId: current.submissionId,
-        renderCandidateId: current.renderCandidateId,
-        ...(current.sessionRunId ? { sessionRunId: current.sessionRunId } : {}),
-      })
+    if (!workspaceHiddenByEditor) {
+      for (const message of runtime.queuedMessages) {
+        const submissionId = queuedMessageSubmissionId(message)
+        if (!submissionId) continue
+        const renderCandidateId = `queued:${submissionId}`
+        addVisible({
+          surface: 'queue-strip',
+          sessionRunId: queuedMessageSubmissionRunId(message),
+          submissionId,
+          renderCandidateId,
+        })
+      }
     }
     if (
       suppressed > 0 &&
@@ -608,6 +588,7 @@ export function TileLeaf({
       })
     }
     suppressedVisibleSurfaceCountRef.current = suppressed
+    commitVisibleSubmitSurfaceOwner(visibleSubmitSurfaceOwner, sessionId, next)
     visibleSubmitSurfacesRef.current = next
   }, [
     ledgerFeedPlan.items,
@@ -616,6 +597,8 @@ export function TileLeaf({
     runtime.sessionRunId,
     sessionId,
     feedIsMounted,
+    visibleSubmitSurfaceOwner,
+    workspaceHiddenByEditor,
   ])
 
   // Claude image-paste flow — three clipboard ingress paths, media-

@@ -271,6 +271,40 @@ describe('SessionManager lifecycle journal', () => {
     )).toBeNull()
   })
 
+  it('degrades novel provider observation enum values to explicit unknown sentinels', async () => {
+    const { SessionManager } = await import('./sessionManager')
+    const spy = journalSpy()
+    const session = new FakeAgentSession()
+    createSession.mockImplementation(() => session)
+    const manager = new SessionManager(null, null, spy.journal as never)
+    const sessionId = '62626262-6262-4262-8262-626262626262'
+
+    await manager.recover({ sessionId, kind: 'codex', cwd: '/tmp/project' })
+    session.emit('transcript-diagnostic', {
+      type: 'provider-request-observation',
+      observation: {
+        type: 'provider_request',
+        phase: 'future-retry-phase',
+        source: 'future-transport',
+        cause: 'future-terminal-cause',
+      },
+    })
+    session.emit('semantic-event', {
+      type: 'turn_started',
+      source: 'future-semantic-source',
+    })
+
+    expect(spy.find('provider.request')?.data).toMatchObject({
+      phase: 'unknown',
+      source: 'unknown',
+      cause: 'unknown',
+    })
+    expect(spy.find('semantic.turn')?.data).toMatchObject({
+      phase: 'started',
+      source: 'unknown',
+    })
+  })
+
   it('records a provider source fact before a synchronous product listener retires its run', async () => {
     const { SessionManager } = await import('./sessionManager')
     const spy = journalSpy()

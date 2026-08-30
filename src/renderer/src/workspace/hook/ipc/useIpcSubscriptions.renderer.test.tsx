@@ -17,6 +17,8 @@ import {
 import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import { useStreamingActions } from '@renderer/workspace/hook/actions/streaming'
+import { isOptimisticCodexUserEntry } from '@providers/codex/renderer/transcript/entries'
+import { entryTextContent } from '@renderer/session-runtime/entries'
 
 import { useIpcSubscriptions } from './useIpcSubscriptions'
 
@@ -235,6 +237,19 @@ describe('useIpcSubscriptions with an injected SessionFeed', () => {
       expect(observation.correlationIds).not.toHaveProperty('sessionRunId')
       expect(Object.values(observation.correlationIds ?? {})).not.toContain(successorRunId)
     }
+    // Both durable user rows arrived in one coalesced callback. Reconciliation
+    // must remove every optimistic owner matched in that burst, not only the
+    // text from the final mapped row; otherwise the evidence says prompt A was
+    // released while its optimistic product row remains visibly duplicated.
+    expect(runtimes[sessionId]!.entries.filter(isOptimisticCodexUserEntry)).toEqual([])
+    expect(
+      runtimes[sessionId]!.entries
+        .filter(entry => entry.type === 'user')
+        .map(entryTextContent),
+    ).toEqual([
+      'startup optimistic prompt',
+      'startup queued reconcile',
+    ])
   })
 
   it('hands a legacy queued prompt from the queue strip to its durable feed row across bursts', () => {

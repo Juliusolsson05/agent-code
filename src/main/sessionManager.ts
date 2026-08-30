@@ -77,6 +77,23 @@ import {
   type CodexReplacementReservation,
 } from '@main/sessions/codexReplacementLedger.js'
 
+function codexObservationEnumOrUnknown(
+  name: CodexTranscriptObservationEventName,
+  key: string,
+  value: unknown,
+): string {
+  if (typeof value !== 'string') return 'unknown'
+  // The shared sanitizer is the vocabulary authority. Reusing it here avoids a
+  // second hand-maintained enum while preserving a crucial distinction at the
+  // provider boundary: a present future value is evidence of schema drift and
+  // must degrade to the explicit `unknown` sentinel, not disappear as though
+  // the producer omitted the field altogether.
+  const picked = pickCodexTranscriptObservationData(name, { [key]: value })
+  return (picked as Record<string, unknown> | undefined)?.[key] === value
+    ? value
+    : 'unknown'
+}
+
 // SessionManager: a thin registry on top of ClaudeSession / TerminalSession
 // that lets the main process run N sessions in parallel. Every event
 // every session emits is re-emitted here with the sessionId attached,
@@ -3325,7 +3342,7 @@ export class SessionManager extends EventEmitter {
     if (type === 'turn_started') {
       this.recordCodexTranscriptObservation('semantic.turn', sessionId, {
         phase: 'started',
-        source: typeof event.source === 'string' ? event.source : 'unknown',
+        source: codexObservationEnumOrUnknown('semantic.turn', 'source', event.source),
       }, {
         ...(stringId('requestId') ? { proxyRequestId: stringId('requestId') } : {}),
         ...(stringId('flowId') ? { proxyFlowId: stringId('flowId') } : {}),
@@ -3345,9 +3362,9 @@ export class SessionManager extends EventEmitter {
     const stringId = (key: string): string | undefined =>
       typeof event[key] === 'string' ? event[key] as string : undefined
     this.recordCodexTranscriptObservation('provider.request', sessionId, {
-      phase: stringId('phase') ?? 'unknown',
-      source: typeof event.source === 'string' ? event.source : 'unknown',
-      cause: stringId('cause') ?? 'unknown',
+      phase: codexObservationEnumOrUnknown('provider.request', 'phase', event.phase),
+      source: codexObservationEnumOrUnknown('provider.request', 'source', event.source),
+      cause: codexObservationEnumOrUnknown('provider.request', 'cause', event.cause),
       ...(typeof event.selected === 'boolean' ? { selected: event.selected } : {}),
       ...(typeof event.subagentHeaderPresent === 'boolean'
         ? { subagentHeaderPresent: event.subagentHeaderPresent }

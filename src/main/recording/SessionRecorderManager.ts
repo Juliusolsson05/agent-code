@@ -82,7 +82,7 @@ export class SessionRecorderManager {
    */
   private readonly retiringRecorders = new Map<
     string,
-    { sessionId: string; recorder: SessionRecorder }
+    { sessionId: string; sessionRunId: string | null; recorder: SessionRecorder }
   >()
   private readonly pendingStops = new Map<
     string,
@@ -181,7 +181,7 @@ export class SessionRecorderManager {
       // sidecars. A recorder may have been command-started before the backend,
       // so fill it from the first authoritative started payload rather than
       // guessing from stable pane identity.
-      active.sessionRunId = extractSessionRunId(payload)
+      active.sessionRunId = extractSessionRunId(payload) ?? active.sessionRunId
       recorder.refreshIdentity({ provider: p.kind, cwd: p.projectDir })
     }
     // session:exit starts a bounded renderer-flush handshake. Closing here
@@ -320,11 +320,12 @@ export class SessionRecorderManager {
    * unchanged: an always-on lifecycle observation cannot create a recorder
    * unless AGENT_CODE_SESSION_RECORD already authorized every session.
    *
-   * WHY only the active generation receives the row: a logical session id may
-   * be reused while an older recorder is retiring. The lifecycle observation
-   * carries no retiring generation token, so guessing would contaminate one
-   * process lifetime with another. Returning false makes that honest loss
-   * observable to the caller without ever attaching evidence to the wrong run.
+   * WHY an exact retiring generation may receive the row: natural exit removes
+   * SessionManager's live registry entry before the renderer commits its final
+   * queue/surface releases. The recorder remains intentionally writable during
+   * that same handshake. `{sessionId, sessionRunId}` is sufficient authority to
+   * select the retiring generation without guessing from reusable pane id; an
+   * unknown pair still fails closed and can never contaminate a successor.
    */
   recordCodexTranscriptObservation(
     sessionId: string,
@@ -340,16 +341,29 @@ export class SessionRecorderManager {
     if (input.schemaVersion !== 1 || !isCodexTranscriptObservationEventName(input.name)) {
       return false
     }
-    let active = this.recorders.get(sessionId)
-    if (!active && this.autoRecord) {
+    let target: { recorder: SessionRecorder; sessionRunId: string | null } | undefined =
+      this.recorders.get(sessionId)
+    if (target?.sessionRunId !== sessionRunId) target = undefined
+    if (!target) {
+      for (const retiring of this.retiringRecorders.values()) {
+        if (
+          retiring.sessionId === sessionId &&
+          retiring.sessionRunId === sessionRunId
+        ) {
+          target = retiring
+          break
+        }
+      }
+    }
+    if (!target && this.autoRecord && !this.recorders.has(sessionId)) {
       // The callback is main-owned and supplies the exact run fence separately
       // from the sanitized sidecar. Seed the same identity a later
       // `session:started` would have supplied so replacement-run observations
       // cannot enter this early-created generation.
       this.startRecording(sessionId, { kind: 'codex', sessionRunId })
-      active = this.recorders.get(sessionId)
+      target = this.recorders.get(sessionId)
     }
-    if (!active || active.sessionRunId !== sessionRunId) return false
+    if (!target || target.sessionRunId !== sessionRunId) return false
     const safeData = pickCodexTranscriptObservationData(input.name, input.data)
     const safeIds = pickCodexTranscriptObservationCorrelationIds(
       input.name,
@@ -370,7 +384,7 @@ export class SessionRecorderManager {
       },
       ...(safeData ? { data: safeData } : {}),
     }
-    active.recorder.codexTranscriptObservation(safeObservation)
+    target.recorder.codexTranscriptObservation(safeObservation)
     return true
   }
 
@@ -476,7 +490,11 @@ export class SessionRecorderManager {
     const active = this.recorders.get(sessionId)
     if (!active || active.generation !== generation) return
     this.recorders.delete(sessionId)
-    this.retiringRecorders.set(generation, { sessionId, recorder: active.recorder })
+    this.retiringRecorders.set(generation, {
+      sessionId,
+      sessionRunId: active.sessionRunId,
+      recorder: active.recorder,
+    })
   }
 
   /** Public stop for the Stop Recording command (plan §7). Alias of stop;
