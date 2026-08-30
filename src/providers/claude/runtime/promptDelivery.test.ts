@@ -197,11 +197,22 @@ describe('deliverClaudePrompt routing', () => {
     vi.useFakeTimers()
     const { io, writes } = makeIo('line one\nline two', '') // screen never reflects the paste
     const p = deliverClaudePrompt(io)
-    await vi.advanceTimersByTimeAsync(2100)
+    // Past CONFIRM_TIMEOUT_MS (5s) plus the bounded rollback that now follows
+    // an unconfirmed write.
+    await vi.advanceTimersByTimeAsync(7000)
     const result = await p
     expect(result.ok).toBe(false)
-    // Critically: Enter must NOT be sent after an unconfirmed paste.
-    expect(writes).toEqual(['\x1b[200~line one\nline two\x1b[201~'])
+    // The contract this test exists for: Enter must NOT be sent after an
+    // unconfirmed paste. Asserted directly rather than by comparing the whole
+    // write list, because the list is no longer just the paste — a failed
+    // write is now rolled back (#679), so it is followed by kill/yank bytes.
+    // Pinning the exact array made this test fail for the rollback rather than
+    // for the thing it is guarding.
+    expect(writes).not.toContain('\r')
+    expect(writes[0]).toBe('\x1b[200~line one\nline two\x1b[201~')
+    // And the rollback must actually have been attempted.
+    expect(writes.slice(1).every(w => w === '\x15' || w === '\x19')).toBe(true)
+    expect(writes.length).toBeGreaterThan(1)
   })
 
   it('fails visibly when the session has no snapshotScreen probe', async () => {

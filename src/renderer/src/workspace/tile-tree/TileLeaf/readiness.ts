@@ -10,17 +10,24 @@ import { isSessionExited } from '@renderer/workspace/providerSessionIdentity'
  * of why "the agent takes minutes to start" was never actionable. A stuck pane
  * and a healthy one looked identical.
  *
- * KNOWN GAP, deliberate: the provider's detailed verdict (replay pending vs
- * composer-unpainted vs human-draft) is collapsed to 'provider-not-ready'
- * before it leaves main, so it cannot be shown here yet. Recovering it means
- * widening the SessionInputReadiness contract — Tier 3 transport this change
- * does not touch. The detail is recorded in the lifecycle journal's `gate.eval`
- * in the meantime; see docs/decomposition/agent-boot-readiness.md.
+ * The gap this used to carry is now half closed (#683). `composer-occupied`
+ * crosses the wire as itself, because it is the one non-ready state the user
+ * must act on: the provider's composer holds a draft, the gate will never
+ * overwrite it, and nothing clears it on its own. It previously rendered as
+ * "waiting for agent", identical to a slow boot, which is how sessions sat
+ * unusable for hours — the longest measured was 47.
+ *
+ * Still collapsed, deliberately: replay-pending and composer-unpainted both
+ * arrive as 'provider-not-ready'. A user cannot do anything differently about
+ * those two, so splitting them would add words without adding an action.
  */
 const READINESS_REASON_TEXT: Record<string, string> = {
   starting: 'starting agent',
   'replaying-history': 'replaying transcript',
   'provider-not-ready': 'waiting for agent',
+  // Names the blocker and the fix in the space of a status line. "draft" is
+  // the user's own word for what is in the box; "clear it" is the action.
+  'composer-occupied': 'draft in agent composer — clear it to send',
   ready: 'starting agent',
 }
 

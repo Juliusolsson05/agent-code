@@ -1119,6 +1119,46 @@ export const sessionCommands: CommandDef[] = [
     run: ({ ui }) => ui.toggleHtmlDebugPanel(),
   },
   {
+    id: 'clear-agent-composer',
+    category: 'session',
+    surface: 'session',
+    title: 'Clear Agent Composer',
+    description: "**What it does:** Clears text sitting in the **agent's own composer** — the provider's input line, not Agent Code's.\n\n**Use when:** The pane says *draft in agent composer* and sends are being refused.\n\n**Notes:** Agent Code will never overwrite a draft in the provider's composer, so anything left there — typed in the raw terminal view, or stranded by a failed send — blocks every later prompt until it is cleared. This clears it for you.",
+    keywords: ['clear', 'composer', 'draft', 'stuck', 'occupied', 'blocked', 'unblock', 'human draft'],
+    // Shown only while the gate is actually blocked on a draft (#683). The
+    // whole problem was that this state is indistinguishable from a slow boot,
+    // so surfacing the remedy exactly when it applies is most of the fix:
+    // the user finds it by looking for what is wrong, not by knowing it exists.
+    when: ({ workspace }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return false
+      return workspace.getRuntime(sessionId)?.inputReadinessReason === 'composer-occupied'
+    },
+    run: async ({ workspace }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return
+      // Ctrl+U, deliberately NOT Escape. `\x1b` is the byte the Stop button
+      // sends, and while the agent is mid-turn the provider reads it as an
+      // interrupt rather than a clear — clearing a draft must never be able to
+      // abort the agent's work.
+      //
+      // Sent as a fixed bounded burst rather than a verify-after-each loop
+      // because Ctrl+U on an already-empty line is a no-op: overshooting costs
+      // nothing, while under-shooting leaves a half-killed prompt that a later
+      // Enter would submit as a fragment. The provider kills to the start of a
+      // VISUAL line, so a wrapped prompt needs roughly one press per rendered
+      // row; 64 covers a very long prompt at any realistic width.
+      //
+      // window.api directly, matching TileLeaf and AgentTerminalLeaf: this
+      // deliberately bypasses the readiness-gated send path, because the state
+      // it exists to clear is the state that closes that gate.
+      for (let press = 0; press < 64; press += 1) {
+        await window.api.sendInput(sessionId, '\x15')
+      }
+      workspace.showPaneToast(sessionId, "Cleared the agent's composer")
+    },
+  },
+  {
     id: 'toggle-dev-debug-panel',
     category: 'developer',
     pickerVisibility: 'debug',
