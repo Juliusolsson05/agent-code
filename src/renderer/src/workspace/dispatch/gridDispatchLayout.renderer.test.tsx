@@ -51,7 +51,14 @@ vi.mock('@renderer/workspace/dispatch/DispatchAgentList', () => ({
   ),
 }))
 vi.mock('@renderer/workspace/dispatch/DispatchMiniList', () => ({
-  DispatchMiniList: () => <div data-testid="lane-strip" />,
+  DispatchMiniList: ({ onToggleExpandedParent }: {
+    onToggleExpandedParent?: (id: string) => void
+  }) => (
+    <div
+      data-testid="lane-strip"
+      data-can-expand={onToggleExpandedParent ? 'true' : 'false'}
+    />
+  ),
 }))
 vi.mock('@providers/registry.renderer', () => ({
   getRendererProvider: () => ({
@@ -130,6 +137,21 @@ describe('Grid Dispatch layout', () => {
     })
 
     expect(getAllByTestId('lane-strip')).toHaveLength(4)
+  })
+
+  it('wires the strip s expand control instead of shipping a dead button', () => {
+    // The strip renders "+N more" as a real button and optional-calls this
+    // handler. Omitting it shipped an affordance that promises an action and
+    // silently does nothing — in the exact case the cap exists for.
+    const { getAllByTestId } = renderGrid({
+      lanes: laneIds.map(id => ({ selectedSessionId: id })),
+      rows: [{ length: 2 }, { length: 2 }],
+      focusedLane: 0,
+    })
+
+    for (const strip of getAllByTestId('lane-strip')) {
+      expect(strip.getAttribute('data-can-expand')).toBe('true')
+    }
   })
 
   it('renders uneven rows without evening them out', () => {

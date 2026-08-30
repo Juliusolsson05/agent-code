@@ -14,6 +14,7 @@ import {
   dispatchFocusedSessionId,
   withLaneSession,
 } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
+import type { GridShapeRow } from '@renderer/workspace/dispatch/gridShape'
 import {
   clampIndexFraction,
   insertLaneRightIntoGrid,
@@ -101,15 +102,13 @@ export function useDispatchActions(
   enterTiledDispatch: (rowLengths: number[]) => Promise<void>
   exitTiledDispatch: () => void
   setTiledLaneSession: (laneIndex: number, sessionId: SessionId) => void
-  setTiledLaneCount: (count: number) => void
   insertTiledLaneRight: (laneIndex: number) => boolean
   removeTiledLane: (laneIndex: number) => void
   setTiledFocusedLane: (laneIndex: number) => void
-  setTiledRatios: (ratios: number[]) => void
   // ---- Grid Dispatch rows (issue #681) ----
   insertDispatchRowBelow: (rowIndex: number) => boolean
   removeDispatchRow: (rowIndex: number) => void
-  setDispatchGridShape: (rowLengths: number[]) => boolean
+  setDispatchGridShape: (rows: GridShapeRow[]) => boolean
   setDispatchLaneWeights: (weights: number[]) => void
   setDispatchRowIndexFraction: (rowIndex: number, fraction: number) => void
   setDispatchRowHeights: (heights: number[]) => void
@@ -273,50 +272,6 @@ export function useDispatchActions(
     [setState],
   )
 
-  // Grow (append EMPTY lanes) or shrink (drop from the right). Surviving lanes
-  // keep their selections; never reshuffle or respawn. We reset ratios on a
-  // count change because a ratios array sized for the old boundary count would
-  // mis-lay-out the new lane set; even distribution is the safe default and the
-  // user can re-drag.
-  //
-  // Appended lanes are empty for the same reason New Lane's are (#673/#681):
-  // more room is a request for space, not for particular agents.
-  const setTiledLaneCount = useCallback(
-    (count: number) => {
-      setState(prev => {
-        const tiled = prev.dispatchMode?.tiled
-        if (!tiled) return prev
-        const next = clampTileCount(count)
-        if (next === tiled.lanes.length) return prev
-        const lanes =
-          next < tiled.lanes.length
-            ? tiled.lanes.slice(0, next)
-            : [...tiled.lanes, ...emptyLanes(next - tiled.lanes.length)]
-        const focusedLane = Math.min(tiled.focusedLane, lanes.length - 1)
-        // The legacy count path only ever addressed a single row, and it stays
-        // that way: it has no positional intent to spread across rows, so it
-        // collapses whatever shape exists into one row of `next` lanes. The
-        // grid-aware way to resize is setDispatchGridShape, which takes a
-        // length per row. Leaving the old rows here would break
-        // sum(rows[].length) === lanes.length on the very next read.
-        return {
-          ...prev,
-          dispatchMode: {
-            ...prev.dispatchMode!,
-            tiled: {
-              lanes,
-              rows: [{ ...(tiled.rows?.[0] ?? {}), length: lanes.length }],
-              focusedLane,
-              laneWeights: undefined,
-              ratios: undefined,
-            },
-          },
-        }
-      })
-    },
-    [setState],
-  )
-
   /**
    * Insert ONE lane beside an existing lane without changing command focus.
    *
@@ -349,7 +304,7 @@ export function useDispatchActions(
   /**
    * Remove ONE lane, shrinking the grid by one.
    *
-   * The splice/clamp/ratio rules live in `removeLaneFromTiled` so they can be
+   * The splice/clamp/weight rules live in `removeLaneFromGrid` so they can be
    * tested as a pure function; this is only the state wiring. A null return
    * means the removal was refused (at the lane floor, or a bad index), in
    * which case we hand back `prev` untouched rather than writing an identical
@@ -380,21 +335,6 @@ export function useDispatchActions(
         return {
           ...prev,
           dispatchMode: { ...prev.dispatchMode!, tiled: { ...tiled, focusedLane: clamped } },
-        }
-      })
-    },
-    [setState],
-  )
-
-  // Persist resized lane-boundary ratios.
-  const setTiledRatios = useCallback(
-    (ratios: number[]) => {
-      setState(prev => {
-        const tiled = prev.dispatchMode?.tiled
-        if (!tiled) return prev
-        return {
-          ...prev,
-          dispatchMode: { ...prev.dispatchMode!, tiled: { ...tiled, ratios } },
         }
       })
     },
@@ -443,12 +383,12 @@ export function useDispatchActions(
   )
 
   const setDispatchGridShape = useCallback(
-    (rowLengths: number[]) => {
+    (rows: GridShapeRow[]) => {
       let applied = false
       setState(prev => {
         const tiled = prev.dispatchMode?.tiled
         if (!tiled) return prev
-        const next = setGridShape(tiled, rowLengths)
+        const next = setGridShape(tiled, rows)
         if (!next) return prev
         applied = true
         return { ...prev, dispatchMode: { ...prev.dispatchMode!, tiled: next } }
@@ -644,11 +584,9 @@ export function useDispatchActions(
     enterTiledDispatch,
     exitTiledDispatch,
     setTiledLaneSession,
-    setTiledLaneCount,
     insertTiledLaneRight,
     removeTiledLane,
     setTiledFocusedLane,
-    setTiledRatios,
     insertDispatchRowBelow,
     removeDispatchRow,
     setDispatchGridShape,

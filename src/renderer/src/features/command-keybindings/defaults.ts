@@ -204,17 +204,25 @@ export function buildDefaultKeybindings(): CommandBindingDefault[] {
     // Dispatch owns the layout, and scoping it here leaves ⌘⇧G free for a grid
     // command later. The overlap matrix proves grid and dispatch are disjoint.
     { commandId: 'global-dispatch', bindings: ['Cmd+Shift+G'], context: 'dispatch' },
-    // Grid Dispatch row focus (#681). ⌥↑/↓ already move the focused lane's
-    // SELECTION up and down the index (handled inline in useKeybinds), so the
-    // shifted pair reads as "same axis, bigger unit" — move the focus itself
-    // between rows. `dispatch` context, because rows only exist there.
+    // Grid Dispatch row focus (#681) ships with NO default binding.
     //
-    // Registered rather than handled inline like the four existing Dispatch
-    // arrows, so these show up in Keyboard Shortcuts, can be rebound, and are
-    // covered by check:keybindings. Migrating those four is its own issue: a
-    // rebindable-keys migration does not belong inside a layout PR.
-    { commandId: 'dispatch-focus-row-up', bindings: ['Alt+Shift+Up'], context: 'dispatch' },
-    { commandId: 'dispatch-focus-row-down', bindings: ['Alt+Shift+Down'], context: 'dispatch' },
+    // ⌥⇧↑/↓ was the obvious pair — it reads as "same axis, bigger unit" beside
+    // the existing ⌥↑/↓ — and check:keybindings accepted it, because that
+    // checker only knows about bindings this app registers. It does not know
+    // about the OS. useKeybinds' header already records why that matters:
+    // Option+Shift+Arrow is the macOS word-selection shortcut and is
+    // "load-bearing for every text field in the app (including our composer)",
+    // which is exactly why directional resize uses fn+alt+Arrow instead.
+    //
+    // Dispatch bindings stay active while a text editor owns the target, and
+    // the router preventDefault()s what it routes, so claiming that chord would
+    // have broken selection in the composer while moving row focus underneath
+    // the user.
+    //
+    // Focus Row Above/Below therefore stay palette-only until a chord is found
+    // that is free of BOTH this app and the platform. They remain rebindable by
+    // the user through Keyboard Shortcuts, which is strictly better than
+    // shipping a default that steals text selection.
 
     // --- App panels (⌘⇧) ----------------------------------------------------
     { commandId: 'usage.open', bindings: ['Cmd+Shift+U'], context: 'global' },

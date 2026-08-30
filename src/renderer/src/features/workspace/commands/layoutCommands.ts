@@ -87,8 +87,8 @@ export const layoutCommands: CommandDef[] = [
       const laneIndex = tiled.focusedLane
       const sourceLane = tiled.lanes[laneIndex]
       if (!sourceLane) return
-      // The raw lane id can still name a globally live but OUT-OF-SCOPE session
-      // during the render before TiledDispatchLayout heals it. Use the same
+      // The raw lane id can still name a globally live but OUT-OF-SCOPE
+      // session, which renders empty rather than as that agent. Use the same
       // strict visual resolver as lifecycle commands so pane feedback can only
       // target the agent the user can actually see in this focused lane.
       const sourceTarget = resolveStrictDispatchCommandTarget(workspace.state)
@@ -123,7 +123,7 @@ export const layoutCommands: CommandDef[] = [
     category: 'layout-dispatch',
     surface: 'dispatch',
     title: 'Remove Lane',
-    description: '**What it does:** Removes the **focused lane** from Tiled Dispatch, shrinking the layout by one lane. The agent keeps running and stays in the index.\n\n**Use when:** You are done watching one agent but want the others to stay exactly where they are.\n\n**Notes:** Changing the tile count instead always drops the LAST lane. Removing the leftmost lane promotes the next one into its place, where it is selected from the full index rather than its own compact selector.',
+    description: '**What it does:** Removes the **focused lane** from Tiled Dispatch, shrinking the layout by one lane. The agent keeps running and stays in the index.\n\n**Use when:** You are done watching one agent but want the others to stay exactly where they are.\n\n**Notes:** Removing a row\'s last lane removes the row. Every lane has its own selector strip, so the lanes that shift left keep the selector they already had.',
     keywords: ['remove', 'lane', 'tile', 'tiled dispatch', 'shrink', 'slot'],
     when: ({ workspace }) => {
       const tiled = workspace.state.dispatchMode?.tiled
@@ -148,11 +148,11 @@ export const layoutCommands: CommandDef[] = [
       // An empty lane has no agent to close, so this collapses to Remove Lane —
       // admission has to agree with what the command will do.
       //
-      // Liveness, not mere presence: a lane can hold a set-but-dead id for the
-      // render between a session disappearing (killed from Agent Activity, tab
-      // closed) and the layout's heal effect clearing it. Admitting on presence
-      // alone let the command run, find nothing to close, and silently do
-      // neither of the two things its title promises.
+      // Liveness, not mere presence: a lane can hold a set-but-dead id between
+      // a session disappearing (killed from Agent Activity, tab closed) and the
+      // clear path blanking it. Admitting on presence alone let the command
+      // run, find nothing to close, and silently do neither of the two things
+      // its title promises.
       const sessionId = tiled.lanes[tiled.focusedLane]?.selectedSessionId
       return Boolean(sessionId && workspace.state.sessions[sessionId])
     },
@@ -260,9 +260,9 @@ export const layoutCommands: CommandDef[] = [
     id: 'dispatch-row-child-cap',
     category: 'layout-dispatch',
     surface: 'dispatch',
-    title: 'Orchestrated Agents',
-    description: '**What it does:** Switches the focused row\'s index between capping an orchestration parent\'s children and showing all of them.\n\n**Use when:** A parent has spawned enough workers to bury every other agent in the list.\n\n**Notes:** Only nested children are ever hidden — top-level agents always show, because the parent is what reports. Hiding a child never renumbers anything: labels and ⌘N stay on the full canonical list.',
-    keywords: ['orchestrated', 'orchestration', 'children', 'collapse', 'expand', 'sub agents', 'workers', 'cap'],
+    title: 'Nested Agents',
+    description: '**What it does:** Switches the focused row\'s index between capping a parent\'s nested children and showing all of them.\n\n**Use when:** A parent has spawned enough workers to bury every other agent in the list.\n\n**Notes:** Applies to both orchestration children and manually linked agents — Dispatch nests them identically, so the cap cannot tell them apart. Only nested children are ever hidden; top-level agents always show, because the parent is what reports. Hiding a child never renumbers anything: labels and ⌘N stay on the full canonical list.',
+    keywords: ['nested', 'orchestrated', 'orchestration', 'linked', 'children', 'collapse', 'expand', 'sub agents', 'workers', 'cap'],
     when: ({ workspace }) => Boolean(workspace.state.dispatchMode?.tiled),
     getState: ({ workspace }) => {
       const tiled = workspace.state.dispatchMode?.tiled

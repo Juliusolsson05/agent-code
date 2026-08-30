@@ -230,6 +230,37 @@ describe('insertRowBelowInGrid', () => {
     expect(next?.lanes).toHaveLength(MAX_DISPATCH_LANES)
   })
 
+  it('does not make the new empty row the tallest row on screen', () => {
+    // Heights are scale-free but NOT written on a common scale: the drag
+    // handler persists fractions summing to 1, while an un-sized row defaults
+    // to 1. A defaulted new row beside dragged siblings of 0.7/0.3 rendered as
+    // the tallest thing on screen — an empty row dominating two working ones.
+    const next = insertRowBelowInGrid(
+      {
+        lanes: [{}, {}],
+        rows: [{ length: 1, height: 0.7 }, { length: 1, height: 0.3 }],
+        focusedLane: 0,
+      },
+      0,
+    )
+
+    expect(next?.rows?.[1]?.height).toBeCloseTo(0.5)
+    // And it sits between them rather than dwarfing either.
+    const heights = next!.rows!.map(row => row.height!)
+    expect(Math.max(...heights)).toBe(0.7)
+  })
+
+  it('leaves heights implicit when no row has been sized', () => {
+    // An even grid must stay even: inventing a height for one row would make
+    // every other row's implicit default mean something different.
+    const next = insertRowBelowInGrid(
+      { lanes: [{}, {}], rows: [{ length: 1 }, { length: 1 }], focusedLane: 0 },
+      0,
+    )
+
+    expect(next?.rows?.every(row => row.height === undefined)).toBe(true)
+  })
+
   it('refuses at the row cap', () => {
     const state = grid(['a', 'b', 'c', 'd'], [1, 1, 1, 1], 0)
 
@@ -287,16 +318,21 @@ describe('removeRowFromGrid', () => {
   })
 })
 
+/** Positional reshape: every output row keeps the identity of the row at the
+ *  same index. Matches what the editor sends when no row was added or removed. */
+const positional = (...lengths: number[]) =>
+  lengths.map((length, index) => ({ length, sourceRow: index }))
+
 describe('setGridShape', () => {
   it('keeps each row s surviving agents in place while growing', () => {
-    const next = setGridShape(grid(['a', 'b', 'c'], [2, 1], 0), [3, 2])
+    const next = setGridShape(grid(['a', 'b', 'c'], [2, 1], 0), positional(3, 2))
 
     expect(lengths(next)).toEqual([3, 2])
     expect(idsOf(next)).toEqual(['a', 'b', undefined, 'c', undefined])
   })
 
   it('drops from the tail of each row while shrinking', () => {
-    const next = setGridShape(grid(['a', 'b', 'c', 'd'], [3, 1], 0), [1, 1])
+    const next = setGridShape(grid(['a', 'b', 'c', 'd'], [3, 1], 0), positional(1, 1))
 
     expect(idsOf(next)).toEqual(['a', 'd'])
   })
@@ -304,7 +340,7 @@ describe('setGridShape', () => {
   it('accepts a ragged shape', () => {
     // The shape editor's whole reason for existing. Four on top and two below
     // must be expressible in one commit, not approximated by a rectangle.
-    const next = setGridShape(grid(['a'], [1], 0), [4, 2])
+    const next = setGridShape(grid(['a'], [1], 0), [{ length: 4, sourceRow: 0 }, { length: 2, sourceRow: null }])
 
     expect(lengths(next)).toEqual([4, 2])
     expect(next?.lanes).toHaveLength(6)
@@ -320,7 +356,7 @@ describe('setGridShape', () => {
           { length: 1, height: 3 },
         ],
       }),
-      [2, 2],
+      positional(2, 2),
     )
 
     expect(next?.rows?.[0]?.projectTabId).toBe('tab-9')
@@ -329,12 +365,12 @@ describe('setGridShape', () => {
   })
 
   it('adds and removes rows to match the requested shape', () => {
-    expect(lengths(setGridShape(grid(['a'], [1], 0), [1, 1, 1]))).toEqual([1, 1, 1])
-    expect(lengths(setGridShape(grid(['a', 'b', 'c'], [1, 1, 1], 0), [1]))).toEqual([1])
+    expect(lengths(setGridShape(grid(['a'], [1], 0), [{ length: 1, sourceRow: 0 }, { length: 1, sourceRow: null }, { length: 1, sourceRow: null }]))).toEqual([1, 1, 1])
+    expect(lengths(setGridShape(grid(['a', 'b', 'c'], [1, 1, 1], 0), positional(1)))).toEqual([1])
   })
 
   it('clamps focus into the resulting lanes', () => {
-    const next = setGridShape(grid(['a', 'b', 'c'], [3], 2), [1])
+    const next = setGridShape(grid(['a', 'b', 'c'], [3], 2), positional(1))
 
     expect(next?.focusedLane).toBe(0)
   })
@@ -343,10 +379,110 @@ describe('setGridShape', () => {
     const state = grid(['a'], [1], 0)
 
     expect(setGridShape(state, [])).toBeNull()
-    expect(setGridShape(state, [0])).toBeNull()
-    expect(setGridShape(state, [1.5])).toBeNull()
-    expect(setGridShape(state, [MAX_DISPATCH_TILES + 1])).toBeNull()
-    expect(setGridShape(state, Array(MAX_DISPATCH_ROWS + 1).fill(1))).toBeNull()
-    expect(setGridShape(state, [MAX_DISPATCH_TILES, MAX_DISPATCH_TILES])).toBeNull()
+    expect(setGridShape(state, positional(0))).toBeNull()
+    expect(setGridShape(state, positional(1.5))).toBeNull()
+    expect(setGridShape(state, positional(MAX_DISPATCH_TILES + 1))).toBeNull()
+    expect(setGridShape(state, positional(...Array(MAX_DISPATCH_ROWS + 1).fill(1)))).toBeNull()
+    expect(setGridShape(state, positional(MAX_DISPATCH_TILES, MAX_DISPATCH_TILES))).toBeNull()
+  })
+})
+
+describe('setGridShape row identity', () => {
+  // The review finding this exists for: the shape editor used to send a bare
+  // number[] of lengths. Removing the middle of three rows shifted every later
+  // row up a slot, so a positional apply re-pointed row 1's metadata at row 2's
+  // contents — it deleted the LAST row and resized the survivors, evicting
+  // agents from rows the user never touched.
+  const bound = (length: number, tab: string): DispatchGridRow =>
+    ({ length, projectTabId: tab })
+
+  it('removes the row the user removed, not the last one', () => {
+    const state: TiledDispatchState = {
+      lanes: ['a1', 'a2', 'b1', 'b2', 'c1', 'c2'].map(id => ({ selectedSessionId: id as SessionId })),
+      rows: [bound(2, 'tab-A'), bound(2, 'tab-B'), bound(2, 'tab-C')],
+      focusedLane: 0,
+    }
+
+    // The user removed the MIDDLE row, so rows A and C survive with their own
+    // lanes and their own bindings.
+    const next = setGridShape(state, [
+      { length: 2, sourceRow: 0 },
+      { length: 2, sourceRow: 2 },
+    ])
+
+    expect(idsOf(next)).toEqual(['a1', 'a2', 'c1', 'c2'])
+    expect(next?.rows?.map(row => row.projectTabId)).toEqual(['tab-A', 'tab-C'])
+  })
+
+  it('does not resize the rows that survive a removal', () => {
+    // The ragged version, which was worse: a positional apply shrank the 4-lane
+    // row to 1, grew the 1-lane row to 2, and dropped the third row entirely.
+    const state: TiledDispatchState = {
+      lanes: ['a', 'b', 'c', 'd', 'e', 'f', 'g'].map(id => ({ selectedSessionId: id as SessionId })),
+      rows: [bound(4, 'tab-A'), bound(1, 'tab-B'), bound(2, 'tab-C')],
+      focusedLane: 0,
+    }
+
+    // Removing the FIRST row leaves B and C at their own widths.
+    const next = setGridShape(state, [
+      { length: 1, sourceRow: 1 },
+      { length: 2, sourceRow: 2 },
+    ])
+
+    expect(lengths(next)).toEqual([1, 2])
+    expect(idsOf(next)).toEqual(['e', 'f', 'g'])
+    expect(next?.rows?.map(row => row.projectTabId)).toEqual(['tab-B', 'tab-C'])
+  })
+
+  it('gives a genuinely new row empty lanes and no inherited binding', () => {
+    const state: TiledDispatchState = {
+      lanes: [{ selectedSessionId: 'a' as SessionId }],
+      rows: [bound(1, 'tab-A')],
+      focusedLane: 0,
+    }
+
+    const next = setGridShape(state, [
+      { length: 1, sourceRow: 0 },
+      { length: 2, sourceRow: null },
+    ])
+
+    expect(idsOf(next)).toEqual(['a', undefined, undefined])
+    expect(next?.rows?.map(row => row.projectTabId)).toEqual(['tab-A', undefined])
+  })
+
+  it('follows the focused lane to wherever its row ended up', () => {
+    // Clamping the stale flat index instead would move focus into a DIFFERENT
+    // row: growing the top row makes the old index a brand-new top-row lane, and
+    // the next session command would target a row the user was not working in.
+    const state: TiledDispatchState = {
+      lanes: ['a1', 'a2', 'b1', 'b2'].map(id => ({ selectedSessionId: id as SessionId })),
+      rows: [{ length: 2 }, { length: 2 }],
+      focusedLane: 3,
+    }
+
+    const next = setGridShape(state, [
+      { length: 4, sourceRow: 0 },
+      { length: 2, sourceRow: 1 },
+    ])
+
+    expect(next?.lanes[next.focusedLane]?.selectedSessionId).toBe('b2')
+  })
+
+  it('keeps focus in its own row when that row shrinks under it', () => {
+    const state: TiledDispatchState = {
+      lanes: ['a1', 'b1', 'b2', 'b3'].map(id => ({ selectedSessionId: id as SessionId })),
+      rows: [{ length: 1 }, { length: 3 }],
+      focusedLane: 3,
+    }
+
+    const next = setGridShape(state, [
+      { length: 1, sourceRow: 0 },
+      { length: 2, sourceRow: 1 },
+    ])
+
+    // Column 2 no longer exists in that row, so focus clamps to its last lane —
+    // still inside the row the user was working in.
+    expect(next?.focusedLane).toBe(2)
+    expect(next?.lanes[next.focusedLane]?.selectedSessionId).toBe('b2')
   })
 })

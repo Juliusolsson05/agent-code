@@ -369,6 +369,12 @@ function GridRowView({
                     workspace.setTiledLaneSession(laneIndex, row.sessionId)
                     workspace.setTiledFocusedLane(laneIndex)
                   }}
+                  // Without this the strip's "+N more" renders as a button and
+                  // does nothing — an affordance that promises an action it
+                  // cannot perform, in the exact case the cap exists for.
+                  onToggleExpandedParent={sessionId =>
+                    workspace.toggleDispatchRowExpandedParent(rowIndex, sessionId)
+                  }
                 />
               </div>
               <div

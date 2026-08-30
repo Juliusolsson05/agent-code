@@ -453,13 +453,17 @@ does not move.
 | id | title | surface | behavior |
 |---|---|---|---|
 | `dispatch-row-project` | `Row Project…` | `dispatch` | Picker listing every open tab plus `Any project`. `getState` badges the current binding. |
-| `dispatch-row-child-cap` | `Orchestrated Agents` | `dispatch` | Toggles the focused row's child cap. `getState` badges `Capped` / `All`. |
+| `dispatch-row-child-cap` | `Nested Agents` | `dispatch` | Toggles the focused row's child cap. `getState` badges `Capped` / `All`. |
 
 One project command rather than a bind/unbind pair, because `Any project` is a
 value in the same list rather than a separate action — the reasoning that made
 `Dispatch Scope` name both ends instead of shipping `Global Dispatch: On`.
-`Orchestrated Agents` is a stable noun with its state in a badge, per rule 3, not
-`Toggle Orchestrated Agents`.
+`Nested Agents` is a stable noun with its state in a badge, per rule 3, not
+`Toggle Orchestrated Agents`. It is **not** called "Orchestrated Agents", which
+an earlier draft used: `buildDispatchGroups` nests manually linked agents and
+orchestration children identically at `depth: 1`, and the cap follows visual
+nesting, so it cannot tell them apart. A title promising orchestration-only
+behavior would have been a lie about what the control does.
 
 The picker follows the surface-registry pattern (`registry.tsx`): a wrapper in
 `features/workspace/surfaces/`, one import, one array entry, and a `uiShell`
@@ -519,7 +523,7 @@ without a modal, which is why those commands keep their exact current semantics
 |---|---|---|
 | `⌥↑` / `⌥↓` | Move the focused lane's *selection* up/down the index | Unchanged |
 | `⌥←` / `⌥→` | Move focus to the previous/next lane | Move focus within the row; **stop at row edges** rather than wrapping |
-| `⌥⇧↑` / `⌥⇧↓` | — | Move focus to the lane above/below (same column ordinal, clamped to that row's length) |
+| `⌥⇧↑` / `⌥⇧↓` | — | **Retracted — see below.** Focus Row Above/Below ship palette-only, with no default chord. |
 | `⌘N` | Fill the focused lane with row N of the index | Unchanged |
 
 `⌥←/→` stopping at row edges rather than wrapping is deliberate: wrapping would
@@ -536,21 +540,31 @@ none of them appear in the Keyboard Shortcuts surface, none can be rebound, and
 Adding row movement inline would be the path of least resistance and would make
 the problem one key worse. Instead:
 
-- `⌥⇧↑` / `⌥⇧↓` are registered as real commands (`dispatch-focus-row-up` /
-  `dispatch-focus-row-down`, `surface: 'dispatch'`) in `defaults.ts`, so they show
-  up in the shortcuts UI, can be rebound, and are covered by `check:keybindings`.
-- The chord is **verified free**: no `Alt+Shift+Arrow` binding exists anywhere in
-  `defaults.ts` (the `Alt+Shift+*` family is `D`, `T`, `A`, `P` — all letters),
-  and `⌥⇧↑/↓` pairs naturally with the existing `⌥↑/↓`, reading as "same axis,
-  bigger unit".
-- **`check:keybindings` gates it, not this document.** If the checker rejects the
-  pairing the way it rejected `⌘⇧D` against dictation, the chord moves rather
-  than shadowing an existing owner.
-- **Fallback if nothing suitable is free:** register the commands with **no
-  default binding**. They stay invocable from the command palette and bindable by
-  the user through the keybindings system the app already ships. Shipping an
-  unbound command is strictly better than shipping an invisible one or stealing a
-  chord that already means something.
+- `dispatch-focus-row-up` / `dispatch-focus-row-down` are registered as real
+  commands (`surface: 'dispatch'`), so they appear in the shortcuts UI and can be
+  rebound by the user.
+- **The `⌥⇧↑/↓` chord was retracted in review, and the reason is worth keeping.**
+  It was checked against `defaults.ts` — no `Alt+Shift+Arrow` binding exists —
+  and `check:keybindings` accepted it. Both were true and both were beside the
+  point: that checker only knows about bindings *this app* registers. It does not
+  know about the OS.
+
+  `useKeybinds`' own header already records the answer: Option+Shift+Arrow is the
+  macOS word-selection shortcut and is *"load-bearing for every text field in the
+  app (including our composer)"* — which is precisely why directional resize uses
+  `fn+alt+Arrow` instead. Dispatch bindings stay live while a text editor owns
+  the target and the router `preventDefault()`s what it routes, so claiming that
+  chord would have broken selection in the composer *and* moved row focus
+  underneath the user.
+
+  **The lesson, recorded because it will recur: a green `check:keybindings` is
+  evidence about this app's binding table, not about whether a chord is free.**
+  Platform reservations have to be checked by reading, and this repo already
+  wrote down the one that mattered.
+- **What shipped is the fallback below**: the commands are registered with **no
+  default binding**. They stay invocable from the palette and bindable through
+  the keybindings UI, which is strictly better than a default that steals text
+  selection. A chord free of both this app and the platform can be added later.
 
 Migrating the four existing inline Dispatch arrows into the registry is *not* in
 this PR's scope — it is a behavior-preserving refactor of a surface this change

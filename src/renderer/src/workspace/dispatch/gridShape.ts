@@ -368,13 +368,31 @@ export function insertRowBelowInGrid(
     lanes: [...grid.lanes.slice(0, insertAt), ...blanks, ...grid.lanes.slice(insertAt)],
     rows: [
       ...grid.rows.slice(0, rowIndex + 1),
-      { length },
+      { length, height: averageRowHeight(grid.rows) },
       ...grid.rows.slice(rowIndex + 1),
     ],
     focusedLane:
       insertAt <= grid.focusedLane ? grid.focusedLane + length : grid.focusedLane,
     laneWeights: insertRowWeights(grid, rowIndex, insertAt, length),
   }
+}
+
+/**
+ * One equal share of the enlarged grid, in whatever scale the siblings use.
+ *
+ * Heights are scale-free and normalized on read, but they are NOT written on a
+ * common scale: the drag handler persists fractions summing to 1, while an
+ * un-sized row defaults to 1. Defaulting a new row to 1 beside dragged siblings
+ * of 0.7/0.3 therefore rendered the brand-new EMPTY row as the tallest thing on
+ * screen and halved its neighbour. Taking the average is the same fix
+ * insertLaneWeight applies on the lane axis.
+ */
+function averageRowHeight(rows: DispatchGridRow[]): number | undefined {
+  const heights = rows.map(row => row.height)
+  if (heights.some(height => height === undefined)) return undefined
+  const known = heights as number[]
+  if (known.length === 0) return undefined
+  return known.reduce((sum, height) => sum + height, 0) / known.length
 }
 
 /** Size a new row's lanes against the row it was cloned from. */
@@ -450,11 +468,30 @@ function focusAfterRowRemoval(
 }
 
 /**
+ * One requested output row: how long, and which existing row it came from.
+ *
+ * `sourceRow: null` means a genuinely NEW row (empty lanes, no inherited
+ * metadata). An index means "this output row IS that existing row", carrying
+ * its lanes, project binding, density, and sizing forward.
+ *
+ * WHY the source is explicit rather than positional: the shape editor used to
+ * hand over a bare `number[]`, which cannot express WHICH row was removed.
+ * Deleting the middle of three rows shifted every later row up a slot, so a
+ * positional apply re-pointed row 1's metadata at row 2's contents — it deleted
+ * the LAST row and resized the survivors, evicting agents from rows the user
+ * never touched. Row identity has to survive the trip.
+ */
+export type GridShapeRow = {
+  length: number
+  sourceRow: number | null
+}
+
+/**
  * Apply a complete row shape at once — the shape editor's commit path.
  *
- * Rows keep their identity BY POSITION: editing row 2's count changes only row
- * 2's lanes, and every row's project binding, density, and height survive.
- * Resizing is a statement about space, so it must not silently unbind a row.
+ * Rows keep their identity through `sourceRow`, so their project binding,
+ * density, and height survive: resizing is a statement about space and must
+ * not silently unbind a row.
  *
  * Lane weights are dropped wholesale rather than remapped. A bulk reshape has
  * no positional intent to map old weights onto — the same reasoning that made
@@ -463,47 +500,61 @@ function focusAfterRowRemoval(
  */
 export function setGridShape(
   tiled: TiledDispatchState,
-  rowLengths: number[],
+  requested: GridShapeRow[],
 ): TiledDispatchState | null {
-  if (!Array.isArray(rowLengths)) return null
-  if (rowLengths.length < 1 || rowLengths.length > MAX_DISPATCH_ROWS) return null
+  if (!Array.isArray(requested)) return null
+  if (requested.length < 1 || requested.length > MAX_DISPATCH_ROWS) return null
   if (
-    rowLengths.some(
-      length =>
-        !Number.isInteger(length) ||
-        length < MIN_DISPATCH_TILES ||
-        length > MAX_DISPATCH_TILES,
+    requested.some(
+      row =>
+        !Number.isInteger(row.length) ||
+        row.length < MIN_DISPATCH_TILES ||
+        row.length > MAX_DISPATCH_TILES,
     )
   ) {
     return null
   }
-  if (rowLengths.reduce((sum, length) => sum + length, 0) > MAX_DISPATCH_LANES) {
+  if (requested.reduce((sum, row) => sum + row.length, 0) > MAX_DISPATCH_LANES) {
     return null
   }
 
   const grid = normalizeGridShape(tiled)
+  const focusedRow = rowIndexForLane(grid.rows, grid.focusedLane)
+  const focusedColumn = focusedRow >= 0
+    ? grid.focusedLane - rowStartIndex(grid.rows, focusedRow)
+    : 0
+
   const lanes: DispatchLane[] = []
   const rows: DispatchGridRow[] = []
-  for (let i = 0; i < rowLengths.length; i++) {
-    const target = rowLengths[i]!
-    const source = grid.rows[i]
+  let nextFocus: number | null = null
+
+  for (const request of requested) {
+    const source = request.sourceRow !== null ? grid.rows[request.sourceRow] : undefined
     const existing = source
-      ? grid.lanes.slice(rowStartIndex(grid.rows, i), rowStartIndex(grid.rows, i) + source.length)
+      ? grid.lanes.slice(
+        rowStartIndex(grid.rows, request.sourceRow!),
+        rowStartIndex(grid.rows, request.sourceRow!) + source.length,
+      )
       : []
-    for (let column = 0; column < target; column++) {
+    // Follow the focused lane to wherever its row ended up. Clamping a stale
+    // flat index instead would silently move focus into a different row: in a
+    // [2,2] grid focused on the bottom row, growing the TOP row to four lanes
+    // makes flat index 3 a brand-new top-row lane, and the next session command
+    // would target a row the user was not working in.
+    if (source && request.sourceRow === focusedRow) {
+      nextFocus = lanes.length + Math.min(focusedColumn, request.length - 1)
+    }
+    for (let column = 0; column < request.length; column++) {
       // Growth appends EMPTY lanes; shrinking drops from the row's tail.
       lanes.push(existing[column] ?? {})
     }
-    rows.push({ ...(source ?? {}), length: target })
+    rows.push({ ...(source ?? {}), length: request.length })
   }
 
   return {
     lanes,
     rows,
-    // Clamp rather than chase the focused session across the reshape: a bulk
-    // shape change has no positional intent, and a focus that silently jumped
-    // rows would be harder to predict than one that stayed in range.
-    focusedLane: Math.min(grid.focusedLane, Math.max(0, lanes.length - 1)),
+    focusedLane: Math.min(nextFocus ?? 0, Math.max(0, lanes.length - 1)),
     laneWeights: undefined,
   }
 }

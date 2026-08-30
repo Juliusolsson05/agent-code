@@ -1,7 +1,10 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
-import { buildVisibleDispatchRows } from '@renderer/workspace/dispatch/dispatchSelectors'
+import {
+  buildVisibleDispatchRows,
+  resolveDispatchSpawnTarget,
+} from '@renderer/workspace/dispatch/dispatchSelectors'
 import {
   ORCHESTRATION_CHILD_CAP,
   rowScopedRows,
@@ -176,5 +179,48 @@ describe('orchestration child cap', () => {
       if (item.kind === 'agent') expect(item.row.tabId).toBe(boundTab)
     }
     expect(items.some(item => item.kind === 'more')).toBe(true)
+  })
+})
+
+describe('spawning into a bound row', () => {
+  // A new agent created from an empty lane in a bound row belongs to that row's
+  // project. Falling back to classic focus or activeTabId would file it under a
+  // project the row does not even list, in a slot the row's own index cannot
+  // then offer.
+  it('files a new agent under the focused row s project', () => {
+    // Deliberately a project that is NOT the active tab — that is the whole
+    // point: the binding has to outrank the activeTabId fallback.
+    const boundTab = GLOBAL_ROWS.find(row => row.tabId !== FIXTURE.state.activeTabId)!.tabId
+    const state: WorkspaceState = {
+      ...FIXTURE.state,
+      dispatchMode: {
+        ...FIXTURE.state.dispatchMode!,
+        scope: 'global',
+        // Empty focused lane, so there is no lane session to read the project
+        // from — exactly the case that used to fall through to activeTabId.
+        tiled: {
+          lanes: [{}],
+          rows: [{ length: 1, projectTabId: boundTab }],
+          focusedLane: 0,
+        },
+      },
+    }
+
+    expect(boundTab).not.toBe(FIXTURE.state.activeTabId)
+    expect(resolveDispatchSpawnTarget(state).tabId).toBe(boundTab)
+  })
+
+  it('still falls back to the active tab for an unbound row', () => {
+    const state: WorkspaceState = {
+      ...FIXTURE.state,
+      dispatchMode: {
+        ...FIXTURE.state.dispatchMode!,
+        scope: 'global',
+        focusedSessionId: undefined,
+        tiled: { lanes: [{}], rows: [{ length: 1 }], focusedLane: 0 },
+      },
+    }
+
+    expect(resolveDispatchSpawnTarget(state).tabId).toBe(FIXTURE.state.activeTabId)
   })
 })
