@@ -401,17 +401,42 @@ export class SessionRecorder {
   }
 
   private async appendRaw(content: string): Promise<void> {
-    try {
-      await appendFile(this.eventsPath, content, { mode: 0o600 })
-    } catch {
-      if (!this.ensuredDir) {
-        await mkdir(this.dir, { recursive: true, mode: 0o700 })
-        this.ensuredDir = true
+    let lastError: unknown
+    const retryDelaysMs = [0, 10, 25, 50]
+    for (const retryDelayMs of retryDelaysMs) {
+      if (retryDelayMs > 0) {
+        // WHY retry at the recorder boundary: full-suite and packaged-app bursts
+        // can briefly exhaust the process file-descriptor table while unrelated
+        // consumers are opening files. Losing the final recording chronology is
+        // a much worse outcome than yielding tens of milliseconds during close.
+        // The short bounded schedule also covers antivirus/indexer EBUSY windows
+        // without hiding persistent disk or permission failures indefinitely.
+        await new Promise<void>(resolve => setTimeout(resolve, retryDelayMs))
+      }
+      try {
         await appendFile(this.eventsPath, content, { mode: 0o600 })
-      } else {
-        throw new Error(`session recording append failed for ${this.eventsPath}`)
+        return
+      } catch (error) {
+        lastError = error
+        const code = (error as NodeJS.ErrnoException | undefined)?.code
+        if (!this.ensuredDir || code === 'ENOENT') {
+          // `ensuredDir` records our last successful mkdir, not an eternal
+          // filesystem guarantee. External cleanup or a failed metadata write
+          // may remove the directory between that proof and this lazy append.
+          try {
+            await mkdir(this.dir, { recursive: true, mode: 0o700 })
+            this.ensuredDir = true
+          } catch (mkdirError) {
+            lastError = mkdirError
+          }
+        }
       }
     }
+    const code = (lastError as NodeJS.ErrnoException | undefined)?.code
+    throw new Error(
+      `session recording append failed${code ? ` (${code})` : ''} for ${this.eventsPath}`,
+      { cause: lastError },
+    )
   }
 
   // Snapshot this.meta SYNCHRONOUSLY, then enqueue the actual write behind any

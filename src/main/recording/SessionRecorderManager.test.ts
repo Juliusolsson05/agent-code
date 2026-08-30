@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, readdirSync, existsSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, existsSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -122,6 +122,28 @@ describe('SessionRecorderManager', () => {
     expect(toJSON).not.toHaveBeenCalled()
     await m.stop('deferred')
     expect(toJSON).toHaveBeenCalledTimes(1)
+  })
+
+  it('re-establishes a recording directory lost before a lazy event append', async () => {
+    const m = mgr()
+    const sessionId = 'directory-recovery'
+    m.startRecording(sessionId)
+    const originalDir = await readRecordingDir(sessionId)
+
+    // `meta.json` creation proves the recorder once ensured the directory.
+    // Removing it models external cleanup between that proof and the first
+    // lazy events append; the writer must re-establish its destination rather
+    // than treating the cached boolean as permanent filesystem authority.
+    rmSync(originalDir, { recursive: true, force: true })
+    m.observe('session:semantic-event', [{ sessionId, event: { kind: 'turn_started' } }])
+    await m.stop(sessionId)
+
+    const recoveredDir = await readRecordingDir(sessionId)
+    const lines = readFileSync(join(recoveredDir, 'events.jsonl'), 'utf8')
+      .trim()
+      .split('\n')
+      .map(line => JSON.parse(line))
+    expect(lines.map(line => line.ch)).toEqual(['session:semantic-event'])
   })
 
   it('ignores payloads without a sessionId', async () => {
