@@ -368,9 +368,15 @@ export function resolveDispatchSpawnTarget(state: WorkspaceState): DispatchSpawn
     // something coming to live there.
     const grid = normalizeGridShape(dm.tiled)
     const rowIndex = rowIndexForLane(grid.rows, laneIndex)
-    const boundTab = rowIndex >= 0 ? grid.rows[rowIndex]?.projectTabId : undefined
-    if (boundTab !== undefined) {
-      return { tabId: boundTab, cwdSessionId: null, laneIndex }
+    // A row can be bound to SEVERAL projects, so "which project does a new
+    // agent belong to" needs a rule rather than a lookup. The active tab when
+    // it is one of them, otherwise the first: deterministic, and "the project
+    // you were last in" is the least surprising answer. The per-group `+` in
+    // the index is unaffected — it already carries an explicit tabId.
+    const bound = rowIndex >= 0 ? grid.rows[rowIndex]?.projectTabIds : undefined
+    if (bound && bound.length > 0) {
+      const tabId = bound.includes(state.activeTabId) ? state.activeTabId : bound[0]!
+      return { tabId, cwdSessionId: null, laneIndex }
     }
     // Unbound: fall back to the classic focus, then the active tab — but still
     // place the new agent INTO the focused lane.

@@ -352,14 +352,14 @@ describe('setGridShape', () => {
     const next = setGridShape(
       grid(['a', 'b'], [1, 1], 0, {
         rows: [
-          { length: 1, projectTabId: 'tab-9', capChildren: false },
+          { length: 1, projectTabIds: ['tab-9'], capChildren: false },
           { length: 1, height: 3 },
         ],
       }),
       positional(2, 2),
     )
 
-    expect(next?.rows?.[0]?.projectTabId).toBe('tab-9')
+    expect(next?.rows?.[0]?.projectTabIds).toEqual(['tab-9'])
     expect(next?.rows?.[0]?.capChildren).toBe(false)
     expect(next?.rows?.[1]?.height).toBe(3)
   })
@@ -394,7 +394,7 @@ describe('setGridShape row identity', () => {
   // contents — it deleted the LAST row and resized the survivors, evicting
   // agents from rows the user never touched.
   const bound = (length: number, tab: string): DispatchGridRow =>
-    ({ length, projectTabId: tab })
+    ({ length, projectTabIds: [tab] })
 
   it('removes the row the user removed, not the last one', () => {
     const state: TiledDispatchState = {
@@ -411,7 +411,7 @@ describe('setGridShape row identity', () => {
     ])
 
     expect(idsOf(next)).toEqual(['a1', 'a2', 'c1', 'c2'])
-    expect(next?.rows?.map(row => row.projectTabId)).toEqual(['tab-A', 'tab-C'])
+    expect(next?.rows?.map(row => row.projectTabIds?.[0])).toEqual(['tab-A', 'tab-C'])
   })
 
   it('does not resize the rows that survive a removal', () => {
@@ -431,7 +431,7 @@ describe('setGridShape row identity', () => {
 
     expect(lengths(next)).toEqual([1, 2])
     expect(idsOf(next)).toEqual(['e', 'f', 'g'])
-    expect(next?.rows?.map(row => row.projectTabId)).toEqual(['tab-B', 'tab-C'])
+    expect(next?.rows?.map(row => row.projectTabIds?.[0])).toEqual(['tab-B', 'tab-C'])
   })
 
   it('gives a genuinely new row empty lanes and no inherited binding', () => {
@@ -447,7 +447,7 @@ describe('setGridShape row identity', () => {
     ])
 
     expect(idsOf(next)).toEqual(['a', undefined, undefined])
-    expect(next?.rows?.map(row => row.projectTabId)).toEqual(['tab-A', undefined])
+    expect(next?.rows?.map(row => row.projectTabIds?.[0])).toEqual(['tab-A', undefined])
   })
 
   it('follows the focused lane to wherever its row ended up', () => {

@@ -219,10 +219,14 @@ export function buildDefaultKeybindings(): CommandBindingDefault[] {
     // have broken selection in the composer while moving row focus underneath
     // the user.
     //
-    // Focus Row Above/Below therefore stay palette-only until a chord is found
-    // that is free of BOTH this app and the platform. They remain rebindable by
-    // the user through Keyboard Shortcuts, which is strictly better than
-    // shipping a default that steals text selection.
+    // Cmd+Alt+Up/Down is that chord. It is free of this app's table (the
+    // reservations file claims Cmd+Alt+DIGITS for tab activation, and
+    // Cmd+Alt+E/D for the editor and debug panel — no arrows), and unlike
+    // Option+Shift+Arrow it is not a macOS text-selection binding, which is the
+    // class that made the first attempt unusable. `dispatch` context, because
+    // rows only exist there.
+    { commandId: 'dispatch-focus-row-up', bindings: ['Cmd+Alt+Up'], context: 'dispatch' },
+    { commandId: 'dispatch-focus-row-down', bindings: ['Cmd+Alt+Down'], context: 'dispatch' },
 
     // --- App panels (⌘⇧) ----------------------------------------------------
     { commandId: 'usage.open', bindings: ['Cmd+Shift+U'], context: 'global' },

@@ -118,7 +118,7 @@ export function useDispatchActions(
   setDispatchLaneWeights: (weights: number[]) => void
   setDispatchRowIndexFraction: (rowIndex: number, fraction: number) => void
   setDispatchRowHeights: (heights: number[]) => void
-  setDispatchRowProject: (rowIndex: number, tabId: TabId | undefined) => void
+  setDispatchRowProjects: (rowIndex: number, tabIds: TabId[]) => void
   setDispatchRowCapChildren: (rowIndex: number, cap: boolean) => void
   toggleDispatchRowExpandedParent: (rowIndex: number, sessionId: SessionId) => void
 } {
@@ -566,21 +566,26 @@ export function useDispatchActions(
     [setState],
   )
 
-  const setDispatchRowProject = useCallback(
-    (rowIndex: number, tabId: TabId | undefined) => {
+  const setDispatchRowProjects = useCallback(
+    (rowIndex: number, tabIds: TabId[]) => {
       setState(prev => {
-        const patched = patchRow(prev, rowIndex, { projectTabId: tabId })
+        // Empty normalizes to ABSENT here, not to an empty array: "any project"
+        // must have exactly one representation or every reader needs to test
+        // for both.
+        const patched = patchRow(prev, rowIndex, {
+          projectTabIds: tabIds.length > 0 ? tabIds : undefined,
+        })
         if (patched === prev || !patched.dispatchMode) return patched
         // Binding PROMOTES scope to global. Project scope builds its row set
-        // from activeTabId alone, so a row bound to any other project would show
-        // an empty index and every lane in it would fail to resolve. The same
-        // promotion, for the same reason, already happens in
+        // from activeTabId alone, so a row bound to any other project would
+        // show an empty index and every lane in it would fail to resolve. The
+        // same promotion, for the same reason, already happens in
         // agentIndexNavigation when a cross-project label is used.
         //
-        // Unbinding deliberately does NOT demote: the user may have several
-        // rows still bound, and silently narrowing the scope out from under them
-        // would empty those rows.
-        if (tabId === undefined || patched.dispatchMode.scope === 'global') return patched
+        // Unbinding deliberately does NOT demote: other rows may still be
+        // bound, and silently narrowing the scope out from under them would
+        // empty those rows.
+        if (tabIds.length === 0 || patched.dispatchMode.scope === 'global') return patched
         return {
           ...patched,
           dispatchMode: { ...patched.dispatchMode, scope: 'global' },
@@ -713,7 +718,7 @@ export function useDispatchActions(
     setDispatchLaneWeights,
     setDispatchRowIndexFraction,
     setDispatchRowHeights,
-    setDispatchRowProject,
+    setDispatchRowProjects,
     setDispatchRowCapChildren,
     toggleDispatchRowExpandedParent,
   }

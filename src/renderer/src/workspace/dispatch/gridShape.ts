@@ -145,10 +145,23 @@ function repairRowLengths(
     }
     sum += row.length
   }
-  if (wellFormed && sum === laneCount) return rows
+  if (wellFormed && sum === laneCount) {
+    // Still has to pass through the project normalization: a legacy
+    // `projectTabId` or an empty `projectTabIds` is not a length problem, and
+    // the fast path must not hand back a row that still carries either.
+    let projectsClean = true
+    for (const row of rows) {
+      if (normalizeRowProjects(row) !== row) {
+        projectsClean = false
+        break
+      }
+    }
+    if (projectsClean) return rows
+    return rows.map(normalizeRowProjects)
+  }
 
   const sanitized = rows.map(row => ({
-    ...row,
+    ...normalizeRowProjects(row),
     length:
       Number.isInteger(row.length) && row.length > 0 ? row.length : 0,
   }))
@@ -202,6 +215,38 @@ function withMigratedIndexFraction(
   if (!first || first.indexFraction !== undefined) return rows
   if (legacy === undefined || !Number.isFinite(legacy) || legacy <= 0) return rows
   return [{ ...first, indexFraction: legacy }, ...rows.slice(1)]
+}
+
+/**
+ * Fold the legacy single `projectTabId` into `projectTabIds`, and collapse an
+ * empty set to absent.
+ *
+ * WHY both, in one place: "any project" must have exactly ONE representation.
+ * With `undefined`, `[]`, and a stale `projectTabId` all reachable, every
+ * reader would need to test for three things and one of them would eventually
+ * forget. Same read-time migration the legacy `ratios` array gets.
+ *
+ * Returns the SAME object when nothing needed changing, so the row-identity
+ * checks that the lane-selection race depends on keep working.
+ */
+function normalizeRowProjects(row: DispatchGridRow): DispatchGridRow {
+  const legacy = row.projectTabId
+  const explicit = row.projectTabIds
+  const merged = explicit ?? (legacy !== undefined ? [legacy] : undefined)
+  const cleaned = merged?.filter(id => typeof id === 'string' && id.length > 0)
+
+  if (legacy === undefined && explicit === cleaned) return row
+  if (legacy === undefined && explicit !== undefined && cleaned !== undefined
+    && explicit.length === cleaned.length && cleaned.length > 0) {
+    return row
+  }
+
+  const { projectTabId: _legacyDropped, ...rest } = row
+  if (!cleaned || cleaned.length === 0) {
+    const { projectTabIds: _empty, ...withoutProjects } = rest
+    return withoutProjects
+  }
+  return { ...rest, projectTabIds: cleaned }
 }
 
 /**

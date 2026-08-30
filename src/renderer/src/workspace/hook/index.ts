@@ -999,7 +999,7 @@ export function useWorkspace(
     setDispatchLaneWeights: dispatchActions.setDispatchLaneWeights,
     setDispatchRowIndexFraction: dispatchActions.setDispatchRowIndexFraction,
     setDispatchRowHeights: dispatchActions.setDispatchRowHeights,
-    setDispatchRowProject: dispatchActions.setDispatchRowProject,
+    setDispatchRowProjects: dispatchActions.setDispatchRowProjects,
     setDispatchRowCapChildren: dispatchActions.setDispatchRowCapChildren,
     toggleDispatchRowExpandedParent: dispatchActions.toggleDispatchRowExpandedParent,
   }

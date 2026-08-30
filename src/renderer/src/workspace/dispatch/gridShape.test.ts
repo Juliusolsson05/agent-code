@@ -117,14 +117,14 @@ describe('normalizeGridShape', () => {
     const normalized = normalizeGridShape(
       tiled(['a', 'b', 'c'], 0, {
         rows: [
-          { length: 1, projectTabId: 'tab-1', capChildren: false },
+          { length: 1, projectTabIds: ['tab-1'], capChildren: false },
           { length: 9, height: 2, indexFraction: 0.3 },
         ],
       }),
     )
 
     expect(lengths(normalized.rows)).toEqual([1, 2])
-    expect(normalized.rows[0]?.projectTabId).toBe('tab-1')
+    expect(normalized.rows[0]?.projectTabIds).toEqual(['tab-1'])
     expect(normalized.rows[0]?.capChildren).toBe(false)
     expect(normalized.rows[1]?.height).toBe(2)
     expect(normalized.rows[1]?.indexFraction).toBe(0.3)

@@ -65,7 +65,7 @@ export const DispatchAgentList = memo(function DispatchAgentList({
   // project binding and child density that make one row's list differ from
   // another's over the same workspace. Absent in classic Dispatch, which has
   // no rows and therefore no per-row scoping.
-  gridRow?: Pick<DispatchGridRow, 'projectTabId' | 'capChildren' | 'expandedParents'>
+  gridRow?: Pick<DispatchGridRow, 'projectTabIds' | 'capChildren' | 'expandedParents'>
   onToggleExpandedParent?: (parentSessionId: SessionId) => void
   onToggleCapChildren?: () => void
   onPickRowProject?: () => void
@@ -116,19 +116,35 @@ export const DispatchAgentList = memo(function DispatchAgentList({
       .filter(group => group.items.length > 0),
     [groups, gridRow],
   )
+  const boundProjects = gridRow?.projectTabIds
   const scopedPinnedRows = useMemo(
-    () => (gridRow?.projectTabId === undefined
+    () => (!boundProjects || boundProjects.length === 0
       ? pinnedRows
-      : pinnedRows.filter(row => row.tabId === gridRow.projectTabId)),
-    [pinnedRows, gridRow],
+      : pinnedRows.filter(row => boundProjects.includes(row.tabId))),
+    [pinnedRows, boundProjects],
   )
-  const rowProjectLabel = useMemo(
-    () => (gridRow?.projectTabId === undefined
-      ? null
-      : groups.find(group => group.tab.id === gridRow.projectTabId)?.tab.title
-        ?? 'Project'),
-    [groups, gridRow],
-  )
+  // Tab LETTERS, not names: the header is 10px uppercase with room for a few
+  // characters, and A/B/C is already how dispatch labels and pinned project
+  // chips read. Degrades to "A·B +2" rather than truncating a name to nothing.
+  const rowProjectLabel = useMemo(() => {
+    if (!boundProjects || boundProjects.length === 0) return null
+    const letters = boundProjects.map(tabId => {
+      // group.tabIndex is the tab's index in state.tabs — the canonical source
+      // of the A/B/C letter. `groups.findIndex` would be wrong: groups omit
+      // tabs with no visible rows, so a project with no agents shifts every
+      // later letter.
+      const group = groups.find(candidate => candidate.tab.id === tabId)
+      return group ? tabIndexLabel(group.tabIndex) : '·'
+    })
+    const shown = letters.slice(0, 2).join('·')
+    return letters.length > 2 ? `${shown} +${letters.length - 2}` : shown
+  }, [groups, boundProjects])
+  const rowProjectTitle = useMemo(() => {
+    if (!boundProjects || boundProjects.length === 0) return 'Restrict this row to one or more projects'
+    return boundProjects
+      .map(tabId => groups.find(group => group.tab.id === tabId)?.tab.title ?? tabId)
+      .join(', ')
+  }, [groups, boundProjects])
 
   return (
     // WHY h-full w-full instead of `basis-1/4 min-w-[220px]
@@ -186,7 +202,7 @@ export const DispatchAgentList = memo(function DispatchAgentList({
               type="button"
               onClick={onPickRowProject}
               data-dispatch-row="true"
-              title="Restrict this row to one project"
+              title={rowProjectTitle}
               className="max-w-[9rem] truncate uppercase hover:text-fg"
             >
               {rowProjectLabel ?? 'Any project'}
