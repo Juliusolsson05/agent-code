@@ -408,6 +408,29 @@ The state transitions and debug fields are derived from the recorded live
 channel ordering. This stage is not allowed to invent a second provider parser
 or choose a rollout file.
 
+### Stage 5 completion record
+
+`LiveWorktreeReconciler` now exclusively owns the renderer's Git catalog TTL,
+in-flight coalescing, failed-probe retry, bounded 500-record evidence window,
+catalog-arrival replay, fallback/canonical projection, session release, and
+effect disposal. `useIpcSubscriptions` is its only consumer and no longer
+contains worktree cache/arbitration policy.
+
+The stale-catalog contract exposed one additional instance of the same substrate
+problem: when a newly created linked worktree was absent from an older Git
+catalog, longest-prefix matching collapsed its path into the main checkout and
+the tracker dedupe key then prevented correction. The reconciler therefore
+retains the pre-window baseline and rebuilds the bounded recent window whenever
+the catalog changes; it does not replay onto an already lossy projection.
+
+Recorded tests now cover entry-before-cache (Codex), cache-before-entry
+(Claude), in-flight coalescing, failed retry, stale-catalog expansion, bounded
+diagnostics, session/effect teardown, the actual SessionFeed hook, the Worktrees
+live-agent projection, and the final painted badge. Feed-debug receives only
+cache counts, evidence count, active/primary sources, and projected path/branch;
+the former raw timeline/command summary is no longer duplicated there. All 23
+focused unit/renderer contracts, typecheck, and the test-contract gate pass.
+
 ## Stage 6 — cross-boundary and UI verification
 
 **Produces**
