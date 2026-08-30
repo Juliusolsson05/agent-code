@@ -55,48 +55,28 @@ export function remapTiledLanes(
 /**
  * Put a session into a lane.
  *
- * WHY this exists rather than three hand-rolled `{ ...lane, selectedSessionId }`
- * spreads: `userEmptied` must be dropped whenever a lane is filled, and the
- * spread preserves it. There are three writers — setTiledLaneSession,
- * applyDispatchSpawnFocus, and the A2!/agent-index navigation path — and the
- * last two are the ORDINARY way a user fills the lane New Lane just created
- * (`resolveDispatchSpawnTarget` deliberately places a new agent into an empty
- * focused lane). Missing them left the flag on a lane that now held an agent,
- * so when that agent later exited the lane became a permanent hole the healer
- * would never re-home — durable across restarts, since the flag persists.
- *
- * This file's header already says the lane helpers must be applied at EVERY
- * id-remap, removal, and focus-read site; a fourth hand-rolled spread is how
- * that class of bug keeps coming back.
+ * WHY a helper for a one-field write: lane construction stays in one place, so
+ * a future field with a maintenance rule has exactly one filling site to add it
+ * to. This helper used to carry such a rule — it stripped `userEmptied`, which
+ * had to be dropped at every writer and was missed at two of them (the spawn
+ * focus path and the A2! index path), turning a filled lane into a permanent
+ * hole that survived restarts. That flag is gone with the healer it existed to
+ * hide from (#681), and the rule went with it.
  */
 export function withLaneSession(lane: DispatchLane, sessionId: SessionId): DispatchLane {
-  const { userEmptied: _filledByTheUserNow, ...rest } = lane
-  return { ...rest, selectedSessionId: sessionId }
+  return { ...lane, selectedSessionId: sessionId }
 }
 
-/**
- * Blank a lane's selection.
- *
- * WHY this drops `userEmptied` as well: both callers only reach this branch for
- * a lane that HELD a session, which is exactly the case where the user had
- * filled it — so it must go back to healing like any other lane. Leaving the
- * flag behind turns "your agent exited" into "this slot is dead forever", and
- * `keepTiledLaneSessions` is the AUTOSAVE boundary, so the dead slot would be
- * written into workspace.json and survive restarts.
- *
- * A lane the user emptied deliberately and never filled has no
- * `selectedSessionId`, so neither caller touches it and its flag survives —
- * which is the whole point of the flag.
- */
+/** Blank a lane's selection. Nothing refills it; that is the point (#681). */
 function withLaneCleared(lane: DispatchLane): DispatchLane {
-  const { userEmptied: _noLongerDeliberate, ...rest } = lane
-  return { ...rest, selectedSessionId: undefined }
+  return { ...lane, selectedSessionId: undefined }
 }
 
 /**
  * Clear any tiled lane pointing at a removed session (selectedSessionId ->
- * undefined). The layout's auto-fill effect then re-homes the emptied lane,
- * unless the lane is `userEmptied` (see withLaneCleared).
+ * undefined). The lane then renders empty and STAYS empty — before #681 the
+ * layout re-homed another agent into the hole, which is what made closing one
+ * agent silently move an unrelated one into the slot you were watching.
  * Apply wherever a session is destroyed/hidden (killSession, close, bury).
  */
 export function clearTiledLaneSessions(
@@ -274,15 +254,15 @@ export function insertLaneRightIntoTiled(
   return {
     lanes: [
       ...tiled.lanes.slice(0, insertAt),
-      // Empty, and MARKED empty. The bare `{}` is not enough: the layout's
-      // heal effect fills any unresolved lane with the next available agent,
-      // so an unmarked empty lane is refilled on the next render and this
-      // whole change becomes a no-op. `userEmptied` is what the healer skips.
+      // A bare `{}` is now sufficient. This used to need an explicit
+      // `userEmptied: true` marker because the layout's heal effect refilled
+      // any unresolved lane on the next render, making the whole feature a
+      // no-op without it. With no healer (#681) every empty lane behaves
+      // identically and the marker has no reader.
       //
       // The user picks the occupant; one press of ⌥↓ in the focused lane
-      // selects the top row of the index (★1 if anything is pinned, else a1),
-      // so the old auto-fill result is still one keystroke away.
-      { userEmptied: true },
+      // selects the top row of the index (★1 if anything is pinned, else a1).
+      {},
       ...tiled.lanes.slice(insertAt),
     ],
     // The command inserts after focus, so its normal path keeps this index.

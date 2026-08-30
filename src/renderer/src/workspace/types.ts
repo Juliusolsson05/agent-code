@@ -268,30 +268,10 @@ export type DetachedSessionRecord = {
  */
 export type DispatchLane = {
   /**
-   * This lane is empty because the USER asked for an empty lane (#673), not
-   * because its agent died or fell out of scope.
-   *
-   * WHY the distinction needs a durable flag rather than being inferred:
-   * `TiledDispatchLayout`'s heal effect hands the next unclaimed agent to any
-   * lane that does not resolve, and the close/kill paths DEPEND on that — when
-   * an agent exits, `clearTiledLaneSessions` blanks its lane precisely so the
-   * healer re-homes another agent into the hole. Both situations look identical
-   * from the lane alone (`selectedSessionId === undefined`), so without a flag
-   * "New Lane inserts an empty lane" is not implementable: the healer refills
-   * it on the very next render and the feature is a no-op.
-   *
-   * Set only by lane insertion. Cleared by any explicit selection
-   * (`setTiledLaneSession`), because once the user puts an agent in the lane it
-   * is an ordinary lane again and must heal like one if that agent later dies.
-   * It survives autosave and rehydrate by spread, which is intended: a lane the
-   * user deliberately emptied should still be empty after a restart.
-   */
-  userEmptied?: true
-  /**
    * Session shown in this lane. Undefined => empty lane (renders a
    * lane-local "select an agent" prompt). On re-entry/rehydrate a lane
-   * whose session no longer exists is reset to undefined and re-filled
-   * — unless `userEmptied` says the emptiness was deliberate.
+   * whose session no longer exists is reset to undefined and STAYS empty:
+   * nothing refills a lane but the user (#681).
    *
    * The SAME sessionId may legitimately appear in more than one lane — the
    * earlier one-session-per-lane restriction was dropped because greying out
