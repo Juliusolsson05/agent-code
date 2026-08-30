@@ -262,10 +262,12 @@ function buildRenderDiagnostics(runtime: SessionRuntime, kind: string): Record<s
 //     on disk and via Claude/Codex's own session files. Duplicating
 //     it here would bloat bundles for zero debugging value.
 //
-//   feedDebugLog / semantic
+//   feedDebugLog / codexTranscriptObservationOutbox / semantic
 //     Shipped as their own files (feed-debug.jsonl and
-//     proxy-semantic.json). Double-embedding them in state-snapshot
-//     would create drift risk if the format ever changes.
+//     proxy-semantic.json), or—in the outbox case—already mirrored into main's
+//     lifecycle journal. Double-embedding them in state-snapshot would create
+//     drift risk, and pending observations can include rows from a prior run
+//     that should only be exported through main's exact pane/run projection.
 //
 //   screen / screenMarkdown / recentScreen / recentScreenMarkdown
 //     Tail-truncated to SCREEN_TAIL_LINES.
@@ -276,6 +278,7 @@ function buildStateSnapshot(runtime: SessionRuntime): Record<string, unknown> {
     toolResultIndex: _toolResultIndex,
     ghosts: _ghosts,
     feedDebugLog: _feedDebugLog,
+    codexTranscriptObservationOutbox: _codexTranscriptObservationOutbox,
     semantic: _semantic,
     screen,
     screenMarkdown,
@@ -288,6 +291,7 @@ function buildStateSnapshot(runtime: SessionRuntime): Record<string, unknown> {
   void _toolResultIndex
   void _ghosts
   void _feedDebugLog
+  void _codexTranscriptObservationOutbox
   void _semantic
 
   return {
@@ -301,6 +305,8 @@ function buildStateSnapshot(runtime: SessionRuntime): Record<string, unknown> {
     _counts: {
       entries: runtime.entries.length,
       feedDebugLog: runtime.feedDebugLog.length,
+      codexTranscriptObservationOutbox:
+        runtime.codexTranscriptObservationOutbox.length,
       queuedMessages: runtime.queuedMessages.length,
       toolUseIndex: runtime.toolUseIndex.size,
       toolResultIndex: runtime.toolResultIndex.size,

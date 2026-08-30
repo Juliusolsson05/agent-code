@@ -693,7 +693,7 @@ describe('registerLifecycleIpc', () => {
     expect(lifecycle()).toEqual([])
   })
 
-  it('bounds distinct retired-pair gap openings and leaves an evicted gap honestly unclosed', async () => {
+  it('bounds distinct retired-pair gap openings without evicting admitted evidence', async () => {
     bus.removeAllListeners()
     records = []
     const sessionId = '29292929-2929-4929-8929-292929292929'
@@ -735,7 +735,12 @@ describe('registerLifecycleIpc', () => {
     })
 
     expect(lifecycle().filter(r =>
-      r.name === 'transcript.observation-gap' && r.data?.phase === 'closed')).toEqual([])
+      r.name === 'transcript.observation-gap' && r.data?.phase === 'closed')).toEqual([
+      expect.objectContaining({
+        ids: expect.objectContaining({ sessionRunId: retiredRun(0) }),
+        data: expect.objectContaining({ phase: 'closed', suppressed: 1 }),
+      }),
+    ])
     expect(lifecycle().find(r => r.name === 'report.suppressed')?.data).toMatchObject({
       suppressed: 1_025,
     })

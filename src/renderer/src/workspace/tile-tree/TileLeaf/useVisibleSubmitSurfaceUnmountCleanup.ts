@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import type { MutableRefObject } from 'react'
 
 import { reportLifecycle } from '@renderer/lifecycle/report'
@@ -48,7 +48,23 @@ export function useVisibleSubmitSurfaceUnmountCleanup(
   sessionIdRef: MutableRefObject<SessionId>,
   surfacesRef: MutableRefObject<ReadonlyMap<string, VisibleSubmitSurface>>,
 ): void {
-  useEffect(() => () => {
-    reportHiddenSubmitSurfaces(sessionIdRef.current, surfacesRef.current)
+  const mountGenerationRef = useRef(0)
+
+  useEffect(() => {
+    const generation = ++mountGenerationRef.current
+    return () => {
+      const sessionId = sessionIdRef.current
+      const surfaces = new Map(surfacesRef.current)
+      // WHY defer one microtask: development StrictMode intentionally runs an
+      // effect's setup→cleanup→setup sequence without removing the tile. A
+      // synchronous cleanup falsely closed every surface, while the replayed
+      // visibility effect saw the same ref ledger and therefore did not reopen
+      // them. A replay advances the generation before this task runs; a real
+      // unmount cannot, so only the real lifetime boundary emits closes.
+      queueMicrotask(() => {
+        if (mountGenerationRef.current !== generation) return
+        reportHiddenSubmitSurfaces(sessionId, surfaces)
+      })
+    }
   }, [sessionIdRef, surfacesRef])
 }

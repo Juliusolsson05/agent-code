@@ -1,4 +1,5 @@
-import { renderHook } from '@testing-library/react'
+import { act, renderHook } from '@testing-library/react'
+import { StrictMode, type ReactNode } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { reportLifecycle } from '@renderer/lifecycle/report'
@@ -16,7 +17,7 @@ afterEach(() => {
 })
 
 describe('TileLeaf visible submit surface lifetime', () => {
-  it('closes the final committed surfaces exactly when the tile unmounts', () => {
+  it('ignores StrictMode effect replay and closes only the real tile unmount', async () => {
     const sessionIdRef = {
       current: '91919191-9191-4191-8191-919191919191' as SessionId,
     }
@@ -32,14 +33,28 @@ describe('TileLeaf visible submit surface lifetime', () => {
         },
       ]]),
     }
-    const view = renderHook(() =>
-      useVisibleSubmitSurfaceUnmountCleanup(sessionIdRef, surfacesRef),
+    const view = renderHook(
+      () => useVisibleSubmitSurfaceUnmountCleanup(sessionIdRef, surfacesRef),
+      {
+        wrapper: ({ children }: { children: ReactNode }) => (
+          <StrictMode>{children}</StrictMode>
+        ),
+      },
     )
 
+    await act(async () => {
+      await Promise.resolve()
+    })
     expect(reportLifecycle).not.toHaveBeenCalled()
     view.rerender()
+    await act(async () => {
+      await Promise.resolve()
+    })
     expect(reportLifecycle).not.toHaveBeenCalled()
     view.unmount()
+    await act(async () => {
+      await Promise.resolve()
+    })
 
     expect(reportLifecycle).toHaveBeenCalledTimes(1)
     expect(reportLifecycle).toHaveBeenCalledWith(

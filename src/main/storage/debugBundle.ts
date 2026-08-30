@@ -356,6 +356,7 @@ type CodexTranscriptObservationExport = {
   sourceGapTrackingCapped: boolean | null
   rendererObservationGapObserved: boolean
   rateLimitGapObserved: boolean
+  malformedProviderSessionMetaObserved: boolean
   attachmentTrackingCappedObserved: boolean
   attachmentSuppressionObserved: boolean
   malformedJsonRows: number
@@ -402,6 +403,7 @@ async function exportCodexTranscriptObservations(params: {
   const scopeAccepted = isCodexTranscriptObservationSessionId(params.sessionId)
   let rendererObservationGapObserved = false
   let rateLimitGapObserved = false
+  let malformedProviderSessionMetaObserved = false
   let attachmentTrackingCappedObserved = false
   let attachmentSuppressionObserved = false
   let malformedJsonRows = 0
@@ -413,8 +415,20 @@ async function exportCodexTranscriptObservations(params: {
       input: createReadStream(sourcePath, { encoding: 'utf8' }),
       crlfDelay: Infinity,
     })
+    let scannedRows = 0
     for await (const line of lines) {
       if (!line) continue
+      scannedRows += 1
+      if (scannedRows % 1_024 === 0) {
+        // WHY scan completely but yield: the earliest prompt in the incident
+        // may sit anywhere in the capped 50 MiB journal, so a byte/time cutoff
+        // would recreate the evidence loss this export exists to diagnose.
+        // JSON parsing that whole source synchronously can still monopolize
+        // Electron main long enough to look like a frozen Save action. Yielding
+        // once per chunk preserves completeness and bounded memory while
+        // letting IPC, paint, and process-exit work make progress.
+        await new Promise<void>(resolve => setImmediate(resolve))
+      }
       let event: Record<string, unknown>
       try {
         event = JSON.parse(line) as Record<string, unknown>
@@ -438,6 +452,10 @@ async function exportCodexTranscriptObservations(params: {
         event.name === 'transcript.surface-gap'
       ) rendererObservationGapObserved = true
       if (event.name === 'transcript.observation-gap') rateLimitGapObserved = true
+      if (
+        event.name === 'transcript.entry' &&
+        eventData?.providerSessionMetaValid === false
+      ) malformedProviderSessionMetaObserved = true
       if (
         event.name === 'transcript.attachment' &&
         eventData?.trackingCapped === true
@@ -557,6 +575,7 @@ async function exportCodexTranscriptObservations(params: {
         params.codexTranscriptObservationCompleteness?.gapTrackingCapped ?? null,
       rendererObservationGapObserved,
       rateLimitGapObserved,
+      malformedProviderSessionMetaObserved,
       attachmentTrackingCappedObserved,
       attachmentSuppressionObserved,
       malformedJsonRows,
@@ -576,6 +595,7 @@ async function exportCodexTranscriptObservations(params: {
         params.codexTranscriptObservationCompleteness.gapTrackingCapped ||
         rendererObservationGapObserved ||
         rateLimitGapObserved ||
+        malformedProviderSessionMetaObserved ||
         attachmentTrackingCappedObserved ||
         attachmentSuppressionObserved ||
         malformedJsonRows > 0 ||

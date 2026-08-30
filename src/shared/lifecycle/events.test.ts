@@ -9,6 +9,7 @@ import {
   pickCodexTranscriptObservationData,
   pickLifecycleCorrelationIds,
   pickLifecycleData,
+  severityForLifecycleEvent,
 } from './events.js'
 
 describe('Codex transcript lifecycle contract', () => {
@@ -169,6 +170,28 @@ describe('Codex transcript lifecycle contract', () => {
       attached: false,
       candidateCount: 2,
     })
+  })
+
+  it('retains physical combined writes and unknown provider diagnostics', () => {
+    expect(pickCodexTranscriptObservationData('submit.write', {
+      phase: 'body-enter',
+      ok: true,
+    })).toEqual({ phase: 'body-enter', ok: true })
+    expect(pickCodexTranscriptObservationData('provider.request', {
+      phase: 'unknown',
+      source: 'unknown',
+      cause: 'unknown',
+    })).toEqual({
+      phase: 'unknown',
+      source: 'unknown',
+      cause: 'unknown',
+    })
+  })
+
+  it('surfaces every transcript evidence gap at warning severity', () => {
+    expect(severityForLifecycleEvent('transcript.outbox-gap')).toBe('warn')
+    expect(severityForLifecycleEvent('transcript.surface-gap')).toBe('warn')
+    expect(severityForLifecycleEvent('transcript.observation-gap')).toBe('warn')
   })
 
   it('closes the session-run relationship vocabulary in exported observations', () => {

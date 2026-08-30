@@ -349,6 +349,35 @@ describe('Codex transcript observation bundle export', () => {
     })
   })
 
+  it('marks malformed provider session metadata as an explicit source gap', async () => {
+    writeFileSync(
+      join(INCIDENT_ROOT, APP_RUN_ID, 'events.jsonl'),
+      `${JSON.stringify(journalEvent({
+        seq: 1,
+        sessionId: CODEX_PANE_ID,
+        name: 'transcript.entry',
+        data: {
+          source: 'session-meta',
+          entryByteOffset: 22,
+          providerSessionMetaValid: false,
+        },
+      }))}\n`,
+    )
+
+    const { bundlePath } = await saveDebugBundle({
+      sessionId: CODEX_PANE_ID,
+      kind: 'codex',
+      reason: 'manual',
+      files: bundleFiles(),
+    }, COMPLETE_JOURNAL_SOURCE)
+
+    const manifest = JSON.parse(readFileSync(join(bundlePath, 'manifest.json'), 'utf8'))
+    expect(manifest.codexTranscriptObservations).toMatchObject({
+      malformedProviderSessionMetaObserved: true,
+      sourceHasGaps: true,
+    })
+  })
+
   it('marks suppressed attachment relations as an explicit source gap', async () => {
     writeFileSync(
       join(INCIDENT_ROOT, APP_RUN_ID, 'events.jsonl'),

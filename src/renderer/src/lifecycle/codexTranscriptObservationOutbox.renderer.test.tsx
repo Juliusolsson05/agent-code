@@ -1,5 +1,5 @@
-import { act, renderHook } from '@testing-library/react'
-import { useState } from 'react'
+import { act, render, renderHook } from '@testing-library/react'
+import { useEffect, useState } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { emptyRuntime, type SessionRuntime } from '@renderer/session-runtime/state'
@@ -74,6 +74,7 @@ describe('Codex transcript observation outbox', () => {
     abandonedUpdater = null
 
     expect(view.result.current.runtimes[sessionId]?.sessionRunId).toBe(successorRunId)
+    expect(view.result.current.runtimes[sessionId]?.feedDebugLog).toEqual([])
     expect(reportSessionLifecycle).toHaveBeenCalledTimes(1)
     expect(reportSessionLifecycle).toHaveBeenCalledWith({
       name: 'submit.release',
@@ -106,7 +107,7 @@ describe('Codex transcript observation outbox', () => {
     act(() => {
       view.result.current.setRuntimes(previous => {
         let next = previous[sessionId]!
-        // The shared ring keeps 500 rows. Committing 501 transitions at once
+        // The dedicated ring keeps 500 rows. Committing 501 transitions at once
         // reproduces the renderer starvation shape without relying on timing.
         for (let index = 0; index < 501; index += 1) {
           next = appendCodexTranscriptObservation(next, 'transcript.snapshot', {
@@ -121,7 +122,50 @@ describe('Codex transcript observation outbox', () => {
     expect(reportSessionLifecycle.mock.calls[0]?.[0]).toEqual({
       name: 'transcript.outbox-gap',
       sessionId,
-      data: { missedFeedRows: 1 },
+      data: { missedObservationRows: 1 },
     })
+  })
+
+  it('mirrors committed mutations before child passive visibility effects', () => {
+    const reportSessionLifecycle = vi.fn()
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: { reportSessionLifecycle },
+    })
+    const sessionId = '74747474-7474-4474-8474-747474747474' as SessionId
+    const submissionId = '75757575-7575-4575-8575-757575757575'
+    const runtime = appendCodexTranscriptObservation(
+      emptyRuntime(),
+      'submit.begin',
+      { provider: 'codex', source: 'text-only' },
+      { submissionId },
+    )
+
+    function VisibleChild(): null {
+      useEffect(() => {
+        window.api.reportSessionLifecycle({
+          name: 'submit.surface',
+          sessionId,
+          data: { surface: 'render-selected', visible: true },
+          correlationIds: {
+            submissionId,
+            renderCandidateId: `optimistic-submission:${submissionId}`,
+          },
+        })
+      }, [])
+      return null
+    }
+
+    function Parent(): React.JSX.Element {
+      useCodexTranscriptObservationOutbox({ [sessionId]: runtime })
+      return <VisibleChild />
+    }
+
+    render(<Parent />)
+
+    expect(reportSessionLifecycle.mock.calls.map(call => call[0].name)).toEqual([
+      'submit.begin',
+      'submit.surface',
+    ])
   })
 })

@@ -160,11 +160,18 @@ export function registerSessionIpc(
       const deliveryInFlight = manager.isDeliveryInFlight(sessionId)
       const ok = manager.write(sessionId, data)
       if (typeof pasteId === 'string' && pasteId.length > 0) {
-        // One pasteId already spans every low-level body/Enter write for a
-        // composer submit. Preserve those boundaries as separate observations
-        // instead of collapsing `ok` into a fictional atomic provider submit.
+        // WHY the combined phase exists: Codex's zero-delay bracketed-paste
+        // path writes `body + paste-end + Enter` in ONE PTY call, while Claude
+        // can use separate writes. Labelling every non-bare-CR write as `body`
+        // made healthy Codex captures falsely claim Enter was never attempted.
+        // This describes the physical write boundary without pretending the
+        // provider absorbed either component independently.
         manager.recordCodexTranscriptObservation('submit.write', sessionId, {
-          phase: data === '\r' ? 'enter' : 'body',
+          phase: data === '\r'
+            ? 'enter'
+            : data.endsWith('\r')
+              ? 'body-enter'
+              : 'body',
           ok,
           deliveryInFlight,
         }, { submissionId: pasteId })

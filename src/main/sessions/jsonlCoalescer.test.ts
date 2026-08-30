@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-const sendToMainWindow = vi.hoisted(() => vi.fn())
+const sendToSessionWindow = vi.hoisted(() => vi.fn())
 
-vi.mock('@main/window/mainWindow.js', () => ({ sendToMainWindow }))
+vi.mock('@main/window/windowRegistry.js', () => ({ sendToSessionWindow }))
 
 import {
   enqueueJsonl,
@@ -16,7 +16,7 @@ describe('jsonl coalescer observation sidecars', () => {
   afterEach(() => {
     for (const sessionId of sessionIds) flushAndDropJsonl(sessionId)
     sessionIds.clear()
-    sendToMainWindow.mockReset()
+    sendToSessionWindow.mockReset()
   })
 
   it('does not add an undefined Codex-only field to provider-neutral entries', () => {
@@ -25,7 +25,9 @@ describe('jsonl coalescer observation sidecars', () => {
     enqueueJsonl(sessionId, { type: 'user' } as never, '/recorded/claude.jsonl')
     flushJsonl(sessionId)
 
-    const payload = sendToMainWindow.mock.calls[0]?.[1] as {
+    // The window registry owns routing after multi-window adoption; the
+    // coalesced payload is the third argument, after pane id and channel.
+    const payload = sendToSessionWindow.mock.calls[0]?.[2] as {
       entries: Array<Record<string, unknown>>
     }
     expect(payload.entries[0]).toEqual({
@@ -46,7 +48,7 @@ describe('jsonl coalescer observation sidecars', () => {
     )
     flushJsonl(sessionId)
 
-    const payload = sendToMainWindow.mock.calls[0]?.[1] as {
+    const payload = sendToSessionWindow.mock.calls[0]?.[2] as {
       entries: Array<Record<string, unknown>>
     }
     expect(payload.entries[0]?.observation).toEqual({

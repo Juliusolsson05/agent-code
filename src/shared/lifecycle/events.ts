@@ -561,6 +561,7 @@ export const SESSION_LIFECYCLE_DATA_KEYS = [
   'attached',
   'tailing',
   'trackingCapped',
+  'providerSessionMetaValid',
 
   // readiness
   'ready',
@@ -602,6 +603,7 @@ export const SESSION_LIFECYCLE_DATA_KEYS = [
   'bytes',
   'suppressed',
   'missedFeedRows',
+  'missedObservationRows',
   'countCapped',
 
   // timing
@@ -739,7 +741,7 @@ export function pickCodexTranscriptObservationData(
       string('source', ['delivery-result', 'no-successful-send'])
       break
     case 'submit.write':
-      string('phase', ['body', 'enter'])
+      string('phase', ['body', 'enter', 'body-enter'])
       boolean('ok')
       boolean('deliveryInFlight')
       break
@@ -781,6 +783,7 @@ export function pickCodexTranscriptObservationData(
         'failed',
         'incomplete',
         'cancelled',
+        'unknown',
       ])
       string('source', ['proxy', 'unknown'])
       string('cause', [
@@ -794,6 +797,7 @@ export function pickCodexTranscriptObservationData(
         'upstream-error',
         'watchdog-timeout',
         'adapter-detached',
+        'unknown',
       ])
       boolean('selected')
       boolean('subagentHeaderPresent')
@@ -830,9 +834,11 @@ export function pickCodexTranscriptObservationData(
       count('entryByteOffset')
       boolean('attached')
       boolean('tailing')
+      boolean('providerSessionMetaValid')
       break
     case 'transcript.outbox-gap':
       count('missedFeedRows')
+      count('missedObservationRows')
       break
     case 'transcript.surface-gap':
       count('candidateCount')
@@ -874,6 +880,9 @@ const SEVERITY_BY_NAME: Partial<Record<SessionLifecycleEventName, 'warn'>> = {
   'recover.failed': 'warn',
   'delivery.reject': 'warn',
   'submit.unwound': 'warn',
+  'transcript.outbox-gap': 'warn',
+  'transcript.surface-gap': 'warn',
+  'transcript.observation-gap': 'warn',
   // Not a session failure, but a gap in the recording — which for a stream
   // whose entire purpose is reconstructing what happened is worth surfacing at
   // the same level as one.

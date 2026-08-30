@@ -272,17 +272,21 @@ export function registerLifecycleIpc(
             existing.countCapped = true
           }
         } else {
+          if (observationGapOpenings >= MAX_TRACKED_OBSERVATION_GAP_KEYS) {
+            // The lifetime ceiling forbids opening another key, but it must not
+            // destroy counts for keys already admitted below the memory cap.
+            // Evicting first drained the only closable evidence on every later
+            // forged pair even though no replacement could be inserted.
+            observationGapTrackingCapped = true
+            return
+          }
           if (observationGaps.size >= MAX_TRACKED_OBSERVATION_GAP_KEYS) {
             // Do not invent a close for eviction. The already-written `opened`
             // row must remain unclosed, honestly saying its eventual count is
-            // unknowable. Deleting BEFORE the lifetime-open check also means a
-            // 1025th forged key cannot keep the exception writer alive.
+            // unknowable. This branch is reachable only while the lifetime
+            // opening budget can still admit a replacement.
             const oldest = observationGaps.keys().next().value
             if (oldest !== undefined) observationGaps.delete(oldest)
-          }
-          if (observationGapOpenings >= MAX_TRACKED_OBSERVATION_GAP_KEYS) {
-            observationGapTrackingCapped = true
-            return
           }
           const gap: ObservationGap = {
             sessionId,

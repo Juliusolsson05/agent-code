@@ -19,7 +19,7 @@ describe('session input transcript observations', () => {
     harness.handlers.clear()
   })
 
-  it('records body and Enter writes under the existing composer submission id', () => {
+  it('records separate and combined body/Enter writes under the composer submission id', () => {
     const recordCodexTranscriptObservation = vi.fn()
     const manager = {
       isDeliveryInFlight: vi.fn(() => false),
@@ -34,6 +34,12 @@ describe('session input transcript observations', () => {
 
     expect(input({}, 'codex-pane', 'hello', 'submission-1')).toBe(true)
     expect(input({}, 'codex-pane', '\r', 'submission-1')).toBe(true)
+    expect(input(
+      {},
+      'codex-pane',
+      '\x1b[200~zero delay\x1b[201~\r',
+      'submission-2',
+    )).toBe(true)
 
     expect(recordCodexTranscriptObservation.mock.calls).toEqual([
       [
@@ -48,9 +54,15 @@ describe('session input transcript observations', () => {
         { phase: 'enter', ok: true, deliveryInFlight: false },
         { submissionId: 'submission-1' },
       ],
+      [
+        'submit.write',
+        'codex-pane',
+        { phase: 'body-enter', ok: true, deliveryInFlight: false },
+        { submissionId: 'submission-2' },
+      ],
     ])
     // The legacy raw paste journal remains unchanged; Stage 0 adds a safe
     // projection and does not replace evidence collectors during observation.
-    expect(append).toHaveBeenCalledTimes(2)
+    expect(append).toHaveBeenCalledTimes(3)
   })
 })

@@ -229,13 +229,35 @@ describe('SessionManager lifecycle journal', () => {
       rolloutEntryId: '16777234:991882:21',
       providerSessionMetaFingerprint: 'aca570c74cde331b785ba5bf566981ab43bc540cc9b71e68b2056fce42c5c27b',
     })
-    expect(spy.lifecycle().filter(row => row.name === 'transcript.entry')).toHaveLength(1)
+    const transcriptEntryRows = spy.lifecycle()
+      .filter(row => row.name === 'transcript.entry')
+    expect(transcriptEntryRows).toHaveLength(2)
+    expect(transcriptEntryRows[0]?.data).toMatchObject({
+      providerSessionMetaValid: true,
+    })
+    expect(transcriptEntryRows[1]).toMatchObject({
+      ids: {
+        fileGenerationId: '16777234:991882',
+        rolloutEntryId: '16777234:991882:22',
+      },
+      data: {
+        source: 'session-meta',
+        entryByteOffset: 22,
+        attached: true,
+        tailing: true,
+        providerSessionMetaValid: false,
+      },
+    })
+    expect(transcriptEntryRows[1]?.ids).not.toHaveProperty(
+      'providerSessionMetaFingerprint',
+    )
     expect(JSON.stringify(spy.lifecycle())).not.toContain('/private/native/path.jsonl')
     expect(recordingRows.map(row => row.name)).toEqual([
       'provider.request',
       'semantic.turn',
       'transcript.candidate',
       'transcript.attachment',
+      'transcript.entry',
       'transcript.entry',
     ])
     await manager.kill(codexPaneId)

@@ -2566,13 +2566,14 @@ export class SessionManager extends EventEmitter {
           const rollout = entry && typeof entry === 'object'
             ? entry as unknown as Record<string, unknown>
             : null
-          const providerSessionMetaFingerprint = rollout?.type === 'session_meta'
+          const isSessionMeta = rollout?.type === 'session_meta'
+          const providerSessionMetaFingerprint = isSessionMeta
             ? pickLifecycleCorrelationIds({
                 providerSessionMetaFingerprint:
                   observation.providerSessionMetaFingerprint,
               })?.providerSessionMetaFingerprint
             : undefined
-          if (providerSessionMetaFingerprint) {
+          if (isSessionMeta) {
             // WHY only session_meta is journalled here: rollout-entry is a hot
             // path (thousands of rows in a long turn) and the raw committed
             // feed already reaches the renderer with its observation sidecar.
@@ -2581,14 +2582,21 @@ export class SessionManager extends EventEmitter {
             // rows. session_meta is one sparse committed fact per generation
             // and supplies the exact provider identity needed to compare with
             // x-codex-window-id without retaining transcript content or paths.
+            // A malformed/future payload still gets a structural row with an
+            // explicit false validity bit: silence here would make provider
+            // shape drift indistinguishable from a missing tail callback.
             const fileGenerationId = observation.fileGenerationId ?? undefined
             this.recordCodexTranscriptObservation('transcript.entry', sessionId, {
               source: 'session-meta',
               entryByteOffset: observation.rolloutByteOffset,
               attached: true,
               tailing: true,
+              providerSessionMetaValid:
+                providerSessionMetaFingerprint !== undefined,
             }, {
-              providerSessionMetaFingerprint,
+              ...(providerSessionMetaFingerprint
+                ? { providerSessionMetaFingerprint }
+                : {}),
               ...(fileGenerationId ? { fileGenerationId } : {}),
               ...(fileGenerationId
                 ? { rolloutEntryId: `${fileGenerationId}:${observation.rolloutByteOffset}` }

@@ -1,7 +1,10 @@
-import { useEffect, useRef } from 'react'
+import { useLayoutEffect, useRef } from 'react'
 
-import { appendFeedDebugLog } from '@renderer/session-runtime/feedDebug'
-import type { SessionRuntime } from '@renderer/session-runtime/state'
+import type {
+  CodexTranscriptObservationOutboxEntry,
+  PendingCodexTranscriptObservation,
+  SessionRuntime,
+} from '@renderer/session-runtime/state'
 import type { SessionId } from '@renderer/workspace/types'
 import {
   isCodexTranscriptObservationEventName,
@@ -14,13 +17,16 @@ import {
 
 import { reportLifecycle } from './report'
 
-const OUTBOX_KIND = 'codex_transcript_observation'
+const CODEX_TRANSCRIPT_OBSERVATION_OUTBOX_CAP = 500
+let lastObservationEpochMs = Date.now()
 
-type PendingCodexTranscriptObservation = {
-  schemaVersion: 1
-  name: CodexTranscriptObservationEventName
-  correlationIds?: SessionLifecycleCorrelationIds
-  data?: SessionLifecycleData
+function nextObservationEpochMs(): number {
+  // WHY not use Date.now() alone: replacing a runtime inside the same
+  // millisecond can reset ids to one while a hook cursor still points at the
+  // retired ring. A process-local monotonic epoch makes that reset visible
+  // without persisting or exporting another identifier.
+  lastObservationEpochMs = Math.max(Date.now(), lastObservationEpochMs + 1)
+  return lastObservationEpochMs
 }
 
 /**
@@ -38,16 +44,16 @@ export function codexOptimisticRenderCandidateId(submissionId: string): string {
 }
 
 /**
- * Append one transcript-continuity fact to the existing committed feed-debug
- * log, then let `useCodexTranscriptObservationOutbox` mirror it after React has
- * committed the runtime transition.
+ * Append one transcript-continuity fact to a bounded runtime sidecar, then let
+ * `useCodexTranscriptObservationOutbox` mirror it after React has committed the
+ * runtime transition.
  *
  * WHY this indirection exists: React is allowed to evaluate a state updater and
  * abandon it. Calling IPC from inside that updater recorded transitions which
  * never became state, and the exact-once guard could then suppress the later
- * updater React actually committed. Feed-debug is already the renderer's
- * bounded, per-session transition log, so it is the narrowest commit artifact
- * available; using it avoids inventing a second runtime store for diagnostics.
+ * updater React actually committed. The sidecar must be separate from
+ * feed-debug: observation volume is not allowed to evict product/feed evidence
+ * or make Stage 0 alter the debugging behavior it is meant to observe.
  *
  * The run id is captured NOW rather than read by the later effect. A process
  * exit and replacement `session:started` may be batched into one render. Reading
@@ -81,12 +87,27 @@ export function appendCodexTranscriptObservation(
     ...(safeCorrelationIds ? { correlationIds: safeCorrelationIds } : {}),
     ...(safeData ? { data: safeData } : {}),
   }
-  return appendFeedDebugLog(current, {
-    layer: 'STATE',
-    kind: OUTBOX_KIND,
-    summary: `codex transcript observation · ${name}`,
-    data: observation,
-  })
+  const entry: CodexTranscriptObservationOutboxEntry = {
+    id: current.codexTranscriptObservationNextId,
+    observation,
+  }
+  const outbox = current.codexTranscriptObservationOutbox.length >=
+      CODEX_TRANSCRIPT_OBSERVATION_OUTBOX_CAP
+    ? [
+        ...current.codexTranscriptObservationOutbox.slice(
+          current.codexTranscriptObservationOutbox.length -
+            CODEX_TRANSCRIPT_OBSERVATION_OUTBOX_CAP + 1,
+        ),
+        entry,
+      ]
+    : [...current.codexTranscriptObservationOutbox, entry]
+  return {
+    ...current,
+    codexTranscriptObservationOutbox: outbox,
+    codexTranscriptObservationNextId: entry.id + 1,
+    codexTranscriptObservationEpochMs:
+      current.codexTranscriptObservationEpochMs ?? nextObservationEpochMs(),
+  }
 }
 
 function readPendingObservation(value: unknown): PendingCodexTranscriptObservation | null {
@@ -115,7 +136,7 @@ type ObservationCursor = {
 }
 
 function firstEntryAfter(
-  entries: SessionRuntime['feedDebugLog'],
+  entries: SessionRuntime['codexTranscriptObservationOutbox'],
   cursorId: number,
 ): number {
   let low = 0
@@ -137,15 +158,18 @@ function firstEntryAfter(
  * This hook observes only runtime state React has already committed. Its cursor
  * is delivery bookkeeping, not product state: losing it can duplicate a debug
  * fact after a workspace-hook remount, but can never add/remove a prompt or
- * influence reconciliation. Advancing across every feed-debug row prevents a
- * busy semantic stream from making us repeatedly rescan unrelated entries.
+ * influence reconciliation. Layout timing is deliberate: TileLeaf reports
+ * visible surfaces from a passive effect, and React runs child passive effects
+ * before parent passive effects. Mirroring committed mutations here first
+ * preserves mutation-before-visibility chronology without moving product UI
+ * work into the layout phase.
  */
 export function useCodexTranscriptObservationOutbox(
   runtimes: Record<SessionId, SessionRuntime>,
 ): void {
   const cursorsRef = useRef(new Map<SessionId, ObservationCursor>())
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const liveSessionIds = new Set(Object.keys(runtimes))
     for (const sessionId of cursorsRef.current.keys()) {
       if (!liveSessionIds.has(sessionId)) cursorsRef.current.delete(sessionId)
@@ -153,41 +177,48 @@ export function useCodexTranscriptObservationOutbox(
 
     for (const [sessionId, runtime] of Object.entries(runtimes)) {
       const previous = cursorsRef.current.get(sessionId)
-      const epochChanged = previous?.epochMs !== runtime.feedDebugEpochMs
+      const epochChanged = previous?.epochMs !==
+        runtime.codexTranscriptObservationEpochMs
       let entryId = epochChanged ? 0 : (previous?.entryId ?? 0)
 
       // `runtimes` changes for every screen/semantic tick across the workspace.
-      // Most sessions did not append a feed-debug row on that tick. Without
-      // this tail check, one active agent made the effect rescan 500 rows for
+      // Most sessions did not append an observation on that tick. Without this
+      // tail check, one active agent made the effect rescan 500 rows for
       // every other restored agent—roughly 50k comparisons per event in a
       // 100-pane workspace. Same epoch + an already-consumed tail is a complete
       // O(1) proof that this session has no pending observation.
-      const lastEntry = runtime.feedDebugLog[runtime.feedDebugLog.length - 1]
+      const lastEntry = runtime.codexTranscriptObservationOutbox[
+        runtime.codexTranscriptObservationOutbox.length - 1
+      ]
       if (!epochChanged && (!lastEntry || lastEntry.id <= entryId)) continue
 
-      const firstEntry = runtime.feedDebugLog[0]
+      const firstEntry = runtime.codexTranscriptObservationOutbox[0]
       const expectedFirstEntryId = epochChanged ? 1 : entryId + 1
       if (firstEntry && firstEntry.id > expectedFirstEntryId) {
-        // The shared feed-debug ring evicted rows before this commit effect could
-        // inspect them. We cannot know whether every missing row was unrelated
-        // debug noise, so the only truthful statement is that the Stage 0
-        // projection MAY be incomplete. Keep the gap pane-scoped: attaching the
-        // runtime's current run would falsely assign rows that may belong to the
-        // predecessor process batched into the same React commit.
+        // The dedicated ring evicted rows before this commit effect could
+        // inspect them, so the Stage 0 projection is definitely incomplete.
+        // Keep the gap pane-scoped: attaching the runtime's current run would
+        // falsely assign rows that may belong to the predecessor process
+        // batched into the same React commit.
         reportLifecycle('transcript.outbox-gap', sessionId, {
-          missedFeedRows: firstEntry.id - expectedFirstEntryId,
+          missedObservationRows: firstEntry.id - expectedFirstEntryId,
         })
       }
 
-      // IDs are monotonic within one feed-debug epoch. Binary-searching the
+      // IDs are monotonic within one observation epoch. Binary-searching the
       // suffix keeps an active session at O(log cap + new rows), instead of
       // replaying the whole 500-row ring on every semantic delta.
-      const start = epochChanged ? 0 : firstEntryAfter(runtime.feedDebugLog, entryId)
-      for (let index = start; index < runtime.feedDebugLog.length; index += 1) {
-        const entry = runtime.feedDebugLog[index]!
+      const start = epochChanged
+        ? 0
+        : firstEntryAfter(runtime.codexTranscriptObservationOutbox, entryId)
+      for (
+        let index = start;
+        index < runtime.codexTranscriptObservationOutbox.length;
+        index += 1
+      ) {
+        const entry = runtime.codexTranscriptObservationOutbox[index]!
         entryId = entry.id
-        if (entry.kind !== OUTBOX_KIND) continue
-        const observation = readPendingObservation(entry.data)
+        const observation = readPendingObservation(entry.observation)
         if (!observation) continue
         reportLifecycle(
           observation.name,
@@ -198,7 +229,7 @@ export function useCodexTranscriptObservationOutbox(
       }
 
       cursorsRef.current.set(sessionId, {
-        epochMs: runtime.feedDebugEpochMs,
+        epochMs: runtime.codexTranscriptObservationEpochMs,
         entryId,
       })
     }

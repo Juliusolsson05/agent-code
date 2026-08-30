@@ -78,7 +78,8 @@ export function emitRendererMemoryGauges(
     if (
       runtime.entries.length === 0 &&
       runtime.semantic.log.length === 0 &&
-      runtime.feedDebugLog.length === 0
+      runtime.feedDebugLog.length === 0 &&
+      runtime.codexTranscriptObservationOutbox.length === 0
     ) {
       continue
     }
@@ -105,6 +106,19 @@ export function emitRendererMemoryGauges(
       // the byte gauges when apportioning heap between structures.
       bytesEstimate: estimateJsonBytesSampled(runtime.feedDebugLog),
     })
+    // WHY account for the sidecar separately: it was split from feedDebugLog
+    // specifically so Stage 0 could not consume the product-debug budget. A
+    // combined gauge would hide regressions that silently recreate that cost.
+    perf.gauge(
+      'renderer.session.memory.codexTranscriptObservationOutbox',
+      runtime.codexTranscriptObservationOutbox.length,
+      {
+        sessionId,
+        bytesEstimate: estimateJsonBytesSampled(
+          runtime.codexTranscriptObservationOutbox,
+        ),
+      },
+    )
     perf.gauge('renderer.session.memory.ghostMap', runtime.ghosts.size, { sessionId })
     perf.gauge('renderer.session.memory.toolIndex', runtime.toolUseIndex.size, {
       sessionId,

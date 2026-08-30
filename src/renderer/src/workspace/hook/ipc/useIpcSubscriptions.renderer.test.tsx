@@ -217,9 +217,9 @@ describe('useIpcSubscriptions with an injected SessionFeed', () => {
       fake.emitExit({ sessionId, exitCode: 0 })
     })
 
-    const transitionObservations = runtimes[sessionId]!.feedDebugLog
-      .filter(row => row.kind === 'codex_transcript_observation')
-      .map(row => row.data as {
+    const transitionObservations = runtimes[sessionId]!
+      .codexTranscriptObservationOutbox
+      .map(row => row.observation as {
         name?: string
         correlationIds?: Record<string, unknown>
       })
