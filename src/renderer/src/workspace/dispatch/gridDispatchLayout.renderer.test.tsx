@@ -38,14 +38,14 @@ vi.mock('@renderer/features/shared/useResizableSplitter', () => ({
 vi.mock('@renderer/workspace/dispatch/DispatchAgentList', () => ({
   DispatchAgentList: ({ groups, gridRow, focusSessionInTab }: {
     groups: { rows: { sessionId: string; tabId: string }[] }[]
-    gridRow?: { projectTabId?: string }
+    gridRow?: { projectTabIds?: string[] }
     focusSessionInTab: (tabId: string, sessionId: string) => void
   }) => {
     const rows = groups.flatMap(g => g.rows)
     return (
       <div
         data-testid="row-index"
-        data-project={gridRow?.projectTabId ?? ''}
+        data-project={(gridRow?.projectTabIds ?? []).join(',')}
         data-sessions={rows.map(r => r.sessionId).join(',')}
         // Stands in for clicking a row in the real index.
         onClick={() => {
@@ -199,7 +199,7 @@ describe('Grid Dispatch layout', () => {
     const boundTab = FIXTURE.state.activeTabId
     const { getAllByTestId } = renderGrid({
       lanes: laneIds.map(id => ({ selectedSessionId: id })),
-      rows: [{ length: 2, projectTabId: boundTab }, { length: 2 }],
+      rows: [{ length: 2, projectTabIds: [boundTab] }, { length: 2 }],
       focusedLane: 0,
     })
 
@@ -247,6 +247,27 @@ describe('Grid Dispatch layout', () => {
 
     expect(selectTiledLaneSession).toHaveBeenCalledTimes(1)
     expect(selectTiledLaneSession.mock.calls[0]![0]).toBe(2)
+  })
+
+  it('gives a row bound to two projects both their index sections', () => {
+    // The feature in one assertion, and the reason it is cheap:
+    // buildDispatchGroups already groups by tab, so a two-project row renders
+    // two labelled sections with no new rendering code.
+    const tabs = [...new Set(
+      FIXTURE.state.tabs.map(tab => tab.id),
+    )].slice(0, 2)
+    expect(tabs).toHaveLength(2)
+
+    const { getAllByTestId } = renderGrid({
+      lanes: laneIds.map(id => ({ selectedSessionId: id })),
+      rows: [{ length: 2, projectTabIds: tabs }, { length: 2 }],
+      focusedLane: 0,
+    })
+
+    const bound = getAllByTestId('row-index')[0]!
+    expect(bound.getAttribute('data-project')).toBe(tabs.join(','))
+    // And the unbound row is not narrowed by its neighbour's binding.
+    expect(getAllByTestId('row-index')[1]!.getAttribute('data-project')).toBe('')
   })
 
   it('still renders a pre-grid single-row workspace', () => {

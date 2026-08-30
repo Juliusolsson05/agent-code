@@ -233,20 +233,21 @@ export const layoutCommands: CommandDef[] = [
     id: 'dispatch-row-project',
     category: 'layout-dispatch',
     surface: 'dispatch',
-    title: 'Row Project…',
-    description: '**What it does:** Restricts the focused row\'s agent index and lane selectors to a single project.\n\n**Use when:** You are running two projects at once and want one row per project.\n\n**Notes:** Binding filters, it never fills — no lane is populated, moved, or cleared. Dispatch scope is promoted to global, because a project-scoped row set is built from the active tab alone.',
-    keywords: ['row project', 'bind row', 'restrict row', 'per project', 'grid dispatch', 'scope row'],
+    title: 'Row Projects…',
+    description: '**What it does:** Restricts the focused row\'s agent index and lane selectors to one or more projects.\n\n**Use when:** A row is a working context that spans more than one repo — an app and the service it calls, a package and its consumer.\n\n**Notes:** The row\'s index shows one section per bound project. Binding filters, it never fills — no lane is populated, moved, or cleared. Dispatch scope is promoted to global, because a project-scoped row set is built from the active tab alone.',
+    keywords: ['row project', 'row projects', 'bind row', 'restrict row', 'per project', 'grid dispatch', 'scope row', 'multiple projects'],
     when: ({ workspace }) => Boolean(workspace.state.dispatchMode?.tiled),
     getState: ({ workspace }) => {
       const tiled = workspace.state.dispatchMode?.tiled
       if (!tiled) return null
       const grid = normalizeGridShape(tiled)
       const rowIndex = rowIndexForLane(grid.rows, grid.focusedLane)
-      const tabId = rowIndex >= 0 ? grid.rows[rowIndex]?.projectTabId : undefined
-      if (tabId === undefined) return value('Any')
-      return value(
-        workspace.state.tabs.find(tab => tab.id === tabId)?.title ?? 'Project',
-      )
+      const ids = rowIndex >= 0 ? grid.rows[rowIndex]?.projectTabIds : undefined
+      if (!ids || ids.length === 0) return value('Any')
+      if (ids.length === 1) {
+        return value(workspace.state.tabs.find(tab => tab.id === ids[0])?.title ?? 'Project')
+      }
+      return value(`${ids.length} projects`)
     },
     run: ({ workspace }) => {
       const tiled = workspace.state.dispatchMode?.tiled

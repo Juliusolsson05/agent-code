@@ -53,6 +53,31 @@ export const RESERVED_INTERACTIONS: readonly ReservedInteraction[] = [
     owner: 'Numbered tab activation (Dispatch-safe variant)',
   },
   {
+    // Monaco's multi-cursor and column-select chords, verified against
+    // node_modules/monaco-editor (multicursor.js / coreCommands.js) rather than
+    // from memory.
+    //
+    // WHY these were missing and why it mattered: Grid Dispatch's row-focus
+    // commands were given Cmd+Alt+Up/Down, the app-side checker passed because
+    // nothing in this table claimed them, and review found they are Monaco's
+    // "Add Cursor Above/Below". The `linux:` override in that file replaces the
+    // chord on Linux only, so `primary` — CtrlCmd|Alt|Arrow — is what applies on
+    // macOS. `dispatch` and `editor` are NOT in DISJOINT_CONTEXT_PAIRS, so with
+    // this entry present the checker now rejects that pairing instead of
+    // offering it as free.
+    //
+    // This is exactly the "incomplete list" failure the header above warns
+    // about, and it has now happened once.
+    bindings: [
+      'Cmd+Alt+Up', 'Cmd+Alt+Down',
+      'Cmd+Alt+Shift+Up', 'Cmd+Alt+Shift+Down',
+      'Cmd+Alt+Shift+Left', 'Cmd+Alt+Shift+Right',
+      'Cmd+Shift+Up', 'Cmd+Shift+Down',
+    ],
+    context: 'editor',
+    owner: 'Monaco multi-cursor / column select',
+  },
+  {
     // Dispatch row/lane movement. Mutually exclusive with the grid navigation
     // COMMANDS that share these chords — that disjointness is exactly what the
     // overlap matrix encodes, and why this is legal rather than a conflict.
