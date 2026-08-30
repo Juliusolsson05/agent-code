@@ -11,12 +11,12 @@ import {
   DialogTitle,
 } from '@renderer/components/ui/dialog'
 import { PathInput } from '@renderer/features/path-picker/ui/PathInput'
-import { relativeTime } from '@renderer/lib/relativeTime'
 // Canonical session listing shape — was a local duplicate of the preload
 // SessionInfo. The renderer tsconfig already includes `src/shared/types/**`,
 // so importing the shared type needs no preload reach-across. See
 // @shared/types/session.
-import type { SessionInfo } from '@shared/types/session'
+import type { ListedSession } from '@preload/api/session'
+import { SessionPickerRow } from '@renderer/features/workspace/ui/SessionPickerRow'
 
 // PathPickerModal — modal that asks the user for a working directory
 // when they press ⌘T (or click the + button in the tab bar).
@@ -68,7 +68,7 @@ export function PathPickerModal({
   // changes and resolves to a valid directory — gives the user live
   // feedback as they type (e.g. "ah, no recorded sessions in this
   // folder yet, I'll start fresh").
-  const [sessions, setSessions] = useState<SessionInfo[]>([])
+  const [sessions, setSessions] = useState<ListedSession[]>([])
   const [sessionsLoading, setSessionsLoading] = useState(false)
   // Latest resolved absolute path. Tracked separately from `value` so
   // actions use the validated form rather than re-running expand.
@@ -337,7 +337,7 @@ function ResumeSection({
   disabled,
 }: {
   resolvedPath: string | null
-  sessions: SessionInfo[]
+  sessions: ListedSession[]
   loading: boolean
   onResume: (sessionId: string) => void | Promise<void>
   disabled: boolean
@@ -380,11 +380,10 @@ function ResumeRow({
   disabled,
   onClick,
 }: {
-  session: SessionInfo
+  session: ListedSession
   disabled: boolean
   onClick: () => void
 }) {
-  const age = relativeTime(session.lastModified)
   return (
     <button
       type="button"
@@ -401,21 +400,12 @@ function ResumeRow({
         border-b border-border last:border-b-0
       "
     >
-      <div className="flex-1 min-w-0">
-        <div className="text-[12px] text-ink truncate">{session.summary}</div>
-        <div className="text-[10px] text-muted mt-0.5 flex items-center gap-2">
-          <span className="font-code">{session.sessionId.slice(0, 8)}</span>
-          {session.gitBranch && (
-            <>
-              <span className="opacity-40">·</span>
-              <span className="truncate max-w-[140px]">{session.gitBranch}</span>
-            </>
-          )}
-        </div>
-      </div>
-      <div className="flex-shrink-0 text-[10px] text-muted tabular-nums">
-        {age}
-      </div>
+      {/* This row is the reason #96 was filed: it led with a flattened
+          `summary` and permanently showed `sessionId.slice(0, 8)` on the second
+          line, so a user who remembered a conversation by what they typed was
+          shown a hex id instead. The id now appears only as a marked fallback,
+          when there is genuinely nothing better to show. */}
+      <SessionPickerRow identity={session.identity} />
     </button>
   )
 }

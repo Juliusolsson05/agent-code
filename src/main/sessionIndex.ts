@@ -7,6 +7,12 @@ import { getProjectDirForCwd } from '@shared/runtime/projectDir.js'
 import { getCodexSessionsDir } from '@providers/codex/runtime/projectDir.js'
 import { performanceService } from '@main/performance/PerformanceService.js'
 import { asRecord, parseJsonRecord } from '@shared/lib/asRecord.js'
+import {
+  buildSessionDisplayIdentity,
+  identityInputFromSessionInfo,
+} from '@shared/types/sessionDisplayIdentity.js'
+import type { SessionDisplayIdentity } from '@shared/types/sessionDisplayIdentity.js'
+import type { SessionIndexEntry, SessionIndexPrompt } from '@shared/types/sessionIndex.js'
 
 // Session Prompt Index — power source for the "Search Conversation
 // Prompts" command.
@@ -41,35 +47,10 @@ import { asRecord, parseJsonRecord } from '@shared/lib/asRecord.js'
 //     here and re-implement the predicates inline. Same shape, same
 //     filters.
 
-export type SessionIndexPrompt = {
-  text: string
-  /** Epoch ms if the entry's ISO timestamp parsed, else null. */
-  ts: number | null
-}
-
-export type SessionIndexEntry = {
-  /** Provider-side uuid (Claude) or rollout uuid (Codex). Stable;
-   *  used as the resume argument. */
-  providerSessionId: string
-  kind: AgentProviderKind
-  /** Cwd the session was recorded in (from session_meta for Codex;
-   *  from the first entry's cwd field for Claude). Falls back to
-   *  empty string if not discoverable. */
-  cwd: string
-  /** File mtime epoch ms. Primary sort key for the recent view. */
-  lastModified: number
-  /** One-line summary from the existing session listers (customTitle
-   *  for Claude if set, else the last prompt; the first prompt for
-   *  Codex). Used as a fallback label when the user hasn't typed
-   *  any prompts yet. */
-  summary: string
-  /** Up to the last N user prompts (newest first). Empty array
-   *  when a session exists on disk but has no visible user prompts
-   *  (rare — fresh session with only assistant bootstrap text). */
-  recentUserPrompts: SessionIndexPrompt[]
-  /** Count of matched prompts when returned from search, else 0. */
-  matchCount: number
-}
+// The wire shapes now live at the neutral boundary (@shared/types/sessionIndex)
+// so preload cannot hold a silently-drifting copy. Re-exported here because
+// every existing importer reaches for them through this module.
+export type { SessionIndexEntry, SessionIndexPrompt } from '@shared/types/sessionIndex.js'
 
 type ListRecentOptions = {
   /** How many sessions to include. Default 10. */
@@ -111,6 +92,49 @@ type CacheEntry = {
  *  unique (uuid); Claude session ids are uuids too. No collisions
  *  across providers in practice, but we prefix to be safe. */
 const promptCache = new Map<string, CacheEntry>()
+
+/**
+ * Build the shared display identity for an index entry (#96).
+ *
+ * WHY this reuses `identityInputFromSessionInfo` rather than deriving its own
+ * ladder input: the resume picker's path (`session:list-for-cwd`) feeds the
+ * ladder through that adapter, and two adapters would be exactly the
+ * divergence #96 was filed about — the Codex hex-id bridge in particular has to
+ * apply identically on both paths or a session renames itself depending on
+ * which picker you opened.
+ *
+ * WHY the newest prompt is offered as `lastPrompt` and never as `firstPrompt`:
+ * `recentUserPrompts` is the last N prompts, newest first. When a session has
+ * more than N, the oldest one in that window is NOT the conversation's opening
+ * prompt, and claiming otherwise would put a mid-conversation line on the
+ * `first-prompt` rung and mislabel the row. Feeding it to the weaker rung is
+ * accurate, and still beats falling through to a bare folder name — which is
+ * what a Codex entry would otherwise get here, since the Codex discoverer does
+ * not populate `summary` at all.
+ */
+function identityForIndexEntry(params: {
+  kind: AgentProviderKind
+  providerSessionId: string
+  cwd: string
+  lastModified: number
+  summary: string
+  prompts: SessionIndexPrompt[]
+}): SessionDisplayIdentity {
+  const input = identityInputFromSessionInfo(
+    {
+      sessionId: params.providerSessionId,
+      summary: params.summary,
+      lastModified: params.lastModified,
+      fileSize: 0,
+      cwd: params.cwd || undefined,
+    },
+    params.kind,
+  )
+  return buildSessionDisplayIdentity({
+    ...input,
+    lastPrompt: input.lastPrompt ?? params.prompts[0]?.text ?? null,
+  })
+}
 
 function cacheKey(kind: AgentProviderKind, id: string): string {
   return `${kind}:${id}`
@@ -608,14 +632,23 @@ export async function listRecentSessionsWithPrompts(
     }
     // Apply cwd filter now if requested.
     if (cwd && resolvedCwd && resolvedCwd !== cwd) continue
+    const summary = c.summary || (prompts[0]?.text ?? '').slice(0, 200)
     results.push({
       providerSessionId: c.providerSessionId,
       kind: c.kind,
       cwd: resolvedCwd,
       lastModified: c.lastModified,
-      summary: c.summary || (prompts[0]?.text ?? '').slice(0, 200),
+      summary,
       recentUserPrompts: prompts.slice(0, promptsPerSession),
       matchCount: 0,
+      identity: identityForIndexEntry({
+        kind: c.kind,
+        providerSessionId: c.providerSessionId,
+        cwd: resolvedCwd,
+        lastModified: c.lastModified,
+        summary: c.summary,
+        prompts,
+      }),
     })
   }
     span.end({
@@ -745,6 +778,14 @@ export async function searchSessionPrompts(
         summary: c.summary || (prompts[0]?.text ?? '').slice(0, 200),
         recentUserPrompts: combined,
         matchCount,
+        identity: identityForIndexEntry({
+          kind: c.kind,
+          providerSessionId: c.providerSessionId,
+          cwd: resolvedCwd,
+          lastModified: c.lastModified,
+          summary: c.summary,
+          prompts,
+        }),
       },
       score,
     })

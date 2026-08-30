@@ -350,8 +350,24 @@ async function parseSession({
   const lastPrompt = extractLastJsonStringField(lite.tail, 'lastPrompt')
   const firstPrompt = extractFirstUserPrompt(lite.head)
 
-  const summary = customTitle ?? lastPrompt ?? firstPrompt
-  if (!summary) return null
+  // WHY a session with no derivable summary is no longer dropped (#96):
+  //
+  // This used to `return null`, which removed the session from the resume
+  // picker entirely. Codex's lister showed the equivalent session with a hex-id
+  // label, so the two providers disagreed about LIST MEMBERSHIP, not just about
+  // naming — a Claude session whose transcript carried no title, no lastPrompt
+  // and no recoverable first prompt was simply invisible, even though its id
+  // resumes perfectly well.
+  //
+  // Invisible is strictly worse than poorly named. The shared identity ladder
+  // (@shared/types/sessionDisplayIdentity) now labels these from the cwd
+  // basename, or the truncated id as a last resort, and marks either as a
+  // fallback so the user knows it is a stand-in rather than a name.
+  //
+  // `summary` stays a required string on the wire for search ranking and other
+  // non-display callers; '' is the honest value when nothing was derivable, and
+  // no surface renders it as a label any more.
+  const summary = customTitle ?? lastPrompt ?? firstPrompt ?? ''
 
   const gitBranch =
     extractJsonStringField(lite.head, 'gitBranch') ??

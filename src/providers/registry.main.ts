@@ -8,9 +8,17 @@ import type { MainProviderConfig } from '@shared/types/providerConfig'
 import { AGENT_PROVIDER_KINDS, isAgentProviderKind } from '@shared/types/providerKind'
 import type { AgentProviderKind } from '@shared/types/providerKind'
 import { ClaudeSession } from '@providers/claude/runtime/claudeSession'
-import { listAllClaudeSessions } from '@providers/claude/runtime/sessionList'
+import { listAllClaudeSessions, listSessionsForCwd } from '@providers/claude/runtime/sessionList'
 import { deliverClaudePrompt } from '@providers/claude/runtime/promptDelivery'
-import { listSessionsForCwd, getProjectDirForCwd } from 'claude-code-headless'
+// WHY the cwd-scoped lister comes from the app and not from claude-code-headless
+// (#96): both copies existed and BOTH were live — this slot used the submodule's
+// while src/main/sessionIndex.ts used the app's. Their parse logic is the same,
+// so the split bought nothing and cost a real bug: the fix for Claude silently
+// dropping unnamed sessions from the resume picker had to be applied to the
+// app-side copy, and leaving this pointed at the submodule would have made the
+// resume picker the one surface that never received it. Keeping getProjectDirForCwd
+// from the package is fine — it is genuinely provider-owned path knowledge.
+import { getProjectDirForCwd } from 'claude-code-headless'
 import { CodexSession } from '@providers/codex/runtime/codexSession'
 import { deliverCodexPrompt } from '@providers/codex/runtime/promptDelivery'
 import { OpencodeSession } from '@providers/opencode/runtime/opencodeSession'
