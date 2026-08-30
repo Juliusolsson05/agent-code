@@ -455,12 +455,26 @@ export function sendToFocusedWindow(channel: string, ...args: unknown[]): void {
  * Session traffic. Routes to the owning window.
  *
  * WHY an unknown owner broadcasts instead of dropping: a dropped session event
- * silently freezes a pane, which is the single worst failure shape in this
- * codebase (see the rendering design principles' bias toward surviving). A
- * stray event is merely wasteful — PROVIDED the receiving renderer refuses
- * sessions it does not own, which `useIpcSubscriptions` now does. The two
- * halves are deliberately redundant: main routes so the common path is exact,
- * the renderer guards so this fallback is harmless.
+ * silently freezes a pane, which is the single worst failure shape this
+ * codebase knows (the rendering design principles' P6 — bias toward surviving,
+ * because a row that survives is diagnosable while one that vanishes is not).
+ * Ownership is claimed at id-mint time and released only on an explicit kill,
+ * so "unowned" should mean "no window is displaying this" and the fallback
+ * should effectively never fire. It is still a broadcast rather than a drop
+ * because that reasoning is an argument, and an argument is not a guarantee.
+ *
+ * WHY there is no matching renderer-side "ignore sessions I don't own" guard,
+ * even though it looks like the obvious belt to this suspenders:
+ *
+ * The renderer CANNOT distinguish "not mine" from "mine, but I have not
+ * registered it yet". A pane's first events legitimately precede the
+ * `session:spawn` IPC response — that is the whole reason ownership is claimed
+ * from inside `spawn()` — so the renderer accumulates them under a sessionId it
+ * has not seen before (`prev[sessionId] ?? emptyRuntime()`, eleven call sites).
+ * A guard strict enough to reject a foreign session would also reject the first
+ * frames of every new pane in its own window. So the fallback is instead made
+ * rare by construction and made *visible* through the breadcrumb below, rather
+ * than made harmless by a guard that cannot exist.
  */
 export function sendToSessionWindow(
   sessionId: string,
@@ -472,6 +486,12 @@ export function sendToSessionWindow(
     sendToWindow(owner, channel, ...args)
     return
   }
+  // Metadata only — lengths, never content. See the breadcrumb ring's notes.
+  recordIpcDiagnosticBreadcrumb('window.route.unowned-session', {
+    channel,
+    sessionIdLength: sessionId.length,
+    windowCount: windows.size,
+  })
   broadcastToWindows(channel, ...args)
 }
 

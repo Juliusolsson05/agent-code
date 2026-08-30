@@ -152,19 +152,40 @@ synchronously, before the manager emits anything. Ownership is released on
 This also means ownership is exact rather than inferred: the window that asked
 for the session is the window that renders it, by construction.
 
-**Unknown owner ⇒ broadcast, plus a renderer-side guard.** If a session id has
-no recorded owner (adoption in flight, a hand-edited workspace, a code path we
-missed), the registry broadcasts. Dropping the event would silently freeze a
-pane — the worst failure shape this codebase knows — while a stray event is
-merely wasteful *provided* the receiving renderer refuses it. So
-`useIpcSubscriptions` gains one guard at the top of its session handlers:
-ignore events for a `sessionId` this window does not own. Without that guard
-broadcast is not a safe fallback at all, because every handler currently
-materializes `emptyRuntime()` for an unrecognized id and would grow a ghost
-runtime in the wrong window.
+**Ownership is claimed from inside `spawn()`, at id-mint time.** `spawn()`
+mints the id itself and then *awaits the provider start* — during which the
+provider emits `started`, the first screen snapshot, and its first semantic
+events. A caller claiming ownership from the resolved result would therefore
+have an unrouted hole exactly where a new pane's first paint lives. `spawn`
+takes an `onSessionIdMinted` callback instead, called synchronously with the
+fresh id before anything can emit for it. It is a callback rather than an
+`ownerWindowId` option so `SessionManager` stays ignorant of windows.
 
-The two halves are deliberately redundant: main routes so the common path is
-exact, the renderer guards so the fallback path is harmless.
+`session:recover` needs no hook: the renderer supplies the durable id it is
+restoring, so the claim happens before the call.
+
+Ownership is released only on an explicit `session:kill` / `session:kill-owned`,
+**not** when a session exits on its own. An exited pane is still on screen,
+still owned, and can be reloaded in place.
+
+**Unknown owner ⇒ broadcast, and no renderer-side guard.** Dropping would
+silently freeze a pane (P6: a row that survives is diagnosable, one that
+vanishes is not), so the fallback broadcasts.
+
+The obvious belt to that suspenders — "renderer ignores sessions it does not
+own" — was designed and then rejected, and the reason is worth recording
+because it looks like an oversight otherwise. **The renderer cannot distinguish
+"not mine" from "mine, but not registered yet."** A pane's first events
+legitimately precede the `session:spawn` IPC response; that is the entire
+reason ownership is claimed from inside `spawn()`. The renderer accumulates
+those events under an id it has never seen (`prev[sessionId] ?? emptyRuntime()`).
+A guard strict enough to reject a foreign session would also reject the first
+frames of every new pane in its own window.
+
+So the fallback is made *rare by construction* (ownership exists from mint until
+explicit disposal) and *visible* (a `window.route.unowned-session` breadcrumb in
+the outbound diagnostic ring, metadata-only), rather than made harmless by a
+guard that cannot exist.
 
 ### 3. `workspace.json` grows a window dimension
 
@@ -421,15 +442,12 @@ is `feat/multi-window`.
 
 Following `docs/testing/standard.md`; suffix picks the tier.
 
-**The two hazards, first and non-negotiable:**
+**The hazard, first and non-negotiable:**
 
 - `workspace.multiWindowSave.test.ts` (unit, main) — two windows save
   concurrently; assert each slice survives byte-for-byte and neither prunes the
   other. This test fails on the naive "renderer writes the whole file"
   implementation, which is the point.
-- `useIpcSubscriptions.sessionOwnership.renderer.test.tsx` — an event for an
-  unowned `sessionId` creates **no** runtime entry. Pins the `?? emptyRuntime()`
-  hazard directly.
 
 **Persistence:**
 
@@ -453,7 +471,11 @@ Following `docs/testing/standard.md`; suffix picks the tier.
 
 - `windowRegistry.routing.test.ts` — session events reach only the owner;
   unowned ids broadcast; ownership transfers on adoption before any event is
-  emitted.
+  emitted; ownership survives a natural exit and ends on an explicit kill.
+- `sessionOwnershipClaim.test.ts` — the mint hook fires before `spawn()`
+  resolves, so an event emitted mid-spawn is already routable. This is the
+  assertion that would fail if someone "simplified" the callback away in favor
+  of claiming from the resolved result.
 - Bridge requests with an unowned caller reject with the fail-closed error
   rather than reaching a window.
 
