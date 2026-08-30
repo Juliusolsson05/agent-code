@@ -1,7 +1,7 @@
 import { Menu } from 'electron'
 import type { MenuItemConstructorOptions } from 'electron'
 
-import { sendToMainWindow, zoomMainWindow } from '@main/window/mainWindow.js'
+import { sendToFocusedWindow, zoomFocusedWindow } from '@main/window/windowRegistry.js'
 import type { NativeMenuCommandId } from '@shared/commands/nativeMenuCommandIds.js'
 
 // macOS application menu (issue #148).
@@ -44,7 +44,10 @@ import type { NativeMenuCommandId } from '@shared/commands/nativeMenuCommandIds.
  *  into nothing. The id list is shared with the renderer, where
  *  `catalog.test.ts` proves every entry still names a real command. */
 function dispatchCommand(commandId: NativeMenuCommandId): void {
-  sendToMainWindow('menu:command', commandId)
+  // WHY the focused window and not a fixed one: the application menu is a
+  // single shared surface driving whichever window the user is currently in.
+  // A menu click while window 2 is frontmost must close window 2's tab.
+  sendToFocusedWindow('menu:command', commandId)
 }
 
 export function buildAppMenu(): Menu {
@@ -116,17 +119,17 @@ export function buildAppMenu(): Menu {
         {
           label: 'Actual Size',
           accelerator: 'CommandOrControl+0',
-          click: () => zoomMainWindow('reset'),
+          click: () => zoomFocusedWindow('reset'),
         },
         {
           label: 'Zoom In',
           accelerator: 'CommandOrControl+Plus',
-          click: () => zoomMainWindow('in'),
+          click: () => zoomFocusedWindow('in'),
         },
         {
           label: 'Zoom Out',
           accelerator: 'CommandOrControl+-',
-          click: () => zoomMainWindow('out'),
+          click: () => zoomFocusedWindow('out'),
         },
         { type: 'separator' },
         { role: 'togglefullscreen' },

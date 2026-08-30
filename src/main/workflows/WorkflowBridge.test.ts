@@ -6,9 +6,15 @@ import type {
 } from 'workflow-mcp'
 import { createWorkflowState } from 'workflow-mcp/state'
 
-vi.mock('@main/window/mainWindow.js', () => ({
+// The bridge resolves a target window before sending. These tests exercise
+// delivery bookkeeping (cursors, interests, batching), not routing, so the
+// registry is stubbed to a single always-resolvable window — routing itself is
+// covered in windowRegistry.routing.test.ts.
+vi.mock('@main/window/windowRegistry.js', () => ({
   recordIpcDiagnosticBreadcrumb: vi.fn(),
-  sendToMainWindow: vi.fn(),
+  sendToWindow: vi.fn(),
+  windowForSession: vi.fn(() => 'test-window'),
+  windowIdForWebContentsId: vi.fn(() => 'test-window'),
 }))
 
 const { WorkflowBridge } = await import('@main/workflows/WorkflowBridge.js')

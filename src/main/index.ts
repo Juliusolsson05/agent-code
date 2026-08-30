@@ -4,7 +4,7 @@
 // `./loadEnv.ts` for the rationale.
 import '@main/loadEnv.js'
 
-import { app, BrowserWindow, crashReporter, dialog, Menu } from 'electron'
+import { app, crashReporter, dialog, Menu } from 'electron'
 import { existsSync } from 'fs'
 import { readFile } from 'fs/promises'
 import { join } from 'path'
@@ -35,11 +35,18 @@ import {
 import { cleanupClaudeImageCacheDir } from '@main/storage/claudeImageCache.js'
 import { acquireStateProcessLock } from '@main/storage/processLock.js'
 import type { StateProcessLock } from '@main/storage/processLock.js'
-import { createMainWindow, focusMainWindow, sendToMainWindow } from '@main/window/mainWindow.js'
+import {
+  broadcastToWindows,
+  createAppWindow,
+  focusWindow,
+  sendToFocusedWindow,
+  sendToSessionWindow,
+  windowCount,
+} from '@main/window/windowRegistry.js'
 import { wireSessionForwarder } from '@main/sessions/forwarder.js'
 import type { SessionForwarderControl } from '@main/sessions/forwarder.js'
 import { SessionRecorderManager } from '@main/recording/SessionRecorderManager.js'
-import { setOutboundObserver } from '@main/window/mainWindow.js'
+import { setOutboundObserver } from '@main/window/windowRegistry.js'
 import { isSessionRecordingEnabled, isSessionRecordingAutoStart } from '@main/ipc/devDebug.js'
 import { registerAllIpc } from '@main/ipc/index.js'
 import { AgentCodeManagedSkillsService } from '@main/agentCodeConventions/AgentCodeManagedSkillsService.js'
@@ -86,7 +93,8 @@ import type { WorkflowService } from 'workflow-mcp'
 // Everything else is delegated:
 //   - IPC handlers: main/ipc/*.ts
 //   - SessionManager → renderer forwarding: main/sessions/forwarder.ts
-//   - Window creation + send helper: main/window/mainWindow.ts
+//   - Window creation: main/window/appWindow.ts
+//   - Window registry + IPC routing: main/window/windowRegistry.ts
 //   - Disk paths, image cache, feed-debug writer: main/storage/*
 //   - History chunk loader + jsonl coalescer: main/sessions/*
 //
@@ -102,7 +110,7 @@ const ghostJournals = new GhostJournalRegistry()
 // Session recorder — one folder per recording under session-recordings/.
 // Constructed and installed as the outbound-IPC observer whenever the
 // dev-debug CAPABILITY is on (AGENT_CODE_DEV_DEBUG=1), so a normal build with
-// dev-debug off pays nothing (no observer installed, sendToMainWindow's hook
+// dev-debug off pays nothing (no observer installed, the registry's hook
 // stays null). AGENT_CODE_SESSION_RECORD does NOT gate construction — it only
 // flips autoRecord (below) so every session records from launch.
 // plan: docs/rendering/session-recording-plan-2026-07.md (#467).
@@ -120,14 +128,14 @@ const sessionRecorders = isSessionRecordingEnabled()
         // provably loses the auto-record race: the recorder starts on a
         // session's FIRST event, which for an idle restored pane is whenever
         // the user first prompts it — unboundedly after Feed mount.
-        sendToMainWindow('record-session:started', { sessionId, generation }),
+        sendToSessionWindow(sessionId, 'record-session:started', { sessionId, generation }),
       (sessionId, generation) =>
         // Natural exit keeps the recorder writable until the renderer has
         // flushed its coalesced shape evidence (or the manager's grace timer
         // expires). The opaque generation is load-bearing: sessionId is reusable,
         // so an acknowledgement without it cannot prove which recorder should
         // close. This channel is deliberately outside recorded session data.
-        sendToMainWindow('record-session:stopping', { sessionId, generation }),
+        sendToSessionWindow(sessionId, 'record-session:stopping', { sessionId, generation }),
     )
   : null
 if (sessionRecorders) setOutboundObserver(sessionRecorders.observe)
@@ -150,7 +158,9 @@ const aiWorkspaceRegistry = new AiWorkspaceRegistry()
 // Registry mutations can originate from renderer IPC or any built-in MCP
 // session. Forward one source-of-truth event so an already-open curated editor
 // does not require a manual close/reopen to see agent attachments or clears.
-aiWorkspaceRegistry.on('changed', event => sendToMainWindow('ai-workspace:changed', event))
+// Broadcast: an AI Workspace is a machine-wide record, and any window may have
+// its curated editor open on the workspace that just changed.
+aiWorkspaceRegistry.on('changed', event => broadcastToWindows('ai-workspace:changed', event))
 const caffeinateController = new CaffeinateController()
 
 // SessionManager is constructed inside whenReady so we can await
@@ -228,7 +238,9 @@ if (packagingSmoke) {
   app.quit()
 } else {
   app.on('second-instance', () => {
-    focusMainWindow()
+    // Focus the last window the user was in rather than an arbitrary one:
+    // relaunching the app is a request to get back to where you were.
+    focusWindow(null)
   })
 
   void app.whenReady().then(startApp).catch((err) => {
@@ -704,7 +716,9 @@ async function startApp(): Promise<void> {
       // narrow "open this id" request. The renderer decides how to present it,
       // preserving the existing rule that layout/chrome state stays renderer
       // local instead of turning main into a second UI store.
-      sendToMainWindow('ai-workspace:open-request', { workspaceId })
+      // The focused window: this is a request to SHOW something, so it belongs
+      // where the user is looking, not in every workspace at once.
+      sendToFocusedWindow('ai-workspace:open-request', { workspaceId })
     },
     sessionManager: manager,
     appRunJournal,
@@ -757,11 +771,11 @@ async function startApp(): Promise<void> {
   cliUpdateOrchestrator.scheduleBootProbe()
   performanceService.mark('app.main.ipc.registered')
   appRunJournal.record({ area: 'window.main', name: 'window.create.start' })
-  createMainWindow()
+  createAppWindow()
   appRunJournal.record({
     area: 'window.main',
     name: 'window.create.end',
-    data: { windowCount: BrowserWindow.getAllWindows().length },
+    data: { windowCount: windowCount() },
   })
   // Install the application menu right after the window exists — the File
   // items dispatch command ids to THIS window's renderer (issue #148).
@@ -776,7 +790,7 @@ async function startApp(): Promise<void> {
       // visible window backed by a manager that can no longer recover or spawn.
       return
     }
-    if (BrowserWindow.getAllWindows().length === 0) createMainWindow()
+    if (windowCount() === 0) createAppWindow()
   })
 }
 

@@ -1,7 +1,10 @@
 import type { SessionManager } from '@main/sessionManager.js'
 import type { LspManager } from '@main/lspManager.js'
 
-import { sendToMainWindow } from '@main/window/mainWindow.js'
+import {
+  broadcastToWindows,
+  sendToSessionWindow,
+} from '@main/window/windowRegistry.js'
 import {
   enqueueJsonl,
   flushAllJsonl,
@@ -15,7 +18,16 @@ import { SubAgentWatcherManager } from '@main/subagents/index.js'
 // Session event forwarder.
 //
 // Wires every manager event to a matching IPC channel. Each payload already
-// carries the sessionId so the renderer can route to the right tile. Complete
+// carries the sessionId, which is now load-bearing twice over: main routes the
+// message to the window that owns the session, and that window's renderer then
+// routes it to the right tile. Before multi-window only the second half
+// existed and every event went to the one window.
+//
+// WHY routing matters beyond tidiness: without it every window would decode the
+// full firehose of every other window's agents, and — worse — each session
+// handler in useIpcSubscriptions materializes `emptyRuntime()` for an
+// unrecognized id, so a misrouted event grows a ghost runtime rather than being
+// ignored. Complete
 // snapshots and cumulative semantic prefixes pass through the narrow
 // coalescers below; structural events still preserve direct ordering.
 //
@@ -38,16 +50,16 @@ export function wireSessionForwarder(
   // from, and the tool_result blocks that flip a subagent to done/error). See
   // src/main/subagents/.
   const subAgents = new SubAgentWatcherManager((sessionId, map) =>
-    sendToMainWindow('session:sub-agents', { sessionId, subAgents: map }),
+    sendToSessionWindow(sessionId, 'session:sub-agents', { sessionId, subAgents: map }),
   )
   const screens = new LatestSessionIpcCoalescer(payload =>
-    sendToMainWindow('session:screen', payload),
+    sendToSessionWindow(payload.sessionId, 'session:screen', payload),
   )
   const processStates = new LatestSessionIpcCoalescer(payload =>
-    sendToMainWindow('session:process-state', payload),
+    sendToSessionWindow(payload.sessionId, 'session:process-state', payload),
   )
   const semanticEvents = new SemanticEventIpcCoalescer(
-    payload => sendToMainWindow('session:semantic-event', payload),
+    payload => sendToSessionWindow(payload.sessionId, 'session:semantic-event', payload),
     undefined,
     sessionId => {
       // See SemanticEventIpcCoalescer.beforeBarrier. These are full snapshots / committed entries,
@@ -59,9 +71,11 @@ export function wireSessionForwarder(
     },
   )
 
-  manager.on('started', payload => sendToMainWindow('session:started', payload))
+  manager.on('started', payload =>
+    sendToSessionWindow(payload.sessionId, 'session:started', payload),
+  )
   manager.on('input-readiness', payload =>
-    sendToMainWindow('session:input-readiness', payload),
+    sendToSessionWindow(payload.sessionId, 'session:input-readiness', payload),
   )
   // WHY screen/process-state do not cross IPC directly: both are complete,
   // authoritative snapshots. During a nine-agent burst the old path cloned and
@@ -82,19 +96,19 @@ export function wireSessionForwarder(
     subAgents.observeParentEntry(payload.sessionId, payload.entry, payload.file)
   })
   manager.on('jsonl-error', ({ sessionId, error }) =>
-    sendToMainWindow('session:jsonl-error', {
+    sendToSessionWindow(sessionId, 'session:jsonl-error', {
       sessionId,
       message: String(error.message ?? error),
     }),
   )
   manager.on('transcript-diagnostic', payload =>
-    sendToMainWindow('session:transcript-diagnostic', payload),
+    sendToSessionWindow(payload.sessionId, 'session:transcript-diagnostic', payload),
   )
   manager.on('terminal-data', payload =>
-    sendToMainWindow('session:terminal-data', payload),
+    sendToSessionWindow(payload.sessionId, 'session:terminal-data', payload),
   )
   manager.on('agent-pty-data', payload =>
-    sendToMainWindow('session:agent-pty-data', payload),
+    sendToSessionWindow(payload.sessionId, 'session:agent-pty-data', payload),
   )
   manager.on('process-state', payload => processStates.enqueue(payload))
   // Legacy per-condition channels (session:trust-dialog / :resume-prompt /
@@ -106,7 +120,9 @@ export function wireSessionForwarder(
   // The manager STILL emits the granular events internally (provider runtimes
   // drive them); we simply stop bridging them over IPC. Re-deprecating the
   // manager-level events is owned by the conditions-framework cluster.
-  manager.on('conditions', payload => sendToMainWindow('session:conditions', payload))
+  manager.on('conditions', payload =>
+    sendToSessionWindow(payload.sessionId, 'session:conditions', payload),
+  )
   manager.on('semantic-event', payload => semanticEvents.enqueue(payload))
   manager.on('removed', payload => {
     // Final cleanup is keyed to removal, not renderer-facing exit. Some provider
@@ -125,9 +141,11 @@ export function wireSessionForwarder(
     subAgents.stop(payload.sessionId)
   })
   manager.on('exit', payload => {
-    sendToMainWindow('session:exit', payload)
+    sendToSessionWindow(payload.sessionId, 'session:exit', payload)
   })
-  lspManager.on('diagnostics', payload => sendToMainWindow('lsp:diagnostics', payload))
+    // Diagnostics are keyed by file, not by session: two windows can have the
+  // same file open in their editors and both need them.
+  lspManager.on('diagnostics', payload => broadcastToWindows('lsp:diagnostics', payload))
 
   return {
     flush(): void {

@@ -11,8 +11,10 @@ import { createWorkflowState } from 'workflow-mcp/state'
 
 import {
   recordIpcDiagnosticBreadcrumb,
-  sendToMainWindow,
-} from '@main/window/mainWindow.js'
+  sendToWindow,
+  windowForSession,
+  windowIdForWebContentsId,
+} from '@main/window/windowRegistry.js'
 import { workflowPayloadForRenderer } from '@main/workflows/workflowPayloadForRenderer.js'
 import type {
   WorkflowCancelRequest,
@@ -61,10 +63,42 @@ type RunDeliveryState = {
   interests: Map<number, RendererRunInterest>
 }
 
+/**
+ * Who a workflow message is for.
+ *
+ * WHY two shapes rather than one window id: the bridge knows its addressee two
+ * different ways depending on the message. Session-runs is about one agent, so
+ * the owning window is derived from the session. Event batches are answers to a
+ * delivery interest a specific renderer registered, and that interest is already
+ * keyed by `rendererId` — so the renderer is the address, and using the session
+ * instead would misdeliver after a session moved between windows while a cursor
+ * hint was still in flight.
+ */
+export type WorkflowBridgeTarget =
+  | { sessionId: string }
+  | { rendererId: number }
+
 type WorkflowBridgeSender = (
+  target: WorkflowBridgeTarget,
   channel: 'workflows:event-batch' | 'workflows:session-runs',
   payload: WorkflowEventsBatch | WorkflowSessionRunsResult,
 ) => void
+
+function sendToTargetWindow(
+  target: WorkflowBridgeTarget,
+  channel: 'workflows:event-batch' | 'workflows:session-runs',
+  payload: WorkflowEventsBatch | WorkflowSessionRunsResult,
+): void {
+  const windowId = 'sessionId' in target
+    ? windowForSession(target.sessionId)
+    : windowIdForWebContentsId(target.rendererId)
+  // An unresolvable target is a closed window or a session whose owner is
+  // mid-handoff. `sendToWindow(null, …)` is a no-op, which is the right
+  // outcome: workflow state is durable in WorkflowService, so a missed cursor
+  // hint costs a delivery, never data. The renderer re-registers interest when
+  // it mounts again.
+  sendToWindow(windowId, channel, payload)
+}
 
 export type WorkflowBridgeOptions = {
   batchWindowMs?: number
@@ -102,7 +136,7 @@ export class WorkflowBridge {
     private readonly service: WorkflowService,
     options: WorkflowBridgeOptions = {},
   ) {
-    this.send = options.send ?? sendToMainWindow
+    this.send = options.send ?? sendToTargetWindow
     this.batchWindowMs = options.batchWindowMs ?? DEFAULT_BATCH_WINDOW_MS
     this.maxBatchBytes = positiveInteger(
       options.maxBatchBytes ?? DEFAULT_MAX_BATCH_BYTES,
@@ -423,7 +457,7 @@ export class WorkflowBridge {
     sessionId: string,
     session: { cwd: string; slots: Map<string, WorkflowRunReferenceData> },
   ): void {
-    this.send('workflows:session-runs', {
+    this.send({ sessionId }, 'workflows:session-runs', {
       sessionId,
       cwd: session.cwd,
       runs: [...session.slots.values()].map(reference => cloneReference(reference)),
@@ -483,17 +517,19 @@ export class WorkflowBridge {
 
   private flush(): void {
     for (const delivery of this.deliveryByScope.values()) {
-      for (const interest of delivery.interests.values()) {
+      for (const [rendererId, interest] of delivery.interests) {
         if (
           interest.inFlightCursor !== null ||
           delivery.latestCursor <= interest.acknowledgedCursor
         ) continue
         const toCursor = delivery.latestCursor
-        // Agent Code currently has one BrowserWindow, so the sender targets that window and one
-        // interest exists per run. Keeping rendererId in state still makes reload cleanup precise;
-        // a future multi-window product must make WorkflowBridgeSender target-aware before sharing
-        // this loop across windows.
-        this.send('workflows:event-batch', {
+        // The interest map is keyed by rendererId precisely so this loop can
+        // address the renderer that asked. With several windows open, two of
+        // them can hold interest in the SAME run (the same project open in
+        // both), and each needs its own cursor hint against its own
+        // acknowledged cursor — one shared send would leave the other window's
+        // acknowledgement permanently behind.
+        this.send({ rendererId }, 'workflows:event-batch', {
           cwd: interest.cwd,
           runId: delivery.runId,
           fromCursor: interest.acknowledgedCursor + 1,
