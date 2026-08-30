@@ -41,13 +41,14 @@ import {
   focusWindow,
   sendToFocusedWindow,
   sendToSessionWindow,
+  setGeometryObserver,
   windowCount,
 } from '@main/window/windowRegistry.js'
 import { wireSessionForwarder } from '@main/sessions/forwarder.js'
 import type { SessionForwarderControl } from '@main/sessions/forwarder.js'
 import { SessionRecorderManager } from '@main/recording/SessionRecorderManager.js'
 import { setOutboundObserver } from '@main/window/windowRegistry.js'
-import { restorableBounds } from '@main/window/windowGeometry.js'
+import { captureWindowGeometry, restorableBounds } from '@main/window/windowGeometry.js'
 import { WorkspaceFileStore } from '@main/storage/workspaceFileStore.js'
 import { isSessionRecordingEnabled, isSessionRecordingAutoStart } from '@main/ipc/devDebug.js'
 import { registerAllIpc } from '@main/ipc/index.js'
@@ -755,6 +756,20 @@ async function startApp(): Promise<void> {
   // renderer-driven `workspace:load` could not answer that — it required a
   // renderer, which requires a window.
   const workspaceFileStore = await WorkspaceFileStore.open()
+  // Dragging a window to the other monitor changes nothing the renderer knows
+  // about, so it triggers no autosave. Without this, the feature's central
+  // promise — it comes back where you left it — would depend on the user
+  // touching a pane before quitting.
+  setGeometryObserver(windowId => {
+    void workspaceFileStore
+      .updateGeometry(windowId, captureWindowGeometry(windowId))
+      .catch(err => {
+        // Geometry is a convenience, not workspace data. A failed write must
+        // not surface as an error dialog or retry storm; the next move tries
+        // again on its own.
+        console.warn('[window] geometry save failed:', err)
+      })
+  })
   registerAllIpc({
     manager,
     remoteController,

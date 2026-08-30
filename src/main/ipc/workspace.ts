@@ -1,8 +1,9 @@
-import { ipcMain, screen } from 'electron'
+import { ipcMain } from 'electron'
 
 import type { SessionManager } from '@main/sessionManager.js'
-import type { WorkspaceFileStore, WindowGeometry } from '@main/storage/workspaceFileStore.js'
-import { getBrowserWindow, windowIdFor } from '@main/window/windowRegistry.js'
+import type { WorkspaceFileStore } from '@main/storage/workspaceFileStore.js'
+import { captureWindowGeometry } from '@main/window/windowGeometry.js'
+import { windowIdFor } from '@main/window/windowRegistry.js'
 
 // Workspace state persistence.
 //
@@ -24,25 +25,6 @@ import { getBrowserWindow, windowIdFor } from '@main/window/windowRegistry.js'
 // The durability machinery (unique temp + rename, one admission-ordered queue
 // for reads and writes) moved to WorkspaceFileStore with its reasoning intact.
 
-function geometryOf(windowId: string): WindowGeometry {
-  const window = getBrowserWindow(windowId)
-  if (!window) return { bounds: null, displayId: null, fullScreen: false }
-  // getNormalBounds, not getBounds: a maximized or full-screened window reports
-  // screen-sized bounds, and restoring those on a smaller display would strand
-  // the window off-screen. The normal bounds are what "put it back where it
-  // was" actually means.
-  const bounds = window.getNormalBounds()
-  let displayId: number | null = null
-  try {
-    displayId = screen.getDisplayMatching(bounds).id
-  } catch {
-    // The display list can be momentarily unavailable during a monitor change.
-    // Geometry restore already validates against attached displays, so a null
-    // hint costs nothing.
-  }
-  return { bounds, displayId, fullScreen: window.isFullScreen() }
-}
-
 export function registerWorkspaceIpc(
   manager: SessionManager,
   store: WorkspaceFileStore,
@@ -62,7 +44,7 @@ export function registerWorkspaceIpc(
       // renderer's autosave already surfaces and retries save failures.
       throw new Error('workspace:save from a sender that owns no window')
     }
-    await store.saveSlice(windowId, json, geometryOf(windowId))
+    await store.saveSlice(windowId, json, captureWindowGeometry(windowId))
     // WHY replacement commit follows the write: a successful spawn response
     // is not durable renderer ownership. If reload destroys the renderer before
     // its remapped local ID reaches workspace.json, main must retain the

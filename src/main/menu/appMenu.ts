@@ -1,7 +1,11 @@
 import { Menu } from 'electron'
 import type { MenuItemConstructorOptions } from 'electron'
 
-import { sendToFocusedWindow, zoomFocusedWindow } from '@main/window/windowRegistry.js'
+import {
+  createAppWindow,
+  sendToFocusedWindow,
+  zoomFocusedWindow,
+} from '@main/window/windowRegistry.js'
 import type { NativeMenuCommandId } from '@shared/commands/nativeMenuCommandIds.js'
 
 // macOS application menu (issue #148).
@@ -62,6 +66,24 @@ export function buildAppMenu(): Menu {
     {
       label: 'File',
       submenu: [
+        {
+          // WHY New Window lives under File and not under Window: that is the
+          // macOS convention every native app follows (Finder, Safari, Mail) —
+          // the Window menu lists and arranges the windows that exist, the File
+          // menu creates things. It also keeps `{ role: 'windowMenu' }` below
+          // intact, which is what supplies the standard window list.
+          //
+          // Main does the work directly rather than dispatching a command id,
+          // for the same reason Close Window keeps its native role: a window is
+          // chrome, not workspace state. No accelerator, per the file-level
+          // rule — the renderer binds ⌘⇧N and a menu accelerator would open two
+          // windows per press.
+          label: 'New Window',
+          click: () => {
+            createAppWindow()
+          },
+        },
+        { type: 'separator' },
         {
           label: 'New Tab',
           // → renderer command `new-tab` (tabCommands.ts). No accelerator: the

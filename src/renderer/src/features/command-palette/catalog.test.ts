@@ -35,6 +35,8 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   'prev-tab',
   'reorder-tabs',
   'resume-session',
+  // windowCommands (1)
+  'new-window',
   // paneCommands (31: 27 literal + 4 generated provider splits)
   'new-agent',
   'split-vertical',
@@ -178,12 +180,12 @@ const NAVIGATION_COMMAND_GROUP: readonly string[] = [
 const ids = (): string[] => builtInCommandCatalog.map(c => c.id)
 
 describe('built-in command catalog — baseline characterization', () => {
-  it('contains exactly the 106 governed commands in registration order', () => {
+  it('contains exactly the 107 governed commands in registration order', () => {
     // Order matters: this is the palette's empty-query browse order.
     expect(ids()).toEqual([...BASELINE_COMMAND_IDS])
   })
 
-  it('has exactly 106 commands', () => {
+  it('has exactly 107 commands', () => {
     // Stated separately from the order assertion because this number is the
     // thing that moves, and a bare count failure is a clearer signal than a
     // 99-line array diff.
@@ -191,10 +193,10 @@ describe('built-in command catalog — baseline characterization', () => {
     // 102 baseline → 98 after governance (5 retirements, 1 addition) → 99 with
     // `open-keyboard-shortcuts` → 102 with the three composer commands → 104
     // with the two lane-removal commands → 105 with Set Agent Title → 106 with
-    // New Lane. Each
+    // New Lane → 107 with New Window. Each
     // step of that arithmetic was a deliberate edit to this line, which is the
     // entire point of pinning it.
-    expect(builtInCommandCatalog).toHaveLength(106)
+    expect(builtInCommandCatalog).toHaveLength(107)
   })
 
   it('reports no structural defects', () => {
@@ -211,7 +213,7 @@ describe('built-in command catalog — baseline characterization', () => {
 })
 
 describe('generated per-provider split commands', () => {
-  // The arithmetic is 102 literal ids + 4 generated = 106. If a provider
+  // The arithmetic is 103 literal ids + 4 generated = 107. If a provider
   // is ever added to AGENT_PROVIDER_KINDS, this invariant is what tells the
   // author that the catalog count moved for a legitimate reason, and forces the
   // baseline snapshot above to be updated deliberately.
@@ -225,10 +227,10 @@ describe('generated per-provider split commands', () => {
   })
 
   it('accounts for the difference between literal and total command count', () => {
-    // 106 total - 4 generated = 102 literal `id:` fields across the command
+    // 107 total - 4 generated = 103 literal `id:` fields across the command
     // modules. At the original baseline this read 102 - 4 = 98; it moved down by
-    // the five retirements, then back up by the nine additions.
-    expect(builtInCommandCatalog.length - nonDefaultProviders.length * 2).toBe(102)
+    // the five retirements, then back up by the nine additions and New Window.
+    expect(builtInCommandCatalog.length - nonDefaultProviders.length * 2).toBe(103)
   })
 
   it('emits both directions for every non-default provider', () => {
@@ -340,10 +342,10 @@ describe('governance targets', () => {
     // not be rebound because it had no command id), `open-keyboard-shortcuts`,
     // and the three composer commands (`clear-composer`,
     // `undo-clear-composer`, `send-composer`), the two lane-removal commands
-    // (`remove-tiled-lane`, `close-agent-remove-lane`), `agent.title.set`, and
-    // `new-tiled-lane`.
-    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 9).toBe(102)
-    expect(builtInCommandCatalog).toHaveLength(106)
+    // (`remove-tiled-lane`, `close-agent-remove-lane`), `agent.title.set`,
+    // `new-tiled-lane`, and `new-window`.
+    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 10).toBe(102)
+    expect(builtInCommandCatalog).toHaveLength(107)
   })
 })
 

@@ -1,6 +1,8 @@
 import { screen } from 'electron'
 
 import type { WindowBounds } from '@main/storage/workspaceFile.js'
+import type { WindowGeometry } from '@main/storage/workspaceFileStore.js'
+import { getBrowserWindow } from '@main/window/windowRegistry.js'
 
 // Deciding whether persisted window bounds are still usable.
 //
@@ -55,4 +57,28 @@ export function restorableBounds(bounds: WindowBounds | null): WindowBounds | nu
   if (!bounds) return null
   const workAreas = screen.getAllDisplays().map(display => display.workArea)
   return boundsAreUsable(bounds, workAreas) ? bounds : null
+}
+
+/**
+ * Read a window's current geometry for persistence.
+ *
+ * WHY `getNormalBounds` and not `getBounds`: a maximized or full-screened
+ * window reports screen-sized bounds, and restoring those on a smaller display
+ * would strand it off-screen. The normal bounds are what "put it back where it
+ * was" actually means, and `fullScreen` is recorded separately so the state is
+ * restored without the geometry lying about it.
+ */
+export function captureWindowGeometry(windowId: string): WindowGeometry {
+  const window = getBrowserWindow(windowId)
+  if (!window) return { bounds: null, displayId: null, fullScreen: false }
+  const bounds = window.getNormalBounds()
+  let displayId: number | null = null
+  try {
+    displayId = screen.getDisplayMatching(bounds).id
+  } catch {
+    // The display list can be momentarily unavailable during a monitor change.
+    // Restore validates against attached displays anyway, so a null hint costs
+    // nothing.
+  }
+  return { bounds, displayId, fullScreen: window.isFullScreen() }
 }

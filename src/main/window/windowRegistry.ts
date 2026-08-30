@@ -3,7 +3,7 @@ import { BrowserWindow } from 'electron'
 import type { WebContents } from 'electron'
 
 import { buildAppWindow, zoomBrowserWindow } from '@main/window/appWindow.js'
-import type { WindowBounds } from '@main/window/appWindow.js'
+import type { WindowBounds } from '@main/storage/workspaceFile.js'
 
 // The window registry: who exists, who is focused, who owns which session, and
 // therefore who should hear a given outbound message.
@@ -22,8 +22,8 @@ import type { WindowBounds } from '@main/window/appWindow.js'
 // `useIpcSubscriptions.ts` reads `prev[sessionId] ?? emptyRuntime()`, so a
 // session event delivered to a window that does not own the session does not
 // get ignored — it MATERIALIZES a runtime for a pane that window will never
-// show. Routing here is the primary defense against that; the renderer-side
-// ownership guard is the backstop.
+// show. Routing here is the ONLY defense against that; see the long note on
+// `sendToSessionWindow` for why a symmetrical renderer-side guard cannot exist.
 //
 // There is deliberately no `sendToMainWindow` alias left behind. An alias would
 // let a new call site keep the ambiguity this module exists to remove.
@@ -68,6 +68,39 @@ const focusOrder: WindowId[] = []
  * eventually-consistent.
  */
 const sessionOwners = new Map<string, WindowId>()
+
+/**
+ * Notified (debounced) when a window is moved, resized, or full-screened, so
+ * the geometry can be persisted.
+ *
+ * WHY an observer instead of the registry writing to the workspace store
+ * directly: the store already imports geometry capture, which imports this
+ * module. Injecting the sink from `startApp` keeps the dependency arrow
+ * pointing one way and keeps the registry testable without a filesystem.
+ */
+type GeometryObserver = (windowId: WindowId) => void
+let geometryObserver: GeometryObserver | null = null
+const geometryDebounces = new Map<WindowId, ReturnType<typeof setTimeout>>()
+
+/** A drag emits a continuous stream of `moved` events; only the resting
+ *  position is worth a file write. */
+const GEOMETRY_DEBOUNCE_MS = 400
+
+export function setGeometryObserver(observer: GeometryObserver | null): void {
+  geometryObserver = observer
+}
+
+function noteGeometryChanged(id: WindowId): void {
+  const pending = geometryDebounces.get(id)
+  if (pending) clearTimeout(pending)
+  geometryDebounces.set(id, setTimeout(() => {
+    geometryDebounces.delete(id)
+    // Re-check liveness: a window can be closed during the debounce, and
+    // capturing geometry from a destroyed window would persist zeros.
+    if (!windows.has(id)) return
+    geometryObserver?.(id)
+  }, GEOMETRY_DEBOUNCE_MS))
+}
 
 // ---------------------------------------------------------------------------
 // Outbound IPC diagnostics
@@ -267,7 +300,6 @@ export function createAppWindow(options?: {
 }): WindowId {
   const id = options?.windowId ?? randomUUID()
   const window = buildAppWindow({
-    windowId: id,
     bounds: options?.bounds ?? null,
     fullScreen: options?.fullScreen ?? false,
     hooks: {
@@ -276,10 +308,16 @@ export function createAppWindow(options?: {
         const entry = windows.get(id)
         if (entry) entry.closing = true
       },
+      onGeometryChanged: () => noteGeometryChanged(id),
       onClosed: () => {
         windows.delete(id)
         const index = focusOrder.indexOf(id)
         if (index !== -1) focusOrder.splice(index, 1)
+        const pendingGeometry = geometryDebounces.get(id)
+        if (pendingGeometry) {
+          clearTimeout(pendingGeometry)
+          geometryDebounces.delete(id)
+        }
         // Session ownership is NOT cleared here. A closed window's sessions
         // stay alive in SessionManager, and the close path transfers them to a
         // survivor. Clearing on teardown would strand every one of them as
@@ -500,6 +538,9 @@ export function resetWindowRegistryForTests(): void {
   windows.clear()
   focusOrder.length = 0
   sessionOwners.clear()
+  for (const timer of geometryDebounces.values()) clearTimeout(timer)
+  geometryDebounces.clear()
+  geometryObserver = null
   outboundObserver = null
   outboundIpcCounts.clear()
   outboundIpcBreadcrumbs.fill(undefined)

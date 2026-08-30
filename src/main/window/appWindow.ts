@@ -3,6 +3,10 @@ import { dirname, join } from 'path'
 import { fileURLToPath } from 'url'
 
 import { openAllowedExternalUrl } from '@main/window/externalNavigation.js'
+// The window's geometry type is the PERSISTED one on purpose: bounds only
+// exist here to be saved and restored, and two structurally identical
+// `WindowBounds` declarations would be free to drift apart.
+import type { WindowBounds } from '@main/storage/workspaceFile.js'
 
 // Construction of ONE Agent Code window.
 //
@@ -24,14 +28,6 @@ const MIN_ZOOM_LEVEL = -2
 const MAX_ZOOM_LEVEL = 2
 const ZOOM_STEP = 1
 
-/** Geometry we persist per window so it reopens where the user left it. */
-export type WindowBounds = {
-  x: number
-  y: number
-  width: number
-  height: number
-}
-
 export type AppWindowHooks = {
   /** Called when this window takes focus, so the registry can keep its
    *  most-recently-focused order for `sendToFocusedWindow`. */
@@ -42,6 +38,16 @@ export type AppWindowHooks = {
    *  the close path can hand this window's workspace to a survivor. Returning
    *  nothing is fine; the registry decides whether a bequest applies. */
   onClosing: () => void
+  /**
+   * Called whenever the window is moved, resized, or changes full-screen state.
+   *
+   * WHY geometry cannot just ride along on the next workspace save: dragging a
+   * window to the other monitor and quitting changes nothing the renderer knows
+   * about, so it produces no autosave. The one promise this whole feature makes
+   * — "it comes back on the display you left it on" — would then depend on the
+   * user happening to touch a pane afterwards. The registry debounces these.
+   */
+  onGeometryChanged: () => void
 }
 
 const DEFAULT_WIDTH = 1400
@@ -144,12 +150,11 @@ function handleZoomInput(
 }
 
 export function buildAppWindow(options: {
-  windowId: string
   bounds: WindowBounds | null
   fullScreen: boolean
   hooks: AppWindowHooks
 }): BrowserWindow {
-  const { windowId, bounds, fullScreen, hooks } = options
+  const { bounds, fullScreen, hooks } = options
 
   const window = new BrowserWindow({
     ...(bounds ?? { width: DEFAULT_WIDTH, height: DEFAULT_HEIGHT }),
@@ -157,14 +162,13 @@ export function buildAppWindow(options: {
     titleBarStyle: 'hiddenInset',
     backgroundColor: '#0a0a0a',
     webPreferences: {
-      // WHY the window id is passed as an additionalArgument rather than an
-      // IPC round trip: the renderer needs its own identity BEFORE it can ask
-      // anything — `workspace:load` returns this window's slice, so a renderer
-      // that has to await its id first would either block bootstrap or race it.
-      // additionalArguments is available synchronously in the preload script,
-      // which is the only place that can hand it to the renderer with no
-      // asynchrony at all.
-      additionalArguments: [`--agent-code-window-id=${windowId}`],
+      // WHY the renderer is NOT told its own window id: it never needs one.
+      // Every window-scoped IPC handler resolves the window from
+      // `event.sender`, so identity is main's business and the renderer keeps
+      // exactly the API it had before multi-window. Handing it an id would
+      // create a second source of truth for "which window am I" that could
+      // disagree with the registry after a reload.
+      //
       // This is a RUNTIME filesystem path, not an import — `@preload/…`
       // path aliases are resolved by vite at build time only, and don't
       // intercept Node's `path.join`. At runtime __dirname is `out/main/`
@@ -213,7 +217,15 @@ export function buildAppWindow(options: {
   // changes — zoom level, display scale, fullscreen toggle. Electron
   // doesn't offer a "traffic light moved" event, but resize covers
   // every case that shifts them.
-  window.on('resize', () => pushTrafficLightInset(window))
+  window.on('resize', () => {
+    pushTrafficLightInset(window)
+    hooks.onGeometryChanged()
+  })
+  // `moved` is macOS/Windows only and is the event that matters most here:
+  // dragging a window to the second monitor fires it and nothing else.
+  window.on('moved', hooks.onGeometryChanged)
+  window.on('enter-full-screen', hooks.onGeometryChanged)
+  window.on('leave-full-screen', hooks.onGeometryChanged)
 
   // ALSO re-push after every renderer load. ready-to-show fires once per
   // window, so a renderer reload (Cmd+R, crash recovery, vite full

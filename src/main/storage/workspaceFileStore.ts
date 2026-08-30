@@ -157,6 +157,23 @@ export class WorkspaceFileStore {
     return this.commit(next)
   }
 
+  /**
+   * Persist geometry alone, without touching the window's workspace payload.
+   *
+   * WHY this exists separately from `saveSlice`: moving a window changes
+   * nothing the renderer knows about, so it produces no autosave and would
+   * otherwise only reach disk if the user happened to touch a pane before
+   * quitting. A window that has never saved a workspace is skipped rather than
+   * created — there is nothing to restore for it yet, and inventing a record
+   * with no workspace would produce an empty window on the next launch.
+   */
+  updateGeometry(windowId: string, geometry: WindowGeometry): Promise<void> {
+    if (this.readOnlyReason) return Promise.resolve()
+    const existing = this.file.windows.find(entry => entry.windowId === windowId)
+    if (!existing) return Promise.resolve()
+    return this.commit(withWindowSlice(this.file, windowId, existing.workspace, geometry))
+  }
+
   /** Drop a window's slice — used when a closing window's workspace has been
    *  handed to a survivor and must not also be restored on next launch. */
   removeWindow(windowId: string): Promise<void> {
