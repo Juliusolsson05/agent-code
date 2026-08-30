@@ -107,8 +107,8 @@ not sent must first attempt rollback, while the reservation is still held:
    with a message stating the prompt was not sent and the draft is preserved in
    the app composer. The renderer does not clear its textarea on failure, so the
    user's text is never the only copy.
-5. **Did not reach `empty`** → send `\x1b`… **no**: send `Ctrl+Y` to restore, then
-   return the existing `do-not-retry` failure. Never leave a partially cleared
+5. **Did not reach `empty`** → send `Ctrl+Y` (`\x19`) to restore what the loop
+   removed, then return the existing `do-not-retry` failure. Never leave a partially cleared
    composer, which would produce exactly the mangled submission this subsystem
    exists to prevent.
 
