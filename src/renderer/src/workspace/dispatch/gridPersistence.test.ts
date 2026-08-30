@@ -150,3 +150,47 @@ describe('scrubbing row metadata at the autosave boundary', () => {
       .toBe(classic)
   })
 })
+
+describe('ragged shapes survive persistence', () => {
+  // P3 as a durability contract. Every other ragged assertion lives in
+  // gridShapeMutations against the pure functions; this one exists because the
+  // failure mode it guards is different in kind — a normalization that
+  // "tidied" 4/2 into 3/3 would look like a layout bug on the next launch, long
+  // after the code that did it.
+  it('round-trips an uneven grid unchanged', () => {
+    const uneven: DispatchModeState = {
+      scope: 'global',
+      tiled: {
+        lanes: Array.from({ length: 6 }, () => ({})),
+        rows: [{ length: 4 }, { length: 2 }],
+        focusedLane: 5,
+      },
+    }
+
+    const restored = normalizeDispatchModeGrid(uneven)
+
+    expect(restored!.tiled!.rows!.map(row => row.length)).toEqual([4, 2])
+    expect(restored!.tiled!.focusedLane).toBe(5)
+    // Same reference: a coherent shape must not be rebuilt, or every consumer
+    // memoizing on dispatchMode identity churns on every restore.
+    expect(restored).toBe(uneven)
+  })
+
+  it('does not redistribute lanes toward a rectangle when repairing', () => {
+    // A repair caused by a corrupt LENGTH must still not even out the rows it
+    // leaves behind: the surplus goes to the last row, so row 0 keeps the width
+    // the user chose.
+    const corrupt: DispatchModeState = {
+      scope: 'global',
+      tiled: {
+        lanes: Array.from({ length: 6 }, () => ({})),
+        rows: [{ length: 4 }, { length: 1 }],
+        focusedLane: 0,
+      },
+    }
+
+    const restored = normalizeDispatchModeGrid(corrupt)
+
+    expect(restored!.tiled!.rows!.map(row => row.length)).toEqual([4, 2])
+  })
+})

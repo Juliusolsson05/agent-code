@@ -11,6 +11,18 @@ built from.**
 
 It is revised in place when a stage disproves it, per `docs/README.md`.
 
+**Status: all stages complete.** Two revisions were made in place, both recorded
+below: Stage 2 was scoped down from a maintained catalog to a one-off census
+(the feature did not earn the apparatus), and the row-scoped SELECTOR half of
+Stages 7 and 8 landed early with Stage 5 because the layout could not render
+without it.
+
+Of the two unknowns this document opened with, **U2 was resolved and turned out
+not to be a bug** — the natural implementation is correct for a reason now
+written down. **U1 is accepted as unverified**: the child cap's threshold has
+never fired on any recording this repository holds, and is shipped as a tunable
+rather than a finding.
+
 ## Why this document exists at all
 
 The design was approved and Stage 1 was implemented before this was written. That
@@ -109,7 +121,7 @@ Three findings, all load-bearing:
    consistent with the design but must be pinned by a test, because it is exactly
    the kind of drift the canonical-order rule exists to prevent.
 
-### Stage 3 — delete auto-fill and the healer
+### Stage 3 — delete auto-fill and the healer ✅ *done*
 
 | Field | |
 |---|---|
@@ -118,7 +130,7 @@ Three findings, all load-bearing:
 | **Why separate** | It is the smallest change that fixes the reported confusion, it stands alone, and everything after it is simpler once nothing self-fills. |
 | **Reality check** | `dispatch-global-d23.json` (4 tiled lanes, real ids) as the starting state for the kill transition. |
 
-### Stage 4 — delete `userEmptied`
+### Stage 4 — delete `userEmptied` ✅ *done*
 
 | Field | |
 |---|---|
@@ -127,7 +139,7 @@ Three findings, all load-bearing:
 | **Why separate** | Only safe *after* Stage 3, and trivially safe after it. Merging them would make the diff argue two things at once. |
 | **Reality check** | Persisted fixtures containing the flag must still rehydrate. |
 
-### Stage 5 — row-aware state, reducers, and layout
+### Stage 5 — row-aware state, reducers, and layout ✅ *done*
 
 | Field | |
 |---|---|
@@ -136,7 +148,7 @@ Three findings, all load-bearing:
 | **Why separate** | Migration correctness is verifiable on its own, against a real persisted file, before any new UI depends on it. |
 | **Reality check** | That fixture's real `ratios: [0.1, 0.142…, 0.142…, 0.142…, 0.142…]`. The invented `[0.25, 1, 6, 2]` in the Stage 1 tests is a synthetic stand-in and must be **supplemented** by the real array here. |
 
-### Stage 6 — commands, shape editor, keyboard
+### Stage 6 — commands, shape editor, keyboard ✅ *done*
 
 | Field | |
 |---|---|
@@ -152,7 +164,7 @@ Three findings, all load-bearing:
 > Stages 7 and 8 are now their CONTROLS: the picker surface, the header
 > toggle, and the commands.
 
-### Stage 7 — per-row project binding
+### Stage 7 — per-row project binding ✅ *done*
 
 | Field | |
 |---|---|
@@ -161,7 +173,7 @@ Three findings, all load-bearing:
 | **Why separate** | It is the first consumer of the Stage 2 census; building it before the census is the exact inversion this method forbids. |
 | **Reality check** | Stage 2's catalog. |
 
-### Stage 8 — orchestration child cap
+### Stage 8 — orchestration child cap ✅ *done*
 
 | Field | |
 |---|---|

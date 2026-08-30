@@ -1,5 +1,9 @@
 # Grid Dispatch Mode
 
+> **Status:** implemented. See `docs/decomposition/grid-dispatch.md` for the
+> stage record and the two revisions made during execution. Where this document
+> and the code disagree, the code won and the decomposition says why.
+
 **Issue:** [#681](https://github.com/Juliusolsson05/agent-code/issues/681)
 **Branch:** `feat/grid-dispatch-mode`
 
