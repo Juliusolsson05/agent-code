@@ -199,6 +199,11 @@ export const WAKE_CALLERS = [
   // Buried pane revival.
   'pane.revive-buried',
   'agent-index.navigate',
+  // Selecting an agent into a Grid Dispatch lane — the index click, a lane
+  // strip, ⌥↑/↓, or ⌘N. Separate from `agent-index.navigate` because these are
+  // the high-frequency in-layout gestures: a storm here means lane churn (a
+  // held arrow key), not command-palette navigation.
+  'dispatch-lane.select',
   // Wake the source pane before provider-switch compaction (#590).
   'provider-switch.wake-source',
   // MCP-driven: reading a child agent, and sending it a prompt. The only wake

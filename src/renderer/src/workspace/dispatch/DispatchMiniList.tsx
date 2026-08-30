@@ -1,10 +1,11 @@
-import { memo, useCallback } from 'react'
+import { memo, useCallback, useMemo } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 
 import { useAppStore } from '@renderer/app-state/hooks'
 import type { DispatchAgentRow } from '@renderer/workspace/dispatch/dispatchSelectors'
 import { DispatchColorFlagStrip } from '@renderer/workspace/dispatch/DispatchColorFlagStrip'
-import type { SessionId } from '@renderer/workspace/types'
+import { rowScopedRows } from '@renderer/workspace/dispatch/rowScopedRows'
+import type { DispatchGridRow, SessionId } from '@renderer/workspace/types'
 import {
   dispatchActivity,
   dispatchActivityClasses,
@@ -26,17 +27,28 @@ import {
 
 type Props = {
   rows: DispatchAgentRow[]
+  /** The grid row this strip belongs to — supplies its project binding and
+   *  child density, so two strips over the same workspace legitimately differ. */
+  gridRow?: Pick<DispatchGridRow, 'projectTabId' | 'capChildren' | 'expandedParents'>
   selectedSessionId?: SessionId
   focused: boolean
   onSelect: (row: DispatchAgentRow) => void
+  onToggleExpandedParent?: (parentSessionId: SessionId) => void
 }
 
 export const DispatchMiniList = memo(function DispatchMiniList({
   rows,
+  gridRow,
   selectedSessionId,
   focused,
   onSelect,
+  onToggleExpandedParent,
 }: Props) {
+  // The strip caps orchestration children for the same reason the index does:
+  // ten extra chips per lane is the same space problem in a narrower column.
+  // The cost is that a capped child cannot be picked straight from the strip —
+  // it is one click away in this row's index, which is adjacent.
+  const items = useMemo(() => rowScopedRows(rows, gridRow ?? {}), [rows, gridRow])
   return (
     <div
       className={`
@@ -44,13 +56,28 @@ export const DispatchMiniList = memo(function DispatchMiniList({
         border-l ${focused ? 'border-accent/60' : 'border-border'}
       `}
     >
-      {rows.map(row => (
-        <DispatchMiniChip
-          key={row.key}
-          row={row}
-          active={row.sessionId === selectedSessionId}
-          onSelect={onSelect}
-        />
+      {items.map(item => (
+        item.kind === 'agent' ? (
+          <DispatchMiniChip
+            key={item.row.key}
+            row={item.row}
+            active={item.row.sessionId === selectedSessionId}
+            onSelect={onSelect}
+          />
+        ) : (
+          <button
+            key={`${item.kind}:${item.parentSessionId}`}
+            type="button"
+            onClick={() => onToggleExpandedParent?.(item.parentSessionId)}
+            title={item.kind === 'more'
+              ? `Show ${item.hidden} more orchestrated agents`
+              : 'Show fewer orchestrated agents'}
+            data-dispatch-row="true"
+            className="flex w-full items-center justify-center border-t border-border py-1 text-[10px] font-semibold text-muted hover:text-fg hover:ring-1 hover:ring-inset hover:ring-accent/40"
+          >
+            {item.kind === 'more' ? `+${item.hidden}` : '−'}
+          </button>
+        )
       ))}
     </div>
   )

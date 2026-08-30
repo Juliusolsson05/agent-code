@@ -3,6 +3,7 @@ import { providerApi } from '@preload/api/provider.js'
 import { sessionsApi } from '@preload/api/sessions.js'
 import { lspApi } from '@preload/api/lsp.js'
 import { workspaceApi } from '@preload/api/workspace.js'
+import { windowApi } from '@preload/api/window.js'
 import { fsApi } from '@preload/api/fs.js'
 import { debugApi } from '@preload/api/debug.js'
 import { systemApi } from '@preload/api/system.js'
@@ -52,6 +53,7 @@ export const api = {
   ...sessionsApi,
   ...lspApi,
   ...workspaceApi,
+  ...windowApi,
   ...fsApi,
   ...debugApi,
   ...systemApi,

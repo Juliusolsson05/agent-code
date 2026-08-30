@@ -281,7 +281,7 @@ export class SessionRecorder {
     // Always cross an event-loop boundary before serialization. `flush()` is
     // also called from the session:exit observer, and without this first yield
     // a final large batch would still run synchronously inside
-    // sendToMainWindow despite the normal 100 ms timer path being deferred.
+    // the window registry despite the normal 100 ms timer path being deferred.
     await yieldToMainLoop()
 
     // Partition. `__note` lines bypass the size cap entirely: a note is the

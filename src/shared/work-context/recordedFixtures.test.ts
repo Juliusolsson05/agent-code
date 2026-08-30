@@ -18,6 +18,13 @@ type RecordedFixture = {
   records: Array<Record<string, unknown>>
 }
 
+type LiveAttributionFixture = RecordedFixture & {
+  git: {
+    main: { path: string; branch: string }
+    grid: { path: string; branch: string }
+  }
+}
+
 const MAIN_CHECKOUT = '/fixture/project-1'
 const LINKED_WORKTREE = `${MAIN_CHECKOUT}/.worktrees/worktree-1`
 
@@ -40,6 +47,33 @@ function loadRecordedFixture(name: string): RecordedFixture {
   return { records: parsed.records as Array<Record<string, unknown>> }
 }
 
+function loadLiveAttributionFixture(name: string): LiveAttributionFixture {
+  // WHY this corpus has a separate root from the older grammar fixtures: its
+  // source is the complaint-time live session, proxy, and Git state captured
+  // at one fixed cutoff. Folding it into `worktree-context` would erase that
+  // cross-source provenance and make a future hand-authored provider literal
+  // look equivalent to the recording that actually reproduced #685.
+  const path = resolve(
+    process.cwd(),
+    'testing',
+    'fixtures',
+    'worktree-live-attribution',
+    name,
+  )
+  const parsed = asRecord(JSON.parse(readFileSync(path, 'utf8')))
+  const git = asRecord(parsed?.git)
+  const main = asRecord(git?.main)
+  const grid = asRecord(git?.grid)
+  if (
+    !parsed || !Array.isArray(parsed.records) || !main || !grid ||
+    typeof main.path !== 'string' || typeof main.branch !== 'string' ||
+    typeof grid.path !== 'string' || typeof grid.branch !== 'string'
+  ) {
+    throw new Error(`recorded live-attribution fixture ${name} is malformed`)
+  }
+  return parsed as unknown as LiveAttributionFixture
+}
+
 function identity(path: string, branch: string): WorktreeIdentity {
   return { path, branch, head: null, detached: false }
 }
@@ -57,6 +91,82 @@ function replay(
 }
 
 describe('recorded work-context provider contracts', () => {
+  it('[claude-cwd-tool-branch-conflict] keeps same-envelope direct work active', () => {
+    const fixture = loadLiveAttributionFixture(
+      'claude-cwd-tool-branch-conflict.json',
+    )
+    const worktrees = [
+      identity(fixture.git.main.path, fixture.git.main.branch),
+      identity(fixture.git.grid.path, fixture.git.grid.branch),
+    ]
+
+    // WHY the prefix is the recorded contradiction, not a reduced object we
+    // invented: its tool writes under the grid worktree while the enclosing
+    // assistant envelope still reports the main checkout. Direct activity is
+    // the active-location fact; envelope cwd is only conversation affinity.
+    const state = replay(fixture.records.slice(0, 1), worktrees, fixture.git.main.path)
+
+    expect(state?.active).toMatchObject({
+      worktreePath: fixture.git.grid.path,
+      branch: fixture.git.grid.branch,
+      source: 'tool:Write:path',
+    })
+  })
+
+  it('[claude-cwd-tool-branch-conflict] uses Git branch for a matched checkout', () => {
+    const fixture = loadLiveAttributionFixture(
+      'claude-cwd-tool-branch-conflict.json',
+    )
+    const worktrees = [
+      identity(fixture.git.main.path, fixture.git.main.branch),
+      identity(fixture.git.grid.path, fixture.git.grid.branch),
+    ]
+
+    // The second captured envelope has both cwd and tool path inside grid but
+    // retains the main branch string. Once the path matches a Git worktree,
+    // that provider branch is stale diagnostic metadata, not naming authority.
+    const state = replay(fixture.records.slice(1), worktrees, fixture.git.main.path)
+
+    expect(state?.active).toMatchObject({
+      worktreePath: fixture.git.grid.path,
+      branch: fixture.git.grid.branch,
+    })
+    expect(state?.primary).toMatchObject({
+      worktreePath: fixture.git.grid.path,
+      branch: fixture.git.grid.branch,
+    })
+  })
+
+  it('[claude-cwd-tool-branch-conflict] does not relabel a detached match', () => {
+    const fixture = loadLiveAttributionFixture(
+      'claude-cwd-tool-branch-conflict.json',
+    )
+    const worktrees: WorktreeIdentity[] = [
+      identity(fixture.git.main.path, fixture.git.main.branch),
+      {
+        path: fixture.git.grid.path,
+        branch: null,
+        head: null,
+        detached: true,
+      },
+    ]
+
+    // This is an explicit policy mutation of the recorded Git row, not a claim
+    // that the complaint-time checkout was detached. It exercises the null half
+    // of the approved rule: Git's matched branch authority includes "no branch"
+    // and must not fall back to the stale provider main string.
+    const state = replay(fixture.records.slice(1), worktrees, fixture.git.main.path)
+
+    expect(state?.active).toMatchObject({
+      worktreePath: fixture.git.grid.path,
+      branch: null,
+    })
+    expect(state?.primary).toMatchObject({
+      worktreePath: fixture.git.grid.path,
+      branch: null,
+    })
+  })
+
   it('[codex-main-to-worktree] recognizes every observed current Codex carrier', () => {
     const { records } = loadRecordedFixture('codex-main-to-worktree.json')
     const sessionMeta = extractWorktreeActivityEvents(records[0])

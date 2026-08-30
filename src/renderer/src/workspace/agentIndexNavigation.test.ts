@@ -82,24 +82,23 @@ describe('agent index navigation', () => {
     expect(result?.state.dispatchMode?.tiled?.ratios).toEqual([0.2, 0.4, 0.4])
   })
 
-  it('clears userEmptied when the bang intent fills a deliberately empty lane', () => {
-    // This path is one of the three writers of a lane's selectedSessionId, and
-    // it is an ORDINARY way to fill the lane New Lane just created: create the
-    // empty lane, focus it, type A2!. It used to spread the lane and keep
-    // `userEmptied`, so the lane rendered fine but became a permanent hole the
-    // healer skipped once that agent exited — durably, since the flag persists
-    // to workspace.json.
-    //
-    // Pinned here rather than only at the helper because the helper cannot
-    // notice a caller that stops using it. This case fails against the
-    // pre-fix code.
+  it('fills the focused empty lane when the bang intent names an agent', () => {
+    // The ORDINARY way to fill the lane New Lane just created: create the empty
+    // lane, focus it, type A2!. Pinned here rather than only at withLaneSession
+    // because the helper cannot notice a caller that stops using it — and one
+    // did. This path used to spread the lane directly and keep the old
+    // `userEmptied` marker, so the lane rendered fine but became a hole the
+    // healer skipped forever once that agent exited. Both the marker and the
+    // healer are gone (#681); what remains worth asserting is that the bang
+    // intent writes into the FOCUSED lane rather than discovering some other
+    // lane already showing A2.
     const state = makeState()
     state.dispatchMode = {
       scope: 'global',
       focusedSessionId: 'a1',
       tiled: {
         focusedLane: 1,
-        lanes: [{ selectedSessionId: 'a1' }, { userEmptied: true }],
+        lanes: [{ selectedSessionId: 'a1' }, {}],
       },
     }
 
@@ -110,6 +109,7 @@ describe('agent index navigation', () => {
       'open-in-focused-tiled-dispatch-lane',
     )
 
+    expect(result?.state.dispatchMode?.tiled?.focusedLane).toBe(1)
     expect(result?.state.dispatchMode?.tiled?.lanes[1])
       .toEqual({ selectedSessionId: 'a2' })
   })

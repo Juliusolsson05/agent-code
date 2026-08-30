@@ -2,10 +2,16 @@ import type {
   DispatchLane,
   DispatchModeState,
   SessionId,
+  TabId,
   TiledDispatchState,
   WorkspaceState,
 } from '@renderer/workspace/types'
 import { buildVisibleDispatchRows } from '@renderer/workspace/dispatch/dispatchSelectors'
+import {
+  MAX_DISPATCH_TILES,
+  MIN_DISPATCH_TILES,
+  normalizeGridShape,
+} from '@renderer/workspace/dispatch/gridShape'
 
 // ============================================================================
 // Tiled-lane coherence helpers
@@ -51,48 +57,28 @@ export function remapTiledLanes(
 /**
  * Put a session into a lane.
  *
- * WHY this exists rather than three hand-rolled `{ ...lane, selectedSessionId }`
- * spreads: `userEmptied` must be dropped whenever a lane is filled, and the
- * spread preserves it. There are three writers — setTiledLaneSession,
- * applyDispatchSpawnFocus, and the A2!/agent-index navigation path — and the
- * last two are the ORDINARY way a user fills the lane New Lane just created
- * (`resolveDispatchSpawnTarget` deliberately places a new agent into an empty
- * focused lane). Missing them left the flag on a lane that now held an agent,
- * so when that agent later exited the lane became a permanent hole the healer
- * would never re-home — durable across restarts, since the flag persists.
- *
- * This file's header already says the lane helpers must be applied at EVERY
- * id-remap, removal, and focus-read site; a fourth hand-rolled spread is how
- * that class of bug keeps coming back.
+ * WHY a helper for a one-field write: lane construction stays in one place, so
+ * a future field with a maintenance rule has exactly one filling site to add it
+ * to. This helper used to carry such a rule — it stripped `userEmptied`, which
+ * had to be dropped at every writer and was missed at two of them (the spawn
+ * focus path and the A2! index path), turning a filled lane into a permanent
+ * hole that survived restarts. That flag is gone with the healer it existed to
+ * hide from (#681), and the rule went with it.
  */
 export function withLaneSession(lane: DispatchLane, sessionId: SessionId): DispatchLane {
-  const { userEmptied: _filledByTheUserNow, ...rest } = lane
-  return { ...rest, selectedSessionId: sessionId }
+  return { ...lane, selectedSessionId: sessionId }
 }
 
-/**
- * Blank a lane's selection.
- *
- * WHY this drops `userEmptied` as well: both callers only reach this branch for
- * a lane that HELD a session, which is exactly the case where the user had
- * filled it — so it must go back to healing like any other lane. Leaving the
- * flag behind turns "your agent exited" into "this slot is dead forever", and
- * `keepTiledLaneSessions` is the AUTOSAVE boundary, so the dead slot would be
- * written into workspace.json and survive restarts.
- *
- * A lane the user emptied deliberately and never filled has no
- * `selectedSessionId`, so neither caller touches it and its flag survives —
- * which is the whole point of the flag.
- */
+/** Blank a lane's selection. Nothing refills it; that is the point (#681). */
 function withLaneCleared(lane: DispatchLane): DispatchLane {
-  const { userEmptied: _noLongerDeliberate, ...rest } = lane
-  return { ...rest, selectedSessionId: undefined }
+  return { ...lane, selectedSessionId: undefined }
 }
 
 /**
  * Clear any tiled lane pointing at a removed session (selectedSessionId ->
- * undefined). The layout's auto-fill effect then re-homes the emptied lane,
- * unless the lane is `userEmptied` (see withLaneCleared).
+ * undefined). The lane then renders empty and STAYS empty — before #681 the
+ * layout re-homed another agent into the hole, which is what made closing one
+ * agent silently move an unrelated one into the slot you were watching.
  * Apply wherever a session is destroyed/hidden (killSession, close, bury).
  */
 export function clearTiledLaneSessions(
@@ -139,6 +125,109 @@ export function keepTiledLaneSessions(
   })
   if (!changed) return dispatchMode
   return { ...dispatchMode, tiled: { ...dispatchMode.tiled, lanes } }
+}
+
+/**
+ * Bring a persisted `tiled` block up to the current grid shape.
+ *
+ * WHY this belongs with the other dispatchMode helpers rather than inside
+ * gridShape: this file's header says the lane helpers must be applied at every
+ * id-remap, removal, and focus-read site, and rehydrate is one of them — the
+ * normalization has to sit on the same DispatchModeState-shaped seam as
+ * remapTiledLanes and keepTiledLaneSessions so it can be composed with them in
+ * one expression instead of being a fourth thing a caller must remember.
+ *
+ * The migration itself (legacy `ratios` -> per-row indexFraction + laneWeights,
+ * and repair of the row-length invariant) lives in gridShape, which owns every
+ * shape rule.
+ *
+ * Returns the SAME reference when nothing needed changing, so consumers that
+ * memoize on dispatchMode identity do not churn on every restore.
+ */
+export function normalizeDispatchModeGrid(
+  dispatchMode: DispatchModeState | null | undefined,
+): DispatchModeState | null | undefined {
+  const tiled = dispatchMode?.tiled
+  if (!dispatchMode || !tiled) return dispatchMode
+
+  const grid = normalizeGridShape(tiled)
+  const alreadyCurrent =
+    tiled.ratios === undefined &&
+    tiled.rows === grid.rows &&
+    tiled.laneWeights === grid.laneWeights &&
+    tiled.focusedLane === grid.focusedLane
+  if (alreadyCurrent) return dispatchMode
+
+  return {
+    ...dispatchMode,
+    tiled: {
+      lanes: grid.lanes,
+      rows: grid.rows,
+      focusedLane: grid.focusedLane,
+      // Dropped, never rewritten: keeping the legacy array beside the fields it
+      // was split into would leave two sources of truth for width, and the next
+      // reader would have to guess which one the user's last drag produced.
+      ...(grid.laneWeights ? { laneWeights: grid.laneWeights } : {}),
+    },
+  }
+}
+
+/**
+ * Drop row metadata pointing at a project or session that no longer exists.
+ *
+ * WHY this belongs at the autosave ownership prune rather than at the close/kill
+ * paths: the prune is where the serialized model is made closed under restore,
+ * and row metadata names two things that can vanish behind its back — a project
+ * tab and a set of expanded parent sessions. A binding to a closed tab is the
+ * dangerous one: it filters that row's index to NOTHING, permanently, and the
+ * picker only offers tabs that exist, so there is no UI path back. Render-time
+ * repair is not enough because the stale value would be rewritten on every save.
+ *
+ * Returns the same reference when nothing needed scrubbing, matching every
+ * other helper in this family so a clean prune does not churn consumers.
+ */
+export function scrubGridRowMetadata(
+  dispatchMode: DispatchModeState | null | undefined,
+  liveTabIds: ReadonlySet<TabId>,
+  liveSessionIds: ReadonlySet<SessionId>,
+): DispatchModeState | null | undefined {
+  const tiled = dispatchMode?.tiled
+  if (!dispatchMode || !tiled?.rows) return dispatchMode
+
+  let changed = false
+  const rows = tiled.rows.map(row => {
+    const next = { ...row }
+    if (next.projectTabIds) {
+      const surviving = next.projectTabIds.filter(id => liveTabIds.has(id))
+      if (surviving.length !== next.projectTabIds.length) {
+        changed = true
+        // A row whose every binding died becomes UNBOUND rather than keeping an
+        // empty set: an empty set would filter its index to nothing with no UI
+        // path back, since the picker only offers tabs that exist.
+        if (surviving.length > 0) next.projectTabIds = surviving
+        else delete next.projectTabIds
+      }
+    }
+    if (next.projectTabId !== undefined) {
+      // Legacy field: normalizeGridShape folds it away on read, but the prune
+      // can see state that has not been through a rehydrate this run.
+      delete next.projectTabId
+      changed = true
+    }
+    if (next.expandedParents) {
+      const kept = next.expandedParents.filter(id => liveSessionIds.has(id))
+      if (kept.length !== next.expandedParents.length) {
+        changed = true
+        // An empty array and an absent field read identically; persisting the
+        // empty one is durable noise.
+        if (kept.length > 0) next.expandedParents = kept
+        else delete next.expandedParents
+      }
+    }
+    return next
+  })
+  if (!changed) return dispatchMode
+  return { ...dispatchMode, tiled: { ...tiled, rows } }
 }
 
 /**
@@ -200,12 +289,11 @@ export function nextTiledRowIndex(
   return (((currentIndex + delta) % length) + length) % length
 }
 
-// The issue caps Tiled Dispatch at 10 lanes. The floor is 1 (a single
-// tiled lane is still a valid — if degenerate — tiled view; returning to
-// the classic single-agent layout is done by toggling Dispatch Mode, not
-// by asking for 0 tiles).
-export const MAX_DISPATCH_TILES = 10
-export const MIN_DISPATCH_TILES = 1
+// The per-ROW column bounds now live in gridShape.ts, which owns every shape
+// rule so a cap enforced in one file cannot drift from one consulted in
+// another. Re-exported here because the commands, overlay, and reducers that
+// already import them from this module are asking the same question.
+export { MAX_DISPATCH_TILES, MIN_DISPATCH_TILES }
 export const DEFAULT_DISPATCH_TILES = 2
 
 /**
@@ -221,227 +309,30 @@ export function clampTileCount(n: number): number {
   return Math.max(MIN_DISPATCH_TILES, Math.min(MAX_DISPATCH_TILES, Math.floor(n)))
 }
 
-/**
- * Build a lane array of `count` lanes, auto-assigning each lane the next
- * visible agent not already used by an earlier lane in THIS fill. Used on
- * enter (preserve=[]) and on grow (preserve=existing lanes, so surviving
- * lanes keep their agents and only the appended lanes get auto-filled).
- *
- * WHY auto-fill rather than start blank: the user asked for N tiles
- * because they want to SEE N agents. Landing them on N empty lanes that
- * each need a manual pick is busywork; pre-filling from the visible row
- * order (the same order the index lane shows) gets them a useful cockpit
- * in one keystroke. Lanes beyond the number of available agents stay
- * empty (render the lane-local picker prompt).
- *
- * NOTE the local `claimed` set only spreads DISTINCT agents across lanes as
- * a sensible default — it is NOT an invariant. The user can still manually
- * put the same agent in two lanes afterwards (duplicates are allowed and the
- * views mirror; see DispatchLane).
- */
-export function buildAutoLanes(
-  state: WorkspaceState,
-  count: number,
-  preserve: DispatchLane[] = [],
-): DispatchLane[] {
-  const rows = buildVisibleDispatchRows(state)
-  const claimed = new Set<SessionId>(
-    preserve
-      .map(lane => lane.selectedSessionId)
-      .filter((id): id is SessionId => Boolean(id)),
-  )
-  const lanes: DispatchLane[] = []
-  for (let i = 0; i < count; i++) {
-    if (preserve[i]) {
-      lanes.push(preserve[i])
-      continue
-    }
-    const next = rows.find(row => !claimed.has(row.sessionId))
-    if (next) {
-      claimed.add(next.sessionId)
-      lanes.push({ selectedSessionId: next.sessionId })
-    } else {
-      lanes.push({})
-    }
-  }
-  return lanes
-}
-
-/**
- * Insert one EMPTY lane immediately to the right of `laneIndex`.
- *
- * WHY this is not `setTiledLaneCount(current + 1)`: count growth always appends
- * at the tail, while this command is spatial — the user is asking for a new
- * view beside the lane they are currently commanding.
- *
- * WHY the new lane is empty, when `buildAutoLanes` exists and would happily
- * fill it (issue #673): the two operations look alike and are not. Raising the
- * tile count is a statement about how many agents you want VISIBLE, so
- * pre-filling is right — landing the user on N empty pickers after they asked
- * for N tiles is busywork, which is what `buildAutoLanes` documents. Inserting
- * a lane is a statement about SPACE, and space does not imply an occupant.
- *
- * This previously routed through `buildAutoLanes` so insertion and count growth
- * would "stay in lockstep as future row kinds evolve". That coupling was the
- * bug: `buildAutoLanes` claims the first visible row not already shown in a
- * lane, which in the common case is the top of the index, so asking for another
- * view silently duplicated a1 into the slot beside you. The two paths are now
- * deliberately decoupled — if a future row kind changes how lanes auto-fill,
- * that should change count growth and leave this alone.
- *
- * Note there is no session lifecycle here and no `state` argument any more:
- * splicing a slot, shifting focus, and re-weighting ratios are all purely
- * structural, so the invariant is now true by signature rather than by comment.
- */
-export function insertLaneRightIntoTiled(
-  tiled: TiledDispatchState,
-  laneIndex: number,
-): TiledDispatchState | null {
-  if (tiled.lanes.length >= MAX_DISPATCH_TILES) return null
-  if (!Number.isInteger(laneIndex)) return null
-  if (laneIndex < 0 || laneIndex >= tiled.lanes.length) return null
-
-  const insertAt = laneIndex + 1
-
-  return {
-    lanes: [
-      ...tiled.lanes.slice(0, insertAt),
-      // Empty, and MARKED empty. The bare `{}` is not enough: the layout's
-      // heal effect fills any unresolved lane with the next available agent,
-      // so an unmarked empty lane is refilled on the next render and this
-      // whole change becomes a no-op. `userEmptied` is what the healer skips.
-      //
-      // The user picks the occupant; one press of ⌥↓ in the focused lane
-      // selects the top row of the index (★1 if anything is pinned, else a1),
-      // so the old auto-fill result is still one keystroke away.
-      { userEmptied: true },
-      ...tiled.lanes.slice(insertAt),
-    ],
-    // The command inserts after focus, so its normal path keeps this index.
-    // The helper is deliberately more general, though: if a future caller
-    // inserts before the focused coordinate, preserve the focused SESSION by
-    // shifting its index just as removeLaneFromTiled does in reverse. Leaving
-    // the ordinal unchanged would silently retarget keyboard commands.
-    focusedLane: insertAt <= tiled.focusedLane
-      ? tiled.focusedLane + 1
-      : tiled.focusedLane,
-    ratios: insertLaneWeight(tiled.ratios, tiled.lanes.length, insertAt),
-  }
-}
-
-/**
- * Add one lane weight without discarding unrelated sizing decisions.
- *
- * Relative weights are scale-free. Giving the newcomer the old average makes
- * it exactly one equal share of the enlarged layout while preserving every
- * existing lane's proportions relative to its peers. A generic count change
- * has no spatial insertion contract and still resets ratios; New Lane does,
- * so snapping a deliberately sized cockpit back to even columns would be an
- * avoidable surprise.
- */
-function insertLaneWeight(
-  ratios: number[] | undefined,
-  laneCount: number,
-  insertAt: number,
-): number[] | undefined {
-  if (!ratios || ratios.length === 0) return undefined
-  const [indexFraction, ...laneWeights] = ratios
-
-  // Malformed persisted weights already render as an even split. Materialize
-  // that same fallback at the new length so the index-sidebar fraction can
-  // survive instead of being lost along with the unusable lane slice.
-  if (
-    laneWeights.length !== laneCount ||
-    laneWeights.some(weight => !Number.isFinite(weight) || weight <= 0)
-  ) {
-    return [indexFraction, ...Array.from({ length: laneCount + 1 }, () => 1)]
-  }
-
-  const average = laneWeights.reduce((sum, weight) => sum + weight, 0) / laneCount
-  return [
-    indexFraction,
-    ...laneWeights.slice(0, insertAt),
-    average,
-    ...laneWeights.slice(insertAt),
-  ]
-}
+// REMOVED: `buildAutoLanes`, which claimed the next unclaimed visible agent for
+// every lane on enter and for every appended lane on count growth (#681).
+//
+// Its docstring argued that asking for N tiles means wanting to SEE N agents,
+// so landing on N empty pickers was busywork. That reasoning did not survive
+// contact with the rest of the model: #673 had already established the opposite
+// rule for New Lane (a new slot is a request for SPACE), and once rows landed,
+// "add a row" would have yanked a whole row of agents out of the index unasked.
+//
+// Nothing fills a slot now except the user. If you find yourself wanting this
+// helper back, the question to answer first is why THIS creation path is
+// entitled to guess an occupant when none of the others are.
 
 // NOTE: render still performs scope validation before mounting a lane, but the
 // durability boundary must not rely on a later React effect. Autosave routes
 // through keepTiledLaneSessions so stale lane ids do not survive to the next
-// launch; render-time healing remains the user-facing repair for scope changes
-// and temporarily empty lanes.
-
-/**
- * Remove ONE lane by index. Returns null when the removal is refused, so the
- * caller can leave state untouched rather than writing back an identical object.
- *
- * WHY this exists at all, given `setTiledLaneCount` already resizes the grid:
- * that action takes only a COUNT, and shrinking by count always drops the tail
- * (`lanes.slice(0, next)`). With seven lanes open and the finished agent in
- * lane three, 7 -> 6 removes lane SEVEN and leaves the user re-selecting the
- * rest by hand.
- *
- * Closing the agent instead does not shrink anything either: the lane empties
- * and `buildAutoLanes`' auto-fill re-homes another agent into it, so the count
- * stays put. Before this, there was no way to shrink the tiled grid at a
- * position of the user's choosing.
- *
- * WHY it is a pure function rather than living inside the reducer: the
- * splice/clamp/ratio rules are the whole behaviour, and they are worth testing
- * without standing up a hook.
- */
-export function removeLaneFromTiled(
-  tiled: TiledDispatchState,
-  laneIndex: number,
-): TiledDispatchState | null {
-  // Refuse at the floor. Emptying the layout is Dispatch Mode's job; a
-  // lane-removal that silently became a mode-exit would be two different
-  // actions sharing one name.
-  if (tiled.lanes.length <= MIN_DISPATCH_TILES) return null
-  if (!Number.isInteger(laneIndex)) return null
-  if (laneIndex < 0 || laneIndex >= tiled.lanes.length) return null
-
-  const lanes = tiled.lanes.filter((_, i) => i !== laneIndex)
-  return {
-    lanes,
-    // Same clamp `setTiledLaneCount` applies: removing the last lane would
-    // otherwise leave focusedLane pointing past the end. Note a lane removed
-    // BEFORE the focused one shifts it down by one, which Math.min does not
-    // do — so adjust explicitly rather than only clamping.
-    focusedLane: Math.min(
-      laneIndex < tiled.focusedLane ? tiled.focusedLane - 1 : tiled.focusedLane,
-      lanes.length - 1,
-    ),
-    // `ratios` is NOT a uniform array of lane boundaries: index 0 is the
-    // INDEX-SIDEBAR fraction (TiledDispatchLayout reads `ratios?.[0]`), and
-    // only `ratios.slice(1)` are lane weights. Dropping the whole array — what
-    // setTiledLaneCount does — therefore also snaps the sidebar back to its
-    // default, undoing a width the user deliberately dragged and never asked
-    // to change.
-    //
-    // A generic count *increase* has no insertion position or adjacent-lane
-    // intent, which is why setTiledLaneCount resets wholesale. New Lane has an
-    // explicit insertion position and can assign an average share; a removal
-    // has an equally honest answer: keep the sidebar fraction, drop the removed
-    // lane's weight, and let normalizedLaneWeights re-normalize what is left.
-    ratios: removeLaneWeight(tiled.ratios, laneIndex),
-  }
-}
-
-/**
- * Drop one lane's weight from a `ratios` array while preserving index 0, the
- * index-sidebar fraction. Returns undefined when there is nothing stored, so
- * the layout falls back to even distribution exactly as before.
- */
-function removeLaneWeight(
-  ratios: number[] | undefined,
-  laneIndex: number,
-): number[] | undefined {
-  if (!ratios || ratios.length === 0) return undefined
-  const [indexFraction, ...laneWeights] = ratios
-  // A ratios array written before this lane existed simply has no weight to
-  // drop; keeping the sidebar fraction is still the right call.
-  if (laneIndex >= laneWeights.length) return [indexFraction]
-  return [indexFraction, ...laneWeights.filter((_, i) => i !== laneIndex)]
-}
+// launch.
+//
+// There is no render-time repair any more (#681). A lane that cannot resolve
+// renders empty and KEEPS its selection, so a scope change is reversible by
+// changing scope back rather than being silently overwritten.
+//
+// The lane splice/insert helpers that used to live below this line were deleted
+// with it: they rewrote `lanes` and the legacy `ratios` without touching `rows`,
+// which is exactly the "updates lanes without updating rows in the same
+// expression" failure gridShape.ts exists to prevent. Every shape mutation now
+// lives in gridShape and returns lanes and rows together.

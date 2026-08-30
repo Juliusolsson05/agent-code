@@ -2,15 +2,16 @@ import { ipcMain, shell } from 'electron'
 
 import type { CliUpdateOrchestrator } from '@main/setup/cliUpdateOrchestrator.js'
 import { setCliUpdateBehavior } from '@main/setup/setupState.js'
-import { sendToMainWindow } from '@main/window/mainWindow.js'
+import { broadcastToWindows } from '@main/window/windowRegistry.js'
 import type { CliUpdateBehavior, CliUpdateKind, CliUpdateSnapshot } from '@shared/types/cliUpdate.js'
 
 // IPC layer for the CLI auto-updater.
 //
 // Shape mirrors other main-owned broadcasters:
 //   - main-to-renderer push channel `cli-updates:state` for state changes.
-//     Delivered via sendToMainWindow so the observer hook can spy on it if
-//     dev-debug recording is on.
+//     Broadcast to every window (the installed CLI version is a property of the
+//     machine, not of a workspace) and delivered through the window registry so
+//     the observer hook can spy on it if dev-debug recording is on.
 //   - request/response handlers `cli-updates:get` (initial snapshot after
 //     the renderer connects), `cli-updates:refresh` (force a fresh probe
 //     from a settings-page button), `cli-updates:set-behavior` (persist
@@ -31,7 +32,7 @@ export function registerCliUpdatesIpc(orchestrator: CliUpdateOrchestrator): void
   // Push every transition to the renderer. Registered before any handler
   // so a probe that finishes early has a live subscriber to hear it.
   orchestrator.on('state', (snapshot: CliUpdateSnapshot) => {
-    sendToMainWindow('cli-updates:state', snapshot)
+    broadcastToWindows('cli-updates:state', snapshot)
   })
 
   ipcMain.handle('cli-updates:get', async () => {

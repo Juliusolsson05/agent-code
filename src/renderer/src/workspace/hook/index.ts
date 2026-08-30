@@ -37,6 +37,7 @@ import {
   useTileTabsSanity,
 } from '@renderer/workspace/hook/invalidation/effects'
 import { useIpcSubscriptions } from '@renderer/workspace/hook/ipc/useIpcSubscriptions'
+import { useWorkspaceAdoption } from '@renderer/workspace/hook/ipc/useWorkspaceAdoption'
 import { useSessionFeed } from '@renderer/features/sessionFeed/SessionFeedContext'
 import type { OrchestrationAgentRecord } from '@mcp/shared/orchestrationTypes'
 import type { AgentManagementRendererResponse } from '@mcp/shared/agentManagementTypes'
@@ -835,6 +836,9 @@ export function useWorkspace(
     setState,
     setTileTabs,
     closeNewAgentPlacement,
+    refs,
+    sessionActions.ensureSessionLive,
+    showToast,
   )
 
   // ---- Side-effects (subscriptions, persistence, invalidation) ----
@@ -845,6 +849,7 @@ export function useWorkspace(
   // see the WHY on useIpcSubscriptions.
   const sessionFeed = useSessionFeed()
   useIpcSubscriptions(sessionFeed, refs, setState, setRuntimes, updateRuntime, appendFeedDebug)
+  useWorkspaceAdoption(refs, setState, setRuntimes, bootstrapComplete)
   useAutoSave(state, draftVersion, refs, bootstrapComplete)
   useBootstrap(
     refs,
@@ -986,11 +991,18 @@ export function useWorkspace(
     setPinnedSessionIds: dispatchActions.setPinnedSessionIds,
     enterTiledDispatch: dispatchActions.enterTiledDispatch,
     exitTiledDispatch: dispatchActions.exitTiledDispatch,
-    setTiledLaneSession: dispatchActions.setTiledLaneSession,
-    setTiledLaneCount: dispatchActions.setTiledLaneCount,
+    selectTiledLaneSession: dispatchActions.selectTiledLaneSession,
     insertTiledLaneRight: dispatchActions.insertTiledLaneRight,
     removeTiledLane: dispatchActions.removeTiledLane,
     setTiledFocusedLane: dispatchActions.setTiledFocusedLane,
-    setTiledRatios: dispatchActions.setTiledRatios,
+    insertDispatchRowBelow: dispatchActions.insertDispatchRowBelow,
+    removeDispatchRow: dispatchActions.removeDispatchRow,
+    setDispatchGridShape: dispatchActions.setDispatchGridShape,
+    setDispatchLaneWeights: dispatchActions.setDispatchLaneWeights,
+    setDispatchRowIndexFraction: dispatchActions.setDispatchRowIndexFraction,
+    setDispatchRowHeights: dispatchActions.setDispatchRowHeights,
+    setDispatchRowProjects: dispatchActions.setDispatchRowProjects,
+    setDispatchRowCapChildren: dispatchActions.setDispatchRowCapChildren,
+    toggleDispatchRowExpandedParent: dispatchActions.toggleDispatchRowExpandedParent,
   }
 }

@@ -2,10 +2,16 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const sentRendererRequests: unknown[] = []
 
-vi.mock('@main/window/mainWindow.js', () => ({
-  sendToMainWindow: (_channel: string, request: unknown) => {
+// `windowForSession` decides whether the request is deliverable at all; these
+// tests are about caching and lifecycle, so every parent session resolves.
+// The unowned-parent rejection is asserted separately below.
+const sessionWindowOwner = vi.fn((_sessionId: string): string | null => 'test-window')
+
+vi.mock('@main/window/windowRegistry.js', () => ({
+  sendToWindow: (_windowId: string, _channel: string, request: unknown) => {
     sentRendererRequests.push(request)
   },
+  windowForSession: (sessionId: string) => sessionWindowOwner(sessionId),
 }))
 
 const { OrchestrationBridge } = await import('@main/orchestration/OrchestrationBridge.js')

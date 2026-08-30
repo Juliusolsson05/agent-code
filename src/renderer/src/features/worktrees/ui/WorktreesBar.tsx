@@ -18,14 +18,28 @@ type Props = {
 
 const POLL_MS = 10_000
 
-// WHY skip the mount refresh when a dump for the same cwd is fresh:
-// opening the panel re-mounts this component, and an unconditional
-// refresh(false) re-runs the git worktree scan every time the panel is
-// toggled. That scan is cheap-ish but not free, and toggling the panel
-// rapidly used to fan out redundant work. If we already have a dump for
-// this exact cwd from the last few seconds, reuse it on mount and let
-// the 10s poll take over. forceActivityRefresh stays false here — only
-// the explicit refresh button forces the (expensive) activity reindex.
+// WHY skip the mount refresh when a dump for the same cwd is fresh: if we
+// already have a dump for this exact cwd from the last few seconds, reuse it
+// and let the 10s poll take over instead of re-running the git worktree scan.
+// forceActivityRefresh stays false here — only the explicit refresh button
+// forces the (expensive) activity reindex.
+//
+// CORRECTION (#150 regression coverage): this comment used to claim the window
+// protects against panel TOGGLING. It does not, and believing that would send
+// the next reader to the wrong guard. WorktreesBarSurface returns null while
+// the panel is closed, so closing it unmounts this component and `dump` — an
+// ordinary useState — is discarded. On the next open `dumpRef.current` is null,
+// `fresh` is false, and the refresh runs regardless of this window. Toggling is
+// nonetheless cheap, for a different reason: the 30s promise cache in
+// ipc/git.ts absorbs the repeated scan in main.
+//
+// What this window DOES cover is a re-mount-free change of `refresh` identity
+// — i.e. a cwd change — where the component keeps its state. That path is real,
+// which is why the window stays. Its absence is also load-bearing in the
+// opposite direction: with `workspace` wrongly in refresh's deps, every runtime
+// tick re-runs the mount effect, and once the dump ages past this window each
+// tick issues a fresh git scan. That is the #150 loop, and
+// WorktreesBar.renderer.test.tsx pins it.
 const MOUNT_REUSE_WINDOW_MS = 5_000
 
 // Section grouping for the panel. We render rows under headed sections

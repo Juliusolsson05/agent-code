@@ -1,0 +1,27 @@
+{
+  "$fixture": {
+    "id": "codex-proxy-exact-identity-zstd",
+    "cutoff": "2026-08-30T18:37:55.388Z",
+    "sourceFingerprint": "f09ad9342dbd431a",
+    "record": {
+      "line": 54
+    },
+    "projection": "client_metadata only; deterministically recompressed"
+  },
+  "event": {
+    "kind": "request",
+    "endpoint": "responses",
+    "method": "POST",
+    "path": "/v1/responses",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "recordedEncoding": "zstd",
+    "body_b64": "KLUv/SBqPQIAMgQPFpC1bQtUShCN1DR7+XtVVWhWzHj9gxJredh0+zlrjiKUyIEFgkpy0wNauBjV8HKNWxXfD+8JsJvUg7AKAgBBefz+m1A="
+  },
+  "expected": {
+    "threadId": "fixture-id-1",
+    "sessionId": "fixture-id-1",
+    "rootTurnId": "fixture-id-2"
+  }
+}

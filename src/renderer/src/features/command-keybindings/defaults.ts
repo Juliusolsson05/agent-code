@@ -43,6 +43,41 @@ export type BindingContext =
  */
 const DISJOINT_CONTEXT_PAIRS: ReadonlyArray<readonly [BindingContext, BindingContext]> = [
   ['grid', 'dispatch'],
+  // `editor` is disjoint from both LAYOUT contexts as of #697:
+  // activeBindingContexts drops grid/dispatch entirely while the GLOBAL EDITOR
+  // owns the target, so a chord can never be matched by a layout binding and an
+  // editor binding for the same keystroke.
+  //
+  // CONSEQUENCE worth stating, because it is a footgun: a chord filed under
+  // `editor` is now reported FREE for a layout binding. That is correct for
+  // chords Monaco alone owns, and WRONG for chords the OS owns in every text
+  // field — those must be filed `global` or they become invisible the moment
+  // this pair is declared. Cmd+Shift+Up/Down were moved for exactly that
+  // reason.
+  //
+  // This pair is what the routing fix is FOR. Without it every dispatch chord
+  // had to be unique against the whole app plus macOS plus Monaco, and two
+  // attempts at a Grid Dispatch row-focus chord collided for exactly that
+  // reason (Alt+Shift+Arrow with macOS word selection, Cmd+Alt+Arrow with
+  // Monaco's multi-cursor). Declaring the disjointness the router now enforces
+  // gives the context system back the room it was designed to provide.
+  //
+  // `global` is deliberately NOT disjoint from anything: it is live in every
+  // surface including the editor, so a global chord really can collide.
+  //
+  // THIS DECLARATION IS ONLY TRUE BECAUSE OF THE ROUTER. If the gate in
+  // activeBindingContexts is ever removed, this list becomes a lie and
+  // check:keybindings will happily approve chords that really do conflict. The
+  // gate is pinned by `bindingContexts.test.ts` ("drops the layout context
+  // entirely while the Global Editor owns the target") — that test failing
+  // means this list must change too, not that the test needs updating.
+  //
+  // That guard is ONE-DIRECTIONAL and it is worth knowing which direction. It
+  // pins the pure context map. It does NOT pin the `editorOwnsTarget` DOM
+  // predicate or the call-site wiring, so a regression in either would keep the
+  // test green while making this list false.
+  ['grid', 'editor'],
+  ['dispatch', 'editor'],
 ]
 
 export function contextsOverlap(a: BindingContext, b: BindingContext): boolean {
@@ -80,6 +115,14 @@ export function buildDefaultKeybindings(): CommandBindingDefault[] {
     // Previously hard-coded as `onCommandPalette?.()` with no command id, which
     // is why it could not be rebound. Phase 4 gives it an owner.
     { commandId: 'open-command-palette', bindings: ['Cmd+Shift+P'], context: 'global' },
+
+    // --- Windows ------------------------------------------------------------
+    // ⌘⇧N is the platform convention for New Window (Finder, Safari, VS Code),
+    // and nothing in this app claims it. Note that `check:keybindings` only
+    // knows THIS app's bindings — it cannot tell you a chord is free of macOS
+    // system reservations — but ⌘⇧N is reserved by no system service, only by
+    // other applications for this exact action.
+    { commandId: 'new-window', bindings: ['Cmd+Shift+N'], context: 'global' },
 
     // --- Tabs ---------------------------------------------------------------
     { commandId: 'new-tab', bindings: ['Cmd+T'], context: 'global' },
@@ -204,6 +247,40 @@ export function buildDefaultKeybindings(): CommandBindingDefault[] {
     // Dispatch owns the layout, and scoping it here leaves ⌘⇧G free for a grid
     // command later. The overlap matrix proves grid and dispatch are disjoint.
     { commandId: 'global-dispatch', bindings: ['Cmd+Shift+G'], context: 'dispatch' },
+    // Grid Dispatch row focus (#681) ships with NO default binding.
+    //
+    // ⌥⇧↑/↓ was the obvious pair — it reads as "same axis, bigger unit" beside
+    // the existing ⌥↑/↓ — and check:keybindings accepted it, because that
+    // checker only knows about bindings this app registers. It does not know
+    // about the OS. useKeybinds' header already records why that matters:
+    // Option+Shift+Arrow is the macOS word-selection shortcut and is
+    // "load-bearing for every text field in the app (including our composer)",
+    // which is exactly why directional resize uses fn+alt+Arrow instead.
+    //
+    // Dispatch bindings stay active while a text editor owns the target, and
+    // the router preventDefault()s what it routes, so claiming that chord would
+    // have broken selection in the composer while moving row focus underneath
+    // the user.
+    //
+    // Grid Dispatch row focus. This chord took three attempts and the first two
+    // are worth keeping written down, because both were "verified free" against
+    // a source that could not see the real owner:
+    //
+    //   Alt+Shift+Arrow  — macOS word selection. check:keybindings passed; it
+    //                      does not know about the OS.
+    //   Cmd+Alt+Arrow    — Monaco's Add Cursor Above/Below. Its `linux:` block
+    //                      overrides Linux only, so `primary` applies on mac.
+    //                      Those chords are now in RESERVED_INTERACTIONS.
+    //
+    // Cmd+Alt+Arrow is legal NOW, and only because #697 made `dispatch` stop
+    // being live while a text editor owns the target. Monaco still owns this
+    // chord inside the editor and always will — the two no longer compete,
+    // because they are never live at the same time. That disjointness is
+    // declared in DISJOINT_CONTEXT_PAIRS above and enforced by the router.
+    //
+    // If that gate is ever removed, this binding becomes a real conflict again.
+    { commandId: 'dispatch-focus-row-up', bindings: ['Cmd+Alt+Up'], context: 'dispatch' },
+    { commandId: 'dispatch-focus-row-down', bindings: ['Cmd+Alt+Down'], context: 'dispatch' },
 
     // --- App panels (⌘⇧) ----------------------------------------------------
     { commandId: 'usage.open', bindings: ['Cmd+Shift+U'], context: 'global' },

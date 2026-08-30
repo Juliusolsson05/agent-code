@@ -1,6 +1,10 @@
 import type { SessionId, SessionKind, Tab, TabId, WorkspaceState } from '@renderer/workspace/types'
 import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 import { tabIndexLabel } from '@renderer/workspace/tile-tree/paneLabelFormat'
+import {
+  normalizeGridShape,
+  rowIndexForLane,
+} from '@renderer/workspace/dispatch/gridShape'
 
 export type DispatchAgentRow = {
   key: string
@@ -323,7 +327,7 @@ export function isPinned(state: WorkspaceState, sessionId: SessionId): boolean {
  * `activeTabId`. Those two fields agree in classic Dispatch (focusing a
  * row syncs both via focusDispatchSession) but DIVERGE in Tiled
  * Dispatch: lane focus/selection (setTiledFocusedLane /
- * setTiledLaneSession) writes only `tiled.focusedLane` and
+ * selectTiledLaneSession) writes only `tiled.focusedLane` and
  * `lanes[].selectedSessionId` — never the classic focus fields. The
  * result was new agents landing in the stale active tab instead of the
  * focused lane's project (issue #266 / #248 regression). Resolving the
@@ -356,9 +360,26 @@ export function resolveDispatchSpawnTarget(state: WorkspaceState): DispatchSpawn
     if (laneTab) {
       return { tabId: laneTab, cwdSessionId: laneSessionId, laneIndex }
     }
-    // Focused lane is empty / its agent is gone: there is no project to read
-    // from the lane itself, so fall back to the classic focus, then the active
-    // tab — but still place the new agent INTO the focused lane.
+    // Focused lane is empty / its agent is gone. If its ROW is bound to a
+    // project, that binding is the answer and outranks every fallback below:
+    // the row's index offers only that project, so spawning into it from a
+    // stale classic focus would file the new agent under a project the row does
+    // not even list. Bindings constrain what may live in a row, and a spawn is
+    // something coming to live there.
+    const grid = normalizeGridShape(dm.tiled)
+    const rowIndex = rowIndexForLane(grid.rows, laneIndex)
+    // A row can be bound to SEVERAL projects, so "which project does a new
+    // agent belong to" needs a rule rather than a lookup. The active tab when
+    // it is one of them, otherwise the first: deterministic, and "the project
+    // you were last in" is the least surprising answer. The per-group `+` in
+    // the index is unaffected — it already carries an explicit tabId.
+    const bound = rowIndex >= 0 ? grid.rows[rowIndex]?.projectTabIds : undefined
+    if (bound && bound.length > 0) {
+      const tabId = bound.includes(state.activeTabId) ? state.activeTabId : bound[0]!
+      return { tabId, cwdSessionId: null, laneIndex }
+    }
+    // Unbound: fall back to the classic focus, then the active tab — but still
+    // place the new agent INTO the focused lane.
     const focusTab = tabForSession(dm.focusedSessionId)
     return {
       tabId: focusTab ?? state.activeTabId,

@@ -19,6 +19,11 @@ import type {
   SessionRecoveryCancellationOptions,
   SessionRecoverOptions,
 } from '@shared/types/session.js'
+import {
+  claimSessionForWindow,
+  releaseSession,
+  windowIdFor,
+} from '@main/window/windowRegistry.js'
 
 // Session lifecycle + I/O IPC.
 //
@@ -32,6 +37,20 @@ import type {
 // picker asks "what sessions could I spawn?" before calling spawn.
 // The prompt-indexing handlers (sessions:*) live in ./sessions.ts
 // because they're a separate concern with their own cache layer.
+//
+// WHY spawn/recover/kill also talk to the window registry:
+//
+// This file is where a session's OWNER is established, because this is where
+// the request to create one arrives and `event.sender` identifies the window
+// that made it. Ownership decides which window receives the session's events
+// (see windowRegistry.sendToSessionWindow). Deriving it later — from the
+// persisted workspace, say — would leave every new pane unrouted for the whole
+// 400ms autosave debounce, which is precisely the interval its first paint
+// lands in.
+//
+// Ownership is NOT released when a session exits on its own: an exited pane is
+// still on screen, still owned, and can be reloaded in place. It is released
+// only when the owner explicitly disposes of the session.
 
 export function registerSessionIpc(
   manager: SessionManager,
@@ -40,14 +59,25 @@ export function registerSessionIpc(
   ipcMain.handle(
     'session:spawn',
     async (
-      _evt,
+      evt,
       options: SessionSpawnOptions,
     ) => {
-      return await manager.spawn(options)
+      const owner = windowIdFor(evt.sender)
+      // The claim happens inside spawn at id-mint time, not out here on the
+      // resolved result: the provider emits `started` and its first screen and
+      // semantic events while `spawn()` is still awaiting, and those must
+      // already route to this window.
+      return await manager.spawn(options, sessionId =>
+        claimSessionForWindow(sessionId, owner),
+      )
     },
   )
 
-  ipcMain.handle('session:recover', async (_evt, options: SessionRecoverOptions) => {
+  ipcMain.handle('session:recover', async (evt, options: SessionRecoverOptions) => {
+    // Recovery already knows its id — the renderer supplies the durable local
+    // id it is restoring — so the claim can happen before the call rather than
+    // through a mint hook.
+    claimSessionForWindow(options.sessionId, windowIdFor(evt.sender))
     return await manager.recover(options)
   })
 
@@ -63,11 +93,15 @@ export function registerSessionIpc(
   })
 
   ipcMain.handle('session:kill', async (_evt, sessionId: string) => {
-    return await manager.kill(sessionId)
+    const killed = await manager.kill(sessionId)
+    releaseSession(sessionId)
+    return killed
   })
 
   ipcMain.handle('session:kill-owned', async (_evt, options: SessionOwnershipOptions) => {
-    return await manager.killOwned(options)
+    const killed = await manager.killOwned(options)
+    releaseSession(options.sessionId)
+    return killed
   })
 
   ipcMain.handle('session:kind', (_evt, sessionId: string) => {

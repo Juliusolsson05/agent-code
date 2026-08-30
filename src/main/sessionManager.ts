@@ -1694,13 +1694,33 @@ export class SessionManager extends EventEmitter {
    * For Claude sessions, start() also attaches the JSONL watcher; for
    * terminal sessions it's just the PTY spawn.
    */
-  async spawn(options: SessionSpawnOptions): Promise<SessionSpawnResult> {
+  async spawn(
+    options: SessionSpawnOptions,
+    /**
+     * Called with the freshly minted id, synchronously, BEFORE anything can
+     * emit an event for it.
+     *
+     * WHY this exists rather than the caller claiming ownership from the
+     * resolved result: `spawn()` awaits the provider start, and the provider
+     * emits `started`, the first screen snapshot, and its first semantic events
+     * during that await. A caller that waited for the promise would have no way
+     * to route those, because nobody outside this method knows the id yet. The
+     * window registry needs the id at mint time or its routing has a hole
+     * exactly where a new pane's first paint lives.
+     *
+     * It is a callback rather than an `ownerWindowId` option so SessionManager
+     * stays ignorant of windows; it hands out an id and does not care who
+     * claims it.
+     */
+    onSessionIdMinted?: (sessionId: string) => void,
+  ): Promise<SessionSpawnResult> {
     const requestedKind: unknown = options.kind
     if (requestedKind !== undefined && !isSessionKind(requestedKind)) {
       throw new Error('Unsupported session provider')
     }
     const kind: SessionKind = options.kind ?? DEFAULT_PROVIDER
     const sessionId = randomUUID()
+    onSessionIdMinted?.(sessionId)
     const codexHandoffClaim = await this.prepareCodexReplacementHandoff(
       options,
       sessionId,

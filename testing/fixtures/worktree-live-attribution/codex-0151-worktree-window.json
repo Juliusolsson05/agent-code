@@ -1,0 +1,289 @@
+{
+  "$fixture": {
+    "id": "codex-0151-worktree-window",
+    "cutoff": "2026-08-30T18:37:55.388Z",
+    "sourceFingerprint": "760c1ac0a2206ded",
+    "records": [
+      {
+        "line": 1,
+        "timestamp": "2026-08-30T17:49:31.977Z"
+      },
+      {
+        "line": 1238,
+        "timestamp": "2026-08-30T18:35:50.182Z"
+      },
+      {
+        "line": 1244,
+        "timestamp": "2026-08-30T18:35:57.058Z"
+      },
+      {
+        "line": 1252,
+        "timestamp": "2026-08-30T18:36:10.956Z"
+      },
+      {
+        "line": 1258,
+        "timestamp": "2026-08-30T18:36:29.098Z"
+      },
+      {
+        "line": 1270,
+        "timestamp": "2026-08-30T18:36:50.907Z"
+      },
+      {
+        "line": 1276,
+        "timestamp": "2026-08-30T18:36:59.948Z"
+      },
+      {
+        "line": 1282,
+        "timestamp": "2026-08-30T18:37:04.603Z"
+      },
+      {
+        "line": 1288,
+        "timestamp": "2026-08-30T18:37:20.828Z"
+      },
+      {
+        "line": 1294,
+        "timestamp": "2026-08-30T18:37:26.610Z"
+      },
+      {
+        "line": 1300,
+        "timestamp": "2026-08-30T18:37:33.838Z"
+      },
+      {
+        "line": 1306,
+        "timestamp": "2026-08-30T18:37:42.167Z"
+      },
+      {
+        "line": 1316,
+        "timestamp": "2026-08-30T18:37:55.388Z"
+      }
+    ]
+  },
+  "git": {
+    "main": {
+      "path": "/fixture/project-1",
+      "branch": "fixture/branch-1"
+    },
+    "ui": {
+      "path": "/fixture/project-1/.worktrees/worktree-2",
+      "branch": "fixture/branch-3"
+    }
+  },
+  "records": [
+    {
+      "type": "session_meta",
+      "timestamp": "2026-08-30T17:49:31.977Z",
+      "payload": {
+        "id": "fixture-id-1",
+        "cwd": "/fixture/project-1",
+        "cli_version": "0.151.0",
+        "git": {
+          "branch": "fixture/branch-1"
+        }
+      }
+    },
+    {
+      "type": "event_msg",
+      "timestamp": "2026-08-30T18:35:50.182Z",
+      "payload": {
+        "type": "item_completed",
+        "item": {
+          "type": "CommandExecution",
+          "status": "completed",
+          "cwd": "file:///fixture/project-1/.worktrees/worktree-2",
+          "command": [
+            "⟨text:8⟩",
+            "⟨text:3⟩",
+            "⟨text:743⟩"
+          ]
+        }
+      }
+    },
+    {
+      "type": "event_msg",
+      "timestamp": "2026-08-30T18:35:57.058Z",
+      "payload": {
+        "type": "item_completed",
+        "item": {
+          "type": "CommandExecution",
+          "status": "completed",
+          "cwd": "file:///fixture/project-1/.worktrees/worktree-2",
+          "command": [
+            "⟨text:8⟩",
+            "⟨text:3⟩",
+            "⟨text:638⟩"
+          ]
+        }
+      }
+    },
+    {
+      "type": "event_msg",
+      "timestamp": "2026-08-30T18:36:10.956Z",
+      "payload": {
+        "type": "item_completed",
+        "item": {
+          "type": "CommandExecution",
+          "status": "completed",
+          "cwd": "file:///fixture/project-1/.worktrees/worktree-2",
+          "command": [
+            "⟨text:8⟩",
+            "⟨text:3⟩",
+            "⟨text:469⟩"
+          ]
+        }
+      }
+    },
+    {
+      "type": "event_msg",
+      "timestamp": "2026-08-30T18:36:29.098Z",
+      "payload": {
+        "type": "item_completed",
+        "item": {
+          "type": "CommandExecution",
+          "status": "completed",
+          "cwd": "file:///fixture/project-1/.worktrees/worktree-2",
+          "command": [
+            "⟨text:8⟩",
+            "⟨text:3⟩",
+            "⟨text:2684⟩"
+          ]
+        }
+      }
+    },
+    {
+      "type": "event_msg",
+      "timestamp": "2026-08-30T18:36:50.907Z",
+      "payload": {
+        "type": "item_completed",
+        "item": {
+          "type": "CommandExecution",
+          "status": "completed",
+          "cwd": "file:///fixture/project-1/.worktrees/worktree-2",
+          "command": [
+            "⟨text:8⟩",
+            "⟨text:3⟩",
+            "⟨text:1591⟩"
+          ]
+        }
+      }
+    },
+    {
+      "type": "event_msg",
+      "timestamp": "2026-08-30T18:36:59.948Z",
+      "payload": {
+        "type": "item_completed",
+        "item": {
+          "type": "CommandExecution",
+          "status": "completed",
+          "cwd": "file:///fixture/project-1/.worktrees/worktree-2",
+          "command": [
+            "⟨text:8⟩",
+            "⟨text:3⟩",
+            "⟨text:1463⟩"
+          ]
+        }
+      }
+    },
+    {
+      "type": "event_msg",
+      "timestamp": "2026-08-30T18:37:04.603Z",
+      "payload": {
+        "type": "item_completed",
+        "item": {
+          "type": "CommandExecution",
+          "status": "completed",
+          "cwd": "file:///fixture/project-1/.worktrees/worktree-2",
+          "command": [
+            "⟨text:8⟩",
+            "⟨text:3⟩",
+            "⟨text:99⟩"
+          ]
+        }
+      }
+    },
+    {
+      "type": "event_msg",
+      "timestamp": "2026-08-30T18:37:20.828Z",
+      "payload": {
+        "type": "item_completed",
+        "item": {
+          "type": "CommandExecution",
+          "status": "completed",
+          "cwd": "file:///fixture/project-1/.worktrees/worktree-2",
+          "command": [
+            "⟨text:8⟩",
+            "⟨text:3⟩",
+            "⟨text:1088⟩"
+          ]
+        }
+      }
+    },
+    {
+      "type": "event_msg",
+      "timestamp": "2026-08-30T18:37:26.610Z",
+      "payload": {
+        "type": "item_completed",
+        "item": {
+          "type": "CommandExecution",
+          "status": "completed",
+          "cwd": "file:///fixture/project-1/.worktrees/worktree-2",
+          "command": [
+            "⟨text:8⟩",
+            "⟨text:3⟩",
+            "⟨text:137⟩"
+          ]
+        }
+      }
+    },
+    {
+      "type": "event_msg",
+      "timestamp": "2026-08-30T18:37:33.838Z",
+      "payload": {
+        "type": "item_completed",
+        "item": {
+          "type": "CommandExecution",
+          "status": "completed",
+          "cwd": "file:///fixture/project-1/.worktrees/worktree-2",
+          "command": [
+            "⟨text:8⟩",
+            "⟨text:3⟩",
+            "⟨text:1088⟩"
+          ]
+        }
+      }
+    },
+    {
+      "type": "event_msg",
+      "timestamp": "2026-08-30T18:37:42.167Z",
+      "payload": {
+        "type": "item_completed",
+        "item": {
+          "type": "CommandExecution",
+          "status": "completed",
+          "cwd": "file:///fixture/project-1/.worktrees/worktree-2",
+          "command": [
+            "⟨text:8⟩",
+            "⟨text:3⟩",
+            "⟨text:316⟩"
+          ]
+        }
+      }
+    },
+    {
+      "type": "event_msg",
+      "timestamp": "2026-08-30T18:37:55.388Z",
+      "payload": {
+        "type": "item_completed",
+        "item": {
+          "type": "CommandExecution",
+          "status": "completed",
+          "cwd": "file:///fixture/project-1/.worktrees/worktree-2",
+          "command": [
+            "⟨text:8⟩",
+            "⟨text:3⟩",
+            "⟨text:285⟩"
+          ]
+        }
+      }
+    }
+  ]
+}
