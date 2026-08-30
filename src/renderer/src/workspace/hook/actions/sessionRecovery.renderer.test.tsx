@@ -110,6 +110,7 @@ describe('useSessionActions recovery retry', () => {
     let runtimes: Record<SessionId, SessionRuntime> = {
       [sessionId]: {
         ...emptyRuntime(),
+        sessionRunId: '44444444-4444-4444-8444-444444444444',
         processStatus: 'failed',
         processError: 'old failed attempt',
         recoveryFailureCode: 'start-failed',
@@ -143,6 +144,7 @@ describe('useSessionActions recovery retry', () => {
       disposition: 'adopted' as const,
       snapshot: {
         sessionId,
+        sessionRunId: '55555555-5555-4555-8555-555555555555',
         kind: 'claude' as const,
         cwd: '/tmp/project',
         lifecycle: 'live' as const,
@@ -179,6 +181,7 @@ describe('useSessionActions recovery retry', () => {
     expect(state.sessions[sessionId]?.builtInMcpDomains).toEqual([])
     expect(wakeResult).toEqual({ sessionId, builtInMcpDomains: [] })
     expect(runtimes[sessionId]).toMatchObject({
+      sessionRunId: '55555555-5555-4555-8555-555555555555',
       processStatus: 'started',
       processError: null,
       recoveryFailureCode: null,

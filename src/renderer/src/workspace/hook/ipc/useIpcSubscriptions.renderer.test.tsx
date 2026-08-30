@@ -529,7 +529,7 @@ describe('useIpcSubscriptions with an injected SessionFeed', () => {
     expect(refsForAssertion!.latestScreenRef.current.s1).toBeUndefined()
   })
 
-  it('marks the runtime exited when the fake feed emits exit', () => {
+  it('retains the retired run across exit and replaces it only on the next started event', () => {
     const fake = createFakeSessionFeed()
     const state = { sessions: {} } as WorkspaceState
     let runtimes: Record<SessionId, SessionRuntime> = {}
@@ -544,7 +544,11 @@ describe('useIpcSubscriptions with an injected SessionFeed', () => {
         updater => {
           runtimes = typeof updater === 'function' ? updater(runtimes) : updater
         },
-        () => {},
+        (sessionId, patch) => {
+          const current = runtimes[sessionId] ?? emptyRuntime()
+          runtimes = { ...runtimes, [sessionId]: { ...current, ...patch } }
+          refs.current!.latestRuntimesRef.current = runtimes
+        },
         () => {},
       )
       return <div />
@@ -553,11 +557,30 @@ describe('useIpcSubscriptions with an injected SessionFeed', () => {
     render(<Harness />)
 
     act(() => {
+      fake.emitStarted({
+        sessionId: 's1',
+        sessionRunId: '66666666-6666-4666-8666-666666666666',
+        kind: 'codex',
+      })
+    })
+    expect(runtimes.s1?.sessionRunId).toBe('66666666-6666-4666-8666-666666666666')
+
+    act(() => {
       fake.emitExit({ sessionId: 's1', exitCode: 0 })
     })
 
     expect(runtimes.s1?.exited).toBe(0)
     expect(runtimes.s1?.processActive).toBe(false)
+    expect(runtimes.s1?.sessionRunId).toBe('66666666-6666-4666-8666-666666666666')
+
+    act(() => {
+      fake.emitStarted({
+        sessionId: 's1',
+        sessionRunId: '77777777-7777-4777-8777-777777777777',
+        kind: 'codex',
+      })
+    })
+    expect(runtimes.s1?.sessionRunId).toBe('77777777-7777-4777-8777-777777777777')
   })
 
   // Live entries window (#375 part B) — the burst handler applying a trim

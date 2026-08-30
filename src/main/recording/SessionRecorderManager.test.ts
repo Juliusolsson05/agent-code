@@ -239,6 +239,83 @@ describe('SessionRecorderManager', () => {
     expect(m.reserveNote('never-started')).toBeNull()
   })
 
+  it('records content-safe Codex transcript observations as replay-inert sidecars', async () => {
+    const m = mgr()
+    const sessionId = '41414141-4141-4141-8141-414141414141'
+    const sessionRunId = '42424242-4242-4242-8242-424242424242'
+    m.startRecording(sessionId, { kind: 'codex', sessionRunId })
+    mono = 17
+
+    expect(m.recordCodexTranscriptObservation(sessionId, sessionRunId, {
+      schemaVersion: 1,
+      area: 'session.lifecycle',
+      name: 'submit.surface',
+      ids: {
+        sessionId: 'forged-pane',
+        sessionRunId: '43434343-4343-4343-8343-434343434343',
+        submissionId: 'sub-1',
+        madeUpJoin: 'unsafe',
+      },
+      data: { surface: 'queued-strip', prompt: 'secret user text' },
+    })).toBe(true)
+    // A lifecycle report must never opt a session into recording merely by
+    // existing. That would turn the always-on journal into an unbounded second
+    // recording system and defeat the explicit recording command.
+    expect(m.recordCodexTranscriptObservation(
+      '44444444-4444-4444-8444-444444444444',
+      '45454545-4545-4545-8545-454545454545',
+      {
+      name: 'submit.surface',
+      },
+    )).toBe(false)
+
+    await m.stop(sessionId)
+    const dir = await readRecordingDir(sessionId)
+    const meta = JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8'))
+    const lines = readFileSync(join(dir, 'events.jsonl'), 'utf8')
+      .trim()
+      .split('\n')
+      .map(line => JSON.parse(line))
+
+    expect(meta.eventCount).toBe(0)
+    expect(lines).toEqual([
+      expect.objectContaining({
+        t: 17,
+        ch: '__codex_transcript_observation',
+        observation: expect.objectContaining({
+          name: 'submit.surface',
+          ids: expect.objectContaining({ sessionId, sessionRunId, submissionId: 'sub-1' }),
+          data: { surface: 'queued-strip' },
+        }),
+      }),
+    ])
+    expect(lines[0].observation.ids).not.toHaveProperty('madeUpJoin')
+    expect(lines[0].observation.data).not.toHaveProperty('prompt')
+  })
+
+  it('never routes replacement-run observations into the predecessor recorder', async () => {
+    const m = mgr()
+    const sessionId = '46464646-4646-4646-8646-464646464646'
+    const runA = '47474747-4747-4747-8747-474747474747'
+    const runB = '48484848-4848-4848-8848-484848484848'
+    m.startRecording(sessionId, { kind: 'codex', sessionRunId: runA })
+
+    expect(m.recordCodexTranscriptObservation(sessionId, runB, {
+      schemaVersion: 1,
+      name: 'transcript.attachment',
+      data: { decision: 'hold', reason: 'awaiting-local-prompt' },
+    })).toBe(false)
+
+    await m.stop(sessionId)
+    const dir = await readRecordingDir(sessionId)
+    // No accepted event means the lazy JSONL writer correctly never creates a
+    // file. Treating ENOENT as a test failure would reward an empty artifact
+    // over the stronger privacy property: no predecessor-run row was written.
+    expect(existsSync(join(dir, 'events.jsonl'))).toBe(false)
+    const meta = JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8'))
+    expect(meta.eventCount).toBe(0)
+  })
+
   it('flushAll finalizes every open recording', async () => {
     const m = mgr()
     m.startRecording('a')

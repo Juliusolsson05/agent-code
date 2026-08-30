@@ -120,6 +120,17 @@ describe('SessionManager recover', () => {
         lifecycle: 'live',
       },
     })
+    if (!first.ok || !adopted.ok) {
+      throw new Error('expected both recovery attempts to succeed')
+    }
+    // WHY exact equality matters more than mere presence: adoption creates no
+    // second backend and emits no second started edge. A renderer reload must
+    // recover the original registry lifetime, not receive a fresh diagnostic
+    // UUID that only looks plausible.
+    expect(first.snapshot.sessionRunId).toMatch(/^[0-9a-f-]{36}$/)
+    expect(adopted.snapshot.sessionRunId).toBe(first.snapshot.sessionRunId)
+    expect(manager.getBackendSnapshot('stable-session')?.sessionRunId)
+      .toBe(first.snapshot.sessionRunId)
     expect(createSession).toHaveBeenCalledTimes(1)
   })
 
