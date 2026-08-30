@@ -646,6 +646,13 @@ async function startApp(): Promise<void> {
     builtInMcpHost,
     appRunJournal,
     async () => { await agentCodeConventionsService.audit() },
+    (sessionId, sessionRunId, observation) => {
+      sessionRecorders?.recordCodexTranscriptObservation(
+        sessionId,
+        sessionRunId,
+        observation,
+      )
+    },
   )
   // Project ownership lives in renderer state, while backend/transcript facts
   // live in SessionManager. Construct this bridge only after both the MCP host

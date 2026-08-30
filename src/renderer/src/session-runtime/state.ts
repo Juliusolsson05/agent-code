@@ -369,6 +369,19 @@ export type SessionRuntime = {
   awaitingAssistant: boolean
   queuedMessages: QueuedMessage[]
   exited: number | null
+  /**
+   * The concrete main-owned backend lifetime last announced by
+   * `session:started` for this pane.
+   *
+   * WHY this survives exit: React effects and durable-debug flushing can run
+   * after the process exit event. Clearing the id at exit would make those
+   * delayed observations unattributed—or, worse, tempt main to stamp them with
+   * a replacement backend that has already reused the stable pane id. A later
+   * `session:started` is the only fact authorized to replace this value.
+   * Runtime is intentionally not persisted; a renderer reload must relearn the
+   * active lifetime from main rather than resurrecting a stale process claim.
+   */
+  sessionRunId: string | null
   projectDir: string | null
   workContext: AgentWorkContext | null
   workActivity: WorktreeActivityState | null
@@ -726,6 +739,7 @@ export function emptyRuntime(): SessionRuntime {
     awaitingAssistant: false,
     queuedMessages: [],
     exited: null,
+    sessionRunId: null,
     projectDir: null,
     workContext: null,
     workActivity: null,

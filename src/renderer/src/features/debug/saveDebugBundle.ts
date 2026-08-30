@@ -16,6 +16,7 @@ import {
 } from '@renderer/features/feed/ui/semantic/renderUnits'
 import { summarizeWorktreeActivity } from '@shared/work-context/debug'
 import { asRecord } from '@shared/lib/asRecord'
+import { reportLifecycle } from '@renderer/lifecycle/report'
 
 // saveDebugBundle — assemble-and-ship side of the "Save Debug Logs"
 // command. Runs in the renderer because every data source the
@@ -559,6 +560,21 @@ export async function assembleAndSaveDebugBundle(params: {
         matchedSessionSegment: proxySection?.matchedSessionSegment ?? null,
       },
     ),
+  }
+
+  if (kind === 'codex' && reason === 'manual') {
+    // Record the two counts as independent observations. The incident bundle
+    // had `_counts.entries === 0` while `totalEntries` described a different
+    // history boundary; collapsing them to one convenient number would erase
+    // precisely the disagreement a manual capture is meant to preserve.
+    reportLifecycle('transcript.snapshot', sessionId, {
+      entryCount: runtime.entries.length,
+      totalEntries: runtime.totalEntries,
+      queueCount: runtime.queuedMessages.length,
+      status: runtime.transcriptStatus,
+    }, runtime.sessionRunId
+      ? { sessionRunId: runtime.sessionRunId }
+      : undefined)
   }
 
   return window.api.saveDebugBundle({

@@ -488,6 +488,13 @@ export function useSessionActions(
         const restoredMeta = withoutProvisionalProviderSession(meta)
         const priorRecoveryFailureCode =
           refs.latestRuntimesRef.current[sessionId]?.recoveryFailureCode ?? null
+        // WHY capture this before the RPC: `session:started` is delivered on a
+        // separate IPC channel and may announce a replacement while recovery
+        // is awaiting its snapshot. The post-await reconciliation below must
+        // distinguish that newer run from the predecessor value that prompted
+        // this wake in the first place.
+        const sessionRunIdBeforeRecovery =
+          refs.latestRuntimesRef.current[sessionId]?.sessionRunId ?? null
 
         setRuntimes(prev => {
           const current = prev[sessionId]
@@ -588,10 +595,23 @@ export function useSessionActions(
                 current.processStatus === 'exited'
               const snapshotIsAuthoritative = recovery.snapshot.input.revision >=
                 current.inputReadinessRevision
+              const observedReplacementWhileRecovering =
+                current.sessionRunId !== null &&
+                current.sessionRunId !== sessionRunIdBeforeRecovery
+              // WHY this ordering is load-bearing for replacement safety:
+              // adoption/recovery snapshots repair the missing started edge on
+              // reload and replace a retained predecessor id, but a different
+              // started id observed during the await is newer evidence. Never
+              // let the delayed recovery response relabel successor events as
+              // belonging to the backend that produced the response.
+              const recoveredSessionRunId = observedReplacementWhileRecovering
+                ? current.sessionRunId
+                : recovery.snapshot.sessionRunId ?? current.sessionRunId
               return {
                 ...prev,
                 [sessionId]: {
                   ...current,
+                  sessionRunId: recoveredSessionRunId,
                   ...(preserveObservedTerminalProcess
                     ? {}
                     : {

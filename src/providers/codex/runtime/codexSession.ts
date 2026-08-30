@@ -18,8 +18,10 @@ import type {
   CodexPromptInputProfile,
   CodexResumeRolloutPreparation,
   CodexRolloutDiagnostic,
+  CodexRolloutEntryObservation,
   CodexRolloutLine,
   CodexSemanticEvent,
+  CodexSemanticProviderRequestEvent,
 } from 'codex-headless'
 import { canonicalizePath, sanitizePathSegment } from '@shared/runtime/projectDir.js'
 import type { BuiltInMcpServerConfig } from '@mcp/shared/types.js'
@@ -138,9 +140,12 @@ export type CodexSessionEvents = {
   'prompt-gate': [PromptGateState]
   'pty-data': [string]
   screen: [CodexScreenSnapshot]
-  'jsonl-entry': [CodexRolloutLine, string]
+  'jsonl-entry': [CodexRolloutLine, string, CodexRolloutEntryObservation]
   'jsonl-error': [Error]
-  'transcript-diagnostic': [CodexRolloutDiagnostic]
+  'transcript-diagnostic': [CodexRolloutDiagnostic | {
+    type: 'provider-request-observation'
+    observation: CodexSemanticProviderRequestEvent
+  }]
   // process-state carries the optional spinner-derived status string
   // (e.g. "working… 12s") so the renderer can show provider-specific
   // verbiage in its activity indicator. Without this, the renderer
@@ -511,8 +516,8 @@ export class CodexSession extends EventEmitter {
       })
 
       // Forward rollout entries as jsonl-entry (matches Claude's event name).
-      this.headless.on('rollout-entry', (line, file) => {
-        this.emit('jsonl-entry', line, file)
+      this.headless.on('rollout-entry', (line, file, observation) => {
+        this.emit('jsonl-entry', line, file, observation)
       })
 
       this.headless.on('rollout-error', err => {
@@ -531,6 +536,16 @@ export class CodexSession extends EventEmitter {
 
       this.headless.semantic.on('event', (ev: CodexSemanticEvent) => {
         this.emit('semantic-event', ev)
+      })
+      this.headless.semantic.on('provider_request', observation => {
+        // Main consumes this wrapper into the content-safe Stage 0 journal and
+        // intentionally does not forward it to renderer diagnostics. Keeping
+        // the route beside—but outside—the aggregate semantic listener makes
+        // the sink-never-decider boundary mechanically visible here.
+        this.emit('transcript-diagnostic', {
+          type: 'provider-request-observation',
+          observation,
+        })
       })
 
       if (this.proxyServer) {

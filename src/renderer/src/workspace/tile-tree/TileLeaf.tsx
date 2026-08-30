@@ -42,6 +42,46 @@ import { useSessionWorkflowViews } from '@renderer/features/workflows/model/useS
 import { WorkflowRunView } from '@renderer/features/workflows/ui/WorkflowRunRow'
 import { WorkflowViewSelector } from '@renderer/features/workflows/ui/WorkflowViewSelector'
 import { useElapsedSeconds } from '@renderer/lib/useElapsedSeconds'
+import { reportLifecycle } from '@renderer/lifecycle/report'
+import { codexOptimisticRenderCandidateId } from '@renderer/lifecycle/codexTranscriptObservationOutbox'
+import {
+  optimisticEntrySubmissionId,
+  optimisticEntrySubmissionRunId,
+  queuedMessageSubmissionId,
+  queuedMessageSubmissionRunId,
+} from '@renderer/workspace/hook/actions/streaming'
+
+type VisibleSubmitSurface = {
+  surface: 'render-selected' | 'queue-strip'
+  submissionId: string
+  renderCandidateId: string
+  sessionRunId: string | null
+  entryOrdinal?: number
+}
+
+const MAX_TRACKED_VISIBLE_SUBMIT_SURFACES = 2_048
+
+function reportHiddenSubmitSurface(
+  sessionId: SessionId,
+  prior: VisibleSubmitSurface,
+): void {
+  reportLifecycle('submit.surface', sessionId, {
+    surface: prior.surface,
+    visible: false,
+    ...(prior.entryOrdinal === undefined ? {} : { entryOrdinal: prior.entryOrdinal }),
+  }, {
+    submissionId: prior.submissionId,
+    renderCandidateId: prior.renderCandidateId,
+    ...(prior.sessionRunId ? { sessionRunId: prior.sessionRunId } : {}),
+  })
+}
+
+function reportHiddenSubmitSurfaces(
+  sessionId: SessionId,
+  surfaces: ReadonlyMap<string, VisibleSubmitSurface>,
+): void {
+  for (const prior of surfaces.values()) reportHiddenSubmitSurface(sessionId, prior)
+}
 
 // Claude paste-state-machine constants + helpers moved to
 // ./TileLeaf/claudePaste.ts. Image helpers moved to
@@ -420,7 +460,6 @@ export function TileLeaf({
     toolResultIndex: runtime.toolResultIndex,
     version: runtime.toolIndexVersion,
   })
-
   const mergedEntries = useMemo(
     () => selectMergedEntries(runtime, runtime.semantic.currentTurn?.turnId ?? null),
     [
@@ -462,6 +501,142 @@ export function TileLeaf({
     cwd: workflowCwd,
     transcriptReferences: transcriptWorkflowReferences,
   })
+  // This one selected-view object owns JSX selection and the derived visibility
+  // evidence. Keeping two equivalent-looking predicates let one drift: the
+  // lifecycle effect said Feed painted an optimistic row while WorkflowRunView
+  // had replaced Feed.
+  const selectedWorkflow = workflowViews.selectedReference && workflowCwd
+    ? { reference: workflowViews.selectedReference, cwd: workflowCwd }
+    : null
+  const feedIsMounted = selectedWorkflow === null
+  const visibleSubmitSurfacesRef = useRef(new Map<string, VisibleSubmitSurface>())
+  const visibleSubmitSurfaceSessionIdRef = useRef(sessionId)
+  const suppressedVisibleSurfaceCountRef = useRef(0)
+  useEffect(() => {
+    let previous = visibleSubmitSurfacesRef.current
+    if (visibleSubmitSurfaceSessionIdRef.current !== sessionId) {
+      // TileLeaf instances can be reused during layout changes. Closing the
+      // old session's exact captured surfaces before changing scope preserves
+      // the chronology; blindly clearing here left every old row apparently
+      // visible forever and also suppressed the first transition in the new
+      // pane. Retired-run proof in main safely accepts these late false edges.
+      reportHiddenSubmitSurfaces(visibleSubmitSurfaceSessionIdRef.current, previous)
+      visibleSubmitSurfacesRef.current = new Map()
+      previous = visibleSubmitSurfacesRef.current
+      visibleSubmitSurfaceSessionIdRef.current = sessionId
+      suppressedVisibleSurfaceCountRef.current = 0
+    }
+    if (provider !== 'codex') {
+      // A same-pane provider switch removes the Codex feed immediately. The
+      // visibility observer must close those captured Codex candidates before
+      // dropping its ledger; otherwise a Codex→Claude switch creates an
+      // unmarked terminal gap in the named evidence stream.
+      reportHiddenSubmitSurfaces(sessionId, previous)
+      visibleSubmitSurfacesRef.current = new Map()
+      suppressedVisibleSurfaceCountRef.current = 0
+      return
+    }
+    const next = new Map<string, VisibleSubmitSurface>()
+    let candidateCount = 0
+    let suppressed = 0
+    const addVisible = (surface: VisibleSubmitSurface): void => {
+      candidateCount += 1
+      if (next.size >= MAX_TRACKED_VISIBLE_SUBMIT_SURFACES) {
+        suppressed += 1
+        return
+      }
+      const key = [
+        surface.surface,
+        surface.sessionRunId ?? 'missing-run',
+        surface.submissionId,
+        surface.renderCandidateId,
+      ].join(':')
+      next.set(key, surface)
+    }
+    // WHY observe the ledger output in addition to the optimistic mutation:
+    // insertion proves a candidate existed, not that the sole ownership
+    // pipeline selected it for paint. The original incident had exactly that
+    // gap: submit and state logs existed while the user's row did not. This
+    // effect records selection from the already-decided item list and never
+    // feeds a value back into that decision, so diagnostics cannot become a
+    // second renderer. A selected WorkflowRunView replaces Feed entirely;
+    // treating a hidden ledger candidate as painted would manufacture the very
+    // visibility proof this observation is supposed to test.
+    if (feedIsMounted) {
+      for (const item of ledgerFeedPlan.items) {
+        if (item.type !== 'entry') continue
+        const submissionId = optimisticEntrySubmissionId(item.entry)
+        if (!submissionId) continue
+        // FeedRenderItem.key is the React row key (`entry:<uuid>`), while the
+        // observation graph names the ownership-ledger candidate that was
+        // selected (`optimistic:<uuid>`). Keeping those namespaces distinct is
+        // what lets a trace compare mutation and selection without treating a
+        // presentation key as a second candidate identity.
+        const renderCandidateId = codexOptimisticRenderCandidateId(submissionId)
+        addVisible({
+          surface: 'render-selected',
+          sessionRunId: optimisticEntrySubmissionRunId(item.entry),
+          submissionId,
+          renderCandidateId,
+          entryOrdinal: item.entryOrdinal,
+        })
+      }
+    }
+
+    // QueueStrip is a separate paint plane below Feed and remains mounted while
+    // WorkflowRunView owns the central cell. Recording from the exact array
+    // handed to QueueStrip closes that observational blind spot without
+    // pretending the queue has a provider or rollout identity.
+    for (const message of runtime.queuedMessages) {
+      const submissionId = queuedMessageSubmissionId(message)
+      if (!submissionId) continue
+      const renderCandidateId = `queued:${submissionId}`
+      addVisible({
+        surface: 'queue-strip',
+        sessionRunId: queuedMessageSubmissionRunId(message),
+        submissionId,
+        renderCandidateId,
+      })
+    }
+
+    for (const [key, prior] of previous) {
+      if (next.has(key)) continue
+      reportHiddenSubmitSurface(sessionId, prior)
+    }
+    for (const [key, current] of next) {
+      if (previous.has(key)) continue
+      reportLifecycle('submit.surface', sessionId, {
+        surface: current.surface,
+        visible: true,
+        ...(current.entryOrdinal === undefined ? {} : { entryOrdinal: current.entryOrdinal }),
+      }, {
+        submissionId: current.submissionId,
+        renderCandidateId: current.renderCandidateId,
+        ...(current.sessionRunId ? { sessionRunId: current.sessionRunId } : {}),
+      })
+    }
+    if (
+      suppressed > 0 &&
+      suppressed !== suppressedVisibleSurfaceCountRef.current
+    ) {
+      // The first N visible rows remain exactly transition-tracked. Beyond the
+      // bound, emit an explicit source gap instead of either growing a TileLeaf
+      // forever or silently pretending the visibility chronology is complete.
+      reportLifecycle('transcript.surface-gap', sessionId, {
+        candidateCount,
+        suppressed,
+      })
+    }
+    suppressedVisibleSurfaceCountRef.current = suppressed
+    visibleSubmitSurfacesRef.current = next
+  }, [
+    ledgerFeedPlan.items,
+    provider,
+    runtime.queuedMessages,
+    runtime.sessionRunId,
+    sessionId,
+    feedIsMounted,
+  ])
 
   // Claude image-paste flow — three clipboard ingress paths, media-
   // type gate, 5 MB size cap. Hook in ./TileLeaf/useClaudeImagePaste.ts.
@@ -664,10 +839,10 @@ export function TileLeaf({
           (see Feed.tsx FeedImpl). This wrapper just provides the
           flex cell sizing; the scroller is a child. */}
       <div className="flex-1 min-h-0">
-        {workflowViews.selectedReference && workflowCwd ? (
+        {selectedWorkflow ? (
           <WorkflowRunView
-            reference={workflowViews.selectedReference}
-            cwd={workflowCwd}
+            reference={selectedWorkflow.reference}
+            cwd={selectedWorkflow.cwd}
             onReferenceChange={workflowViews.replaceReference}
           />
         ) : (

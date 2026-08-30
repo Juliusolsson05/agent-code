@@ -2,6 +2,7 @@ import { appendFile, mkdir, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import { SESSION_RECORDING_DIR } from '@main/storage/paths.js'
+import type { CodexTranscriptObservation } from '@shared/lifecycle/events.js'
 
 // One SessionRecorder = ONE self-contained recording folder.
 //
@@ -188,6 +189,37 @@ export class SessionRecorder {
         wall: this.nowWall(),
         ch: '__render_shape',
         sightings,
+      },
+    })
+  }
+
+  /**
+   * Content-safe Codex transcript chronology captured by the Stage 0
+   * observation seam.
+   *
+   * WHY this is a synthetic sidecar instead of another SessionFeed channel:
+   * these rows explain how a submitted turn moved between local write, queue,
+   * transcript, and paint surfaces; they are evidence ABOUT the product
+   * pipeline, not input TO it. Feeding them through the replay reducers would
+   * let instrumentation manufacture state and would violate Stage 0's most
+   * important constraint: diagnostics may observe a decision but never become
+   * a decider. The lifecycle IPC boundary has already applied the closed event
+   * and metadata allowlists before this method is called.
+   *
+   * Like render-shape sightings, observations remain subject to the recording
+   * size cap and do not inflate `eventCount`, whose established meaning is
+   * "real outbound feed events". A long capture therefore stays bounded and
+   * existing recording-size heuristics keep their meaning.
+   */
+  codexTranscriptObservation(observation: CodexTranscriptObservation): void {
+    if (this.closed || this.capped) return
+    this.enqueue({
+      kind: 'event',
+      value: {
+        t: Math.round(this.nowMono() - this.startMono),
+        wall: this.nowWall(),
+        ch: '__codex_transcript_observation',
+        observation,
       },
     })
   }

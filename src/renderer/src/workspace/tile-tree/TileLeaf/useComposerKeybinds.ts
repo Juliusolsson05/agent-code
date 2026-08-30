@@ -233,6 +233,15 @@ export function useComposerKeybinds({
       // overloading it here to mean "has images" would have made the summarizer
       // and any future ok:false filter bucket every image submit as a failure.
       source: draftImages.length > 0 ? 'with-images' : 'text-only',
+    }, {
+      submissionId: pasteId,
+      // Capture the render-time backend lifetime. This handler awaits provider
+      // I/O below; by the time its result/error observation fires, the stable
+      // pane id may already host a replacement process. Reading the workspace's
+      // latest runtime after that await would join the old delivery to the new
+      // backend, so every observation in this one submit flow reuses the exact
+      // id observed at Enter.
+      ...(runtime.sessionRunId ? { sessionRunId: runtime.sessionRunId } : {}),
     })
     workspace.setStreamingBaseline(sessionId, baseline)
     if (caps.usesOptimisticUserEcho) {
@@ -242,7 +251,12 @@ export function useComposerKeybinds({
       // "submit" is visible even if rollout JSON is late.
       // (Capability-flagged; the store call stays here so
       // providers never import the workspace store.)
-      workspace.addOptimisticCodexUserEntry(sessionId, input)
+      workspace.addOptimisticCodexUserEntry(
+        sessionId,
+        input,
+        pasteId,
+        runtime.sessionRunId,
+      )
     }
 
     try {
@@ -310,15 +324,11 @@ export function useComposerKeybinds({
         provider: submitProvider,
         ok: true,
         durationMs: Date.now() - submitStartedAt,
+      }, {
+        submissionId: pasteId,
+        ...(runtime.sessionRunId ? { sessionRunId: runtime.sessionRunId } : {}),
       })
     } catch (err) {
-      // Keep the draft visible if main no longer has a live
-      // session for this pane. Clearing the composer on a
-      // dropped write makes the failure look like Codex ignored
-      // the prompt when it never received it.
-      if (caps.usesOptimisticUserEcho) {
-        workspace.removeOptimisticCodexUserEntry(sessionId, input)
-      }
       const delivery = (err as { promptDeliveryResult?: PromptDeliveryResult })
         .promptDeliveryResult
       // `bodyWritten`/`enterWritten` are the fields that decide whether this
@@ -345,6 +355,20 @@ export function useComposerKeybinds({
       const nothingWasWritten = failed !== null
         ? !failed.promptWritten && !failed.enterWritten
         : sendsThatWrote === 0
+      // Keep the draft visible if main no longer has a live session for this
+      // pane. The product row is removed for every failed submit as before,
+      // but its Stage 0 edge must distinguish proven zero-write failure from a
+      // partial/unknown send. In particular, a successful Codex paste followed
+      // by a throwing Enter is not a `before-write-failure`.
+      if (caps.usesOptimisticUserEcho) {
+        workspace.removeOptimisticCodexUserEntry(
+          sessionId,
+          input,
+          pasteId,
+          runtime.sessionRunId,
+          nothingWasWritten ? 'before-write-failure' : 'write-status-uncertain',
+        )
+      }
       if (nothingWasWritten) {
         workspace.unwindStreamingBaseline(sessionId)
         reportLifecycle('submit.unwound', sessionId, {
@@ -352,6 +376,9 @@ export function useComposerKeybinds({
           code: failed?.code ?? 'threw',
           stage: failed?.stage ?? null,
           source: failed !== null ? 'delivery-result' : 'no-successful-send',
+        }, {
+          submissionId: pasteId,
+          ...(runtime.sessionRunId ? { sessionRunId: runtime.sessionRunId } : {}),
         })
       }
       reportLifecycle('submit.result', sessionId, {
@@ -363,6 +390,9 @@ export function useComposerKeybinds({
         enterWritten: failed ? failed.enterWritten : null,
         retryable: failed ? failed.retrySafe : null,
         durationMs: Date.now() - submitStartedAt,
+      }, {
+        submissionId: pasteId,
+        ...(runtime.sessionRunId ? { sessionRunId: runtime.sessionRunId } : {}),
       })
       workspace.updateRuntime(sessionId, {
         promptDelivery: delivery && !delivery.ok && !delivery.retrySafe

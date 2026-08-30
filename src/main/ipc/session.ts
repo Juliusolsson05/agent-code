@@ -125,6 +125,17 @@ export function registerSessionIpc(
       // replaces, just narrower.
       const deliveryInFlight = manager.isDeliveryInFlight(sessionId)
       const ok = manager.write(sessionId, data)
+      if (typeof pasteId === 'string' && pasteId.length > 0) {
+        // One pasteId already spans every low-level body/Enter write for a
+        // composer submit. Preserve those boundaries as separate observations
+        // instead of collapsing `ok` into a fictional atomic provider submit.
+        manager.recordCodexTranscriptObservation('submit.write', sessionId, {
+          phase: data === '\r' ? 'enter' : 'body',
+          bytes: Buffer.byteLength(data, 'utf8'),
+          ok,
+          deliveryInFlight,
+        }, { submissionId: pasteId })
+      }
       if (!ok) {
         // WHY both facts instead of one verdict: this used to log "missing
         // session" unconditionally, which is wrong for the far more common

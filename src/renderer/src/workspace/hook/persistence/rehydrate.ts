@@ -194,6 +194,12 @@ export async function rehydrateWorkspace(
   const recoveryFailureCodes = new Map<SessionId, SessionRecoverFailureCode>()
   const backendSnapshots = new Map<SessionId, SessionBackendSnapshot>()
   const recoveryOutcomes = new Map<SessionId, SessionRecoveryOutcome>()
+  // WHY the pre-RPC value is retained per pane: a `session:started` event can
+  // arrive while recovery is awaiting main. If that event names a different
+  // run, it is a newer registry lifetime and the eventual snapshot must not
+  // overwrite it. Comparing against the baseline distinguishes that real race
+  // from a stale predecessor id already present before a fresh recovery.
+  const recoveryRunBaselines = new Map<SessionId, string | null>()
 
   const syncRecoveryProjection = (): void => {
     const projected = projectSessionRecovery({
@@ -420,8 +426,22 @@ export async function rehydrateWorkspace(
       existing.recoveryFailureCode === null
     const snapshotIsAuthoritative = backend !== undefined &&
       backend.input.revision >= base.inputReadinessRevision
+    const runIdBeforeRecovery = recoveryRunBaselines.get(sessionId) ?? null
+    const observedRunId = existing?.sessionRunId ?? null
+    const observedReplacementWhileRecovering =
+      observedRunId !== null && observedRunId !== runIdBeforeRecovery
+    // WHY snapshot wins over the pre-recovery value but not over a new edge:
+    // on reload/adoption the snapshot is the renderer's only authoritative run
+    // identity; on respawn it replaces the retained predecessor. Conversely,
+    // a different started id observed after the RPC began proves the snapshot
+    // response is already stale. Older main versions omit the field, in which
+    // case retaining the observed value is safer than inventing or erasing it.
+    const recoveredRunId = observedReplacementWhileRecovering
+      ? observedRunId
+      : backend?.sessionRunId ?? observedRunId
     const seeded: SessionRuntime = {
       ...base,
+      ...(backend ? { sessionRunId: recoveredRunId } : {}),
       ...(draft && !base.draftInput ? { draftInput: draft } : {}),
       ...seedResumedRuntimeFields(existing, freshSessions[sessionId]),
     }
@@ -692,6 +712,10 @@ export async function rehydrateWorkspace(
           // its tool surface silently changes underneath the user.
           const resumeSessionId = kind !== 'terminal' ? resumableProviderSessionId(meta) : undefined
           const restoredMeta = withoutProvisionalProviderSession(meta)
+          recoveryRunBaselines.set(
+            oldId,
+            refs.latestRuntimesRef.current[oldId]?.sessionRunId ?? null,
+          )
           const recovery = await recoverSessionBeforeDeadline(recoveryApi, {
             sessionId: oldId,
             kind,

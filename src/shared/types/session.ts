@@ -30,6 +30,20 @@ export type AgentInputReadiness = Omit<SessionInputReadiness, 'revision'>
 
 export type SessionBackendSnapshot = {
   sessionId: string
+  /**
+   * Identity of the concrete registered backend lifetime, when one exists.
+   *
+   * WHY this is not derivable from `sessionId`: renderer panes keep the same
+   * local id across adoption and replacement, while delayed observations must
+   * remain attributable to the exact process that produced them. Recovery is
+   * also the only bootstrap path for an already-live backend and emits no new
+   * `session:started` edge, so omitting this value leaves a reloaded renderer
+   * permanently unable to name that run. It is optional only because a
+   * `spawning` snapshot can exist before SessionManager has registered a
+   * backend (and older transports/recordings do not carry the field). Every
+   * `live` snapshot produced by current main includes it.
+   */
+  sessionRunId?: string
   kind: SessionKind
   cwd: string
   lifecycle: 'spawning' | 'live'
@@ -176,6 +190,23 @@ export type AgentScreenSnapshot = {
  */
 export type AgentTranscriptEntry = Record<string, unknown>
 
+/**
+ * Diagnostic identity carried beside a committed provider entry.
+ *
+ * WHY this is not embedded into `AgentTranscriptEntry`: that object mirrors a
+ * provider-owned line and is also used for transcript translation. Mutating it
+ * would make app-local observation metadata look native. The optional sidecar
+ * keeps older providers and recordings compatible while allowing Codex's
+ * coordinator-authorized file generation to remain explicit.
+ */
+export type AgentTranscriptObservationMetadata = {
+  fileGenerationId: string | null
+  /** Absolute byte position of the line within the authorized file generation. */
+  rolloutByteOffset: number
+  /** Provider-owned, privacy-transformed session_meta identity when present. */
+  providerSessionMetaFingerprint?: string
+}
+
 /** Payload for the process-state event: whether the provider is
  *  actively working, plus an optional human-readable status verb. */
 export type AgentProcessState = {
@@ -271,7 +302,7 @@ export type AgentSessionEvents = {
   'prompt-gate': [PromptGateState]
   'pty-data': [string]
   screen: [AgentScreenSnapshot]
-  'jsonl-entry': [AgentTranscriptEntry, string]
+  'jsonl-entry': [AgentTranscriptEntry, string, AgentTranscriptObservationMetadata?]
   'jsonl-error': [Error]
   /**
    * Diagnostic-only explanation of transcript discovery/ownership decisions.

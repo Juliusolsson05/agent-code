@@ -110,7 +110,11 @@ export class SessionLifecycleJournal {
     name: SessionLifecycleEventName,
     sessionId: string,
     data?: SessionLifecycleData,
+    correlationIds?: Omit<AppRunJournalIds, 'sessionId'>,
   ): void {
-    this.record(name, { sessionId }, data)
+    // SessionManager supplies the pane id from its registry boundary; callers
+    // may enrich the fact with narrower correlation identities, but can never
+    // replace which pane the event belongs to.
+    this.record(name, { ...correlationIds, sessionId }, data)
   }
 }
