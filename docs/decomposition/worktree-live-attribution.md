@@ -444,7 +444,7 @@ focused unit/renderer contracts, typecheck, and the test-contract gate pass.
 **Produces**
 
 - A verification report tied to fixture ids, issue updates for #658/#685, and a
-  single resolving PR that remains unmerged until explicit user confirmation.
+  single resolving PR merged only after explicit user confirmation.
 - If shared parser semantics change historical output, one centralized derived
   index version bump; otherwise no ceremonial cache invalidation.
 
@@ -471,6 +471,35 @@ release gates, and issue/PR state is part of the requested workflow.
 The report must name the Claude conflict fixture, Codex 0.151 exact-identity
 fixture, no-JSONL live recording, and final end-to-end state. Test counts alone
 are not evidence.
+
+### Stage 6 completion record
+
+The checked-in `claude-cwd-tool-branch-conflict` recording proves that direct
+tool paths override stale envelope cwd/branch metadata and that the matched Git
+identity supplies the painted branch. The `codex-proxy-exact-identity-zstd`
+recording proves the private Responses request carries one exact session id,
+while `codex-0151-worktree-window` independently proves that id against both the
+rollout filename and `session_meta`. Replaying `codex-live-channel-gap` then
+crosses the original no-JSONL boundary through the existing process-wide lease
+and generation-bound tail; it never falls back to cwd or newest-file guessing.
+
+The renderer cache-order harness replays those provider shapes through
+`LiveWorktreeReconciler`, including empty, stale, and expanded Git catalogs.
+Retained evidence is first reversed from its old touch aggregates and then
+replayed, so active, primary, historical `workContext`, the badge, Dispatch,
+tiled panes, and Worktrees live-agent projection consume the same canonical Git
+identity. A clean full-catalog replay is the accounting oracle for the
+stale-catalog race rather than a second set of expected weights.
+
+Fixture privacy/determinism, package contracts, portable zstd decoding on Node
+20.19/22.12/24, package construction, shared reconciliation, renderer ordering,
+and parent/child typechecks pass. A final local all-headless run under shared CPU
+contention produced only four unrelated five-second timeouts; the clean GitHub
+matrix passed Contract, Coverage, Node 20.19, Node 24, tier commands, and the
+aggregate quality gate before codex-headless PR #44 was merged. Three bounded
+orchestrated reviews found no remaining architectural boundary violation; their
+last two concrete decoder/replay findings are covered by the regression tests
+above. The parent PR CI is the final merge gate authorized by the user.
 
 ## What is isolated
 
