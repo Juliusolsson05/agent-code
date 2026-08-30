@@ -198,14 +198,31 @@ const SURFACE_OWNED_COMMAND_IDS: ReadonlySet<string> = new Set([
  * several contexts are genuinely live at once ('global' always, plus exactly
  * one of grid/dispatch, plus 'feed' only when a rendered feed is focused and
  * the user is not typing).
+ *
+ * `grid` and `dispatch` are LAYOUT contexts: they say which workspace surface
+ * owns the keyboard. While a text editor owns the target it owns the keyboard,
+ * so neither is live (#697). They used to stay live, and the router
+ * preventDefault()s whatever it matches — so any workspace chord was swallowed
+ * mid-keystroke while the user was typing into Monaco, and the editor never saw
+ * the key. Cmd+Alt+Down moved Dispatch row focus instead of adding a cursor.
+ *
+ * WHY that mattered beyond the one chord: it forced every dispatch binding to
+ * be unique against the ENTIRE app plus macOS plus Monaco, rather than just
+ * against other dispatch bindings. Two attempts at a row-focus chord collided
+ * (Alt+Shift+Arrow with macOS word selection, Cmd+Alt+Arrow with Monaco's
+ * multi-cursor) purely because of that. Gating here reopens the space the
+ * context system was supposed to provide in the first place.
+ *
+ * `global` deliberately stays live: top-level app commands are not workspace
+ * navigation, and a user typing in a file still expects them to work.
  */
-function activeBindingContexts(input: {
+export function activeBindingContexts(input: {
   dispatchMode: boolean
   editorOwnsTarget: boolean
   feedFocused: boolean
 }): ReadonlySet<BindingContext> {
   const contexts = new Set<BindingContext>(['global'])
-  contexts.add(input.dispatchMode ? 'dispatch' : 'grid')
+  if (!input.editorOwnsTarget) contexts.add(input.dispatchMode ? 'dispatch' : 'grid')
   if (input.editorOwnsTarget) contexts.add('editor')
   if (input.feedFocused) contexts.add('feed')
   return contexts
