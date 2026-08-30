@@ -76,6 +76,7 @@ describe('renderer session replacement handoff', () => {
       persistedFeedDebugIdRef: ref({}),
       inFlightFeedDebugIdRef: ref({}),
       paneToastTimers: ref({}),
+      pendingAdoptionWindowIdsRef: ref<string[]>([]),
       saveTimerRef: ref(null),
       bootRef: ref(false),
     } as WorkspaceRefs

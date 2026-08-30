@@ -42,6 +42,19 @@ export type WorkspaceRefs = {
   paneToastTimers: MutableRefObject<Record<SessionId, ReturnType<typeof setTimeout>>>
   saveTimerRef: MutableRefObject<ReturnType<typeof setTimeout> | null>
   bootRef: MutableRefObject<boolean>
+  /**
+   * Closed windows whose workspace this window has merged but not yet proven
+   * durable.
+   *
+   * WHY the confirmation is deferred through a ref instead of being sent when
+   * the merge is applied: main DELETES the closed window's slice on that
+   * confirmation, and until this window's next autosave lands, that slice is
+   * the only durable record of those tabs, agents, pins and drafts. Confirming
+   * on "I merged" rather than "it is on disk" turns any crash, force-quit or
+   * reload in the next 400ms into permanent data loss. `useAutoSave` drains
+   * this after a save actually commits.
+   */
+  pendingAdoptionWindowIdsRef: MutableRefObject<string[]>
 }
 
 export function useWorkspaceRefs(
@@ -87,6 +100,7 @@ export function useWorkspaceRefs(
   const latestScreenRef = useRef<Record<SessionId, string>>({})
   const undoStackRef = useRef(new UndoCloseStack())
   const bootstrapTimersRef = useRef<Map<SessionId, ReturnType<typeof setTimeout>>>(new Map())
+  const pendingAdoptionWindowIdsRef = useRef<string[]>([])
   const persistedFeedDebugIdRef = useRef<Record<SessionId, number>>({})
   const inFlightFeedDebugIdRef = useRef<Record<SessionId, number>>({})
   const paneToastTimers = useRef<Record<SessionId, ReturnType<typeof setTimeout>>>({})
@@ -161,6 +175,7 @@ export function useWorkspaceRefs(
     // every mutation; the beforeunload handler cancels this and
     // flushes synchronously.
     saveTimerRef,
+    pendingAdoptionWindowIdsRef,
 
     // Guard for the once-only bootstrap effect. Under React 18
     // StrictMode the effect runs twice; the ref makes the second

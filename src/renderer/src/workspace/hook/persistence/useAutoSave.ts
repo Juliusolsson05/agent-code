@@ -148,6 +148,23 @@ export function useAutoSave(
     void window.api.saveWorkspace(json)
       .then(() => {
         retryAttemptRef.current = 0
+        // Drain any adopted-window confirmations now that the merged rows are
+        // DURABLE. Main deletes the closed window's slice on this call, so it
+        // has to follow a committed save rather than the in-memory merge — see
+        // `pendingAdoptionWindowIdsRef`. Draining before the confirmations
+        // resolve is deliberate: a failed confirm leaves main's slice in place,
+        // which is the safe direction, and re-queuing would risk an unbounded
+        // retry loop against a read-only store.
+        const pendingAdoptions = refs.pendingAdoptionWindowIdsRef.current
+        if (pendingAdoptions.length > 0) {
+          refs.pendingAdoptionWindowIdsRef.current = []
+          for (const windowId of pendingAdoptions) {
+            void window.api.confirmWorkspaceAdoption(windowId).catch(err => {
+              // eslint-disable-next-line no-console
+              console.warn('[workspace] adoption confirmation failed:', err)
+            })
+          }
+        }
         saveSpan.end({
           tabs: persisted.tabs.length,
           sessions: Object.keys(persisted.sessions).length,
@@ -181,7 +198,12 @@ export function useAutoSave(
           }, retryDelayMs)
         }
       })
-  }, [refs.latestRuntimesRef, refs.latestStateRef, refs.latestTileTabsRef])
+  }, [
+    refs.latestRuntimesRef,
+    refs.latestStateRef,
+    refs.latestTileTabsRef,
+    refs.pendingAdoptionWindowIdsRef,
+  ])
 
   // The retry callback must always execute the newest serializer closure, but
   // adding flushSave to its own dependency graph would make the callback

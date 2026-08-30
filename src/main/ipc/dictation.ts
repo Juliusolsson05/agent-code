@@ -21,7 +21,7 @@ import {
   readHistory,
   resetTotals,
 } from '@main/dictation/historyStore.js'
-import { sendToMainWindow } from '@main/window/mainWindow.js'
+import { sendToWindow, windowIdFor } from '@main/window/windowRegistry.js'
 import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import type { DictationDebugJournalRegistry } from '@main/dictationJournal.js'
 import type { DictationDebugEventInput } from '@preload/api/types.js'
@@ -223,10 +223,16 @@ export function registerDictationIpc(deps: {
   ipcMain.handle(
     'dictation:stream-start',
     async (
-      _evt,
+      evt,
       params: { provider: DictationProvider; mimeType?: string; debugSessionId?: string },
     ) => {
       const debugSessionId = params.debugSessionId ?? null
+      // WHY the originating window is captured here instead of resolved at
+      // delivery time: interim transcript words must land in the composer the
+      // user is dictating INTO. Focus can move to another window mid-utterance
+      // (a click, a notification, ⌘`), and resolving late would start typing a
+      // half-finished sentence into a different workspace's composer.
+      const originWindowId = windowIdFor(evt.sender)
 
       if (params.provider !== 'deepgram') {
         emit(debugSessionId, 'ERROR', 'stream-start:rejected', {
@@ -269,7 +275,7 @@ export function registerDictationIpc(deps: {
             // if it emits interim text, the composer can paint live words; if
             // it fails, the final release path below still has every chunk and
             // uploads the complete WebM over HTTP.
-            sendToMainWindow('dictation:stream-transcript', {
+            sendToWindow(originWindowId, 'dictation:stream-transcript', {
               id,
               text: event.text,
               isFinal: event.isFinal,

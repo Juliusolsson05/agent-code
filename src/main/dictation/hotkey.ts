@@ -1,11 +1,22 @@
 import { globalShortcut } from 'electron'
 
-import { sendToMainWindow } from '@main/window/mainWindow.js'
+import { sendToFocusedWindow } from '@main/window/windowRegistry.js'
 import { startMacDictationHotkeyHelper, stopMacDictationHotkeyHelper } from '@main/dictation/macHotkeyHelper.js'
 
 let currentBinding = ''
 let registeredElectronHotkey = ''
 let electronHotkeyRecording = false
+
+// WHY every edge here goes to the FOCUSED window rather than a fixed one:
+// the dictation hotkey is a global accelerator, so it fires no matter which
+// window the user is in — and with several windows open, "start listening" can
+// only sensibly mean the composer they are looking at. `sendToFocusedWindow`
+// falls back to the most recently focused window, which matters because a
+// global shortcut can arrive while Agent Code is not even frontmost, and
+// `BrowserWindow.getFocusedWindow()` returns null in exactly that case.
+//
+// Down and up edges are NOT re-resolved independently: see the release note on
+// `releaseElectronHotkeyRecording`.
 
 /**
  * Electron exposes an accelerator activation callback, not a physical key-up
@@ -23,7 +34,7 @@ let electronHotkeyRecording = false
 function releaseElectronHotkeyRecording(binding: string): void {
   if (!electronHotkeyRecording) return
   electronHotkeyRecording = false
-  sendToMainWindow('dictation:hotkey-up', { binding })
+  sendToFocusedWindow('dictation:hotkey-up', { binding })
 }
 
 // WHY a binding-classifier lives here (packaged-app fix):
@@ -154,7 +165,7 @@ export async function configureDictationHotkey(binding: string): Promise<{
           return
         }
         electronHotkeyRecording = true
-        sendToMainWindow('dictation:hotkey-down', { binding: currentBinding })
+        sendToFocusedWindow('dictation:hotkey-down', { binding: currentBinding })
       })
       if (ok) registeredElectronHotkey = classification.accelerator
       return { ok, binding: currentBinding, native: false }
@@ -187,12 +198,12 @@ export async function configureDictationHotkey(binding: string): Promise<{
         // lifecycle problems without guessing from Deepgram logs.
         // eslint-disable-next-line no-console
         console.debug('[dictation:hotkey] down', { binding: currentBinding, at: Date.now() })
-        sendToMainWindow('dictation:hotkey-down', { binding: currentBinding })
+        sendToFocusedWindow('dictation:hotkey-down', { binding: currentBinding })
       },
       onRelease: () => {
         // eslint-disable-next-line no-console
         console.debug('[dictation:hotkey] up', { binding: currentBinding, at: Date.now() })
-        sendToMainWindow('dictation:hotkey-up', { binding: currentBinding })
+        sendToFocusedWindow('dictation:hotkey-up', { binding: currentBinding })
       },
     })
     return {
