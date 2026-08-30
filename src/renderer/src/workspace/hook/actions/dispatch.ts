@@ -26,6 +26,7 @@ import {
   removeLaneFromGrid,
   removeRowFromGrid,
   rowIndexForLane,
+  rowStartIndex,
   setGridShape,
 } from '@renderer/workspace/dispatch/gridShape'
 import type {
@@ -314,21 +315,58 @@ export function useDispatchActions(
   const selectTiledLaneSession = useCallback(
     async (laneIndex: number, sessionId: SessionId) => {
       const detached = refs.stateRef.current.detachedSessions[sessionId] !== undefined
-      if (detached) {
-        try {
-          await ensureSessionLive(sessionId, 'dispatch-lane.select')
-        } catch (error) {
-          // Do NOT place a session we could not wake: leaving the lane on its
-          // previous occupant is honest, where showing a dead pane is not.
-          showToast(
-            error instanceof Error && error.message.length > 0
-              ? error.message
-              : 'Could not wake agent',
-          )
-          return
-        }
+      if (!detached) {
+        // Owned by a tile tree and respawned at rehydrate, so this stays
+        // synchronous and no coordinate can shift underneath it.
+        setTiledLaneSession(laneIndex, sessionId)
+        return
       }
-      setTiledLaneSession(laneIndex, sessionId)
+
+      // The gesture targets a (row, column), not a flat index.
+      //
+      // WHY that distinction matters once the write is async: `lanes` is flat
+      // and row-major, so a lane added or removed in an EARLIER row shifts
+      // every later index. `setTiledLaneSession`'s bounds check catches an
+      // index that fell off the end, but an index that is merely now a
+      // DIFFERENT row's lane is still in range — the write would land in the
+      // wrong row. Re-deriving from the coordinate after the wake fixes that.
+      //
+      // BE PRECISE about the limit: rows have no durable identity, so removing
+      // a row ABOVE the target changes the target row's own index and it can no
+      // longer be located. That case DROPS the write rather than following it.
+      // Dropping is the honest outcome — silently retargeting a slot the user
+      // did not choose is the surprise this whole change removes — and the
+      // window is narrow, needing a reshape to land inside a wake round-trip.
+      // If rows ever gain ids, this becomes a real follow instead.
+      const before = normalizeGridShape(refs.stateRef.current.dispatchMode?.tiled ?? {
+        lanes: [], focusedLane: 0,
+      })
+      const rowIndex = rowIndexForLane(before.rows, laneIndex)
+      const column = rowIndex >= 0 ? laneIndex - rowStartIndex(before.rows, rowIndex) : -1
+
+      try {
+        await ensureSessionLive(sessionId, 'dispatch-lane.select')
+      } catch (error) {
+        // Do NOT place a session we could not wake: leaving the lane on its
+        // previous occupant is honest, where showing a dead pane is not.
+        showToast(
+          error instanceof Error && error.message.length > 0
+            ? error.message
+            : 'Could not wake agent',
+        )
+        return
+      }
+
+      if (rowIndex < 0 || column < 0) return
+      const after = normalizeGridShape(refs.stateRef.current.dispatchMode?.tiled ?? {
+        lanes: [], focusedLane: 0,
+      })
+      const row = after.rows[rowIndex]
+      // The row was removed, or shrank past the column the user aimed at.
+      // Dropping the write is right: silently retargeting a slot the user did
+      // not choose is the class of surprise this whole branch is removing.
+      if (!row || column >= row.length) return
+      setTiledLaneSession(rowStartIndex(after.rows, rowIndex) + column, sessionId)
     },
     [refs, ensureSessionLive, showToast, setTiledLaneSession],
   )
