@@ -2,6 +2,7 @@ import type { SurfaceEntry } from './types'
 import { CaffeinateToastSurface } from '@renderer/features/caffeinate/surfaces/CaffeinateToastSurface'
 import { VoiceDictationSurface } from '@renderer/features/voice-dictation/surfaces/VoiceDictationSurface'
 import { TiledDispatchCountSurface } from '@renderer/features/workspace/surfaces/TiledDispatchCountSurface'
+import { DispatchRowProjectSurface } from '@renderer/features/workspace/surfaces/DispatchRowProjectSurface'
 import { DebugBundleNoteSurface } from '@renderer/features/debug/surfaces/DebugBundleNoteSurface'
 import { RecordingNoteSurface } from '@renderer/features/debug/surfaces/RecordingNoteSurface'
 import { UsageModalSurface } from '@renderer/features/usage/surfaces/UsageModalSurface'
@@ -62,6 +63,7 @@ export const modalSurfaces: SurfaceEntry[] = [
   // palette/count-prompt stacking — codex review of PR #505 caught it.
   // Grouping by semantic kind is NOT safe here; group by paint order.
   { id: 'tiled-dispatch-count', Component: TiledDispatchCountSurface },
+  { id: 'dispatch-row-project', Component: DispatchRowProjectSurface },
   { id: 'caffeinate-toast', Component: CaffeinateToastSurface },
   { id: 'keyboard-shortcuts', Component: KeyboardShortcutsSurface },
   { id: 'tile-tabs', Component: TileTabsModalSurface },
