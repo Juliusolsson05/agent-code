@@ -10,7 +10,10 @@ import type {
 } from '@renderer/workspace/types'
 import { closeLeaf, collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 import { sanitizeTileTabsState } from '@renderer/workspace/layout/helpers'
-import { keepTiledLaneSessions } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
+import {
+  keepTiledLaneSessions,
+  scrubGridRowMetadata,
+} from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 
 type SessionOwnershipTab = {
   id: TabId
@@ -253,7 +256,8 @@ export function pruneSessionOwnership(
   const droppedSessionIds = Object.keys(input.sessions).filter(id => !liveIds.has(id))
   const focusedSessionId = input.dispatchMode?.focusedSessionId
   const dispatchMode = input.dispatchMode
-    ? keepTiledLaneSessions({
+    ? scrubGridRowMetadata(
+      keepTiledLaneSessions({
         // WHY tiled lanes are scrubbed at the same durability boundary as
         // focusedSessionId: autosave must serialize a model closed under
         // restore. Kill/close paths already clear lanes, but corrupt or
@@ -265,7 +269,14 @@ export function pruneSessionOwnership(
         focusedSessionId: focusedSessionId && liveIds.has(focusedSessionId)
           ? focusedSessionId
           : undefined,
-      }, liveIds)
+      }, liveIds),
+      // Grid rows also name a PROJECT and a set of expanded parent sessions.
+      // A binding to a closed tab filters that row's index to nothing with no
+      // UI path back (the picker only lists tabs that exist), so it has to be
+      // scrubbed at the same durability boundary as every other pointer.
+      new Set(input.tabs.map(tab => tab.id)),
+      liveIds,
+    )
     : input.dispatchMode
 
   return {

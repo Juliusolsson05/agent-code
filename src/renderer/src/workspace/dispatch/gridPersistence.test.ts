@@ -1,8 +1,11 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
-import { normalizeDispatchModeGrid } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
-import type { DispatchModeState, WorkspaceState } from '@renderer/workspace/types'
+import {
+  normalizeDispatchModeGrid,
+  scrubGridRowMetadata,
+} from '@renderer/workspace/dispatch/tiledDispatchSelectors'
+import type { DispatchModeState, SessionId, WorkspaceState } from '@renderer/workspace/types'
 
 // Restoring a workspace written before Grid Dispatch existed.
 //
@@ -77,5 +80,73 @@ describe('restoring a pre-grid workspace', () => {
     const already = normalizeDispatchModeGrid(RECORDED)!
 
     expect(normalizeDispatchModeGrid(already)).toBe(already)
+  })
+})
+
+describe('scrubbing row metadata at the autosave boundary', () => {
+  // Row metadata names two things that can disappear: a project tab and a set
+  // of expanded parent sessions. Both must be scrubbed where every other
+  // durable pointer is, or workspace.json keeps a binding to a closed project —
+  // which filters that row's index to nothing, permanently, with no UI path
+  // back because the picker only lists tabs that exist.
+  const gridMode = (row: Record<string, unknown>): DispatchModeState => ({
+    scope: 'global',
+    tiled: { lanes: [{}], rows: [{ length: 1, ...row }], focusedLane: 0 },
+  })
+
+  it('drops a binding to a project that no longer exists', () => {
+    const scrubbed = scrubGridRowMetadata(
+      gridMode({ projectTabId: 'tab-gone' }),
+      new Set(['tab-live']),
+      new Set<SessionId>(),
+    )
+
+    expect(scrubbed!.tiled!.rows![0]!.projectTabId).toBeUndefined()
+  })
+
+  it('keeps a binding to a project that survives', () => {
+    const scrubbed = scrubGridRowMetadata(
+      gridMode({ projectTabId: 'tab-live' }),
+      new Set(['tab-live']),
+      new Set<SessionId>(),
+    )
+
+    expect(scrubbed!.tiled!.rows![0]!.projectTabId).toBe('tab-live')
+  })
+
+  it('drops expanded parents whose sessions are gone, keeping the rest', () => {
+    const scrubbed = scrubGridRowMetadata(
+      gridMode({ expandedParents: ['dead' as SessionId, 'alive' as SessionId] }),
+      new Set(['tab-live']),
+      new Set(['alive' as SessionId]),
+    )
+
+    expect(scrubbed!.tiled!.rows![0]!.expandedParents).toEqual(['alive'])
+  })
+
+  it('drops the field entirely when no expanded parent survives', () => {
+    // An empty array and an absent field mean the same thing to the reader, and
+    // persisting the empty one is durable noise.
+    const scrubbed = scrubGridRowMetadata(
+      gridMode({ expandedParents: ['dead' as SessionId] }),
+      new Set(['tab-live']),
+      new Set<SessionId>(),
+    )
+
+    expect(scrubbed!.tiled!.rows![0]!.expandedParents).toBeUndefined()
+  })
+
+  it('returns the same reference when nothing needed scrubbing', () => {
+    const clean = gridMode({ projectTabId: 'tab-live' })
+
+    expect(scrubGridRowMetadata(clean, new Set(['tab-live']), new Set<SessionId>()))
+      .toBe(clean)
+  })
+
+  it('leaves classic Dispatch alone', () => {
+    const classic: DispatchModeState = { scope: 'project' }
+
+    expect(scrubGridRowMetadata(classic, new Set<string>(), new Set<SessionId>()))
+      .toBe(classic)
   })
 })

@@ -2,6 +2,7 @@ import type {
   DispatchLane,
   DispatchModeState,
   SessionId,
+  TabId,
   TiledDispatchState,
   WorkspaceState,
 } from '@renderer/workspace/types'
@@ -169,6 +170,51 @@ export function normalizeDispatchModeGrid(
       ...(grid.laneWeights ? { laneWeights: grid.laneWeights } : {}),
     },
   }
+}
+
+/**
+ * Drop row metadata pointing at a project or session that no longer exists.
+ *
+ * WHY this belongs at the autosave ownership prune rather than at the close/kill
+ * paths: the prune is where the serialized model is made closed under restore,
+ * and row metadata names two things that can vanish behind its back — a project
+ * tab and a set of expanded parent sessions. A binding to a closed tab is the
+ * dangerous one: it filters that row's index to NOTHING, permanently, and the
+ * picker only offers tabs that exist, so there is no UI path back. Render-time
+ * repair is not enough because the stale value would be rewritten on every save.
+ *
+ * Returns the same reference when nothing needed scrubbing, matching every
+ * other helper in this family so a clean prune does not churn consumers.
+ */
+export function scrubGridRowMetadata(
+  dispatchMode: DispatchModeState | null | undefined,
+  liveTabIds: ReadonlySet<TabId>,
+  liveSessionIds: ReadonlySet<SessionId>,
+): DispatchModeState | null | undefined {
+  const tiled = dispatchMode?.tiled
+  if (!dispatchMode || !tiled?.rows) return dispatchMode
+
+  let changed = false
+  const rows = tiled.rows.map(row => {
+    const next = { ...row }
+    if (next.projectTabId !== undefined && !liveTabIds.has(next.projectTabId)) {
+      delete next.projectTabId
+      changed = true
+    }
+    if (next.expandedParents) {
+      const kept = next.expandedParents.filter(id => liveSessionIds.has(id))
+      if (kept.length !== next.expandedParents.length) {
+        changed = true
+        // An empty array and an absent field read identically; persisting the
+        // empty one is durable noise.
+        if (kept.length > 0) next.expandedParents = kept
+        else delete next.expandedParents
+      }
+    }
+    return next
+  })
+  if (!changed) return dispatchMode
+  return { ...dispatchMode, tiled: { ...tiled, rows } }
 }
 
 /**
