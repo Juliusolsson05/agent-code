@@ -70,6 +70,13 @@ const WORKSPACE_FILE = join(AGENT_CODE_ROOT, 'workspace.json')
 const PROXY_ROOT = join(AGENT_CODE_ROOT, 'proxy')
 const RECORDING_ROOT = join(AGENT_CODE_ROOT, 'session-recordings')
 const FEED_DEBUG_ROOT = join(AGENT_CODE_ROOT, 'feed-debug')
+const FIXTURE_NAMES = [
+  'claude-cwd-tool-branch-conflict.json',
+  'codex-0151-worktree-window.json',
+  'codex-proxy-exact-identity-zstd.json',
+  'codex-live-channel-gap.json',
+  'git-worktree-identities.json',
+] as const
 
 // WHY one cutoff spans both provider recordings: the reported Codex failure
 // was observed immediately after this final worktree command, and the Claude
@@ -1132,6 +1139,80 @@ ${fixtures.map(item => `| \`${item.name}\` | \`${item.fingerprint}\` |`).join('\
 `
 }
 
+function assertNoPrivateText(value: string, label: string): void {
+  const username = basename(HOME)
+  if (value.includes(HOME) || value.includes(username)) {
+    throw new Error(`refusing ${label}: operator home or username survived`)
+  }
+  if (UUID.test(value)) {
+    throw new Error(`refusing ${label}: UUID-shaped identity survived`)
+  }
+}
+
+async function verifyCheckedInArtifacts(): Promise<void> {
+  // WHY checked-in verification is a first-class mode rather than a fallback
+  // inside extraction: the raw proxy and session recordings are private,
+  // retention-managed runtime artifacts. Once their pane is restarted, Agent
+  // Code may rotate those directories. Silently treating committed fixtures as
+  // extraction inputs would then be circular evidence. This mode verifies the
+  // durable claims that remain independently checkable (privacy, canonical
+  // serialization, manifest fingerprints, and exact zstd transport bytes),
+  // while default extraction still fails if the original source has vanished.
+  const outputs: Array<{ name: string; value: JsonRecord }> = []
+  for (const name of FIXTURE_NAMES) {
+    const path = join(FIXTURE_DIR, name)
+    const raw = await readFile(path, 'utf8')
+    const value = asRecord(JSON.parse(raw))
+    if (!value) throw new Error(`${name} is not a JSON object`)
+    if (raw !== `${JSON.stringify(value, null, 2)}\n`) {
+      throw new Error(`${name} is not canonically serialized`)
+    }
+    assertPublishable(value, name)
+    outputs.push({ name, value })
+  }
+
+  const proxy = outputs.find(output => (
+    output.name === 'codex-proxy-exact-identity-zstd.json'
+  ))?.value
+  const event = asRecord(proxy?.event)
+  const expected = asRecord(proxy?.expected)
+  const decoded = event ? decodeProxyBody(event) : null
+  const expectedBody = {
+    client_metadata: {
+      thread_id: stringField(expected, 'threadId'),
+      session_id: stringField(expected, 'sessionId'),
+      root_turn_id: stringField(expected, 'rootTurnId'),
+    },
+  }
+  if (
+    decoded?.encoding !== 'zstd' ||
+    JSON.stringify(decoded.body) !== JSON.stringify(expectedBody)
+  ) {
+    throw new Error('checked-in proxy body does not preserve only the expected identity')
+  }
+  const deterministicBody = zstd.zstdCompressSync(
+    Buffer.from(JSON.stringify(expectedBody)),
+  ).toString('base64')
+  if (deterministicBody !== stringField(event, 'body_b64')) {
+    throw new Error('checked-in proxy body is not the deterministic minimized zstd frame')
+  }
+
+  const manifestPath = join(FIXTURE_DIR, 'MANIFEST.md')
+  const manifest = await readFile(manifestPath, 'utf8')
+  const expectedManifest = manifestMarkdown(outputs.map(output => ({
+    name: output.name,
+    fingerprint: String(asRecord(output.value.$fixture)?.sourceFingerprint),
+  })))
+  if (manifest !== expectedManifest) {
+    throw new Error('checked-in fixture manifest does not match fixture fingerprints')
+  }
+  const census = await readFile(join(EVIDENCE_DIR, 'shape-census.md'), 'utf8')
+  assertNoPrivateText(manifest, 'fixture manifest')
+  assertNoPrivateText(census, 'shape census')
+
+  console.log(`Checked-in fixture verification passed (${String(outputs.length)} fixtures)`)
+}
+
 async function main(): Promise<void> {
   const git = await selectedGitIdentities()
   const tokens = new Tokenizer(git)
@@ -1142,12 +1223,12 @@ async function main(): Promise<void> {
   const live = await collectLiveGap(liveSession, tokens)
   const gitOutput = gitFixture(git, tokens)
 
-  const outputs: Array<{ name: string; value: JsonRecord }> = [
-    { name: 'claude-cwd-tool-branch-conflict.json', value: claude.fixture },
-    { name: 'codex-0151-worktree-window.json', value: codex.fixture },
-    { name: 'codex-proxy-exact-identity-zstd.json', value: proxy.fixture },
-    { name: 'codex-live-channel-gap.json', value: live.fixture },
-    { name: 'git-worktree-identities.json', value: gitOutput },
+  const outputs: Array<{ name: typeof FIXTURE_NAMES[number]; value: JsonRecord }> = [
+    { name: FIXTURE_NAMES[0], value: claude.fixture },
+    { name: FIXTURE_NAMES[1], value: codex.fixture },
+    { name: FIXTURE_NAMES[2], value: proxy.fixture },
+    { name: FIXTURE_NAMES[3], value: live.fixture },
+    { name: FIXTURE_NAMES[4], value: gitOutput },
   ]
   for (const output of outputs) assertPublishable(output.value, output.name)
 
@@ -1182,4 +1263,10 @@ async function main(): Promise<void> {
   console.log(`Census written: ${join(EVIDENCE_DIR, 'shape-census.md')}`)
 }
 
-await main()
+const args = process.argv.slice(2)
+if (args.length === 0) await main()
+else if (args.length === 1 && args[0] === '--verify-checked-in') {
+  await verifyCheckedInArtifacts()
+} else {
+  throw new Error(`unsupported arguments: ${args.join(' ')}`)
+}

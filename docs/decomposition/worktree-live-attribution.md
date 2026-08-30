@@ -203,6 +203,14 @@ extractions pass. Repository typecheck includes the exporter and passes; the
 test-contract and whitespace checks also pass. No Stage 2 tests or production
 behavior were added during this stage.
 
+The raw proxy/session directories are retention-managed and can rotate when the
+pane restarts, so the extractor also has a non-circular
+`--verify-checked-in` mode. It does not claim to reconstruct absent private
+sources: it revalidates canonical JSON, the complete privacy allowlist,
+manifest fingerprints, and the deterministic minimized zstd identity frame.
+The normal repository `check` runs this durable gate; source extraction still
+fails loudly when the original recording is unavailable.
+
 ## Stage 2 — record ownership semantics as failing contracts
 
 **Produces**
