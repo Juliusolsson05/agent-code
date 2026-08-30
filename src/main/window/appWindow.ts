@@ -39,6 +39,19 @@ export type AppWindowHooks = {
    *  nothing is fine; the registry decides whether a bequest applies. */
   onClosing: () => void
   /**
+   * Called when a close that already fired `onClosing` is ABORTED — the user
+   * chose "Keep Editing" at the unsaved-changes sheet.
+   *
+   * WHY this is not optional: Electron emits `close` before the renderer's
+   * `beforeunload` veto, so `onClosing` has already marked the window as
+   * closing by the time the sheet appears. Without this, a vetoed close leaves
+   * that flag latched and the window is skipped by every main→renderer send
+   * for the rest of its life — panes freeze, the menu stops working, and only
+   * a restart recovers. It also aborts a ⌘Q, so the quit flag has to be
+   * unlatched here for the same reason.
+   */
+  onCloseVetoed: () => void
+  /**
    * Called whenever the window is moved, resized, or changes full-screen state.
    *
    * WHY geometry cannot just ride along on the next workspace save: dragging a
@@ -199,10 +212,15 @@ export function buildAppWindow(options: {
     },
   })
 
-  if (fullScreen) window.setFullScreen(true)
-
   window.on('ready-to-show', () => {
     window.show()
+    // WHY full screen is entered AFTER show() rather than at construction:
+    // entering full screen on a window that is still hidden makes macOS run the
+    // space transition against a window it is about to reveal, which is a
+    // well-known source of a black or mispositioned window. Restoring a
+    // full-screen window is a first-class case here, so it takes the ordering
+    // that survives the transition.
+    if (fullScreen) window.setFullScreen(true)
     pushTrafficLightInset(window)
   })
 
@@ -293,7 +311,14 @@ export function buildAppWindow(options: {
       cancelId: 0,
       noLink: true,
     })
-    if (discard === 1) event.preventDefault()
+    if (discard === 1) {
+      event.preventDefault()
+      return
+    }
+    // "Keep Editing": the close (and any quit that triggered it) is aborted.
+    // Everything that was armed on `close` has to be disarmed here — see
+    // `onCloseVetoed`.
+    hooks.onCloseVetoed()
   })
 
   if (process.env['ELECTRON_RENDERER_URL']) {

@@ -45,10 +45,12 @@ import {
   sendToWindow,
   sessionsOwnedBy,
   setGeometryObserver,
+  setWindowCloseVetoedObserver,
   setWindowClosedObserver,
   transferSessions,
   windowCount,
 } from '@main/window/windowRegistry.js'
+import { abandonPendingBequest, recordPendingBequest } from '@main/ipc/window.js'
 import { wireSessionForwarder } from '@main/sessions/forwarder.js'
 import type { SessionForwarderControl } from '@main/sessions/forwarder.js'
 import { SessionRecorderManager } from '@main/recording/SessionRecorderManager.js'
@@ -239,13 +241,20 @@ async function runPackagingSmoke(): Promise<void> {
 // window hands its workspace to a survivor, but quitting closes every window
 // and must NOT collapse them all into whichever one dies last.
 //
-// The flag is cleared on window focus because Electron has no "quit cancelled"
-// event: the unsaved-editor dialog can veto a quit, and a stuck flag would
-// silently disable the handoff for the rest of the session. A focused window
-// proves the app is alive and interactive, so the quit did not happen.
+// WHY this is NOT cleared on window focus, which was the first attempt:
+// Electron has no "quit cancelled" event, and focus looked like a proxy for
+// "the app is still alive". It is wrong in both directions. During a real quit,
+// destroying the first window promotes the next one to key and fires
+// `browser-window-focus` — clearing the flag mid-quit and letting the remaining
+// windows collapse into one, which is data loss. And the unsaved-changes sheet
+// is a window-modal sheet, so a vetoed quit never fires focus at all and the
+// flag stays latched forever, silently disabling the handoff.
+//
+// The flag is instead cleared by the two paths that actually KNOW the quit
+// failed: the sheet's "Keep Editing" branch (via the close-vetoed observer,
+// wired in startApp) and the workflow-drain rejection below.
 let quitting = false
 app.on('before-quit', () => { quitting = true })
-app.on('browser-window-focus', () => { quitting = false })
 
 const hasSingleInstanceLock = packagingSmoke || app.requestSingleInstanceLock()
 
@@ -782,6 +791,8 @@ async function startApp(): Promise<void> {
   // they appear in Dispatch under their own project tabs. See
   // renderer/workspace/adoptWorkspace.ts for why the SURVIVOR performs the
   // merge rather than main.
+  // The only party that knows a ⌘Q was cancelled is the unsaved-changes sheet.
+  setWindowCloseVetoedObserver(() => { quitting = false })
   setWindowClosedObserver(closedWindowId => {
     // WHY quitting is excluded: on quit every window closes, and collapsing all
     // of them into whichever one happens to die last would destroy the
@@ -800,7 +811,14 @@ async function startApp(): Promise<void> {
     // back to a broadcast — which grows a ghost runtime in whichever window
     // receives one. The survivor is about to adopt them anyway, so pointing
     // them there immediately is both correct and the shortest possible gap.
-    transferSessions(sessionsOwnedBy(closedWindowId), survivor)
+    //
+    // It is an OPTIMISTIC move, so it is recorded as a pending offer: if the
+    // survivor refuses the merge, or the offer cannot be composed at all, the
+    // routing is rolled back rather than left pinned to a window that will
+    // never display those sessions.
+    const bequeathedSessionIds = sessionsOwnedBy(closedWindowId)
+    transferSessions(bequeathedSessionIds, survivor)
+    recordPendingBequest(closedWindowId, survivor, bequeathedSessionIds)
 
     // WHY a turn of the event loop before reading the slice: the closing
     // renderer flushes its final autosave from `beforeunload`, and that IPC
@@ -810,7 +828,10 @@ async function startApp(): Promise<void> {
       void (async () => {
         const slice = await workspaceFileStore.loadSlice(closedWindowId)
         if (!slice) {
-          await workspaceFileStore.removeWindow(closedWindowId)
+          // Nothing was ever persisted for this window, so there is nothing to
+          // hand over and nothing to delete. Un-route its sessions so they do
+          // not stay silently pinned to the survivor.
+          abandonPendingBequest(closedWindowId)
           return
         }
         sendToWindow(survivor, 'workspace:adopt', {
@@ -821,6 +842,7 @@ async function startApp(): Promise<void> {
         // The slice is still on disk and the sessions are still alive; the
         // workspace comes back as its own window next launch. Nothing is lost,
         // so this is a warning rather than a user-facing failure.
+        abandonPendingBequest(closedWindowId)
         console.warn('[window] workspace handoff failed:', err)
       })
     })
@@ -884,6 +906,25 @@ async function startApp(): Promise<void> {
     }
   }
   restorePersistedWindows()
+  if (workspaceFileStore.isReadOnly()) {
+    // WHY a native dialog rather than a console warning: in this state the app
+    // looks completely normal — a window opens, a default agent spawns — but
+    // NOTHING the user does will ever be persisted, because every save is
+    // refused to avoid overwriting a file we could not read. Working a full day
+    // and losing it at quit is the worst outcome this feature can produce, and
+    // it is not something a `console.warn` prevents.
+    dialog.showMessageBox({
+      type: 'warning',
+      title: 'Workspace cannot be saved',
+      message: 'Agent Code could not read its saved workspace, so changes will not be saved.',
+      detail: `${workspaceFileStore.refusalReason() ?? 'Unknown error.'}\n\nYour existing workspace file has been left untouched. Agents you start now will run normally, but tabs, layout, and pins will not persist. Quit and repair or move ~/.config/agent-code/workspace.json to restore saving.`,
+      buttons: ['Continue'],
+      noLink: true,
+    }).catch(() => {
+      // A failed dialog must not take the app down; the console warning from
+      // the store load is still on record.
+    })
+  }
   appRunJournal.record({
     area: 'window.main',
     name: 'window.create.end',

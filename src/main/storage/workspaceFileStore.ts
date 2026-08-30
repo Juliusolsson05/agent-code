@@ -62,6 +62,12 @@ export class WorkspaceFileStore {
   // only the private tail absorbs it so later saves are not poisoned forever.
   private saveTail: Promise<void> = Promise.resolve()
 
+  /**
+   * Windows whose slice has been deliberately dropped after a survivor adopted
+   * their workspace. A late save from such a window must not re-create it.
+   */
+  private readonly retiredWindowIds = new Set<string>()
+
   static async open(): Promise<WorkspaceFileStore> {
     const store = new WorkspaceFileStore()
     await store.load()
@@ -79,6 +85,13 @@ export class WorkspaceFileStore {
       // of unknown as an unparseable file: do not write over what we could not
       // read.
       this.readOnlyReason = `workspace.json could not be read: ${e.message}`
+      return
+    }
+
+    if (text.trim().length === 0) {
+      // An empty or whitespace-only file has nothing to preserve, so refusing
+      // to write would cost the user their whole session to protect zero bytes.
+      // This is the one "unreadable" shape that is safe to overwrite.
       return
     }
 
@@ -103,6 +116,11 @@ export class WorkspaceFileStore {
 
   isReadOnly(): boolean {
     return this.readOnlyReason !== null
+  }
+
+  /** Why saving is refused, for the startup warning that tells the user. */
+  refusalReason(): string | null {
+    return this.readOnlyReason
   }
 
   /** Union of every window's committed session ids. */
@@ -133,6 +151,14 @@ export class WorkspaceFileStore {
     if (this.readOnlyReason) {
       return Promise.reject(new Error(this.readOnlyReason))
     }
+    if (this.retiredWindowIds.has(windowId)) {
+      // A late `beforeunload` flush from a window whose workspace has already
+      // been handed to a survivor. Writing it would re-append the slice and
+      // resurrect that window — and its now-adopted sessions — on the next
+      // launch, as a duplicate. There is no renderer left to tell, so this
+      // resolves rather than rejects.
+      return Promise.resolve()
+    }
 
     let workspace: unknown
     try {
@@ -153,8 +179,7 @@ export class WorkspaceFileStore {
       return Promise.reject(new Error('workspace:save payload is not a { workspace } object'))
     }
 
-    const next = withWindowSlice(this.file, windowId, workspace, geometry)
-    return this.commit(next)
+    return this.commit(current => withWindowSlice(current, windowId, workspace, geometry))
   }
 
   /**
@@ -169,20 +194,45 @@ export class WorkspaceFileStore {
    */
   updateGeometry(windowId: string, geometry: WindowGeometry): Promise<void> {
     if (this.readOnlyReason) return Promise.resolve()
-    const existing = this.file.windows.find(entry => entry.windowId === windowId)
-    if (!existing) return Promise.resolve()
-    return this.commit(withWindowSlice(this.file, windowId, existing.workspace, geometry))
+    if (this.retiredWindowIds.has(windowId)) return Promise.resolve()
+    return this.commit(current => {
+      const existing = current.windows.find(entry => entry.windowId === windowId)
+      // Resolved against `current` — the document as it exists at COMMIT time —
+      // not against a snapshot taken when the debounce fired. Reading it early
+      // is what would let a geometry write carry a stale workspace payload back
+      // over a newer autosave.
+      if (!existing) return current
+      return withWindowSlice(current, windowId, existing.workspace, geometry)
+    })
   }
 
   /** Drop a window's slice — used when a closing window's workspace has been
    *  handed to a survivor and must not also be restored on next launch. */
   removeWindow(windowId: string): Promise<void> {
     if (this.readOnlyReason) return Promise.resolve()
-    return this.commit(withoutWindow(this.file, windowId))
+    this.retiredWindowIds.add(windowId)
+    return this.commit(current => withoutWindow(current, windowId))
   }
 
-  private commit(next: WorkspaceFile): Promise<void> {
+  /**
+   * Serialize a mutation against the document as it exists when the write
+   * actually runs.
+   *
+   * WHY the caller passes a FUNCTION rather than a finished document:
+   *
+   * Composing outside this queue is a read-modify-write race with a window in
+   * the middle. `this.file` only advances once bytes are durable, so window B
+   * composing while window A's write is still in flight would build on the
+   * pre-A document and then overwrite A's slice — reverting it one generation.
+   * The user-visible form of that is a tab closed in window A reappearing after
+   * an unrelated save in window B, which is exactly the resurrection class
+   * `pruneSessionOwnership` exists to prevent. Two windows flushing their
+   * `beforeunload` saves at ⌘Q is the highest-collision moment in the app's
+   * life, so this cannot be left to luck.
+   */
+  private commit(compose: (current: WorkspaceFile) => WorkspaceFile): Promise<void> {
     const save = this.saveTail.then(async () => {
+      const next = compose(this.file)
       await mkdir(STATE_DIR, { recursive: true })
       // WHY this temp file is still unique even though saves are serialized:
       // the queue is process-local ordering, while the nonce is crash-safety

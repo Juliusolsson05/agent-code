@@ -147,6 +147,64 @@ describe('window registry routing', () => {
     expect(registry.listWindowIds()).not.toContain(closing)
   })
 
+  it('resumes delivery when a close is vetoed', () => {
+    const window = registry.createAppWindow()
+    registry.claimSessionForWindow('agent-1', window)
+
+    // Electron emits `close` BEFORE the renderer's beforeunload veto, so a
+    // window that ends up surviving has already been marked as closing. Without
+    // the veto hook the flag stays latched and this window is skipped by every
+    // main→renderer send for the rest of its life: panes freeze, the menu stops
+    // working, and only a restart recovers.
+    built[0]?.hooks.onClosing()
+    registry.sendToSessionWindow('agent-1', 'session:screen', { sessionId: 'agent-1' })
+    expect(built[0]?.sent).toEqual([])
+
+    built[0]?.hooks.onCloseVetoed()
+    registry.sendToSessionWindow('agent-1', 'session:screen', { sessionId: 'agent-1' })
+    expect(built[0]?.sent).toHaveLength(1)
+  })
+
+  it('tells its observer when a close is vetoed', () => {
+    const window = registry.createAppWindow()
+    const vetoed: string[] = []
+    registry.setWindowCloseVetoedObserver(id => vetoed.push(id))
+
+    built[0]?.hooks.onClosing()
+    built[0]?.hooks.onCloseVetoed()
+
+    // The sheet is the only party that knows a ⌘Q was cancelled. A latched quit
+    // flag silently disables the workspace handoff for the rest of the session.
+    expect(vetoed).toEqual([window])
+  })
+
+  it('does not hand a user gesture to a window that is closing', () => {
+    registry.createAppWindow()
+    const live = registry.createAppWindow()
+    built[1]?.hooks.onFocused()
+    built[0]?.hooks.onFocused()
+    built[0]?.hooks.onClosing()
+
+    // Otherwise a menu click or dictation hotkey during another window's close
+    // dialog is silently dropped instead of landing on a live window.
+    expect(registry.focusedWindowId()).toBe(live)
+    registry.sendToFocusedWindow('menu:command', 'new-tab')
+    expect(built[1]?.sent).toHaveLength(1)
+  })
+
+  it('still resolves a save from a window that has just been destroyed', () => {
+    const window = registry.createAppWindow()
+    // The fake assigns webContents.id from creation order; this is the first.
+    const webContentsId = 1
+    built[0]?.hooks.onClosed()
+
+    // `useAutoSave` flushes a final save from `beforeunload`, and main can
+    // dequeue that message after `closed`. Rejecting it would drop the last
+    // 400ms of the user's work on every window close — and the workspace
+    // handoff is designed around admitting exactly that save.
+    expect(registry.windowIdForWebContentsId(webContentsId)).toBe(window)
+  })
+
   it('broadcasts app-wide state to every live window', () => {
     registry.createAppWindow()
     registry.createAppWindow()

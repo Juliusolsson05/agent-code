@@ -14,7 +14,7 @@ import type { SessionMeta, WorkspaceState } from '@renderer/workspace/types'
 // survivor's very next autosave.
 
 function meta(cwd: string): SessionMeta {
-  return { cwd, kind: 'claude' } as SessionMeta
+  return { cwd, kind: 'claude' }
 }
 
 function survivorState(): WorkspaceState {
@@ -31,7 +31,7 @@ function survivorState(): WorkspaceState {
     detachedSessions: {},
     buried: [],
     pinnedSessionIds: ['own-agent'],
-  } as unknown as WorkspaceState
+  }
 }
 
 function closedWindowWorkspace(): PersistedWorkspace {
@@ -54,6 +54,7 @@ function closedWindowWorkspace(): PersistedWorkspace {
       'grid-a': meta('/closed'),
       'grid-b': meta('/closed'),
       parked: meta('/closed'),
+      entombed: meta('/closed'),
     },
     detachedSessions: {
       parked: {
@@ -65,7 +66,15 @@ function closedWindowWorkspace(): PersistedWorkspace {
         detachedAt: 10,
       },
     },
-    buried: [],
+    buried: [{
+      id: 'entombed',
+      sessionId: 'entombed',
+      sessionMeta: meta('/closed'),
+      buriedAt: 20,
+      sourceTabId: 'tab-closed',
+      sourceTabTitle: 'closed-project',
+      sourceTabIndex: 0,
+    }],
     pinnedSessionIds: ['parked'],
     tileTabs: null,
     drafts: { 'grid-a': 'half-written prompt' },
@@ -89,6 +98,9 @@ describe('adopting a closed window', () => {
       buried: adoption.state.buried,
     })
     expect(owned.has('parked')).toBe(true)
+    // Buried panes are a third ownership surface and were claimed to survive
+    // without ever being exercised.
+    expect(owned.has('entombed')).toBe(true)
     expect(owned.has('grid-a')).toBe(true)
     expect(owned.has('grid-b')).toBe(true)
     expect(owned.has('own-agent')).toBe(true)
@@ -105,6 +117,10 @@ describe('adopting a closed window', () => {
     const adopted = adoption.state.tabs.find(tab => tab.id === 'tab-closed')
     expect(adopted?.root).toEqual(closedWindowWorkspace().tabs[0]?.root)
     expect(adoption.adoptedLeafSessionIds).toEqual(['grid-a', 'grid-b'])
+    // Every adopted session needs a runtime, not just the painted ones: the
+    // wake path for a parked or buried agent no-ops without one.
+    expect([...adoption.adoptedSessionIds].sort())
+      .toEqual(['entombed', 'grid-a', 'grid-b', 'parked'])
   })
 
   it('carries pins and drafts across', () => {

@@ -70,6 +70,23 @@ const focusOrder: WindowId[] = []
 const sessionOwners = new Map<string, WindowId>()
 
 /**
+ * webContents id → window id for windows that have already been destroyed.
+ *
+ * WHY a tombstone rather than "reject a sender we do not know": `useAutoSave`
+ * flushes a final save from `beforeunload`, and that IPC message can be
+ * dequeued by main AFTER the window's `closed` has already removed it from the
+ * registry. Rejecting it would drop the last 400ms of the user's work on every
+ * window close — and the workspace handoff is explicitly designed around
+ * admitting exactly that save. A sender that was NEVER registered is still
+ * rejected; this only remembers senders that were.
+ *
+ * Bounded because window ids are minted per window and a session has a
+ * realistic ceiling on how many it opens; entries are tiny and the map is
+ * cleared with the registry.
+ */
+const retiredWebContentsIds = new Map<number, WindowId>()
+
+/**
  * Notified (debounced) when a window is moved, resized, or full-screened, so
  * the geometry can be persisted.
  *
@@ -104,6 +121,23 @@ let windowClosedObserver: WindowClosedObserver | null = null
 
 export function setWindowClosedObserver(observer: WindowClosedObserver | null): void {
   windowClosedObserver = observer
+}
+
+/**
+ * Notified when a close that had already begun is aborted by the user.
+ *
+ * WHY anything outside this module cares: a ⌘Q that is vetoed at the
+ * unsaved-changes sheet leaves `app.on('before-quit')`'s quit flag latched, and
+ * a latched flag silently disables the close-time workspace handoff for the
+ * rest of the session. The only party that knows the quit failed is the sheet.
+ */
+type WindowCloseVetoedObserver = (windowId: WindowId) => void
+let windowCloseVetoedObserver: WindowCloseVetoedObserver | null = null
+
+export function setWindowCloseVetoedObserver(
+  observer: WindowCloseVetoedObserver | null,
+): void {
+  windowCloseVetoedObserver = observer
 }
 
 function noteGeometryChanged(id: WindowId): void {
@@ -325,7 +359,16 @@ export function createAppWindow(options?: {
         if (entry) entry.closing = true
       },
       onGeometryChanged: () => noteGeometryChanged(id),
+      onCloseVetoed: () => {
+        const entry = windows.get(id)
+        if (entry) entry.closing = false
+        windowCloseVetoedObserver?.(id)
+      },
       onClosed: () => {
+        const closing = windows.get(id)
+        if (closing && !closing.window.isDestroyed()) {
+          retiredWebContentsIds.set(closing.window.webContents.id, id)
+        }
         windows.delete(id)
         const index = focusOrder.indexOf(id)
         if (index !== -1) focusOrder.splice(index, 1)
@@ -388,7 +431,7 @@ export function windowIdForWebContentsId(webContentsId: number): WindowId | null
     if (entry.window.isDestroyed()) continue
     if (entry.window.webContents.id === webContentsId) return entry.id
   }
-  return null
+  return retiredWebContentsIds.get(webContentsId) ?? null
 }
 
 /** The focused window, else the most recently focused one that still exists. */
@@ -396,7 +439,12 @@ export function focusedWindowId(): WindowId | null {
   const native = BrowserWindow.getFocusedWindow()
   if (native && !native.isDestroyed()) {
     for (const entry of windows.values()) {
-      if (entry.window.id === native.id) return entry.id
+      // The `closing` check matters as much here as in the fallback below:
+      // Electron still reports a window with its close sheet up as focused, and
+      // `deliver()` drops messages to a closing window. Without this a menu
+      // click or dictation hotkey during another window's close dialog is
+      // silently lost instead of landing on a live window.
+      if (entry.window.id === native.id && !entry.closing) return entry.id
     }
   }
   for (const id of focusOrder) {
@@ -544,9 +592,13 @@ export function sendToSessionWindow(
     sendToWindow(owner, channel, ...args)
     return
   }
-  // Metadata only — lengths, never content. See the breadcrumb ring's notes.
-  recordIpcDiagnosticBreadcrumb('window.route.unowned-session', {
-    channel,
+  // WHY the channel goes in the breadcrumb's CHANNEL field rather than its
+  // metadata: `sanitizeDiagnosticMetadata` replaces every metadata string with
+  // its length, so `channel: 'session:screen'` would be recorded as
+  // `channelLength: 14` — defeating the only reason this breadcrumb exists.
+  // Channel names are a fixed compile-time allowlist, not provider data, so the
+  // redaction rule that sanitizer enforces does not apply to them.
+  recordIpcDiagnosticBreadcrumb(`window.route.unowned-session:${channel}`, {
     sessionIdLength: sessionId.length,
     windowCount: windows.size,
   })
@@ -560,8 +612,10 @@ export function resetWindowRegistryForTests(): void {
   sessionOwners.clear()
   for (const timer of geometryDebounces.values()) clearTimeout(timer)
   geometryDebounces.clear()
+  retiredWebContentsIds.clear()
   geometryObserver = null
   windowClosedObserver = null
+  windowCloseVetoedObserver = null
   outboundObserver = null
   outboundIpcCounts.clear()
   outboundIpcBreadcrumbs.fill(undefined)

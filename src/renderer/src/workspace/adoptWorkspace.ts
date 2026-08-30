@@ -5,7 +5,6 @@ import type {
   SessionId,
   SessionMeta,
   Tab,
-  TabId,
   WorkspaceState,
 } from '@renderer/workspace/types'
 import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
@@ -46,9 +45,11 @@ export type WorkspaceAdoption =
         WorkspaceState,
         'tabs' | 'sessions' | 'detachedSessions' | 'buried' | 'pinnedSessionIds'
       >
-      /** Sessions that landed in a tile tree and therefore need a runtime. */
+      /** Sessions that landed in a tile tree, and so need their transcript
+       *  loaded eagerly — they are about to be painted. */
       adoptedLeafSessionIds: SessionId[]
-      /** Every session the survivor now owns, leaves and parked alike. */
+      /** Every session the survivor now owns, leaves and parked alike. All of
+       *  them need a runtime; see the wake-path note in useWorkspaceAdoption. */
       adoptedSessionIds: SessionId[]
       drafts: Record<SessionId, string>
     }
@@ -67,8 +68,8 @@ export type WorkspaceAdoption =
  * state.
  *
  * Pure: no IPC, no runtimes, no React. The caller applies the returned state
- * and then seeds runtimes for `adoptedLeafSessionIds`, whose backends are
- * already alive in `SessionManager`.
+ * and seeds a runtime for every id in `adoptedSessionIds` — not just the
+ * leaves, because the wake path for a parked agent no-ops without one.
  */
 export function adoptWorkspace(
   current: WorkspaceState,
@@ -157,17 +158,4 @@ export function adoptWorkspace(
     // the kind of small, silent data loss autosave exists to prevent.
     drafts: incoming.drafts ?? {},
   }
-}
-
-/**
- * The tab ids an adoption introduces, for callers that need to know which tabs
- * are new (a toast naming them, say). Derived rather than returned as state so
- * the merge result stays a plain workspace slice.
- */
-export function adoptedTabIds(
-  current: WorkspaceState,
-  incoming: PersistedWorkspace,
-): TabId[] {
-  const currentTabIds = new Set(current.tabs.map(tab => tab.id))
-  return (incoming.tabs ?? []).map(tab => tab.id).filter(id => !currentTabIds.has(id))
 }

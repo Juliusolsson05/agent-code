@@ -164,9 +164,12 @@ fresh id before anything can emit for it. It is a callback rather than an
 `session:recover` needs no hook: the renderer supplies the durable id it is
 restoring, so the claim happens before the call.
 
-Ownership is released only on an explicit `session:kill` / `session:kill-owned`,
-**not** when a session exits on its own. An exited pane is still on screen,
-still owned, and can be reloaded in place.
+Ownership is released on an explicit `session:kill` / `session:kill-owned`, and
+on the manager's `removed` event **deferred by one tick** — `removed` fires
+before the renderer-facing `exit`, so releasing synchronously would broadcast
+that last event to every window. It is *not* released when a session merely
+exits: an exited pane is still on screen, still owned, and can be reloaded in
+place.
 
 **Unknown owner ⇒ broadcast, and no renderer-side guard.** Dropping would
 silently freeze a pane (P6: a row that survives is diagnosable, one that
@@ -359,8 +362,9 @@ may not still exist after an app restart; it can adopt, spawn, or fail, and
 takes a generation fence and a 30-second deadline to do it. Here every backend
 is alive, healthy, and already owned by main — the only thing missing is this
 renderer's view. So adoption seeds `emptyRuntime()` +
-`seedResumedRuntimeFields()` and calls `loadInitialHistoryForSession`, the same
-helpers bootstrap uses, and skips recovery entirely.
+`seedResumedRuntimeFields()` + the backend snapshot, and calls
+`loadInitialHistoryForSession` for the leaves — the same helpers bootstrap uses
+— while skipping recovery entirely.
 
 **An id collision refuses the whole adoption.** Both id spaces are
 `randomUUID()`, so a collision means the file was hand-edited or something is
@@ -368,12 +372,44 @@ already wrong, and "merge the parts that fit" is guessing. Dropping a colliding
 tab would strand its sessions: alive in `SessionManager`, owned by no window,
 invisible and unkillable from the UI.
 
-**Deletion is confirmed, never assumed.** Main drops the closed window's slice
-only when the survivor calls `window:adoption-complete`. Until the adopting
-renderer's next autosave lands, that slice is the only durable record of those
-sessions. A renderer that refused the merge, could not parse it, or died
-mid-handoff simply never confirms, and the workspace comes back as its own
-window on the next launch.
+**Deletion is confirmed by DURABILITY, never by the merge.** Main drops the
+closed window's slice only when the survivor calls `window:adoption-complete`,
+and the survivor only calls it from its autosave success path — never when the
+merge lands in memory. Until a save actually commits, that slice is the only
+durable record of those sessions, so confirming on "I merged" would turn any
+crash, force-quit or reload in the following 400 ms into permanent loss. The
+queue lives on `WorkspaceRefs.pendingAdoptionWindowIdsRef`; `useAutoSave` drains
+it after a committed write.
+
+**An adoption that arrives before the survivor has restored itself is queued,
+not applied.** `rehydrateWorkspace` publishes its result as a *wholesale*
+replacement of `tabs` / `sessions` / `detachedSessions` / `buried` /
+`pinnedSessionIds`, and rebuilds the runtime map from its own restored set.
+Anything merged before that publish is erased — and autosave is disabled until
+bootstrap completes, so it could never have become durable anyway. Worse, a
+`partial-restore` (which this codebase's own comments describe as recurring)
+leaves autosave off for the life of that renderer. The gate is
+`bootstrapComplete`; queued offers are applied when it flips.
+
+**A refusal is reported, so main can roll back.** `window:adoption-refused`
+tells main to keep the slice AND to release the session ownership it moved
+optimistically. Staying silent would leave those sessions pinned to a window
+that will never display them — alive, invisible, and accumulating runtimes for
+panes that do not exist. Main tracks outstanding offers, so a confirmation that
+does not match an offer it made is ignored rather than honored.
+
+**Every adopted session gets a runtime — not just the tile leaves.**
+`ensureSessionLive`, the wake path behind Attach to Grid and revive, gates on
+the runtime existing and no-ops every write when it does not. A parked agent
+adopted without one wakes into an empty feed with no transcript and no way to
+report a failure, which is precisely the case this feature exists to rescue.
+
+**Readiness is seeded from a backend snapshot.** `setInputReadiness` dedupes on
+`(ready, reason)`, so a healthy agent already sitting at `ready: true` emits
+nothing to a renderer that has just started watching it. Without the snapshot
+every adopted pane reads "starting agent" forever and its first send detours
+through a full `recoverSession` round trip. This is the same fix the remote
+phone client already applies when it attaches late.
 
 **Ordering.** Session ownership transfers *before* the survivor is told, so an
 event emitted during the handoff already routes to the window that will display
@@ -394,11 +430,27 @@ every window persists its own slice and all of them come back next launch. The
 two paths must be distinguishable or a normal ⌘Q would collapse every workspace
 into one window.
 
-`app.on('before-quit')` sets a module flag; the per-window `close` handler
-checks it and skips the bequest. The existing quit sequencing is delicate —
+`app.on('before-quit')` sets a module flag; the window-closed observer checks it
+and skips the bequest. The existing quit sequencing is delicate —
 `WorkflowService.stop()` gating, `sessionShutdownGate`, the re-entrant
-`app.quit()` — so the flag is *read* by the window close path and never
-*written* by it.
+`app.quit()` — so the flag is *read* by the close path and never *written* by
+it.
+
+**The flag is NOT cleared on window focus**, which was the first attempt and is
+wrong in both directions. During a real quit, destroying the first window
+promotes the next to key and fires `browser-window-focus`, clearing the flag
+mid-quit and letting the remaining windows collapse into one — data loss. And
+the unsaved-changes prompt is a window-modal *sheet*, so a vetoed quit never
+fires focus at all and the flag stays latched forever, silently disabling the
+handoff for the rest of the session. It is instead cleared by the two paths that
+actually know the quit failed: the sheet's "Keep Editing" branch (via
+`setWindowCloseVetoedObserver`) and the workflow-drain rejection.
+
+That same veto has to disarm one more thing. Electron emits a window's `close`
+**before** the renderer's `beforeunload` veto, so a window that ends up
+surviving has already been marked `closing` — and a closing window is skipped by
+every main→renderer send. Left latched, that window's panes freeze and its menu
+stops working until the app restarts.
 
 Closing the **last** window while the app stays alive (macOS keeps the process
 running; `src/main/index.ts:779` re-creates a window on `activate`) has no
@@ -486,6 +538,13 @@ Following `docs/testing/standard.md`; suffix picks the tier.
 
 **Bequest:**
 
+- `useWorkspaceAdoption.renderer.test.tsx` — the half that authorizes main to
+  delete user data: a confirmation is queued for autosave rather than sent on
+  merge; an unreadable payload and an id collision both refuse and never
+  confirm; an adoption arriving before bootstrap is not applied; parked sessions
+  get a runtime; readiness comes from the backend snapshot; history loads for
+  leaves only. (Mutation-checked — reverting either the bootstrap gate or the
+  deferred confirmation turns two of these red.)
 - `adoptWorkspace.test.ts` — adopted detached records are still *owned* by the
   survivor's own `collectOwnedSessionIds` (the assertion that proves tabs had to
   travel with their sessions); tile arrangement survives; pins, drafts, and
@@ -494,6 +553,13 @@ Following `docs/testing/standard.md`; suffix picks the tier.
 
 **Routing:**
 
+- `workspaceFileStore.test.ts` — a save admitted while another window's write is
+  in flight does not revert it (mutation-checked against composing outside the
+  queue), and a late save from an already-adopted window is ignored so it cannot
+  resurrect that window as a duplicate.
+- `windowRegistry.test.ts` — a vetoed close resumes delivery and notifies its
+  observer; a closing window is never handed a user gesture; a destroyed
+  window's final save still resolves to its slice.
 - `windowRegistry.routing.test.ts` — session events reach only the owner;
   unowned ids broadcast; ownership transfers on adoption before any event is
   emitted; ownership survives a natural exit and ends on an explicit kill.

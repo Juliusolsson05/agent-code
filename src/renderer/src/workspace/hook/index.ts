@@ -846,7 +846,7 @@ export function useWorkspace(
   // see the WHY on useIpcSubscriptions.
   const sessionFeed = useSessionFeed()
   useIpcSubscriptions(sessionFeed, refs, setState, setRuntimes, updateRuntime, appendFeedDebug)
-  useWorkspaceAdoption(refs, setState, setRuntimes)
+  useWorkspaceAdoption(refs, setState, setRuntimes, bootstrapComplete)
   useAutoSave(state, draftVersion, refs, bootstrapComplete)
   useBootstrap(
     refs,

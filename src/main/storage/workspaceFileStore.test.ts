@@ -187,6 +187,60 @@ describe('per-window isolation on disk', () => {
     )
   })
 
+  it('a save admitted while another window s write is in flight does not revert it', async () => {
+    // The read-modify-write must be composed INSIDE the queue. Composing it at
+    // call time means window B builds on the document as it was before window
+    // A's in-flight write, then overwrites A's slice — reverting it one
+    // generation. The user-visible form is a tab closed in window A reappearing
+    // after an unrelated save in window B, which is the resurrection class
+    // `pruneSessionOwnership` exists to prevent. Two windows flushing their
+    // `beforeunload` saves at quit is the highest-collision moment in the app's
+    // life, so this is not a theoretical ordering.
+    const gate = deferred()
+    const tempContents = new Map<string, string>()
+    let durable = ''
+    let writes = 0
+    writeFile.mockImplementation(async (file: string, contents: string) => {
+      writes += 1
+      if (writes === 1) await gate.promise
+      tempContents.set(file, contents)
+    })
+    rename.mockImplementation(async (source: string) => {
+      durable = tempContents.get(source) ?? ''
+    })
+
+    const store = await WorkspaceFileStore.open()
+    const left = store.saveSlice('left', slice(['left-updated']), NO_GEOMETRY)
+    await vi.waitFor(() => expect(writeFile).toHaveBeenCalledTimes(1))
+    const right = store.saveSlice('right', slice(['right-updated']), NO_GEOMETRY)
+    gate.resolve()
+    await Promise.all([left, right])
+
+    const windows = JSON.parse(durable).windows as Array<{
+      windowId: string
+      workspace: { sessions: Record<string, unknown> }
+    }>
+    expect(Object.keys(windows.find(w => w.windowId === 'left')!.workspace.sessions))
+      .toEqual(['left-updated'])
+    expect(Object.keys(windows.find(w => w.windowId === 'right')!.workspace.sessions))
+      .toEqual(['right-updated'])
+  })
+
+  it('ignores a late save from a window whose workspace was already adopted', async () => {
+    // A closing window's `beforeunload` flush can be dequeued after its
+    // workspace has been handed to a survivor. Writing it would re-append the
+    // slice and resurrect that window — with its now-adopted sessions — as a
+    // duplicate on the next launch.
+    const store = await WorkspaceFileStore.open()
+    await store.removeWindow('left')
+    writeFile.mockClear()
+
+    await expect(store.saveSlice('left', slice(['too-late']), NO_GEOMETRY)).resolves
+      .toBeUndefined()
+    expect(writeFile).not.toHaveBeenCalled()
+    await expect(store.loadSlice('left')).resolves.toBeNull()
+  })
+
   it('restores every persisted window', async () => {
     const store = await WorkspaceFileStore.open()
     expect(store.windows().map(w => w.windowId)).toEqual(['left', 'right'])

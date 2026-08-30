@@ -3,6 +3,7 @@ import type { LspManager } from '@main/lspManager.js'
 
 import {
   broadcastToWindows,
+  releaseSession,
   sendToSessionWindow,
 } from '@main/window/windowRegistry.js'
 import {
@@ -139,6 +140,16 @@ export function wireSessionForwarder(
     processStates.flush(payload.sessionId)
     flushAndDropJsonl(payload.sessionId)
     subAgents.stop(payload.sessionId)
+    // WHY window ownership is released HERE but only on the next tick:
+    //
+    // `removed` is the designated final-cleanup point, but it fires BEFORE the
+    // renderer-facing `exit` (see the ordering note above), so releasing
+    // synchronously would leave that last event unowned and broadcast it to
+    // every window. Deferring by one turn lets `exit` route to the owner and
+    // still drops the entry, which otherwise grows for the life of the process
+    // — and, worse, would hand a closing window's survivor ids for backends
+    // that no longer exist.
+    setImmediate(() => releaseSession(payload.sessionId))
   })
   manager.on('exit', payload => {
     sendToSessionWindow(payload.sessionId, 'session:exit', payload)

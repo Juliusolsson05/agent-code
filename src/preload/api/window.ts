@@ -23,15 +23,30 @@ export const windowApi = {
     subscribe('workspace:adopt', cb),
 
   /**
-   * Acknowledge that this window has taken over a closed window's workspace.
+   * Acknowledge that this window has DURABLY persisted a closed window's
+   * workspace.
    *
-   * WHY adoption is confirmed rather than assumed: main deletes the closed
-   * window's persisted slice on this call, and until the adopting renderer's
-   * next autosave lands, that slice is the ONLY durable record of those
-   * sessions. A renderer that refused the merge, failed to parse it, or died
-   * mid-handoff simply never calls this, and the workspace comes back as its
-   * own window on the next launch instead of being deleted.
+   * WHY adoption is confirmed rather than assumed, and why it is confirmed from
+   * the autosave success path rather than from the merge: main deletes the
+   * closed window's persisted slice on this call, and until the adopting
+   * renderer's next save actually commits, that slice is the ONLY durable
+   * record of those sessions. Confirming on "I merged" would make any crash,
+   * force-quit or reload in the following 400ms permanent data loss. A renderer
+   * that refused the merge, failed to parse it, or died mid-handoff simply
+   * never calls this, and the workspace comes back as its own window on the
+   * next launch instead of being deleted.
    */
   confirmWorkspaceAdoption: (windowId: string): Promise<void> =>
     ipcRenderer.invoke('window:adoption-complete', windowId),
+
+  /**
+   * Decline a closed window's workspace.
+   *
+   * Main keeps the slice AND rolls back the session routing it moved here
+   * optimistically. Staying silent instead would leave those sessions pinned to
+   * a window that will never display them — alive, invisible, and accumulating
+   * runtimes for panes that do not exist.
+   */
+  refuseWorkspaceAdoption: (windowId: string): Promise<void> =>
+    ipcRenderer.invoke('window:adoption-refused', windowId),
 }

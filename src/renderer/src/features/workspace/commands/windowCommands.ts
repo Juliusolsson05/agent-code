@@ -20,7 +20,7 @@ export const windowCommands: CommandDef[] = [
     // workspace mode, and nothing about it depends on the current layout.
     surface: 'app',
     title: 'New Window',
-    description: '**What it does:** Opens a **new Agent Code window** with its own tabs and agents.\n\n**Use when:** You want a second workspace, usually on another monitor.\n\n**Notes:** The new window starts empty. Windows reopen where you left them.',
+    description: '**What it does:** Opens a **new Agent Code window** with its own tabs and agents.\n\n**Use when:** You want a second workspace, usually on another monitor.\n\n**Notes:** Starts with one agent in your default folder. Windows reopen where you left them.',
     keywords: ['second window', 'monitor', 'display', 'workspace'],
     // Main owns the work: a window has no tabs to consult and no tile tree to
     // mutate, so there is nothing for the renderer to decide. This mirrors how
