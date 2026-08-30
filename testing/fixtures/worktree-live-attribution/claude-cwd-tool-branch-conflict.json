@@ -1,0 +1,63 @@
+{
+  "$fixture": {
+    "id": "claude-cwd-tool-branch-conflict",
+    "cutoff": "2026-08-30T18:37:55.388Z",
+    "sourceFingerprint": "71bf00e79139ece8",
+    "records": [
+      {
+        "line": 303,
+        "timestamp": "2026-08-30T18:06:06.591Z"
+      },
+      {
+        "line": 496,
+        "timestamp": "2026-08-30T18:17:18.457Z"
+      }
+    ]
+  },
+  "git": {
+    "main": {
+      "path": "/fixture/project-1",
+      "branch": "fixture/branch-1"
+    },
+    "grid": {
+      "path": "/fixture/project-1/.worktrees/worktree-1",
+      "branch": "fixture/branch-2"
+    }
+  },
+  "records": [
+    {
+      "type": "assistant",
+      "timestamp": "2026-08-30T18:06:06.591Z",
+      "cwd": "/fixture/project-1",
+      "gitBranch": "fixture/branch-1",
+      "message": {
+        "content": [
+          {
+            "type": "tool_use",
+            "name": "Write",
+            "input": {
+              "file_path": "/fixture/project-1/.worktrees/worktree-1/path-1/path-2/path-3/path-4"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "assistant",
+      "timestamp": "2026-08-30T18:17:18.457Z",
+      "cwd": "/fixture/project-1/.worktrees/worktree-1",
+      "gitBranch": "fixture/branch-1",
+      "message": {
+        "content": [
+          {
+            "type": "tool_use",
+            "name": "Write",
+            "input": {
+              "file_path": "/fixture/project-1/.worktrees/worktree-1/path-5/path-6/path-5/path-7/path-8/path-9"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

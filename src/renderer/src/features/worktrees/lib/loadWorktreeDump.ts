@@ -138,7 +138,14 @@ export function collectLiveAgentsByWorktree(
       // per-worktree activity even though they're on-disk in the tab.
       if (!isAgentProviderKind(kind)) continue
       const runtime = workspace.runtimes[sessionId]
-      const contextPath = runtime?.workContext?.worktreePath ?? meta?.cwd
+      // WHY this surface selects active before the compatibility workContext:
+      // workContext intentionally represents the historically dominant
+      // (primary) checkout for older consumers, while this panel answers where
+      // the agent is live *now*. Badges and status surfaces already read active;
+      // using primary here could place one running pane in two worktree rows.
+      const contextPath = runtime?.workActivity?.active?.worktreePath ??
+        runtime?.workContext?.worktreePath ??
+        meta?.cwd
       const matched = matchWorktree(contextPath, identities)
       if (!matched) continue
       const rows = byPath.get(matched.path) ?? []
