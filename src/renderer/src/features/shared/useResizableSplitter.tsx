@@ -34,10 +34,19 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 // computation to the caller, because the caller knows what its
 // container's bounding rect is and whether it wants ratio (0..1) or
 // pixel width as the output. The caller passes an `onDrag` callback
-// that receives the raw clientX (or clientY for future vertical
-// splitters — currently we only ship horizontal-split callers).
+// that receives the raw clientX, or clientY when `axis: 'y'`.
+//
+// The vertical axis arrived with Grid Dispatch's row boundaries (#681).
+// It is one option rather than a second hook because all three
+// correctness properties above — window-level capture, cursor lock,
+// preventDefault — are axis-independent, and a forked hook would have
+// been the fourth place to get them subtly wrong.
 
 type Options = {
+  /** Which coordinate the drag reports. 'x' (default) passes clientX for a
+   *  left/right splitter; 'y' passes clientY for a top/bottom one, and also
+   *  switches the cursor lock to row-resize. */
+  axis?: 'x' | 'y'
   /** Whether this splitter should respond to drags at all. Lets the
    *  caller turn the splitter off when its host component is in a
    *  state where resizing doesn't make sense (e.g. file tree hidden).
@@ -63,7 +72,7 @@ type Controller = {
   cursorLock: React.ReactNode
 }
 
-export function useResizableSplitter({ enabled = true, onDrag }: Options): Controller {
+export function useResizableSplitter({ axis = 'x', enabled = true, onDrag }: Options): Controller {
   const [dragging, setDragging] = useState(false)
   // The onDrag callback is captured into a ref so the move-listener
   // effect doesn't tear down + re-add on every callback identity
@@ -86,7 +95,7 @@ export function useResizableSplitter({ enabled = true, onDrag }: Options): Contr
   useEffect(() => {
     if (!dragging) return
     const onMove = (e: MouseEvent) => {
-      onDragRef.current(e.clientX)
+      onDragRef.current(axis === 'y' ? e.clientY : e.clientX)
     }
     const onUp = () => setDragging(false)
     // capture:true so we win against any drag-prevention on the
@@ -100,13 +109,13 @@ export function useResizableSplitter({ enabled = true, onDrag }: Options): Contr
       window.removeEventListener('mouseup', onUp, true)
       window.removeEventListener('blur', onUp)
     }
-  }, [dragging])
+  }, [dragging, axis])
 
   const cursorLock = dragging ? (
-    // While dragging, force the col-resize cursor everywhere so the
-    // user doesn't see it change when the pointer crosses pane
-    // boundaries. Removed automatically when dragging ends.
-    <style>{`* { cursor: col-resize !important; }`}</style>
+    // While dragging, force the resize cursor everywhere so the user
+    // doesn't see it change when the pointer crosses pane boundaries.
+    // Removed automatically when dragging ends.
+    <style>{`* { cursor: ${axis === 'y' ? 'row-resize' : 'col-resize'} !important; }`}</style>
   ) : null
 
   return { dragging, onMouseDown, cursorLock }

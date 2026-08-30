@@ -24,6 +24,7 @@ import type {
 import { collectLeaves, remapTileTreeSessionIds } from '@renderer/workspace/tile-tree/treeOps'
 import {
   keepTiledLaneSessions,
+  normalizeDispatchModeGrid,
   remapTiledLanes,
 } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import { remapSessionMetaRelationships } from '@renderer/workspace/idRemap'
@@ -504,7 +505,13 @@ export async function rehydrateWorkspace(
           : restoredTileTabs?.focusedTabId
             ?? newTabs.find(t => t.id === persisted.activeTabId)?.id
             ?? newTabs[0].id
-        const remappedDispatchMode = keepTiledLaneSessions(
+        // Grid shape is normalized OUTERMOST so the shape rules see the final
+        // lane array: a workspace written before Grid Dispatch has no `rows`
+        // (=> one row of every lane) and a legacy `ratios` array that has to be
+        // split into the row's index fraction and the per-lane weights. Doing
+        // it here rather than at every reader is what lets the rest of the
+        // renderer assume a coherent grid.
+        const remappedDispatchMode = normalizeDispatchModeGrid(keepTiledLaneSessions(
           remapTiledLanes(
             persisted.dispatchMode
               ? {
@@ -524,7 +531,7 @@ export async function rehydrateWorkspace(
           // Dispatch pointer over this same set prevents the repaired owner
           // record from lingering as a selected-but-unresolvable lane.
           new Set(Object.keys(initialSessions)),
-        ) ?? null
+        )) ?? null
         return {
           tabs: newTabs,
           activeTabId,

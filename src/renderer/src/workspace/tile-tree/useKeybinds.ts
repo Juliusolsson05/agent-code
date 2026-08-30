@@ -14,6 +14,12 @@ import {
   selectVisibleDispatchRow,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
 import { nextTiledRowIndex } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
+import {
+  normalizeGridShape,
+  rowIndexForLane,
+  rowStartIndex,
+} from '@renderer/workspace/dispatch/gridShape'
+import { rowScopedRows } from '@renderer/workspace/dispatch/rowScopedRows'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import { enumerateCodeBlockIds } from '@renderer/features/copy-code-block/lib/enumerateCodeBlocks'
 import { getCodeBlockCode } from '@renderer/features/copy-code-block/lib/codeBlockRegistry'
@@ -810,12 +816,12 @@ export function useKeybinds(
           }
           if (k === 'ArrowLeft' || code === 'KeyH') {
             e.preventDefault()
-            if (tiled) workspace.setTiledFocusedLane(tiled.focusedLane - 1)
+            if (tiled) moveTiledFocusWithinRow(workspace, -1)
             return
           }
           if (k === 'ArrowRight' || code === 'KeyL') {
             e.preventDefault()
-            if (tiled) workspace.setTiledFocusedLane(tiled.focusedLane + 1)
+            if (tiled) moveTiledFocusWithinRow(workspace, 1)
             return
           }
         }
@@ -963,25 +969,54 @@ function focusDispatchRowByIndex(workspace: Workspace, index: number) {
 //
 // When a tiled layout is active, dispatch selection targets the FOCUSED
 // LANE rather than the single dispatch focus. These mirror the classic
-// helpers above but write through setTiledLaneSession, so cmd-N / arrows
-// fill the focused lane (duplicates across lanes are allowed).
+// helpers above but write through selectTiledLaneSession, so cmd-N / arrows
+// fill the focused lane (duplicates across lanes are allowed) — and wake a
+// hibernated agent first, which the raw lane writer never did (#690).
 
 function focusedTiledLane(workspace: Workspace): number {
   return workspace.dispatchMode?.tiled?.focusedLane ?? 0
 }
 
+/**
+ * The rows the FOCUSED grid row actually offers.
+ *
+ * Keyboard selection has to see the same list the user does. The row's index
+ * and strips are filtered by `rowScopedRows` (project binding + child cap), so
+ * walking the unfiltered canonical set would let ⌥↓ drop a project-A agent into
+ * a row bound to project B — one the row's own selector does not list. The
+ * empty-lane hint points straight at this key, which makes that reachable
+ * rather than theoretical.
+ *
+ * Labels are NOT renumbered: these are the canonical rows, filtered. A bound
+ * row shows gaps, which is what keeps cmd-N and the visible chip in agreement.
+ */
+function tiledRowScopedRows(workspace: Workspace) {
+  const all = dispatchRows(workspace)
+  const tiled = workspace.dispatchMode?.tiled
+  if (!tiled) return all
+  const grid = normalizeGridShape(tiled)
+  const rowIndex = rowIndexForLane(grid.rows, grid.focusedLane)
+  const gridRow = rowIndex >= 0 ? grid.rows[rowIndex] : undefined
+  if (!gridRow) return all
+  return rowScopedRows(all, gridRow).flatMap(item => (item.kind === 'agent' ? [item.row] : []))
+}
+
 function focusTiledRowByIndex(workspace: Workspace, index: number) {
-  const row = dispatchRows(workspace)[index]
+  // cmd-N addresses a LABEL, and labels are canonical (never renumbered), so a
+  // bound row shows gaps like B12, B15. Resolving by label rather than by
+  // position keeps the key and the visible chip naming the same agent; asking
+  // for a label this row does not offer simply does nothing, instead of pulling
+  // in an agent the row's own selector excludes.
+  const row = tiledRowScopedRows(workspace).find(candidate => candidate.globalIndex === index + 1)
   if (!row) return
-  // cmd-N fills the focused lane with row N. Duplicates are allowed, so this
-  // works even if that agent is already shown in another lane.
-  workspace.setTiledLaneSession(focusedTiledLane(workspace), row.sessionId)
+  // Wakes a hibernated detached agent before placing it (#690).
+  void workspace.selectTiledLaneSession(focusedTiledLane(workspace), row.sessionId)
 }
 
 function moveTiledLaneSelection(workspace: Workspace, delta: number) {
   const tiled = workspace.dispatchMode?.tiled
   if (!tiled) return
-  const rows = dispatchRows(workspace)
+  const rows = tiledRowScopedRows(workspace)
   if (rows.length === 0) return
   const laneIndex = tiled.focusedLane
   const currentId = tiled.lanes[laneIndex]?.selectedSessionId
@@ -991,7 +1026,28 @@ function moveTiledLaneSelection(workspace: Workspace, delta: number) {
   // that agent into this lane too.
   const probe = nextTiledRowIndex(currentIndex, delta, rows.length)
   const row = rows[probe]
-  if (row) workspace.setTiledLaneSession(laneIndex, row.sessionId)
+  if (row) void workspace.selectTiledLaneSession(laneIndex, row.sessionId)
+}
+
+/**
+ * Move lane focus one step, STOPPING at the row's edges.
+ *
+ * Wrapping into the neighbouring row would make one keystroke move focus a
+ * single lane or jump it across the layout depending on where you started —
+ * fine when you are looking, wrong when you are typing fast. Crossing rows is
+ * the deliberate job of Focus Row Above/Below.
+ */
+function moveTiledFocusWithinRow(workspace: Workspace, delta: number) {
+  const tiled = workspace.dispatchMode?.tiled
+  if (!tiled) return
+  const grid = normalizeGridShape(tiled)
+  const rowIndex = rowIndexForLane(grid.rows, grid.focusedLane)
+  if (rowIndex < 0) return
+  const start = rowStartIndex(grid.rows, rowIndex)
+  const end = start + (grid.rows[rowIndex]?.length ?? 0) - 1
+  const next = grid.focusedLane + delta
+  if (next < start || next > end) return
+  workspace.setTiledFocusedLane(next)
 }
 
 function moveDispatchSelection(workspace: Workspace, delta: number) {

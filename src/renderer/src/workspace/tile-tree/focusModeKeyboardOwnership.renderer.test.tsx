@@ -36,7 +36,7 @@ function makeWorkspace(
 ): {
   workspace: Workspace
   focusDispatchSession: ReturnType<typeof vi.fn>
-  setTiledLaneSession: ReturnType<typeof vi.fn>
+  selectTiledLaneSession: ReturnType<typeof vi.fn>
 } {
   const runtime = emptyRuntime()
   const activeTab = {
@@ -69,7 +69,7 @@ function makeWorkspace(
           : {}),
       }
   const focusDispatchSession = vi.fn()
-  const setTiledLaneSession = vi.fn()
+  const selectTiledLaneSession = vi.fn()
   const state = {
     activeTabId: activeTab.id,
     tabs: [activeTab],
@@ -101,13 +101,13 @@ function makeWorkspace(
     },
     getRuntime: () => runtime,
     focusDispatchSession,
-    setTiledLaneSession,
+    selectTiledLaneSession,
     navigate: vi.fn(),
     toggleReaderMode: vi.fn(),
     toggleSpotlight: vi.fn(),
   } as unknown as Workspace
 
-  return { workspace, focusDispatchSession, setTiledLaneSession }
+  return { workspace, focusDispatchSession, selectTiledLaneSession }
 }
 
 function pressOptionArrow(key: 'ArrowUp' | 'ArrowDown'): void {
@@ -159,12 +159,12 @@ describe('focus-mode keyboard ownership', () => {
   })
 
   it('does not change a hidden Tiled Dispatch lane while Reader navigates history', () => {
-    const { workspace, setTiledLaneSession } = makeWorkspace('reader', 'tiled-dispatch')
+    const { workspace, selectTiledLaneSession } = makeWorkspace('reader', 'tiled-dispatch')
     render(<KeyboardHarness workspace={workspace} />)
 
     pressOptionArrow('ArrowDown')
 
-    expect(setTiledLaneSession).not.toHaveBeenCalled()
+    expect(selectTiledLaneSession).not.toHaveBeenCalled()
   })
 
   it('does not move hidden Grid or Dispatch focus while Spotlight owns the screen', () => {

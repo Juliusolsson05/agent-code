@@ -14,7 +14,8 @@ import { buildDispatchGroups } from '@renderer/workspace/dispatch/dispatchSelect
 import type { DispatchAgentRow } from '@renderer/workspace/dispatch/dispatchSelectors'
 import { DispatchColorFlagStrip } from '@renderer/workspace/dispatch/DispatchColorFlagStrip'
 import { tabIndexLabel } from '@renderer/workspace/tile-tree/paneLabels'
-import type { SessionId, SessionKind, TabId } from '@renderer/workspace/types'
+import { rowScopedRows } from '@renderer/workspace/dispatch/rowScopedRows'
+import type { DispatchGridRow, SessionId, SessionKind, TabId } from '@renderer/workspace/types'
 import type { Entry } from '@shared/types/transcript'
 import type { ProviderConditionSnapshot } from '@shared/types/providerConditions'
 import { dispatchAttentionLabelFromConditions } from '@renderer/workspace/conditions/selectors'
@@ -44,6 +45,10 @@ export const DispatchAgentList = memo(function DispatchAgentList({
   showWorktreeBadges,
   disabledSessionIds,
   onCreateAgentInProject,
+  gridRow,
+  onToggleExpandedParent,
+  onToggleCapChildren,
+  onPickRowProject,
 }: {
   groups: ReturnType<typeof buildDispatchGroups>
   pinnedRows: DispatchAgentRow[]
@@ -56,10 +61,18 @@ export const DispatchAgentList = memo(function DispatchAgentList({
   // that has no meaningful create path simply omits it rather than passing a
   // no-op the header would still render a button for.
   onCreateAgentInProject?: (tabId: TabId, anchorSessionId: SessionId) => void
+  // Grid Dispatch (#681): the grid row this index belongs to. Supplies the
+  // project binding and child density that make one row's list differ from
+  // another's over the same workspace. Absent in classic Dispatch, which has
+  // no rows and therefore no per-row scoping.
+  gridRow?: Pick<DispatchGridRow, 'projectTabId' | 'capChildren' | 'expandedParents'>
+  onToggleExpandedParent?: (parentSessionId: SessionId) => void
+  onToggleCapChildren?: () => void
+  onPickRowProject?: () => void
   // Sessions that must render as unselectable in this index. Used by Tiled
   // Dispatch's lane-0 index to grey out agents already shown in another lane
   // (the one-session-per-lane invariant — without this, clicking a claimed
-  // agent looks selectable but silently no-ops in setTiledLaneSession).
+  // agent looks selectable but silently no-ops in selectTiledLaneSession).
   // Undefined/absent in classic Dispatch, so its rows stay fully clickable.
   disabledSessionIds?: Set<SessionId>
 }) {
@@ -92,6 +105,31 @@ export const DispatchAgentList = memo(function DispatchAgentList({
     }
   }, [activeSessionId, groups, pinnedRows])
 
+  // Row scoping. Absent `gridRow` means classic Dispatch: no binding, no cap,
+  // every row through. Applied at RENDER only — it never reaches
+  // buildVisibleDispatchRows, so labels, globalIndex, and cmd+N targeting stay
+  // computed from the full canonical set and a filtered list shows gaps rather
+  // than renumbering.
+  const scopedGroups = useMemo(
+    () => groups
+      .map(group => ({ ...group, items: rowScopedRows(group.rows, gridRow ?? {}) }))
+      .filter(group => group.items.length > 0),
+    [groups, gridRow],
+  )
+  const scopedPinnedRows = useMemo(
+    () => (gridRow?.projectTabId === undefined
+      ? pinnedRows
+      : pinnedRows.filter(row => row.tabId === gridRow.projectTabId)),
+    [pinnedRows, gridRow],
+  )
+  const rowProjectLabel = useMemo(
+    () => (gridRow?.projectTabId === undefined
+      ? null
+      : groups.find(group => group.tab.id === gridRow.projectTabId)?.tab.title
+        ?? 'Project'),
+    [groups, gridRow],
+  )
+
   return (
     // WHY h-full w-full instead of `basis-1/4 min-w-[220px]
     // max-w-[420px] border-r`:
@@ -116,7 +154,47 @@ export const DispatchAgentList = memo(function DispatchAgentList({
         className="sticky top-0 z-10 flex items-center justify-between border-b border-border bg-surface px-2.5 py-1.5 text-[10px] text-muted uppercase"
       >
         <span>Sessions</span>
-        <span>{dispatchScope}</span>
+        <span className="flex items-center gap-1.5">
+          {/* Child-cap toggle. A stable control whose STATE is the glyph, not
+              the label — the same rule command titles follow ("Reader Mode",
+              never "Toggle Reader Mode"). */}
+          {onToggleCapChildren && (
+            <button
+              type="button"
+              onClick={onToggleCapChildren}
+              data-dispatch-row="true"
+              title={
+                gridRow?.capChildren === false
+                  ? 'Cap orchestrated agents'
+                  : 'Show all orchestrated agents'
+              }
+              aria-label={
+                gridRow?.capChildren === false
+                  ? 'Cap orchestrated agents'
+                  : 'Show all orchestrated agents'
+              }
+              className="px-1 leading-none text-[11px] text-muted hover:text-fg"
+            >
+              {gridRow?.capChildren === false ? '⊟' : '⊞'}
+            </button>
+          )}
+          {/* The row's project binding lives at the top of the list it
+              constrains — the whole benefit of a per-row index over one shared
+              sidebar. Falls back to the scope label in classic Dispatch. */}
+          {onPickRowProject ? (
+            <button
+              type="button"
+              onClick={onPickRowProject}
+              data-dispatch-row="true"
+              title="Restrict this row to one project"
+              className="max-w-[9rem] truncate uppercase hover:text-fg"
+            >
+              {rowProjectLabel ?? 'Any project'}
+            </button>
+          ) : (
+            <span>{dispatchScope}</span>
+          )}
+        </span>
       </div>
       {/* Pinned section. Rendered above the regular groups and
           always visible — pinned agents are cross-scope by design.
@@ -125,13 +203,13 @@ export const DispatchAgentList = memo(function DispatchAgentList({
           legible while dispatch scope is set to a different project.
           Skip rendering when there are no pins so the regular agent
           groups don't gain an empty section header. */}
-      {pinnedRows.length > 0 && (
+      {scopedPinnedRows.length > 0 && (
         <div className="border-b border-border" data-dispatch-pinned-group="true">
           {/* projectTabId=null: pinned agents can span several projects, so
               there is no single tab a new agent would belong to. */}
-          <DispatchGroupHeader title="Pinned" rows={pinnedRows} projectTabId={null} />
+          <DispatchGroupHeader title="Pinned" rows={scopedPinnedRows} projectTabId={null} />
           <div>
-            {pinnedRows.map(row => (
+            {scopedPinnedRows.map(row => (
               <DispatchAgentListRow
                 key={row.key}
                 row={row}
@@ -145,7 +223,7 @@ export const DispatchAgentList = memo(function DispatchAgentList({
           </div>
         </div>
       )}
-      {groups.map(group => (
+      {scopedGroups.map(group => (
         <div key={group.tab.id} className="border-b border-border">
           <DispatchGroupHeader
             title={group.tab.title}
@@ -154,15 +232,27 @@ export const DispatchAgentList = memo(function DispatchAgentList({
             onCreateAgent={onCreateAgentInProject}
           />
           <div>
-            {group.rows.map(row => (
-              <DispatchAgentListRow
-                key={row.key}
-                row={row}
-                active={row.sessionId === activeSessionId}
-                disabled={disabledSessionIds?.has(row.sessionId) ?? false}
-                showWorktreeBadges={showWorktreeBadges}
-                focusSessionInTab={focusSessionInTab}
-              />
+            {group.items.map(item => (
+              item.kind === 'agent' ? (
+                <DispatchAgentListRow
+                  key={item.row.key}
+                  row={item.row}
+                  active={item.row.sessionId === activeSessionId}
+                  disabled={disabledSessionIds?.has(item.row.sessionId) ?? false}
+                  showWorktreeBadges={showWorktreeBadges}
+                  focusSessionInTab={focusSessionInTab}
+                />
+              ) : (
+                <button
+                  key={`${item.kind}:${item.parentSessionId}`}
+                  type="button"
+                  onClick={() => onToggleExpandedParent?.(item.parentSessionId)}
+                  data-dispatch-row="true"
+                  className="flex w-full items-center gap-1 border-t border-border py-1 pl-7 text-left text-[10px] text-muted hover:text-fg hover:bg-surface-raised"
+                >
+                  {item.kind === 'more' ? `+ ${item.hidden} more` : '− Show fewer'}
+                </button>
+              )
             ))}
           </div>
         </div>

@@ -835,6 +835,9 @@ export function useWorkspace(
     setState,
     setTileTabs,
     closeNewAgentPlacement,
+    refs,
+    sessionActions.ensureSessionLive,
+    showToast,
   )
 
   // ---- Side-effects (subscriptions, persistence, invalidation) ----
@@ -986,11 +989,18 @@ export function useWorkspace(
     setPinnedSessionIds: dispatchActions.setPinnedSessionIds,
     enterTiledDispatch: dispatchActions.enterTiledDispatch,
     exitTiledDispatch: dispatchActions.exitTiledDispatch,
-    setTiledLaneSession: dispatchActions.setTiledLaneSession,
-    setTiledLaneCount: dispatchActions.setTiledLaneCount,
+    selectTiledLaneSession: dispatchActions.selectTiledLaneSession,
     insertTiledLaneRight: dispatchActions.insertTiledLaneRight,
     removeTiledLane: dispatchActions.removeTiledLane,
     setTiledFocusedLane: dispatchActions.setTiledFocusedLane,
-    setTiledRatios: dispatchActions.setTiledRatios,
+    insertDispatchRowBelow: dispatchActions.insertDispatchRowBelow,
+    removeDispatchRow: dispatchActions.removeDispatchRow,
+    setDispatchGridShape: dispatchActions.setDispatchGridShape,
+    setDispatchLaneWeights: dispatchActions.setDispatchLaneWeights,
+    setDispatchRowIndexFraction: dispatchActions.setDispatchRowIndexFraction,
+    setDispatchRowHeights: dispatchActions.setDispatchRowHeights,
+    setDispatchRowProject: dispatchActions.setDispatchRowProject,
+    setDispatchRowCapChildren: dispatchActions.setDispatchRowCapChildren,
+    toggleDispatchRowExpandedParent: dispatchActions.toggleDispatchRowExpandedParent,
   }
 }
