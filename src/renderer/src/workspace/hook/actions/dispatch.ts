@@ -17,6 +17,9 @@ import {
 import {
   clampIndexFraction,
   insertLaneRightIntoGrid,
+  MAX_DISPATCH_LANES,
+  MAX_DISPATCH_ROWS,
+  MIN_DISPATCH_TILES,
   insertRowBelowInGrid,
   normalizeGridShape,
   removeLaneFromGrid,
@@ -95,7 +98,7 @@ export function useDispatchActions(
   unpinSession: (sessionId: SessionId) => void
   setPinnedSessionIds: (ids: SessionId[]) => void
   // ---- Tiled Dispatch (issue #248) ----
-  enterTiledDispatch: (count: number) => Promise<void>
+  enterTiledDispatch: (rowLengths: number[]) => Promise<void>
   exitTiledDispatch: () => void
   setTiledLaneSession: (laneIndex: number, sessionId: SessionId) => void
   setTiledLaneCount: (count: number) => void
@@ -198,17 +201,36 @@ export function useDispatchActions(
   // the single exception would have left the user unable to predict which of
   // their slots the app feels entitled to fill.
   const enterTiledDispatch = useCallback(
-    async (count: number) => {
+    async (rowLengths: number[]) => {
       closeNewAgentPlacement()
       setState(prev => {
         const scope = prev.dispatchMode?.scope ?? 'project'
-        const lanes = emptyLanes(clampTileCount(count))
+        // Takes a length PER ROW rather than a single count, because the grid
+        // is ragged by design and entering it should be able to express that
+        // in one step. A count would force the user into a rectangle and then
+        // make them edit their way out of it.
+        const rows = rowLengths
+          .slice(0, MAX_DISPATCH_ROWS)
+          .map(length => ({ length: clampTileCount(length) }))
+        const capped: { length: number }[] = []
+        let total = 0
+        for (const row of rows) {
+          const length = Math.min(row.length, MAX_DISPATCH_LANES - total)
+          if (length < MIN_DISPATCH_TILES) break
+          capped.push({ length })
+          total += length
+        }
+        const shape = capped.length > 0 ? capped : [{ length: clampTileCount(1) }]
         return {
           ...prev,
           dispatchMode: {
             scope,
             focusedSessionId: prev.dispatchMode?.focusedSessionId,
-            tiled: { lanes, rows: [{ length: lanes.length }], focusedLane: 0 },
+            tiled: {
+              lanes: emptyLanes(shape.reduce((sum, row) => sum + row.length, 0)),
+              rows: shape,
+              focusedLane: 0,
+            },
           },
         }
       })

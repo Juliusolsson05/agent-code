@@ -204,6 +204,17 @@ export function buildDefaultKeybindings(): CommandBindingDefault[] {
     // Dispatch owns the layout, and scoping it here leaves ⌘⇧G free for a grid
     // command later. The overlap matrix proves grid and dispatch are disjoint.
     { commandId: 'global-dispatch', bindings: ['Cmd+Shift+G'], context: 'dispatch' },
+    // Grid Dispatch row focus (#681). ⌥↑/↓ already move the focused lane's
+    // SELECTION up and down the index (handled inline in useKeybinds), so the
+    // shifted pair reads as "same axis, bigger unit" — move the focus itself
+    // between rows. `dispatch` context, because rows only exist there.
+    //
+    // Registered rather than handled inline like the four existing Dispatch
+    // arrows, so these show up in Keyboard Shortcuts, can be rebound, and are
+    // covered by check:keybindings. Migrating those four is its own issue: a
+    // rebindable-keys migration does not belong inside a layout PR.
+    { commandId: 'dispatch-focus-row-up', bindings: ['Alt+Shift+Up'], context: 'dispatch' },
+    { commandId: 'dispatch-focus-row-down', bindings: ['Alt+Shift+Down'], context: 'dispatch' },
 
     // --- App panels (⌘⇧) ----------------------------------------------------
     { commandId: 'usage.open', bindings: ['Cmd+Shift+U'], context: 'global' },
