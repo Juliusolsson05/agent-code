@@ -43,6 +43,41 @@ export type BindingContext =
  */
 const DISJOINT_CONTEXT_PAIRS: ReadonlyArray<readonly [BindingContext, BindingContext]> = [
   ['grid', 'dispatch'],
+  // `editor` is disjoint from both LAYOUT contexts as of #697:
+  // activeBindingContexts drops grid/dispatch entirely while the GLOBAL EDITOR
+  // owns the target, so a chord can never be matched by a layout binding and an
+  // editor binding for the same keystroke.
+  //
+  // CONSEQUENCE worth stating, because it is a footgun: a chord filed under
+  // `editor` is now reported FREE for a layout binding. That is correct for
+  // chords Monaco alone owns, and WRONG for chords the OS owns in every text
+  // field — those must be filed `global` or they become invisible the moment
+  // this pair is declared. Cmd+Shift+Up/Down were moved for exactly that
+  // reason.
+  //
+  // This pair is what the routing fix is FOR. Without it every dispatch chord
+  // had to be unique against the whole app plus macOS plus Monaco, and two
+  // attempts at a Grid Dispatch row-focus chord collided for exactly that
+  // reason (Alt+Shift+Arrow with macOS word selection, Cmd+Alt+Arrow with
+  // Monaco's multi-cursor). Declaring the disjointness the router now enforces
+  // gives the context system back the room it was designed to provide.
+  //
+  // `global` is deliberately NOT disjoint from anything: it is live in every
+  // surface including the editor, so a global chord really can collide.
+  //
+  // THIS DECLARATION IS ONLY TRUE BECAUSE OF THE ROUTER. If the gate in
+  // activeBindingContexts is ever removed, this list becomes a lie and
+  // check:keybindings will happily approve chords that really do conflict. The
+  // gate is pinned by `bindingContexts.test.ts` ("drops the layout context
+  // entirely while the Global Editor owns the target") — that test failing
+  // means this list must change too, not that the test needs updating.
+  //
+  // That guard is ONE-DIRECTIONAL and it is worth knowing which direction. It
+  // pins the pure context map. It does NOT pin the `editorOwnsTarget` DOM
+  // predicate or the call-site wiring, so a regression in either would keep the
+  // test green while making this list false.
+  ['grid', 'editor'],
+  ['dispatch', 'editor'],
 ]
 
 export function contextsOverlap(a: BindingContext, b: BindingContext): boolean {
@@ -227,24 +262,25 @@ export function buildDefaultKeybindings(): CommandBindingDefault[] {
     // have broken selection in the composer while moving row focus underneath
     // the user.
     //
-    // Focus Row Above/Below still ship with NO default chord, after two
-    // attempts and two different collisions:
+    // Grid Dispatch row focus. This chord took three attempts and the first two
+    // are worth keeping written down, because both were "verified free" against
+    // a source that could not see the real owner:
     //
-    //   Alt+Shift+Arrow  — macOS word selection, load-bearing in the composer.
-    //   Cmd+Alt+Arrow    — Monaco's Add Cursor Above/Below (its `linux:` block
-    //                      overrides only Linux, so `primary` applies on mac).
+    //   Alt+Shift+Arrow  — macOS word selection. check:keybindings passed; it
+    //                      does not know about the OS.
+    //   Cmd+Alt+Arrow    — Monaco's Add Cursor Above/Below. Its `linux:` block
+    //                      overrides Linux only, so `primary` applies on mac.
+    //                      Those chords are now in RESERVED_INTERACTIONS.
     //
-    // Monaco owns effectively the whole Cmd+Alt+Arrow space on macOS, including
-    // the Shift variants for column select. Those chords are now recorded in
-    // RESERVED_INTERACTIONS so the checker rejects this class instead of
-    // offering it as free — which is the durable half of the fix.
+    // Cmd+Alt+Arrow is legal NOW, and only because #697 made `dispatch` stop
+    // being live while a text editor owns the target. Monaco still owns this
+    // chord inside the editor and always will — the two no longer compete,
+    // because they are never live at the same time. That disjointness is
+    // declared in DISJOINT_CONTEXT_PAIRS above and enforced by the router.
     //
-    // The commands remain in the palette and are rebindable through Keyboard
-    // Shortcuts. Guessing a third chord is not the way to close this: the
-    // underlying problem is that the `dispatch` binding context is active even
-    // while Monaco owns the target (activeBindingContexts never consults
-    // editorOwnsTarget), which is a routing fix worth its own change rather
-    // than a rider on this one.
+    // If that gate is ever removed, this binding becomes a real conflict again.
+    { commandId: 'dispatch-focus-row-up', bindings: ['Cmd+Alt+Up'], context: 'dispatch' },
+    { commandId: 'dispatch-focus-row-down', bindings: ['Cmd+Alt+Down'], context: 'dispatch' },
 
     // --- App panels (⌘⇧) ----------------------------------------------------
     { commandId: 'usage.open', bindings: ['Cmd+Shift+U'], context: 'global' },
