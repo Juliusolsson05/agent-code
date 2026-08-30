@@ -9,8 +9,7 @@ import {
 } from '@renderer/components/ui/dialog'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
-import { relativeTime } from '@renderer/lib/relativeTime'
-import { cwdBasename, providerGlyph } from '@renderer/features/workspace/lib/sessionDisplay'
+import { SessionPickerRow } from '@renderer/features/workspace/ui/SessionPickerRow'
 import { useResizableSplitter } from '@renderer/features/shared/useResizableSplitter'
 import { SessionPreviewPane } from '@renderer/features/session-preview/ui/SessionPreviewPane'
 import type { PreviewTarget } from '@renderer/features/session-preview/ui/SessionPreviewPane'
@@ -383,9 +382,9 @@ function SessionCard({
   onSelect: () => void
   dataIdx: number
 }) {
-  const glyph = providerGlyph(entry.kind)
-  const base = cwdBasename(entry.cwd) || entry.cwd || '(no cwd)'
-
+  // Identity comes from main, already resolved through the shared ladder (#96).
+  // This surface used to build its own from `kind` + cwd basename, which is why
+  // the same session looked different here and in the resume picker.
   return (
     <div
       data-session-idx={dataIdx}
@@ -396,27 +395,19 @@ function SessionCard({
         (selected ? 'bg-surface-hi' : 'hover:bg-canvas/60')
       }
     >
-      <div className="flex items-center gap-3 text-[12px]">
-        <span className="text-accent font-semibold select-none w-4 text-center">
-          {glyph}
-        </span>
-        <span className="text-ink font-semibold">{entry.kind}</span>
-        <span className="text-muted">·</span>
-        <span className="text-ink-dim truncate">{base}</span>
-        <span className="text-muted">·</span>
-        <span className="text-muted">{relativeTime(entry.lastModified)}</span>
-        {entry.matchCount > 0 ? (
-          <>
-            <span className="text-muted">·</span>
-            <span className="text-accent text-[11px]">
-              {entry.matchCount} match{entry.matchCount === 1 ? '' : 'es'}
-            </span>
-          </>
-        ) : null}
-        {resuming ? (
-          <span className="ml-auto text-[11px] text-muted">resuming…</span>
-        ) : null}
-      </div>
+      <SessionPickerRow
+        identity={entry.identity}
+        trailing={
+          <span className="flex items-center gap-2 text-[11px]">
+            {entry.matchCount > 0 ? (
+              <span className="text-accent">
+                {entry.matchCount} match{entry.matchCount === 1 ? '' : 'es'}
+              </span>
+            ) : null}
+            {resuming ? <span className="text-muted">resuming…</span> : null}
+          </span>
+        }
+      />
 
       {entry.recentUserPrompts.length === 0 ? (
         <div className="mt-2 text-[11px] italic text-muted">
