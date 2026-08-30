@@ -53,6 +53,30 @@ export const RESERVED_INTERACTIONS: readonly ReservedInteraction[] = [
     owner: 'Numbered tab activation (Dispatch-safe variant)',
   },
   {
+    // macOS text-editing chords the OS owns in EVERY text field, including our
+    // composer. Nothing in this repository installs them, which is exactly why
+    // they were missing: the checker can only know what someone writes down.
+    //
+    // Option+Shift+Arrow extends a selection by word/paragraph. Grid Dispatch's
+    // row focus was given that chord, check:keybindings passed because no entry
+    // claimed it, and review found it would have broken selection in the
+    // composer. `useKeybinds`' header had documented it in prose for years —
+    // prose the checker cannot read.
+    //
+    // Context is `global` deliberately: the OS owns these wherever text is
+    // editable, so they can never be safely claimed by a layout context either.
+    //
+    // NOT listed here: bare Option+Arrow (word movement). Dispatch genuinely
+    // claims Alt+Arrow for lane movement and the router deliberately yields it
+    // back inside a text editor (`if (alt && !cmd) return`). Reserving it would
+    // report that deliberate arrangement as a conflict.
+    bindings: [
+      'Alt+Shift+Left', 'Alt+Shift+Right', 'Alt+Shift+Up', 'Alt+Shift+Down',
+    ],
+    context: 'global',
+    owner: 'macOS word/paragraph selection',
+  },
+  {
     // Monaco's multi-cursor and column-select chords, verified against
     // node_modules/monaco-editor (multicursor.js / coreCommands.js) rather than
     // from memory.
