@@ -229,6 +229,19 @@ describe('row project bindings become a set', () => {
     expect(rowOf(restored).projectTabIds).toBeUndefined()
   })
 
+  it('leaves an UNBOUND row untouched by reference', () => {
+    // The common case, and the one that would break everything quietly: if
+    // normalization rebuilt plain rows, the lane-selection race check — which
+    // compares row objects across an async wake — would see a different object
+    // every time and drop every selection.
+    const plain: DispatchModeState = {
+      scope: 'global',
+      tiled: { lanes: [{}], rows: [{ length: 1 }], focusedLane: 0 },
+    }
+
+    expect(normalizeDispatchModeGrid(plain)).toBe(plain)
+  })
+
   it('leaves a healthy multi-project row untouched by reference', () => {
     // Row identity is load-bearing: the lane-selection race check compares row
     // objects across a wake, so a normalization that rebuilt every row would
