@@ -226,38 +226,39 @@ carry a comment saying it is a bridge and what replaces it.
 `claude-code-headless` lister if it is ever revived — or delete that file, since
 the app has not used it since the app-side fork.
 
-## Stages
+## Stages — as built
 
-Each stage merges on its own and leaves the app working. #96 asks for
-one-modal-at-a-time; this keeps that, with the data work first because the
-renderer cannot be fixed without it.
+Six, not the five originally planned. The order changed so that **every commit
+leaves the app working**: the plan had the Claude "stop dropping unnamed
+sessions" change in stage 1, but `summary` is what the unmigrated pickers were
+still rendering, so flipping it before they moved would have shown blank rows in
+the intermediate commits. It moved to last.
 
-**Stage 1 — the record and the ladder (no UI change).**
-`SessionDisplayIdentity` in `@shared/types`, the ladder in
-`src/main/sessionDisplayIdentity.ts`, the registry-contract widening, the Codex
-bridge. Unit tests for the ladder: one case per rung, plus the Codex hex bridge,
-plus "a nameless Claude session is no longer dropped". Nothing renders it yet.
+1. **The record and the ladder.** `@shared/types/sessionDisplayIdentity` — type,
+   ladder, `SessionInfo` adapter, Codex hex bridge. 12 unit tests. Nothing wired.
+2. **Both listing paths serve it.** `session:list-for-cwd` / `session:list-all`
+   and the prompt index. Also collapsed `SessionIndexEntry` into
+   `@shared/types/sessionIndex` — planned for stage 5, pulled forward because the
+   type existed twice and adding the identity field to a hand-copied duplicate
+   was not defensible.
+3. **`SessionPickerRow` + PromptSearchModal.** 5 renderer tests on fallback marking.
+4. **CommandPalette + PathPickerModal.** Both migrated together — they consume
+   the same channel and splitting them would have left one commit where the two
+   resume surfaces disagreed, which is the bug.
+5. *(folded into 4)*
+6. **Behaviour + lock.** Remove the Claude `return null`; point
+   `registry.main.ts` at the app-side lister; add the boundary test.
 
-**Stage 2 — `SessionPickerRow` + PromptSearchModal.**
-Build the component; migrate the surface already closest to the target. Renderer
-test: a `cwd`-sourced label renders as a visible fallback, a `custom-title` one
-does not.
+### Deviations from the design above
 
-**Stage 3 — CommandPalette.**
-The highest-traffic picker and the one that currently leaks a full raw session
-id. Migrating it deletes the `summary || firstPrompt || sessionId` chain.
-
-**Stage 4 — PathPickerModal resume list.**
-Deletes the permanent `sessionId.slice(0, 8)` second line — the literal thing
-#96 was filed about.
-
-**Stage 5 — consolidation and the consistency test.**
-Delete `SessionIndexEntry`'s duplicated definition in `preload/api/types.ts`.
-Add the test that keeps this closed: **every session picker renders identity
-through `SessionPickerRow`** — a narrow filesystem-scanning boundary test in the
-style of `src/providers/importBoundaries.test.ts`, asserting no picker reads
-`.summary` or `.sessionId` for display. One test, clear failure message, no new
-tooling — matching the repo's anti-enforcement-bloat convention.
+- **`turnCount` dropped from the record.** Nothing can populate it: `SessionInfo`
+  has no count, and the index's `recentUserPrompts` is a capped window. Shipping a
+  field that is always `null` is dead weight.
+- **Registry consolidation added.** Not in the original plan. `registry.main.ts`
+  imported its cwd-scoped Claude lister from `claude-code-headless` while
+  `sessionIndex.ts` used the app-side copy — both live, same parse logic. Left
+  alone, the stage-6 fix would have reached every surface *except* the resume
+  picker. Fixed in the same PR as the blast radius it sits in.
 
 ## Verification
 
