@@ -989,7 +989,6 @@ export function useWorkspace(
     setPinnedSessionIds: dispatchActions.setPinnedSessionIds,
     enterTiledDispatch: dispatchActions.enterTiledDispatch,
     exitTiledDispatch: dispatchActions.exitTiledDispatch,
-    setTiledLaneSession: dispatchActions.setTiledLaneSession,
     selectTiledLaneSession: dispatchActions.selectTiledLaneSession,
     insertTiledLaneRight: dispatchActions.insertTiledLaneRight,
     removeTiledLane: dispatchActions.removeTiledLane,

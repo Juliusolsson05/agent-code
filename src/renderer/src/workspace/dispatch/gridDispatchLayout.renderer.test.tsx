@@ -96,7 +96,6 @@ function renderGrid(tiled: TiledDispatchState) {
     focusSessionInTab: vi.fn(),
     selectGridRelatedSession: vi.fn(),
     setTiledFocusedLane: vi.fn(),
-    setTiledLaneSession: vi.fn(),
     selectTiledLaneSession,
     setDispatchRowHeights: vi.fn(),
     setDispatchRowIndexFraction: vi.fn(),

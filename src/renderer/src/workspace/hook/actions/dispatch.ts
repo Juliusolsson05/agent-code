@@ -106,7 +106,6 @@ export function useDispatchActions(
   // ---- Tiled Dispatch (issue #248) ----
   enterTiledDispatch: (rowLengths: number[]) => Promise<void>
   exitTiledDispatch: () => void
-  setTiledLaneSession: (laneIndex: number, sessionId: SessionId) => void
   selectTiledLaneSession: (laneIndex: number, sessionId: SessionId) => Promise<void>
   insertTiledLaneRight: (laneIndex: number) => boolean
   removeTiledLane: (laneIndex: number) => void
@@ -255,7 +254,13 @@ export function useDispatchActions(
     })
   }, [setState])
 
-  // Assign a lane's agent. Duplicates ARE allowed — the same session may sit
+  // Assign a lane's agent. NOT exposed on the workspace: every caller must go
+  // through `selectTiledLaneSession` below, which wakes a hibernated agent
+  // first. Handing out the raw writer is what let four separate call sites
+  // place a dead backend in a lane (#690), and a wrapper that can be bypassed
+  // only fixes the callers that exist today.
+  //
+  // Duplicates ARE allowed — the same session may sit
   // in multiple lanes (the views mirror; see DispatchLane). No-op for
   // out-of-range indexes so a stale keybind targeting a since-removed lane is
   // harmless, and a no-op when the lane already shows this session.
@@ -639,7 +644,6 @@ export function useDispatchActions(
     setPinnedSessionIds,
     enterTiledDispatch,
     exitTiledDispatch,
-    setTiledLaneSession,
     selectTiledLaneSession,
     insertTiledLaneRight,
     removeTiledLane,

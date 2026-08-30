@@ -73,7 +73,7 @@ function recordedState(tiled: TiledDispatchState): WorkspaceState {
 
 function workspaceFor(
   state: WorkspaceState,
-  setTiledLaneSession: ReturnType<typeof vi.fn>,
+  selectTiledLaneSession: ReturnType<typeof vi.fn>,
 ): Workspace {
   return {
     state,
@@ -84,15 +84,15 @@ function workspaceFor(
     focusSessionInTab: vi.fn(),
     selectGridRelatedSession: vi.fn(),
     setTiledFocusedLane: vi.fn(),
-    setTiledLaneSession,
+    selectTiledLaneSession,
   } as unknown as Workspace
 }
 
 function renderLanes(tiled: TiledDispatchState, state = recordedState(tiled)) {
-  const setTiledLaneSession = vi.fn()
+  const selectTiledLaneSession = vi.fn()
   const result = render(
     <DispatchLayout
-      workspace={workspaceFor(state, setTiledLaneSession)}
+      workspace={workspaceFor(state, selectTiledLaneSession)}
       agentViewMode="agent"
       showStatusMode={false}
       showWorktreeBadges={false}
@@ -100,7 +100,7 @@ function renderLanes(tiled: TiledDispatchState, state = recordedState(tiled)) {
   )
   const painted = () =>
     result.queryAllByTestId('lane-agent').map(node => node.getAttribute('data-session-id'))
-  return { ...result, setTiledLaneSession, painted }
+  return { ...result, selectTiledLaneSession, painted }
 }
 
 // The lanes this workspace was actually saved with.
@@ -139,13 +139,13 @@ describe('unresolved tiled lanes', () => {
     const survivors = { ...FIXTURE.state.sessions }
     delete survivors[killed]
 
-    const { painted, setTiledLaneSession } = renderLanes(
+    const { painted, selectTiledLaneSession } = renderLanes(
       afterKill!.tiled!,
       { ...recordedState(afterKill!.tiled!), sessions: survivors },
     )
 
     // Nothing was handed to the empty lane...
-    expect(setTiledLaneSession).not.toHaveBeenCalled()
+    expect(selectTiledLaneSession).not.toHaveBeenCalled()
     // ...and every other lane still shows exactly what it showed before.
     expect(painted()).toEqual(RECORDED_LANES.filter(id => id !== killed))
   })
@@ -190,12 +190,12 @@ describe('unresolved tiled lanes', () => {
       dispatchMode: { ...FIXTURE.state.dispatchMode!, scope: 'project', tiled },
     }
 
-    const { painted, setTiledLaneSession, getAllByTestId } = renderLanes(tiled, projectScoped)
+    const { painted, selectTiledLaneSession, getAllByTestId } = renderLanes(tiled, projectScoped)
 
     expect(painted()).toEqual([])
     expect(getAllByTestId('lane-empty')).toHaveLength(1)
     // The selection survives — nothing rewrote the lane.
-    expect(setTiledLaneSession).not.toHaveBeenCalled()
+    expect(selectTiledLaneSession).not.toHaveBeenCalled()
     expect(tiled.lanes[0]?.selectedSessionId).toBe(foreign)
   })
 
