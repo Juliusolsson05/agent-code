@@ -304,6 +304,49 @@ describe('ClaudeSession prompt acceptance', () => {
     await expect(waiter.promise).resolves.toMatchObject({ kind: 'user' })
   })
 
+  it('tells the renderer WHY it is blocked, not just that it is', () => {
+    // #683. Every non-ready verdict used to collapse to 'provider-not-ready',
+    // which the renderer renders as "waiting for agent" — identical to a slow
+    // boot. A session blocked because the user's own text sits in the
+    // provider's composer therefore looked like one that was merely starting,
+    // and since that state never clears on its own (deliberately), the pane
+    // stayed dead with the cause and the remedy both invisible. Measured
+    // before this: 19 of 216 sessions ended still blocked, longest 47 hours.
+    const session = new ClaudeSession()
+    const surface = installPromptSurface(session, { composer: 'empty' })
+    ;(session as unknown as { transcriptTailAttached: boolean }).transcriptTailAttached = true
+    ;(session as unknown as { transcriptReplayQuiesced: boolean }).transcriptReplayQuiesced = true
+    const seen: Array<{ ready: boolean; reason?: string }> = []
+    session.on('input-readiness', input => seen.push({ ready: input.ready, reason: input.reason }))
+
+    refreshPromptGate(session)
+    surface.setComposer('drafted')
+    refreshPromptGate(session)
+
+    expect(seen).toContainEqual({ ready: false, reason: 'composer-occupied' })
+  })
+
+  it('publishes a readiness change when one non-ready reason replaces another', () => {
+    // The guard here was `else if (wasReady)`, so a transition BETWEEN two
+    // non-ready states published nothing at all. A session going
+    // warming -> occupied left the renderer showing the warming text forever:
+    // the boolean had not changed, so the one event carrying the news was
+    // suppressed. That is why a blocked pane reported "starting agent"
+    // indefinitely rather than naming the draft.
+    const session = new ClaudeSession()
+    const surface = installPromptSurface(session, { composer: 'unpainted' })
+    ;(session as unknown as { transcriptTailAttached: boolean }).transcriptTailAttached = true
+    ;(session as unknown as { transcriptReplayQuiesced: boolean }).transcriptReplayQuiesced = true
+    const seen: Array<string | undefined> = []
+    session.on('input-readiness', input => seen.push(input.reason))
+
+    refreshPromptGate(session)          // warming / composer-unpainted
+    surface.setComposer('drafted')
+    refreshPromptGate(session)          // occupied — never ready in between
+
+    expect(seen).toContain('composer-occupied')
+  })
+
   it('reports occupied for as long as the composer holds a draft', () => {
     // No time bound here on purpose. A 10s staleness escape hatch was tried and
     // removed before merge: typing never clears the composer, so it expired
