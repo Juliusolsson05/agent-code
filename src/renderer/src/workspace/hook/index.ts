@@ -992,5 +992,14 @@ export function useWorkspace(
     removeTiledLane: dispatchActions.removeTiledLane,
     setTiledFocusedLane: dispatchActions.setTiledFocusedLane,
     setTiledRatios: dispatchActions.setTiledRatios,
+    insertDispatchRowBelow: dispatchActions.insertDispatchRowBelow,
+    removeDispatchRow: dispatchActions.removeDispatchRow,
+    setDispatchGridShape: dispatchActions.setDispatchGridShape,
+    setDispatchLaneWeights: dispatchActions.setDispatchLaneWeights,
+    setDispatchRowIndexFraction: dispatchActions.setDispatchRowIndexFraction,
+    setDispatchRowHeights: dispatchActions.setDispatchRowHeights,
+    setDispatchRowProject: dispatchActions.setDispatchRowProject,
+    setDispatchRowCapChildren: dispatchActions.setDispatchRowCapChildren,
+    toggleDispatchRowExpandedParent: dispatchActions.toggleDispatchRowExpandedParent,
   }
 }

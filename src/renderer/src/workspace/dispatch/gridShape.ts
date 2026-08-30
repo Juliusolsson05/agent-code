@@ -53,6 +53,26 @@ export const MAX_DISPATCH_LANES = 16
 export const MAX_DISPATCH_TILES = 10
 export const MIN_DISPATCH_TILES = 1
 
+// Index-list width bounds, as a fraction of one row's width. The index must
+// stay readable (it carries titles, project chips, and activity) but must never
+// eat the row, so the lanes always keep at least 60%. These live here rather
+// than in the layout because the reducer clamps on write and the layout clamps
+// on read; two copies of a bound is how the two disagree.
+export const INDEX_FRACTION_MIN = 0.1
+export const INDEX_FRACTION_MAX = 0.4
+export const DEFAULT_INDEX_FRACTION = 0.18
+
+/** Smallest share of a row a single lane may be dragged to. */
+export const LANE_MIN_FRACTION = 0.08
+
+/** Smallest share of the grid a single row may be dragged to. */
+export const ROW_MIN_FRACTION = 0.12
+
+export function clampIndexFraction(value: number): number {
+  if (!Number.isFinite(value)) return DEFAULT_INDEX_FRACTION
+  return Math.max(INDEX_FRACTION_MIN, Math.min(INDEX_FRACTION_MAX, value))
+}
+
 /** Row shape guaranteed coherent with the lanes it describes. */
 export type NormalizedGrid = {
   lanes: DispatchLane[]

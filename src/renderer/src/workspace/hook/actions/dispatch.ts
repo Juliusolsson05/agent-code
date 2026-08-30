@@ -1,23 +1,74 @@
 import { useCallback } from 'react'
 
 import type {
+  DispatchGridRow,
   DispatchLane,
   DispatchModeState,
   SessionId,
   SessionMeta,
   TabId,
+  WorkspaceState,
 } from '@renderer/workspace/types'
 import {
   clampTileCount,
   dispatchFocusedSessionId,
-  insertLaneRightIntoTiled,
-  removeLaneFromTiled,
   withLaneSession,
 } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
+import {
+  clampIndexFraction,
+  insertLaneRightIntoGrid,
+  insertRowBelowInGrid,
+  normalizeGridShape,
+  removeLaneFromGrid,
+  removeRowFromGrid,
+  rowIndexForLane,
+  setGridShape,
+} from '@renderer/workspace/dispatch/gridShape'
 import type {
   WorkspaceSetState,
   WorkspaceSetTileTabs,
 } from '@renderer/workspace/hook/context'
+
+/**
+ * Write row METADATA without touching any row length.
+ *
+ * WHY metadata gets its own writer instead of each reducer spreading `rows`
+ * itself: a hand-rolled spread is one keystroke away from also writing a
+ * `length`, which silently breaks sum(rows[].length) === lanes.length — the one
+ * invariant nothing downstream re-derives. Routing every metadata write through
+ * a helper that CANNOT change lengths makes that class of bug unreachable
+ * rather than merely unlikely.
+ *
+ * Normalizes first so a row index is meaningful even against state persisted
+ * before the grid existed.
+ */
+function patchRow(
+  prev: WorkspaceState,
+  rowIndex: number,
+  patch: Partial<Omit<DispatchGridRow, 'length'>>,
+): WorkspaceState {
+  const tiled = prev.dispatchMode?.tiled
+  if (!tiled) return prev
+  const grid = normalizeGridShape(tiled)
+  if (!Number.isInteger(rowIndex) || rowIndex < 0 || rowIndex >= grid.rows.length) {
+    return prev
+  }
+  return {
+    ...prev,
+    dispatchMode: {
+      ...prev.dispatchMode!,
+      tiled: {
+        ...tiled,
+        rows: grid.rows.map((row, i) => (i === rowIndex ? { ...row, ...patch } : row)),
+        // Carried explicitly: normalizeGridShape may have just split a legacy
+        // `ratios` array, and spreading `tiled` alone would put the stale one
+        // back beside the fields it was split into.
+        laneWeights: grid.laneWeights,
+        ratios: undefined,
+      },
+    },
+  }
+}
 
 /**
  * N blank lanes.
@@ -52,6 +103,16 @@ export function useDispatchActions(
   removeTiledLane: (laneIndex: number) => void
   setTiledFocusedLane: (laneIndex: number) => void
   setTiledRatios: (ratios: number[]) => void
+  // ---- Grid Dispatch rows (issue #681) ----
+  insertDispatchRowBelow: (rowIndex: number) => boolean
+  removeDispatchRow: (rowIndex: number) => void
+  setDispatchGridShape: (rowLengths: number[]) => boolean
+  setDispatchLaneWeights: (weights: number[]) => void
+  setDispatchRowIndexFraction: (rowIndex: number, fraction: number) => void
+  setDispatchRowHeights: (heights: number[]) => void
+  setDispatchRowProject: (rowIndex: number, tabId: TabId | undefined) => void
+  setDispatchRowCapChildren: (rowIndex: number, cap: boolean) => void
+  toggleDispatchRowExpandedParent: (rowIndex: number, sessionId: SessionId) => void
 } {
   const enterDispatchMode = useCallback(
     async (scope: DispatchModeState['scope'] = state.dispatchMode?.scope ?? 'project') => {
@@ -147,7 +208,7 @@ export function useDispatchActions(
           dispatchMode: {
             scope,
             focusedSessionId: prev.dispatchMode?.focusedSessionId,
-            tiled: { lanes, focusedLane: 0 },
+            tiled: { lanes, rows: [{ length: lanes.length }], focusedLane: 0 },
           },
         }
       })
@@ -210,11 +271,23 @@ export function useDispatchActions(
             ? tiled.lanes.slice(0, next)
             : [...tiled.lanes, ...emptyLanes(next - tiled.lanes.length)]
         const focusedLane = Math.min(tiled.focusedLane, lanes.length - 1)
+        // The legacy count path only ever addressed a single row, and it stays
+        // that way: it has no positional intent to spread across rows, so it
+        // collapses whatever shape exists into one row of `next` lanes. The
+        // grid-aware way to resize is setDispatchGridShape, which takes a
+        // length per row. Leaving the old rows here would break
+        // sum(rows[].length) === lanes.length on the very next read.
         return {
           ...prev,
           dispatchMode: {
             ...prev.dispatchMode!,
-            tiled: { lanes, focusedLane, ratios: undefined },
+            tiled: {
+              lanes,
+              rows: [{ ...(tiled.rows?.[0] ?? {}), length: lanes.length }],
+              focusedLane,
+              laneWeights: undefined,
+              ratios: undefined,
+            },
           },
         }
       })
@@ -236,7 +309,7 @@ export function useDispatchActions(
       setState(prev => {
         const tiled = prev.dispatchMode?.tiled
         if (!tiled) return prev
-        const next = insertLaneRightIntoTiled(tiled, laneIndex)
+        const next = insertLaneRightIntoGrid(tiled, laneIndex)
         if (!next) return prev
         inserted = true
         return { ...prev, dispatchMode: { ...prev.dispatchMode!, tiled: next } }
@@ -265,7 +338,7 @@ export function useDispatchActions(
       setState(prev => {
         const tiled = prev.dispatchMode?.tiled
         if (!tiled) return prev
-        const next = removeLaneFromTiled(tiled, laneIndex)
+        const next = removeLaneFromGrid(tiled, laneIndex)
         if (!next) return prev
         return { ...prev, dispatchMode: { ...prev.dispatchMode!, tiled: next } }
       })
@@ -301,6 +374,162 @@ export function useDispatchActions(
           ...prev,
           dispatchMode: { ...prev.dispatchMode!, tiled: { ...tiled, ratios } },
         }
+      })
+    },
+    [setState],
+  )
+
+  // ---- Grid Dispatch row reducers (issue #681) ----
+  //
+  // Structural changes (insert/remove row, reshape) delegate to gridShape, which
+  // returns a COMPLETE coherent shape or null. Row METADATA changes (project,
+  // density, sizing) never touch lengths, so they go through patchRow below.
+  // Keeping those two categories apart is what stops a metadata write from
+  // silently breaking sum(rows[].length) === lanes.length.
+
+  const insertDispatchRowBelow = useCallback(
+    (rowIndex: number) => {
+      let inserted = false
+      setState(prev => {
+        const tiled = prev.dispatchMode?.tiled
+        if (!tiled) return prev
+        const next = insertRowBelowInGrid(tiled, rowIndex)
+        if (!next) return prev
+        inserted = true
+        return { ...prev, dispatchMode: { ...prev.dispatchMode!, tiled: next } }
+      })
+      // Reports the reducer's ACTUAL admission rather than the palette's earlier
+      // render snapshot, so a stale invocation cannot announce a row that was
+      // refused at the row or lane ceiling. Same contract as
+      // insertTiledLaneRight.
+      return inserted
+    },
+    [setState],
+  )
+
+  const removeDispatchRow = useCallback(
+    (rowIndex: number) => {
+      setState(prev => {
+        const tiled = prev.dispatchMode?.tiled
+        if (!tiled) return prev
+        const next = removeRowFromGrid(tiled, rowIndex)
+        if (!next) return prev
+        return { ...prev, dispatchMode: { ...prev.dispatchMode!, tiled: next } }
+      })
+    },
+    [setState],
+  )
+
+  const setDispatchGridShape = useCallback(
+    (rowLengths: number[]) => {
+      let applied = false
+      setState(prev => {
+        const tiled = prev.dispatchMode?.tiled
+        if (!tiled) return prev
+        const next = setGridShape(tiled, rowLengths)
+        if (!next) return prev
+        applied = true
+        return { ...prev, dispatchMode: { ...prev.dispatchMode!, tiled: next } }
+      })
+      return applied
+    },
+    [setState],
+  )
+
+  const setDispatchLaneWeights = useCallback(
+    (weights: number[]) => {
+      setState(prev => {
+        const tiled = prev.dispatchMode?.tiled
+        if (!tiled) return prev
+        // Length-checked here as well as on read: a weights array that does not
+        // describe every lane is dropped by normalizeGridShape anyway, and
+        // storing one would make the next drag start from a silently discarded
+        // value.
+        if (weights.length !== tiled.lanes.length) return prev
+        return {
+          ...prev,
+          dispatchMode: { ...prev.dispatchMode!, tiled: { ...tiled, laneWeights: weights } },
+        }
+      })
+    },
+    [setState],
+  )
+
+  const setDispatchRowIndexFraction = useCallback(
+    (rowIndex: number, fraction: number) => {
+      setState(prev => patchRow(prev, rowIndex, { indexFraction: clampIndexFraction(fraction) }))
+    },
+    [setState],
+  )
+
+  const setDispatchRowHeights = useCallback(
+    (heights: number[]) => {
+      setState(prev => {
+        const tiled = prev.dispatchMode?.tiled
+        if (!tiled) return prev
+        const grid = normalizeGridShape(tiled)
+        if (heights.length !== grid.rows.length) return prev
+        return {
+          ...prev,
+          dispatchMode: {
+            ...prev.dispatchMode!,
+            tiled: {
+              ...tiled,
+              rows: grid.rows.map((row, i) => ({ ...row, height: heights[i] })),
+            },
+          },
+        }
+      })
+    },
+    [setState],
+  )
+
+  const setDispatchRowProject = useCallback(
+    (rowIndex: number, tabId: TabId | undefined) => {
+      setState(prev => {
+        const patched = patchRow(prev, rowIndex, { projectTabId: tabId })
+        if (patched === prev || !patched.dispatchMode) return patched
+        // Binding PROMOTES scope to global. Project scope builds its row set
+        // from activeTabId alone, so a row bound to any other project would show
+        // an empty index and every lane in it would fail to resolve. The same
+        // promotion, for the same reason, already happens in
+        // agentIndexNavigation when a cross-project label is used.
+        //
+        // Unbinding deliberately does NOT demote: the user may have several
+        // rows still bound, and silently narrowing the scope out from under them
+        // would empty those rows.
+        if (tabId === undefined || patched.dispatchMode.scope === 'global') return patched
+        return {
+          ...patched,
+          dispatchMode: { ...patched.dispatchMode, scope: 'global' },
+        }
+      })
+    },
+    [setState],
+  )
+
+  const setDispatchRowCapChildren = useCallback(
+    (rowIndex: number, cap: boolean) => {
+      // Flipping the row default also clears its per-parent overrides: those
+      // are exceptions TO the default, so carrying them across a change of the
+      // default would leave the row in a state the toggle cannot describe.
+      setState(prev => patchRow(prev, rowIndex, { capChildren: cap, expandedParents: undefined }))
+    },
+    [setState],
+  )
+
+  const toggleDispatchRowExpandedParent = useCallback(
+    (rowIndex: number, sessionId: SessionId) => {
+      setState(prev => {
+        const tiled = prev.dispatchMode?.tiled
+        if (!tiled) return prev
+        const current = normalizeGridShape(tiled).rows[rowIndex]?.expandedParents ?? []
+        const next = current.includes(sessionId)
+          ? current.filter(id => id !== sessionId)
+          : [...current, sessionId]
+        return patchRow(prev, rowIndex, {
+          expandedParents: next.length > 0 ? next : undefined,
+        })
       })
     },
     [setState],
@@ -398,5 +627,14 @@ export function useDispatchActions(
     removeTiledLane,
     setTiledFocusedLane,
     setTiledRatios,
+    insertDispatchRowBelow,
+    removeDispatchRow,
+    setDispatchGridShape,
+    setDispatchLaneWeights,
+    setDispatchRowIndexFraction,
+    setDispatchRowHeights,
+    setDispatchRowProject,
+    setDispatchRowCapChildren,
+    toggleDispatchRowExpandedParent,
   }
 }

@@ -145,6 +145,13 @@ Three findings, all load-bearing:
 | **Why separate** | Chord admission is decided by the checker, not by this document. |
 | **Reality check** | The existing binding table is the ground truth for what is free. |
 
+> **Revision (2026-08-30).** The row-scoped SELECTOR half of Stages 7 and 8
+> landed early, as `rowScopedRows.ts` with Stage 5. The layout needs a
+> per-row row list to render at all, and building that seam twice — once
+> stubbed, once real — would have been the churn this method exists to avoid.
+> Stages 7 and 8 are now their CONTROLS: the picker surface, the header
+> toggle, and the commands.
+
 ### Stage 7 — per-row project binding
 
 | Field | |
@@ -212,12 +219,24 @@ should defend `3` in review; it is a starting value. The cap is inert on every
 recorded shape, so the risk of being wrong is "the feature does nothing yet",
 not "the index lies". If it turns out to need tuning, it is one constant.
 
-**U2 — `depth` may not always be 1 for a child.** `buildDispatchGroups` emits a
-child at depth 0 when its parent is absent from the same group (scope filter,
-closed parent, or a **pinned** parent — pins are pulled into their own section).
-The census above has no pinned sessions, so this branch was never exercised. A
-cap keyed on `depth === 1` would silently miss an orphaned child. Stage 2 must
-force this case.
+**U2 — RESOLVED, and it was not a bug.** The concern was that
+`buildDispatchGroups` emits a child at depth 0 when its parent is absent from
+the same group (scope filter, closed parent, or a **pinned** parent, since pins
+are pulled into their own section), so a cap keyed on `depth === 1` would
+silently miss an orphaned child.
+
+Working it through, not capping it is the *correct* behavior. An orphaned child
+renders with its own canonical label at the top level and is visually
+indistinguishable from an ordinary agent. Hiding it under a `+N more` belonging
+to a parent the user cannot see would be strictly worse than showing it.
+
+The cap therefore follows VISUAL nesting — the run of depth-1 rows after a
+depth-0 row — which makes the orphan case right by construction rather than by
+a special case. Pinned in `rowScopedRows.test.ts`
+("does not cap a child that renders as a top-level row").
+
+The flag was still worth raising: the rule is now held for a stated reason
+rather than because it was the first thing written.
 
 **U3 — mini-list capping is unmeasured.** The design caps strips as well as the
 index. Ten extra chips in a 46px column may not actually be the same problem as
