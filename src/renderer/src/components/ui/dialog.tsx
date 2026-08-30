@@ -55,8 +55,15 @@ const DialogContent = React.forwardRef<
       // Global DOM and native-IPC input routers can synchronously query this
       // marker without mirroring open state into a second modal manager.
       {...{ [APP_INTERACTION_OWNER_ATTRIBUTE]: 'app' }}
+      // WHY the column is `minmax(0,1fr)` instead of Grid's implicit `auto`:
+      // dialogs routinely contain paths, command lines, and editors. An
+      // unbroken descendant contributes a huge intrinsic minimum to an auto
+      // track, so the direct child widens past this element's 92vw contract
+      // and a nested `w-full` field faithfully follows it off-screen. Zeroing
+      // the TRACK minimum lets the child shrink first; each child still owns
+      // whether its content truncates, wraps, or scrolls.
       className={cn(
-        'fixed left-1/2 top-1/2 z-[1100] grid w-[min(520px,92vw)] -translate-x-1/2 -translate-y-1/2 rounded-float border border-border-hi bg-surface text-ink shadow-2xl outline-none',
+        'fixed left-1/2 top-1/2 z-[1100] grid grid-cols-[minmax(0,1fr)] w-[min(520px,92vw)] -translate-x-1/2 -translate-y-1/2 rounded-float border border-border-hi bg-surface text-ink shadow-2xl outline-none',
         className,
       )}
     >

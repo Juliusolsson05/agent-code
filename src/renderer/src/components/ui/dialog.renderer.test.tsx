@@ -37,6 +37,13 @@ describe('Dialog', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Agent details' })
     expect(dialog.getAttribute('aria-describedby')).toBeTruthy()
     expect(dialog.matches(APP_INTERACTION_OWNER_SELECTOR)).toBe(true)
+    // WHY this class is a behavior contract, not a snapshot of incidental
+    // styling: CSS Grid columns default to an automatic minimum. A direct
+    // child containing an unbroken path can therefore widen the grid track
+    // past the dialog's viewport-bound width, dragging a `w-full` textarea
+    // outside the modal with it. The explicit zero minimum is what lets every
+    // dialog child shrink before its own truncate/overflow policy takes over.
+    expect(dialog.className).toContain('grid-cols-[minmax(0,1fr)]')
     // WHY this assertion matters: a portal is what lets Radix make the rest
     // of the app inert consistently; rendering under a transformed pane can
     // otherwise break both fixed positioning and stacking behavior.
