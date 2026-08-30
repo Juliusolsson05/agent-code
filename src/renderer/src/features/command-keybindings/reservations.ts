@@ -67,14 +67,34 @@ export const RESERVED_INTERACTIONS: readonly ReservedInteraction[] = [
     // editable, so they can never be safely claimed by a layout context either.
     //
     // NOT listed here: bare Option+Arrow (word movement). Dispatch genuinely
-    // claims Alt+Arrow for lane movement and the router deliberately yields it
-    // back inside a text editor (`if (alt && !cmd) return`). Reserving it would
-    // report that deliberate arrangement as a conflict.
+    // claims Alt+Arrow for lane movement, and the router yields it back inside
+    // the GLOBAL EDITOR specifically (`if (alt && !cmd) return`) — not in the
+    // composer, where dispatch navigation from a focused composer is the
+    // intended workflow. Reserving it would report that arrangement as a
+    // conflict.
+    //
+    // Be precise about what this entry does and does not buy: it stops a chord
+    // from being OFFERED as free. It does not stop the inline dispatch grammar
+    // in useKeybinds from consuming Alt+Shift+Arrow in a composer today, which
+    // it does because that block tests `alt && !cmd` with no shift check.
     bindings: [
       'Alt+Shift+Left', 'Alt+Shift+Right', 'Alt+Shift+Up', 'Alt+Shift+Down',
+      // Select to document start/end. Monaco has its own cursorTopSelect /
+      // cursorBottomSelect for these, but that is Monaco COPYING the OS
+      // convention — macOS owns them in every text field, so they belong here
+      // and not in the Monaco entry.
+      //
+      // WHY that distinction became load-bearing: `editor` is now disjoint from
+      // `grid`/`dispatch` (#697). A chord filed only under `editor` is
+      // therefore reported FREE for a dispatch binding — correct for chords
+      // Monaco alone owns, wrong for chords the OS owns everywhere. Filed under
+      // `editor` these would have been offered as free the moment the
+      // disjointness landed, and select-to-document-start would have died in
+      // the composer whenever Dispatch was live.
+      'Cmd+Shift+Up', 'Cmd+Shift+Down',
     ],
     context: 'global',
-    owner: 'macOS word/paragraph selection',
+    owner: 'macOS text selection',
   },
   {
     // Monaco's multi-cursor and column-select chords, verified against
@@ -96,7 +116,8 @@ export const RESERVED_INTERACTIONS: readonly ReservedInteraction[] = [
       'Cmd+Alt+Up', 'Cmd+Alt+Down',
       'Cmd+Alt+Shift+Up', 'Cmd+Alt+Shift+Down',
       'Cmd+Alt+Shift+Left', 'Cmd+Alt+Shift+Right',
-      'Cmd+Shift+Up', 'Cmd+Shift+Down',
+      // Paged column select.
+      'Cmd+Alt+Shift+PageUp', 'Cmd+Alt+Shift+PageDown',
     ],
     context: 'editor',
     owner: 'Monaco multi-cursor / column select',

@@ -13,6 +13,12 @@ import { activeBindingContexts } from '@renderer/workspace/tile-tree/useKeybinds
 //
 // The seam is the export itself. It could be removed if the router ever exposed
 // its resolved context set for a synthetic event.
+//
+// KNOW WHAT THIS DOES NOT COVER. It pins the pure map only. The
+// `editorOwnsTarget` DOM predicate and the call-site wiring are not exercised
+// here, so a regression in either keeps these green while making
+// DISJOINT_CONTEXT_PAIRS false. That declaration cites this file; the citation
+// is about the map, not the whole chain.
 
 describe('activeBindingContexts', () => {
   const contexts = (input: Partial<Parameters<typeof activeBindingContexts>[0]>) =>
@@ -36,11 +42,15 @@ describe('activeBindingContexts', () => {
     expect(contexts({ dispatchMode: true }).has('grid')).toBe(false)
   })
 
-  it('drops the layout context entirely while a text editor owns the target', () => {
+  it('drops the layout context entirely while the Global Editor owns the target', () => {
     // #697. `grid` and `dispatch` describe which WORKSPACE SURFACE owns the
     // keyboard. When Monaco owns the target it owns the keyboard, so neither is
     // live — otherwise a workspace chord is matched, preventDefault()ed, and
     // invoked while the user is typing, and the editor never sees the key.
+    //
+    // Scope, precisely: `editorOwnsTarget` is the GLOBAL EDITOR only. The agent
+    // composer keeps grid/dispatch live on purpose, since navigating rows from
+    // a focused composer is Dispatch's core workflow.
     //
     // Concretely: Cmd+Alt+Down is Monaco's Add Cursor Below. With `dispatch`
     // live it would move Dispatch row focus instead and add no cursor.

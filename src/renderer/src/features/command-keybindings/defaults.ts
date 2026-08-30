@@ -44,9 +44,16 @@ export type BindingContext =
 const DISJOINT_CONTEXT_PAIRS: ReadonlyArray<readonly [BindingContext, BindingContext]> = [
   ['grid', 'dispatch'],
   // `editor` is disjoint from both LAYOUT contexts as of #697:
-  // activeBindingContexts drops grid/dispatch entirely while a text editor owns
-  // the target, so a chord can never be matched by a layout binding and an
+  // activeBindingContexts drops grid/dispatch entirely while the GLOBAL EDITOR
+  // owns the target, so a chord can never be matched by a layout binding and an
   // editor binding for the same keystroke.
+  //
+  // CONSEQUENCE worth stating, because it is a footgun: a chord filed under
+  // `editor` is now reported FREE for a layout binding. That is correct for
+  // chords Monaco alone owns, and WRONG for chords the OS owns in every text
+  // field — those must be filed `global` or they become invisible the moment
+  // this pair is declared. Cmd+Shift+Up/Down were moved for exactly that
+  // reason.
   //
   // This pair is what the routing fix is FOR. Without it every dispatch chord
   // had to be unique against the whole app plus macOS plus Monaco, and two
@@ -62,8 +69,13 @@ const DISJOINT_CONTEXT_PAIRS: ReadonlyArray<readonly [BindingContext, BindingCon
   // activeBindingContexts is ever removed, this list becomes a lie and
   // check:keybindings will happily approve chords that really do conflict. The
   // gate is pinned by `bindingContexts.test.ts` ("drops the layout context
-  // entirely while a text editor owns the target") — that test failing means
-  // this list must change too, not that the test needs updating.
+  // entirely while the Global Editor owns the target") — that test failing
+  // means this list must change too, not that the test needs updating.
+  //
+  // That guard is ONE-DIRECTIONAL and it is worth knowing which direction. It
+  // pins the pure context map. It does NOT pin the `editorOwnsTarget` DOM
+  // predicate or the call-site wiring, so a regression in either would keep the
+  // test green while making this list false.
   ['grid', 'editor'],
   ['dispatch', 'editor'],
 ]

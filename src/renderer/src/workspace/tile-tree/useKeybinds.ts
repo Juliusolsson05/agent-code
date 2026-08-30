@@ -200,8 +200,15 @@ const SURFACE_OWNED_COMMAND_IDS: ReadonlySet<string> = new Set([
  * the user is not typing).
  *
  * `grid` and `dispatch` are LAYOUT contexts: they say which workspace surface
- * owns the keyboard. While a text editor owns the target it owns the keyboard,
- * so neither is live (#697). They used to stay live, and the router
+ * owns the keyboard. While the GLOBAL EDITOR owns the target it owns the
+ * keyboard, so neither is live (#697).
+ *
+ * Read "editor" here literally: `editorOwnsTarget` matches only
+ * `[data-global-editor-input-owner]`, stamped by MonacoFileEditor and
+ * EditorWorkbench. The agent COMPOSER is also a text editor and deliberately
+ * keeps grid/dispatch live — navigating rows and lanes while a composer has
+ * focus is Dispatch's core workflow, not a bug. Chords that must survive in the
+ * composer are protected by the reservation table instead. They used to stay live, and the router
  * preventDefault()s whatever it matches — so any workspace chord was swallowed
  * mid-keystroke while the user was typing into Monaco, and the editor never saw
  * the key. Cmd+Alt+Down moved Dispatch row focus instead of adding a cursor.
