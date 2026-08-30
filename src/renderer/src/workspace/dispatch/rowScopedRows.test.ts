@@ -56,13 +56,38 @@ describe('project binding', () => {
 
   it('keeps only the bound project s agents', () => {
     const tabId = GLOBAL_ROWS[0]!.tabId
-    const items = rowScopedRows(GLOBAL_ROWS, { projectTabId: tabId })
+    const items = rowScopedRows(GLOBAL_ROWS, { projectTabIds: [tabId] })
 
     expect(items.length).toBeGreaterThan(0)
     expect(items.length).toBeLessThan(GLOBAL_ROWS.length)
     for (const item of items) {
       if (item.kind === 'agent') expect(item.row.tabId).toBe(tabId)
     }
+  })
+
+  it('offers agents from every bound project', () => {
+    // The whole feature: a row is a working context and a working context
+    // routinely spans two repos. buildDispatchGroups already groups by tab, so
+    // the index renders one labelled section per project for free.
+    const tabs = [...new Set(GLOBAL_ROWS.map(row => row.tabId))]
+    expect(tabs.length).toBeGreaterThanOrEqual(2)
+    const pair = [tabs[0]!, tabs[1]!]
+
+    const items = rowScopedRows(GLOBAL_ROWS, { projectTabIds: pair })
+    const shown = items.flatMap(item => (item.kind === 'agent' ? [item.row] : []))
+
+    expect(new Set(shown.map(row => row.tabId))).toEqual(new Set(pair))
+    // Strictly more than either project alone, strictly fewer than everything.
+    const single = rowScopedRows(GLOBAL_ROWS, { projectTabIds: [tabs[0]!] })
+    expect(shown.length).toBeGreaterThan(single.length)
+    expect(shown.length).toBeLessThan(GLOBAL_ROWS.length)
+  })
+
+  it('treats an empty binding set as unbound', () => {
+    // Defensive: normalizeGridShape collapses empty to absent, but this helper
+    // is also called with the shape editor's in-progress draft.
+    expect(rowScopedRows(GLOBAL_ROWS, { projectTabIds: [] }))
+      .toHaveLength(GLOBAL_ROWS.length)
   })
 
   it('preserves canonical labels with gaps instead of renumbering', () => {
@@ -72,7 +97,7 @@ describe('project binding', () => {
     // global D12/D15 would make the highlighted chip and the acted-on session
     // different agents.
     const lastTab = GLOBAL_ROWS[GLOBAL_ROWS.length - 1]!.tabId
-    const items = rowScopedRows(GLOBAL_ROWS, { projectTabId: lastTab })
+    const items = rowScopedRows(GLOBAL_ROWS, { projectTabIds: [lastTab] })
     const shown = items.flatMap(item => (item.kind === 'agent' ? [item.row] : []))
 
     for (const row of shown) {
@@ -173,7 +198,7 @@ describe('orchestration child cap', () => {
     // does not even show.
     const fanOut = withFanOut(10)
     const boundTab = fanOut[fanOut.length - 1]!.tabId
-    const items = rowScopedRows(fanOut, { projectTabId: boundTab })
+    const items = rowScopedRows(fanOut, { projectTabIds: [boundTab] })
 
     for (const item of items) {
       if (item.kind === 'agent') expect(item.row.tabId).toBe(boundTab)
@@ -200,7 +225,7 @@ describe('spawning into a bound row', () => {
         // from — exactly the case that used to fall through to activeTabId.
         tiled: {
           lanes: [{}],
-          rows: [{ length: 1, projectTabId: boundTab }],
+          rows: [{ length: 1, projectTabIds: [boundTab] }],
           focusedLane: 0,
         },
       },
@@ -222,5 +247,46 @@ describe('spawning into a bound row', () => {
     }
 
     expect(resolveDispatchSpawnTarget(state).tabId).toBe(FIXTURE.state.activeTabId)
+  })
+})
+
+describe('spawning into a multi-project row', () => {
+  // With one binding this was a lookup. With several it needs a RULE, and the
+  // rule is "the project you were last in": the active tab when it is one of
+  // the bound set, otherwise the first. Anything less deterministic makes the
+  // same gesture file agents in different projects on different days.
+  const rowWithProjects = (ids: string[]): WorkspaceState => ({
+    ...FIXTURE.state,
+    dispatchMode: {
+      ...FIXTURE.state.dispatchMode!,
+      scope: 'global',
+      tiled: {
+        lanes: [{}],
+        rows: [{ length: 1, projectTabIds: ids }],
+        focusedLane: 0,
+      },
+    },
+  })
+
+  it('prefers the active tab when it is one of the bound projects', () => {
+    const other = GLOBAL_ROWS.find(row => row.tabId !== FIXTURE.state.activeTabId)!.tabId
+
+    // Deliberately listed SECOND, so passing cannot be an artifact of taking
+    // the head of the array.
+    const target = resolveDispatchSpawnTarget(
+      rowWithProjects([other, FIXTURE.state.activeTabId]),
+    )
+
+    expect(target.tabId).toBe(FIXTURE.state.activeTabId)
+  })
+
+  it('falls back to the first bound project when the active tab is not bound', () => {
+    const others = [...new Set(GLOBAL_ROWS.map(row => row.tabId))]
+      .filter(id => id !== FIXTURE.state.activeTabId)
+    expect(others.length).toBeGreaterThanOrEqual(2)
+
+    const target = resolveDispatchSpawnTarget(rowWithProjects(others))
+
+    expect(target.tabId).toBe(others[0])
   })
 })

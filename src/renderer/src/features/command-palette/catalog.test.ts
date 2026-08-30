@@ -36,6 +36,8 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   'prev-tab',
   'reorder-tabs',
   'resume-session',
+  // windowCommands (1)
+  'new-window',
   // paneCommands (31: 27 literal + 4 generated provider splits)
   'new-agent',
   'split-vertical',
@@ -185,12 +187,12 @@ const NAVIGATION_COMMAND_GROUP: readonly string[] = [
 const ids = (): string[] => builtInCommandCatalog.map(c => c.id)
 
 describe('built-in command catalog — baseline characterization', () => {
-  it('contains exactly the 112 governed commands in registration order', () => {
+  it('contains exactly the 113 governed commands in registration order', () => {
     // Order matters: this is the palette's empty-query browse order.
     expect(ids()).toEqual([...BASELINE_COMMAND_IDS])
   })
 
-  it('has exactly 112 commands', () => {
+  it('has exactly 113 commands', () => {
     // Stated separately from the order assertion because this number is the
     // thing that moves, and a bare count failure is a clearer signal than a
     // 99-line array diff.
@@ -198,10 +200,11 @@ describe('built-in command catalog — baseline characterization', () => {
     // 102 baseline → 98 after governance (5 retirements, 1 addition) → 99 with
     // `open-keyboard-shortcuts` → 102 with the three composer commands → 104
     // with the two lane-removal commands → 105 with Set Agent Title → 106 with
-    // New Lane. Each
+    // New Lane → 112 with Grid Dispatch's six row commands → 113 with New
+    // Window. Each
     // step of that arithmetic was a deliberate edit to this line, which is the
     // entire point of pinning it.
-    expect(builtInCommandCatalog).toHaveLength(112)
+    expect(builtInCommandCatalog).toHaveLength(113)
   })
 
   it('reports no structural defects', () => {
@@ -218,7 +221,7 @@ describe('built-in command catalog — baseline characterization', () => {
 })
 
 describe('generated per-provider split commands', () => {
-  // The arithmetic is 102 literal ids + 4 generated = 106. If a provider
+  // The arithmetic is 103 literal ids + 4 generated = 107. If a provider
   // is ever added to AGENT_PROVIDER_KINDS, this invariant is what tells the
   // author that the catalog count moved for a legitimate reason, and forces the
   // baseline snapshot above to be updated deliberately.
@@ -232,10 +235,11 @@ describe('generated per-provider split commands', () => {
   })
 
   it('accounts for the difference between literal and total command count', () => {
-    // 112 total - 4 generated = 108 literal `id:` fields across the command
+    // 113 total - 4 generated = 109 literal `id:` fields across the command
     // modules. At the original baseline this read 102 - 4 = 98; it moved down by
-    // the five retirements, then back up by the nine additions.
-    expect(builtInCommandCatalog.length - nonDefaultProviders.length * 2).toBe(108)
+    // the five retirements, then back up by the nine additions, Grid Dispatch's
+    // six row commands, and New Window.
+    expect(builtInCommandCatalog.length - nonDefaultProviders.length * 2).toBe(109)
   })
 
   it('emits both directions for every non-default provider', () => {
@@ -348,12 +352,12 @@ describe('governance targets', () => {
     // and the three composer commands (`clear-composer`,
     // `undo-clear-composer`, `send-composer`), the two lane-removal commands
     // (`remove-tiled-lane`, `close-agent-remove-lane`), `agent.title.set`,
-    // `new-tiled-lane`, and Grid Dispatch's six row commands (#681):
+    // `new-tiled-lane`, Grid Dispatch's six row commands (#681):
     // `new-dispatch-row`, `remove-dispatch-row`, `dispatch-row-project`,
     // `dispatch-row-child-cap`, `dispatch-focus-row-up`,
-    // `dispatch-focus-row-down`.
-    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 15).toBe(102)
-    expect(builtInCommandCatalog).toHaveLength(112)
+    // `dispatch-focus-row-down`, and `new-window` (#688).
+    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 16).toBe(102)
+    expect(builtInCommandCatalog).toHaveLength(113)
   })
 })
 

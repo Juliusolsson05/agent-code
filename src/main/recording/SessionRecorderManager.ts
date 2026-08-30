@@ -15,7 +15,7 @@ import {
 // Owns one SessionRecorder per live session and routes the outbound IPC
 // stream to it. plan §2.
 //
-// TAP: registered as the outbound observer on sendToMainWindow (the ONE
+// TAP: registered as the outbound observer on the window registry (the ONE
 // funnel every rendering event crosses — mainWindow.ts). We record the
 // exact payloads the renderer receives, including the BULK
 // session:jsonl-entries the coalescer sends (a ledger-input recorder tapped
@@ -118,7 +118,7 @@ export class SessionRecorderManager {
     // by the Start Recording command.
     private readonly autoRecord: boolean = false,
     // Push notification for the renderer's shape observer (Phase 2, PR
-    // #555). INJECTED (index.ts passes a sendToMainWindow closure) rather
+    // #555). INJECTED (index.ts passes a session-routed send closure) rather
     // than imported, because this manager sits UNDER the outbound funnel —
     // importing mainWindow here would invert that relationship. WHY push
     // and not renderer polling: under auto-record the recorder starts on a
@@ -136,7 +136,7 @@ export class SessionRecorderManager {
     ) => void = () => {},
   ) {}
 
-  /** The outbound observer registered on sendToMainWindow. The critical
+  /** The outbound observer registered on the window registry. The critical
    *  gate: an event is only written if its session has been EXPLICITLY
    *  started (or auto-record is on). A session the user never chose to
    *  record produces nothing on disk — no burial. */

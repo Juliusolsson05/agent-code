@@ -1,7 +1,7 @@
 import { ipcMain } from 'electron'
 
 import type { RemoteController } from '@main/remote/RemoteController.js'
-import { sendToMainWindow } from '@main/window/mainWindow.js'
+import { broadcastToWindows } from '@main/window/windowRegistry.js'
 
 // remote:* IPC — the desktop's control channel for the remote mobile
 // companion (spec: docs/superpowers/specs/2026-07-06-remote-mobile-
@@ -36,6 +36,6 @@ export function registerRemoteIpc(controller: RemoteController): void {
   // connected/disconnected) so RemotePanel live-updates without polling —
   // same push pattern caffeinate uses.
   controller.on('status-changed', status => {
-    sendToMainWindow('remote:status-changed', status)
+    broadcastToWindows('remote:status-changed', status)
   })
 }

@@ -38,6 +38,7 @@ import {
   useTileTabsSanity,
 } from '@renderer/workspace/hook/invalidation/effects'
 import { useIpcSubscriptions } from '@renderer/workspace/hook/ipc/useIpcSubscriptions'
+import { useWorkspaceAdoption } from '@renderer/workspace/hook/ipc/useWorkspaceAdoption'
 import { useSessionFeed } from '@renderer/features/sessionFeed/SessionFeedContext'
 import type { OrchestrationAgentRecord } from '@mcp/shared/orchestrationTypes'
 import type { AgentManagementRendererResponse } from '@mcp/shared/agentManagementTypes'
@@ -854,6 +855,7 @@ export function useWorkspace(
   const sessionFeed = useSessionFeed()
   useIpcSubscriptions(sessionFeed, refs, setState, setRuntimes, updateRuntime, appendFeedDebug)
   useCodexTranscriptObservationOutbox(runtimes)
+  useWorkspaceAdoption(refs, setState, setRuntimes, bootstrapComplete)
   useAutoSave(state, draftVersion, refs, bootstrapComplete)
   useBootstrap(
     refs,
@@ -1005,7 +1007,7 @@ export function useWorkspace(
     setDispatchLaneWeights: dispatchActions.setDispatchLaneWeights,
     setDispatchRowIndexFraction: dispatchActions.setDispatchRowIndexFraction,
     setDispatchRowHeights: dispatchActions.setDispatchRowHeights,
-    setDispatchRowProject: dispatchActions.setDispatchRowProject,
+    setDispatchRowProjects: dispatchActions.setDispatchRowProjects,
     setDispatchRowCapChildren: dispatchActions.setDispatchRowCapChildren,
     toggleDispatchRowExpandedParent: dispatchActions.toggleDispatchRowExpandedParent,
   }

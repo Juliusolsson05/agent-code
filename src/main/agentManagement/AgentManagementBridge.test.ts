@@ -4,10 +4,16 @@ import type { ManagedAgentRendererDescriptor } from '@mcp/shared/agentManagement
 const sentRendererRequests: unknown[] = []
 const resolveProviderTranscriptPath = vi.fn(async () => '/tmp/provider-agent.jsonl')
 
-vi.mock('@main/window/mainWindow.js', () => ({
-  sendToMainWindow: (_channel: string, request: unknown) => {
+// See the note in OrchestrationBridge.test.ts: routing is stubbed to one
+// always-resolvable window so these tests can be about the bridge's own
+// serialization and inventory behavior.
+const sessionWindowOwner = vi.fn((_sessionId: string): string | null => 'test-window')
+
+vi.mock('@main/window/windowRegistry.js', () => ({
+  sendToWindow: (_windowId: string, _channel: string, request: unknown) => {
     sentRendererRequests.push(request)
   },
+  windowForSession: (sessionId: string) => sessionWindowOwner(sessionId),
 }))
 
 vi.mock('@main/providerSwitch/shared.js', () => ({

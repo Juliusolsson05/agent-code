@@ -47,11 +47,16 @@ export type RowScopedItem =
  */
 export function rowScopedRows(
   rows: DispatchAgentRow[],
-  gridRow: Pick<DispatchGridRow, 'projectTabId' | 'capChildren' | 'expandedParents'>,
+  gridRow: Pick<DispatchGridRow, 'projectTabIds' | 'capChildren' | 'expandedParents'>,
 ): RowScopedItem[] {
-  const visible = gridRow.projectTabId === undefined
+  // Absent OR empty means unbound. normalizeGridShape collapses empty to
+  // absent, but this helper is called with hand-built rows in tests and from
+  // the shape editor's in-progress draft, so it accepts both rather than
+  // depending on a normalization its callers may not have run.
+  const bound = gridRow.projectTabIds
+  const visible = !bound || bound.length === 0
     ? rows
-    : rows.filter(row => row.tabId === gridRow.projectTabId)
+    : rows.filter(row => bound.includes(row.tabId))
 
   // Absent means capped: one orchestration parent can spawn ten reviewers, and
   // ten depth-1 rows push every other project off-screen for agents the user is

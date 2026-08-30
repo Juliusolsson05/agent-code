@@ -4,7 +4,7 @@ import { execFile } from 'node:child_process'
 import { monitorEventLoopDelay } from 'node:perf_hooks'
 
 import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
-import { getOutboundIpcDiagnostics } from '@main/window/mainWindow.js'
+import { getOutboundIpcDiagnostics } from '@main/window/windowRegistry.js'
 import type { RendererFreezeHeartbeat } from '@shared/incident/rendererFreeze.js'
 
 const HEARTBEAT_STALL_MS = 4_000

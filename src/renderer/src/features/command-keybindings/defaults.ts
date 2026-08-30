@@ -81,6 +81,14 @@ export function buildDefaultKeybindings(): CommandBindingDefault[] {
     // is why it could not be rebound. Phase 4 gives it an owner.
     { commandId: 'open-command-palette', bindings: ['Cmd+Shift+P'], context: 'global' },
 
+    // --- Windows ------------------------------------------------------------
+    // ⌘⇧N is the platform convention for New Window (Finder, Safari, VS Code),
+    // and nothing in this app claims it. Note that `check:keybindings` only
+    // knows THIS app's bindings — it cannot tell you a chord is free of macOS
+    // system reservations — but ⌘⇧N is reserved by no system service, only by
+    // other applications for this exact action.
+    { commandId: 'new-window', bindings: ['Cmd+Shift+N'], context: 'global' },
+
     // --- Tabs ---------------------------------------------------------------
     { commandId: 'new-tab', bindings: ['Cmd+T'], context: 'global' },
     { commandId: 'close-tab', bindings: ['Cmd+Shift+W'], context: 'global' },
@@ -219,10 +227,24 @@ export function buildDefaultKeybindings(): CommandBindingDefault[] {
     // have broken selection in the composer while moving row focus underneath
     // the user.
     //
-    // Focus Row Above/Below therefore stay palette-only until a chord is found
-    // that is free of BOTH this app and the platform. They remain rebindable by
-    // the user through Keyboard Shortcuts, which is strictly better than
-    // shipping a default that steals text selection.
+    // Focus Row Above/Below still ship with NO default chord, after two
+    // attempts and two different collisions:
+    //
+    //   Alt+Shift+Arrow  — macOS word selection, load-bearing in the composer.
+    //   Cmd+Alt+Arrow    — Monaco's Add Cursor Above/Below (its `linux:` block
+    //                      overrides only Linux, so `primary` applies on mac).
+    //
+    // Monaco owns effectively the whole Cmd+Alt+Arrow space on macOS, including
+    // the Shift variants for column select. Those chords are now recorded in
+    // RESERVED_INTERACTIONS so the checker rejects this class instead of
+    // offering it as free — which is the durable half of the fix.
+    //
+    // The commands remain in the palette and are rebindable through Keyboard
+    // Shortcuts. Guessing a third chord is not the way to close this: the
+    // underlying problem is that the `dispatch` binding context is active even
+    // while Monaco owns the target (activeBindingContexts never consults
+    // editorOwnsTarget), which is a routing fix worth its own change rather
+    // than a rider on this one.
 
     // --- App panels (⌘⇧) ----------------------------------------------------
     { commandId: 'usage.open', bindings: ['Cmd+Shift+U'], context: 'global' },
