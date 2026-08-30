@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 
-import { sendToMainWindow } from '@main/window/mainWindow.js'
+import { sendToWindow, windowForSession } from '@main/window/windowRegistry.js'
 import type {
   OrchestrationAgentKind,
   OrchestrationAgentMessage,
@@ -506,7 +506,28 @@ export class OrchestrationBridge {
       // its own 30s timeout. Serializing preserves correctness and backpressure:
       // callers wait in main, while the renderer only handles one orchestration
       // mutation/read at a time.
-      sendToMainWindow('orchestration:request', request)
+      //
+      // WHY the request is addressed to the window owning the PARENT session
+      // rather than broadcast: every variant carries `parentSessionId`, and the
+      // request mutates that window's workspace store (detached placement,
+      // project affinity, titles). Broadcasting would have every window answer
+      // the same `requestId` from a different workspace model, and main would
+      // resolve whichever reply raced first.
+      //
+      // WHY an unowned parent rejects rather than falling back to the focused
+      // window: this bridge is fail-closed by design, and creating or closing a
+      // real agent in a workspace the caller does not belong to is worse than
+      // returning an error the calling agent can read and retry.
+      const target = windowForSession(request.parentSessionId)
+      if (!target) {
+        clearTimeout(timer)
+        this.pending.delete(request.requestId)
+        reject(new Error(
+          `No Agent Code window owns orchestration parent session ${request.parentSessionId}`,
+        ))
+        return
+      }
+      sendToWindow(target, 'orchestration:request', request)
     })
   }
 

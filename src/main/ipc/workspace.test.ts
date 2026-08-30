@@ -1,164 +1,151 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const {
-  handle,
-  mkdir,
-  readFile,
-  writeFile,
-  rename,
-  unlink,
-} = vi.hoisted(() => ({
+const { handle, windowIdFor, getBrowserWindow } = vi.hoisted(() => ({
   handle: vi.fn(),
-  mkdir: vi.fn(),
-  readFile: vi.fn(),
-  writeFile: vi.fn(),
-  rename: vi.fn(),
-  unlink: vi.fn(),
+  windowIdFor: vi.fn(),
+  getBrowserWindow: vi.fn(),
 }))
 
-vi.mock('electron', () => ({ ipcMain: { handle } }))
-vi.mock('fs/promises', () => ({ mkdir, readFile, writeFile, rename, unlink }))
-vi.mock('@main/storage/paths.js', () => ({
-  STATE_DIR: '/recorded/state',
-  STATE_FILE: '/recorded/state/workspace.json',
+vi.mock('electron', () => ({
+  ipcMain: { handle },
+  screen: { getDisplayMatching: () => ({ id: 1 }) },
 }))
+vi.mock('@main/window/windowRegistry.js', () => ({ windowIdFor, getBrowserWindow }))
 
-function deferred() {
-  let resolve!: () => void
-  const promise = new Promise<void>(res => {
-    resolve = res
-  })
-  return { promise, resolve }
+const { registerWorkspaceIpc } = await import('@main/ipc/workspace.js')
+
+// The addressing layer: which window a workspace payload belongs to, and what
+// main tells SessionManager afterwards.
+//
+// The durability ordering itself is pinned in workspaceFileStore.test.ts. What
+// is asserted here is the part that only exists because there are windows.
+
+type SaveHandler = (event: { sender: unknown }, json: string) => Promise<void>
+type LoadHandler = (event: { sender: unknown }) => Promise<string | null>
+
+function handlerFor(channel: string): (...args: never[]) => Promise<unknown> {
+  const entry = handle.mock.calls.find(([name]) => name === channel)
+  if (!entry) throw new Error(`no handler registered for ${channel}`)
+  return entry[1] as (...args: never[]) => Promise<unknown>
 }
 
-describe('workspace persistence ordering', () => {
+function fakeStore(overrides: Partial<{
+  saveSlice: (windowId: string, json: string, geometry: unknown) => Promise<void>
+  loadSlice: (windowId: string) => Promise<string | null>
+  sessionIds: () => Set<string>
+}> = {}) {
+  return {
+    saveSlice: overrides.saveSlice ?? vi.fn(async () => undefined),
+    loadSlice: overrides.loadSlice ?? vi.fn(async () => null),
+    sessionIds: overrides.sessionIds ?? (() => new Set<string>()),
+  }
+}
+
+describe('workspace IPC addressing', () => {
   beforeEach(() => {
     handle.mockReset()
-    mkdir.mockReset().mockResolvedValue(undefined)
-    readFile.mockReset()
-    writeFile.mockReset()
-    rename.mockReset()
-    unlink.mockReset().mockResolvedValue(undefined)
+    windowIdFor.mockReset()
+    getBrowserWindow.mockReset().mockReturnValue(null)
   })
 
-  it('commits overlapping saves in IPC admission order', async () => {
-    const firstWriteGate = deferred()
-    const tempContents = new Map<string, string>()
-    const acknowledgements: string[][] = []
-    let durableContents = ''
-    let writeCount = 0
+  it('writes a payload into the slice of the window that sent it', async () => {
+    windowIdFor.mockImplementation((sender: { id: number }) =>
+      sender.id === 1 ? 'left' : 'right')
+    const store = fakeStore()
+    registerWorkspaceIpc({ acknowledgePersistedSessionOwnership: vi.fn() } as never, store as never)
+    const save = handlerFor('workspace:save') as unknown as SaveHandler
 
-    writeFile.mockImplementation(async (file: string, contents: string) => {
-      writeCount += 1
-      if (writeCount === 1) await firstWriteGate.promise
-      tempContents.set(file, contents)
-    })
-    rename.mockImplementation(async (source: string) => {
-      durableContents = tempContents.get(source) ?? ''
-    })
+    await save({ sender: { id: 1 } }, '{"workspace":{}}')
+    await save({ sender: { id: 2 } }, '{"workspace":{}}')
 
-    const { registerWorkspaceIpc } = await import('./workspace')
+    expect((store.saveSlice as ReturnType<typeof vi.fn>).mock.calls.map(call => call[0]))
+      .toEqual(['left', 'right'])
+  })
+
+  it('acknowledges the union of every window rather than one window s sessions', async () => {
+    // WHY the union: `acknowledgePersistedSessionOwnership` answers a
+    // process-wide question — which local ids has SOME renderer made durable.
+    // Handing it one window's ids would tell the manager that another window's
+    // live, persisted sessions are unclaimed, and main would be free to reclaim
+    // or stop them.
+    windowIdFor.mockReturnValue('left')
+    const acknowledged: string[][] = []
+    const store = fakeStore({ sessionIds: () => new Set(['left-agent', 'right-agent']) })
     registerWorkspaceIpc({
-      acknowledgePersistedSessionOwnership: (sessionIds: ReadonlySet<string>) => {
-        acknowledgements.push([...sessionIds])
+      acknowledgePersistedSessionOwnership: (ids: ReadonlySet<string>) => {
+        acknowledged.push([...ids].sort())
       },
-    } as never)
-    const save = handle.mock.calls.find(([channel]) => channel === 'workspace:save')?.[1] as
-      | ((_event: unknown, json: string) => Promise<void>)
-      | undefined
-    expect(save).toBeTypeOf('function')
+    } as never, store as never)
 
-    const firstJson = JSON.stringify({ workspace: { sessions: { predecessor: {} } } })
-    const secondJson = JSON.stringify({ workspace: { sessions: { successor: {} } } })
-    const firstSave = save?.({}, firstJson)
-    await vi.waitFor(() => expect(writeFile).toHaveBeenCalledTimes(1))
-    const secondSave = save?.({}, secondJson)
-
-    // WHY inspect the blocked boundary before releasing it: the production
-    // failure needs no corrupt temp file. Unique scratch paths let save B race
-    // past delayed save A, after which A can overwrite the newer renderer
-    // snapshot and acknowledge ownership in the wrong order.
-    await Promise.resolve()
-    await Promise.resolve()
-    const writesBeforeRelease = writeFile.mock.calls.length
-    firstWriteGate.resolve()
-    await Promise.all([firstSave, secondSave])
-
-    expect(writesBeforeRelease).toBe(1)
-    expect(durableContents).toBe(secondJson)
-    expect(acknowledgements).toEqual([
-      ['predecessor'],
-      ['successor'],
-    ])
-  })
-
-  it('does not let reload read bytes older than an admitted save', async () => {
-    const writeGate = deferred()
-    const savedJson = JSON.stringify({
-      workspace: { sessions: { successor: {} } },
-    })
-    writeFile.mockImplementationOnce(async () => await writeGate.promise)
-    rename.mockResolvedValue(undefined)
-    readFile.mockResolvedValue(savedJson)
-
-    const { registerWorkspaceIpc } = await import('./workspace')
-    registerWorkspaceIpc({
-      acknowledgePersistedSessionOwnership: vi.fn(),
-    } as never)
-    const save = handle.mock.calls.find(([channel]) => channel === 'workspace:save')?.[1] as
-      | ((_event: unknown, json: string) => Promise<void>)
-      | undefined
-    const load = handle.mock.calls.find(([channel]) => channel === 'workspace:load')?.[1] as
-      | (() => Promise<string | null>)
-      | undefined
-    expect(save).toBeTypeOf('function')
-    expect(load).toBeTypeOf('function')
-
-    const saving = save?.({}, savedJson)
-    await vi.waitFor(() => expect(writeFile).toHaveBeenCalledTimes(1))
-    const loading = load?.()
-    await Promise.resolve()
-    await Promise.resolve()
-    const readsBeforeSaveSettles = readFile.mock.calls.length
-
-    writeGate.resolve()
-    await expect(saving).resolves.toBeUndefined()
-    await expect(loading).resolves.toBe(savedJson)
-
-    // A renderer created after unload-save admission must see that save or a
-    // later one. Reading the previous predecessor bytes here can start reclaim
-    // while the blocked rename is about to durably acknowledge the killed
-    // successor, leaving disk and main with opposite owners.
-    expect(readsBeforeSaveSettles).toBe(0)
-    expect(readFile).toHaveBeenCalledTimes(1)
-  })
-
-  it('removes its unique temp file when the atomic rename rejects', async () => {
-    const recordedFailure = new Error('recorded rename rejection')
-    writeFile.mockResolvedValue(undefined)
-    rename.mockRejectedValue(recordedFailure)
-
-    const { registerWorkspaceIpc } = await import('./workspace')
-    registerWorkspaceIpc({
-      acknowledgePersistedSessionOwnership: vi.fn(),
-    } as never)
-    const save = handle.mock.calls.find(([channel]) => channel === 'workspace:save')?.[1] as
-      | ((_event: unknown, json: string) => Promise<void>)
-      | undefined
-    expect(save).toBeTypeOf('function')
-
-    await expect(save?.({}, JSON.stringify({
-      workspace: { sessions: { successor: {} } },
-    }))).rejects.toBe(recordedFailure)
-
-    const tempPath = writeFile.mock.calls[0]?.[0]
-    expect(tempPath).toMatch(/^\/recorded\/state\/workspace\.json\./)
-    // WHY assert the exact nonce path rather than merely "unlink happened":
-    // concurrent admitted saves each own a different scratch artifact. Broad
-    // cleanup or recomputing the name could delete another generation's file.
-    expect(unlink).toHaveBeenCalledWith(tempPath)
-    expect(unlink.mock.invocationCallOrder[0]).toBeGreaterThan(
-      rename.mock.invocationCallOrder[0],
+    await (handlerFor('workspace:save') as unknown as SaveHandler)(
+      { sender: { id: 1 } },
+      '{"workspace":{}}',
     )
+
+    expect(acknowledged).toEqual([['left-agent', 'right-agent']])
+  })
+
+  it('acknowledges in save admission order', async () => {
+    // The predecessor/successor handoff depends on main acknowledging the
+    // NEWEST committed ownership last. Because each handler awaits its own save
+    // and the store serializes them, the acknowledgements inherit that order —
+    // this pins the property so a future "acknowledge eagerly, save in the
+    // background" refactor fails here rather than in a session handoff.
+    windowIdFor.mockReturnValue('left')
+    const order: string[] = []
+    const gate = { release: () => {} }
+    const blocked = new Promise<void>(resolve => { gate.release = resolve })
+    let first = true
+    const store = fakeStore({
+      saveSlice: vi.fn(async () => {
+        if (first) {
+          first = false
+          await blocked
+        }
+      }),
+      sessionIds: () => new Set([order.length === 0 ? 'predecessor' : 'successor']),
+    })
+    registerWorkspaceIpc({
+      acknowledgePersistedSessionOwnership: (ids: ReadonlySet<string>) => {
+        order.push([...ids][0]!)
+      },
+    } as never, store as never)
+    const save = handlerFor('workspace:save') as unknown as SaveHandler
+
+    const a = save({ sender: { id: 1 } }, '{"workspace":{}}')
+    const b = save({ sender: { id: 1 } }, '{"workspace":{}}')
+    gate.release()
+    await Promise.all([a, b])
+
+    expect(order).toEqual(['predecessor', 'successor'])
+  })
+
+  it('rejects a save from a sender that owns no window', async () => {
+    // WHY reject rather than fall back to some window: a save with no
+    // defensible destination would otherwise overwrite a real window's
+    // workspace with a stranger's. Autosave already surfaces and retries save
+    // failures, so the renderer is not left believing it is durable.
+    windowIdFor.mockReturnValue(null)
+    const store = fakeStore()
+    registerWorkspaceIpc({ acknowledgePersistedSessionOwnership: vi.fn() } as never, store as never)
+
+    await expect(
+      (handlerFor('workspace:save') as unknown as SaveHandler)(
+        { sender: { id: 9 } },
+        '{"workspace":{}}',
+      ),
+    ).rejects.toThrow(/owns no window/)
+    expect(store.saveSlice).not.toHaveBeenCalled()
+  })
+
+  it('loads nothing for a sender that owns no window', async () => {
+    windowIdFor.mockReturnValue(null)
+    const store = fakeStore({ loadSlice: vi.fn(async () => '{"workspace":{}}') })
+    registerWorkspaceIpc({ acknowledgePersistedSessionOwnership: vi.fn() } as never, store as never)
+
+    await expect(
+      (handlerFor('workspace:load') as unknown as LoadHandler)({ sender: { id: 9 } }),
+    ).resolves.toBeNull()
+    expect(store.loadSlice).not.toHaveBeenCalled()
   })
 })

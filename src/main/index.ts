@@ -4,7 +4,7 @@
 // `./loadEnv.ts` for the rationale.
 import '@main/loadEnv.js'
 
-import { app, BrowserWindow, crashReporter, dialog, Menu } from 'electron'
+import { app, crashReporter, dialog, Menu } from 'electron'
 import { existsSync } from 'fs'
 import { readFile } from 'fs/promises'
 import { join } from 'path'
@@ -35,11 +35,28 @@ import {
 import { cleanupClaudeImageCacheDir } from '@main/storage/claudeImageCache.js'
 import { acquireStateProcessLock } from '@main/storage/processLock.js'
 import type { StateProcessLock } from '@main/storage/processLock.js'
-import { createMainWindow, focusMainWindow, sendToMainWindow } from '@main/window/mainWindow.js'
+import {
+  broadcastToWindows,
+  createAppWindow,
+  focusedWindowId,
+  focusWindow,
+  sendToFocusedWindow,
+  sendToSessionWindow,
+  sendToWindow,
+  sessionsOwnedBy,
+  setGeometryObserver,
+  setWindowCloseVetoedObserver,
+  setWindowClosedObserver,
+  transferSessions,
+  windowCount,
+} from '@main/window/windowRegistry.js'
+import { abandonPendingBequest, recordPendingBequest } from '@main/ipc/window.js'
 import { wireSessionForwarder } from '@main/sessions/forwarder.js'
 import type { SessionForwarderControl } from '@main/sessions/forwarder.js'
 import { SessionRecorderManager } from '@main/recording/SessionRecorderManager.js'
-import { setOutboundObserver } from '@main/window/mainWindow.js'
+import { setOutboundObserver } from '@main/window/windowRegistry.js'
+import { captureWindowGeometry, restorableBounds } from '@main/window/windowGeometry.js'
+import { WorkspaceFileStore } from '@main/storage/workspaceFileStore.js'
 import { isSessionRecordingEnabled, isSessionRecordingAutoStart } from '@main/ipc/devDebug.js'
 import { registerAllIpc } from '@main/ipc/index.js'
 import { AgentCodeManagedSkillsService } from '@main/agentCodeConventions/AgentCodeManagedSkillsService.js'
@@ -86,7 +103,8 @@ import type { WorkflowService } from 'workflow-mcp'
 // Everything else is delegated:
 //   - IPC handlers: main/ipc/*.ts
 //   - SessionManager → renderer forwarding: main/sessions/forwarder.ts
-//   - Window creation + send helper: main/window/mainWindow.ts
+//   - Window creation: main/window/appWindow.ts
+//   - Window registry + IPC routing: main/window/windowRegistry.ts
 //   - Disk paths, image cache, feed-debug writer: main/storage/*
 //   - History chunk loader + jsonl coalescer: main/sessions/*
 //
@@ -102,7 +120,7 @@ const ghostJournals = new GhostJournalRegistry()
 // Session recorder — one folder per recording under session-recordings/.
 // Constructed and installed as the outbound-IPC observer whenever the
 // dev-debug CAPABILITY is on (AGENT_CODE_DEV_DEBUG=1), so a normal build with
-// dev-debug off pays nothing (no observer installed, sendToMainWindow's hook
+// dev-debug off pays nothing (no observer installed, the registry's hook
 // stays null). AGENT_CODE_SESSION_RECORD does NOT gate construction — it only
 // flips autoRecord (below) so every session records from launch.
 // plan: docs/rendering/session-recording-plan-2026-07.md (#467).
@@ -120,14 +138,14 @@ const sessionRecorders = isSessionRecordingEnabled()
         // provably loses the auto-record race: the recorder starts on a
         // session's FIRST event, which for an idle restored pane is whenever
         // the user first prompts it — unboundedly after Feed mount.
-        sendToMainWindow('record-session:started', { sessionId, generation }),
+        sendToSessionWindow(sessionId, 'record-session:started', { sessionId, generation }),
       (sessionId, generation) =>
         // Natural exit keeps the recorder writable until the renderer has
         // flushed its coalesced shape evidence (or the manager's grace timer
         // expires). The opaque generation is load-bearing: sessionId is reusable,
         // so an acknowledgement without it cannot prove which recorder should
         // close. This channel is deliberately outside recorded session data.
-        sendToMainWindow('record-session:stopping', { sessionId, generation }),
+        sendToSessionWindow(sessionId, 'record-session:stopping', { sessionId, generation }),
     )
   : null
 if (sessionRecorders) setOutboundObserver(sessionRecorders.observe)
@@ -150,7 +168,9 @@ const aiWorkspaceRegistry = new AiWorkspaceRegistry()
 // Registry mutations can originate from renderer IPC or any built-in MCP
 // session. Forward one source-of-truth event so an already-open curated editor
 // does not require a manual close/reopen to see agent attachments or clears.
-aiWorkspaceRegistry.on('changed', event => sendToMainWindow('ai-workspace:changed', event))
+// Broadcast: an AI Workspace is a machine-wide record, and any window may have
+// its curated editor open on the workspace that just changed.
+aiWorkspaceRegistry.on('changed', event => broadcastToWindows('ai-workspace:changed', event))
 const caffeinateController = new CaffeinateController()
 
 // SessionManager is constructed inside whenReady so we can await
@@ -217,6 +237,25 @@ async function runPackagingSmoke(): Promise<void> {
 // shared. If that lock ever feels too strict, the storage model must be changed
 // first; deleting the guard alone would make last-writer-wins corruption
 // possible again.
+// WHY quit has to be distinguishable from an ordinary window close: closing one
+// window hands its workspace to a survivor, but quitting closes every window
+// and must NOT collapse them all into whichever one dies last.
+//
+// WHY this is NOT cleared on window focus, which was the first attempt:
+// Electron has no "quit cancelled" event, and focus looked like a proxy for
+// "the app is still alive". It is wrong in both directions. During a real quit,
+// destroying the first window promotes the next one to key and fires
+// `browser-window-focus` — clearing the flag mid-quit and letting the remaining
+// windows collapse into one, which is data loss. And the unsaved-changes sheet
+// is a window-modal sheet, so a vetoed quit never fires focus at all and the
+// flag stays latched forever, silently disabling the handoff.
+//
+// The flag is instead cleared by the two paths that actually KNOW the quit
+// failed: the sheet's "Keep Editing" branch (via the close-vetoed observer,
+// wired in startApp) and the workflow-drain rejection below.
+let quitting = false
+app.on('before-quit', () => { quitting = true })
+
 const hasSingleInstanceLock = packagingSmoke || app.requestSingleInstanceLock()
 
 if (packagingSmoke) {
@@ -228,7 +267,9 @@ if (packagingSmoke) {
   app.quit()
 } else {
   app.on('second-instance', () => {
-    focusMainWindow()
+    // Focus the last window the user was in rather than an arbitrary one:
+    // relaunching the app is a request to get back to where you were.
+    focusWindow(null)
   })
 
   void app.whenReady().then(startApp).catch((err) => {
@@ -704,7 +745,9 @@ async function startApp(): Promise<void> {
       // narrow "open this id" request. The renderer decides how to present it,
       // preserving the existing rule that layout/chrome state stays renderer
       // local instead of turning main into a second UI store.
-      sendToMainWindow('ai-workspace:open-request', { workspaceId })
+      // The focused window: this is a request to SHOW something, so it belongs
+      // where the user is looking, not in every workspace at once.
+      sendToFocusedWindow('ai-workspace:open-request', { workspaceId })
     },
     sessionManager: manager,
     appRunJournal,
@@ -734,6 +777,86 @@ async function startApp(): Promise<void> {
     },
   })
   await cliUpdateOrchestrator.loadInitialBehavior()
+  // WHY the workspace file is read here, before any window exists: it now holds
+  // the window list, so it is what decides how many windows to create. The old
+  // renderer-driven `workspace:load` could not answer that — it required a
+  // renderer, which requires a window.
+  const workspaceFileStore = await WorkspaceFileStore.open()
+  // Dragging a window to the other monitor changes nothing the renderer knows
+  // about, so it triggers no autosave. Without this, the feature's central
+  // promise — it comes back where you left it — would depend on the user
+  // touching a pane before quitting.
+  // Closing a window is not destructive: its agents stay alive in
+  // SessionManager and its workspace is handed to a surviving window, where
+  // they appear in Dispatch under their own project tabs. See
+  // renderer/workspace/adoptWorkspace.ts for why the SURVIVOR performs the
+  // merge rather than main.
+  // The only party that knows a ⌘Q was cancelled is the unsaved-changes sheet.
+  setWindowCloseVetoedObserver(() => { quitting = false })
+  setWindowClosedObserver(closedWindowId => {
+    // WHY quitting is excluded: on quit every window closes, and collapsing all
+    // of them into whichever one happens to die last would destroy the
+    // multi-window layout the user spent time arranging. Quit persists each
+    // window separately and restores them all.
+    if (quitting) return
+    const survivor = focusedWindowId()
+    // No survivor means this was the last window. Its slice stays on disk, so
+    // the macOS `activate` path (or the next launch) restores it intact — which
+    // is exactly the pre-multi-window behavior.
+    if (!survivor) return
+
+    // Ownership moves FIRST, synchronously, before anything is awaited. The
+    // closed window's sessions are still producing events, and every tick they
+    // spend owned by a window that no longer exists is a tick their events fall
+    // back to a broadcast — which grows a ghost runtime in whichever window
+    // receives one. The survivor is about to adopt them anyway, so pointing
+    // them there immediately is both correct and the shortest possible gap.
+    //
+    // It is an OPTIMISTIC move, so it is recorded as a pending offer: if the
+    // survivor refuses the merge, or the offer cannot be composed at all, the
+    // routing is rolled back rather than left pinned to a window that will
+    // never display those sessions.
+    const bequeathedSessionIds = sessionsOwnedBy(closedWindowId)
+    transferSessions(bequeathedSessionIds, survivor)
+    recordPendingBequest(closedWindowId, survivor, bequeathedSessionIds)
+
+    // WHY a turn of the event loop before reading the slice: the closing
+    // renderer flushes its final autosave from `beforeunload`, and that IPC
+    // message is already queued when `closed` fires. Reading in this tick could
+    // compose the bequest from the previous save and lose the last 400ms.
+    setImmediate(() => {
+      void (async () => {
+        const slice = await workspaceFileStore.loadSlice(closedWindowId)
+        if (!slice) {
+          // Nothing was ever persisted for this window, so there is nothing to
+          // hand over and nothing to delete. Un-route its sessions so they do
+          // not stay silently pinned to the survivor.
+          abandonPendingBequest(closedWindowId)
+          return
+        }
+        sendToWindow(survivor, 'workspace:adopt', {
+          windowId: closedWindowId,
+          workspace: slice,
+        })
+      })().catch(err => {
+        // The slice is still on disk and the sessions are still alive; the
+        // workspace comes back as its own window next launch. Nothing is lost,
+        // so this is a warning rather than a user-facing failure.
+        abandonPendingBequest(closedWindowId)
+        console.warn('[window] workspace handoff failed:', err)
+      })
+    })
+  })
+  setGeometryObserver(windowId => {
+    void workspaceFileStore
+      .updateGeometry(windowId, captureWindowGeometry(windowId))
+      .catch(err => {
+        // Geometry is a convenience, not workspace data. A failed write must
+        // not surface as an error dialog or retry storm; the next move tries
+        // again on its own.
+        console.warn('[window] geometry save failed:', err)
+      })
+  })
   registerAllIpc({
     manager,
     remoteController,
@@ -751,17 +874,61 @@ async function startApp(): Promise<void> {
     cliUpdateOrchestrator,
     workflowBridge: activeWorkflowBridge,
     agentCodeConventionsService,
+    workspaceFileStore,
   })
   // Boot probe runs after the IPC is wired so its first `state` push
   // has a live subscriber to receive it on the renderer side.
   cliUpdateOrchestrator.scheduleBootProbe()
   performanceService.mark('app.main.ipc.registered')
   appRunJournal.record({ area: 'window.main', name: 'window.create.start' })
-  createMainWindow()
+  // Restore every persisted window, or create one on a fresh install. A
+  // window whose saved bounds no longer land on an attached display is created
+  // with default placement instead — see windowGeometry.ts for why that is the
+  // common case rather than an edge case.
+  //
+  // WHY this is a closure shared with the `activate` handler below rather than
+  // two call sites: they answer the same question ("what windows should exist
+  // when there are none?"), and the version that drifted first — activate
+  // minting a fresh id — silently orphaned the persisted slice of the window
+  // the user had just closed.
+  const restorePersistedWindows = (): void => {
+    const persistedWindows = workspaceFileStore.windows()
+    if (persistedWindows.length === 0) {
+      createAppWindow()
+      return
+    }
+    for (const record of persistedWindows) {
+      createAppWindow({
+        windowId: record.windowId,
+        bounds: restorableBounds(record.bounds),
+        fullScreen: record.fullScreen,
+      })
+    }
+  }
+  restorePersistedWindows()
+  if (workspaceFileStore.isReadOnly()) {
+    // WHY a native dialog rather than a console warning: in this state the app
+    // looks completely normal — a window opens, a default agent spawns — but
+    // NOTHING the user does will ever be persisted, because every save is
+    // refused to avoid overwriting a file we could not read. Working a full day
+    // and losing it at quit is the worst outcome this feature can produce, and
+    // it is not something a `console.warn` prevents.
+    dialog.showMessageBox({
+      type: 'warning',
+      title: 'Workspace cannot be saved',
+      message: 'Agent Code could not read its saved workspace, so changes will not be saved.',
+      detail: `${workspaceFileStore.refusalReason() ?? 'Unknown error.'}\n\nYour existing workspace file has been left untouched. Agents you start now will run normally, but tabs, layout, and pins will not persist. Quit and repair or move ~/.config/agent-code/workspace.json to restore saving.`,
+      buttons: ['Continue'],
+      noLink: true,
+    }).catch(() => {
+      // A failed dialog must not take the app down; the console warning from
+      // the store load is still on record.
+    })
+  }
   appRunJournal.record({
     area: 'window.main',
     name: 'window.create.end',
-    data: { windowCount: BrowserWindow.getAllWindows().length },
+    data: { windowCount: windowCount() },
   })
   // Install the application menu right after the window exists — the File
   // items dispatch command ids to THIS window's renderer (issue #148).
@@ -776,7 +943,13 @@ async function startApp(): Promise<void> {
       // visible window backed by a manager that can no longer recover or spawn.
       return
     }
-    if (BrowserWindow.getAllWindows().length === 0) createMainWindow()
+    if (windowCount() !== 0) return
+    // WHY the persisted restore and not a bare createAppWindow(): closing the
+    // LAST window deliberately keeps its slice on disk so this path can bring it
+    // back. Minting a fresh window id here would load nothing, hand the user an
+    // empty workspace, and leave the real one orphaned in the file until the
+    // next launch restored it as a surprise extra window.
+    restorePersistedWindows()
   })
 }
 
