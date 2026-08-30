@@ -117,13 +117,25 @@ export function ComposerInput({
 
       {promptDelivery.kind === 'uncertain' ? (
         <div className="mb-2 rounded-slab border border-warning/50 bg-warning/10 p-2 text-[11px] text-ink">
-          <div>Claude may already have this prompt. Normal resend is blocked.</div>
+          {/* Two different truths behind one failure code. enterWritten=false
+              means main never pressed Enter, so the prompt is provably NOT
+              with Claude — it is stranded, unsubmitted, in the agent's own
+              composer (2026-08-30T22-36 bundle: the old unconditional wording
+              told that user the opposite). Only when Enter WAS written is
+              "may already have it" an honest description of the uncertainty. */}
+          <div>
+            {promptDelivery.enterWritten === false
+              ? 'The prompt was never submitted — it is sitting unsent in the agent\'s composer. Resend is blocked so it does not double up.'
+              : 'Claude may already have this prompt. Normal resend is blocked.'}
+          </div>
           <button
             type="button"
             className="mt-1 text-accent hover:underline"
             onClick={onResolveUncertainDelivery}
           >
-            I verified the transcript — allow sending again
+            {promptDelivery.enterWritten === false
+              ? 'I cleared the agent composer — allow sending again'
+              : 'I verified the transcript — allow sending again'}
           </button>
         </div>
       ) : null}

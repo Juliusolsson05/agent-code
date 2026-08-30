@@ -160,9 +160,17 @@ export function useComposerKeybinds({
     }
     if (input.trim().length === 0 && draftImages.length === 0) return
     if (runtime.promptDelivery.kind === 'uncertain') {
+      // Same evidence branch as the banner and the failure toast below.
+      // Review caught this guard still making the unconditional "may already
+      // have it" claim while the banner two lines away said the opposite —
+      // the user's retry gesture was answered with the exact misdirection
+      // this state exists to prevent. enterWritten=false proves no submit
+      // reached Claude, so the honest obstruction is the stranded draft.
       workspace.showPaneToast(
         sessionId,
-        'Claude may already have the previous prompt. Verify the transcript before sending again.',
+        runtime.promptDelivery.enterWritten === false
+          ? 'The previous prompt was never submitted — it is sitting in the agent\'s composer. Clear it (or confirm below) before sending again.'
+          : 'Claude may already have the previous prompt. Verify the transcript before sending again.',
       )
       return
     }
@@ -401,6 +409,10 @@ export function useComposerKeybinds({
               prompt: submittedInput,
               message: delivery.message,
               failedAt: Date.now(),
+              // Main's own write evidence, passed through untouched so the
+              // banner can distinguish "submitted but unconfirmed" from
+              // "never submitted at all" — see PromptDeliveryUiState.
+              enterWritten: failed ? failed.enterWritten : null,
             }
           : {
               kind: 'failed-safe',
@@ -410,7 +422,12 @@ export function useComposerKeybinds({
       workspace.showPaneToast(
         sessionId,
         delivery && !delivery.ok && !delivery.retrySafe
-          ? `${delivery.message}. It may already be submitted; automatic resend is blocked.`
+          // Branch on evidence, not vibes: enterWritten=false PROVES Claude
+          // never received a submit, so "may already be submitted" would be a
+          // lie for exactly the failure the user is staring at.
+          ? failed && failed.enterWritten === false
+            ? `${delivery.message}. The draft was never submitted — it is sitting in the agent's composer.`
+            : `${delivery.message}. It may already be submitted; automatic resend is blocked.`
           : err instanceof Error ? err.message : 'Prompt delivery failed; draft preserved',
       )
       console.warn('[TileLeaf] submit failed', err)

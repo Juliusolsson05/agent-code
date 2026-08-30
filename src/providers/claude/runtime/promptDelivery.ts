@@ -349,7 +349,28 @@ function acceptanceResult(
     record?.(`acceptance-${outcome.kind}`, { acceptedAt: outcome.acceptedAt })
     return { ok: true, acceptance: outcome }
   }
-  record?.('uncertain', { outcome: outcome.kind })
+  // These tallies are COUNTS, never candidate content — that discipline, not
+  // any sink-side filter, is the privacy line. Review corrected the first
+  // version of this comment, which claimed the journal's sensitive-key
+  // redactor protects this record: it does not — io.record is wired to the
+  // paste-debug journal (ipc/session.ts -> PasteDebugJournal.append), which
+  // JSON-stringifies payloads with no key filtering; caller discipline is its
+  // documented contract. The miss* prefix is for cross-stream naming
+  // consistency with the lifecycle events, nothing more. `missExact` > 0 is
+  // the headline number — Claude wrote an entry in our window and the text
+  // comparison refused it, exactly the class that made 21/21 recorded
+  // timeouts false before the whitespace-collapse fix.
+  record?.('uncertain', {
+    outcome: outcome.kind,
+    ...(outcome.kind === 'timeout' && outcome.nearMisses
+      ? {
+          missCursor: outcome.nearMisses.cursor,
+          missTimestamp: outcome.nearMisses.timestamp,
+          missImage: outcome.nearMisses.image,
+          missExact: outcome.nearMisses.exact,
+        }
+      : {}),
+  })
   return failure({
     stage: outcome.kind === 'session-exited' ? 'session-exit' : 'after-enter',
     code: outcome.kind === 'session-exited' ? 'session-exited' : 'acceptance-timeout',

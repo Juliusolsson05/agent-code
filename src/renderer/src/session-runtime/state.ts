@@ -90,7 +90,22 @@ export type PromptDeliveryUiState =
   | { kind: 'idle' }
   | { kind: 'sending'; prompt: string; startedAt: number }
   | { kind: 'failed-safe'; message: string }
-  | { kind: 'uncertain'; prompt: string; message: string; failedAt: number }
+  /**
+   * `enterWritten` is the fact that decides what the banner may claim. The
+   * 2026-08-30T22-36 bundle caught the banner telling a user "Claude may
+   * already have this prompt" over an absorption-timeout whose own delivery
+   * result said enterWritten=false — Enter was never pressed, so Claude
+   * provably did NOT have it; the draft was stranded unsubmitted in the
+   * agent's composer. null = the delivery threw before producing a result,
+   * so neither claim is honest and the banner stays on the cautious wording.
+   */
+  | {
+      kind: 'uncertain'
+      prompt: string
+      message: string
+      failedAt: number
+      enterWritten: boolean | null
+    }
 
 export type PendingRewindUndo = {
   createdAt: number
