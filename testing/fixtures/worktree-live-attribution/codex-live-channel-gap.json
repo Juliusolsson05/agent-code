@@ -1,0 +1,74 @@
+{
+  "$fixture": {
+    "id": "codex-live-channel-gap",
+    "cutoff": "2026-08-30T18:37:55.388Z",
+    "sourceFingerprint": "7528791d645786a8",
+    "records": [
+      {
+        "line": 1,
+        "channel": "session:jsonl-error"
+      },
+      {
+        "line": 2,
+        "channel": "session:started"
+      }
+    ]
+  },
+  "workspace": {
+    "kind": "codex",
+    "cwd": "/fixture/project-1",
+    "providerSessionId": null
+  },
+  "recording": {
+    "provider": "codex",
+    "providerSessionId": null,
+    "cwd": "/fixture/home/path-10/path-11"
+  },
+  "events": [
+    {
+      "ch": "session:started",
+      "payload": {
+        "sessionId": "agent-session-1",
+        "kind": "codex",
+        "projectDir": "/fixture/home/path-10/path-11"
+      }
+    },
+    {
+      "ch": "session:jsonl-error",
+      "payload": {
+        "sessionId": "agent-session-1",
+        "message": "Codex prompt evidence disabled: unsupported-cli"
+      }
+    }
+  ],
+  "channelCounts": {
+    "__render_shape": 443,
+    "session:jsonl-error": 1,
+    "session:process-state": 1876,
+    "session:screen": 2358,
+    "session:semantic-event": 7403,
+    "session:started": 1,
+    "session:transcript-diagnostic": 564
+  },
+  "feedKindCounts": {
+    "block_completed": 420,
+    "block_started": 420,
+    "flow_selected": 183,
+    "ghost_orphan_sweep": 219,
+    "input_readiness": 2,
+    "optimistic_user_add": 1,
+    "optimistic_user_queue": 7,
+    "process_state": 1876,
+    "screen_update": 399,
+    "session_started": 1,
+    "stream_phase": 1116,
+    "submit": 8,
+    "text_delta": 471,
+    "tool_input_delta": 3364,
+    "turn_completed": 183,
+    "turn_delta": 466,
+    "turn_started": 183,
+    "usage_updated": 183,
+    "visible_rows": 1542
+  }
+}

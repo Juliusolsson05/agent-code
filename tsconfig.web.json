@@ -50,13 +50,14 @@
     // could not see its `expect` augmentation. Include the one shared setup instead of adding
     // matcher imports to individual specs and letting the two test environments drift.
     "testing/setup/renderer.ts",
-    // This fixture exporter imports the canonical renderer redactor and the
-    // production Dispatch selectors on purpose: the recorded corpus must be
-    // minimized and replay-verified by the same ownership boundaries the app
-    // uses. Keep it in the web project so callback selection, fixture-state
-    // assumptions, and selector API drift fail the normal typecheck instead of
-    // surfacing only when someone refreshes the evidence months later.
+    // These fixture exporters import canonical renderer/shared boundaries on
+    // purpose: recorded corpora must be minimized by the same privacy and
+    // identity rules the app uses. Keep them in the web project so callback
+    // selection, zstd projection, fixture-state assumptions, and selector API
+    // drift fail the normal typecheck instead of surfacing only when someone
+    // refreshes evidence months later.
     "scripts/extract-work-context-fixtures.mts",
+    "scripts/extract-worktree-live-attribution-fixtures.mts",
     // WHY these two large bundles are explicit instead of admitting the entire
     // rendering-bundles corpus: browser-owned IPC regressions import their
     // recorded enqueue/remove/attachment and no-op notification sequences

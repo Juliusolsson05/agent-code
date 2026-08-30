@@ -174,6 +174,35 @@ snapshot, its per-session proxy log, and the current Git worktree list. Existing
 instrumentation already captured the failure, so adding another recorder before
 extracting it would create a redundant source.
 
+### Stage 1 completion record
+
+`scripts/extract-worktree-live-attribution-fixtures.mts` now discovers the
+sources through structural joins rather than committed private ids: current Git
+identities select the main/grid/UI topology, the fixed-cutoff Codex corpus
+selects the unique 0.151.0 rollout ending in the recorded UI-worktree command
+tail, and the per-session proxy thread id joins that rollout to the matching
+Agent Code recording and workspace entry.
+
+The checked-in corpus contains five JSON fixtures, a provenance/privacy
+manifest, and an aggregate shape census. At the fixed provider/session cutoff
+it records 26 direct Claude tool paths in the grid worktree, both required
+Claude conflict rows, and a Codex tail of 12 consecutive completed UI-worktree
+commands. A fixed source-order prefix of 128 proxy requests is zstd encoded,
+decodes successfully, and matches one exact rollout thread/session id in all
+128 cases; the current proxy `request_shape` is absent in all 128. The matching
+live Agent Code recording contains zero `session:jsonl-entries` despite 7,403
+semantic events and 2,358 screen events through the same cutoff.
+
+The proxy fixture keeps the real zstd/parser boundary but contains only a
+tokenized `client_metadata` object that the exporter deterministically
+recompresses and immediately round-trips. Other fixtures discard prompts,
+assistant prose, screen/semantic payloads, commands, tool results, raw ids, and
+raw paths. The canonical sensitive-value scan, strict path/UUID/string gates,
+explicit decoded-body inspection, and two consecutive byte-identical
+extractions pass. Repository typecheck includes the exporter and passes; the
+test-contract and whitespace checks also pass. No Stage 2 tests or production
+behavior were added during this stage.
+
 ## Stage 2 — record ownership semantics as failing contracts
 
 **Produces**
