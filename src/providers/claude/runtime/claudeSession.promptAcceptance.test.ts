@@ -224,8 +224,8 @@ describe('ClaudeSession prompt acceptance', () => {
   // FIXTURE_SENT is the exact `draftInput` preserved in debug bundle
   // 2026-08-30T22-07-43-944-88c29f92 (482 chars, 8 raw TAB bytes from a pasted
   // table). FIXTURE_ACCEPTED is the exact `message.content` Claude committed
-  // to transcript 47211034-…jsonl 316ms after submit.begin (505 chars — the
-  // tabs came back as column-dependent SPACE runs; the queue-operation entry
+  // to transcript 47211034-…jsonl 316ms after submit.begin (505 chars — each
+  // tab rewritten to a constant four spaces; the queue-operation entry
   // carried the identical expanded form, proving the transform happens on
   // paste ingestion inside Claude's composer, so NO transcript witness can
   // ever equal the sent bytes).
@@ -243,7 +243,9 @@ describe('ClaudeSession prompt acceptance', () => {
 
   it('accepts the recorded tab-expanded transcript entry (2026-08-30 false timeout)', async () => {
     const session = new ClaudeSession()
-    const waiter = session.armPromptAcceptance(FIXTURE_SENT)
+    // timeoutMs keeps a regression RED-fast: without it a broken matcher
+    // stalls this test on the 10s real-timer default before failing.
+    const waiter = session.armPromptAcceptance(FIXTURE_SENT, { timeoutMs: 200 })
     ;(session as unknown as { resolvePromptAcceptance(value: unknown, cursor: number): void })
       .resolvePromptAcceptance({
         type: 'user',
@@ -257,7 +259,7 @@ describe('ClaudeSession prompt acceptance', () => {
     // 280ms before the user entry). Matching the queue shape is what makes a
     // busy-session submit confirm fast instead of waiting on turn commit.
     const session = new ClaudeSession()
-    const waiter = session.armPromptAcceptance(FIXTURE_SENT)
+    const waiter = session.armPromptAcceptance(FIXTURE_SENT, { timeoutMs: 200 })
     ;(session as unknown as { resolvePromptAcceptance(value: unknown, cursor: number): void })
       .resolvePromptAcceptance({
         type: 'queue-operation',
@@ -288,7 +290,7 @@ describe('ClaudeSession prompt acceptance', () => {
     const session = new ClaudeSession()
     const nfd = 'read cafe\u0301.txt'          // e + combining acute (NFD)
     const nfc = 'read caf\u00e9.txt'           // precomposed é (NFC)
-    const waiter = session.armPromptAcceptance(nfd)
+    const waiter = session.armPromptAcceptance(nfd, { timeoutMs: 200 })
     ;(session as unknown as { resolvePromptAcceptance(value: unknown, cursor: number): void })
       .resolvePromptAcceptance({
         type: 'user',
@@ -362,7 +364,7 @@ describe('ClaudeSession prompt acceptance', () => {
     await expect(waiter.promise).resolves.toMatchObject({ kind: 'user' })
   })
 
-  it('matches the real Claude text-plus-image JSONL shape without weakening exact text matching', async () => {
+  it('matches the real Claude text-plus-image JSONL shape without weakening the text guard', async () => {
     const session = new ClaudeSession()
     const waiter = session.armPromptAcceptance('describe briefly', { expectedImageCount: 1 })
     ;(session as unknown as { resolvePromptAcceptance(value: unknown, cursor: number): void })

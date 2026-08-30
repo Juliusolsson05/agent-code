@@ -30,6 +30,17 @@ export type MobileComposerState = {
   draft: string
   sending: boolean
   deliveryUncertain: boolean
+  /**
+   * Main's own write evidence from the failed delivery, forwarded verbatim
+   * over the wire (RemoteServer replies with the full PromptDeliveryResult;
+   * WebSocketSessionFeed returns it untouched). false = Enter provably never
+   * reached the provider, so "may already be submitted" would be a lie; null
+   * = no delivery result came back (an old server, or a transport throw), so
+   * neither claim is honest and the cautious wording stays. Review caught the
+   * first version of this change discarding the field here and then claiming
+   * in a comment that the protocol never carried it.
+   */
+  enterWritten: boolean | null
   error: string | null
 }
 
@@ -37,6 +48,7 @@ export const EMPTY_MOBILE_COMPOSER_STATE: MobileComposerState = {
   draft: '',
   sending: false,
   deliveryUncertain: false,
+  enterWritten: null,
   error: null,
 }
 
@@ -188,11 +200,17 @@ export function SessionView({
       .deliverPrompt(sessionId, text)
       .then(result => {
         if (!result.ok) {
+          // The failure branch of PromptDeliveryResult always carries
+          // enterWritten; `?? null` covers a server old enough to omit it.
+          const enterWritten = 'enterWritten' in result ? result.enterWritten ?? null : null
           updateComposerState(current => ({
             ...current,
             deliveryUncertain: !result.retrySafe,
+            enterWritten,
             error: !result.retrySafe
-              ? `${result.message}. It may already be submitted; resend is blocked.`
+              ? enterWritten === false
+                ? `${result.message}. The draft was never submitted; resend is blocked so it does not double up.`
+                : `${result.message}. It may already be submitted; resend is blocked.`
               : result.message,
           }))
           return
@@ -200,6 +218,9 @@ export function SessionView({
         updateComposerState(current => ({
           ...current,
           deliveryUncertain: false,
+          // Cleared with the flag: stale evidence attached to a LATER failure
+          // would misdescribe it, which is worse than no evidence.
+          enterWritten: null,
           // Whitespace is user input too. Comparing normalized transport text
           // erased next-draft whitespace edits made during acknowledgement.
           draft: current.draft === submittedDraft ? '' : current.draft,
@@ -389,6 +410,7 @@ export function SessionView({
               updateComposerState(current => ({
                 ...current,
                 deliveryUncertain: false,
+                enterWritten: null,
                 error: null,
               }))
             }}>
@@ -434,18 +456,18 @@ export function SessionView({
                   prompt: draft,
                   message: error ?? 'Delivery uncertain',
                   failedAt: Date.now(),
-                  // The remote protocol does not forward main's write
-                  // evidence, so the phone client genuinely cannot tell
-                  // "submitted but unconfirmed" from "never submitted".
-                  // null keeps the banner on its cautious wording instead
-                  // of letting the client fabricate a claim.
-                  enterWritten: null,
+                  // Forwarded from the delivery result kept in composer
+                  // state above — the wire carries main's full
+                  // PromptDeliveryResult, so the phone can be exactly as
+                  // honest as the desktop about whether Enter was pressed.
+                  enterWritten: composerState.enterWritten,
                 }
               : { kind: 'idle' }}
             onResolveUncertainDelivery={() => {
               updateComposerState(current => ({
                 ...current,
                 deliveryUncertain: false,
+                enterWritten: null,
                 error: null,
               }))
             }}

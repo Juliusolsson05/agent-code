@@ -160,9 +160,17 @@ export function useComposerKeybinds({
     }
     if (input.trim().length === 0 && draftImages.length === 0) return
     if (runtime.promptDelivery.kind === 'uncertain') {
+      // Same evidence branch as the banner and the failure toast below.
+      // Review caught this guard still making the unconditional "may already
+      // have it" claim while the banner two lines away said the opposite —
+      // the user's retry gesture was answered with the exact misdirection
+      // this state exists to prevent. enterWritten=false proves no submit
+      // reached Claude, so the honest obstruction is the stranded draft.
       workspace.showPaneToast(
         sessionId,
-        'Claude may already have the previous prompt. Verify the transcript before sending again.',
+        runtime.promptDelivery.enterWritten === false
+          ? 'The previous prompt was never submitted — it is sitting in the agent\'s composer. Clear it (or confirm below) before sending again.'
+          : 'Claude may already have the previous prompt. Verify the transcript before sending again.',
       )
       return
     }

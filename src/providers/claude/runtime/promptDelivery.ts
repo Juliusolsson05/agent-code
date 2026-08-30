@@ -289,11 +289,17 @@ function acceptanceResult(
     record?.(`acceptance-${outcome.kind}`, { acceptedAt: outcome.acceptedAt })
     return { ok: true, acceptance: outcome }
   }
-  // Redactor trap: journal data keys matching /prompt|content|text|…/i are
-  // dropped, so the tallies use miss* names. `missExact` > 0 is the headline
-  // number — it means Claude wrote an entry in our window and the text
-  // comparison refused it, which is exactly the class that made 21/21
-  // recorded timeouts false before the whitespace-collapse fix.
+  // These tallies are COUNTS, never candidate content — that discipline, not
+  // any sink-side filter, is the privacy line. Review corrected the first
+  // version of this comment, which claimed the journal's sensitive-key
+  // redactor protects this record: it does not — io.record is wired to the
+  // paste-debug journal (ipc/session.ts -> PasteDebugJournal.append), which
+  // JSON-stringifies payloads with no key filtering; caller discipline is its
+  // documented contract. The miss* prefix is for cross-stream naming
+  // consistency with the lifecycle events, nothing more. `missExact` > 0 is
+  // the headline number — Claude wrote an entry in our window and the text
+  // comparison refused it, exactly the class that made 21/21 recorded
+  // timeouts false before the whitespace-collapse fix.
   record?.('uncertain', {
     outcome: outcome.kind,
     ...(outcome.kind === 'timeout' && outcome.nearMisses

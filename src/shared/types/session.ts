@@ -446,8 +446,11 @@ export type PromptAcceptanceOutcome =
    * while this waiter starved. Diagnostic-only, but load-bearing for the
    * journal: the 2026-08-30 corpus showed 21/21 acceptance-timeouts were
    * false (the entry existed; a filter dropped it), and none of that was
-   * visible from the timeout alone. Optional because cancel/exit paths and
-   * older providers do not tally.
+   * visible from the timeout alone. Optional purely for back-compat: the one
+   * timeout constructor (ClaudeSession.armPromptAcceptance) always attaches
+   * it, but existing tests and shims build bare `{ kind: 'timeout' }`
+   * literals, and requiring the field would force every one of them to
+   * fabricate tallies they never measured.
    */
   | {
       kind: 'timeout'

@@ -165,8 +165,9 @@ export class ClaudeSession extends EventEmitter {
      * the journal: it recorded that acceptance never fired but not WHY, and
      * finding the tab-expansion cause took a debug bundle, the provider
      * transcript, and a byte-level diff. With these counters a timeout names
-     * the guilty filter directly (a nonzero `exact` with matching-length
-     * candidates = text divergence; nonzero `timestamp` = the armedAt race).
+     * the guilty filter directly (a nonzero `exact` = an entry arrived in the
+     * window and the text comparison refused it; nonzero `timestamp` = the
+     * armedAt race).
      * Counts only — candidate content never leaves the session.
      */
     misses: { cursor: number; timestamp: number; image: number; exact: number }
@@ -1143,13 +1144,19 @@ export class ClaudeSession extends EventEmitter {
  * already had.
  *
  * This deliberately reverses the earlier rule ("interior whitespace remains
- * exact: collapsing it could acknowledge a different prompt"). That worry is
- * neutralized by the other filters: the ingest cursor only admits entries
- * whose callback arrived after arming, and the armedAt timestamp guard
- * rejects records that predate this delivery — so the only entries a
- * collapse could confuse are ones written in direct response to OUR Enter.
- * Non-whitespace edits (an appended '.', a truncation) still refuse to
- * match, which is the guard exactness actually existed for.
+ * exact: collapsing it could acknowledge a different prompt"). The cursor and
+ * armedAt filters narrow the exposure sharply — they admit only entries
+ * ingested after arming with post-arm timestamps — but review found one path
+ * they do NOT close: a mid-turn delivery of prompt A confirms via its
+ * queue-operation entry, and A's user entry is written later at DEQUEUE with
+ * a fresh timestamp, so a subsequently-armed waiter for prompt B can match
+ * A's dequeue entry if A and B canonicalize equal. Whitespace/NFC twins
+ * queued back-to-back are the residual risk; byte-identical twins already
+ * had it before this change. Accepted knowingly: against the measured
+ * 21-of-21 false-timeout rate, the twin scenario needs two near-identical
+ * prompts in one turn AND a swallowed Enter to do harm. Non-whitespace edits
+ * (an appended '.', a truncation) still refuse to match, which is the guard
+ * exactness actually existed for.
  *
  * KNOWN RESIDUAL, accepted: Claude also strips ANSI escapes from pastes
  * (stripAnsi, PromptInput.tsx:1204). A prompt containing raw ESC bytes would
