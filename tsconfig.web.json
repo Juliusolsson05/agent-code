@@ -58,6 +58,12 @@
     // refreshes evidence months later.
     "scripts/extract-work-context-fixtures.mts",
     "scripts/extract-worktree-live-attribution-fixtures.mts",
+    // The live-attribution extractor imports this finite JSON-key policy, and
+    // its unit contract imports the same source. Composite projects require
+    // transitive TypeScript modules to be explicit; listing it here keeps the
+    // privacy gate in the authoritative typecheck instead of hiding it behind
+    // tsx's runtime-only transpilation.
+    "scripts/worktree-live-fixture-policy.ts",
     // WHY these two large bundles are explicit instead of admitting the entire
     // rendering-bundles corpus: browser-owned IPC regressions import their
     // recorded enqueue/remove/attachment and no-op notification sequences

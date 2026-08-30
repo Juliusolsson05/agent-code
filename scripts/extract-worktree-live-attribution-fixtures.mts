@@ -20,6 +20,7 @@ import { promisify } from 'node:util'
 import * as zlib from 'node:zlib'
 
 import { decompressZstdBounded } from '../packages/codex-headless/src/proxy/zstd.js'
+import { findRejectedWorktreeLiveFixtureKeys } from './worktree-live-fixture-policy.js'
 import { findSensitiveSurvivors } from '../src/renderer/src/rendering/replay/redact.js'
 import { sanitizePathSegment } from '../src/shared/runtime/projectDir.js'
 
@@ -1010,6 +1011,17 @@ function allowedFixtureString(value: string, path: string, label: string): boole
 }
 
 function assertPublishable(value: unknown, label: string): void {
+  const rejectedKeys = findRejectedWorktreeLiveFixtureKeys(value)
+  if (rejectedKeys.length > 0) {
+    // WHY keys have their own error before value inspection: channel and kind
+    // counts promote raw strings into numeric-valued object keys. JSON.stringify
+    // sees those bytes, but a value-only allowlist does not; key provenance is
+    // therefore an independent publication boundary.
+    throw new Error(
+      `refusing ${label}: non-allowlisted object keys survived\n` +
+      rejectedKeys.slice(0, 20).join('\n'),
+    )
+  }
   const sensitive = findSensitiveSurvivors(value)
   if (sensitive.length > 0) {
     throw new Error(`refusing ${label}: sensitive values survived at ${sensitive.join(', ')}`)

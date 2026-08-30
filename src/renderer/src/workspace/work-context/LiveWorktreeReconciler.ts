@@ -88,16 +88,20 @@ export class LiveWorktreeReconciler {
     if (this.disposed) return projection
     let evidence = this.evidenceBySession.get(sessionId)
     if (evidence && !sameProjection(projection, evidence.lastEmitted)) {
-      // WHY an external projection is authoritative here: initial-history
-      // hydration runs independently from live SessionFeed subscriptions and
-      // may finish after the first live burst. That loader folds the current
-      // runtime plus the durable tail, so retaining our old baseline/recent
-      // window would both discard history and replay entries already included
-      // in the hydrated state. Rebase atomically whenever the caller presents
-      // work fields other than the last projection this reconciler emitted.
+      // WHY the external projection becomes the baseline but cannot erase the
+      // retained window: initial-history hydration runs independently from both
+      // live SessionFeed subscriptions and the full Git catalog. It can finish
+      // with a main-checkout-only projection after a decisive linked-worktree
+      // write was already buffered here. Replaying retained raw evidence is the
+      // only way the later full catalog can recover that path; tracker event
+      // keys must be released below because hydration may have included the
+      // same record under a smaller catalog and therefore the wrong checkout.
       evidence = {
-        baseline: projection,
-        recentRaw: [],
+        baseline: this.releaseRetainedEvidenceKeys(
+          projection,
+          evidence.recentRaw,
+        ),
+        recentRaw: evidence.recentRaw,
         lastEmitted: projection,
       }
     }
@@ -204,9 +208,16 @@ export class LiveWorktreeReconciler {
       )
     }
     if (!sameProjection(params.projection, evidence.lastEmitted)) {
+      // This is the catalog-ready half of the same hydration race handled in
+      // observe(). The caller's history is authoritative as a new baseline,
+      // while the live raw window remains the evidence needed to reinterpret a
+      // path that the history loader saw through a smaller Git catalog.
       evidence = {
-        baseline: params.projection,
-        recentRaw: [],
+        baseline: this.releaseRetainedEvidenceKeys(
+          params.projection,
+          evidence.recentRaw,
+        ),
+        recentRaw: evidence.recentRaw,
         lastEmitted: params.projection,
       }
       this.evidenceBySession.set(params.sessionId, evidence)
@@ -227,6 +238,34 @@ export class LiveWorktreeReconciler {
     const cached = this.cache.get(cwd)
     if (!cached || cached.refreshedAt <= 0) return projection
     return this.canonicalProjection(cwd, projection, cached.worktrees)
+  }
+
+  private releaseRetainedEvidenceKeys(
+    projection: WorktreeRuntimeProjection,
+    recentRaw: readonly unknown[],
+  ): WorktreeRuntimeProjection {
+    if (!projection.workActivity || recentRaw.length === 0) return projection
+    const retainedKeys = new Set(recentRaw.flatMap(raw => (
+      extractWorktreeActivityEvents(raw, this.now()).map(event => event.key)
+    )))
+    if (retainedKeys.size === 0) return projection
+    const workActivity = {
+      ...projection.workActivity,
+      // WHY remove matching timeline rows as well as dedupe keys: the event's
+      // raw path is replayed immediately against the renderer's authoritative
+      // Git catalog. Keeping the stale-catalog copy would duplicate one
+      // observation in diagnostics even though only one provider record exists.
+      timeline: projection.workActivity.timeline.filter(
+        event => !retainedKeys.has(event.key),
+      ),
+      recentKeys: projection.workActivity.recentKeys.filter(
+        key => !retainedKeys.has(key),
+      ),
+    }
+    return {
+      workActivity,
+      workContext: deriveAgentWorkContext(workActivity),
+    }
   }
 
   private foldRaw(
