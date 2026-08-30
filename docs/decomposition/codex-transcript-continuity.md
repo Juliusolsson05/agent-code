@@ -1,7 +1,6 @@
 # Codex Transcript Continuity
 
-> **Status:** Revised after adversarial review; awaiting explicit user approval.
-> No implementation stage may begin before that approval.
+> **Status:** Approved by the user on 2026-08-30. Stage 0 is in progress.
 >
 > **Primary issues:** #339 (submitted prompts lose visible ownership), #96
 > (Resume and conversation search disagree), #151 (known prompts are not
@@ -85,7 +84,7 @@ This decomposition replaces those failed substrates. It does not add a Codex
 
 | Artifact | Location | Trusted fact |
 |---|---|---|
-| Submitted-prompt incident | supplied bundle `incident-events.jsonl`, `feed-debug.jsonl`, `state-snapshot.json`, screen/tail samples, and its referenced proxy run | Prompts 3 and 4 have a complete cross-channel chronology. Prompts 1 and 2 have only partial evidence because `feed-debug.jsonl` is a 500-row ring. The app-wide incident journal is not session-keyed. |
+| Submitted-prompt incident | supplied bundle `incident-events.jsonl`, `feed-debug.jsonl`, `state-snapshot.json`, screen/tail samples, its referenced proxy run, and the durable per-session feed log at `~/.config/agent-code/feed-debug/d00b4e7c-c146-436d-8d3b-fee3a3a5b572.jsonl` | The bundle contains only the renderer's deliberate 500-row snapshot, but the durable per-session log still contains the earlier evidence: 16,155 rows at the Stage 0 inspection, including eight submits, one direct optimistic row, seven queue parks across both queue reasons, and three recorded idle clears. The app-run incident journal already carries `ids.sessionId`; the missing join is submission identity. |
 | Native committed transcript | `~/.codex/sessions/2026/08/30/rollout-2026-08-30T10-11-55-01a053a8-0611-7711-9ca3-f69f130764ab.jsonl` | Codex 0.151.0 created and appended the file. `session_meta.payload.id` is `01a053a8-0611-7711-9ca3-f69f130764ab`, and the file contains prompts missing from Agent Code's committed feed. It is mutable; Stage 1 must snapshot, byte-count, and hash it before fixture extraction. |
 | Provider-issued incident identity | bundle plus referenced proxy run | Main `/responses` requests carry `x-codex-window-id: 01a053a8-0611-7711-9ca3-f69f130764ab:0`; the UUID component before `:` exactly equals `session_meta.payload.id`. Header generation and rollout-internal `context_window.window_id` are different identity spaces. |
 | Saved identity observations | debug-bundle and proxy recordings across Codex 0.132.0, 0.144.3, 0.149.1, and 0.151.0 | The header-to-`payload.id` relation is strongly supported, including generations 0–19. Measured consistently as distinct observed `x-codex-window-id` UUID components, the uneven distribution is 0.132.0 ×14, 0.144.3 ×1, 0.149.1 ×1, and 0.151.0 ×10. Nine of the ten 0.151.0 UUIDs come from six proxy runs in one worktree/session family, not independent environments, so count is not broad version attestation. At least one recorded legacy provider ID resolves to two divergent files, so provider ID alone is not always a physical-path authority. Presence of `x-openai-subagent` disqualifies a child flow; absence of a parent header does not prove a root flow. |
@@ -217,11 +216,13 @@ The third fully correlated prompt demonstrates the failure:
 | 17:19:39.438 | `process_state` idle clears one queued item |
 
 The fourth prompt is natively committed but still says “queued for delivery” at
-capture. Feed-debug also contains an earlier idle clear of one queued item. The
-bundle context suggests that item was prompt 2 because `_counts.entries` shows
-prompt 1 had already become an optimistic entry, but the ring evicted the queue
-add and cannot identify the cleared item directly. That attribution remains an
-inference, not a recorded fact.
+capture. The bundle's 500-row snapshot omitted earlier evidence, but the durable
+per-session feed log retains it: prompt 1 took the direct optimistic-entry path;
+prompt 2 was parked as `live-current-turn`; prompts 3 and 4 were parked as
+`unowned-history`; and three idle clears are present. Later submissions in the
+same file also supply non-erased controls for both queue-reason branches. Stage
+1 must freeze the file at a byte boundary because it remains live and its
+128 MiB cap has begun dropping tail records.
 
 The causal deletion is the `process_state` edge clear added with PR #252 / commit
 `b0050cde`, not PR #304's later timer backstop. Current queue removal can occur
@@ -400,14 +401,19 @@ changes.
   provider request/queue, committed-row observed, attachment/tail, and visible
   surface. It records both `_counts.entries` and `totalEntries` when they disagree.
   Runtime decisions remain byte-for-byte unchanged.
-- **Why separate:** today's app-wide submit journal has no session/submission key,
-  the feed ring evicts early events, and one imagined universal token would
-  falsely imply prompt-to-request causality. Instrumentation must expose the
-  actual graph before any authority changes.
+- **Why separate:** today's app-run journal already has `ids.sessionId` but no
+  submission key, while its bounded bundle tail interleaves panes. The durable
+  feed log is session-scoped but carries raw text and has no submission token.
+  One imagined universal token would falsely imply prompt-to-request causality.
+  Stage 0 therefore extends the existing lifecycle/incident and feed-debug
+  substrates, then exports a session-filtered content-safe view; it does not
+  create another runtime store or let diagnostics become a decider.
 - **Reality check:** incident seq 81–92 interleaves four Codex and two Claude
-  submits; only prompts 3/4 retain complete feed evidence. The existing paste
-  journal already supplies a usable submission UUID but is absent from the
-  bundle manifest.
+  submits. The supplied bundle retained complete cross-channel evidence only for
+  prompts 3/4, but the 128 MiB durable per-session feed log retains the earlier
+  prompt 1/2 queue decisions plus later positive controls. The existing paste
+  journal already supplies the usable submission UUID but is absent from every
+  content-safe observation view.
 
 ### Stage 1 — freeze and extend the real fixture corpora
 
@@ -856,11 +862,14 @@ content.
 
 ### 7.2 Submitted-turn lifecycle and rendering corpus
 
-Use prompts 3/4 from the supplied incident as complete cases and prompts 1/2 as
-partial chronology only. Add a fresh complete reproduction because the existing
-feed ring evicted early evidence. Extend the existing rendering-bundle,
-rendering-recording, and queue-operation catalogs. Keep `buriedPrompt239` only as
-a synthetic mutation/control test.
+Freeze the durable per-session feed log and use its eight recorded submissions:
+the supplied bundle remains the cross-channel source for prompts 3/4, while the
+full log restores the prompt 1/2 queue decisions and supplies later erased and
+non-erased controls for both `live-current-turn` and `unowned-history`. A fresh
+recording is still required for missing write-failure, reload, proxy-disabled,
+and exact 0.151 resume/fork cases, not to replace evidence that already exists.
+Extend the existing rendering-bundle, rendering-recording, and queue-operation
+catalogs. Keep `buriedPrompt239` only as a synthetic mutation/control test.
 
 Record real healthy handoff, multi-prompt detached late attach, native rows before
 submit result, semantic before screen, duplicated IPC, injected role-user before
