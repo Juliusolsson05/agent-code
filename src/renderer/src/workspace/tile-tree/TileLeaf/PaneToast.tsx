@@ -19,11 +19,20 @@ export function PaneToast({ message }: { message: string | null }) {
           against this short line box into an almost complete pill. GlobalToast
           remains the true detached-toast owner of the float token.
 
-          WHY the emergency wrap belongs here rather than at each caller:
+          WHY the emergency wrap and line cap belong here rather than at each caller:
           pane toasts intentionally carry full bundle paths, resume commands,
           and backend errors. Any one can contain a token wider than a split
-          pane, so the shared presentation must be the containment boundary. */}
-      <span className="toast-enter min-w-0 max-w-full rounded-control px-3 py-0.5 text-center font-code text-[11px] font-semibold text-white [overflow-wrap:anywhere] bg-accent/80">
+          pane, so the shared presentation must be the containment boundary.
+          Wrapping alone is not sufficient: this wrapper is a non-shrinking
+          child above the composer, and an uncapped error could turn into
+          hundreds of lines and push the composer outside a short split pane.
+          Three lines keep the feedback useful without letting it repossess
+          the pane; the full DOM text remains available to assistive tech and
+          `title` preserves mouse inspection of the clipped remainder. */}
+      <span
+        className="toast-enter line-clamp-3 min-w-0 max-w-full rounded-control px-3 py-0.5 text-center font-code text-[11px] font-semibold text-white [overflow-wrap:anywhere] bg-accent/80"
+        title={message}
+      >
         {message}
       </span>
     </div>

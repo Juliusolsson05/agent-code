@@ -37,4 +37,20 @@ describe('toast radius ownership', () => {
     expect(globalToast.className).toContain('rounded-float')
     expect(globalToast.className).not.toContain('rounded-control')
   })
+
+  it('bounds pathological feedback without discarding the complete message', () => {
+    const message = `Backend error: ${'A'.repeat(2048)}`
+    render(<PaneToast message={message} />)
+
+    const paneToast = screen.getByText(message)
+    // WHY this is a joint visual/content contract: emergency wrapping fixes
+    // horizontal overflow, but without a line cap the non-shrinking toast can
+    // consume the pane vertically and clip the composer. The text must stay in
+    // the DOM and title even when CSS clamps its paint, because backend errors
+    // and resume commands contain details the user may still need to inspect.
+    expect(paneToast.className).toContain('[overflow-wrap:anywhere]')
+    expect(paneToast.className).toContain('line-clamp-3')
+    expect(paneToast).toHaveAttribute('title', message)
+    expect(paneToast).toHaveTextContent(message)
+  })
 })

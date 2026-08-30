@@ -18,7 +18,7 @@ Both defects surfaced in the first review of the semantic radius rollout, but th
 1. Reproduce the note prompt with long unbroken metadata and inspect the dialog, body wrapper, and textarea width constraints at normal and narrow viewports.
 2. Add the smallest shared dialog containment invariant that fixes every direct child without clipping legitimate dialog content. Add a feature-level constraint only if the shared invariant does not fully cover the note prompt.
 3. Retoken `PaneToast` to the small interactive/chrome radius while leaving `GlobalToast` on `rounded-float`.
-4. Add renderer tests that assert the shrink/containment class contract and distinguish inline from detached toast radii.
+4. Add renderer tests that assert the shrink/containment class contract, distinguish inline from detached toast radii, and keep pathological feedback from growing tall enough to displace the pane composer.
 5. Run focused renderer tests, the renderer suite, and typecheck. Visually compare the affected surfaces at narrow and normal widths using the available local Chromium/Electron path.
 
 ## Guardrails
@@ -26,3 +26,4 @@ Both defects surfaced in the first review of the semantic radius rollout, but th
 - Do not add `overflow-hidden` to the dialog as a cosmetic mask: dialogs can legitimately contain popovers, focus rings, and other content that may paint beyond a child box.
 - Do not change the numeric corner presets to repair one misclassified surface. The token value is shared; placement classification is the defect.
 - Do not flatten `GlobalToast`: it is fixed, shadowed, and genuinely detached from the workspace grid.
+- Do not solve horizontal containment by allowing an unbounded number of wrapped lines. Pane feedback may contain full paths and backend errors, so it needs both emergency word wrapping and a finite block-size contract.
