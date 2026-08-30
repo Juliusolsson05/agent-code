@@ -276,6 +276,11 @@ function createRegistryLifecycle(generation: symbol): RegistryLifecycle {
 // well beyond "the shell prompt and a few commands ago" which is
 // the actual requirement. Past the cap we keep the tail (newest
 // content wins) so long-running shells don't blow up memory.
+// One event per session per second for composer writes. A raw terminal view
+// emits one write per keystroke, so this is the difference between a journal
+// that answers "who typed here" and one that is nothing but keystrokes.
+const INPUT_WRITE_COALESCE_MS = 1000
+
 const TERMINAL_BUFFER_CAP = 256 * 1024
 
 // Raw-agent terminal buffer cap. This is intentionally larger than the
@@ -336,6 +341,14 @@ export class SessionManager extends EventEmitter {
   // per-session critical section; without it, Enter from attempt A can submit
   // paste B and turn a slow operation into duplicate queue entries.
   private readonly promptDeliveriesInFlight = new Set<string>()
+  /** Open coalescing window per session for `input.write`. See recordInputWrite. */
+  private readonly inputWriteCoalesce = new Map<string, {
+    firstAt: number
+    writes: number
+    bytes: number
+    origin: 'delivery' | 'external'
+    hadSubmit: boolean
+  }>()
   private readonly lastActivityAt = new Map<string, number>()
   // Latest per-session UI-state snapshots, cached at the emit sites below.
   // WHY: consumers that attach mid-flight (the remote mobile companion's
@@ -2935,6 +2948,77 @@ export class SessionManager extends EventEmitter {
     return this.promptDeliveriesInFlight.has(sessionId)
   }
 
+  /**
+   * Record who wrote into the provider's composer.
+   *
+   * WHY this exists at all: the prompt gate refuses delivery while the composer
+   * holds a draft, and it decides that by classifying rendered characters. That
+   * can tell us characters are present; it cannot tell us who put them there.
+   * A human mid-sentence, a dictation paste, the phone client, a debug
+   * terminal, and a delivery that stranded its own bytes all render identically
+   * and all produce `occupied / human-draft`. Sessions then sit blocked — 19 of
+   * 216 ended that way, the longest for 47 hours — with the cause unknowable
+   * after the fact.
+   *
+   * WHY here and not at the call sites: this is the single function every
+   * non-delivery writer reaches (renderer composer, raw terminal view, terminal
+   * panes, dictation, debug terminal, phone client). Instrumenting the choke
+   * point cannot miss a writer; instrumenting seven call sites can, and would
+   * miss the eighth one added later.
+   *
+   * WHY coalesced rather than one event per write: a raw terminal view sends
+   * one write per keystroke. Logging each would bury the signal in the journal
+   * that exists to surface it, and would make the journal's own size a new
+   * problem. One event per session per window, carrying the count, answers
+   * "did someone type here, and when" — which is the question — without
+   * carrying what they typed, which is never logged.
+   */
+  private recordInputWrite(
+    sessionId: string,
+    data: string,
+    origin: 'delivery' | 'external',
+  ): void {
+    if (!this.lifecycle) return
+    const now = Date.now()
+    const pending = this.inputWriteCoalesce.get(sessionId)
+    // A submit is always worth its own event: it is the boundary between "text
+    // is accumulating" and "the composer should now be empty", which is exactly
+    // the transition that matters when reconstructing why a composer is
+    // occupied later.
+    const hasSubmit = data.includes('\r')
+    if (pending && !hasSubmit && now - pending.firstAt < INPUT_WRITE_COALESCE_MS && pending.origin === origin) {
+      pending.writes += 1
+      pending.bytes += data.length
+      return
+    }
+    if (pending) this.flushInputWrite(sessionId)
+    this.inputWriteCoalesce.set(sessionId, {
+      firstAt: now, writes: 1, bytes: data.length, origin, hadSubmit: hasSubmit,
+    })
+    if (hasSubmit) this.flushInputWrite(sessionId)
+    else {
+      const timer = setTimeout(() => this.flushInputWrite(sessionId), INPUT_WRITE_COALESCE_MS)
+      // Never hold the process open for a diagnostic.
+      timer.unref?.()
+    }
+  }
+
+  private flushInputWrite(sessionId: string): void {
+    const pending = this.inputWriteCoalesce.get(sessionId)
+    if (!pending) return
+    this.inputWriteCoalesce.delete(sessionId)
+    // Byte COUNTS only. What the user typed is never journaled — the question
+    // is who wrote and when, and the content would make this a privacy problem
+    // for no diagnostic gain.
+    this.lifecycle?.session('input.write', sessionId, {
+      origin: pending.origin,
+      writes: pending.writes,
+      bytes: pending.bytes,
+      hadSubmit: pending.hadSubmit,
+      windowMs: Date.now() - pending.firstAt,
+    })
+  }
+
   write(sessionId: string, data: string): boolean {
     // A raw Enter is globally meaningful to a TUI composer. While the provider
     // delivery state machine owns that composer, accepting Enter from a slash
@@ -2990,6 +3074,11 @@ export class SessionManager extends EventEmitter {
       return false
     }
     entry.session.write(data)
+    // External = every writer that is not a prompt delivery: the app composer,
+    // the raw terminal view, terminal panes, dictation, the debug terminal, and
+    // the phone client. They are indistinguishable from each other here, which
+    // is itself the finding — none of them announce themselves today.
+    this.recordInputWrite(sessionId, data, 'external')
     return true
   }
 
@@ -3006,6 +3095,7 @@ export class SessionManager extends EventEmitter {
     // retry. The identity rejection above remains genuinely pre-write.
     onWriteAttempt?.()
     expectedEntry.session.write(data)
+    this.recordInputWrite(sessionId, data, 'delivery')
     return true
   }
 
