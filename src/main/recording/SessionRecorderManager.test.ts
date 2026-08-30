@@ -355,4 +355,52 @@ describe('SessionRecorderManager', () => {
     expect(m.isRecording('auto')).toBe(true)
     await m.stopRecording('auto')
   })
+
+  it('auto-records a valid Stage 0 sidecar that precedes session:started', async () => {
+    const m = new SessionRecorderManager(nowWall, nowMono, true)
+    const sessionId = '94949494-9494-4494-8494-949494949494'
+    const sessionRunId = '95959595-9595-4595-8595-959595959595'
+    expect(m.recordCodexTranscriptObservation(sessionId, '', {
+      schemaVersion: 1,
+      name: 'transcript.attachment',
+    })).toBe(false)
+    expect(m.isRecording(sessionId)).toBe(false)
+
+    expect(m.recordCodexTranscriptObservation(sessionId, sessionRunId, {
+      schemaVersion: 1,
+      name: 'transcript.attachment',
+      data: { decision: 'hold', reason: 'awaiting-local-prompt' },
+    })).toBe(true)
+    expect(m.isRecording(sessionId)).toBe(true)
+
+    await m.stopRecording(sessionId)
+    const dir = await readRecordingDir(sessionId)
+    const rows = readFileSync(join(dir, 'events.jsonl'), 'utf8')
+      .trim()
+      .split('\n')
+      .map(line => JSON.parse(line))
+    expect(rows).toEqual([
+      expect.objectContaining({
+        ch: '__codex_transcript_observation',
+        observation: expect.objectContaining({
+          name: 'transcript.attachment',
+          ids: expect.objectContaining({ sessionId, sessionRunId }),
+        }),
+      }),
+    ])
+  })
+
+  it('does not let a valid Stage 0 sidecar opt into recording by default', () => {
+    const m = mgr()
+    expect(m.recordCodexTranscriptObservation(
+      '96969696-9696-4696-8696-969696969696',
+      '97979797-9797-4797-8797-979797979797',
+      {
+        schemaVersion: 1,
+        name: 'transcript.attachment',
+        data: { decision: 'hold', reason: 'awaiting-local-prompt' },
+      },
+    )).toBe(false)
+    expect(m.isRecording('96969696-9696-4696-8696-969696969696')).toBe(false)
+  })
 })

@@ -313,13 +313,12 @@ export class SessionRecorderManager {
    * Append one already-sanitized Stage 0 observation to the active session
    * recording without routing it through the outbound SessionFeed funnel.
    *
-   * WHY this deliberately does not auto-start a recorder: ordinary recording
-   * remains an explicit user choice (or the existing AGENT_CODE_SESSION_RECORD
-   * power mode). Lifecycle observations are always-on and comparatively
-   * frequent; allowing them to create recordings would silently undo that
-   * privacy/storage boundary. In power mode the normal `session:started` event
-   * creates the recorder before a human can submit, so the chronology is still
-   * present in the captures that opted into it.
+   * WHY this starts a recorder only in existing auto-record power mode: a
+   * capability refusal or ownership decision can precede `session:started`.
+   * Waiting for that outbound event silently amputates the exact Stage 0 prefix
+   * an unattended capture opted into. Default command-driven recording remains
+   * unchanged: an always-on lifecycle observation cannot create a recorder
+   * unless AGENT_CODE_SESSION_RECORD already authorized every session.
    *
    * WHY only the active generation receives the row: a logical session id may
    * be reused while an older recorder is retiring. The lifecycle observation
@@ -332,17 +331,25 @@ export class SessionRecorderManager {
     sessionRunId: string,
     observation: unknown,
   ): boolean {
-    const active = this.recorders.get(sessionId)
     if (
-      !active ||
       !isCodexTranscriptObservationSessionId(sessionId) ||
-      active.sessionRunId !== sessionRunId
+      !isCodexTranscriptObservationSessionId(sessionRunId)
     ) return false
     if (!observation || typeof observation !== 'object' || Array.isArray(observation)) return false
     const input = observation as Record<string, unknown>
     if (input.schemaVersion !== 1 || !isCodexTranscriptObservationEventName(input.name)) {
       return false
     }
+    let active = this.recorders.get(sessionId)
+    if (!active && this.autoRecord) {
+      // The callback is main-owned and supplies the exact run fence separately
+      // from the sanitized sidecar. Seed the same identity a later
+      // `session:started` would have supplied so replacement-run observations
+      // cannot enter this early-created generation.
+      this.startRecording(sessionId, { kind: 'codex', sessionRunId })
+      active = this.recorders.get(sessionId)
+    }
+    if (!active || active.sessionRunId !== sessionRunId) return false
     const safeData = pickCodexTranscriptObservationData(input.name, input.data)
     const safeIds = pickCodexTranscriptObservationCorrelationIds(
       input.name,

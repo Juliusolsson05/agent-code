@@ -145,15 +145,6 @@ describe('Codex transcript observation bundle export', () => {
         data: { provider: 'claude', source: 'text-only' },
       }),
       journalEvent({
-        // A fractional sequence cannot order an append-only chronology even
-        // though it is a finite JavaScript number. The exporter must not lend
-        // authority to malformed direct journal producers.
-        seq: 5.5,
-        sessionId: CODEX_PANE_ID,
-        name: 'transcript.snapshot',
-        data: { entryCount: 99, totalEntries: 99 },
-      }),
-      journalEvent({
         seq: 6,
         sessionId: CODEX_PANE_ID,
         name: 'submit.begin',
@@ -197,7 +188,7 @@ describe('Codex transcript observation bundle export', () => {
       schemaVersion: 1,
       appRunId: APP_RUN_ID,
       ids: { sessionId: CODEX_PANE_ID, submissionId: 'sub-1' },
-      data: { phase: 'body', bytes: 81, ok: true },
+      data: { phase: 'body', ok: true },
     })
     expect(observations[0].ids).not.toHaveProperty('madeUpJoin')
     expect(observations[0].data).not.toHaveProperty('prompt')
@@ -218,6 +209,8 @@ describe('Codex transcript observation bundle export', () => {
       sourceFlushFailed: false,
       sourceGapTrackingStatusAvailable: true,
       sourceGapTrackingCapped: false,
+      malformedJsonRows: 0,
+      invalidChronologyRows: 0,
       sourceHasGaps: false,
     })
   })
@@ -283,6 +276,7 @@ describe('Codex transcript observation bundle export', () => {
       matchedEvents: 20_000,
       writtenEvents: rows.length,
       truncated: true,
+      sourceHasGaps: true,
     })
     expect(rows.length).toBeLessThan(20_000)
     expect(rows.map(row => row.seq)).toEqual(
@@ -351,6 +345,92 @@ describe('Codex transcript observation bundle export', () => {
       sourceCapped: false,
       sourceDroppedEvents: 0,
       rateLimitGapObserved: true,
+      sourceHasGaps: true,
+    })
+  })
+
+  it('marks suppressed attachment relations as an explicit source gap', async () => {
+    writeFileSync(
+      join(INCIDENT_ROOT, APP_RUN_ID, 'events.jsonl'),
+      `${JSON.stringify(journalEvent({
+        seq: 1,
+        sessionId: CODEX_PANE_ID,
+        name: 'transcript.attachment',
+        data: { decision: 'hold', suppressed: 3 },
+      }))}\n`,
+    )
+
+    const { bundlePath } = await saveDebugBundle({
+      sessionId: CODEX_PANE_ID,
+      kind: 'codex',
+      reason: 'manual',
+      files: bundleFiles(),
+    }, COMPLETE_JOURNAL_SOURCE)
+
+    const manifest = JSON.parse(readFileSync(join(bundlePath, 'manifest.json'), 'utf8'))
+    expect(manifest.codexTranscriptObservations).toMatchObject({
+      attachmentSuppressionObserved: true,
+      sourceHasGaps: true,
+    })
+  })
+
+  it('marks malformed JSON as global uncertainty while preserving complete rows', async () => {
+    const valid = journalEvent({
+      seq: 2,
+      sessionId: CODEX_PANE_ID,
+      name: 'transcript.snapshot',
+      data: { entryCount: 1, totalEntries: 1 },
+    })
+    writeFileSync(
+      join(INCIDENT_ROOT, APP_RUN_ID, 'events.jsonl'),
+      `{"schemaVersion":1\n${JSON.stringify(valid)}\n`,
+    )
+
+    const { bundlePath } = await saveDebugBundle({
+      sessionId: CODEX_PANE_ID,
+      kind: 'codex',
+      reason: 'manual',
+      files: bundleFiles(),
+    }, COMPLETE_JOURNAL_SOURCE)
+
+    const body = readFileSync(join(bundlePath, 'codex-transcript-observations.jsonl'), 'utf8')
+    expect(body.trim().split('\n')).toHaveLength(1)
+    const manifest = JSON.parse(readFileSync(join(bundlePath, 'manifest.json'), 'utf8'))
+    expect(manifest.codexTranscriptObservations).toMatchObject({
+      malformedJsonRows: 1,
+      invalidChronologyRows: 0,
+      matchedEvents: 1,
+      sourceHasGaps: true,
+    })
+  })
+
+  it('marks a scoped row with invalid chronology coordinates as a source gap', async () => {
+    writeFileSync(
+      join(INCIDENT_ROOT, APP_RUN_ID, 'events.jsonl'),
+      `${JSON.stringify(journalEvent({
+        // A fractional sequence cannot order an append-only chronology even
+        // though it is a finite JavaScript number. The exporter must not lend
+        // authority to malformed direct journal producers.
+        seq: 5.5,
+        sessionId: CODEX_PANE_ID,
+        name: 'transcript.snapshot',
+        data: { entryCount: 99, totalEntries: 99 },
+      }))}\n`,
+    )
+
+    const { bundlePath } = await saveDebugBundle({
+      sessionId: CODEX_PANE_ID,
+      kind: 'codex',
+      reason: 'manual',
+      files: bundleFiles(),
+    }, COMPLETE_JOURNAL_SOURCE)
+
+    const manifest = JSON.parse(readFileSync(join(bundlePath, 'manifest.json'), 'utf8'))
+    expect(manifest.codexTranscriptObservations).toMatchObject({
+      malformedJsonRows: 0,
+      invalidChronologyRows: 1,
+      matchedEvents: 0,
+      writtenEvents: 0,
       sourceHasGaps: true,
     })
   })

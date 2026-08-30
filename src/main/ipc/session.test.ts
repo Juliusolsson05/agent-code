@@ -39,13 +39,13 @@ describe('session input transcript observations', () => {
       [
         'submit.write',
         'codex-pane',
-        { phase: 'body', bytes: 5, ok: true, deliveryInFlight: false },
+        { phase: 'body', ok: true, deliveryInFlight: false },
         { submissionId: 'submission-1' },
       ],
       [
         'submit.write',
         'codex-pane',
-        { phase: 'enter', bytes: 1, ok: true, deliveryInFlight: false },
+        { phase: 'enter', ok: true, deliveryInFlight: false },
         { submissionId: 'submission-1' },
       ],
     ])

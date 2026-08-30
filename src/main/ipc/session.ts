@@ -131,7 +131,6 @@ export function registerSessionIpc(
         // instead of collapsing `ok` into a fictional atomic provider submit.
         manager.recordCodexTranscriptObservation('submit.write', sessionId, {
           phase: data === '\r' ? 'enter' : 'body',
-          bytes: Buffer.byteLength(data, 'utf8'),
           ok,
           deliveryInFlight,
         }, { submissionId: pasteId })

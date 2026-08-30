@@ -740,7 +740,6 @@ export function pickCodexTranscriptObservationData(
       break
     case 'submit.write':
       string('phase', ['body', 'enter'])
-      count('bytes')
       boolean('ok')
       boolean('deliveryInFlight')
       break

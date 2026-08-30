@@ -357,6 +357,9 @@ type CodexTranscriptObservationExport = {
   rendererObservationGapObserved: boolean
   rateLimitGapObserved: boolean
   attachmentTrackingCappedObserved: boolean
+  attachmentSuppressionObserved: boolean
+  malformedJsonRows: number
+  invalidChronologyRows: number
   sourceHasGaps: boolean
 }
 
@@ -400,6 +403,9 @@ async function exportCodexTranscriptObservations(params: {
   let rendererObservationGapObserved = false
   let rateLimitGapObserved = false
   let attachmentTrackingCappedObserved = false
+  let attachmentSuppressionObserved = false
+  let malformedJsonRows = 0
+  let invalidChronologyRows = 0
 
   try {
     if (!scopeAccepted) throw new Error('invalid Codex transcript observation session scope')
@@ -415,13 +421,18 @@ async function exportCodexTranscriptObservations(params: {
       } catch {
         // A crash may leave only the final JSONL line torn. Treat it exactly as
         // every other journal reader does: preserve all complete evidence and
-        // skip the fragment rather than making bundle save fail.
+        // skip the fragment rather than making bundle save fail. Unlike a
+        // permissive replay reader, this forensic projection also counts the
+        // uncertainty: an unparsable global row cannot prove which pane lost
+        // evidence, so no pane exported from this source may claim completeness.
+        malformedJsonRows += 1
         continue
       }
       const ids = event.ids as Record<string, unknown> | undefined
       if (event.area !== SESSION_LIFECYCLE_AREA) continue
       if (!isCodexTranscriptObservationEventName(event.name)) continue
       if (ids?.sessionId !== params.sessionId) continue
+      const eventData = event.data as Record<string, unknown> | undefined
       if (
         event.name === 'transcript.outbox-gap' ||
         event.name === 'transcript.surface-gap'
@@ -429,9 +440,13 @@ async function exportCodexTranscriptObservations(params: {
       if (event.name === 'transcript.observation-gap') rateLimitGapObserved = true
       if (
         event.name === 'transcript.attachment' &&
-        (event.data as Record<string, unknown> | undefined)?.trackingCapped === true
+        eventData?.trackingCapped === true
       ) attachmentTrackingCappedObserved = true
-      const eventData = event.data as Record<string, unknown> | undefined
+      if (
+        event.name === 'transcript.attachment' &&
+        typeof eventData?.suppressed === 'number' &&
+        eventData.suppressed > 0
+      ) attachmentSuppressionObserved = true
       if (
         LEGACY_CROSS_PROVIDER_SUBMIT_EVENTS.has(event.name) &&
         (eventData?.provider !== 'codex' ||
@@ -462,6 +477,9 @@ async function exportCodexTranscriptObservations(params: {
         // These are the ordering coordinates that make the file a chronology.
         // A malformed direct journal write is not useful evidence and should
         // not be made to look authoritative by filling invented timestamps.
+        // The row already passed exact pane/name scope above, so count this gap
+        // only for the affected exported stream rather than every pane.
+        invalidChronologyRows += 1
         continue
       }
       matchedEvents += 1
@@ -540,12 +558,16 @@ async function exportCodexTranscriptObservations(params: {
       rendererObservationGapObserved,
       rateLimitGapObserved,
       attachmentTrackingCappedObserved,
-      // Projection truncation and source loss are intentionally separate.
-      // A complete 4 MiB prefix cannot repair rows the upstream journal
-      // already dropped, and an unavailable completeness snapshot is itself
-      // an unknown—not permission to claim a complete chronology.
+      attachmentSuppressionObserved,
+      malformedJsonRows,
+      invalidChronologyRows,
+      // Projection truncation and source loss are separately reported but both
+      // make the aggregate completeness verdict false. A complete 4 MiB prefix
+      // cannot repair rows the upstream journal already dropped, and an
+      // unavailable snapshot is unknown—not permission to claim completeness.
       sourceHasGaps: !sourceAvailable ||
         !scopeAccepted ||
+        truncated ||
         params.appRunJournalCompleteness === undefined ||
         params.appRunJournalCompleteness.capped ||
         params.appRunJournalCompleteness.droppedEvents > 0 ||
@@ -554,7 +576,10 @@ async function exportCodexTranscriptObservations(params: {
         params.codexTranscriptObservationCompleteness.gapTrackingCapped ||
         rendererObservationGapObserved ||
         rateLimitGapObserved ||
-        attachmentTrackingCappedObserved,
+        attachmentTrackingCappedObserved ||
+        attachmentSuppressionObserved ||
+        malformedJsonRows > 0 ||
+        invalidChronologyRows > 0,
     })
   } catch (err) {
     // Enrichment is forensic aid, never the durable artifact the user asked to

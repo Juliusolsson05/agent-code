@@ -199,9 +199,7 @@ function appendQueuedSubmissionReleases(
       {
         submissionId,
         renderCandidateId,
-        ...(queuedMessageSubmissionRunId(message)
-          ? { sessionRunId: queuedMessageSubmissionRunId(message)! }
-          : {}),
+        sessionRunId: queuedMessageSubmissionRunId(message) ?? undefined,
       },
     )
   }
@@ -231,9 +229,7 @@ function appendCommittedSubmissionReconcile(
       ? { fileGenerationId: observation.fileGenerationId }
       : {}),
     ...(rolloutEntryId ? { rolloutEntryId } : {}),
-    ...(optimisticEntrySubmissionRunId(entry)
-      ? { sessionRunId: optimisticEntrySubmissionRunId(entry)! }
-      : {}),
+    sessionRunId: optimisticEntrySubmissionRunId(entry) ?? undefined,
   }
   const reconciled = appendCodexTranscriptObservation(
     current,
@@ -270,9 +266,7 @@ function appendQueuedSubmissionReconcile(
       ? { fileGenerationId: observation.fileGenerationId }
       : {}),
     ...(rolloutEntryId ? { rolloutEntryId } : {}),
-    ...(queuedMessageSubmissionRunId(message)
-      ? { sessionRunId: queuedMessageSubmissionRunId(message)! }
-      : {}),
+    sessionRunId: queuedMessageSubmissionRunId(message) ?? undefined,
   }
   const reconciled = appendCodexTranscriptObservation(
     current,

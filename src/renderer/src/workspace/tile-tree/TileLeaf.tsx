@@ -50,38 +50,14 @@ import {
   queuedMessageSubmissionId,
   queuedMessageSubmissionRunId,
 } from '@renderer/workspace/hook/actions/streaming'
-
-type VisibleSubmitSurface = {
-  surface: 'render-selected' | 'queue-strip'
-  submissionId: string
-  renderCandidateId: string
-  sessionRunId: string | null
-  entryOrdinal?: number
-}
+import {
+  reportHiddenSubmitSurface,
+  reportHiddenSubmitSurfaces,
+  useVisibleSubmitSurfaceUnmountCleanup,
+  type VisibleSubmitSurface,
+} from '@renderer/workspace/tile-tree/TileLeaf/useVisibleSubmitSurfaceUnmountCleanup'
 
 const MAX_TRACKED_VISIBLE_SUBMIT_SURFACES = 2_048
-
-function reportHiddenSubmitSurface(
-  sessionId: SessionId,
-  prior: VisibleSubmitSurface,
-): void {
-  reportLifecycle('submit.surface', sessionId, {
-    surface: prior.surface,
-    visible: false,
-    ...(prior.entryOrdinal === undefined ? {} : { entryOrdinal: prior.entryOrdinal }),
-  }, {
-    submissionId: prior.submissionId,
-    renderCandidateId: prior.renderCandidateId,
-    ...(prior.sessionRunId ? { sessionRunId: prior.sessionRunId } : {}),
-  })
-}
-
-function reportHiddenSubmitSurfaces(
-  sessionId: SessionId,
-  surfaces: ReadonlyMap<string, VisibleSubmitSurface>,
-): void {
-  for (const prior of surfaces.values()) reportHiddenSubmitSurface(sessionId, prior)
-}
 
 // Claude paste-state-machine constants + helpers moved to
 // ./TileLeaf/claudePaste.ts. Image helpers moved to
@@ -512,6 +488,10 @@ export function TileLeaf({
   const visibleSubmitSurfacesRef = useRef(new Map<string, VisibleSubmitSurface>())
   const visibleSubmitSurfaceSessionIdRef = useRef(sessionId)
   const suppressedVisibleSurfaceCountRef = useRef(0)
+  useVisibleSubmitSurfaceUnmountCleanup(
+    visibleSubmitSurfaceSessionIdRef,
+    visibleSubmitSurfacesRef,
+  )
   useEffect(() => {
     let previous = visibleSubmitSurfacesRef.current
     if (visibleSubmitSurfaceSessionIdRef.current !== sessionId) {
