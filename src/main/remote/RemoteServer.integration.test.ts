@@ -233,7 +233,13 @@ describe('event fan-out', () => {
       },
     }))
     await waitFor(frames, f => framesOfType(f, 'reply').length > 0)
-    expect(manager.write).toHaveBeenCalledWith('pre', '1\r')
+    // The third arg is the write's ORIGIN, and it is asserted rather than
+    // relaxed away: this is the phone-client path, and `remote` is one of the
+    // few attributions the write boundary can make for free. If a refactor
+    // dropped the label, every remote keystroke would silently journal as a
+    // local renderer write — a wrong answer to the one question the
+    // input.write event exists to answer.
+    expect(manager.write).toHaveBeenCalledWith('pre', '1\r', 'remote')
     ws.close()
   })
 })
@@ -269,7 +275,7 @@ describe('inbound scope enforcement on a live socket', () => {
     ws.send(JSON.stringify({ token, id: 'b', message: { type: 'interrupt', sessionId: 's1' } }))
     await waitFor(frames, f => framesOfType(f, 'reply').length >= 2)
     expect(manager.submitStagedPrompt).toHaveBeenCalledWith('s1')
-    expect(manager.write).toHaveBeenCalledWith('s1', '\x1b')
+    expect(manager.write).toHaveBeenCalledWith('s1', '\x1b', 'remote')
     ws.close()
   })
 
@@ -318,7 +324,7 @@ describe('inbound scope enforcement on a live socket', () => {
       message: { type: 'permission-reply', sessionId: 's1', action: offered },
     }))
     await waitFor(frames, f => framesOfType(f, 'reply').length >= 2)
-    expect(manager.write).toHaveBeenCalledWith('s1', '1\r')
+    expect(manager.write).toHaveBeenCalledWith('s1', '1\r', 'remote')
     ws.close()
   })
 

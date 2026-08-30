@@ -209,10 +209,22 @@ describe('deliverClaudePrompt routing', () => {
     // Pinning the exact array made this test fail for the rollback rather than
     // for the thing it is guarding.
     expect(writes).not.toContain('\r')
-    expect(writes[0]).toBe('\x1b[200~line one\nline two\x1b[201~')
-    // And the rollback must actually have been attempted.
-    expect(writes.slice(1).every(w => w === '\x15' || w === '\x19')).toBe(true)
-    expect(writes.length).toBeGreaterThan(1)
+    // Exactly the paste, and NOTHING after it — no kill, no yank.
+    //
+    // This fixture's screen never reflects the paste, so the delivery cannot
+    // see its own bytes. That is precisely when rollback must do nothing:
+    // pressing Ctrl+U against a composer we cannot read would destroy whatever
+    // is actually in it, and the whole reason this state is dangerous is that
+    // the thing in it might be a human's draft. An earlier version of the
+    // rollback pressed anyway and reported `cleared`, which review caught — it
+    // turned an honest "do not retry" into a false success on top of a
+    // composer it had never observed.
+    //
+    // So the correct outcome here is an unrecoverable failure with no
+    // keystrokes, and the assertion is the exact array: a rollback that starts
+    // firing blind again must fail this test rather than pass a weaker
+    // "every write is a kill byte" check that is vacuously true when empty.
+    expect(writes).toEqual(['\x1b[200~line one\nline two\x1b[201~'])
   })
 
   it('fails visibly when the session has no snapshotScreen probe', async () => {

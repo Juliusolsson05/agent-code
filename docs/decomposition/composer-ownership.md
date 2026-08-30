@@ -33,10 +33,20 @@ All four work. None of them is the problem.
 
 ## The root cause
 
-**Claude's composer is a shared mutable buffer with six writers, one lock that
+**Claude's composer is a shared mutable buffer with many writers, one lock that
 only one writer takes, and no record of who wrote what.**
 
-The writers:
+> **Corrected 2026-08-30.** This section said "six writers" over a table of
+> seven, and the table was still incomplete — it was built by grepping
+> `sendInput`, so it found only the writers that announce themselves that way.
+> Review found the condition resolver, which synthesizes keystrokes *inside the
+> provider* and reaches the PTY through the headless write callback, appearing
+> in neither instrumented function. The miscount is not a typo worth quietly
+> fixing: it is evidence for Unknown 2 below. An enumeration that was wrong
+> about its own row count was never a reliable basis for "these are all of
+> them", and the fix for that is measurement, not a more careful grep.
+
+The writers, as currently known:
 
 | writer | path | takes the lock? |
 |---|---|---|
@@ -47,6 +57,8 @@ The writers:
 | voice dictation | `useComposerDictation` → `sendInput` | no |
 | debug inline terminal | `AgentInlineTerminal` → `sendInput` | no |
 | phone client | `RemoteServer` → `write` | no |
+| **condition resolver** | `resolveCondition` → provider → headless write | no |
+| our own Clear command | `sendInput` → `write` | no |
 
 The lock is **one-directional**. Delivery excludes everyone else for the
 duration of a delivery. Nothing excludes the others the rest of the time, and —
@@ -97,8 +109,11 @@ This list is the reason implementation cannot start yet.
    `occupied` verdicts and no idea what wrote them. I have been *guessing*: I
    attributed the user's report to orphaned writes, and review proved 52 of 57
    refusals had no orphaned write on the session. I do not want to guess twice.
-2. **Whether the six writers are the complete set.** Enumerated by grep, which
-   finds call sites, not dynamic dispatch or future ones.
+2. **Whether the table above is the complete set.** Enumerated by grep, which
+   finds call sites, not dynamic dispatch or future ones. This is not a
+   hypothetical worry — the first version of the table missed the condition
+   resolver for exactly that reason, and the miss was found by review rather
+   than by the method that produced the table.
 3. **Whether dictation and the phone client can write while Claude is mid-turn**,
    and what that does to the gate.
 4. **Whether an orphan survives a session reload/replace**, and whether the
@@ -112,12 +127,33 @@ This list is the reason implementation cannot start yet.
 
 ### Stage 1 — Composer write journal *(instrumentation; produces nothing visible)*
 
-- **Produces** — a per-session append-only record of every byte written to the
-  PTY: timestamp, origin (`delivery` | `app-composer` | `raw-terminal` |
-  `dictation` | `remote` | `debug`), byte length, and whether it contained a
-  submit. Written at the single choke point every writer already passes
-  through (`SessionManager.write` / `writeReserved`), so it cannot miss a
-  writer by construction.
+- **Produces** — a per-session append-only record of every byte handed to the
+  PTY: timestamp, origin, byte length, and whether it contained a submit.
+
+  The origin vocabulary is `delivery` | `condition` | `remote` |
+  `renderer-paste` | `renderer`, which is coarser than the per-surface list this
+  stage originally promised. Every value is derived from what the write
+  boundary already knows, so the split costs nothing; splitting `renderer`
+  further into app-composer / raw-terminal / dictation / debug needs an origin
+  threaded through the shared `SessionFeed` contract from each call site. That
+  is deliberately deferred, because the evidence does not yet justify a contract
+  change: 52 of 57 recorded refusals had no orphaned write at all, so the first
+  question is whether ANY writer is implicated — not which one.
+
+  Two claims this stage originally made were wrong and are struck:
+
+  - *"cannot miss a writer by construction"* — false. It was written before the
+    condition resolver was known to bypass both instrumented functions. That
+    path is now recorded at the manager call boundary, but the guarantee itself
+    does not exist: it holds only for writers that route through the two
+    functions, which is a property to re-check whenever a provider gains a new
+    way to synthesize input, not an invariant the type system enforces.
+  - *"every byte written"* — the record is written **before** the PTY crossing,
+    so it describes bytes handed to node-pty, not bytes accepted by the child.
+    That direction is chosen on purpose: node-pty's write is not transactional,
+    so a throw does not prove zero bytes arrived, and recording afterwards would
+    drop precisely the half-failed writes most likely to orphan a prompt. The
+    strong claim is the negative one — no event means nothing was attempted.
 - **Verified by** — replaying a session by hand: type in the app composer, type
   in the raw terminal, dictate, send from the phone. Each must appear with the
   correct origin, and the totals must reconcile against `gate.eval` transitions

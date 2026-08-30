@@ -215,10 +215,20 @@ describe('WebSocketSessionFeed against a live RemoteServer', () => {
     await waitForOpen(f)
 
     expect(await f.sendInput('s1', '\r')).toBe(true)
+    // The third arg is the write's ORIGIN, and it is asserted rather than
+    // relaxed away: this is the phone-client path, and `remote` is one of the
+    // few attributions the write boundary can make for free. If a refactor
+    // dropped the label, every remote keystroke would silently journal as a
+    // local renderer write — a wrong answer to the one question the
+    // input.write event exists to answer.
+    // No origin asserted on this one: the '\r' comes from this file's own
+    // `submitStagedPrompt` fake, which calls write directly. Production submits
+    // do not reach the manager this way, so pinning an origin here would assert
+    // the mock rather than the code.
     expect(manager.write).toHaveBeenCalledWith('s1', '\r')
 
     expect(await f.sendInput('s1', '\x1b')).toBe(true)
-    expect(manager.write).toHaveBeenCalledWith('s1', '\x1b')
+    expect(manager.write).toHaveBeenCalledWith('s1', '\x1b', 'remote')
 
     expect(await f.sendInput('s1', '\x1b[200~multi\nline\x1b[201~')).toBe(true)
     expect(manager.deliverPromptToAgent).toHaveBeenCalledWith('s1', 'multi\nline')

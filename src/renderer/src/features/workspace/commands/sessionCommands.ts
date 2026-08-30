@@ -1142,20 +1142,35 @@ export const sessionCommands: CommandDef[] = [
       // interrupt rather than a clear — clearing a draft must never be able to
       // abort the agent's work.
       //
-      // Sent as a fixed bounded burst rather than a verify-after-each loop
-      // because Ctrl+U on an already-empty line is a no-op: overshooting costs
-      // nothing, while under-shooting leaves a half-killed prompt that a later
-      // Enter would submit as a fragment. The provider kills to the start of a
-      // VISUAL line, so a wrapped prompt needs roughly one press per rendered
-      // row; 64 covers a very long prompt at any realistic width.
+      // WHY each press is awaited and spaced instead of fired in a burst: the
+      // provider's input tokeniser accumulates a run of non-ESC bytes into ONE
+      // text token, and its control-letter branch only matches a
+      // single-character string. Two `\x15` bytes arriving in one PTY read are
+      // therefore not two kills — they are inserted as literal text. A tight
+      // 64-iteration loop would type garbage into the exact draft it is meant
+      // to remove, which is how the first cut of this command behaved.
       //
-      // window.api directly, matching TileLeaf and AgentTerminalLeaf: this
-      // deliberately bypasses the readiness-gated send path, because the state
-      // it exists to clear is the state that closes that gate.
+      // WHY a fixed count and not a loop that stops when the pane reports
+      // ready: `workspace.getRuntime` closes over a `useCallback` snapshot, so
+      // a value read inside this async loop never updates. A readiness check
+      // here would either break immediately or never — it cannot observe the
+      // thing it claims to. Verification has to happen where the composer can
+      // actually be re-read, which is main, not here.
+      //
+      // Overshooting is free and undershooting is not, which settles the count.
+      // `deleteToLineStart` on an empty composer slices `text[0..0]` and kills
+      // the empty string — a genuine no-op. Stopping short, by contrast, leaves
+      // a half-killed prompt that a later Enter submits as a fragment. Kills
+      // reach the start of a VISUAL line, so a wrapped prompt needs one press
+      // per rendered row; 64 covers a long prompt at any realistic width.
       for (let press = 0; press < 64; press += 1) {
         await window.api.sendInput(sessionId, '\x15')
+        await new Promise(resolve => { setTimeout(resolve, 25) })
       }
-      workspace.showPaneToast(sessionId, "Cleared the agent's composer")
+      // States what was DONE, not what was achieved. From the renderer we
+      // cannot confirm the composer is empty; the pane's own readiness line is
+      // the honest signal, and it updates on the next gate evaluation.
+      workspace.showPaneToast(sessionId, "Sent a clear to the agent's composer")
     },
   },
   {

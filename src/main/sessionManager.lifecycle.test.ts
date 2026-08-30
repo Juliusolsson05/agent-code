@@ -100,20 +100,66 @@ describe('SessionManager lifecycle journal', () => {
     // the failure is silent in exactly the way that made #683 take a full
     // journal dig to diagnose.
 
-    it('attributes a renderer write as external and a delivery write as delivery', async () => {
+    it('defaults an unlabelled write to renderer rather than inventing an origin', async () => {
       const { SessionManager } = await import('./sessionManager')
       const spy = journalSpy()
       const manager = new SessionManager(null, null, spy.journal as never)
       await manager.recover({ sessionId: 's1', kind: 'claude', cwd: '/tmp/project' })
 
-      // The path every non-delivery writer reaches: app composer, raw terminal,
-      // dictation, phone client, debug terminal. They are indistinguishable
-      // here, which is the finding this event records rather than hides.
+      // A caller that does not declare an origin must get the honest bucket.
+      // The alternative — guessing a specific surface — would put a fabricated
+      // attribution in the one record that exists to answer "who wrote this",
+      // which is worse than admitting the surfaces are merged.
       manager.write('s1', 'hello\r')
 
       const writes = spy.lifecycle().filter(r => r.name === 'input.write')
       expect(writes).toHaveLength(1)
-      expect(writes[0]?.data).toMatchObject({ origin: 'external', hadSubmit: true })
+      expect(writes[0]?.data).toMatchObject({ origin: 'renderer', hadSubmit: true })
+    })
+
+    it('separates the origins the write boundary already knows', async () => {
+      // These three are distinguishable for free — `remote` is its own manager
+      // entry point and `renderer-paste` is the existing pasteId read as the
+      // signal it already is. The test pins them because the value of this
+      // event is entirely in the distinctions it preserves; a refactor that
+      // collapsed them back would leave the event still firing and still
+      // useless.
+      const { SessionManager } = await import('./sessionManager')
+      const spy = journalSpy()
+      const manager = new SessionManager(null, null, spy.journal as never)
+      await manager.recover({ sessionId: 's1', kind: 'claude', cwd: '/tmp/project' })
+
+      manager.write('s1', 'from-phone\r', 'remote')
+      manager.write('s1', 'pasted-text\r', 'renderer-paste')
+
+      const origins = spy.lifecycle()
+        .filter(r => r.name === 'input.write')
+        .map(r => (r.data as { origin?: string }).origin)
+      expect(origins).toEqual(['remote', 'renderer-paste'])
+    })
+
+    it('records a write it is about to make, not one it has confirmed', async () => {
+      // Ordering is the assertion. node-pty's write is not transactional, so a
+      // throw does not prove zero bytes reached the child. Recording after the
+      // crossing would drop exactly the half-failed writes most likely to
+      // orphan a prompt — the case this event exists to explain. A thrown write
+      // must still leave a record.
+      const { SessionManager } = await import('./sessionManager')
+      const spy = journalSpy()
+      const manager = new SessionManager(null, null, spy.journal as never)
+      await manager.recover({ sessionId: 's1', kind: 'claude', cwd: '/tmp/project' })
+
+      const entry = (manager as never as {
+        sessions: Map<string, { session: { write: (d: string) => void } }>
+      }).sessions.get('s1')
+      expect(entry).toBeDefined()
+      entry!.session.write = () => { throw new Error('pty gone') }
+
+      expect(() => manager.write('s1', 'lost\r')).toThrow('pty gone')
+
+      const writes = spy.lifecycle().filter(r => r.name === 'input.write')
+      expect(writes).toHaveLength(1)
+      expect(writes[0]?.data).toMatchObject({ origin: 'renderer', bytes: 5 })
     })
 
     it('never journals what was typed', async () => {

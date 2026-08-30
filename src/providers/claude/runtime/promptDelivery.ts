@@ -384,6 +384,16 @@ const YANK = '\x19'
 // not know here. Bounded rather than computed: we verify after every press
 // instead of predicting how many are needed.
 const MAX_KILL_PRESSES = 64
+// Each kill must arrive as its own PTY read — see rollbackWrittenPrompt step 2.
+// Also gives the composer a frame to repaint before we re-read it.
+const KILL_KEYSTROKE_GAP_MS = 25
+// How long to wait for our own write to become visible before concluding we
+// cannot see it. Bounded well under the delivery deadline: this runs after a
+// failure, and a slow answer here delays the error the user is waiting for.
+const ROLLBACK_OBSERVE_ATTEMPTS = 40
+
+const sleep = (ms: number): Promise<void> =>
+  new Promise(resolve => { setTimeout(resolve, ms) })
 
 /**
  * Remove bytes THIS delivery wrote from Claude's composer after a write that
@@ -411,30 +421,68 @@ async function rollbackWrittenPrompt(
   const readComposer = (): 'empty' | 'drafted' | 'unpainted' =>
     // Classified WITHOUT cell attributes, which is the fail-closed path: with
     // no attributes an unrecognised row is reported as 'drafted'. That error
-    // direction is the safe one here — a false 'drafted' ends the loop and
-    // restores, whereas a false 'empty' would let us report success over a
-    // composer still holding half a prompt.
+    // direction is the safe one here — a false 'drafted' aborts and restores,
+    // whereas a false 'empty' would let us report success over a composer still
+    // holding half a prompt.
     parseClaudeComposerState(io.session.snapshotScreen?.() ?? '', null)
 
+  // STEP 1 — wait until our bytes are actually VISIBLE before touching anything.
+  //
+  // WHY this exists, and why the obvious shape was dangerous: the first cut read
+  // the composer and returned 'cleared' if it saw 'empty'. But we arrive here
+  // BECAUSE absorption timed out, and absorption times out precisely when the
+  // screen does not yet show what we wrote. So 'empty' is the EXPECTED reading
+  // at this instant, not evidence of anything — and an empty composer usually
+  // paints a bare `❯`, which classifies as 'empty' exactly.
+  //
+  // The old shape therefore returned `cleared` after writing zero bytes and told
+  // the caller `promptWritten: false, retrySafe: true` — "it was not sent". The
+  // user resends, Claude finishes repainting and lands prompt #1 in the
+  // composer, prompt #2 is written after it, and Claude submits BOTH
+  // concatenated. That is strictly worse than the stranded draft this function
+  // exists to clean up, and worse than main's honest `do-not-retry`.
+  //
+  // Absence cannot be proven from a surface known to lag. Only a
+  // drafted -> empty TRANSITION proves we removed something, so we refuse to
+  // act until we have observed the `drafted` half.
+  let sawOurBytes = false
+  for (let wait = 0; wait < ROLLBACK_OBSERVE_ATTEMPTS; wait += 1) {
+    if (readComposer() === 'drafted') { sawOurBytes = true; break }
+    await sleep(CONFIRM_POLL_INTERVAL_MS)
+  }
+  if (!sawOurBytes) {
+    // Never observed. The bytes may be in flight, already consumed, or never
+    // landed — we cannot tell, so we make no claim and change nothing. This is
+    // main's behaviour, which is honest: "it may already be submitted".
+    io.record?.('rollback-unobserved')
+    return 'unrecoverable'
+  }
+
+  // STEP 2 — clear, one keypress at a time.
+  //
+  // WHY each press must arrive alone: Claude's input tokeniser accumulates a run
+  // of non-ESC bytes into ONE text token, and its control-letter branch only
+  // matches a single-character string. Two `\x15` bytes in one read are
+  // therefore not two kills — they are the literal text "\x15\x15" inserted
+  // into the composer. A tight loop would type garbage into the very draft it
+  // is trying to remove.
   for (let press = 0; press < MAX_KILL_PRESSES; press += 1) {
-    if (readComposer() === 'empty') {
-      io.record?.('rollback-cleared', { presses: press })
-      return 'cleared'
-    }
     if (!io.write(KILL_TO_LINE_START)) {
       io.record?.('rollback-write-failed', { presses: press })
       return 'unrecoverable'
     }
-    // The composer repaints on Claude's own schedule, which is the same lag
-    // that caused the absorption timeout in the first place.
-    await new Promise(resolve => setTimeout(resolve, CONFIRM_POLL_INTERVAL_MS))
+    await sleep(KILL_KEYSTROKE_GAP_MS)
+    if (readComposer() === 'empty') {
+      io.record?.('rollback-cleared', { presses: press + 1 })
+      return 'cleared'
+    }
   }
 
   // Bounded out with content still present. Put it back rather than leave a
   // partially killed prompt: a later Enter — the user's, or another delivery's
   // — would submit a mangled fragment, which is the exact failure this whole
-  // subsystem exists to prevent. One yank is enough because the kills
-  // accumulated into a single kill-ring entry.
+  // subsystem exists to prevent. One yank suffices because consecutive kills
+  // accumulate into a single kill-ring entry.
   const restored = io.write(YANK)
   io.record?.('rollback-exhausted', { presses: MAX_KILL_PRESSES, restored })
   return restored ? 'restored' : 'unrecoverable'
