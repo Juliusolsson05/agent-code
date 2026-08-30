@@ -1,8 +1,13 @@
 import { useCallback } from 'react'
 
-import type { DispatchModeState, SessionId, SessionMeta, TabId } from '@renderer/workspace/types'
+import type {
+  DispatchLane,
+  DispatchModeState,
+  SessionId,
+  SessionMeta,
+  TabId,
+} from '@renderer/workspace/types'
 import {
-  buildAutoLanes,
   clampTileCount,
   dispatchFocusedSessionId,
   insertLaneRightIntoTiled,
@@ -13,6 +18,17 @@ import type {
   WorkspaceSetState,
   WorkspaceSetTileTabs,
 } from '@renderer/workspace/hook/context'
+
+/**
+ * N blank lanes.
+ *
+ * Each lane is a fresh object rather than a shared literal: lanes are spread
+ * and replaced individually by every writer, and a shared reference would make
+ * two lanes alias one another the first time someone mutated instead of spread.
+ */
+function emptyLanes(count: number): DispatchLane[] {
+  return Array.from({ length: Math.max(0, count) }, () => ({}))
+}
 
 export function useDispatchActions(
   state: { activeTabId: TabId; dispatchMode: DispatchModeState | null; sessions: Record<SessionId, SessionMeta> },
@@ -110,16 +126,22 @@ export function useDispatchActions(
   // allowed (the views mirror — see DispatchLane), so these reducers no
   // longer reject a session that's open elsewhere.
 
-  // Enter (or freshly build) a Tiled Dispatch layout. Enters Dispatch if
-  // it wasn't already on, clears tiled-tabs (mutually exclusive top-level
-  // mode), and auto-fills lanes from unclaimed visible agents so the user
-  // lands on a populated cockpit rather than N empty lanes.
+  // Enter (or freshly build) a Tiled Dispatch layout. Enters Dispatch if it
+  // wasn't already on and clears tiled-tabs (mutually exclusive top-level mode).
+  //
+  // The lanes arrive EMPTY (#681). This used to auto-fill from unclaimed visible
+  // agents on the theory that asking for N tiles means wanting to see N agents.
+  // The cost of that convenience was a layout that rearranges itself: the same
+  // helper ran on growth, and the render-time healer ran on every unresolved
+  // lane, so killing an agent replaced it with an unrelated one. Making entry
+  // the single exception would have left the user unable to predict which of
+  // their slots the app feels entitled to fill.
   const enterTiledDispatch = useCallback(
     async (count: number) => {
       closeNewAgentPlacement()
       setState(prev => {
         const scope = prev.dispatchMode?.scope ?? 'project'
-        const lanes = buildAutoLanes(prev, clampTileCount(count))
+        const lanes = emptyLanes(clampTileCount(count))
         return {
           ...prev,
           dispatchMode: {
@@ -168,11 +190,14 @@ export function useDispatchActions(
     [setState],
   )
 
-  // Grow (append auto-filled lanes) or shrink (drop from the right).
-  // Surviving lanes keep their selections; never reshuffle or respawn. We
-  // reset ratios on a count change because a ratios array sized for the old
-  // boundary count would mis-lay-out the new lane set; even distribution is
-  // the safe default and the user can re-drag.
+  // Grow (append EMPTY lanes) or shrink (drop from the right). Surviving lanes
+  // keep their selections; never reshuffle or respawn. We reset ratios on a
+  // count change because a ratios array sized for the old boundary count would
+  // mis-lay-out the new lane set; even distribution is the safe default and the
+  // user can re-drag.
+  //
+  // Appended lanes are empty for the same reason New Lane's are (#673/#681):
+  // more room is a request for space, not for particular agents.
   const setTiledLaneCount = useCallback(
     (count: number) => {
       setState(prev => {
@@ -183,7 +208,7 @@ export function useDispatchActions(
         const lanes =
           next < tiled.lanes.length
             ? tiled.lanes.slice(0, next)
-            : buildAutoLanes(prev, next, tiled.lanes)
+            : [...tiled.lanes, ...emptyLanes(next - tiled.lanes.length)]
         const focusedLane = Math.min(tiled.focusedLane, lanes.length - 1)
         return {
           ...prev,

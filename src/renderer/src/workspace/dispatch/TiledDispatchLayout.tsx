@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from 'react'
+import { useCallback, useMemo, useRef } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
 import type { AgentViewMode } from '@renderer/app-state/settings/types'
@@ -120,43 +120,25 @@ export function TiledDispatchLayout({
     })
   }, [lanes, rowBySession])
 
-  // Auto-fill / heal effect. Any lane that did NOT resolve (dead or
-  // out-of-scope) is handed the next visible agent not already resolved by
-  // another lane.
+  // NOTE: there is deliberately NO auto-fill/heal effect here any more.
   //
-  // EXCEPT a lane the user deliberately emptied (`userEmptied`, #673). New Lane
-  // inserts one of those on purpose, and healing it would hand back the very
-  // agent the user asked not to have — reproducing the bug the flag exists to
-  // fix. The flag is the only thing separating "empty because you asked" from
-  // "empty because the agent died", and the second case still must heal: the
-  // close path blanks a lane precisely so another agent moves in.
+  // Until #681 this component handed the next available agent to any lane that
+  // failed to resolve. That is what made killing the agent in column 2 of 6
+  // replace it with an unrelated agent from the index instead of leaving a hole
+  // — the user closed one thing and a different thing appeared in the position
+  // they were watching, which was the single most confusing behavior in the
+  // layout.
   //
-  // Convergent: once every fillable lane holds an in-scope, live agent there is
-  // nothing to assign. If there are more lanes than agents the surplus stay
-  // empty (picker prompt) and the effect settles.
+  // A lane is now only ever filled by the user. An unresolved lane renders
+  // empty and KEEPS its selectedSessionId, so a lane that merely fell out of
+  // scope comes back when scope returns; a lane whose session genuinely died
+  // has already been blanked by clearTiledLaneSessions at the kill/close/bury
+  // path, and the autosave prune scrubs anything those missed.
   //
-  // WHY duplicates are absent from that invalid list: mirrored lanes are a
-  // supported view of one durable session, and `A2!` intentionally creates
-  // them. Both copies resolve above, so this healer must skip both; treating a
-  // duplicate as missing would make forced placement appear for one render
-  // and then silently replace it with an unrelated available agent.
-  useEffect(() => {
-    const resolvedIds = new Set<SessionId>()
-    for (const r of laneResolutions) if (r) resolvedIds.add(r.sessionId)
-    const available = rows
-      .map(row => row.sessionId)
-      .filter(id => !resolvedIds.has(id))
-    let cursor = 0
-    for (let i = 0; i < laneResolutions.length; i++) {
-      if (laneResolutions[i]) continue
-      if (lanes[i]?.userEmptied) continue
-      const next = available[cursor]
-      if (next === undefined) break // no more agents to hand out
-      cursor++
-      resolvedIds.add(next)
-      workspace.setTiledLaneSession(i, next)
-    }
-  }, [lanes, laneResolutions, rows, workspace.setTiledLaneSession])
+  // Deleting the healer is also what made `DispatchLane.userEmptied`
+  // unnecessary: that flag existed solely to hide New Lane's deliberate hole
+  // from this effect, and with no effect to hide from, every empty lane behaves
+  // identically. Do not reintroduce either one without the other.
 
   const indexFraction = clampIndexFraction(tiled.ratios?.[0] ?? DEFAULT_INDEX_FRACTION)
   const laneWeights = normalizedLaneWeights(tiled.ratios, lanes.length)

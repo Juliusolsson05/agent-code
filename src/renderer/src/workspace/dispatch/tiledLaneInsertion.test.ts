@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  buildAutoLanes,
   insertLaneRightIntoTiled,
   MAX_DISPATCH_TILES,
 } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
@@ -9,30 +8,7 @@ import type {
   DispatchLane,
   SessionId,
   TiledDispatchState,
-  WorkspaceState,
 } from '@renderer/workspace/types'
-
-// buildAutoLanes reads real workspace state to find visible rows. Insertion no
-// longer does, which is the point of #673 — this fixture exists only for the
-// auto-fill guard below.
-function stateWithAgents(visibleIds: string[]): WorkspaceState {
-  return {
-    tabs: visibleIds.map((id, index) => ({
-      id: `tab-${id}`,
-      title: `project-${index}`,
-      root: { type: 'leaf', sessionId: id },
-      focusedSessionId: id,
-    })),
-    activeTabId: `tab-${visibleIds[0]}`,
-    dispatchMode: { scope: 'global' },
-    sessions: Object.fromEntries(
-      visibleIds.map(id => [id, { cwd: `/work/${id}`, kind: 'claude' as const }]),
-    ),
-    detachedSessions: {},
-    buried: [],
-    pinnedSessionIds: [],
-  } as WorkspaceState
-}
 
 const lane = (id: string): DispatchLane => ({ selectedSessionId: id as SessionId })
 
@@ -158,25 +134,5 @@ describe('insertLaneRightIntoTiled', () => {
     expect(idsOf(current)).toEqual(['a', 'b', 'c'])
     expect(current.focusedLane).toBe(1)
     expect(current.ratios).toEqual([0.2, 1, 2, 3])
-  })
-})
-
-describe('buildAutoLanes', () => {
-  it('still pre-fills lanes for tile-count growth', () => {
-    // The obvious wrong fix for #673 is to make buildAutoLanes stop claiming
-    // agents. That would break the operation it was actually written for:
-    // asking for N tiles means wanting to SEE N agents, and landing on N empty
-    // pickers is the busywork the auto-fill exists to prevent. Insertion was
-    // decoupled from this helper instead, and this test is the guard on that
-    // blast radius — it fails if someone "fixes" the shared helper.
-    const lanes = buildAutoLanes(stateWithAgents(['a', 'b', 'c']), 3)
-
-    expect(lanes.map(l => l.selectedSessionId)).toEqual(['a', 'b', 'c'])
-  })
-
-  it('preserves existing lanes and only fills the new tail', () => {
-    const lanes = buildAutoLanes(stateWithAgents(['a', 'b', 'c']), 3, [lane('c')])
-
-    expect(lanes.map(l => l.selectedSessionId)).toEqual(['c', 'a', 'b'])
   })
 })
