@@ -105,17 +105,19 @@ export function navigateToAgentIndexTarget(
         ...state,
         // Project-scoped Dispatch derives its visible rows from activeTabId.
         // A cross-project label must move that scope before selecting the
-        // session or the layout's healing effect will reject the lane as
-        // out-of-scope and immediately replace it with an unrelated row.
+        // session, or the lane cannot resolve and renders "Not in this scope"
+        // instead of the agent the user just asked for. (Before #681 the
+        // consequence was worse — the healer replaced the selection outright.)
         activeTabId: target.tabId,
         dispatchMode: {
           ...dispatchMode,
           // A project-scoped row set cannot retain lanes from project A after
-          // activeTabId moves to project B. TiledDispatchLayout would treat all
-          // untouched A lanes as out-of-scope and heal them away. Promoting the
-          // one cross-project navigation to global makes both the retained
-          // lanes and incoming target renderable, preserving the issue's
-          // "replace only the focused lane" invariant.
+          // activeTabId moves to project B: every untouched A lane would stop
+          // resolving and render empty. Promoting the one cross-project
+          // navigation to global keeps both the retained lanes and the incoming
+          // target renderable, preserving the issue's "replace only the focused
+          // lane" invariant. Their selections would survive either way now
+          // (#681), but a grid of blank lanes is not a useful place to land.
           scope: crossesProjectScope ? 'global' : dispatchMode.scope,
           // Keep classic focus coherent for a later exit from tiled mode.
           focusedSessionId: target.sessionId,

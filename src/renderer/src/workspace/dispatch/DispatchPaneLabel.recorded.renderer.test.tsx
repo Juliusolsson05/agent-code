@@ -108,7 +108,6 @@ function workspaceFor(state: WorkspaceState): Workspace {
     selectGridRelatedSession: vi.fn(),
     setTiledFocusedLane: vi.fn(),
     setTiledLaneSession: vi.fn(),
-    setTiledRatios: vi.fn(),
   } as unknown as Workspace
 }
 

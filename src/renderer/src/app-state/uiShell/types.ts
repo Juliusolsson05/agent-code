@@ -339,4 +339,14 @@ export type UiShellState = {
    *  A dedicated overlay (not a command-palette mode) keeps the numeric
    *  input out of the palette's large mode state machine. */
   tiledDispatchPromptOpen: boolean
+  /**
+   * Which grid row the project picker is editing, or null when closed.
+   *
+   * WHY the ROW INDEX and not a boolean: the picker is opened from a specific
+   * row's header, and by the time it commits the user may have focused a
+   * different row. Carrying the coordinate the click captured is what stops a
+   * late commit from binding the wrong row — the same reason the lane commands
+   * take an explicit lane index rather than re-reading focusedLane.
+   */
+  dispatchRowProjectPickerRow: number | null
 }

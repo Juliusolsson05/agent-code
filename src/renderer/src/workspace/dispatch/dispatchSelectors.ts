@@ -1,6 +1,10 @@
 import type { SessionId, SessionKind, Tab, TabId, WorkspaceState } from '@renderer/workspace/types'
 import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 import { tabIndexLabel } from '@renderer/workspace/tile-tree/paneLabelFormat'
+import {
+  normalizeGridShape,
+  rowIndexForLane,
+} from '@renderer/workspace/dispatch/gridShape'
 
 export type DispatchAgentRow = {
   key: string
@@ -356,9 +360,20 @@ export function resolveDispatchSpawnTarget(state: WorkspaceState): DispatchSpawn
     if (laneTab) {
       return { tabId: laneTab, cwdSessionId: laneSessionId, laneIndex }
     }
-    // Focused lane is empty / its agent is gone: there is no project to read
-    // from the lane itself, so fall back to the classic focus, then the active
-    // tab — but still place the new agent INTO the focused lane.
+    // Focused lane is empty / its agent is gone. If its ROW is bound to a
+    // project, that binding is the answer and outranks every fallback below:
+    // the row's index offers only that project, so spawning into it from a
+    // stale classic focus would file the new agent under a project the row does
+    // not even list. Bindings constrain what may live in a row, and a spawn is
+    // something coming to live there.
+    const grid = normalizeGridShape(dm.tiled)
+    const rowIndex = rowIndexForLane(grid.rows, laneIndex)
+    const boundTab = rowIndex >= 0 ? grid.rows[rowIndex]?.projectTabId : undefined
+    if (boundTab !== undefined) {
+      return { tabId: boundTab, cwdSessionId: null, laneIndex }
+    }
+    // Unbound: fall back to the classic focus, then the active tab — but still
+    // place the new agent INTO the focused lane.
     const focusTab = tabForSession(dm.focusedSessionId)
     return {
       tabId: focusTab ?? state.activeTabId,
