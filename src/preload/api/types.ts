@@ -244,20 +244,10 @@ export type SessionAgentPtyDataEvent = { sessionId: string; data: string }
 // recent user prompts for visual recognition. `matchCount` is only
 // meaningful on search results — zero on the default listing.
 
-export type SessionIndexPrompt = {
-  text: string
-  ts: number | null
-}
-
-export type SessionIndexEntry = {
-  providerSessionId: string
-  kind: AgentProviderKind
-  cwd: string
-  lastModified: number
-  summary: string
-  recentUserPrompts: SessionIndexPrompt[]
-  matchCount: number
-}
+// Re-exported from the neutral boundary. These were a hand-copied duplicate of
+// main's declarations and had already lost fields to drift; #96's identity work
+// made a third copy untenable.
+export type { SessionIndexEntry, SessionIndexPrompt } from '@shared/types/sessionIndex.js'
 
 export type SessionHistoryChunk = {
   entries: JsonlEntry[]

@@ -3,6 +3,8 @@ import type { AgentProviderKind } from '@shared/types/providerKind.js'
 import { ipcRenderer } from 'electron'
 import type { PromptDeliveryResult } from '@shared/types/providerConfig.js'
 
+import type { SessionDisplayIdentity } from '@shared/types/sessionDisplayIdentity.js'
+
 import { subscribe } from '@preload/api/ipc.js'
 import type {
   SessionExitEvent,
@@ -40,6 +42,12 @@ import type {
 // parallel and needs to route messages to the right one. The renderer
 // subscribes ONCE per event type and dispatches by sessionId in the
 // callback — this avoids N×N listener storms as tabs and splits grow.
+
+// A listed past session, as the pickers receive it. `identity` is derived once
+// in main (#96) so every picker renders the same label for the same
+// conversation; the raw SessionInfo fields remain for resume mechanics and
+// non-display callers.
+export type ListedSession = SessionInfo & { identity: SessionDisplayIdentity }
 
 export const sessionApi = {
   // --- Session lifecycle ---
@@ -158,7 +166,7 @@ export const sessionApi = {
     cwd: string,
     limit?: number,
     provider: AgentProviderKind = DEFAULT_PROVIDER,
-  ): Promise<SessionInfo[]> =>
+  ): Promise<ListedSession[]> =>
     ipcRenderer.invoke('session:list-for-cwd', cwd, limit, provider),
 
   /** Global session listing for the rendering-debug harness. Returns
@@ -166,7 +174,7 @@ export const sessionApi = {
    *  by lastModified desc. */
   listAllSessions: (
     limit?: number,
-  ): Promise<Array<SessionInfo & { provider: AgentProviderKind }>> =>
+  ): Promise<Array<ListedSession & { provider: AgentProviderKind }>> =>
     ipcRenderer.invoke('session:list-all', limit),
 
   loadOlderHistory: (params: {

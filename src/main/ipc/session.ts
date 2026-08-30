@@ -7,6 +7,10 @@ import { sha8FromDigestBytes } from '@shared/code/sha8.js'
 import type { ConditionCustomAction } from '@shared/types/providerConditions.js'
 import { getMainProvider } from '@providers/registry.main.js'
 import { AGENT_PROVIDER_KINDS, DEFAULT_PROVIDER } from '@shared/types/providerKind.js'
+import {
+  buildSessionDisplayIdentity,
+  identityInputFromSessionInfo,
+} from '@shared/types/sessionDisplayIdentity.js'
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
 import {
   loadInitialHistoryChunk,
@@ -264,7 +268,17 @@ export function registerSessionIpc(
     ) => {
       try {
         const providerConfig = getMainProvider(provider)
-        return await providerConfig.listSessions(cwd, limit ?? 20)
+        const sessions = await providerConfig.listSessions(cwd, limit ?? 20)
+        // Attach the shared display identity (#96). Derived here, in main,
+        // once — the resume picker and the command palette both consume this
+        // channel and used to each invent their own label from `summary`,
+        // which is how the same conversation ended up with two names.
+        return sessions.map(session => ({
+          ...session,
+          identity: buildSessionDisplayIdentity(
+            identityInputFromSessionInfo(session, provider),
+          ),
+        }))
       } catch (err) {
         // Don't let a listing error brick the modal — return empty.
         // eslint-disable-next-line no-console
@@ -291,7 +305,11 @@ export function registerSessionIpc(
           const providerConfig = getMainProvider(provider)
           if (!providerConfig.listAllSessions) return []
           const sessions = await providerConfig.listAllSessions(cap).catch(() => [])
-          return sessions.map(s => ({ ...s, provider }))
+          return sessions.map(s => ({
+            ...s,
+            provider,
+            identity: buildSessionDisplayIdentity(identityInputFromSessionInfo(s, provider)),
+          }))
         }))
         const tagged = listed.flat()
         tagged.sort((a, b) => b.lastModified - a.lastModified)
