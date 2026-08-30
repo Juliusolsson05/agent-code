@@ -13,6 +13,9 @@ type SplitHandleProps = {
   valueMin?: number
   valueMax?: number
   onKeyboardDelta?: (delta: number) => void
+  /** 'vertical' (default) is a left/right divider between columns;
+   *  'horizontal' is a top/bottom divider between stacked rows. */
+  orientation?: 'vertical' | 'horizontal'
 }
 
 // Shared vertical splitter handle.
@@ -38,17 +41,25 @@ export function SplitHandle({
   valueMin,
   valueMax,
   onKeyboardDelta,
+  orientation = 'vertical',
 }: SplitHandleProps) {
+  const horizontal = orientation === 'horizontal'
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (!onKeyboardDelta) return
-    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+    const [back, forward] = horizontal
+      ? ['ArrowUp', 'ArrowDown']
+      : ['ArrowLeft', 'ArrowRight']
+    if (event.key !== back && event.key !== forward) return
     event.preventDefault()
-    onKeyboardDelta(event.key === 'ArrowLeft' ? -1 : 1)
+    onKeyboardDelta(event.key === back ? -1 : 1)
   }
   return (
     <div
       role={exposeSeparatorRole ? 'separator' : undefined}
-      aria-orientation={exposeSeparatorRole ? 'vertical' : undefined}
+      // ARIA orientation names the separator's own axis, which is the
+      // OPPOSITE of the axis it moves along: a divider between stacked rows is
+      // itself a horizontal line.
+      aria-orientation={exposeSeparatorRole ? (horizontal ? 'horizontal' : 'vertical') : undefined}
       aria-label={exposeSeparatorRole ? label : undefined}
       aria-valuenow={exposeSeparatorRole ? valueNow : undefined}
       aria-valuemin={exposeSeparatorRole ? valueMin : undefined}
@@ -56,14 +67,16 @@ export function SplitHandle({
       tabIndex={exposeSeparatorRole && onKeyboardDelta ? 0 : undefined}
       onKeyDown={onKeyDown}
       onMouseDown={onMouseDown}
-      className={`relative flex-shrink-0 cursor-col-resize select-none outline-none focus-visible:ring-1 focus-visible:ring-focus-ring ${className}`}
-      style={{ width: `${hitSizePx}px`, ...style }}
+      className={`relative flex-shrink-0 ${
+        horizontal ? 'cursor-row-resize' : 'cursor-col-resize'
+      } select-none outline-none focus-visible:ring-1 focus-visible:ring-focus-ring ${className}`}
+      style={horizontal ? { height: `${hitSizePx}px`, ...style } : { width: `${hitSizePx}px`, ...style }}
     >
       <div
-        className={`absolute left-1/2 top-0 h-full -translate-x-1/2 ${
-          dragging ? 'bg-accent' : 'bg-border'
-        } transition-colors`}
-        style={{ width: `${barSizePx}px` }}
+        className={`absolute ${
+          horizontal ? 'top-1/2 left-0 w-full -translate-y-1/2' : 'left-1/2 top-0 h-full -translate-x-1/2'
+        } ${dragging ? 'bg-accent' : 'bg-border'} transition-colors`}
+        style={horizontal ? { height: `${barSizePx}px` } : { width: `${barSizePx}px` }}
       />
     </div>
   )

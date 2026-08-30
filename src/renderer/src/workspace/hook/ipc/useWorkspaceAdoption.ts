@@ -59,7 +59,17 @@ export function useWorkspaceAdoption(
       // tabs are visible means the adopted panes never paint in that state.
       setRuntimes(prev => {
         const next = { ...prev }
-        for (const sessionId of adoption.adoptedLeafSessionIds) {
+        // Leaves need a runtime because they are about to be PAINTED. Parked
+        // (detached) sessions do not — rehydrate deliberately never spawns
+        // them — but a parked agent can still carry an unsent draft, and losing
+        // a half-written prompt to a window close is exactly the small silent
+        // loss autosave exists to prevent. So the seed set is "leaves, plus
+        // anything holding a draft".
+        const needsRuntime = new Set([
+          ...adoption.adoptedLeafSessionIds,
+          ...Object.keys(adoption.drafts).filter(id => adoption.state.sessions[id]),
+        ])
+        for (const sessionId of needsRuntime) {
           const meta = adoption.state.sessions[sessionId]
           const draft = adoption.drafts[sessionId]
           next[sessionId] = {

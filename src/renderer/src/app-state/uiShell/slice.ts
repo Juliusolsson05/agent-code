@@ -28,6 +28,7 @@ export const createUiShellSlice: StateCreator<
   newAgentPlacementOpen: false,
   newAgentProjectIntent: null,
   tiledDispatchPromptOpen: false,
+  dispatchRowProjectPickerRow: null,
   dispatchAttachIntent: null,
   linkedAgentParentId: null,
   gitBarOpen: false,
@@ -177,6 +178,10 @@ export const createUiShellSlice: StateCreator<
     set({ tiledDispatchPromptOpen: true }, false, 'uiShell/openTiledDispatchPrompt'),
   closeTiledDispatchPrompt: () =>
     set({ tiledDispatchPromptOpen: false }, false, 'uiShell/closeTiledDispatchPrompt'),
+  openDispatchRowProjectPicker: (rowIndex: number) =>
+    set({ dispatchRowProjectPickerRow: rowIndex }, false, 'uiShell/openDispatchRowProjectPicker'),
+  closeDispatchRowProjectPicker: () =>
+    set({ dispatchRowProjectPickerRow: null }, false, 'uiShell/closeDispatchRowProjectPicker'),
 
   openDispatchAttach: intent =>
     set({ dispatchAttachIntent: intent }, false, 'uiShell/openDispatchAttach'),

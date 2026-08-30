@@ -794,10 +794,18 @@ async function startApp(): Promise<void> {
     // is exactly the pre-multi-window behavior.
     if (!survivor) return
 
-    // WHY a turn of the event loop first: the closing renderer flushes its
-    // final autosave from `beforeunload`, and that IPC message is already
-    // queued when `closed` fires. Reading the slice in this tick could compose
-    // the bequest from the previous save and lose the last 400ms of work.
+    // Ownership moves FIRST, synchronously, before anything is awaited. The
+    // closed window's sessions are still producing events, and every tick they
+    // spend owned by a window that no longer exists is a tick their events fall
+    // back to a broadcast — which grows a ghost runtime in whichever window
+    // receives one. The survivor is about to adopt them anyway, so pointing
+    // them there immediately is both correct and the shortest possible gap.
+    transferSessions(sessionsOwnedBy(closedWindowId), survivor)
+
+    // WHY a turn of the event loop before reading the slice: the closing
+    // renderer flushes its final autosave from `beforeunload`, and that IPC
+    // message is already queued when `closed` fires. Reading in this tick could
+    // compose the bequest from the previous save and lose the last 400ms.
     setImmediate(() => {
       void (async () => {
         const slice = await workspaceFileStore.loadSlice(closedWindowId)
@@ -805,9 +813,6 @@ async function startApp(): Promise<void> {
           await workspaceFileStore.removeWindow(closedWindowId)
           return
         }
-        // Ownership moves BEFORE the survivor is told, so any event emitted
-        // during the handoff already routes to the window that will display it.
-        transferSessions(sessionsOwnedBy(closedWindowId), survivor)
         sendToWindow(survivor, 'workspace:adopt', {
           windowId: closedWindowId,
           workspace: slice,
@@ -858,10 +863,18 @@ async function startApp(): Promise<void> {
   // window whose saved bounds no longer land on an attached display is created
   // with default placement instead — see windowGeometry.ts for why that is the
   // common case rather than an edge case.
-  const persistedWindows = workspaceFileStore.windows()
-  if (persistedWindows.length === 0) {
-    createAppWindow()
-  } else {
+  //
+  // WHY this is a closure shared with the `activate` handler below rather than
+  // two call sites: they answer the same question ("what windows should exist
+  // when there are none?"), and the version that drifted first — activate
+  // minting a fresh id — silently orphaned the persisted slice of the window
+  // the user had just closed.
+  const restorePersistedWindows = (): void => {
+    const persistedWindows = workspaceFileStore.windows()
+    if (persistedWindows.length === 0) {
+      createAppWindow()
+      return
+    }
     for (const record of persistedWindows) {
       createAppWindow({
         windowId: record.windowId,
@@ -870,6 +883,7 @@ async function startApp(): Promise<void> {
       })
     }
   }
+  restorePersistedWindows()
   appRunJournal.record({
     area: 'window.main',
     name: 'window.create.end',
@@ -888,7 +902,13 @@ async function startApp(): Promise<void> {
       // visible window backed by a manager that can no longer recover or spawn.
       return
     }
-    if (windowCount() === 0) createAppWindow()
+    if (windowCount() !== 0) return
+    // WHY the persisted restore and not a bare createAppWindow(): closing the
+    // LAST window deliberately keeps its slice on disk so this path can bring it
+    // back. Minting a fresh window id here would load nothing, hand the user an
+    // empty workspace, and leave the real one orphaned in the file until the
+    // next launch restored it as a surprise extra window.
+    restorePersistedWindows()
   })
 }
 
