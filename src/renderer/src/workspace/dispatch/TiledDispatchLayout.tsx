@@ -283,7 +283,10 @@ function GridRowView({
   const selectIntoRow = useCallback(
     (sessionId: SessionId) => {
       const target = focusedLaneInRow ?? start
-      workspace.setTiledLaneSession(target, sessionId)
+      // selectTiledLaneSession, not setTiledLaneSession: a detached agent may
+      // be hibernated, and placing one without waking it lets the user type
+      // into a dead backend (#690).
+      void workspace.selectTiledLaneSession(target, sessionId)
       workspace.setTiledFocusedLane(target)
     },
     [focusedLaneInRow, start, workspace],
@@ -354,29 +357,33 @@ function GridRowView({
                   workspace={workspace}
                 />
               )}
-              {/* EVERY lane gets a strip, including each row's first. The old
-                  layout gave lane 0 no strip because the sidebar WAS its
-                  selector; with a per-row index that special case is
-                  meaningless — the index belongs to the row, not to its first
-                  lane. */}
-              <div className="flex-shrink-0 min-h-0">
-                <DispatchMiniList
-                  rows={rows}
-                  gridRow={gridRow}
-                  selectedSessionId={lane?.selectedSessionId}
-                  focused={focused}
-                  onSelect={row => {
-                    workspace.setTiledLaneSession(laneIndex, row.sessionId)
-                    workspace.setTiledFocusedLane(laneIndex)
-                  }}
-                  // Without this the strip's "+N more" renders as a button and
-                  // does nothing — an affordance that promises an action it
-                  // cannot perform, in the exact case the cap exists for.
-                  onToggleExpandedParent={sessionId =>
-                    workspace.toggleDispatchRowExpandedParent(rowIndex, sessionId)
-                  }
-                />
-              </div>
+              {/* The row's FIRST lane has no strip: the row's own index list
+                  sits directly beside it and is its selector. That pairing is
+                  the point of giving every row its own index — a strip there
+                  would be a second selector for the same lane, six inches from
+                  the first, and it costs 46px of the widest lane in the row.
+                  Every OTHER lane needs its own, because the index is already
+                  spoken for. */}
+              {column > 0 && (
+                <div className="flex-shrink-0 min-h-0">
+                  <DispatchMiniList
+                    rows={rows}
+                    gridRow={gridRow}
+                    selectedSessionId={lane?.selectedSessionId}
+                    focused={focused}
+                    onSelect={row => {
+                      void workspace.selectTiledLaneSession(laneIndex, row.sessionId)
+                      workspace.setTiledFocusedLane(laneIndex)
+                    }}
+                    // Without this the strip's "+N more" renders as a button and
+                    // does nothing — an affordance that promises an action it
+                    // cannot perform, in the exact case the cap exists for.
+                    onToggleExpandedParent={sessionId =>
+                      workspace.toggleDispatchRowExpandedParent(rowIndex, sessionId)
+                    }
+                  />
+                </div>
+              )}
               <div
                 className="relative flex-1 min-w-0 min-h-0"
                 onMouseDownCapture={() => {

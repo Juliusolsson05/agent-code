@@ -1008,7 +1008,8 @@ function focusTiledRowByIndex(workspace: Workspace, index: number) {
   // in an agent the row's own selector excludes.
   const row = tiledRowScopedRows(workspace).find(candidate => candidate.globalIndex === index + 1)
   if (!row) return
-  workspace.setTiledLaneSession(focusedTiledLane(workspace), row.sessionId)
+  // Wakes a hibernated detached agent before placing it (#690).
+  void workspace.selectTiledLaneSession(focusedTiledLane(workspace), row.sessionId)
 }
 
 function moveTiledLaneSelection(workspace: Workspace, delta: number) {
@@ -1024,7 +1025,7 @@ function moveTiledLaneSelection(workspace: Workspace, delta: number) {
   // that agent into this lane too.
   const probe = nextTiledRowIndex(currentIndex, delta, rows.length)
   const row = rows[probe]
-  if (row) workspace.setTiledLaneSession(laneIndex, row.sessionId)
+  if (row) void workspace.selectTiledLaneSession(laneIndex, row.sessionId)
 }
 
 /**

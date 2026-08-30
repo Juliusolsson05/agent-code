@@ -36,16 +36,25 @@ vi.mock('@renderer/features/shared/useResizableSplitter', () => ({
 // The real index list is mocked down to the one fact each row must get right:
 // which agents it was asked to list, and which grid row it belongs to.
 vi.mock('@renderer/workspace/dispatch/DispatchAgentList', () => ({
-  DispatchAgentList: ({ groups, gridRow }: {
-    groups: { rows: { sessionId: string }[] }[]
+  DispatchAgentList: ({ groups, gridRow, focusSessionInTab }: {
+    groups: { rows: { sessionId: string; tabId: string }[] }[]
     gridRow?: { projectTabId?: string }
-  }) => (
-    <div
-      data-testid="row-index"
-      data-project={gridRow?.projectTabId ?? ''}
-      data-sessions={groups.flatMap(g => g.rows.map(r => r.sessionId)).join(',')}
-    />
-  ),
+    focusSessionInTab: (tabId: string, sessionId: string) => void
+  }) => {
+    const rows = groups.flatMap(g => g.rows)
+    return (
+      <div
+        data-testid="row-index"
+        data-project={gridRow?.projectTabId ?? ''}
+        data-sessions={rows.map(r => r.sessionId).join(',')}
+        // Stands in for clicking a row in the real index.
+        onClick={() => {
+          const row = rows[1] ?? rows[0]
+          if (row) focusSessionInTab(row.tabId, row.sessionId)
+        }}
+      />
+    )
+  },
   DispatchEmpty: ({ message }: { message: string }) => (
     <div data-testid="lane-empty">{message}</div>
   ),
@@ -73,6 +82,7 @@ const FIXTURE = JSON.parse(
 ) as { state: WorkspaceState }
 
 function renderGrid(tiled: TiledDispatchState) {
+  const selectTiledLaneSession = vi.fn().mockResolvedValue(undefined)
   const state: WorkspaceState = {
     ...FIXTURE.state,
     dispatchMode: { ...FIXTURE.state.dispatchMode!, scope: 'global', tiled },
@@ -87,20 +97,24 @@ function renderGrid(tiled: TiledDispatchState) {
     selectGridRelatedSession: vi.fn(),
     setTiledFocusedLane: vi.fn(),
     setTiledLaneSession: vi.fn(),
+    selectTiledLaneSession,
     setDispatchRowHeights: vi.fn(),
     setDispatchRowIndexFraction: vi.fn(),
     setDispatchLaneWeights: vi.fn(),
     setDispatchRowCapChildren: vi.fn(),
     toggleDispatchRowExpandedParent: vi.fn(),
   } as unknown as Workspace
-  return render(
-    <DispatchLayout
-      workspace={workspace}
-      agentViewMode="agent"
-      showStatusMode={false}
-      showWorktreeBadges={false}
-    />,
-  )
+  return {
+    ...render(
+      <DispatchLayout
+        workspace={workspace}
+        agentViewMode="agent"
+        showStatusMode={false}
+        showWorktreeBadges={false}
+      />,
+    ),
+    selectTiledLaneSession,
+  }
 }
 
 const laneIds = FIXTURE.state.dispatchMode!.tiled!.lanes.map(
@@ -126,17 +140,30 @@ describe('Grid Dispatch layout', () => {
     expect(getAllByTestId('row-index')).toHaveLength(2)
   })
 
-  it('gives every lane its own strip, including each row s first', () => {
-    // The old layout gave lane 0 no strip because the sidebar WAS its selector.
-    // With a per-row index that special case is meaningless, and a row whose
-    // first lane had no selector would be unusable from the mouse.
+  it('leaves each row s FIRST lane to that row s index list', () => {
+    // The row's own index sits directly beside its first lane and is that
+    // lane's selector — the pairing that giving every row an index exists for.
+    // A strip there would be a second selector for the same lane, inches from
+    // the first, eating 46px of the row's widest lane.
     const { getAllByTestId } = renderGrid({
       lanes: laneIds.map(id => ({ selectedSessionId: id })),
       rows: [{ length: 2 }, { length: 2 }],
       focusedLane: 0,
     })
 
-    expect(getAllByTestId('lane-strip')).toHaveLength(4)
+    // 2 rows x 2 lanes, minus the first lane of each row.
+    expect(getAllByTestId('lane-strip')).toHaveLength(2)
+  })
+
+  it('gives a strip to every lane the index does not already select', () => {
+    const { getAllByTestId } = renderGrid({
+      lanes: laneIds.map(id => ({ selectedSessionId: id })),
+      rows: [{ length: 3 }, { length: 1 }],
+      focusedLane: 0,
+    })
+
+    // Row 0 keeps strips on lanes 2 and 3; row 1's single lane has none.
+    expect(getAllByTestId('lane-strip')).toHaveLength(2)
   })
 
   it('wires the strip s expand control instead of shipping a dead button', () => {
@@ -182,6 +209,28 @@ describe('Grid Dispatch layout', () => {
     // The unbound row is NOT narrowed by its neighbour's binding — rows are
     // independent in what they list, not only in how wide they are.
     expect(indexes[1]!.getAttribute('data-project')).toBe('')
+  })
+
+  it('selects through the waking path, never the raw lane writer', () => {
+    // #690: rehydrate deliberately does not respawn detached sessions, so a
+    // hibernated agent placed straight into a lane renders fine and then
+    // rejects the first prompt as "not a live agent session". Every selection
+    // gesture has to go through the action that wakes first.
+    const { getAllByTestId, selectTiledLaneSession } = renderGrid({
+      lanes: laneIds.map(id => ({ selectedSessionId: id })),
+      rows: [{ length: 2 }, { length: 2 }],
+      focusedLane: 0,
+    })
+
+    const index = getAllByTestId('row-index')[0]!
+    const offered = index.getAttribute('data-sessions')!.split(',')
+    index.click()
+
+    expect(selectTiledLaneSession).toHaveBeenCalledTimes(1)
+    const [laneIndex, sessionId] = selectTiledLaneSession.mock.calls[0]!
+    // Into this row's first lane, with an agent the row actually offers.
+    expect(laneIndex).toBe(0)
+    expect(offered).toContain(sessionId)
   })
 
   it('still renders a pre-grid single-row workspace', () => {

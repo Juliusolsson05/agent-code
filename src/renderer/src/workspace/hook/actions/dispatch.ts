@@ -32,6 +32,8 @@ import type {
   WorkspaceSetState,
   WorkspaceSetTileTabs,
 } from '@renderer/workspace/hook/context'
+import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
+import type { SessionActions } from '@renderer/workspace/hook/actions/session'
 
 /**
  * Write row METADATA without touching any row length.
@@ -90,6 +92,9 @@ export function useDispatchActions(
   setState: WorkspaceSetState,
   setTileTabs: WorkspaceSetTileTabs,
   closeNewAgentPlacement: () => void,
+  refs: WorkspaceRefs,
+  ensureSessionLive: SessionActions['ensureSessionLive'],
+  showToast: (message: string, durationMs?: number) => void,
 ): {
   enterDispatchMode: (scope?: DispatchModeState['scope']) => Promise<void>
   exitDispatchMode: () => void
@@ -102,6 +107,7 @@ export function useDispatchActions(
   enterTiledDispatch: (rowLengths: number[]) => Promise<void>
   exitTiledDispatch: () => void
   setTiledLaneSession: (laneIndex: number, sessionId: SessionId) => void
+  selectTiledLaneSession: (laneIndex: number, sessionId: SessionId) => Promise<void>
   insertTiledLaneRight: (laneIndex: number) => boolean
   removeTiledLane: (laneIndex: number) => void
   setTiledFocusedLane: (laneIndex: number) => void
@@ -270,6 +276,56 @@ export function useDispatchActions(
       })
     },
     [setState],
+  )
+
+  /**
+   * Put a session into a lane, WAKING it first when it is detached.
+   *
+   * Rehydrate deliberately does not respawn detached sessions — they survive a
+   * restart as metadata with no provider process (see rehydrate.ts). Something
+   * has to wake them before they are used, and agent-index navigation already
+   * says exactly why:
+   *
+   *   "Wake under the SAME SessionId before exposing one in a lane/grid slot;
+   *    otherwise the navigation appears to work but the first keystroke lands
+   *    on a dead backend."
+   *
+   * That was true of every OTHER way a session reaches a lane. The index click,
+   * the strip click, ⌥↑/↓ and ⌘N all wrote straight through
+   * `setTiledLaneSession`, so a hibernated agent could be selected, rendered,
+   * and typed into — and main rejected the prompt as "not a live agent session"
+   * with `reason: never-owned` (#690). The composer's own retry papers over it
+   * inconsistently, which made the failure look intermittent.
+   *
+   * WHY the wake completes BEFORE the lane is written: writing first exposes a
+   * dead pane the user can type into during the gap, which is the very state
+   * this is fixing. `ensureSessionLive` joins an in-flight wake and is a cheap
+   * no-op for an already-running detached agent, so the common case pays
+   * almost nothing.
+   *
+   * Grid-placed sessions skip the check entirely — they are owned by a tile
+   * tree and were respawned at rehydrate.
+   */
+  const selectTiledLaneSession = useCallback(
+    async (laneIndex: number, sessionId: SessionId) => {
+      const detached = refs.stateRef.current.detachedSessions[sessionId] !== undefined
+      if (detached) {
+        try {
+          await ensureSessionLive(sessionId, 'dispatch-lane.select')
+        } catch (error) {
+          // Do NOT place a session we could not wake: leaving the lane on its
+          // previous occupant is honest, where showing a dead pane is not.
+          showToast(
+            error instanceof Error && error.message.length > 0
+              ? error.message
+              : 'Could not wake agent',
+          )
+          return
+        }
+      }
+      setTiledLaneSession(laneIndex, sessionId)
+    },
+    [refs, ensureSessionLive, showToast, setTiledLaneSession],
   )
 
   /**
@@ -584,6 +640,7 @@ export function useDispatchActions(
     enterTiledDispatch,
     exitTiledDispatch,
     setTiledLaneSession,
+    selectTiledLaneSession,
     insertTiledLaneRight,
     removeTiledLane,
     setTiledFocusedLane,

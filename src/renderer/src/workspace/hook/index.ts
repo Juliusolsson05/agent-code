@@ -835,6 +835,9 @@ export function useWorkspace(
     setState,
     setTileTabs,
     closeNewAgentPlacement,
+    refs,
+    sessionActions.ensureSessionLive,
+    showToast,
   )
 
   // ---- Side-effects (subscriptions, persistence, invalidation) ----
@@ -987,6 +990,7 @@ export function useWorkspace(
     enterTiledDispatch: dispatchActions.enterTiledDispatch,
     exitTiledDispatch: dispatchActions.exitTiledDispatch,
     setTiledLaneSession: dispatchActions.setTiledLaneSession,
+    selectTiledLaneSession: dispatchActions.selectTiledLaneSession,
     insertTiledLaneRight: dispatchActions.insertTiledLaneRight,
     removeTiledLane: dispatchActions.removeTiledLane,
     setTiledFocusedLane: dispatchActions.setTiledFocusedLane,
