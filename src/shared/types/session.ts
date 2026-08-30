@@ -441,7 +441,18 @@ export interface AgentSession extends AgentSessionEmitter {
 export type PromptAcceptanceOutcome =
   | { kind: 'user'; acceptedAt: number; entryId?: string }
   | { kind: 'queue'; acceptedAt: number }
-  | { kind: 'timeout' }
+  /**
+   * `nearMisses`: how many candidate entries each acceptance filter rejected
+   * while this waiter starved. Diagnostic-only, but load-bearing for the
+   * journal: the 2026-08-30 corpus showed 21/21 acceptance-timeouts were
+   * false (the entry existed; a filter dropped it), and none of that was
+   * visible from the timeout alone. Optional because cancel/exit paths and
+   * older providers do not tally.
+   */
+  | {
+      kind: 'timeout'
+      nearMisses?: { cursor: number; timestamp: number; image: number; exact: number }
+    }
   | { kind: 'cancelled' }
   | { kind: 'session-exited' }
 

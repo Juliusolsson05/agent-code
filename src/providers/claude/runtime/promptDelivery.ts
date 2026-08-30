@@ -289,7 +289,22 @@ function acceptanceResult(
     record?.(`acceptance-${outcome.kind}`, { acceptedAt: outcome.acceptedAt })
     return { ok: true, acceptance: outcome }
   }
-  record?.('uncertain', { outcome: outcome.kind })
+  // Redactor trap: journal data keys matching /prompt|content|text|…/i are
+  // dropped, so the tallies use miss* names. `missExact` > 0 is the headline
+  // number — it means Claude wrote an entry in our window and the text
+  // comparison refused it, which is exactly the class that made 21/21
+  // recorded timeouts false before the whitespace-collapse fix.
+  record?.('uncertain', {
+    outcome: outcome.kind,
+    ...(outcome.kind === 'timeout' && outcome.nearMisses
+      ? {
+          missCursor: outcome.nearMisses.cursor,
+          missTimestamp: outcome.nearMisses.timestamp,
+          missImage: outcome.nearMisses.image,
+          missExact: outcome.nearMisses.exact,
+        }
+      : {}),
+  })
   return failure({
     stage: outcome.kind === 'session-exited' ? 'session-exit' : 'after-enter',
     code: outcome.kind === 'session-exited' ? 'session-exited' : 'acceptance-timeout',

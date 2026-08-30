@@ -434,6 +434,12 @@ export function SessionView({
                   prompt: draft,
                   message: error ?? 'Delivery uncertain',
                   failedAt: Date.now(),
+                  // The remote protocol does not forward main's write
+                  // evidence, so the phone client genuinely cannot tell
+                  // "submitted but unconfirmed" from "never submitted".
+                  // null keeps the banner on its cautious wording instead
+                  // of letting the client fabricate a claim.
+                  enterWritten: null,
                 }
               : { kind: 'idle' }}
             onResolveUncertainDelivery={() => {

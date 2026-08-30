@@ -207,7 +207,7 @@ describe('ClaudeSession prompt acceptance', () => {
     await expect(waiter.promise).resolves.toMatchObject({ kind: 'queue' })
   })
 
-  it('normalizes Claude-trimmed trailing whitespace without collapsing interior text', async () => {
+  it('matches across whitespace transforms while trailing trim still works', async () => {
     const session = new ClaudeSession()
     const waiter = session.armPromptAcceptance('keep  interior\n')
     ;(session as unknown as { resolvePromptAcceptance(value: unknown, cursor: number): void })
@@ -216,6 +216,107 @@ describe('ClaudeSession prompt acceptance', () => {
         message: { role: 'user', content: 'keep  interior' },
       }, 1)
     await expect(waiter.promise).resolves.toMatchObject({ kind: 'user' })
+  })
+
+  // ---------------------------------------------------------------------------
+  // REAL-DATA FIXTURE — the 2026-08-30 22:07:38 false acceptance-timeout.
+  //
+  // FIXTURE_SENT is the exact `draftInput` preserved in debug bundle
+  // 2026-08-30T22-07-43-944-88c29f92 (482 chars, 8 raw TAB bytes from a pasted
+  // table). FIXTURE_ACCEPTED is the exact `message.content` Claude committed
+  // to transcript 47211034-…jsonl 316ms after submit.begin (505 chars — the
+  // tabs came back as column-dependent SPACE runs; the queue-operation entry
+  // carried the identical expanded form, proving the transform happens on
+  // paste ingestion inside Claude's composer, so NO transcript witness can
+  // ever equal the sent bytes).
+  //
+  // Under byte-exact interior matching this pair never matched: the delivery
+  // succeeded end-to-end and was reported failed after 20s, the stale draft
+  // was restored over the user's composer, and the resend guard blocked the
+  // retry. A corpus sweep the same day found this made 21 OF 21 recorded
+  // acceptance-timeouts false. These strings are the regression fence: if
+  // canonicalization ever tightens back toward byte-exactness, this test —
+  // not a user with a debug bundle — is what catches it.
+  // ---------------------------------------------------------------------------
+  const FIXTURE_SENT = "but you can for sure go about and close these ones because they are for sure superseeded. \tTitle\tWhy I think it's obsolete\n#343\tCompaction rendering has split ownership\tThe thing it complains about was structurally removed. One decision point now.\n#346\tStreaming vs committed markdown lists diverge\tSame cohort; the two paths were unified under the ledger + provider painters.\n#345\tLive compaction leaks raw XML into feed\tPR #427 added model-level guards in the semantic collector.\n"
+  const FIXTURE_ACCEPTED = "but you can for sure go about and close these ones because they are for sure superseeded.     Title    Why I think it's obsolete\n#343    Compaction rendering has split ownership    The thing it complains about was structurally removed. One decision point now.\n#346    Streaming vs committed markdown lists diverge    Same cohort; the two paths were unified under the ledger + provider painters.\n#345    Live compaction leaks raw XML into feed    PR #427 added model-level guards in the semantic collector."
+
+  it('accepts the recorded tab-expanded transcript entry (2026-08-30 false timeout)', async () => {
+    const session = new ClaudeSession()
+    const waiter = session.armPromptAcceptance(FIXTURE_SENT)
+    ;(session as unknown as { resolvePromptAcceptance(value: unknown, cursor: number): void })
+      .resolvePromptAcceptance({
+        type: 'user',
+        message: { role: 'user', content: FIXTURE_ACCEPTED },
+      }, 1)
+    await expect(waiter.promise).resolves.toMatchObject({ kind: 'user' })
+  })
+
+  it('accepts the same delivery via the recorded queue-operation shape', async () => {
+    // Mid-turn deliveries surface as queue-operation first (22:07:38.150Z,
+    // 280ms before the user entry). Matching the queue shape is what makes a
+    // busy-session submit confirm fast instead of waiting on turn commit.
+    const session = new ClaudeSession()
+    const waiter = session.armPromptAcceptance(FIXTURE_SENT)
+    ;(session as unknown as { resolvePromptAcceptance(value: unknown, cursor: number): void })
+      .resolvePromptAcceptance({
+        type: 'queue-operation',
+        operation: 'enqueue',
+        content: FIXTURE_ACCEPTED,
+      }, 1)
+    await expect(waiter.promise).resolves.toMatchObject({ kind: 'queue' })
+  })
+
+  it('still refuses a non-whitespace edit of the same prompt', async () => {
+    // The collapse must not weaken the guard exactness actually existed for:
+    // a real content difference (here, an appended word) stays unmatched.
+    const session = new ClaudeSession()
+    const waiter = session.armPromptAcceptance(FIXTURE_SENT, { timeoutMs: 30 })
+    ;(session as unknown as { resolvePromptAcceptance(value: unknown, cursor: number): void })
+      .resolvePromptAcceptance({
+        type: 'user',
+        message: { role: 'user', content: FIXTURE_ACCEPTED + ' extra' },
+      }, 1)
+    await expect(waiter.promise).resolves.toMatchObject({ kind: 'timeout' })
+  })
+
+  it('matches an NFD-armed short prompt against its NFC-committed entry', async () => {
+    // Short (non-paste-like) prompts are typed through Claude's Cursor, whose
+    // MeasuredText NFC-normalizes (vendor utils/Cursor.ts:1135). NFD input is
+    // what macOS filenames and PDF copy-paste produce. Found by adversarial
+    // review of the whitespace fix — collapse alone does not cover it.
+    const session = new ClaudeSession()
+    const nfd = 'read cafe\u0301.txt'          // e + combining acute (NFD)
+    const nfc = 'read caf\u00e9.txt'           // precomposed é (NFC)
+    const waiter = session.armPromptAcceptance(nfd)
+    ;(session as unknown as { resolvePromptAcceptance(value: unknown, cursor: number): void })
+      .resolvePromptAcceptance({
+        type: 'user',
+        message: { role: 'user', content: nfc },
+      }, 1)
+    await expect(waiter.promise).resolves.toMatchObject({ kind: 'user' })
+  })
+
+  it('reports which filter starved a timed-out waiter', async () => {
+    // The diagnostic the 2026-08-30 investigation lacked: the timeout alone
+    // said nothing, and naming the guilty filter took a debug bundle plus a
+    // byte-level diff. exact=1 here is that diff, pre-computed and journaled.
+    const session = new ClaudeSession()
+    ;(session as unknown as { promptAcceptanceIngestCursor: number })
+      .promptAcceptanceIngestCursor = 1
+    const waiter = session.armPromptAcceptance('the real prompt', { timeoutMs: 40 })
+    const resolve = (entry: unknown, cursor: number): void => {
+      ;(session as unknown as { resolvePromptAcceptance(value: unknown, cursor: number): void })
+        .resolvePromptAcceptance(entry, cursor)
+    }
+    // rejected by the ingest cursor (arrived before arming)
+    resolve({ type: 'user', message: { role: 'user', content: 'the real prompt' } }, 1)
+    // rejected by text inequality (a genuinely different entry)
+    resolve({ type: 'user', message: { role: 'user', content: 'another prompt' } }, 2)
+    await expect(waiter.promise).resolves.toMatchObject({
+      kind: 'timeout',
+      nearMisses: { cursor: 1, timestamp: 0, image: 0, exact: 1 },
+    })
   })
 
   it('ignores an entry at or before the waiter ingest cursor', async () => {

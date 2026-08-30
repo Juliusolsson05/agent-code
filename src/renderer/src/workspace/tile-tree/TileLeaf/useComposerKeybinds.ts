@@ -371,6 +371,10 @@ export function useComposerKeybinds({
               prompt: submittedInput,
               message: delivery.message,
               failedAt: Date.now(),
+              // Main's own write evidence, passed through untouched so the
+              // banner can distinguish "submitted but unconfirmed" from
+              // "never submitted at all" — see PromptDeliveryUiState.
+              enterWritten: failed ? failed.enterWritten : null,
             }
           : {
               kind: 'failed-safe',
@@ -380,7 +384,12 @@ export function useComposerKeybinds({
       workspace.showPaneToast(
         sessionId,
         delivery && !delivery.ok && !delivery.retrySafe
-          ? `${delivery.message}. It may already be submitted; automatic resend is blocked.`
+          // Branch on evidence, not vibes: enterWritten=false PROVES Claude
+          // never received a submit, so "may already be submitted" would be a
+          // lie for exactly the failure the user is staring at.
+          ? failed && failed.enterWritten === false
+            ? `${delivery.message}. The draft was never submitted — it is sitting in the agent's composer.`
+            : `${delivery.message}. It may already be submitted; automatic resend is blocked.`
           : err instanceof Error ? err.message : 'Prompt delivery failed; draft preserved',
       )
       console.warn('[TileLeaf] submit failed', err)
