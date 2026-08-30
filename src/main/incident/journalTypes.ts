@@ -1,8 +1,15 @@
 import type { BuildInfo } from '@main/buildInfo.js'
+import type { SessionLifecycleCorrelationIds } from '@shared/lifecycle/events.js'
 
 export type AppRunJournalSeverity = 'debug' | 'info' | 'warn' | 'error' | 'fatal'
 
-export type AppRunJournalIds = {
+// WHY lifecycle correlation ids live in the generic journal id envelope: the
+// lifecycle journal is deliberately a thin view over AppRunJournal, not a
+// parallel store. Giving these ids first-class slots preserves exact joins in
+// the shared events.jsonl while the closed shared picker still controls what a
+// renderer is allowed to introduce across IPC. AppRunJournal's main-owned ids
+// remain alongside them for incidents outside transcript continuity.
+export type AppRunJournalIds = SessionLifecycleCorrelationIds & {
   sessionId?: string
   providerSessionId?: string
   orchestrationRunId?: string

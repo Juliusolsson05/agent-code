@@ -4,6 +4,13 @@ import { app } from 'electron'
 
 import { SessionRecorder } from '@main/recording/SessionRecorder.js'
 import { SESSION_RECORDING_DIR } from '@main/storage/paths.js'
+import {
+  isCodexTranscriptObservationEventName,
+  isCodexTranscriptObservationSessionId,
+  pickCodexTranscriptObservationCorrelationIds,
+  pickCodexTranscriptObservationData,
+  type CodexTranscriptObservation,
+} from '@shared/lifecycle/events.js'
 
 // Owns one SessionRecorder per live session and routes the outbound IPC
 // stream to it. plan §2.
@@ -51,8 +58,17 @@ function extractProvider(payload: unknown): string | null {
   return null
 }
 
+function extractSessionRunId(payload: unknown): string | null {
+  if (typeof payload !== 'object' || payload === null) return null
+  const id = (payload as { sessionRunId?: unknown }).sessionRunId
+  return typeof id === 'string' && id.length > 0 ? id : null
+}
+
 export class SessionRecorderManager {
-  private readonly recorders = new Map<string, { recorder: SessionRecorder; generation: string }>()
+  private readonly recorders = new Map<
+    string,
+    { recorder: SessionRecorder; generation: string; sessionRunId: string | null }
+  >()
   /**
    * Recorder generations that have yielded the session's active slot but are
    * still inside the renderer's final-evidence handshake.
@@ -66,7 +82,7 @@ export class SessionRecorderManager {
    */
   private readonly retiringRecorders = new Map<
     string,
-    { sessionId: string; recorder: SessionRecorder }
+    { sessionId: string; sessionRunId: string | null; recorder: SessionRecorder }
   >()
   private readonly pendingStops = new Map<
     string,
@@ -161,6 +177,11 @@ export class SessionRecorderManager {
     // best-effort/null.
     if (channel === 'session:started') {
       const p = payload as { kind?: string; projectDir?: string }
+      // The provider run id is the provenance fence for synthetic Stage 0
+      // sidecars. A recorder may have been command-started before the backend,
+      // so fill it from the first authoritative started payload rather than
+      // guessing from stable pane identity.
+      active.sessionRunId = extractSessionRunId(payload) ?? active.sessionRunId
       recorder.refreshIdentity({ provider: p.kind, cwd: p.projectDir })
     }
     // session:exit starts a bounded renderer-flush handshake. Closing here
@@ -226,7 +247,11 @@ export class SessionRecorderManager {
         this.nowWall,
         this.nowMono,
       )
-      active = { recorder, generation }
+      active = {
+        recorder,
+        generation,
+        sessionRunId: extractSessionRunId(firstPayload),
+      }
       this.recorders.set(sessionId, active)
       try {
         this.notifyRecordingStarted(sessionId, generation)
@@ -281,6 +306,85 @@ export class SessionRecorderManager {
         : undefined
     if (!recorder) return false
     recorder.renderShapes(sightings)
+    return true
+  }
+
+  /**
+   * Append one already-sanitized Stage 0 observation to the active session
+   * recording without routing it through the outbound SessionFeed funnel.
+   *
+   * WHY this starts a recorder only in existing auto-record power mode: a
+   * capability refusal or ownership decision can precede `session:started`.
+   * Waiting for that outbound event silently amputates the exact Stage 0 prefix
+   * an unattended capture opted into. Default command-driven recording remains
+   * unchanged: an always-on lifecycle observation cannot create a recorder
+   * unless AGENT_CODE_SESSION_RECORD already authorized every session.
+   *
+   * WHY an exact retiring generation may receive the row: natural exit removes
+   * SessionManager's live registry entry before the renderer commits its final
+   * queue/surface releases. The recorder remains intentionally writable during
+   * that same handshake. `{sessionId, sessionRunId}` is sufficient authority to
+   * select the retiring generation without guessing from reusable pane id; an
+   * unknown pair still fails closed and can never contaminate a successor.
+   */
+  recordCodexTranscriptObservation(
+    sessionId: string,
+    sessionRunId: string,
+    observation: unknown,
+  ): boolean {
+    if (
+      !isCodexTranscriptObservationSessionId(sessionId) ||
+      !isCodexTranscriptObservationSessionId(sessionRunId)
+    ) return false
+    if (!observation || typeof observation !== 'object' || Array.isArray(observation)) return false
+    const input = observation as Record<string, unknown>
+    if (input.schemaVersion !== 1 || !isCodexTranscriptObservationEventName(input.name)) {
+      return false
+    }
+    let target: { recorder: SessionRecorder; sessionRunId: string | null } | undefined =
+      this.recorders.get(sessionId)
+    if (target?.sessionRunId !== sessionRunId) target = undefined
+    if (!target) {
+      for (const retiring of this.retiringRecorders.values()) {
+        if (
+          retiring.sessionId === sessionId &&
+          retiring.sessionRunId === sessionRunId
+        ) {
+          target = retiring
+          break
+        }
+      }
+    }
+    if (!target && this.autoRecord && !this.recorders.has(sessionId)) {
+      // The callback is main-owned and supplies the exact run fence separately
+      // from the sanitized sidecar. Seed the same identity a later
+      // `session:started` would have supplied so replacement-run observations
+      // cannot enter this early-created generation.
+      this.startRecording(sessionId, { kind: 'codex', sessionRunId })
+      target = this.recorders.get(sessionId)
+    }
+    if (!target || target.sessionRunId !== sessionRunId) return false
+    const safeData = pickCodexTranscriptObservationData(input.name, input.data)
+    const safeIds = pickCodexTranscriptObservationCorrelationIds(
+      input.name,
+      input.ids,
+      safeData,
+    )
+    // The caller supplies the exact main-owned run fence separately. Restore
+    // both authoritative scope keys after filtering the untrusted object so a
+    // future internal caller cannot smuggle a different pane/run into the
+    // shareable sidecar through an otherwise shape-valid ids bag.
+    const safeObservation: CodexTranscriptObservation = {
+      schemaVersion: 1,
+      name: input.name,
+      ids: {
+        ...(safeIds ?? {}),
+        sessionRunId,
+        sessionId,
+      },
+      ...(safeData ? { data: safeData } : {}),
+    }
+    target.recorder.codexTranscriptObservation(safeObservation)
     return true
   }
 
@@ -386,7 +490,11 @@ export class SessionRecorderManager {
     const active = this.recorders.get(sessionId)
     if (!active || active.generation !== generation) return
     this.recorders.delete(sessionId)
-    this.retiringRecorders.set(generation, { sessionId, recorder: active.recorder })
+    this.retiringRecorders.set(generation, {
+      sessionId,
+      sessionRunId: active.sessionRunId,
+      recorder: active.recorder,
+    })
   }
 
   /** Public stop for the Stop Recording command (plan §7). Alias of stop;

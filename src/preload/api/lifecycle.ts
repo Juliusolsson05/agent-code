@@ -1,6 +1,10 @@
 import { ipcRenderer } from 'electron'
 
-import type { SessionLifecycleData, SessionLifecycleEventName } from '@shared/lifecycle/events.js'
+import type {
+  SessionLifecycleCorrelationIds,
+  SessionLifecycleData,
+  SessionLifecycleEventName,
+} from '@shared/lifecycle/events.js'
 
 // Renderer -> main session-lifecycle breadcrumbs.
 //
@@ -18,6 +22,7 @@ export type SessionLifecycleReport = {
   name: SessionLifecycleEventName
   sessionId?: string
   data?: SessionLifecycleData
+  correlationIds?: SessionLifecycleCorrelationIds
 }
 
 export const lifecycleApi = {

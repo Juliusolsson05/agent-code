@@ -93,7 +93,7 @@ export function wireSessionForwarder(
     // sitting in main's 100 ms window. The renderer's JSONL barrier can only flush messages it has
     // received, so main must establish this order before crossing Electron IPC.
     semanticEvents.flush(payload.sessionId)
-    enqueueJsonl(payload.sessionId, payload.entry, payload.file)
+    enqueueJsonl(payload.sessionId, payload.entry, payload.file, payload.observation)
     subAgents.observeParentEntry(payload.sessionId, payload.entry, payload.file)
   })
   manager.on('jsonl-error', ({ sessionId, error }) =>

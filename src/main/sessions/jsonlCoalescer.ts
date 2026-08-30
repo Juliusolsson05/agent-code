@@ -1,4 +1,7 @@
-import type { AgentTranscriptEntry } from '@shared/types/session.js'
+import type {
+  AgentTranscriptEntry,
+  AgentTranscriptObservationMetadata,
+} from '@shared/types/session.js'
 
 import { sendToSessionWindow } from '@main/window/windowRegistry.js'
 import { makeStringPool, internEntryFields } from '@main/sessions/internEntry.js'
@@ -30,7 +33,11 @@ import { makeStringPool, internEntryFields } from '@main/sessions/internEntry.js
 // — imperceptible.
 
 type PendingJsonlBuffer = {
-  entries: Array<{ entry: AgentTranscriptEntry; file: string }>
+  entries: Array<{
+    entry: AgentTranscriptEntry
+    file: string
+    observation?: AgentTranscriptObservationMetadata
+  }>
   flushScheduled: boolean
   // #288: per-session string pool. The coalescer is the choke point every
   // live `jsonl-entry` flows through, and the entries it forwards are the
@@ -69,6 +76,7 @@ export function enqueueJsonl(
   sessionId: string,
   entry: AgentTranscriptEntry,
   file: string,
+  observation?: AgentTranscriptObservationMetadata,
 ): void {
   let pending = jsonlPending.get(sessionId)
   if (!pending) {
@@ -80,7 +88,16 @@ export function enqueueJsonl(
   // identical payload. The pool is the session's own (created above),
   // so first-seen-wins de-dup spans the whole session, not just one burst.
   internEntryFields(entry as Record<string, unknown>, pending.intern)
-  pending.entries.push({ entry, file })
+  // Preserve the wire shape for providers that do not publish rollout
+  // observation metadata. An own `observation: undefined` property looks
+  // harmless in memory, but it changes object-key inspection and structured
+  // clone payloads for every Claude/OpenCode entry. Stage 0 is Codex-only; an
+  // absent sidecar must remain genuinely absent outside that provider path.
+  pending.entries.push({
+    entry,
+    file,
+    ...(observation === undefined ? {} : { observation }),
+  })
   if (!pending.flushScheduled) {
     pending.flushScheduled = true
     setImmediate(() => flushJsonl(sessionId))

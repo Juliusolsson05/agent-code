@@ -63,12 +63,13 @@ export type RecordingHeader = {
 
 /** One line of events.jsonl. `t` monotonic-ms (replay order), `wall` = the
  *  Date.now() captured at record time. A real event carries `ch` (a
- *  SessionFeed channel) + `payload`; the synthetic `__note` / `__truncated`
- *  lines carry their own fields and are ignored for pipeline input. */
+ *  SessionFeed channel) + `payload`; synthetic diagnostic lines carry their
+ *  own fields and are ignored for pipeline input. */
 export type RecordedLine =
   | { t: number; wall: number; ch: FeedChannel; payload: unknown }
   | { t: number; wall: number; ch: '__note'; note: { id: string; status: 'reserved' | 'filled'; text?: string } }
   | { t: number; wall: number; ch: '__truncated'; reason: string; bytes: number }
+  | { t: number; wall: number; ch: '__codex_transcript_observation'; observation: unknown }
 
 export type ParsedRecording = {
   header: RecordingHeader
@@ -170,7 +171,13 @@ function isSyntheticChannel(ch: string): boolean {
   // sidecar lines are extraction/audit input, never pipeline input — a
   // replay that fed them to the fold would invent events the session
   // never emitted.
-  return ch === '__note' || ch === '__truncated' || ch === '__render_shape'
+  return ch === '__note' ||
+    ch === '__truncated' ||
+    ch === '__render_shape' ||
+    // Stage 0 observations describe the ownership/reconciliation decisions
+    // made by the live pipeline. Replaying one as input would make the
+    // diagnostic influence the behavior it is supposed to measure.
+    ch === '__codex_transcript_observation'
 }
 
 /**
@@ -254,9 +261,8 @@ function runtimeViewFor(
 
 /**
  * Replay a parsed recording through the real pipeline. Returns one tick per
- * PIPELINE-relevant event (synthetic `__note` / `__truncated` lines are
- * skipped). The adapter and ledger are constructed ONCE (D11) and driven each
- * tick.
+ * PIPELINE-relevant event (all synthetic diagnostic sidecars are skipped). The
+ * adapter and ledger are constructed ONCE (D11) and driven each tick.
  */
 export function replayRecording(
   recording: ParsedRecording,

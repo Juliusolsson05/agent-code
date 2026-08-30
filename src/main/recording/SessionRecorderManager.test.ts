@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, readdirSync, existsSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, existsSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -124,6 +124,28 @@ describe('SessionRecorderManager', () => {
     expect(toJSON).toHaveBeenCalledTimes(1)
   })
 
+  it('re-establishes a recording directory lost before a lazy event append', async () => {
+    const m = mgr()
+    const sessionId = 'directory-recovery'
+    m.startRecording(sessionId)
+    const originalDir = await readRecordingDir(sessionId)
+
+    // `meta.json` creation proves the recorder once ensured the directory.
+    // Removing it models external cleanup between that proof and the first
+    // lazy events append; the writer must re-establish its destination rather
+    // than treating the cached boolean as permanent filesystem authority.
+    rmSync(originalDir, { recursive: true, force: true })
+    m.observe('session:semantic-event', [{ sessionId, event: { kind: 'turn_started' } }])
+    await m.stop(sessionId)
+
+    const recoveredDir = await readRecordingDir(sessionId)
+    const lines = readFileSync(join(recoveredDir, 'events.jsonl'), 'utf8')
+      .trim()
+      .split('\n')
+      .map(line => JSON.parse(line))
+    expect(lines.map(line => line.ch)).toEqual(['session:semantic-event'])
+  })
+
   it('ignores payloads without a sessionId', async () => {
     const m = mgr()
     m.observe('session:screen', [{ screen: 'no id here' }])
@@ -239,6 +261,141 @@ describe('SessionRecorderManager', () => {
     expect(m.reserveNote('never-started')).toBeNull()
   })
 
+  it('records content-safe Codex transcript observations as replay-inert sidecars', async () => {
+    const m = mgr()
+    const sessionId = '41414141-4141-4141-8141-414141414141'
+    const sessionRunId = '42424242-4242-4242-8242-424242424242'
+    m.startRecording(sessionId, { kind: 'codex', sessionRunId })
+    mono = 17
+
+    expect(m.recordCodexTranscriptObservation(sessionId, sessionRunId, {
+      schemaVersion: 1,
+      area: 'session.lifecycle',
+      name: 'submit.surface',
+      ids: {
+        sessionId: 'forged-pane',
+        sessionRunId: '43434343-4343-4343-8343-434343434343',
+        submissionId: 'sub-1',
+        madeUpJoin: 'unsafe',
+      },
+      data: { surface: 'queued-strip', prompt: 'secret user text' },
+    })).toBe(true)
+    // A lifecycle report must never opt a session into recording merely by
+    // existing. That would turn the always-on journal into an unbounded second
+    // recording system and defeat the explicit recording command.
+    expect(m.recordCodexTranscriptObservation(
+      '44444444-4444-4444-8444-444444444444',
+      '45454545-4545-4545-8545-454545454545',
+      {
+      name: 'submit.surface',
+      },
+    )).toBe(false)
+
+    await m.stop(sessionId)
+    const dir = await readRecordingDir(sessionId)
+    const meta = JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8'))
+    const lines = readFileSync(join(dir, 'events.jsonl'), 'utf8')
+      .trim()
+      .split('\n')
+      .map(line => JSON.parse(line))
+
+    expect(meta.eventCount).toBe(0)
+    expect(lines).toEqual([
+      expect.objectContaining({
+        t: 17,
+        ch: '__codex_transcript_observation',
+        observation: expect.objectContaining({
+          name: 'submit.surface',
+          ids: expect.objectContaining({ sessionId, sessionRunId, submissionId: 'sub-1' }),
+          data: { surface: 'queued-strip' },
+        }),
+      }),
+    ])
+    expect(lines[0].observation.ids).not.toHaveProperty('madeUpJoin')
+    expect(lines[0].observation.data).not.toHaveProperty('prompt')
+  })
+
+  it('never routes replacement-run observations into the predecessor recorder', async () => {
+    const m = mgr()
+    const sessionId = '46464646-4646-4646-8646-464646464646'
+    const runA = '47474747-4747-4747-8747-474747474747'
+    const runB = '48484848-4848-4848-8848-484848484848'
+    m.startRecording(sessionId, { kind: 'codex', sessionRunId: runA })
+
+    expect(m.recordCodexTranscriptObservation(sessionId, runB, {
+      schemaVersion: 1,
+      name: 'transcript.attachment',
+      data: { decision: 'hold', reason: 'awaiting-local-prompt' },
+    })).toBe(false)
+
+    await m.stop(sessionId)
+    const dir = await readRecordingDir(sessionId)
+    // No accepted event means the lazy JSONL writer correctly never creates a
+    // file. Treating ENOENT as a test failure would reward an empty artifact
+    // over the stronger privacy property: no predecessor-run row was written.
+    expect(existsSync(join(dir, 'events.jsonl'))).toBe(false)
+    const meta = JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8'))
+    expect(meta.eventCount).toBe(0)
+  })
+
+  it('routes final observations to the exact retiring run while a successor is active', async () => {
+    const m = mgr()
+    const sessionId = '49494949-4949-4949-8949-494949494949'
+    const runA = '50505050-5050-4050-8050-505050505050'
+    const runB = '51515151-5151-4151-8151-515151515151'
+    m.startRecording(sessionId, { kind: 'codex', sessionRunId: runA })
+
+    // A started event from a compatibility transport may omit the run id. It
+    // can enrich provider/cwd, but must not erase the explicit run fence that
+    // already protects the sidecar writer.
+    m.observe('session:started', [{ sessionId, kind: 'codex' }])
+    expect(m.recordCodexTranscriptObservation(sessionId, runA, {
+      schemaVersion: 1,
+      name: 'submit.surface',
+      data: { surface: 'render-selected', visible: true },
+    })).toBe(true)
+
+    m.observe('session:exit', [{ sessionId, code: 0 }])
+    const generationA = m.recordingGeneration(sessionId)
+    expect(generationA).toEqual(expect.any(String))
+    m.startRecording(sessionId, { kind: 'codex', sessionRunId: runB })
+
+    expect(m.recordCodexTranscriptObservation(sessionId, runA, {
+      schemaVersion: 1,
+      name: 'submit.release',
+      data: { cause: 'session-exit' },
+    })).toBe(true)
+    expect(m.recordCodexTranscriptObservation(sessionId, runB, {
+      schemaVersion: 1,
+      name: 'submit.surface',
+      data: { surface: 'render-selected', visible: true },
+    })).toBe(true)
+
+    await m.finishStopping(sessionId, generationA ?? undefined)
+    await m.stopRecording(sessionId)
+
+    const dirs = readdirSync(TMP)
+      .filter(dir => dir.endsWith(`-${sessionId}`))
+      .map(dir => join(TMP, dir))
+    expect(dirs).toHaveLength(2)
+    const namesByRun = new Map<string, string[]>()
+    for (const dir of dirs) {
+      const observations = readFileSync(join(dir, 'events.jsonl'), 'utf8')
+        .trim()
+        .split('\n')
+        .filter(Boolean)
+        .map(line => JSON.parse(line))
+        .filter(line => line.ch === '__codex_transcript_observation')
+        .map(line => line.observation)
+      const runId = observations[0]?.ids?.sessionRunId
+      if (typeof runId === 'string') {
+        namesByRun.set(runId, observations.map(observation => observation.name))
+      }
+    }
+    expect(namesByRun.get(runA)).toEqual(['submit.surface', 'submit.release'])
+    expect(namesByRun.get(runB)).toEqual(['submit.surface'])
+  })
+
   it('flushAll finalizes every open recording', async () => {
     const m = mgr()
     m.startRecording('a')
@@ -277,5 +434,53 @@ describe('SessionRecorderManager', () => {
     m.observe('session:started', [{ sessionId: 'auto', kind: 'codex' }])
     expect(m.isRecording('auto')).toBe(true)
     await m.stopRecording('auto')
+  })
+
+  it('auto-records a valid Stage 0 sidecar that precedes session:started', async () => {
+    const m = new SessionRecorderManager(nowWall, nowMono, true)
+    const sessionId = '94949494-9494-4494-8494-949494949494'
+    const sessionRunId = '95959595-9595-4595-8595-959595959595'
+    expect(m.recordCodexTranscriptObservation(sessionId, '', {
+      schemaVersion: 1,
+      name: 'transcript.attachment',
+    })).toBe(false)
+    expect(m.isRecording(sessionId)).toBe(false)
+
+    expect(m.recordCodexTranscriptObservation(sessionId, sessionRunId, {
+      schemaVersion: 1,
+      name: 'transcript.attachment',
+      data: { decision: 'hold', reason: 'awaiting-local-prompt' },
+    })).toBe(true)
+    expect(m.isRecording(sessionId)).toBe(true)
+
+    await m.stopRecording(sessionId)
+    const dir = await readRecordingDir(sessionId)
+    const rows = readFileSync(join(dir, 'events.jsonl'), 'utf8')
+      .trim()
+      .split('\n')
+      .map(line => JSON.parse(line))
+    expect(rows).toEqual([
+      expect.objectContaining({
+        ch: '__codex_transcript_observation',
+        observation: expect.objectContaining({
+          name: 'transcript.attachment',
+          ids: expect.objectContaining({ sessionId, sessionRunId }),
+        }),
+      }),
+    ])
+  })
+
+  it('does not let a valid Stage 0 sidecar opt into recording by default', () => {
+    const m = mgr()
+    expect(m.recordCodexTranscriptObservation(
+      '96969696-9696-4696-8696-969696969696',
+      '97979797-9797-4797-8797-979797979797',
+      {
+        schemaVersion: 1,
+        name: 'transcript.attachment',
+        data: { decision: 'hold', reason: 'awaiting-local-prompt' },
+      },
+    )).toBe(false)
+    expect(m.isRecording('96969696-9696-4696-8696-969696969696')).toBe(false)
   })
 })

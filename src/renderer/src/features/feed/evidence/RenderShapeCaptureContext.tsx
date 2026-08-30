@@ -114,9 +114,26 @@ export function RenderShapeCaptureProvider({
         // Echoing main's opaque generation closes that ownership loop without
         // guessing from a reusable sessionId. A stale renderer can finish its
         // own flush, but its acknowledgement cannot stop a newer recording.
-        if (!payload.generation) return
-        void disarmRenderShapeCapture(sessionId, payload.generation)
-          .finally(() => window.api.finishSessionRecordingStop(sessionId, payload.generation))
+        const generation = payload.generation
+        if (!generation) return
+        void (async () => {
+          try {
+            await disarmRenderShapeCapture(sessionId, generation)
+          } finally {
+            // session:exit appends final queue/surface releases to React state;
+            // the dedicated observation outbox mirrors only after that state is
+            // committed. Main's stopping notification can arrive before React
+            // flushes the earlier IPC callback. Yield one renderer task so the
+            // workspace layout effect sends those rows before this invoke asks
+            // main to close the still-writable recorder. IPC ordering then
+            // preserves reports-before-ack. Without this handoff, the shape
+            // sidecar was complete while the named chronology ended with open
+            // owners—the recorder grace period existed, but renderer ended it
+            // before its other evidence producer had a chance to run.
+            await new Promise<void>(resolve => window.setTimeout(resolve, 0))
+            await window.api.finishSessionRecordingStop(sessionId, generation)
+          }
+        })()
           .catch(() => {
             /* main's grace timer is the fallback */
           })

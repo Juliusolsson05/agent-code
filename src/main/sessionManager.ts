@@ -24,6 +24,7 @@ import type {
   AgentResumePromptState,
   AgentPermissionPromptState,
   AgentProcessState,
+  AgentTranscriptObservationMetadata,
   AgentInputReadiness,
   SessionBackendSnapshot,
   SessionInputReadiness,
@@ -53,6 +54,17 @@ import type { BuiltInMcpHttpHost } from '@mcp/runtime/BuiltInMcpHttpHost.js'
 import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import { SessionLifecycleJournal } from '@main/lifecycle/SessionLifecycleJournal.js'
 import type { PromptGateState } from '@shared/types/session.js'
+import {
+  isCodexTranscriptObservationEventName,
+  isCodexTranscriptObservationSessionId,
+  pickCodexTranscriptObservationCorrelationIds,
+  pickCodexTranscriptObservationData,
+  pickLifecycleCorrelationIds,
+  type CodexTranscriptObservation,
+  type CodexTranscriptObservationEventName,
+  type SessionLifecycleCorrelationIds,
+  type SessionLifecycleData,
+} from '@shared/lifecycle/events.js'
 import type {
   SessionSpawnOptions,
   SessionSpawnResult,
@@ -64,6 +76,23 @@ import {
   type CodexReplacementRedirect,
   type CodexReplacementReservation,
 } from '@main/sessions/codexReplacementLedger.js'
+
+function codexObservationEnumOrUnknown(
+  name: CodexTranscriptObservationEventName,
+  key: string,
+  value: unknown,
+): string {
+  if (typeof value !== 'string') return 'unknown'
+  // The shared sanitizer is the vocabulary authority. Reusing it here avoids a
+  // second hand-maintained enum while preserving a crucial distinction at the
+  // provider boundary: a present future value is evidence of schema drift and
+  // must degrade to the explicit `unknown` sentinel, not disappear as though
+  // the producer omitted the field altogether.
+  const picked = pickCodexTranscriptObservationData(name, { [key]: value })
+  return (picked as Record<string, unknown> | undefined)?.[key] === value
+    ? value
+    : 'unknown'
+}
 
 // SessionManager: a thin registry on top of ClaudeSession / TerminalSession
 // that lets the main process run N sessions in parallel. Every event
@@ -101,7 +130,9 @@ export type { SessionKind } from '@shared/types/providerKind.js'
 // callers consume the manager through the `SessionManager` interface,
 // not via direct event-map type access.
 type ManagerEvents = {
-  started: [{ sessionId: string; kind: SessionKind; projectDir?: string }]
+  // Optional at the event type seam for older recordings and test/remote feed
+  // implementations; every real SessionManager spawn emits it below.
+  started: [{ sessionId: string; sessionRunId?: string; kind: SessionKind; projectDir?: string }]
   'input-readiness': [{ sessionId: string; input: SessionInputReadiness }]
   'pty-data': [{ sessionId: string; data: string }]
   /** Raw PTY bytes for an attached agent inline terminal. Emitted
@@ -115,7 +146,12 @@ type ManagerEvents = {
    *  this seam); the renderer narrows by shape. See the transcript-
    *  entry-codec plan in #394 phase 2b — this seam is what promotes
    *  it onto the registry. */
-  'jsonl-entry': [{ sessionId: string; entry: AgentTranscriptEntry; file: string }]
+  'jsonl-entry': [{
+    sessionId: string
+    entry: AgentTranscriptEntry
+    file: string
+    observation?: AgentTranscriptObservationMetadata
+  }]
   'jsonl-error': [{ sessionId: string; error: Error }]
   'transcript-diagnostic': [{ sessionId: string; diagnostic: unknown }]
   'process-state': [{ sessionId: string; active: boolean; status?: string }]
@@ -155,6 +191,15 @@ type ManagerEvents = {
   exit: [{ sessionId: string; exitCode: number; signal?: number }]
 }
 
+// A same-cwd burst can expose many ownership candidates. Stage 0 needs the
+// individual fingerprints to reconstruct the ambiguity graph, but the always-on app
+// journal has a deliberately bounded pending queue. Matching candidates go
+// first below, and this hard ceiling keeps one pathological scan from evicting
+// the sparse submit/reconcile evidence needed to explain the user-visible bug.
+const MAX_CODEX_CANDIDATE_OBSERVATIONS_PER_RUN = 8
+const MAX_CODEX_CANDIDATE_EDGE_KEYS_PER_RUN = 256
+const MAX_CODEX_ATTACHMENT_TRANSITIONS_PER_RUN = 8
+
 type PtySize = { cols: number; rows: number }
 
 export interface SessionManager {
@@ -190,6 +235,15 @@ export interface SessionManager {
 type AgentSessionLike = AgentSession
 
 type RegistryLifecycle = {
+  /**
+   * Identifies this concrete main-owned backend lifetime, not the durable pane.
+   *
+   * WHY `sessionId` is insufficient: recovery and provider replacement can
+   * reuse the pane id while replacing the process underneath it. Transcript
+   * observations from those two lifetimes must never join merely because the
+   * renderer still calls both of them the same pane.
+   */
+  runId: string
   generation: symbol
   startSettled: boolean
   naturalExitObserved: boolean
@@ -198,6 +252,20 @@ type RegistryLifecycle = {
   stopPromise: Promise<void> | null
   postStartStopPromise: Promise<void> | null
 }
+
+export type CodexSessionRunState = 'live' | 'retired'
+
+type RecentCodexSessionRun = {
+  sessionId: string
+  sessionRunId: string
+  state: CodexSessionRunState
+}
+
+// The ledger exists only to bridge short renderer/main teardown races. Keeping
+// thousands of exact run pairs covers far more than one app window can have in
+// flight while still making memory use independent of total historical agent
+// count. This is not transcript history and must never grow with disk history.
+const RECENT_CODEX_SESSION_RUN_LIMIT = 2_048
 
 // Internal registry shape: we store the concrete instance plus its
 // kind so kill/write/resize can dispatch without sniffing the object.
@@ -261,6 +329,7 @@ class RecoveryCancelledError extends Error {
 
 function createRegistryLifecycle(generation: symbol): RegistryLifecycle {
   return {
+    runId: randomUUID(),
     generation,
     startSettled: false,
     naturalExitObserved: false,
@@ -420,6 +489,32 @@ export class SessionManager extends EventEmitter {
   // every history chunk, and the phone's TranscriptStore discards a chunk
   // whose file disagrees with the file its live frames carry.
   private readonly lastTranscriptFile = new Map<string, string>()
+  private readonly codexCandidateObservationEdges = new Map<
+    string,
+    {
+      sessionRunId: string
+      seenKeys: Set<string>
+      emittedKeys: Set<string>
+      emittedCount: number
+      trackingCapped: boolean
+    }
+  >()
+  private readonly codexAttachmentObservationState = new Map<
+    string,
+    {
+      sessionRunId: string
+      lastTransitionKey: string | null
+      emittedTransitions: number
+      capReported: boolean
+    }
+  >()
+  // WHY a separate exact-pair ledger exists beside `sessions`: renderer
+  // post-commit effects can report after the provider exit synchronously
+  // removes the live registry entry. Treating every absent sessionId as a
+  // retired Codex run lets arbitrary renderer strings masquerade as ownership
+  // evidence (and reach debug bundles). This bounded main-authored ledger is
+  // the only proof that an absent `{sessionId, sessionRunId}` pair ever existed.
+  private readonly recentCodexSessionRuns = new Map<string, RecentCodexSessionRun>()
   // Spawn-time identity captured for LATE resolution. The transcript-file
   // cache above starts empty every app run, but RESUMED sessions have a
   // durable transcript on disk from the moment they spawn — main just needs
@@ -472,6 +567,13 @@ export class SessionManager extends EventEmitter {
     // still construct cleanly; null-guarded at every use.
     private readonly journal: AppRunJournal | null = null,
     private readonly beforeAgentSessionStart: (() => Promise<void>) | null = null,
+    // Optional opt-in recording projection. Kept as a structural callback so
+    // the process/session registry does not depend on the dev-debug recorder.
+    private readonly recordCodexObservation: (
+      sessionId: string,
+      sessionRunId: string,
+      observation: CodexTranscriptObservation,
+    ) => void = () => {},
   ) {
     super()
     // Typed lifecycle emitter over the same journal. Constructed here rather
@@ -719,6 +821,18 @@ export class SessionManager extends EventEmitter {
     ) {
       return false
     }
+    const retiringEntry = expectedEntry ?? this.sessions.get(sessionId)
+    if (kind === 'codex' && retiringEntry?.kind === 'codex') {
+      // Record retirement before deleting the authoritative row. A synchronous
+      // renderer report cannot interleave inside this call, but downstream
+      // `removed` handlers and later IPC turns need the exact former run after
+      // registry visibility has ended.
+      this.rememberCodexSessionRun(
+        sessionId,
+        retiringEntry.lifecycle.runId,
+        'retired',
+      )
+    }
     this.sessions.delete(sessionId)
     this.sessionStateGenerations.delete(sessionId)
     // Flush rather than drop: the writes in an open window really happened, and
@@ -734,6 +848,8 @@ export class SessionManager extends EventEmitter {
     this.lastScreenSnapshot.delete(sessionId)
     this.lastConditionsSnapshot.delete(sessionId)
     this.lastTranscriptFile.delete(sessionId)
+    this.codexCandidateObservationEdges.delete(sessionId)
+    this.codexAttachmentObservationState.delete(sessionId)
     this.lastInputReadiness.delete(sessionId)
     this.lastGateEvaluation.delete(sessionId)
     this.spawnInfo.delete(sessionId)
@@ -2459,7 +2575,12 @@ export class SessionManager extends EventEmitter {
       session.on('started', ({ projectDir }) => {
         if (!ownsEntry()) return
         this.markActivity(sessionId)
-        this.emit('started', { sessionId, kind, projectDir })
+        this.emit('started', {
+          sessionId,
+          sessionRunId: agentEntry.lifecycle.runId,
+          kind,
+          projectDir,
+        })
       })
       session.on('input-readiness', (input: AgentInputReadiness) => {
         if (!ownsEntry()) return
@@ -2503,19 +2624,92 @@ export class SessionManager extends EventEmitter {
         this.lastScreenSnapshot.set(sessionId, snap)
         this.emit('screen', { sessionId, ...snap })
       })
-      session.on('jsonl-entry', (entry: AgentTranscriptEntry, file: string) => {
+      session.on('jsonl-entry', (
+        entry: AgentTranscriptEntry,
+        file: string,
+        observation?: AgentTranscriptObservationMetadata,
+      ) => {
         if (!ownsEntry()) return
         this.markActivity(sessionId)
         this.lastTranscriptFile.set(sessionId, file)
-        this.emit('jsonl-entry', { sessionId, entry, file })
+        if (kind === 'codex' && observation) {
+          const rollout = entry && typeof entry === 'object'
+            ? entry as unknown as Record<string, unknown>
+            : null
+          const isSessionMeta = rollout?.type === 'session_meta'
+          const providerSessionMetaFingerprint = isSessionMeta
+            ? pickLifecycleCorrelationIds({
+                providerSessionMetaFingerprint:
+                  observation.providerSessionMetaFingerprint,
+              })?.providerSessionMetaFingerprint
+            : undefined
+          if (isSessionMeta) {
+            // WHY only session_meta is journalled here: rollout-entry is a hot
+            // path (thousands of rows in a long turn) and the raw committed
+            // feed already reaches the renderer with its observation sidecar.
+            // Per-entry app-journal rows can overflow the 2k pending cap before
+            // an incident flush, destroying the much rarer submit/reconcile
+            // rows. session_meta is one sparse committed fact per generation
+            // and supplies the exact provider identity needed to compare with
+            // x-codex-window-id without retaining transcript content or paths.
+            // A malformed/future payload still gets a structural row with an
+            // explicit false validity bit: silence here would make provider
+            // shape drift indistinguishable from a missing tail callback.
+            const fileGenerationId = observation.fileGenerationId ?? undefined
+            this.recordCodexTranscriptObservation('transcript.entry', sessionId, {
+              source: 'session-meta',
+              entryByteOffset: observation.rolloutByteOffset,
+              attached: true,
+              tailing: true,
+              providerSessionMetaValid:
+                providerSessionMetaFingerprint !== undefined,
+            }, {
+              ...(providerSessionMetaFingerprint
+                ? { providerSessionMetaFingerprint }
+                : {}),
+              ...(fileGenerationId ? { fileGenerationId } : {}),
+              ...(fileGenerationId
+                ? { rolloutEntryId: `${fileGenerationId}:${observation.rolloutByteOffset}` }
+                : {}),
+            }, agentEntry.lifecycle.runId)
+          }
+        }
+        // Observation precedes the externally-observable emit. EventEmitter
+        // listeners run synchronously and may retire this pane; recording after
+        // emit either lost A's source fact or re-stamped it as replacement B.
+        this.emit('jsonl-entry', { sessionId, entry, file, observation })
       })
       session.on('jsonl-error', (error: Error) => {
         if (!ownsEntry()) return
         this.markActivity(sessionId)
+        if (kind === 'codex') {
+          const message = String(error?.message ?? error)
+          const capabilityRefusal = message.includes('Codex prompt evidence disabled:')
+          this.recordCodexTranscriptObservation('transcript.attachment', sessionId, {
+            decision: 'error',
+            reason: capabilityRefusal ? 'prompt-evidence-disabled' : 'jsonl-error',
+            code: capabilityRefusal && message.includes('unsupported-cli')
+              ? 'unsupported-cli'
+              : 'unknown',
+            attached: false,
+            tailing: false,
+          }, undefined, agentEntry.lifecycle.runId)
+        }
         this.emit('jsonl-error', { sessionId, error })
       })
       session.on('transcript-diagnostic', (diagnostic: unknown) => {
         if (!ownsEntry()) return
+        if (kind === 'codex' && this.observeCodexTranscriptDiagnostic(
+          sessionId,
+          diagnostic,
+          agentEntry.lifecycle.runId,
+        )) {
+          // Provider-request rows are main-only Stage 0 evidence. Sending this
+          // wrapper through session:transcript-diagnostic would not affect the
+          // semantic reducer today, but it would create a second product-facing
+          // route future code could accidentally treat as policy.
+          return
+        }
         this.emit('transcript-diagnostic', { sessionId, diagnostic })
       })
       session.on('process-state', (state: AgentProcessState) => {
@@ -2547,6 +2741,9 @@ export class SessionManager extends EventEmitter {
       session.on('semantic-event', (event: unknown) => {
         if (!ownsEntry()) return
         this.markActivity(sessionId)
+        if (kind === 'codex') {
+          this.observeCodexSemanticEvent(sessionId, event, agentEntry.lifecycle.runId)
+        }
         this.emit('semantic-event', { sessionId, event })
       })
       session.on('exit', ({ exitCode, signal }: { exitCode: number; signal?: number }) => {
@@ -2568,6 +2765,9 @@ export class SessionManager extends EventEmitter {
       })
 
       this.sessions.set(sessionId, agentEntry)
+      if (kind === 'codex') {
+        this.rememberCodexSessionRun(sessionId, agentEntry.lifecycle.runId, 'live')
+      }
       // Clear any gate state left by a PREVIOUS backend under this same local
       // id. Stable ids are deliberately reused after a failed start, and
       // cleanupSessionState is generation-owned — it returns early for a
@@ -2736,7 +2936,12 @@ export class SessionManager extends EventEmitter {
       {
         if (!ownsEntry()) return
         this.markActivity(sessionId)
-        this.emit('started', { sessionId, kind, projectDir: undefined })
+        this.emit('started', {
+          sessionId,
+          sessionRunId: terminalEntry.lifecycle.runId,
+          kind,
+          projectDir: undefined,
+        })
       },
     )
     session.on('data', data => {
@@ -3185,6 +3390,336 @@ export class SessionManager extends EventEmitter {
     return this.sessions.get(sessionId)?.kind ?? null
   }
 
+  /**
+   * Return the identity of the concrete backend currently owning a pane.
+   *
+   * This is intentionally read-only diagnostic metadata. Callers may attach
+   * it to observations, but no lifecycle or transcript decision may branch on
+   * it; the registry generation/entry identity remain the runtime authorities.
+   */
+  getSessionRunId(sessionId: string): string | null {
+    return this.sessions.get(sessionId)?.lifecycle.runId ?? null
+  }
+
+  /**
+   * Prove whether main has owned one exact Codex backend lifetime.
+   *
+   * WHY callers provide both ids: sessionId alone is durable renderer routing
+   * identity and can name many successive processes. Returning only "this pane
+   * used to be Codex" would recreate the same false join this accessor exists
+   * to prevent. Live state is re-proven against the registry on every call;
+   * only retired pairs may rely on the bounded recent-run ledger.
+   */
+  getCodexSessionRunState(
+    sessionId: string,
+    sessionRunId: string,
+  ): CodexSessionRunState | null {
+    const liveEntry = this.sessions.get(sessionId)
+    if (
+      liveEntry?.kind === 'codex' &&
+      liveEntry.lifecycle.runId === sessionRunId
+    ) return 'live'
+
+    const known = this.recentCodexSessionRuns.get(
+      this.codexSessionRunKey(sessionId, sessionRunId),
+    )
+    return known?.state === 'retired' ? 'retired' : null
+  }
+
+  /**
+   * Record a content-safe fact about Codex transcript continuity.
+   *
+   * This is deliberately a write-only fan-out into the existing lifecycle
+   * journal and an already-active session recorder. Nothing can query it, and
+   * the method refuses non-Codex sessions, so instrumentation cannot become a
+   * provider-neutral policy surface by accident.
+   */
+  recordCodexTranscriptObservation(
+    name: CodexTranscriptObservationEventName,
+    sessionId: string,
+    data?: SessionLifecycleData,
+    correlationIds?: SessionLifecycleCorrelationIds,
+    expectedSessionRunId?: string,
+  ): void {
+    if (!isCodexTranscriptObservationEventName(name)) return
+    // Product recovery may preserve legacy/malformed stable pane ids. Stage 0
+    // is a shareable forensic stream, so fail only this observation fan-out
+    // closed rather than serializing path/prompt-shaped scope text or changing
+    // whether the underlying Codex session is allowed to run.
+    if (!isCodexTranscriptObservationSessionId(sessionId)) return
+    const liveEntry = this.sessions.get(sessionId)
+    if (liveEntry?.kind !== 'codex') return
+    const sessionRunId = liveEntry.lifecycle.runId
+    // Provider callbacks capture the source run before crossing any external
+    // EventEmitter boundary. Refuse the row if stable pane ownership changed;
+    // a diagnostic gap is preferable to a false A-source/B-run join.
+    if (expectedSessionRunId && sessionRunId !== expectedSessionRunId) return
+    const safeData = pickCodexTranscriptObservationData(name, data)
+    const safeCorrelationIds = pickCodexTranscriptObservationCorrelationIds(
+      name,
+      correlationIds,
+      safeData,
+    )
+    const ids = {
+      ...safeCorrelationIds,
+      ...(sessionRunId ? { sessionRunId } : {}),
+      sessionId,
+    }
+    this.lifecycle.record(name, ids, safeData)
+    try {
+      if (!sessionRunId) return
+      this.recordCodexObservation(sessionId, sessionRunId, {
+        schemaVersion: 1,
+        name,
+        ids,
+        ...(safeData ? { data: safeData } : {}),
+      })
+    } catch {
+      // The recorder is optional evidence. A closed/capped recorder must never
+      // perturb provider event delivery or the main registry.
+    }
+  }
+
+  private observeCodexSemanticEvent(
+    sessionId: string,
+    value: unknown,
+    expectedSessionRunId: string,
+  ): void {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return
+    const event = value as Record<string, unknown>
+    const stringId = (key: string): string | undefined =>
+      typeof event[key] === 'string' ? event[key] as string : undefined
+    const type = stringId('type')
+
+    if (type === 'turn_started') {
+      this.recordCodexTranscriptObservation('semantic.turn', sessionId, {
+        phase: 'started',
+        source: codexObservationEnumOrUnknown('semantic.turn', 'source', event.source),
+      }, {
+        ...(stringId('requestId') ? { proxyRequestId: stringId('requestId') } : {}),
+        ...(stringId('flowId') ? { proxyFlowId: stringId('flowId') } : {}),
+        ...(stringId('turnId') ? { semanticTurnId: stringId('turnId') } : {}),
+      }, expectedSessionRunId)
+    }
+  }
+
+  private observeCodexProviderRequest(
+    sessionId: string,
+    value: unknown,
+    expectedSessionRunId: string,
+  ): void {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return
+    const event = value as Record<string, unknown>
+    if (event.type !== 'provider_request') return
+    const stringId = (key: string): string | undefined =>
+      typeof event[key] === 'string' ? event[key] as string : undefined
+    this.recordCodexTranscriptObservation('provider.request', sessionId, {
+      phase: codexObservationEnumOrUnknown('provider.request', 'phase', event.phase),
+      source: codexObservationEnumOrUnknown('provider.request', 'source', event.source),
+      cause: codexObservationEnumOrUnknown('provider.request', 'cause', event.cause),
+      ...(typeof event.selected === 'boolean' ? { selected: event.selected } : {}),
+      ...(typeof event.subagentHeaderPresent === 'boolean'
+        ? { subagentHeaderPresent: event.subagentHeaderPresent }
+        : {}),
+    }, {
+      ...(stringId('requestId') ? { proxyRequestId: stringId('requestId') } : {}),
+      ...(stringId('flowId') ? { proxyFlowId: stringId('flowId') } : {}),
+      ...(stringId('providerSessionFingerprint')
+        ? { providerWindowFingerprint: stringId('providerSessionFingerprint') }
+        : {}),
+      ...(stringId('providerWindowGenerationId')
+        ? { providerWindowGenerationId: stringId('providerWindowGenerationId') }
+        : {}),
+    }, expectedSessionRunId)
+  }
+
+  private observeCodexTranscriptDiagnostic(
+    sessionId: string,
+    value: unknown,
+    expectedSessionRunId: string,
+  ): boolean {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+    const diagnostic = value as Record<string, unknown>
+    if (diagnostic.type === 'provider-request-observation') {
+      this.observeCodexProviderRequest(
+        sessionId,
+        diagnostic.observation,
+        expectedSessionRunId,
+      )
+      return true
+    }
+    if (diagnostic.type !== 'fresh-rollout-ownership-decision') return false
+    const evidence = diagnostic.evidence && typeof diagnostic.evidence === 'object'
+      ? diagnostic.evidence as Record<string, unknown>
+      : {}
+    const candidateFingerprint = typeof evidence.leasedCandidateFingerprint === 'string'
+      ? evidence.leasedCandidateFingerprint
+      : undefined
+    const fingerprintArray = (key: string): string[] => Array.isArray(evidence[key])
+      ? evidence[key].filter((item): item is string => typeof item === 'string')
+      : []
+    const matchingFingerprints = new Set(fingerprintArray('matchingCandidateFingerprints'))
+    const providerSessionByCandidate = new Map<string, string>()
+    if (Array.isArray(evidence.candidateProviderSessionFingerprints)) {
+      for (const value of evidence.candidateProviderSessionFingerprints) {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) continue
+        const relation = value as Record<string, unknown>
+        if (typeof relation.candidateFingerprint !== 'string' ||
+          typeof relation.providerSessionMetaFingerprint !== 'string') continue
+        const safeIds = pickLifecycleCorrelationIds({
+          candidateFingerprint: relation.candidateFingerprint,
+          providerSessionMetaFingerprint: relation.providerSessionMetaFingerprint,
+        })
+        if (safeIds?.candidateFingerprint && safeIds.providerSessionMetaFingerprint) {
+          providerSessionByCandidate.set(
+            safeIds.candidateFingerprint,
+            safeIds.providerSessionMetaFingerprint,
+          )
+        }
+      }
+    }
+    const observedFingerprints = [...new Set([
+      ...matchingFingerprints,
+      ...fingerprintArray('candidateFingerprints'),
+    ])].filter(fingerprint =>
+      pickLifecycleCorrelationIds({ candidateFingerprint: fingerprint }) !== undefined,
+    )
+
+    // Record each graph edge transition once per concrete backend run.
+    // Ownership recomputes the same decision whenever any sibling changes;
+    // journalling all 32 candidates on every recompute multiplied one logical
+    // edge into thousands of pending rows with a large same-cwd grid. The
+    // matched bit is part of the key because false -> true is new evidence.
+    // A per-run ceiling keeps 100 panes below the shared 2k pending budget.
+    const prioritizedFingerprints = [
+      ...observedFingerprints.filter(value => matchingFingerprints.has(value)),
+      ...observedFingerprints.filter(value => !matchingFingerprints.has(value)),
+    ]
+    const sessionRunId = expectedSessionRunId
+    const previousEdges = this.codexCandidateObservationEdges.get(sessionId)
+    const edges = sessionRunId && previousEdges?.sessionRunId === sessionRunId
+      ? previousEdges
+      : sessionRunId
+        ? {
+            sessionRunId,
+            seenKeys: new Set<string>(),
+            emittedKeys: new Set<string>(),
+            emittedCount: 0,
+            trackingCapped: false,
+          }
+        : null
+    if (edges && edges !== previousEdges) {
+      this.codexCandidateObservationEdges.set(sessionId, edges)
+    }
+    let suppressedCandidateCount = 0
+    for (const fingerprint of prioritizedFingerprints) {
+      if (!edges) continue
+      const matched = matchingFingerprints.has(fingerprint)
+      const providerSessionMetaFingerprint = providerSessionByCandidate.get(fingerprint)
+      const edgeKey = [
+        fingerprint,
+        matched ? 'matched' : 'unmatched',
+        providerSessionMetaFingerprint ?? 'no-session-meta',
+      ].join(':')
+      if (!edges.seenKeys.has(edgeKey)) {
+        // The ledger cap is itself evidence loss. Once crossed, we keep
+        // reporting that fact and stop pretending later unknown keys are new.
+        // `emittedKeys` remains separately exact because it is bounded by 8.
+        if (edges.seenKeys.size < MAX_CODEX_CANDIDATE_EDGE_KEYS_PER_RUN) {
+          edges.seenKeys.add(edgeKey)
+        } else {
+          edges.trackingCapped = true
+        }
+        if (edges.emittedCount < MAX_CODEX_CANDIDATE_OBSERVATIONS_PER_RUN) {
+          edges.emittedCount += 1
+          edges.emittedKeys.add(edgeKey)
+          this.recordCodexTranscriptObservation('transcript.candidate', sessionId, {
+            phase: 'pre-lease',
+            matched,
+          }, {
+            candidateFingerprint: fingerprint,
+            ...(providerSessionMetaFingerprint
+              ? { providerSessionMetaFingerprint }
+              : {}),
+          }, expectedSessionRunId)
+        }
+      }
+      // `suppressed` describes the current decision's missing graph edges,
+      // not how many callbacks happened to arrive. Recomputing it against the
+      // exact bounded emitted set makes byte-identical 300-candidate decisions
+      // dedupe even after the larger seen ledger reaches its memory ceiling.
+      if (!edges.emittedKeys.has(edgeKey)) suppressedCandidateCount += 1
+    }
+
+    const attachmentData = pickCodexTranscriptObservationData('transcript.attachment', {
+      decision: typeof diagnostic.decision === 'string' ? diagnostic.decision : 'unknown',
+      reason: typeof diagnostic.reason === 'string' ? diagnostic.reason : 'unknown',
+      attached: diagnostic.tailStarted === true,
+      tailing: diagnostic.tailStarted === true,
+      candidateCount: typeof evidence.candidateCount === 'number'
+        ? evidence.candidateCount
+        : 0,
+      matchingCandidateCount: typeof evidence.matchingCandidateCount === 'number'
+        ? evidence.matchingCandidateCount
+        : 0,
+      // Dedupe means the edge is already present in this run's observation
+      // stream, not suppressed. Count only previously-unseen current edges the
+      // per-run ceiling prevented us from writing on this decision.
+      suppressed: suppressedCandidateCount,
+      ...(edges?.trackingCapped ? { trackingCapped: true } : {}),
+    })
+    const attachmentIds = pickCodexTranscriptObservationCorrelationIds(
+      'transcript.attachment',
+      candidateFingerprint ? {
+      candidateFingerprint,
+      ...(providerSessionByCandidate.get(candidateFingerprint)
+        ? { providerSessionMetaFingerprint: providerSessionByCandidate.get(candidateFingerprint) }
+        : {}),
+      } : undefined,
+      attachmentData,
+    )
+    const previousAttachmentState = this.codexAttachmentObservationState.get(sessionId)
+    const attachmentState = sessionRunId &&
+      previousAttachmentState?.sessionRunId === sessionRunId
+      ? previousAttachmentState
+      : sessionRunId
+        ? {
+            sessionRunId,
+            lastTransitionKey: null,
+            emittedTransitions: 0,
+            capReported: false,
+          }
+        : null
+    if (attachmentState && attachmentState !== previousAttachmentState) {
+      this.codexAttachmentObservationState.set(sessionId, attachmentState)
+    }
+    if (attachmentState) {
+      const transitionKey = JSON.stringify([attachmentData ?? null, attachmentIds ?? null])
+      if (attachmentState.lastTransitionKey === transitionKey) return false
+      attachmentState.lastTransitionKey = transitionKey
+      if (attachmentState.emittedTransitions < MAX_CODEX_ATTACHMENT_TRANSITIONS_PER_RUN) {
+        attachmentState.emittedTransitions += 1
+        this.recordCodexTranscriptObservation(
+          'transcript.attachment',
+          sessionId,
+          attachmentData,
+          attachmentIds,
+          expectedSessionRunId,
+        )
+      } else if (!attachmentState.capReported) {
+        // One final tombstone makes suppression explicit. Continuing to write a
+        // row for every coordinator recompute would let N fresh panes evict the
+        // sparse submit chain from AppRunJournal's bounded pending buffer.
+        attachmentState.capReported = true
+        this.recordCodexTranscriptObservation('transcript.attachment', sessionId, {
+          ...(attachmentData ?? {}),
+          trackingCapped: true,
+        }, attachmentIds, expectedSessionRunId)
+      }
+    }
+    return false
+  }
+
   // Record that main owned this session id, for input_write_failed disambiguation.
   private rememberSessionId(sessionId: string): void {
     this.everKnownSessionIds.add(sessionId)
@@ -3195,6 +3730,32 @@ export class SessionManager extends EventEmitter {
       if (oldest !== undefined) {
         this.everKnownSessionIds.delete(oldest)
       }
+    }
+  }
+
+  private codexSessionRunKey(sessionId: string, sessionRunId: string): string {
+    // Both components are UUIDs at the production boundary, but length-prefix
+    // the pane id instead of depending on a delimiter invariant. This helper is
+    // also exercised by intentionally non-UUID unit session ids and an exact
+    // key must remain collision-free there too.
+    return `${sessionId.length}:${sessionId}${sessionRunId}`
+  }
+
+  private rememberCodexSessionRun(
+    sessionId: string,
+    sessionRunId: string,
+    state: CodexSessionRunState,
+  ): void {
+    const key = this.codexSessionRunKey(sessionId, sessionRunId)
+    // Map.set does not refresh insertion order for an existing key. Delete
+    // first so a just-retired run receives a full teardown-race retention
+    // window instead of being evicted according to its much older spawn time.
+    this.recentCodexSessionRuns.delete(key)
+    this.recentCodexSessionRuns.set(key, { sessionId, sessionRunId, state })
+    while (this.recentCodexSessionRuns.size > RECENT_CODEX_SESSION_RUN_LIMIT) {
+      const oldest = this.recentCodexSessionRuns.keys().next().value
+      if (oldest === undefined) break
+      this.recentCodexSessionRuns.delete(oldest)
     }
   }
 
@@ -3868,6 +4429,12 @@ export class SessionManager extends EventEmitter {
     if (!kind || !cwd) return null
     return {
       sessionId,
+      // WHY recovery must expose the registry generation instead of asking a
+      // late renderer to infer it: adoption intentionally emits no duplicate
+      // `started` edge, and sessionId survives process replacement. The run id
+      // therefore belongs on this level-triggered backend fact. A spawning
+      // claim has no registered process yet, so absence remains honest there.
+      ...(entry ? { sessionRunId: entry.lifecycle.runId } : {}),
       kind,
       cwd,
       lifecycle: entry ? 'live' : 'spawning',

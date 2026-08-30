@@ -67,6 +67,10 @@ export class AppRunJournal {
   private readonly eventLoopDelay = monitorEventLoopDelay({ resolution: 20 })
   private pending: AppRunJournalEvent[] = []
   private droppedPendingEvents = 0
+  // Monotonic source-loss counter for debug-bundle provenance. The per-flush
+  // counter above resets after writing its inline warning; resetting this one
+  // would let a later manual export falsely describe the source as complete.
+  private totalDroppedPendingEvents = 0
   private nextEventSeq = 1
   private nextIncidentSeq = 1
   private heartbeatSeq = 1
@@ -207,6 +211,7 @@ export class AppRunJournal {
       // should cost us old breadcrumbs, not unbounded heap growth in main.
       this.pending.shift()
       this.droppedPendingEvents += 1
+      this.totalDroppedPendingEvents += 1
     }
     this.pending.push(event)
   }
@@ -298,38 +303,84 @@ export class AppRunJournal {
     return true
   }
 
-  async flush(): Promise<void> {
-    if (!this.started) return
+  async flush(): Promise<boolean> {
+    if (!this.started) return false
+
+    // Take the batch INSIDE the serialized operation. A timer flush may already
+    // have removed the newest observations from `pending` while its disk append
+    // is still in flight. If a manual debug-bundle flush merely saw an empty
+    // pending array and returned, the bundle could race ahead of that append and
+    // falsely claim a complete source. Queueing the drain itself means the
+    // manual caller joins the prior append and, if it failed and re-queued its
+    // batch, immediately retries that batch before reporting success.
+    const attempt = this.writeQueue.then(() => this.flushPendingBatch())
+    // The shared queue is deliberately kept resolved so one forensic write
+    // failure never poisons every future retry. The caller still receives the
+    // exact attempt result through `attempt`; swallowing only happens on the
+    // internal sequencing tail, not at the API boundary.
+    this.writeQueue = attempt.then(() => undefined, () => undefined)
+    return attempt
+  }
+
+  private async flushPendingBatch(): Promise<boolean> {
     const batch = this.takePendingBatch()
-    if (batch.length === 0) return
+    if (batch.length === 0) return true
     const lines = batch.map(safeStringify).join('\n') + '\n'
     const bytes = Buffer.byteLength(lines, 'utf8')
-    if (!this.reserveJournalBytes(bytes)) return
-    this.writeQueue = this.writeQueue
-      .catch(() => {})
-      .then(async () => {
-        await mkdir(this.runDir, { recursive: true })
-        await writeFile(this.eventsPath, lines, { encoding: 'utf8', flag: 'a' })
-      })
-      .catch(err => {
-        // The journal is forensics, not product state. A disk-full or
-        // permission failure must not crash the Electron main process while we
-        // are recording why the app is already unhealthy. But silently dropping
-        // this batch would discard the NEWEST events during exactly the
-        // disk-trouble the journal exists to capture, so re-queue them at the
-        // front and let the next flush retry. Un-reserve the bytes that never
-        // reached disk so the counter tracks real on-disk size (the re-queued
-        // batch is re-counted on the next flush). Re-queueing is bounded:
-        // record()'s drop-oldest rule (and the trim below) keep `pending` at MAX.
-        this.journalBytesWritten = Math.max(0, this.journalBytesWritten - bytes)
-        console.warn('[incident-journal] event append failed; re-queueing batch:', err)
-        this.pending.unshift(...batch)
-        while (this.pending.length > MAX_PENDING_EVENTS) {
-          this.pending.shift()
-          this.droppedPendingEvents += 1
-        }
-      })
-    await this.writeQueue
+    // Reaching the hard ceiling is represented by the monotonic `capped`
+    // completeness bit, not as an I/O failure. Keeping those dimensions
+    // separate lets a bundle say whether evidence is absent because retention
+    // bounded it or because the forced append itself failed.
+    if (!this.reserveJournalBytes(bytes)) return true
+    try {
+      await mkdir(this.runDir, { recursive: true })
+      await writeFile(this.eventsPath, lines, { encoding: 'utf8', flag: 'a' })
+      return true
+    } catch (err) {
+      // The journal is forensics, not product state. A disk-full or
+      // permission failure must not crash the Electron main process while we
+      // are recording why the app is already unhealthy. But silently dropping
+      // this batch would discard the NEWEST events during exactly the
+      // disk-trouble the journal exists to capture, so re-queue them at the
+      // front and let the next flush retry. Un-reserve the bytes that never
+      // reached disk so the counter tracks real on-disk size (the re-queued
+      // batch is re-counted on the next flush). Re-queueing is bounded:
+      // record()'s drop-oldest rule (and the trim below) keep `pending` at MAX.
+      this.journalBytesWritten = Math.max(0, this.journalBytesWritten - bytes)
+      console.warn('[incident-journal] event append failed; re-queueing batch:', err)
+      this.requeueFailedBatch(batch)
+      return false
+    }
+  }
+
+  private requeueFailedBatch(batch: AppRunJournalEvent[]): void {
+    this.pending.unshift(...batch)
+    while (this.pending.length > MAX_PENDING_EVENTS) {
+      this.pending.shift()
+      this.droppedPendingEvents += 1
+      this.totalDroppedPendingEvents += 1
+    }
+  }
+
+  /**
+   * Snapshot whether the durable event source is complete for this app run.
+   *
+   * WHY this is level-triggered state instead of another journal event: once
+   * the 50 MiB ceiling is reached the journal cannot append a tombstone to the
+   * file whose ceiling rejected it. Manual bundle export already holds this
+   * live journal instance, so a read-only snapshot is the narrowest truthful
+   * bridge. Nothing in runtime policy consumes it.
+   */
+  getCompletenessSnapshot(): {
+    capped: boolean
+    bytesWritten: number
+    droppedEvents: number
+  } {
+    return {
+      capped: this.journalCapped,
+      bytesWritten: this.journalBytesWritten,
+      droppedEvents: this.totalDroppedPendingEvents,
+    }
   }
 
   /**
@@ -347,12 +398,21 @@ export class AppRunJournal {
     const batch = this.takePendingBatch()
     if (batch.length === 0) return
     const lines = batch.map(safeStringify).join('\n') + '\n'
-    if (!this.reserveJournalBytes(Buffer.byteLength(lines, 'utf8'))) return
+    const bytes = Buffer.byteLength(lines, 'utf8')
+    if (!this.reserveJournalBytes(bytes)) return
     try {
       mkdirSync(this.runDir, { recursive: true })
       appendFileSync(this.eventsPath, lines, 'utf8')
     } catch (err) {
-      console.warn('[incident-journal] synchronous flush failed:', err)
+      // recordIncident() uses this path while the app is still running. Losing
+      // its pre-incident batch here would let a later manual bundle see a
+      // healthy journal and unknowingly omit the exact lead-up it asked for.
+      // Match the async path: undo the reservation and preserve a bounded retry
+      // batch. On final quit there may be no retry, but keeping it in memory is
+      // still more truthful than declaring those bytes durable.
+      this.journalBytesWritten = Math.max(0, this.journalBytesWritten - bytes)
+      this.requeueFailedBatch(batch)
+      console.warn('[incident-journal] synchronous flush failed; re-queueing batch:', err)
     }
   }
 

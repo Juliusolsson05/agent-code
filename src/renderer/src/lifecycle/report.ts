@@ -1,5 +1,10 @@
 import {
+  isCodexTranscriptObservationEventName,
+  pickCodexTranscriptObservationCorrelationIds,
+  pickCodexTranscriptObservationData,
+  pickLifecycleCorrelationIds,
   pickLifecycleData,
+  type SessionLifecycleCorrelationIds,
   type SessionLifecycleData,
   type SessionLifecycleEventName,
   type WakeCaller,
@@ -39,6 +44,7 @@ type LifecycleBridge = {
     name: SessionLifecycleEventName
     sessionId?: string
     data?: SessionLifecycleData
+    correlationIds?: SessionLifecycleCorrelationIds
   }) => void
 }
 
@@ -47,26 +53,46 @@ function bridge(): LifecycleBridge | null {
   return (window as { api?: LifecycleBridge }).api ?? null
 }
 
+const LEGACY_CROSS_PROVIDER_SUBMIT_EVENTS: ReadonlySet<string> = new Set([
+  'submit.begin',
+  'submit.result',
+  'submit.unwound',
+])
+
 /**
  * Record one renderer-observed lifecycle fact.
  *
  * Payload is allowlist-filtered here as well as in main. Filtering twice is
  * deliberate: main cannot trust a renderer payload, and filtering renderer-side
  * means a mistaken key fails a renderer unit test instead of silently producing
- * an empty field in a file on someone's disk weeks later.
+ * an empty field in a file on someone's disk weeks later. Correlation ids are
+ * filtered by a separate closed contract because ids are joins, not labels: a
+ * malformed/truncated join can make two unrelated prompt lifecycles look like
+ * one, which is more damaging to incident analysis than omitting that join.
  */
 export function reportLifecycle(
   name: SessionLifecycleEventName,
   sessionId?: string,
   data?: SessionLifecycleData,
+  correlationIds?: SessionLifecycleCorrelationIds,
 ): void {
   try {
     const api = bridge()
     if (!api?.reportSessionLifecycle) return
+    const reportedProvider = data?.provider
+    const strictCodexObservation = isCodexTranscriptObservationEventName(name) &&
+      (!LEGACY_CROSS_PROVIDER_SUBMIT_EVENTS.has(name) || reportedProvider === 'codex')
+    const safeData = strictCodexObservation
+      ? pickCodexTranscriptObservationData(name, data)
+      : pickLifecycleData(data)
+    const safeCorrelationIds = strictCodexObservation
+      ? pickCodexTranscriptObservationCorrelationIds(name, correlationIds, safeData)
+      : pickLifecycleCorrelationIds(correlationIds)
     api.reportSessionLifecycle({
       name,
       ...(sessionId === undefined ? {} : { sessionId }),
-      ...(data === undefined ? {} : { data: pickLifecycleData(data) }),
+      ...(safeData === undefined ? {} : { data: safeData }),
+      ...(safeCorrelationIds === undefined ? {} : { correlationIds: safeCorrelationIds }),
     })
   } catch {
     // Swallowed without logging. A console.warn here would fire once per emit

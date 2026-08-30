@@ -228,12 +228,23 @@ describe('replay harness — recorded-session round trip', () => {
     expect(replay.ticks.at(-1)?.rows.map(r => r.candidate.id)).toEqual(['entry:u1', 'entry:a1'])
   })
 
-  it('skips synthetic __note / __truncated lines for pipeline input', () => {
+  it('skips synthetic diagnostics for pipeline input', () => {
     vi.useFakeTimers()
     const withNotes: RecordedLine[] = [
       ...buildRecording().slice(0, 2),
       { t: 12, wall: T + 12, ch: '__note', note: { id: 'n1', status: 'reserved' } },
       { t: 15, wall: T + 15, ch: '__note', note: { id: 'n1', status: 'filled', text: 'reads vanished here' } },
+      {
+        t: 16,
+        wall: T + 16,
+        ch: '__codex_transcript_observation',
+        observation: {
+          schemaVersion: 1,
+          name: 'submit.surface',
+          ids: { sessionId: 's-replay', submissionId: 'sub-1' },
+          data: { surface: 'queue-visible' },
+        },
+      },
       ...buildRecording().slice(2),
       { t: 90, wall: T + 90, ch: '__truncated', reason: 'size-cap', bytes: 1234 },
     ]
@@ -244,6 +255,7 @@ describe('replay harness — recorded-session round trip', () => {
     // reads them) but produce NO pipeline tick — the tick count equals the
     // number of real feed events.
     expect(recording.lines.some(l => l.ch === '__note')).toBe(true)
+    expect(recording.lines.some(l => l.ch === '__codex_transcript_observation')).toBe(true)
     expect(replay.ticks.every(t => t.line.ch.startsWith('session:'))).toBe(true)
     expect(replay.ticks).toHaveLength(buildRecording().length)
   })

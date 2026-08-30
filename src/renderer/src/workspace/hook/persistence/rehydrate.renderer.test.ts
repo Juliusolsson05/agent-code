@@ -8,6 +8,7 @@ import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import type {
   SessionRecoverOptions,
+  SessionRecoverResult,
   SessionRecoveryCancellationOptions,
 } from '@shared/types/session'
 
@@ -144,11 +145,13 @@ describe('rehydrateWorkspace backend reconciliation', () => {
   it('adopts under the persisted local id without calling the fresh-spawn API', async () => {
     const persisted = makePersisted()
     const harness = makeHarness()
+    const adoptedSessionRunId = '11111111-1111-4111-8111-111111111111'
     const recoverSession = vi.fn(async () => ({
       ok: true as const,
       disposition: 'adopted' as const,
       snapshot: {
         sessionId: 'stable-session',
+        sessionRunId: adoptedSessionRunId,
         kind: 'claude' as const,
         cwd: '/tmp/project',
         lifecycle: 'live' as const,
@@ -192,10 +195,61 @@ describe('rehydrateWorkspace backend reconciliation', () => {
     ])
     expect(harness.runtimes()['stable-session']).toMatchObject({
       draftInput: 'unfinished prompt',
+      // WHY this is the reload regression: adoption emits no new started edge.
+      // The backend snapshot must be sufficient to restore exact-run
+      // attribution before any delayed renderer observation is reported.
+      sessionRunId: adoptedSessionRunId,
       processStatus: 'started',
       processError: null,
       inputReady: true,
     })
+  })
+
+  it('does not let a delayed recovery snapshot overwrite a replacement run observed meanwhile', async () => {
+    const persisted = makePersisted()
+    const harness = makeHarness()
+    const recovery = deferred<SessionRecoverResult>()
+    const recoverSession = vi.fn(() => recovery.promise)
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: { recoverSession, defaultCwd: vi.fn() },
+    })
+
+    const restoring = rehydrateWorkspace(
+      persisted,
+      harness.refs,
+      harness.setState,
+      harness.setRuntimes,
+      harness.setTileTabs,
+      vi.fn(),
+    )
+    await vi.waitFor(() => expect(recoverSession).toHaveBeenCalledTimes(1))
+
+    const successorRunId = '22222222-2222-4222-8222-222222222222'
+    harness.setRuntimes(prev => ({
+      ...prev,
+      'stable-session': {
+        ...(prev['stable-session'] ?? emptyRuntime()),
+        // Models the separate session:started channel winning the race while
+        // the recovery invoke is still unresolved.
+        sessionRunId: successorRunId,
+      },
+    }))
+    recovery.resolve({
+      ok: true,
+      disposition: 'adopted',
+      snapshot: {
+        sessionId: 'stable-session',
+        sessionRunId: '33333333-3333-4333-8333-333333333333',
+        kind: 'claude',
+        cwd: '/tmp/project',
+        lifecycle: 'live',
+        input: { ready: true, revision: 1, reason: 'ready' },
+      },
+    })
+
+    await restoring
+    expect(harness.runtimes()['stable-session']?.sessionRunId).toBe(successorRunId)
   })
 
   it('retains the pane, metadata, and draft when backend recovery fails', async () => {

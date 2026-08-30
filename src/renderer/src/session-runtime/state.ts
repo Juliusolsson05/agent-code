@@ -36,6 +36,11 @@ import type { SessionRecoverFailureCode,
 } from '@shared/types/session'
 import type { BuiltInMcpDomain } from '@mcp/shared/types'
 import type { SubAgentState } from '@preload/api/types'
+import type {
+  CodexTranscriptObservationEventName,
+  SessionLifecycleCorrelationIds,
+  SessionLifecycleData,
+} from '@shared/lifecycle/events'
 export type { SubAgentState, SubAgentToolCall } from '@preload/api/types'
 
 export type PickerItem = {
@@ -332,6 +337,18 @@ export type ProviderSwitchRuntimeState = {
   message: string
 }
 
+export type PendingCodexTranscriptObservation = {
+  schemaVersion: 1
+  name: CodexTranscriptObservationEventName
+  correlationIds?: SessionLifecycleCorrelationIds
+  data?: SessionLifecycleData
+}
+
+export type CodexTranscriptObservationOutboxEntry = {
+  id: number
+  observation: PendingCodexTranscriptObservation
+}
+
 export type SessionRuntime = {
   screen: string
   screenMarkdown: string
@@ -369,6 +386,19 @@ export type SessionRuntime = {
   awaitingAssistant: boolean
   queuedMessages: QueuedMessage[]
   exited: number | null
+  /**
+   * The concrete main-owned backend lifetime last announced by
+   * `session:started` for this pane.
+   *
+   * WHY this survives exit: React effects and durable-debug flushing can run
+   * after the process exit event. Clearing the id at exit would make those
+   * delayed observations unattributed—or, worse, tempt main to stamp them with
+   * a replacement backend that has already reused the stable pane id. A later
+   * `session:started` is the only fact authorized to replace this value.
+   * Runtime is intentionally not persisted; a renderer reload must relearn the
+   * active lifetime from main rather than resurrecting a stale process claim.
+   */
+  sessionRunId: string | null
   projectDir: string | null
   workContext: AgentWorkContext | null
   workActivity: WorktreeActivityState | null
@@ -594,6 +624,17 @@ export type SessionRuntime = {
   feedDebugLog: FeedDebugEntry[]
   feedDebugNextId: number
   feedDebugEpochMs: number | null
+  /** Commit-safe, observation-only bridge from renderer state to lifecycle IPC.
+   *
+   * WHY this is not another `feedDebugLog` entry: transcript instrumentation
+   * can be much noisier than the 500 product-debug rows operators inspect.
+   * Sharing that ring made enabling Stage 0 evict the pre-existing evidence it
+   * was supposed to complement. This bounded sidecar has no product readers
+   * and exists only to let the workspace layout effect mirror committed rows
+   * to main's durable lifecycle journal. */
+  codexTranscriptObservationOutbox: CodexTranscriptObservationOutboxEntry[]
+  codexTranscriptObservationNextId: number
+  codexTranscriptObservationEpochMs: number | null
   /** Wall-clock ms (epoch) of the newest JSONL entry timestamp we
    *  have observed for this session.
    *
@@ -726,6 +767,7 @@ export function emptyRuntime(): SessionRuntime {
     awaitingAssistant: false,
     queuedMessages: [],
     exited: null,
+    sessionRunId: null,
     projectDir: null,
     workContext: null,
     workActivity: null,
@@ -776,6 +818,9 @@ export function emptyRuntime(): SessionRuntime {
     feedDebugLog: [],
     feedDebugNextId: 1,
     feedDebugEpochMs: null,
+    codexTranscriptObservationOutbox: [],
+    codexTranscriptObservationNextId: 1,
+    codexTranscriptObservationEpochMs: null,
     lastJsonlEntryAt: null,
     ghosts: new Map(),
     subAgents: {},

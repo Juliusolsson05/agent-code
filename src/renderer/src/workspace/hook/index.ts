@@ -29,6 +29,7 @@ import { useAutoSave } from '@renderer/workspace/hook/persistence/useAutoSave'
 import { useBootstrap } from '@renderer/workspace/hook/persistence/useBootstrap'
 import type { WorkspaceRestoreStatus } from '@renderer/workspace/hook/persistence/useBootstrap'
 import { useFeedDebugPersist } from '@renderer/workspace/hook/persistence/useFeedDebugPersist'
+import { useCodexTranscriptObservationOutbox } from '@renderer/lifecycle/codexTranscriptObservationOutbox'
 import {
   usePickerSanity,
   usePinnedSessionIdsSanity,
@@ -244,6 +245,10 @@ export function useWorkspace(
   const showPaneToast = usePaneToast(refs.paneToastTimers, updateRuntime)
 
   // ---- Actions ----
+  const isCodexSession = useCallback(
+    (sessionId: SessionId) => refs.stateRef.current.sessions[sessionId]?.kind === 'codex',
+    [refs.stateRef],
+  )
   const { setDraftInput, setDraftImages, clearDraft, undoClearDraft } = useDraftActions(
     setRuntimes,
     updateRuntime,
@@ -256,7 +261,7 @@ export function useWorkspace(
     addOptimisticCodexUserEntry,
     removeOptimisticCodexUserEntry,
   } =
-    useStreamingActions(setRuntimes)
+    useStreamingActions(setRuntimes, isCodexSession)
   const { pickerEnter, pickerMove, pickerCancel, pickerConfirm, setCodeBlockPicker } =
     usePickerActions(setRuntimes, refs, showPaneToast)
   const { toggleSpotlight, setSpotlightSession } = useSpotlightActions(
@@ -849,6 +854,7 @@ export function useWorkspace(
   // see the WHY on useIpcSubscriptions.
   const sessionFeed = useSessionFeed()
   useIpcSubscriptions(sessionFeed, refs, setState, setRuntimes, updateRuntime, appendFeedDebug)
+  useCodexTranscriptObservationOutbox(runtimes)
   useWorkspaceAdoption(refs, setState, setRuntimes, bootstrapComplete)
   useAutoSave(state, draftVersion, refs, bootstrapComplete)
   useBootstrap(

@@ -2,6 +2,7 @@ import { appendFile, mkdir, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import { SESSION_RECORDING_DIR } from '@main/storage/paths.js'
+import type { CodexTranscriptObservation } from '@shared/lifecycle/events.js'
 
 // One SessionRecorder = ONE self-contained recording folder.
 //
@@ -193,6 +194,37 @@ export class SessionRecorder {
   }
 
   /**
+   * Content-safe Codex transcript chronology captured by the Stage 0
+   * observation seam.
+   *
+   * WHY this is a synthetic sidecar instead of another SessionFeed channel:
+   * these rows explain how a submitted turn moved between local write, queue,
+   * transcript, and paint surfaces; they are evidence ABOUT the product
+   * pipeline, not input TO it. Feeding them through the replay reducers would
+   * let instrumentation manufacture state and would violate Stage 0's most
+   * important constraint: diagnostics may observe a decision but never become
+   * a decider. The lifecycle IPC boundary has already applied the closed event
+   * and metadata allowlists before this method is called.
+   *
+   * Like render-shape sightings, observations remain subject to the recording
+   * size cap and do not inflate `eventCount`, whose established meaning is
+   * "real outbound feed events". A long capture therefore stays bounded and
+   * existing recording-size heuristics keep their meaning.
+   */
+  codexTranscriptObservation(observation: CodexTranscriptObservation): void {
+    if (this.closed || this.capped) return
+    this.enqueue({
+      kind: 'event',
+      value: {
+        t: Math.round(this.nowMono() - this.startMono),
+        wall: this.nowWall(),
+        ch: '__codex_transcript_observation',
+        observation,
+      },
+    })
+  }
+
+  /**
    * Attach-Recording-Note marker (plan §7b). `__note` is a synthetic
    * channel outside the 9 real SessionFeed channels, so replay ignores it
    * for pipeline input while the triage/extraction tooling reads it. Two
@@ -369,17 +401,42 @@ export class SessionRecorder {
   }
 
   private async appendRaw(content: string): Promise<void> {
-    try {
-      await appendFile(this.eventsPath, content, { mode: 0o600 })
-    } catch {
-      if (!this.ensuredDir) {
-        await mkdir(this.dir, { recursive: true, mode: 0o700 })
-        this.ensuredDir = true
+    let lastError: unknown
+    const retryDelaysMs = [0, 10, 25, 50]
+    for (const retryDelayMs of retryDelaysMs) {
+      if (retryDelayMs > 0) {
+        // WHY retry at the recorder boundary: full-suite and packaged-app bursts
+        // can briefly exhaust the process file-descriptor table while unrelated
+        // consumers are opening files. Losing the final recording chronology is
+        // a much worse outcome than yielding tens of milliseconds during close.
+        // The short bounded schedule also covers antivirus/indexer EBUSY windows
+        // without hiding persistent disk or permission failures indefinitely.
+        await new Promise<void>(resolve => setTimeout(resolve, retryDelayMs))
+      }
+      try {
         await appendFile(this.eventsPath, content, { mode: 0o600 })
-      } else {
-        throw new Error(`session recording append failed for ${this.eventsPath}`)
+        return
+      } catch (error) {
+        lastError = error
+        const code = (error as NodeJS.ErrnoException | undefined)?.code
+        if (!this.ensuredDir || code === 'ENOENT') {
+          // `ensuredDir` records our last successful mkdir, not an eternal
+          // filesystem guarantee. External cleanup or a failed metadata write
+          // may remove the directory between that proof and this lazy append.
+          try {
+            await mkdir(this.dir, { recursive: true, mode: 0o700 })
+            this.ensuredDir = true
+          } catch (mkdirError) {
+            lastError = mkdirError
+          }
+        }
       }
     }
+    const code = (lastError as NodeJS.ErrnoException | undefined)?.code
+    throw new Error(
+      `session recording append failed${code ? ` (${code})` : ''} for ${this.eventsPath}`,
+      { cause: lastError },
+    )
   }
 
   // Snapshot this.meta SYNCHRONOUSLY, then enqueue the actual write behind any

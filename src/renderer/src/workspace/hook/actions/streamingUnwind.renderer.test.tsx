@@ -21,7 +21,7 @@ function harness(initial: Record<SessionId, SessionRuntime>) {
   const view = renderHook(() =>
     useStreamingActions(updater => {
       runtimes = typeof updater === 'function' ? updater(runtimes) : updater
-    }),
+    }, () => true),
   )
   return { view, get: (id: SessionId) => runtimes[id], all: () => runtimes }
 }

@@ -1,7 +1,7 @@
 import { useCallback } from 'react'
 
 import { emptyRuntime } from '@renderer/session-runtime/state'
-import type { SessionRuntime } from '@renderer/session-runtime/state'
+import type { QueuedMessage, SessionRuntime } from '@renderer/session-runtime/state'
 import type { SessionId } from '@renderer/workspace/types'
 import type { Entry } from '@shared/types/transcript'
 import {
@@ -17,6 +17,10 @@ import {
   buildCommittedAssistantText,
   semanticTurnHasRenderableContent,
 } from '@renderer/features/feed/ui/semantic/renderUnits'
+import {
+  appendCodexTranscriptObservation,
+  codexOptimisticRenderCandidateId,
+} from '@renderer/lifecycle/codexTranscriptObservationOutbox'
 
 import type { WorkspaceSetRuntimes } from '@renderer/workspace/hook/context'
 
@@ -107,12 +111,51 @@ export function codexPromptsMatchForOwnership(
   return queuedKey !== '' && queuedKey === committedKey
 }
 
-export function useStreamingActions(setRuntimes: WorkspaceSetRuntimes): {
+// Diagnostic correlation must not become an enumerable field on product rows:
+// entry serialization feeds byte estimates, recordings, fixtures, and provider
+// adapters. Weak ownership riders disappear with the row, survive normal React
+// reference-preserving folds, and make Stage 0 literally removable without
+// changing an Entry or QueuedMessage's wire shape.
+type SubmissionOwnership = { submissionId: string; sessionRunId: string | null }
+const optimisticSubmissionOwnership = new WeakMap<Entry, SubmissionOwnership>()
+const queuedSubmissionOwnership = new WeakMap<QueuedMessage, SubmissionOwnership>()
+
+export function optimisticEntrySubmissionId(entry: Entry): string | null {
+  return optimisticSubmissionOwnership.get(entry)?.submissionId ?? null
+}
+
+export function optimisticEntrySubmissionRunId(entry: Entry): string | null {
+  return optimisticSubmissionOwnership.get(entry)?.sessionRunId ?? null
+}
+
+export function queuedMessageSubmissionId(message: QueuedMessage): string | null {
+  return queuedSubmissionOwnership.get(message)?.submissionId ?? null
+}
+
+export function queuedMessageSubmissionRunId(message: QueuedMessage): string | null {
+  return queuedSubmissionOwnership.get(message)?.sessionRunId ?? null
+}
+
+export function useStreamingActions(
+  setRuntimes: WorkspaceSetRuntimes,
+  isCodexSession: (sessionId: SessionId) => boolean,
+): {
   setStreamingBaseline: (sessionId: SessionId, baseline: string | null) => void
   unwindStreamingBaseline: (sessionId: SessionId) => void
   clearPendingRewindUndo: (sessionId: SessionId) => void
-  addOptimisticCodexUserEntry: (sessionId: SessionId, text: string) => void
-  removeOptimisticCodexUserEntry: (sessionId: SessionId, text: string) => void
+  addOptimisticCodexUserEntry: (
+    sessionId: SessionId,
+    text: string,
+    submissionId?: string,
+    sessionRunId?: string | null,
+  ) => void
+  removeOptimisticCodexUserEntry: (
+    sessionId: SessionId,
+    text: string,
+    submissionId?: string,
+    sessionRunId?: string | null,
+    releaseCause?: 'before-write-failure' | 'write-status-uncertain',
+  ) => void
 } {
   const clearPendingRewindUndo = useCallback(
     (sessionId: SessionId) => {
@@ -258,30 +301,92 @@ export function useStreamingActions(setRuntimes: WorkspaceSetRuntimes): {
   )
 
   const addOptimisticCodexUserEntry = useCallback(
-    (sessionId: SessionId, text: string) => {
+    (
+      sessionId: SessionId,
+      text: string,
+      submissionId?: string,
+      sessionRunId?: string | null,
+    ) => {
       const trimmed = text.trim()
       if (!trimmed) return
+      // OpenCode intentionally shares the optimistic-entry mechanics, but the
+      // Stage 0 evidence contract is Codex-only. Capture provider kind at the
+      // action boundary so a later provider replacement cannot widen or erase
+      // this submit's diagnostic blast radius while React evaluates the fold.
+      const observeCodex = isCodexSession(sessionId)
       setRuntimes(prev => {
         const current = prev[sessionId] ?? emptyRuntime()
+        const submitRunId = sessionRunId === undefined ? current.sessionRunId : sessionRunId
         const last = current.entries[current.entries.length - 1]
         if (isOptimisticCodexUserEntry(last) && entryTextContent(last) === trimmed) {
-          return prev
+          // The existing product rule intentionally collapses an identical
+          // adjacent optimistic row. Stage 0 must not change that rule, but it
+          // must also not erase the fact that a second Enter happened. Record
+          // the second submission against the already-owned candidate so two
+          // identical prompts remain distinct in diagnostics.
+          if (!submissionId || !observeCodex) return prev
+          return {
+            ...prev,
+            [sessionId]: appendCodexTranscriptObservation(
+              current,
+              'submit.surface',
+              { surface: 'duplicate-suppressed', changed: false },
+              // The existing row belongs to an EARLIER submission. Reusing
+              // its candidate id beside this submission id would assert they
+              // are one owner; minting a candidate for this submit would claim
+              // a row exists when product dedupe created none. Record only the
+              // suppressed submit until Stage 4 defines an explicit many-to-one
+              // ownership relation from real fixtures.
+              { submissionId, sessionRunId: submitRunId ?? undefined },
+            ),
+          }
         }
         const queueReason = optimisticCodexQueueReason(current)
         if (queueReason !== null) {
           const alreadyQueued = current.queuedMessages.some(q =>
             codexPromptsMatchForOwnership(q.content, trimmed),
           )
-          if (alreadyQueued) return prev
+          if (alreadyQueued) {
+            if (!submissionId || !observeCodex) return prev
+            return {
+              ...prev,
+              [sessionId]: appendCodexTranscriptObservation(
+                current,
+                'submit.surface',
+                { surface: 'duplicate-suppressed', changed: false, queueReason },
+                // Same invariant as the optimistic duplicate above: the
+                // existing queue candidate belongs to another submission.
+                { submissionId, sessionRunId: submitRunId ?? undefined },
+              ),
+            }
+          }
           const queued = {
             content: trimmed,
             timestamp: String(Date.now()),
           }
+          if (submissionId && observeCodex) {
+            queuedSubmissionOwnership.set(queued, {
+              submissionId,
+              sessionRunId: submitRunId,
+            })
+          }
+          const observedCurrent = submissionId && observeCodex
+            ? appendCodexTranscriptObservation(
+                current,
+                'submit.surface',
+                { surface: 'queued-strip', changed: true, queueReason },
+                {
+                  submissionId,
+                  renderCandidateId: `queued:${submissionId}`,
+                  sessionRunId: submitRunId ?? undefined,
+                },
+              )
+            : current
           return {
             ...prev,
             [sessionId]: appendFeedDebugLog(
               {
-                ...current,
+                ...observedCurrent,
                 queuedMessages: [...current.queuedMessages, queued],
                 awaitingAssistant: true,
               },
@@ -303,6 +408,7 @@ export function useStreamingActions(setRuntimes: WorkspaceSetRuntimes): {
                 // durable transcript row.
                 data: {
                   text: trimmed,
+                  ...(submissionId && observeCodex ? { submissionId } : {}),
                   queueLengthBefore: current.queuedMessages.length,
                   queueLengthAfter: current.queuedMessages.length + 1,
                   queueReason,
@@ -329,11 +435,29 @@ export function useStreamingActions(setRuntimes: WorkspaceSetRuntimes): {
             content: [{ type: 'text', text: trimmed }],
           },
         }
+        if (submissionId && observeCodex) {
+          optimisticSubmissionOwnership.set(optimistic, {
+            submissionId,
+            sessionRunId: submitRunId,
+          })
+        }
+        const observedCurrent = submissionId && observeCodex
+          ? appendCodexTranscriptObservation(
+              current,
+              'submit.surface',
+              { surface: 'optimistic-entry', changed: true },
+              {
+                submissionId,
+                renderCandidateId: codexOptimisticRenderCandidateId(submissionId),
+                sessionRunId: submitRunId ?? undefined,
+              },
+            )
+          : current
         return {
           ...prev,
           [sessionId]: appendFeedDebugLog(
             {
-              ...current,
+              ...observedCurrent,
               entries: [...current.entries, optimistic],
             },
             {
@@ -349,6 +473,7 @@ export function useStreamingActions(setRuntimes: WorkspaceSetRuntimes): {
               // trace an exact ownership chain for the user row.
               data: {
                 text: trimmed,
+                ...(submissionId && observeCodex ? { submissionId } : {}),
                 entryCountBefore: current.entries.length,
                 entryCountAfter: current.entries.length + 1,
                 uuid: optimistic.uuid,
@@ -358,13 +483,20 @@ export function useStreamingActions(setRuntimes: WorkspaceSetRuntimes): {
         }
       })
     },
-    [setRuntimes],
+    [isCodexSession, setRuntimes],
   )
 
   const removeOptimisticCodexUserEntry = useCallback(
-    (sessionId: SessionId, text: string) => {
+    (
+      sessionId: SessionId,
+      text: string,
+      submissionId?: string,
+      sessionRunId?: string | null,
+      releaseCause: 'before-write-failure' | 'write-status-uncertain' = 'write-status-uncertain',
+    ) => {
       const trimmed = text.trim()
       if (!trimmed) return
+      const observeCodex = isCodexSession(sessionId)
       setRuntimes(prev => {
         const current = prev[sessionId]
         if (!current || current.entries.length === 0) return prev
@@ -372,11 +504,35 @@ export function useStreamingActions(setRuntimes: WorkspaceSetRuntimes): {
         if (!isOptimisticCodexUserEntry(last) || entryTextContent(last) !== trimmed) {
           return prev
         }
+        // Removing the product row and describing why are intentionally one
+        // committed transition, but the caller supplies the evidence strength.
+        // Codex can return from the body write and then throw on Enter; calling
+        // that `before-write-failure` manufactures a fact we do not possess.
+        // The neutral cause preserves the row-ownership edge without claiming
+        // whether bytes reached the provider.
+        const observedCurrent = submissionId && observeCodex
+          ? appendCodexTranscriptObservation(
+              current,
+              'submit.release',
+              { cause: releaseCause },
+              {
+                submissionId,
+                sessionRunId: (
+                  sessionRunId === undefined
+                    ? optimisticEntrySubmissionRunId(last)
+                    : sessionRunId
+                ) ?? undefined,
+                ...(optimisticEntrySubmissionId(last)
+                  ? { renderCandidateId: codexOptimisticRenderCandidateId(optimisticEntrySubmissionId(last)!) }
+                  : {}),
+              },
+            )
+          : current
         return {
           ...prev,
           [sessionId]: appendFeedDebugLog(
             {
-              ...current,
+              ...observedCurrent,
               entries: current.entries.slice(0, -1),
             },
             {
@@ -389,7 +545,7 @@ export function useStreamingActions(setRuntimes: WorkspaceSetRuntimes): {
         }
       })
     },
-    [setRuntimes],
+    [isCodexSession, setRuntimes],
   )
 
   return {

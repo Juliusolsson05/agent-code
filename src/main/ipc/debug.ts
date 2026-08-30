@@ -4,9 +4,14 @@ import { queueFeedDebugAppend } from '@main/storage/feedDebugLog.js'
 import type { FeedDebugPersistEntry } from '@main/storage/feedDebugLog.js'
 import { saveDebugBundle } from '@main/storage/debugBundle.js'
 import type { SaveDebugBundleParams, SaveDebugBundleResult } from '@main/storage/debugBundle.js'
-import { addDebugBundleNote } from '@main/storage/debugBundleLog.js'
+import {
+  addDebugBundleNote,
+  isAutosaveDebugBundleReason,
+} from '@main/storage/debugBundleLog.js'
 import { readProxyEventsForBundle } from '@main/storage/proxyEventsReader.js'
 import type { ProxyEventsBundleSection } from '@main/storage/proxyEventsReader.js'
+import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
+import type { LifecycleIpcDiagnostics } from '@main/ipc/lifecycle.js'
 
 // Debug-panel IPC.
 //
@@ -23,7 +28,10 @@ import type { ProxyEventsBundleSection } from '@main/storage/proxyEventsReader.j
 //     The return value is the absolute path so the renderer can
 //     display it and copy it to the clipboard.
 
-export function registerDebugIpc(): void {
+export function registerDebugIpc(
+  journal: AppRunJournal,
+  lifecycleDiagnostics: LifecycleIpcDiagnostics,
+): void {
   ipcMain.handle(
     'debug:append-feed-log',
     async (
@@ -40,11 +48,40 @@ export function registerDebugIpc(): void {
   ipcMain.handle(
     'debug:save-bundle',
     async (_evt, params: SaveDebugBundleParams): Promise<SaveDebugBundleResult> => {
+      let journalFlushFailed = false
+      // Lifecycle reports arrive over fire-and-forget IPC and AppRunJournal
+      // batches them for up to one second. A manual bundle is often captured
+      // immediately after the bad paint; without this drain, the named
+      // observation stream would deterministically omit the newest decision
+      // chain even though the user clicked Save after seeing it. Flush before
+      // reading the journal, but keep it best-effort: forensic enrichment must
+      // never make the renderer-owned bundle unsaveable on a degraded disk.
+      if (!isAutosaveDebugBundleReason(params.reason)) {
+        try {
+          journalFlushFailed = !(await journal.flush())
+        } catch (err) {
+          // flush normally converts a write failure to `false` after safely
+          // re-queueing its batch. Keep this catch as a last-resort boundary for
+          // unexpected journal bugs: the core renderer bundle is still useful,
+          // but its manifest must not call the source observation chain whole.
+          journalFlushFailed = true
+          console.warn('[debug-bundle] failed to flush incident journal before save', err)
+        }
+      }
       // Let errors propagate. The renderer catches and shows a
       // `save failed: <msg>` toast — the user triggered this
       // explicitly, so silent failure is strictly worse than a
       // surfaced one.
-      return saveDebugBundle(params)
+      return saveDebugBundle(params, isAutosaveDebugBundleReason(params.reason)
+        ? undefined
+        : {
+            appRunJournalCompleteness: {
+              ...journal.getCompletenessSnapshot(),
+              flushFailed: journalFlushFailed,
+            },
+            codexTranscriptObservationCompleteness:
+              lifecycleDiagnostics.getCodexTranscriptObservationCompletenessSnapshot(),
+          })
     },
   )
 

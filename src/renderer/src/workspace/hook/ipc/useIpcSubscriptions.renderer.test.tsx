@@ -18,6 +18,9 @@ import {
 } from '@renderer/session-runtime/liveEntryWindow'
 import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
+import { useStreamingActions } from '@renderer/workspace/hook/actions/streaming'
+import { isOptimisticCodexUserEntry } from '@providers/codex/renderer/transcript/entries'
+import { entryTextContent } from '@renderer/session-runtime/entries'
 
 import { useIpcSubscriptions } from './useIpcSubscriptions'
 
@@ -79,6 +82,178 @@ function makeRefs(state: WorkspaceState): WorkspaceRefs {
 }
 
 describe('useIpcSubscriptions with an injected SessionFeed', () => {
+  it('does not restamp startup submissions as a successor run during reconciliation', () => {
+    const fake = createFakeSessionFeed()
+    const sessionId = 'startup-submit-run-fence' as SessionId
+    const successorRunId = '89898989-8989-4989-8989-898989898989'
+    const optimisticSubmissionId = '81818181-8181-4181-8181-818181818181'
+    const queuedReconcileSubmissionId = '82828282-8282-4282-8282-828282828282'
+    const queuedReleaseSubmissionId = '83838383-8383-4383-8383-838383838383'
+    const state = {
+      sessions: { [sessionId]: { cwd: '/repo', kind: 'codex' } },
+    } as unknown as WorkspaceState
+    let runtimes: Record<SessionId, SessionRuntime> = {
+      [sessionId]: emptyRuntime(),
+    }
+    let actions!: ReturnType<typeof useStreamingActions>
+    let refsForTest!: WorkspaceRefs
+    const commitRuntimes = (
+      updater:
+        | Record<SessionId, SessionRuntime>
+        | ((current: Record<SessionId, SessionRuntime>) => Record<SessionId, SessionRuntime>),
+    ): void => {
+      runtimes = typeof updater === 'function' ? updater(runtimes) : updater
+      refsForTest.latestRuntimesRef.current = runtimes
+    }
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: { gitWorktrees: vi.fn(async () => ({ ok: false })) },
+    })
+
+    function Harness(): React.JSX.Element {
+      const refs = useRef<WorkspaceRefs | null>(null)
+      if (refs.current === null) {
+        refs.current = makeRefs(state)
+        refs.current.latestRuntimesRef.current = runtimes
+        refsForTest = refs.current
+      }
+      actions = useStreamingActions(commitRuntimes, () => true)
+      useIpcSubscriptions(
+        fake,
+        refs.current,
+        () => {},
+        commitRuntimes,
+        () => {},
+        () => {},
+      )
+      return <div />
+    }
+
+    render(<Harness />)
+    act(() => {
+      actions.addOptimisticCodexUserEntry(
+        sessionId,
+        'startup optimistic prompt',
+        optimisticSubmissionId,
+        null,
+      )
+    })
+    const preQueue = runtimes[sessionId]!
+    runtimes = {
+      ...runtimes,
+      [sessionId]: {
+        ...preQueue,
+        semantic: {
+          ...preQueue.semantic,
+          currentTurn: {
+            turnId: 'startup-live-turn',
+            source: 'proxy',
+            text: '',
+            blocks: {},
+            blockOrder: [],
+            stopReason: null,
+            usage: null,
+            task: {
+              todos: [],
+              doneCount: 0,
+              totalCount: 0,
+              inProgressToolUseIds: [],
+              activeToolNames: [],
+            },
+            startedAt: 1,
+            endedAt: null,
+            lookups: {
+              toolCallsById: {},
+              toolUseIdsInOrder: [],
+              resolvedToolUseIds: [],
+              erroredToolUseIds: [],
+            },
+          },
+        },
+      },
+    }
+    refsForTest.latestRuntimesRef.current = runtimes
+    act(() => {
+      actions.addOptimisticCodexUserEntry(
+        sessionId,
+        'startup queued reconcile',
+        queuedReconcileSubmissionId,
+        null,
+      )
+      actions.addOptimisticCodexUserEntry(
+        sessionId,
+        'startup queued release',
+        queuedReleaseSubmissionId,
+        null,
+      )
+    })
+
+    // The backend begins only after all three ownership riders captured the
+    // explicit no-run startup window. Reconciliation and release happen later,
+    // while the runtime points at a real successor, which is the race that the
+    // old truthy conditional spread accidentally re-stamped.
+    runtimes = {
+      ...runtimes,
+      [sessionId]: { ...runtimes[sessionId]!, sessionRunId: successorRunId },
+    }
+    refsForTest.latestRuntimesRef.current = runtimes
+    const committed = (text: string, offset: number) => ({
+      file: 'rollout.jsonl',
+      entry: {
+        timestamp: `2026-08-30T14:00:0${offset}.000Z`,
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_text', text }],
+        },
+      },
+      observation: { fileGenerationId: 'dev:inode', rolloutByteOffset: offset },
+    })
+    act(() => {
+      fake.emitJsonlEntries({
+        sessionId,
+        entries: [
+          committed('startup optimistic prompt', 1),
+          committed('startup queued reconcile', 2),
+        ],
+      })
+      fake.emitExit({ sessionId, exitCode: 0 })
+    })
+
+    const transitionObservations = runtimes[sessionId]!
+      .codexTranscriptObservationOutbox
+      .map(row => row.observation as {
+        name?: string
+        correlationIds?: Record<string, unknown>
+      })
+      .filter(row => row.name === 'submit.reconcile' || row.name === 'submit.release')
+    expect(transitionObservations.map(row => row.correlationIds?.submissionId)).toEqual([
+      optimisticSubmissionId,
+      optimisticSubmissionId,
+      queuedReconcileSubmissionId,
+      queuedReconcileSubmissionId,
+      queuedReleaseSubmissionId,
+    ])
+    for (const observation of transitionObservations) {
+      expect(observation.correlationIds).not.toHaveProperty('sessionRunId')
+      expect(Object.values(observation.correlationIds ?? {})).not.toContain(successorRunId)
+    }
+    // Both durable user rows arrived in one coalesced callback. Reconciliation
+    // must remove every optimistic owner matched in that burst, not only the
+    // text from the final mapped row; otherwise the evidence says prompt A was
+    // released while its optimistic product row remains visibly duplicated.
+    expect(runtimes[sessionId]!.entries.filter(isOptimisticCodexUserEntry)).toEqual([])
+    expect(
+      runtimes[sessionId]!.entries
+        .filter(entry => entry.type === 'user')
+        .map(entryTextContent),
+    ).toEqual([
+      'startup optimistic prompt',
+      'startup queued reconcile',
+    ])
+  })
+
   it('replays recorded Codex activity when the asynchronous Git catalog arrives', async () => {
     const fake = createFakeSessionFeed()
     const sessionId = 'recorded-codex-worktree-cache-race'
@@ -645,7 +820,7 @@ describe('useIpcSubscriptions with an injected SessionFeed', () => {
     expect(refsForAssertion!.latestScreenRef.current.s1).toBeUndefined()
   })
 
-  it('marks the runtime exited when the fake feed emits exit', () => {
+  it('retains the retired run across exit and replaces it only on the next started event', () => {
     const fake = createFakeSessionFeed()
     const state = { sessions: {} } as WorkspaceState
     let runtimes: Record<SessionId, SessionRuntime> = {}
@@ -660,7 +835,11 @@ describe('useIpcSubscriptions with an injected SessionFeed', () => {
         updater => {
           runtimes = typeof updater === 'function' ? updater(runtimes) : updater
         },
-        () => {},
+        (sessionId, patch) => {
+          const current = runtimes[sessionId] ?? emptyRuntime()
+          runtimes = { ...runtimes, [sessionId]: { ...current, ...patch } }
+          refs.current!.latestRuntimesRef.current = runtimes
+        },
         () => {},
       )
       return <div />
@@ -669,11 +848,30 @@ describe('useIpcSubscriptions with an injected SessionFeed', () => {
     render(<Harness />)
 
     act(() => {
+      fake.emitStarted({
+        sessionId: 's1',
+        sessionRunId: '66666666-6666-4666-8666-666666666666',
+        kind: 'codex',
+      })
+    })
+    expect(runtimes.s1?.sessionRunId).toBe('66666666-6666-4666-8666-666666666666')
+
+    act(() => {
       fake.emitExit({ sessionId: 's1', exitCode: 0 })
     })
 
     expect(runtimes.s1?.exited).toBe(0)
     expect(runtimes.s1?.processActive).toBe(false)
+    expect(runtimes.s1?.sessionRunId).toBe('66666666-6666-4666-8666-666666666666')
+
+    act(() => {
+      fake.emitStarted({
+        sessionId: 's1',
+        sessionRunId: '77777777-7777-4777-8777-777777777777',
+        kind: 'codex',
+      })
+    })
+    expect(runtimes.s1?.sessionRunId).toBe('77777777-7777-4777-8777-777777777777')
   })
 
   // Live entries window (#375 part B) — the burst handler applying a trim

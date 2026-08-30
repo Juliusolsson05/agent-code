@@ -159,14 +159,33 @@ export function registerSessionIpc(
       // replaces, just narrower.
       const deliveryInFlight = manager.isDeliveryInFlight(sessionId)
       // `pasteId` is set only by the Agent Code paste flow (claudePaste.ts) and
-      // never by keystrokes — so the flag that already exists for the paste
-      // journal doubles as the one renderer-side attribution signal available
-      // without a contract change. Free precision; take it.
+      // never by keystrokes, so it is also the exact renderer-side attribution
+      // signal required by SessionManager's prompt-delivery ownership fence.
+      const attributedPasteId = typeof pasteId === 'string' && pasteId.length > 0
+        ? pasteId
+        : null
       const ok = manager.write(
         sessionId,
         data,
-        typeof pasteId === 'string' && pasteId.length > 0 ? 'renderer-paste' : 'renderer',
+        attributedPasteId ? 'renderer-paste' : 'renderer',
       )
+      if (attributedPasteId) {
+        // WHY the combined phase exists: Codex's zero-delay bracketed-paste
+        // path writes `body + paste-end + Enter` in ONE PTY call, while Claude
+        // can use separate writes. Labelling every non-bare-CR write as `body`
+        // made healthy Codex captures falsely claim Enter was never attempted.
+        // This describes the physical write boundary without pretending the
+        // provider absorbed either component independently.
+        manager.recordCodexTranscriptObservation('submit.write', sessionId, {
+          phase: data === '\r'
+            ? 'enter'
+            : data.endsWith('\r')
+              ? 'body-enter'
+              : 'body',
+          ok,
+          deliveryInFlight,
+        }, { submissionId: attributedPasteId })
+      }
       if (!ok) {
         // WHY both facts instead of one verdict: this used to log "missing
         // session" unconditionally, which is wrong for the far more common

@@ -2,6 +2,7 @@ import type { ProviderConditionSnapshot } from '@shared/types/providerConditions
 import type { SessionKind } from '@shared/types/providerKind.js'
 import type {
   AgentTranscriptEntry,
+  AgentTranscriptObservationMetadata,
   SessionInputReadiness,
 } from '@shared/types/session.js'
 
@@ -59,6 +60,11 @@ export type ScreenSnapshot = {
 
 export type SessionStartedEvent = {
   sessionId: string
+  /**
+   * One concrete main-owned backend lifetime. Optional for recorded fixtures,
+   * remote transports, and older app builds that predate Stage 0 correlation.
+   */
+  sessionRunId?: string
   kind: SessionKind
   /** Undefined for terminal sessions — they don't have a CC project dir. */
   projectDir?: string
@@ -81,7 +87,11 @@ export type SessionScreenEvent = { sessionId: string } & ScreenSnapshot
 // same type remains at the preload boundary for its other consumers.
 export type SessionJsonlEntriesEvent = {
   sessionId: string
-  entries: Array<{ entry: AgentTranscriptEntry; file: string }>
+  entries: Array<{
+    entry: AgentTranscriptEntry
+    file: string
+    observation?: AgentTranscriptObservationMetadata
+  }>
 }
 
 export type SessionJsonlErrorEvent = { sessionId: string; message: string }

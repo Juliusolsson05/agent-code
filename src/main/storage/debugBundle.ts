@@ -1,5 +1,7 @@
+import { createReadStream } from 'fs'
 import { mkdir, open, readFile, rename, rm, stat, writeFile } from 'fs/promises'
 import { dirname, join, normalize } from 'path'
+import { createInterface } from 'readline'
 
 import { scheduleDebugStoragePrune } from '@main/storage/debugRetention.js'
 import {
@@ -10,6 +12,13 @@ import {
 import { getAppRunId } from '@main/incident/appRunIds.js'
 import { getBuildInfo } from '@main/buildInfo.js'
 import { INCIDENT_RUNS_DIR } from '@main/storage/paths.js'
+import {
+  isCodexTranscriptObservationEventName,
+  isCodexTranscriptObservationSessionId,
+  pickCodexTranscriptObservationCorrelationIds,
+  pickCodexTranscriptObservationData,
+  SESSION_LIFECYCLE_AREA,
+} from '@shared/lifecycle/events.js'
 // Filename-safe session-id token — shared with feedDebugLog so the two
 // session-keyed storage layouts can't diverge on their escape rule. See
 // @shared/runtime/projectDir sanitizeFilenameToken.
@@ -57,6 +66,34 @@ import type {
 // Was a local `sanitizeForPath` duplicating feedDebugLog's regex; now the one
 // shared `sanitizeFilenameToken` (same output, single source of truth).
 const sanitizeForPath = sanitizeFilenameToken
+
+const CODEX_TRANSCRIPT_OBSERVATIONS_FILE = 'codex-transcript-observations.jsonl'
+// Four MiB is intentionally generous relative to the closed, rate-limited
+// lifecycle vocabulary while still keeping one pathological run from turning a
+// manual bundle into a second copy of the 50 MiB app journal. We count UTF-8
+// bytes, not JavaScript characters, because the filesystem cap is a byte cost.
+const CODEX_TRANSCRIPT_OBSERVATIONS_MAX_BYTES = 4 * 1024 * 1024
+const LEGACY_CROSS_PROVIDER_SUBMIT_EVENTS: ReadonlySet<string> = new Set([
+  'submit.begin',
+  'submit.result',
+  'submit.unwound',
+])
+
+type AppRunJournalCompleteness = {
+  capped: boolean
+  bytesWritten: number
+  droppedEvents: number
+  flushFailed: boolean
+}
+type CodexTranscriptObservationCompleteness = {
+  gapTrackingCapped: boolean
+}
+const MAIN_AUTHORED_RUN_DISPOSITIONS: ReadonlySet<unknown> = new Set([
+  'current',
+  'stale',
+  'missing',
+  'retired-or-unknown',
+])
 
 // Bundle folder naming: `<ISO-like timestamp-with-ms>-<sessionShort>`.
 //
@@ -121,6 +158,10 @@ function isSafeRelativePath(name: string): boolean {
 
 export async function saveDebugBundle(
   params: SaveDebugBundleParams,
+  options?: {
+    appRunJournalCompleteness?: AppRunJournalCompleteness
+    codexTranscriptObservationCompleteness?: CodexTranscriptObservationCompleteness
+  },
 ): Promise<SaveDebugBundleResult> {
   if (!params?.sessionId || !Array.isArray(params.files) || params.files.length === 0) {
     throw new Error('saveDebugBundle: missing sessionId or empty files list')
@@ -199,7 +240,13 @@ export async function saveDebugBundle(
   // so a bundle is self-contained for triage without timestamp-matching against
   // the incidents dir. Autosave gets the identity stamp only (see the autosave
   // branch above for why the journal-tail copies stay manual-only).
-  await enrichBundleWithIncidentJournal(bundlePath)
+  await enrichBundleWithIncidentJournal(bundlePath, {
+    sessionId: params.sessionId,
+    kind: params.kind ?? null,
+    appRunJournalCompleteness: options?.appRunJournalCompleteness,
+    codexTranscriptObservationCompleteness:
+      options?.codexTranscriptObservationCompleteness,
+  })
 
   try {
     await appendDebugBundleSaved({
@@ -246,7 +293,15 @@ async function writeBundleFiles(bundlePath: string, files: DebugBundleFile[]): P
 // heartbeat.json + incidents.jsonl). Entirely best-effort: the timestamped
 // bundle the user asked for is the durable artifact, so NOTHING here may throw
 // out of the save path.
-async function enrichBundleWithIncidentJournal(bundlePath: string): Promise<void> {
+async function enrichBundleWithIncidentJournal(
+  bundlePath: string,
+  params: {
+    sessionId: string
+    kind: string | null
+    appRunJournalCompleteness?: AppRunJournalCompleteness
+    codexTranscriptObservationCompleteness?: CodexTranscriptObservationCompleteness
+  },
+): Promise<void> {
   const appRunId = await stampBundleProvenance(bundlePath)
 
   // Copy the journal tail so the bundle is triage-complete on its own.
@@ -270,6 +325,327 @@ async function enrichBundleWithIncidentJournal(bundlePath: string): Promise<void
   } catch {
     // No heartbeat yet (very early crash) is fine.
   }
+
+  if (params.kind === 'codex') {
+    await exportCodexTranscriptObservations({
+      bundlePath,
+      appRunId,
+      sessionId: params.sessionId,
+      appRunJournalCompleteness: params.appRunJournalCompleteness,
+      codexTranscriptObservationCompleteness:
+        params.codexTranscriptObservationCompleteness,
+    })
+  }
+}
+
+type CodexTranscriptObservationExport = {
+  source: 'app-run-journal'
+  sourceAppRunId: string
+  sourceAvailable: boolean
+  scopeAccepted: boolean
+  matchedEvents: number
+  writtenEvents: number
+  bytes: number
+  truncated: boolean
+  sourceCompletenessAvailable: boolean
+  sourceCapped: boolean | null
+  sourceBytesWritten: number | null
+  sourceDroppedEvents: number | null
+  sourceFlushFailed: boolean | null
+  sourceGapTrackingStatusAvailable: boolean
+  sourceGapTrackingCapped: boolean | null
+  rendererObservationGapObserved: boolean
+  rateLimitGapObserved: boolean
+  malformedProviderSessionMetaObserved: boolean
+  attachmentTrackingCappedObserved: boolean
+  attachmentSuppressionObserved: boolean
+  malformedJsonRows: number
+  invalidChronologyRows: number
+  sourceHasGaps: boolean
+}
+
+/**
+ * Export one Codex pane's Stage 0 chronology from the existing app-run
+ * journal. This is a projection, not a second runtime store: the journal
+ * remains the durable source of truth and the bundle gets only the rows whose
+ * closed lifecycle name and exact `ids.sessionId` prove they belong here.
+ *
+ * WHY scan the full file instead of reusing `incident-events.jsonl`: that file
+ * is deliberately a 128 KiB cross-pane tail. The submitted prompt that started
+ * this investigation had already fallen outside the renderer bundle ring and
+ * could just as easily fall outside this tail. Stage 0 needs the complete
+ * session chain, so we stream the run journal from the beginning while bounding
+ * only the sparse matched output. Streaming prevents a long run's 50 MiB
+ * journal from being duplicated in memory.
+ *
+ * WHY re-apply the shared pickers even though `SessionLifecycleJournal` already
+ * uses them: the named file promises to be content-safe on its own. A future
+ * main-owned producer could accidentally write the right event name directly
+ * to AppRunJournal with an extra field. Reusing the SAME shared pickers here
+ * gives the export defense in depth without creating a second privacy schema
+ * that can drift from the writer.
+ */
+async function exportCodexTranscriptObservations(params: {
+  bundlePath: string
+  appRunId: string
+  sessionId: string
+  appRunJournalCompleteness?: AppRunJournalCompleteness
+  codexTranscriptObservationCompleteness?: CodexTranscriptObservationCompleteness
+}): Promise<void> {
+  const sourcePath = join(INCIDENT_RUNS_DIR, params.appRunId, 'events.jsonl')
+  const outputPath = join(params.bundlePath, CODEX_TRANSCRIPT_OBSERVATIONS_FILE)
+  const output: string[] = []
+  let bytes = 0
+  let matchedEvents = 0
+  let writtenEvents = 0
+  let truncated = false
+  let sourceAvailable = true
+  const scopeAccepted = isCodexTranscriptObservationSessionId(params.sessionId)
+  let rendererObservationGapObserved = false
+  let rateLimitGapObserved = false
+  let malformedProviderSessionMetaObserved = false
+  let attachmentTrackingCappedObserved = false
+  let attachmentSuppressionObserved = false
+  let malformedJsonRows = 0
+  let invalidChronologyRows = 0
+  let lastChronologySeq: number | null = null
+  let lastChronologyMonotonicMs: number | null = null
+
+  try {
+    if (!scopeAccepted) throw new Error('invalid Codex transcript observation session scope')
+    const lines = createInterface({
+      input: createReadStream(sourcePath, { encoding: 'utf8' }),
+      crlfDelay: Infinity,
+    })
+    let scannedRows = 0
+    for await (const line of lines) {
+      if (!line) continue
+      scannedRows += 1
+      if (scannedRows % 1_024 === 0) {
+        // WHY scan completely but yield: the earliest prompt in the incident
+        // may sit anywhere in the capped 50 MiB journal, so a byte/time cutoff
+        // would recreate the evidence loss this export exists to diagnose.
+        // JSON parsing that whole source synchronously can still monopolize
+        // Electron main long enough to look like a frozen Save action. Yielding
+        // once per chunk preserves completeness and bounded memory while
+        // letting IPC, paint, and process-exit work make progress.
+        await new Promise<void>(resolve => setImmediate(resolve))
+      }
+      let event: Record<string, unknown>
+      try {
+        event = JSON.parse(line) as Record<string, unknown>
+      } catch {
+        // A crash may leave only the final JSONL line torn. Treat it exactly as
+        // every other journal reader does: preserve all complete evidence and
+        // skip the fragment rather than making bundle save fail. Unlike a
+        // permissive replay reader, this forensic projection also counts the
+        // uncertainty: an unparsable global row cannot prove which pane lost
+        // evidence, so no pane exported from this source may claim completeness.
+        malformedJsonRows += 1
+        continue
+      }
+      const ids = event.ids as Record<string, unknown> | undefined
+      if (event.area !== SESSION_LIFECYCLE_AREA) continue
+      if (!isCodexTranscriptObservationEventName(event.name)) continue
+      if (ids?.sessionId !== params.sessionId) continue
+      const eventData = event.data as Record<string, unknown> | undefined
+      if (
+        event.name === 'transcript.outbox-gap' ||
+        event.name === 'transcript.surface-gap'
+      ) rendererObservationGapObserved = true
+      if (event.name === 'transcript.observation-gap') rateLimitGapObserved = true
+      if (
+        event.name === 'transcript.entry' &&
+        eventData?.providerSessionMetaValid === false
+      ) malformedProviderSessionMetaObserved = true
+      if (
+        event.name === 'transcript.attachment' &&
+        eventData?.trackingCapped === true
+      ) attachmentTrackingCappedObserved = true
+      if (
+        event.name === 'transcript.attachment' &&
+        typeof eventData?.suppressed === 'number' &&
+        eventData.suppressed > 0
+      ) attachmentSuppressionObserved = true
+      if (
+        LEGACY_CROSS_PROVIDER_SUBMIT_EVENTS.has(event.name) &&
+        (eventData?.provider !== 'codex' ||
+          !MAIN_AUTHORED_RUN_DISPOSITIONS.has(eventData.runDisposition))
+      ) {
+        // Stable pane ids can survive a provider switch within one app run.
+        // These three names were provider-neutral before Stage 0, so session
+        // equality alone cannot make an earlier Claude/OpenCode submit into a
+        // Codex transcript fact. Provider alone is not provenance either: that
+        // value originates in renderer data. Lifecycle IPC strips any renderer
+        // runDisposition and writes its own only after exact live/retired proof,
+        // so requiring BOTH fields keeps forged generic rows out of this named
+        // evidence stream while preserving them in the broad app journal.
+        continue
+      }
+
+      if (
+        typeof event.seq !== 'number' ||
+        typeof event.ts !== 'number' ||
+        typeof event.monotonicMs !== 'number' ||
+        !Number.isSafeInteger(event.seq) ||
+        event.seq < 0 ||
+        !Number.isSafeInteger(event.ts) ||
+        !Number.isFinite(event.monotonicMs) ||
+        event.monotonicMs < 0 ||
+        Math.abs(event.ts) > 8.64e15
+      ) {
+        // These are the ordering coordinates that make the file a chronology.
+        // A malformed direct journal write is not useful evidence and should
+        // not be made to look authoritative by filling invented timestamps.
+        // The row already passed exact pane/name scope above, so count this gap
+        // only for the affected exported stream rather than every pane.
+        invalidChronologyRows += 1
+        continue
+      }
+      if (
+        (lastChronologySeq !== null && event.seq <= lastChronologySeq) ||
+        (lastChronologyMonotonicMs !== null &&
+          event.monotonicMs < lastChronologyMonotonicMs)
+      ) {
+        // Shape-valid coordinates are not enough: AppRunJournal has a
+        // crash-adjacent synchronous flush path, and a previously-started
+        // asynchronous append can land after it. That produces individually
+        // valid rows in reversed file order. Keep the already-ordered prefix,
+        // reject the descending row, and mark the source incomplete instead of
+        // certifying a reordered file as a trustworthy chronology.
+        invalidChronologyRows += 1
+        continue
+      }
+      lastChronologySeq = event.seq
+      lastChronologyMonotonicMs = event.monotonicMs
+      matchedEvents += 1
+      if (truncated) continue
+      const data = pickCodexTranscriptObservationData(event.name, event.data)
+      const correlationIds = pickCodexTranscriptObservationCorrelationIds(
+        event.name,
+        event.ids,
+        data,
+      )
+      const safeEvent = {
+        schemaVersion: 1,
+        seq: event.seq,
+        ts: event.ts,
+        tsIso: new Date(event.ts).toISOString(),
+        monotonicMs: event.monotonicMs,
+        appRunId: params.appRunId,
+        area: SESSION_LIFECYCLE_AREA,
+        name: event.name,
+        severity:
+          event.severity === 'debug' ||
+          event.severity === 'warn' ||
+          event.severity === 'error' ||
+          event.severity === 'fatal'
+            ? event.severity
+            : 'info',
+        // Session attribution was already checked against the requested exact
+        // pane above. The shared correlation picker intentionally excludes
+        // sessionId because main owns it, so restore that one authoritative id
+        // after filtering the renderer-provided ids.
+        ids: { ...(correlationIds ?? {}), sessionId: params.sessionId },
+        ...(data ? { data } : {}),
+      }
+      const serialized = `${JSON.stringify(safeEvent)}\n`
+      const lineBytes = Buffer.byteLength(serialized, 'utf8')
+      if (bytes + lineBytes > CODEX_TRANSCRIPT_OBSERVATIONS_MAX_BYTES) {
+        // Keep scanning so the manifest reports the honest matched count. The
+        // `truncated` flag is the explicit evidence gap; silently stopping at
+        // four MiB would make a partial chronology look complete.
+        truncated = true
+        continue
+      }
+      output.push(serialized)
+      bytes += lineBytes
+      writtenEvents += 1
+    }
+  } catch (err) {
+    // The manual renderer-owned files are still a valid bundle when the
+    // always-on journal failed to start or disappeared under external cleanup.
+    // Emit an empty named stream plus manifest counts so absence is explicit,
+    // never confused with an enrichment exception that aborted the save.
+    console.warn('[debug-bundle] failed to export Codex transcript observations', err)
+    sourceAvailable = false
+  }
+
+  try {
+    await writeFile(outputPath, output.join(''), 'utf8')
+    await stampCodexTranscriptObservationExport(params.bundlePath, {
+      source: 'app-run-journal',
+      sourceAppRunId: params.appRunId,
+      sourceAvailable,
+      scopeAccepted,
+      matchedEvents,
+      writtenEvents,
+      bytes,
+      truncated,
+      sourceCompletenessAvailable: params.appRunJournalCompleteness !== undefined,
+      sourceCapped: params.appRunJournalCompleteness?.capped ?? null,
+      sourceBytesWritten: params.appRunJournalCompleteness?.bytesWritten ?? null,
+      sourceDroppedEvents: params.appRunJournalCompleteness?.droppedEvents ?? null,
+      sourceFlushFailed: params.appRunJournalCompleteness?.flushFailed ?? null,
+      sourceGapTrackingStatusAvailable:
+        params.codexTranscriptObservationCompleteness !== undefined,
+      sourceGapTrackingCapped:
+        params.codexTranscriptObservationCompleteness?.gapTrackingCapped ?? null,
+      rendererObservationGapObserved,
+      rateLimitGapObserved,
+      malformedProviderSessionMetaObserved,
+      attachmentTrackingCappedObserved,
+      attachmentSuppressionObserved,
+      malformedJsonRows,
+      invalidChronologyRows,
+      // Projection truncation and source loss are separately reported but both
+      // make the aggregate completeness verdict false. A complete 4 MiB prefix
+      // cannot repair rows the upstream journal already dropped, and an
+      // unavailable snapshot is unknown—not permission to claim completeness.
+      sourceHasGaps: !sourceAvailable ||
+        !scopeAccepted ||
+        truncated ||
+        params.appRunJournalCompleteness === undefined ||
+        params.appRunJournalCompleteness.capped ||
+        params.appRunJournalCompleteness.droppedEvents > 0 ||
+        params.appRunJournalCompleteness.flushFailed ||
+        params.codexTranscriptObservationCompleteness === undefined ||
+        params.codexTranscriptObservationCompleteness.gapTrackingCapped ||
+        rendererObservationGapObserved ||
+        rateLimitGapObserved ||
+        malformedProviderSessionMetaObserved ||
+        attachmentTrackingCappedObserved ||
+        attachmentSuppressionObserved ||
+        malformedJsonRows > 0 ||
+        invalidChronologyRows > 0,
+    })
+  } catch (err) {
+    // Enrichment is forensic aid, never the durable artifact the user asked to
+    // save. Match the incident-tail policy above and leave the core bundle in
+    // place even when this optional write fails.
+    console.warn('[debug-bundle] failed to write Codex transcript observations', err)
+  }
+}
+
+async function stampCodexTranscriptObservationExport(
+  bundlePath: string,
+  observationExport: CodexTranscriptObservationExport,
+): Promise<void> {
+  const manifestPath = join(bundlePath, 'manifest.json')
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Record<string, unknown>
+  const files = Array.isArray(manifest.files)
+    ? manifest.files.filter((file): file is string => typeof file === 'string')
+    : []
+  if (!files.includes(CODEX_TRANSCRIPT_OBSERVATIONS_FILE)) {
+    files.push(CODEX_TRANSCRIPT_OBSERVATIONS_FILE)
+  }
+  manifest.files = files
+  // Counts and the cap flag belong beside bundle provenance, not as an invented
+  // observation event. Consumers can therefore distinguish "zero matching
+  // events" from "the export was truncated" without teaching the lifecycle
+  // vocabulary a fake product event that never occurred.
+  manifest.codexTranscriptObservations = observationExport
+  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
 }
 
 // Identity stamp shared by BOTH bundle flavors (#374 requires EVERY bundle —

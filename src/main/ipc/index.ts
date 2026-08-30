@@ -97,7 +97,6 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerWorkspaceIpc(deps.manager, deps.workspaceFileStore)
   registerWindowIpc(deps.workspaceFileStore)
   registerGhostIpc(deps.ghostJournals)
-  registerDebugIpc()
   registerGitIpc()
   registerWorktreeActivityIpc(deps.worktreeActivityIndex)
   registerSetupIpc()
@@ -106,7 +105,7 @@ export function registerAllIpc(deps: IpcDeps): void {
     appRunJournal: deps.appRunJournal,
   })
   registerPasteDebugIpc({ pasteDebugJournals: deps.pasteDebugJournals })
-  registerDevDebugIpc(deps.sessionRecorders)
+  registerDevDebugIpc(deps.sessionRecorders, deps.manager)
   registerOrchestrationIpc(deps.orchestrationBridge)
   registerAgentManagementIpc(deps.agentManagementBridge)
   registerAiWorkspaceIpc(deps.aiWorkspaceRegistry)
@@ -114,7 +113,15 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerCaffeinateIpc(deps.caffeinateController)
   registerRemoteIpc(deps.remoteController)
   registerIncidentIpc(deps.appRunJournal)
-  registerLifecycleIpc(deps.appRunJournal)
+  // Debug export needs the lifecycle limiter's monotonic completeness state.
+  // Registering lifecycle first keeps that state owned by the producer instead
+  // of duplicating a process-global flag in the bundle writer.
+  const lifecycleDiagnostics = registerLifecycleIpc(
+    deps.appRunJournal,
+    deps.manager,
+    deps.sessionRecorders,
+  )
+  registerDebugIpc(deps.appRunJournal, lifecycleDiagnostics)
   registerUsageIpc()
   registerCliUpdatesIpc(deps.cliUpdateOrchestrator)
   registerWorkflowIpc(deps.workflowBridge)

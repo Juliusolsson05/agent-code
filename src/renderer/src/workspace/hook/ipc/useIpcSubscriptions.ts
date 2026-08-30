@@ -12,7 +12,7 @@ import type { SessionSemanticEvent } from '@shared/sessionFeed/types'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import type { TranscriptEntryMapper } from '@shared/types/providerConfig'
 import { emptyRuntime } from '@renderer/session-runtime/state'
-import type { SessionRuntime } from '@renderer/session-runtime/state'
+import type { QueuedMessage, SessionRuntime } from '@renderer/session-runtime/state'
 import { appendFeedDebugLog } from '@renderer/session-runtime/feedDebug'
 import type { FeedDebugInput } from '@renderer/session-runtime/feedDebug'
 import type { SessionId } from '@renderer/workspace/types'
@@ -57,7 +57,15 @@ import {
 } from '@renderer/session-runtime/ghosts'
 import {
   codexPromptsMatchForOwnership,
+  optimisticEntrySubmissionId,
+  optimisticEntrySubmissionRunId,
+  queuedMessageSubmissionId,
+  queuedMessageSubmissionRunId,
 } from '@renderer/workspace/hook/actions/streaming'
+import {
+  appendCodexTranscriptObservation,
+  codexOptimisticRenderCandidateId,
+} from '@renderer/lifecycle/codexTranscriptObservationOutbox'
 import {
   applyCommittedUserEntry,
   applyQueuedCommandObservation,
@@ -165,6 +173,109 @@ function stringField(record: Record<string, unknown> | null | undefined, key: st
 
 function entryUuid(entry: Entry): string | null {
   return typeof entry.uuid === 'string' ? entry.uuid : null
+}
+
+function appendQueuedSubmissionReleases(
+  current: SessionRuntime,
+  messages: readonly QueuedMessage[],
+  cause: string,
+): SessionRuntime {
+  let next = current
+  for (const message of messages) {
+    const submissionId = queuedMessageSubmissionId(message)
+    if (!submissionId) continue
+    const renderCandidateId = `queued:${submissionId}`
+    next = appendCodexTranscriptObservation(
+      next,
+      'submit.release',
+      { cause },
+      {
+        submissionId,
+        renderCandidateId,
+        sessionRunId: queuedMessageSubmissionRunId(message) ?? undefined,
+      },
+    )
+  }
+  return next
+}
+
+function appendCommittedSubmissionReconcile(
+  current: SessionRuntime,
+  entry: Entry,
+  matchedBy: 'exact-text' | 'normalized-text',
+  observation: { fileGenerationId: string | null; rolloutByteOffset: number } | undefined,
+): SessionRuntime {
+  const submissionId = optimisticEntrySubmissionId(entry)
+  if (!submissionId) return current
+  const renderCandidateId = codexOptimisticRenderCandidateId(submissionId)
+  // The absolute byte offset is scoped to one coordinator-authorized file
+  // generation. Joining the pair is explicit evidence from the same tail
+  // callback; emitting an offset alone would collide across files and imply
+  // identity the producer never supplied.
+  const rolloutEntryId = observation?.fileGenerationId
+    ? `${observation.fileGenerationId}:${observation.rolloutByteOffset}`
+    : null
+  const correlationIds = {
+    submissionId,
+    renderCandidateId,
+    ...(observation?.fileGenerationId
+      ? { fileGenerationId: observation.fileGenerationId }
+      : {}),
+    ...(rolloutEntryId ? { rolloutEntryId } : {}),
+    sessionRunId: optimisticEntrySubmissionRunId(entry) ?? undefined,
+  }
+  const reconciled = appendCodexTranscriptObservation(
+    current,
+    'submit.reconcile',
+    {
+      matchedBy,
+      ...(observation ? { entryByteOffset: observation.rolloutByteOffset } : {}),
+    },
+    correlationIds,
+  )
+  return appendCodexTranscriptObservation(
+    reconciled,
+    'submit.release',
+    { cause: 'committed-user-observed' },
+    correlationIds,
+  )
+}
+
+function appendQueuedSubmissionReconcile(
+  current: SessionRuntime,
+  message: QueuedMessage,
+  observation: { fileGenerationId: string | null; rolloutByteOffset: number } | undefined,
+): SessionRuntime {
+  const submissionId = queuedMessageSubmissionId(message)
+  if (!submissionId) return current
+  const renderCandidateId = `queued:${submissionId}`
+  const rolloutEntryId = observation?.fileGenerationId
+    ? `${observation.fileGenerationId}:${observation.rolloutByteOffset}`
+    : null
+  const correlationIds = {
+    submissionId,
+    renderCandidateId,
+    ...(observation?.fileGenerationId
+      ? { fileGenerationId: observation.fileGenerationId }
+      : {}),
+    ...(rolloutEntryId ? { rolloutEntryId } : {}),
+    sessionRunId: queuedMessageSubmissionRunId(message) ?? undefined,
+  }
+  const reconciled = appendCodexTranscriptObservation(
+    current,
+    'submit.reconcile',
+    {
+      matchedBy: 'normalized-text',
+      ...(observation ? { entryByteOffset: observation.rolloutByteOffset } : {}),
+    },
+    correlationIds,
+  )
+  return appendCodexTranscriptObservation(
+    reconciled,
+    'submit.release',
+    { cause: 'committed-user-observed' },
+    correlationIds,
+  )
 }
 
 function providerSessionObservedEvent(event: unknown): {
@@ -461,6 +572,13 @@ export function useIpcSubscriptions(
             )
             const idleStable = lastActivityAt === 0 || now - lastActivityAt >= QUEUE_IDLE_RECONCILE_MS
             if (idleStable) {
+              if (sessionKind === 'codex') {
+                working = appendQueuedSubmissionReleases(
+                  working,
+                  working.queuedMessages,
+                  'idle-convergence',
+                )
+              }
               working = withDerivedSessionStatus(
                 appendFeedDebugLog(
                   { ...working, queuedMessages: [] },
@@ -543,9 +661,16 @@ export function useIpcSubscriptions(
     // The conflict marker therefore acts as a fail-closed ownership fence until
     // a later recovery has positively validated both provider kind and cwd.
 
-    const offStarted = feed.onSessionStarted(({ sessionId, projectDir }) => {
+    const offStarted = feed.onSessionStarted(({ sessionId, sessionRunId, projectDir }) => {
       if (quarantinesSessionFeed(sessionId)) return
       updateRuntime(sessionId, {
+        // A started event is the backend-lifetime boundary. Missing identity
+        // must reset to unknown instead of retaining the predecessor's run id:
+        // older recordings/remote transports intentionally make the field
+        // optional, and attributing their successor to the previous process
+        // would be a false join. Exit deliberately does NOT clear this field;
+        // delayed observations still belong to the retired lifetime.
+        sessionRunId: sessionRunId ?? null,
         projectDir,
         processStatus: 'started',
         processError: null,
@@ -556,7 +681,7 @@ export function useIpcSubscriptions(
         layer: 'STATE',
         kind: 'session_started',
         summary: `session started${projectDir ? ` · ${projectDir}` : ''}`,
-        data: { projectDir },
+        data: { projectDir, sessionRunId: sessionRunId ?? null },
       })
     })
 
@@ -765,10 +890,18 @@ export function useIpcSubscriptions(
       jsonlProviderStreamBySession.delete(sessionId)
       setRuntimes(prev => {
         const current = prev[sessionId] ?? emptyRuntime()
+        const sessionKind = refs.stateRef.current.sessions[sessionId]?.kind
+        const observedCurrent = sessionKind === 'codex'
+          ? appendQueuedSubmissionReleases(
+              current,
+              current.queuedMessages,
+              'session-exit',
+            )
+          : current
         const next = withDerivedSessionStatus(
           appendFeedDebugLog(
             {
-              ...current,
+              ...observedCurrent,
               exited: exitCode,
               awaitingAssistant: false,
               queuedMessages: [],
@@ -841,10 +974,17 @@ export function useIpcSubscriptions(
             queuedMessagesLength: current.queuedMessages.length,
             streamPhase: current.streamPhase,
           })
+          const observedCurrent = shouldClearIdleQueue && sessionKind === 'codex'
+            ? appendQueuedSubmissionReleases(
+              current,
+              current.queuedMessages,
+              'process-idle',
+            )
+            : current
           const next = withDerivedSessionStatus(
             appendFeedDebugLog(
               {
-                ...current,
+                ...observedCurrent,
                 processActive: active,
                 processStatus: current.exited === null ? 'started' : current.processStatus,
                 processError: null,
@@ -1071,6 +1211,13 @@ export function useIpcSubscriptions(
           queuedMessagesLength: current.queuedMessages.length,
           streamPhase,
         })
+        const observedCurrent = shouldClearIdleQueue && sessionKind === 'codex'
+          ? appendQueuedSubmissionReleases(
+            current,
+            current.queuedMessages,
+            'semantic-idle',
+          )
+          : current
 
         // Claude's counterpart to the idle CLEAR above: mark, never delete.
         // The optimistic-echo providers own their queue rows locally, so
@@ -1116,7 +1263,7 @@ export function useIpcSubscriptions(
         const nextCurrent = withDerivedSessionStatus(
           appendFeedDebugLog(
             {
-              ...current,
+              ...observedCurrent,
               awaitingAssistant: nextAwaitingAssistant,
               queuedMessages: shouldClearIdleQueue
                 ? []
@@ -1463,6 +1610,11 @@ export function useIpcSubscriptions(
       let pendingClaudeQueue: ClaudeQueueState | null = null
       setRuntimes(prev => {
         const current = prev[sessionId] ?? emptyRuntime()
+        // Transcript observations accumulate on the existing feed-debug log
+        // while this pure fold runs. The post-commit outbox effect mirrors only
+        // the runtime React actually accepts, so an abandoned updater cannot
+        // claim that an optimistic/queued owner was reconciled or released.
+        let observationRuntime = current
         const seen = (refs.seenUuidsRef.current[sessionId] ??= new Set())
         const appended: Entry[] = []
         let oldestMarker: string | null = current.historyOldestMarker
@@ -1477,12 +1629,13 @@ export function useIpcSubscriptions(
         // as the old queue-debt bug duplicated queue operations.
         let workActivity = observedWorktreeProjection.workActivity
         let workContext = observedWorktreeProjection.workContext
-        // Set when a Codex user entry mapped from rollout matches an
-        // optimistic row already in the feed. Codex can commit tool
-        // outputs before the real user message in the same burst, so
-        // the optimistic row is not guaranteed to still be the tail by
-        // the time the committed user entry arrives.
-        let reconciledOptimisticText: string | null = null
+        // Every distinct Codex user entry in one coalesced burst can reconcile
+        // a different optimistic row. A single "last text" slot made the
+        // observation stream claim prompt A was released while the product
+        // state removed only prompt B, leaving A duplicated beside its durable
+        // rollout row. Retain the complete burst set so mutation, rendering,
+        // and the Stage 0 evidence all describe the same handoff.
+        const reconciledOptimisticTexts = new Set<string>()
 
         // Reuse the existing map references so downstream consumers
         // that hold them live (Feed contexts) keep working without
@@ -1542,7 +1695,7 @@ export function useIpcSubscriptions(
         let routeShadowMismatches = 0
         let routeShadowSample: string | null = null
 
-        for (const { entry: raw } of entries) {
+        for (const { entry: raw, observation } of entries) {
           // ---- Claude queue-operation branch ----
           // Checked BEFORE the mapper on purpose: queue-operation
           // entries produce NO feed entries (the claude mapper filters
@@ -1701,17 +1854,34 @@ export function useIpcSubscriptions(
                   isOptimisticCodexUserEntry(item) &&
                   entryTextContent(item) === mappedText
                 ) {
+                  if (routedKind === 'codex') {
+                    observationRuntime = appendCommittedSubmissionReconcile(
+                      observationRuntime,
+                      item,
+                      'exact-text',
+                      observation,
+                    )
+                  }
                   appended.splice(idx, 1)
-                  reconciledOptimisticText = mappedText
+                  if (mappedText !== null) reconciledOptimisticTexts.add(mappedText)
                 }
               }
-              if (
-                current.entries.some(entry =>
-                  isOptimisticCodexUserEntry(entry) &&
-                  entryTextContent(entry) === mappedText,
-                )
-              ) {
-                reconciledOptimisticText = mappedText
+              const reconciledCurrentEntries = current.entries.filter(entry =>
+                isOptimisticCodexUserEntry(entry) &&
+                entryTextContent(entry) === mappedText,
+              )
+              if (reconciledCurrentEntries.length > 0) {
+                for (const entry of reconciledCurrentEntries) {
+                  if (routedKind === 'codex') {
+                    observationRuntime = appendCommittedSubmissionReconcile(
+                      observationRuntime,
+                      entry,
+                      'exact-text',
+                      observation,
+                    )
+                  }
+                }
+                if (mappedText !== null) reconciledOptimisticTexts.add(mappedText)
               }
               // Mid-turn Codex submits are intentionally kept in
               // queuedMessages instead of appended to entries (see
@@ -1731,10 +1901,22 @@ export function useIpcSubscriptions(
                 // renderer rewrite is meant to eliminate. Preserve the
                 // original displayed text in the queue, but compare by
                 // the same ownership key we use for render dedupe.
+                const reconciledQueuedMessages = queuedMessages.filter(q =>
+                  codexPromptsMatchForOwnership(q.content, mappedText),
+                )
+                for (const queuedMessage of reconciledQueuedMessages) {
+                  if (routedKind === 'codex') {
+                    observationRuntime = appendQueuedSubmissionReconcile(
+                      observationRuntime,
+                      queuedMessage,
+                      observation,
+                    )
+                  }
+                }
                 queuedMessages = queuedMessages.filter(q =>
                   !codexPromptsMatchForOwnership(q.content, mappedText),
                 )
-                reconciledOptimisticText = mappedText
+                if (mappedText !== null) reconciledOptimisticTexts.add(mappedText)
               }
             }
           }
@@ -1772,13 +1954,15 @@ export function useIpcSubscriptions(
           }
         }
 
-        const baseEntries = reconciledOptimisticText !== null
-          ? current.entries.filter(entry =>
-              !(
+        const baseEntries = reconciledOptimisticTexts.size > 0
+          ? current.entries.filter(entry => {
+              const optimisticText = entryTextContent(entry)
+              return !(
                 isOptimisticCodexUserEntry(entry) &&
-                entryTextContent(entry) === reconciledOptimisticText
-              ),
-            )
+                optimisticText !== null &&
+                reconciledOptimisticTexts.has(optimisticText)
+              )
+            })
           : current.entries
 
         // Track the newest JSONL entry timestamp this session has
@@ -1876,7 +2060,7 @@ export function useIpcSubscriptions(
         const lastJsonlChanged = lastJsonlEntryAt !== current.lastJsonlEntryAt
         const noChange =
           appended.length === 0 &&
-          reconciledOptimisticText === null &&
+          reconciledOptimisticTexts.size === 0 &&
           queuedMessages === current.queuedMessages &&
           awaitingAssistant === current.awaitingAssistant &&
           workContext === current.workContext &&
@@ -1898,7 +2082,7 @@ export function useIpcSubscriptions(
           return prev
         }
 
-        const nextEntries = appended.length > 0 || reconciledOptimisticText !== null
+        const nextEntries = appended.length > 0 || reconciledOptimisticTexts.size > 0
           ? [...baseEntries, ...appended]
           : current.entries
 
@@ -1978,7 +2162,7 @@ export function useIpcSubscriptions(
         const nextRuntimeBase = withDerivedSessionStatus(
           appendFeedDebugLog(
             {
-              ...current,
+              ...observationRuntime,
               entries: finalEntries,
               // Bump totalEntries by however many real entries just
               // landed via this burst. `appended` is already deduped
@@ -2029,13 +2213,13 @@ export function useIpcSubscriptions(
               layer: 'JSONL',
               kind: 'jsonl_entries',
               summary:
-                appended.length > 0 || reconciledOptimisticText !== null
-                  ? `entries +${appended.length}${reconciledOptimisticText !== null ? ' · reconciled optimistic user' : ''}`
+                appended.length > 0 || reconciledOptimisticTexts.size > 0
+                  ? `entries +${appended.length}${reconciledOptimisticTexts.size > 0 ? ` · reconciled optimistic users ${reconciledOptimisticTexts.size}` : ''}`
                   : 'jsonl side-effects only',
               data: {
                 burstSize: entries.length,
                 appendedCount: appended.length,
-                reconciledOptimisticUser: reconciledOptimisticText !== null,
+                reconciledOptimisticUser: reconciledOptimisticTexts.size > 0,
                 // WHY these counts are more important than they look:
                 // optimistic Codex user rows intentionally disappear
                 // when the durable rollout user message arrives. In
@@ -2049,7 +2233,7 @@ export function useIpcSubscriptions(
                 entryCountBefore: current.entries.length,
                 entryCountBaseAfterOptimisticReconcile: baseEntries.length,
                 entryCountAfter: nextEntries.length,
-                reconciledOptimisticText,
+                reconciledOptimisticTexts: [...reconciledOptimisticTexts],
                 appended: appended.slice(-8).map(summarizeEntryForDebug),
                 queuedMessages: queuedMessages.length,
                 worktreeReconciliation: worktreeReconciler.summarize({
@@ -2111,7 +2295,7 @@ export function useIpcSubscriptions(
           sessionId,
           burstSize: entries.length,
           appendedCount: appended.length,
-          reconciledOptimisticUser: reconciledOptimisticText !== null,
+          reconciledOptimisticUser: reconciledOptimisticTexts.size > 0,
           ghostsChanged,
           queuedMessages: queuedMessages.length,
           entriesTrimmed,
@@ -2221,6 +2405,13 @@ export function useIpcSubscriptions(
               streamPhase: current.streamPhase,
             })
           ) {
+            if (sessionKind === 'codex') {
+              next = appendQueuedSubmissionReleases(
+                next,
+                next.queuedMessages,
+                'bootstrap-complete',
+              )
+            }
             next = { ...next, awaitingAssistant: false, queuedMessages: [] }
             if (!reconciled.includes('awaitingAssistant')) {
               reconciled.push('awaitingAssistant')

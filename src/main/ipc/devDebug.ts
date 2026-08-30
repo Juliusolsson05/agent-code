@@ -3,6 +3,7 @@ import type { RenderShapeAppendResult } from '@shared/types/renderShapes.js'
 
 import { readRecentPasteSessions } from '../pasteDebugJournal.js'
 import type { SessionRecorderManager } from '@main/recording/SessionRecorderManager.js'
+import type { SessionManager } from '@main/sessionManager.js'
 
 export type DevDebugConfig = {
   enabled: boolean
@@ -60,7 +61,10 @@ const MAX_RECORDING_NOTE_CHARS = 16 * 1024
 // construction). It is threaded in from the IPC deps rather than imported as a
 // singleton so the wiring stays visible at the registerAllIpc call site,
 // exactly like every other manager here.
-export function registerDevDebugIpc(sessionRecorders: SessionRecorderManager | null): void {
+export function registerDevDebugIpc(
+  sessionRecorders: SessionRecorderManager | null,
+  manager?: Pick<SessionManager, 'getSessionRunId'>,
+): void {
   ipcMain.handle('dev-debug:get-config', (): DevDebugConfig => {
     return {
       // WHY this flag lives in main instead of import.meta.env:
@@ -147,7 +151,14 @@ export function registerDevDebugIpc(sessionRecorders: SessionRecorderManager | n
       // The command knows the pane's provider (workspace meta.kind); pass it
       // so a mid-session start still records the right provider (the
       // session:started event that carries it has usually already fired).
-      sessionRecorders.startRecording(sessionId, provider ? { kind: provider } : undefined)
+      const sessionRunId = manager?.getSessionRunId(sessionId) ?? undefined
+      sessionRecorders.startRecording(sessionId, {
+        ...(provider ? { kind: provider } : {}),
+        // Mid-session command starts never receive another session:started.
+        // Seed the recorder's provenance fence from trusted main registry state;
+        // accepting a renderer-supplied run id would re-open A→B contamination.
+        ...(sessionRunId ? { sessionRunId } : {}),
+      })
       return { recording: true, generation: sessionRecorders.recordingGeneration(sessionId) }
     },
   )
