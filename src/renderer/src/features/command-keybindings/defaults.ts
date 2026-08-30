@@ -219,14 +219,24 @@ export function buildDefaultKeybindings(): CommandBindingDefault[] {
     // have broken selection in the composer while moving row focus underneath
     // the user.
     //
-    // Cmd+Alt+Up/Down is that chord. It is free of this app's table (the
-    // reservations file claims Cmd+Alt+DIGITS for tab activation, and
-    // Cmd+Alt+E/D for the editor and debug panel — no arrows), and unlike
-    // Option+Shift+Arrow it is not a macOS text-selection binding, which is the
-    // class that made the first attempt unusable. `dispatch` context, because
-    // rows only exist there.
-    { commandId: 'dispatch-focus-row-up', bindings: ['Cmd+Alt+Up'], context: 'dispatch' },
-    { commandId: 'dispatch-focus-row-down', bindings: ['Cmd+Alt+Down'], context: 'dispatch' },
+    // Focus Row Above/Below still ship with NO default chord, after two
+    // attempts and two different collisions:
+    //
+    //   Alt+Shift+Arrow  — macOS word selection, load-bearing in the composer.
+    //   Cmd+Alt+Arrow    — Monaco's Add Cursor Above/Below (its `linux:` block
+    //                      overrides only Linux, so `primary` applies on mac).
+    //
+    // Monaco owns effectively the whole Cmd+Alt+Arrow space on macOS, including
+    // the Shift variants for column select. Those chords are now recorded in
+    // RESERVED_INTERACTIONS so the checker rejects this class instead of
+    // offering it as free — which is the durable half of the fix.
+    //
+    // The commands remain in the palette and are rebindable through Keyboard
+    // Shortcuts. Guessing a third chord is not the way to close this: the
+    // underlying problem is that the `dispatch` binding context is active even
+    // while Monaco owns the target (activeBindingContexts never consults
+    // editorOwnsTarget), which is a routing fix worth its own change rather
+    // than a rider on this one.
 
     // --- App panels (⌘⇧) ----------------------------------------------------
     { commandId: 'usage.open', bindings: ['Cmd+Shift+U'], context: 'global' },

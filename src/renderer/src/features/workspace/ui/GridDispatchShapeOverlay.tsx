@@ -146,7 +146,15 @@ export function GridDispatchShapeOverlay({ workspace, onClose }: Props) {
         workspace.setDispatchRowCapChildren(index, row.capChildren !== false)
       })
     } else {
-      void workspace.enterTiledDispatch(rows.map(row => row.length))
+      // Await the entry before applying config: the rows do not exist until it
+      // resolves, so a synchronous loop would write onto a grid that is not
+      // there yet and the user's Advanced choices would vanish with no error.
+      void workspace.enterTiledDispatch(rows.map(row => row.length)).then(() => {
+        rows.forEach((row, index) => {
+          workspace.setDispatchRowProjects(index, row.projectTabIds ?? [])
+          workspace.setDispatchRowCapChildren(index, row.capChildren !== false)
+        })
+      })
     }
     onClose()
   }, [tiled, workspace, rows, onClose])
@@ -226,7 +234,7 @@ export function GridDispatchShapeOverlay({ workspace, onClose }: Props) {
                   min={MIN_DISPATCH_TILES}
                   // Cap at what this row could actually grow to, so a stepper
                   // never offers a value the commit would refuse.
-                  max={Math.min(MAX_DISPATCH_TILES, length + Math.max(0, remaining))}
+                  max={Math.min(MAX_DISPATCH_TILES, draft.length + Math.max(0, remaining))}
                   value={draft.length}
                   onChange={next => setRowLength(index, next)}
                 />

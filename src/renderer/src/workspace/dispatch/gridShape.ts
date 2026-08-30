@@ -232,7 +232,15 @@ function withMigratedIndexFraction(
 function normalizeRowProjects(row: DispatchGridRow): DispatchGridRow {
   const legacy = row.projectTabId
   const explicit = row.projectTabIds
-  const merged = explicit ?? (legacy !== undefined ? [legacy] : undefined)
+  // Array.isArray, not a truthiness check: this runs on rehydrate against a
+  // file a user can hand-edit, and `"projectTabIds": "tab-a"` would otherwise
+  // reach `.filter` and throw. A throw here escapes rehydrate, leaves the user
+  // with one blank fallback tab, and deliberately locks autosave — which is
+  // exactly the degradation this function's header forbids. Every other
+  // persisted field in this file is type-guarded; this one was not.
+  const merged = Array.isArray(explicit)
+    ? explicit
+    : legacy !== undefined ? [legacy] : undefined
   const cleaned = merged?.filter(id => typeof id === 'string' && id.length > 0)
 
   if (legacy === undefined && explicit === cleaned) return row
