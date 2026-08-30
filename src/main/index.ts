@@ -38,10 +38,15 @@ import type { StateProcessLock } from '@main/storage/processLock.js'
 import {
   broadcastToWindows,
   createAppWindow,
+  focusedWindowId,
   focusWindow,
   sendToFocusedWindow,
   sendToSessionWindow,
+  sendToWindow,
+  sessionsOwnedBy,
   setGeometryObserver,
+  setWindowClosedObserver,
+  transferSessions,
   windowCount,
 } from '@main/window/windowRegistry.js'
 import { wireSessionForwarder } from '@main/sessions/forwarder.js'
@@ -230,6 +235,18 @@ async function runPackagingSmoke(): Promise<void> {
 // shared. If that lock ever feels too strict, the storage model must be changed
 // first; deleting the guard alone would make last-writer-wins corruption
 // possible again.
+// WHY quit has to be distinguishable from an ordinary window close: closing one
+// window hands its workspace to a survivor, but quitting closes every window
+// and must NOT collapse them all into whichever one dies last.
+//
+// The flag is cleared on window focus because Electron has no "quit cancelled"
+// event: the unsaved-editor dialog can veto a quit, and a stuck flag would
+// silently disable the handoff for the rest of the session. A focused window
+// proves the app is alive and interactive, so the quit did not happen.
+let quitting = false
+app.on('before-quit', () => { quitting = true })
+app.on('browser-window-focus', () => { quitting = false })
+
 const hasSingleInstanceLock = packagingSmoke || app.requestSingleInstanceLock()
 
 if (packagingSmoke) {
@@ -760,6 +777,49 @@ async function startApp(): Promise<void> {
   // about, so it triggers no autosave. Without this, the feature's central
   // promise — it comes back where you left it — would depend on the user
   // touching a pane before quitting.
+  // Closing a window is not destructive: its agents stay alive in
+  // SessionManager and its workspace is handed to a surviving window, where
+  // they appear in Dispatch under their own project tabs. See
+  // renderer/workspace/adoptWorkspace.ts for why the SURVIVOR performs the
+  // merge rather than main.
+  setWindowClosedObserver(closedWindowId => {
+    // WHY quitting is excluded: on quit every window closes, and collapsing all
+    // of them into whichever one happens to die last would destroy the
+    // multi-window layout the user spent time arranging. Quit persists each
+    // window separately and restores them all.
+    if (quitting) return
+    const survivor = focusedWindowId()
+    // No survivor means this was the last window. Its slice stays on disk, so
+    // the macOS `activate` path (or the next launch) restores it intact — which
+    // is exactly the pre-multi-window behavior.
+    if (!survivor) return
+
+    // WHY a turn of the event loop first: the closing renderer flushes its
+    // final autosave from `beforeunload`, and that IPC message is already
+    // queued when `closed` fires. Reading the slice in this tick could compose
+    // the bequest from the previous save and lose the last 400ms of work.
+    setImmediate(() => {
+      void (async () => {
+        const slice = await workspaceFileStore.loadSlice(closedWindowId)
+        if (!slice) {
+          await workspaceFileStore.removeWindow(closedWindowId)
+          return
+        }
+        // Ownership moves BEFORE the survivor is told, so any event emitted
+        // during the handoff already routes to the window that will display it.
+        transferSessions(sessionsOwnedBy(closedWindowId), survivor)
+        sendToWindow(survivor, 'workspace:adopt', {
+          windowId: closedWindowId,
+          workspace: slice,
+        })
+      })().catch(err => {
+        // The slice is still on disk and the sessions are still alive; the
+        // workspace comes back as its own window next launch. Nothing is lost,
+        // so this is a warning rather than a user-facing failure.
+        console.warn('[window] workspace handoff failed:', err)
+      })
+    })
+  })
   setGeometryObserver(windowId => {
     void workspaceFileStore
       .updateGeometry(windowId, captureWindowGeometry(windowId))

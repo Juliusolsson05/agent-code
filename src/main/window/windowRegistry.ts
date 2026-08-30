@@ -90,6 +90,22 @@ export function setGeometryObserver(observer: GeometryObserver | null): void {
   geometryObserver = observer
 }
 
+/**
+ * Notified after a window is fully torn down, so its workspace can be handed to
+ * a surviving window.
+ *
+ * WHY this fires on `closed` (after teardown) rather than `close` (before): the
+ * closing renderer flushes its final autosave from `beforeunload`, and the
+ * bequest must be composed from that final slice, not the one from up to 400ms
+ * earlier. By `closed` the save has been admitted to the store's queue.
+ */
+type WindowClosedObserver = (windowId: WindowId) => void
+let windowClosedObserver: WindowClosedObserver | null = null
+
+export function setWindowClosedObserver(observer: WindowClosedObserver | null): void {
+  windowClosedObserver = observer
+}
+
 function noteGeometryChanged(id: WindowId): void {
   const pending = geometryDebounces.get(id)
   if (pending) clearTimeout(pending)
@@ -318,6 +334,10 @@ export function createAppWindow(options?: {
           clearTimeout(pendingGeometry)
           geometryDebounces.delete(id)
         }
+        // Notified AFTER the map delete so `focusedWindowId()` inside the
+        // observer resolves to a survivor rather than the window that just
+        // died.
+        windowClosedObserver?.(id)
         // Session ownership is NOT cleared here. A closed window's sessions
         // stay alive in SessionManager, and the close path transfers them to a
         // survivor. Clearing on teardown would strand every one of them as
@@ -541,6 +561,7 @@ export function resetWindowRegistryForTests(): void {
   for (const timer of geometryDebounces.values()) clearTimeout(timer)
   geometryDebounces.clear()
   geometryObserver = null
+  windowClosedObserver = null
   outboundObserver = null
   outboundIpcCounts.clear()
   outboundIpcBreadcrumbs.fill(undefined)

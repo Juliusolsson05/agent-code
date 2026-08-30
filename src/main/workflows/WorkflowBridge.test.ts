@@ -164,7 +164,10 @@ describe('WorkflowBridge', () => {
     })
 
     expect(send).toHaveBeenCalledTimes(1)
-    expect(send).toHaveBeenCalledWith('workflows:session-runs', {
+    // Session-runs is addressed by SESSION: it describes one agent, so the
+    // owning window is derived from the session rather than from whichever
+    // renderer last registered a delivery interest.
+    expect(send).toHaveBeenCalledWith({ sessionId: 'session-1' }, 'workflows:session-runs', {
       sessionId: 'session-1',
       cwd: '/repo',
       runs: [expect.objectContaining({
@@ -263,7 +266,12 @@ describe('WorkflowBridge', () => {
 
     vi.advanceTimersByTime(16)
     expect(send).toHaveBeenCalledTimes(1)
-    expect(send).toHaveBeenCalledWith('workflows:event-batch', {
+    // Event batches are addressed by RENDERER, because a batch answers the
+    // delivery interest a specific renderer registered. With two windows open
+    // on the same project both can hold interest in one run, each with its own
+    // acknowledged cursor — a session-addressed send would leave one of them
+    // permanently behind.
+    expect(send).toHaveBeenCalledWith({ rendererId: 7 }, 'workflows:event-batch', {
       cwd: '/repo',
       runId: 'run-a',
       fromCursor: 1,
@@ -280,7 +288,7 @@ describe('WorkflowBridge', () => {
     bridge.acknowledgeEvents(7, { cwd: '/repo', runId: 'run-a', cursor: 2 })
     vi.advanceTimersByTime(16)
     expect(send).toHaveBeenCalledTimes(2)
-    expect(send).toHaveBeenLastCalledWith('workflows:event-batch', {
+    expect(send).toHaveBeenLastCalledWith({ rendererId: 7 }, 'workflows:event-batch', {
       cwd: '/repo',
       runId: 'run-a',
       fromCursor: 3,
@@ -445,7 +453,7 @@ describe('WorkflowBridge', () => {
     await bridge.readEvents({ cwd: '/repo', runId: 'run-a', after: 0 }, 9)
     bridge.acknowledgeEvents(9, { cwd: '/repo', runId: 'run-a', cursor: 1 })
     vi.advanceTimersByTime(1)
-    expect(send).toHaveBeenLastCalledWith('workflows:event-batch', {
+    expect(send).toHaveBeenLastCalledWith({ rendererId: 9 }, 'workflows:event-batch', {
       cwd: '/repo',
       runId: 'run-a',
       fromCursor: 2,

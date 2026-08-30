@@ -95,7 +95,7 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerFsIpc()
   registerSessionsIpc()
   registerWorkspaceIpc(deps.manager, deps.workspaceFileStore)
-  registerWindowIpc()
+  registerWindowIpc(deps.workspaceFileStore)
   registerGhostIpc(deps.ghostJournals)
   registerDebugIpc()
   registerGitIpc()

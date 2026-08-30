@@ -317,47 +317,75 @@ window's workspace model would be worse than answering it not at all.
 ### 6. Closing a window bequeaths its agents
 
 Closing a window with live agents must not kill them, and the agents must land
-somewhere the user can find them. `DetachedSessionRecord` is already exactly
-that concept — "sessions can be live without grid placement" — and Dispatch
-already renders it.
+somewhere the user can find them. The surviving window takes over the closed
+window's workspace: its tabs are appended, its sessions merged, and every one
+of them shows up in that window's Dispatch.
 
-There is one constraint that dictates the mechanism.
-`collectOwnedSessionIds()` drops a detached record whose `projectTabId` is not
-among the window's tabs, deliberately: "a missing parent means there is no
-surface from which the agent can be found or managed. Drop that closed
-ownership island." So handing a surviving window bare detached records would
-delete them on its very next autosave.
+**The survivor performs the merge, not main.** Main deliberately treats a
+window's workspace payload as opaque (§4), and this merge reasons about tabs,
+tile leaves, detached records, pins, and drafts. Implementing it in main would
+be a second opinion about session ownership, free to disagree with
+`sessionOwnership.ts` — the exact failure that module's header warns about. So
+main hands the survivor the closed window's last persisted slice over
+`workspace:adopt`, and `adoptWorkspace()` (a pure function in the renderer)
+does the merge.
 
-The bequest therefore moves **tabs and sessions together**:
+**Adopted tabs keep their tile trees.** The first design here converted every
+tile leaf into a `DetachedSessionRecord`, on the theory that "they show up in
+Dispatch" meant "they become Dispatch rows". Two findings killed that:
 
-1. The closing window's slice is transformed by a pure function
-   `bequeathWindowWorkspace(closing, survivor)`:
-   - every tile leaf in the closing slice becomes a `DetachedSessionRecord`
-     with `surface: 'dispatch'` and its existing `projectTabId` / title / index;
-   - the closing slice's tabs are appended to the survivor's tabs, with their
-     roots reduced to the empty-project shape (they are now Dispatch-only
-     projects);
-   - `sessions`, `detachedSessions`, `buried`, `pinnedSessionIds`, and `drafts`
-     are merged; `dispatchMode` and `tileTabs` of the closing window are dropped
-     (they describe a layout that no longer exists);
-   - session ids collide across windows only if the file was hand-edited — the
-     function asserts disjointness and, on overlap, keeps the survivor's row and
-     reports the dropped ids the same way autosave reports its own drops.
-2. Main hands the merged slice to the survivor window over
-   `workspace:adopt`, and the survivor merges it into its live store and saves.
-3. The registry re-points `sessionId → survivorWindowId` for every adopted id
-   **before** step 2, so events emitted during the handoff are already routed
-   correctly.
+1. It is not representable. `Tab.root` is a `TileNode` whose only terminal form
+   is `{ type: 'leaf', sessionId }` — a tab with no panes cannot exist, so
+   flattening every leaf leaves the adopted tabs with no valid root.
+2. It buys nothing. `buildDispatchGroups` (`dispatchSelectors.ts`) already lists
+   **both** grid-placed and detached sessions for a tab, so an adopted agent
+   appears in the survivor's Dispatch either way.
 
-Tab ids are preserved rather than merged into a same-project tab in the
-survivor. Merging would require deriving a tab's project identity from its
-sessions' `cwd` — `Tab` has no `cwd` field (`workspace/types.ts:48`) — and then
-rewriting `projectTabId` across detached records, pins, and tiled lanes. Two
-tabs for one project is honest and closable; inventing a tab-identity model to
-avoid it is not in scope. This is called out in the plan so the next reader
-knows it was a decision and not an oversight.
+Keeping the tree therefore costs nothing and preserves the arrangement the user
+built.
+
+**Tabs travel with their sessions.** `collectOwnedSessionIds` drops a detached
+record whose `projectTabId` names no tab — deliberately: "a missing parent means
+there is no surface from which the agent can be found or managed." Handing the
+survivor bare records would delete them on its very next autosave. Carrying the
+tab keeps every `projectTabId` valid by construction, with nothing rewritten.
+The `projectTabIndex` display ordinal IS re-derived, because the adopted tabs
+are appended after the survivor's own and a stale index would label the Dispatch
+rows with the wrong project letter.
+
+**Adopted sessions are seeded from a backend snapshot, not recovered.**
+`recoverSession` exists to reconcile a persisted id with a backend that may or
+may not still exist after an app restart; it can adopt, spawn, or fail, and
+takes a generation fence and a 30-second deadline to do it. Here every backend
+is alive, healthy, and already owned by main — the only thing missing is this
+renderer's view. So adoption seeds `emptyRuntime()` +
+`seedResumedRuntimeFields()` and calls `loadInitialHistoryForSession`, the same
+helpers bootstrap uses, and skips recovery entirely.
+
+**An id collision refuses the whole adoption.** Both id spaces are
+`randomUUID()`, so a collision means the file was hand-edited or something is
+already wrong, and "merge the parts that fit" is guessing. Dropping a colliding
+tab would strand its sessions: alive in `SessionManager`, owned by no window,
+invisible and unkillable from the UI.
+
+**Deletion is confirmed, never assumed.** Main drops the closed window's slice
+only when the survivor calls `window:adoption-complete`. Until the adopting
+renderer's next autosave lands, that slice is the only durable record of those
+sessions. A renderer that refused the merge, could not parse it, or died
+mid-handoff simply never confirms, and the workspace comes back as its own
+window on the next launch.
+
+**Ordering.** Session ownership transfers *before* the survivor is told, so an
+event emitted during the handoff already routes to the window that will display
+it. And the whole handoff waits one turn of the event loop after `closed`,
+because the closing renderer's `beforeunload` autosave is already queued as an
+IPC message — reading the slice in the same tick would compose the bequest from
+the previous save and lose the last 400 ms of work.
 
 **Which window inherits:** the last-focused surviving window.
+
+**Focus does not move.** Another window closing is not a request to navigate;
+the adopted tabs appear without stealing the user's place.
 
 ### 7. Quit is not close
 
@@ -417,26 +445,24 @@ above.
 ## Stages
 
 Each stage is independently reviewable and leaves the app working. The branch
-is `feat/multi-window`.
+is `feat/multi-window`. What actually shipped, in order:
 
 1. **Registry, no behavior change.** Split `mainWindow.ts` into
-   `windowRegistry.ts` + `appWindow.ts`, reclassify all 30 send sites (§5),
-   still creating exactly one window. Nothing user-visible; the whole diff is
-   "who is this message for".
-2. **Ownership map.** `sessionId → WindowId` at spawn/recover/kill, plus the
-   renderer-side guard in `useIpcSubscriptions`. Still one window.
-3. **Persistence v2.** File shape, migration, per-window load/save merge in
-   `src/main/ipc/workspace.ts`. Still one window — the file gains a `windows`
-   array of length 1.
-4. **New Window.** Menu item, command, keybinding, `window.api.newWindow()`,
-   fresh slice bootstrap. Two windows now genuinely work.
-5. **Geometry.** Persist and restore bounds/display/fullScreen; clamp to a
-   currently-attached display on restore (an unplugged monitor must not strand a
-   window off-screen).
-6. **Bequest.** `bequeathWindowWorkspace`, `workspace:adopt`, quit-vs-close flag.
-7. **Bridges.** Target-aware `WorkflowBridgeSender`, orchestration and
-   agent-management caller routing, deleting the three stale TODO comments that
-   asked for exactly this.
+   `windowRegistry.ts` + `appWindow.ts` and reclassify all 30 send sites (§5),
+   still creating exactly one window. The three bridges that carried
+   "must be target-aware" comments were done here rather than last: they are
+   send sites like any other, and leaving them ambiguous through four more
+   commits would have meant reasoning about routing twice.
+2. **Ownership map.** `sessionId → WindowId` claimed at id-mint time inside
+   `spawn()`, released on explicit kill.
+3. **Persistence v2.** File format, migration, per-window load/save merge, and
+   startup restoring every persisted window. Display validation landed here too,
+   since restoring N windows without it is what strands one off-screen.
+4. **New Window.** File-menu item, palette command, ⌘⇧N, `window:new`.
+   Geometry became durable on move/resize in the same commit — a window you drag
+   and never touch again otherwise never persists its position.
+5. **Bequest.** `adoptWorkspace`, `workspace:adopt`, confirmed deletion,
+   quit-vs-close.
 
 ## Tests
 
@@ -460,22 +486,22 @@ Following `docs/testing/standard.md`; suffix picks the tier.
 
 **Bequest:**
 
-- `bequeathWindowWorkspace.test.ts` — leaves become detached records that
-  `collectOwnedSessionIds` still considers owned (this is the assertion that
-  proves the tabs-move-with-sessions decision was necessary); pins and drafts
-  survive; the closing window's `tileTabs`/`dispatchMode` are dropped;
-  overlapping session ids keep the survivor's row and are reported.
-- A quit does **not** bequeath: both slices persist separately.
+- `adoptWorkspace.test.ts` — adopted detached records are still *owned* by the
+  survivor's own `collectOwnedSessionIds` (the assertion that proves tabs had to
+  travel with their sessions); tile arrangement survives; pins, drafts, and
+  buried panes survive; the Dispatch project ordinal is re-derived; an id
+  collision refuses the whole adoption.
 
 **Routing:**
 
 - `windowRegistry.routing.test.ts` — session events reach only the owner;
   unowned ids broadcast; ownership transfers on adoption before any event is
   emitted; ownership survives a natural exit and ends on an explicit kill.
-- `sessionOwnershipClaim.test.ts` — the mint hook fires before `spawn()`
-  resolves, so an event emitted mid-spawn is already routable. This is the
-  assertion that would fail if someone "simplified" the callback away in favor
-  of claiming from the resolved result.
+- `windowGeometry.test.ts` — bounds on a detached display are rejected, a
+  window parked half off the edge is kept, and a sliver too small to grab is
+  not. The display-change failure only reproduces with a monitor unplugged,
+  which no deterministic suite can stage, so the predicate is split out and
+  tested against work-area rectangles directly.
 - Bridge requests with an unowned caller reject with the fail-closed error
   rather than reaching a window.
 
