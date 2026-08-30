@@ -3,6 +3,7 @@ import { globalEditorCommands } from '@renderer/features/global-editor/commands/
 import { paneCommands } from '@renderer/features/workspace/commands/paneCommands'
 import { sessionCommands } from '@renderer/features/workspace/commands/sessionCommands'
 import { tabCommands } from '@renderer/features/workspace/commands/tabCommands'
+import { windowCommands } from '@renderer/features/workspace/commands/windowCommands'
 import { settingsCommands } from '@renderer/features/settings/commands/settingsCommands'
 import { spotlightCommands } from '@renderer/features/spotlight/commands/spotlightCommands'
 import { tileTabsCommands } from '@renderer/features/tile-tabs/commands/tileTabsCommands'
@@ -57,6 +58,9 @@ import type { CommandDef } from '@renderer/features/command-palette/types'
  */
 export const builtInCommandCatalog: readonly CommandDef[] = Object.freeze([
   ...tabCommands,
+  // Right after the tab family: a window is the thing a tab lives in, so
+  // "New Window" belongs beside "New Tab" in the empty-query browse order.
+  ...windowCommands,
   ...paneCommands,
   ...layoutCommands,
   // Registered right after layoutCommands so the moved editor commands

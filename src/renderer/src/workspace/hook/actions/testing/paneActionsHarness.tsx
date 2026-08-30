@@ -58,6 +58,7 @@ export function makeRefs(state: WorkspaceState): WorkspaceRefs {
     persistedFeedDebugIdRef: ref({}),
     inFlightFeedDebugIdRef: ref({}),
     paneToastTimers: ref({}),
+    pendingAdoptionWindowIdsRef: ref<string[]>([]),
     saveTimerRef: ref(null),
     bootRef: ref(false),
   }

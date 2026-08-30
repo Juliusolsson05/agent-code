@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { stat } from 'node:fs/promises'
 
-import { sendToMainWindow } from '@main/window/mainWindow.js'
+import { sendToWindow, windowForSession } from '@main/window/windowRegistry.js'
 import {
   findCodexRolloutPathsBySessionIds,
   resolveProviderTranscriptPath,
@@ -366,7 +366,20 @@ export class AgentManagementBridge {
       // read-only: each crosses React's renderer-owned workspace model and bulk
       // reads may page durable history. Backpressure here prevents an MCP burst
       // from racing workspace mutations or starving the renderer event loop.
-      sendToMainWindow('agent-management:request', request)
+      //
+      // WHY the caller's window is resolved here and a miss THROWS: the request
+      // is answered from one window's workspace inventory, and this tool's whole
+      // contract is that it reports the caller's project. Throwing inside this
+      // try reuses the existing failure path (timer cleared, pending dropped,
+      // slot released), which is exactly the fail-closed behavior the timeout
+      // comment above describes.
+      const target = windowForSession(request.callerSessionId)
+      if (!target) {
+        throw new Error(
+          `No Agent Code window owns agent-management caller session ${request.callerSessionId}`,
+        )
+      }
+      sendToWindow(target, 'agent-management:request', request)
     } catch (error) {
       clearTimeout(timer)
       this.pending.delete(request.requestId)

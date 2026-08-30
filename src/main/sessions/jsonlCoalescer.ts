@@ -1,6 +1,6 @@
 import type { AgentTranscriptEntry } from '@shared/types/session.js'
 
-import { sendToMainWindow } from '@main/window/mainWindow.js'
+import { sendToSessionWindow } from '@main/window/windowRegistry.js'
 import { makeStringPool, internEntryFields } from '@main/sessions/internEntry.js'
 
 // Per-session jsonl-entry coalescer.
@@ -54,7 +54,7 @@ export function flushJsonl(sessionId: string): void {
   }
   pending.entries = []
   pending.flushScheduled = false
-  sendToMainWindow('session:jsonl-entries', payload)
+  sendToSessionWindow(sessionId, 'session:jsonl-entries', payload)
 }
 
 export function flushAllJsonl(): void {

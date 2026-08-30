@@ -81,6 +81,14 @@ export function buildDefaultKeybindings(): CommandBindingDefault[] {
     // is why it could not be rebound. Phase 4 gives it an owner.
     { commandId: 'open-command-palette', bindings: ['Cmd+Shift+P'], context: 'global' },
 
+    // --- Windows ------------------------------------------------------------
+    // ⌘⇧N is the platform convention for New Window (Finder, Safari, VS Code),
+    // and nothing in this app claims it. Note that `check:keybindings` only
+    // knows THIS app's bindings — it cannot tell you a chord is free of macOS
+    // system reservations — but ⌘⇧N is reserved by no system service, only by
+    // other applications for this exact action.
+    { commandId: 'new-window', bindings: ['Cmd+Shift+N'], context: 'global' },
+
     // --- Tabs ---------------------------------------------------------------
     { commandId: 'new-tab', bindings: ['Cmd+T'], context: 'global' },
     { commandId: 'close-tab', bindings: ['Cmd+Shift+W'], context: 'global' },
