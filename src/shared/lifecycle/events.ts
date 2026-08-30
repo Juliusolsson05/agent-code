@@ -115,6 +115,28 @@ export const SESSION_LIFECYCLE_EVENT_NAMES = [
   'history.load.start',
   'history.load.end',
 
+  // "Who put text in the provider's composer?"
+  //
+  // The gate refuses to deliver while the composer holds a draft, and that is
+  // correct — it must never overwrite something a human is writing. But
+  // authorship is currently INFERRED by classifying rendered characters, which
+  // cannot distinguish a human's typing from voice dictation, the phone
+  // client, a debug terminal, or a delivery that stranded its own bytes. Every
+  // one of those produces the identical `occupied / human-draft` verdict.
+  //
+  // Measured before this event existed: text sits in the composer for a median
+  // of 52s and as long as 48 minutes, and 136 of 155 appearances had no
+  // `submit.begin` anywhere near them — because `submit.begin` only covers the
+  // app composer. So "not the app composer" was a bucket, not an answer.
+  //
+  // This records the fact at the ONE choke point every writer already passes
+  // through, so the set cannot be incomplete by construction. It is what turns
+  // "something puts text there" into a ranked list of actual causes.
+  //
+  // Coalesced deliberately — raw-terminal typing is one write per keystroke,
+  // and a per-keystroke event would drown the journal it is meant to inform.
+  'input.write',
+
   // "Did the prompt reach the provider?"
   'submit.begin',
   'submit.result',
@@ -274,9 +296,21 @@ export const SESSION_LIFECYCLE_DATA_KEYS = [
   'entryCount',
   'suppressed',
 
+  // composer authorship (`input.write`)
+  //
+  // `origin` is the whole point: it is the fact the gate cannot recover by
+  // looking at the screen. Counts rather than content — what was typed is
+  // never journaled, because the question is who wrote and when, and the text
+  // would turn a diagnostic into a privacy problem for no added answer.
+  'origin',
+  'writes',
+  'bytes',
+  'hadSubmit',
+
   // timing
   'durationMs',
   'elapsedMs',
+  'windowMs',
 ] as const
 
 export type SessionLifecycleDataKey = (typeof SESSION_LIFECYCLE_DATA_KEYS)[number]

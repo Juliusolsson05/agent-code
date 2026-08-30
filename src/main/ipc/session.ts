@@ -158,7 +158,15 @@ export function registerSessionIpc(
       // between and reports the wrong cause — the same misdiagnosis this
       // replaces, just narrower.
       const deliveryInFlight = manager.isDeliveryInFlight(sessionId)
-      const ok = manager.write(sessionId, data)
+      // `pasteId` is set only by the Agent Code paste flow (claudePaste.ts) and
+      // never by keystrokes — so the flag that already exists for the paste
+      // journal doubles as the one renderer-side attribution signal available
+      // without a contract change. Free precision; take it.
+      const ok = manager.write(
+        sessionId,
+        data,
+        typeof pasteId === 'string' && pasteId.length > 0 ? 'renderer-paste' : 'renderer',
+      )
       if (!ok) {
         // WHY both facts instead of one verdict: this used to log "missing
         // session" unconditionally, which is wrong for the far more common

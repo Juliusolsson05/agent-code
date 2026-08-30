@@ -276,6 +276,36 @@ function createRegistryLifecycle(generation: symbol): RegistryLifecycle {
 // well beyond "the shell prompt and a few commands ago" which is
 // the actual requirement. Past the cap we keep the tail (newest
 // content wins) so long-running shells don't blow up memory.
+// One event per session per second for composer writes. A raw terminal view
+// emits one write per keystroke, so this is the difference between a journal
+// that answers "who typed here" and one that is nothing but keystrokes.
+const INPUT_WRITE_COALESCE_MS = 1000
+
+/**
+ * Who put bytes into a session's PTY.
+ *
+ * Every value here is derived from information the write boundary ALREADY has,
+ * which is why the split costs nothing: `remote` is a distinct manager entry
+ * point, and `renderer-paste` is just the existing optional `pasteId` on
+ * `session:input` read as the attribution signal it already is.
+ *
+ * `renderer` stays a bucket, and the honest reading is "an app surface that is
+ * not a paste" — the raw terminal view, terminal panes, dictation, the debug
+ * terminal, and our own Clear command are indistinguishable from each other.
+ * Separating them needs an origin threaded from each call site through the
+ * shared SessionFeed contract, and that is deliberately NOT done here: it is a
+ * contract change worth making only if Stage 2 shows a renderer writer is
+ * implicated at all. Today the evidence points the other way — 52 of 57
+ * recorded refusals had no orphaned write of any kind — so the useful question
+ * is whether ANY writer touched the composer, and that this union answers.
+ */
+type InputWriteOrigin =
+  | 'delivery'
+  | 'condition'
+  | 'remote'
+  | 'renderer-paste'
+  | 'renderer'
+
 const TERMINAL_BUFFER_CAP = 256 * 1024
 
 // Raw-agent terminal buffer cap. This is intentionally larger than the
@@ -336,6 +366,22 @@ export class SessionManager extends EventEmitter {
   // per-session critical section; without it, Enter from attempt A can submit
   // paste B and turn a slow operation into duplicate queue entries.
   private readonly promptDeliveriesInFlight = new Set<string>()
+  /**
+   * Open coalescing window per session for `input.write`. See recordInputWrite.
+   *
+   * The timer handle is held so teardown can cancel it. Without that, a session
+   * that dies mid-window leaves a timer that fires against a session id the
+   * registry no longer knows, and the map entry itself outlives the session —
+   * the exact per-session-map leak class `cleanupSessionState` exists to stop.
+   */
+  private readonly inputWriteCoalesce = new Map<string, {
+    firstAt: number
+    writes: number
+    bytes: number
+    origin: InputWriteOrigin
+    hadSubmit: boolean
+    timer?: ReturnType<typeof setTimeout>
+  }>()
   private readonly lastActivityAt = new Map<string, number>()
   // Latest per-session UI-state snapshots, cached at the emit sites below.
   // WHY: consumers that attach mid-flight (the remote mobile companion's
@@ -675,6 +721,13 @@ export class SessionManager extends EventEmitter {
     }
     this.sessions.delete(sessionId)
     this.sessionStateGenerations.delete(sessionId)
+    // Flush rather than drop: the writes in an open window really happened, and
+    // the ones immediately before a session dies are the most diagnostically
+    // valuable of all — a delivery that was mid-flight when the PTY exited is
+    // exactly the shape being investigated. flushInputWrite also clears the
+    // pending timer, so this both emits the record and ends the map entry's
+    // lifetime with the session.
+    this.flushInputWrite(sessionId)
     // UI-state snapshot caches die with the session — replaying a dead
     // session's screen/conditions to a late subscriber would present it as
     // live (the exact stale-state bug the remote late-joiner replay had).
@@ -2955,7 +3008,91 @@ export class SessionManager extends EventEmitter {
     return this.promptDeliveriesInFlight.has(sessionId)
   }
 
-  write(sessionId: string, data: string): boolean {
+  /**
+   * Record who wrote into the provider's composer.
+   *
+   * WHY this exists at all: the prompt gate refuses delivery while the composer
+   * holds a draft, and it decides that by classifying rendered characters. That
+   * can tell us characters are present; it cannot tell us who put them there.
+   * A human mid-sentence, a dictation paste, the phone client, a debug
+   * terminal, and a delivery that stranded its own bytes all render identically
+   * and all produce `occupied / human-draft`. Sessions then sit blocked — 19 of
+   * 216 ended that way, the longest for 47 hours — with the cause unknowable
+   * after the fact.
+   *
+   * WHY here and not at the call sites: this is the single function every
+   * non-delivery writer reaches (renderer composer, raw terminal view, terminal
+   * panes, dictation, debug terminal, phone client). Instrumenting the choke
+   * point cannot miss a writer; instrumenting seven call sites can, and would
+   * miss the eighth one added later.
+   *
+   * WHY coalesced rather than one event per write: a raw terminal view sends
+   * one write per keystroke. Logging each would bury the signal in the journal
+   * that exists to surface it, and would make the journal's own size a new
+   * problem. One event per session per window, carrying the count, answers
+   * "did someone type here, and when" — which is the question — without
+   * carrying what they typed, which is never logged.
+   */
+  private recordInputWrite(
+    sessionId: string,
+    data: string,
+    origin: InputWriteOrigin,
+  ): void {
+    if (!this.lifecycle) return
+    const now = Date.now()
+    const pending = this.inputWriteCoalesce.get(sessionId)
+    // A submit is always worth its own event: it is the boundary between "text
+    // is accumulating" and "the composer should now be empty", which is exactly
+    // the transition that matters when reconstructing why a composer is
+    // occupied later.
+    const hasSubmit = data.includes('\r')
+    if (pending && !hasSubmit && now - pending.firstAt < INPUT_WRITE_COALESCE_MS && pending.origin === origin) {
+      pending.writes += 1
+      pending.bytes += data.length
+      return
+    }
+    if (pending) this.flushInputWrite(sessionId)
+    const entry = {
+      firstAt: now, writes: 1, bytes: data.length, origin, hadSubmit: hasSubmit,
+      timer: undefined as ReturnType<typeof setTimeout> | undefined,
+    }
+    this.inputWriteCoalesce.set(sessionId, entry)
+    if (hasSubmit) this.flushInputWrite(sessionId)
+    else {
+      entry.timer = setTimeout(() => this.flushInputWrite(sessionId), INPUT_WRITE_COALESCE_MS)
+      // Never hold the process open for a diagnostic.
+      entry.timer.unref?.()
+    }
+  }
+
+  private flushInputWrite(sessionId: string): void {
+    const pending = this.inputWriteCoalesce.get(sessionId)
+    if (!pending) return
+    this.inputWriteCoalesce.delete(sessionId)
+    // A flush can be reached before the window elapses — by a submit, an origin
+    // change, or teardown — so the timer is cleared here rather than only on
+    // the path that owns it.
+    if (pending.timer) clearTimeout(pending.timer)
+    // Byte COUNTS only. What the user typed is never journaled — the question
+    // is who wrote and when, and the content would make this a privacy problem
+    // for no diagnostic gain.
+    this.lifecycle?.session('input.write', sessionId, {
+      origin: pending.origin,
+      writes: pending.writes,
+      bytes: pending.bytes,
+      hadSubmit: pending.hadSubmit,
+      windowMs: Date.now() - pending.firstAt,
+    })
+  }
+
+  write(
+    sessionId: string,
+    data: string,
+    // Defaulted rather than required so no caller is forced to lie. A caller
+    // that does not know its own origin gets the honest bucket instead of a
+    // made-up label, and the two entry points that DO know pass it.
+    origin: Exclude<InputWriteOrigin, 'delivery' | 'condition'> = 'renderer',
+  ): boolean {
     // A raw Enter is globally meaningful to a TUI composer. While the provider
     // delivery state machine owns that composer, accepting Enter from a slash
     // path, remote submit, or raw terminal would let one operation submit
@@ -3009,6 +3146,17 @@ export class SessionManager extends EventEmitter {
       }
       return false
     }
+    // Recorded BEFORE crossing the write boundary, deliberately. node-pty's
+    // write is not transactional: a throw does not prove zero bytes reached the
+    // child. Recording after would drop exactly the writes most likely to
+    // orphan a prompt — the ones that failed halfway — leaving the journal
+    // silent about the case it exists to explain. So this event means "bytes
+    // were handed to the PTY", not "the PTY accepted them", and the absence of
+    // an event is the strong claim: nothing was even attempted.
+    //
+    // The origin the caller supplies is as precise as the boundary can be
+    // without a contract change; see InputWriteOrigin.
+    this.recordInputWrite(sessionId, data, origin)
     entry.session.write(data)
     return true
   }
@@ -3025,6 +3173,10 @@ export class SessionManager extends EventEmitter {
     // crossing it so the outer coordinator never labels a thrown write safe to
     // retry. The identity rejection above remains genuinely pre-write.
     onWriteAttempt?.()
+    // Before the crossing, for the same reason as `onWriteAttempt` immediately
+    // above: a thrown write may still have delivered bytes, and the journal has
+    // to agree with the retry decision rather than contradict it.
+    this.recordInputWrite(sessionId, data, 'delivery')
     expectedEntry.session.write(data)
     return true
   }
@@ -3123,6 +3275,20 @@ export class SessionManager extends EventEmitter {
     // renderer/IPC consumers. The cast asserts providers keep their
     // reasons within that set — Claude's DriveResult does; a new
     // provider's resolver must too (documented on the contract).
+    // Condition resolvers synthesize their own keystrokes inside the provider —
+    // free text and Enter, in the AskUserQuestion case — reaching the PTY
+    // through the headless write callback rather than either instrumented
+    // function here. Review caught that this made the journal's
+    // "cannot miss a writer by construction" claim false: an answered dialog
+    // could put text in the composer with nothing recorded, which is precisely
+    // the blind spot the event exists to close.
+    //
+    // Recorded at the call boundary rather than inside the provider because
+    // this is where every resolver converges, and because the manager is what
+    // owns the journal. Byte counts are unknown from here — the provider
+    // decides them — so this records the ACT, which is the part that matters
+    // for attribution.
+    this.recordInputWrite(sessionId, '', 'condition')
     return entry.session.resolveCondition(action) as Promise<ResolveConditionResult>
   }
 

@@ -10,9 +10,9 @@ import type { CommandDef } from '@renderer/features/command-palette/types'
 // 2026-07-23-command-surface-audit.md): CHARACTERIZE THE CURRENT CATALOG.
 //
 // This file pinned the exact 102-id before-state, then the 106-id governance
-// after-state (102 - 5 retired + 9 added), and now 112 with Grid Dispatch's six
-// row commands (#681): New Row, Remove Row, Row Project, Orchestrated Agents,
-// and the two row-focus movements. Keeping ONE snapshot that moved — rather
+// after-state (102 - 5 retired + 9 added), then 112 with Grid Dispatch's six
+// row commands (#681), 113 with New Window (#688), and now 114 with Clear
+// Agent Composer (#683). Keeping ONE snapshot that moved — rather
 // than a "baseline" file and an "after" file — is what makes the plan's
 // headline count an assertion anyone can check against running code instead of
 // prose.
@@ -128,6 +128,7 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   'attach-recording-note',
   'toggle-rendering-debug-mode',
   'toggle-html-debug-panel',
+  'clear-agent-composer',
   'toggle-dev-debug-panel',
   // agentTitleCommands (1)
   'agent.title.set',
@@ -187,12 +188,12 @@ const NAVIGATION_COMMAND_GROUP: readonly string[] = [
 const ids = (): string[] => builtInCommandCatalog.map(c => c.id)
 
 describe('built-in command catalog — baseline characterization', () => {
-  it('contains exactly the 113 governed commands in registration order', () => {
+  it('contains exactly the 114 governed commands in registration order', () => {
     // Order matters: this is the palette's empty-query browse order.
     expect(ids()).toEqual([...BASELINE_COMMAND_IDS])
   })
 
-  it('has exactly 113 commands', () => {
+  it('has exactly 114 commands', () => {
     // Stated separately from the order assertion because this number is the
     // thing that moves, and a bare count failure is a clearer signal than a
     // 99-line array diff.
@@ -201,10 +202,10 @@ describe('built-in command catalog — baseline characterization', () => {
     // `open-keyboard-shortcuts` → 102 with the three composer commands → 104
     // with the two lane-removal commands → 105 with Set Agent Title → 106 with
     // New Lane → 112 with Grid Dispatch's six row commands → 113 with New
-    // Window. Each
+    // Window → 114 with Clear Agent Composer (#683). Each
     // step of that arithmetic was a deliberate edit to this line, which is the
     // entire point of pinning it.
-    expect(builtInCommandCatalog).toHaveLength(113)
+    expect(builtInCommandCatalog).toHaveLength(114)
   })
 
   it('reports no structural defects', () => {
@@ -235,11 +236,11 @@ describe('generated per-provider split commands', () => {
   })
 
   it('accounts for the difference between literal and total command count', () => {
-    // 113 total - 4 generated = 109 literal `id:` fields across the command
+    // 114 total - 4 generated = 110 literal `id:` fields across the command
     // modules. At the original baseline this read 102 - 4 = 98; it moved down by
     // the five retirements, then back up by the nine additions, Grid Dispatch's
     // six row commands, and New Window.
-    expect(builtInCommandCatalog.length - nonDefaultProviders.length * 2).toBe(109)
+    expect(builtInCommandCatalog.length - nonDefaultProviders.length * 2).toBe(110)
   })
 
   it('emits both directions for every non-default provider', () => {
@@ -338,7 +339,7 @@ describe('governance targets', () => {
   })
 
   it('lands on the arithmetic the plan predicted', () => {
-    // 102 baseline - 5 retirements + 15 additions = 112, checked against the
+    // 102 baseline - 5 retirements + 17 additions = 114, checked against the
     // real catalog rather than trusted as prose.
     //
     // The subtracted term is the count of APPROVED ADDITIONS and the expected
@@ -355,9 +356,10 @@ describe('governance targets', () => {
     // `new-tiled-lane`, Grid Dispatch's six row commands (#681):
     // `new-dispatch-row`, `remove-dispatch-row`, `dispatch-row-project`,
     // `dispatch-row-child-cap`, `dispatch-focus-row-up`,
-    // `dispatch-focus-row-down`, and `new-window` (#688).
-    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 16).toBe(102)
-    expect(builtInCommandCatalog).toHaveLength(113)
+    // `dispatch-focus-row-down`, `new-window` (#688), and
+    // `clear-agent-composer` (#683).
+    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 17).toBe(102)
+    expect(builtInCommandCatalog).toHaveLength(114)
   })
 })
 

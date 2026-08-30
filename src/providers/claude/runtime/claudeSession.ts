@@ -785,17 +785,44 @@ export class ClaudeSession extends EventEmitter {
     return { kind: 'ready' }
   }
 
+  /**
+   * Collapse a gate verdict into the reason that crosses to the renderer.
+   *
+   * Only `occupied` survives as itself (#683). It is the one non-ready state
+   * that does NOT clear on its own — by design, since the gate must never
+   * overwrite a human draft — so it is the only one where the user has
+   * something to do. Everything else is "wait", and a caller cannot act
+   * differently on replay-pending versus composer-unpainted.
+   */
+  private static readinessReasonFor(
+    gate: PromptGateState,
+  ): AgentInputReadiness['reason'] {
+    if (gate.kind === 'ready') return 'ready'
+    if (gate.kind === 'occupied') return 'composer-occupied'
+    return 'provider-not-ready'
+  }
+
   private publishPromptGate(next: PromptGateState): PromptGateState {
     if (JSON.stringify(next) === JSON.stringify(this.promptGateState)) {
       return this.promptGateState
     }
-    const wasReady = this.promptGateState.kind === 'ready'
+    const previousReason = ClaudeSession.readinessReasonFor(this.promptGateState)
+    const nextReason = ClaudeSession.readinessReasonFor(next)
     this.promptGateState = next
     this.emit('prompt-gate', next)
-    if (next.kind === 'ready') {
-      this.emit('input-readiness', { ready: true, reason: 'ready' })
-    } else if (wasReady) {
-      this.emit('input-readiness', { ready: false, reason: 'provider-not-ready' })
+    // WHY this emits on a REASON change and not only on a readiness FLIP: the
+    // previous condition was `else if (wasReady)`, so a transition between two
+    // non-ready states published nothing. A session going warming -> occupied
+    // therefore left the renderer showing the warming text forever, which is
+    // exactly the case #683 is about — the pane sat on "waiting for agent"
+    // while the real reason was a draft the user needed to clear. The boolean
+    // did not change, so the old guard suppressed the one event that carried
+    // the news.
+    if (nextReason !== previousReason) {
+      this.emit('input-readiness', {
+        ready: next.kind === 'ready',
+        reason: nextReason,
+      })
     }
     return next
   }
