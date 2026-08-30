@@ -2,6 +2,11 @@ import { act, renderHook } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
 import { useDispatchActions } from '@renderer/workspace/hook/actions/dispatch'
+import {
+  insertLaneRightIntoGrid,
+  insertRowBelowInGrid,
+  removeRowFromGrid,
+} from '@renderer/workspace/dispatch/gridShape'
 import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 
@@ -24,6 +29,8 @@ const HIBERNATED = 'hibernated-session' as SessionId
 function harness(options: {
   wakeRejects?: boolean
   duringWake?: (ref: { current: WorkspaceState }) => void
+  rows?: { length: number }[]
+  lanes?: number
 } = {}) {
   const order: string[] = []
   const state = {
@@ -31,9 +38,12 @@ function harness(options: {
     dispatchMode: {
       scope: 'global' as const,
       tiled: {
-        // [1, 2] — a first row of one lane, then the row the races target.
-        lanes: [{ selectedSessionId: LIVE }, {}, {}],
-        rows: [{ length: 1 }, { length: 2 }],
+        // Default [1, 2] — a first row of one lane, then the row races target.
+        lanes: [
+          { selectedSessionId: LIVE },
+          ...Array.from({ length: (options.lanes ?? 3) - 1 }, () => ({})),
+        ],
+        rows: options.rows ?? [{ length: 1 }, { length: 2 }],
         focusedLane: 0,
       },
     },
@@ -96,7 +106,7 @@ function harness(options: {
 
 describe('selecting an agent into a lane', () => {
   it('wakes a hibernated agent BEFORE writing the lane', async () => {
-    const { hook, order, ensureSessionLive } = harness()
+    const { hook, order, ensureSessionLive, written } = harness()
 
     await act(async () => {
       await hook.result.current.selectTiledLaneSession(1, HIBERNATED)
@@ -106,6 +116,10 @@ describe('selecting an agent into a lane', () => {
     // Order is the contract: a lane written first is a dead pane the user can
     // type into while the wake is still in flight.
     expect(order).toEqual(['wake', 'write-lane'])
+    // `order` alone would pass on a write the reducer's bounds check rejected,
+    // because the harness records the setState CALL. Assert the lane actually
+    // took the session.
+    expect(written).toEqual([1])
   })
 
   it('does not place an agent it could not wake', async () => {
@@ -137,6 +151,31 @@ describe('selecting an agent into a lane', () => {
   })
 })
 
+/**
+ * Apply a REAL grid mutation while the wake is in flight.
+ *
+ * WHY the real functions and not a hand-built next-shape: the fix depends on
+ * those mutations preserving untouched row objects by reference, which is what
+ * lets identity distinguish "this row grew" from "this is a different row".
+ * A hand-written reshape with fresh objects tests the test's idea of the
+ * reducers, not the reducers — and would make the follow cases fail for a
+ * reason that never happens in the product.
+ */
+function reshapeWith(
+  mutate: (tiled: NonNullable<NonNullable<WorkspaceState['dispatchMode']>['tiled']>) =>
+    ReturnType<typeof insertLaneRightIntoGrid>,
+) {
+  return (ref: { current: WorkspaceState }) => {
+    const tiled = ref.current.dispatchMode!.tiled!
+    const next = mutate(tiled)
+    if (!next) throw new Error('reshape refused; the fixture is wrong')
+    ref.current = {
+      ...ref.current,
+      dispatchMode: { ...ref.current.dispatchMode!, tiled: next },
+    } as WorkspaceState
+  }
+}
+
 describe('a reshape while the wake is in flight', () => {
   // `lanes` is flat and row-major, so a lane added or removed in an EARLIER row
   // shifts every later index. setTiledLaneSession's bounds check catches an
@@ -145,22 +184,9 @@ describe('a reshape while the wake is in flight', () => {
   // gesture therefore captures a (row, column) and re-derives the flat index
   // after the wake.
   it('follows the target lane when an earlier row grows under it', async () => {
+    // Real New Lane in row 0: [1,2] -> [2,2]. Target slides from flat 2 to 3.
     const { hook, written } = harness({
-      duringWake: ref => {
-        const tiled = ref.current.dispatchMode!.tiled!
-        // New Lane in row 0: [1,2] -> [2,2]. The target slides from flat 2 to 3.
-        ref.current = {
-          ...ref.current,
-          dispatchMode: {
-            ...ref.current.dispatchMode!,
-            tiled: {
-              ...tiled,
-              lanes: [tiled.lanes[0]!, {}, ...tiled.lanes.slice(1)],
-              rows: [{ length: 2 }, { length: 2 }],
-            },
-          },
-        } as WorkspaceState
-      },
+      duringWake: reshapeWith(tiled => insertLaneRightIntoGrid(tiled, 0)),
     })
 
     // Aim at row 1, column 1 of a [1, 2] grid — flat index 2.
@@ -173,28 +199,48 @@ describe('a reshape while the wake is in flight', () => {
     expect(written).toEqual([3])
   })
 
-  it('drops the write when the target row is gone', async () => {
-    // Rows have no durable identity, so a row removed ABOVE the target changes
-    // the target's own index and it can no longer be located. Dropping is the
-    // honest outcome: silently retargeting a slot the user did not choose is
-    // the class of surprise this branch exists to remove. Narrow enough to
-    // accept — it needs a reshape to land inside a wake round-trip.
-    const { hook, order } = harness({
-      duringWake: ref => {
-        ref.current = {
-          ...ref.current,
-          dispatchMode: {
-            ...ref.current.dispatchMode!,
-            tiled: { lanes: [{}], rows: [{ length: 1 }], focusedLane: 0 },
-          },
-        } as WorkspaceState
-      },
+  it('drops the write when a row above the target is removed', async () => {
+    // THE case an earlier version of this test got wrong, and the reason a real
+    // bug shipped green: with only two rows, removing row 0 leaves the stale
+    // index off the END of the array, so the write dropped for a reason that
+    // had nothing to do with row identity. THREE rows is what distinguishes
+    // them — index 1 is still in range, but it now names a different row.
+    const { hook, order, written } = harness({
+      rows: [{ length: 1 }, { length: 2 }, { length: 2 }],
+      lanes: 5,
+      // Real Remove Row on row 0. Index 1 stays in range but now names old row 2.
+      duringWake: reshapeWith(tiled => removeRowFromGrid(tiled, 0)),
     })
 
     await act(async () => {
       await hook.result.current.selectTiledLaneSession(2, HIBERNATED)
     })
 
+    // Without the identity check this wrote into the old row 2 — a lane in a
+    // row the user never touched, evicting whatever they were watching.
+    expect(written).toEqual([])
     expect(order).toEqual(['wake'])
+  })
+
+  it('drops the write when a row is inserted above the target', async () => {
+    // Same class, opposite direction, and reachable with no confirmation
+    // dialog at all: New Row while a wake is in flight.
+    // A [2,2] fixture on purpose: New Row inherits the source row's length, so
+    // the inserted row is 2 lanes wide and the target's column still EXISTS in
+    // it. That is what forces the identity check to be the thing that catches
+    // this — with a 1-lane fixture the write would drop on the column bound and
+    // the test would pass without the fix.
+    const { hook, written } = harness({
+      rows: [{ length: 2 }, { length: 2 }],
+      lanes: 4,
+      duringWake: reshapeWith(tiled => insertRowBelowInGrid(tiled, 0)),
+    })
+
+    // Row 1, column 0 of [2,2] — flat 2.
+    await act(async () => {
+      await hook.result.current.selectTiledLaneSession(2, HIBERNATED)
+    })
+
+    expect(written).toEqual([])
   })
 })

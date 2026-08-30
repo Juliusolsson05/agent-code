@@ -232,6 +232,23 @@ describe('Grid Dispatch layout', () => {
     expect(offered).toContain(sessionId)
   })
 
+  it('sends a row s index click into THAT row, not the focused one', () => {
+    // Load-bearing once each row's first lane lost its strip: with focus in
+    // row 0, clicking row 1's index must target row 1's first lane (flat 2).
+    // The earlier version of this test clicked row 0's index while focus was
+    // already in row 0, so it could not tell `focusedLaneInRow` from `start`.
+    const { getAllByTestId, selectTiledLaneSession } = renderGrid({
+      lanes: laneIds.map(id => ({ selectedSessionId: id })),
+      rows: [{ length: 2 }, { length: 2 }],
+      focusedLane: 0,
+    })
+
+    getAllByTestId('row-index')[1]!.click()
+
+    expect(selectTiledLaneSession).toHaveBeenCalledTimes(1)
+    expect(selectTiledLaneSession.mock.calls[0]![0]).toBe(2)
+  })
+
   it('still renders a pre-grid single-row workspace', () => {
     // The migration path, end to end: no `rows` at all means one row holding
     // every lane, and it must render rather than crash on a missing descriptor.

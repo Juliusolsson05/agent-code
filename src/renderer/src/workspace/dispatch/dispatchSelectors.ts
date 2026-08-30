@@ -327,7 +327,7 @@ export function isPinned(state: WorkspaceState, sessionId: SessionId): boolean {
  * `activeTabId`. Those two fields agree in classic Dispatch (focusing a
  * row syncs both via focusDispatchSession) but DIVERGE in Tiled
  * Dispatch: lane focus/selection (setTiledFocusedLane /
- * setTiledLaneSession) writes only `tiled.focusedLane` and
+ * selectTiledLaneSession) writes only `tiled.focusedLane` and
  * `lanes[].selectedSessionId` — never the classic focus fields. The
  * result was new agents landing in the stale active tab instead of the
  * focused lane's project (issue #266 / #248 regression). Resolving the

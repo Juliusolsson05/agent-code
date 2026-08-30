@@ -411,11 +411,16 @@ function GridRowView({
                     // Advertising it in an unfocused lane would tell the user
                     // to press something that yanks the agent they are working
                     // with and leaves this lane untouched.
+                    // The FIRST lane of a row has no strip (its index list is
+                    // its selector), so naming one there points the user at
+                    // something that is not on screen.
                     hint={
                       focused && !lane?.selectedSessionId
-                        ? gridRow.projectTabId
-                          ? 'Pick an agent from the strip, or press ⌥↓'
-                          : 'Pick an agent from the strip, or press ⌥↓ for the top of the index'
+                        ? column === 0
+                          ? 'Pick an agent from the index, or press ⌥↓'
+                          : gridRow.projectTabId
+                            ? 'Pick an agent from the strip, or press ⌥↓'
+                            : 'Pick an agent from the strip, or press ⌥↓ for the top of the index'
                         : undefined
                     }
                   />

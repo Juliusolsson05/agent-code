@@ -969,8 +969,9 @@ function focusDispatchRowByIndex(workspace: Workspace, index: number) {
 //
 // When a tiled layout is active, dispatch selection targets the FOCUSED
 // LANE rather than the single dispatch focus. These mirror the classic
-// helpers above but write through setTiledLaneSession, so cmd-N / arrows
-// fill the focused lane (duplicates across lanes are allowed).
+// helpers above but write through selectTiledLaneSession, so cmd-N / arrows
+// fill the focused lane (duplicates across lanes are allowed) — and wake a
+// hibernated agent first, which the raw lane writer never did (#690).
 
 function focusedTiledLane(workspace: Workspace): number {
   return workspace.dispatchMode?.tiled?.focusedLane ?? 0

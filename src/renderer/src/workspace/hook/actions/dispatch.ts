@@ -305,19 +305,25 @@ export function useDispatchActions(
    *
    * WHY the wake completes BEFORE the lane is written: writing first exposes a
    * dead pane the user can type into during the gap, which is the very state
-   * this is fixing. `ensureSessionLive` joins an in-flight wake and is a cheap
-   * no-op for an already-running detached agent, so the common case pays
-   * almost nothing.
+   * this is fixing.
    *
-   * Grid-placed sessions skip the check entirely — they are owned by a tile
-   * tree and were respawned at rehydrate.
+   * Be honest about the cost. `DetachedSessionRecord` means "live but not
+   * grid-placed", so in an ordinary session EVERY dispatch agent is detached —
+   * this is the common path, not the exception. `ensureSessionLive` joins an
+   * in-flight wake and adopts rather than restarts a running agent, but it is
+   * not free: one `session:recover` round-trip and a transient `spawning` flip
+   * per gesture. Sub-frame in practice; not "nothing".
    */
   const selectTiledLaneSession = useCallback(
     async (laneIndex: number, sessionId: SessionId) => {
       const detached = refs.stateRef.current.detachedSessions[sessionId] !== undefined
       if (!detached) {
-        // Owned by a tile tree and respawned at rehydrate, so this stays
-        // synchronous and no coordinate can shift underneath it.
+        // Grid-placed: stays synchronous, so no coordinate can shift underneath
+        // it. NOT a guarantee that it is live — a tile leaf whose respawn failed
+        // at rehydrate, or whose process died since, is still selectable here
+        // and still needs the pane's own Retry. That gap is shared verbatim with
+        // agent-index navigation, which uses the identical predicate; widening
+        // both is its own change, not this one.
         setTiledLaneSession(laneIndex, sessionId)
         return
       }
@@ -331,18 +337,35 @@ export function useDispatchActions(
       // DIFFERENT row's lane is still in range — the write would land in the
       // wrong row. Re-deriving from the coordinate after the wake fixes that.
       //
-      // BE PRECISE about the limit: rows have no durable identity, so removing
-      // a row ABOVE the target changes the target row's own index and it can no
-      // longer be located. That case DROPS the write rather than following it.
-      // Dropping is the honest outcome — silently retargeting a slot the user
-      // did not choose is the surprise this whole change removes — and the
-      // window is narrow, needing a reshape to land inside a wake round-trip.
-      // If rows ever gain ids, this becomes a real follow instead.
+      // The follow is gated on the ROW DESCRIPTOR surviving by reference, not
+      // on its index still being in range.
+      //
+      // WHY reference identity is the right test: a row index is positional and
+      // is only stable against changes to row LENGTHS, never to row MEMBERSHIP.
+      // Checking range alone drops correctly in a 2-row grid (the stale index
+      // falls off the end) and silently writes into the WRONG row from three
+      // rows up — removing row 0 of [1,2,2] would have written the agent into
+      // what used to be row 2. Every grid mutation preserves untouched row
+      // objects (`insertLaneRightIntoGrid`/`removeLaneFromGrid` map, the row ops
+      // slice/filter), so identity follows exactly the grow/shrink cases and
+      // drops every membership change.
+      //
+      // Dropping is the honest outcome for a membership change — silently
+      // retargeting a slot the user did not choose is the surprise this whole
+      // change removes. If rows ever gain durable ids this becomes a real
+      // follow instead.
+      //
+      // The window is NOT narrow, which is why this matters: a cold wake allows
+      // up to 30s, and Remove Row / Close Agent sit on a confirmation dialog
+      // inside it.
       const before = normalizeGridShape(refs.stateRef.current.dispatchMode?.tiled ?? {
         lanes: [], focusedLane: 0,
       })
       const rowIndex = rowIndexForLane(before.rows, laneIndex)
       const column = rowIndex >= 0 ? laneIndex - rowStartIndex(before.rows, rowIndex) : -1
+      // Checked BEFORE the wake: an unresolvable coordinate can never produce a
+      // write, and spawning a provider process only to discard it is waste.
+      if (rowIndex < 0 || column < 0) return
 
       try {
         await ensureSessionLive(sessionId, 'dispatch-lane.select')
@@ -357,15 +380,13 @@ export function useDispatchActions(
         return
       }
 
-      if (rowIndex < 0 || column < 0) return
       const after = normalizeGridShape(refs.stateRef.current.dispatchMode?.tiled ?? {
         lanes: [], focusedLane: 0,
       })
       const row = after.rows[rowIndex]
-      // The row was removed, or shrank past the column the user aimed at.
-      // Dropping the write is right: silently retargeting a slot the user did
-      // not choose is the class of surprise this whole branch is removing.
-      if (!row || column >= row.length) return
+      // Not the same row any more (removed, or displaced by an insert above),
+      // or it shrank past the column the user aimed at.
+      if (!row || row !== before.rows[rowIndex] || column >= row.length) return
       setTiledLaneSession(rowStartIndex(after.rows, rowIndex) + column, sessionId)
     },
     [refs, ensureSessionLive, showToast, setTiledLaneSession],
