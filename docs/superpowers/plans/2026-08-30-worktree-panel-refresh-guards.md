@@ -69,13 +69,17 @@ Mount, advance fake timers to 9s, re-render repeatedly with a **new `workspace`
 object reference** each time (this is exactly what an agent runtime tick does),
 then advance to 10s.
 
-- Correct behaviour: the poll fires once at 10s. Two loads total.
-- With `workspace` in the deps: every re-render restarts the interval, so the
-  10s boundary is never reached and the second load never happens.
+Two assertions, and reverting the guard confirmed both are load-bearing:
 
-The assertion is on the poll *firing on its original schedule despite churn* —
-which is the property that actually broke, and it fails loudly if the ref is
-removed.
+- **After the churn burst, still one load.** With `workspace` back in the deps,
+  each re-render mints a new `refresh` and re-runs the mount effect; the mount
+  dump is by then older than `MOUNT_REUSE_WINDOW_MS`, so the freshness check
+  declines to reuse it and issues an immediate load — *one extra git scan per
+  runtime tick*. This is the runaway loop itself, and it is what actually trips
+  first.
+- **At the 10s boundary, exactly two loads.** The interval set at mount must
+  still be the one running. A poll torn down and restarted on every tick never
+  completes a scheduled refresh — the starvation half of the same bug.
 
 ### Contract 2 — overlapping refreshes coalesce
 
