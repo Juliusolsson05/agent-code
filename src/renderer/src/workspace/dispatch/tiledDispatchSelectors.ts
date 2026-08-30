@@ -6,6 +6,10 @@ import type {
   WorkspaceState,
 } from '@renderer/workspace/types'
 import { buildVisibleDispatchRows } from '@renderer/workspace/dispatch/dispatchSelectors'
+import {
+  MAX_DISPATCH_TILES,
+  MIN_DISPATCH_TILES,
+} from '@renderer/workspace/dispatch/gridShape'
 
 // ============================================================================
 // Tiled-lane coherence helpers
@@ -200,12 +204,11 @@ export function nextTiledRowIndex(
   return (((currentIndex + delta) % length) + length) % length
 }
 
-// The issue caps Tiled Dispatch at 10 lanes. The floor is 1 (a single
-// tiled lane is still a valid — if degenerate — tiled view; returning to
-// the classic single-agent layout is done by toggling Dispatch Mode, not
-// by asking for 0 tiles).
-export const MAX_DISPATCH_TILES = 10
-export const MIN_DISPATCH_TILES = 1
+// The per-ROW column bounds now live in gridShape.ts, which owns every shape
+// rule so a cap enforced in one file cannot drift from one consulted in
+// another. Re-exported here because the commands, overlay, and reducers that
+// already import them from this module are asking the same question.
+export { MAX_DISPATCH_TILES, MIN_DISPATCH_TILES }
 export const DEFAULT_DISPATCH_TILES = 2
 
 /**

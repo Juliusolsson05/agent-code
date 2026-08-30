@@ -308,25 +308,110 @@ export type DispatchLane = {
   selectedSessionId?: SessionId
 }
 
+/**
+ * One row of Grid Dispatch: a COMPLETE dispatch view, not a strip of lanes.
+ *
+ * Each row owns its own index list, its own project binding, its own list
+ * density, and its own height. That is what makes "add a row" mean "add another
+ * whole dispatch surface" rather than "make everything shorter", and it is why
+ * per-row project binding is expressible at all — a shared sidebar could not
+ * answer "whose agents am I listing?" once two rows disagree.
+ *
+ * See docs/superpowers/plans/2026-08-30-grid-dispatch-mode.md for the design.
+ */
+export type DispatchGridRow = {
+  /**
+   * How many of `TiledDispatchState.lanes` belong to this row.
+   *
+   * INVARIANT: sum(rows[].length) === lanes.length. This is the one thing in
+   * the grid that can desynchronize, which is why every mutation goes through
+   * `gridShape.ts` (whose functions always return lanes and rows together) and
+   * why `normalizeGridShape` repairs rather than trusts it on read.
+   *
+   * Row lengths are INDEPENDENT. There is deliberately no global column count
+   * anywhere in this state: four lanes on top and two below is the expected
+   * shape, not a degenerate one, because projects do not have equal agent
+   * counts. Coupling row lengths would make New Lane in one row silently add a
+   * lane to every other row.
+   */
+  length: number
+  /** Relative height weight against sibling rows. Absent => equal share. */
+  height?: number
+  /** This row's index-list fraction of the row width. Absent => default. */
+  indexFraction?: number
+  /**
+   * Restrict this row to one project. Absent => the row follows
+   * `DispatchModeState.scope` like the whole layout used to.
+   *
+   * A binding FILTERS, it never fills: the user named a constraint, not an
+   * occupant. Binding also promotes scope to 'global', because a project-scoped
+   * row set is built from activeTabId alone and would leave any other project's
+   * row with an empty index (the same promotion, for the same reason, that
+   * agentIndexNavigation applies to a cross-project label).
+   */
+  projectTabId?: TabId
+  /**
+   * Cap orchestration/linked children at ORCHESTRATION_CHILD_CAP in this row's
+   * index and strips. Absent => capped (the default). One orchestration parent
+   * can spawn ten children to review a PR, and ten depth-1 rows push every
+   * other project off-screen for agents the user is not watching — the parent
+   * is what reports.
+   *
+   * Purely presentational: this never reaches buildVisibleDispatchRows, so
+   * labels, globalIndex, and cmd+N targeting are unaffected by toggling it.
+   */
+  capChildren?: boolean
+  /** Parents the user expanded past the cap, in this row only. */
+  expandedParents?: SessionId[]
+}
+
 export type TiledDispatchState = {
-  /** Tile count, clamped 1..10. lanes[0] is the index lane. */
+  /**
+   * Every lane in the grid, FLAT and ROW-MAJOR. `rows` slices it.
+   *
+   * WHY flat rather than DispatchLane[][]: tiledDispatchSelectors' header
+   * records that two whole bug classes came from code that maintained some lane
+   * pointers and missed others, which is why remapTiledLanes /
+   * clearTiledLaneSessions / keepTiledLaneSessions exist as the single reusable
+   * way to keep lanes coherent, applied at nine call sites (id remap x2, kill,
+   * close x2, bury, tab close, undo-close, rehydrate, autosave prune). A nested
+   * array would rewrite all three helpers and every one of those sites. Flat
+   * means there is still exactly ONE lane list to keep coherent, and none of
+   * that code had to change to gain a second dimension.
+   */
   lanes: DispatchLane[]
   /**
    * Lane index that currently owns keyboard selection (arrows / cmd+N).
    * Switching the focused lane must never change another lane's
    * selection — that's the whole point of per-lane independence.
-   * Defaults to 0 (the index lane).
+   * Defaults to 0.
+   *
+   * Stays a FLAT scalar for the same reason `lanes` stays flat: it is read by
+   * dispatchFocusedSessionId, dispatchTarget, agentIndexNavigation,
+   * resolveDispatchSpawnTarget, useKeybinds, and applyDispatchSpawnFocus. Use
+   * `rowIndexForLane` to recover its row rather than storing a second
+   * coordinate — a per-row remembered column would be a SECOND source of focus
+   * truth, which is the exact shape of #266/#267/#271/#272.
    */
   focusedLane: number
   /**
-   * Column widths. Index 0 is the pinned index lane's fraction of the whole
-   * row (clamped 0.1..0.4 in the layout). Indices 1..N are relative weights
-   * for the N agent-view lane units sharing the remaining width (normalized
-   * on read; absolute scale irrelevant). Absent => even distribution. The
-   * generic tile-count prompt resets this because it has no positional intent;
-   * exact insert/remove operations can preserve the sidebar and map individual
-   * weights honestly. (See TiledDispatchLayout's column-width convention
-   * comment, which is the load-bearing spec.)
+   * Row shape. Absent => [{ length: lanes.length }], i.e. the single-row
+   * layout every workspace.json written before Grid Dispatch describes. That
+   * default is why this change needs no migration for the common case.
+   */
+  rows?: DispatchGridRow[]
+  /**
+   * Row-major lane width weights, one per lane, normalized on read within each
+   * row. Absent => even split. Replaces `ratios` (below); the two halves of
+   * that array had to separate once each ROW gained its own index fraction.
+   */
+  laneWeights?: number[]
+  /**
+   * LEGACY. Index 0 was the single index sidebar's fraction of the whole row;
+   * 1..N were the lane weights. `normalizeGridShape` splits a persisted one
+   * into `rows[0].indexFraction` + `laneWeights` on read, and nothing writes
+   * this field any more. Kept on the type only so old persisted state
+   * type-checks through that one normalization.
    */
   ratios?: number[]
 }
