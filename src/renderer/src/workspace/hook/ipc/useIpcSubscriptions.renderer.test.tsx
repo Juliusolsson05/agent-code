@@ -5,6 +5,8 @@ import { useRef } from 'react'
 import type { MutableRefObject } from 'react'
 import recordedQueueHandoffBundle from '../../../../../../testing/fixtures/rendering-bundles/2026-06-14T14-25-07-012-a8ad1ebb.json'
 import recordedTaskNotificationBundle from '../../../../../../testing/fixtures/rendering-bundles/2026-06-21T20-14-23-131-62432945.json'
+import recordedCodexWorktreeWindow from '../../../../../../testing/fixtures/worktree-live-attribution/codex-0151-worktree-window.json'
+import recordedGitWorktrees from '../../../../../../testing/fixtures/worktree-live-attribution/git-worktree-identities.json'
 
 import { createFakeSessionFeed } from '@renderer/features/sessionFeed/FakeSessionFeed'
 import { UndoCloseStack } from '@renderer/lib/undoClose'
@@ -250,6 +252,119 @@ describe('useIpcSubscriptions with an injected SessionFeed', () => {
       'startup optimistic prompt',
       'startup queued reconcile',
     ])
+  })
+
+  it('replays recorded Codex activity when the asynchronous Git catalog arrives', async () => {
+    const fake = createFakeSessionFeed()
+    const sessionId = 'recorded-codex-worktree-cache-race'
+    const fixture = recordedCodexWorktreeWindow as {
+      git: {
+        main: { path: string; branch: string }
+        ui: { path: string; branch: string }
+      }
+      records: Array<Record<string, unknown>>
+    }
+    const gitFixture = recordedGitWorktrees as {
+      worktrees: Array<{
+        path: string
+        branch: string
+        detached: boolean
+      }>
+    }
+    const state = {
+      sessions: {
+        [sessionId]: { cwd: fixture.git.main.path, kind: 'codex' },
+      },
+    } as unknown as WorkspaceState
+    let runtimes: Record<SessionId, SessionRuntime> = {}
+    let resolveGit!: (value: {
+      ok: true
+      worktrees: Array<{
+        path: string
+        branch: string
+        detached: boolean
+        head: null
+      }>
+    }) => void
+    const gitResult = new Promise<{
+      ok: true
+      worktrees: Array<{
+        path: string
+        branch: string
+        detached: boolean
+        head: null
+      }>
+    }>(resolve => { resolveGit = resolve })
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: { gitWorktrees: vi.fn(() => gitResult) },
+    })
+
+    function Harness(): React.JSX.Element {
+      const refs = useRef<WorkspaceRefs | null>(null)
+      if (refs.current === null) refs.current = makeRefs(state)
+      useIpcSubscriptions(
+        fake,
+        refs.current,
+        () => {},
+        updater => {
+          runtimes = typeof updater === 'function' ? updater(runtimes) : updater
+          refs.current!.latestRuntimesRef.current = runtimes
+        },
+        (id, patch) => {
+          const current = runtimes[id] ?? emptyRuntime()
+          runtimes = { ...runtimes, [id]: { ...current, ...patch } }
+          refs.current!.latestRuntimesRef.current = runtimes
+        },
+        () => {},
+      )
+      return <div />
+    }
+
+    render(<Harness />)
+    act(() => {
+      // The complaint-time order is important: session startup begins an IPC
+      // Git lookup, then rollout bursts can arrive before that promise settles.
+      // A test with a pre-populated cache would skip the actual live boundary
+      // and prove only the direct tracker replay that already passed in #663.
+      fake.emitStarted({
+        sessionId,
+        kind: 'codex',
+        projectDir: fixture.git.main.path,
+      })
+      fake.emitJsonlEntries({
+        sessionId,
+        entries: fixture.records.map((entry, index) => ({
+          file: `recorded-${index}.jsonl`,
+          entry,
+        })),
+      })
+    })
+
+    expect(runtimes[sessionId]?.workContext?.worktreePath ?? null)
+      .not.toBe(fixture.git.ui.path)
+
+    await act(async () => {
+      resolveGit({
+        ok: true,
+        worktrees: gitFixture.worktrees.map(worktree => ({
+          ...worktree,
+          head: null,
+        })),
+      })
+      await gitResult
+      await Promise.resolve()
+    })
+
+    expect(runtimes[sessionId]?.workActivity?.active).toMatchObject({
+      worktreePath: fixture.git.ui.path,
+      branch: fixture.git.ui.branch,
+      source: 'codex:item_completed:CommandExecution.cwd',
+    })
+    expect(runtimes[sessionId]?.workContext).toMatchObject({
+      worktreePath: fixture.git.ui.path,
+      branch: fixture.git.ui.branch,
+    })
   })
 
   it('hands a legacy queued prompt from the queue strip to its durable feed row across bursts', () => {

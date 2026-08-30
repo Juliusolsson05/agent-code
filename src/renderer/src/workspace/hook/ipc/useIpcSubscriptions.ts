@@ -86,15 +86,8 @@ import {
   clearConditionRuntimeState,
   conditionRequiresAttention,
 } from '@renderer/workspace/conditions/selectors'
-import type { WorktreeIdentity } from '@shared/work-context/types'
-import {
-  canonicalizeWorktreeActivity,
-  deriveAgentWorkContext,
-  ingestWorktreeRawEvent,
-  withFallbackWorktreeActivity,
-} from '@shared/work-context/tracker'
-import { summarizeWorktreeActivity } from '@shared/work-context/debug'
 import { asRecord } from '@shared/lib/asRecord'
+import { LiveWorktreeReconciler } from '@renderer/workspace/work-context/LiveWorktreeReconciler'
 
 import type {
   WorkspaceSetRuntimes,
@@ -301,14 +294,6 @@ function providerSessionObservedEvent(event: unknown): {
   }
 }
 
-type WorktreeCacheEntry = {
-  worktrees: WorktreeIdentity[]
-  refreshedAt: number
-  inflight: Promise<void> | null
-}
-
-const WORKTREE_CACHE_TTL_MS = 5000
-const WORK_CONTEXT_RECENT_RAW_LIMIT = 500
 // Threshold before an unsuperseded ghost is marked orphaned.
 //
 // History: 3000ms while orphan rendering was always-on (commit
@@ -376,26 +361,6 @@ const SEMANTIC_DELTA_FLUSH_MS = 100
 // this a convergence-triggered clear: we wait for signals to quiesce, then
 // reconcile, rather than reacting to any single edge.
 const QUEUE_IDLE_RECONCILE_MS = 2000
-
-function canIngestWorkContext(raw: unknown, hasWorktreeCache: boolean): boolean {
-  const type = (raw as { type?: unknown })?.type
-  return type === 'worktree-state' || hasWorktreeCache
-}
-
-function appendRecentWorkContextRaw(
-  recentRawBySession: Map<SessionId, unknown[]>,
-  sessionId: SessionId,
-  entries: Array<{ entry: unknown }>,
-): void {
-  const current = recentRawBySession.get(sessionId) ?? []
-  const next = current.concat(entries.map(({ entry }) => entry))
-  recentRawBySession.set(
-    sessionId,
-    next.length > WORK_CONTEXT_RECENT_RAW_LIMIT
-      ? next.slice(-WORK_CONTEXT_RECENT_RAW_LIMIT)
-      : next,
-  )
-}
 
 function applyConditionSnapshot(
   runtime: SessionRuntime,
@@ -470,8 +435,48 @@ export function useIpcSubscriptions(
   appendFeedDebug: (sessionId: SessionId, input: FeedDebugInput) => void,
 ): void {
   useEffect(() => {
-    const worktreeCache = new Map<string, WorktreeCacheEntry>()
-    const recentWorkContextRawBySession = new Map<SessionId, unknown[]>()
+    let worktreeReconciler!: LiveWorktreeReconciler
+    worktreeReconciler = new LiveWorktreeReconciler({
+      loadWorktrees: cwd => window.api.gitWorktrees(cwd),
+      onCatalogReady: cwd => {
+        setRuntimes(prev => {
+          let changed = false
+          const next = { ...prev }
+          for (const [sessionId, runtime] of Object.entries(prev)) {
+            const meta = refs.stateRef.current.sessions[sessionId]
+            if (meta?.cwd !== cwd) continue
+            const projection = worktreeReconciler.project({
+              sessionId,
+              cwd,
+              projection: runtime,
+            })
+            if (
+              projection.workContext === runtime.workContext &&
+              projection.workActivity === runtime.workActivity
+            ) continue
+            next[sessionId] = appendFeedDebugLog(
+              { ...runtime, ...projection },
+              {
+                layer: 'STATE',
+                kind: 'worktree_catalog_reconciled',
+                summary: 'Git worktree catalog replayed against recent evidence',
+                // This summary deliberately excludes raw events, command text,
+                // prompts, and file bodies. The cache race needs observability,
+                // but duplicating provider content into feed-debug would turn a
+                // metadata repair into a second sensitive transcript store.
+                data: worktreeReconciler.summarize({
+                  sessionId,
+                  cwd,
+                  projection,
+                }),
+              },
+            )
+            changed = true
+          }
+          return changed ? next : prev
+        })
+      },
+    })
     // Ghost orphan / superseded-GC sweep — see docs/design/ghost-system.md for the
     // canonical explanation. Runs every GHOST_ORPHAN_SWEEP_MS,
     // calls orphanStale to flag any ghost whose updatedAt has been
@@ -609,71 +614,10 @@ export function useIpcSubscriptions(
       )
     }, MEMORY_GAUGE_INTERVAL_MS)
     const refreshWorktrees = (cwd: string | null | undefined): void => {
-      if (!cwd) return
-      const cached = worktreeCache.get(cwd)
-      const now = Date.now()
-      if (cached?.inflight) return
-      if (cached && now - cached.refreshedAt < WORKTREE_CACHE_TTL_MS) return
-
-      const inflight = window.api.gitWorktrees(cwd).then(result => {
-        if (!result.ok) return
-        worktreeCache.set(cwd, {
-          worktrees: result.worktrees,
-          refreshedAt: Date.now(),
-          inflight: null,
-        })
-        setRuntimes(prev => {
-          let changed = false
-          const next = { ...prev }
-          for (const [sessionId, runtime] of Object.entries(prev)) {
-            const meta = refs.stateRef.current.sessions[sessionId]
-            if (meta?.cwd !== cwd) continue
-
-            let workActivity = runtime.workActivity
-            const recentRaw = recentWorkContextRawBySession.get(sessionId) ?? []
-            for (const raw of recentRaw) {
-              workActivity = ingestWorktreeRawEvent({
-                state: workActivity,
-                raw,
-                worktrees: result.worktrees,
-                sessionCwd: cwd,
-              })
-            }
-
-            workActivity = canonicalizeWorktreeActivity(
-              withFallbackWorktreeActivity({
-                state: workActivity,
-                sessionCwd: cwd,
-                worktrees: result.worktrees,
-                source: 'fallback:session-cwd:worktree-cache',
-              }),
-              result.worktrees,
-            )
-            const workContext = deriveAgentWorkContext(workActivity)
-
-            if (
-              workContext === runtime.workContext &&
-              workActivity === runtime.workActivity
-            ) continue
-            next[sessionId] = { ...runtime, workContext, workActivity }
-            changed = true
-          }
-          return changed ? next : prev
-        })
-      }).catch(() => {
-        // Worktree context is decorative metadata. If git probing fails,
-        // leave the last known cache in place and keep feed ingestion moving.
-      }).finally(() => {
-        const latest = worktreeCache.get(cwd)
-        if (latest?.inflight === inflight) {
-          worktreeCache.set(cwd, { ...latest, inflight: null })
-        }
-      })
-      worktreeCache.set(cwd, {
-        worktrees: cached?.worktrees ?? [],
-        refreshedAt: cached?.refreshedAt ?? 0,
-        inflight,
-      })
+      // The reconciler owns failure/retry/coalescing. This listener intentionally
+      // does not await decorative Git metadata and therefore cannot delay a
+      // SessionFeed event or turn a failed probe into an unhandled rejection.
+      void worktreeReconciler.refresh(cwd)
     }
 
     const withUnread = (
@@ -940,7 +884,7 @@ export function useIpcSubscriptions(
     const offExit = feed.onSessionExit(({ sessionId, exitCode }) => {
       if (quarantinesSessionFeed(sessionId)) return
       flushSemanticEventQueue()
-      recentWorkContextRawBySession.delete(sessionId)
+      worktreeReconciler.forgetSession(sessionId)
       claudeQueueBySession.delete(sessionId)
       codexCurrentTurnIdBySession.delete(sessionId)
       jsonlProviderStreamBySession.delete(sessionId)
@@ -1607,8 +1551,17 @@ export function useIpcSubscriptions(
         return
       }
 
-      appendRecentWorkContextRaw(recentWorkContextRawBySession, sessionId, entries)
       const sessionCwd = metaForProviderGate?.cwd
+      const worktreeCwd =
+        sessionCwd ??
+        refs.latestRuntimesRef.current[sessionId]?.projectDir ??
+        ''
+      const observedWorktreeProjection = worktreeReconciler.observe(
+        sessionId,
+        worktreeCwd,
+        entries,
+        refs.latestRuntimesRef.current[sessionId] ?? emptyRuntime(),
+      )
       refreshWorktrees(sessionCwd)
 
       if (observedProviderSessionId) {
@@ -1670,11 +1623,12 @@ export function useIpcSubscriptions(
         // runtime keeps only the derived `pending` list it paints.
         let claudeQueue = claudeQueueBySession.get(sessionId) ?? createClaudeQueueState()
         let awaitingAssistant = current.awaitingAssistant
-        let workActivity = current.workActivity
-        let workContext = current.workContext
-        const cachedWorktrees = sessionCwd ? worktreeCache.get(sessionCwd) : undefined
-        const hasWorktreeCache = !!cachedWorktrees && cachedWorktrees.refreshedAt > 0
-        const worktrees = cachedWorktrees?.worktrees ?? []
+        // Computed outside the React updater because the reconciler owns a
+        // bounded evidence window. React may invoke an updater more than once;
+        // mutating that window here would duplicate an IPC burst just as surely
+        // as the old queue-debt bug duplicated queue operations.
+        let workActivity = observedWorktreeProjection.workActivity
+        let workContext = observedWorktreeProjection.workContext
         // Every distinct Codex user entry in one coalesced burst can reconcile
         // a different optimistic row. A single "last text" slot made the
         // observation stream claim prompt A was released while the product
@@ -1742,16 +1696,6 @@ export function useIpcSubscriptions(
         let routeShadowSample: string | null = null
 
         for (const { entry: raw, observation } of entries) {
-          if (canIngestWorkContext(raw, hasWorktreeCache)) {
-            workActivity = ingestWorktreeRawEvent({
-              state: workActivity,
-              raw,
-              worktrees,
-              sessionCwd: sessionCwd ?? current.projectDir ?? '',
-            })
-            workContext = deriveAgentWorkContext(workActivity)
-          }
-
           // ---- Claude queue-operation branch ----
           // Checked BEFORE the mapper on purpose: queue-operation
           // entries produce NO feed entries (the claude mapper filters
@@ -2292,8 +2236,11 @@ export function useIpcSubscriptions(
                 reconciledOptimisticTexts: [...reconciledOptimisticTexts],
                 appended: appended.slice(-8).map(summarizeEntryForDebug),
                 queuedMessages: queuedMessages.length,
-                workContext,
-                workActivity: summarizeWorktreeActivity(workActivity),
+                worktreeReconciliation: worktreeReconciler.summarize({
+                  sessionId,
+                  cwd: worktreeCwd,
+                  projection: { workContext, workActivity },
+                }),
                 conditions: current.conditions,
                 // Shadow route comparison (#394 phase 2b): count of
                 // lines this burst where the legacy shape sniff
@@ -2538,6 +2485,7 @@ export function useIpcSubscriptions(
     })
 
     return () => {
+      worktreeReconciler.dispose()
       window.clearInterval(orphanSweepTimer)
       window.clearInterval(memoryGaugeTimer)
       if (semanticFlushTimer !== null) window.clearTimeout(semanticFlushTimer)

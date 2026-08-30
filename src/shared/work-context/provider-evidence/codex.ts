@@ -194,7 +194,7 @@ function sessionCwdSeed(params: {
     source: params.source,
     path: params.path,
     branch: params.branch ?? null,
-    confidence: 'medium',
+    confidence: 'fallback',
     // WHY per-turn configuration is not activity: turn_context and
     // thread_settings_applied repeat the session's launch cwd at each turn.
     // They may bootstrap a missing primary context, but must not repossess the

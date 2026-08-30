@@ -59,6 +59,13 @@ jobs:
       - name: Validate testing contract
         run: npm run test:contract
 
+      - name: Verify retained worktree attribution corpus
+        # WHY this is a shipping/privacy gate rather than an optional extractor:
+        # the private source recordings may rotate, but every file committed to
+        # this public corpus still needs exact membership, string allowlisting,
+        # and bounded zstd verification on every PR.
+        run: npm run check:worktree-live-fixtures
+
       - name: Type-check main and renderer
         # electron-vite transpiles TypeScript but does not enforce the
         # project references. This exact gate caught a real
@@ -110,3 +117,32 @@ jobs:
 
       - name: Verify distributable output
         run: npm run test:package
+
+  minimum-node-fixture-gate:
+    name: minimum-node-fixture-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Setup declared minimum Node
+        # WHY pin the literal floor instead of another moving LTS alias: native
+        # zstd arrived after 22.12. The compatibility contract exists precisely
+        # to catch code that works on the Node 24 development default while
+        # silently dropping identity or crashing checks at the advertised floor.
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22.12.0
+          cache: npm
+
+      - name: Install JavaScript dependencies
+        # The fixture verifier needs tsx and package source, not Electron's
+        # native postinstall. Skipping lifecycle scripts keeps this Linux floor
+        # probe scoped to the runtime API contract it is intended to protect.
+        run: npm ci --include=dev --ignore-scripts
+
+      - name: Verify bounded zstd fixture path
+        run: npm run check:worktree-live-fixtures

@@ -104,4 +104,69 @@ describe('collectLiveAgentsByWorktree recorded context', () => {
       .toEqual([SESSION_ID])
     expect(liveByWorktree.get(MAIN_CHECKOUT) ?? []).toEqual([])
   })
+
+  it('groups by active checkout when historical primary still points at main', () => {
+    const worktrees = [
+      status(MAIN_CHECKOUT, 'fixture/branch-1', 'main'),
+      status(LINKED_WORKTREE, 'fixture/worktree-branch', 'active-unmerged'),
+    ]
+    let workActivity: WorktreeActivityState | null = null
+    for (const raw of recordedCodexRecords()) {
+      workActivity = ingestWorktreeRawEvent({
+        state: workActivity,
+        raw,
+        worktrees,
+        sessionCwd: MAIN_CHECKOUT,
+      })
+    }
+    if (!workActivity?.active) throw new Error('recorded replay has no active context')
+    const divergentActivity: WorktreeActivityState = {
+      ...workActivity,
+      // WHY force the semantic disagreement rather than inventing an entire
+      // state: recorded replay proves the active Codex transition, while this
+      // one override captures the documented primary/active split that the
+      // Worktrees surface must resolve in favor of the current checkout.
+      primary: {
+        worktreePath: MAIN_CHECKOUT,
+        branch: 'fixture/branch-1',
+        repoRoot: MAIN_CHECKOUT,
+        confidence: 'fallback',
+        source: 'fixture:historical-primary',
+        updatedAt: workActivity.updatedAt,
+      },
+    }
+    const runtime = {
+      workActivity: divergentActivity,
+      workContext: deriveAgentWorkContext(divergentActivity),
+      sessionStatus: 'running',
+      streamPhase: 'idle',
+    } as unknown as SessionRuntime
+    const state = {
+      tabs: [{
+        id: 'tab-divergent',
+        title: 'Divergent project',
+        root: { type: 'leaf', sessionId: SESSION_ID },
+        focusedSessionId: SESSION_ID,
+      }],
+      activeTabId: 'tab-divergent',
+      dispatchMode: null,
+      sessions: {
+        [SESSION_ID]: { cwd: MAIN_CHECKOUT, kind: 'codex' },
+      },
+      detachedSessions: {},
+      buried: [],
+      pinnedSessionIds: [],
+    } as WorkspaceState
+    const workspace = {
+      state,
+      runtimes: { [SESSION_ID]: runtime },
+    } as unknown as Workspace
+
+    const liveByWorktree = collectLiveAgentsByWorktree(workspace, worktrees)
+
+    expect(runtime.workContext?.worktreePath).toBe(MAIN_CHECKOUT)
+    expect(liveByWorktree.get(LINKED_WORKTREE)?.map(agent => agent.sessionId))
+      .toEqual([SESSION_ID])
+    expect(liveByWorktree.get(MAIN_CHECKOUT) ?? []).toEqual([])
+  })
 })

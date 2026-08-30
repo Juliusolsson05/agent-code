@@ -37,7 +37,7 @@ export function extractClaudeWorktreeActivitySeeds(
   // metadata records that pass through the shared facade during a full scan.
   if (!isConversationEntry(record as Entry)) return []
 
-  const seeds = conversationToolSeeds(record)
+  const seeds: WorktreeActivityEventSeed[] = []
   const cwd = stringField(record, 'cwd')
   if (cwd) {
     seeds.push({
@@ -45,12 +45,19 @@ export function extractClaudeWorktreeActivitySeeds(
       source: 'claude:entry.cwd',
       path: cwd,
       branch: stringField(record, 'gitBranch'),
-      confidence: 'medium',
+      confidence: 'fallback',
       active: true,
       requiresWorktreeMatch: true,
-      primaryWeight: 1,
     })
   }
+
+  // WHY envelope affinity is emitted before its tool blocks: the provider can
+  // serialize stale top-level cwd/gitBranch alongside an operation whose exact
+  // target is in another worktree (the recorded #685 shape). Within one
+  // envelope, direct activity is the later and stronger fact. The shared
+  // tracker separately prevents a generic cwd in a later envelope from
+  // repossessing activity, so correctness does not depend on array order alone.
+  seeds.push(...conversationToolSeeds(record))
 
   return seeds
 }

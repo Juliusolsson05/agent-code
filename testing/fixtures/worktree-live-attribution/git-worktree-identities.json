@@ -1,0 +1,27 @@
+{
+  "$fixture": {
+    "id": "git-worktree-identities",
+    "cutoff": "2026-08-30T18:37:55.388Z",
+    "sourceFingerprint": "7fe5742a11fc0635"
+  },
+  "worktrees": [
+    {
+      "role": "main",
+      "path": "/fixture/project-1",
+      "branch": "fixture/branch-1",
+      "detached": false
+    },
+    {
+      "role": "grid-worktree",
+      "path": "/fixture/project-1/.worktrees/worktree-1",
+      "branch": "fixture/branch-2",
+      "detached": false
+    },
+    {
+      "role": "ui-worktree",
+      "path": "/fixture/project-1/.worktrees/worktree-2",
+      "branch": "fixture/branch-3",
+      "detached": false
+    }
+  ]
+}

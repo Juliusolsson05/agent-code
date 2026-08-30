@@ -31,7 +31,12 @@ export function contextFromPath(params: {
   const matched = matchWorktree(path, worktrees)
   return {
     worktreePath: matched?.path ?? path,
-    branch: branch ?? matched?.branch ?? null,
+    // WHY Git wins even when its value is null: a matched identity describes
+    // the checkout as it exists now. Provider branch strings are launch-time
+    // metadata and the recorded Claude resume kept saying main after cwd/tool
+    // paths moved to a linked worktree. `null` is also meaningful for detached
+    // HEAD; falling back there would falsely relabel a detached checkout.
+    branch: matched ? matched.branch : branch ?? null,
     repoRoot: worktrees[0]?.path ?? null,
     confidence,
     source,
