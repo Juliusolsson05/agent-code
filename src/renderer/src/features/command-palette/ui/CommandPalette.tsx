@@ -94,10 +94,11 @@ import { SafeMarkdownLink } from '@renderer/features/rendered-content/SafeMarkdo
 import type { AiWorkspaceSummary } from '@mcp/shared/aiWorkspaceTypes'
 // Canonical session listing shape. This was a local copy that DROPPED
 // `fileSize` (and `customTitle`) — a concrete instance of the drift the
-// shared contract prevents: the palette consumes `SessionInfo[]` straight
+// shared contract prevents: the palette consumes `ListedSession[]` straight
 // from `window.api.listSessionsForCwd`, which always returns the full shape,
 // so the narrower local type was hiding fields rather than reflecting reality.
-import type { SessionInfo } from '@shared/types/session'
+import type { ListedSession } from '@preload/api/session'
+import { SessionPickerRow } from '@renderer/features/workspace/ui/SessionPickerRow'
 
 // CommandPalette — VS Code-style ⌘⇧P command menu.
 //
@@ -373,7 +374,7 @@ function OpenCommandPalette({
   // component invisibly and destroys it in the same commit.
   const mode = useAppStore(state => state.paletteMode)
   const setMode = useAppStore(state => state.setPaletteMode)
-  const [sessions, setSessions] = useState<SessionInfo[]>([])
+  const [sessions, setSessions] = useState<ListedSession[]>([])
   const [sessionsLoading, setSessionsLoading] = useState(false)
   const [aiWorkspaces, setAiWorkspaces] = useState<AiWorkspaceSummary[]>([])
   const [aiWorkspacesLoading, setAiWorkspacesLoading] = useState(false)
@@ -1233,7 +1234,7 @@ function OpenCommandPalette({
   }, [commandContext, onClose, onMenuCommandHandled, pendingMenuCommand, showToast])
 
   const executeResume = useCallback(
-    (session: SessionInfo) => {
+    (session: ListedSession) => {
       onClose()
       if (!focusedCwd) return
       void workspace.replaceSession(focusedCwd, {
@@ -1560,9 +1561,9 @@ function OpenCommandPalette({
     // An earlier draft of this block referenced a `filtered` variable
     // that a concurrent command-palette refactor had already renamed —
     // the two changes merged cleanly as text but left this reference
-    // dangling. `filteredSessions` is typed `SessionInfo[]`, so the
+    // dangling. `filteredSessions` is typed `ListedSession[]`, so the
     // cast is belt-and-suspenders against noUncheckedIndexedAccess.
-    const session = filteredSessions[selectedIndex] as SessionInfo | undefined
+    const session = filteredSessions[selectedIndex] as ListedSession | undefined
     if (!session) return null
     const cwd = session.cwd ?? focusedCwd
     if (!cwd) return null
@@ -2068,13 +2069,12 @@ function OpenCommandPalette({
                     onMouseEnter={() => setSelectedIndex(i)}
                     onClick={() => executeResume(session)}
                   >
-                    <div className="text-[12px] truncate">
-                      {session.summary || session.firstPrompt || session.sessionId}
-                    </div>
-                    <div className="text-[10px] text-muted mt-0.5 truncate">
-                      {session.gitBranch ? `${session.gitBranch} · ` : ''}
-                      {session.cwd ?? focusedCwd ?? ''}
-                    </div>
+                    {/* Identity is resolved in main through the shared ladder
+                        (#96). The chain this replaced —
+                        `summary || firstPrompt || sessionId` — could fall all
+                        the way through to a FULL untruncated uuid, and had no
+                        way to tell the user that is what they were looking at. */}
+                    <SessionPickerRow identity={session.identity} />
                   </div>
                 ))
               ))}
