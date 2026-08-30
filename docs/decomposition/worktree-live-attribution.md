@@ -2,8 +2,8 @@
 
 Issues: #658, #685
 
-Status: decomposition only. No production implementation is authorized until
-this document is explicitly approved.
+Status: approved by the user; implementation proceeds stage-by-stage without a
+separate confirmation pause after each independently verified artifact.
 
 ## Why staged decomposition applies
 
@@ -241,6 +241,24 @@ The expected Claude precedence comes from 30 real worktree tool paths and two
 observed disagreement shapes. The Codex exact-identity contract comes from 253
 of 253 requests matching the actual rollout, while the live-hook test uses the
 recorded absence-then-arrival order instead of a preconstructed final state.
+
+### Stage 2 completion record
+
+`ownership-catalog.md` now freezes every recorded carrier as exact identity,
+direct activity, bootstrap/affinity, diagnostic-only metadata, historical
+affinity, UI fallback, or explicit non-evidence. The contracts consume the
+Stage 1 JSON directly. The only protocol restoration performed by a test is a
+deterministic valid UUID substitution for the corpus's privacy token, because
+the production exact locator correctly refuses non-UUID provider ids.
+
+The red baseline is specific: both Claude contracts fail because the current
+state ends on `claude:entry.cwd`/the stale main branch; the recorded zstd proxy
+contract fails because `request_shape` is absent; and the exact-tail and
+concurrent-sibling system contracts time out with no active rollout. The
+filename/`session_meta` mismatch negative already passes, proving the test is
+not asking for arbitrary attachment. The actual renderer harness also passes
+the entry-before-cache contract, establishing behavior that Stage 5 must
+preserve while extracting it from the subscription megafile.
 
 ## Stage 3 — restore exact Codex rollout ownership
 

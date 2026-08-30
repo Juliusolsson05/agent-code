@@ -67,6 +67,11 @@
     // tens of megabytes of evidence that the corpus runner already owns.
     "testing/fixtures/rendering-bundles/2026-06-14T14-25-07-012-a8ad1ebb.json",
     "testing/fixtures/rendering-bundles/2026-06-21T20-14-23-131-62432945.json",
+    // The live worktree contract statically imports the minimized Codex and Git
+    // projections so its happy-dom run exercises the same evidence regardless
+    // of Node filesystem availability. Include only this privacy-reviewed
+    // corpus rather than admitting every testing fixture to the web program.
+    "testing/fixtures/worktree-live-attribution/**/*.json",
     // Curated rendering-shape fixtures are imported by provider adapter and
     // DOM contracts. Composite TypeScript refuses transitive JSON that is not
     // named in the project file list; keeping the fixture tree explicit makes
