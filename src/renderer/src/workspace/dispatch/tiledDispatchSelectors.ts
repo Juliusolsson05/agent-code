@@ -9,6 +9,7 @@ import { buildVisibleDispatchRows } from '@renderer/workspace/dispatch/dispatchS
 import {
   MAX_DISPATCH_TILES,
   MIN_DISPATCH_TILES,
+  normalizeGridShape,
 } from '@renderer/workspace/dispatch/gridShape'
 
 // ============================================================================
@@ -123,6 +124,51 @@ export function keepTiledLaneSessions(
   })
   if (!changed) return dispatchMode
   return { ...dispatchMode, tiled: { ...dispatchMode.tiled, lanes } }
+}
+
+/**
+ * Bring a persisted `tiled` block up to the current grid shape.
+ *
+ * WHY this belongs with the other dispatchMode helpers rather than inside
+ * gridShape: this file's header says the lane helpers must be applied at every
+ * id-remap, removal, and focus-read site, and rehydrate is one of them — the
+ * normalization has to sit on the same DispatchModeState-shaped seam as
+ * remapTiledLanes and keepTiledLaneSessions so it can be composed with them in
+ * one expression instead of being a fourth thing a caller must remember.
+ *
+ * The migration itself (legacy `ratios` -> per-row indexFraction + laneWeights,
+ * and repair of the row-length invariant) lives in gridShape, which owns every
+ * shape rule.
+ *
+ * Returns the SAME reference when nothing needed changing, so consumers that
+ * memoize on dispatchMode identity do not churn on every restore.
+ */
+export function normalizeDispatchModeGrid(
+  dispatchMode: DispatchModeState | null | undefined,
+): DispatchModeState | null | undefined {
+  const tiled = dispatchMode?.tiled
+  if (!dispatchMode || !tiled) return dispatchMode
+
+  const grid = normalizeGridShape(tiled)
+  const alreadyCurrent =
+    tiled.ratios === undefined &&
+    tiled.rows === grid.rows &&
+    tiled.laneWeights === grid.laneWeights &&
+    tiled.focusedLane === grid.focusedLane
+  if (alreadyCurrent) return dispatchMode
+
+  return {
+    ...dispatchMode,
+    tiled: {
+      lanes: grid.lanes,
+      rows: grid.rows,
+      focusedLane: grid.focusedLane,
+      // Dropped, never rewritten: keeping the legacy array beside the fields it
+      // was split into would leave two sources of truth for width, and the next
+      // reader would have to guess which one the user's last drag produced.
+      ...(grid.laneWeights ? { laneWeights: grid.laneWeights } : {}),
+    },
+  }
 }
 
 /**

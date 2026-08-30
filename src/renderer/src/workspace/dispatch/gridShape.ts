@@ -111,6 +111,22 @@ function repairRowLengths(
   // migration for ordinary state: no row shape MEANS one row of every lane.
   if (!rows || rows.length === 0) return [{ length: laneCount }]
 
+  // Fast path: already coherent, so hand back the SAME array. Rebuilding an
+  // identical shape on every read would defeat consumers that memoize on
+  // dispatchMode identity — this runs on rehydrate and behind reducers, both of
+  // which feed React. Reference stability here is a correctness property for
+  // those consumers, not a micro-optimization.
+  let sum = 0
+  let wellFormed = true
+  for (const row of rows) {
+    if (!Number.isInteger(row.length) || row.length <= 0) {
+      wellFormed = false
+      break
+    }
+    sum += row.length
+  }
+  if (wellFormed && sum === laneCount) return rows
+
   const sanitized = rows.map(row => ({
     ...row,
     length:
