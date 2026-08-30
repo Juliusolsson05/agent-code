@@ -137,6 +137,36 @@ describe('recorded work-context provider contracts', () => {
     })
   })
 
+  it('[claude-cwd-tool-branch-conflict] does not relabel a detached match', () => {
+    const fixture = loadLiveAttributionFixture(
+      'claude-cwd-tool-branch-conflict.json',
+    )
+    const worktrees: WorktreeIdentity[] = [
+      identity(fixture.git.main.path, fixture.git.main.branch),
+      {
+        path: fixture.git.grid.path,
+        branch: null,
+        head: null,
+        detached: true,
+      },
+    ]
+
+    // This is an explicit policy mutation of the recorded Git row, not a claim
+    // that the complaint-time checkout was detached. It exercises the null half
+    // of the approved rule: Git's matched branch authority includes "no branch"
+    // and must not fall back to the stale provider main string.
+    const state = replay(fixture.records.slice(1), worktrees, fixture.git.main.path)
+
+    expect(state?.active).toMatchObject({
+      worktreePath: fixture.git.grid.path,
+      branch: null,
+    })
+    expect(state?.primary).toMatchObject({
+      worktreePath: fixture.git.grid.path,
+      branch: null,
+    })
+  })
+
   it('[codex-main-to-worktree] recognizes every observed current Codex carrier', () => {
     const { records } = loadRecordedFixture('codex-main-to-worktree.json')
     const sessionMeta = extractWorktreeActivityEvents(records[0])

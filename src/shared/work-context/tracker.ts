@@ -148,6 +148,10 @@ export function ingestWorktreeActivityEvent(params: {
   const shouldReplacePrimary =
     event.kind === 'worktree-enter' ||
     !nextState.primary ||
+    (
+      event.kind === 'session-cwd' &&
+      nextState.primary.confidence === 'fallback'
+    ) ||
     (event.primaryWeight > 0 && nextScore > currentPrimaryScore) ||
     (
       event.primaryWeight > 0 &&
@@ -158,7 +162,19 @@ export function ingestWorktreeActivityEvent(params: {
 
   return {
     ...nextState,
-    active: event.active ? context : nextState.active,
+    // WHY active precedence is not timestamp precedence: launch/conversation
+    // cwd is repeated affinity metadata, while commands and file operations
+    // are direct observations. A new affinity seed may replace another
+    // fallback (so bootstrap can converge), but it cannot repossess active from
+    // even a weak direct read merely because its envelope was appended later.
+    active:
+      event.active && (
+        event.kind !== 'session-cwd' ||
+        !nextState.active ||
+        nextState.active.confidence === 'fallback'
+      )
+        ? context
+        : nextState.active,
     primary: shouldReplacePrimary ? context : nextState.primary,
     updatedAt: now,
   }
@@ -229,7 +245,10 @@ function canonicalizeContext(
   return {
     ...context,
     worktreePath: matched.path,
-    branch: context.branch ?? matched.branch,
+    // A matched detached checkout intentionally has no branch. Retaining the
+    // provider's earlier branch string here would undo contextFromPath's Git
+    // authority whenever an async cache refresh canonicalizes existing state.
+    branch: matched.branch,
     repoRoot: worktrees[0]?.path ?? context.repoRoot,
   }
 }

@@ -9,7 +9,11 @@ import type { IndexedTranscript, WorktreeActivityIndexFile } from '@main/worktre
 // source file produce different events. mtime/size cannot detect that kind of
 // change. Bumping this value makes the next refresh reparse raw transcripts;
 // it never migrates or mutates the provider-owned source files.
-export const WORKTREE_ACTIVITY_INDEX_VERSION = 3
+// v4 reclassifies provider session cwd as fallback/affinity and emits Claude
+// envelope cwd before direct tool activity. Event order/confidence are stored in
+// this derived index, so retaining v3 would make historical Worktrees results
+// disagree with the live tracker until each source file happened to change.
+export const WORKTREE_ACTIVITY_INDEX_VERSION = 4
 const INDEX_FILE = join(STATE_DIR, 'worktree-activity-index.json')
 const INDEX_VERSION_PROBE_BYTES = 4 * 1024
 

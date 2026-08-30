@@ -351,6 +351,25 @@ The rule is constrained by the recorded Claude conflict rows and current Git
 identity, not by a new guessed provider field. No unobserved Claude exit shape
 is added as a "real" fixture.
 
+### Stage 4 completion record
+
+Claude and Codex session-cwd seeds are now explicitly fallback/affinity
+evidence. Claude emits the generic envelope seed before direct tool evidence,
+while the shared tracker also enforces the cross-record invariant: session cwd
+may replace an empty/other fallback but cannot overwrite an active context
+proved by even a weak direct operation. Weighted primary selection follows the
+same bootstrap boundary.
+
+`contextFromPath` and async canonicalization now take both path and branch from
+the longest matched Git identity. Provider branch remains visible in the raw
+timeline event for diagnosis, but it cannot relabel a linked worktree; a
+matched detached checkout remains branchless. Both recorded Claude failures,
+the Codex worktree transition, MCP-child negative, prior Claude lifecycle
+fixture, and the renderer cache-order fixture pass unchanged. Because event
+order/confidence are part of the historical derived cache, the worktree
+activity index version advances once from 3 to 4 so live and historical views
+cannot retain conflicting semantics.
+
 ## Stage 5 — isolate and prove live renderer reconciliation
 
 **Produces**
