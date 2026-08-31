@@ -3548,6 +3548,25 @@ export class SessionManager extends EventEmitter {
       )
       return true
     }
+    if (diagnostic.type === 'prompt-input-evidence' && diagnostic.available === false) {
+      // WHY consume this in main instead of forwarding it to the renderer:
+      // refusal to issue the legacy 0.149.1 prompt-attestation capability is
+      // neither transcript failure nor product state. Exact proxy identity can
+      // still attach a current Codex rollout. Recording the closed reason here
+      // preserves the incident breadcrumb without creating another UI route
+      // that could regress into “transcript unavailable”.
+      const code = diagnostic.reason === 'unsupported-cli'
+        ? 'unsupported-cli'
+        : 'unknown'
+      this.recordCodexTranscriptObservation('transcript.attachment', sessionId, {
+        decision: 'hold',
+        reason: 'prompt-evidence-disabled',
+        code,
+        attached: false,
+        tailing: false,
+      }, undefined, expectedSessionRunId)
+      return true
+    }
     if (diagnostic.type !== 'fresh-rollout-ownership-decision') return false
     const evidence = diagnostic.evidence && typeof diagnostic.evidence === 'object'
       ? diagnostic.evidence as Record<string, unknown>

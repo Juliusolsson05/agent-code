@@ -1,5 +1,5 @@
 import { ipcMain } from 'electron'
-import { createHash } from 'node:crypto'
+import { createHash, createHmac, randomBytes } from 'node:crypto'
 import { resolve as resolvePath } from 'node:path'
 
 import type { SessionManager } from '@main/sessionManager.js'
@@ -26,6 +26,20 @@ import {
   releaseSession,
   windowIdFor,
 } from '@main/window/windowRegistry.js'
+
+// One secret per app process is enough for correlation inside that run's
+// incident journal, and unlike a bare SHA-256 it prevents an exported bundle
+// reader from dictionary-guessing common repository paths. Cross-run joins are
+// deliberately unsupported: the breadcrumb answers whether two requests in
+// THIS launch targeted the same cwd without retaining the cwd itself.
+const RESUME_LIST_TARGET_FINGERPRINT_KEY = randomBytes(32)
+
+function resumeListTargetFingerprint(normalizedCwd: string): string {
+  return createHmac('sha256', RESUME_LIST_TARGET_FINGERPRINT_KEY)
+    .update('session.resume-list.target\0')
+    .update(normalizedCwd)
+    .digest('hex')
+}
 
 // Session lifecycle + I/O IPC.
 //
@@ -293,20 +307,22 @@ export function registerSessionIpc(
       provider: AgentProviderKind = DEFAULT_PROVIDER,
     ) => {
       const normalizedCwd = resolvePath(cwd)
+      const targetFingerprint = resumeListTargetFingerprint(normalizedCwd)
       try {
         const providerConfig = getMainProvider(provider)
         const sessions = await providerConfig.listSessions(cwd, limit ?? 20)
-        // WHY record the resolved target and count here, rather than only the
+        // WHY record a correlated target and count here, rather than only the
         // generic IPC duration: the captured failure proved the handler ran but
         // could not distinguish wrong provider/cwd, a successful empty list, a
         // thrown disk read, or rows lost later in the renderer. No transcript
-        // content or session ids are retained in this always-on breadcrumb.
+        // content, session ids, or reversible filesystem paths are retained in
+        // this always-on breadcrumb.
         appRunJournal?.record({
           area: 'session.resume-list',
           name: 'session.resume-list.complete',
           data: {
             provider,
-            cwd: normalizedCwd,
+            targetFingerprint,
             limit: limit ?? 20,
             resultCount: sessions.length,
             outcome: 'success',
@@ -321,11 +337,20 @@ export function registerSessionIpc(
         // Both renderer callers catch this and keep their surfaces usable.
         // eslint-disable-next-line no-console
         console.warn('[session:list-for-cwd] failed:', err)
-        appRunJournal?.recordError('session.resume-list.error', err, {
-          provider,
-          cwd: normalizedCwd,
-          limit: limit ?? 20,
-          outcome: 'error',
+        // Do not pass the provider exception to the persistent journal: file
+        // system errors routinely embed the raw path in both message and
+        // stack. The console still carries local debugging detail; the
+        // retained breadcrumb needs only the safe target join and outcome.
+        appRunJournal?.record({
+          area: 'session.resume-list',
+          name: 'session.resume-list.error',
+          severity: 'warn',
+          data: {
+            provider,
+            targetFingerprint,
+            limit: limit ?? 20,
+            outcome: 'error',
+          },
         })
         throw err
       }

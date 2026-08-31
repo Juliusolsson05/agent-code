@@ -2,16 +2,37 @@ import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 
-/** Parse stage-zero gitlinks from `git ls-files --stage -z`. */
+/** Parse stage-zero, build-input gitlinks from `git ls-files --stage -z`. */
 export function parseGitlinks(output) {
   const links = []
   for (const record of output.split('\0')) {
     if (!record) continue
-    const match = /^160000 ([0-9a-f]{40,64}) \d+\t(.+)$/.exec(record)
+    const match = /^160000 ([0-9a-f]{40,64}) ([0-3])\t(.+)$/.exec(record)
     if (!match) continue
-    links.push({ expectedHead: match[1].toLowerCase(), path: match[2] })
+    if (match[2] !== '0') {
+      // WHY an unresolved gitlink is its own hard failure: silently ignoring
+      // stages 1-3 would let the verifier report success with no authoritative
+      // parent gitlink at all. A conflict must be resolved before there is a
+      // pinned commit the build can honestly claim to have compiled.
+      throw new Error(`Unmerged submodule gitlink at stage ${match[2]}: ${match[3]}`)
+    }
+    // `vendor/` is explicitly a source-reference namespace: those checkouts
+    // are never imported, built, or shipped. Blocking app startup because a
+    // developer is inspecting a different upstream Codex revision would add
+    // friction without strengthening the provenance claim this guard makes.
+    if (match[3].startsWith('vendor/')) continue
+    links.push({ expectedHead: match[1].toLowerCase(), path: match[3] })
   }
   return links
+}
+
+/** Render one path as a literal POSIX-shell word for the repair hint. */
+export function quoteShellWord(value) {
+  // WHY always quote—even ordinary paths: a command shown as copy/paste
+  // remediation is part of the safety boundary. Handling spaces but missing
+  // `$()` or a leading dash would turn an error message into executable input.
+  // Single quotes have exactly one escape rule, which keeps this inspectable.
+  return `'${value.replaceAll("'", `'"'"'`)}'`
 }
 
 /**
@@ -80,22 +101,26 @@ export function formatSubmoduleFailure(failures) {
     lines.push(
       '',
       'Restore pinned commits with:',
-      `  git submodule update --init --recursive -- ${repairablePaths.join(' ')}`,
+      `  git submodule update --init --recursive -- ${repairablePaths.map(quoteShellWord).join(' ')}`,
     )
   }
   return lines.join('\n')
 }
 
-function runGit(cwd, args) {
-  return execFileSync('git', args, {
+function runGit(cwd, args, trim = true) {
+  const output = execFileSync('git', args, {
     cwd,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
-  }).trim()
+  })
+  // NUL-delimited path output is binary-shaped data. Trimming it can mutate a
+  // legal path whose first/last character is whitespace, so only scalar Git
+  // output (HEAD, repo root, porcelain status) goes through string trimming.
+  return trim ? output.trim() : output
 }
 
 export function verifySubmoduleCheckouts(repoRoot) {
-  const gitlinks = parseGitlinks(runGit(repoRoot, ['ls-files', '--stage', '-z']))
+  const gitlinks = parseGitlinks(runGit(repoRoot, ['ls-files', '--stage', '-z'], false))
   const observations = new Map()
   for (const link of gitlinks) {
     const submoduleRoot = resolve(repoRoot, link.path)

@@ -33,6 +33,7 @@ import type {
 } from '@shared/types/session.js'
 import { isCodexReadyForPromptScreen } from '@providers/codex/runtime/codexReadyForPrompt.js'
 import { addCodexBuiltInMcpLaunchConfig } from '@providers/shared/runtime/builtInMcpLaunch.js'
+import { forwardCodexRolloutEntries } from '@providers/codex/runtime/codexHeadlessForwarding.js'
 
 
 /** Allocate a per-session run directory and return the path of its
@@ -538,9 +539,9 @@ export class CodexSession extends EventEmitter {
       })
 
       // Forward rollout entries as jsonl-entry (matches Claude's event name).
-      this.headless.on('rollout-entry', (line, file, observation) => {
-        this.emit('jsonl-entry', line, file, observation)
-      })
+      // The named bridge is also the parent/package system-test seam; keep the
+      // runtime on that same path so the test cannot validate a private copy.
+      forwardCodexRolloutEntries(this.headless, this)
 
       this.headless.on('rollout-error', err => {
         this.emit('jsonl-error', err)

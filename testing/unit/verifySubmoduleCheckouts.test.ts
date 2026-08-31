@@ -6,6 +6,7 @@ import {
   classifySubmoduleCheckouts,
   formatSubmoduleFailure,
   parseGitlinks,
+  quoteShellWord,
 } from '../../scripts/verify-submodule-checkouts.mjs'
 
 describe('submodule build provenance guard', () => {
@@ -14,6 +15,7 @@ describe('submodule build provenance guard', () => {
       '100644 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 0\tpackage.json',
       '160000 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb 0\tpackages/codex-headless',
       '160000 cccccccccccccccccccccccccccccccccccccccc 0\tvendor/codex src',
+      '160000 dddddddddddddddddddddddddddddddddddddddd 0\tthird_party/runtime tool',
       '',
     ].join('\0'))).toEqual([
       {
@@ -21,10 +23,16 @@ describe('submodule build provenance guard', () => {
         path: 'packages/codex-headless',
       },
       {
-        expectedHead: 'cccccccccccccccccccccccccccccccccccccccc',
-        path: 'vendor/codex src',
+        expectedHead: 'dddddddddddddddddddddddddddddddddddddddd',
+        path: 'third_party/runtime tool',
       },
     ])
+  })
+
+  it('rejects an unresolved gitlink instead of inventing a stage-zero pin', () => {
+    expect(() => parseGitlinks(
+      `160000 ${'a'.repeat(40)} 2\tpackages/codex-headless\0`,
+    )).toThrow('Unmerged submodule gitlink at stage 2: packages/codex-headless')
   })
 
   it('reports stale HEAD and local source edits as distinct failures', () => {
@@ -54,7 +62,7 @@ describe('submodule build provenance guard', () => {
     expect(message).toContain(`actual:   ${'c'.repeat(40)}`)
     expect(message).toContain('DIRTY        packages/codex-headless')
     expect(message).toContain(
-      'git submodule update --init --recursive -- packages/codex-headless',
+      "git submodule update --init --recursive -- 'packages/codex-headless'",
     )
   })
 
@@ -68,5 +76,19 @@ describe('submodule build provenance guard', () => {
       path: 'packages/missing',
       expectedHead: 'd'.repeat(40),
     }])
+  })
+
+  it('quotes every repair path as inert shell data', () => {
+    expect(quoteShellWord("vendor/codex src/$('boom')/it's/-dash")).toBe(
+      `'vendor/codex src/$('"'"'boom'"'"')/it'"'"'s/-dash'`,
+    )
+    const message = formatSubmoduleFailure([{
+      kind: 'uninitialized',
+      path: "third_party/tool src/$('boom')/it's/-dash",
+      expectedHead: 'e'.repeat(40),
+    }])
+    expect(message).toContain(
+      `-- 'third_party/tool src/$('"'"'boom'"'"')/it'"'"'s/-dash'`,
+    )
   })
 })
