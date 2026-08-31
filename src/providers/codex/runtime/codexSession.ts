@@ -33,6 +33,7 @@ import type {
 } from '@shared/types/session.js'
 import { isCodexReadyForPromptScreen } from '@providers/codex/runtime/codexReadyForPrompt.js'
 import { addCodexBuiltInMcpLaunchConfig } from '@providers/shared/runtime/builtInMcpLaunch.js'
+import { forwardCodexRolloutEntries } from '@providers/codex/runtime/codexHeadlessForwarding.js'
 
 
 /** Allocate a per-session run directory and return the path of its
@@ -129,6 +130,12 @@ export type CodexScreenSnapshot = {
   picker: SlashPickerState
 }
 
+export type CodexPromptEvidenceDiagnostic = {
+  type: 'prompt-input-evidence'
+  available: false
+  reason: string
+}
+
 export type CodexSessionEvents = {
   started: [{ projectDir: string; proxyUrl?: string }]
   'input-readiness': [AgentInputReadiness]
@@ -146,7 +153,7 @@ export type CodexSessionEvents = {
   'transcript-diagnostic': [CodexRolloutDiagnostic | {
     type: 'provider-request-observation'
     observation: CodexSemanticProviderRequestEvent
-  }]
+  } | CodexPromptEvidenceDiagnostic]
   // process-state carries the optional spinner-derived status string
   // (e.g. "working… 12s") so the renderer can show provider-specific
   // verbiage in its activity indicator. Without this, the renderer
@@ -532,9 +539,9 @@ export class CodexSession extends EventEmitter {
       })
 
       // Forward rollout entries as jsonl-entry (matches Claude's event name).
-      this.headless.on('rollout-entry', (line, file, observation) => {
-        this.emit('jsonl-entry', line, file, observation)
-      })
+      // The named bridge is also the parent/package system-test seam; keep the
+      // runtime on that same path so the test cannot validate a private copy.
+      forwardCodexRolloutEntries(this.headless, this)
 
       this.headless.on('rollout-error', err => {
         this.emit('jsonl-error', err)
@@ -630,16 +637,19 @@ export class CodexSession extends EventEmitter {
     })
     if (preparation.ok) return preparation.profile
 
-    // WHY profile refusal must not make the terminal unusable. Custom/new
-    // binaries and user policy still launch with their untouched keymap; only
-    // fresh-rollout prompt ownership is disabled, because a plausible but
-    // unverified prompt is more dangerous than a missing transcript edge.
-    this.emit(
-      'jsonl-error',
-      new Error(
-        `Codex prompt evidence disabled: ${preparation.reason}`,
-      ),
-    )
+    // WHY this is a diagnostic rather than `jsonl-error`: the prompt profile
+    // is only one optional source of fresh-rollout ownership evidence. Exact
+    // provider identity from the Responses proxy can still attach and tail the
+    // rollout, and an already-attached resume rollout remains fully usable.
+    // Routing this capability refusal through the fatal transcript channel made
+    // the renderer display "transcript unavailable" for the entire session even
+    // while committed JSONL was arriving normally. Keep the content-safe reason
+    // observable for incident collection without lying about transcript health.
+    this.emit('transcript-diagnostic', {
+      type: 'prompt-input-evidence',
+      available: false,
+      reason: preparation.reason,
+    })
     return null
   }
 

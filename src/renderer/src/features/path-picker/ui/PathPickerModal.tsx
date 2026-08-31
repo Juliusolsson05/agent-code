@@ -70,6 +70,11 @@ export function PathPickerModal({
   // folder yet, I'll start fresh").
   const [sessions, setSessions] = useState<SessionInfo[]>([])
   const [sessionsLoading, setSessionsLoading] = useState(false)
+  const [listingError, setListingError] = useState<string | null>(null)
+  const [listingTarget, setListingTarget] = useState<{
+    cwd: string
+    provider: AgentProvider
+  } | null>(null)
   // Latest resolved absolute path. Tracked separately from `value` so
   // actions use the validated form rather than re-running expand.
   const [resolvedPath, setResolvedPath] = useState<string | null>(null)
@@ -84,6 +89,15 @@ export function PathPickerModal({
   // Debounce token for the session list refresh — see the effect below.
   const reqVersion = useRef(0)
 
+  const invalidateResumeListing = (): void => {
+    // This is called from the initiating UI event as well as repeated in the
+    // effect. Effects run after commit; clearing only there permits one painted
+    // frame where an old row is still clickable under a new visible target.
+    setSessions([])
+    setListingTarget(null)
+    setListingError(null)
+  }
+
   // Reset on open so a stale error / value from a previous attempt
   // doesn't carry over.
   useEffect(() => {
@@ -93,6 +107,8 @@ export function PathPickerModal({
     setBusy(false)
     setSessions([])
     setSessionsLoading(false)
+    setListingError(null)
+    setListingTarget(null)
     setResolvedPath(null)
     setPendingCreatePath(null)
     setProvider(DEFAULT_PROVIDER)
@@ -105,6 +121,14 @@ export function PathPickerModal({
   useEffect(() => {
     if (!open) return
     const v = ++reqVersion.current
+    // WHY invalidate before starting the debounce: the provider toggle
+    // and path field change immediately, so rows from the previous target must
+    // stop being actionable immediately too. Waiting for the replacement IPC
+    // response creates a window where a Claude row can be resumed as Codex.
+    setSessions([])
+    setListingTarget(null)
+    setListingError(null)
+    setSessionsLoading(true)
     const t = setTimeout(async () => {
       const result = await window.api.expandCwd(value)
       if (v !== reqVersion.current) return
@@ -114,6 +138,7 @@ export function PathPickerModal({
         // resolved path so the list doesn't lie.
         setResolvedPath(null)
         setSessions([])
+        setSessionsLoading(false)
         // If the path simply doesn't exist yet, surface the create-and-open
         // affordance. Other errors (`not a directory`, `permission denied`,
         // `path is empty`) deliberately don't get this treatment — we don't
@@ -130,11 +155,24 @@ export function PathPickerModal({
       // that was just tab-completed into an existing directory.
       setPendingCreatePath(null)
       setResolvedPath(result.path)
-      setSessionsLoading(true)
-      const list = await window.api.listSessionsForCwd(result.path, 20, provider)
-      if (v !== reqVersion.current) return
-      setSessions(list)
-      setSessionsLoading(false)
+      try {
+        const list = await window.api.listSessionsForCwd(result.path, 20, provider)
+        if (v !== reqVersion.current) return
+        setSessions(list)
+        setListingTarget({ cwd: result.path, provider })
+        setListingError(null)
+      } catch {
+        if (v !== reqVersion.current) return
+        // WHY listing failure does not invalidate the cwd: starting a fresh
+        // session is still safe and useful. Keep the validated path, clear only
+        // the stale resume rows, and make the disk/provider failure visible
+        // instead of misreporting it as a successful zero-result scan.
+        setSessions([])
+        setListingTarget(null)
+        setListingError('Unable to load saved sessions. You can still start a new session.')
+      } finally {
+        if (v === reqVersion.current) setSessionsLoading(false)
+      }
     }, 150)
     return () => clearTimeout(t)
   }, [value, open, provider])
@@ -183,22 +221,14 @@ export function PathPickerModal({
 
   const resume = async (sessionId: string) => {
     if (busy) return
+    // Rows exist only with an accepted listing target. Keeping this explicit
+    // makes a stale closure or synthetic click fail closed instead of pairing
+    // a historical session id with today's provider toggle.
+    if (!listingTarget || !sessions.some(session => session.sessionId === sessionId)) return
     setBusy(true)
     setError(null)
     try {
-      // Use the already-validated path if we have one; fall back to
-      // re-validating just in case the user typed something new since
-      // the last debounce.
-      let path = resolvedPath
-      if (!path) {
-        const result = await window.api.expandCwd(value)
-        if (!result.ok) {
-          setError(result.error)
-          return
-        }
-        path = result.path
-      }
-      await onResume(path, sessionId, provider)
+      await onResume(listingTarget.cwd, sessionId, listingTarget.provider)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -229,7 +259,10 @@ export function PathPickerModal({
             <button
               key={p}
               type="button"
-              onClick={() => setProvider(p)}
+              onClick={() => {
+                if (p !== provider) invalidateResumeListing()
+                setProvider(p)
+              }}
               className={`rounded-control
                 px-3 py-1 text-[11px] font-semibold uppercase tracking-wider
                 border transition-colors duration-120
@@ -250,6 +283,7 @@ export function PathPickerModal({
           <PathInput
             value={value}
             onChange={next => {
+              if (next !== value) invalidateResumeListing()
               setValue(next)
               if (error) setError(null)
             }}
@@ -302,6 +336,12 @@ export function PathPickerModal({
           onResume={resume}
           disabled={busy}
         />
+
+        {listingError && (
+          <div role="alert" className="mt-2 text-[11px] text-danger flex-shrink-0">
+            {listingError}
+          </div>
+        )}
 
         <div className="flex justify-end gap-2 mt-4 flex-shrink-0">
           <Button

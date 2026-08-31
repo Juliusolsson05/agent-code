@@ -388,6 +388,47 @@ describe('SessionManager lifecycle journal', () => {
     )).toBeNull()
   })
 
+  it('records unsupported prompt evidence without poisoning transcript availability', async () => {
+    const { SessionManager } = await import('./sessionManager')
+    const spy = journalSpy()
+    const session = new FakeAgentSession()
+    createSession.mockImplementation(() => session)
+    const manager = new SessionManager(null, null, spy.journal as never)
+    const sessionId = '63636363-6363-4363-8363-636363636363'
+    const productErrors: unknown[] = []
+    const productDiagnostics: unknown[] = []
+    const productEntries: unknown[] = []
+    manager.on('jsonl-error', event => productErrors.push(event))
+    manager.on('transcript-diagnostic', event => productDiagnostics.push(event))
+    manager.on('jsonl-entry', event => productEntries.push(event))
+
+    await manager.recover({ sessionId, kind: 'codex', cwd: '/tmp/project' })
+    session.emit('transcript-diagnostic', {
+      type: 'prompt-input-evidence',
+      available: false,
+      reason: 'unsupported-cli',
+    })
+    session.emit('jsonl-entry', {
+      type: 'session_meta',
+      payload: { id: '00000000-0000-4000-8000-000000000151' },
+    }, '/private/native/path.jsonl', {
+      fileGenerationId: '16777234:991882',
+      rolloutByteOffset: 0,
+    })
+
+    expect(productErrors).toEqual([])
+    expect(productDiagnostics).toEqual([])
+    expect(productEntries).toHaveLength(1)
+    expect(spy.find('transcript.attachment')?.data).toEqual({
+      decision: 'hold',
+      reason: 'prompt-evidence-disabled',
+      code: 'unsupported-cli',
+      attached: false,
+      tailing: false,
+    })
+    await manager.killAll()
+  })
+
   it('degrades novel provider observation enum values to explicit unknown sentinels', async () => {
     const { SessionManager } = await import('./sessionManager')
     const spy = journalSpy()

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const harness = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
+  listSessions: vi.fn(),
 }))
 
 vi.mock('electron', () => ({
@@ -12,11 +13,16 @@ vi.mock('electron', () => ({
   },
 }))
 
+vi.mock('@providers/registry.main.js', () => ({
+  getMainProvider: () => ({ listSessions: harness.listSessions }),
+}))
+
 const { registerSessionIpc } = await import('./session.js')
 
 describe('session input transcript observations', () => {
   beforeEach(() => {
     harness.handlers.clear()
+    harness.listSessions.mockReset()
   })
 
   it('records separate and combined body/Enter writes under the composer submission id', () => {
@@ -64,5 +70,78 @@ describe('session input transcript observations', () => {
     // The legacy raw paste journal remains unchanged; Stage 0 adds a safe
     // projection and does not replace evidence collectors during observation.
     expect(append).toHaveBeenCalledTimes(3)
+  })
+})
+
+describe('session resume listing evidence', () => {
+  beforeEach(() => {
+    harness.handlers.clear()
+    harness.listSessions.mockReset()
+  })
+
+  it('records provider/target correlation and count without retaining the cwd', async () => {
+    harness.listSessions.mockResolvedValue([
+      { sessionId: 'provider-session', summary: 'saved', lastModified: 1 },
+    ])
+    const record = vi.fn()
+    const manager = {}
+    const pasteDebugJournals = {}
+    registerSessionIpc(
+      manager as never,
+      pasteDebugJournals as never,
+      { record } as never,
+    )
+    const list = harness.handlers.get('session:list-for-cwd')
+    if (!list) throw new Error('session:list-for-cwd was not registered')
+
+    await expect(list(
+      {},
+      '/repo/worktrees/../worktrees/codex',
+      20,
+      'codex',
+    )).resolves.toHaveLength(1)
+    expect(harness.listSessions).toHaveBeenCalledWith(
+      '/repo/worktrees/../worktrees/codex',
+      20,
+    )
+    expect(record).toHaveBeenCalledWith({
+      area: 'session.resume-list',
+      name: 'session.resume-list.complete',
+      data: {
+        provider: 'codex',
+        targetFingerprint: expect.stringMatching(/^[0-9a-f]{64}$/),
+        limit: 20,
+        resultCount: 1,
+        outcome: 'success',
+      },
+    })
+    expect(JSON.stringify(record.mock.calls)).not.toContain('/repo/worktrees/codex')
+  })
+
+  it('preserves listing failure and records it separately from zero results', async () => {
+    const failure = new Error('recorded lister failure at /repo/codex')
+    harness.listSessions.mockRejectedValue(failure)
+    const record = vi.fn()
+    registerSessionIpc(
+      {} as never,
+      {} as never,
+      { record } as never,
+    )
+    const list = harness.handlers.get('session:list-for-cwd')
+    if (!list) throw new Error('session:list-for-cwd was not registered')
+
+    await expect(list({}, '/repo/codex', 20, 'codex')).rejects.toBe(failure)
+    expect(record).toHaveBeenCalledWith({
+      area: 'session.resume-list',
+      name: 'session.resume-list.error',
+      severity: 'warn',
+      data: {
+        provider: 'codex',
+        targetFingerprint: expect.stringMatching(/^[0-9a-f]{64}$/),
+        limit: 20,
+        outcome: 'error',
+      },
+    })
+    expect(JSON.stringify(record.mock.calls)).not.toContain('/repo/codex')
   })
 })
