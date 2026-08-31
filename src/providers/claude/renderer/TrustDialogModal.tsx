@@ -6,16 +6,25 @@ import {
   DialogTitle,
 } from '@renderer/components/ui/dialog'
 
+// WHY the modal takes intent callbacks instead of an onSend(bytes) writer:
+// this component used to write a bare '\r' for accept, assuming Claude Code
+// pre-highlights "Yes, I trust this folder". Claude Code 2.1.251 pre-highlights
+// "No, exit", so that Enter confirmed the exit option and killed the session
+// (#705). The correct keystrokes depend on the live screen, which only the
+// headless side can observe — so the modal expresses INTENT and views.tsx
+// dispatches the condition actions (custom accept resolved by the headless
+// trust-dialog driver; Esc for decline). No raw bytes originate here anymore.
 type Props = {
   state: { workspace?: string } | null
-  onSend: (data: string) => Promise<void>
+  onAccept: () => Promise<void>
+  onDecline: () => Promise<void>
 }
 
-export function TrustDialogModal({ state, onSend }: Props) {
+export function TrustDialogModal({ state, onAccept, onDecline }: Props) {
   if (!state) return null
 
-  const accept = () => { void onSend('\r') }
-  const decline = () => { void onSend('\x1b') }
+  const accept = () => { void onAccept() }
+  const decline = () => { void onDecline() }
 
   return (
     <Dialog open onOpenChange={nextOpen => {
