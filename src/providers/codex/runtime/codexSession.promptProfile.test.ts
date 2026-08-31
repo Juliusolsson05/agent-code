@@ -52,18 +52,24 @@ describe('CodexSession prompt profile launch binding', () => {
   it('keeps terminal launch available but withholds authority on conflict', async () => {
     const { session, env } = sessionAndEnv('conflicting-binding')
     const errors: Error[] = []
+    const diagnostics: unknown[] = []
     session.on('jsonl-error', error => errors.push(error))
+    session.on('transcript-diagnostic', diagnostic => diagnostics.push(diagnostic))
     const profile = await (session as unknown as PromptProfileInternals)
       .preparePromptInputProfile([appServerFixture, baseMarker], env)
 
     expect(profile).toBeNull()
-    expect(errors.map(error => error.message)).toEqual([
-      'Codex prompt evidence disabled: effective-config-unverified',
-    ])
-    // WHY the adapter reports a content-safe refusal and returns null; start()
-    // owns the following PTY spawn and deliberately continues with the caller's
-    // untouched keymap. Throwing here would recreate the recorded no-composer
-    // startup outage instead of merely disabling transcript ownership.
+    expect(errors).toEqual([])
+    expect(diagnostics).toEqual([{
+      type: 'prompt-input-evidence',
+      available: false,
+      reason: 'effective-config-unverified',
+    }])
+    // WHY the adapter reports a content-safe capability diagnostic and returns
+    // null: start() owns the following PTY spawn and deliberately continues
+    // with the caller's untouched keymap. Throwing—or emitting jsonl-error—
+    // would recreate an outage in the terminal or transcript UI for a feature
+    // that exact provider identity can replace independently.
     expect(typeof session.start).toBe('function')
   })
 })
