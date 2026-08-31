@@ -92,6 +92,7 @@ import { dirtyAiWorkspacePaths } from '@renderer/features/ai-workspace/lib/aiWor
 import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
 import { SafeMarkdownLink } from '@renderer/features/rendered-content/SafeMarkdownLink'
 import type { AiWorkspaceSummary } from '@mcp/shared/aiWorkspaceTypes'
+import { useResumeSessionListing } from '@renderer/features/command-palette/useResumeSessionListing'
 // Canonical session listing shape. This was a local copy that DROPPED
 // `fileSize` (and `customTitle`) — a concrete instance of the drift the
 // shared contract prevents: the palette consumes `SessionInfo[]` straight
@@ -373,8 +374,13 @@ function OpenCommandPalette({
   // component invisibly and destroys it in the same commit.
   const mode = useAppStore(state => state.paletteMode)
   const setMode = useAppStore(state => state.setPaletteMode)
-  const [sessions, setSessions] = useState<SessionInfo[]>([])
-  const [sessionsLoading, setSessionsLoading] = useState(false)
+  const {
+    target: resumeTarget,
+    sessions,
+    loading: sessionsLoading,
+    error: sessionsError,
+    load: loadResumeSessions,
+  } = useResumeSessionListing()
   const [aiWorkspaces, setAiWorkspaces] = useState<AiWorkspaceSummary[]>([])
   const [aiWorkspacesLoading, setAiWorkspacesLoading] = useState(false)
   const [aiWorkspaceError, setAiWorkspaceError] = useState<string | null>(null)
@@ -432,15 +438,8 @@ function OpenCommandPalette({
     setMode('resume')
     setQuery('')
     setSelectedIndex(0)
-    setSessionsLoading(true)
-    try {
-      const list = await window.api.listSessionsForCwd(focusedCwd, 20, resumeProvider)
-      setSessions(list)
-    } catch {
-      setSessions([])
-    }
-    setSessionsLoading(false)
-  }, [focusedCwd, resumeProvider])
+    await loadResumeSessions({ cwd: focusedCwd, provider: resumeProvider })
+  }, [focusedCwd, loadResumeSessions, resumeProvider])
 
   // Buried panes are scoped to the ACTIVE TAB. The natural temptation
   // is to show every buried pane in the workspace ("they're paused
@@ -1235,13 +1234,13 @@ function OpenCommandPalette({
   const executeResume = useCallback(
     (session: SessionInfo) => {
       onClose()
-      if (!focusedCwd) return
-      void workspace.replaceSession(focusedCwd, {
+      if (!resumeTarget) return
+      void workspace.replaceSession(resumeTarget.cwd, {
         resumeSessionId: session.sessionId,
-        kind: resumeProvider,
+        kind: resumeTarget.provider,
       })
     },
-    [onClose, focusedCwd, focusedProvider, workspace],
+    [onClose, resumeTarget, workspace],
   )
 
   const executeBuried = useCallback(
@@ -1564,10 +1563,10 @@ function OpenCommandPalette({
     // cast is belt-and-suspenders against noUncheckedIndexedAccess.
     const session = filteredSessions[selectedIndex] as SessionInfo | undefined
     if (!session) return null
-    const cwd = session.cwd ?? focusedCwd
+    const cwd = session.cwd ?? resumeTarget?.cwd
     if (!cwd) return null
     return {
-      kind: resumeProvider,
+      kind: resumeTarget?.provider ?? resumeProvider,
       cwd,
       providerSessionId: session.sessionId,
     }
@@ -2046,6 +2045,10 @@ function OpenCommandPalette({
                 <div className="px-3 py-4 text-muted text-[12px] text-center">
                   Loading sessions…
                 </div>
+              ) : sessionsError ? (
+                <div role="alert" className="px-3 py-4 text-danger text-[12px] text-center">
+                  {sessionsError}
+                </div>
               ) : filteredSessions.length === 0 ? (
                 <div className="px-3 py-4 text-muted text-[12px] text-center">
                   No matching sessions
@@ -2073,7 +2076,7 @@ function OpenCommandPalette({
                     </div>
                     <div className="text-[10px] text-muted mt-0.5 truncate">
                       {session.gitBranch ? `${session.gitBranch} · ` : ''}
-                      {session.cwd ?? focusedCwd ?? ''}
+                      {session.cwd ?? resumeTarget?.cwd ?? ''}
                     </div>
                   </div>
                 ))

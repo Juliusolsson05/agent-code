@@ -131,10 +131,21 @@ export function PathPickerModal({
       setPendingCreatePath(null)
       setResolvedPath(result.path)
       setSessionsLoading(true)
-      const list = await window.api.listSessionsForCwd(result.path, 20, provider)
-      if (v !== reqVersion.current) return
-      setSessions(list)
-      setSessionsLoading(false)
+      try {
+        const list = await window.api.listSessionsForCwd(result.path, 20, provider)
+        if (v !== reqVersion.current) return
+        setSessions(list)
+      } catch {
+        if (v !== reqVersion.current) return
+        // WHY listing failure does not invalidate the cwd: starting a fresh
+        // session is still safe and useful. Keep the validated path, clear only
+        // the stale resume rows, and make the disk/provider failure visible
+        // instead of misreporting it as a successful zero-result scan.
+        setSessions([])
+        setError('Unable to load saved sessions. You can still start a new session.')
+      } finally {
+        if (v === reqVersion.current) setSessionsLoading(false)
+      }
     }, 150)
     return () => clearTimeout(t)
   }, [value, open, provider])

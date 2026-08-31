@@ -89,7 +89,7 @@ export function registerAllIpc(deps: IpcDeps): void {
   installPerformanceIpcInstrumentation()
   registerEditorFsIpc(editorFsRoots)
   registerEditorFsWatchIpc(editorFsRoots)
-  registerSessionIpc(deps.manager, deps.pasteDebugJournals)
+  registerSessionIpc(deps.manager, deps.pasteDebugJournals, deps.appRunJournal)
   registerProviderIpc(deps.manager)
   registerLspIpc(deps.lspManager, editorFsRoots, deps.aiWorkspaceRegistry)
   registerFsIpc()

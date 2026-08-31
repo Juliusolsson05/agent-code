@@ -1,8 +1,10 @@
 import { ipcMain } from 'electron'
 import { createHash } from 'node:crypto'
+import { resolve as resolvePath } from 'node:path'
 
 import type { SessionManager } from '@main/sessionManager.js'
 import type { PasteDebugJournalRegistry } from '@main/pasteDebugJournal.js'
+import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import { sha8FromDigestBytes } from '@shared/code/sha8.js'
 import type { ConditionCustomAction } from '@shared/types/providerConditions.js'
 import { getMainProvider } from '@providers/registry.main.js'
@@ -55,6 +57,7 @@ import {
 export function registerSessionIpc(
   manager: SessionManager,
   pasteDebugJournals: PasteDebugJournalRegistry,
+  appRunJournal?: AppRunJournal,
 ): void {
   ipcMain.handle(
     'session:spawn',
@@ -289,14 +292,42 @@ export function registerSessionIpc(
       limit?: number,
       provider: AgentProviderKind = DEFAULT_PROVIDER,
     ) => {
+      const normalizedCwd = resolvePath(cwd)
       try {
         const providerConfig = getMainProvider(provider)
-        return await providerConfig.listSessions(cwd, limit ?? 20)
+        const sessions = await providerConfig.listSessions(cwd, limit ?? 20)
+        // WHY record the resolved target and count here, rather than only the
+        // generic IPC duration: the captured failure proved the handler ran but
+        // could not distinguish wrong provider/cwd, a successful empty list, a
+        // thrown disk read, or rows lost later in the renderer. No transcript
+        // content or session ids are retained in this always-on breadcrumb.
+        appRunJournal?.record({
+          area: 'session.resume-list',
+          name: 'session.resume-list.complete',
+          data: {
+            provider,
+            cwd: normalizedCwd,
+            limit: limit ?? 20,
+            resultCount: sessions.length,
+            outcome: 'success',
+          },
+        })
+        return sessions
       } catch (err) {
-        // Don't let a listing error brick the modal — return empty.
+        // WHY reject instead of converting every failure to []: an empty list
+        // means the disk scan succeeded and found nothing. Returning the same
+        // value for I/O/provider failures made the UI say "No matching
+        // sessions" and erased the only distinction needed to diagnose #718.
+        // Both renderer callers catch this and keep their surfaces usable.
         // eslint-disable-next-line no-console
         console.warn('[session:list-for-cwd] failed:', err)
-        return []
+        appRunJournal?.recordError('session.resume-list.error', err, {
+          provider,
+          cwd: normalizedCwd,
+          limit: limit ?? 20,
+          outcome: 'error',
+        })
+        throw err
       }
     },
   )
