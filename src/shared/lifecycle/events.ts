@@ -488,6 +488,14 @@ export const WAKE_CALLERS = [
   // inputReady, so every click on a trust modal took the wake path.
   'tile-leaf.send',
   'tile-leaf.send-retry',
+  // The delivery-protocol twin of send-retry (#706): main rejected
+  // deliverPromptToAgent at before-write because no live registry entry exists
+  // for the pane (never-owned after a restart, or entry-lost-after-owned), so
+  // the composer wakes the same SessionId and retries the delivery once.
+  // Separate from send-retry because the two paths fail for different reasons:
+  // a storm here means restored panes are reaching delivery without a backend,
+  // not that raw writes are bouncing.
+  'tile-leaf.deliver-retry',
   // The Retry affordance under a failed pane's readiness banner.
   'tile-leaf.retry',
   // Mount-time wake. Unconditional until #597; the site that made every

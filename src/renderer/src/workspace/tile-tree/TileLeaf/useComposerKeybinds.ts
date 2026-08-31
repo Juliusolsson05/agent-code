@@ -22,6 +22,7 @@ import { useAppStore } from '@renderer/app-state/hooks'
 import { useSessionFeed } from '@renderer/features/sessionFeed/SessionFeedContext'
 import type { PromptDeliveryResult } from '@shared/types/providerConfig'
 import { draftAfterAcceptance, imagesAfterAcceptance } from './promptDeliveryDraft'
+import { deliverWithWake } from './deliverWithWake'
 import { reportLifecycle } from '@renderer/lifecycle/report'
 
 // The big onKeyDown handler for the composer textarea.
@@ -295,8 +296,18 @@ export function useComposerKeybinds({
           sendsThatWrote += 1
           return result
         },
+        // Wrapped in deliverWithWake (#706): a pane restored from
+        // workspace.json after a restart reaches this call with no live
+        // backend in main's registry (nothing respawns detached sessions, and
+        // the raw-write wake in TileLeaf.send never runs for the delivery
+        // protocol). On main's before-write "not a live agent session" reject
+        // the wrapper wakes the SAME SessionId and retries once; every other
+        // failure shape flows through untouched.
         deliverPrompt: (prompt, imagePaths) =>
-          feed.deliverPrompt(sessionId, prompt, imagePaths, pasteId),
+          deliverWithWake(
+            () => feed.deliverPrompt(sessionId, prompt, imagePaths, pasteId),
+            () => workspace.ensureSessionLive(sessionId, 'tile-leaf.deliver-retry'),
+          ),
         pasteId,
         getScreen: () => workspace.latestScreenRef.current[sessionId],
       })
