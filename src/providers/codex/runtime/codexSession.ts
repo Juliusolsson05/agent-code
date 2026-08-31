@@ -10,6 +10,7 @@ import {
   CodexHeadless,
   CodexResponsesAdapter,
   ResponsesProxy,
+  ensureCodexProjectTrust,
   prepareCodex01491PromptInputProfile,
   prepareCodexResumeRollout,
 } from 'codex-headless'
@@ -294,6 +295,21 @@ export class CodexSession extends EventEmitter {
       ready: false,
       reason: this.resumeSessionId ? 'replaying-history' : 'provider-not-ready',
     })
+    // Pre-trust the spawn folder ON DISK so Codex never shows its trust
+    // dialog for this session (#714). The user chose this cwd explicitly —
+    // that choice is the trust decision — and the dialog's keystroke-driven
+    // path produced four distinct failures in one day (#705 #711 #712 #713:
+    // inverted accept bytes, invisibly refused clicks, the wake readiness
+    // timeout killing a live CLI waiting on its own dialog, an app-hostage
+    // modal). Sitting HERE, one await per start attempt, covers every spawn
+    // route — fresh panes, recover/wake respawns, orchestration children,
+    // worktree cwds — and stays far from the "config/read must remain the
+    // final await before spawn" invariant below. The helper never throws and
+    // its failure modes deliberately do not gate the spawn: the trust-dialog
+    // condition/modal remain the fallback for anything the write cannot
+    // cover (inline projects tables, read-only configs).
+    await ensureCodexProjectTrust(this.cwd)
+    if (!this.isStartAttemptActive(attempt)) return
     // Codex uses a subcommand for resume: `codex resume <id>`.
     const args: string[] = []
     // Filter undefined env entries before adding generated MCP credential variables. Keeping this
