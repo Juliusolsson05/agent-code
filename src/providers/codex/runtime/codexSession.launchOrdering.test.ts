@@ -13,6 +13,12 @@ const launch = vi.hoisted(() => ({
   profileBarrier: Promise.resolve() as Promise<void>,
   releaseProfile: (() => undefined) as () => void,
   headlessOptions: null as null | Record<string, unknown>,
+  // The on-disk trust write (#714) records into its OWN channel rather than
+  // `events` because every pre-existing test in this file asserts exact event
+  // arrays; only the dedicated ordering test below opts the call into the
+  // event ladder via `recordTrustInEvents`.
+  trustCalls: [] as string[],
+  recordTrustInEvents: false,
 }))
 
 vi.mock('node-pty', () => ({
@@ -57,6 +63,11 @@ vi.mock('codex-headless', () => {
       static async create(): Promise<never> {
         throw new Error('proxy is outside this launch-order recording')
       }
+    },
+    ensureCodexProjectTrust: async (cwd: string) => {
+      launch.trustCalls.push(cwd)
+      if (launch.recordTrustInEvents) launch.events.push('trust:ensure')
+      return 'trusted-appended'
     },
     prepareCodexResumeRollout: async () => {
       launch.events.push('resume:start')
@@ -131,6 +142,8 @@ beforeEach(() => {
   launch.events = []
   launch.configMode = 'recorded-safe'
   launch.headlessOptions = null
+  launch.trustCalls = []
+  launch.recordTrustInEvents = false
   launch.reserveResumeBeforeReturn = false
   launch.resumeLeaseActive = false
   launch.resumeBarrier = new Promise<void>(resolve => {
@@ -167,6 +180,36 @@ describe('CodexSession resume launch attestation ordering', () => {
       'resume:start',
       'resume:end',
     ])
+    await session.stop()
+  })
+
+  it('writes the on-disk folder trust before any ownership step or spawn (#714)', async () => {
+    // WHY ordering matters: the write exists so Codex never paints its trust
+    // dialog. Written after the PTY spawns it would race the dialog it is
+    // supposed to prevent; written after ownership acquisition it would sit
+    // inside the carefully-ordered attestation ladder the other tests in this
+    // file pin. First — before handoff, ownership, config/read, spawn — is
+    // the only position that cannot interfere with either.
+    launch.recordTrustInEvents = true
+    const session = new CodexSession({
+      binary: 'recorded-codex',
+      cwd: '/recorded/worktree',
+      resumeSessionId: '00000000-0000-4000-8000-000000000632',
+      useProxy: false,
+      beforeResumeOwnershipAcquire: async () => {
+        launch.events.push('handoff')
+      },
+    })
+    const starting = session.start()
+    await vi.waitFor(() => {
+      expect(launch.events).toEqual(['trust:ensure', 'handoff', 'resume:start'])
+    })
+    expect(launch.trustCalls).toEqual(['/recorded/worktree'])
+    launch.releaseResume()
+    await starting
+    // Exactly once per start attempt — a second ensure would be harmless
+    // (idempotent) but would betray a second spawn path sneaking in.
+    expect(launch.trustCalls).toEqual(['/recorded/worktree'])
     await session.stop()
   })
 
