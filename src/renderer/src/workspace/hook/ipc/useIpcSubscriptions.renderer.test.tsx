@@ -82,6 +82,144 @@ function makeRefs(state: WorkspaceState): WorkspaceRefs {
 }
 
 describe('useIpcSubscriptions with an injected SessionFeed', () => {
+  it('persists fresh Codex identity while handing a queued prompt to its rollout row', () => {
+    const fake = createFakeSessionFeed()
+    const sessionId = 'fresh-codex-identity-and-queue' as SessionId
+    const providerSessionId = '01a0557d-f1a7-7830-bb44-e567be592195'
+    const prompt = 'the queued prompt must become durable'
+    let workspaceState = {
+      sessions: { [sessionId]: { cwd: '/repo', kind: 'codex' } },
+    } as unknown as WorkspaceState
+    const activeTurn = {
+      turnId: 'proxy-turn-before-rollout-attach',
+      source: 'proxy' as const,
+      text: '',
+      blocks: {},
+      blockOrder: [],
+      stopReason: null,
+      usage: null,
+      task: {
+        todos: [],
+        doneCount: 0,
+        totalCount: 0,
+        inProgressToolUseIds: [],
+        activeToolNames: [],
+      },
+      startedAt: 1,
+      endedAt: null,
+      lookups: {
+        toolCallsById: {},
+        toolUseIdsInOrder: [],
+        resolvedToolUseIds: [],
+        erroredToolUseIds: [],
+      },
+    }
+    let runtimes: Record<SessionId, SessionRuntime> = {
+      [sessionId]: {
+        ...emptyRuntime(),
+        semantic: {
+          ...emptyRuntime().semantic,
+          currentTurn: activeTurn,
+        },
+      },
+    }
+    let actions!: ReturnType<typeof useStreamingActions>
+    let refsForTest!: WorkspaceRefs
+    const commitRuntimes = (
+      updater:
+        | Record<SessionId, SessionRuntime>
+        | ((current: Record<SessionId, SessionRuntime>) => Record<SessionId, SessionRuntime>),
+    ): void => {
+      runtimes = typeof updater === 'function' ? updater(runtimes) : updater
+      refsForTest.latestRuntimesRef.current = runtimes
+    }
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: { gitWorktrees: vi.fn(async () => ({ ok: false })) },
+    })
+
+    function Harness(): React.JSX.Element {
+      const refs = useRef<WorkspaceRefs | null>(null)
+      if (refs.current === null) {
+        refs.current = makeRefs(workspaceState)
+        refs.current.latestRuntimesRef.current = runtimes
+        refsForTest = refs.current
+      }
+      actions = useStreamingActions(commitRuntimes, () => true)
+      useIpcSubscriptions(
+        fake,
+        refs.current,
+        updater => {
+          workspaceState = typeof updater === 'function'
+            ? updater(workspaceState)
+            : updater
+          refs.current!.stateRef.current = workspaceState
+          refs.current!.latestStateRef.current = workspaceState
+        },
+        commitRuntimes,
+        () => {},
+        () => {},
+      )
+      return <div />
+    }
+
+    render(<Harness />)
+    act(() => {
+      actions.addOptimisticCodexUserEntry(
+        sessionId,
+        prompt,
+        '71717171-7171-4171-8171-717171717171',
+      )
+    })
+    expect(runtimes[sessionId]?.queuedMessages.map(message => message.content))
+      .toEqual([prompt])
+
+    act(() => {
+      fake.emitJsonlEntries({
+        sessionId,
+        entries: [
+          {
+            file: 'rollout.jsonl',
+            entry: {
+              timestamp: '2026-08-30T18:45:12.000Z',
+              type: 'session_meta',
+              payload: { id: providerSessionId, cwd: '/repo' },
+            },
+          },
+          {
+            file: 'rollout.jsonl',
+            entry: {
+              timestamp: '2026-08-30T18:45:13.000Z',
+              type: 'response_item',
+              payload: {
+                type: 'message',
+                role: 'user',
+                content: [{ type: 'input_text', text: prompt }],
+              },
+            },
+          },
+        ],
+      })
+    })
+
+    // WHY this test asserts both writes in one callback: exact proxy identity
+    // opens a fresh tail from byte zero, so session_meta and the prompt that
+    // retires the local queue can arrive in the same coalesced IPC burst. If
+    // either pass is removed, the immediate UI may look correct while restart
+    // loses the provider id, or persistence may look correct while the queued
+    // strip remains stuck forever.
+    expect(workspaceState.sessions[sessionId]).toMatchObject({
+      providerSessionId,
+      providerSessionIdSource: 'jsonl-entry',
+    })
+    expect(runtimes[sessionId]?.queuedMessages).toEqual([])
+    expect(
+      runtimes[sessionId]?.entries
+        .filter(entry => entry.type === 'user')
+        .map(entryTextContent),
+    ).toEqual([prompt])
+  })
+
   it('does not restamp startup submissions as a successor run during reconciliation', () => {
     const fake = createFakeSessionFeed()
     const sessionId = 'startup-submit-run-fence' as SessionId
