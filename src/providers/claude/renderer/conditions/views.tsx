@@ -43,6 +43,27 @@ type ClaudeStateByKind = {
 
 const raw = (data: string) => ({ kind: 'pty' as const, id: 'raw', label: '', data })
 
+// The trust-dialog wire actions, mirrored verbatim from claude-code-headless's
+// conditions/trustDialog.ts (the ids/labels/resolver-name are the contract;
+// neither side changes without the other).
+//
+// WHY accept is a CUSTOM action and not a keystroke: Claude Code 2.1.251
+// pre-highlights "No, exit", so the raw '\r' this view used to dispatch
+// confirmed the exit option and terminated the CLI (#705). Which keystrokes
+// accept requires depends on where the highlight currently sits — only the
+// headless side can observe that, so accept routes through
+// session:resolveCondition to the trust-dialog driver, which walks the
+// highlight onto "Yes, I trust this folder" with per-press verification before
+// confirming. Esc's meaning does not depend on the highlight, so decline stays
+// a plain pty action.
+const trustAccept = {
+  kind: 'custom' as const,
+  id: 'accept',
+  label: 'Yes, I trust this folder',
+  name: 'claude.trust-dialog.accept',
+}
+const trustDecline = { kind: 'pty' as const, id: 'decline', label: 'No, exit', data: '\x1b' }
+
 // claude.trust-dialog — only renders when visible, mirroring the old outlet's
 // `trust?.visible ? { workspace } : null`.
 export const claudeTrustView = defineView<'claude.trust-dialog', ClaudeTrustDialogState>({
@@ -53,7 +74,8 @@ export const claudeTrustView = defineView<'claude.trust-dialog', ClaudeTrustDial
   Component: ({ state, dispatch }) => (
     <TrustDialogModal
       state={state?.visible ? { workspace: state.workspace } : null}
-      onSend={(data) => dispatch(raw(data))}
+      onAccept={() => dispatch(trustAccept)}
+      onDecline={() => dispatch(trustDecline)}
     />
   ),
 })

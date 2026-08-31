@@ -19,7 +19,12 @@ export type { ConditionPtyAction, ConditionCustomAction, ConditionAction }
 
 export type ClaudeTrustDialogState = {
   visible: boolean
-  options?: Array<{ key: string; label: string }>
+  // `highlighted` marks the row carrying the TUI's `❯` pointer — the row a
+  // bare Enter would confirm. Optional because snapshots recorded before the
+  // 2.1.251 trust fix (claude-code-headless#51) predate the field; the
+  // renderer never synthesizes keystrokes from options either way (accept is
+  // resolved headless-side from the live screen — see views.tsx).
+  options?: Array<{ key: string; label: string; highlighted?: boolean }>
   workspace?: string
 }
 
