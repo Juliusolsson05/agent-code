@@ -21,6 +21,7 @@ import type {
 } from '@shared/types/session.js'
 import { ClaudeCodeHeadless, createProxyServer } from 'claude-code-headless'
 import type {
+  ClaudeCondition,
   ClaudeConditionSnapshot,
   ConditionCustomAction,
   DriveResult,
@@ -761,7 +762,9 @@ export class ClaudeSession extends EventEmitter {
     if (!this.headless) return { kind: 'terminal', reason: 'no-headless' }
 
     const conditions = this.headless.getConditionSnapshot().conditions
-    const condition = Object.values(conditions).find(value => value !== undefined)
+    const condition = Object.values(conditions).find(
+      value => value !== undefined && conditionBlocksPromptInput(value),
+    )
     if (condition) {
       return {
         kind: 'blocked',
@@ -1192,6 +1195,40 @@ export class ClaudeSession extends EventEmitter {
  */
 function canonicalizeAcceptedPrompt(value: string): string {
   return value.normalize('NFC').replace(/\s+/gu, ' ').trim()
+}
+
+/**
+ * Does this condition gate prompt delivery? Every condition blocks except a
+ * SETTLED compaction (#709).
+ *
+ * WHY the carve-out: Claude Code leaves its compaction outcome line —
+ * `⎿  Compacted (ctrl+o to see full summary)`, or the `Error during
+ * compaction: …` line — painted above the composer, and on an idle pane
+ * nothing ever scrolls it away. The parser truthfully reports that line as a
+ * visible done/error compaction, so without this predicate the gate blocked
+ * with `resolvable: false` (compaction has no actions) and could never
+ * unblock: prompts were refused, so no output could ever push the line off
+ * screen. Every manual /compact deadlocked its pane (recorded in debug bundle
+ * 2026-08-31T01-07-29-510-6052830c, where the screen simultaneously shows the
+ * done line AND an empty, ready composer — proof the settled state does not
+ * occupy Claude's input).
+ *
+ * A RUNNING compaction still blocks: it describes a now-happening rewrite of
+ * the conversation, and it self-clears when Claude replaces the spinner line
+ * with the outcome line.
+ *
+ * WHY this lives in the gate and not in the condition module's detect: the
+ * settled state is still worth SHOWING (the strip renders done/error, and
+ * selectors map an error compaction to the ERROR attention badge). Detection
+ * reports what is on screen; whether a state gates input is this consumer's
+ * policy — and this file is already the Claude-specific runtime, so per-kind
+ * knowledge is its business.
+ */
+function conditionBlocksPromptInput(condition: ClaudeCondition): boolean {
+  if (condition.kind === 'claude.compaction') {
+    return condition.state.phase === 'running'
+  }
+  return true
 }
 
 function stripTrailingClaudeImagePills(value: string, count: number): string | null {

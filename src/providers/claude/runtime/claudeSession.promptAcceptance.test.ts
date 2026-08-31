@@ -8,11 +8,14 @@ function installPromptSurface(
   session: ClaudeSession,
   initial: {
     composer?: 'empty' | 'drafted' | 'unpainted'
-    conditions?: Record<string, { kind: string; actions: unknown[] }>
+    // `state` is optional because most gate tests only care that a condition
+    // EXISTS; the compaction carve-out tests below pass the real recorded
+    // state because the gate's blocking predicate reads `state.phase` (#709).
+    conditions?: Record<string, { kind: string; actions: unknown[]; state?: unknown }>
   } = {},
 ): {
   setComposer(value: 'empty' | 'drafted' | 'unpainted'): void
-  setConditions(value: Record<string, { kind: string; actions: unknown[] }>): void
+  setConditions(value: Record<string, { kind: string; actions: unknown[]; state?: unknown }>): void
   getComposerState: ReturnType<typeof vi.fn>
 } {
   let composer = initial.composer ?? 'empty'
@@ -480,5 +483,96 @@ describe('ClaudeSession prompt acceptance', () => {
     surface.setComposer('empty')
     refreshPromptGate(session)
     expect(promptGateState(session)).toMatchObject({ kind: 'ready' })
+  })
+})
+
+// The #709 deadlock: Claude leaves its compaction outcome line painted above
+// the composer, the parser truthfully reports it as a visible done/error
+// compaction, and the gate used to block on ANY condition — with
+// `resolvable: false`, since compaction has no actions. Prompts were refused,
+// so no output could ever scroll the line away: every manual /compact
+// permanently bricked its pane. These tests pin the carve-out: settled
+// compaction never gates input, running compaction still does, and the
+// carve-out is compaction-specific.
+describe('prompt gate settled-compaction carve-out (#709)', () => {
+  function readySession(
+    conditions: Record<string, { kind: string; actions: unknown[]; state?: unknown }>,
+  ): ClaudeSession {
+    const session = new ClaudeSession()
+    installPromptSurface(session, { conditions })
+    ;(session as unknown as { transcriptTailAttached: boolean }).transcriptTailAttached = true
+    ;(session as unknown as { transcriptReplayQuiesced: boolean }).transcriptReplayQuiesced = true
+    refreshPromptGate(session)
+    return session
+  }
+
+  it('a done compaction does not block — the exact recorded deadlock state', () => {
+    // Byte-for-byte the condition captured in debug bundle
+    // 2026-08-31T01-07-29-510-6052830c while the pane's composer was empty and
+    // ready on screen but every send was refused.
+    const session = readySession({
+      'claude.compaction': {
+        kind: 'claude.compaction',
+        state: {
+          visible: true,
+          phase: 'done',
+          statusText: '⎿  Compacted (ctrl+o to see full summary)',
+        },
+        actions: [],
+      },
+    })
+    expect(promptGateState(session)).toEqual({ kind: 'ready' })
+  })
+
+  it('a compaction error does not block — the error line persists just like done', () => {
+    const session = readySession({
+      'claude.compaction': {
+        kind: 'claude.compaction',
+        state: {
+          visible: true,
+          phase: 'error',
+          errorText: 'Conversation too long',
+        },
+        actions: [],
+      },
+    })
+    expect(promptGateState(session)).toEqual({ kind: 'ready' })
+  })
+
+  it('a running compaction still blocks, and reports unresolvable honestly', () => {
+    const session = readySession({
+      'claude.compaction': {
+        kind: 'claude.compaction',
+        state: {
+          visible: true,
+          phase: 'running',
+          statusText: '✽ Compacting conversation… (1m 51s)',
+        },
+        actions: [],
+      },
+    })
+    // Blocking here is correct BECAUSE it self-clears: Claude replaces the
+    // spinner line with the outcome line, which flips the gate to ready via
+    // the carve-out above.
+    expect(promptGateState(session)).toEqual({
+      kind: 'blocked',
+      condition: 'claude.compaction',
+      resolvable: false,
+    })
+  })
+
+  it('the carve-out is compaction-specific — other conditions block regardless of state', () => {
+    const session = readySession({
+      'claude.trust-dialog': {
+        kind: 'claude.trust-dialog',
+        state: { visible: true },
+        actions: [{ kind: 'custom', id: 'accept', label: 'Yes', name: 'claude.trust-dialog.accept' }],
+      },
+    })
+    expect(promptGateState(session)).toEqual({
+      kind: 'blocked',
+      condition: 'claude.trust-dialog',
+      resolvable: true,
+    })
   })
 })
