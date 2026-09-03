@@ -130,6 +130,25 @@ export const CodeRenderContext = createContext<{
 // when no subagents exist, so consumers render the plain spawn card.
 export const SubAgentsContext = createContext<Record<string, SubAgentState>>({})
 
+/**
+ * Tool-use ids of AskUserQuestion blocks that the LIVE semantic plane still
+ * holds unresolved in the CURRENT turn (#738).
+ *
+ * WHY this exists: the rendering ledger hands ownership of a tool_use to the
+ * committed JSONL row the instant that entry lands, and Claude Code appends
+ * the assistant message before it runs the picker. The committed row renders
+ * with `live: false`, so with a healthy transcript the interactive picker
+ * never painted (or flashed for one tick) and the user could not answer from
+ * Agent Code — the question was answerable only when the JSONL channel was
+ * broken. This set lets the committed card prove liveness from the semantic
+ * plane instead: while the block is unresolved in the current turn, the TUI
+ * is still blocked on it and the picker is real. After a reload there is no
+ * semantic evidence and the card stays view-only, which is the honest
+ * rendering. Only the current turn counts: a turn archived to history is no
+ * longer blocking the TUI, whatever its blocks say.
+ */
+export const LiveUnresolvedQuestionsContext = createContext<ReadonlySet<string>>(new Set())
+
 /** Claude toolUseId → parsed <task-notification>. The shared context only
  * transports a provider-owned join index; Feed leaves it empty for every
  * other provider and only Claude components interpret its values. */

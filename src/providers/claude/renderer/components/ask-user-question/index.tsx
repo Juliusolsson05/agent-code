@@ -1,3 +1,6 @@
+import { useContext } from 'react'
+
+import { LiveUnresolvedQuestionsContext } from '@renderer/features/feed/context'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import { PagedTextViewer } from '@renderer/lib/text/PagedTextViewer'
 import { AskUserQuestionRow } from './AskUserQuestionRow'
@@ -30,8 +33,22 @@ export function ClaudeAnsweredQuestionRow({
   // decline. This marker (set by AskUserQuestionRow at send time, keyed by
   // operationId) is the only signal that the decline is actually an answer.
   const viaMessage = useAnsweredViaMessageStore(state => state.byOperationId[model.operationId])
+  const liveUnresolved = useContext(LiveUnresolvedQuestionsContext)
   const answer = result ? fromClaudeQuestionResult(result, model) : null
   const answered = answer !== null
+
+  // WHY the committed card can be the live picker (#738): the ledger gives
+  // this tool_use to the committed row as soon as the JSONL entry lands —
+  // which Claude Code writes BEFORE it runs the picker — so the live-plane
+  // twin (ClaudeLiveQuestionRow) is rejected and, without this, the user saw
+  // "no answer recorded" for a question the TUI was still waiting on. The
+  // semantic plane knows whether the block is still unresolved in the current
+  // turn; that, plus no durable result and no answer-via-message, is the
+  // proof that the picker is real. A reload has no semantic evidence and
+  // falls through to the honest view-only card below.
+  if (result === null && !(viaMessage && viaMessage.length > 0) && liveUnresolved.has(model.operationId)) {
+    return <AskUserQuestionRow input={model.input} operationId={model.operationId} />
+  }
 
   if (viaMessage && viaMessage.length > 0) {
     // The summary lines already read "question → choices", so we do NOT repeat

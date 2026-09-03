@@ -30,6 +30,7 @@ import {
   CodeRenderContext,
   SubAgentsContext,
   AskUserQuestionConditionContext,
+  LiveUnresolvedQuestionsContext,
 } from '@renderer/features/feed/context'
 import {
   type AgentProvider,
@@ -545,6 +546,18 @@ function FeedImpl({
   // helper folds in each block's content lengths and status so this effect fires
   // on the common streaming path. It is a scroll-invalidation token only.
   const semanticTurnSignal = semanticTurn ? semanticTurnScrollSignal(semanticTurn) : ''
+  // See LiveUnresolvedQuestionsContext for why the committed AskUserQuestion
+  // card needs this. Current turn only, by design.
+  const liveUnresolvedQuestionIds = useMemo(() => {
+    const ids = new Set<string>()
+    if (!semanticTurn) return ids
+    for (const block of Object.values(semanticTurn.blocks)) {
+      if (block.toolName === 'AskUserQuestion' && block.resultAt == null && block.toolUseId) {
+        ids.add(block.toolUseId)
+      }
+    }
+    return ids
+  }, [semanticTurn])
   const semanticHistorySignal = semanticHistory
     .map(semanticTurnScrollSignal)
     .join('|')
@@ -1073,6 +1086,7 @@ function FeedImpl({
                 <SubAgentsContext.Provider value={subAgents}>
                   <TaskNotificationsContext.Provider value={taskNotifications}>
                     <AskUserQuestionConditionContext.Provider value={askUserQuestionState}>
+                     <LiveUnresolvedQuestionsContext.Provider value={liveUnresolvedQuestionIds}>
                       <CodeRenderContext.Provider value={codeRenderContextValue}>
                         <div
                           ref={scrollerRef}
@@ -1121,6 +1135,7 @@ function FeedImpl({
                           </div>
                         </div>
                       </CodeRenderContext.Provider>
+                     </LiveUnresolvedQuestionsContext.Provider>
                     </AskUserQuestionConditionContext.Provider>
                   </TaskNotificationsContext.Provider>
                 </SubAgentsContext.Provider>
