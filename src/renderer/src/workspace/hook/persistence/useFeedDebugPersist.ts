@@ -5,6 +5,8 @@ import type { SessionRuntime } from '@renderer/session-runtime/state'
 
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 
+import { estimateFeedDebugLogBytes } from '@renderer/session-runtime/feedDebug'
+
 import { countPendingFeedDebug, decideFeedDebugFlush } from './feedDebugFlushPolicy'
 
 // Ship runtime feed-debug entries to the main process, batched by time
@@ -121,8 +123,13 @@ export function useFeedDebugPersist(
       if (!runtime || runtime.feedDebugLog.length === 0) return
       const lastPersistedId = refs.persistedFeedDebugIdRef.current[sessionId] ?? 0
       const lastInFlightId = refs.inFlightFeedDebugIdRef.current[sessionId] ?? 0
+      const pendingCount = countPendingFeedDebug(runtime.feedDebugLog, lastPersistedId)
+      if (pendingCount === 0) return
       const decision = decideFeedDebugFlush({
-        pendingCount: countPendingFeedDebug(runtime.feedDebugLog, lastPersistedId),
+        pendingCount,
+        // The ring's per-entry byte estimate is cached per entry object, so
+        // this is a cache-hit walk over the pending tail, not a stringify.
+        pendingBytes: estimateFeedDebugLogBytes(runtime.feedDebugLog.slice(-pendingCount)),
         lastAttemptAt: lastAttemptAtRef.current[sessionId] ?? null,
         now: Date.now(),
         inFlight: lastInFlightId > lastPersistedId,

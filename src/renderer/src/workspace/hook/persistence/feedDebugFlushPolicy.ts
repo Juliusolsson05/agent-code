@@ -16,10 +16,15 @@
 // "Save Debug Logs" right after seeing it should find it on disk. The timer
 // only paces what FOLLOWS a flush.
 //
-// WHY a pending-count ceiling: the ring is byte-capped (#722) and a burst can
-// fill it faster than the interval; forcing a flush at the ceiling keeps a
-// single append from carrying a multi-megabyte batch and keeps the renderer
-// from holding entries the ring is about to evict.
+// WHY two ceilings, count AND bytes: the ring is byte-capped at 4 MiB (#722)
+// and evicts from the head, so an entry that waits on the timer can be
+// evicted before it is ever persisted — a loss the immediate-flush version
+// could only suffer during one in-flight append. Count alone does not bound
+// that: the #722 shape is a few hundred KB per `visible_rows` entry, where
+// twenty entries already exceed the ring. A byte ceiling at a quarter of the
+// ring forces the flush long before eviction can reach unpersisted entries
+// at any realistic rate, and keeps one append from carrying a
+// multi-megabyte batch.
 //
 // WHY `lastAttemptAt` and not `lastSuccessAt`: a rejected append (main not
 // ready, disk full) must not turn the streaming cadence back into a retry
@@ -29,6 +34,7 @@
 
 export const FEED_DEBUG_FLUSH_INTERVAL_MS = 1_500
 export const FEED_DEBUG_FLUSH_MAX_PENDING = 256
+export const FEED_DEBUG_FLUSH_MAX_PENDING_BYTES = 1024 * 1024
 
 export type FeedDebugFlushDecision =
   | { kind: 'now' }
@@ -37,6 +43,8 @@ export type FeedDebugFlushDecision =
 
 export type FeedDebugFlushInput = {
   pendingCount: number
+  /** Estimated JSON bytes of the pending entries (the ring's own estimate). */
+  pendingBytes: number
   /** Epoch ms of the last append attempt for this session, or null. */
   lastAttemptAt: number | null
   now: number
@@ -44,14 +52,17 @@ export type FeedDebugFlushInput = {
   inFlight: boolean
   intervalMs?: number
   maxPending?: number
+  maxPendingBytes?: number
 }
 
 export function decideFeedDebugFlush(input: FeedDebugFlushInput): FeedDebugFlushDecision {
   const intervalMs = input.intervalMs ?? FEED_DEBUG_FLUSH_INTERVAL_MS
   const maxPending = input.maxPending ?? FEED_DEBUG_FLUSH_MAX_PENDING
+  const maxPendingBytes = input.maxPendingBytes ?? FEED_DEBUG_FLUSH_MAX_PENDING_BYTES
   if (input.pendingCount <= 0) return { kind: 'none' }
   if (input.inFlight) return { kind: 'none' }
   if (input.pendingCount >= maxPending) return { kind: 'now' }
+  if (input.pendingBytes >= maxPendingBytes) return { kind: 'now' }
   if (input.lastAttemptAt === null) return { kind: 'now' }
   const elapsed = input.now - input.lastAttemptAt
   if (elapsed >= intervalMs) return { kind: 'now' }

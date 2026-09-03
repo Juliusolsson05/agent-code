@@ -7,7 +7,11 @@ import { emptyRuntime, type SessionRuntime } from '@renderer/session-runtime/sta
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import type { SessionId } from '@renderer/workspace/types'
 
-import { FEED_DEBUG_FLUSH_INTERVAL_MS, FEED_DEBUG_FLUSH_MAX_PENDING } from './feedDebugFlushPolicy'
+import {
+  FEED_DEBUG_FLUSH_INTERVAL_MS,
+  FEED_DEBUG_FLUSH_MAX_PENDING,
+  FEED_DEBUG_FLUSH_MAX_PENDING_BYTES,
+} from './feedDebugFlushPolicy'
 import { useFeedDebugPersist } from './useFeedDebugPersist'
 
 // #748: the hook re-runs on every runtimes replacement (dozens per second
@@ -30,10 +34,10 @@ function ref<T>(current: T): MutableRefObject<T> {
   return { current }
 }
 
-function withEntries(runtime: SessionRuntime, count: number): SessionRuntime {
+function withEntries(runtime: SessionRuntime, count: number, data?: unknown): SessionRuntime {
   let next = runtime
   for (let i = 0; i < count; i += 1) {
-    next = appendFeedDebugLog(next, { layer: 'RENDER', kind: 'visible_rows', summary: `rows ${i}` })
+    next = appendFeedDebugLog(next, { layer: 'RENDER', kind: 'visible_rows', summary: `rows ${i}`, data })
   }
   return next
 }
@@ -92,6 +96,27 @@ describe('useFeedDebugPersist pacing', () => {
     refs.latestRuntimesRef.current = runtimes
     rerender({ r: runtimes })
     expect(append).toHaveBeenCalledTimes(2)
+  })
+
+  it('forces a flush inside the interval when a few large entries reach the byte ceiling', async () => {
+    // The #722 shape: hundreds of KB per entry. Waiting for the count
+    // ceiling would let the byte-capped ring evict them unpersisted.
+    vi.useFakeTimers()
+    const append = vi.fn().mockResolvedValue(undefined)
+    install(append)
+    let runtimes: Record<SessionId, SessionRuntime> = { s1: withEntries(emptyRuntime(), 1) }
+    const refs = makeRefs(runtimes)
+    const { rerender } = renderHook(({ r }) => useFeedDebugPersist(r, refs), { initialProps: { r: runtimes } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(append).toHaveBeenCalledTimes(1)
+
+    const big = { rows: 'x'.repeat(FEED_DEBUG_FLUSH_MAX_PENDING_BYTES / 2) }
+    runtimes = { s1: withEntries(runtimes.s1!, 3, big) }
+    refs.latestRuntimesRef.current = runtimes
+    rerender({ r: runtimes })
+    expect(append).toHaveBeenCalledTimes(2)
+    const forced = append.mock.calls[1]![0] as { entries: Array<{ id: number }> }
+    expect(forced.entries).toHaveLength(3)
   })
 
   it('keeps failed entries pending and retries no sooner than the interval', async () => {

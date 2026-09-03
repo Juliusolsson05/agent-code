@@ -5,7 +5,7 @@ import { countPendingFeedDebug, decideFeedDebugFlush } from './feedDebugFlushPol
 // #748: appends must be paced by time, not by runtimes replacements.
 
 describe('decideFeedDebugFlush', () => {
-  const base = { intervalMs: 1_000, maxPending: 10, inFlight: false }
+  const base = { intervalMs: 1_000, maxPending: 10, maxPendingBytes: 4_096, pendingBytes: 100, inFlight: false }
 
   it('flushes the first batch immediately and again once the interval has elapsed', () => {
     expect(decideFeedDebugFlush({ ...base, pendingCount: 1, lastAttemptAt: null, now: 5_000 })).toEqual({ kind: 'now' })
@@ -21,6 +21,12 @@ describe('decideFeedDebugFlush', () => {
 
   it('forces a flush at the pending ceiling even inside the interval', () => {
     expect(decideFeedDebugFlush({ ...base, pendingCount: 10, lastAttemptAt: 4_900, now: 5_000 })).toEqual({ kind: 'now' })
+  })
+
+  it('forces a flush when the pending bytes reach the byte ceiling before the count does', () => {
+    expect(
+      decideFeedDebugFlush({ ...base, pendingCount: 2, pendingBytes: 4_096, lastAttemptAt: 4_900, now: 5_000 }),
+    ).toEqual({ kind: 'now' })
   })
 
   it('does nothing while an append is unresolved or when nothing is pending', () => {
