@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 
 import { SessionFeedProvider } from '@renderer/features/sessionFeed/SessionFeedContext'
@@ -41,6 +41,14 @@ function renderRow(fake = createFakeSessionFeed()) {
   )
   return fake
 }
+
+import { useAnswerSubmissionStore } from './answeredViaMessageStore'
+
+// The submit latch is keyed by operationId in a module-level store (#738), so
+// a happy-path submit in one test would leave the next test's row disabled.
+beforeEach(() => {
+  useAnswerSubmissionStore.setState({ inFlight: {} })
+})
 
 describe('AskUserQuestionRow input routing', () => {
   it('forwards terminal navigation keys through the SessionFeed', () => {

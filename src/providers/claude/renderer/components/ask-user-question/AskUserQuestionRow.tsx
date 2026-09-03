@@ -15,7 +15,13 @@ import {
 } from '@providers/claude/renderer/adapters/questions'
 import { answersToPrompt, answerSummaryLines } from '@providers/claude/renderer/components/ask-user-question/answerPrompt'
 import { deliverAnswersViaPrompt } from '@providers/claude/renderer/components/ask-user-question/deliverAnswersViaPrompt'
-import { useAnsweredViaMessageStore } from '@providers/claude/renderer/components/ask-user-question/answeredViaMessageStore'
+import {
+  beginAnswer,
+  endAnswer,
+  isAnswerInFlight,
+  useAnswerSubmissionStore,
+  useAnsweredViaMessageStore,
+} from '@providers/claude/renderer/components/ask-user-question/answeredViaMessageStore'
 
 // Native in-feed renderer for Claude Code's `AskUserQuestion` tool.
 //
@@ -111,27 +117,28 @@ export function AskUserQuestionRow({
   const { showToast } = useGlobalToast()
   const markAnsweredViaMessage = useAnsweredViaMessageStore(state => state.mark)
 
-  // Local "answering" latch. Once the user submits an answer we disable every
-  // control, both to give feedback ("Answering…") and to guard against
-  // double-submit while the headless driver is writing to the real terminal.
-  // Unlike the old raw-keystroke path, the structured resolver can return a
-  // bounded failure, so this latch is cleared on failed/ rejected IPC and the
-  // user can retry without remounting the row.
-  const [answering, setAnswering] = useState(false)
+  // "Answering…" affordance. Once the user submits an answer we disable every
+  // control, both to give feedback and to guard against double-submit while
+  // the headless driver is writing to the real terminal. The latch lives in a
+  // store keyed by operationId (see useAnswerSubmissionStore for why a
+  // per-instance useState was wrong once the committed card became the live
+  // picker, #738), so a remounted row for the same question starts out
+  // disabled. The structured resolver can return a bounded failure, so the
+  // latch is cleared on failed/rejected IPC and the user can retry.
+  const answering = useAnswerSubmissionStore(state => state.inFlight[operationId] === true)
   const [resolveError, setResolveError] = useState<string | null>(null)
   const [selectedByQuestion, setSelectedByQuestion] =
     useState<Record<number, number[]>>({})
   const [textByQuestion, setTextByQuestion] = useState<Record<number, string>>({})
 
-  // Synchronous double-submit guard. `answering` (React state) only drives
-  // the VISUAL disabled/"Answering…" affordance — but `disabled` doesn't
-  // take effect until the next render, so two clicks dispatched in the SAME
-  // tick (e.g. a fast double-click) both pass the `if (answering)` check and
-  // fire two resolver calls. The second call could interleave keystrokes with
-  // the first in the provider TUI. A ref is read+written SYNCHRONOUSLY at the
-  // top of the handler, before any IPC, so the second call in the same tick sees
-  // `true` and bails. It is reset only for structured/rejected failures.
-  const submittedRef = useRef(false)
+  // Synchronous double-submit guard: `answering` (subscribed store state)
+  // only drives the VISUAL disabled/"Answering…" affordance — `disabled`
+  // doesn't take effect until the next render, so two clicks dispatched in the
+  // SAME tick (a fast double-click) would both pass the `if (answering)` check
+  // and fire two resolver calls, interleaving keystrokes in the provider TUI.
+  // `isAnswerInFlight` reads the store synchronously at the top of the
+  // handler, before any IPC, so the second call in the same tick sees the
+  // first one's write and bails.
   // Tracks whether this row is still mounted, so the detached answer-via-message
   // callback only touches state (latch/error reset) when there is a row to
   // touch — on the happy path Esc has already unmounted it.
@@ -174,8 +181,8 @@ export function AskUserQuestionRow({
 
   const dispatchAnswer = (action: ConditionCustomAction) => {
     // Synchronous latch FIRST — before the state check — so a same-tick
-    // second click can't slip a second digit through (see `submittedRef`).
-    if (submittedRef.current) return
+    // second click can't slip a second digit through (see `isAnswerInFlight`).
+    if (isAnswerInFlight(operationId)) return
     if (answering) return
     if (!sessionId) return
     // WHY this does NOT gate on the screen condition anymore:
@@ -186,8 +193,7 @@ export function AskUserQuestionRow({
     // before writing anything and returns a structured failure if the picker is
     // absent or ambiguous. That removes the stray-keystroke race without making
     // the renderer guess about liveness from a racing snapshot.
-    submittedRef.current = true
-    setAnswering(true)
+    beginAnswer(operationId)
     setResolveError(null)
     void feed
       .resolveCondition(sessionId, action)
@@ -198,8 +204,7 @@ export function AskUserQuestionRow({
           // was no meaningful recovery signal; the driver can now say "timeout" or
           // "option not found" without corrupting the terminal, so keeping the row
           // interactive is the safer failure mode.
-          submittedRef.current = false
-          setAnswering(false)
+          endAnswer(operationId)
           // WHY failedAtStep is optional: transport-level refusals can explain
           // the failure without entering the multi-step TUI driver. Appending
           // an absent step produced the user-facing nonsense “at undefined”.
@@ -211,8 +216,7 @@ export function AskUserQuestionRow({
         }
       })
       .catch(() => {
-        submittedRef.current = false
-        setAnswering(false)
+        endAnswer(operationId)
         setResolveError('resolver IPC failed')
       })
   }
@@ -317,7 +321,7 @@ export function AskUserQuestionRow({
   // `dispatchAnswer` (the driver's one robust case). See
   // docs/decomposition/2026-07-23-auq-answer-via-prompt.md.
   const answerViaMessage = (answers: Parameters<typeof buildAction>[0]) => {
-    if (submittedRef.current) return
+    if (isAnswerInFlight(operationId)) return
     if (answering) return
     if (!sessionId) return
     const prompt = answersToPrompt(answers)
@@ -325,8 +329,7 @@ export function AskUserQuestionRow({
       setResolveError('Select an option or type an answer first.')
       return
     }
-    submittedRef.current = true
-    setAnswering(true)
+    beginAnswer(operationId)
     setResolveError(null)
     const summary = answerSummaryLines(answers)
     // Detached: on success Esc has already unmounted this row, so the sequence
@@ -346,11 +349,11 @@ export function AskUserQuestionRow({
         return
       }
       showToast(`Could not send your answer: ${outcome.reason}`)
-      if (mountedRef.current) {
-        submittedRef.current = false
-        setAnswering(false)
-        setResolveError(outcome.reason)
-      }
+      // Release the latch whether or not this instance is still mounted: the
+      // store outlives the row, and a committed card mounted for the same
+      // question must be able to retry.
+      endAnswer(operationId)
+      if (mountedRef.current) setResolveError(outcome.reason)
     })
   }
 
