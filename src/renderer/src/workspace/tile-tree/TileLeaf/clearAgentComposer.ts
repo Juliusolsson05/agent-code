@@ -36,15 +36,34 @@ import type { SessionId } from '@renderer/workspace/types'
 export const CLEAR_AGENT_COMPOSER_PRESSES = 64
 export const CLEAR_AGENT_COMPOSER_SPACING_MS = 25
 
+// WHY one clear at a time per session: the spacing above is the whole
+// mechanism. Two interleaved loops — a held key auto-repeating Escape, a
+// second press because nothing visible happens for 1.6 s, the palette command
+// invoked twice — would land `\x15` bytes under 25 ms apart, which the
+// provider's tokeniser merges into one text token and INSERTS into the very
+// draft being cleared. A second request while one is running is a no-op.
+const clearing = new Set<SessionId>()
+
+/** True while a clear routine is running for the session. */
+export function isClearingAgentComposer(sessionId: SessionId): boolean {
+  return clearing.has(sessionId)
+}
+
 export async function clearAgentComposer(
   sessionId: SessionId,
   sendInput: (sessionId: SessionId, data: string) => Promise<unknown> = (id, data) =>
     window.api.sendInput(id, data),
 ): Promise<void> {
-  for (let press = 0; press < CLEAR_AGENT_COMPOSER_PRESSES; press += 1) {
-    await sendInput(sessionId, '\x15')
-    await new Promise(resolve => {
-      setTimeout(resolve, CLEAR_AGENT_COMPOSER_SPACING_MS)
-    })
+  if (clearing.has(sessionId)) return
+  clearing.add(sessionId)
+  try {
+    for (let press = 0; press < CLEAR_AGENT_COMPOSER_PRESSES; press += 1) {
+      await sendInput(sessionId, '\x15')
+      await new Promise(resolve => {
+        setTimeout(resolve, CLEAR_AGENT_COMPOSER_SPACING_MS)
+      })
+    }
+  } finally {
+    clearing.delete(sessionId)
   }
 }

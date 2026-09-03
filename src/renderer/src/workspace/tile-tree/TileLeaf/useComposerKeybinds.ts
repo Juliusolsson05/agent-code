@@ -18,7 +18,7 @@ import {
   isAgentProviderKind,
 } from '@shared/types/providerKind'
 import { hasActionCondition } from '@renderer/workspace/conditions/selectors'
-import { clearAgentComposer } from '@renderer/workspace/tile-tree/TileLeaf/clearAgentComposer'
+import { clearAgentComposer, isClearingAgentComposer } from '@renderer/workspace/tile-tree/TileLeaf/clearAgentComposer'
 import { useAppStore } from '@renderer/app-state/hooks'
 import { useSessionFeed } from '@renderer/features/sessionFeed/SessionFeedContext'
 import type { PromptDeliveryResult } from '@shared/types/providerConfig'
@@ -589,6 +589,10 @@ export function useComposerKeybinds({
         // The clear routine sends spaced Ctrl+U, never ESC, so a running turn
         // cannot be interrupted by it; see clearAgentComposer.ts.
         if (composerOccupied) {
+          // Auto-repeat from a held key would start interleaved clear loops;
+          // clearAgentComposer also refuses re-entry, so a second press while
+          // one is running is a no-op rather than a second toast.
+          if (e.repeat || isClearingAgentComposer(sessionId)) return
           workspace.showPaneToast(sessionId, "Clearing the agent's composer…")
           await clearAgentComposer(sessionId)
           return
@@ -784,7 +788,18 @@ export function useComposerKeybinds({
       //
       // Tab on an empty draft accepts Agent Code's own suggestion chip
       // instead — the gesture Claude offers, but where send actually works.
-      // Modifier combinations (Shift+Tab, Ctrl+Tab, …) do nothing.
+      // Prefill only, like Claude's own Tab; the chip's click keeps its
+      // auto-send default. Modifier combinations (Shift+Tab, Ctrl+Tab, …)
+      // do nothing.
+      //
+      // opencode is the exception: its TUI binds a bare Tab to "next agent"
+      // (cycling build/plan) and has no prompt-suggestion placeholder, so
+      // forwarding Tab there is a real feature with none of the hazard.
+      if (provider === 'opencode') {
+        if (!backendReady) { blockBackendWrite(); return }
+        await send('\t')
+        return
+      }
       if (input === '' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
         const suggestion = runtime.promptSuggestion?.text
         if (suggestion) {

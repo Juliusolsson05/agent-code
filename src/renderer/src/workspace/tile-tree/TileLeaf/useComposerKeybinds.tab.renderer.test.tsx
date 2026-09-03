@@ -35,7 +35,7 @@ function keyEvent(
   } as unknown as React.KeyboardEvent<HTMLTextAreaElement>
 }
 
-function setup(options: { runtime?: Partial<SessionRuntime>; input?: string } = {}) {
+function setup(options: { runtime?: Partial<SessionRuntime>; input?: string; provider?: 'claude' | 'codex' | 'opencode' } = {}) {
   const send = vi.fn(async () => {})
   const setInputText = vi.fn()
   const updateRuntime = vi.fn()
@@ -60,7 +60,7 @@ function setup(options: { runtime?: Partial<SessionRuntime>; input?: string } = 
   const hook = renderHook(() =>
     useComposerKeybinds({
       sessionId: SESSION,
-      provider: 'claude',
+      provider: options.provider ?? 'claude',
       runtime,
       workspace,
       input: options.input ?? '',
@@ -114,6 +114,13 @@ describe('composer Tab handling', () => {
     expect(shifted.setInputText).not.toHaveBeenCalled()
   })
 
+  it('keeps forwarding Tab for opencode, whose TUI binds it to agent cycling', async () => {
+    const { hook, send, setInputText } = setup({ provider: 'opencode' })
+    await act(async () => { await hook.result.current.onKeyDown(keyEvent('Tab')) })
+    expect(send).toHaveBeenCalledWith('\t')
+    expect(setInputText).not.toHaveBeenCalled()
+  })
+
   it('still forwards Tab in slash mode, where it means picker completion', async () => {
     const { hook, send } = setup()
     // Typing `/` into an empty composer enters slash mode and forwards it.
@@ -154,8 +161,28 @@ describe('composer Escape while the provider composer is occupied', () => {
     expect(showPaneToast).toHaveBeenCalledWith(SESSION, expect.stringContaining('Clearing'))
   })
 
+  it('runs one clear routine even when Escape repeats or is pressed again mid-clear', async () => {
+    const { hook, showPaneToast } = setup({
+      runtime: { inputReady: false, inputReadinessReason: 'composer-occupied' },
+    })
+    const sendInput = vi.mocked(window.api.sendInput)
+
+    await act(async () => {
+      const first = hook.result.current.onKeyDown(keyEvent('Escape'))
+      // A held key auto-repeats; a nervous second press lands mid-loop.
+      const repeat = hook.result.current.onKeyDown({ ...keyEvent('Escape'), repeat: true } as React.KeyboardEvent<HTMLTextAreaElement>)
+      await vi.advanceTimersByTimeAsync(CLEAR_AGENT_COMPOSER_SPACING_MS * 3)
+      const second = hook.result.current.onKeyDown(keyEvent('Escape'))
+      await vi.advanceTimersByTimeAsync(CLEAR_AGENT_COMPOSER_PRESSES * CLEAR_AGENT_COMPOSER_SPACING_MS + 100)
+      await Promise.all([first, repeat, second])
+    })
+
+    expect(sendInput).toHaveBeenCalledTimes(CLEAR_AGENT_COMPOSER_PRESSES)
+    expect(showPaneToast).toHaveBeenCalledTimes(1)
+  })
+
   it('keeps the plain toast for every other not-ready state and ESC when ready', async () => {
-    const starting = setup({ runtime: { inputReady: false, inputReadinessReason: 'warming' as SessionRuntime['inputReadinessReason'] } })
+    const starting = setup({ runtime: { inputReady: false, inputReadinessReason: 'provider-not-ready' } })
     await act(async () => { await starting.hook.result.current.onKeyDown(keyEvent('Escape')) })
     expect(starting.send).not.toHaveBeenCalled()
     expect(vi.mocked(window.api.sendInput)).not.toHaveBeenCalled()
