@@ -11,6 +11,7 @@ import {
   getActiveAppFontFamily,
 } from '@renderer/app-state/settings/theme'
 import { readXtermTheme, syncXtermTheme } from '@renderer/workspace/tile-tree/xtermTheme'
+import { createTerminalInputForwarder } from '@renderer/workspace/tile-tree/terminalInputForwarder'
 
 // TerminalLeaf — one pane that hosts a plain shell session.
 //
@@ -230,7 +231,14 @@ export function TerminalLeaf({
       // Outgoing: keystrokes typed into the xterm go straight to
       // the shell via sendInput. No slash mode, no history
       // cycling, no composer — this is a raw terminal.
+      // Replay-aware, coalescing outgoing path — see terminalInputForwarder.ts
+      // (#745). A shell replay carries fewer terminal queries than an agent
+      // TUI's, but the same stale-reply hazard applies.
+      const forwarder = createTerminalInputForwarder(data => {
+        void window.api.sendInput(sessionId, data)
+      })
       onDataDisposable = term.onData(data => {
+        if (forwarder.replaying) return
         acknowledgeSessionRef.current(sessionId)
         if (!attachedBackfillDone) {
           pendingInput.push(data)
@@ -241,7 +249,7 @@ export function TerminalLeaf({
           if (pendingInput.length > 256) pendingInput.splice(0, pendingInput.length - 256)
           return
         }
-        void window.api.sendInput(sessionId, data)
+        forwarder.onData(data)
       })
 
       // Incoming: raw bytes from the shell PTY.
@@ -308,12 +316,12 @@ export function TerminalLeaf({
           if (disposed || termRef.current !== term) return
           const liveTerm = term
           if (!liveTerm) return
-          if (buffer) liveTerm.write(buffer)
-          // Drain any live events that arrived between subscribe
-          // and attach-response. These are strictly AFTER the
-          // buffer's last byte because main buffered silently
-          // until we called attach.
-          if (backlogQueue.length > 0) liveTerm.write(backlogQueue.join(''))
+          // Replay the buffer, then drain any live events that arrived
+          // between subscribe and attach-response. These are strictly AFTER
+          // the buffer's last byte because main buffered silently until we
+          // called attach. The forwarder drops whatever xterm answers while
+          // parsing either.
+          void forwarder.replay(liveTerm, [buffer, backlogQueue.join('')])
           backlogQueue.length = 0
           attachedBackfillDone = true
           if (pendingResize) {

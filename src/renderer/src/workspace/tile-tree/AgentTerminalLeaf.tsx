@@ -17,6 +17,7 @@ import { PaneToast } from '@renderer/workspace/tile-tree/TileLeaf/PaneToast'
 import { useComposerDictation } from '@renderer/workspace/tile-tree/TileLeaf/useComposerDictation'
 import { useAgentTerminalDimensionActive } from '@renderer/workspace/terminal/AgentTerminalOwnership'
 import { AgentTitleHeader } from '@renderer/workspace/tile-tree/AgentTitleHeader'
+import { createTerminalInputForwarder } from '@renderer/workspace/tile-tree/terminalInputForwarder'
 
 type Props = {
   sessionId: SessionId
@@ -230,7 +231,15 @@ export function AgentTerminalLeaf({
       resizeObserver = new ResizeObserver(scheduleFitAndResizeBackend)
       resizeObserver.observe(container)
 
+      // Replay-aware, coalescing outgoing path — see terminalInputForwarder.ts
+      // (#745) for why replies xterm generates while parsing the replay must
+      // never reach the provider and why same-tick chunks share one IPC call.
+      const forwarder = createTerminalInputForwarder(data => {
+        void window.api.sendInput(sessionId, data)
+      })
       onDataDisposable = term.onData(data => {
+        // A reply to replayed content is not user activity: no acknowledgement.
+        if (forwarder.replaying) return
         acknowledgeSessionRef.current(sessionId)
         if (!attachedBackfillDone) {
           pendingInput.push(data)
@@ -241,7 +250,7 @@ export function AgentTerminalLeaf({
           if (pendingInput.length > 256) pendingInput.splice(0, pendingInput.length - 256)
           return
         }
-        void window.api.sendInput(sessionId, data)
+        forwarder.onData(data)
       })
 
       // Subscribe before attach, then replay the buffer before draining live
@@ -325,8 +334,9 @@ export function AgentTerminalLeaf({
           void window.api.detachAgentPty(sessionId)
           return true
         }
-        if (buffer) liveTerm.write(buffer)
-        if (backlogQueue.length > 0) liveTerm.write(backlogQueue.join(''))
+        // Replay, with the forwarder holding its latch until xterm has parsed
+        // every chunk; the backlog is strictly newer than the buffer.
+        void forwarder.replay(liveTerm, [buffer, backlogQueue.join('')])
         backlogQueue.length = 0
         attachedBackfillDone = true
         if (pendingResize) {
