@@ -1,6 +1,7 @@
 import { isConversationEntry } from '@shared/types/transcript'
 import type { Entry } from '@shared/types/transcript'
 import type { GhostEntry } from 'agent-transcript-parser/ghost'
+import { isGhostHiddenBehindJsonlTail } from '@renderer/session-runtime/ghosts'
 
 import type { SemanticRuntimeState } from '@renderer/session-runtime/state'
 
@@ -356,41 +357,17 @@ function computeProtectBound(
   }
   for (const ghost of ghosts.values()) {
     if (ghost._atp.supersededBy !== undefined) continue
+    // An orphan the committed tail has already passed can never paint again
+    // (render predicate rule 4 — see isGhostHiddenBehindJsonlTail in
+    // ghosts.ts, where the sweep uses the same test), so it has no claim on
+    // the window. Without this, one never-matched orphan pinned the bound
+    // for the rest of the session and the window became append-only (#724).
     if (isGhostHiddenBehindJsonlTail(ghost, lastJsonlEntryAt)) continue
     if (ghost._atp.updatedAt < bound) bound = ghost._atp.updatedAt
   }
   return bound
 }
 
-/** An orphaned ghost at-or-before the committed JSONL tail can never paint
- *  again: the render predicate's rule 4 (rendering/model/ghostPredicate.ts,
- *  mirrored in mergedEntries.ts) hides it, and `lastJsonlEntryAt` only moves
- *  forward. Such a ghost therefore has no committed owner that trimming could
- *  orphan on screen — it is exactly as safe to trim past as a superseded one.
- *
- *  WHY this matters (#724): without it a single orphan that JSONL never
- *  matches — every sidecar-shaped stream, for instance — pinned the bound at
- *  its `updatedAt` for the rest of the session, `planLiveEntryTrim` returned
- *  null on every burst, and `runtime.entries` became append-only (5,016
- *  entries observed against the 2,000 cap). The sweep in useIpsSubscriptions
- *  evicts these same ghosts (`gcHiddenOrphanGhosts` in ghosts.ts) using this
- *  predicate so the two stay in agreement; the render rules themselves are
- *  untouched (see the Warning section of docs/design/ghost-system.md).
- *
- *  A null tail (no JSONL observed yet) keeps the conservative behaviour: the
- *  ghost still pins the bound. Mixed clocks caveat applies exactly as it does
- *  for rule 4 — renderer wall-clock `updatedAt` against a producer JSONL
- *  timestamp, the established convention of this subsystem. */
-export function isGhostHiddenBehindJsonlTail(
-  ghost: GhostEntry,
-  lastJsonlEntryAt: number | null,
-): boolean {
-  return (
-    ghost._atp.orphanedAt !== undefined &&
-    lastJsonlEntryAt !== null &&
-    ghost._atp.updatedAt <= lastJsonlEntryAt
-  )
-}
 
 /**
  * Decide how much of the head of `entries` can be dropped. Returns null when

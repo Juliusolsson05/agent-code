@@ -521,6 +521,7 @@ export function useIpcSubscriptions(
                 GHOST_SUPERSEDED_GC_MS,
               ),
               runtime.lastJsonlEntryAt,
+              runtime.semantic.currentTurn?.turnId ?? null,
               now,
               GHOST_SUPERSEDED_GC_MS,
             )
@@ -533,7 +534,9 @@ export function useIpcSubscriptions(
                 {
                   layer: 'STATE',
                   kind: 'ghost_orphan_sweep',
-                  summary: 'stale ghosts marked orphaned',
+                  summary: nextGhosts.size < runtime.ghosts.size
+                    ? `swept ${runtime.ghosts.size - nextGhosts.size} superseded/hidden ghosts`
+                    : 'stale ghosts marked orphaned',
                   data: {
                     ghostCount: nextGhosts.size,
                     evictedCount: runtime.ghosts.size - nextGhosts.size,

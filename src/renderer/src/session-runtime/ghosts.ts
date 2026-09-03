@@ -91,7 +91,6 @@ import type {
 
 import type { Entry } from '@shared/types/transcript'
 import { isConversationEntry } from '@shared/types/transcript'
-import { isGhostHiddenBehindJsonlTail } from '@renderer/session-runtime/liveEntryWindow'
 import { asRecord } from '@shared/lib/asRecord'
 import type {
   SemanticLiveBlock,
@@ -533,21 +532,56 @@ export function gcSupersededGhosts(
 }
 
 // -----------------------------------------------------------------------------
-// Convenience: drop orphaned ghosts the committed tail has already passed
+// Hidden orphans: rule 4 of the render predicate, shared with the trim bound
 // -----------------------------------------------------------------------------
 
 /**
- * Evict orphaned, un-superseded ghosts whose `updatedAt` is at-or-before
- * `lastJsonlEntryAt` once they have been orphaned for at least `gcMs`.
+ * An orphaned ghost at-or-before the committed JSONL tail can never paint
+ * again: the render predicate's rule 4 (rendering/model/ghostPredicate.ts,
+ * mirrored in mergedEntries.ts) hides it, and `lastJsonlEntryAt` only moves
+ * forward (every writer max-merges; every reset also resets the ghost map).
  *
- * WHY these can go (#724): the render predicate's rule 4 hides exactly this
- * set and `lastJsonlEntryAt` only advances, so such a ghost can never paint
- * again. Keeping it bought nothing and cost two things: `runtime.ghosts`
- * grew monotonically (917 ghosts in one session on the two-day journal), and
+ * WHY this lives here and is shared (#724): two consumers besides the
+ * predicate need the same answer — `computeProtectBound` in
+ * liveEntryWindow.ts (such a ghost must not pin the live-entry trim bound)
+ * and `gcHiddenOrphanGhosts` below (such a ghost need not stay in memory).
+ * One function keeps the three from drifting.
+ *
+ * A null tail (no JSONL observed yet) is never "hidden": the conservative
+ * pre-#724 behaviour stands. Mixed-clock caveat exactly as for rule 4 —
+ * renderer wall-clock `updatedAt` against a producer JSONL timestamp, the
+ * established convention of this subsystem.
+ */
+export function isGhostHiddenBehindJsonlTail(
+  ghost: GhostEntry,
+  lastJsonlEntryAt: number | null,
+): boolean {
+  return (
+    ghost._atp.orphanedAt !== undefined &&
+    lastJsonlEntryAt !== null &&
+    ghost._atp.updatedAt <= lastJsonlEntryAt
+  )
+}
+
+/**
+ * Evict orphaned, un-superseded ghosts the committed tail has already passed
+ * (see isGhostHiddenBehindJsonlTail) once they have been orphaned for at
+ * least `gcMs` — except ghosts of the live `currentTurn`.
+ *
+ * WHY these can go (#724): rule 4 hides exactly this set for good. Keeping
+ * them bought nothing and cost two things: `runtime.ghosts` grew
+ * monotonically (917 ghosts in one session on the two-day journal), and
  * every un-superseded ghost pins the live-entry trim bound, so the first
- * never-matched orphan froze `planLiveEntryTrim` for the rest of the
- * session. The trim side uses the same predicate
- * (`isGhostHiddenBehindJsonlTail`) so the two consumers cannot disagree.
+ * never-matched orphan froze `planLiveEntryTrim` for the rest of the session.
+ *
+ * WHY the live turn's ghosts are exempt: `ghostsFromSemanticTurn` re-mints
+ * any block of `semantic.currentTurn` whose uuid is missing from the map, on
+ * every semantic tick. Evicting a hidden orphan of a turn that is still
+ * current (a tool running past the orphan TTL, or a reconcile miss) would
+ * therefore re-create it un-orphaned with a fresh `updatedAt` — churn on
+ * every tick, and a reset of rule 4's clock that could let it paint later
+ * as a duplicate. Those ghosts wait until the turn is no longer current;
+ * `currentTurn.startedAt` already protects the trim bound meanwhile.
  *
  * WHY orphans NEWER than the tail stay: that is the "JSONL stuck past live"
  * fallback the ghost system exists for — they may still render and their
@@ -564,6 +598,7 @@ export function gcSupersededGhosts(
 export function gcHiddenOrphanGhosts(
   prev: ReadonlyMap<string, GhostEntry>,
   lastJsonlEntryAt: number | null,
+  currentTurnId: string | null,
   now: number,
   gcMs: number,
 ): Map<string, GhostEntry> {
@@ -571,8 +606,11 @@ export function gcHiddenOrphanGhosts(
   let next: Map<string, GhostEntry> | null = null
   for (const [uuid, ghost] of prev) {
     if (ghost._atp.supersededBy !== undefined) continue
+    const orphanedAt = ghost._atp.orphanedAt
+    if (orphanedAt === undefined) continue
     if (!isGhostHiddenBehindJsonlTail(ghost, lastJsonlEntryAt)) continue
-    if (ghost._atp.orphanedAt! + gcMs > now) continue
+    if (currentTurnId !== null && ghost._atp.turnId === currentTurnId) continue
+    if (orphanedAt + gcMs >= now) continue
     if (next === null) next = new Map(prev)
     next.delete(uuid)
   }

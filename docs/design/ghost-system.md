@@ -124,7 +124,7 @@ The whole subsystem reads in one direction — semantic events flow in, the rend
 - **atp ghost primitives** — `packages/agent-transcript-parser/src/ghost.ts`. Pure library: `createGhost`, `updateGhost`, `supersedeGhost`, `orphanGhost`, `reduceGhostLog`, `reduceGhostLogSansSuperseded`, `mergeWithUpstream`. No IO. Reusable outside Agent Code.
 - **Agent Code renderer reducer** — `src/renderer/src/workspace/ghosts.ts`. Bridges semantic events to atp primitives: `ghostsFromSemanticTurn`, `reconcileUpstream`, `orphanStale`, `gcSupersededGhosts`, `ghostsToPersist`. Reference-stable on no-op.
 - **render predicate** — `src/renderer/src/workspace/mergedEntries.ts`. The five-rule selector. Source of truth for "does this ghost surface in the feed."
-- **IPC wiring** — `src/renderer/src/workspace/hook/ipc/useIpcSubscriptions.ts`. The orchestration layer: mint on semantic, reconcile on JSONL, sweep orphans on a 1s timer, stamp `lastJsonlEntryAt` from JSONL bursts, persist diffs.
+- **IPC wiring** — `src/renderer/src/workspace/hook/ipc/useIpcSubscriptions.ts`. The orchestration layer: mint on semantic, reconcile on JSONL, sweep orphans on a 1s timer (flag stale ghosts, GC superseded ghosts, GC hidden orphans — see [Eviction](#eviction-of-hidden-orphans)), stamp `lastJsonlEntryAt` from JSONL bursts, persist diffs.
 - **bootstrap on resume** — `src/renderer/src/workspace/hook/actions/session.ts` (ghost log read + reconcile against loaded JSONL tail) and `src/renderer/src/workspace/hook/actions/initialHistory.ts` (stamping `lastJsonlEntryAt` from the loaded tail).
 - **disk persistence** — `src/main/ghostJournal.ts` (writer with batched 100 ms drain), `src/main/ipc/ghost.ts` (`ghost:append` / `ghost:read`), `src/preload/api/ghost.ts` (renderer bridge).
 - **runtime field** — `src/renderer/src/workspace/workspaceState.ts` — `SessionRuntime.ghosts: Map<string, GhostEntry>` and `SessionRuntime.lastJsonlEntryAt: number | null`.
@@ -134,14 +134,15 @@ The whole subsystem reads in one direction — semantic events flow in, the rend
 ## Lifecycle
 
 ```
-created ──► updated* ──► superseded
-                  \──► orphaned
+created ──► updated* ──► superseded ──► (evicted after 5 s)
+                  \──► orphaned ──► (evicted after 5 s, once the JSONL tail has passed it)
 ```
 
 - **created** — `createGhost` mints a fresh ghost with a deterministic `(turnId, blockIndex)` uuid. `createdAt = updatedAt = now`. Append to the journal.
 - **updated** — `updateGhost` produces a revised snapshot with new content and bumped `updatedAt`. Same uuid. Append to the journal. The reducer `reduceGhostLog` picks the freshest by `updatedAt` at read time.
 - **superseded** — `supersedeGhost` sets `_atp.supersededBy = realUuid`. Triggered by `reconcileUpstream` when a JSONL entry lands that matches the ghost's `(turnId, blockIndex)` (or `tool_use_id`). Append to the journal as the final state record.
 - **orphaned** — `orphanGhost` sets `_atp.orphanedAt`. Triggered by the TTL sweep (`orphanStale`, every 1 s, threshold 30 s). The ghost is now eligible for the render predicate's rule 2.
+- **evicted** — in-memory only; the journal keeps the last appended state. Superseded ghosts leave `runtime.ghosts` 5 s after supersedure (`gcSupersededGhosts`). Orphaned ghosts leave 5 s after the orphan flag **only once rule 4 hides them for good** — `updatedAt <= lastJsonlEntryAt` — and never while their turn is still `semantic.currentTurn` (`gcHiddenOrphanGhosts`, #724). See [Eviction of hidden orphans](#eviction-of-hidden-orphans).
 
 A ghost is appended-only on disk. There is no in-place mutation, no file rewrite, no lock file. `reduceGhostLog` folds the append stream into a `Map<uuid, GhostEntry>` at read time.
 
@@ -228,6 +229,22 @@ The TTL does fire reliably in the genuine stuck cases:
 - **Live-stuck:** `currentTurn` cleared (without JSONL having caught up), semantic stream went silent, and the turn is no longer retained in semantic history → orphan after 30 s, predicate evaluates, ghost may render. Note: if `currentTurn` instead hangs alive with the same `turnId`, or if bounded semantic history still contains the completed turn, rule 3 keeps the ghost hidden and `SemanticStreamingTurn` continues to own visibility.
 - **Resume-after-crash:** ghost log loaded from disk, ghost's `updatedAt` is from before the crash → orphan sweep fires within the first second of resume → predicate evaluates against the loaded JSONL tail.
 
+## Eviction of hidden orphans
+
+Rule 4 is monotone: `lastJsonlEntryAt` only ever moves forward (every writer max-merges, and every reset that nulls it also replaces the ghost map), so an orphan whose `updatedAt` is at-or-before the tail can never paint again. Before #724 such ghosts stayed in `runtime.ghosts` forever, and because `computeProtectBound` (`session-runtime/liveEntryWindow.ts`) treated every un-superseded ghost as a live claim on its committed owner, the first never-matched orphan — a sidecar-shaped stream, typically — pinned the live-entry trim bound for the rest of the session and the entry window became append-only (5,016 entries against the 2,000 cap on the 2026-09-01 → 09-03 journal; one session held 917 ghosts).
+
+`isGhostHiddenBehindJsonlTail` (`session-runtime/ghosts.ts`) is rule 4 extracted so two other consumers agree with the predicate exactly:
+
+- `computeProtectBound` skips hidden orphans — they have no visible claim left, so trimming their would-be committed owner cannot re-paint them.
+- `gcHiddenOrphanGhosts` (in the 1 s sweep, after `gcSupersededGhosts`) evicts them 5 s after the orphan flag — the same grace superseded ghosts get, so the orphan record has reached the journal first.
+
+Two exemptions are load-bearing:
+
+- **Orphans newer than the tail stay.** That is the stuck-JSONL fallback this whole subsystem exists for; they may still render and still pin the bound.
+- **Ghosts of the live `currentTurn` stay even when hidden.** `ghostsFromSemanticTurn` re-mints any block of `currentTurn` whose uuid is missing from the map, on every semantic tick. Evicting such a ghost would re-create it un-orphaned with a fresh `updatedAt` — churn, and a reset of rule 4's clock that could let it paint later as a duplicate. `currentTurn.startedAt` protects the trim bound in the meantime.
+
+Rules 1–5, the orphan TTL and which ghosts render are unchanged by eviction; on resume an evicted orphan is reloaded from the journal, hidden by the same rule, and swept again.
+
 ## Phase 3: deliberately out of scope
 
 The original design intent was for ghost to be the **only** live render path. `SemanticStreamingTurn` would be deleted. The merged feed would render committed entries plus ghosts (in chronological position via ordered insertion in `mergeWithUpstream`), with seamless supersedure on JSONL catch-up.
@@ -252,7 +269,7 @@ The current predicate (timestamp gate + shape filter) layered fix passed cross-r
 - **Don't drop rule 3** without first deleting `SemanticStreamingTurn`. The two surfaces will double-render the live turn.
 - **Don't drop rule 4** by going back to a TTL-only orphan render. Stale-old-orphan-below-newer-rows comes back, plus every sidecar leak.
 - **Don't drop rule 5** without first widening the proxy-side `isSidecarFlow` predicate to cover predict-next-prompt with full-history bodies. The tail-sidecar case is the dominant production failure mode.
-- **Don't bump the orphan TTL aggressively** in either direction without thinking through what new code reads `orphanedAt`. Today the only consumer is the predicate; future code may treat orphan-ness as a stronger signal.
+- **Don't bump the orphan TTL aggressively** in either direction without thinking through what reads `orphanedAt`. Three consumers do today: the predicate (rule 2), `computeProtectBound` (hidden orphans stop pinning the live-entry trim) and `gcHiddenOrphanGhosts` (hidden orphans are evicted after the grace) — all through `isGhostHiddenBehindJsonlTail`, so a TTL change moves eviction timing too.
 - **Don't lose the reference-stability invariants** in `ghostsFromSemanticTurn`, `reconcileUpstream`, or `selectMergedEntries`. Feed's row memos depend on them. Allocating a fresh map / array on no-op invalidates every memoized row in the feed.
 - **Don't ghost tool RESULTS.** `blocksFromSemantic` deliberately drops `tool_result` / `function_call_output` / `custom_tool_call_output`. Their authoritative form arrives in upstream JSONL and synthesizing a provisional one would fabricate output the model never produced. Ghosting tool-call *inputs* is safe; ghosting outputs is not.
 - **Don't change `entry.timestamp` semantics.** `lastJsonlEntryAt` is parsed from `entry.timestamp` (ISO 8601 string) on both Claude and Codex paths. The comparison against ghost `_atp.updatedAt` only works because both are wall-clock-when-the-producer-observed-the-event. If a future JSONL entry path stamps `Date.now()` instead of the real timestamp, rule 4 silently degrades on resume.

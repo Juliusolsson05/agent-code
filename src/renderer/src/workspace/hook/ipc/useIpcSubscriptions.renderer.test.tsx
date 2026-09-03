@@ -16,6 +16,7 @@ import {
   MAX_LIVE_ENTRIES,
   TRIM_TO_LIVE_ENTRIES,
 } from '@renderer/session-runtime/liveEntryWindow'
+import { SEMANTIC_HISTORY_CAP } from '@renderer/session-runtime/semantic/helpers'
 import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import { useStreamingActions } from '@renderer/workspace/hook/actions/streaming'
@@ -1087,5 +1088,134 @@ describe('useIpcSubscriptions with an injected SessionFeed', () => {
     expect(runtimes[sessionId]?.entries.length).toBe(TRIM_TO_LIVE_ENTRIES)
     expect(runtimes[sessionId]?.totalEntries).toBe(total)
     expect(runtimes[sessionId]?.entries.at(-1)?.uuid).toBe(`win-u-${total - 1}`)
+  })
+
+  // #724 end to end: a ghost that JSONL never matches is orphaned by the
+  // sweep and then — once its turn has left semantic history — used to pin
+  // the trim bound at its orphan time forever. With the JSONL tail past it,
+  // the window must trim again, and the sweep must evict the ghost.
+  it('does not let a never-matched orphan ghost freeze the live window, and evicts it once JSONL passes it', () => {
+    vi.useFakeTimers()
+    const fake = createFakeSessionFeed()
+    const state = { sessions: {} } as WorkspaceState
+    let runtimes: Record<SessionId, SessionRuntime> = {}
+    const ghostAppend = vi.fn()
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: { ghostAppend },
+    })
+
+    function Harness(): React.JSX.Element {
+      const refs = useRef<WorkspaceRefs | null>(null)
+      if (refs.current === null) refs.current = makeRefs(state)
+      useIpcSubscriptions(
+        fake,
+        refs.current,
+        () => {},
+        updater => {
+          runtimes = typeof updater === 'function' ? updater(runtimes) : updater
+        },
+        () => {},
+        () => {},
+      )
+      return <div />
+    }
+
+    render(<Harness />)
+    const sessionId = 'orphan-win-1'
+    const t0 = Date.now()
+
+    // A tool_use block on turn-1 mints a ghost; no JSONL ever matches it.
+    act(() => {
+      fake.emitSemantic({
+        sessionId,
+        event: { type: 'turn_started', turnId: 'turn-1', source: 'proxy', ts: 1 },
+      })
+      fake.emitSemantic({
+        sessionId,
+        event: {
+          type: 'block_started',
+          turnId: 'turn-1',
+          blockIndex: 0,
+          kind: 'tool_use',
+          toolName: 'apply_patch',
+          toolUseId: 'tool-orphan',
+          source: 'proxy',
+          ts: 2,
+        },
+      })
+      fake.emitSemantic({
+        sessionId,
+        event: {
+          type: 'tool_input_delta',
+          turnId: 'turn-1',
+          blockIndex: 0,
+          toolName: 'apply_patch',
+          toolUseId: 'tool-orphan',
+          partialJson: 'x',
+          inputJsonSoFar: 'x',
+          source: 'proxy',
+          ts: 3,
+        },
+      })
+    })
+    expect(runtimes[sessionId]?.ghosts.size).toBe(1)
+
+    // The sweep orphans it 30 s later (updatedAt := orphan time ≈ t0 + 31 s).
+    act(() => {
+      vi.advanceTimersByTime(31_000)
+    })
+    const orphan = [...runtimes[sessionId]!.ghosts.values()][0]!
+    expect(orphan._atp.orphanedAt).toBeDefined()
+
+    // A minute later, enough later turns push turn-1 out of semantic history,
+    // so the only thing left protecting anything is the orphan itself.
+    act(() => {
+      vi.advanceTimersByTime(60_000)
+    })
+    act(() => {
+      for (let k = 2; k <= 2 + SEMANTIC_HISTORY_CAP; k += 1) {
+        fake.emitSemantic({
+          sessionId,
+          event: { type: 'turn_started', turnId: `turn-${k}`, source: 'proxy', ts: k * 10 },
+        })
+        fake.emitSemantic({
+          sessionId,
+          event: { type: 'turn_completed', turnId: `turn-${k}`, source: 'proxy', ts: k * 10 + 1 },
+        })
+      }
+    })
+    expect(runtimes[sessionId]?.semantic.currentTurn).toBeNull()
+    expect(
+      runtimes[sessionId]?.semantic.history.some(turn => turn.turnId === 'turn-1'),
+    ).toBe(false)
+
+    // A JSONL burst past the cap whose rows all postdate the orphan but
+    // predate the history bound, plus one row newer than the orphan so rule 4
+    // hides it. Pre-#724 the orphan pinned the bound at its orphan time and
+    // nothing here was trimmable.
+    const total = MAX_LIVE_ENTRIES + 100
+    const rowBase = t0 + 40_000
+    const burst = Array.from({ length: total }, (_, i) => ({
+      file: 'transcript.jsonl',
+      entry: {
+        type: 'user',
+        uuid: `orphan-u-${i}`,
+        parentUuid: null,
+        timestamp: new Date(i === total - 1 ? t0 + 100_000 : rowBase + i * 10).toISOString(),
+        message: { role: 'user', content: [{ type: 'text', text: `row ${i}` }] },
+      },
+    }))
+    act(() => {
+      fake.emitJsonlEntries({ sessionId, entries: burst })
+    })
+    expect(runtimes[sessionId]?.entries.length).toBe(TRIM_TO_LIVE_ENTRIES)
+    expect(runtimes[sessionId]?.totalEntries).toBe(total)
+
+    // And the sweep evicts the hidden orphan after its grace.
+    act(() => {
+      vi.advanceTimersByTime(6_000)
+    })
+    expect(runtimes[sessionId]?.ghosts.size).toBe(0)
   })
 })
