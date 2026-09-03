@@ -37,6 +37,7 @@ import {
 import { useFocusedAgentCwd } from '@renderer/features/global-editor/useFocusedAgentCwd'
 import { SplitHandle } from '@renderer/features/shared/SplitHandle'
 import { useResizableSplitter } from '@renderer/features/shared/useResizableSplitter'
+import { useWorkspaceSurfaceHidden } from '@renderer/app/shell/RetainedWorkspaceSurface'
 
 // Splitter geometry. SPLITTER_PX is the visual width of the
 // draggable bar between the editor and the workspace. We avoid
@@ -997,8 +998,14 @@ export function GlobalEditorShell({ children, workspace }: Props) {
   // Escape exits fullscreen — but only when no editor overlay owns the
   // key (Quick Open / content search close themselves on Escape and must
   // not ALSO drop the user out of fullscreen with the same press).
+  // WHY the retained-surface flag is part of the gate (#752): the workspace,
+  // this shell included, now stays mounted under display:none while Reader
+  // Mode / Spotlight / Settings own the screen. Escape there belongs to the
+  // takeover surface (useKeybinds exits Reader on Escape); a fullscreen
+  // editor hiding underneath must not ALSO collapse on the same press.
+  const surfaceHidden = useWorkspaceSurfaceHidden()
   useEffect(() => {
-    if (!open || !editorFullscreen) return
+    if (!open || !editorFullscreen || surfaceHidden) return
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return
       if (event.defaultPrevented) return
@@ -1009,7 +1016,7 @@ export function GlobalEditorShell({ children, workspace }: Props) {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [open, editorFullscreen, setEditorFullscreen])
+  }, [open, editorFullscreen, setEditorFullscreen, surfaceHidden])
 
   // When open without a focused cwd (rare boot edge), still show
   // the split so the user sees the overlay engaged — but the

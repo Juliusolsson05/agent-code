@@ -7,6 +7,7 @@ import type { KeyboardEvent } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
 import { useGlobalEditorStore } from '@renderer/features/global-editor/store'
+import { useWorkspaceSurfaceHidden } from '@renderer/app/shell/RetainedWorkspaceSurface'
 import { useGlobalToast } from '@renderer/ui/GlobalToast'
 import { Feed } from '@renderer/features/feed/ui/Feed'
 import type { ScrollInfo } from '@renderer/features/feed/ui/Feed'
@@ -141,6 +142,9 @@ export function TileLeaf({
   // survives. Reading the flag here is what turns "mounted" back into
   // "visible" — see the mask below.
   const workspaceHiddenByEditor = useGlobalEditorStore(state => state.editorFullscreen)
+  // Same shape one level up (#752): Reader Mode, Spotlight and Settings now
+  // retain the whole workspace under display:none instead of unmounting it.
+  const workspaceHiddenBySurface = useWorkspaceSurfaceHidden()
   // This one OR is the ENTIRE implementation of "Tail All" scoping, and it is
   // load-bearing in a way that is easy to mistake for a shortcut.
   //
@@ -186,11 +190,12 @@ export function TileLeaf({
   //
   // The converse is not true either — a mounted TileLeaf does not always render
   // a Feed to tail. Two known cases: a pane showing a workflow run swaps Feed
-  // for WorkflowRunView below, and Reader Mode is a full takeover (MainSurface
-  // renders ReaderView *instead of* the workspace shell) so no TileLeaf exists
-  // at all there; ReaderView owns an independent stickToBottom. The remote
-  // client mounts Feed directly (remote-client/src/ui/SessionView.tsx) and
-  // deliberately passes no tail props, so Tail All is desktop-only.
+  // for WorkflowRunView below, and Reader Mode / Spotlight / Settings retain
+  // the workspace hidden (RetainedWorkspaceSurface, #752 — the second mask
+  // term below, same reasoning as the editor one); ReaderView owns an
+  // independent stickToBottom. The remote client mounts Feed directly
+  // (remote-client/src/ui/SessionView.tsx) and deliberately passes no tail
+  // props, so Tail All is desktop-only.
   // In all of these Tail All is inert, not wrong — but the palette still reports
   // "On", which is the honest cost of a workspace-level stance.
   //
@@ -199,7 +204,8 @@ export function TileLeaf({
   // Note that the *flag* restoring is not the same as the *scroll position*
   // restoring — see the tail-mode guard in Feed's scroll listener for why the
   // pre-tail position has to be protected for that promise to hold.
-  const effectiveTailMode = (runtime.tailMode || tailAllMode) && !workspaceHiddenByEditor
+  const effectiveTailMode =
+    (runtime.tailMode || tailAllMode) && !workspaceHiddenByEditor && !workspaceHiddenBySurface
   const dictationEnabled = useAppStore(state => state.settings.dictationEnabled)
   const dictationProvider = useAppStore(state => state.settings.dictationProvider)
   const dictationShortcut = useAppStore(state => state.settings.dictationShortcut)
