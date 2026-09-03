@@ -1,4 +1,4 @@
-Status: In progress
+Status: Complete
 
 # Explicit provider switch picker plan
 
@@ -38,9 +38,9 @@ transcript conversion only after the user chooses.
 2. Change Switch Provider to close the command palette and open that picker for
    the resolved command target instead of starting an implicit cycle.
 3. Replace `switchFocusedProvider()` with an explicit
-   `switchSessionProvider(sessionId, targetKind)` workspace action that validates
-   the latest source kind and declared edge before invoking the shared switch
-   transaction.
+   `switchSessionProvider(sessionId, targetKind, targetProviderRuntime)` workspace
+   action that validates the latest source kind and declared edge before
+   invoking the shared switch transaction.
 4. Extract the new-agent provider/runtime choices into a shared renderer source,
    then add a registered modal surface that filters those choices through the
    source provider's declared edges and commits the captured destination once.
@@ -51,18 +51,16 @@ transcript conversion only after the user chooses.
 
 ## Verification
 
-- Focused Vitest coverage for command, picker, provider action, and UI-shell
-  state: 4 files / 30 tests green (plus the store intent test among the unit
-  run's passing cases).
-- `npm run typecheck` — green.
-- `npm run test:contract` — green.
-- `npm run check:keybindings` — green (palette command surface changed).
-- Full renderer project (`vitest run --project renderer`, 4 workers):
-  98 files / 435 tests green.
-- `src/renderer/src/app-state/store.test.ts` two prompt-template migration
-  cases fail only under a cold single-file run's import contention and pass
-  when isolated; unrelated to this branch (same known flakes as PR #755's
-  full-suite run).
-- Full `npm run check` deferred to CI: the aggregate run also executes the
-  machine-local transcript-provenance fixture that does not apply on this
-  laptop (documented on PR #755); clean CI covers it.
+- Focused picker, command, provider-switch, and new-agent Vitest coverage:
+  5 files / 32 tests green.
+- UI-shell store coverage: 1 file / 8 tests green.
+- `npm run check` passed test contracts, checked-in worktree fixtures,
+  keybindings, TypeScript, and the transcript parser's live-resume probe.
+- The aggregate Vitest run passed 350 files / 2,508 tests and reported two
+  unrelated local failures: a known personal transcript fixture points at a
+  removed `~/.claude` session, and the capped-text-buffer fuzz case exceeded
+  its five-second budget under host contention.
+- The fuzz suite passes 1 file / 10 tests when rerun with a 15-second timeout;
+  its invariant case completed in 9.89 seconds.
+- `npm run test:package` — green; the production build contains every required
+  entry point.
