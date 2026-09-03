@@ -125,6 +125,41 @@ describe('Duplicate Agent command', () => {
   })
 })
 
+describe('Switch Provider command', () => {
+  it('captures the command target and opens a picker without converting immediately', async () => {
+    const openProviderSwitchPicker = vi.fn()
+    const closePalette = vi.fn()
+    const switchSessionProvider = vi.fn()
+    const context = {
+      workspace: {
+        state: {
+          activeTabId: 'tab-1',
+          dispatchMode: null,
+          sessions: {
+            source: { cwd: '/projects/app', kind: 'claude' },
+          },
+          tabs: [{
+            id: 'tab-1',
+            focusedSessionId: 'source',
+            root: { type: 'leaf', sessionId: 'source' },
+          }],
+        },
+        switchSessionProvider,
+      } as unknown as Workspace,
+      ui: { openProviderSwitchPicker, closePalette },
+      flags: {},
+    } as unknown as CommandContext
+    const command = sessionCommands.find(candidate => candidate.id === 'switch-provider')
+    if (!command) throw new Error('Switch Provider command is missing')
+
+    await command.run(context)
+
+    expect(closePalette).toHaveBeenCalledOnce()
+    expect(openProviderSwitchPicker).toHaveBeenCalledWith('source')
+    expect(switchSessionProvider).not.toHaveBeenCalled()
+  })
+})
+
 describe('Rendering Debug Mode command', () => {
   it('reports its interception state and delegates the toggle to the UI shell', () => {
     const toggleRenderingDebugMode = vi.fn()

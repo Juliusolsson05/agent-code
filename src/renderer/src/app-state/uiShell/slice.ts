@@ -50,6 +50,7 @@ export const createUiShellSlice: StateCreator<
   closeOldAgentsOpen: false,
   bulkProviderSwitchOpen: false,
   usageModalOpen: false,
+  providerSwitchPickerSessionId: null,
   rewindPromptSessionId: null,
   agentViewModePickerSessionId: null,
   colorFlagPickerSessionId: null,
@@ -311,6 +312,18 @@ export const createUiShellSlice: StateCreator<
     set({ bulkProviderSwitchOpen: true }, false, 'uiShell/openBulkProviderSwitch'),
   closeBulkProviderSwitch: () =>
     set({ bulkProviderSwitchOpen: false }, false, 'uiShell/closeBulkProviderSwitch'),
+  openProviderSwitchPicker: sessionId =>
+    set(
+      { providerSwitchPickerSessionId: sessionId },
+      false,
+      'uiShell/openProviderSwitchPicker',
+    ),
+  closeProviderSwitchPicker: () =>
+    set(
+      { providerSwitchPickerSessionId: null },
+      false,
+      'uiShell/closeProviderSwitchPicker',
+    ),
   openUsageModal: () =>
     set({ usageModalOpen: true }, false, 'uiShell/openUsageModal'),
   closeUsageModal: () =>

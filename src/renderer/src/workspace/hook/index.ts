@@ -825,11 +825,11 @@ export function useWorkspace(
     return off
   }, [refs, setRuntimes])
 
-  const { switchFocusedProvider, reloadFocusedAgent, rewindFocusedToPrompt, undoLastRewind } =
+  const { switchSessionProvider, reloadFocusedAgent, rewindFocusedToPrompt, undoLastRewind } =
     useProviderActions(refs, setRuntimes, showPaneToast, sessionActions)
 
   // Bulk provider switch (Switch Agents modal) + remembered-batch return. Uses
-  // the same single-agent core as switchFocusedProvider, but reports through the
+  // the same single-agent core as switchSessionProvider, but reports through the
   // global toast (the operation spans many panes, so a pane-scoped toast would
   // be arbitrary) and records the batch on workspace state.
   const { switchAgentsToProvider, returnLastProviderSwitchBatch } =
@@ -972,7 +972,7 @@ export function useWorkspace(
     replaceSession,
     reloadFocusedAgent,
     softReloadAgentView,
-    switchFocusedProvider,
+    switchSessionProvider,
     switchAgentsToProvider,
     returnLastProviderSwitchBatch,
     rewindFocusedToPrompt,

@@ -200,6 +200,7 @@ export type CommandContext = {
     openKeyboardShortcuts: () => void
     openCloseOldAgents: () => void
     openBulkProviderSwitch: () => void
+    openProviderSwitchPicker: (sessionId: string) => void
     openRewindPrompt: (sessionId: string) => void
     openAgentViewModePicker: (sessionId: string) => void
     /** Open the Dispatch color-flag swatch picker for a session. */
