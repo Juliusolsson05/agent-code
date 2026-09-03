@@ -39,6 +39,7 @@ import { getToolPath, refreshToolchainFromState } from '@main/setup/toolchain.js
 import { resolveToolPath } from '@main/setup/binaryResolver.js'
 import { updateToolPaths } from '@main/setup/setupState.js'
 import { forgetFeedDebugSession } from '@main/storage/feedDebugLog.js'
+import { CappedTextBuffer } from '@main/sessions/cappedTextBuffer.js'
 import type {
   ConditionCustomAction,
   ProviderConditionSnapshot,
@@ -401,23 +402,6 @@ export type ResolveConditionResult =
       failedAtStep?: string
     }
 
-function appendCappedBuffer(prev: string, data: string, cap: number): string {
-  let next = prev + data
-  if (next.length <= cap) return next
-
-  // Naive slice by string length can split a UTF-16 surrogate pair.
-  // xterm will usually recover from a replacement character, but the
-  // replay buffer should not introduce corruption at its oldest edge
-  // when dropping the whole rune costs only one code unit.
-  let startIdx = next.length - cap
-  const firstCode = next.charCodeAt(startIdx)
-  if (firstCode >= 0xdc00 && firstCode <= 0xdfff) {
-    startIdx += 1
-  }
-  next = next.slice(startIdx)
-  return next
-}
-
 export class SessionManager extends EventEmitter {
   private readonly sessions = new Map<string, RegistryEntry>()
   private readonly spawningSessionGenerations = new Map<string, symbol>()
@@ -613,7 +597,10 @@ export class SessionManager extends EventEmitter {
   // duplicate bytes (once in the buffer, once as a live event).
   // Toggling the flag in the same synchronous tick as the buffer
   // read means no data can slip through between the two.
-  private readonly terminalBuffers = new Map<string, string>()
+  // WHY CappedTextBuffer and not a string: see src/main/sessions/
+  // cappedTextBuffer.ts — the string version copied the whole cap on every
+  // chunk and retained sliced-string parents (#726).
+  private readonly terminalBuffers = new Map<string, CappedTextBuffer>()
   private readonly terminalAttached = new Set<string>()
 
   // Agent PTY terminal replay state. Agent sessions already publish
@@ -631,7 +618,7 @@ export class SessionManager extends EventEmitter {
   // terminal, and agent PTYs can be noisy. Buffer in main, broadcast
   // only after an attach, and let the renderer replay the buffer before
   // draining live bytes.
-  private readonly agentPtyBuffers = new Map<string, string>()
+  private readonly agentPtyBuffers = new Map<string, CappedTextBuffer>()
   private readonly agentPtyAttachCounts = new Map<string, number>()
   private readonly agentPtyRestoreSizes = new Map<string, PtySize>()
 
@@ -2571,7 +2558,7 @@ export class SessionManager extends EventEmitter {
       })
 
       this.sessionSizes.set(sessionId, initialSize)
-      this.agentPtyBuffers.set(sessionId, '')
+      this.agentPtyBuffers.set(sessionId, new CappedTextBuffer(AGENT_PTY_BUFFER_CAP))
       session.on('started', ({ projectDir }) => {
         if (!ownsEntry()) return
         this.markActivity(sessionId)
@@ -2608,11 +2595,12 @@ export class SessionManager extends EventEmitter {
       session.on('pty-data', (data: string) => {
         if (!ownsEntry()) return
         this.markActivity(sessionId)
-        const prev = this.agentPtyBuffers.get(sessionId) ?? ''
-        this.agentPtyBuffers.set(
-          sessionId,
-          appendCappedBuffer(prev, data, AGENT_PTY_BUFFER_CAP),
-        )
+        let replay = this.agentPtyBuffers.get(sessionId)
+        if (!replay) {
+          replay = new CappedTextBuffer(AGENT_PTY_BUFFER_CAP)
+          this.agentPtyBuffers.set(sessionId, replay)
+        }
+        replay.append(data)
         if ((this.agentPtyAttachCounts.get(sessionId) ?? 0) > 0) {
           this.emit('agent-pty-data', { sessionId, data })
         }
@@ -2925,7 +2913,7 @@ export class SessionManager extends EventEmitter {
     // and is replayed to the renderer on attach — see the block
     // comment on terminalBuffers above for the full reasoning.
     this.sessionSizes.set(sessionId, initialSize)
-    this.terminalBuffers.set(sessionId, '')
+    this.terminalBuffers.set(sessionId, new CappedTextBuffer(TERMINAL_BUFFER_CAP))
 
     // Terminal sessions only emit started / data / exit. The 'data'
     // event carries raw PTY bytes for xterm.js on the renderer side;
@@ -2951,11 +2939,12 @@ export class SessionManager extends EventEmitter {
       // replay the full history. Cap at TERMINAL_BUFFER_CAP —
       // longer sessions just lose the oldest bytes, which is the
       // standard terminal scrollback behavior.
-      const prev = this.terminalBuffers.get(sessionId) ?? ''
-      this.terminalBuffers.set(
-        sessionId,
-        appendCappedBuffer(prev, data, TERMINAL_BUFFER_CAP),
-      )
+      let replay = this.terminalBuffers.get(sessionId)
+      if (!replay) {
+        replay = new CappedTextBuffer(TERMINAL_BUFFER_CAP)
+        this.terminalBuffers.set(sessionId, replay)
+      }
+      replay.append(data)
       // Only broadcast live events AFTER the renderer has attached.
       // Before attach, the data is still in the buffer and will be
       // replayed when the renderer calls attachTerminal. See the
@@ -3118,7 +3107,7 @@ export class SessionManager extends EventEmitter {
       )
       return ''
     }
-    const buffer = this.terminalBuffers.get(sessionId) ?? ''
+    const buffer = this.terminalBuffers.get(sessionId)?.read() ?? ''
     // Flip the attach flag in the SAME synchronous block as reading
     // the buffer. JavaScript is single-threaded and event emission
     // can only happen on a later tick, so nothing can sneak in.
@@ -3166,7 +3155,7 @@ export class SessionManager extends EventEmitter {
       )
       return null
     }
-    const buffer = this.agentPtyBuffers.get(sessionId) ?? ''
+    const buffer = this.agentPtyBuffers.get(sessionId)?.read() ?? ''
     const attachCount = this.agentPtyAttachCounts.get(sessionId) ?? 0
     if (attachCount === 0) {
       const currentSize = this.sessionSizes.get(sessionId)
