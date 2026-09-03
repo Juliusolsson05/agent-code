@@ -981,17 +981,8 @@ export function foldSemanticEvent(
       //
       // Copy-on-write: we only clone `blocks` once we find a block to stamp, so
       // the common no-pending-picker stop allocates nothing new.
-      //
-      // AND only for EXPLICIT terminal reasons (#738): the proxy synthesizes a
-      // `turn_stopped` with `stopReason: null` when the stream dies, when the
-      // stale-flow watchdog reaps a silent flow, or on an API error frame. None
-      // of those is evidence that the user stopped answering; stamping on them
-      // turned a question the TUI was still waiting on into "no answer sent".
-      // A picker orphaned by a genuine stream death lingers until the next
-      // `turn_started` archives the turn — bounded, and the committed decline
-      // result still lands when it does.
       let stoppedBlocks = currentTurn.blocks
-      if (stopReason !== 'tool_use' && stopReason !== null) {
+      if (stopReason !== 'tool_use') {
         let stampedPicker = false
         for (const [key, block] of Object.entries(currentTurn.blocks)) {
           if (block.toolName === 'AskUserQuestion' && block.resultAt == null) {
