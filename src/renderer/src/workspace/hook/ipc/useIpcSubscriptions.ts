@@ -49,6 +49,7 @@ import {
 import { emitRendererMemoryGauges } from '@renderer/performance/memoryInstrumentation'
 import { pickerEqual } from '@renderer/workspace/layout/helpers'
 import {
+  gcHiddenOrphanGhosts,
   gcSupersededGhosts,
   ghostsFromSemanticTurn,
   ghostsToPersist,
@@ -509,8 +510,17 @@ export function useIpcSubscriptions(
           // `working` untouched so the queue pass below still gets a chance.
           if (runtime.ghosts.size > 0) {
             const orphanedGhosts = orphanStale(runtime.ghosts, now, GHOST_ORPHAN_TTL_MS)
-            const nextGhosts = gcSupersededGhosts(
-              orphanedGhosts,
+            // Hidden orphans (orphaned AND at-or-before the committed JSONL
+            // tail) can never render again and would otherwise pin the
+            // live-entry trim bound for the rest of the session (#724).
+            // Same grace as superseded GC, for the same persistence reason.
+            const nextGhosts = gcHiddenOrphanGhosts(
+              gcSupersededGhosts(
+                orphanedGhosts,
+                now,
+                GHOST_SUPERSEDED_GC_MS,
+              ),
+              runtime.lastJsonlEntryAt,
               now,
               GHOST_SUPERSEDED_GC_MS,
             )
@@ -526,6 +536,7 @@ export function useIpcSubscriptions(
                   summary: 'stale ghosts marked orphaned',
                   data: {
                     ghostCount: nextGhosts.size,
+                    evictedCount: runtime.ghosts.size - nextGhosts.size,
                     orphanedCount: [...nextGhosts.values()].filter(
                       ghost => ghost._atp.orphanedAt !== undefined &&
                         runtime.ghosts.get(ghost.uuid)?._atp.orphanedAt === undefined,
@@ -2120,11 +2131,13 @@ export function useIpcSubscriptions(
           liveEntryWindowOverBudget(nextEntries)
         ) {
           // Bounds come from CURRENT semantic state (this handler never
-          // folds semantic events) and POST-reconcile ghosts (a ghost this
+          // folds semantic events), POST-reconcile ghosts (a ghost this
           // burst just superseded no longer needs its committed owner
-          // protected). See planLiveEntryTrim for the constraint set — it
-          // returns null whenever trimming would be unsafe.
-          const plan = planLiveEntryTrim(nextEntries, current.semantic, nextGhosts)
+          // protected), and the POST-burst JSONL tail so orphans this burst
+          // just passed stop pinning the bound (#724). See planLiveEntryTrim
+          // for the constraint set — it returns null whenever trimming would
+          // be unsafe.
+          const plan = planLiveEntryTrim(nextEntries, current.semantic, nextGhosts, lastJsonlEntryAt)
           if (plan) {
             finalEntries = nextEntries.slice(plan.cut)
             entriesTrimmed = plan.cut

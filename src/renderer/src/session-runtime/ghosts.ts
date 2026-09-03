@@ -91,6 +91,7 @@ import type {
 
 import type { Entry } from '@shared/types/transcript'
 import { isConversationEntry } from '@shared/types/transcript'
+import { isGhostHiddenBehindJsonlTail } from '@renderer/session-runtime/liveEntryWindow'
 import { asRecord } from '@shared/lib/asRecord'
 import type {
   SemanticLiveBlock,
@@ -525,6 +526,53 @@ export function gcSupersededGhosts(
   for (const [uuid, ghost] of prev) {
     if (ghost._atp.supersededBy === undefined) continue
     if (ghost._atp.updatedAt + gcMs >= now) continue
+    if (next === null) next = new Map(prev)
+    next.delete(uuid)
+  }
+  return next ?? (prev as Map<string, GhostEntry>)
+}
+
+// -----------------------------------------------------------------------------
+// Convenience: drop orphaned ghosts the committed tail has already passed
+// -----------------------------------------------------------------------------
+
+/**
+ * Evict orphaned, un-superseded ghosts whose `updatedAt` is at-or-before
+ * `lastJsonlEntryAt` once they have been orphaned for at least `gcMs`.
+ *
+ * WHY these can go (#724): the render predicate's rule 4 hides exactly this
+ * set and `lastJsonlEntryAt` only advances, so such a ghost can never paint
+ * again. Keeping it bought nothing and cost two things: `runtime.ghosts`
+ * grew monotonically (917 ghosts in one session on the two-day journal), and
+ * every un-superseded ghost pins the live-entry trim bound, so the first
+ * never-matched orphan froze `planLiveEntryTrim` for the rest of the
+ * session. The trim side uses the same predicate
+ * (`isGhostHiddenBehindJsonlTail`) so the two consumers cannot disagree.
+ *
+ * WHY orphans NEWER than the tail stay: that is the "JSONL stuck past live"
+ * fallback the ghost system exists for — they may still render and their
+ * committed owners must stay protected. A null tail keeps everything.
+ *
+ * WHY a grace period: the orphan transition is what persists the ghost to
+ * the on-disk log (`ghostsToPersist` diffs by `updatedAt`); waiting `gcMs`
+ * after `orphanedAt` gives that append the same head start superseded ghosts
+ * get before `gcSupersededGhosts` drops them. Nothing durable is lost — on
+ * resume the ghost is reloaded, hidden by the same rule, and swept again.
+ *
+ * Reference-stable on no-op, like every other reducer in this file.
+ */
+export function gcHiddenOrphanGhosts(
+  prev: ReadonlyMap<string, GhostEntry>,
+  lastJsonlEntryAt: number | null,
+  now: number,
+  gcMs: number,
+): Map<string, GhostEntry> {
+  if (prev.size === 0 || lastJsonlEntryAt === null) return prev as Map<string, GhostEntry>
+  let next: Map<string, GhostEntry> | null = null
+  for (const [uuid, ghost] of prev) {
+    if (ghost._atp.supersededBy !== undefined) continue
+    if (!isGhostHiddenBehindJsonlTail(ghost, lastJsonlEntryAt)) continue
+    if (ghost._atp.orphanedAt! + gcMs > now) continue
     if (next === null) next = new Map(prev)
     next.delete(uuid)
   }
