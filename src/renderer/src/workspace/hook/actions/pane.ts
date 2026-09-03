@@ -16,12 +16,14 @@ import type {
   SessionId,
   SessionKind,
   SessionMeta,
+  SessionSpawnSelection,
   SplitDirection,
   Tab,
   TabId,
   TileNode,
   WorkspaceState,
 } from '@renderer/workspace/types'
+import type { AgentProviderRuntime } from '@shared/types/providerKind'
 import { RATIO_DEFAULT } from '@renderer/workspace/types'
 import {
   closeLeaf,
@@ -346,6 +348,8 @@ type SplitFocusedContinuation = {
   resumeSessionId: string
   cwd: string
   builtInMcpDomains?: BuiltInMcpDomain[]
+  /** Preserve an alternate provider transport when cloning a conversation. */
+  providerRuntime?: AgentProviderRuntime
 }
 
 export function usePaneActions(
@@ -374,13 +378,13 @@ export function usePaneActions(
     continuation?: SplitFocusedContinuation,
   ) => Promise<void>
   startNewAgentPlacement: () => void
-  commitNewAgentPlacement: (kind: SessionKind, target: PlacementTarget) => Promise<void>
+  commitNewAgentPlacement: (selection: SessionSpawnSelection, target: PlacementTarget) => Promise<void>
   createDetachedDispatchAgent: (
-    kind: Exclude<SessionKind, 'terminal'>,
+    selection: SessionSpawnSelection & { kind: Exclude<SessionKind, 'terminal'> },
     projectOverride?: { tabId: TabId; anchorSessionId: SessionId },
   ) => Promise<void>
   createLinkedAgent: (
-    kind: Exclude<SessionKind, 'terminal'>,
+    selection: SessionSpawnSelection & { kind: Exclude<SessionKind, 'terminal'> },
     parentId: SessionId,
   ) => Promise<void>
   createOrchestrationAgent: (params: {
@@ -424,6 +428,7 @@ export function usePaneActions(
     ) => {
       const resumeSessionId = continuation?.resumeSessionId
       const builtInMcpDomains = continuation?.builtInMcpDomains
+      const providerRuntime = continuation?.providerRuntime
       const dispatchSnapshot = refs.stateRef.current
       // ONE Dispatch creation flow for every session kind.
       //
@@ -488,9 +493,9 @@ export function usePaneActions(
 
         let sessionId: SessionId
         try {
-          // `resumeSessionId` and `builtInMcpDomains` are passed through
-          // unguarded, but the two are NOT symmetric and it is worth being
-          // precise about which is which:
+          // Resume identity, runtime flavor, and built-in MCP domains are
+          // passed through unguarded, but they are NOT symmetric and it is
+          // worth being precise about which is which:
           //
           //  - `builtInMcpDomains` really is dropped for a terminal —
           //    `sessionActions.spawn` gates it behind `isAgentProviderKind`.
@@ -499,6 +504,10 @@ export function usePaneActions(
           //    back into the durable `SessionMeta` is kind-gated. It is inert
           //    for a terminal because main re-gates on kind before resolving a
           //    transcript, not because anything here filtered it.
+          //  - `providerRuntime` is validated by main against the chosen
+          //    provider factory. It is present when a transcript clone must
+          //    remain OpenCode Terminal instead of reverting to rendered
+          //    OpenCode.
           //
           // Neither can be reached today regardless: `continuation` is only
           // supplied by agent-gated callers, so no terminal spawn carries one.
@@ -507,6 +516,7 @@ export function usePaneActions(
           // the code it describes.
           sessionId = await sessionActions.spawn(cwd, {
             kind,
+            ...(providerRuntime ? { providerRuntime } : {}),
             resumeSessionId,
             builtInMcpDomains,
           })
@@ -575,7 +585,12 @@ export function usePaneActions(
           // cleanup (spawn did register SessionMeta in the store); its own
           // ownership check then returns false for the same stale-ref reason,
           // harmlessly, because the backend is already gone.
-          await window.api.killOwnedSession({ sessionId, kind, cwd })
+          await window.api.killOwnedSession({
+            sessionId,
+            kind,
+            ...(providerRuntime ? { providerRuntime } : {}),
+            cwd,
+          })
             .catch(() => undefined)
           await sessionActions.killSession(sessionId)
           return
@@ -594,6 +609,7 @@ export function usePaneActions(
       try {
         newSessionId = await sessionActions.spawn(spawnCwd, {
           kind,
+          ...(providerRuntime ? { providerRuntime } : {}),
           resumeSessionId,
           builtInMcpDomains,
         })
@@ -638,7 +654,7 @@ export function usePaneActions(
 
   const createDetachedDispatchAgent = useCallback(
     async (
-      kind: Exclude<SessionKind, 'terminal'>,
+      selection: SessionSpawnSelection & { kind: Exclude<SessionKind, 'terminal'> },
       // Explicit project override, supplied by the Dispatch header "+".
       //
       // WHY it must override BOTH halves rather than just the tab: cwd is
@@ -650,6 +666,7 @@ export function usePaneActions(
       // Dispatch agents are never inserted into tab.root.
       projectOverride?: { tabId: TabId; anchorSessionId: SessionId },
     ) => {
+      const { kind, providerRuntime } = selection
       const snapshot = refs.stateRef.current
       // Resolve the target project ONCE so cwd and projectTab agree. In Tiled
       // Dispatch this follows the focused lane, not the stale active tab —
@@ -682,7 +699,7 @@ export function usePaneActions(
 
       let sessionId: SessionId
       try {
-        sessionId = await sessionActions.spawn(cwd, { kind })
+        sessionId = await sessionActions.spawn(cwd, { kind, providerRuntime })
       } catch (err) {
         showToast(
           err instanceof Error && err.message.length > 0
@@ -730,7 +747,11 @@ export function usePaneActions(
   // route through applyDispatchSpawnFocus so Tiled lanes and classic
   // focus cannot drift.
   const createLinkedAgent = useCallback(
-    async (kind: Exclude<SessionKind, 'terminal'>, parentId: SessionId) => {
+    async (
+      selection: SessionSpawnSelection & { kind: Exclude<SessionKind, 'terminal'> },
+      parentId: SessionId,
+    ) => {
+      const { kind, providerRuntime } = selection
       const snapshot = refs.stateRef.current
       const parentMeta = snapshot.sessions[parentId]
       if (!parentMeta) {
@@ -765,7 +786,7 @@ export function usePaneActions(
 
       let sessionId: SessionId
       try {
-        sessionId = await sessionActions.spawn(rootParentMeta.cwd, { kind })
+        sessionId = await sessionActions.spawn(rootParentMeta.cwd, { kind, providerRuntime })
       } catch (err) {
         showToast(
           err instanceof Error && err.message.length > 0
@@ -788,7 +809,11 @@ export function usePaneActions(
           sessions: {
             ...prev.sessions,
             [sessionId]: {
-              ...(prev.sessions[sessionId] ?? { cwd: rootParentMeta.cwd, kind }),
+              ...(prev.sessions[sessionId] ?? {
+                cwd: rootParentMeta.cwd,
+                kind,
+                ...(providerRuntime ? { providerRuntime } : {}),
+              }),
               linkedParentId: rootParentId,
             },
           },
@@ -1230,7 +1255,8 @@ export function usePaneActions(
 
 
   const commitNewAgentPlacement = useCallback(
-    async (kind: SessionKind, target: PlacementTarget) => {
+    async (selection: SessionSpawnSelection, target: PlacementTarget) => {
+      const { kind, providerRuntime } = selection
       const tab = state.tabs.find(t => t.id === state.activeTabId)
       if (!tab) return
       const anchorSessionId = tab.focusedSessionId
@@ -1239,7 +1265,7 @@ export function usePaneActions(
 
       let newSessionId: SessionId
       try {
-        newSessionId = await sessionActions.spawn(cwd, { kind })
+        newSessionId = await sessionActions.spawn(cwd, { kind, providerRuntime })
       } catch (err) {
         showToast(
           err instanceof Error && err.message.length > 0

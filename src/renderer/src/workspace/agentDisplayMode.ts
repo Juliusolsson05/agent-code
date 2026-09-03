@@ -1,7 +1,7 @@
 import type { AgentViewMode } from '@renderer/app-state/settings/types'
 import type { AgentViewModeOverride, SessionKind } from '@renderer/workspace/types'
 import { isAgentProviderKind } from '@shared/types/providerKind'
-import type { AgentProviderKind } from '@shared/types/providerKind'
+import type { AgentProviderKind, AgentProviderRuntime } from '@shared/types/providerKind'
 import type {
   RenderedViewLeaseFeature,
   SessionRuntime,
@@ -42,22 +42,19 @@ function normalizeAgentViewModeForKind(
   mode: AgentViewMode,
 ): AgentViewMode {
   if (kind !== 'opencode') return mode
-  // WHY OpenCode is pinned to Agent mode for now:
+  // WHY ordinary OpenCode is pinned to Agent mode:
   // Claude/Codex "Terminal" means "attach xterm to the real provider PTY."
-  // OpenCode does not have that surface in Agent Code today; its runtime is
-  // HTTP/SSE plus committed history, so mounting AgentTerminalLeaf only paints
-  // an empty terminal and makes the global setting look broken. Until
-  // opencode-headless grows a parallel native-mode path with provider-native
-  // screen/proxy/transcript interpretation, the honest behavior is to keep
-  // OpenCode on the rendered Agent surface regardless of the global default.
-  //
-  // TODO(#484): replace this hard pin with a provider capability once OpenCode
-  // has a real native surface that can satisfy Terminal/Hybrid semantics.
+  // The ordinary OpenCode choice is still HTTP/SSE and has no PTY, so mounting
+  // AgentTerminalLeaf would paint an empty terminal. OpenCode Terminal is a
+  // separately selected process runtime and is forced to terminal before this
+  // normalizer runs; keeping this pin prevents the two choices from collapsing
+  // back into one misleading view toggle.
   return 'agent'
 }
 
 export function getEffectiveAgentSurface(args: {
   kind: SessionKind | undefined
+  providerRuntime?: AgentProviderRuntime
   mode: AgentViewMode
   runtime: SessionRuntime
 }): EffectiveAgentSurface {
@@ -67,6 +64,10 @@ export function getEffectiveAgentSurface(args: {
       ? args.mode
       : 'agent'
   if (!isAgentKind(kind)) return 'rendered'
+  // A terminal-flavoured provider session is a different process contract,
+  // not merely a view preference. It has PTY bytes and deliberately no
+  // structured feed, so no global/per-pane mode may mount the rendered leaf.
+  if (args.providerRuntime === 'terminal') return 'terminal'
   const mode = normalizeAgentViewModeForKind(kind, requestedMode)
 
   // WHY this selector ignores leases in hard Terminal mode:
@@ -115,6 +116,7 @@ export function getEffectiveAgentSurface(args: {
 
 export function getEffectiveAgentSurfaceForSession(args: {
   kind: SessionKind | undefined
+  providerRuntime?: AgentProviderRuntime
   globalMode: AgentViewMode
   override: AgentViewModeOverride | undefined
   runtime: SessionRuntime
@@ -129,6 +131,7 @@ export function getEffectiveAgentSurfaceForSession(args: {
   // promotion in one selector makes dropping any of those inputs harder.
   return getEffectiveAgentSurface({
     kind: args.kind,
+    providerRuntime: args.providerRuntime,
     mode: resolveConfiguredAgentViewMode(args.globalMode, args.override),
     runtime: args.runtime,
   })
@@ -137,12 +140,14 @@ export function getEffectiveAgentSurfaceForSession(args: {
 export function commandAllowedByRenderedViewPolicy(args: {
   policy: RenderedViewPolicy | undefined
   kind: SessionKind | undefined
+  providerRuntime?: AgentProviderRuntime
   mode: AgentViewMode
   runtime: SessionRuntime
 }): boolean {
   const policy = args.policy ?? { kind: 'none' }
   if (policy.kind === 'none') return true
   if (!isAgentKind(args.kind)) return true
+  if (args.providerRuntime === 'terminal') return false
   const requestedMode: AgentViewMode =
     args.mode === 'terminal' || args.mode === 'hybrid' || args.mode === 'agent'
       ? args.mode
@@ -161,6 +166,7 @@ export function commandAllowedByRenderedViewPolicy(args: {
   }
   return getEffectiveAgentSurface({
     kind: args.kind,
+    providerRuntime: args.providerRuntime,
     mode,
     runtime: args.runtime,
   }) === 'rendered'

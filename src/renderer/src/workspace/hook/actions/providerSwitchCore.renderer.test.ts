@@ -22,6 +22,7 @@ afterEach(() => {
 describe('switchAgentProvider', () => {
   it('wakes a durable source pane before main can request native compaction', async () => {
     const switchProvider = vi.fn().mockResolvedValue({
+      kind: 'switched',
       targetKind: 'codex',
       targetProviderSessionId: 'target-provider-session',
       targetFilePath: '/project/target.jsonl',
@@ -148,6 +149,7 @@ describe('switchAgentProvider', () => {
 
   it('does not resurrect an explicit unsupported domain after waking the source', async () => {
     const switchProvider = vi.fn().mockResolvedValue({
+      kind: 'switched',
       targetKind: 'codex',
       targetProviderSessionId: 'target-provider-session',
       targetFilePath: '/project/target.jsonl',
@@ -239,5 +241,67 @@ describe('switchAgentProvider', () => {
 
     expect(result).toEqual({ status: 'failed', message: 'Claude could not resume' })
     expect(switchProvider).not.toHaveBeenCalled()
+  })
+
+  it('replaces a durable OpenCode session whose exported transcript is still empty', async () => {
+    const switchProvider = vi.fn().mockResolvedValue({
+      kind: 'source-empty',
+      targetKind: 'claude',
+    })
+    const replaceSession = vi.fn().mockResolvedValue('target-pane')
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: {
+        onProviderSwitchProgress: vi.fn(() => vi.fn()),
+        switchProvider,
+      },
+    })
+    const refs = {
+      stateRef: {
+        current: {
+          sessions: {
+            'source-pane': {
+              cwd: '/project',
+              kind: 'opencode',
+              providerRuntime: 'terminal',
+              providerSessionId: 'ses_precreated_but_empty',
+              builtInMcpDomains: ['orchestration'],
+            },
+          },
+        },
+      },
+      latestRuntimesRef: { current: {} },
+      defaultBuiltInMcpDomainsRef: { current: [] },
+    } as unknown as WorkspaceRefs
+    const ensureSessionLive = vi.fn(async () => ({
+      sessionId: 'source-pane',
+      builtInMcpDomains: ['orchestration'],
+    }))
+
+    await expect(switchAgentProvider({
+      sessionId: 'source-pane',
+      targetKind: 'claude',
+      refs,
+      setRuntimes: vi.fn() as WorkspaceSetRuntimes,
+      sessionActions: {
+        ensureSessionLive,
+        replaceSession,
+      } as unknown as SessionActions,
+    })).resolves.toEqual({
+      status: 'switched',
+      newSessionId: 'target-pane',
+      targetKind: 'claude',
+    })
+
+    expect(switchProvider).toHaveBeenCalledWith(expect.objectContaining({
+      sourceKind: 'opencode',
+      targetKind: 'claude',
+      sourceProviderSessionId: 'ses_precreated_but_empty',
+    }))
+    expect(replaceSession).toHaveBeenCalledWith('/project', {
+      kind: 'claude',
+      builtInMcpDomains: ['orchestration'],
+      targetSessionId: 'source-pane',
+    })
   })
 })

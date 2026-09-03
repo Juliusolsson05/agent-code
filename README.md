@@ -153,7 +153,7 @@ verifies both thin app bundles before upload. For day-to-day development, use
 - [`codex-headless`](https://github.com/Juliusolsson05/codex-headless)
   — headless Codex control layer
 - [`agent-transcript-parser`](https://github.com/Juliusolsson05/agent-transcript-parser)
-  — Claude/Codex transcript conversion and rewind
+  — Claude/Codex/OpenCode transcript conversion and rewind
 - [`agent-voice-dictation`](https://github.com/Juliusolsson05/agent-voice-dictation)
   — dictation primitives for agent composer UIs
 

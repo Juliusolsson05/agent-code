@@ -140,10 +140,12 @@ function ReaderBody({
   // Use the pane's actual provider for the screen extractor rather than
   // the old `=== 'codex' ? 'codex' : 'claude'` negation, which collapsed
   // opencode (a registered provider since phase 7) to Claude. This is
-  // latent today — opencode has no PTY/screen so extractAssistantInProgress
-  // returns '' for it regardless — but the negation would silently
-  // mis-extract the moment opencode grows any screen text or the extractor
-  // changes. Terminal / unknown kinds fall back to the default provider.
+  // Structured OpenCode has no PTY and supplies semantic SSE text. OpenCode
+  // Terminal is deliberately forced onto its raw surface, so there is still no
+  // supported OpenCode screen-scraping path here. Keeping the real provider is
+  // nevertheless important: a future parser must be an explicit exhaustive
+  // addition rather than silently receiving Claude's rules. Terminal / unknown
+  // kinds fall back to the default provider.
   const provider = isAgentProviderKind(meta?.kind) ? meta.kind : DEFAULT_PROVIDER
   const workspaceRoot = meta?.cwd ?? null
   const reader = workspace.readerMode

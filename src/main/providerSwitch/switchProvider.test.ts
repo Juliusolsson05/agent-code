@@ -33,6 +33,16 @@ vi.mock('@main/providerSwitch/transcriptEngine.js', () => ({
         targetProfile: mocks.targetProfile,
       }
     }
+    if (provider === 'opencode') {
+      return {
+        provider,
+        read: mocks.sourceRead,
+        projectNativeResume: mocks.targetProject,
+        write: mocks.targetWrite,
+        sessionId: mocks.targetSessionId,
+        targetProfile: mocks.targetProfile,
+      }
+    }
     throw new Error(`No transcript engine adapter is registered for provider "${provider}".`)
   },
 }))
@@ -99,6 +109,7 @@ describe('switchProvider neutral hub integration', () => {
     })
 
     expect(mocks.sourceRead).toHaveBeenCalledWith('/source', 'source-session')
+    expect(mocks.targetProfile).toHaveBeenCalledWith('/target')
     expect(mocks.targetProject).toHaveBeenCalledWith(
       conversation,
       expect.objectContaining({
@@ -108,12 +119,30 @@ describe('switchProvider neutral hub integration', () => {
     )
     expect(mocks.targetWrite).toHaveBeenCalledWith('/target', projection.values)
     expect(result).toEqual({
+      kind: 'switched',
       targetKind: 'codex',
       targetProviderSessionId: 'target-session',
       targetFilePath: '/target/rollout.jsonl',
       compactedBeforeSwitch: false,
       truncatedBeforeSwitch: false,
     })
+  })
+
+  it.each([
+    ['claude', 'opencode'],
+    ['opencode', 'codex'],
+  ] as const)('routes the %s → %s edge through the same neutral hub', async (sourceKind, targetKind) => {
+    const result = await switchProvider({
+      sourceKind,
+      targetKind,
+      sourceProviderSessionId: 'source-session',
+      cwd: '/project',
+    })
+
+    expect(mocks.sourceRead).toHaveBeenCalledWith('/project', 'source-session')
+    expect(mocks.targetProject).toHaveBeenCalledOnce()
+    expect(mocks.targetWrite).toHaveBeenCalledOnce()
+    expect(result.targetKind).toBe(targetKind)
   })
 
   it('runs native source compaction and retries planning before projection', async () => {
@@ -155,8 +184,31 @@ describe('switchProvider neutral hub integration', () => {
         targetProfile: expect.objectContaining({ model: 'gpt-current' }),
       }),
     )
+    expect(result.kind).toBe('switched')
+    if (result.kind !== 'switched') throw new Error('expected a translated target session')
     expect(result.compactedBeforeSwitch).toBe(true)
     expect(result.truncatedBeforeSwitch).toBe(false)
+  })
+
+  it('reports a durable but empty source without writing a target transcript', async () => {
+    mocks.sourceRead.mockResolvedValueOnce({
+      ...conversation,
+      entries: [],
+    })
+
+    await expect(switchProvider({
+      sourceKind: 'opencode',
+      targetKind: 'claude',
+      sourceProviderSessionId: 'ses_precreated_but_empty',
+      cwd: '/project',
+    })).resolves.toEqual({
+      kind: 'source-empty',
+      targetKind: 'claude',
+    })
+
+    expect(mocks.targetProfile).not.toHaveBeenCalled()
+    expect(mocks.targetProject).not.toHaveBeenCalled()
+    expect(mocks.targetWrite).not.toHaveBeenCalled()
   })
 
   it('never truncates overflow unless the caller explicitly requests it', async () => {

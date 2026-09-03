@@ -7,9 +7,8 @@ export const OPENCODE_IDENTITY = {
   glyph: '◍',
   shortLabel: 'OpenCode',
   spawnDescription: 'server-based coding agent session',
-  /** Runtime resume is native (server session id); the copyable CLI
-   *  form needs verification against the opencode CLI before the
-   *  branch merges (#406 §C-4). */
+  /** Verified against OpenCode CLI 1.18.27: the no-subcommand TUI accepts
+   *  `--session`/`-s` and resumes the named native session. */
   resumeCommand: (quotedSessionId: string) => `opencode --session ${quotedSessionId}`,
   // No splitShortcutKey: chords are scarce; palette split commands
   // derive automatically (#394 phase 4).

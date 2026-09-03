@@ -44,6 +44,7 @@ import type {
   ProviderConditionSnapshot,
 } from '@shared/types/providerConditions.js'
 import { asRecord } from '@shared/lib/asRecord.js'
+import { addOpencodeBuiltInMcpLaunchConfig } from '@providers/shared/runtime/builtInMcpLaunch.js'
 
 // Custom-action names OpencodeSession both BUILDS (when folding a
 // permission/question into the snapshot) and DISPATCHES (in
@@ -114,8 +115,9 @@ export class OpencodeSession extends EventEmitter implements AgentSession {
 
   private readonly cwd: string
   private readonly binary: string | undefined
-  private readonly env: Record<string, string | undefined> | undefined
+  private readonly extraEnv: Record<string, string | undefined>
   private readonly resumeSessionId: string | null
+  private readonly builtInMcpServers: NonNullable<SessionOptions['builtInMcpServers']>
 
   constructor(options: SessionOptions) {
     super()
@@ -123,12 +125,9 @@ export class OpencodeSession extends EventEmitter implements AgentSession {
     // Leave undefined → OpencodeHeadless/SpawnedServer default to the
     // 'opencode' binary on PATH. Passing an empty string would spawn ''.
     this.binary = options.binary
-    // SpawnedServer already merges process.env under opts.env, so we
-    // forward only the caller's overrides (unlike CodexSession, which
-    // must rebuild the whole env for node-pty). No TERM/COLORTERM here:
-    // there is no terminal to color.
-    this.env = options.env
+    this.extraEnv = options.env ?? {}
     this.resumeSessionId = options.resumeSessionId ?? null
+    this.builtInMcpServers = options.builtInMcpServers ?? []
   }
 
   async start(): Promise<{ projectDir?: string } | void> {
@@ -136,11 +135,25 @@ export class OpencodeSession extends EventEmitter implements AgentSession {
       ready: false,
       reason: this.resumeSessionId ? 'replaying-history' : 'provider-not-ready',
     })
+    // OpenCode's inline config is the only launch-scoped way to add MCP
+    // servers without modifying user files. Build a clean, one-start env so
+    // generated bearer variables are inherited by `opencode serve` but never
+    // retained as mutable session state or copied into the config JSON itself.
+    const env: Record<string, string> = {}
+    for (const [key, value] of Object.entries(process.env)) {
+      if (typeof value === 'string') env[key] = value
+    }
+    for (const [key, value] of Object.entries(this.extraEnv)) {
+      if (value === undefined) delete env[key]
+      else env[key] = value
+    }
+    addOpencodeBuiltInMcpLaunchConfig(this.builtInMcpServers, env)
+
     const headless = new OpencodeHeadless({
       mode: 'spawn',
       cwd: this.cwd,
       binary: this.binary,
-      env: this.env,
+      env,
       // Resume replays that session's committed history inside start()
       // (publishSessionMessages), which is why every listener below is
       // attached BEFORE start() is awaited — otherwise the replayed
@@ -447,12 +460,13 @@ export class OpencodeSession extends EventEmitter implements AgentSession {
     this.headless = null
   }
 
-  /** Opencode has NO PTY — there are no raw bytes to write. Permanent
-   *  no-op by design; input flows through sendPrompt (HTTP) and
-   *  condition custom actions (#406 §B). */
+  /** This structured OpenCode runtime has NO PTY — there are no raw bytes to
+   *  write. Permanent no-op by design; input flows through sendPrompt (HTTP)
+   *  and condition custom actions (#406 §B). The separate terminal runtime
+   *  implements real write/resize methods. */
   write(_data: string): void {}
 
-  /** No PTY → no terminal geometry. Permanent no-op by design. */
+  /** No PTY on this structured runtime → no terminal geometry. */
   resize(_cols: number, _rows: number): void {}
 
   isExited(): boolean {

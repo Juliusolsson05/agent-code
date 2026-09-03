@@ -14,6 +14,7 @@ import { listSessionsForCwd, getProjectDirForCwd } from 'claude-code-headless'
 import { CodexSession } from '@providers/codex/runtime/codexSession'
 import { deliverCodexPrompt } from '@providers/codex/runtime/promptDelivery'
 import { OpencodeSession } from '@providers/opencode/runtime/opencodeSession'
+import { OpencodeTerminalSession } from '@providers/opencode/runtime/opencodeTerminalSession'
 import { deliverOpencodePrompt } from '@providers/opencode/runtime/promptDelivery'
 import {
   findCodexRolloutPathByThreadId,
@@ -80,10 +81,6 @@ const codexMain: MainProviderConfig = {
   deliverPrompt: deliverCodexPrompt,
 }
 
-// STATUS (#406, wiring step 2 of 7): compile-green stub config. The
-// stub session fails loudly on start(); listSessions/resolveTranscript
-// degradations are the documented smallest-viable resolutions from the
-// gap analysis. Steps 3–6 make the pane real before this branch merges.
 const opencodeMain: MainProviderConfig = {
   id: 'opencode',
   name: 'OpenCode',
@@ -105,18 +102,20 @@ const opencodeMain: MainProviderConfig = {
     ],
   },
   createSession: (opts) => new OpencodeSession(opts),
-  // No offline session listing yet: opencode stores sessions in
-  // SQLite behind a server API (#406 blocker 1). Empty list = resume
-  // picker shows nothing; fresh spawns unaffected. The ephemeral-
-  // server lister is a step-7 follow-up.
+  createTerminalSession: (opts) => new OpencodeTerminalSession(opts),
+  // OpenCode stores sessions behind its own SQLite/API boundary and does not
+  // expose a cwd-filtered CLI list with the metadata our resume picker needs.
+  // Known `ses_` identities are fully resumable/transformable through the CLI;
+  // returning an empty list keeps only discovery unavailable.
   listSessions: async () => [],
   // Opencode has no per-cwd project dir concept; the storage root is
   // server-owned. Returning cwd keeps consumers (which only display
   // it) harmless.
   getProjectDir: async (cwd) => cwd,
-  // No durable transcript FILE exists (#406 blocker 2): initial
-  // history arrives via the start-time committed replay, not the
-  // file loader. Every consumer types string|null and degrades.
+  // No durable transcript FILE exists: structured history arrives via the
+  // HTTP runtime replay, while offline transforms use `opencode export` in the
+  // transcript adapter. Returning null prevents generic file consumers from
+  // reaching into OpenCode's private database.
   resolveTranscriptPath: async () => null,
   deliverPrompt: deliverOpencodePrompt,
 }

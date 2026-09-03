@@ -22,7 +22,7 @@ function requestHeaders(config: { bearerToken?: string; headers: Record<string, 
 }
 
 describe('BuiltInMcpHttpHost', () => {
-  it('refuses Workflow MCP registrations for Claude and every domain for OpenCode', () => {
+  it('refuses Workflow MCP for Claude and authorizes the OpenCode launch bridge', async () => {
     const host = new BuiltInMcpHttpHost()
 
     expect(host.registerSession({
@@ -31,20 +31,37 @@ describe('BuiltInMcpHttpHost', () => {
       providerKind: 'claude',
       domains: ['workflows'],
     })).toEqual([])
-    expect(host.registerSession({
-      sessionId: 'opencode-orchestration',
-      cwd: '/tmp/project',
-      providerKind: 'opencode',
-      domains: ['orchestration'],
-    })).toEqual([])
-    expect(host.registerSession({
-      sessionId: 'opencode-management',
-      cwd: '/tmp/project',
-      providerKind: 'opencode',
-      domains: ['agent_management'],
-    })).toEqual([])
     expect(host.sessionDomains('claude-workflow-only')).toEqual([])
-    expect(host.sessionDomains('opencode-orchestration')).toEqual([])
+
+    await host.start()
+    try {
+      // WHY this is an authorization assertion rather than just a static map
+      // assertion: both OpenCode runtimes receive this host-issued bearer
+      // configuration at process launch. A policy update that never reaches
+      // the main-owned scope would make the UI claim MCP support while every
+      // model request still fails at the bridge.
+      expect(host.registerSession({
+        sessionId: 'opencode-all-domains',
+        cwd: '/tmp/project',
+        providerKind: 'opencode',
+        domains: [
+          'orchestration',
+          'ai_workspace',
+          'agent_transcripts',
+          'agent_management',
+          'workflows',
+        ],
+      })).toHaveLength(1)
+      expect(host.sessionDomains('opencode-all-domains')).toEqual([
+        'orchestration',
+        'ai_workspace',
+        'agent_transcripts',
+        'agent_management',
+        'workflows',
+      ])
+    } finally {
+      await host.stop()
+    }
   })
 
   it('narrows mixed Claude scopes before constructing the model-visible server', async () => {

@@ -12,14 +12,14 @@ import { switchAgentProvider } from '@renderer/workspace/hook/actions/providerSw
 // Bulk provider switch + remembered-batch return.
 //
 // This is the "I hit a usage limit" escape hatch: move a whole batch of agents
-// from one provider to the other in one action, and remember that exact batch
+// from one provider to another in one action, and remember that exact batch
 // so it can be sent back later (limit reset) without re-selecting everything.
 //
 // Both directions go through the SAME single-agent core (switchAgentProvider),
 // so "return" is literally the forward switch pointed the other way on a
 // remembered set. We deliberately re-translate on return rather than
 // snapshot-restoring the pre-switch transcript: the whole point of parking
-// agents on the other provider is to KEEP WORKING there, and a snapshot restore
+// agents on the target provider is to KEEP WORKING there, and a snapshot restore
 // would silently drop every turn done after the switch.
 
 function providerLabel(kind: AgentProviderKind): string {

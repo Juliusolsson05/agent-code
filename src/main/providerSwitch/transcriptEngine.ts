@@ -19,8 +19,10 @@ import {
   codexNativeResumeProjector,
   decodeClaudeConversation,
   decodeCodexConversation,
+  decodeOpencodeConversation,
   decodeJsonl,
   budgetCharactersForContextTokens,
+  opencodeNativeResumeProjector,
   resolveCodexTargetProfileFromSources,
   resolveUserPrompt,
 } from 'agent-transcript-parser'
@@ -35,6 +37,13 @@ import type {
 
 import { readInstalledVersion } from '@main/setup/cliVersion.js'
 import { getToolPath } from '@main/setup/toolchain.js'
+import {
+  exportOpencodeSession,
+  importOpencodeSession,
+  listOpencodeModels,
+  opencodeExportSessionId,
+  readResolvedOpencodeConfig,
+} from '@providers/opencode/runtime/opencodeCliSessions.js'
 import {
   findCodexRolloutPathBySessionId,
   getClaudeSessionFilePath,
@@ -78,14 +87,14 @@ export interface HostTranscriptAdapter {
   // Doing that four times a second pinned ~350 MB and stalled the main event
   // loop for seconds at a time (#720). With the path in hand the caller can
   // stat() cheaply and only pay for a decode when the file actually grew.
-  locate(cwd: string, providerSessionId: string): Promise<string>
+  locate?(cwd: string, providerSessionId: string): Promise<string>
   // Decode a transcript whose path the caller already resolved via locate().
   // read() is locate()+readAt(); the compaction wait pairs a single locate()
   // with repeated readAt() so the Codex sessions-tree walk is paid once.
-  readAt(path: string): Promise<ConversationDocument>
+  readAt?(path: string): Promise<ConversationDocument>
   listPrompts(cwd: string, providerSessionId: string): Promise<RewindPrompt[]>
   draft(content: readonly ConversationContent[]): RewindDraft
-  targetProfile(): Promise<TranscriptTargetProfile>
+  targetProfile(cwd?: string): Promise<TranscriptTargetProfile>
   projectNativeResume(
     conversation: ConversationDocument,
     context: TranscriptProjectionContext,
@@ -159,6 +168,44 @@ const codexAdapter: HostTranscriptAdapter = {
   },
 }
 
+const opencodeAdapter: HostTranscriptAdapter = {
+  provider: 'opencode',
+  async read(cwd, providerSessionId) {
+    return (await loadOpencodeSnapshot(cwd, providerSessionId)).conversation
+  },
+  async listPrompts(cwd, providerSessionId) {
+    return promptsFromSnapshot(
+      await loadOpencodeSnapshot(cwd, providerSessionId),
+      plainDraft,
+    )
+  },
+  draft: plainDraft,
+  targetProfile: resolveOpencodeTargetProfile,
+  async projectNativeResume(conversation, context) {
+    const targetProfile = context.targetProfile ?? await resolveOpencodeTargetProfile(context.cwd)
+    return opencodeNativeResumeProjector.projectNativeResume(conversation, {
+      ...context,
+      cliVersion: await installedVersion('opencode'),
+      modelProvider: targetProfile.modelProvider ?? 'opencode',
+      model: targetProfile.model,
+    })
+  },
+  async write(cwd, values) {
+    if (values.length !== 1 || !isRecord(values[0])) {
+      throw new Error('Projected OpenCode resume must contain exactly one export object.')
+    }
+    const binary = getToolPath('opencode', 'opencode')
+    const sessionId = await importOpencodeSession({ binary, cwd }, values[0])
+    return `opencode://session/${sessionId}`
+  },
+  sessionId(values) {
+    if (values.length !== 1 || !isRecord(values[0])) {
+      throw new Error('Projected OpenCode resume must contain exactly one export object.')
+    }
+    return opencodeExportSessionId(values[0])
+  },
+}
+
 async function resolveClaudeTargetProfile(): Promise<TranscriptTargetProfile> {
   const claudeHome = process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude')
   const settings = await readFile(join(claudeHome, 'settings.json'), 'utf8')
@@ -194,6 +241,37 @@ async function resolveCodexTargetProfile(): Promise<TranscriptTargetProfile> {
   }
 }
 
+async function resolveOpencodeTargetProfile(cwd = process.cwd()): Promise<TranscriptTargetProfile> {
+  const binary = getToolPath('opencode', 'opencode')
+  const options = { binary, cwd }
+  const configuredModel = await readResolvedOpencodeConfig(options)
+    .then(config => typeof config.model === 'string' ? config.model : null)
+    .catch(() => null)
+  const selectedModel = configuredModel ?? await listOpencodeModels(options)
+    .then(models => models[0] ?? null)
+    .catch(() => null)
+  if (!selectedModel) {
+    throw new Error(
+      'OpenCode did not report a configured or available model; select a model in OpenCode before switching.',
+    )
+  }
+  const separator = selectedModel.indexOf('/')
+  if (separator <= 0 || separator === selectedModel.length - 1) {
+    throw new Error(
+      `OpenCode model ${JSON.stringify(selectedModel)} is not in provider/model form.`,
+    )
+  }
+  return {
+    modelProvider: selectedModel.slice(0, separator),
+    model: selectedModel.slice(separator + 1),
+    // OpenCode can front models with very different windows and its resolved
+    // config does not expose a reliable context size. A conservative 128k
+    // window prevents an imported session from failing only after the source
+    // pane has been replaced; models with larger windows merely compact early.
+    budgetCharacters: budgetCharactersForContextTokens(128_000),
+  }
+}
+
 // WHY a registry rather than source/target pair branches: each provider owns
 // one decoder, one native projector, and its storage policy. Switching composes
 // any installed source and target adapters through ConversationDocument, so a
@@ -202,6 +280,7 @@ async function resolveCodexTargetProfile(): Promise<TranscriptTargetProfile> {
 const transcriptAdapters = new Map<string, HostTranscriptAdapter>([
   [claudeAdapter.provider, claudeAdapter],
   [codexAdapter.provider, codexAdapter],
+  [opencodeAdapter.provider, opencodeAdapter],
 ])
 
 export function getHostTranscriptAdapter(provider: AgentProviderKind): HostTranscriptAdapter {
@@ -212,7 +291,7 @@ export function getHostTranscriptAdapter(provider: AgentProviderKind): HostTrans
   return adapter
 }
 
-async function installedVersion(provider: 'claude' | 'codex'): Promise<string> {
+async function installedVersion(provider: AgentProviderKind): Promise<string> {
   const binary = getToolPath(provider, provider)
   const result = await readInstalledVersion(binary)
   // The wire field is required by both providers, but failure to probe a CLI
@@ -258,6 +337,61 @@ async function loadCodexSnapshotAt(path: string): Promise<TranscriptSnapshot> {
     conversation: decodeCodexConversation(records),
     prompts: analyzeCodexTranscript(records).prompts,
   }
+}
+
+async function loadOpencodeSnapshot(
+  cwd: string,
+  providerSessionId: string,
+): Promise<TranscriptSnapshot> {
+  const binary = getToolPath('opencode', 'opencode')
+  const exported = await exportOpencodeSession({ binary, cwd }, providerSessionId)
+  assertStableOpencodeExport(exported, providerSessionId)
+  const conversation = decodeOpencodeConversation(exported)
+  // OpenCode exports one complete native message per array position. That
+  // position is therefore the exact rewind coordinate; deriving references
+  // from decoded user entries keeps prompt listing and rewindConversation on
+  // the same address without inventing a renderer ordinal.
+  const prompts: PromptReference[] = []
+  const seenLines = new Set<number>()
+  for (const entry of conversation.entries) {
+    if (entry.kind !== 'message' || entry.role !== 'user') continue
+    if (seenLines.has(entry.source.line)) continue
+    seenLines.add(entry.source.line)
+    prompts.push({
+      address: {
+        provider: 'opencode',
+        line: entry.source.line,
+        sessionId: conversation.sourceSessionIds[0] ?? providerSessionId,
+      },
+      raw: entry.source.raw,
+    })
+  }
+  return { conversation, prompts }
+}
+
+function assertStableOpencodeExport(
+  exported: Record<string, unknown>,
+  providerSessionId: string,
+): void {
+  if (!Array.isArray(exported.messages) || exported.messages.length === 0) return
+  const last = exported.messages.at(-1)
+  const info = isRecord(last) && isRecord(last.info) ? last.info : null
+  const time = info && isRecord(info.time) ? info.time : null
+  const settled = info?.role === 'assistant' &&
+    typeof time?.completed === 'number' &&
+    Number.isFinite(time.completed)
+  if (settled) return
+
+  // The native TUI emits no machine-readable busy/idle signal. Its supported
+  // export boundary does expose the durable distinction we need: an idle turn
+  // ends with an assistant message carrying `time.completed`; an in-flight
+  // export ends with a user message or an incomplete assistant. Refuse that
+  // snapshot before rewind/duplicate/switch can project partial work and kill
+  // the source pane. A cancelled user-only tail is intentionally conservative:
+  // the CLI provides no evidence that distinguishes it from a live request.
+  throw new Error(
+    `OpenCode session ${providerSessionId} has an unfinished turn; wait for the native TUI to finish before transforming its transcript.`,
+  )
 }
 
 async function readStableTranscript(path: string): Promise<RawJsonlDocument> {

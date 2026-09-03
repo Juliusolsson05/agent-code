@@ -159,7 +159,11 @@ export function useWorkspace(
     if (!meta) return false
     const kind = meta.kind ?? DEFAULT_PROVIDER
     if (!isAgentProviderKind(kind)) return false
-    if (kind === 'opencode' && override === 'terminal') {
+    if (
+      kind === 'opencode' &&
+      meta.providerRuntime !== 'terminal' &&
+      override === 'terminal'
+    ) {
       // WHY this repeats the render-policy guard instead of relying only on
       // getEffectiveAgentSurface: this field is durable workspace metadata.
       // Persisting "terminal" on an OpenCode session today would make
@@ -167,7 +171,11 @@ export function useWorkspace(
       // future native-mode work to distinguish "real user override" from
       // "stale impossible override." Reject it at the write boundary; the
       // display-policy pin remains the read-side safety net.
-      showToast('OpenCode native terminal mode is not available yet')
+      showToast('Choose OpenCode Terminal when creating the agent to use the native TUI')
+      return false
+    }
+    if (meta.providerRuntime === 'terminal' && override === 'agent') {
+      showToast('OpenCode Terminal sessions always use the native TUI')
       return false
     }
 

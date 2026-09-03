@@ -11,9 +11,9 @@
 // packages/opencode-headless) and the renderer amplified that into
 // total block loss instead of degrading gracefully.
 //
-// The strictness codex needs does not apply here: opencode has exactly
-// ONE event stream (the server's SSE bus, republished verbatim by
-// OpencodeSession) — no PTY, no proxy, no screen-scrape fallback, so
+// The strictness codex needs does not apply to this structured runtime:
+// it has exactly ONE event stream (the server's SSE bus, republished verbatim
+// by OpencodeSession) — no PTY, no proxy, no screen-scrape fallback, so
 // there are no racing producers that could thrash the live-turn slot.
 // A new turnId from 'opencode-sse' is always a legitimate new turn as
 // far as the server is concerned; trusting it is strictly better than

@@ -86,6 +86,7 @@ export function useUndoCloseAction(
       try {
         newSessionId = await sessionActions.spawn(meta.cwd, {
           kind: meta.kind ?? DEFAULT_PROVIDER,
+          ...(meta.providerRuntime ? { providerRuntime: meta.providerRuntime } : {}),
           resumeSessionId: resumableProviderSessionId(meta),
           recoverTmuxName: meta.kind === 'terminal' ? meta.tmuxName : undefined,
           // WHY capability intent is restored but credentials are not: closing a pane revokes its
@@ -162,6 +163,7 @@ export function useUndoCloseAction(
           // agents.
           const newId = await sessionActions.spawn(meta.cwd, {
             kind,
+            ...(meta.providerRuntime ? { providerRuntime: meta.providerRuntime } : {}),
             resumeSessionId: kind !== 'terminal' ? resumableProviderSessionId(meta) : undefined,
             recoverTmuxName: kind === 'terminal' ? meta.tmuxName : undefined,
             builtInMcpDomains: meta.builtInMcpDomains,
@@ -223,6 +225,9 @@ export function useUndoCloseAction(
           // as a fresh shell with the user's scrollback gone.
           const newId = await sessionActions.spawn(detached.meta.cwd, {
             kind,
+            ...(detached.meta.providerRuntime
+              ? { providerRuntime: detached.meta.providerRuntime }
+              : {}),
             resumeSessionId: kind !== 'terminal'
               ? resumableProviderSessionId(detached.meta)
               : undefined,
@@ -298,6 +303,7 @@ export function useUndoCloseAction(
         // shell. The latter is the whole reason this entry type exists.
         newSessionId = await sessionActions.spawn(meta.cwd, {
           kind,
+          ...(meta.providerRuntime ? { providerRuntime: meta.providerRuntime } : {}),
           resumeSessionId: kind !== 'terminal'
             ? resumableProviderSessionId(meta)
             : undefined,

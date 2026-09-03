@@ -104,7 +104,7 @@ describe('agent display mode policy', () => {
     ).toBe('terminal')
   })
 
-  it('keeps OpenCode on the rendered Agent surface until native mode exists', () => {
+  it('keeps ordinary OpenCode on the rendered Agent surface', () => {
     expect(
       getEffectiveAgentSurface({
         kind: 'opencode',
@@ -120,6 +120,31 @@ describe('agent display mode policy', () => {
         runtime: emptyRuntime(),
       }),
     ).toBe('rendered')
+  })
+
+  it('forces OpenCode Terminal onto its native surface regardless of view settings', () => {
+    expect(
+      getEffectiveAgentSurfaceForSession({
+        kind: 'opencode',
+        providerRuntime: 'terminal',
+        globalMode: 'agent',
+        override: 'agent',
+        runtime: {
+          ...emptyRuntime(),
+          renderedViewLeases: { 'copy-assistant-message': 1 },
+        },
+      }),
+    ).toBe('terminal')
+
+    expect(
+      commandAllowedByRenderedViewPolicy({
+        policy: { kind: 'opens-rendered-feed' },
+        kind: 'opencode',
+        providerRuntime: 'terminal',
+        mode: 'agent',
+        runtime: emptyRuntime(),
+      }),
+    ).toBe(false)
   })
 
   it('uses Hybrid as terminal-first, rendered only while leases are active', () => {

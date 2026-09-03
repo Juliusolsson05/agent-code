@@ -39,11 +39,16 @@ export const providerApi = {
      *  needed before the persisted transcript can fit the target provider. */
     sourceSessionId?: string
   }): Promise<{
+    kind: 'switched'
     targetKind: AgentProviderKind
     targetProviderSessionId: string
     targetFilePath: string
     compactedBeforeSwitch: boolean
     truncatedBeforeSwitch: boolean
+  } | {
+    /** A provider id can identify a pre-created but still blank session. */
+    kind: 'source-empty'
+    targetKind: AgentProviderKind
   }> => ipcRenderer.invoke('session:switch-provider', params),
 
   onProviderSwitchProgress: (cb: (event: {

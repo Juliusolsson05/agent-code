@@ -9,7 +9,11 @@ import type { BuiltInMcpDomain } from '@mcp/shared/types.js'
 // Local binding for in-file uses (SessionStartedEvent.kind, etc.). The
 // `export type { SessionKind }` re-export below is a separate statement that
 // does NOT bind the name locally, so this import is required too.
-import type { AgentProviderKind, SessionKind } from '@shared/types/providerKind.js'
+import type {
+  AgentProviderKind,
+  AgentProviderRuntime,
+  SessionKind,
+} from '@shared/types/providerKind.js'
 import type { AgentTranscriptEntry } from '@shared/types/session.js'
 export type { ProviderConditionSnapshot } from '@shared/types/providerConditions.js'
 export type { BuiltInMcpDomain } from '@mcp/shared/types.js'
@@ -160,7 +164,7 @@ export type JsonlEntry = AgentTranscriptEntry
 // Source of truth lives in @shared/types/providerKind. Re-exported here
 // (not redeclared) so the preload bridge type and every renderer import
 // of `SessionKind` resolve to the exact same union as main/shared.
-export type { SessionKind } from '@shared/types/providerKind.js'
+export type { AgentProviderRuntime, SessionKind } from '@shared/types/providerKind.js'
 export type {
   SessionBackendSnapshot,
   SessionInputReadiness,
@@ -173,6 +177,8 @@ export type {
 export type SessionSpawnOptions = {
   /** Which kind of session to spawn. Defaults to 'claude' in main. */
   kind?: SessionKind
+  /** Alternate agent execution runtime. Currently supported by OpenCode only. */
+  providerRuntime?: AgentProviderRuntime
   cwd: string
   cols?: number
   rows?: number
@@ -203,6 +209,8 @@ export type SessionSpawnOptions = {
 
 export type SessionSpawnResult = {
   sessionId: string
+  /** Provider-native durable identity known synchronously at startup. */
+  providerSessionId?: string
   /** Set only for tmux-backed terminal sessions and persisted for recovery. */
   tmuxName?: string
   /**
@@ -217,7 +225,7 @@ export type { ConditionCustomAction }
 
 /** Raw PTY output for a terminal session — destined for xterm.js. */
 export type SessionTerminalDataEvent = { sessionId: string; data: string }
-/** Raw PTY output for an attached Claude/Codex inline terminal. */
+/** Raw PTY output for an attached provider terminal. */
 export type SessionAgentPtyDataEvent = { sessionId: string; data: string }
 
 // The legacy per-condition bridge event payload types

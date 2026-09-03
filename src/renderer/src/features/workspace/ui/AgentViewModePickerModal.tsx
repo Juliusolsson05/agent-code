@@ -45,8 +45,11 @@ export function AgentViewModePickerModal({
   const kind = meta?.kind ?? DEFAULT_PROVIDER
   const isAgent = isAgentProviderKind(kind)
   const provider = getRendererProviderCapabilities(isAgent ? kind : DEFAULT_PROVIDER)
-  const nativeUnavailable = kind === 'opencode'
-  const currentValue: PickerValue = meta?.agentViewModeOverride ?? 'default'
+  const terminalRuntime = meta?.providerRuntime === 'terminal'
+  const nativeUnavailable = kind === 'opencode' && !terminalRuntime
+  const currentValue: PickerValue = terminalRuntime
+    ? 'terminal'
+    : meta?.agentViewModeOverride ?? 'default'
   const [cursor, setCursor] = useState<PickerValue>(currentValue)
 
   const options = useMemo<Option[]>(
@@ -55,22 +58,24 @@ export function AgentViewModePickerModal({
         value: 'default',
         label: `Follow Global (${labelForGlobalMode(globalMode)})`,
         description: 'Use the app-wide Agent View Mode setting.',
+        disabled: terminalRuntime,
       },
       {
         value: 'agent',
         label: 'Agent',
         description: 'Always show Agent Code rendering for this session.',
+        disabled: terminalRuntime,
       },
       {
         value: 'terminal',
         label: 'Terminal',
         description: nativeUnavailable
-          ? 'OpenCode native terminal mode is not available yet.'
+          ? 'Choose OpenCode Terminal when creating an agent; this structured session has no PTY.'
           : 'Always show the provider native terminal for this session.',
         disabled: nativeUnavailable,
       },
     ],
-    [globalMode, nativeUnavailable],
+    [globalMode, nativeUnavailable, terminalRuntime],
   )
 
   useEffect(() => {

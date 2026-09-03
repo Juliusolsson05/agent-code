@@ -58,6 +58,10 @@ describe('useSessionActions recovery retry', () => {
     const spawnSession = vi.fn()
       .mockResolvedValueOnce({ sessionId: 'claude-default' })
       .mockResolvedValueOnce({ sessionId: 'codex-explicit-off' })
+      .mockResolvedValueOnce({
+        sessionId: 'opencode-terminal',
+        providerSessionId: 'ses_precreated_at_runtime_start',
+      })
     Object.defineProperty(window, 'api', {
       configurable: true,
       value: { spawnSession, ghostRead: vi.fn(async () => []) },
@@ -75,6 +79,10 @@ describe('useSessionActions recovery retry', () => {
         kind: 'codex',
         builtInMcpDomains: [],
       })
+      await result.current.spawn('/tmp/project', {
+        kind: 'opencode',
+        providerRuntime: 'terminal',
+      })
     })
 
     expect(spawnSession).toHaveBeenNthCalledWith(1, expect.objectContaining({
@@ -85,8 +93,27 @@ describe('useSessionActions recovery retry', () => {
       kind: 'codex',
       builtInMcpDomains: [],
     }))
+    expect(spawnSession).toHaveBeenNthCalledWith(3, expect.objectContaining({
+      kind: 'opencode',
+      providerRuntime: 'terminal',
+      builtInMcpDomains: ['orchestration', 'workflows'],
+    }))
     expect(state.sessions['claude-default']?.builtInMcpDomains).toEqual(['orchestration'])
     expect(state.sessions['codex-explicit-off']?.builtInMcpDomains).toEqual([])
+    expect(state.sessions['opencode-terminal']).toMatchObject({
+      kind: 'opencode',
+      providerRuntime: 'terminal',
+      providerSessionId: 'ses_precreated_at_runtime_start',
+      providerSessionIdSource: 'runtime-start',
+    })
+    // Native terminal sessions intentionally skip structured history loading;
+    // the provider's durable identity is for recovery and conversion, not an
+    // instruction to mount the immature rendered OpenCode surface.
+    expect(runtimes['opencode-terminal']).toMatchObject({
+      transcriptStatus: 'ready',
+      processStatus: 'started',
+      hasOlderHistory: false,
+    })
   })
 
   it('clears a retained failure and accepts equal-revision readiness and backend MCP facts', async () => {

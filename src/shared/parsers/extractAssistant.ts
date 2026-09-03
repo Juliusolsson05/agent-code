@@ -44,8 +44,11 @@ export function extractAssistantInProgress(
     case 'claude':
       return claudeExtract(screen)
     case 'opencode':
-      // Opencode has NO terminal screen to extract from — the streaming
-      // baseline is meaningless for it and callers pass '' screens.
+      // Structured OpenCode streams semantic SSE text rather than a screen.
+      // OpenCode Terminal does have a PTY, but is forced to the raw surface:
+      // pretending Claude/Codex escape-sequence heuristics understand its TUI
+      // would produce plausible-but-wrong Reader text. Add a dedicated parser
+      // here only if the terminal runtime later supports rendered/Reader views.
       return ''
   }
 }

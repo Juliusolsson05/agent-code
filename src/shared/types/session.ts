@@ -3,13 +3,17 @@ import type {
   BuiltInMcpServerConfig,
 } from '@mcp/shared/types.js'
 import type { ProviderConditionSnapshot } from '@shared/types/providerConditions.js'
-import type { SessionKind } from '@shared/types/providerKind.js'
+import type { AgentProviderRuntime, SessionKind } from '@shared/types/providerKind.js'
 
 // Re-export the provider/session kind source of truth so callers that
 // already import session types from here keep one import. The canonical
 // definition (and the rationale for the AgentProviderKind vs SessionKind
 // split) lives in providerKind.ts — see that file before adding a kind.
-export type { AgentProviderKind, SessionKind } from '@shared/types/providerKind.js'
+export type {
+  AgentProviderKind,
+  AgentProviderRuntime,
+  SessionKind,
+} from '@shared/types/providerKind.js'
 
 // WHY recovery types live at the neutral shared boundary: main owns the
 // operation, preload transports it, and the renderer consumes it. Defining a
@@ -68,6 +72,9 @@ export type SessionBackendSnapshot = {
    */
   sessionRunId?: string
   kind: SessionKind
+  /** Alternate agent execution runtime. Absent means the provider's normal
+   * structured runtime; plain terminal sessions never carry this field. */
+  providerRuntime?: AgentProviderRuntime
   cwd: string
   lifecycle: 'spawning' | 'live'
   input: SessionInputReadiness
@@ -80,6 +87,7 @@ export type SessionBackendSnapshot = {
 export type SessionRecoverOptions = {
   sessionId: string
   kind?: SessionKind
+  providerRuntime?: AgentProviderRuntime
   cwd: string
   cols?: number
   rows?: number
@@ -107,7 +115,7 @@ export type SessionRecoverOptions = {
 
 export type SessionOwnershipOptions = Pick<
   SessionRecoverOptions,
-  'sessionId' | 'kind' | 'cwd'
+  'sessionId' | 'kind' | 'providerRuntime' | 'cwd'
 >
 
 export type SessionRecoveryCancellationOptions = SessionOwnershipOptions & {
@@ -413,6 +421,14 @@ export interface AgentSession extends AgentSessionEmitter {
   getProcessPid?(): number | null
   /** Optional: has the underlying process exited? Same rationale. */
   isExited?(): boolean
+  /**
+   * Optional startup-time durable provider identity.
+   *
+   * Most providers discover this later from transcript traffic. A native
+   * OpenCode TUI must pre-create the session before PTY spawn, so it can return
+   * the id immediately and avoid losing it in the spawn-IPC/event ordering gap.
+   */
+  getProviderSessionId?(): string | null
 
   /** Optional (Claude today): drive a screen-derived condition action
    *  through the provider's own driver. Codex has no equivalent and
@@ -482,13 +498,12 @@ export interface AgentSession extends AgentSessionEmitter {
     opts?: { deadlineAt?: number; timeoutMs?: number; pollIntervalMs?: number },
   ): Promise<PromptReadinessOutcome>
 
-  /** Optional (opencode today): deliver a user prompt over the
-   *  provider's own transport rather than as PTY keystrokes. Providers
-   *  with no terminal (opencode's HTTP server) implement this; the
-   *  provider's deliverPrompt protocol calls it instead of io.write.
-   *  Claude/Codex leave it undefined and receive prompts as bracketed-
-   *  paste PTY writes. Throws on transport failure so the delivery
-   *  protocol can report ok:false and the composer keeps the draft. */
+  /** Optional (OpenCode today): deliver a user prompt through the concrete
+   *  runtime's transport. Structured OpenCode uses HTTP; OpenCode Terminal
+   *  performs a readiness-gated bracketed paste into its PTY. Keeping both
+   *  behind one provider-owned capability lets SessionManager stay ignorant
+   *  of which OpenCode runtime was selected. Claude/Codex leave it undefined
+   *  and their provider policies write through io.write instead. */
   deliverPromptText?(text: string): Promise<void>
 }
 

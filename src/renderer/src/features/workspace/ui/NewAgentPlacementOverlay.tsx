@@ -3,7 +3,7 @@ import {
   DEFAULT_PROVIDER,
   isAgentProviderKind,
 } from '@shared/types/providerKind'
-import type { AgentProviderKind } from '@shared/types/providerKind'
+import type { AgentProviderKind, AgentProviderRuntime } from '@shared/types/providerKind'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { Button } from '@renderer/components/ui/button'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -14,7 +14,12 @@ import {
   placementTargetIdForArrow,
 } from '@renderer/features/workspace/lib/newAgentPlacement'
 import type { PlacementTarget } from '@renderer/features/workspace/lib/newAgentPlacement'
-import type { SessionId, SessionKind, TabId } from '@renderer/workspace/types'
+import type {
+  SessionId,
+  SessionKind,
+  SessionSpawnSelection,
+  TabId,
+} from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { DispatchAttachIntent } from '@renderer/app-state/uiShell/types'
 
@@ -38,7 +43,8 @@ type Props = {
   attachIntent: DispatchAttachIntent | null
   /**
    * Non-null = "Linked Agent" mode. The value is the parent session
-   * id. The overlay shows ONLY the Claude/Codex kind picker — no
+   * id. The overlay shows only agent choices — including the separate
+   * OpenCode/OpenCode Terminal runtime choices — with no
    * placement step — and on pick calls
    * `createLinkedAgent(kind, parentId)`. Like attach mode this is a
    * uiShell-level intent passed in, so App.tsx owns the close path.
@@ -57,10 +63,25 @@ type Props = {
 // non-registry pane kind. A newly registered provider appears in the
 // spawn overlay automatically instead of compiling but being
 // unspawnable from the UI (#394 §4.6).
-const KIND_OPTIONS: Array<{ kind: SessionKind; label: string; description: string }> = [
-  ...AGENT_PROVIDER_KINDS.map(kind => {
+const KIND_OPTIONS: Array<SessionSpawnSelection & { label: string; description: string }> = [
+  ...AGENT_PROVIDER_KINDS.flatMap(kind => {
     const caps = getRendererProviderCapabilities(kind)
-    return { kind: kind as SessionKind, label: caps.shortLabel, description: caps.spawnDescription }
+    const ordinary = {
+      kind: kind as SessionKind,
+      label: caps.shortLabel,
+      description: caps.spawnDescription,
+    }
+    if (kind !== 'opencode') return [ordinary]
+    // OpenCode and OpenCode Terminal are intentionally two launch choices,
+    // not two provider kinds. Both keep the same skills/MCP/provider identity;
+    // only the runtime/surface differs. Putting the terminal flavour adjacent
+    // to ordinary OpenCode makes that distinction visible at creation time.
+    return [ordinary, {
+      kind: 'opencode' as const,
+      providerRuntime: 'terminal' as const,
+      label: 'OpenCode Terminal',
+      description: 'native OpenCode TUI with Agent Code skills and MCP',
+    }]
   }),
   { kind: 'terminal', label: 'Terminal', description: 'plain shell pane' },
 ]
@@ -92,6 +113,7 @@ export function NewAgentPlacementOverlay({
   const overlayRef = useRef<HTMLDivElement>(null)
   const [selectedIndex, setSelectedIndex] = useState(0)
   const [selectedKind, setSelectedKind] = useState<SessionKind | null>(null)
+  const [selectedProviderRuntime, setSelectedProviderRuntime] = useState<AgentProviderRuntime | undefined>()
   const [selectedTargetId, setSelectedTargetId] = useState<string | null>(null)
   const [bounds, setBounds] = useState({ width: 0, height: 0 })
   // One-shot latch around commitNewAgentPlacement. The commit is async
@@ -130,7 +152,8 @@ export function NewAgentPlacementOverlay({
   // by the Enter keybind and the click handler so both paths behave
   // identically (the click path used to just `setSelectedKind`, which
   // silently did nothing in dispatch mode).
-  const commitKind = (kind: SessionKind) => {
+  const commitKind = (selection: SessionSpawnSelection) => {
+    const { kind, providerRuntime } = selection
     if (linkedMode && linkedAgentParentId) {
       // WHY the runtime narrow: `SessionKind` includes 'terminal', which
       // createLinkedAgent's signature refuses. The kind picker filters options
@@ -142,7 +165,7 @@ export function NewAgentPlacementOverlay({
       if (!isAgentProviderKind(kind)) return
       if (committingRef.current) return
       committingRef.current = true
-      void workspace.createLinkedAgent(kind, linkedAgentParentId)
+      void workspace.createLinkedAgent({ kind, providerRuntime }, linkedAgentParentId)
       // createLinkedAgent does not own the overlay lifecycle (the
       // linked intent lives in uiShell); close it ourselves.
       onClose()
@@ -193,10 +216,14 @@ export function NewAgentPlacementOverlay({
       // must override focus-based resolution — the whole reason that intent
       // exists is that focus does NOT identify the clicked project in Tiled
       // Dispatch.
-      void workspace.createDetachedDispatchAgent(kind, projectIntent ?? undefined)
+      void workspace.createDetachedDispatchAgent(
+        { kind, providerRuntime },
+        projectIntent ?? undefined,
+      )
       return
     }
     setSelectedKind(kind)
+    setSelectedProviderRuntime(providerRuntime)
   }
 
   useEffect(() => {
@@ -213,8 +240,14 @@ export function NewAgentPlacementOverlay({
         ? workspace.state.sessions[attachIntent.sessionId]?.kind ?? DEFAULT_PROVIDER
         : 'claude'
       setSelectedKind(kind)
+      setSelectedProviderRuntime(
+        attachIntent
+          ? workspace.state.sessions[attachIntent.sessionId]?.providerRuntime
+          : undefined,
+      )
     } else {
       setSelectedKind(null)
+      setSelectedProviderRuntime(undefined)
     }
     setSelectedTargetId(null)
     // Reset the commit latch whenever the overlay re-opens. Otherwise
@@ -294,7 +327,7 @@ export function NewAgentPlacementOverlay({
           event.preventDefault()
           const option = kindOptions[selectedIndex]
           if (!option) return
-          commitKind(option.kind)
+          commitKind(option)
         }
         return
       }
@@ -377,7 +410,10 @@ export function NewAgentPlacementOverlay({
           onClose()
           return
         }
-        void workspace.commitNewAgentPlacement(selectedKind, placementTarget)
+        void workspace.commitNewAgentPlacement({
+          kind: selectedKind,
+          providerRuntime: selectedProviderRuntime,
+        }, placementTarget)
       }
     }
 
@@ -395,6 +431,7 @@ export function NewAgentPlacementOverlay({
     placementTargets,
     selectedIndex,
     selectedKind,
+    selectedProviderRuntime,
     workspace,
   ])
 
@@ -508,11 +545,11 @@ export function NewAgentPlacementOverlay({
                 const active = index === selectedIndex
                 return (
                   <button
-                    key={option.kind}
+                    key={`${option.kind}:${option.providerRuntime ?? 'default'}`}
                     type="button"
                     onClick={() => {
                       setSelectedIndex(index)
-                      commitKind(option.kind)
+                      commitKind(option)
                     }}
                     className={`flex w-full items-center justify-between border px-3 py-2 text-left ${
                       active

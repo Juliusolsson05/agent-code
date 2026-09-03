@@ -1,12 +1,17 @@
 import { EventEmitter } from 'node:events'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { createSession } = vi.hoisted(() => ({
+const { createSession, createTerminalSession } = vi.hoisted(() => ({
   createSession: vi.fn(),
+  createTerminalSession: vi.fn(),
 }))
 
 vi.mock('@providers/registry.main.js', () => ({
-  getMainProvider: () => ({ createSession }),
+  getMainProvider: () => ({
+    name: 'OpenCode',
+    createSession,
+    createTerminalSession,
+  }),
 }))
 
 vi.mock('@main/setup/toolchain.js', () => ({
@@ -37,6 +42,12 @@ class FakeAgentSession extends EventEmitter {
   resize(): void {}
 }
 
+class FakeTerminalAgentSession extends FakeAgentSession {
+  getProviderSessionId(): string {
+    return 'ses_native'
+  }
+}
+
 class BlockingAgentSession extends EventEmitter {
   constructor(private readonly releaseStart: Promise<void>) {
     super()
@@ -58,6 +69,8 @@ describe('SessionManager restart wake recovery', () => {
   beforeEach(() => {
     createSession.mockReset()
     createSession.mockImplementation(() => new FakeAgentSession())
+    createTerminalSession.mockReset()
+    createTerminalSession.mockImplementation(() => new FakeAgentSession())
   })
 
   it('can restore a provider backend under an existing workspace SessionId', async () => {
@@ -82,6 +95,44 @@ describe('SessionManager restart wake recovery', () => {
       resumeSessionId: 'provider-session',
       shellSessionId: 'restored-session',
     }))
+  })
+
+  it('selects and preserves the separate OpenCode terminal runtime identity', async () => {
+    const { SessionManager } = await import('./sessionManager')
+    createTerminalSession.mockImplementation(() => new FakeTerminalAgentSession())
+    const manager = new SessionManager()
+
+    const result = await manager.spawn({
+      kind: 'opencode',
+      providerRuntime: 'terminal',
+      cwd: '/tmp/project',
+      resumeSessionId: 'ses_native',
+    })
+
+    expect(createSession).not.toHaveBeenCalled()
+    expect(createTerminalSession).toHaveBeenCalledWith(expect.objectContaining({
+      cwd: '/tmp/project',
+      resumeSessionId: 'ses_native',
+    }))
+    expect(manager.getBackendSnapshot(result.sessionId)).toMatchObject({
+      kind: 'opencode',
+      providerRuntime: 'terminal',
+      lifecycle: 'live',
+    })
+    expect(result.providerSessionId).toBe('ses_native')
+    // Runtime flavour participates in ownership. A stale structured-pane
+    // close must not be allowed to terminate the native TUI sharing its kind.
+    await expect(manager.killOwned({
+      sessionId: result.sessionId,
+      kind: 'opencode',
+      cwd: '/tmp/project',
+    })).resolves.toBe(false)
+    await expect(manager.killOwned({
+      sessionId: result.sessionId,
+      kind: 'opencode',
+      providerRuntime: 'terminal',
+      cwd: '/tmp/project',
+    })).resolves.toBe(true)
   })
 
   it('keeps ordinary fresh spawn unable to choose a persisted local id', async () => {

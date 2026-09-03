@@ -13,7 +13,7 @@ vi.mock('node:crypto', () => ({
 
 vi.mock('@main/providerSwitch/transcriptEngine.js', () => ({
   getHostTranscriptAdapter(provider: string) {
-    if (provider === 'opencode') throw new Error('No transcript engine adapter is registered')
+    if (provider === 'unknown') throw new Error('No transcript engine adapter is registered')
     return {
       provider,
       read: mocks.read,
@@ -75,10 +75,31 @@ describe('duplicateSession neutral integration', () => {
 
   it('fails before reading when the provider has no adapter', async () => {
     await expect(duplicateSession({
-      provider: 'opencode',
+      provider: 'unknown' as 'claude',
       sourceProviderSessionId: 'source',
       cwd: '/project',
     })).rejects.toThrow('No transcript engine adapter')
     expect(mocks.read).not.toHaveBeenCalled()
+  })
+
+  it('duplicates an empty OpenCode export because blank sessions are native import values', async () => {
+    mocks.read.mockResolvedValue({
+      schemaVersion: 1,
+      sourceProvider: 'opencode',
+      sourceSessionIds: ['source'],
+      entries: [],
+    })
+
+    const result = await duplicateSession({
+      provider: 'opencode',
+      sourceProviderSessionId: 'source',
+      cwd: '/project',
+    })
+
+    expect(mocks.project).toHaveBeenCalledWith(
+      expect.objectContaining({ entries: [] }),
+      expect.objectContaining({ cwd: '/project' }),
+    )
+    expect(result.newProviderSessionId).toBe('new-session')
   })
 })

@@ -137,6 +137,7 @@ export function renderWorkspaceLeaf(
   const runtime = workspace.getRuntime(renderedSessionId)
   if (getEffectiveAgentSurfaceForSession({
     kind,
+    providerRuntime: meta?.providerRuntime,
     globalMode: agentViewMode,
     override: meta?.agentViewModeOverride,
     runtime,

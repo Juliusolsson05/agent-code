@@ -31,7 +31,7 @@ type Props = {
   provider: Exclude<SessionKind, 'terminal'>
 }
 
-// AgentTerminalLeaf — full-pane raw provider terminal for Claude/Codex agents.
+// AgentTerminalLeaf — full-pane raw provider terminal for PTY-backed agents.
 //
 // This is #247's productized version of the debug AgentInlineTerminal: same
 // live provider process, same raw PTY byte stream, but mounted as the pane's
@@ -161,7 +161,7 @@ export function AgentTerminalLeaf({
         if (cols <= 0 || rows <= 0) return
         // WHY de-dupe cols/rows: the raw terminal owns provider PTY size while
         // mounted. ResizeObserver fires frequently during split drags, and
-        // forwarding no-op dimensions makes Claude/Codex repaint needlessly
+        // forwarding no-op dimensions makes provider TUIs repaint needlessly
         // while the same byte stream is also feeding xterm.
         if (!attachedBackfillDone) {
           // WHY queue instead of sending early: lazy wake intentionally leaves

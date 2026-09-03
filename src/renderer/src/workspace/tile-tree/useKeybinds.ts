@@ -151,11 +151,13 @@ function renderedAgentSurfaceIsVisible(
   agentViewMode: string,
   sessionId: string,
 ): boolean {
-  const kind = workspace.state.sessions[sessionId]?.kind
+  const meta = workspace.state.sessions[sessionId]
+  const kind = meta?.kind
   if (!isAgentKind(kind)) return false
   return (
     getEffectiveAgentSurface({
       kind,
+      providerRuntime: meta?.providerRuntime,
       mode: agentViewMode === 'terminal' || agentViewMode === 'hybrid' ? agentViewMode : 'agent',
       runtime: workspace.getRuntime(sessionId),
     }) === 'rendered'
