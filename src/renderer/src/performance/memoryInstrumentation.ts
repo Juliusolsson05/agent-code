@@ -1,5 +1,6 @@
 import type { SessionRuntime } from '@renderer/session-runtime/state'
 import { estimateJsonBytes, trimmedUuidCount } from '@renderer/session-runtime/liveEntryWindow'
+import { estimateFeedDebugLogBytes } from '@renderer/session-runtime/feedDebug'
 import { codeBlockRegistrySize } from '@renderer/features/copy-code-block/lib/codeBlockRegistry'
 import { monacoModelCount } from '@renderer/lib/code/monacoModelProbe'
 
@@ -100,11 +101,13 @@ export function emitRendererMemoryGauges(
     )
     perf.gauge('renderer.session.memory.feedDebugLog', runtime.feedDebugLog.length, {
       sessionId,
-      // Same sampled-byte dimension as the entries/semantic gauges — the
-      // ring is count-capped but records vary from one-line summaries to
-      // multi-KB data payloads, so a count alone can't be compared against
-      // the byte gauges when apportioning heap between structures.
-      bytesEstimate: estimateJsonBytesSampled(runtime.feedDebugLog),
+      // Same byte dimension as the entries/semantic gauges — records vary
+      // from one-line summaries to multi-KB data payloads, so a count alone
+      // can't be compared against the byte gauges when apportioning heap
+      // between structures. Exact rather than sampled: the ring's own byte
+      // budget (#722) already caches a per-entry estimate, so this is a
+      // cache-hit walk, and it is the number the budget is enforced on.
+      bytesEstimate: estimateFeedDebugLogBytes(runtime.feedDebugLog),
     })
     // WHY account for the sidecar separately: it was split from feedDebugLog
     // specifically so Stage 0 could not consume the product-debug budget. A
