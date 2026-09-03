@@ -71,6 +71,14 @@ interface TranscriptSnapshot {
 export interface HostTranscriptAdapter {
   provider: string
   read(cwd: string, providerSessionId: string): Promise<ConversationDocument>
+  // WHY the path is exposed separately from read(): the compaction wait in
+  // compactBeforeSwitch.ts polls the live source transcript for minutes. A
+  // full read() decodes the whole file (60–150 MB for a long Codex rollout)
+  // and, for Codex, walks the entire date-bucketed sessions tree to find it.
+  // Doing that four times a second pinned ~350 MB and stalled the main event
+  // loop for seconds at a time (#720). With the path in hand the caller can
+  // stat() cheaply and only pay for a decode when the file actually grew.
+  locate(cwd: string, providerSessionId: string): Promise<string>
   listPrompts(cwd: string, providerSessionId: string): Promise<RewindPrompt[]>
   draft(content: readonly ConversationContent[]): RewindDraft
   targetProfile(): Promise<TranscriptTargetProfile>
@@ -87,6 +95,7 @@ const claudeAdapter: HostTranscriptAdapter = {
   async read(cwd, providerSessionId) {
     return (await loadClaudeSnapshot(cwd, providerSessionId)).conversation
   },
+  locate: getClaudeSessionFilePath,
   async listPrompts(cwd, providerSessionId) {
     return promptsFromSnapshot(
       await loadClaudeSnapshot(cwd, providerSessionId),
@@ -111,6 +120,9 @@ const codexAdapter: HostTranscriptAdapter = {
   provider: 'codex',
   async read(cwd, providerSessionId) {
     return (await loadCodexSnapshot(cwd, providerSessionId)).conversation
+  },
+  async locate(_cwd, providerSessionId) {
+    return locateCodexRollout(providerSessionId)
   },
   async listPrompts(cwd, providerSessionId) {
     return promptsFromSnapshot(
@@ -213,12 +225,17 @@ async function loadClaudeSnapshot(
   }
 }
 
+async function locateCodexRollout(providerSessionId: string): Promise<string> {
+  const path = await findCodexRolloutPathBySessionId(providerSessionId)
+  if (!path) throw new Error(`Codex rollout for session ${providerSessionId} was not found.`)
+  return path
+}
+
 async function loadCodexSnapshot(
   _cwd: string,
   providerSessionId: string,
 ): Promise<TranscriptSnapshot> {
-  const path = await findCodexRolloutPathBySessionId(providerSessionId)
-  if (!path) throw new Error(`Codex rollout for session ${providerSessionId} was not found.`)
+  const path = await locateCodexRollout(providerSessionId)
   const document = await readStableTranscript(path)
   const records = classifyCodexDocument(document).records
   return {

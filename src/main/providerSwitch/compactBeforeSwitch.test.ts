@@ -1,17 +1,31 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ConversationDocument } from 'agent-transcript-parser'
 
-const mocks = vi.hoisted(() => ({ read: vi.fn() }))
+const mocks = vi.hoisted(() => ({
+  read: vi.fn(),
+  locate: vi.fn(),
+  stat: vi.fn(),
+}))
 
 vi.mock('@main/providerSwitch/transcriptEngine.js', () => ({
-  getHostTranscriptAdapter: () => ({ read: mocks.read }),
+  getHostTranscriptAdapter: () => ({ read: mocks.read, locate: mocks.locate }),
 }))
+
+// The wait loop stats the located transcript to decide whether a decode is
+// worth paying for. Tests drive that gate through this mock; the default
+// (rejecting stat) means "unknown", which keeps the decode-every-cooldown
+// behaviour the pre-existing contracts below were written against.
+vi.mock('node:fs/promises', () => ({ stat: mocks.stat }))
 
 import { compactSourceBeforeSwitch } from './compactBeforeSwitch.js'
 
 describe('compactSourceBeforeSwitch', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mocks.locate.mockReset()
+    mocks.locate.mockResolvedValue('/project/provider-session.jsonl')
+    mocks.stat.mockReset()
+    mocks.stat.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }))
   })
 
   it('returns only after the live provider persists a new native summary', async () => {
@@ -152,7 +166,98 @@ describe('compactSourceBeforeSwitch', () => {
     expect(manager.deliverPromptToAgent).toHaveBeenCalledOnce()
     expect(manager.deliverPromptToAgent).not.toHaveBeenCalledWith('local-session', '/compact')
   })
+
+  // The three contracts below protect #720: the wait used to decode the whole
+  // source transcript on every 250 ms tick (a tree walk plus a 100 MB parse
+  // for long Codex rollouts) and pin the decoded documents for the whole wait.
+
+  it('locates the transcript once and skips decoding while the file is unchanged', async () => {
+    mocks.read
+      .mockResolvedValueOnce(conversation([]))
+      .mockResolvedValueOnce(conversation([]))
+      .mockResolvedValueOnce(conversation([compaction('provider-authored summary', 12)]))
+    // Three ticks see the same size/mtime, then the provider appends.
+    mocks.stat
+      .mockResolvedValueOnce(fileInfo(100, 1))
+      .mockResolvedValueOnce(fileInfo(100, 1))
+      .mockResolvedValueOnce(fileInfo(100, 1))
+      .mockResolvedValue(fileInfo(240, 2))
+    const manager = {
+      getSessionKind: vi.fn(() => 'claude'),
+      getSpawnCwd: vi.fn(() => '/project'),
+      deliverPromptToAgent: vi.fn(async () => ({ ok: true })),
+    }
+
+    await compactSourceBeforeSwitch(manager as never, {
+      sourceKind: 'claude',
+      targetKind: 'codex',
+      sourceProviderSessionId: 'provider-session',
+      sourceSessionId: 'local-session',
+      cwd: '/project',
+    }, requiresCompactionPlan())
+
+    expect(mocks.locate).toHaveBeenCalledOnce()
+    expect(mocks.locate).toHaveBeenCalledWith('/project', 'provider-session')
+    // before-fingerprint read + first poll + the poll after the file grew.
+    expect(mocks.read).toHaveBeenCalledTimes(3)
+    expect(mocks.stat.mock.calls.length).toBeGreaterThanOrEqual(4)
+  })
+
+  it('rate-limits decoding while the source keeps appending', async () => {
+    mocks.read
+      .mockResolvedValueOnce(conversation([]))
+      .mockResolvedValueOnce(conversation([]))
+      .mockResolvedValueOnce(conversation([compaction('provider-authored summary', 12)]))
+    // Every tick reports growth; only the cooled ticks may decode.
+    let size = 0
+    mocks.stat.mockImplementation(async () => fileInfo((size += 1), size))
+    const manager = {
+      getSessionKind: vi.fn(() => 'claude'),
+      getSpawnCwd: vi.fn(() => '/project'),
+      deliverPromptToAgent: vi.fn(async () => ({ ok: true })),
+    }
+
+    await compactSourceBeforeSwitch(manager as never, {
+      sourceKind: 'claude',
+      targetKind: 'codex',
+      sourceProviderSessionId: 'provider-session',
+      sourceSessionId: 'local-session',
+      cwd: '/project',
+    }, requiresCompactionPlan())
+
+    expect(mocks.read).toHaveBeenCalledTimes(3)
+    // At least three changed ticks passed between the two poll decodes.
+    expect(mocks.stat.mock.calls.length).toBeGreaterThanOrEqual(4)
+  })
+
+  it('decodes again after a transient read error even when the file did not move', async () => {
+    mocks.read
+      .mockResolvedValueOnce(conversation([]))
+      .mockRejectedValueOnce(new Error('caught between bytes'))
+      .mockResolvedValueOnce(conversation([compaction('provider-authored summary', 12)]))
+    mocks.stat.mockResolvedValue(fileInfo(100, 1))
+    const manager = {
+      getSessionKind: vi.fn(() => 'claude'),
+      getSpawnCwd: vi.fn(() => '/project'),
+      deliverPromptToAgent: vi.fn(async () => ({ ok: true })),
+    }
+
+    const result = await compactSourceBeforeSwitch(manager as never, {
+      sourceKind: 'claude',
+      targetKind: 'codex',
+      sourceProviderSessionId: 'provider-session',
+      sourceSessionId: 'local-session',
+      cwd: '/project',
+    }, requiresCompactionPlan())
+
+    expect(mocks.read).toHaveBeenCalledTimes(3)
+    expect(result.entries[0]).toMatchObject({ kind: 'compaction' })
+  })
 })
+
+function fileInfo(size: number, mtimeMs: number) {
+  return { size, mtimeMs }
+}
 
 function conversation(
   entries: ConversationDocument['entries'],
