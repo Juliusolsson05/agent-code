@@ -41,10 +41,13 @@ The headless terminal already gates on EXACT equality of `plain`/`recent`
 
 2. **Alias duplicate strings on the renderer wire.** At the IPC edge the
    forwarder omits `recent`/`recentMarkdown` when they equal
-   `plain`/`markdown`; the preload's `onSessionScreen` expands them back so
-   every renderer type and consumer is unchanged. Remote client and
-   recorder keep the full payload (they tap before the edge) unless the
-   recorder proves to tap after it, in which case replay expands too.
+   `plain`/`markdown` (`aliasScreenSnapshotForWire`); the preload's
+   `onSessionScreen` expands them back (`expandScreenSnapshotFromWire`) so
+   every renderer type and consumer is unchanged. The remote server takes
+   the full payload from the manager. The session recorder taps the IPC
+   send, so recordings carry the wire form; replay treats `session:screen`
+   as a no-op tick (`reconstructSlices.ts`) and the redaction pass caps
+   fields only when present, so nothing downstream reads the omitted keys.
 
 Not in scope: removing the markdown walks from the headless package
 (submodule), and not sending `markdown` unless a debug consumer is mounted.
