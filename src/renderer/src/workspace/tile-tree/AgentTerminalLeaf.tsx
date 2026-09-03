@@ -93,7 +93,9 @@ export function AgentTerminalLeaf({
 
   useComposerDictation({
     enabled: dictationEnabled,
-    focused,
+    // A retained, hidden pane (Reader/Spotlight/Settings, #752) is still the
+    // workspace-focused one; it must not be the dictation target.
+    focused: focused && dimensionActive,
     provider: dictationProvider,
     shortcut: dictationShortcut,
     sink: { kind: 'terminal', sessionId },
@@ -277,10 +279,10 @@ export function AgentTerminalLeaf({
       // callbacks current without making them part of xterm's mount contract.
       //
       // WHY the wake is conditional (#596): this effect runs on every MOUNT,
-      // and this component is unmounted and remounted constantly — entering
-      // and leaving Spotlight/Reader/Settings (which render outside
-      // GlobalEditorShell, so the whole tile tree goes away), and on every tab
-      // switch. Waking unconditionally meant each of those round-tripped
+      // and this component is still remounted on every tab switch and layout
+      // change (Reader/Spotlight/Settings stopped unmounting it in #752, but
+      // Spotlight mounts a second leaf). Waking unconditionally meant each of
+      // those round-tripped
       // through recoverSession for an agent that was already running, flapped
       // its runtime status spawning→started, and — until the companion fix in
       // ensureSessionLive — armed a 30-second timer that KILLED the live
@@ -412,9 +414,11 @@ export function AgentTerminalLeaf({
     }
   }, [sessionId])
 
+  // Also re-runs when the pane is revealed after a takeover (#752): the
+  // remount used to refocus xterm for free; retained panes need it here.
   useEffect(() => {
-    if (focused) termRef.current?.focus()
-  }, [focused])
+    if (focused && dimensionActive) termRef.current?.focus()
+  }, [focused, dimensionActive])
 
   const focusTerminal = () => {
     termRef.current?.focus()

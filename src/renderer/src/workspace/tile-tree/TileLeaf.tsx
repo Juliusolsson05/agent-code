@@ -145,6 +145,16 @@ export function TileLeaf({
   // Same shape one level up (#752): Reader Mode, Spotlight and Settings now
   // retain the whole workspace under display:none instead of unmounting it.
   const workspaceHiddenBySurface = useWorkspaceSurfaceHidden()
+  // WHY "focused" is not enough for input ownership (#752 review): the
+  // retained tree keeps this leaf mounted AND focused (activeTab's focused
+  // session) while Reader/Spotlight/Settings own the screen. Every document-
+  // level router below — type-to-focus, paste-to-focus, the bare-Enter
+  // submit target, the dictation hotkey, the condition outlet — used to be
+  // unreachable because the leaf did not exist; now it must be told that a
+  // hidden focused pane owns nothing. Typing "yes" + Enter in Reader Mode
+  // must not submit a prompt through an invisible composer.
+  const workspaceHidden = workspaceHiddenByEditor || workspaceHiddenBySurface
+  const interactive = focused && !workspaceHidden
   // This one OR is the ENTIRE implementation of "Tail All" scoping, and it is
   // load-bearing in a way that is easy to mistake for a shortcut.
   //
@@ -204,8 +214,7 @@ export function TileLeaf({
   // Note that the *flag* restoring is not the same as the *scroll position*
   // restoring — see the tail-mode guard in Feed's scroll listener for why the
   // pre-tail position has to be protected for that promise to hold.
-  const effectiveTailMode =
-    (runtime.tailMode || tailAllMode) && !workspaceHiddenByEditor && !workspaceHiddenBySurface
+  const effectiveTailMode = (runtime.tailMode || tailAllMode) && !workspaceHidden
   const dictationEnabled = useAppStore(state => state.settings.dictationEnabled)
   const dictationProvider = useAppStore(state => state.settings.dictationProvider)
   const dictationShortcut = useAppStore(state => state.settings.dictationShortcut)
@@ -283,17 +292,18 @@ export function TileLeaf({
     endHistoryCycle,
   } = usePromptHistory({ entries: runtime.entries, sessionKind })
 
-  // When focus flips to this pane, move the DOM caret into its input.
+  // When focus flips to this pane — or the pane is revealed again after a
+  // takeover while still focused — move the DOM caret into its input.
   useEffect(() => {
-    if (focused) inputRef.current?.focus()
-  }, [focused])
+    if (interactive) inputRef.current?.focus()
+  }, [interactive])
 
   // Type-to-focus — document-level key listener that routes printable
   // keys into the composer when the pane is focused but DOM focus
   // drifted elsewhere. Hook in ./TileLeaf/useTypeToFocus.ts owns
   // the full filter/injection logic.
   useTypeToFocus({
-    focused,
+    focused: interactive,
     sessionId,
     inputRef,
     setDraftInput,
@@ -543,7 +553,7 @@ export function TileLeaf({
     // second renderer. A selected WorkflowRunView replaces Feed entirely;
     // treating a hidden ledger candidate as painted would manufacture the very
     // visibility proof this observation is supposed to test.
-    if (feedIsMounted && !workspaceHiddenByEditor) {
+    if (feedIsMounted && !workspaceHidden) {
       for (const item of ledgerFeedPlan.items) {
         if (item.type !== 'entry') continue
         const submissionId = optimisticEntrySubmissionId(item.entry)
@@ -568,7 +578,7 @@ export function TileLeaf({
     // WorkflowRunView owns the central cell. Recording from the exact array
     // handed to QueueStrip closes that observational blind spot without
     // pretending the queue has a provider or rollout identity.
-    if (!workspaceHiddenByEditor) {
+    if (!workspaceHidden) {
       for (const message of runtime.queuedMessages) {
         const submissionId = queuedMessageSubmissionId(message)
         if (!submissionId) continue
@@ -604,7 +614,7 @@ export function TileLeaf({
     sessionId,
     feedIsMounted,
     visibleSubmitSurfaceOwner,
-    workspaceHiddenByEditor,
+    workspaceHidden,
   ])
 
   // Claude image-paste flow — three clipboard ingress paths, media-
@@ -624,7 +634,7 @@ export function TileLeaf({
   // ./TileLeaf/usePasteToFocus.ts. Declared here (not next to
   // useTypeToFocus) because it depends on `handlePaste`.
   usePasteToFocus({
-    focused,
+    focused: interactive,
     sessionId,
     inputRef,
     setDraftInput,
@@ -656,7 +666,7 @@ export function TileLeaf({
 
   const dictation = useComposerDictation({
     enabled: dictationEnabled,
-    focused,
+    focused: interactive,
     provider: dictationProvider,
     shortcut: dictationShortcut,
     sink: {
@@ -675,7 +685,7 @@ export function TileLeaf({
 
   useEffect(() => {
     return registerComposerEnterTarget({
-      focused,
+      focused: interactive,
       hovered: composerHovered,
       hasSubmittableDraft: () => {
         // Slash mode is PTY-owned: Enter commits Claude Code's highlighted
@@ -692,7 +702,7 @@ export function TileLeaf({
         void submitCurrentDraft('global-enter')
       },
     })
-  }, [focused, composerHovered, input, runtime.draftImages.length, slashMode, submitCurrentDraft])
+  }, [interactive, composerHovered, input, runtime.draftImages.length, slashMode, submitCurrentDraft])
 
   // Auto-send a clicked prompt suggestion. onApplySuggestion prefills the draft
   // and stashes the text in autoSendPendingRef; this effect waits until the
@@ -777,8 +787,12 @@ export function TileLeaf({
     // needing a ref forwarded out of this component. The existing
     // debug panels are stateless about the DOM and read from runtime
     // props instead, so a data attribute keeps that boundary intact.
-    // Session UUIDs are unique across the app, so there's no collision
-    // risk with multiple panes mounted simultaneously.
+    // Session UUIDs are unique across the app, so ordinarily one element per
+    // session. The exception (#752): while Spotlight shows a session, the
+    // retained (display:none) tile tree still holds that session's leaf, so
+    // two elements share the id and `querySelector` returns whichever comes
+    // first in DOM order — the Spotlight one, because MainSurface renders the
+    // takeover surface BEFORE the retained workspace. Keep that order.
     <div
       ref={paneRef}
       data-pane-id={sessionId}
@@ -950,7 +964,7 @@ export function TileLeaf({
         conditions={normalizedConditions}
         onSend={sendConditionKey}
         onResolveCustom={(action) => feed.resolveCondition(sessionId, action)}
-        interactionActive={focused}
+        interactionActive={interactive}
       />
 
       <PaneToast message={runtime.paneToast} />
