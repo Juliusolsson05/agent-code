@@ -2,6 +2,8 @@ import { basename, dirname, join } from 'node:path'
 import type { JsonlEntry, SubAgentState } from '@preload/api/types.js'
 import { SubAgentWatcher } from './SubAgentWatcher.js'
 import { CodexSubAgentTracker, isCodexRolloutEntry } from './codexSubagentState.js'
+import { CompletionLedger } from './completionLedger.js'
+import type { ParentStatus } from './completionLedger.js'
 
 // Owns one SubAgentWatcher per active session and the parent-completion
 // bookkeeping that flips a subagent running→done.
@@ -19,8 +21,6 @@ type Emit = (
   subAgents: Record<string, SubAgentState>,
 ) => void
 
-type ParentStatus = 'done' | 'error'
-
 function subagentsDirFromTranscript(file: string): string | null {
   if (!file.endsWith('.jsonl')) return null
   const providerSessionId = basename(file, '.jsonl')
@@ -30,8 +30,12 @@ function subagentsDirFromTranscript(file: string): string | null {
 export class SubAgentWatcherManager {
   private watchers = new Map<string, SubAgentWatcher>()
   private codexTrackers = new Map<string, CodexSubAgentTracker>()
-  // sessionId -> (parent Agent tool_use id -> terminal status)
-  private completed = new Map<string, Map<string, ParentStatus>>()
+  // sessionId -> parent-completion ledger. WHY a ledger and not a plain map:
+  // the parent stream carries a tool_result for EVERY tool call and the
+  // previous map kept all of them for the life of the session (#743). The
+  // ledger keeps a bounded recent window plus the ids the watcher has claimed
+  // as sub-agents; see completionLedger.ts.
+  private completed = new Map<string, CompletionLedger>()
 
   constructor(private readonly emit: Emit) {}
 
@@ -55,13 +59,13 @@ export class SubAgentWatcherManager {
     let changed = false
     for (const b of content as Array<Record<string, unknown>>) {
       if (b.type === 'tool_result' && typeof b.tool_use_id === 'string') {
-        const map = this.completed.get(sessionId) ?? new Map<string, ParentStatus>()
-        const status: ParentStatus = b.is_error === true ? 'error' : 'done'
-        if (map.get(b.tool_use_id) !== status) {
-          map.set(b.tool_use_id, status)
-          this.completed.set(sessionId, map)
-          changed = true
+        let ledger = this.completed.get(sessionId)
+        if (!ledger) {
+          ledger = new CompletionLedger()
+          this.completed.set(sessionId, ledger)
         }
+        const status: ParentStatus = b.is_error === true ? 'error' : 'done'
+        if (ledger.record(b.tool_use_id, status)) changed = true
       }
     }
     // A parent tool_result landing won't grow the subagent file, so nudge the
@@ -76,7 +80,7 @@ export class SubAgentWatcherManager {
     const watcher = new SubAgentWatcher(
       dir,
       toolUseId => {
-        const s = this.completed.get(sessionId)?.get(toolUseId)
+        const s = this.completed.get(sessionId)?.lookup(toolUseId)
         return { done: s === 'done' || s === 'error', error: s === 'error' }
       },
       subAgents => this.emit(sessionId, subAgents),
