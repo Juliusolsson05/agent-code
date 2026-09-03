@@ -105,26 +105,40 @@ describe('CappedTextBuffer', () => {
     const cap = 1000
     const pieceSize = 37
     const buffer = new CappedTextBuffer(cap, pieceSize)
+    // The oracle only needs the newest `cap + maxUnits` code units: the
+    // buffer can never hold more than `cap`, so `endsWith` below never looks
+    // further back. Keeping the whole stream made this quadratic — every
+    // `+=` built a cons string and every `endsWith` flattened it, copying a
+    // ~3 MB stream per iteration (4,000 × ~1.5 MB); it took 20–50 s on a
+    // loaded machine and tripped vitest's 5 s timeout.
+    const maxUnits = 1_500
     let stream = ''
+    let streamTotal = 0
     let seed = 11
     const alphabet = ['a', 'b', '\u{1F600}', 'c', '\u{1F4A9}', 'd']
     for (let i = 0; i < 4_000; i += 1) {
       seed = (seed * 48271) % 2147483647
-      const units = 1 + (seed % 1_500)
+      const units = 1 + (seed % maxUnits)
       let chunk = ''
       while (chunk.length < units) chunk += alphabet[(seed + chunk.length) % alphabet.length]!
-      stream += chunk
+      stream = (stream + chunk).slice(-(cap + maxUnits))
+      streamTotal += chunk.length
       buffer.append(chunk)
 
       const text = buffer.read()
       expect(text.length).toBe(buffer.length)
       expect(buffer.length).toBeLessThanOrEqual(cap)
       expect(stream.endsWith(text)).toBe(true)
-      if (stream.length > cap) expect(buffer.length).toBeGreaterThan(cap - pieceSize)
+      // The oracle is trimmed, so it cannot answer "has the stream passed
+      // the cap" by its own length any more; the running total can.
+      if (streamTotal > cap) expect(buffer.length).toBeGreaterThan(cap - pieceSize)
       const first = text.charCodeAt(0)
       expect(first >= 0xdc00 && first <= 0xdfff).toBe(false)
     }
-  })
+    // 4,000 iterations is well under a second of CPU; the generous budget is
+    // for a loaded machine running several vitest workers, where the default
+    // 5 s was tripped by contention rather than by the test.
+  }, 20_000)
 
   it('does not start the tail of an oversized chunk on a low surrogate', () => {
     // 'ab' + 😀 (two code units) + 'cd' is six code units.
