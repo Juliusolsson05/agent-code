@@ -37,13 +37,31 @@ export type DebugStorageBucket =
   | 'ghost-logs'
   | 'session-recordings'
 
-type Artifact = {
+/** Exported so the pass logic can be unit-tested with in-memory artifacts. */
+export type DebugStorageArtifact = {
   path: string
   bytes: number
   mtimeMs: number
   kind: 'file' | 'dir'
   bucket: DebugStorageBucket
   protected?: boolean
+}
+type Artifact = DebugStorageArtifact
+
+export type DebugStoragePrunePolicy = {
+  now: number
+  ttlMs: number
+  activeGraceMs: number
+  budgetBytes: number
+  caps: Record<DebugStorageBucket, number>
+}
+
+export type DebugStoragePrunePassesResult = {
+  removed: number
+  bytesFreed: number
+  /** Bytes still accounted after all passes — what the old code reported as
+   *  `scannedBytes` from its third re-scan. */
+  remainingBytes: number
 }
 
 export type DebugStoragePruneResult = {
@@ -214,36 +232,102 @@ export function scheduleDebugStoragePrune(reason: string): void {
 export async function pruneDebugStorage(reason: string): Promise<DebugStoragePruneResult> {
   const budget = await budgetBytes()
   const ttl = ttlHours()
-  const cutoff = Date.now() - ttl * 60 * 60 * 1000
-  const activeCutoff = Date.now() - ACTIVE_GRACE_MS
-  const caps = bucketCaps(budget)
-  let artifacts = await collectArtifacts()
+  // WHY exactly one scan per prune (#728): this runs every five minutes for
+  // the life of the process, and collectArtifacts() re-reads the multi-MB
+  // debug-bundle ledger and stats every tracked file. The passes used to
+  // re-collect between themselves — three ledger parses and three walks per
+  // prune, on the main thread.
+  //
+  // What that trades away: the re-scans also refreshed each artifact's bytes
+  // and mtime and noticed files created or removed by someone else mid-prune.
+  // For the seconds one prune takes that staleness is acceptable — the
+  // active-grace window is ten minutes, an under-counted live run just makes
+  // a pass stop early, and the next prune five minutes later corrects any of
+  // it. `now` is taken after the scan so the grace is measured against the
+  // mtimes actually collected.
+  const artifacts = await collectArtifacts()
+  const outcome = await runPrunePasses(
+    artifacts,
+    {
+      now: Date.now(),
+      ttlMs: ttl * 60 * 60 * 1000,
+      activeGraceMs: ACTIVE_GRACE_MS,
+      budgetBytes: budget,
+      caps: bucketCaps(budget),
+    },
+    async artifact => (await removeArtifact(artifact)) > 0,
+  )
+
+  return {
+    reason,
+    budgetBytes: budget,
+    ttlHours: ttl,
+    removed: outcome.removed,
+    bytesFreed: outcome.bytesFreed,
+    scannedBytes: outcome.remainingBytes,
+  }
+}
+
+/**
+ * The three prune passes over ONE collected artifact list.
+ *
+ * Pass order and per-pass rules are unchanged from the re-scanning version:
+ *   1. TTL — anything unprotected older than the TTL goes, regardless of
+ *      size or bucket.
+ *   2. Per-bucket cap — oldest first until the bucket fits, skipping the
+ *      manual bundle bucket, protected artifacts and anything written within
+ *      the active grace (a live session's run must not vanish under it).
+ *   3. Global budget — oldest first across buckets until the total fits,
+ *      with the same protected/active exemptions.
+ *
+ * `remove` answers whether the artifact is gone. A successful removal frees
+ * the artifact's collected byte count — the same number the old code
+ * subtracted between re-scans — and drops it from the working set. A failed
+ * removal neither counts nor drops it: it stays for the next pass, as a
+ * re-scan would have found it. (A boolean rather than a byte count keeps
+ * the accounting consistent by construction; a partial `rm -rf` leaves the
+ * artifact's full snapshot weight in place until the next prune.)
+ *
+ * Exported with the remover injected so the pass semantics can be tested
+ * against in-memory artifacts; production wraps `removeArtifact`.
+ */
+export async function runPrunePasses(
+  artifacts: readonly Artifact[],
+  policy: DebugStoragePrunePolicy,
+  remove: (artifact: Artifact) => Promise<boolean>,
+): Promise<DebugStoragePrunePassesResult> {
+  const cutoff = policy.now - policy.ttlMs
+  const activeCutoff = policy.now - policy.activeGraceMs
+  const live = new Set(artifacts)
   let removed = 0
   let bytesFreed = 0
+  const drop = async (artifact: Artifact): Promise<number> => {
+    if (!(await remove(artifact))) return 0
+    live.delete(artifact)
+    removed += 1
+    bytesFreed += artifact.bytes
+    return artifact.bytes
+  }
 
   for (const artifact of artifacts) {
     // Ghost logs are recovery state. Age alone is not enough evidence that a
     // log is disposable: a user can resume an older crashed session and still
     // need those provisional rows during bootstrap. Keep ghost cleanup on the
     // budget/cap passes below, where pressure is explicit and active recent
-    // files still get the ACTIVE_GRACE_MS guard.
+    // files still get the activeGraceMs guard.
     if (isProtectedFromDebugPrune(artifact)) continue
     if (artifact.mtimeMs >= cutoff) continue
-    const freed = await removeArtifact(artifact)
-    if (freed === 0) continue
-    removed += 1
-    bytesFreed += freed
+    await drop(artifact)
   }
 
-  artifacts = await collectArtifacts()
-  for (const bucket of Object.keys(caps) as DebugStorageBucket[]) {
+  for (const bucket of Object.keys(policy.caps) as DebugStorageBucket[]) {
     if (bucket === 'debug-bundles-manual') continue
-    const bucketArtifacts = artifacts
+    const bucketArtifacts = [...live]
       .filter(artifact => artifact.bucket === bucket)
       .sort((a, b) => a.mtimeMs - b.mtimeMs)
     let bucketBytes = sumBytes(bucketArtifacts)
     for (const artifact of bucketArtifacts) {
-      if (bucketBytes <= caps[bucket]) break
+      if (bucketBytes <= policy.caps[bucket]) break
       // Honor protection in the per-bucket cap pass too. The TTL pass and the
       // global-budget pass both skip protected artifacts; without this line the
       // 4% incidents cap could still evict a "protected" recent incident run,
@@ -252,35 +336,19 @@ export async function pruneDebugStorage(reason: string): Promise<DebugStoragePru
       // the same protection via the `continue` at the top of this loop.)
       if (isProtectedFromDebugPrune(artifact)) continue
       if (artifact.mtimeMs > activeCutoff) continue
-      const freed = await removeArtifact(artifact)
-      if (freed === 0) continue
-      removed += 1
-      bytesFreed += freed
-      bucketBytes -= freed
+      bucketBytes -= await drop(artifact)
     }
   }
 
-  artifacts = await collectArtifacts()
-  let totalBytes = sumBytes(artifacts)
-  for (const artifact of [...artifacts].sort((a, b) => a.mtimeMs - b.mtimeMs)) {
-    if (totalBytes <= budget) break
+  let totalBytes = sumBytes([...live])
+  for (const artifact of [...live].sort((a, b) => a.mtimeMs - b.mtimeMs)) {
+    if (totalBytes <= policy.budgetBytes) break
     if (isProtectedFromDebugPrune(artifact)) continue
     if (artifact.mtimeMs > activeCutoff) continue
-    const freed = await removeArtifact(artifact)
-    if (freed === 0) continue
-    removed += 1
-    bytesFreed += freed
-    totalBytes -= freed
+    totalBytes -= await drop(artifact)
   }
 
-  return {
-    reason,
-    budgetBytes: budget,
-    ttlHours: ttl,
-    removed,
-    bytesFreed,
-    scannedBytes: totalBytes,
-  }
+  return { removed, bytesFreed, remainingBytes: totalBytes }
 }
 
 function bucketCaps(totalBudget: number): Record<DebugStorageBucket, number> {
