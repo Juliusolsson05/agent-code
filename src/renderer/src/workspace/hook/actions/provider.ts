@@ -1,5 +1,11 @@
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
-import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
+import {
+  AGENT_PROVIDER_KINDS,
+  DEFAULT_PROVIDER,
+  isAgentProviderKind,
+} from '@shared/types/providerKind'
+import type { AgentProviderKind } from '@shared/types/providerKind'
+import { getProviderFeatures } from '@providers/shared/featureCapabilities'
 import type { RewindPromptAddress } from '@shared/types/transcriptRewind'
 import { useCallback } from 'react'
 
@@ -15,14 +21,26 @@ import { switchAgentProvider } from '@renderer/workspace/hook/actions/providerSw
 
 // Provider-level actions on the focused pane.
 //
-// switchFocusedProvider   — Claude ↔ Codex translation of the focused
-//                           session's transcript, then re-home pane
-//                           onto the new provider.
+// switchFocusedProvider   — translate the focused session to the next
+//                           registered provider and re-home its pane.
 // reloadFocusedAgent      — respawn the focused agent session with
 //                           resume so the conversation history replays.
 // rewindFocusedToPrompt   — user picks a past user prompt; pane
 //                           re-homes onto a truncated transcript with
 //                           the prompt prefilled as an unsent draft.
+
+export function nextSwitchTarget(sourceKind: AgentProviderKind): AgentProviderKind | null {
+  const sourceIndex = AGENT_PROVIDER_KINDS.indexOf(sourceKind)
+  const declaredTargets = getProviderFeatures(sourceKind).switchTargets
+  return Array.from(
+    { length: AGENT_PROVIDER_KINDS.length - 1 },
+    (_, offset) => AGENT_PROVIDER_KINDS[
+      (sourceIndex + offset + 1) % AGENT_PROVIDER_KINDS.length
+    ],
+  ).find((candidate): candidate is AgentProviderKind => (
+    candidate !== undefined && declaredTargets.includes(candidate)
+  )) ?? null
+}
 
 export function useProviderActions(
   refs: WorkspaceRefs,
@@ -50,32 +68,19 @@ export function useProviderActions(
       showPaneToast(sourceSessionId, 'Only agent panes can switch provider')
       return
     }
-    // Focused command policy: toggle to "the other provider". The translate /
-    // replace / empty-pane mechanics live in switchAgentProvider so the bulk
-    // modal can reuse them; this command owns only the target choice and the
-    // pane-scoped toast.
-    //
-    // Only the claude↔codex pair has a transcript translation path today:
-    // main-side switchProvider throws for any other pair, and atp ships only
-    // Claude/Codex codecs. OpenCode is a registered AgentProviderKind (so it
-    // passes the guard above) but has NO transcript codec yet (the atp
-    // opencode-codec follow-up, #406 step 7). Without this check an opencode
-    // pane would compute targetKind='claude' via the negation below, attempt
-    // opencode→claude, and hit switchProvider's "no translation path" throw —
-    // surfacing as a confusing failure toast. Refuse cleanly instead.
-    //
-    // WHY the switchable pair is spelled out rather than registry-derived: it
-    // mirrors the two file-transcript providers that actually have codecs.
-    // When a third provider gains a codec + file layout this becomes a
-    // capability lookup and the binary negation dies (#394 phase 5b, §6).
-    if (sourceKind !== 'claude' && sourceKind !== 'codex') {
+    // One command now has three possible destinations. Preserve the old
+    // one-keystroke behavior by cycling registry order, but consult the
+    // declared edge list at every step so a temporarily unsupported direction
+    // is skipped rather than attempted. The bulk modal remains the explicit
+    // source→target picker for users who do not want the cycle order.
+    const targetKind = nextSwitchTarget(sourceKind)
+    if (!targetKind) {
       showPaneToast(
         sourceSessionId,
-        `${getRendererProviderCapabilities(sourceKind).shortLabel} panes can't switch provider yet`,
+        `${getRendererProviderCapabilities(sourceKind).shortLabel} has no switch destination`,
       )
       return
     }
-    const targetKind = sourceKind === 'claude' ? 'codex' : 'claude'
 
     const result = await switchAgentProvider({
       sessionId: sourceSessionId,

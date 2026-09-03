@@ -14,7 +14,7 @@ import { resolveSessionBuiltInMcpDomains } from '@renderer/workspace/mcpDomains'
 //
 // WHY this exists as a standalone function instead of living inside
 // `switchFocusedProvider`: two callers now need the exact same "translate this
-// agent's transcript and re-home its pane onto the other provider" operation —
+// agent's transcript and re-home its pane onto a target provider" operation —
 // the focused-pane command (provider.ts) and the bulk Switch Agents modal
 // (bulkProviderSwitch.ts). Duplicating the two-branch translate/replace logic
 // would be a correctness hazard: the empty-pane special case and the
@@ -23,8 +23,8 @@ import { resolveSessionBuiltInMcpDomains } from '@renderer/workspace/mcpDomains'
 // toast to show, how to summarize a batch).
 //
 // The function is direction-EXPLICIT: the caller passes `targetKind`. The
-// focused command computes that as "the other provider"; the bulk modal forces
-// a fixed direction for the whole batch. Keeping the helper agnostic means the
+// focused command computes the next supported registry target; the bulk modal
+// chooses an explicit direction for the whole batch. Keeping the helper agnostic means the
 // policy lives with the caller, not buried in here.
 //
 // It never throws — every outcome is a discriminated result so the bulk caller
@@ -60,7 +60,7 @@ export async function switchAgentProvider(params: {
 
   const sourceKind = meta.kind ?? DEFAULT_PROVIDER
   if (!isAgentProviderKind(sourceKind)) {
-    return { status: 'skipped', reason: 'Only Claude and Codex panes can switch provider' }
+    return { status: 'skipped', reason: 'Only agent panes can switch provider' }
   }
   // Defensive: a no-op direction. The bulk modal only enumerates source-kind
   // agents so this shouldn't fire there, but returning a switched/skip result
@@ -82,6 +82,54 @@ export async function switchAgentProvider(params: {
       meta.builtInMcpDomains === undefined ? undefined : effectiveSourceDomains,
     defaultDomains: refs.defaultBuiltInMcpDomainsRef.current,
   })
+
+  const replaceTranscriptlessPane = async (): Promise<SwitchAgentProviderResult> => {
+    // A freshly-spawned pane can be transcript-less either because its
+    // provider has not announced a durable id yet (Claude/Codex) OR because it
+    // deliberately pre-created an empty durable session (OpenCode Terminal).
+    // Both states need the same pane replacement. Keeping that operation in
+    // one closure prevents the two identity models from drifting on draft and
+    // MCP-domain preservation.
+    const draftImages = refs.latestRuntimesRef.current[sessionId]?.draftImages ?? []
+    const effectiveSourceDomains =
+      meta.builtInMcpDomains === undefined
+        ? undefined
+        : resolveSessionBuiltInMcpDomains({
+            provider: sourceKind,
+            sessionDomains: meta.builtInMcpDomains,
+            defaultDomains: [],
+          })
+    const newSessionId = await sessionActions.replaceSession(meta.cwd, {
+      kind: targetKind,
+      builtInMcpDomains: resolveTargetBuiltInMcpDomains(
+        effectiveSourceDomains,
+        targetKind,
+      ),
+      // Pin the replacement to THIS agent. Without it, bulk switching can
+      // replace whichever pane became focused while an earlier conversion was
+      // awaiting main-process work.
+      targetSessionId: sessionId,
+    })
+    if (!newSessionId) return { status: 'failed', message: 'Replacement failed' }
+
+    setRuntimes(prev => {
+      const runtime = prev[newSessionId]
+      if (!runtime) return prev
+      return {
+        ...prev,
+        [newSessionId]: {
+          ...runtime,
+          // A target without image attachment support must not inherit hidden
+          // image state: the invisible array participates in the empty-submit
+          // guard and could make an apparently blank composer send a prompt.
+          draftImages: getRendererProviderCapabilities(targetKind).supportsImageAttachments
+            ? draftImages
+            : [],
+        },
+      }
+    })
+    return { status: 'switched', newSessionId, targetKind }
+  }
 
   const sourceRuntime = refs.latestRuntimesRef.current[sessionId]
   if (sourceRuntime?.processActive || sourceRuntime?.semantic.currentTurn) {
@@ -125,54 +173,7 @@ export async function switchAgentProvider(params: {
       // reload/rewind/resume semantics. Image drafts are still part of the
       // user's unsent empty-pane state, so this branch snapshots and restores
       // them explicitly — but only when the target provider can render them.
-      const draftImages = refs.latestRuntimesRef.current[sessionId]?.draftImages ?? []
-      // No durable transcript means there is nothing for ensureSessionLive to
-      // recover, but provider policy still applies. Filtering the explicit
-      // source list first prevents stale Claude `workflows` metadata from
-      // becoming valid merely because the target Codex provider supports it.
-      const effectiveSourceDomains =
-        meta.builtInMcpDomains === undefined
-          ? undefined
-          : resolveSessionBuiltInMcpDomains({
-              provider: sourceKind,
-              sessionDomains: meta.builtInMcpDomains,
-              defaultDomains: [],
-            })
-      const newSessionId = await sessionActions.replaceSession(meta.cwd, {
-        kind: targetKind,
-        builtInMcpDomains: resolveTargetBuiltInMcpDomains(
-          effectiveSourceDomains,
-          targetKind,
-        ),
-        // Pin the replacement to THIS agent. Without it, replaceSession falls
-        // back to the current command target (the focused pane) — fine when the
-        // caller IS the focused agent, but fatal for the bulk loop, which
-        // switches agents that are not focused and would otherwise replace the
-        // focused pane N times. Pinning also closes a latent race in the
-        // single-pane caller: focus can change during the translate await
-        // below, and we want to replace the pane we validated, not whatever is
-        // focused when the await resolves. (Same reason rewind pins its target.)
-        targetSessionId: sessionId,
-      })
-      if (!newSessionId) return { status: 'failed', message: 'Replacement failed' }
-
-      setRuntimes(prev => {
-        const runtime = prev[newSessionId]
-        if (!runtime) return prev
-        return {
-          ...prev,
-          [newSessionId]: {
-            ...runtime,
-            // Codex panes do not render or submit draft image attachments.
-            // Carrying Claude-only image state into a Codex runtime would be
-            // worse than a visible drop: the hidden array still participates in
-            // the composer "empty submit" guard, so pressing Enter on an
-            // apparently empty Codex composer could submit a blank prompt.
-            draftImages: getRendererProviderCapabilities(targetKind).supportsImageAttachments ? draftImages : [],
-          },
-        }
-      })
-      return { status: 'switched', newSessionId, targetKind }
+      return await replaceTranscriptlessPane()
     }
 
     // WHY a durable pane is woken before main plans the transcript conversion:
@@ -223,6 +224,10 @@ export async function switchAgentProvider(params: {
       sourceSessionId: sessionId,
       cwd: meta.cwd,
     }).finally(unsubscribeProgress)
+
+    if (result.kind === 'source-empty') {
+      return await replaceTranscriptlessPane()
+    }
 
     // WHY target domains distinguish legacy `undefined` from an explicit list:
     // waking initializes renderer metadata under the SOURCE provider. A legacy

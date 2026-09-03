@@ -106,6 +106,65 @@ function makeHarness() {
 }
 
 describe('rehydrateWorkspace backend reconciliation', () => {
+  it('recovers OpenCode Terminal with its runtime selector and durable provider id intact', async () => {
+    const persisted = makePersisted()
+    persisted.sessions['stable-session'] = {
+      cwd: '/tmp/project',
+      kind: 'opencode',
+      providerRuntime: 'terminal',
+      providerSessionId: 'ses_durable_terminal',
+      providerSessionIdSource: 'runtime-start',
+      builtInMcpDomains: ['orchestration'],
+    }
+    const harness = makeHarness()
+    const recoverSession = vi.fn(async () => ({
+      ok: true as const,
+      disposition: 'spawned' as const,
+      snapshot: {
+        sessionId: 'stable-session',
+        kind: 'opencode' as const,
+        providerRuntime: 'terminal' as const,
+        cwd: '/tmp/project',
+        lifecycle: 'live' as const,
+        input: { ready: true, revision: 1, reason: 'ready' as const },
+        builtInMcpDomains: ['orchestration' as const],
+      },
+    }))
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: { recoverSession, defaultCwd: vi.fn() },
+    })
+
+    await rehydrateWorkspace(
+      persisted,
+      harness.refs,
+      harness.setState,
+      harness.setRuntimes,
+      harness.setTileTabs,
+      vi.fn(),
+    )
+
+    expect(recoverSession).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'stable-session',
+      kind: 'opencode',
+      providerRuntime: 'terminal',
+      resumeSessionId: 'ses_durable_terminal',
+    }))
+    expect(harness.state().sessions['stable-session']).toMatchObject({
+      kind: 'opencode',
+      providerRuntime: 'terminal',
+      providerSessionId: 'ses_durable_terminal',
+    })
+    // Structured-history bootstrap must remain off. The raw terminal owns the
+    // pixels even though the same provider id remains available to conversion,
+    // duplication, and future crash recovery.
+    expect(harness.runtimes()['stable-session']).toMatchObject({
+      processStatus: 'started',
+      transcriptStatus: 'ready',
+      hasOlderHistory: false,
+    })
+  })
+
   it('does not reapply enabled defaults to a persisted explicit empty list', async () => {
     const persisted = makePersisted()
     persisted.sessions['stable-session']!.builtInMcpDomains = []

@@ -44,6 +44,67 @@ export function addCodexBuiltInMcpLaunchConfig(
 }
 
 /**
+ * Merge Agent Code's per-session HTTP MCP endpoints into OpenCode's highest-
+ * precedence inline configuration.
+ *
+ * WHY use `OPENCODE_CONFIG_CONTENT` instead of editing a user config file:
+ * these URLs and bearer tokens belong to one short-lived Agent Code session.
+ * Persisting them would leave dead endpoints behind and, worse, copy session
+ * credentials into durable user-owned state. OpenCode supports `{env:NAME}`
+ * interpolation in config values, so the JSON carries only generated variable
+ * names while the actual credentials stay in the child process environment.
+ * This is the same process-inspection boundary Codex uses above: secrets do
+ * not appear in argv or in the inline config value.
+ *
+ * Existing inline configuration is preserved because users commonly use this
+ * variable to test unreleased OpenCode options. Agent Code's server names win
+ * on collision: a built-in tool call must resolve to the endpoint whose token
+ * SessionManager issued for this exact local session, never to a stale user
+ * entry that happens to reuse the name.
+ */
+export function addOpencodeBuiltInMcpLaunchConfig(
+  servers: readonly BuiltInMcpServerConfig[],
+  env: Record<string, string>,
+): void {
+  if (servers.length === 0) return
+
+  const existing = parseOpencodeInlineConfig(env.OPENCODE_CONFIG_CONTENT)
+  const existingMcp = asPlainObject(existing.mcp, 'mcp')
+  const builtInMcp: Record<string, unknown> = {}
+
+  servers.forEach((server, serverIndex) => {
+    const headers = {
+      ...server.headers,
+      ...(server.bearerToken === undefined
+        ? {}
+        : { Authorization: `Bearer ${server.bearerToken}` }),
+    }
+    const interpolatedHeaders: Record<string, string> = {}
+    Object.entries(headers).forEach(([header, value], headerIndex) => {
+      const variable = `AGENT_CODE_MCP_${serverIndex}_${headerIndex}`
+      env[variable] = value
+      interpolatedHeaders[header] = `{env:${variable}}`
+    })
+    builtInMcp[server.name] = {
+      type: 'remote',
+      url: server.url,
+      enabled: true,
+      ...(Object.keys(interpolatedHeaders).length > 0
+        ? { headers: interpolatedHeaders }
+        : {}),
+    }
+  })
+
+  env.OPENCODE_CONFIG_CONTENT = JSON.stringify({
+    ...existing,
+    mcp: {
+      ...existingMcp,
+      ...builtInMcp,
+    },
+  })
+}
+
+/**
  * Materialize Claude's MCP config in a mode-0600 temporary directory.
  *
  * WHY a file is preferable to Claude's supported inline JSON form: `--mcp-config` accepts both,
@@ -89,4 +150,29 @@ export async function createPrivateClaudeMcpConfig(
 
 function tomlKeySegment(value: string): string {
   return /^[A-Za-z0-9_-]+$/.test(value) ? value : JSON.stringify(value)
+}
+
+function parseOpencodeInlineConfig(value: string | undefined): Record<string, unknown> {
+  if (!value?.trim()) return {}
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(value)
+  } catch (error) {
+    throw new Error(
+      `Cannot add Agent Code MCP servers because OPENCODE_CONFIG_CONTENT is not valid JSON: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    )
+  }
+  return asPlainObject(parsed, 'root')
+}
+
+function asPlainObject(value: unknown, field: string): Record<string, unknown> {
+  if (value === undefined) return {}
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(
+      `Cannot add Agent Code MCP servers because OPENCODE_CONFIG_CONTENT ${field} must be an object`,
+    )
+  }
+  return value as Record<string, unknown>
 }

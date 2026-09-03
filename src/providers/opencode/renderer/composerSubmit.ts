@@ -1,11 +1,12 @@
 // OpenCode composer submit (#406 step 5).
 //
-// Opencode has no PTY, so — unlike Claude/Codex which write bracketed-
-// paste bytes through io.send — this submits the finished prompt over
+// Structured OpenCode has no PTY, so — unlike terminal runtimes which write
+// bracketed-paste bytes through io.send — this submits the finished prompt over
 // the HTTP deliver-prompt IPC (session:deliver-prompt →
 // SessionManager.deliverPromptToAgent → registry deliverPrompt →
 // opencode prompt()). io.send is deliberately unused; there is no
-// terminal to receive keystrokes.
+// terminal on this runtime to receive keystrokes. OpenCode Terminal bypasses
+// this renderer capability and uses the shared raw-terminal input path.
 //
 // WHY throw on failure: the composer call site (useComposerKeybinds)
 // only clears the draft when composerSubmit resolves; its catch path

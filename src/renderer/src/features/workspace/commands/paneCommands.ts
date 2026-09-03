@@ -44,8 +44,8 @@ export const paneCommands: CommandDef[] = [
     // are surface-gated out of Dispatch.
     surface: 'app',
     title: 'New Agent…',
-    description: '**What it does:** Starts a **new agent or terminal**.\n\n**Use when:** You want another Claude, Codex, or shell pane.\n\n**Notes:** In **Dispatch**, Claude/Codex become detached agents; terminals attach to the focused project grid.',
-    keywords: ['new', 'agent', 'placement', 'claude', 'codex', 'terminal'],
+    description: '**What it does:** Starts a **new agent or terminal**.\n\n**Use when:** You want another Claude, Codex, OpenCode, or shell pane.\n\n**Notes:** OpenCode and OpenCode Terminal are separate choices. In **Dispatch**, agents become detached rows.',
+    keywords: ['new', 'agent', 'placement', 'claude', 'codex', 'opencode', 'terminal'],
     when: ({ workspace }) => Boolean(workspace.activeTab && !workspace.tileTabs),
     run: ({ workspace }) => workspace.startNewAgentPlacement(),
   },
@@ -119,8 +119,8 @@ export const paneCommands: CommandDef[] = [
     pickerVisibility: 'advanced',
     surface: 'session',
     title: 'Linked Agent…',
-    description: '**What it does:** Starts a new Claude or Codex agent linked to the currently targeted agent.\n\n**Use when:** You want a one-off helper, like a review agent, visually nested under the parent.\n\n**Notes:** The linked agent is a normal Dispatch agent. It renders directly under the parent and closes automatically when the parent closes.',
-    keywords: ['linked', 'agent', 'review', 'helper', 'child', 'dispatch', 'claude', 'codex'],
+    description: '**What it does:** Starts a new agent linked to the currently targeted agent.\n\n**Use when:** You want a one-off helper, like a review agent, visually nested under the parent.\n\n**Notes:** The linked agent is a normal Dispatch agent. It renders directly under the parent and closes automatically when the parent closes.',
+    keywords: ['linked', 'agent', 'review', 'helper', 'child', 'dispatch', 'claude', 'codex', 'opencode'],
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return false

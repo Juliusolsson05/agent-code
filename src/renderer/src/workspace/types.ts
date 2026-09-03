@@ -2,7 +2,11 @@ import type { BuiltInMcpDomain } from '@mcp/shared/types'
 // Local binding for in-file uses (SessionMeta.kind, etc.). The
 // `export type { SessionKind }` re-export below does not bind the name
 // locally, so this import is also required.
-import type { AgentProviderKind, SessionKind } from '@shared/types/providerKind'
+import type {
+  AgentProviderKind,
+  AgentProviderRuntime,
+  SessionKind,
+} from '@shared/types/providerKind'
 
 // Tile tree data model.
 //
@@ -78,6 +82,11 @@ export type { SessionKind } from '@shared/types/providerKind'
 
 export type AgentViewModeOverride = 'agent' | 'terminal'
 
+export type SessionSpawnSelection = {
+  kind: SessionKind
+  providerRuntime?: AgentProviderRuntime
+}
+
 export type SessionMeta = {
   /** cwd the session was spawned with — needed to respawn on relaunch. */
   cwd: string
@@ -96,6 +105,13 @@ export type SessionMeta = {
    * tile tree is always there, but old entries never carried kind.
    */
   kind?: SessionKind
+  /**
+   * Alternate execution runtime for the provider. Absent means the provider's
+   * structured/default runtime; `terminal` currently selects OpenCode's native
+   * TUI while intentionally retaining provider kind `opencode` for setup,
+   * skills, MCP, and lifecycle behavior.
+   */
+  providerRuntime?: AgentProviderRuntime
   /**
    * Per-session override for the agent pane surface.
    *
@@ -124,7 +140,11 @@ export type SessionMeta = {
    * keeping transcriptStatus disconnected until JSONL confirms durability.
    */
   providerSessionId?: string
-  providerSessionIdSource?: 'jsonl-entry' | 'proxy-header' | 'resume-request'
+  providerSessionIdSource?:
+    | 'jsonl-entry'
+    | 'proxy-header'
+    | 'resume-request'
+    | 'runtime-start'
   /**
    * For tmux-backed terminals (P1): the registry-managed tmux
    * session name. Captured from the spawn IPC response and passed

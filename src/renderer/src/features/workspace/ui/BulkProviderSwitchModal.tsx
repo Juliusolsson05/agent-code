@@ -1,4 +1,5 @@
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
+import { getProviderFeatures } from '@providers/shared/featureCapabilities'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import {
@@ -12,7 +13,7 @@ import { cwdBasename, providerGlyph } from '@renderer/features/workspace/lib/ses
 import { resolveTabSessions } from '@renderer/workspace/queries'
 import type { SessionId, Tab } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
-import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
+import { AGENT_PROVIDER_KINDS, DEFAULT_PROVIDER } from '@shared/types/providerKind'
 import type { AgentProviderKind } from '@shared/types/providerKind'
 
 // Switch Agents modal — bulk provider switch + remembered-batch return.
@@ -28,7 +29,7 @@ import type { AgentProviderKind } from '@shared/types/providerKind'
 // Unlike Close Old Agents there is no time threshold and no "include running"
 // toggle: the trigger for this feature is "I hit a usage limit, get everyone
 // off this provider", so every source-kind agent is eligible. We still SHOW how
-// many are mid-turn and will be interrupted, so the choice is informed.
+// many are mid-turn and will be skipped, so the choice is informed.
 
 type Props = {
   open: boolean
@@ -55,30 +56,48 @@ type ProjectRow = {
   total: number
 }
 
+type SwitchDirection = {
+  key: string
+  source: AgentProviderKind
+  target: AgentProviderKind
+}
+
+const SWITCH_DIRECTIONS: SwitchDirection[] = AGENT_PROVIDER_KINDS.flatMap(source => (
+  getProviderFeatures(source).switchTargets.map(target => ({
+    key: `${source}:${target}`,
+    source,
+    target,
+  }))
+))
+
 function providerLabel(kind: AgentProviderKind): string {
   // Registry-derived (#394 phase 4).
   return getRendererProviderCapabilities(kind).shortLabel
 }
 
 export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
-  // `target` is the provider agents move TO. Source is the other one — and the
-  // preview enumerates only source-kind agents, since you can't switch a Claude
-  // agent "to Claude". Default target Claude (source Codex) matches the most
-  // common trigger the user described (Codex limited → move to Claude).
-  const [target, setTarget] = useState<AgentProviderKind>('claude')
+  // The old two-provider modal could derive source by negating target. With
+  // OpenCode there are six directed edges, so the selected value must preserve
+  // both ends. Keep Codex→Claude as the familiar default.
+  const [directionKey, setDirectionKey] = useState('codex:claude')
   const [scopeMode, setScopeMode] = useState<ScopeMode>('all')
   const [selectedProjects, setSelectedProjects] = useState<Set<string>>(() => new Set())
   const [projectFilter, setProjectFilter] = useState('')
   const [busy, setBusy] = useState(false)
   // Live status (mid-turn) can change while the modal sits open. Re-tick every
-  // 10s so the ⚠ interrupt count stays honest, matching Close Old Agents.
+  // 10s so the ⚠ skip count stays honest, matching Close Old Agents.
   const [nowTick, setNowTick] = useState(0)
 
-  const source: AgentProviderKind = target === 'claude' ? 'codex' : 'claude'
+  const direction = SWITCH_DIRECTIONS.find(item => item.key === directionKey) ?? {
+    key: 'codex:claude',
+    source: 'codex' as const,
+    target: 'claude' as const,
+  }
+  const { source, target } = direction
 
   useEffect(() => {
     if (!open) return
-    setTarget('claude')
+    setDirectionKey('codex:claude')
     setScopeMode('all')
     setSelectedProjects(new Set())
     setProjectFilter('')
@@ -245,8 +264,8 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
             <div>
               <DialogTitle>Switch Agents to Another Provider</DialogTitle>
               <DialogDescription>
-                Move a batch of agents between Claude and Codex — e.g. when you hit a usage
-                limit. History is translated; the originals stay on disk.
+                Move a batch of agents between Claude, Codex, and OpenCode — e.g. when you
+                hit a usage limit. History is translated; the originals stay native.
               </DialogDescription>
             </div>
             <button
@@ -284,12 +303,15 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
               </label>
               <div className="mt-1">
                 <select
-                  value={target}
-                  onChange={e => setTarget(e.target.value as AgentProviderKind)}
+                  value={directionKey}
+                  onChange={e => setDirectionKey(e.target.value)}
                   className="rounded-control px-2 py-1.5 bg-canvas border border-border text-[12px] text-ink outline-none focus:border-accent"
                 >
-                  <option value="claude">Codex → Claude</option>
-                  <option value="codex">Claude → Codex</option>
+                  {SWITCH_DIRECTIONS.map(item => (
+                    <option key={item.key} value={item.key}>
+                      {providerLabel(item.source)} → {providerLabel(item.target)}
+                    </option>
+                  ))}
                 </select>
               </div>
             </div>
@@ -457,7 +479,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
         <div className="flex-shrink-0 border-t border-border px-4 py-3 flex items-center justify-between gap-3">
           <div className="text-[10px] text-muted">
             {midTurnCount > 0
-              ? `⚠ ${midTurnCount} of ${matchingRows.length} are mid-turn and will be interrupted when they respawn.`
+              ? `⚠ ${midTurnCount} of ${matchingRows.length} are mid-turn and will be skipped until idle.`
               : 'Terminals are never switched.'}
           </div>
           <div className="flex items-center gap-2">

@@ -5,11 +5,11 @@
 
 ## Purpose
 
-Provider switching moves one live Agent Code pane from Claude to Codex, or from
-Codex to Claude, while preserving enough conversation state for the target
-provider to continue useful work. The target receives a new provider session
-and a newly projected native transcript. The local Agent Code pane is replaced
-only after every preparation step succeeds.
+Provider switching moves one live Agent Code pane among Claude, Codex, and
+OpenCode while preserving enough conversation state for the target provider to
+continue useful work. The target receives a new provider session and a newly
+projected native transcript. The local Agent Code pane is replaced only after
+every preparation step succeeds.
 
 This is not a byte-for-byte format conversion. Claude and Codex persist
 different concepts, and some provider-owned data is intentionally not portable.
@@ -20,8 +20,10 @@ The durable contract is therefore:
 3. Ask the parser for a typed target-context plan.
 4. If necessary, compact through the live source provider and wait for durable
    evidence of completion.
-5. Project the effective conversation into a native target transcript.
-6. Replace the pane only after the target file has been written successfully.
+5. Project the effective conversation into the target's native transcript.
+6. Persist it through the target adapter (file write for Claude/Codex, supported
+   CLI import for OpenCode).
+7. Replace the pane only after persistence succeeds.
 
 ## Capacity outcomes
 
@@ -33,7 +35,7 @@ timeouts, prompt delivery, or UI. Planning has four meaningful outcomes:
 |---|---|---|
 | Ready | Effective history fits the target | Project immediately |
 | Existing compaction | A persisted source summary plus newer turns fits | Project from that summary boundary |
-| Portable handoff required | Codex has a durable encrypted compaction | Ask the live compacted Codex session for plaintext; do not compact twice |
+| Portable handoff required | Codex has a durable encrypted compaction, or OpenCode lacks a portable native summary | Ask the live source for a read-only plaintext handoff |
 | Compaction required | No sufficient persisted summary exists | Drive native source compaction, then reassess |
 
 Lossy suffix truncation exists as an explicit parser operation for diagnostics
@@ -99,6 +101,26 @@ The second Codex turn is necessary because only Codex can read its encrypted
 replacement history. It is not a fallback truncation and does not ask Agent
 Code to interpret ciphertext.
 
+## OpenCode transcripts and oversized context
+
+OpenCode owns its SQLite schema. Agent Code reads and writes only through the
+supported `opencode export <ses_…>` and `opencode import <file>` commands; the
+pure parser consumes and produces the resulting `{ info, messages }` envelope.
+This boundary is shared by rendered OpenCode and OpenCode Terminal because both
+are runtime flavors of the same provider identity.
+
+OpenCode exports do not provide a portable native compaction carrier. When its
+history exceeds the target budget, Agent Code asks the live source for one
+ordinary read-only handoff turn, waits for an assistant message with a durable
+`time.completed`, and projects only that summary. CLI exports have no cheap file
+change token, so polling is capped at one full export/decode per second.
+
+A brand-new OpenCode Terminal pre-creates a durable `ses_…` identity for crash
+recovery before any message exists. Consequently, “provider id exists” does not
+prove “transcript has content.” The main transaction returns an explicit
+`source-empty` outcome, and the renderer replaces the blank pane while keeping
+its unsent Agent Code draft and compatible MCP-domain policy.
+
 ## Model metadata
 
 The target transcript and capacity check must use the same target model.
@@ -116,6 +138,13 @@ resolved at all, lookup fails before a target transcript is written.
 Claude uses an explicit `ANTHROPIC_MODEL` or `settings.json` model when present.
 Without an explicit `[1m]` selector, capacity planning assumes the conservative
 200k window rather than treating a long-context beta as the default.
+
+OpenCode resolves its merged project configuration through `opencode debug
+config --pure`; if that has no model, the first installed `provider/model` from
+`opencode models` is used. OpenCode can front providers with different context
+windows and does not expose one reliable capacity field here, so switching uses
+a conservative 128k planning window and carries the exact resolved provider and
+model IDs into the imported native messages.
 
 ## Transaction and UI rules
 
@@ -141,7 +170,9 @@ The switch aborts without replacing the pane when any of these occur:
 - provider rejects `/compact` or the portable-summary prompt;
 - no new durable compaction appears before the bounded timeout;
 - native compaction still exceeds the target budget;
-- projected native transcript validation or write fails;
+- projected native transcript validation, file write, or OpenCode import fails;
+- an OpenCode export ends in a user or incomplete assistant message, providing
+  no durable evidence that the native turn has settled;
 - the source process exits during orchestration.
 
 No failure path silently invokes lossy truncation.
@@ -151,7 +182,7 @@ No failure path silently invokes lossy truncation.
 - `src/main/providerSwitch/switchProvider.ts` — executes the parser's typed plan
   and owns transaction order.
 - `src/main/providerSwitch/compactBeforeSwitch.ts` — live source compaction and
-  Codex portable-summary orchestration.
+  Codex/OpenCode portable-summary orchestration.
 - `src/main/providerSwitch/transcriptEngine.ts` — provider adapters, target
   model metadata, decode/project/write boundaries.
 - `src/main/ipc/provider.ts` — main-process lock and progress events.
@@ -178,10 +209,17 @@ code. The Claude placeholder bug and the fake Codex compaction bug both produced
 syntactically valid sessions and successful model turns whose answers revealed
 that the actual work context had been lost.
 
+OpenCode currently adds a separate isolated CLI contract probe: import the
+projected envelope into temporary XDG state, export the resulting `ses_…`, and
+decode it again. This proves native schema/load compatibility without reading
+or mutating personal OpenCode storage. A paid semantic follow-up turn remains a
+stronger optional validation, just as it is for the two file-backed providers.
+
 ## Warning
 
-Do not unify Claude and Codex compaction behind a shared wire shape. They share
-the word "compaction", not persistence semantics. Never copy encrypted provider
-payloads across providers, never treat Claude's boundary placeholder as its
-summary, and never make truncation an implicit recovery path. Any change to
-these rules requires both structural tests and a real semantic resume probe.
+Do not unify Claude, Codex, and OpenCode compaction behind a shared wire shape.
+They share a planning concept, not persistence semantics. Never copy encrypted
+provider payloads across providers, never treat Claude's boundary placeholder
+as its summary, never invent an OpenCode compaction record, and never make
+truncation an implicit recovery path. Any change to these rules requires both
+structural tests and a real semantic resume probe.

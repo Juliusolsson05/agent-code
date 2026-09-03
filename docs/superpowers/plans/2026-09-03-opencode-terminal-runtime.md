@@ -1,4 +1,4 @@
-Status: In progress
+Status: Complete
 
 # OpenCode terminal runtime implementation plan
 
@@ -10,6 +10,11 @@ Keep the existing `OpenCode` HTTP/SSE renderer and add a separately selectable
 `OpenCode Terminal` agent that runs the native OpenCode TUI in a PTY. The
 terminal flavor must remain an agent session—not a plain shell—so it retains
 Agent Code's managed-skill reconciliation and per-session built-in MCP scope.
+
+Make OpenCode a complete member of the neutral transcript-transform graph at
+the same time. Known OpenCode sessions—including those created by the terminal
+runtime—must support export-backed parsing, duplication, rewind, and switching
+to/from Claude and Codex through the `agent-transcript-parser` package.
 
 ## Design constraints
 
@@ -33,6 +38,15 @@ Agent Code's managed-skill reconciliation and per-session built-in MCP scope.
   per-pane Agent/Hybrid view settings must not mount the immature renderer for
   this flavor, while ordinary OpenCode remains pinned to its existing rendered
   surface.
+- Treat `opencode export` and `opencode import` as the only durable transcript
+  boundary. OpenCode owns SQLite storage and migrations; Agent Code and the
+  parser must never reach into that private database.
+- Compose provider switching through `ConversationDocument`, preserving the
+  one-decoder/one-projector-per-provider architecture. Do not add six pairwise
+  translators for the three-provider graph.
+- Refuse an unfinished OpenCode export before a switch/duplicate/rewind can
+  replace a live pane. The native TUI does not emit a reliable busy/idle signal,
+  but a completed assistant timestamp is durable evidence at the CLI boundary.
 
 ## Implementation
 
@@ -49,15 +63,32 @@ Agent Code's managed-skill reconciliation and per-session built-in MCP scope.
    the choice through grid, Dispatch, and linked-agent creation.
 5. Update surface selection so terminal-flavor sessions always render the raw
    agent terminal while ordinary OpenCode keeps its structured renderer.
-6. Add focused tests for MCP configuration, PTY lifecycle, picker distinction,
+6. Extend `agent-transcript-parser` with an OpenCode export decoder, native
+   import projector, exact prompt addresses, unknown-part preservation, and a
+   portable-handoff rule for oversized context.
+7. Register a host OpenCode adapter that exports/imports through the installed
+   CLI, resolves project model metadata, and participates in all six directed
+   Claude/Codex/OpenCode switch edges plus duplicate and rewind.
+8. Add focused tests for MCP configuration, PTY lifecycle, picker distinction,
    surface selection, and durable spawn/recovery propagation. Run typecheck,
    focused suites, then the repository's applicable checks.
 
 ## Verification
 
-- `npm run typecheck`
-- Focused Vitest files for the new runtime, launch config, picker policy, and
-  workspace recovery
-- `npm test`
-- `npm run test:package` if the source-level suite and typecheck pass
-
+- Root contract, checked-in live-fixture, keybinding, TypeScript, and live-resume
+  probe checks passed.
+- The focused OpenCode/runtime/switch/recovery matrix passed: 15 files / 97
+  tests. The MCP policy and host authorization rerun passed: 4 files / 22 tests.
+- The parser package's full `npm run check` passed: contract, typecheck, 24 test
+  files / 100 tests, build, and packed-artifact verification.
+- Isolated OpenCode 1.18.27 CLI `import` → `export` verification passed for a
+  blank session and a projected two-message conversation using temporary XDG
+  state (no personal OpenCode data).
+- The root production application build and packaged-entry verification passed
+  with the parser gitlink pinned to its implementation commit.
+- The complete root test run reached 351 files / 2,501 tests. 2,498 passed. Two
+  unrelated fixed-timeout tests failed only under whole-suite resource
+  contention and passed together when rerun (2 files / 17 tests). The remaining
+  unrelated provenance assertion references a developer-local Claude transcript
+  that no longer exists; it is intentionally active only when a personal corpus
+  root exists and is absent on clean CI runners.

@@ -75,6 +75,27 @@ describe('built-in MCP continuity at session resurrection boundaries', () => {
     harness.mounted.unmount()
   })
 
+  it('keeps the OpenCode terminal runtime when a transcript clone is spawned', async () => {
+    const harness = mountPaneActions(makeState(null))
+
+    await act(async () => {
+      await harness.actions.splitFocused('vertical', 'opencode', {
+        resumeSessionId: 'ses_clone',
+        builtInMcpDomains: ['orchestration'],
+        providerRuntime: 'terminal',
+        cwd: '/projects/opencode-child',
+      })
+    })
+
+    expect(harness.spawn).toHaveBeenCalledWith('/projects/opencode-child', {
+      kind: 'opencode',
+      providerRuntime: 'terminal',
+      resumeSessionId: 'ses_clone',
+      builtInMcpDomains: ['orchestration'],
+    })
+    harness.mounted.unmount()
+  })
+
   it('restores a closed pane with fresh credentials derived from its captured domains', async () => {
     const state = makeState(null)
     const refs = makeRefs(state)

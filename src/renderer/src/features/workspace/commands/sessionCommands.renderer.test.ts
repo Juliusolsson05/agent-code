@@ -75,6 +75,54 @@ describe('Duplicate Agent command', () => {
     )
     expect(closePalette).toHaveBeenCalledOnce()
   })
+
+  it('keeps an OpenCode Terminal clone on the native terminal runtime', async () => {
+    const duplicateSession = vi.fn().mockResolvedValue({
+      newProviderSessionId: 'ses_clone',
+    })
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: { duplicateSession },
+    })
+    const splitFocused = vi.fn().mockResolvedValue(undefined)
+    const context = {
+      workspace: {
+        state: {
+          activeTabId: 'tab-opencode',
+          dispatchMode: null,
+          sessions: {
+            source: {
+              cwd: '/projects/opencode',
+              kind: 'opencode',
+              providerRuntime: 'terminal',
+              providerSessionId: 'ses_source',
+              builtInMcpDomains: ['orchestration'],
+            },
+          },
+          tabs: [{
+            id: 'tab-opencode',
+            focusedSessionId: 'source',
+            root: { type: 'leaf', sessionId: 'source' },
+          }],
+        },
+        splitFocused,
+        showPaneToast: vi.fn(),
+      } as unknown as Workspace,
+      ui: { closePalette: vi.fn() },
+      flags: {},
+    } as unknown as CommandContext
+    const command = sessionCommands.find(candidate => candidate.id === 'duplicate-agent')
+    if (!command) throw new Error('Duplicate Agent command is missing')
+
+    await command.run(context)
+
+    expect(splitFocused).toHaveBeenCalledWith('vertical', 'opencode', {
+      resumeSessionId: 'ses_clone',
+      builtInMcpDomains: ['orchestration'],
+      providerRuntime: 'terminal',
+      cwd: '/projects/opencode',
+    })
+  })
 })
 
 describe('Rendering Debug Mode command', () => {
@@ -151,12 +199,12 @@ describe('built-in MCP provider command policy', () => {
     command => command.id === 'enable-agent-management-mcp',
   )
 
-  it('offers Workflow MCP only to Codex', () => {
+  it('offers Workflow MCP to Codex and OpenCode but not Claude', () => {
     if (!workflowCommand) throw new Error('Workflow MCP command is missing')
 
     expect(workflowCommand.when?.(mcpCommandContext('codex').context)).toBe(true)
     expect(workflowCommand.when?.(mcpCommandContext('claude').context)).toBe(false)
-    expect(workflowCommand.when?.(mcpCommandContext('opencode').context)).toBe(false)
+    expect(workflowCommand.when?.(mcpCommandContext('opencode').context)).toBe(true)
   })
 
   it('keeps the Workflow runtime guard inert for Claude', async () => {
@@ -181,16 +229,16 @@ describe('built-in MCP provider command policy', () => {
     })
   })
 
-  it('does not advertise unsupported general MCP toggles to OpenCode', () => {
+  it('advertises general MCP toggles to OpenCode now that launch config is injected', () => {
     if (!orchestrationCommand) throw new Error('Orchestration MCP command is missing')
-    expect(orchestrationCommand.when?.(mcpCommandContext('opencode').context)).toBe(false)
+    expect(orchestrationCommand.when?.(mcpCommandContext('opencode').context)).toBe(true)
   })
 
-  it('offers Agent Management to Claude and Codex but not OpenCode', () => {
+  it('offers Agent Management to every provider launcher', () => {
     if (!agentManagementCommand) throw new Error('Agent Management MCP command is missing')
     expect(agentManagementCommand.when?.(mcpCommandContext('claude').context)).toBe(true)
     expect(agentManagementCommand.when?.(mcpCommandContext('codex').context)).toBe(true)
-    expect(agentManagementCommand.when?.(mcpCommandContext('opencode').context)).toBe(false)
+    expect(agentManagementCommand.when?.(mcpCommandContext('opencode').context)).toBe(true)
   })
 
   it('toggles Agent Management for one existing session through replacement', async () => {

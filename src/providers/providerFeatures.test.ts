@@ -34,7 +34,7 @@ describe('provider feature matrix', () => {
         transcriptDuplicate: true,
         promptHistoryExtraction: true,
         inAppResume: true,
-        switchTargets: ['codex'],
+        switchTargets: ['codex', 'opencode'],
         verifiedExternalResumeCommand: true,
       },
       codex: {
@@ -43,21 +43,21 @@ describe('provider feature matrix', () => {
         transcriptDuplicate: true,
         promptHistoryExtraction: true,
         inAppResume: true,
-        switchTargets: ['claude'],
+        switchTargets: ['claude', 'opencode'],
         verifiedExternalResumeCommand: true,
       },
       opencode: {
         savedSessionListing: false,
-        transcriptRewind: false,
-        transcriptDuplicate: false,
-        promptHistoryExtraction: false,
+        transcriptRewind: true,
+        transcriptDuplicate: true,
+        promptHistoryExtraction: true,
         // The one capability OpenCode HAS. Pinned explicitly because Reload
         // Agent was hidden for it by a guard reading the unrelated
         // shell-command flag, and this row is what makes that regression
         // visible if anyone re-conflates the two.
         inAppResume: true,
-        switchTargets: [],
-        verifiedExternalResumeCommand: false,
+        switchTargets: ['claude', 'codex'],
+        verifiedExternalResumeCommand: true,
       },
     })
   })
@@ -80,29 +80,21 @@ describe('provider feature matrix', () => {
     expect(getProviderFeatures('not-a-provider').switchTargets).toEqual([])
   })
 
-  it('leaves OpenCode unavailable for every unsupported operation', () => {
-    // Named individually rather than as a group: each flips when its OWN
-    // adapter becomes real, and flipping them together is the mistake this
-    // whole phase exists to prevent.
+  it('grants OpenCode transcript operations without pretending it has a session index', () => {
     const opencode = getProviderFeatures('opencode')
     expect(opencode.savedSessionListing).toBe(false)
-    expect(opencode.transcriptRewind).toBe(false)
-    expect(opencode.transcriptDuplicate).toBe(false)
-    expect(opencode.promptHistoryExtraction).toBe(false)
-    expect(opencode.verifiedExternalResumeCommand).toBe(false)
-    expect(opencode.switchTargets).toEqual([])
-    // NOT in the list above: in-app resume genuinely works for OpenCode.
-    // Grouping it with the rest is the exact mistake that hid Reload Agent.
+    expect(opencode.transcriptRewind).toBe(true)
+    expect(opencode.transcriptDuplicate).toBe(true)
+    expect(opencode.promptHistoryExtraction).toBe(true)
+    expect(opencode.verifiedExternalResumeCommand).toBe(true)
+    expect(opencode.switchTargets).toEqual(['claude', 'codex'])
     expect(opencode.inAppResume).toBe(true)
   })
 
-  it('keeps switch edges directional and symmetric only where declared', () => {
-    // Claude<->Codex is a real round trip; nothing points at OpenCode, and
-    // OpenCode points at nothing. A boolean "canSwitch" could not express that.
-    expect(getProviderFeatures('claude').switchTargets).toEqual(['codex'])
-    expect(getProviderFeatures('codex').switchTargets).toEqual(['claude'])
+  it('declares a complete directed switch graph for all transcript adapters', () => {
     for (const kind of AGENT_PROVIDER_KINDS) {
-      expect(getProviderFeatures(kind).switchTargets).not.toContain('opencode')
+      expect(getProviderFeatures(kind).switchTargets)
+        .toEqual(AGENT_PROVIDER_KINDS.filter(candidate => candidate !== kind))
     }
   })
 

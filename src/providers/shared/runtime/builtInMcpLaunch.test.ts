@@ -1,43 +1,62 @@
-import { readFile, stat } from 'node:fs/promises'
-
 import { describe, expect, it } from 'vitest'
 
-import {
-  addCodexBuiltInMcpLaunchConfig,
-  createPrivateClaudeMcpConfig,
-} from './builtInMcpLaunch.js'
+import { addOpencodeBuiltInMcpLaunchConfig } from './builtInMcpLaunch.js'
 
-const secret = 'session-secret-that-must-not-enter-argv'
-const server = {
-  name: 'agent_code',
-  url: 'http://127.0.0.1:1234/mcp',
-  bearerToken: secret,
-  headers: {},
-}
+describe('addOpencodeBuiltInMcpLaunchConfig', () => {
+  it('merges remote servers while keeping credentials out of inline JSON', () => {
+    const env: Record<string, string> = {
+      OPENCODE_CONFIG_CONTENT: JSON.stringify({
+        model: 'example/model',
+        mcp: { personal: { type: 'remote', url: 'https://example.test/mcp' } },
+      }),
+    }
 
-describe('built-in MCP provider launch configuration', () => {
-  it('passes Codex header values through environment-backed configuration', () => {
-    const args: string[] = []
-    const env: Record<string, string> = {}
+    addOpencodeBuiltInMcpLaunchConfig(
+      [{
+        name: 'agent-code',
+        url: 'http://127.0.0.1:4200/session/test',
+        bearerToken: 'session-secret',
+        headers: { 'X-Agent-Code': 'header-secret' },
+      }],
+      env,
+    )
 
-    addCodexBuiltInMcpLaunchConfig([server], args, env)
-
-    expect(args.join(' ')).not.toContain(secret)
-    expect(args.join(' ')).toContain('env_http_headers.Authorization')
-    expect(Object.values(env)).toContain(`Bearer ${secret}`)
+    expect(env.OPENCODE_CONFIG_CONTENT).not.toContain('session-secret')
+    expect(env.OPENCODE_CONFIG_CONTENT).not.toContain('header-secret')
+    expect(env.AGENT_CODE_MCP_0_0).toBe('header-secret')
+    expect(env.AGENT_CODE_MCP_0_1).toBe('Bearer session-secret')
+    expect(JSON.parse(env.OPENCODE_CONFIG_CONTENT)).toEqual({
+      model: 'example/model',
+      mcp: {
+        personal: { type: 'remote', url: 'https://example.test/mcp' },
+        'agent-code': {
+          type: 'remote',
+          url: 'http://127.0.0.1:4200/session/test',
+          enabled: true,
+          headers: {
+            'X-Agent-Code': '{env:AGENT_CODE_MCP_0_0}',
+            Authorization: '{env:AGENT_CODE_MCP_0_1}',
+          },
+        },
+      },
+    })
   })
 
-  it('passes Claude a private file path instead of inline secret JSON', async () => {
-    const config = await createPrivateClaudeMcpConfig([server])
-    expect(config).not.toBeNull()
-    if (!config) return
-    try {
-      expect(config.path).not.toContain(secret)
-      expect((await stat(config.path)).mode & 0o777).toBe(0o600)
-      expect(await readFile(config.path, 'utf8')).toContain(`Bearer ${secret}`)
-    } finally {
-      await config.dispose()
-    }
-    await expect(readFile(config.path, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+  it('does not mutate the environment when no servers are requested', () => {
+    const env = { OPENCODE_CONFIG_CONTENT: '{not-json' }
+    addOpencodeBuiltInMcpLaunchConfig([], env)
+    expect(env).toEqual({ OPENCODE_CONFIG_CONTENT: '{not-json' })
+  })
+
+  it('fails before spawn when existing inline configuration cannot be merged safely', () => {
+    expect(() => addOpencodeBuiltInMcpLaunchConfig(
+      [{
+        name: 'agent-code',
+        url: 'http://127.0.0.1:4200',
+        bearerToken: 'secret',
+        headers: {},
+      }],
+      { OPENCODE_CONFIG_CONTENT: '{not-json' },
+    )).toThrow(/OPENCODE_CONFIG_CONTENT is not valid JSON/)
   })
 })

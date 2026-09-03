@@ -362,7 +362,7 @@ export type Settings = {
    *  semantic the user asked for: the setting seeds initial state and
    *  then gets out of the way. */
   defaultWorkspaceMode: WorkspaceModeId
-  /** App-wide default surface for Claude/Codex agent panes.
+  /** App-wide default surface for provider panes that support both surfaces.
    *
    * WHY this is global settings instead of per-session metadata:
    * terminal mode attaches an interactive xterm to the provider PTY and

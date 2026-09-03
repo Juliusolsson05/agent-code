@@ -90,7 +90,10 @@ export async function loadInitialHistoryForSession({
 }): Promise<void> {
   const meta = metaOverride ?? refs.stateRef.current.sessions[sessionId]
   const kind = meta?.kind ?? DEFAULT_PROVIDER
-  if (!meta || !isAgentProviderKind(kind)) return
+  // Native terminal flavours replay inside their own TUI. Loading the same
+  // export into the unmounted rendered runtime wastes a CLI process and can
+  // make hidden feed state influence terminal-only command availability.
+  if (!meta || !isAgentProviderKind(kind) || meta.providerRuntime === 'terminal') return
 
   if (!hasDurableProviderSession(meta)) {
     setRuntimes(prev => {

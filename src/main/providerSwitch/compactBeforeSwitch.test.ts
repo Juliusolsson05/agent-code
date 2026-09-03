@@ -10,11 +10,14 @@ const mocks = vi.hoisted(() => ({
 // `read` and `readAt` share one mock so the call count below means "decodes",
 // whichever entry point the implementation chose for a given decode.
 vi.mock('@main/providerSwitch/transcriptEngine.js', () => ({
-  getHostTranscriptAdapter: () => ({
-    read: mocks.read,
-    readAt: mocks.read,
-    locate: mocks.locate,
-  }),
+  getHostTranscriptAdapter: (provider: string) => provider === 'opencode'
+    ? { provider, read: mocks.read }
+    : {
+        provider,
+        read: mocks.read,
+        readAt: mocks.read,
+        locate: mocks.locate,
+      },
 }))
 
 // The wait loop stats the located transcript to decide whether a decode is
@@ -151,6 +154,35 @@ describe('compactSourceBeforeSwitch', () => {
 
     expect(manager.deliverPromptToAgent).toHaveBeenCalledOnce()
     expect(manager.deliverPromptToAgent).not.toHaveBeenCalledWith('local-session', '/compact')
+  })
+
+  it('uses completed OpenCode exports for a portable handoff without requiring a file path', async () => {
+    mocks.read
+      .mockResolvedValueOnce(conversation([], 'opencode'))
+      .mockResolvedValueOnce(conversation([
+        opencodeAssistant('portable OpenCode summary', 3),
+      ], 'opencode'))
+    const manager = opencodeManager()
+    const onPortableSummary = vi.fn()
+
+    const result = await compactSourceBeforeSwitch(
+      manager as never,
+      opencodeRequest(),
+      requiresCompactionPlan(),
+      onPortableSummary,
+    )
+
+    expect(onPortableSummary).toHaveBeenCalledOnce()
+    expect(manager.deliverPromptToAgent).toHaveBeenCalledOnce()
+    expect(manager.deliverPromptToAgent).toHaveBeenCalledWith(
+      'local-session',
+      expect.stringContaining('portable handoff summary'),
+    )
+    expect(mocks.locate).not.toHaveBeenCalled()
+    expect(result.entries).toEqual([expect.objectContaining({
+      kind: 'compaction',
+      summary: 'portable OpenCode summary',
+    })])
   })
 
   // The contracts below protect #720: the wait used to decode the whole source
@@ -304,6 +336,14 @@ function codexManager() {
   }
 }
 
+function opencodeManager() {
+  return {
+    getSessionKind: vi.fn(() => 'opencode'),
+    getSpawnCwd: vi.fn(() => '/project'),
+    deliverPromptToAgent: vi.fn(async () => ({ ok: true })),
+  }
+}
+
 function claudeRequest() {
   return {
     sourceKind: 'claude' as const,
@@ -324,19 +364,47 @@ function codexRequest() {
   }
 }
 
+function opencodeRequest() {
+  return {
+    sourceKind: 'opencode' as const,
+    targetKind: 'claude' as const,
+    sourceProviderSessionId: 'provider-session',
+    sourceSessionId: 'local-session',
+    cwd: '/project',
+  }
+}
+
 function fileInfo(size: number, mtimeMs: number) {
   return { size, mtimeMs }
 }
 
 function conversation(
   entries: ConversationDocument['entries'],
-  sourceProvider: 'claude' | 'codex' = 'claude',
+  sourceProvider: 'claude' | 'codex' | 'opencode' = 'claude',
 ): ConversationDocument {
   return {
     schemaVersion: 1 as const,
     sourceProvider,
     sourceSessionIds: ['provider-session'],
     entries,
+  }
+}
+
+function opencodeAssistant(text: string, line: number) {
+  return {
+    kind: 'message' as const,
+    role: 'assistant' as const,
+    content: [{ kind: 'text' as const, text }],
+    timestamp: '2026-09-03T12:00:00.000Z',
+    source: {
+      provider: 'opencode',
+      line,
+      raw: {
+        info: { role: 'assistant', time: { created: 1, completed: 2 } },
+        parts: [{ type: 'text', text }],
+      },
+      evidence: [],
+    },
   }
 }
 

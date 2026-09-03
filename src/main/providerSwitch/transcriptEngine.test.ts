@@ -2,6 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   readFile: vi.fn(),
+  exportOpencodeSession: vi.fn(),
+  importOpencodeSession: vi.fn(),
+  listOpencodeModels: vi.fn(),
+  readResolvedOpencodeConfig: vi.fn(),
 }))
 
 vi.mock('fs/promises', () => ({ readFile: mocks.readFile }))
@@ -17,22 +21,99 @@ vi.mock('@main/setup/cliVersion.js', () => ({
   readInstalledVersion: vi.fn(async () => ({ ok: true, version: 'test' })),
 }))
 vi.mock('@main/setup/toolchain.js', () => ({ getToolPath: vi.fn(() => '/tool') }))
+vi.mock('@providers/opencode/runtime/opencodeCliSessions.js', () => ({
+  exportOpencodeSession: mocks.exportOpencodeSession,
+  importOpencodeSession: mocks.importOpencodeSession,
+  listOpencodeModels: mocks.listOpencodeModels,
+  readResolvedOpencodeConfig: mocks.readResolvedOpencodeConfig,
+  opencodeExportSessionId: (value: { info?: { id?: string } }) => value.info?.id,
+}))
 
 import { getHostTranscriptAdapter } from './transcriptEngine.js'
 
 describe('host transcript adapter registry', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mocks.readResolvedOpencodeConfig.mockResolvedValue({ model: 'anthropic/claude-sonnet-4' })
+    mocks.listOpencodeModels.mockResolvedValue([])
   })
 
   it('registers providers independently of conversion pairs', () => {
     expect(getHostTranscriptAdapter('claude').provider).toBe('claude')
     expect(getHostTranscriptAdapter('codex').provider).toBe('codex')
+    expect(getHostTranscriptAdapter('opencode').provider).toBe('opencode')
   })
 
-  it('fails before IO when a provider has no transcript adapter', () => {
-    expect(() => getHostTranscriptAdapter('opencode')).toThrow(
-      'No transcript engine adapter is registered',
+  it('decodes OpenCode exports and exposes exact message indexes as prompts', async () => {
+    mocks.exportOpencodeSession.mockResolvedValue({
+      info: { id: 'ses_source' },
+      messages: [
+        {
+          info: { id: 'msg_1', sessionID: 'ses_source', role: 'user', time: { created: 1 } },
+          parts: [{ type: 'text', text: 'first' }],
+        },
+        {
+          info: {
+            id: 'msg_2', sessionID: 'ses_source', role: 'assistant',
+            time: { created: 2, completed: 3 },
+          },
+          parts: [{ type: 'text', text: 'answer' }],
+        },
+        {
+          info: { id: 'msg_3', sessionID: 'ses_source', role: 'user', time: { created: 4 } },
+          parts: [{ type: 'text', text: 'second' }],
+        },
+        {
+          info: {
+            id: 'msg_4', sessionID: 'ses_source', role: 'assistant',
+            time: { created: 5, completed: 6 },
+          },
+          parts: [{ type: 'text', text: 'second answer' }],
+        },
+      ],
+    })
+
+    await expect(getHostTranscriptAdapter('opencode').read('/project', 'ses_source'))
+      .resolves.toMatchObject({ sourceProvider: 'opencode', sourceSessionIds: ['ses_source'] })
+    await expect(getHostTranscriptAdapter('opencode').listPrompts('/project', 'ses_source'))
+      .resolves.toEqual([{
+        address: { provider: 'opencode', line: 2, sessionId: 'ses_source' },
+        text: 'second',
+        timestamp: '1970-01-01T00:00:00.004Z',
+      }])
+  })
+
+  it('uses OpenCode resolved provider/model metadata for capacity and projection', async () => {
+    await expect(getHostTranscriptAdapter('opencode').targetProfile('/project'))
+      .resolves.toEqual({
+        model: 'claude-sonnet-4',
+        modelProvider: 'anthropic',
+        budgetCharacters: 288_000,
+      })
+  })
+
+  it('refuses an in-flight OpenCode export before a transcript transform can replace it', async () => {
+    mocks.exportOpencodeSession.mockResolvedValue({
+      info: { id: 'ses_source' },
+      messages: [{
+        info: { id: 'msg_user', sessionID: 'ses_source', role: 'user', time: { created: 1 } },
+        parts: [{ type: 'text', text: 'still running' }],
+      }],
+    })
+
+    await expect(getHostTranscriptAdapter('opencode').read('/project', 'ses_source'))
+      .rejects.toThrow('has an unfinished turn')
+  })
+
+  it('imports one projected OpenCode envelope instead of treating it as JSONL', async () => {
+    mocks.importOpencodeSession.mockResolvedValue('ses_target')
+    const value = { info: { id: 'ses_target' }, messages: [] }
+
+    await expect(getHostTranscriptAdapter('opencode').write('/project', [value]))
+      .resolves.toBe('opencode://session/ses_target')
+    expect(mocks.importOpencodeSession).toHaveBeenCalledWith(
+      { binary: '/tool', cwd: '/project' },
+      value,
     )
   })
 

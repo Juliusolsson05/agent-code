@@ -49,7 +49,11 @@ export function useHistoryActions(
       }
 
       const kind = meta.kind ?? DEFAULT_PROVIDER
-      if (!isAgentProviderKind(kind) || !meta.providerSessionId) {
+      if (
+        !isAgentProviderKind(kind) ||
+        meta.providerRuntime === 'terminal' ||
+        !meta.providerSessionId
+      ) {
         span.end({ skipped: 'unsupported-or-missing-provider-session', kind })
         return
       }

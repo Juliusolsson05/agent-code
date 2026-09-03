@@ -138,11 +138,13 @@ function commandVisible(command: CommandDef, ctx: CommandContext): boolean {
 function renderedViewAvailable(command: CommandDef, ctx: CommandContext): boolean {
   const sessionId = commandTargetSessionId(ctx.workspace)
   if (!sessionId) return true
-  const kind = ctx.workspace.state.sessions[sessionId]?.kind
+  const meta = ctx.workspace.state.sessions[sessionId]
+  const kind = meta?.kind
   const runtime = ctx.workspace.getRuntime(sessionId)
   return commandAllowedByRenderedViewPolicy({
     policy: command.renderedViewPolicy,
     kind,
+    providerRuntime: meta?.providerRuntime,
     mode: ctx.flags.agentViewMode,
     runtime,
   })

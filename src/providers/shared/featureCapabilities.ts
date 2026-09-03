@@ -8,9 +8,11 @@ import type { AgentProviderKind } from '@shared/types/providerKind'
  * feature capability. That predicate only distinguishes agents from terminals —
  * it says nothing about whether a provider has a transcript adapter, a
  * saved-session index, or a verified CLI resume form. Because every agent
- * provider passed it, OpenCode was offered Resume, Rewind, Duplicate, Switch
- * Provider and Copy Resume, all of which are empty, rejected, unsupported or
- * unverified for it. The user sees an ordinary enabled command and gets nothing.
+ * provider passed it, OpenCode was historically offered Resume, Rewind,
+ * Duplicate, Switch Provider and Copy Resume before those paths were actually
+ * implemented or verified. The user saw an ordinary enabled command and got
+ * nothing. OpenCode now declares the capabilities backed by its CLI adapter;
+ * this registry still prevents that failure from recurring for a new provider.
  *
  * The rule this replaces it with: a provider gets a feature when it DECLARES
  * the capability, not when it happens to be an agent. Adding a provider now
@@ -105,50 +107,43 @@ export const NO_PROVIDER_FEATURES: ProviderFeatureCapabilities = {
  */
 const FEATURES_BY_KIND: Record<AgentProviderKind, ProviderFeatureCapabilities> = {
   // Saved-session index, a transcript adapter used by both rewind and
-  // duplicate, a verified `claude --resume` form, and a translation edge to
-  // Codex.
+  // duplicate, a verified `claude --resume` form, and translation edges to
+  // both other native-resume adapters.
   claude: {
     savedSessionListing: true,
     transcriptRewind: true,
     transcriptDuplicate: true,
     promptHistoryExtraction: true,
     inAppResume: true,
-    switchTargets: ['codex'],
+    switchTargets: ['codex', 'opencode'],
     verifiedExternalResumeCommand: true,
   },
-  // Mirrors Claude, with the reverse translation edge.
+  // Mirrors Claude, with explicit edges to both other adapters.
   codex: {
     savedSessionListing: true,
     transcriptRewind: true,
     transcriptDuplicate: true,
     promptHistoryExtraction: true,
     inAppResume: true,
-    switchTargets: ['claude'],
+    switchTargets: ['claude', 'opencode'],
     verifiedExternalResumeCommand: true,
   },
-  // Almost everything false, and that is the correction rather than a slight.
-  // OpenCode has no saved-session listing in main, no transcript adapter for
-  // rewind or duplicate to operate on, no switch edge in either direction, and
-  // its resumeCommand template is an unverified guess (see the note in its
-  // identity descriptor). Agent-hood previously granted all of it implicitly,
-  // so the commands appeared enabled and then did nothing.
-  //
-  // Flip these individually as each adapter becomes real; never as a group.
+  // OpenCode still lacks a cwd-indexed saved-session picker, but its supported
+  // CLI export/import boundary now backs prompt extraction, rewind, duplicate,
+  // and pairwise switching. Keep listing separate: being able to address a
+  // known `ses_` id does not imply main can enumerate sessions for Resume UI.
   opencode: {
     savedSessionListing: false,
-    transcriptRewind: false,
-    transcriptDuplicate: false,
-    // `extractLatestUserPrompts` filters on Claude's `permissionMode` field
-    // unless the kind is codex, so OpenCode entries all fall through and View
-    // Prompts opens empty.
-    promptHistoryExtraction: false,
+    transcriptRewind: true,
+    transcriptDuplicate: true,
+    promptHistoryExtraction: true,
     // TRUE, and the one place OpenCode is not behind. `opencodeSession`
     // accepts a resume id and replays the session's messages, so Reload Agent
     // works — it was only hidden because the guard read the flag for the
     // unrelated shell-command feature.
     inAppResume: true,
-    switchTargets: [],
-    verifiedExternalResumeCommand: false,
+    switchTargets: ['claude', 'codex'],
+    verifiedExternalResumeCommand: true,
   },
 }
 

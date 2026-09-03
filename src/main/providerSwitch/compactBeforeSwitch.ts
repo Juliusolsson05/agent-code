@@ -10,6 +10,7 @@ import {
   conversationAfterLatestPortableCompaction,
   describeLatestCompaction,
   portableCodexHandoffAfterLine,
+  portableOpencodeHandoffAfterLine,
 } from 'agent-transcript-parser'
 
 import type { SessionManager } from '@main/sessionManager.js'
@@ -59,6 +60,32 @@ export async function compactSourceBeforeSwitch(
   }
 
   const source = getHostTranscriptAdapter(request.sourceKind)
+
+  if (request.sourceKind === 'opencode') {
+    // OpenCode's supported storage boundary is `opencode export`; it has no
+    // stable transcript path for Agent Code to watch and its slash-command
+    // parser lives inside the interactive TUI. Asking for one ordinary,
+    // read-only handoff turn works for both the terminal and structured
+    // runtimes, then the export's completed timestamp proves durability.
+    const summaryBaselineLine = await readSourceAs(
+      source,
+      sourceCwd,
+      request.sourceProviderSessionId,
+      latestSourceLine,
+    )
+    onPortableSummary?.()
+    const delivery = await manager.deliverPromptToAgent(sourceSessionId, PORTABLE_SUMMARY_PROMPT)
+    if (!delivery.ok) {
+      throw new Error(`Could not request OpenCode portable handoff: ${delivery.message}`)
+    }
+    return await waitForPortableOpencodeSummary(
+      manager,
+      request,
+      source,
+      sourceCwd,
+      summaryBaselineLine,
+    )
+  }
 
   // WHY no local below holds a ConversationDocument: this function and its
   // wait loops are suspended on timers for up to five minutes, and V8 keeps
@@ -237,6 +264,35 @@ async function waitForPortableCodexSummary(
   })
 }
 
+async function waitForPortableOpencodeSummary(
+  manager: SessionManager,
+  request: SwitchProviderRequest,
+  source: SourceAdapter,
+  sourceCwd: string,
+  baselineLine: number,
+): Promise<ConversationDocument> {
+  return await pollSourceUntil(manager, request, source, sourceCwd, {
+    expectedKind: 'opencode',
+    exitedMessage: 'The OpenCode source agent exited while creating its portable handoff.',
+    timeoutMessage: () => 'Timed out waiting for OpenCode to persist a portable handoff summary.',
+  }, conversation => {
+    const handoff = portableOpencodeHandoffAfterLine(conversation, baselineLine)
+    if (!handoff) return null
+    return {
+      value: {
+        ...conversation,
+        entries: [{
+          kind: 'compaction',
+          summary: handoff.summary,
+          summarySource: 'synthetic',
+          timestamp: handoff.message.timestamp,
+          source: handoff.message.source,
+        }],
+      },
+    }
+  })
+}
+
 type PollOptions = {
   expectedKind: AgentProviderKind
   exitedMessage: string
@@ -285,11 +341,26 @@ async function pollSourceUntil<T>(
   // source.
   let lastDecodeEndedAt = Number.NEGATIVE_INFINITY
   let lastReadError: unknown = null
+  const fileBacked = typeof source.locate === 'function' && typeof source.readAt === 'function'
 
   const decodeOnce = async (): Promise<{ value: T } | null> => {
     try {
+      if (!fileBacked) {
+        const outcome = await readSourceAs(
+          source,
+          sourceCwd,
+          request.sourceProviderSessionId,
+          probe,
+        )
+        lastReadError = null
+        // A CLI export has no cheap stat token. Keep it pending so the next
+        // cooled tick exports again; MIN_DECODE_INTERVAL_MS still prevents a
+        // long session from monopolizing the main process.
+        decodePending = true
+        return outcome
+      }
       if (transcriptPath === null) {
-        transcriptPath = await source.locate(sourceCwd, request.sourceProviderSessionId)
+        transcriptPath = await source.locate!(sourceCwd, request.sourceProviderSessionId)
       }
       lastToken = await transcriptChangeToken(transcriptPath)
       const outcome = await readSourceAtAs(source, transcriptPath, probe)
@@ -311,7 +382,7 @@ async function pollSourceUntil<T>(
     if (manager.getSessionKind(sourceSessionId) !== options.expectedKind) {
       throw new Error(options.exitedMessage)
     }
-    if (transcriptPath !== null && !decodePending) {
+    if (fileBacked && transcriptPath !== null && !decodePending) {
       const token = await transcriptChangeToken(transcriptPath)
       if (token === null) {
         transcriptPath = null
@@ -365,6 +436,9 @@ async function readSourceAtAs<T>(
   path: string,
   select: (conversation: ConversationDocument) => T,
 ): Promise<T> {
+  if (!source.readAt) {
+    throw new Error(`Provider ${source.provider} does not expose path-based transcript reads.`)
+  }
   return select(await source.readAt(path))
 }
 

@@ -20,13 +20,14 @@ describe('built-in MCP provider policy', () => {
     expect(normalizeConfigurableBuiltInMcpDomains('orchestration')).toEqual([])
   })
 
-  it('keeps Workflow MCP Codex-only and makes OpenCode support explicit', () => {
+  it('keeps Workflow MCP out of Claude while making OpenCode support explicit', () => {
     expect(providerSupportsBuiltInMcpDomain('codex', 'workflows')).toBe(true)
     expect(providerSupportsBuiltInMcpDomain('claude', 'workflows')).toBe(false)
     expect(providerSupportsBuiltInMcpDomain('claude', 'orchestration')).toBe(true)
     expect(providerSupportsBuiltInMcpDomain('claude', 'agent_management')).toBe(true)
     expect(providerSupportsBuiltInMcpDomain('codex', 'agent_management')).toBe(true)
-    expect(providerSupportsBuiltInMcpDomain('opencode', 'orchestration')).toBe(false)
+    expect(providerSupportsBuiltInMcpDomain('opencode', 'orchestration')).toBe(true)
+    expect(providerSupportsBuiltInMcpDomain('opencode', 'workflows')).toBe(true)
   })
 
   it('filters untrusted domain lists while preserving supported input order', () => {
@@ -42,6 +43,6 @@ describe('built-in MCP provider policy', () => {
     expect(filterBuiltInMcpDomainsForProvider('opencode', [
       'orchestration',
       'workflows',
-    ])).toEqual([])
+    ])).toEqual(['orchestration', 'workflows'])
   })
 })

@@ -439,11 +439,25 @@ export async function rehydrateWorkspace(
     const recoveredRunId = observedReplacementWhileRecovering
       ? observedRunId
       : backend?.sessionRunId ?? observedRunId
+    const usesProviderTerminalRuntime =
+      freshSessions[sessionId]?.providerRuntime === 'terminal'
     const seeded: SessionRuntime = {
       ...base,
       ...(backend ? { sessionRunId: recoveredRunId } : {}),
       ...(draft && !base.draftInput ? { draftInput: draft } : {}),
-      ...seedResumedRuntimeFields(existing, freshSessions[sessionId]),
+      ...(usesProviderTerminalRuntime
+        ? {
+            // The OpenCode native TUI owns the pane's visual history. Marking
+            // this runtime as `loading` would mount the structured-history
+            // bootstrap path and leave a permanent spinner because rehydrate
+            // deliberately skips that loader below. Its provider id remains
+            // durable metadata for recovery and transcript transforms; it is
+            // not permission to mix the rendered engine into this surface.
+            hasOlderHistory: false,
+            transcriptStatus: 'ready' as const,
+            transcriptError: null,
+          }
+        : seedResumedRuntimeFields(existing, freshSessions[sessionId])),
     }
 
     if (failure) {
@@ -719,6 +733,7 @@ export async function rehydrateWorkspace(
           const recovery = await recoverSessionBeforeDeadline(recoveryApi, {
             sessionId: oldId,
             kind,
+            providerRuntime: meta.providerRuntime,
             cwd: meta.cwd,
             resumeSessionId,
             dangerousMode: kind !== 'terminal' ? refs.dangerousAgentsRef.current : undefined,
@@ -797,6 +812,7 @@ export async function rehydrateWorkspace(
           commitRehydratedState(newId)
           if (
             kind !== 'terminal' &&
+            meta.providerRuntime !== 'terminal' &&
             resumeSessionId &&
             refs.stateRef.current.sessions[newId] &&
             refs.latestRuntimesRef.current[newId]

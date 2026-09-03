@@ -46,10 +46,15 @@ import type {
 } from '@shared/types/providerConditions.js'
 import {
   DEFAULT_PROVIDER,
+  isAgentProviderRuntime,
   isAgentProviderKind,
   isSessionKind,
 } from '@shared/types/providerKind.js'
-import type { AgentProviderKind, SessionKind } from '@shared/types/providerKind.js'
+import type {
+  AgentProviderKind,
+  AgentProviderRuntime,
+  SessionKind,
+} from '@shared/types/providerKind.js'
 import type { BuiltInMcpDomain, BuiltInMcpServerConfig } from '@mcp/shared/types.js'
 import type { BuiltInMcpHttpHost } from '@mcp/runtime/BuiltInMcpHttpHost.js'
 import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
@@ -271,11 +276,12 @@ const RECENT_CODEX_SESSION_RUN_LIMIT = 2_048
 // Internal registry shape: we store the concrete instance plus its
 // kind so kill/write/resize can dispatch without sniffing the object.
 // The registry holds concrete session instances. Agent sessions
-// (claude, codex) are created via the provider registry; terminal
+// (Claude, Codex, and either OpenCode runtime) are created via the provider registry; terminal
 // sessions are handled directly.
 type RegistryEntry =
   | {
       kind: AgentProviderKind
+      providerRuntime?: AgentProviderRuntime
       session: AgentSessionLike
       lifecycle: RegistryLifecycle
     }
@@ -288,6 +294,7 @@ type RegistryEntry =
 
 type RecoveryClaim = {
   kind: SessionKind
+  providerRuntime?: AgentProviderRuntime
   cwd: string
   recoveryTokens: Set<string>
   startedAt: number
@@ -301,6 +308,7 @@ type CodexReplacementReservationRecord =
 
 type SessionSpawnInfo = {
   kind: SessionKind
+  providerRuntime?: AgentProviderRuntime
   cwd: string
   resumeSessionId: string | null
   dangerousMode: boolean
@@ -378,8 +386,23 @@ type InputWriteOrigin =
 
 const TERMINAL_BUFFER_CAP = 256 * 1024
 
+function resolveProviderRuntime(
+  kind: SessionKind,
+  requested: unknown,
+): AgentProviderRuntime | undefined {
+  if (requested === undefined) return undefined
+  if (!isAgentProviderRuntime(requested) || !isAgentProviderKind(kind)) {
+    throw new Error('Unsupported agent provider runtime')
+  }
+  const provider = getMainProvider(kind)
+  if (requested === 'terminal' && !provider.createTerminalSession) {
+    throw new Error(`${provider.name} does not support a terminal runtime`)
+  }
+  return requested
+}
+
 // Raw-agent terminal buffer cap. This is intentionally larger than the
-// plain terminal cap because Claude/Codex TUIs emit more repaint bytes
+// plain terminal cap because provider TUIs emit more repaint bytes
 // than a normal shell: full-screen redraws, ANSI cursor movement, and
 // progress rows can churn heavily even when the visible content is
 // small. We still cap aggressively because this buffer is debug-only
@@ -608,7 +631,7 @@ export class SessionManager extends EventEmitter {
   // structured feed but not enough for a real inline terminal: xterm
   // needs the raw byte stream, including ANSI cursor movement and full
   // repaint sequences. We therefore keep a capped byte-string replay
-  // buffer per Claude/Codex session and expose it only when a raw terminal
+  // buffer per PTY-backed agent session and expose it only when a raw terminal
   // consumer explicitly attaches (DebugPanel or #247's pane-level terminal
   // mode).
   //
@@ -958,6 +981,7 @@ export class SessionManager extends EventEmitter {
     if (!ownership) return false
     return (
       (ownership.kind ?? DEFAULT_PROVIDER) === (options.kind ?? DEFAULT_PROVIDER) &&
+      (ownership.providerRuntime ?? null) === (options.providerRuntime ?? null) &&
       path.resolve(ownership.cwd) === path.resolve(options.cwd)
     )
   }
@@ -1410,6 +1434,17 @@ export class SessionManager extends EventEmitter {
       })
     }
     const kind = options.kind ?? DEFAULT_PROVIDER
+    let providerRuntime: AgentProviderRuntime | undefined
+    try {
+      providerRuntime = resolveProviderRuntime(kind, options.providerRuntime)
+    } catch (error) {
+      return Promise.resolve({
+        ok: false,
+        code: 'start-failed',
+        retryable: false,
+        message: error instanceof Error ? error.message : String(error),
+      })
+    }
     const cwd = path.resolve(options.cwd)
     if (this.shuttingDown) {
       return Promise.resolve({
@@ -1549,7 +1584,11 @@ export class SessionManager extends EventEmitter {
     // Only a cancelled or actively reclaiming reverse lineage fences B.
     const existingClaim = this.recoveriesInFlight.get(options.sessionId)
     if (existingClaim) {
-      if (existingClaim.kind === kind && existingClaim.cwd === cwd) {
+      if (
+        existingClaim.kind === kind &&
+        (existingClaim.providerRuntime ?? null) === (providerRuntime ?? null) &&
+        existingClaim.cwd === cwd
+      ) {
         if (options.recoveryToken) {
           // Compatible callers share one physical provider start. A new
           // renderer therefore joins that generation's cancellation authority
@@ -1575,7 +1614,12 @@ export class SessionManager extends EventEmitter {
     const existingEntry = this.sessions.get(options.sessionId)
     if (existingEntry) {
       const snapshot = this.getBackendSnapshot(options.sessionId)
-      if (snapshot && snapshot.kind === kind && path.resolve(snapshot.cwd) === cwd) {
+      if (
+        snapshot &&
+        snapshot.kind === kind &&
+        (snapshot.providerRuntime ?? null) === (providerRuntime ?? null) &&
+        path.resolve(snapshot.cwd) === cwd
+      ) {
         // Adoption carries the ADOPTED BACKEND'S readiness, not just the
         // disposition. #596 turned on exactly this distinction: a caller that
         // adopts a live-but-not-ready agent behaves completely differently from
@@ -1625,6 +1669,7 @@ export class SessionManager extends EventEmitter {
     // lets us publish the fully-formed claim before any of those side effects.
     const claim: RecoveryClaim = {
       kind,
+      providerRuntime,
       cwd,
       recoveryTokens: new Set([options.recoveryToken ?? randomUUID()]),
       startedAt: performance.now(),
@@ -1695,6 +1740,7 @@ export class SessionManager extends EventEmitter {
         ...options,
         cwd: claim.cwd,
         kind: claim.kind,
+        providerRuntime: claim.providerRuntime,
       }, options.sessionId, claim)
       const result = await spawnPromise
       const snapshot = this.getBackendSnapshot(options.sessionId)
@@ -1822,6 +1868,10 @@ export class SessionManager extends EventEmitter {
       throw new Error('Unsupported session provider')
     }
     const kind: SessionKind = options.kind ?? DEFAULT_PROVIDER
+    // Validate before minting/claiming a renderer-visible id. The private spawn
+    // path repeats this at the IPC execution boundary because recovery can call
+    // it directly with persisted data.
+    resolveProviderRuntime(kind, options.providerRuntime)
     const sessionId = randomUUID()
     onSessionIdMinted?.(sessionId)
     const codexHandoffClaim = await this.prepareCodexReplacementHandoff(
@@ -2356,6 +2406,7 @@ export class SessionManager extends EventEmitter {
       throw new Error('Unsupported session provider')
     }
     const kind: SessionKind = options.kind ?? DEFAULT_PROVIDER
+    const providerRuntime = resolveProviderRuntime(kind, options.providerRuntime)
     if (
       this.sessions.has(sessionId) ||
       this.spawningSessionGenerations.has(sessionId) ||
@@ -2377,6 +2428,7 @@ export class SessionManager extends EventEmitter {
     if (recoveryClaim) recoveryClaim.spawnGeneration = spawnGeneration
     this.spawnInfo.set(sessionId, {
       kind,
+      providerRuntime,
       cwd: path.resolve(options.cwd),
       resumeSessionId: options.resumeSessionId ?? null,
       dangerousMode: options.dangerousMode === true,
@@ -2486,7 +2538,16 @@ export class SessionManager extends EventEmitter {
       // 'process-state'/'conditions'/'semantic-event'/'exit' events. We use
       // a narrow structural cast so provider-specific implementation
       // details don't leak into the manager.
-      const session = provider.createSession({
+      const createSession = providerRuntime === 'terminal'
+        ? provider.createTerminalSession
+        : provider.createSession
+      // resolveProviderRuntime already proved this capability exists. Keeping
+      // the defensive branch here makes registry drift fail at construction,
+      // before an unowned partially configured process can exist.
+      if (!createSession) {
+        throw new Error(`${provider.name} does not support a terminal runtime`)
+      }
+      const session = createSession({
         cwd: options.cwd,
         binary,
         cols: initialSize.cols,
@@ -2536,6 +2597,7 @@ export class SessionManager extends EventEmitter {
       })
       const agentEntry: RegistryEntry = {
         kind,
+        providerRuntime,
         session,
         lifecycle: createRegistryLifecycle(spawnGeneration),
       }
@@ -2817,7 +2879,11 @@ export class SessionManager extends EventEmitter {
         sessionId,
         provider: kind,
       })
-      return { sessionId }
+      const providerSessionId = session.getProviderSessionId?.() ?? null
+      return {
+        sessionId,
+        ...(providerSessionId ? { providerSessionId } : {}),
+      }
     }
 
     // kind === 'terminal'
@@ -3118,7 +3184,7 @@ export class SessionManager extends EventEmitter {
   /**
    * Agent PTY attach/replay entry point.
    *
-   * This is the Claude/Codex counterpart to attachTerminal(). It is
+   * This is the agent-provider counterpart to attachTerminal(). It is
    * intentionally separate because agent panes are not terminal panes:
    * their primary renderer is the structured feed, while this inline
    * terminal is an opt-in view into the underlying provider TUI.
@@ -3168,7 +3234,7 @@ export class SessionManager extends EventEmitter {
   }
 
   /**
-   * Detach a raw inline terminal from a Claude/Codex session.
+   * Detach a raw terminal view from an agent session.
    * The final detach disables raw PTY IPC forwarding and restores the provider
    * PTY size that was active before the first inline terminal took ownership.
    */
@@ -4198,6 +4264,12 @@ export class SessionManager extends EventEmitter {
     const requestedKind: unknown = options.kind
     if (requestedKind !== undefined && !isSessionKind(requestedKind)) return false
     const kind = options.kind ?? DEFAULT_PROVIDER
+    let providerRuntime: AgentProviderRuntime | undefined
+    try {
+      providerRuntime = resolveProviderRuntime(kind, options.providerRuntime)
+    } catch {
+      return false
+    }
     const cwd = path.resolve(options.cwd)
     const entry = this.sessions.get(options.sessionId)
     const claim = this.recoveriesInFlight.get(options.sessionId)
@@ -4210,11 +4282,20 @@ export class SessionManager extends EventEmitter {
     // backend unless both provider kind and lexical cwd still match in main.
     if (entry) {
       const snapshot = this.getBackendSnapshot(options.sessionId)
-      if (!snapshot || snapshot.kind !== kind || path.resolve(snapshot.cwd) !== cwd) {
+      if (
+        !snapshot ||
+        snapshot.kind !== kind ||
+        (snapshot.providerRuntime ?? null) !== (providerRuntime ?? null) ||
+        path.resolve(snapshot.cwd) !== cwd
+      ) {
         return false
       }
     } else if (claim) {
-      if (claim.kind !== kind || claim.cwd !== cwd) return false
+      if (
+        claim.kind !== kind ||
+        (claim.providerRuntime ?? null) !== (providerRuntime ?? null) ||
+        claim.cwd !== cwd
+      ) return false
     } else if (redirects.length > 0) {
       if (redirects.some(redirect => {
         // A redirect carries two independently valid routing identities. A
@@ -4226,6 +4307,7 @@ export class SessionManager extends EventEmitter {
           : redirect.successorOwnership
         return (
           (ownership.kind ?? DEFAULT_PROVIDER) !== kind ||
+          (ownership.providerRuntime ?? null) !== (providerRuntime ?? null) ||
           path.resolve(ownership.cwd) !== cwd
         )
       })) {
@@ -4273,6 +4355,7 @@ export class SessionManager extends EventEmitter {
       if (
         !reservedOwnership ||
         (reservedOwnership.kind ?? DEFAULT_PROVIDER) !== kind ||
+        (reservedOwnership.providerRuntime ?? null) !== (providerRuntime ?? null) ||
         path.resolve(reservedOwnership.cwd) !== cwd
       ) {
         return false
@@ -4313,18 +4396,26 @@ export class SessionManager extends EventEmitter {
     const requestedKind: unknown = options.kind
     if (requestedKind !== undefined && !isSessionKind(requestedKind)) return false
     const kind = options.kind ?? DEFAULT_PROVIDER
+    let providerRuntime: AgentProviderRuntime | undefined
+    try {
+      providerRuntime = resolveProviderRuntime(kind, options.providerRuntime)
+    } catch {
+      return false
+    }
     const cwd = path.resolve(options.cwd)
     const claim = this.recoveriesInFlight.get(options.sessionId)
     const reclaim = this.codexReplacements.getReclaim(options.sessionId)
     const reclaimMatches = Boolean(
       reclaim &&
       reclaim.kind === kind &&
+      providerRuntime === undefined &&
       reclaim.cwd === cwd &&
       reclaim.recoveryTokens.has(options.recoveryToken)
     )
     const ownsClaim = Boolean(
       claim &&
       claim.kind === kind &&
+      (claim.providerRuntime ?? null) === (providerRuntime ?? null) &&
       claim.cwd === cwd &&
       claim.recoveryTokens.has(options.recoveryToken)
     )
@@ -4433,6 +4524,9 @@ export class SessionManager extends EventEmitter {
     const info = this.spawnInfo.get(sessionId)
     if (!entry && !claim && !info) return null
     const kind = entry?.kind ?? info?.kind ?? claim?.kind
+    const providerRuntime = (
+      entry && entry.kind !== 'terminal' ? entry.providerRuntime : undefined
+    ) ?? info?.providerRuntime ?? claim?.providerRuntime
     const cwd = info?.cwd ?? claim?.cwd
     if (!kind || !cwd) return null
     return {
@@ -4444,6 +4538,7 @@ export class SessionManager extends EventEmitter {
       // claim has no registered process yet, so absence remains honest there.
       ...(entry ? { sessionRunId: entry.lifecycle.runId } : {}),
       kind,
+      ...(providerRuntime ? { providerRuntime } : {}),
       cwd,
       lifecycle: entry ? 'live' : 'spawning',
       input: this.lastInputReadiness.get(sessionId) ?? {

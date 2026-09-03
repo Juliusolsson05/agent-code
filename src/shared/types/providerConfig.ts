@@ -270,7 +270,7 @@ export type SemanticFoldPolicy = {
   trustedReplaceSources: readonly string[]
   /**
    * When a trusted source mismatches a live turn: true = replace outright
-   * (opencode — exactly one event stream, no PTY/proxy dual-source
+   * (structured opencode — exactly one event stream, no PTY/proxy dual-source
    * flicker, so a new turnId from that stream is always a legitimate new
    * turn); false = only through the completed/empty yield hatches
    * (codex — two racing producers make an outright replace re-create the
@@ -357,6 +357,16 @@ export type MainProviderConfig = {
    * provider, exactly where it can be fixed.
    */
   createSession: (opts: SessionOptions) => AgentSession
+  /**
+   * Optional native-terminal execution for the same provider identity.
+   *
+   * WHY this is a second factory rather than a second provider registry row:
+   * setup, skills, MCP permissions, history identity, and binary resolution
+   * all remain provider-level concerns. Only providers with a real interactive
+   * TUI expose this capability; SessionManager rejects a requested terminal
+   * runtime when the selected provider does not implement it.
+   */
+  createTerminalSession?: (opts: SessionOptions) => AgentSession
   /** List resumable sessions for a cwd. */
   listSessions: (cwd: string, limit: number) => Promise<SessionInfo[]>
   /**

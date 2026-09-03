@@ -3,6 +3,7 @@ import {
   isAgentProviderKind,
   isSessionKind,
 } from '@shared/types/providerKind'
+import type { AgentProviderRuntime } from '@shared/types/providerKind'
 import type { SessionRecoverFailureCode } from '@shared/types/session'
 import { useCallback, useRef } from 'react'
 
@@ -75,6 +76,7 @@ export type SessionActions = {
     opts?: {
       resumeSessionId?: string
       kind?: SessionKind
+      providerRuntime?: AgentProviderRuntime
       dangerousMode?: boolean
       recoverTmuxName?: string
       builtInMcpDomains?: BuiltInMcpDomain[]
@@ -87,6 +89,7 @@ export type SessionActions = {
     opts?: {
       resumeSessionId?: string
       kind?: SessionKind
+      providerRuntime?: AgentProviderRuntime
       builtInMcpDomains?: BuiltInMcpDomain[]
       targetSessionId?: SessionId
     },
@@ -113,6 +116,7 @@ export async function killSessionBackendIfOwned(
   return await window.api.killOwnedSession({
     sessionId,
     kind: meta.kind,
+    providerRuntime: meta.providerRuntime,
     cwd: meta.cwd,
   })
 }
@@ -254,6 +258,7 @@ export function useSessionActions(
         resumeSessionId?: string
         predecessorSessionId?: SessionId
         kind?: SessionKind
+        providerRuntime?: AgentProviderRuntime
         dangerousMode?: boolean
         recoverTmuxName?: string
         builtInMcpDomains?: BuiltInMcpDomain[]
@@ -278,9 +283,11 @@ export function useSessionActions(
           : undefined
       let sessionId: SessionId
       let tmuxName: string | undefined
+      let startedProviderSessionId: string | undefined
       try {
         const result = await window.api.spawnSession({
           kind,
+          providerRuntime: opts?.providerRuntime,
           cwd,
           resumeSessionId: opts?.resumeSessionId,
           ...(opts?.predecessorSessionId
@@ -293,6 +300,7 @@ export function useSessionActions(
         })
         sessionId = result.sessionId
         tmuxName = result.tmuxName
+        startedProviderSessionId = result.providerSessionId
         if (result.replacementTransactionId) {
           // WHY presence, not renderer inference: only main can prove the
           // successor targeted the predecessor's exact Codex rollout and
@@ -305,15 +313,21 @@ export function useSessionActions(
         throw new Error(sessionSpawnErrorMessage(kind, err, useProxy === true))
       }
       const previousMeta = refs.stateRef.current.sessions[sessionId]
+      const requestedProviderSessionId = opts?.resumeSessionId ?? startedProviderSessionId
       const meta: SessionMeta = {
         ...(previousMeta ?? {}),
         cwd,
         kind,
+        // Write the field even when absent so a pathological reused id cannot
+        // inherit an alternate runtime from stale metadata.
+        providerRuntime: opts?.providerRuntime,
         ...(tmuxName ? { tmuxName } : {}),
-        ...(kind !== 'terminal' && opts?.resumeSessionId
+        ...(kind !== 'terminal' && requestedProviderSessionId
           ? {
-              providerSessionId: opts.resumeSessionId,
-              providerSessionIdSource: 'resume-request' as const,
+              providerSessionId: requestedProviderSessionId,
+              providerSessionIdSource: opts?.resumeSessionId
+                ? 'resume-request' as const
+                : 'runtime-start' as const,
             }
           : {}),
         ...(isAgentProviderKind(kind) && builtInMcpDomains !== undefined
@@ -337,7 +351,7 @@ export function useSessionActions(
           ...prev,
           [sessionId]: {
             ...base,
-            ...(kind !== 'terminal'
+            ...(kind !== 'terminal' && opts?.providerRuntime !== 'terminal'
               ? seedResumedRuntimeFields(current, meta)
               : {
                   hasOlderHistory: false,
@@ -352,7 +366,7 @@ export function useSessionActions(
           },
         }
       })
-      if (kind !== 'terminal' && meta.providerSessionId) {
+      if (kind !== 'terminal' && meta.providerRuntime !== 'terminal' && meta.providerSessionId) {
         void loadInitialHistoryForSession({
           sessionId,
           meta,
@@ -549,6 +563,7 @@ export function useSessionActions(
           const recovery = await window.api.recoverSession({
             sessionId,
             kind,
+            providerRuntime: meta.providerRuntime,
             cwd: meta.cwd,
             resumeSessionId,
             builtInMcpDomains,
@@ -776,6 +791,7 @@ export function useSessionActions(
             : undefined
         const recoveredMeta: SessionMeta = {
           ...restoredMeta,
+          providerRuntime: recoverySnapshot?.providerRuntime ?? meta.providerRuntime,
           ...(recoveredBuiltInMcpDomains !== undefined
             ? { builtInMcpDomains: recoveredBuiltInMcpDomains }
             : {}),
@@ -806,6 +822,7 @@ export function useSessionActions(
 
         if (
           kind !== 'terminal' &&
+          recoveredMeta.providerRuntime !== 'terminal' &&
           resumeSessionId &&
           refs.stateRef.current.sessions[sessionId] &&
           refs.latestRuntimesRef.current[sessionId]
@@ -910,6 +927,7 @@ export function useSessionActions(
       opts?: {
         resumeSessionId?: string
         kind?: SessionKind
+        providerRuntime?: AgentProviderRuntime
         builtInMcpDomains?: BuiltInMcpDomain[]
         targetSessionId?: SessionId
       },
@@ -938,6 +956,14 @@ export function useSessionActions(
       const oldMeta = snapshot.sessions[oldId]
       if (!oldMeta) return
       const nextKind = spawnOpts.kind ?? oldMeta?.kind ?? DEFAULT_PROVIDER
+      // Reload/resume of the same provider preserves its execution surface;
+      // switching providers drops it because runtime capabilities are owned by
+      // the target provider, not transferable pane decoration.
+      const providerRuntime = spawnOpts.providerRuntime ?? (
+        nextKind === (oldMeta.kind ?? DEFAULT_PROVIDER)
+          ? oldMeta.providerRuntime
+          : undefined
+      )
       // WHY replaceSession inherits MCP domains by default:
       //
       // Reload, provider switch, resume, and rewind all funnel through this
@@ -957,6 +983,7 @@ export function useSessionActions(
       const oldDraft = refs.latestRuntimesRef.current[oldId]?.draftInput ?? ''
       const newId = await spawn(cwd, {
         ...spawnOpts,
+        providerRuntime,
         // WHY main needs the local predecessor even though the renderer kills
         // it below: resumed Codex owns an exact rollout lease before its PTY
         // starts. The historical start-success-before-old-stop ordering makes
@@ -1021,6 +1048,7 @@ export function useSessionActions(
           ...(sessions[newId] ?? { cwd, kind: nextKind }),
           cwd,
           kind: nextKind,
+          providerRuntime,
           ...(spawnOpts.resumeSessionId
             ? {
                 providerSessionId: spawnOpts.resumeSessionId,
@@ -1087,7 +1115,7 @@ export function useSessionActions(
     ],
   )
 
-  // Recreates every Claude/Codex session with the requested
+  // Recreates every registered agent session with the requested
   // dangerous mode, then remaps visible panes and buried records
   // onto the fresh session ids. Plain terminal sessions are left
   // untouched.
@@ -1159,6 +1187,7 @@ export function useSessionActions(
           const restoredMeta = withoutProvisionalProviderSession(meta)
           const { sessionId: newId } = await window.api.spawnSession({
             kind,
+            providerRuntime: meta.providerRuntime,
             cwd: meta.cwd,
             resumeSessionId,
             dangerousMode,
@@ -1194,7 +1223,19 @@ export function useSessionActions(
           const existing = prev[newId]
           const restored: SessionRuntime = { ...(existing ?? emptyRuntime()) }
           restored.draftInput = oldRuntimes[oldId]?.draftInput ?? existing?.draftInput ?? ''
-          Object.assign(restored, seedResumedRuntimeFields(existing, freshSessions[newId]))
+          if (freshSessions[newId]?.providerRuntime === 'terminal') {
+            // A global dangerous-mode/MCP restart must not convert native
+            // OpenCode TUI state into a rendered-history bootstrap. The raw
+            // PTY is the only visual authority for this runtime; its durable
+            // provider id is still retained in freshSessions for resume.
+            Object.assign(restored, {
+              hasOlderHistory: false,
+              transcriptStatus: 'ready' as const,
+              transcriptError: null,
+            })
+          } else {
+            Object.assign(restored, seedResumedRuntimeFields(existing, freshSessions[newId]))
+          }
           next[newId] = restored
         }
         return next

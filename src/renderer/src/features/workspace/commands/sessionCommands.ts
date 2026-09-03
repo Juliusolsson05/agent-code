@@ -20,8 +20,8 @@ function targetSupportsBuiltInMcpDomain(
   domain: BuiltInMcpDomain,
 ): boolean {
   // Command visibility must describe the launcher's real capability, not the
-  // broad AgentProviderKind union. OpenCode is a valid agent provider but does
-  // not inject built-in MCP yet; Workflow MCP is narrower still because Claude
+  // broad AgentProviderKind union. OpenCode now injects the same process-local
+  // endpoints into both runtimes; Workflow MCP remains narrower because Claude
   // owns the equivalent feature natively.
   const sessionId = commandTargetSessionId(workspace)
   if (!sessionId) return false
@@ -73,7 +73,7 @@ export const sessionCommands: CommandDef[] = [
     category: 'session',
     surface: 'session',
     title: 'View Prompts',
-    description: '**What it does:** Opens prompt history for the focused **agent**.\n\n**Use when:** You want to inspect previous user prompts.\n\n**Notes:** Claude and Codex agents only.',
+    description: '**What it does:** Opens prompt history for the focused **agent**.\n\n**Use when:** You want to inspect previous user prompts.\n\n**Notes:** Available for providers with transcript parsing support.',
     keywords: ['prompts', 'history', 'user', 'modal', 'session', 'context'],
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
@@ -104,7 +104,7 @@ export const sessionCommands: CommandDef[] = [
     // claude-code-src/full/commands/rewind/rewind.ts and
     // `rewindConversationTo` in REPL.tsx).
     //
-    // Requires a focused Claude/Codex pane with a providerSessionId
+    // Requires a focused transcript-backed agent with a providerSessionId
     // — rewind needs a file on disk to truncate from. The action
     // itself re-checks and surfaces a toast if the pane is
     // mid-stream.
@@ -134,11 +134,13 @@ export const sessionCommands: CommandDef[] = [
       const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? DEFAULT_PROVIDER
       // Rewind REWRITES session history, so it needs a real transcript
-      // adapter — not merely an agent provider. isAgentProviderKind passed for
-      // OpenCode, which has no adapter, so the command appeared enabled and
-      // then did nothing.
+      // adapter — not merely an agent provider. This explicit feature gate was
+      // introduced when OpenCode had no adapter; retaining it matters because
+      // the next provider must not inherit destructive transcript powers just
+      // by joining the broad agent-kind union.
       return (
         getProviderFeatures(kind).transcriptRewind &&
+        meta?.providerRuntime !== 'terminal' &&
         Boolean(meta?.providerSessionId)
       )
     },
@@ -242,7 +244,7 @@ export const sessionCommands: CommandDef[] = [
     pickerVisibility: 'advanced',
     surface: 'app',
     title: 'Close Old Agents…',
-    description: '**What it does:** Opens a batch cleanup modal for **Claude and Codex agents** inactive longer than a chosen time.\n\n**Use when:** You want to close stale agents across all projects or selected projects.\n\n**Notes:** Defaults to 4 hours and excludes currently-running agents unless you opt in.',
+    description: '**What it does:** Opens a batch cleanup modal for **agents** inactive longer than a chosen time.\n\n**Use when:** You want to close stale agents across all projects or selected projects.\n\n**Notes:** Defaults to 4 hours and excludes currently-running agents unless you opt in.',
     keywords: [
       'close',
       'old',
@@ -282,7 +284,7 @@ export const sessionCommands: CommandDef[] = [
     pickerVisibility: 'advanced',
     surface: 'app',
     title: 'Switch Agents to Another Provider…',
-    description: '**What it does:** Opens a modal to move a batch of **Claude/Codex agents** to the other provider at once, and to return the most recent batch.\n\n**Use when:** You hit a usage limit on one provider and want to move agents to the other (then back later).\n\n**Notes:** History is translated; the most recent batch is remembered so you can send it back from the same modal.',
+    description: '**What it does:** Opens a modal to move a batch of agents between **Claude, Codex, and OpenCode**, and to return the most recent batch.\n\n**Use when:** You hit a usage limit on one provider and want to move agents elsewhere (then back later).\n\n**Notes:** History is translated; the most recent batch is remembered so you can send it back from the same modal.',
     keywords: [
       'switch',
       'provider',
@@ -290,6 +292,7 @@ export const sessionCommands: CommandDef[] = [
       'batch',
       'claude',
       'codex',
+      'opencode',
       'migrate',
       'move',
       'limit',
@@ -347,13 +350,13 @@ export const sessionCommands: CommandDef[] = [
     category: 'developer',
     pickerVisibility: 'debug',
     // `session`, not `debug`: Ping is diagnostic, but the command still
-    // reloads the focused Claude/Codex session and must follow Dispatch
+    // reloads the focused agent session and must follow Dispatch
     // row focus exactly like the other built-in MCP toggles. The
     // `devDebugEnabled` check below remains the data/product gate.
     surface: 'session',
     title: 'Built-in MCP Ping',
-    description: '**What it does:** Reloads the focused **Claude or Codex agent** with Agent Code built-in MCP ping access on or off.\n\n**Use when:** You want to verify the MCP bridge for this pane.\n\n**Notes:** Ping is a diagnostic MCP domain; orchestration tools are separate.',
-    keywords: ['mcp', 'server', 'built-in', 'ping', 'enable', 'disable', 'reload', 'agent', 'claude', 'codex'],
+    description: '**What it does:** Reloads the focused **agent** with Agent Code built-in MCP ping access on or off.\n\n**Use when:** You want to verify the MCP bridge for this pane.\n\n**Notes:** Ping is a diagnostic MCP domain; orchestration tools are separate.',
+    keywords: ['mcp', 'server', 'built-in', 'ping', 'enable', 'disable', 'reload', 'agent', 'claude', 'codex', 'opencode'],
     when: ({ workspace, flags }) => {
       if (!flags.devDebugEnabled) return false
       return targetSupportsBuiltInMcpDomain(workspace, 'ping')
@@ -404,8 +407,8 @@ export const sessionCommands: CommandDef[] = [
     pickerVisibility: 'advanced',
     surface: 'session',
     title: 'AI Workspace MCP',
-    description: '**What it does:** Reloads the focused **Claude or Codex agent** with Agent Code AI Workspace MCP tools on or off.\n\n**Use when:** You want this agent to create curated cross-worktree file review workspaces.\n\n**Notes:** Orchestration agents can use this domain, but it remains a separate MCP capability.',
-    keywords: ['mcp', 'ai workspace', 'workspace', 'review', 'files', 'worktree', 'enable', 'disable', 'reload', 'claude', 'codex'],
+    description: '**What it does:** Reloads the focused **agent** with Agent Code AI Workspace MCP tools on or off.\n\n**Use when:** You want this agent to create curated cross-worktree file review workspaces.\n\n**Notes:** Orchestration agents can use this domain, but it remains a separate MCP capability.',
+    keywords: ['mcp', 'ai workspace', 'workspace', 'review', 'files', 'worktree', 'enable', 'disable', 'reload', 'claude', 'codex', 'opencode'],
     when: ({ workspace }) => {
       return targetSupportsBuiltInMcpDomain(workspace, 'ai_workspace')
     },
@@ -454,8 +457,8 @@ export const sessionCommands: CommandDef[] = [
     pickerVisibility: 'advanced',
     surface: 'session',
     title: 'Orchestration MCP',
-    description: '**What it does:** Reloads the focused **Claude or Codex agent** with Agent Code orchestration MCP tools on or off.\n\n**Use when:** You want this agent to create and coordinate distinct orchestration child agents.\n\n**Notes:** Orchestration agents are separate from manual Linked Agents.',
-    keywords: ['mcp', 'orchestration', 'agents', 'workers', 'enable', 'disable', 'reload', 'claude', 'codex'],
+    description: '**What it does:** Reloads the focused **agent** with Agent Code orchestration MCP tools on or off.\n\n**Use when:** You want this agent to create and coordinate distinct orchestration child agents.\n\n**Notes:** Orchestration agents are separate from manual Linked Agents.',
+    keywords: ['mcp', 'orchestration', 'agents', 'workers', 'enable', 'disable', 'reload', 'claude', 'codex', 'opencode'],
     when: ({ workspace }) => {
       return targetSupportsBuiltInMcpDomain(workspace, 'orchestration')
     },
@@ -504,8 +507,8 @@ export const sessionCommands: CommandDef[] = [
     pickerVisibility: 'advanced',
     surface: 'session',
     title: 'Agent Transcripts MCP',
-    description: '**What it does:** Reloads the focused **Claude or Codex agent** with Agent Code transcript-consumption MCP tools on or off.\n\n**Use when:** You want this agent to read a specific Claude/Codex JSONL transcript file through filtered projections instead of manual shell parsing.\n\n**Notes:** The tool accepts an explicit file path and returns bounded normalized transcript context; it does not discover transcripts for the agent.',
-    keywords: ['mcp', 'transcript', 'transcripts', 'agent context', 'handoff', 'review', 'enable', 'disable', 'reload', 'claude', 'codex'],
+    description: '**What it does:** Reloads the focused **agent** with Agent Code transcript-consumption MCP tools on or off.\n\n**Use when:** You want this agent to read a specific transcript file through filtered projections instead of manual shell parsing.\n\n**Notes:** The tool accepts an explicit file path and returns bounded normalized transcript context; it does not discover transcripts for the agent.',
+    keywords: ['mcp', 'transcript', 'transcripts', 'agent context', 'handoff', 'review', 'enable', 'disable', 'reload', 'claude', 'codex', 'opencode'],
     when: ({ workspace }) => {
       return targetSupportsBuiltInMcpDomain(workspace, 'agent_transcripts')
     },
@@ -554,8 +557,8 @@ export const sessionCommands: CommandDef[] = [
     pickerVisibility: 'advanced',
     surface: 'session',
     title: 'Agent Management MCP',
-    description: '**What it does:** Reloads the focused **Claude or Codex agent** with project-wide Agent Code management tools on or off.\n\n**Use when:** You want this agent to inventory, inspect, prompt, or close other agents in its project.\n\n**Notes:** Read operations include visible, detached, and buried agents without waking them. Every close it attempts asks **you** to confirm first, and cascades are refused outright.',
-    keywords: ['mcp', 'agent management', 'agents', 'project', 'transcripts', 'cleanup', 'prompt', 'close', 'enable', 'disable', 'reload', 'claude', 'codex'],
+    description: '**What it does:** Reloads the focused **agent** with project-wide Agent Code management tools on or off.\n\n**Use when:** You want this agent to inventory, inspect, prompt, or close other agents in its project.\n\n**Notes:** Read operations include visible, detached, and buried agents without waking them. Every close it attempts asks **you** to confirm first, and cascades are refused outright.',
+    keywords: ['mcp', 'agent management', 'agents', 'project', 'transcripts', 'cleanup', 'prompt', 'close', 'enable', 'disable', 'reload', 'claude', 'codex', 'opencode'],
     when: ({ workspace }) => {
       return targetSupportsBuiltInMcpDomain(workspace, 'agent_management')
     },
@@ -605,8 +608,8 @@ export const sessionCommands: CommandDef[] = [
     pickerVisibility: 'advanced',
     surface: 'session',
     title: 'Workflow MCP',
-    description: '**What it does:** Reloads the focused **Codex agent** with Agent Code workflow MCP tools on or off.\n\n**Use when:** You want Codex to discover, start, inspect, cancel, or resume portable multi-agent workflows.\n\n**Notes:** Claude is intentionally excluded because it has a native workflow feature. Workflow execution is app-owned and survives renderer reloads; changing MCP capabilities still requires replacing the provider process.',
-    keywords: ['mcp', 'workflow', 'workflows', 'pipeline', 'agents', 'resume', 'enable', 'disable', 'reload', 'codex', 'claude native'],
+    description: '**What it does:** Reloads the focused **Codex or OpenCode agent** with Agent Code workflow MCP tools on or off.\n\n**Use when:** You want the agent to discover, start, inspect, cancel, or resume portable multi-agent workflows.\n\n**Notes:** Claude is intentionally excluded because it has a native workflow feature. Workflow execution is app-owned and survives renderer reloads; changing MCP capabilities still requires replacing the provider process.',
+    keywords: ['mcp', 'workflow', 'workflows', 'pipeline', 'agents', 'resume', 'enable', 'disable', 'reload', 'codex', 'opencode', 'claude native'],
     when: ({ workspace }) => {
       return targetSupportsBuiltInMcpDomain(workspace, 'workflows')
     },
@@ -626,7 +629,7 @@ export const sessionCommands: CommandDef[] = [
       try {
         const nextDomains = toggleBuiltInMcpDomain(meta.builtInMcpDomains, 'workflows')
         // WHY replace the agent instead of mutating the running registration:
-        // Codex receives its MCP configuration at process launch. Updating
+        // Codex and OpenCode receive MCP configuration at process launch. Updating
         // renderer metadata alone would display an enabled toggle while the
         // provider still had a cached tools/list response from the old scope.
         // Replacement keeps visible state and actual capability atomic.
@@ -657,8 +660,8 @@ export const sessionCommands: CommandDef[] = [
     category: 'session',
     surface: 'session',
     title: 'Reload Agent',
-    description: '**What it does:** Restarts the focused **Claude or Codex agent**.\n\n**Use when:** The agent is stuck, exited, or needs reconnecting.\n\n**Notes:** Requires a resumable provider session.',
-    keywords: ['reload', 'resume', 'agent', 'claude', 'codex', 'reconnect'],
+    description: '**What it does:** Restarts the focused **agent**.\n\n**Use when:** The agent is stuck, exited, or needs reconnecting.\n\n**Notes:** Requires a resumable provider session.',
+    keywords: ['reload', 'resume', 'agent', 'claude', 'codex', 'opencode', 'reconnect'],
     getState: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       const meta = sessionId ? workspace.state.sessions[sessionId] : null
@@ -766,8 +769,8 @@ export const sessionCommands: CommandDef[] = [
     pickerVisibility: 'advanced',
     surface: 'session',
     title: 'Copy Resume Command',
-    description: '**What it does:** Copies a shell command to **resume this session**.\n\n**Use when:** You want to continue the agent outside the app.\n\n**Notes:** Produces a Claude or Codex CLI command.',
-    keywords: ['copy', 'resume', 'command', 'terminal', 'cli', 'shell', 'claude', 'codex'],
+    description: '**What it does:** Copies a shell command to **resume this session**.\n\n**Use when:** You want to continue the agent outside the app.\n\n**Notes:** Produces the current provider’s verified CLI command.',
+    keywords: ['copy', 'resume', 'command', 'terminal', 'cli', 'shell', 'claude', 'codex', 'opencode'],
     getState: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       const meta = sessionId ? workspace.state.sessions[sessionId] : null
@@ -873,6 +876,10 @@ export const sessionCommands: CommandDef[] = [
           {
             resumeSessionId: newProviderSessionId,
             builtInMcpDomains: meta.builtInMcpDomains,
+            // OpenCode Terminal and rendered OpenCode share a provider kind.
+            // The transcript clone should branch the current experience, not
+            // silently reinterpret a terminal clone as a rendered session.
+            providerRuntime: meta.providerRuntime,
             // WHY cwd is part of the continuation payload: command targeting may resolve a
             // related/orchestration child displayed inside a parent pane. That child's transcript
             // and MCP domains must be re-registered against the CHILD worktree, not whichever
@@ -881,12 +888,11 @@ export const sessionCommands: CommandDef[] = [
           },
         )
       } catch (err) {
-        // Surface the failure as a pane toast, not just console.warn — an
-        // OpenCode pane hitting `duplicateSession`'s fail-loud throw (see
-        // src/main/providerSwitch/duplicateSession.ts) now produces a visible
-        // "no duplicate implementation for provider 'opencode' yet" message
-        // instead of silently doing nothing. Any other transport / fs error
-        // surfaces the same way. Console line is retained for triage.
+        // Surface the failure as a pane toast, not just console.warn. Native
+        // transcript export/import crosses both a CLI and storage boundary, so
+        // an adapter rejection or transport/fs error must remain actionable
+        // instead of silently leaving the user wondering where the clone went.
+        // Console output is retained for engineering triage.
         const message =
           err instanceof Error && err.message.length > 0
             ? err.message
@@ -903,8 +909,8 @@ export const sessionCommands: CommandDef[] = [
     pickerVisibility: 'advanced',
     surface: 'session',
     title: 'Switch Provider',
-    description: '**What it does:** Switches the focused agent between **Claude** and **Codex**.\n\n**Use when:** You want to continue the same work with another provider.\n\n**Notes:** Saved sessions are translated; empty panes are replaced with a fresh pane of the other provider.',
-    keywords: ['provider', 'switch', 'claude', 'codex', 'translate'],
+    description: '**What it does:** Moves the focused agent to the next available provider.\n\n**Use when:** You want to continue the same work with Claude, Codex, or OpenCode.\n\n**Notes:** Saved sessions are translated; empty panes are replaced with a fresh pane.',
+    keywords: ['provider', 'switch', 'claude', 'codex', 'opencode', 'translate'],
     getState: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       const meta = sessionId ? workspace.state.sessions[sessionId] : null
@@ -924,9 +930,8 @@ export const sessionCommands: CommandDef[] = [
       const kind = meta?.kind ?? DEFAULT_PROVIDER
       // The explicit switch EDGE list, not agent-hood. "Can switch" is
       // meaningless without naming a destination, and translation is
-      // directional — a Claude→Codex adapter is not automatically the reverse.
-      // OpenCode has no edge either way, so agent-hood offered it a switch
-      // that the main-side translator rejects.
+      // directional — one decoder/projector registration does not excuse a
+      // provider from declaring the product paths it supports.
       return getProviderFeatures(kind).switchTargets.length > 0
     },
     run: ({ workspace }) => workspace.switchFocusedProvider(),

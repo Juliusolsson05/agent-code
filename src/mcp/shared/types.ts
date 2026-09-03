@@ -47,10 +47,9 @@ export type ConfigurableBuiltInMcpDomain =
  * Claude already provides natively. Advertising both gives the model two
  * overlapping control planes with different persistence and execution rules.
  * Codex has no equivalent native surface, so Agent Code's Workflow MCP remains
- * available there. OpenCode's current runtime does not consume
- * `builtInMcpServers` at all; claiming support before its launcher injects the
- * configuration would create toggles that appear to work while exposing no
- * tools to the model.
+ * available there. OpenCode accepts the same HTTP endpoints through its
+ * process-local inline configuration; both its structured server runtime and
+ * native terminal runtime inject that configuration at launch.
  */
 const BUILT_IN_MCP_DOMAINS_BY_PROVIDER = {
   claude: [
@@ -61,7 +60,7 @@ const BUILT_IN_MCP_DOMAINS_BY_PROVIDER = {
     'agent_management',
   ],
   codex: [...BUILT_IN_MCP_DOMAINS],
-  opencode: [],
+  opencode: [...BUILT_IN_MCP_DOMAINS],
 } as const satisfies Record<AgentProviderKind, readonly BuiltInMcpDomain[]>
 
 const BUILT_IN_MCP_DOMAIN_SET = new Set<string>(BUILT_IN_MCP_DOMAINS)

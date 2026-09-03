@@ -50,6 +50,22 @@ export type SessionKind = AgentProviderKind | 'terminal'
 export const SESSION_KINDS = [...AGENT_PROVIDER_KINDS, 'terminal'] as const
 
 /**
+ * An alternate execution runtime for an agent provider.
+ *
+ * WHY this is metadata beside `AgentProviderKind`, not another provider kind:
+ * OpenCode's rendered HTTP/SSE adapter and its native TUI are two ways to run
+ * the SAME installed `opencode` tool. Calling the latter
+ * `opencode-terminal` would duplicate setup status, binary resolution, skill
+ * discovery, MCP identity, and every exhaustive provider registry entry. The
+ * optional discriminator instead changes only the factory and pane surface;
+ * an absent value deliberately means the provider's normal structured
+ * runtime so every persisted workspace from before this feature keeps its
+ * existing behavior.
+ */
+export const AGENT_PROVIDER_RUNTIMES = ['terminal'] as const
+export type AgentProviderRuntime = (typeof AGENT_PROVIDER_RUNTIMES)[number]
+
+/**
  * Narrow an untrusted string (IPC arg, persisted metadata, MCP input)
  * to an AgentProviderKind. Use this at every boundary BEFORE indexing a
  * `Record<AgentProviderKind, …>` registry — TypeScript will not let you
@@ -64,6 +80,12 @@ export function isAgentProviderKind(value: unknown): value is AgentProviderKind 
 /** Narrow an untrusted string to a SessionKind (includes 'terminal'). */
 export function isSessionKind(value: unknown): value is SessionKind {
   return typeof value === 'string' && (SESSION_KINDS as readonly string[]).includes(value)
+}
+
+/** Narrow persisted / IPC data before it influences runtime selection. */
+export function isAgentProviderRuntime(value: unknown): value is AgentProviderRuntime {
+  return typeof value === 'string' &&
+    (AGENT_PROVIDER_RUNTIMES as readonly string[]).includes(value)
 }
 
 /**

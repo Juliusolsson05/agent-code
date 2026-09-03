@@ -48,6 +48,6 @@ describe('session built-in MCP domain resolution', () => {
       provider: 'opencode',
       sessionDomains: undefined,
       defaultDomains: ['orchestration', 'agent_management'],
-    })).toEqual([])
+    })).toEqual(['orchestration', 'agent_management'])
   })
 })

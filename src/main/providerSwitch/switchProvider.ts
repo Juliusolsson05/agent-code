@@ -30,13 +30,19 @@ export type SwitchProviderRequest = {
   overflowPolicy?: 'compact' | 'fail' | 'truncate'
 }
 
-export type SwitchProviderResult = {
-  targetKind: AgentProviderKind
-  targetProviderSessionId: string
-  targetFilePath: string
-  compactedBeforeSwitch: boolean
-  truncatedBeforeSwitch: boolean
-}
+export type SwitchProviderResult =
+  | {
+      kind: 'switched'
+      targetKind: AgentProviderKind
+      targetProviderSessionId: string
+      targetFilePath: string
+      compactedBeforeSwitch: boolean
+      truncatedBeforeSwitch: boolean
+    }
+  | {
+      kind: 'source-empty'
+      targetKind: AgentProviderKind
+    }
 
 export type ProviderSwitchProgress = {
   sourceSessionId: string
@@ -80,12 +86,21 @@ export async function switchProvider(
     request.sourceProviderSessionId,
   )
   if (!conversation.entries.some(entry => entry.kind !== 'opaque')) {
-    throw new Error(
-      `switchProvider: ${request.sourceKind} transcript contained no projectable conversation entries`,
-    )
+    // OpenCode Terminal is intentionally born with a durable provider session:
+    // its TUI needs a `ses_...` id before the PTY starts so crash recovery can
+    // resume the same conversation. That means "has a provider id" no longer
+    // implies "has submitted a turn", as it happened to for Claude and Codex.
+    // Report the distinction to the renderer instead of manufacturing a blank
+    // target transcript or throwing. The renderer already has the exact
+    // lossless operation for this state: replace the empty pane while carrying
+    // unsent composer state and MCP policy forward.
+    return { kind: 'source-empty', targetKind }
   }
 
-  const targetProfile = await target.targetProfile()
+  // Target model resolution may be project-scoped (OpenCode merges a local
+  // opencode config for cwd), so capacity planning and projection must inspect
+  // the same destination directory the imported session will run in.
+  const targetProfile = await target.targetProfile(targetCwd)
   let plan = planConversationContext(
     conversation,
     targetKind,
@@ -171,6 +186,7 @@ export async function switchProvider(
   const targetFilePath = await target.write(targetCwd, projection.values)
 
   return {
+    kind: 'switched',
     targetKind,
     targetProviderSessionId,
     targetFilePath,

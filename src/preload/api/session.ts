@@ -87,7 +87,7 @@ export const sessionApi = {
     ipcRenderer.invoke('session:terminal-attach', sessionId),
 
   /**
-   * Attach this renderer to a Claude/Codex session's raw PTY terminal.
+   * Attach this renderer to an agent runtime's raw PTY terminal.
    * Returns a capped replay buffer and enables live
    * 'session:agent-pty-data' events for the session. Used by
    * DebugPanel's inline terminal view;
@@ -221,7 +221,7 @@ export const sessionApi = {
   onSessionTerminalData: (cb: (e: SessionTerminalDataEvent) => void): Unsub =>
     subscribe('session:terminal-data', cb),
 
-  /** Raw PTY bytes for attached Claude/Codex inline terminals. */
+  /** Raw PTY bytes for attached provider terminals. */
   onSessionAgentPtyData: (cb: (e: SessionAgentPtyDataEvent) => void): Unsub =>
     subscribe('session:agent-pty-data', cb),
 
