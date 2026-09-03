@@ -71,6 +71,18 @@ interface TranscriptSnapshot {
 export interface HostTranscriptAdapter {
   provider: string
   read(cwd: string, providerSessionId: string): Promise<ConversationDocument>
+  // WHY the path is exposed separately from read(): the compaction wait in
+  // compactBeforeSwitch.ts polls the live source transcript for minutes. A
+  // full read() decodes the whole file (60–150 MB for a long Codex rollout)
+  // and, for Codex, walks the entire date-bucketed sessions tree to find it.
+  // Doing that four times a second pinned ~350 MB and stalled the main event
+  // loop for seconds at a time (#720). With the path in hand the caller can
+  // stat() cheaply and only pay for a decode when the file actually grew.
+  locate(cwd: string, providerSessionId: string): Promise<string>
+  // Decode a transcript whose path the caller already resolved via locate().
+  // read() is locate()+readAt(); the compaction wait pairs a single locate()
+  // with repeated readAt() so the Codex sessions-tree walk is paid once.
+  readAt(path: string): Promise<ConversationDocument>
   listPrompts(cwd: string, providerSessionId: string): Promise<RewindPrompt[]>
   draft(content: readonly ConversationContent[]): RewindDraft
   targetProfile(): Promise<TranscriptTargetProfile>
@@ -86,6 +98,10 @@ const claudeAdapter: HostTranscriptAdapter = {
   provider: 'claude',
   async read(cwd, providerSessionId) {
     return (await loadClaudeSnapshot(cwd, providerSessionId)).conversation
+  },
+  locate: getClaudeSessionFilePath,
+  async readAt(path) {
+    return (await loadClaudeSnapshotAt(path)).conversation
   },
   async listPrompts(cwd, providerSessionId) {
     return promptsFromSnapshot(
@@ -111,6 +127,12 @@ const codexAdapter: HostTranscriptAdapter = {
   provider: 'codex',
   async read(cwd, providerSessionId) {
     return (await loadCodexSnapshot(cwd, providerSessionId)).conversation
+  },
+  async locate(_cwd, providerSessionId) {
+    return locateCodexRollout(providerSessionId)
+  },
+  async readAt(path) {
+    return (await loadCodexSnapshotAt(path)).conversation
   },
   async listPrompts(cwd, providerSessionId) {
     return promptsFromSnapshot(
@@ -204,7 +226,10 @@ async function loadClaudeSnapshot(
   cwd: string,
   providerSessionId: string,
 ): Promise<TranscriptSnapshot> {
-  const path = await getClaudeSessionFilePath(cwd, providerSessionId)
+  return loadClaudeSnapshotAt(await getClaudeSessionFilePath(cwd, providerSessionId))
+}
+
+async function loadClaudeSnapshotAt(path: string): Promise<TranscriptSnapshot> {
   const document = await readStableTranscript(path)
   const records = classifyClaudeDocument(document).records
   return {
@@ -213,12 +238,20 @@ async function loadClaudeSnapshot(
   }
 }
 
+async function locateCodexRollout(providerSessionId: string): Promise<string> {
+  const path = await findCodexRolloutPathBySessionId(providerSessionId)
+  if (!path) throw new Error(`Codex rollout for session ${providerSessionId} was not found.`)
+  return path
+}
+
 async function loadCodexSnapshot(
   _cwd: string,
   providerSessionId: string,
 ): Promise<TranscriptSnapshot> {
-  const path = await findCodexRolloutPathBySessionId(providerSessionId)
-  if (!path) throw new Error(`Codex rollout for session ${providerSessionId} was not found.`)
+  return loadCodexSnapshotAt(await locateCodexRollout(providerSessionId))
+}
+
+async function loadCodexSnapshotAt(path: string): Promise<TranscriptSnapshot> {
   const document = await readStableTranscript(path)
   const records = classifyCodexDocument(document).records
   return {
