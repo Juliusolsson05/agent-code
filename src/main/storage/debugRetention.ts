@@ -37,7 +37,8 @@ export type DebugStorageBucket =
   | 'ghost-logs'
   | 'session-recordings'
 
-type Artifact = {
+/** Exported so the pass logic can be unit-tested with in-memory artifacts. */
+export type DebugStorageArtifact = {
   path: string
   bytes: number
   mtimeMs: number
@@ -45,9 +46,7 @@ type Artifact = {
   bucket: DebugStorageBucket
   protected?: boolean
 }
-
-/** Public alias so the pass logic can be unit-tested with in-memory artifacts. */
-export type DebugStorageArtifact = Artifact
+type Artifact = DebugStorageArtifact
 
 export type DebugStoragePrunePolicy = {
   now: number
@@ -237,8 +236,15 @@ export async function pruneDebugStorage(reason: string): Promise<DebugStoragePru
   // the life of the process, and collectArtifacts() re-reads the multi-MB
   // debug-bundle ledger and stats every tracked file. The passes used to
   // re-collect between themselves — three ledger parses and three walks per
-  // prune, on the main thread. The passes only need to know what they
-  // themselves removed, which the in-memory live set below tracks exactly.
+  // prune, on the main thread.
+  //
+  // What that trades away: the re-scans also refreshed each artifact's bytes
+  // and mtime and noticed files created or removed by someone else mid-prune.
+  // For the seconds one prune takes that staleness is acceptable — the
+  // active-grace window is ten minutes, an under-counted live run just makes
+  // a pass stop early, and the next prune five minutes later corrects any of
+  // it. `now` is taken after the scan so the grace is measured against the
+  // mtimes actually collected.
   const artifacts = await collectArtifacts()
   const outcome = await runPrunePasses(
     artifacts,
@@ -249,7 +255,7 @@ export async function pruneDebugStorage(reason: string): Promise<DebugStoragePru
       budgetBytes: budget,
       caps: bucketCaps(budget),
     },
-    removeArtifact,
+    async artifact => (await removeArtifact(artifact)) > 0,
   )
 
   return {
@@ -274,18 +280,21 @@ export async function pruneDebugStorage(reason: string): Promise<DebugStoragePru
  *   3. Global budget — oldest first across buckets until the total fits,
  *      with the same protected/active exemptions.
  *
- * Byte accounting subtracts what `remove` reports, exactly as the old code
- * subtracted between re-scans, so a removal that frees nothing (rm failed)
- * neither counts nor drops the artifact from the working set — it is still
- * there for the next pass, as it would have been in a re-scan.
+ * `remove` answers whether the artifact is gone. A successful removal frees
+ * the artifact's collected byte count — the same number the old code
+ * subtracted between re-scans — and drops it from the working set. A failed
+ * removal neither counts nor drops it: it stays for the next pass, as a
+ * re-scan would have found it. (A boolean rather than a byte count keeps
+ * the accounting consistent by construction; a partial `rm -rf` leaves the
+ * artifact's full snapshot weight in place until the next prune.)
  *
  * Exported with the remover injected so the pass semantics can be tested
- * against in-memory artifacts; production passes `removeArtifact`.
+ * against in-memory artifacts; production wraps `removeArtifact`.
  */
 export async function runPrunePasses(
   artifacts: readonly Artifact[],
   policy: DebugStoragePrunePolicy,
-  remove: (artifact: Artifact) => Promise<number>,
+  remove: (artifact: Artifact) => Promise<boolean>,
 ): Promise<DebugStoragePrunePassesResult> {
   const cutoff = policy.now - policy.ttlMs
   const activeCutoff = policy.now - policy.activeGraceMs
@@ -293,12 +302,11 @@ export async function runPrunePasses(
   let removed = 0
   let bytesFreed = 0
   const drop = async (artifact: Artifact): Promise<number> => {
-    const freed = await remove(artifact)
-    if (freed === 0) return 0
+    if (!(await remove(artifact))) return 0
     live.delete(artifact)
     removed += 1
-    bytesFreed += freed
-    return freed
+    bytesFreed += artifact.bytes
+    return artifact.bytes
   }
 
   for (const artifact of artifacts) {

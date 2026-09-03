@@ -130,9 +130,9 @@ function recordingRemover(failFor: ReadonlySet<string> = new Set()) {
   const calls: string[] = []
   return {
     calls,
-    remove: async (a: DebugStorageArtifact): Promise<number> => {
+    remove: async (a: DebugStorageArtifact): Promise<boolean> => {
       calls.push(a.path)
-      return failFor.has(a.path) ? 0 : a.bytes
+      return !failFor.has(a.path)
     },
   }
 }
@@ -152,36 +152,47 @@ describe('runPrunePasses', () => {
     expect(result).toEqual({ removed: 1, bytesFreed: 10, remainingBytes: 40 })
   })
 
-  it('cap pass trims the oldest inactive artifacts of an over-cap bucket only', async () => {
+  it('cap pass trims the oldest inactive, unprotected artifacts of an over-cap bucket only', async () => {
     const oldest = artifact('oldest', 'proxy', 60, 5 * HOUR)
     const older = artifact('older', 'proxy', 60, 3 * HOUR)
+    const shielded = artifact('shielded', 'proxy', 60, 2 * HOUR, { protected: true })
     const active = artifact('active', 'proxy', 60, 60_000)
     const other = artifact('other', 'performance', 500, 5 * HOUR)
+    const manual = artifact('manual', 'debug-bundles-manual', 900, 5 * HOUR)
     const { calls, remove } = recordingRemover()
 
     const result = await runPrunePasses(
-      [older, active, oldest, other],
-      policy({ caps: capsOf(1_000_000, { proxy: 100 }) }),
+      [older, active, oldest, shielded, other, manual],
+      policy({ caps: capsOf(1_000_000, { proxy: 50, 'debug-bundles-manual': 10 }) }),
       remove,
     )
 
-    // 180 > 100: drop oldest (120), then older (60 ≤ 100, stop). The active
-    // run is inside the grace and never offered; the other bucket is under
-    // its own cap and untouched.
+    // proxy: 240 > 50. Oldest first: oldest (180), older (120), then the
+    // protected and the active run are reached while still over cap and must
+    // be skipped — the bucket ends over its cap rather than losing either.
+    // The manual bundle bucket is never capped; performance is under its cap.
     expect(calls).toEqual(['oldest', 'older'])
-    expect(result).toEqual({ removed: 2, bytesFreed: 120, remainingBytes: 560 })
+    expect(result).toEqual({ removed: 2, bytesFreed: 120, remainingBytes: 1_520 })
   })
 
-  it('budget pass trims oldest-first across buckets until the total fits', async () => {
+  it('budget pass trims oldest-first across buckets until the total fits, skipping protected and active', async () => {
     const a = artifact('a', 'proxy', 100, 4 * HOUR)
+    const shielded = artifact('shielded', 'incidents', 100, 3.5 * HOUR, { protected: true })
     const b = artifact('b', 'performance', 100, 3 * HOUR)
+    const active = artifact('active', 'feed-debug', 100, 60_000)
     const c = artifact('c', 'feed-debug', 100, 2 * HOUR)
     const { calls, remove } = recordingRemover()
 
-    const result = await runPrunePasses([c, a, b], policy({ budgetBytes: 150 }), remove)
+    const result = await runPrunePasses(
+      [c, a, active, b, shielded],
+      policy({ budgetBytes: 150 }),
+      remove,
+    )
 
-    expect(calls).toEqual(['a', 'b'])
-    expect(result).toEqual({ removed: 2, bytesFreed: 200, remainingBytes: 100 })
+    // 500 > 150: a (400), shielded skipped, b (300), c (200), active skipped.
+    // Ends over budget rather than touching what the rules exempt.
+    expect(calls).toEqual(['a', 'b', 'c'])
+    expect(result).toEqual({ removed: 3, bytesFreed: 300, remainingBytes: 200 })
   })
 
   it('never offers an artifact removed by an earlier pass to a later one', async () => {
