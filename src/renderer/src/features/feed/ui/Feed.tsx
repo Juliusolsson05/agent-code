@@ -548,16 +548,25 @@ function FeedImpl({
   const semanticTurnSignal = semanticTurn ? semanticTurnScrollSignal(semanticTurn) : ''
   // See LiveUnresolvedQuestionsContext for why the committed AskUserQuestion
   // card needs this. Current turn only, by design.
-  const liveUnresolvedQuestionIds = useMemo(() => {
-    const ids = new Set<string>()
-    if (!semanticTurn) return ids
+  //
+  // WHY a string signature in between: `semanticTurn` is replaced on every
+  // streamed delta, so memoising the Set on it would hand every consumer a
+  // fresh identity per token and re-render each committed question row for
+  // nothing. The signature only changes when the set of unresolved ids does.
+  const liveUnresolvedQuestionSignature = useMemo(() => {
+    if (!semanticTurn) return ''
+    const ids: string[] = []
     for (const block of Object.values(semanticTurn.blocks)) {
       if (block.toolName === 'AskUserQuestion' && block.resultAt == null && block.toolUseId) {
-        ids.add(block.toolUseId)
+        ids.push(block.toolUseId)
       }
     }
-    return ids
+    return ids.sort().join('\n')
   }, [semanticTurn])
+  const liveUnresolvedQuestionIds = useMemo(
+    () => new Set(liveUnresolvedQuestionSignature ? liveUnresolvedQuestionSignature.split('\n') : []),
+    [liveUnresolvedQuestionSignature],
+  )
   const semanticHistorySignal = semanticHistory
     .map(semanticTurnScrollSignal)
     .join('|')
@@ -1086,56 +1095,56 @@ function FeedImpl({
                 <SubAgentsContext.Provider value={subAgents}>
                   <TaskNotificationsContext.Provider value={taskNotifications}>
                     <AskUserQuestionConditionContext.Provider value={askUserQuestionState}>
-                     <LiveUnresolvedQuestionsContext.Provider value={liveUnresolvedQuestionIds}>
-                      <CodeRenderContext.Provider value={codeRenderContextValue}>
-                        <div
-                          ref={scrollerRef}
-                          data-render-debug-feed-root
-                          // Declares this subtree as quotable text owned by
-                          // this session, for "Reply to Selection". Anchored
-                          // here rather than on the pane root so the composer
-                          // and pane header stay OUT of scope — you should not
-                          // be able to quote your own half-typed prompt back
-                          // into itself. See features/reply-to-selection/lib/
-                          // quoteScope.ts for the full reasoning.
-                          data-quote-scope={sessionId}
-                          className="h-full overflow-auto @container"
-                          onWheel={() => {
-                            onUserEngagement?.()
-                          }}
-                          onPointerDown={() => {
-                            onUserEngagement?.()
-                          }}
-                        >
-                          {/* Container-query responsive (mobile-feed-rewrite Part A). This node
-                           *  is SHARED with the desktop and with narrow tiled panes, so the
-                           *  WIDEST step (@min-[768px]) restores the historical desktop classes
-                           *  VERBATIM — wide output must not change (regression invariant). Only
-                           *  narrow widths (phone, skinny tiles) diverge: they drop the max-w cap
-                           *  and shrink the gutters, instead of eating 64px of px-8 on a ~375px
-                           *  screen. The scroller above carries `@container` so these variants
-                           *  respond to the FEED's own width, not the viewport — which is why a
-                           *  narrow desktop tile benefits identically to a phone. */}
-                          <div className="min-h-full flex flex-col gap-4 mx-auto px-3 pt-3 pb-6 @min-[480px]:px-5 @min-[480px]:pt-5 @min-[768px]:max-w-[880px] @min-[768px]:px-8 @min-[768px]:pt-6 @min-[768px]:pb-8">
-                            {/* ONE owner rule for every visible feed surface.
-                             *
-                             * The old JSX rendered separate buckets in a fixed order:
-                             * committed entries first, semantic history/current later,
-                             * work last. That let a
-                             * stale semantic history row mount under a newer submitted
-                             * prompt, which looked exactly like "my user prompt never
-                             * rendered" in real conversations. Feed now consumes the
-                             * selector's single ordered item list so ownership,
-                             * chronological placement, debug rows, and lazy-entry
-                             * eagerness all share one render contract. Queued prompts
-                             * remain composer-adjacent because they are pending input,
-                             * not transcript history. */}
-                            {renderItems.map(renderFeedItem)}
-                            <div ref={endRef} />
+                      <LiveUnresolvedQuestionsContext.Provider value={liveUnresolvedQuestionIds}>
+                        <CodeRenderContext.Provider value={codeRenderContextValue}>
+                          <div
+                            ref={scrollerRef}
+                            data-render-debug-feed-root
+                            // Declares this subtree as quotable text owned by
+                            // this session, for "Reply to Selection". Anchored
+                            // here rather than on the pane root so the composer
+                            // and pane header stay OUT of scope — you should not
+                            // be able to quote your own half-typed prompt back
+                            // into itself. See features/reply-to-selection/lib/
+                            // quoteScope.ts for the full reasoning.
+                            data-quote-scope={sessionId}
+                            className="h-full overflow-auto @container"
+                            onWheel={() => {
+                              onUserEngagement?.()
+                            }}
+                            onPointerDown={() => {
+                              onUserEngagement?.()
+                            }}
+                          >
+                            {/* Container-query responsive (mobile-feed-rewrite Part A). This node
+                             *  is SHARED with the desktop and with narrow tiled panes, so the
+                             *  WIDEST step (@min-[768px]) restores the historical desktop classes
+                             *  VERBATIM — wide output must not change (regression invariant). Only
+                             *  narrow widths (phone, skinny tiles) diverge: they drop the max-w cap
+                             *  and shrink the gutters, instead of eating 64px of px-8 on a ~375px
+                             *  screen. The scroller above carries `@container` so these variants
+                             *  respond to the FEED's own width, not the viewport — which is why a
+                             *  narrow desktop tile benefits identically to a phone. */}
+                            <div className="min-h-full flex flex-col gap-4 mx-auto px-3 pt-3 pb-6 @min-[480px]:px-5 @min-[480px]:pt-5 @min-[768px]:max-w-[880px] @min-[768px]:px-8 @min-[768px]:pt-6 @min-[768px]:pb-8">
+                              {/* ONE owner rule for every visible feed surface.
+                               *
+                               * The old JSX rendered separate buckets in a fixed order:
+                               * committed entries first, semantic history/current later,
+                               * work last. That let a
+                               * stale semantic history row mount under a newer submitted
+                               * prompt, which looked exactly like "my user prompt never
+                               * rendered" in real conversations. Feed now consumes the
+                               * selector's single ordered item list so ownership,
+                               * chronological placement, debug rows, and lazy-entry
+                               * eagerness all share one render contract. Queued prompts
+                               * remain composer-adjacent because they are pending input,
+                               * not transcript history. */}
+                              {renderItems.map(renderFeedItem)}
+                              <div ref={endRef} />
+                            </div>
                           </div>
-                        </div>
-                      </CodeRenderContext.Provider>
-                     </LiveUnresolvedQuestionsContext.Provider>
+                        </CodeRenderContext.Provider>
+                      </LiveUnresolvedQuestionsContext.Provider>
                     </AskUserQuestionConditionContext.Provider>
                   </TaskNotificationsContext.Provider>
                 </SubAgentsContext.Provider>

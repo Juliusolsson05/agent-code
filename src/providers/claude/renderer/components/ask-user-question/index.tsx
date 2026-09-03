@@ -33,6 +33,7 @@ export function ClaudeAnsweredQuestionRow({
   // decline. This marker (set by AskUserQuestionRow at send time, keyed by
   // operationId) is the only signal that the decline is actually an answer.
   const viaMessage = useAnsweredViaMessageStore(state => state.byOperationId[model.operationId])
+  const answeredViaMessage = viaMessage !== undefined && viaMessage.length > 0
   const liveUnresolved = useContext(LiveUnresolvedQuestionsContext)
   const answer = result ? fromClaudeQuestionResult(result, model) : null
   const answered = answer !== null
@@ -46,11 +47,11 @@ export function ClaudeAnsweredQuestionRow({
   // turn; that, plus no durable result and no answer-via-message, is the
   // proof that the picker is real. A reload has no semantic evidence and
   // falls through to the honest view-only card below.
-  if (result === null && !(viaMessage && viaMessage.length > 0) && liveUnresolved.has(model.operationId)) {
+  if (result === null && !answeredViaMessage && liveUnresolved.has(model.operationId)) {
     return <AskUserQuestionRow input={model.input} operationId={model.operationId} />
   }
 
-  if (viaMessage && viaMessage.length > 0) {
+  if (answeredViaMessage) {
     // The summary lines already read "question → choices", so we do NOT repeat
     // the question list above them — that was doubling the question text.
     return (

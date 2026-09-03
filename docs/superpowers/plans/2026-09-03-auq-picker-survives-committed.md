@@ -14,10 +14,10 @@ message before it runs the picker. With a healthy transcript tail the
 interactive row never paints, or flashes for one tick — the question is
 answerable from Agent Code only when the JSONL channel is broken.
 
-Secondary: the proxy synthesizes `turn_stopped` with `stopReason: null` on
-stream death / stale-flow reap / API error, and `foldEvent` stamps the AUQ
-block's `resultAt` from any non-`tool_use` stop, so the live row shows
-"no answer sent" for a question that is still waiting.
+Secondary, out of scope here: the proxy synthesizes `turn_stopped` with
+`stopReason: null` on stream death / stale-flow reap / API error and
+`foldEvent` stamps the AUQ block's `resultAt` from it. Changing that was
+tried and dropped in review (see Design).
 
 ## Design
 
@@ -33,12 +33,20 @@ A. **The committed card turns interactive while the live plane still holds
    are untouched; liveness proof comes from the semantic plane, so after a
    reload with no semantic evidence the card stays view-only — honest.
 
-C. **Only explicit terminal stops dismiss a pending question.**
-   `foldEvent`'s `turn_stopped` branch stamps an AUQ block's `resultAt` only
-   when `stopReason` is a real terminal reason; a synthesized stop
-   (`stopReason === null`) leaves it unresolved. A picker orphaned by a
-   genuine stream death lingers until the next `turn_started` archives the
-   turn — bounded — and the committed decline result still lands.
+B. **The submit latch follows the question, not the row instance.** The
+   live-plane row unmounts when the ledger hands the tool_use to the
+   committed row, which can happen while the resolver is still typing the
+   first answer; the committed card then mounts a fresh `AskUserQuestionRow`.
+   A per-instance `useState`/`useRef` latch dies with the old instance, so
+   the new one would accept a second answer. The latch now lives in
+   `useAnswerSubmissionStore`, keyed by `operationId`, read synchronously
+   for the same-tick double-click guard and subscribed for the "Answering…"
+   affordance.
+
+Rejected: treating a synthesized `turn_stopped` (`stopReason: null`) as
+non-terminal in `foldEvent`. It changed the semantic plane's stop contract
+for every consumer to serve one row, and the "no answer sent" flash it
+targeted was not reproduced; if it recurs it gets its own issue.
 
 Not changed: rules in `ownership.ts`, `committed.test.ts:180-210` (the
 duplicate-capture guard) and the corpus fixtures.
@@ -49,10 +57,8 @@ duplicate-capture guard) and the corpus fixtures.
   picker when its operation id is live-unresolved and `result` is null;
   stays view-only when the id is absent, when a result exists, and when an
   answer via message was recorded.
-- `foldEvent` test: a synthesized `turn_stopped` (`stopReason: null`) does
-  not stamp a pending AskUserQuestion; an explicit `end_turn` still does;
-  `tool_use` never does.
-- Feed-level test: with a committed AUQ tool_use entry and a live
-  `semanticTurn` holding the same unresolved block, the feed renders the
-  interactive row (the fc397785 shape).
+- `index.renderer.test.tsx`: an answer recorded via message wins over the
+  live-unresolved signal (view shows "Answered via message", no picker).
+- `answeredViaMessageStore` latch: the in-flight flag is visible to a second
+  row instance for the same operationId and cleared on `end`.
 - `npx tsc -b`.

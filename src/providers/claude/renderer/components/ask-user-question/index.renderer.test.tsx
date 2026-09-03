@@ -10,6 +10,11 @@ import {
 import { Block } from '@renderer/features/feed/ui/rows/Block'
 import { SessionFeedProvider } from '@renderer/features/sessionFeed/SessionFeedContext'
 import { createFakeSessionFeed } from '@renderer/features/sessionFeed/FakeSessionFeed'
+import {
+  beginAnswer,
+  useAnswerSubmissionStore,
+  useAnsweredViaMessageStore,
+} from '@providers/claude/renderer/components/ask-user-question/answeredViaMessageStore'
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 
 describe('Claude provider-owned committed question', () => {
@@ -90,6 +95,63 @@ describe('Claude provider-owned committed question', () => {
     expect(screen.getByRole('button', { name: /Later/ })).toBeInTheDocument()
     expect(screen.queryByText('Yes · Later')).not.toBeInTheDocument()
     expect(screen.queryByText('no answer recorded')).not.toBeInTheDocument()
+  })
+
+  it('shows the answer recorded via message instead of the picker while the id is still live-unresolved', () => {
+    // The via-message path dismisses the TUI picker with Esc and sends the
+    // choices as a prompt; the semantic block stays unresolved until Claude
+    // records the generic decline. During that gap the card must show the
+    // answer that was sent, not re-offer the picker.
+    const use: ToolUseBlock = {
+      type: 'tool_use', id: 'via-message', name: 'AskUserQuestion', input: {
+        questions: [{ question: 'Deploy now?', options: [{ label: 'Yes' }, { label: 'Later' }] }],
+      },
+    }
+    useAnsweredViaMessageStore.getState().mark('via-message', ['Deploy now? → Later'])
+    render(
+      <SessionFeedProvider value={createFakeSessionFeed()}>
+        <ProviderContext.Provider value="claude">
+          <LiveUnresolvedQuestionsContext.Provider value={new Set(['via-message'])}>
+            <ToolUseIndexContext.Provider value={new Map([[use.id, use]])}>
+              <ToolResultIndexContext.Provider value={new Map()}>
+                <Block block={use} role="assistant" />
+              </ToolResultIndexContext.Provider>
+            </ToolUseIndexContext.Provider>
+          </LiveUnresolvedQuestionsContext.Provider>
+        </ProviderContext.Provider>
+      </SessionFeedProvider>,
+    )
+    expect(screen.getByText('Answered via message')).toBeInTheDocument()
+    expect(screen.getByText('Deploy now? → Later')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Later/ })).not.toBeInTheDocument()
+  })
+
+  it('mounts the committed picker already disabled while an answer for the same question is in flight', () => {
+    // The live-plane row can be unmounted mid-submit (the ledger hands the
+    // tool_use to the committed row); the fresh instance must inherit the
+    // latch or it would accept a second answer into the TUI.
+    const use: ToolUseBlock = {
+      type: 'tool_use', id: 'in-flight', name: 'AskUserQuestion', input: {
+        questions: [{ question: 'Deploy now?', options: [{ label: 'Yes' }, { label: 'Later' }] }],
+      },
+    }
+    useAnswerSubmissionStore.setState({ inFlight: {} })
+    beginAnswer('in-flight')
+    render(
+      <SessionFeedProvider value={createFakeSessionFeed()}>
+        <ProviderContext.Provider value="claude">
+          <LiveUnresolvedQuestionsContext.Provider value={new Set(['in-flight'])}>
+            <ToolUseIndexContext.Provider value={new Map([[use.id, use]])}>
+              <ToolResultIndexContext.Provider value={new Map()}>
+                <Block block={use} role="assistant" />
+              </ToolResultIndexContext.Provider>
+            </ToolUseIndexContext.Provider>
+          </LiveUnresolvedQuestionsContext.Provider>
+        </ProviderContext.Provider>
+      </SessionFeedProvider>,
+    )
+    expect(screen.getByRole('button', { name: /Later/ })).toBeDisabled()
+    useAnswerSubmissionStore.setState({ inFlight: {} })
   })
 
   it('stays view-only once a durable result exists even if the live set still lists the id', () => {
