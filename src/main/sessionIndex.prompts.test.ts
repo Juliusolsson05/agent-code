@@ -1,4 +1,4 @@
-import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -105,8 +105,13 @@ describe('extractPromptsFromFile', () => {
     const grown = await extractPromptsFromFile('claude', 'b', file, 4)
     expect(grown.prompts.slice(0, 3).map(p => p.text)).toEqual(['prompt 301', 'prompt 300', 'prompt 299'])
     const after = __sessionIndexCacheEntryForTests('claude', 'b')!
-    // The head of the parsed range did not move: nothing older was re-read.
+    // The head of the parsed range did not move: nothing older was re-read,
+    // and the bytes actually read are the appended bytes plus the 64-byte
+    // seam check.
     expect(after.parsedFrom).toBe(before.parsedFrom)
+    expect(after.lastBytesRead).toBe(
+      64 + claudeUser('prompt 300', 300).length + claudeUser('prompt 301', 301).length + partial.length,
+    )
     expect(after.parsedTo).toBe(before.parsedTo + claudeUser('prompt 300', 300).length + claudeUser('prompt 301', 301).length)
 
     // Completing the line makes it visible on the next read.
@@ -179,18 +184,102 @@ describe('extractPromptsFromFile', () => {
     expect(__sessionIndexCacheEntryForTests('claude', 'e')!.parsedFrom).toBe(0)
   })
 
-  it('returns nothing for a missing file and keeps the cache bounded', async () => {
+  it('returns nothing for a missing file and keeps the cache bounded as an LRU', async () => {
     const missing = await extractPromptsFromFile('claude', 'nope', join(root, 'nope.jsonl'), 4)
     expect(missing).toEqual({ prompts: [], cwd: '' })
 
-    for (let i = 0; i < 520; i += 1) {
+    const total = 1_040
+    for (let i = 0; i < total; i += 1) {
       const file = join(root, `tiny-${i}.jsonl`)
       writeFileSync(file, claudeUser(`tiny ${i}`, i))
       await extractPromptsFromFile('claude', `tiny-${i}`, file, 4)
+      // Touch the very first entry late in the run: an LRU keeps it, a FIFO
+      // would not.
+      if (i === total - 8) await extractPromptsFromFile('claude', 'tiny-0', join(root, 'tiny-0.jsonl'), 4)
     }
-    expect(__sessionIndexCacheSizeForTests()).toBeLessThanOrEqual(512)
-    // The most recently used entry survives eviction; the oldest did not.
-    expect(__sessionIndexCacheEntryForTests('claude', 'tiny-519')).not.toBeNull()
-    expect(__sessionIndexCacheEntryForTests('claude', 'tiny-0')).toBeNull()
+    expect(__sessionIndexCacheSizeForTests()).toBeLessThanOrEqual(1024)
+    expect(__sessionIndexCacheEntryForTests('claude', `tiny-${total - 1}`)).not.toBeNull()
+    expect(__sessionIndexCacheEntryForTests('claude', 'tiny-0')).not.toBeNull()
+    expect(__sessionIndexCacheEntryForTests('claude', 'tiny-1')).toBeNull()
+  })
+
+  it('serialises overlapping extractions of the same transcript', async () => {
+    const file = join(root, 'f.jsonl')
+    writeLargeClaudeTranscript(file)
+    await extractPromptsFromFile('claude', 'f', file, 4)
+
+    // Two full reads racing on a warm entry used to both fold the same chunk.
+    const [a, b] = await Promise.all([
+      extractPromptsFromFile('claude', 'f', file, 'all'),
+      extractPromptsFromFile('claude', 'f', file, 'all'),
+    ])
+    expect(a.prompts).toHaveLength(300)
+    expect(b.prompts).toHaveLength(300)
+    expect(new Set(a.prompts.map(p => p.text)).size).toBe(300)
+
+    appendFileSync(file, claudeUser('prompt 300', 300))
+    const [c, d] = await Promise.all([
+      extractPromptsFromFile('claude', 'f', file, 4),
+      extractPromptsFromFile('claude', 'f', file, 4),
+    ])
+    expect(c.prompts.slice(0, 2).map(p => p.text)).toEqual(['prompt 300', 'prompt 299'])
+    expect(d.prompts.slice(0, 2).map(p => p.text)).toEqual(['prompt 300', 'prompt 299'])
+    expect(__sessionIndexCacheEntryForTests('claude', 'f')!.parsedTo).toBe(statSync(file).size)
+  })
+
+  it('folds a record far longer than the tail window without quadratic re-reads', async () => {
+    const file = join(root, 'g.jsonl')
+    // Two prompts, then an 8 MB record (a pasted image is exactly this shape).
+    writeFileSync(file, claudeUser('before', 0) + claudeUser('also before', 1) + claudeFiller(2, 8 * 1024 * 1024))
+
+    const { prompts } = await extractPromptsFromFile('claude', 'g', file, 2)
+    expect(prompts.map(p => p.text)).toEqual(['also before', 'before'])
+    // Geometric widening: the total bytes read stay within a small multiple
+    // of the file size instead of re-reading the prefix per step.
+    expect(__sessionIndexCacheEntryForTests('claude', 'g')!.lastBytesRead).toBeLessThan(3 * statSync(file).size)
+  })
+
+  it('re-parses when the mtime moved with the size unchanged', async () => {
+    const file = join(root, 'h.jsonl')
+    writeFileSync(file, claudeUser('one', 0) + claudeUser('two', 1))
+    expect((await extractPromptsFromFile('claude', 'h', file, 'all')).prompts.map(p => p.text)).toEqual(['two', 'one'])
+
+    // Same byte length, different content, mtime pushed forward explicitly so
+    // the check does not depend on filesystem timestamp granularity.
+    writeFileSync(file, claudeUser('uno', 0) + claudeUser('dos', 1))
+    const later = new Date(statSync(file).mtimeMs + 5_000)
+    utimesSync(file, later, later)
+    expect((await extractPromptsFromFile('claude', 'h', file, 'all')).prompts.map(p => p.text)).toEqual(['dos', 'uno'])
+  })
+
+  it('detects a rewrite that grew the file instead of folding it on stale prompts', async () => {
+    const file = join(root, 'i.jsonl')
+    writeFileSync(file, claudeUser('old 0', 0) + claudeUser('old 1', 1))
+    await extractPromptsFromFile('claude', 'i', file, 'all')
+
+    let rewritten = ''
+    for (let i = 0; i < 8; i += 1) rewritten += claudeUser(`new ${i}`, i)
+    writeFileSync(file, rewritten)
+    const { prompts } = await extractPromptsFromFile('claude', 'i', file, 'all')
+    expect(prompts.map(p => p.text)).toEqual(['new 7', 'new 6', 'new 5', 'new 4', 'new 3', 'new 2', 'new 1', 'new 0'])
+  })
+
+  it('handles an empty file, a lone partial line, and a multi-byte seam', async () => {
+    const empty = join(root, 'empty.jsonl')
+    writeFileSync(empty, '')
+    expect(await extractPromptsFromFile('claude', 'empty', empty, 4)).toEqual({ prompts: [], cwd: '' })
+
+    const partial = join(root, 'partial.jsonl')
+    writeFileSync(partial, '{"type":"user","uuid":"u"')
+    expect(await extractPromptsFromFile('claude', 'partial', partial, 4)).toEqual({ prompts: [], cwd: '' })
+
+    // A 300 KB filler after an emoji-heavy prompt puts the first tail window
+    // boundary inside multi-byte sequences; cutting on newline BYTES and
+    // decoding each chunk separately must still yield the prompt intact.
+    const seam = join(root, 'seam.jsonl')
+    const emoji = '🙂'.repeat(1_000)
+    writeFileSync(seam, claudeUser(`first ${emoji}`, 0) + claudeFiller(1, 300 * 1024) + claudeUser('last', 2))
+    const { prompts } = await extractPromptsFromFile('claude', 'seam', seam, 'all')
+    expect(prompts.map(p => p.text)).toEqual(['last', `first ${emoji}`])
   })
 })

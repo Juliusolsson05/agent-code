@@ -111,6 +111,18 @@ type CacheEntry = {
    *  been parsed, i.e. `prompts` is complete for the range. */
   parsedFrom: number
   parsedTo: number
+  /** Codex only: the head was already searched for a cwd and had none, so
+   *  growth reads must not re-read it every time. */
+  headCwdChecked?: boolean
+  /** The last bytes of the parsed range (up to SEAM_BYTES, ending at
+   *  `parsedTo`). A growth read re-reads and compares them first: the
+   *  providers' files are append-only by convention, not by guarantee, and a
+   *  rewrite that happens to end larger must not be folded on top of stale
+   *  prompts. Byte-for-byte on a real tail is a far stronger check than
+   *  "is the byte before parsedTo still a newline". */
+  seam?: Buffer
+  /** Bytes read by the most recent extraction (test/diagnostic hook). */
+  lastBytesRead?: number
 }
 
 // WHY a byte range instead of "the whole file, keyed by mtime" (#735): both
@@ -122,15 +134,25 @@ type CacheEntry = {
 // thread to show four prompts. With a parsed range the entry extends by the
 // appended bytes on growth, and a listing that only needs the newest K
 // prompts folds the tail first and stops.
-const PROMPT_CACHE_MAX_ENTRIES = 512
+// WHY the cache is larger than the search bound: a search folds up to
+// SEARCH_CANDIDATES_PER_PROVIDER transcripts per provider, and every one of
+// them must still be cached when the next keystroke arrives or the search
+// thrashes the LRU and re-reads everything. Keep this above the sum of the
+// per-provider bounds plus the listing's ten.
+const PROMPT_CACHE_MAX_ENTRIES = 1024
+const SEAM_BYTES = 64
 const TAIL_WINDOW_BYTES = 256 * 1024
 const HEAD_CWD_WINDOW_BYTES = 64 * 1024
 // Search used to fold every transcript on disk per query (2,150 files, one
-// of them 148 MB). Results are recency-ranked and capped at 20, so the 500
-// most recently modified candidates is the same answer for any query a user
-// types while working; older sessions stay reachable through the cwd-scoped
-// list.
-const SEARCH_CANDIDATE_LIMIT = 500
+// of them 148 MB). Results are recency-ranked and capped at 20, so bounding
+// the candidates to the most recently modified per provider is the same
+// answer for any query a user types while working. The bound is per
+// provider, applied AFTER the cwd filter for Claude (whose cwd is known
+// from discovery), so a burst of Codex rollouts in other projects cannot
+// crowd this project's Claude sessions out of the search. Sessions older
+// than the bound are not searchable — the price of never freezing on a
+// keystroke; raise the bound (and the cache) rather than remove it.
+const SEARCH_CANDIDATES_PER_PROVIDER = 400
 
 /** Keyed by provider session id. Codex session ids are globally
  *  unique (uuid); Claude session ids are uuids too. No collisions
@@ -165,7 +187,7 @@ export function __resetSessionIndexCacheForTests(): void {
 export function __sessionIndexCacheEntryForTests(
   kind: AgentProviderKind,
   sessionId: string,
-): { parsedFrom: number; parsedTo: number; prompts: number; cwd: string } | null {
+): { parsedFrom: number; parsedTo: number; prompts: number; cwd: string; lastBytesRead: number } | null {
   const entry = promptCache.get(cacheKey(kind, sessionId))
   if (!entry) return null
   return {
@@ -173,6 +195,7 @@ export function __sessionIndexCacheEntryForTests(
     parsedTo: entry.parsedTo,
     prompts: entry.prompts.length,
     cwd: entry.cwd,
+    lastBytesRead: entry.lastBytesRead ?? 0,
   }
 }
 export function __sessionIndexCacheSizeForTests(): number {
@@ -342,6 +365,35 @@ export async function extractPromptsFromFile(
   file: string,
   need: number | 'all' = 'all',
 ): Promise<{ prompts: SessionIndexPrompt[]; cwd: string }> {
+  // WHY calls for the same transcript are serialised: the cached entry is
+  // mutated in place across awaits (fold ranges, prompts). Two overlapping
+  // calls — the picker fires a listing on open and again from its debounced
+  // effect, and a search keystroke can land while a cold search is still
+  // folding — would both capture the same range, both fold the same chunk,
+  // and leave duplicated prompts in an entry that then reads as a permanent
+  // cache hit. Chaining on the key makes the second call see the committed
+  // entry instead.
+  const key = cacheKey(kind, sessionId)
+  const previous = inflight.get(key) ?? Promise.resolve()
+  const run = previous
+    .catch(() => undefined)
+    .then(() => extractPromptsUnlocked(kind, sessionId, file, need))
+  inflight.set(key, run)
+  try {
+    return await run
+  } finally {
+    if (inflight.get(key) === run) inflight.delete(key)
+  }
+}
+
+const inflight = new Map<string, Promise<{ prompts: SessionIndexPrompt[]; cwd: string }>>()
+
+async function extractPromptsUnlocked(
+  kind: AgentProviderKind,
+  sessionId: string,
+  file: string,
+  need: number | 'all',
+): Promise<{ prompts: SessionIndexPrompt[]; cwd: string }> {
   const span = performanceService.span('sessionIndex.extractPrompts', {
     kind,
     sessionId,
@@ -366,7 +418,9 @@ export async function extractPromptsFromFile(
   ) {
     entry = undefined
   }
-  const wanted = need === 'all' ? Number.POSITIVE_INFINITY : Math.max(0, need)
+  // A listing that asks for nothing still needs the cwd, so read at least one
+  // prompt's worth of tail.
+  const wanted = need === 'all' ? Number.POSITIVE_INFINITY : Math.max(1, need)
   if (
     entry &&
     entry.mtime === mtime &&
@@ -382,6 +436,16 @@ export async function extractPromptsFromFile(
 
   let bytesRead = 0
   try {
+    if (size > entry.parsedTo && entry.seam && entry.seam.length > 0) {
+      // See CacheEntry.seam: verify the tail we parsed is still there before
+      // folding what follows it; otherwise the file was rewritten — start
+      // over from a cold entry.
+      const seam = await readRange(file, entry.parsedTo - entry.seam.length, entry.parsedTo)
+      bytesRead += seam.length
+      if (!seam.equals(entry.seam)) {
+        entry = { mtime, size, cwd: '', prompts: [], parsedFrom: size, parsedTo: size }
+      }
+    }
     if (size > entry.parsedTo) {
       bytesRead += await foldForward(entry, kind, file, size)
     }
@@ -390,8 +454,9 @@ export async function extractPromptsFromFile(
       bytesRead += await foldBackward(entry, kind, file, window)
       window *= 4
     }
-    if (!entry.cwd && kind === 'codex' && entry.parsedFrom > 0) {
+    if (!entry.cwd && kind === 'codex' && entry.parsedFrom > 0 && !entry.headCwdChecked) {
       entry.cwd = await readHeadCwd(file, size)
+      entry.headCwdChecked = true
     }
   } catch {
     span.end({ result: 'read-failed' })
@@ -399,6 +464,7 @@ export async function extractPromptsFromFile(
   }
   entry.mtime = mtime
   entry.size = size
+  entry.lastBytesRead = bytesRead
   cacheSet(key, entry)
   span.end({
     result: 'parsed',
@@ -445,7 +511,15 @@ async function foldForward(
   entry.prompts.push(...folded.prompts)
   if (!entry.cwd && folded.cwd) entry.cwd = folded.cwd
   entry.parsedTo = entry.parsedTo + lastNewline + 1
+  entry.seam = seamOf(buf, lastNewline + 1)
   return buf.length
+}
+
+// A private copy of the last SEAM_BYTES bytes before `end` in `buf`; a copy so
+// the entry never keeps a whole read buffer alive through a subarray.
+function seamOf(buf: Buffer, end: number): Buffer {
+  const start = Math.max(0, end - SEAM_BYTES)
+  return Buffer.from(buf.subarray(start, end))
 }
 
 /** Fold up to `window` bytes older than `entry.parsedFrom`. If the window
@@ -468,6 +542,11 @@ async function foldBackward(
     if (start > 0) {
       const firstNewline = buf.indexOf(NEWLINE)
       if (firstNewline < 0) {
+        // The whole window sat inside one line (a pasted image can be a
+        // single multi-MB record). Widen geometrically: a constant step here
+        // re-reads the same prefix on every iteration — quadratic for a line
+        // that is a large multiple of the window.
+        window *= 2
         start = Math.max(0, start - window)
         continue
       }
@@ -484,11 +563,13 @@ async function foldBackward(
           entry.parsedTo = from
           break
         }
+        window *= 2
         start = Math.max(0, start - window)
         continue
       }
       to = lastNewline + 1
       entry.parsedTo = start + to
+      entry.seam = seamOf(buf, to)
     }
     const text = buf.subarray(from, to).toString('utf8')
     const folded = foldLines(kind, text, null)
@@ -850,9 +931,20 @@ export async function searchSessionPrompts(
     score: number
   }> = []
 
-  // Newest first, bounded: see SEARCH_CANDIDATE_LIMIT.
+  // Newest first, bounded per provider AFTER the cwd filter where the cwd is
+  // already known — see SEARCH_CANDIDATES_PER_PROVIDER. Codex cwd is only
+  // known after a head read, so its candidates are filtered below as before.
   candidates.sort((a, b) => b.lastModified - a.lastModified)
-  for (const c of candidates.slice(0, SEARCH_CANDIDATE_LIMIT)) {
+  const bounded: typeof candidates = []
+  const taken: Partial<Record<AgentProviderKind, number>> = {}
+  for (const c of candidates) {
+    if (cwd && c.cwd && c.cwd !== cwd) continue
+    const count = taken[c.kind] ?? 0
+    if (count >= SEARCH_CANDIDATES_PER_PROVIDER) continue
+    taken[c.kind] = count + 1
+    bounded.push(c)
+  }
+  for (const c of bounded) {
     const { prompts, cwd: parsedCwd } = await extractPromptsFromFile(
       c.kind,
       c.providerSessionId,

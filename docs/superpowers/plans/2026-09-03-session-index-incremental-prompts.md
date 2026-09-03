@@ -38,8 +38,28 @@ it, keyed by file, with mtime and size for validation:
   per keystroke bought nothing but freezes.
 
 Behaviour that does not change: prompt filtering rules per provider, the
-newest-first order and `promptsPerSession` slicing, cwd resolution, the
-discovery walks.
+newest-first order and `promptsPerSession` slicing, the discovery walks.
+One deliberate difference: cwd comes from the first record in the parsed
+range (the tail on a listing), i.e. the session's most recent cwd rather
+than its first — the better answer for resume, and identical for the
+common single-cwd session.
+
+## Review follow-ups (applied)
+
+- Concurrent extractions of the same transcript are serialised per key:
+  the picker fires a listing on open and again from its debounced effect,
+  and both used to fold the same chunk into one shared entry.
+- Growth reads compare the last 64 bytes of the parsed range before
+  folding, so a rewrite that ends larger starts over instead of stacking
+  on stale prompts.
+- Backward widening grows geometrically inside the loop, so a single
+  multi-MB record (a pasted image) costs one pass, not a quadratic one.
+- The search bound is per provider and applied after the cwd filter, so
+  Codex rollouts in other projects cannot crowd out this project's Claude
+  sessions; the cache holds more than the bounds combined so a search never
+  thrashes it.
+- `need` is clamped to at least one prompt so a listing always learns the
+  cwd; the Codex head is read for a cwd at most once per entry.
 
 ## Verification
 
