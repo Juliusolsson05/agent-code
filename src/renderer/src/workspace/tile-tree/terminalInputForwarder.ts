@@ -14,10 +14,13 @@
 // so the renderer xterm is the only responder; that is fine for the live
 // stream (the TUI is asking now) and wrong for replay.
 //
-// WHY coalesce: xterm emits `onData` per parsed input event, so a paste or a
-// burst of query replies arrives as many chunks in one tick. Joining what
-// arrives within a microtask keeps typing latency invisible while turning
-// an N-call burst into one IPC call.
+// WHY coalesce: xterm emits `onData` per parsed input event, so a burst of
+// query replies (one screen repaint can carry several DSR/DA probes) arrives
+// as many chunks in one tick. Joining what arrives within a microtask keeps
+// typing latency invisible while turning an N-call burst into one IPC call.
+// A paste is NOT split by xterm (it is one `triggerDataEvent`), and DOM key
+// events are separate tasks, so coalescing cannot glue a keystroke onto a
+// paste or onto Enter from a different key.
 //
 // WHY keystrokes typed during replay are dropped rather than queued: the
 // window is the ~100 ms xterm takes to parse the replay, the pane has not
@@ -72,17 +75,30 @@ export function createTerminalInputForwarder(
     replay(term, chunks) {
       const writes = chunks.filter(chunk => chunk.length > 0)
       if (writes.length === 0) return Promise.resolve()
-      return new Promise(resolve => {
+      return new Promise((resolve, reject) => {
         let remaining = writes.length
+        // Raised BEFORE the writes: xterm may run the callback synchronously
+        // inside `write` (its fast path after user input), and the latch must
+        // already be up for whatever that parse provokes.
         replayDepth += writes.length
-        for (const chunk of writes) {
-          // xterm invokes the callback after the chunk has been parsed, i.e.
-          // after every `onData` it provoked has already fired.
-          term.write(chunk, () => {
-            replayDepth -= 1
-            remaining -= 1
-            if (remaining === 0) resolve()
-          })
+        for (let i = 0; i < writes.length; i += 1) {
+          try {
+            // xterm invokes the callback after the chunk has been parsed, i.e.
+            // after every `onData` it provoked has already fired.
+            term.write(writes[i]!, () => {
+              replayDepth -= 1
+              remaining -= 1
+              if (remaining === 0) resolve()
+            })
+          } catch (error) {
+            // `write` can throw synchronously (xterm's pending-bytes
+            // watermark). The chunks that never got queued will never call
+            // back; release their share of the latch or the pane would drop
+            // every keystroke for the rest of its life.
+            replayDepth -= writes.length - i
+            reject(error instanceof Error ? error : new Error(String(error)))
+            return
+          }
         }
       })
     },

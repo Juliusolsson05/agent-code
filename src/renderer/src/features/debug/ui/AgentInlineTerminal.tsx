@@ -113,7 +113,7 @@ export function AgentInlineTerminal({ sessionId, active }: Props) {
         if (disposed || termRef.current !== term) return
         const liveTerm = term
         if (!liveTerm) return
-        void forwarder.replay(liveTerm, [buffer ?? '', ...backlogQueue])
+        void forwarder.replay(liveTerm, [buffer ?? '', backlogQueue.join('')])
         backlogQueue.length = 0
         attachedBackfillDone = true
         liveTerm.focus()

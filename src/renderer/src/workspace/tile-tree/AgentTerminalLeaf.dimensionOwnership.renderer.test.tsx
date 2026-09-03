@@ -13,6 +13,7 @@ import { AgentTerminalLeaf } from './AgentTerminalLeaf'
 const xtermHarness = vi.hoisted(() => ({
   cols: 120,
   rows: 40,
+  onData: null as ((data: string) => void) | null,
 }))
 
 vi.mock('@xterm/xterm', () => ({
@@ -22,8 +23,14 @@ vi.mock('@xterm/xterm', () => ({
     options: Record<string, unknown> = {}
     loadAddon() {}
     open() {}
-    onData() { return { dispose() {} } }
-    write() {}
+    onData(listener: (data: string) => void) {
+      xtermHarness.onData = listener
+      return { dispose() {} }
+    }
+    // Real xterm reports each write parsed via the callback; the input
+    // forwarder (#745) holds its replay latch until then, so a mock that
+    // never calls back would model a pane that is deaf forever.
+    write(_data: string, callback?: () => void) { callback?.() }
     focus() {}
     dispose() {}
   },
@@ -178,5 +185,43 @@ describe('AgentTerminalLeaf dimension ownership', () => {
     // so a pane with the same cols/rows still restores its size after the
     // inline terminal may have changed the backend while fullscreen was open.
     expect(resize).toHaveBeenCalledWith('session-1', 120, 40)
+  })
+
+  it('forwards a keystroke typed after attach through the replay-silenced input path', async () => {
+    const runtime = {
+      ...emptyRuntime(),
+      processStatus: 'started' as const,
+    }
+    render(
+      <AgentTerminalOwnershipProvider>
+        <MountedAgentTerminalOwner sessionId="session-1">
+          <AgentTerminalLeaf
+            sessionId="session-1"
+            focused
+            onFocusRequest={() => {}}
+            workspace={workspace}
+            runtime={runtime}
+            projectDir="/tmp/project"
+            provider="codex"
+          />
+        </MountedAgentTerminalOwner>
+      </AgentTerminalOwnershipProvider>,
+    )
+    act(() => flushAnimationFrames())
+    await act(async () => {
+      attach.resolve('replayed screen \x1b[6n')
+      await attach.promise
+    })
+    // The replay has been "parsed" (the mock calls back synchronously), so
+    // the latch is down and a real keystroke must reach the provider; had
+    // the latch stuck, this pane would silently drop every key.
+    expect(xtermHarness.onData).not.toBeNull()
+    await act(async () => {
+      xtermHarness.onData!('x')
+      await Promise.resolve()
+    })
+    const api = window.api as unknown as { sendInput: ReturnType<typeof vi.fn> }
+    expect(api.sendInput).toHaveBeenCalledWith('session-1', 'x')
+    expect(workspace.acknowledgeSession).toHaveBeenCalledWith('session-1')
   })
 })

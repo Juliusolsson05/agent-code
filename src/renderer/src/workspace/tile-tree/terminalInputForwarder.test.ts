@@ -89,4 +89,36 @@ describe('terminalInputForwarder', () => {
     expect(forwarder.replaying).toBe(false)
     expect(send).not.toHaveBeenCalled()
   })
+
+  it('holds the latch when xterm runs the write callback synchronously', () => {
+    // xterm's fast path after user input invokes the callback inside
+    // `write`; the latch must already be up for what that parse provokes.
+    const send = vi.fn()
+    const forwarder = createTerminalInputForwarder(send)
+    const seen: boolean[] = []
+    const term = {
+      write(chunk: string, callback?: () => void) {
+        if (chunk.includes('\x1b[6n')) seen.push(forwarder.onData('\x1b[1;1R'))
+        callback?.()
+      },
+    }
+    void forwarder.replay(term, ['a\x1b[6n', 'b\x1b[6n'])
+    expect(seen).toEqual([false, false])
+    expect(forwarder.replaying).toBe(false)
+    expect(send).not.toHaveBeenCalled()
+  })
+
+  it('releases the latch for chunks xterm refused to queue', async () => {
+    const send = vi.fn()
+    const forwarder = createTerminalInputForwarder(send)
+    const term = {
+      write(chunk: string, callback?: () => void) {
+        if (chunk === 'second') throw new Error('write buffer overflow')
+        callback?.()
+      },
+    }
+    await expect(forwarder.replay(term, ['first', 'second', 'third'])).rejects.toThrow('overflow')
+    expect(forwarder.replaying).toBe(false)
+    expect(forwarder.onData('x')).toBe(true)
+  })
 })
