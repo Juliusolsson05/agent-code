@@ -60,14 +60,17 @@ export async function compactSourceBeforeSwitch(
 
   const source = getHostTranscriptAdapter(request.sourceKind)
 
-  // WHY nothing below keeps a ConversationDocument in a local: this function
-  // and its wait loops are suspended on timers for up to five minutes, and V8
-  // keeps every live local of a suspended async function alive in its
-  // generator object. The 2026-09-03 heap snapshot (issue #720) showed three
-  // full copies of an 18k-entry rollout — `before`, `compacted`, and the
-  // current poll's document — pinned here for the entire wait, 80% of the main
-  // heap. Every read now goes through `readSourceAs`, which decodes, applies a
-  // selector, and lets the document die before the caller awaits anything.
+  // WHY no local below holds a ConversationDocument: this function and its
+  // wait loops are suspended on timers for up to five minutes, and V8 keeps
+  // every register of a suspended async function alive in its generator
+  // object. The 2026-09-03 heap snapshot (issue #720) showed three full copies
+  // of an 18k-entry rollout — `before`, `compacted`, and the current poll's
+  // document — pinned here for the entire wait, 80% of the main heap. Every
+  // read now goes through a selector helper that decodes, derives, and lets
+  // the document die before the caller awaits anything. The one copy that
+  // remains reachable is `plan.conversation`, which switchProvider and the IPC
+  // handler hold anyway; dropping it is a caller-side follow-up (see the plan
+  // doc), not something this frame can achieve alone.
   if (plan.kind === 'requires-compaction') {
     const beforeFingerprint = await readSourceAs(
       source,
@@ -247,13 +250,22 @@ type PollOptions = {
 // date-bucketed sessions tree to find the rollout, then a full decode of a
 // file that can exceed 100 MB — four times a second, for up to five minutes,
 // on the main thread. The transcript only matters when it has grown, and
-// `size:mtimeMs` is enough to tell. A stat failure yields a null token, which
-// is treated as "unknown, decode again" so a transient fs hiccup degrades to
-// the rate-limited path rather than stalling the switch.
+// `size:mtimeMs` is enough to tell. Both providers append (or atomically
+// replace, which moves mtime), so a same-size in-place rewrite is not a shape
+// this has to detect.
 //
-// The token is sampled BEFORE the decode so an append that lands during the
-// decode changes the token relative to `lastToken` and forces a re-check on
-// the next tick; sampling afterwards could swallow that write.
+// WHY the path is resolved lazily and re-resolved after a stat failure: a
+// resumed Codex session can start writing a different rollout than the one
+// carrying its id (CodexHeadless #159), and `read()` always followed the
+// newest file. Pinning one path for the whole wait would turn that into a
+// silent 300 s timeout, so a failed stat drops the pinned path and the next
+// decode locates again. Locate failures are retried to the deadline like
+// read failures — a rollout that a `read()` just found should not fail the
+// switch because one poll could not see it.
+//
+// The change token is sampled right BEFORE each decode so an append that
+// lands during the decode moves the token relative to `lastToken` and forces
+// a re-check on the next tick; sampling afterwards could swallow that write.
 async function pollSourceUntil<T>(
   manager: SessionManager,
   request: SwitchProviderRequest,
@@ -264,40 +276,63 @@ async function pollSourceUntil<T>(
 ): Promise<T> {
   const sourceSessionId = request.sourceSessionId!
   const deadline = Date.now() + COMPACTION_TIMEOUT_MS
-  // Resolved once per wait — for Codex this is the expensive tree walk that
-  // used to run on every tick.
-  const transcriptPath = await source.locate(sourceCwd, request.sourceProviderSessionId)
+  let transcriptPath: string | null = null
   let lastToken: string | null = null
   let decodePending = true
-  let lastDecodeAt = Number.NEGATIVE_INFINITY
+  // Measured from the END of the previous decode, not its start: a decode
+  // that itself takes most of a second must not be immediately followed by
+  // another, or the floor would bound nothing on a continuously appending
+  // source.
+  let lastDecodeEndedAt = Number.NEGATIVE_INFINITY
   let lastReadError: unknown = null
+
+  const decodeOnce = async (): Promise<{ value: T } | null> => {
+    try {
+      if (transcriptPath === null) {
+        transcriptPath = await source.locate(sourceCwd, request.sourceProviderSessionId)
+      }
+      lastToken = await transcriptChangeToken(transcriptPath)
+      const outcome = await readSourceAtAs(source, transcriptPath, probe)
+      lastReadError = null
+      decodePending = false
+      return outcome
+    } catch (error) {
+      // A failed locate/read says nothing about whether the file settled, so
+      // the next cooled tick decodes again even if the token did not move.
+      lastReadError = error
+      decodePending = true
+      return null
+    } finally {
+      lastDecodeEndedAt = Date.now()
+    }
+  }
+
   while (Date.now() < deadline) {
     if (manager.getSessionKind(sourceSessionId) !== options.expectedKind) {
       throw new Error(options.exitedMessage)
     }
-    const token = await transcriptChangeToken(transcriptPath)
-    if (token === null || token !== lastToken) decodePending = true
-    if (decodePending && Date.now() - lastDecodeAt >= MIN_DECODE_INTERVAL_MS) {
-      lastToken = token
-      decodePending = false
-      lastDecodeAt = Date.now()
-      try {
-        const outcome = await readSourceAs(
-          source,
-          sourceCwd,
-          request.sourceProviderSessionId,
-          probe,
-        )
-        if (outcome) return outcome.value
-        lastReadError = null
-      } catch (error) {
-        // A failed read says nothing about whether the file settled, so the
-        // next cooled tick decodes again even if the token did not move.
-        lastReadError = error
+    if (transcriptPath !== null && !decodePending) {
+      const token = await transcriptChangeToken(transcriptPath)
+      if (token === null) {
+        transcriptPath = null
+        decodePending = true
+      } else if (token !== lastToken) {
         decodePending = true
       }
     }
+    if (decodePending && Date.now() - lastDecodeEndedAt >= MIN_DECODE_INTERVAL_MS) {
+      const outcome = await decodeOnce()
+      if (outcome) return outcome.value
+    }
     await delay(COMPACTION_POLL_MS)
+  }
+  // A change observed inside the last cooldown window still gets its decode.
+  // Without this, a provider that finished writing in the final second would
+  // fail the switch AFTER its history was irreversibly compacted — the one
+  // outcome the whole wait exists to avoid.
+  if (decodePending) {
+    const outcome = await decodeOnce()
+    if (outcome) return outcome.value
   }
   throw new Error(options.timeoutMessage(lastReadError))
 }
@@ -321,6 +356,16 @@ async function readSourceAs<T>(
   select: (conversation: ConversationDocument) => T,
 ): Promise<T> {
   return select(await source.read(sourceCwd, providerSessionId))
+}
+
+// Same contract as readSourceAs for a path the poll already located, so the
+// repeated decodes skip the provider's file lookup entirely.
+async function readSourceAtAs<T>(
+  source: SourceAdapter,
+  path: string,
+  select: (conversation: ConversationDocument) => T,
+): Promise<T> {
+  return select(await source.readAt(path))
 }
 
 function latestSourceLine(conversation: ConversationDocument): number {

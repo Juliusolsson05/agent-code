@@ -45,6 +45,27 @@ Not in scope: `switchProvider` still holds the pre-compaction `conversation`
 via `plan.conversation` for the duration of `compactSource` (one copy instead
 of three). Moving transcript decoding off the main thread is a separate item.
 
+## Review follow-ups (applied)
+
+An adversarial review of the first cut found four gaps, all fixed in the
+second commit:
+
+- Codex `read()` still walked the sessions tree on every decode. The adapter
+  now also exposes `readAt(path)`, and the poll decodes at the located path.
+- A change observed inside the last cooldown window before the 300 s
+  deadline was never decoded. The loop now spends one final decode on a
+  pending change before throwing — the alternative fails a switch whose
+  source was already irreversibly compacted.
+- The decode floor was measured from decode start; it is now measured from
+  decode end so a slow decode cannot be followed immediately by another.
+- Locate is lazy and re-runs after a stat failure, so a resumed Codex
+  session that moves to a new rollout (CodexHeadless #159) cannot turn into
+  a silent timeout, and locate failures are retried like read failures.
+- The tests mock the poll delay to advance fake timers, so every timing
+  contract (including the five-minute deadline case) is deterministic and
+  instant, and the "unchanged file" contract asserts on decode timestamps
+  rather than counts.
+
 ## Verification
 
 - `compactBeforeSwitch.test.ts`: existing five contracts unchanged; new
