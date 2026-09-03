@@ -7,6 +7,7 @@ import {
   getActiveAppFontFamily,
 } from '@renderer/app-state/settings/theme'
 import { readXtermTheme, syncXtermTheme } from '@renderer/workspace/tile-tree/xtermTheme'
+import { createTerminalInputForwarder } from '@renderer/workspace/tile-tree/terminalInputForwarder'
 
 type Props = {
   sessionId: string
@@ -88,8 +89,13 @@ export function AgentInlineTerminal({ sessionId, active }: Props) {
       resizeObserver = new ResizeObserver(fitAndResizeBackend)
       resizeObserver.observe(container)
 
-      onDataDisposable = term.onData(data => {
+      // See terminalInputForwarder.ts (#745): replies to replayed content
+      // are dropped, live chunks are coalesced per tick.
+      const forwarder = createTerminalInputForwarder(data => {
         void window.api.sendInput(sessionId, data)
+      })
+      onDataDisposable = term.onData(data => {
+        forwarder.onData(data)
       })
 
       let attachedBackfillDone = false
@@ -107,8 +113,7 @@ export function AgentInlineTerminal({ sessionId, active }: Props) {
         if (disposed || termRef.current !== term) return
         const liveTerm = term
         if (!liveTerm) return
-        if (buffer) liveTerm.write(buffer)
-        for (const d of backlogQueue) liveTerm.write(d)
+        void forwarder.replay(liveTerm, [buffer ?? '', backlogQueue.join('')])
         backlogQueue.length = 0
         attachedBackfillDone = true
         liveTerm.focus()
