@@ -32,9 +32,19 @@ const FEED_DEBUG_LOG_CAP = 500
 // is the same lesson MAX_LIVE_ENTRY_BYTES (#375) already applied to the
 // entry window. 4 MiB is generous for small records (500 × a few hundred
 // bytes never gets near it) and only bites when payloads are large, which is
-// exactly the case that needs bounding. Disk persistence keeps the full
-// stream, so the in-memory ring only has to serve the live panel.
+// exactly the case that needs bounding. Disk persistence is best-effort (one
+// in-flight append batch per session; entries evicted before it resolves are
+// never written — see useFeedDebugPersist), and the byte budget narrows that
+// loss window for large records. The ring exists for the live panel, not for
+// durability; a durable buffer is a separate concern (see the header).
 export const FEED_DEBUG_LOG_MAX_BYTES = 4 * 1024 * 1024
+
+// A real entry always serialises to at least its id/ts/summary envelope, so a
+// zero estimate means estimateJsonBytes gave up (cyclic or BigInt payload).
+// Charge such an entry a conservative floor instead of letting it ride free
+// under the budget — an unbounded payload that cannot be measured is exactly
+// the shape the budget must not ignore.
+const UNMEASURABLE_ENTRY_BYTES = 64 * 1024
 
 export type FeedDebugInput = {
   layer: FeedDebugLayer
@@ -55,14 +65,14 @@ const entryBytesCache = new WeakMap<FeedDebugEntry, number>()
 function feedDebugEntryBytes(entry: FeedDebugEntry): number {
   let bytes = entryBytesCache.get(entry)
   if (bytes === undefined) {
-    bytes = estimateJsonBytes(entry)
+    bytes = estimateJsonBytes(entry) || UNMEASURABLE_ENTRY_BYTES
     entryBytesCache.set(entry, bytes)
   }
   return bytes
 }
 
-/** Estimated JSON bytes of a feed-debug ring (cache-hit walk). Exported for
- *  the memory gauge and tests; the append path uses it internally. */
+/** Estimated JSON bytes of a feed-debug ring (cache-hit walk). Used by the
+ *  append path, the renderer.session.memory.feedDebugLog gauge, and tests. */
 export function estimateFeedDebugLogBytes(log: readonly FeedDebugEntry[]): number {
   let total = 0
   for (const entry of log) total += feedDebugEntryBytes(entry)
@@ -71,8 +81,9 @@ export function estimateFeedDebugLogBytes(log: readonly FeedDebugEntry[]): numbe
 
 // Evict from the head until the ring fits the byte budget. The newest entry
 // is never evicted, even when it alone exceeds the budget: a single
-// oversized record must not blank the panel, and the count cap already
-// guarantees it will age out within 500 appends.
+// oversized record must not blank the panel. It is the first thing the NEXT
+// append evicts, so an oversized record never occupies the ring for longer
+// than one append.
 function trimFeedDebugLogToBudget(log: FeedDebugEntry[]): FeedDebugEntry[] {
   let total = estimateFeedDebugLogBytes(log)
   if (total <= FEED_DEBUG_LOG_MAX_BYTES) return log

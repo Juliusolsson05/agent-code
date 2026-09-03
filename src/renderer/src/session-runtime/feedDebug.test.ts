@@ -43,8 +43,12 @@ describe('appendFeedDebugLog', () => {
   it('never lets the byte rule evict small entries', () => {
     const runtime = appendMany(emptyRuntime(), 500, () => ({ small: true }))
 
+    // A full ring of small records must sit far under the budget, so the
+    // count cap — not the byte rule — is what decides the length here.
     expect(runtime.feedDebugLog).toHaveLength(500)
-    expect(estimateFeedDebugLogBytes(runtime.feedDebugLog)).toBeLessThan(FEED_DEBUG_LOG_MAX_BYTES)
+    const bytes = estimateFeedDebugLogBytes(runtime.feedDebugLog)
+    expect(bytes).toBeGreaterThan(500 * 40)
+    expect(bytes).toBeLessThan(FEED_DEBUG_LOG_MAX_BYTES / 8)
   })
 
   it('evicts the oldest entries once the estimated bytes exceed the budget', () => {
@@ -54,6 +58,9 @@ describe('appendFeedDebugLog', () => {
 
     const bytes = estimateFeedDebugLogBytes(runtime.feedDebugLog)
     expect(bytes).toBeLessThanOrEqual(FEED_DEBUG_LOG_MAX_BYTES)
+    // Minimal eviction: one more record would not have fit, so nothing was
+    // dropped that the budget could have kept.
+    expect(bytes + 300 * 1024).toBeGreaterThan(FEED_DEBUG_LOG_MAX_BYTES)
     expect(runtime.feedDebugLog.length).toBeLessThan(60)
     expect(runtime.feedDebugLog.length).toBeGreaterThan(0)
     // Eviction takes the head: the retained ids are the newest, contiguous.
@@ -75,5 +82,15 @@ describe('appendFeedDebugLog', () => {
 
     expect(runtime.feedDebugLog).toHaveLength(1)
     expect(runtime.feedDebugLog[0]?.summary).toBe('oversized')
+
+    // The oversized record is the first casualty of the next append.
+    const after = appendFeedDebugLog(runtime, {
+      layer: 'STATE',
+      kind: 'screen_update',
+      summary: 'small again',
+      data: { small: true },
+    })
+    expect(after.feedDebugLog).toHaveLength(1)
+    expect(after.feedDebugLog[0]?.summary).toBe('small again')
   })
 })
