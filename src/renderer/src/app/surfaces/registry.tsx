@@ -28,6 +28,7 @@ import { ColorFlagPickerSurface } from '@renderer/features/workspace/surfaces/Co
 import { KeyboardShortcutsSurface } from '@renderer/features/settings/surfaces/KeyboardShortcutsSurface'
 import { RewindToPromptSurface } from '@renderer/features/workspace/surfaces/RewindToPromptSurface'
 import { AgentTitlePromptSurface } from '@renderer/features/workspace/surfaces/AgentTitlePromptSurface'
+import { ProviderSwitchPickerSurface } from '@renderer/features/workspace/surfaces/ProviderSwitchPickerSurface'
 
 // The surface registry (issue #494). Adding a surface = write a wrapper
 // in the owning feature's surfaces/ folder + add ONE import + ONE array
@@ -83,6 +84,9 @@ export const modalSurfaces: SurfaceEntry[] = [
   { id: 'rewind-to-prompt', Component: RewindToPromptSurface },
   { id: 'agent-title-prompt', Component: AgentTitlePromptSurface },
   { id: 'usage', Component: UsageModalSurface },
+  // New modals append so their z-50 sibling order cannot accidentally move an
+  // established surface below one it used to cover; see the registry contract.
+  { id: 'provider-switch-picker', Component: ProviderSwitchPickerSurface },
 ]
 
 /**

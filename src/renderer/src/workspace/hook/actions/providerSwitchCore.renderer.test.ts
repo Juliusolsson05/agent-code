@@ -304,4 +304,144 @@ describe('switchAgentProvider', () => {
       targetSessionId: 'source-pane',
     })
   })
+
+  it('carries an OpenCode Terminal destination into the replacement runtime', async () => {
+    const replaceSession = vi.fn().mockResolvedValue('target-pane')
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: {},
+    })
+    const refs = {
+      stateRef: {
+        current: {
+          sessions: {
+            'source-pane': { cwd: '/project', kind: 'claude' },
+          },
+        },
+      },
+      latestRuntimesRef: { current: {} },
+      defaultBuiltInMcpDomainsRef: { current: [] },
+    } as unknown as WorkspaceRefs
+
+    await expect(switchAgentProvider({
+      sessionId: 'source-pane',
+      targetKind: 'opencode',
+      targetProviderRuntime: 'terminal',
+      refs,
+      setRuntimes: vi.fn() as WorkspaceSetRuntimes,
+      sessionActions: { replaceSession } as unknown as SessionActions,
+    })).resolves.toMatchObject({ status: 'switched', targetKind: 'opencode' })
+
+    expect(replaceSession).toHaveBeenCalledWith('/project', {
+      kind: 'opencode',
+      providerRuntime: 'terminal',
+      builtInMcpDomains: [],
+      targetSessionId: 'source-pane',
+    })
+  })
+
+  it('carries an OpenCode Terminal destination through a durable transcript switch', async () => {
+    const switchProvider = vi.fn().mockResolvedValue({
+      kind: 'switched',
+      targetKind: 'opencode',
+      targetProviderSessionId: 'ses_translated_target',
+      targetFilePath: '/project/target.json',
+      compactedBeforeSwitch: false,
+      truncatedBeforeSwitch: false,
+    })
+    const replaceSession = vi.fn().mockResolvedValue('target-pane')
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: {
+        onProviderSwitchProgress: vi.fn(() => vi.fn()),
+        switchProvider,
+      },
+    })
+    const refs = {
+      stateRef: {
+        current: {
+          sessions: {
+            'source-pane': {
+              cwd: '/project',
+              kind: 'claude',
+              providerSessionId: 'claude-source-session',
+            },
+          },
+        },
+      },
+      latestRuntimesRef: { current: {} },
+      defaultBuiltInMcpDomainsRef: { current: [] },
+    } as unknown as WorkspaceRefs
+    const ensureSessionLive = vi.fn(async () => ({
+      sessionId: 'source-pane',
+      builtInMcpDomains: [],
+    }))
+
+    await expect(switchAgentProvider({
+      sessionId: 'source-pane',
+      targetKind: 'opencode',
+      targetProviderRuntime: 'terminal',
+      refs,
+      setRuntimes: vi.fn() as WorkspaceSetRuntimes,
+      sessionActions: {
+        ensureSessionLive,
+        replaceSession,
+      } as unknown as SessionActions,
+    })).resolves.toEqual({
+      status: 'switched',
+      newSessionId: 'target-pane',
+      targetKind: 'opencode',
+    })
+
+    expect(switchProvider).toHaveBeenCalledWith({
+      sourceKind: 'claude',
+      targetKind: 'opencode',
+      sourceProviderSessionId: 'claude-source-session',
+      sourceSessionId: 'source-pane',
+      cwd: '/project',
+    })
+    expect(replaceSession).toHaveBeenCalledWith('/project', {
+      kind: 'opencode',
+      providerRuntime: 'terminal',
+      resumeSessionId: 'ses_translated_target',
+      builtInMcpDomains: [],
+      targetSessionId: 'source-pane',
+    })
+  })
+
+  it('rejects stale or undeclared runtime edges before creating a transcript', async () => {
+    const replaceSession = vi.fn()
+    const switchProvider = vi.fn()
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: { switchProvider },
+    })
+    const refs = {
+      stateRef: {
+        current: {
+          sessions: {
+            'source-pane': {
+              cwd: '/project',
+              kind: 'opencode',
+              providerSessionId: 'ses_source',
+            },
+          },
+        },
+      },
+      latestRuntimesRef: { current: {} },
+      defaultBuiltInMcpDomainsRef: { current: [] },
+    } as unknown as WorkspaceRefs
+
+    await expect(switchAgentProvider({
+      sessionId: 'source-pane',
+      targetKind: 'opencode',
+      targetProviderRuntime: 'terminal',
+      refs,
+      setRuntimes: vi.fn() as WorkspaceSetRuntimes,
+      sessionActions: { replaceSession } as unknown as SessionActions,
+    })).resolves.toMatchObject({ status: 'skipped' })
+
+    expect(switchProvider).not.toHaveBeenCalled()
+    expect(replaceSession).not.toHaveBeenCalled()
+  })
 })

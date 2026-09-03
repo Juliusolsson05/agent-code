@@ -3,17 +3,21 @@
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import type { SessionId } from '@renderer/workspace/types'
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
-import type { AgentProviderKind } from '@shared/types/providerKind'
+import type { AgentProviderKind, AgentProviderRuntime } from '@shared/types/providerKind'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import type { WorkspaceSetRuntimes } from '@renderer/workspace/hook/context'
 import type { SessionActions } from '@renderer/workspace/hook/actions/session'
 import { resumableProviderSessionId } from '@renderer/workspace/providerSessionIdentity'
 import { resolveSessionBuiltInMcpDomains } from '@renderer/workspace/mcpDomains'
+import {
+  providerChoiceLabel,
+  providerSwitchChoices,
+} from '@renderer/workspace/providerChoices'
 
 // Single-agent provider switch — the shared core.
 //
 // WHY this exists as a standalone function instead of living inside
-// `switchFocusedProvider`: two callers now need the exact same "translate this
+// `switchSessionProvider`: two callers now need the exact same "translate this
 // agent's transcript and re-home its pane onto a target provider" operation —
 // the focused-pane command (provider.ts) and the bulk Switch Agents modal
 // (bulkProviderSwitch.ts). Duplicating the two-branch translate/replace logic
@@ -23,9 +27,9 @@ import { resolveSessionBuiltInMcpDomains } from '@renderer/workspace/mcpDomains'
 // toast to show, how to summarize a batch).
 //
 // The function is direction-EXPLICIT: the caller passes `targetKind`. The
-// focused command computes the next supported registry target; the bulk modal
-// chooses an explicit direction for the whole batch. Keeping the helper agnostic means the
-// policy lives with the caller, not buried in here.
+// focused picker chooses one explicit provider/runtime destination; the bulk
+// modal chooses an explicit provider direction for the whole batch. Keeping the
+// helper agnostic means the policy lives with the caller, not buried in here.
 //
 // It never throws — every outcome is a discriminated result so the bulk caller
 // can tally switched / skipped / failed for its summary without a try/catch per
@@ -45,6 +49,7 @@ const providerSwitchesInFlight = new Set<SessionId>()
 export async function switchAgentProvider(params: {
   sessionId: SessionId
   targetKind: AgentProviderKind
+  targetProviderRuntime?: AgentProviderRuntime
   refs: WorkspaceRefs
   setRuntimes: WorkspaceSetRuntimes
   sessionActions: SessionActions
@@ -53,7 +58,15 @@ export async function switchAgentProvider(params: {
     message: string
   }) => void
 }): Promise<SwitchAgentProviderResult> {
-  const { sessionId, targetKind, refs, setRuntimes, sessionActions, onProgress } = params
+  const {
+    sessionId,
+    targetKind,
+    targetProviderRuntime,
+    refs,
+    setRuntimes,
+    sessionActions,
+    onProgress,
+  } = params
 
   const meta = refs.stateRef.current.sessions[sessionId]
   if (!meta) return { status: 'skipped', reason: 'Session no longer exists' }
@@ -62,11 +75,19 @@ export async function switchAgentProvider(params: {
   if (!isAgentProviderKind(sourceKind)) {
     return { status: 'skipped', reason: 'Only agent panes can switch provider' }
   }
-  // Defensive: a no-op direction. The bulk modal only enumerates source-kind
-  // agents so this shouldn't fire there, but returning a switched/skip result
-  // keeps the helper honest if a caller ever asks to "switch" to the same kind.
-  if (sourceKind === targetKind) {
-    return { status: 'skipped', reason: `Already on ${targetKind}` }
+  const declaredChoice = providerSwitchChoices(sourceKind).some(choice => (
+    choice.kind === targetKind && choice.providerRuntime === targetProviderRuntime
+  ))
+  if (!declaredChoice) {
+    // WHY validate again below the picker: commands are also reachable from
+    // native menus, keybindings, tests, and future automation. The modal is a
+    // presentation convenience, not authority. Rejecting before export keeps
+    // an impossible/stale edge from producing a durable target transcript that
+    // no pane can safely adopt.
+    return {
+      status: 'skipped',
+      reason: `${providerChoiceLabel(targetKind, targetProviderRuntime)} is not a switch destination for ${sourceKind}`,
+    }
   }
 
   const resolveTargetBuiltInMcpDomains = (
@@ -101,6 +122,7 @@ export async function switchAgentProvider(params: {
           })
     const newSessionId = await sessionActions.replaceSession(meta.cwd, {
       kind: targetKind,
+      ...(targetProviderRuntime ? { providerRuntime: targetProviderRuntime } : {}),
       builtInMcpDomains: resolveTargetBuiltInMcpDomains(
         effectiveSourceDomains,
         targetKind,
@@ -243,6 +265,7 @@ export async function switchAgentProvider(params: {
     )
     const newSessionId = await sessionActions.replaceSession(meta.cwd, {
       kind: result.targetKind,
+      ...(targetProviderRuntime ? { providerRuntime: targetProviderRuntime } : {}),
       resumeSessionId: result.targetProviderSessionId,
       builtInMcpDomains: targetBuiltInMcpDomains,
       // See the empty-pane branch above: pin to this agent so the bulk loop

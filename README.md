@@ -59,7 +59,7 @@ behavior.
 
 Because Agent Code also owns transcript translation
 ([`agent-transcript-parser`](https://github.com/Juliusolsson05/agent-transcript-parser)),
-a running session can move mid-task from Claude Code to Codex or back.
+a running session can move mid-task among Claude Code, Codex, and OpenCode.
 
 ## What you can do with it
 
@@ -73,8 +73,9 @@ a running session can move mid-task from Claude Code to Codex or back.
     <img src="docs/screenshots/close-old-agents.png" alt="Agent Code Close Old Agents modal — inactive-hours threshold, per-project scope, and a preview of the Claude and Codex agents that will be closed" />
   </p>
 
-- **Provider switching** — move any session between Claude and Codex,
-  individually or in bulk, without losing state.
+- **Provider switching** — choose Claude, Codex, OpenCode, or the managed
+  OpenCode Terminal for one session, or move whole provider batches, without
+  losing state.
 - **Custom rendering** — React feed built from committed transcripts, semantic
   streams, tool calls, and provider conditions. The raw terminal stays available.
 - **Persistent terminals** — tmux-backed shells that survive UI reloads.

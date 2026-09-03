@@ -1,10 +1,5 @@
-import {
-  AGENT_PROVIDER_KINDS,
-  DEFAULT_PROVIDER,
-  isAgentProviderKind,
-} from '@shared/types/providerKind'
-import type { AgentProviderKind, AgentProviderRuntime } from '@shared/types/providerKind'
-import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
+import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
+import type { AgentProviderRuntime } from '@shared/types/providerKind'
 import { Button } from '@renderer/components/ui/button'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
@@ -22,6 +17,10 @@ import type {
 } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { DispatchAttachIntent } from '@renderer/app-state/uiShell/types'
+import {
+  SESSION_SPAWN_CHOICES,
+  type AgentProviderChoice,
+} from '@renderer/workspace/providerChoices'
 
 type Props = {
   open: boolean
@@ -59,32 +58,10 @@ type Props = {
   projectIntent: { tabId: TabId; anchorSessionId: SessionId } | null
 }
 
-// Registry-derived agent options (#394 phase 2c-2) + the one
-// non-registry pane kind. A newly registered provider appears in the
-// spawn overlay automatically instead of compiling but being
-// unspawnable from the UI (#394 §4.6).
-const KIND_OPTIONS: Array<SessionSpawnSelection & { label: string; description: string }> = [
-  ...AGENT_PROVIDER_KINDS.flatMap(kind => {
-    const caps = getRendererProviderCapabilities(kind)
-    const ordinary = {
-      kind: kind as SessionKind,
-      label: caps.shortLabel,
-      description: caps.spawnDescription,
-    }
-    if (kind !== 'opencode') return [ordinary]
-    // OpenCode and OpenCode Terminal are intentionally two launch choices,
-    // not two provider kinds. Both keep the same skills/MCP/provider identity;
-    // only the runtime/surface differs. Putting the terminal flavour adjacent
-    // to ordinary OpenCode makes that distinction visible at creation time.
-    return [ordinary, {
-      kind: 'opencode' as const,
-      providerRuntime: 'terminal' as const,
-      label: 'OpenCode Terminal',
-      description: 'native OpenCode TUI with Agent Code skills and MCP',
-    }]
-  }),
-  { kind: 'terminal', label: 'Terminal', description: 'plain shell pane' },
-]
+// This overlay consumes the same expanded provider choices as the Switch
+// Provider picker. See providerChoices.ts for why OpenCode Terminal is runtime
+// metadata rather than a hand-written fourth provider kind.
+const KIND_OPTIONS = SESSION_SPAWN_CHOICES
 
 const ARROW_TO_DIRECTION = {
   ArrowLeft: 'left',
@@ -140,7 +117,7 @@ export function NewAgentPlacementOverlay({
   const kindOnly = dispatchMode || linkedMode
   const kindOptions = useMemo(
     () => kindOnly
-      ? KIND_OPTIONS.filter((option): option is Extract<typeof KIND_OPTIONS[number], { kind: AgentProviderKind }> =>
+      ? KIND_OPTIONS.filter((option): option is AgentProviderChoice =>
           isAgentProviderKind(option.kind),
         )
       : KIND_OPTIONS,
