@@ -18,6 +18,7 @@ import {
   isAgentProviderKind,
 } from '@shared/types/providerKind'
 import { hasActionCondition } from '@renderer/workspace/conditions/selectors'
+import { clearAgentComposer, isClearingAgentComposer } from '@renderer/workspace/tile-tree/TileLeaf/clearAgentComposer'
 import { useAppStore } from '@renderer/app-state/hooks'
 import { useSessionFeed } from '@renderer/features/sessionFeed/SessionFeedContext'
 import type { PromptDeliveryResult } from '@shared/types/providerConfig'
@@ -129,6 +130,14 @@ export function useComposerKeybinds({
     runtime.inputReady &&
     runtime.processStatus === 'started' &&
     !isSessionExited(runtime)
+  // The one not-ready state the user can fix from the keyboard: the backend
+  // is up but the provider's own composer holds text (#683), so the gate
+  // refuses sends until it is cleared. See the Escape branch below (#737).
+  const composerOccupied =
+    !runtime.inputReady &&
+    runtime.processStatus === 'started' &&
+    !isSessionExited(runtime) &&
+    runtime.inputReadinessReason === 'composer-occupied'
   const hasBlockingCondition = hasActionCondition(runtime.conditions)
   const blockBackendWrite = () => {
     workspace.showPaneToast(
@@ -572,6 +581,22 @@ export function useComposerKeybinds({
     if (e.key === 'Escape') {
       e.preventDefault()
       if (!backendReady) {
+        // WHY Escape clears the provider composer here instead of toasting
+        // "still starting" (#737): `composer-occupied` flips inputReady off,
+        // which used to block Escape, Ctrl+C and Ctrl+U as well — the user
+        // was left with no keyboard way to remove the very text that was
+        // blocking them (only the raw terminal view or the palette command).
+        // The clear routine sends spaced Ctrl+U, never ESC, so a running turn
+        // cannot be interrupted by it; see clearAgentComposer.ts.
+        if (composerOccupied) {
+          // Auto-repeat from a held key would start interleaved clear loops;
+          // clearAgentComposer also refuses re-entry, so a second press while
+          // one is running is a no-op rather than a second toast.
+          if (e.repeat || isClearingAgentComposer(sessionId)) return
+          workspace.showPaneToast(sessionId, "Clearing the agent's composer…")
+          await clearAgentComposer(sessionId)
+          return
+        }
         blockBackendWrite()
         return
       }
@@ -749,8 +774,39 @@ export function useComposerKeybinds({
     }
     if (e.key === 'Tab') {
       e.preventDefault()
-      if (!backendReady) { blockBackendWrite(); return }
-      await send('\t')
+      // WHY Tab never reaches the PTY from normal mode (#737): the provider's
+      // composer is empty by construction while the draft lives in this
+      // textarea, so the only things a forwarded `\t` can do in Claude are
+      // show a hint or — when a prompt suggestion is being displayed as the
+      // dim placeholder — ACCEPT it into the real input. That second case
+      // turned the placeholder into plain text, the composer classifier
+      // reported `drafted`, the prompt gate latched `occupied`, and every
+      // later send was refused as "occupied by a human draft" with no way to
+      // recover from the app composer. Slash mode keeps forwarding Tab for
+      // picker completion (that path only exists once `/` is in the
+      // provider composer, where Tab means autocomplete).
+      //
+      // Tab on an empty draft accepts Agent Code's own suggestion chip
+      // instead — the gesture Claude offers, but where send actually works.
+      // Prefill only, like Claude's own Tab; the chip's click keeps its
+      // auto-send default. Modifier combinations (Shift+Tab, Ctrl+Tab, …)
+      // do nothing.
+      //
+      // opencode is the exception: its TUI binds a bare Tab to "next agent"
+      // (cycling build/plan) and has no prompt-suggestion placeholder, so
+      // forwarding Tab there is a real feature with none of the hazard.
+      if (provider === 'opencode') {
+        if (!backendReady) { blockBackendWrite(); return }
+        await send('\t')
+        return
+      }
+      if (input === '' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        const suggestion = runtime.promptSuggestion?.text
+        if (suggestion) {
+          setInputText(suggestion)
+          workspace.updateRuntime(sessionId, { promptSuggestion: null })
+        }
+      }
       return
     }
   }
