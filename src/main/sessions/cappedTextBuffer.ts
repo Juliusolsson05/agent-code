@@ -47,8 +47,12 @@ export class CappedTextBuffer {
     if (!(cap > 0)) throw new RangeError(`CappedTextBuffer cap must be positive, got ${cap}`)
     // A sixteenth of the cap bounds overflow loss to ~6% of the replay, with
     // a floor so small caps (tests, tiny terminals) do not shred every chunk.
+    // At least 2 so a piece can always hold a whole surrogate pair — that is
+    // what lets cutPieces guarantee it never splits one.
     this.pieceSize = pieceSize ?? Math.max(DEFAULT_MIN_PIECE, cap >> 4)
-    if (!(this.pieceSize > 0)) throw new RangeError(`CappedTextBuffer pieceSize must be positive`)
+    if (!Number.isInteger(this.pieceSize) || this.pieceSize < 2) {
+      throw new RangeError(`CappedTextBuffer pieceSize must be an integer >= 2, got ${this.pieceSize}`)
+    }
   }
 
   /** Total retained code units. Never exceeds `cap`. */
@@ -56,20 +60,34 @@ export class CappedTextBuffer {
     return this.live
   }
 
+  // INVARIANT relied on here: a chunk never begins with a low surrogate or
+  // ends with a high one, i.e. no code point is split across chunks. node-pty
+  // guarantees that (its data events come through a StringDecoder), and all
+  // three emitters pass those strings straight through. The old string
+  // implementation could tolerate a split pair because it re-cut the combined
+  // string; this one cuts pieces on surrogate-safe boundaries within a chunk
+  // and evicts whole pieces, so it needs the chunks themselves to be whole.
+  //
+  // Chunks up to pieceSize are stored by reference. That is the right trade
+  // for node-pty's freshly decoded flat strings; a caller handing in a slice
+  // of a larger string would keep that parent alive for the piece's lifetime.
   append(chunk: string): void {
     if (chunk.length === 0) return
+    let start = 0
     if (chunk.length > this.cap) {
       // The new chunk alone overflows the cap: everything older is gone by
-      // definition, and the chunk itself must not be retained in full.
-      chunk = flatTail(chunk, this.cap)
+      // definition, and only a flat copy of the chunk's tail may be kept —
+      // never a slice, which would retain the whole oversized chunk (#321).
+      // Cutting straight from the tail offset copies each byte once.
+      start = surrogateSafeStart(chunk, chunk.length - this.cap)
       this.pieces = []
       this.head = 0
       this.live = 0
     }
-    if (chunk.length <= this.pieceSize) {
+    if (start === 0 && chunk.length <= this.pieceSize) {
       this.push(chunk)
     } else {
-      for (const piece of cutPieces(chunk, this.pieceSize)) this.push(piece)
+      for (const piece of cutPieces(chunk, start, this.pieceSize)) this.push(piece)
     }
     // Compact once the dead prefix dominates so the array stays O(live
     // pieces) rather than O(pieces ever appended). The threshold keeps the
@@ -102,19 +120,13 @@ export class CappedTextBuffer {
   }
 }
 
-// Last `cap` code units of `chunk` as a flat copy, never starting on a low
-// surrogate — the old string implementation made the same cut, for the same
-// reason: a replay buffer must not introduce a replacement character at its
-// oldest edge when dropping one more code unit costs nothing.
-function flatTail(chunk: string, cap: number): string {
-  return flatCopy(chunk, surrogateSafeStart(chunk, chunk.length - cap), chunk.length)
-}
-
-// Cut `chunk` into flat pieces of at most `size` code units on surrogate-safe
-// boundaries. Each piece is a real copy so none of them keeps `chunk` alive.
-function cutPieces(chunk: string, size: number): string[] {
+// Cut `chunk[start..]` into flat pieces of at most `size` code units on
+// surrogate-safe boundaries. Each piece is a real copy so none of them keeps
+// `chunk` alive. With size >= 2 (enforced by the constructor) pulling a
+// boundary back off a high surrogate always leaves a non-empty piece, so the
+// loop cannot stall and no pair is ever split.
+function cutPieces(chunk: string, start: number, size: number): string[] {
   const pieces: string[] = []
-  let start = 0
   while (start < chunk.length) {
     let end = Math.min(chunk.length, start + size)
     // Never end a piece on a high surrogate: pull the pair into the next
@@ -123,13 +135,16 @@ function cutPieces(chunk: string, size: number): string[] {
       const code = chunk.charCodeAt(end - 1)
       if (code >= 0xd800 && code <= 0xdbff) end -= 1
     }
-    if (end <= start) end = Math.min(chunk.length, start + size)
     pieces.push(flatCopy(chunk, start, end))
     start = end
   }
   return pieces
 }
 
+// Never start the retained tail on a low surrogate — the old string
+// implementation made the same cut, for the same reason: a replay buffer must
+// not introduce a replacement character at its oldest edge when dropping one
+// more code unit costs nothing.
 function surrogateSafeStart(chunk: string, start: number): number {
   const code = chunk.charCodeAt(start)
   return code >= 0xdc00 && code <= 0xdfff ? start + 1 : start
