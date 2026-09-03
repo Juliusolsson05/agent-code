@@ -26,6 +26,7 @@
 
 import { spawn } from 'node:child_process'
 import { writeHeapSnapshot, getHeapStatistics } from 'node:v8'
+import { rmSync } from 'node:fs'
 import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 
@@ -104,6 +105,23 @@ const SAMPLE_INTERVAL_MS = 5_000
 const FAST_SAMPLE_INTERVAL_MS = 2_000
 const FAST_SAMPLE_PRESSURE_RATIO = 0.25
 
+// Retry policy for a FAILED snapshot write (#733).
+//
+// WHY not "reset the latch and let the next sample retry": that is what the
+// previous version did, and above FAST_SAMPLE_PRESSURE_RATIO the next sample
+// is 2 s away. The failure most likely at the trip line — ENOSPC on a disk
+// already holding many GB of debug artifacts, or EIO — does not subside in
+// 2 s, so the process re-ran a multi-second synchronous writeHeapSnapshot
+// every 2 s until it died or the disk freed up: a freeze loop under exactly
+// the condition this subsystem creates.
+//
+// Ten minutes between attempts and three attempts total gives the disk
+// half an hour to recover; if it has not, one more freeze will not help,
+// and the OOM classifier (process.report + prior-run attribution, #389)
+// still records the crash without a snapshot.
+const MAX_SNAPSHOT_ATTEMPTS = 3
+const SNAPSHOT_RETRY_BACKOFF_MS = 10 * 60 * 1000
+
 // Forensic callback, fired once when the watchdog trips and a snapshot is
 // written. It lets the always-on incident journal record a heap.pressure
 // incident (with the snapshot path) WITHOUT coupling the watchdog to the journal
@@ -113,13 +131,39 @@ export type HeapPressureInfo = {
   heapLimit: number
   rss: number
   uptimeMs: number
-  snapshotPath: string
+  /** Null when no snapshot could be written for this run. The trip itself
+   *  (heapUsed / limit / rss / uptime) is still the forensic signal, so the
+   *  incident is recorded either way (#733). */
+  snapshotPath: string | null
+  /** Set on the give-up notification: message of the last write failure. */
+  snapshotError?: string
+  snapshotAttempts?: number
 }
 
 let watchdogTimer: NodeJS.Timeout | null = null
 let watchdogStopped = false
+// Snapshot latch. Idle → latched when an attempt starts → stays latched on
+// success or on the final failed attempt; failures 1..MAX-1 unlatch it and
+// arm `snapshotRetryNotBefore` instead. Wall-clock on purpose: a laptop that
+// sleeps through the backoff retries on the first tripped sample after wake,
+// which is the behaviour we want, and the attempt cap bounds every clock
+// anomaly (#733).
 let snapshotWritten = false
+let snapshotAttempts = 0
+let snapshotRetryNotBefore = 0
 let onHeapPressure: ((info: HeapPressureInfo) => void) | null = null
+
+/** Test-only: the watchdog is module-level state by design (one per
+ *  process); tests that drive several runs need to start from scratch. */
+export function __resetHeapWatchdogForTests(): void {
+  if (watchdogTimer) clearTimeout(watchdogTimer)
+  watchdogTimer = null
+  watchdogStopped = false
+  snapshotWritten = false
+  snapshotAttempts = 0
+  snapshotRetryNotBefore = 0
+  onHeapPressure = null
+}
 
 export function startMainHeapWatchdog(opts?: {
   onHeapPressure?: (info: HeapPressureInfo) => void
@@ -163,7 +207,11 @@ async function sampleAndMaybeSnapshot(): Promise<number> {
   const tripAt = Math.min(HEAP_USED_TRIP_BYTES, limit * HEAP_LIMIT_TRIP_RATIO)
   if (heapUsed < tripAt) return pressureRatio
   if (snapshotWritten) return pressureRatio
+  // A failed write armed a backoff; until it elapses a tripped sample is a
+  // no-op rather than another synchronous multi-second write (#733).
+  if (Date.now() < snapshotRetryNotBefore) return pressureRatio
   snapshotWritten = true
+  snapshotAttempts += 1
 
   const dir = HEAP_SNAPSHOT_DIR
   try {
@@ -211,9 +259,45 @@ async function sampleAndMaybeSnapshot(): Promise<number> {
   } catch (err) {
     // eslint-disable-next-line no-console
     console.error('[heap-watchdog] snapshot write failed', err)
-    // Reset the gate so a later sample can retry once the immediate
-    // pressure subsides. We deliberately do not retry inside this
-    // tick — the failure most likely IS heap exhaustion.
+    // writeHeapSnapshot creates the file before it streams, so an ENOSPC or
+    // EIO mid-stream leaves a truncated snapshot behind — very likely the
+    // thing that consumed the last free bytes. Drop it so the backoff really
+    // gives the disk a chance and retention never mistakes it for evidence.
+    try {
+      rmSync(file, { force: true })
+    } catch {
+      // best-effort
+    }
+    if (snapshotAttempts >= MAX_SNAPSHOT_ATTEMPTS) {
+      // Keep the latch set: no more attempts this run. Said once so a
+      // reader of the log knows the silence afterwards is deliberate, and
+      // recorded durably through the journal callback — main's console is
+      // not persisted, and a run that tripped but could never write a
+      // snapshot is exactly the run the incident journal must know about.
+      // eslint-disable-next-line no-console
+      console.error(
+        `[heap-watchdog] giving up after ${snapshotAttempts} failed snapshot writes for this run`,
+      )
+      try {
+        const memory = process.memoryUsage()
+        onHeapPressure?.({
+          heapUsed,
+          heapLimit: limit,
+          rss: memory.rss,
+          uptimeMs: Math.round(process.uptime() * 1000),
+          snapshotPath: null,
+          snapshotError: err instanceof Error ? err.message : String(err),
+          snapshotAttempts,
+        })
+      } catch {
+        // best-effort
+      }
+      return pressureRatio
+    }
+    // Re-arm behind a backoff rather than for the next sample: the failure
+    // is most likely disk state (or heap exhaustion itself) that a 2 s
+    // sample cadence cannot outwait — see the retry policy above.
+    snapshotRetryNotBefore = Date.now() + SNAPSHOT_RETRY_BACKOFF_MS
     snapshotWritten = false
   }
   return pressureRatio
