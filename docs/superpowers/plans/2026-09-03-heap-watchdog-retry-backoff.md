@@ -1,6 +1,6 @@
 # Performance: bound the heap watchdog's snapshot retries
 
-Fixes #733. Refs #365, #364, #48.
+Fixes #733. Refs #365, #364, #48, #103.
 
 ## Problem
 
@@ -24,6 +24,11 @@ the subsystem creates.
   attempts: the disk had half an hour to recover; if it did not, one more
   freeze will not help.
 - Expose a test-only reset so the module-level state can be exercised.
+- (Review follow-ups) The give-up is recorded durably through the
+  `onHeapPressure` callback with `snapshotPath: null` and the last error, so
+  the incident journal knows about a run that tripped but could never write;
+  each failed write removes the truncated file `writeHeapSnapshot` leaves
+  behind; the tests stub `AGENT_CODE_HEAP_SUMMARY` so no real child can spawn.
 
 ## Verification
 

@@ -26,6 +26,7 @@
 
 import { spawn } from 'node:child_process'
 import { writeHeapSnapshot, getHeapStatistics } from 'node:v8'
+import { rmSync } from 'node:fs'
 import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 
@@ -130,11 +131,23 @@ export type HeapPressureInfo = {
   heapLimit: number
   rss: number
   uptimeMs: number
-  snapshotPath: string
+  /** Null when no snapshot could be written for this run. The trip itself
+   *  (heapUsed / limit / rss / uptime) is still the forensic signal, so the
+   *  incident is recorded either way (#733). */
+  snapshotPath: string | null
+  /** Set on the give-up notification: message of the last write failure. */
+  snapshotError?: string
+  snapshotAttempts?: number
 }
 
 let watchdogTimer: NodeJS.Timeout | null = null
 let watchdogStopped = false
+// Snapshot latch. Idle → latched when an attempt starts → stays latched on
+// success or on the final failed attempt; failures 1..MAX-1 unlatch it and
+// arm `snapshotRetryNotBefore` instead. Wall-clock on purpose: a laptop that
+// sleeps through the backoff retries on the first tripped sample after wake,
+// which is the behaviour we want, and the attempt cap bounds every clock
+// anomaly (#733).
 let snapshotWritten = false
 let snapshotAttempts = 0
 let snapshotRetryNotBefore = 0
@@ -246,13 +259,39 @@ async function sampleAndMaybeSnapshot(): Promise<number> {
   } catch (err) {
     // eslint-disable-next-line no-console
     console.error('[heap-watchdog] snapshot write failed', err)
+    // writeHeapSnapshot creates the file before it streams, so an ENOSPC or
+    // EIO mid-stream leaves a truncated snapshot behind — very likely the
+    // thing that consumed the last free bytes. Drop it so the backoff really
+    // gives the disk a chance and retention never mistakes it for evidence.
+    try {
+      rmSync(file, { force: true })
+    } catch {
+      // best-effort
+    }
     if (snapshotAttempts >= MAX_SNAPSHOT_ATTEMPTS) {
       // Keep the latch set: no more attempts this run. Said once so a
-      // reader of the log knows the silence afterwards is deliberate.
+      // reader of the log knows the silence afterwards is deliberate, and
+      // recorded durably through the journal callback — main's console is
+      // not persisted, and a run that tripped but could never write a
+      // snapshot is exactly the run the incident journal must know about.
       // eslint-disable-next-line no-console
       console.error(
         `[heap-watchdog] giving up after ${snapshotAttempts} failed snapshot writes for this run`,
       )
+      try {
+        const memory = process.memoryUsage()
+        onHeapPressure?.({
+          heapUsed,
+          heapLimit: limit,
+          rss: memory.rss,
+          uptimeMs: Math.round(process.uptime() * 1000),
+          snapshotPath: null,
+          snapshotError: err instanceof Error ? err.message : String(err),
+          snapshotAttempts,
+        })
+      } catch {
+        // best-effort
+      }
       return pressureRatio
     }
     // Re-arm behind a backoff rather than for the next sample: the failure
