@@ -25,6 +25,19 @@ describe('CompletionLedger', () => {
     expect(ledger.lookup('d')).toBe('done')
   })
 
+  it('treats a re-recorded id as most recently used', () => {
+    const ledger = new CompletionLedger(3)
+    ledger.record('a', 'done')
+    ledger.record('b', 'done')
+    ledger.record('c', 'done')
+    // Re-recording moves `a` to the young end; the next overflow evicts `b`.
+    ledger.record('a', 'done')
+    ledger.record('d', 'done')
+    expect(ledger.lookup('b')).toBeUndefined()
+    expect(ledger.lookup('a')).toBe('done')
+    expect(ledger.lookup('d')).toBe('done')
+  })
+
   it('keeps a claimed result through any number of later records', () => {
     const ledger = new CompletionLedger(3)
     ledger.record('agent-1', 'done')

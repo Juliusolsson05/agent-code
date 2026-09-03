@@ -10,11 +10,12 @@
 // consume a sliver) in a sibling structure.
 //
 // WHY two tiers: a result can land BEFORE the watcher has discovered the
-// sidecar file (it polls the subagents dir), so an unbounded "only record
+// sidecar file (it polls the subagents dir every 600 ms), so an "only record
 // Agent ids" filter is not available at record time — the parent entry does
 // not say which tool a result belongs to. A bounded recent window covers that
-// race by orders of magnitude (the poll is seconds; 2,048 results is minutes
-// of the busiest session). Once the watcher has looked an id up it is
+// race by orders of magnitude: the bound is in RESULTS, not time, and 2,048
+// parent tool results is tens of minutes of the busiest session against a
+// discovery latency of at most two polls. Once the watcher has looked an id up it is
 // promoted to `claimed`, which is bounded by the number of sub-agents the
 // session ever had and is never evicted: the watcher recomputes done/error
 // from `lookup` on every emit, so an evicted-after-claim id would make a
