@@ -1,6 +1,7 @@
 import { isConversationEntry } from '@shared/types/transcript'
 import type { Entry } from '@shared/types/transcript'
 import type { GhostEntry } from 'agent-transcript-parser/ghost'
+import { isGhostHiddenBehindJsonlTail } from '@renderer/session-runtime/ghosts'
 
 import type { SemanticRuntimeState } from '@renderer/session-runtime/state'
 
@@ -345,6 +346,7 @@ function entryTimestampMs(entry: Entry): number | null {
 function computeProtectBound(
   semantic: SemanticRuntimeState,
   ghosts: ReadonlyMap<string, GhostEntry>,
+  lastJsonlEntryAt: number | null,
 ): number {
   let bound = Infinity
   for (const turn of semantic.history) {
@@ -355,10 +357,17 @@ function computeProtectBound(
   }
   for (const ghost of ghosts.values()) {
     if (ghost._atp.supersededBy !== undefined) continue
+    // An orphan the committed tail has already passed can never paint again
+    // (render predicate rule 4 — see isGhostHiddenBehindJsonlTail in
+    // ghosts.ts, where the sweep uses the same test), so it has no claim on
+    // the window. Without this, one never-matched orphan pinned the bound
+    // for the rest of the session and the window became append-only (#724).
+    if (isGhostHiddenBehindJsonlTail(ghost, lastJsonlEntryAt)) continue
     if (ghost._atp.updatedAt < bound) bound = ghost._atp.updatedAt
   }
   return bound
 }
+
 
 /**
  * Decide how much of the head of `entries` can be dropped. Returns null when
@@ -416,6 +425,10 @@ export function planLiveEntryTrim(
   entries: readonly Entry[],
   semantic: SemanticRuntimeState,
   ghosts: ReadonlyMap<string, GhostEntry>,
+  // The committed JSONL tail, so orphan ghosts already hidden behind it stop
+  // pinning the bound (see isGhostHiddenBehindJsonlTail). Null keeps every
+  // un-superseded ghost protective, which is the pre-#724 behaviour.
+  lastJsonlEntryAt: number | null = null,
 ): LiveEntryTrimPlan | null {
   // Either budget can trigger (#375 is a bytes problem — see the constant
   // docs). The byte sum is a WeakMap cache-hit walk, so evaluating it on
@@ -454,7 +467,7 @@ export function planLiveEntryTrim(
     if (typeof uuid !== 'string' || uuid.length === 0) return null
   }
 
-  const protectBeforeMs = computeProtectBound(semantic, ghosts)
+  const protectBeforeMs = computeProtectBound(semantic, ghosts, lastJsonlEntryAt)
 
   let cut = 0
   const trimmedUuids: string[] = []

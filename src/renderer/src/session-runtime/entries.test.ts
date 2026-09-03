@@ -138,6 +138,14 @@ function windowEntries(count: number): Entry[] {
 
 const emptyGhosts = new Map<string, GhostEntry>()
 
+function orphanGhostAt(updatedAt: number): GhostEntry {
+  return {
+    uuid: `g-orphan-${updatedAt}`,
+    type: 'assistant',
+    _atp: { updatedAt, orphanedAt: updatedAt },
+  } as unknown as GhostEntry
+}
+
 function ghostAt(updatedAt: number, superseded = false): GhostEntry {
   return {
     uuid: `g-${updatedAt}`,
@@ -247,6 +255,40 @@ describe('planLiveEntryTrim', () => {
       ['g-done', ghostAt(BASE_TS + 5 * 1000, true)],
     ])
     const plan = planLiveEntryTrim(entries, emptySemanticRuntime(), ghosts)
+    expect(plan).not.toBeNull()
+    expect(plan!.cut).toBe(25)
+  })
+
+  // #724: the render predicate's rule 4 hides an orphaned ghost for good once
+  // the committed JSONL tail is at-or-past its updatedAt. Such a ghost has no
+  // committed owner that trimming could orphan on screen, so it must not pin
+  // the bound — one never-matched orphan used to freeze the window forever.
+  it('ignores an orphaned ghost the JSONL tail has already passed', () => {
+    const entries = windowEntries(MAX_LIVE_ENTRIES + 100)
+    const ghosts = new Map<string, GhostEntry>([
+      ['g-hidden', orphanGhostAt(BASE_TS + 25 * 1000)],
+    ])
+    const plan = planLiveEntryTrim(entries, emptySemanticRuntime(), ghosts, BASE_TS + 30 * 1000)
+    expect(plan).not.toBeNull()
+    expect(plan!.cut).toBe(entries.length - TRIM_TO_LIVE_ENTRIES)
+  })
+
+  it('still protects an orphaned ghost newer than the JSONL tail (stuck-JSONL fallback)', () => {
+    const entries = windowEntries(MAX_LIVE_ENTRIES + 100)
+    const ghosts = new Map<string, GhostEntry>([
+      ['g-ahead', orphanGhostAt(BASE_TS + 25 * 1000)],
+    ])
+    const plan = planLiveEntryTrim(entries, emptySemanticRuntime(), ghosts, BASE_TS + 20 * 1000)
+    expect(plan).not.toBeNull()
+    expect(plan!.cut).toBe(25)
+  })
+
+  it('keeps every un-superseded ghost protective while no JSONL tail is known', () => {
+    const entries = windowEntries(MAX_LIVE_ENTRIES + 100)
+    const ghosts = new Map<string, GhostEntry>([
+      ['g-orphan', orphanGhostAt(BASE_TS + 25 * 1000)],
+    ])
+    const plan = planLiveEntryTrim(entries, emptySemanticRuntime(), ghosts, null)
     expect(plan).not.toBeNull()
     expect(plan!.cut).toBe(25)
   })
