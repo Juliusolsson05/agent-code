@@ -82,7 +82,11 @@ export type SessionActions = {
       builtInMcpDomains?: BuiltInMcpDomain[]
     },
   ) => Promise<SessionId>
-  ensureSessionLive: (sessionId: SessionId, caller: WakeCaller) => Promise<SessionWakeResult>
+  ensureSessionLive: (
+    sessionId: SessionId,
+    caller: WakeCaller,
+    options?: SessionWakeOptions,
+  ) => Promise<SessionWakeResult>
   killSession: (sessionId: SessionId) => Promise<void>
   replaceSession: (
     cwd: string,
@@ -101,6 +105,14 @@ export type SessionActions = {
 export type SessionWakeResult = {
   sessionId: SessionId
   builtInMcpDomains: BuiltInMcpDomain[] | undefined
+}
+
+export type SessionWakeOptions = {
+  /** Wait for the composer to report input-ready before resolving (the
+   *  default; prompt delivery needs it). A raw terminal pane passes false:
+   *  readiness is a composer concept and the pane wants to show the TUI
+   *  booting, not a blank box for the whole boot (#772). */
+  awaitInputReady?: boolean
 }
 
 export async function killSessionBackendIfOwned(
@@ -450,7 +462,15 @@ export function useSessionActions(
   )
 
   const ensureSessionLive = useCallback(
-    async (sessionId: SessionId, caller: WakeCaller): Promise<SessionWakeResult> => {
+    async (
+      sessionId: SessionId,
+      caller: WakeCaller,
+      options?: SessionWakeOptions,
+    ): Promise<SessionWakeResult> => {
+      // WHY options do not participate in the single-flight key: a wake is a
+      // wake; a terminal pane joining a composer's wake simply resolves when
+      // that one does. The readiness wait can no longer kill anything (see
+      // below), so joining a waiting wake costs latency, never the backend.
       const inFlight = wakeInFlightRef.current.get(sessionId)
       // WHY the joined caller is still recorded: a remount storm shows up as
       // many wake.request events collapsing onto ONE recovery, and that ratio
@@ -552,7 +572,7 @@ export function useSessionActions(
         // already running? The distinction decides whether the readiness
         // wait below is meaningful and whether the kill on its timeout is
         // legitimate. Main already answers it; this used to be discarded.
-        let recoveryDisposition: 'adopted' | 'spawned' | null = null
+        let recoveryDisposition: 'adopted' | 'spawned' | 'joined' | null = null
         const recoverStartedAt = Date.now()
         try {
           reportLifecycle('recover.request', sessionId, {
@@ -696,13 +716,50 @@ export function useSessionActions(
         // exactly what makes the snapshot 'live'. It is kept so the skip
         // stays anchored to observed liveness rather than to a disposition
         // label a future recover() might widen.
+        // `joined` (#772) is the same situation from the other side: another
+        // caller — normally the rehydrate recovery — started this backend and
+        // this wake merely attached to that start. A readiness deadline on the
+        // joiner used to kill the shared start under the restart herd.
         const adoptedLiveBackend =
-          recoveryDisposition === 'adopted' && recoverySnapshot?.lifecycle === 'live'
-        if (!readyError && recoverySnapshot && !recoverySnapshot.input.ready && !adoptedLiveBackend) {
+          (recoveryDisposition === 'adopted' || recoveryDisposition === 'joined') &&
+          recoverySnapshot?.lifecycle === 'live'
+        // WHY the terminal runtime never waits: its "ready" is first PTY byte
+        // + 250 ms (opencodeTerminalSession), a boot-latency measurement, and
+        // a caller that opted out (AgentTerminalLeaf) shows the booting TUI
+        // and lets the user type at it.
+        const skipReadinessWait =
+          options?.awaitInputReady === false || meta.providerRuntime === 'terminal'
+        let readyTimedOut = false
+        if (
+          !readyError &&
+          recoverySnapshot &&
+          !recoverySnapshot.input.ready &&
+          !adoptedLiveBackend &&
+          !skipReadinessWait
+        ) {
           try {
             await waitForSessionInputReady(refs, sessionId)
           } catch (err) {
-            readyError = err
+            // WHY a timeout with a LIVE backend is not a failure (#772): the
+            // wait rejects immediately for a backend that exited or failed to
+            // start, so reaching the deadline means the process is alive and
+            // merely slow — an opencode TUI booting under a dozen concurrent
+            // CLI starts, a Codex resume of a 90 MB rollout. Killing it made
+            // every restart a 30 s wait followed by a dead pane the user had
+            // to retry by hand (observed 94 s, 217 s and 556 s after boot).
+            // The pane stays at its current status, not-ready, and readiness
+            // arrives whenever the composer does. Only an observed exit or
+            // start failure keeps the destructive path below.
+            const observed = refs.latestRuntimesRef.current[sessionId]
+            const backendAlive =
+              observed !== undefined &&
+              observed.processStatus !== 'failed' &&
+              (observed.exited === null || observed.exited === undefined)
+            if (backendAlive) {
+              readyTimedOut = true
+            } else {
+              readyError = err
+            }
             // A provider that started but never reached its real composer
             // boundary must be replaced, not repeatedly re-adopted on Retry.
             // Main rechecks kind+cwd atomically, so a stale/conflicted pane
@@ -731,7 +788,7 @@ export function useSessionActions(
             // common and far worse than a stuck pane on a wedged one — but
             // it does mean #548's self-heal no longer covers this class, and
             // nothing has replaced it.
-            if (recoveryDisposition === 'spawned') {
+            if (readyError && recoveryDisposition === 'spawned') {
               void killSessionBackendIfOwned(refs, sessionId).catch(() => undefined)
             }
           }
@@ -805,6 +862,9 @@ export function useSessionActions(
           ok: true,
           disposition: recoveryDisposition,
           ready: recoverySnapshot?.input.ready ?? null,
+          // The #772 fingerprint: ok:true with code:'ready-timeout' is a
+          // backend that outlived the deadline instead of being killed by it.
+          ...(readyTimedOut ? { code: 'ready-timeout' } : {}),
           durationMs: Date.now() - recoverStartedAt,
         })
 

@@ -224,4 +224,35 @@ describe('AgentTerminalLeaf dimension ownership', () => {
     expect(api.sendInput).toHaveBeenCalledWith('session-1', 'x')
     expect(workspace.acknowledgeSession).toHaveBeenCalledWith('session-1')
   })
+
+  it('wakes a spawning backend without waiting for input readiness (#772)', async () => {
+    const runtime = {
+      ...emptyRuntime(),
+      processStatus: 'spawning' as const,
+    }
+    render(
+      <AgentTerminalOwnershipProvider>
+        <MountedAgentTerminalOwner sessionId="session-1">
+          <AgentTerminalLeaf
+            sessionId="session-1"
+            focused
+            onFocusRequest={() => {}}
+            workspace={workspace}
+            runtime={runtime}
+            projectDir="/tmp/project"
+            provider="codex"
+          />
+        </MountedAgentTerminalOwner>
+      </AgentTerminalOwnershipProvider>,
+    )
+    await act(async () => {
+      attach.resolve('')
+      await attach.promise
+    })
+    expect(workspace.ensureSessionLive).toHaveBeenCalledWith(
+      'session-1',
+      'agent-terminal-leaf.mount',
+      { awaitInputReady: false },
+    )
+  })
 })
