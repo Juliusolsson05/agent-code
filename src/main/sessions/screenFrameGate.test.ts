@@ -68,6 +68,17 @@ describe('ScreenFrameGate', () => {
     expect(gate.shouldEmit('s1', { plain: output, recent: output })).toBe(true)
   })
 
+  it('emits a picker-only change even when the text is a spinner tick', () => {
+    // Arrow navigation in the slash picker changes cell colours only; the
+    // parsed picker state is the sole evidence of the change.
+    const gate = new ScreenFrameGate()
+    const items = [{ label: '/help' }, { label: '/clear' }]
+    expect(gate.shouldEmit('s1', { plain: CLAUDE_THINKING, recent: CLAUDE_THINKING, picker: { visible: true, items, selected: 0 } })).toBe(true)
+    expect(gate.shouldEmit('s1', { plain: CLAUDE_THINKING_NEXT_TICK, recent: CLAUDE_THINKING_NEXT_TICK, picker: { visible: true, items, selected: 0 } })).toBe(false)
+    expect(gate.shouldEmit('s1', { plain: CLAUDE_THINKING_NEXT_TICK, recent: CLAUDE_THINKING_NEXT_TICK, picker: { visible: true, items, selected: 1 } })).toBe(true)
+    expect(gate.shouldEmit('s1', { plain: CLAUDE_THINKING_NEXT_TICK, recent: CLAUDE_THINKING_NEXT_TICK, picker: { visible: false, items: [] } })).toBe(true)
+  })
+
   it('compares recent independently when the provider has scrollback', () => {
     const gate = new ScreenFrameGate()
     gate.shouldEmit('s1', { plain: CODEX_WORKING, recent: 'older output\n' + CODEX_WORKING })

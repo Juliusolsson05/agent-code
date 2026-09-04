@@ -56,10 +56,23 @@ Not in scope: removing the markdown walks from the headless package
 
 - `screenFrameGate.test.ts`: real spinner/timer/rc lines from recordings
   normalize to the same string across ticks; a composer keystroke, a new
-  output line and a picker change are emitted; the first frame is always
-  emitted; a session's state is dropped on removal; a frame that changes
-  and then ticks emits once.
-- Forwarder/preload: an aliased frame arrives in the renderer with
-  `recent === plain`; a Codex frame with real scrollback keeps its own
-  `recent`.
-- `npx tsc -b`; `src/main/sessions`, forwarder and preload suites.
+  output line and a picker-only change (selection moves, picker closes)
+  are emitted; the first frame is always emitted; a session's state is
+  dropped on removal; a frame that changes and then ticks emits once.
+- `sessionManager.screenGate.test.ts`: a spinner tick does not reach
+  `manager.on('screen')` listeners but does update `getScreenSnapshot`;
+  a real change reaches them again.
+- `screenSnapshotWire.test.ts`: the alias/expand helpers drop duplicate
+  fields, keep a different window verbatim and round-trip. The forwarder
+  and preload changes are one-line delegations to those helpers and have
+  no suites of their own.
+- `npx tsc -b`; `src/main/sessions`, `sessionManager.wake` and the
+  session-feed renderer suite.
+
+## Known limitations
+
+- The remote client renders `recent` as a terminal mirror; while an agent
+  thinks it now shows the spinner/timer frozen at the last real change
+  rather than animating. `workingStatus` (process-state) is unaffected.
+- Gate state is reset when a session is removed and when a superseded
+  backend is replaced under the same id (the `lastGateEvaluation` site).

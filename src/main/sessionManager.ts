@@ -2847,6 +2847,10 @@ export class SessionManager extends EventEmitter {
       // inherit the dead one's `since` (fabricating elapsed) and, because the
       // first verdict then looked unchanged, skip arming the sampler entirely.
       this.lastGateEvaluation.delete(sessionId)
+      // Same reasoning for the screen-frame gate (#761 review): a superseded
+      // backend's last normalized frame must not swallow the fresh one's
+      // identical-looking first frame.
+      this.screenFrameGate.forget(sessionId)
       this.rememberSessionId(sessionId)
       this.throwIfSpawnCancelled(recoveryClaim, codexReplacementHandoff)
       // Hoisted out of the try so the catch can report a duration too: a

@@ -37,11 +37,15 @@
 // cost of a missing rule is one extra emitted frame, which is the status
 // quo.
 
-const CLAUDE_SPINNER_GLYPHS = '·✢✳✶✻✽'
+// The glyph cycle the headless ScreenParser documents (it also lists ✺).
+const CLAUDE_SPINNER_GLYPHS = '·✢✳✶✻✽✺'
 const CODEX_BRAILLE_GLYPHS = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
 const SPINNER_LINE_START = new RegExp(`^(\\s*)[${CLAUDE_SPINNER_GLYPHS}${CODEX_BRAILLE_GLYPHS}](?=\\s|$)`)
 // `5s`, `12s`, `1m 9s`, `2h 3m 4s` — the elapsed counters every TUI spinner
 // carries. Word-bounded so `k8s`, `s3`, hex and version strings survive.
+// Static durations in transcript text (`took 3s`) are rewritten too; that
+// is harmless for the comparison because static text cannot produce a
+// timer-only diff, and the emitted frame is never the rewritten one.
 const ELAPSED_TIMER = /\b(?:\d+h\s*)?(?:\d+m\s*)?\d+s\b/g
 // `↓ 1.2k tokens`, `↑ 340 tokens`, `(2.3k tokens)`.
 const TOKEN_COUNTER = /\b\d+(?:\.\d+)?k?\s+tokens\b/g
@@ -64,6 +68,10 @@ export function normalizeVolatileScreenText(text: string): string {
 export type GatedScreenFrame = {
   plain: string
   recent: string
+  /** Slash-picker state parsed from the terminal GRID, not from `plain`:
+   *  arrow navigation changes only cell colours, so it is invisible to the
+   *  text comparison and must be part of the key (review of #761). */
+  picker?: unknown
 }
 
 export type ScreenFrameGateStats = {
@@ -77,7 +85,7 @@ export type ScreenFrameGateStats = {
  * normalized `plain` or `recent` differs from the last emitted one.
  */
 export class ScreenFrameGate {
-  private readonly last = new Map<string, { plain: string; recent: string; droppedSince: number }>()
+  private readonly last = new Map<string, { plain: string; recent: string; picker: string; droppedSince: number }>()
   private readonly stats: ScreenFrameGateStats = { emitted: 0, dropped: 0 }
 
   shouldEmit(sessionId: string, frame: GatedScreenFrame): boolean {
@@ -87,13 +95,20 @@ export class ScreenFrameGate {
     // frame, so the second normalization would be pure waste on the hot
     // path; Codex has real scrollback and pays for it.
     const recent = frame.recent === frame.plain ? plain : normalizeVolatileScreenText(frame.recent)
+    // WHY the picker is keyed by its JSON: it is a small object (visible flag
+    // plus a handful of items) and it is the only part of a frame that can
+    // change without a single character of `plain` changing — the parser
+    // reads selection from cell colours. Before the gate, a picker change
+    // rode along on the next chrome tick; now the chrome tick is dropped,
+    // so the picker must count as a change in its own right.
+    const picker = frame.picker === undefined ? '' : JSON.stringify(frame.picker)
     const previous = this.last.get(sessionId)
-    if (previous && previous.plain === plain && previous.recent === recent) {
+    if (previous && previous.plain === plain && previous.recent === recent && previous.picker === picker) {
       previous.droppedSince += 1
       this.stats.dropped += 1
       return false
     }
-    this.last.set(sessionId, { plain, recent, droppedSince: 0 })
+    this.last.set(sessionId, { plain, recent, picker, droppedSince: 0 })
     this.stats.emitted += 1
     return true
   }
