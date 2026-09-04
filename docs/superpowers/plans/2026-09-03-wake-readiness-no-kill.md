@@ -48,12 +48,16 @@ I/O off the critical path (#775).
 
 ## Verification
 
-- `sessionRecovery.renderer.test.tsx`: a spawned backend that never
-  reports ready → wake resolves ok, no kill, pane `started`; a spawned
-  terminal-runtime backend skips the wait; an exited backend still fails
-  the wake; `awaitInputReady: false` resolves without the wait.
-- `sessionManager.wake.test.ts`: the second wake that joins an in-flight
+- `sessionRecovery.renderer.test.tsx`: 6/6 — spawned-alive-not-ready past the
+  deadline resolves ok with no kill and pane `started`; exit-before-ready still
+  fails, kills (spawned only) and marks `failed`; terminal runtime and
+  `awaitInputReady: false` both skip the wait.
+- `sessionManager.wake.test.ts`: 6/6 — a second wake joining an in-flight
   recovery gets `disposition: 'joined'`.
-- `AgentTerminalLeaf.dimensionOwnership.renderer.test.tsx`: the leaf
-  passes `awaitInputReady: false` on its wake.
-- `npx tsc -b`.
+- `AgentTerminalLeaf.dimensionOwnership.renderer.test.tsx`: 3/3 — the leaf
+  passes `awaitInputReady: false` on its wake sites.
+- `npx tsc -b` clean.
+- Environment note: a fresh `npm ci` in a new worktree breaks ALL React-hook
+  renderer tests with `useRef` dispatcher-null errors (reproduced on a
+  main-identical file); cloning the primary checkout's `node_modules` (APFS
+  `cp -Rc`) fixes it. Not a product regression — document for future worktrees.
