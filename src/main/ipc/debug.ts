@@ -16,9 +16,9 @@ import type { LifecycleIpcDiagnostics } from '@main/ipc/lifecycle.js'
 // Debug-panel IPC.
 //
 // Two endpoints:
-//   - debug:append-feed-log — streaming, fire-and-forget batches from
-//     the FeedDebugPanel flush timer. Serialized per-session in the
-//     storage module; this handler just validates shape and forwards.
+//   - debug:append-feed-log — paced batches from the renderer's
+//     persistence hook (useFeedDebugPersist, #748). Serialized per-session
+//     in the storage module; this handler just validates shape and forwards.
 //   - debug:save-bundle — one-shot, user-triggered from the "Save
 //     Debug Logs" command palette entry. Renderer assembles the bundle
 //     (state + feed-debug + proxy semantic + html raw/clean) and we
