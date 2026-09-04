@@ -77,9 +77,19 @@ export function TerminalLeaf({
   const dictationEnabled = useAppStore(state => state.settings.dictationEnabled)
   const dictationProvider = useAppStore(state => state.settings.dictationProvider)
   const dictationShortcut = useAppStore(state => state.settings.dictationShortcut)
+  // Declared before the dictation hook so the registration below can gate on
+  // it (hook order is call order; the visibility answer must exist first).
+  const ownerVisible = useAgentTerminalOwnerVisible()
   useComposerDictation({
-    enabled: dictationEnabled,
-    focused,
+    // WHY both flags are visibility-gated (#757 round-4 review): this leaf
+    // stays mounted (display:none) while Reader/Spotlight/Settings own the
+    // screen, and the retained tree keeps focusedSessionId pointing at it.
+    // The dictation registry prefers the focused target, so an ungated
+    // registration meant the global Fn hotkey transcribed straight into
+    // this INVISIBLE pane's PTY. Both siblings (TileLeaf, AgentTerminalLeaf)
+    // already gate the same way; this was the one leaf kind that didn't.
+    enabled: dictationEnabled && ownerVisible,
+    focused: focused && ownerVisible,
     provider: dictationProvider,
     shortcut: dictationShortcut,
     sink: { kind: 'terminal', sessionId },
@@ -115,7 +125,6 @@ export function TerminalLeaf({
   // gives it the same stale-size problem: Spotlight's copy resizes the PTY
   // to full width, and on reveal the retained leaf's fit equals its old
   // cols/rows, so the de-dupe swallows the resize the shell now needs.
-  const ownerVisible = useAgentTerminalOwnerVisible()
   const ownerVisibleRef = useRef(ownerVisible)
   ownerVisibleRef.current = ownerVisible
   const onVisibilityChangeRef = useRef<((visible: boolean) => void) | null>(null)
