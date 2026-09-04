@@ -6,8 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
-import { useGlobalEditorStore } from '@renderer/features/global-editor/store'
-import { useWorkspaceSurfaceHidden } from '@renderer/app/shell/RetainedWorkspaceSurface'
+import { focusIsUnowned, useInteractiveOwnership } from '@renderer/workspace/tile-tree/TileLeaf/useInteractiveOwnership'
 import { useGlobalToast } from '@renderer/ui/GlobalToast'
 import { Feed } from '@renderer/features/feed/ui/Feed'
 import type { ScrollInfo } from '@renderer/features/feed/ui/Feed'
@@ -137,24 +136,14 @@ export function TileLeaf({
   const htmlDebugPanelOpen = useAppStore(state => state.htmlDebugPanelOpen)
   const tailAllMode = useAppStore(state => state.tailAllMode)
   // The one place the "mounted ⇒ visible" shortcut genuinely breaks: Global
-  // Editor fullscreen hides the whole workspace subtree with `display: 'none'`
-  // (GlobalEditorShell) while deliberately keeping it mounted so editor state
-  // survives. Reading the flag here is what turns "mounted" back into
-  // "visible" — see the mask below.
-  const workspaceHiddenByEditor = useGlobalEditorStore(state => state.editorFullscreen)
-  // Same shape one level up (#752): Reader Mode, Spotlight and Settings now
-  // retain the whole workspace under display:none instead of unmounting it.
-  const workspaceHiddenBySurface = useWorkspaceSurfaceHidden()
-  // WHY "focused" is not enough for input ownership (#752 review): the
-  // retained tree keeps this leaf mounted AND focused (activeTab's focused
-  // session) while Reader/Spotlight/Settings own the screen. Every document-
-  // level router below — type-to-focus, paste-to-focus, the bare-Enter
-  // submit target, the dictation hotkey, the condition outlet — used to be
-  // unreachable because the leaf did not exist; now it must be told that a
-  // hidden focused pane owns nothing. Typing "yes" + Enter in Reader Mode
-  // must not submit a prompt through an invisible composer.
-  const workspaceHidden = workspaceHiddenByEditor || workspaceHiddenBySurface
-  const interactive = focused && !workspaceHidden
+  // Editor fullscreen (GlobalEditorWorkspaceSlot) and the Reader/Spotlight/
+  // Settings takeover (RetainedWorkspaceSurface, #752) both hide the whole
+  // workspace subtree with `display: 'none'` while deliberately keeping it
+  // mounted. `hidden` is the composed answer from that context — scoped to
+  // this subtree, never a global flag — and it is what turns "mounted" back
+  // into "visible" for the mask below and into "owns keyboard input" for
+  // every document-level router. See useInteractiveOwnership for why.
+  const { interactive, hidden: workspaceHidden } = useInteractiveOwnership(focused)
   // This one OR is the ENTIRE implementation of "Tail All" scoping, and it is
   // load-bearing in a way that is easy to mistake for a shortcut.
   //
@@ -292,11 +281,17 @@ export function TileLeaf({
     endHistoryCycle,
   } = usePromptHistory({ entries: runtime.entries, sessionKind })
 
-  // When focus flips to this pane — or the pane is revealed again after a
-  // takeover while still focused — move the DOM caret into its input.
+  // When focus flips to this pane, move the DOM caret into its input. On a
+  // reveal (interactive turning true with `focused` unchanged) only take an
+  // unowned focus: a takeover surface unmounting leaves focus on <body>, but
+  // editor-fullscreen exit leaves it in Monaco, which must keep it.
+  const prevFocusedRef = useRef(focused)
   useEffect(() => {
-    if (interactive) inputRef.current?.focus()
-  }, [interactive])
+    const focusChanged = prevFocusedRef.current !== focused
+    prevFocusedRef.current = focused
+    if (!interactive) return
+    if (focusChanged || focusIsUnowned()) inputRef.current?.focus()
+  }, [interactive, focused])
 
   // Type-to-focus — document-level key listener that routes printable
   // keys into the composer when the pane is focused but DOM focus
@@ -665,7 +660,10 @@ export function TileLeaf({
   })
 
   const dictation = useComposerDictation({
-    enabled: dictationEnabled,
+    // A hidden pane must not even be a fallback dictation target; an
+    // unfocused VISIBLE pane must stay registered as one, so this is
+    // `hidden`, not `interactive`.
+    enabled: dictationEnabled && !workspaceHidden,
     focused: interactive,
     provider: dictationProvider,
     shortcut: dictationShortcut,

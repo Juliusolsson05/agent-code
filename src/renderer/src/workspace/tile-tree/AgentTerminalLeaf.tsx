@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef } from 'react'
+import { focusIsUnowned } from '@renderer/workspace/tile-tree/TileLeaf/useInteractiveOwnership'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 
@@ -15,7 +16,7 @@ import { isSessionExited } from '@renderer/workspace/providerSessionIdentity'
 import { shortenCwd } from '@renderer/workspace/tile-tree/TileLeaf/labels'
 import { PaneToast } from '@renderer/workspace/tile-tree/TileLeaf/PaneToast'
 import { useComposerDictation } from '@renderer/workspace/tile-tree/TileLeaf/useComposerDictation'
-import { useAgentTerminalDimensionActive } from '@renderer/workspace/terminal/AgentTerminalOwnership'
+import { useAgentTerminalDimensionActive , useAgentTerminalOwnerVisible } from '@renderer/workspace/terminal/AgentTerminalOwnership'
 import { AgentTitleHeader } from '@renderer/workspace/tile-tree/AgentTitleHeader'
 import { createTerminalInputForwarder } from '@renderer/workspace/tile-tree/terminalInputForwarder'
 
@@ -75,6 +76,7 @@ export function AgentTerminalLeaf({
   const focusedRef = useRef(focused)
   focusedRef.current = focused
   const dimensionActive = useAgentTerminalDimensionActive()
+  const ownerVisible = useAgentTerminalOwnerVisible()
   const dimensionActiveRef = useRef(false)
   const dimensionOwnershipEpochRef = useRef(0)
   const onDimensionOwnershipChangeRef = useRef<((active: boolean) => void) | null>(null)
@@ -92,9 +94,10 @@ export function AgentTerminalLeaf({
   }, [dimensionActive])
 
   useComposerDictation({
-    enabled: dictationEnabled,
     // A retained, hidden pane (Reader/Spotlight/Settings, #752) is still the
-    // workspace-focused one; it must not be the dictation target.
+    // workspace-focused one; it must be neither the dictation target nor a
+    // fallback (`enabled`), while an unfocused visible pane stays a fallback.
+    enabled: dictationEnabled && ownerVisible,
     focused: focused && dimensionActive,
     provider: dictationProvider,
     shortcut: dictationShortcut,
@@ -415,9 +418,15 @@ export function AgentTerminalLeaf({
   }, [sessionId])
 
   // Also re-runs when the pane is revealed after a takeover (#752): the
-  // remount used to refocus xterm for free; retained panes need it here.
+  // remount used to refocus xterm for free; retained panes need it here —
+  // but only when focus is unowned, so editor-fullscreen exit leaves the
+  // caret in Monaco (see focusIsUnowned).
+  const prevFocusedRef = useRef(focused)
   useEffect(() => {
-    if (focused && dimensionActive) termRef.current?.focus()
+    const focusChanged = prevFocusedRef.current !== focused
+    prevFocusedRef.current = focused
+    if (!focused || !dimensionActive) return
+    if (focusChanged || focusIsUnowned()) termRef.current?.focus()
   }, [focused, dimensionActive])
 
   const focusTerminal = () => {

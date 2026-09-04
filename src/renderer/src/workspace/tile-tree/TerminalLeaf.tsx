@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { focusIsUnowned } from '@renderer/workspace/tile-tree/TileLeaf/useInteractiveOwnership'
 import { useAgentTerminalOwnerVisible } from '@renderer/workspace/terminal/AgentTerminalOwnership'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
@@ -458,8 +459,14 @@ export function TerminalLeaf({
   // focused at the workspace level. For that we have the
   // synchronous `focusTerminal()` handler below, wired into the
   // outer div's onMouseDown.
+  const prevFocusedRef = useRef(focused)
   useEffect(() => {
-    if (focused && ownerVisible) termRef.current?.focus()
+    const focusChanged = prevFocusedRef.current !== focused
+    prevFocusedRef.current = focused
+    if (!focused || !ownerVisible) return
+    // On a reveal only take an unowned focus (see focusIsUnowned): editor-
+    // fullscreen exit must leave the caret in Monaco.
+    if (focusChanged || focusIsUnowned()) termRef.current?.focus()
   }, [focused, ownerVisible])
 
   // Imperative re-focus. Called from outer-div mousedown so that

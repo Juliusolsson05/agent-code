@@ -37,6 +37,28 @@ no longer means "visible" (`GlobalEditorWorkspaceSlot`,
   surface is hidden, so Escape in Reader Mode exits Reader (owned by
   `useKeybinds`) instead of also collapsing a fullscreen editor underneath.
 
+- **Visibility composes across shells** (review). `AgentTerminalOwner-
+  VisibilityProvider` ANDs with its enclosing provider: the editor slot
+  nests inside the retained surface and provides its own value, and React's
+  nearest-provider rule would otherwise hide the takeover signal from every
+  pane whenever the editor is not fullscreen — retained panes kept their
+  dimension claim, measured a display:none box, left the PTY at Spotlight's
+  size on exit and kept the inline debug terminal disabled.
+- **Hidden panes own nothing** (review). `useInteractiveOwnership(focused)`
+  derives `interactive = focused && visible` and `hidden` from that composed
+  context — never from the editor store's global flag, which made
+  Spotlight's own visible leaf refuse Enter/y/n under a fullscreen editor.
+  TileLeaf feeds it to type-to-focus, paste-to-focus, the bare-Enter submit
+  target, the dictation hotkey (`enabled` too, so a hidden pane is not even
+  a fallback target) and the condition outlet; AgentTerminalLeaf gates
+  dictation and xterm focus the same way; TerminalLeaf (no ownership hook of
+  its own) resets its sent size when hidden and refits on reveal.
+- **Reveal refocus only takes an unowned focus** (`focusIsUnowned`): a
+  takeover unmounting leaves focus on <body>, which the pane reclaims as the
+  remount used to; editor-fullscreen exit leaves it in Monaco, which must
+  keep it.
+- Feeds skip the sticky-bottom pin while hidden and re-pin on reveal.
+
 Spotlight mounts its own leaf for the focused session; the hidden tile-
 tree leaf keeps its PTY attachment (refcounted in main) and its xterm
 keeps parsing while hidden. That parse cost is far below a replay and is
@@ -52,5 +74,13 @@ tracked in #752's second half and the architecture audit).
   Spotlight keep the pane terminal MOUNTED (mount count stays 1 across
   enter/exit) and hidden; dimension ownership still hands to the inline
   debug terminal while hidden and returns afterwards.
+- `RetainedWorkspaceSurface.renderer.test.tsx`: the real editor slot inside
+  a hidden surface releases the dimension claim and restores it on reveal.
+- `useInteractiveOwnership.renderer.test.tsx`: no shell → interactive;
+  hidden surface, fullscreen slot, visible slot inside a hidden surface →
+  not; both visible → interactive, unfocused → not.
+- `AgentTerminalLeaf.dimensionOwnership` and `TerminalLeaf.retention`
+  round trips: one resize on attach, none while hidden, one on reveal.
 - Existing Spotlight target-guard test adapted to the retained tree.
-- `npx tsc -b`; renderer suites for app/shell, tile-tree, global-editor.
+- `npx tsc -b`; renderer suites for app/shell, tile-tree, global-editor,
+  reader, spotlight, feed.
