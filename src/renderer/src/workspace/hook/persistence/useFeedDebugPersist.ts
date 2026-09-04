@@ -52,11 +52,26 @@ export function useFeedDebugPersist(
   // WorkspaceRefs because nothing outside this hook reads them.
   const timersRef = useRef<Record<SessionId, ReturnType<typeof setTimeout>>>({})
   const lastAttemptAtRef = useRef<Record<SessionId, number>>({})
+  // WHY removed sessions get a final, unpaced flush (review of #750): a
+  // session leaves `runtimes` on replacement, pane close, tab kill and
+  // reload, and its LAST entries — the exit code, the kill reason — are the
+  // ones written in the final second. With pacing alone those entries sat
+  // on a timer that found no runtime when it fired and were never written;
+  // the pre-pacing hook shipped them from the same effect pass that
+  // appended them. Removal is one append per session, so it bypasses the
+  // cadence entirely. If an append for that session is still in flight the
+  // final runtime is parked here and flushed when it resolves.
+  const previousRuntimesRef = useRef<Record<SessionId, SessionRuntime>>({})
+  const finalRuntimesRef = useRef<Record<SessionId, SessionRuntime>>({})
+  const unmountedRef = useRef(false)
 
   // Unmount only: the pacing timers must NOT be torn down by the per-
   // replacement effect's cleanup, or every streamed delta would cancel and
-  // re-arm them and the interval would never elapse under load.
+  // re-arm them and the interval would never elapse under load. Anything
+  // still pending at unmount (window close) is lost — an `invoke` cannot be
+  // awaited past teardown — which is the one loss this hook accepts.
   useEffect(() => () => {
+    unmountedRef.current = true
     for (const timer of Object.values(timersRef.current)) clearTimeout(timer)
     timersRef.current = {}
   }, [])
@@ -106,6 +121,7 @@ export function useFeedDebugPersist(
           if (refs.inFlightFeedDebugIdRef.current[sessionId] === maxPendingId) {
             delete refs.inFlightFeedDebugIdRef.current[sessionId]
           }
+          if (unmountedRef.current) return
           consider(sessionId, refs.latestRuntimesRef.current[sessionId])
         })
         .catch(err => {
@@ -114,15 +130,42 @@ export function useFeedDebugPersist(
           }
           // eslint-disable-next-line no-console
           console.warn(`[feed-debug ${sessionId.slice(0, 8)}] append failed`, err)
-          // No immediate retry: `lastAttemptAt` was stamped at send time, so
-          // the next replacement or timer pass waits out the interval.
+          if (unmountedRef.current) return
+          // Re-run the policy so an idle session retries after the interval
+          // without waiting for another runtimes replacement; `lastAttemptAt`
+          // was stamped at send time, so this arms a timer, never a storm.
+          consider(sessionId, refs.latestRuntimesRef.current[sessionId])
         })
     }
 
+    const forget = (sessionId: SessionId): void => {
+      const timer = timersRef.current[sessionId]
+      if (timer !== undefined) {
+        clearTimeout(timer)
+        delete timersRef.current[sessionId]
+      }
+      delete lastAttemptAtRef.current[sessionId]
+      delete finalRuntimesRef.current[sessionId]
+    }
+
     const consider = (sessionId: SessionId, runtime: SessionRuntime | undefined): void => {
-      if (!runtime || runtime.feedDebugLog.length === 0) return
       const lastPersistedId = refs.persistedFeedDebugIdRef.current[sessionId] ?? 0
       const lastInFlightId = refs.inFlightFeedDebugIdRef.current[sessionId] ?? 0
+      const inFlight = lastInFlightId > lastPersistedId
+      // A session that has left `runtimes`: flush whatever its final
+      // snapshot still holds, unpaced, then drop its bookkeeping.
+      const final = runtime === undefined ? finalRuntimesRef.current[sessionId] : undefined
+      if (final !== undefined) {
+        if (inFlight) return
+        const remaining = countPendingFeedDebug(final.feedDebugLog, lastPersistedId)
+        if (remaining > 0) {
+          send(sessionId, final)
+          return
+        }
+        forget(sessionId)
+        return
+      }
+      if (!runtime || runtime.feedDebugLog.length === 0) return
       const pendingCount = countPendingFeedDebug(runtime.feedDebugLog, lastPersistedId)
       if (pendingCount === 0) return
       const decision = decideFeedDebugFlush({
@@ -132,7 +175,7 @@ export function useFeedDebugPersist(
         pendingBytes: estimateFeedDebugLogBytes(runtime.feedDebugLog.slice(-pendingCount)),
         lastAttemptAt: lastAttemptAtRef.current[sessionId] ?? null,
         now: Date.now(),
-        inFlight: lastInFlightId > lastPersistedId,
+        inFlight,
       })
       if (decision.kind === 'none') return
       if (decision.kind === 'now') {
@@ -154,6 +197,15 @@ export function useFeedDebugPersist(
       }, decision.delayMs)
     }
 
+    // Sessions that left the map since the last pass get their final flush
+    // (see finalRuntimesRef); everything else goes through the policy.
+    const previous = previousRuntimesRef.current
+    previousRuntimesRef.current = runtimes
+    for (const [sessionId, runtime] of Object.entries(previous)) {
+      if (sessionId in runtimes) continue
+      finalRuntimesRef.current[sessionId] = runtime
+      consider(sessionId, undefined)
+    }
     for (const [sessionId, runtime] of Object.entries(runtimes)) {
       consider(sessionId, runtime)
     }

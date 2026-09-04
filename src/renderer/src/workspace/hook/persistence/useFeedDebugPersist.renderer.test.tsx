@@ -146,6 +146,93 @@ describe('useFeedDebugPersist pacing', () => {
     expect(refs.persistedFeedDebugIdRef.current.s1).toBe(3)
   })
 
+  it('paces entries that arrive while an append is in flight instead of draining on resolve', async () => {
+    vi.useFakeTimers()
+    let resolveFirst!: () => void
+    const append = vi.fn()
+      .mockImplementationOnce(() => new Promise<void>(resolve => { resolveFirst = resolve }))
+      .mockResolvedValue(undefined)
+    install(append)
+    let runtimes: Record<SessionId, SessionRuntime> = { s1: withEntries(emptyRuntime(), 1) }
+    const refs = makeRefs(runtimes)
+    const { rerender } = renderHook(({ r }) => useFeedDebugPersist(r, refs), { initialProps: { r: runtimes } })
+    expect(append).toHaveBeenCalledTimes(1)
+
+    // Entries keep arriving while the first append is unresolved.
+    for (let i = 0; i < 3; i += 1) {
+      runtimes = { s1: withEntries(runtimes.s1!, 1) }
+      refs.latestRuntimesRef.current = runtimes
+      rerender({ r: runtimes })
+    }
+    await act(async () => {
+      resolveFirst()
+      await vi.advanceTimersByTimeAsync(100)
+    })
+    // Resolving must arm the timer, not drain immediately.
+    expect(append).toHaveBeenCalledTimes(1)
+    await act(async () => { await vi.advanceTimersByTimeAsync(FEED_DEBUG_FLUSH_INTERVAL_MS) })
+    expect(append).toHaveBeenCalledTimes(2)
+    const paced = append.mock.calls[1]![0] as { entries: Array<{ id: number }> }
+    expect(paced.entries.map(e => e.id)).toEqual([2, 3, 4])
+  })
+
+  it('flushes a removed session\'s trailing entries at once instead of losing them to the timer', async () => {
+    // Session replacement / pane close delete the runtime while the pacing
+    // timer is armed; the final entries (exit code, kill reason) must still
+    // reach disk.
+    vi.useFakeTimers()
+    const append = vi.fn().mockResolvedValue(undefined)
+    install(append)
+    let runtimes: Record<SessionId, SessionRuntime> = { s1: withEntries(emptyRuntime(), 1) }
+    const refs = makeRefs(runtimes)
+    const { rerender } = renderHook(({ r }) => useFeedDebugPersist(r, refs), { initialProps: { r: runtimes } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(append).toHaveBeenCalledTimes(1)
+
+    runtimes = { s1: withEntries(runtimes.s1!, 2) }
+    refs.latestRuntimesRef.current = runtimes
+    rerender({ r: runtimes })
+    expect(append).toHaveBeenCalledTimes(1)
+
+    runtimes = {}
+    refs.latestRuntimesRef.current = runtimes
+    rerender({ r: runtimes })
+    expect(append).toHaveBeenCalledTimes(2)
+    const final = append.mock.calls[1]![0] as { entries: Array<{ id: number }> }
+    expect(final.entries.map(e => e.id)).toEqual([2, 3])
+    await act(async () => { await vi.advanceTimersByTimeAsync(FEED_DEBUG_FLUSH_INTERVAL_MS * 2) })
+    expect(append).toHaveBeenCalledTimes(2)
+  })
+
+  it('flushes a removed session\'s trailing entries once its in-flight append resolves', async () => {
+    vi.useFakeTimers()
+    let resolveFirst!: () => void
+    const append = vi.fn()
+      .mockImplementationOnce(() => new Promise<void>(resolve => { resolveFirst = resolve }))
+      .mockResolvedValue(undefined)
+    install(append)
+    let runtimes: Record<SessionId, SessionRuntime> = { s1: withEntries(emptyRuntime(), 1) }
+    const refs = makeRefs(runtimes)
+    const { rerender } = renderHook(({ r }) => useFeedDebugPersist(r, refs), { initialProps: { r: runtimes } })
+    expect(append).toHaveBeenCalledTimes(1)
+
+    runtimes = { s1: withEntries(runtimes.s1!, 1) }
+    refs.latestRuntimesRef.current = runtimes
+    rerender({ r: runtimes })
+    runtimes = {}
+    refs.latestRuntimesRef.current = runtimes
+    rerender({ r: runtimes })
+    expect(append).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      resolveFirst()
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(append).toHaveBeenCalledTimes(2)
+    const final = append.mock.calls[1]![0] as { entries: Array<{ id: number }> }
+    expect(final.entries.map(e => e.id)).toEqual([2])
+  })
+
   it('clears the pacing timer on unmount', async () => {
     vi.useFakeTimers()
     const append = vi.fn().mockResolvedValue(undefined)

@@ -10,8 +10,10 @@ import { estimateJsonBytes } from '@renderer/session-runtime/liveEntryWindow'
 // (screen_update, process_state, submit, jsonl_entries, SEM, …)
 // appends one entry here, capped at FEED_DEBUG_LOG_CAP entries AND
 // FEED_DEBUG_LOG_MAX_BYTES. The FeedDebugPanel renders this in realtime;
-// the same entries are shipped to main/storage/feedDebugLog.ts every tick
-// to be written to disk (per-session JSONL under STATE_DIR/feed-debug/).
+// the same entries are shipped to main/storage/feedDebugLog.ts in paced
+// batches (useFeedDebugPersist, #748: at most one append per session per
+// 1.5 s, sooner at a count/byte ceiling, immediately when a session is
+// removed) to be written to disk (per-session JSONL under STATE_DIR/feed-debug/).
 //
 // Why cap the in-memory array: long-running sessions could
 // accumulate tens of thousands of entries, bloating the runtime map
@@ -33,10 +35,12 @@ const FEED_DEBUG_LOG_CAP = 500
 // entry window. 4 MiB is generous for small records (500 × a few hundred
 // bytes never gets near it) and only bites when payloads are large, which is
 // exactly the case that needs bounding. Disk persistence is best-effort (one
-// in-flight append batch per session; entries evicted before it resolves are
-// never written — see useFeedDebugPersist), and the byte budget narrows that
-// loss window for large records. The ring exists for the live panel, not for
-// durability; a durable buffer is a separate concern (see the header).
+// in-flight append batch per session plus a ≤1.5 s pacing window; entries
+// evicted before they are sent are never written — see useFeedDebugPersist,
+// whose byte ceiling forces a flush at a quarter of this budget), and the
+// byte budget narrows that loss window for large records. The ring exists
+// for the live panel, not for durability; a durable buffer is a separate
+// concern (see the header).
 export const FEED_DEBUG_LOG_MAX_BYTES = 4 * 1024 * 1024
 
 // A real entry always serialises to at least its id/ts/summary envelope, so a
