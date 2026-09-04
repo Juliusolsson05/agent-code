@@ -1,4 +1,5 @@
 import { act, renderHook } from '@testing-library/react'
+import { StrictMode } from 'react'
 import type { MutableRefObject } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -247,5 +248,75 @@ describe('useFeedDebugPersist pacing', () => {
     unmount()
     await act(async () => { await vi.advanceTimersByTimeAsync(FEED_DEBUG_FLUSH_INTERVAL_MS * 2) })
     expect(append).toHaveBeenCalledTimes(1)
+  })
+
+  it('paces a removed session\'s final-flush retries instead of spinning on a persistent rejection', async () => {
+    // Review blocker: the rejection path re-invokes consider() with the
+    // session gone from latestRuntimesRef, which re-enters the final
+    // branch. Unpaced, a persistently failing append became one IPC round
+    // trip + one console.warn per microtask — the retry storm this PR
+    // exists to kill, resurrected on the removal path.
+    vi.useFakeTimers()
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const append = vi.fn()
+      .mockResolvedValueOnce(undefined) // initial live batch (id 1)
+      .mockRejectedValueOnce(new Error('disk full at close')) // final flush fails
+      .mockRejectedValueOnce(new Error('disk full at close')) // paced retry fails too
+      .mockResolvedValue(undefined)
+    install(append)
+    let runtimes: Record<SessionId, SessionRuntime> = { s1: withEntries(emptyRuntime(), 1) }
+    const refs = makeRefs(runtimes)
+    const { rerender } = renderHook(({ r }) => useFeedDebugPersist(r, refs), { initialProps: { r: runtimes } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(append).toHaveBeenCalledTimes(1)
+
+    runtimes = { s1: withEntries(runtimes.s1!, 2) }
+    refs.latestRuntimesRef.current = runtimes
+    rerender({ r: runtimes })
+    runtimes = {}
+    refs.latestRuntimesRef.current = runtimes
+    rerender({ r: runtimes })
+    // The FIRST final flush is immediate: removal is one append, not a stream.
+    expect(append).toHaveBeenCalledTimes(2)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    // Rejection landed. No retry before the interval, however many microtasks run.
+    expect(append).toHaveBeenCalledTimes(2)
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(FEED_DEBUG_FLUSH_INTERVAL_MS - 1) })
+    expect(append).toHaveBeenCalledTimes(2)
+    await act(async () => { await vi.advanceTimersByTimeAsync(1) })
+    expect(append).toHaveBeenCalledTimes(3)
+
+    // The paced retry also rejects; exactly one more after another interval,
+    // then the success clears the cursors and stops the cycle.
+    await act(async () => { await vi.advanceTimersByTimeAsync(FEED_DEBUG_FLUSH_INTERVAL_MS - 1) })
+    expect(append).toHaveBeenCalledTimes(3)
+    await act(async () => { await vi.advanceTimersByTimeAsync(1) })
+    expect(append).toHaveBeenCalledTimes(4)
+    expect(refs.persistedFeedDebugIdRef.current.s1).toBe(3)
+    await act(async () => { await vi.advanceTimersByTimeAsync(FEED_DEBUG_FLUSH_INTERVAL_MS * 3) })
+    expect(append).toHaveBeenCalledTimes(4)
+  })
+
+  it('recovers after a StrictMode-style double mount keeps the hook mounted', async () => {
+    // The unmount-only effect runs its cleanup on React 18's dev
+    // simulated unmount and MUST re-arm on the simulated remount, or
+    // every later .then/.catch bails and pacing only recovers on a lucky
+    // render. Render directly under StrictMode to exercise the same
+    // effect → cleanup → effect sequence on one hook instance.
+    vi.useFakeTimers()
+    const append = vi.fn().mockResolvedValue(undefined)
+    install(append)
+    const runtimes: Record<SessionId, SessionRuntime> = { s1: withEntries(emptyRuntime(), 2) }
+    const refs = makeRefs(runtimes)
+    const { rerender } = renderHook(
+      ({ r }) => useFeedDebugPersist(r, refs),
+      { initialProps: { r: runtimes }, wrapper: StrictMode },
+    )
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(append).toHaveBeenCalledTimes(1)
+    // The resolve path after the simulated remount must still advance the
+    // durable cursor; with a stuck unmountedRef it never would.
+    expect(refs.persistedFeedDebugIdRef.current.s1).toBe(2)
   })
 })

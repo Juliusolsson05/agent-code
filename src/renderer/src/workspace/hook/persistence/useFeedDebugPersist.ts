@@ -7,7 +7,7 @@ import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 
 import { estimateFeedDebugLogBytes } from '@renderer/session-runtime/feedDebug'
 
-import { countPendingFeedDebug, decideFeedDebugFlush } from './feedDebugFlushPolicy'
+import { countPendingFeedDebug, decideFeedDebugFlush, FEED_DEBUG_FLUSH_INTERVAL_MS } from './feedDebugFlushPolicy'
 
 // Ship runtime feed-debug entries to the main process, batched by time
 // (see feedDebugFlushPolicy.ts for the cadence and why). The main-side
@@ -63,6 +63,14 @@ export function useFeedDebugPersist(
   // final runtime is parked here and flushed when it resolves.
   const previousRuntimesRef = useRef<Record<SessionId, SessionRuntime>>({})
   const finalRuntimesRef = useRef<Record<SessionId, SessionRuntime>>({})
+  // Stamp of the last FINAL-branch send per removed session. The live
+  // path's `lastAttemptAtRef` cannot answer "is this final flush a
+  // retry": the batch that preceded removal is typically only
+  // milliseconds old, and keying the final flush off it would delay a
+  // session's trailing entries (exit code, kill reason) by up to one
+  // interval — the loss this branch exists to prevent. Only attempts the
+  // final branch itself made count as retries.
+  const finalAttemptAtRef = useRef<Record<SessionId, number>>({})
   const unmountedRef = useRef(false)
 
   // Unmount only: the pacing timers must NOT be torn down by the per-
@@ -70,10 +78,18 @@ export function useFeedDebugPersist(
   // re-arm them and the interval would never elapse under load. Anything
   // still pending at unmount (window close) is lost — an `invoke` cannot be
   // awaited past teardown — which is the one loss this hook accepts.
-  useEffect(() => () => {
-    unmountedRef.current = true
-    for (const timer of Object.values(timersRef.current)) clearTimeout(timer)
-    timersRef.current = {}
+  // The body re-arms the flag because React 18 StrictMode double-mounts in
+  // dev: effect → cleanup(true) → effect again. Without the reset every
+  // post-remount .then/.catch would bail forever and pacing would only
+  // recover on the next lucky render. Production never remounts, so this
+  // is dev-only correctness — but it is also free.
+  useEffect(() => {
+    unmountedRef.current = false
+    return () => {
+      unmountedRef.current = true
+      for (const timer of Object.values(timersRef.current)) clearTimeout(timer)
+      timersRef.current = {}
+    }
   }, [])
 
   useEffect(() => {
@@ -146,6 +162,7 @@ export function useFeedDebugPersist(
       }
       delete lastAttemptAtRef.current[sessionId]
       delete finalRuntimesRef.current[sessionId]
+      delete finalAttemptAtRef.current[sessionId]
     }
 
     const consider = (sessionId: SessionId, runtime: SessionRuntime | undefined): void => {
@@ -153,12 +170,39 @@ export function useFeedDebugPersist(
       const lastInFlightId = refs.inFlightFeedDebugIdRef.current[sessionId] ?? 0
       const inFlight = lastInFlightId > lastPersistedId
       // A session that has left `runtimes`: flush whatever its final
-      // snapshot still holds, unpaced, then drop its bookkeeping.
+      // snapshot still holds, then drop its bookkeeping.
       const final = runtime === undefined ? finalRuntimesRef.current[sessionId] : undefined
       if (final !== undefined) {
         if (inFlight) return
         const remaining = countPendingFeedDebug(final.feedDebugLog, lastPersistedId)
         if (remaining > 0) {
+          // WHY retries (but not the first flush) are paced here — review
+          // blocker on this PR: the rejection path below re-invokes
+          // consider() with the session already gone from
+          // latestRuntimesRef, which lands HERE again. Unpaced, a
+          // persistently failing append (disk full, EACCES at close time,
+          // main rejecting the shape) became a tight loop of one IPC round
+          // trip + one console.warn per microtask — the exact retry storm
+          // this PR exists to kill, resurrected on the removal path. The
+          // FIRST final flush stays immediate (removal is one append per
+          // session, not a stream); only attempts the final branch itself
+          // made inside the interval wait, via the same per-session timer
+          // the live path uses. That timer's callback reads
+          // latestRuntimesRef, which is undefined for a removed session
+          // and therefore routes back into this branch.
+          const finalAttemptAt = finalAttemptAtRef.current[sessionId]
+          if (finalAttemptAt !== undefined) {
+            const elapsed = Date.now() - finalAttemptAt
+            if (elapsed < FEED_DEBUG_FLUSH_INTERVAL_MS) {
+              if (timersRef.current[sessionId] !== undefined) return
+              timersRef.current[sessionId] = setTimeout(() => {
+                delete timersRef.current[sessionId]
+                consider(sessionId, refs.latestRuntimesRef.current[sessionId])
+              }, FEED_DEBUG_FLUSH_INTERVAL_MS - elapsed)
+              return
+            }
+          }
+          finalAttemptAtRef.current[sessionId] = Date.now()
           send(sessionId, final)
           return
         }
