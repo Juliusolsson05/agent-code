@@ -93,6 +93,10 @@ export const getHistoryMessageSchema = z.object({
   type: z.literal('get-history'),
   sessionId: z.string().min(1),
   beforeMarker: z.string().min(1).optional(),
+  // Byte offset of beforeMarker's line, from a previous chunk's `offsets`.
+  // Optional so older clients keep working on the marker-only path; the
+  // loader validates it against the file (and the marker) before trusting it.
+  beforeOffset: z.number().int().min(0).optional(),
   limit: z.number().int().min(1).max(500).optional(),
 })
 

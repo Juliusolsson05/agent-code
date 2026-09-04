@@ -62,19 +62,42 @@ an accepted, documented deviation: `totalEntries` feeds a scroll-position
 denominator and a "nothing on disk yet" check, and a full parse just to
 make the denominator exact for corrupt files would be the bug reintroduced.
 
-**Older window.** Walk newest-first hunting for the anchor marker; once it
-is found keep collecting `limit + 1` older records and stop. The work is
-proportional to the distance from EOF to the anchor — what the renderer
-already holds in memory — instead of the distance from the head. While
-hunting, the first `limit + 1` records seen (the file tail) are retained so
-the historical fallback survives: an anchor that no longer exists in the
-durable transcript (live-append race) still pages from the tail, with the
-same `hasMore` the forward scan produced.
+**Older window — a position cursor.** Every chunk (initial and older)
+returns `offsets`, the absolute byte offset of each returned record's line,
+parallel to `entries`. The renderer's cursor is the marker of the chunk's
+first kept line plus that line's offset, and the older-history request
+carries both (`beforeMarker`, `beforeOffset`). With an offset the loader
+verifies the line there carries the marker (one record read, plus the byte
+before it must be a newline) and walks backward from exactly that byte for
+`limit + 1` records: exact, O(page), no marker hunt. Without an offset — the
+remote client, or a cursor the live-window trim re-anchored on an entry
+whose position was never recorded — or when the check fails (rewritten
+file, cursor from another transcript), it uses the ORIGINAL forward scan
+anchored on the OLDEST occurrence of the marker, which parses from byte 0
+to the anchor as before #747. The missing-marker fallback (page from the
+tail) survives on that path.
 
-One deliberate difference: a marker that occurs twice anchors on its NEWEST
-occurrence (the forward scan stopped at the oldest). The renderer's window
-grows contiguously from the tail, so the newest occurrence is the one at
-its edge; anchoring on the oldest could skip every record between the two.
+Why not a backward marker hunt (the first revision of this PR): markers are
+not unique. Real Claude transcripts on the reviewing machine held
+contiguous blocks of 100–260 uuids repeated 200–530 records later with
+different content, and Codex markers (timestamp + payload id, falling back
+to `ts:type`) collide on same-millisecond records routinely. A hunt that
+anchors on the NEWEST occurrence moves the renderer's cursor FORWARD by the
+duplicate gap and, when the gap is at least the page size, cycles forever —
+the feed re-requests near the top and `ViewPromptsModal` auto-pages, so
+that is an unbounded IPC loop. The oldest-occurrence forward scan provably
+terminates (the renderer's next cursor is a line this page returned, which
+lies strictly before the anchor, so the anchor position strictly decreases)
+but skips every record between two occurrences. The offset cursor is what
+makes paging both exact and terminating; the forward scan remains only as
+the terminating fallback.
+
+Why per-entry `offsets` rather than one `oldestOffset`: the renderer's
+cursor is the first KEPT line, and chunks frequently lead with records the
+mapper drops (Codex `turn_context`/`session_meta`, Claude snapshots). An
+offset for the first returned line would then fail the marker-at-offset
+check on every such page and silently degrade to the slow scan. Numbers
+only — ~2 KB per 200-record page.
 
 Alternatives rejected:
 
@@ -100,16 +123,38 @@ Invariants that must hold:
   order, same `hasMore`) for every file, including ones with blank lines,
   malformed lines, an unterminated last line, and records larger than the
   block size.
-- Bytes read and parsed for the window are bounded by the window's own size
-  plus one block, independent of file size.
+- Bytes read and parsed for the window are proportional to the window's own
+  size plus one block. The initial load's I/O is not independent of file
+  size — `totalEntries` still costs one no-decode newline count over the
+  head (17–32 ms hot on 84 MB; a full-file read cold) — its PARSE cost is.
+- Paging with the offset cursor reaches every record exactly once and
+  terminates; paging without it terminates.
 - A read failure (missing file, file truncated under us) returns the same
   empty chunk the streaming reader returned.
 - Interning stays per load, and only the returned entries are interned.
 
+## Review follow-ups (applied)
+
+- The position cursor above replaces the newest-occurrence marker hunt
+  (blocker: livelock on duplicated markers).
+- Byte offsets ride every chunk (`offsets`), the older request carries
+  `beforeOffset` (preload, IPC, remote schema and wire types), and the
+  renderer keeps `historyOldestOffset` next to `historyOldestMarker`,
+  clearing it whenever the marker comes from a live burst or a trim.
+- A record containing a raw U+2028/U+2029 is one line (readline split
+  those; the old reader shredded 12 Codex records into 116 junk lines) —
+  documented in `parseJsonlLine` and pinned by a test.
+- No phantom empty line at EOF, `blockBytes` asserted positive, the newline
+  count searches only the bytes a short read filled, only returned entries
+  are interned.
+
 ## Not in scope
 
 - Caching `totalEntries` or the tail across loads.
-- Changing the IPC/remote wire shape (`beforeMarker`, `limit`, `totalEntries`).
+- The remote client's store adopting `offsets`/`beforeOffset` (it receives
+  them; it still pages on the marker alone, i.e. the forward scan).
+- Carrying byte offsets on live jsonl frames so a trim re-anchor keeps the
+  exact cursor.
 - The renderer's `INITIAL_HISTORY_CONCURRENCY` or its marker policy.
 - `streamJsonl` itself; other forward-scanning callers keep using it.
 
@@ -120,9 +165,13 @@ Invariants that must hold:
   equivalence on a small transcript and on a multi-MB one with records
   larger than a block and a multi-byte character straddling a block
   boundary; the window-larger-than-file case; empty and missing files;
-  blank, malformed and unterminated lines; bytes read for the window bounded
-  independent of file size; older pages anchored at several depths, the
-  first record, and a missing marker.
+  blank, malformed and unterminated lines; a raw U+2028 record kept whole;
+  bytes read for the window proportional to the window; older pages
+  anchored at several depths by marker and by offset, the first record, a
+  missing marker, an offset that does not carry the marker (falls back), a
+  mid-file offset reading only the page; the duplicated-marker livelock
+  input paged to the head with the offset cursor (every record once) and
+  without it (terminates, lossy as before).
 - `npx tsc -b --pretty false`, `npx eslint` on the changed files, the
   sessions unit folder, and the remote-server system test that exercises
   `get-history` end to end.

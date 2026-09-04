@@ -397,6 +397,7 @@ export function registerSessionIpc(
         cwd: string
         providerSessionId: string
         beforeMarker: string
+        beforeOffset?: number
         limit?: number
       },
     ) => {

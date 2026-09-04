@@ -16,11 +16,15 @@ import {
 // Reverse tail reads for history loading (#747). The contract that MUST
 // hold: the window a reverse read returns is byte-for-byte what the full
 // forward parse returned — same records, same order, same `hasMore`, same
-// `totalEntries` — while the bytes read for it are bounded by the window,
-// not the file. The oracle below IS the removed forward implementation
-// (streamJsonl + ring buffer / marker scan), so every equivalence assertion
-// compares against the behaviour the app shipped with, not against a
-// re-derivation of it.
+// `totalEntries` — while the bytes read for it are proportional to the
+// window, not the file. The oracle below IS the removed forward
+// implementation (streamJsonl + ring buffer / marker scan), so every
+// equivalence assertion compares against the behaviour the app shipped
+// with, not against a re-derivation of it.
+//
+// The second half covers the position cursor (PR #753 review): markers
+// repeat in real transcripts, so paging must be anchored on the byte offset
+// a previous chunk handed back, and must still TERMINATE without one.
 
 let root: string
 
@@ -76,10 +80,10 @@ async function oracleOlder(file: string, kind: 'claude' | 'codex', marker: strin
   return { entries, foundMarker: found, hasMore: before > limit }
 }
 
-function claudeLine(i: number, text: string): string {
+function claudeLine(i: number, text: string, uuid = `u-${i}`): string {
   return JSON.stringify({
     type: i % 2 === 0 ? 'user' : 'assistant',
-    uuid: `u-${i}`,
+    uuid,
     seq: i,
     cwd: '/project/agent-code',
     sessionId: 'session-1',
@@ -109,6 +113,25 @@ function seqs(entries: Entry[]): number[] {
   return entries.map(e => e.seq as number)
 }
 
+/** Byte offset of the line holding record `seq` (the previous newline + 1). */
+function lineStartOf(bytes: Buffer, seq: number): number {
+  const at = bytes.indexOf(Buffer.from(`"seq":${seq},`))
+  expect(at, `record ${seq} present`).toBeGreaterThanOrEqual(0)
+  return bytes.lastIndexOf(0x0a, at) + 1
+}
+
+/** Every offset must point at the line that parses to its entry. */
+function expectOffsetsToAddress(file: string, entries: Entry[], offsets: number[]): void {
+  const bytes = readFileSync(file)
+  expect(offsets).toHaveLength(entries.length)
+  for (const [i, offset] of offsets.entries()) {
+    expect(offset === 0 || bytes[offset - 1] === 0x0a, `offset ${offset} on a line boundary`).toBe(true)
+    const end = bytes.indexOf(0x0a, offset)
+    const line = bytes.subarray(offset, end === -1 ? bytes.length : end).toString('utf8')
+    expect(JSON.parse(line), `line at ${offset}`).toEqual(entries[i])
+  }
+}
+
 describe('readInitialTranscriptTail', () => {
   it('returns the same window, count and hasMore as the full forward parse', async () => {
     const file = writeClaude('small.jsonl', 50)
@@ -119,6 +142,7 @@ describe('readInitialTranscriptTail', () => {
       expect(got.parsed, `limit ${limit}`).toBe(want.parsed)
       expect(got.parsed > limit, `limit ${limit}`).toBe(want.hasMore)
       expect(got.parseErrors).toBe(0)
+      expectOffsetsToAddress(file, got.entries, got.offsets)
     }
   })
 
@@ -152,6 +176,7 @@ describe('readInitialTranscriptTail', () => {
       expect(got.entries, `limit ${limit}`).toEqual(want.entries)
       expect(got.parsed, `limit ${limit}`).toBe(want.parsed)
       expect(got.parseErrors).toBe(0)
+      expectOffsetsToAddress(file, got.entries, got.offsets)
     }
     // And with the production block size, which lands boundaries elsewhere.
     const got = await readTail(file, 120)
@@ -183,6 +208,7 @@ describe('readInitialTranscriptTail', () => {
     expect(seqs(chunk.entries)).toEqual(Array.from({ length: 20 }, (_, i) => i))
     expect(chunk.hasMore).toBe(false)
     expect(chunk.totalEntries).toBe(20)
+    expect(chunk.offsets?.[0]).toBe(0)
     // A window that is exactly the file: still everything, still no more.
     const exact = await loadInitialHistoryChunkFromFile(file, 20)
     expect(exact.entries).toHaveLength(20)
@@ -212,6 +238,7 @@ describe('readInitialTranscriptTail', () => {
       const want = await oracleTail(file, limit)
       expect(got.entries, `limit ${limit}`).toEqual(want.entries)
       expect(got.parsed > limit, `limit ${limit}`).toBe(want.hasMore)
+      expectOffsetsToAddress(file, got.entries, got.offsets)
     }
     // A window that walks the whole file counts exactly what the forward
     // parse counted, junk included.
@@ -222,12 +249,29 @@ describe('readInitialTranscriptTail', () => {
     // truncated record and the blank CR line before record 3 are counted as
     // if they were records (8 instead of 5), and only the tail's parse
     // errors (the mid-append line and the literal null) are reported.
-    // Provider-written transcripts never have junk in
-    // their head (the only malformed line is the mid-append one at EOF), so
-    // this only ever shows on a hand-edited file; a full parse to make the
-    // count exact there is the cost #747 removed. Change this assertion
-    // knowingly if that trade-off is ever revisited.
+    // Provider-written transcripts never have junk in their head (the only
+    // malformed line is the mid-append one at EOF), so this only ever shows
+    // on a hand-edited file; a full parse to make the count exact there is
+    // the cost #747 removed. Change this assertion knowingly if that
+    // trade-off is ever revisited.
     expect(await readTail(file, 2, 48)).toMatchObject({ parsed: 8, parseErrors: 2 })
+  })
+
+  it('keeps a record containing a raw U+2028/U+2029 whole, where readline split it', async () => {
+    // Valid JSON allows unescaped U+2028/U+2029 inside strings and Codex
+    // writes them. Node's readline treats both as line terminators, so the
+    // forward reader shredded such a record into unparseable fragments;
+    // splitting on the 0x0A byte alone is the JSONL contract.
+    const file = join(root, 'ls.jsonl')
+    const text = 'first paragraph second third'
+    writeFileSync(file, claudeLine(0, 'a') + claudeLine(1, text) + claudeLine(2, 'c'))
+    const got = await readTail(file, 10, 32)
+    expect(seqs(got.entries)).toEqual([0, 1, 2])
+    expect(((got.entries[1]!.message as Entry).content as Entry[])[0]!.text).toBe(text)
+    expect(got).toMatchObject({ parsed: 3, parseErrors: 0 })
+    // The old reader saw fragments here; pin that the deviation is real so
+    // a future "match readline exactly" change has to confront it.
+    expect((await oracleTail(file, 10)).parseErrors).toBeGreaterThan(0)
   })
 
   it('returns an empty chunk for an empty file, a junk-only file and a missing file', async () => {
@@ -247,18 +291,30 @@ describe('readInitialTranscriptTail', () => {
 })
 
 describe('readOlderTranscriptWindow', () => {
-  it('pages older history identically to the forward marker scan at every depth', async () => {
+  it('pages older history identically to the forward marker scan at every depth, with and without an offset', async () => {
     const file = writeClaude('pages.jsonl', 300)
+    const bytes = readFileSync(file)
     for (const [anchor, limit] of [[299, 50], [280, 50], [150, 200], [37, 10], [1, 50], [0, 50]] as const) {
-      const got = await readOlder(file, { kind: 'claude', beforeMarker: `u-${anchor}`, limit }, 4096)
       const want = await oracleOlder(file, 'claude', `u-${anchor}`, limit)
-      expect(got.entries, `anchor ${anchor}`).toEqual(want.entries)
-      expect(got.hasMore, `anchor ${anchor}`).toBe(want.hasMore)
-      expect(got.foundMarker, `anchor ${anchor}`).toBe(true)
+      const byMarker = await readOlder(file, { kind: 'claude', beforeMarker: `u-${anchor}`, limit }, 4096)
+      expect(byMarker.entries, `marker anchor ${anchor}`).toEqual(want.entries)
+      expect(byMarker.hasMore, `marker anchor ${anchor}`).toBe(want.hasMore)
+      expect(byMarker).toMatchObject({ foundMarker: true, anchor: 'marker' })
+      expectOffsetsToAddress(file, byMarker.entries, byMarker.offsets)
+
+      const byOffset = await readOlder(
+        file,
+        { kind: 'claude', beforeMarker: `u-${anchor}`, beforeOffset: lineStartOf(bytes, anchor), limit },
+        4096,
+      )
+      expect(byOffset.entries, `offset anchor ${anchor}`).toEqual(want.entries)
+      expect(byOffset.hasMore, `offset anchor ${anchor}`).toBe(want.hasMore)
+      expect(byOffset).toMatchObject({ foundMarker: true, anchor: 'offset' })
+      expectOffsetsToAddress(file, byOffset.entries, byOffset.offsets)
     }
     // The public entrypoint shapes the "nothing before the first record"
     // case as the end of pagination.
-    expect(await loadOlderHistoryChunkFromFile(file, { kind: 'claude', beforeMarker: 'u-0', limit: 50 }))
+    expect(await loadOlderHistoryChunkFromFile(file, { kind: 'claude', beforeMarker: 'u-0', beforeOffset: 0, limit: 50 }))
       .toEqual({ entries: [], hasMore: false })
   })
 
@@ -280,41 +336,125 @@ describe('readOlderTranscriptWindow', () => {
     for (const limit of [5, 30, 40]) {
       const got = await readOlder(file, { kind: 'claude', beforeMarker: 'never-written', limit }, 1024)
       const want = await oracleOlder(file, 'claude', 'never-written', limit)
-      expect(got.foundMarker).toBe(false)
+      expect(got).toMatchObject({ foundMarker: false, anchor: 'tail' })
       expect(got.entries, `limit ${limit}`).toEqual(want.entries)
       expect(got.hasMore, `limit ${limit}`).toBe(want.hasMore)
     }
   })
 
-  it('reads from EOF to the anchor, not from the head of the file', async () => {
+  it('reads only from the offset back to the page, not from either end of the file', async () => {
     const file = writeClaude('deep.jsonl', 400, i => `${'y'.repeat(10_000)} ${i}`)
-    const size = readFileSync(file).length
+    const bytes = readFileSync(file)
+    const size = bytes.length
     const blockBytes = 64 * 1024
-    // Anchor 20 records from the end, page of 10: the read must cover the
-    // 20 records after the anchor, the anchor, and 11 before it — 32
-    // records, ~320 KB of a ~4 MB file.
-    const got = await readOlder(file, { kind: 'claude', beforeMarker: 'u-380', limit: 10 }, blockBytes)
-    expect(seqs(got.entries)).toEqual([370, 371, 372, 373, 374, 375, 376, 377, 378, 379])
+    const recordBytes = Buffer.byteLength(claudeLine(200, `${'y'.repeat(10_000)} 200`))
+    // Anchor in the middle of a ~4 MB file: the exact path reads the anchor
+    // line (its check) plus 11 records before it — ~120 KB — where both a
+    // head scan and a tail scan would read ~2 MB.
+    const got = await readOlder(
+      file,
+      { kind: 'claude', beforeMarker: 'u-200', beforeOffset: lineStartOf(bytes, 200), limit: 10 },
+      blockBytes,
+    )
+    expect(got.anchor).toBe('offset')
+    expect(seqs(got.entries)).toEqual([190, 191, 192, 193, 194, 195, 196, 197, 198, 199])
     expect(got.hasMore).toBe(true)
-    const recordBytes = Buffer.byteLength(claudeLine(380, `${'y'.repeat(10_000)} 380`))
-    expect(got.tailBytes).toBeLessThanOrEqual(32 * recordBytes + blockBytes)
-    expect(got.tailBytes).toBeLessThan(size / 8)
+    expect(got.tailBytes).toBeLessThanOrEqual(12 * recordBytes + blockBytes)
+    expect(got.tailBytes).toBeLessThan(size / 16)
   })
 
-  it('anchors on the newest occurrence of a duplicated marker', async () => {
-    // The renderer's window grows contiguously from the tail, so the
-    // occurrence at its edge is the newest; stopping at the older one (what
-    // the forward scan did) would skip everything in between.
-    const file = join(root, 'dup.jsonl')
+  it('refuses an offset whose line does not carry the marker and falls back safely', async () => {
+    const file = writeClaude('bad-offset.jsonl', 60)
+    const bytes = readFileSync(file)
+    const want = await oracleOlder(file, 'claude', 'u-40', 5)
+    const lineStart = (seq: number): number => lineStartOf(bytes, seq)
+    const cases: Array<[string, number | undefined]> = [
+      ['a different record\'s line', lineStart(41)],
+      ['mid-line (not a line boundary)', lineStart(40) + 3],
+      ['past EOF', bytes.length + 10],
+      ['negative', -1],
+      ['not an integer', 12.5],
+      ['undefined', undefined],
+    ]
+    for (const [label, beforeOffset] of cases) {
+      const got = await readOlder(file, { kind: 'claude', beforeMarker: 'u-40', beforeOffset, limit: 5 }, 512)
+      expect(got.anchor, label).toBe('marker')
+      expect(got.entries, label).toEqual(want.entries)
+      expect(got.hasMore, label).toBe(true)
+    }
+    // The honest offset takes the exact path and agrees.
+    const ok = await readOlder(file, { kind: 'claude', beforeMarker: 'u-40', beforeOffset: lineStart(40), limit: 5 }, 512)
+    expect(ok.anchor).toBe('offset')
+    expect(ok.entries).toEqual(want.entries)
+  })
+
+  // The renderer's cursor rule (history.ts / initialHistory.ts): after each
+  // chunk the cursor is the marker of the first kept line, plus — when the
+  // chunk carries offsets — that line's offset. Every record here is
+  // renderable, so "first kept" is simply the first returned record.
+  async function pageToHead(
+    file: string,
+    limit: number,
+    useOffsets: boolean,
+  ): Promise<{ pages: number; reached: number[] }> {
+    const initial = await loadInitialHistoryChunkFromFile(file, limit)
+    const reached = seqs(initial.entries)
+    let marker = claudeMarker(initial.entries[0]!)!
+    let offset: number | undefined = useOffsets ? initial.offsets?.[0] : undefined
+    let hasMore = initial.hasMore
+    let pages = 0
+    while (hasMore) {
+      pages += 1
+      if (pages > 200) throw new Error(`still paging after ${pages} pages — livelock`)
+      const chunk = await loadOlderHistoryChunkFromFile(file, {
+        kind: 'claude',
+        beforeMarker: marker,
+        beforeOffset: offset,
+        limit,
+      })
+      reached.unshift(...seqs(chunk.entries))
+      hasMore = chunk.hasMore
+      if (chunk.entries.length > 0) {
+        marker = claudeMarker(chunk.entries[0]!)!
+        offset = useOffsets ? chunk.offsets?.[0] : undefined
+      }
+    }
+    return { pages, reached }
+  }
+
+  /** Records 0–29 carry uuids A0..A29, records 30–59 carry A0..A29 AGAIN
+   *  with different text, 60–79 are unique — the reviewer's minimal input
+   *  that cycled the newest-occurrence cursor (55 → 45 → 35 → 25 → 55 …). */
+  function writeDuplicatedMarkers(name: string): string {
+    const file = join(root, name)
     let body = ''
-    for (let i = 0; i < 60; i += 1) {
-      body += i === 5 || i === 50
-        ? claudeLine(i, 'dup').replace(`"uuid":"u-${i}"`, '"uuid":"dup"')
-        : claudeLine(i, 'x')
+    for (let i = 0; i < 80; i += 1) {
+      const uuid = i < 60 ? `A${i % 30}` : `unique-${i}`
+      body += claudeLine(i, i < 30 ? `first ${i}` : i < 60 ? `again ${i}` : `tail ${i}`, uuid)
     }
     writeFileSync(file, body)
-    const got = await readOlder(file, { kind: 'claude', beforeMarker: 'dup', limit: 5 }, 256)
-    expect(seqs(got.entries)).toEqual([45, 46, 47, 48, 49])
-    expect(got.hasMore).toBe(true)
+    return file
+  }
+
+  it('pages a transcript with repeated markers to the head, reaching every record exactly once, with the offset cursor', async () => {
+    const file = writeDuplicatedMarkers('dup-offsets.jsonl')
+    const { pages, reached } = await pageToHead(file, 10, true)
+    expect(reached).toEqual(Array.from({ length: 80 }, (_, i) => i))
+    expect(pages).toBe(7)
+  })
+
+  it('still terminates on repeated markers without an offset (oldest-occurrence scan, lossy as before)', async () => {
+    const file = writeDuplicatedMarkers('dup-markers.jsonl')
+    const { pages, reached } = await pageToHead(file, 10, false)
+    // Terminates, and never delivers a record twice.
+    expect(new Set(reached).size).toBe(reached.length)
+    expect(pages).toBeLessThanOrEqual(8)
+    // Lossy across the duplicate gap, exactly like the original forward
+    // scan: pages 70–79 (tail), 60–69, 50–59 leave the cursor at record
+    // 50 = A20, which the oldest-occurrence scan resolves to record 20, so
+    // 20–49 are skipped and paging ends after 10–19 and 0–9. That is the
+    // trade-off the offset cursor exists to remove.
+    expect(reached).toEqual([...Array.from({ length: 20 }, (_, i) => i), ...Array.from({ length: 30 }, (_, i) => 50 + i)])
+    expect(pages).toBe(4)
   })
 })

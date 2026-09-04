@@ -11,8 +11,8 @@ import { resolveProviderTranscriptPath } from '@main/providerSwitch/shared.js'
 // When a session is resumed the renderer asks main for the newest `limit`
 // durable transcript records (`session:load-initial-history`), and when the
 // user scrolls up past that window it asks for the chunk immediately before
-// the `beforeMarker` it already has (`session:load-older-history`). This
-// module walks the provider's on-disk JSONL transcript for both.
+// the cursor it already has (`session:load-older-history`). This module
+// walks the provider's on-disk JSONL transcript for both.
 //
 // WHY the file is read BACKWARDS from EOF (#747): both requests want records
 // at or near the tail, but the first implementation streamed the whole file
@@ -21,9 +21,32 @@ import { resolveProviderTranscriptPath } from '@main/providerSwitch/shared.js'
 // seconds of boot — 25 loads read 252 MB in 10.7 s of main-thread time, and
 // one 89 MB rollout took 4.6 s to hand back 120 entries. The bytes that
 // matter are the last few hundred KB; everything before them was parsed only
-// to be thrown away (initial tail) or to find the anchor (older page). Reading
-// blocks backwards and stopping as soon as the window is complete makes the
-// parse cost proportional to the WINDOW, not the file.
+// to be thrown away. Reading blocks backwards and stopping as soon as the
+// window is complete makes the PARSE cost proportional to the window. The
+// initial load still makes one no-decode newline count over the head for
+// `totalEntries`, so its I/O is not independent of file size — its parse
+// cost is.
+//
+// WHY the older page is anchored on a BYTE OFFSET, not only on a marker
+// (PR #753 review): the renderer's cursor after each page is the marker of
+// the chunk's first kept line. Markers are not unique in real transcripts —
+// Claude files on the reviewing machine held contiguous blocks of 100–260
+// uuids repeated a few hundred records later with different content, and
+// Codex markers are synthesized from timestamp + payload id and collide on
+// same-millisecond records routinely. A marker hunt that anchors on the
+// NEWEST occurrence jumps the cursor forward by the duplicate gap and, when
+// the gap exceeds the page size, cycles forever — the feed re-requests on
+// every scroll near the top, so that is an unbounded IPC loop reading MBs
+// per call. Anchoring on the OLDEST occurrence (the original forward scan)
+// always terminates (the anchor position strictly decreases page over page)
+// but can skip every record between two duplicates. So every chunk now
+// carries the byte offset of each returned line; the renderer echoes the
+// offset of its cursor line as `beforeOffset` and the loader walks back
+// from exactly there — no hunt, no ambiguity, O(page). The marker still
+// rides along as the sanity check that the offset points at the line the
+// renderer thinks it does (the file could have been rewritten), and callers
+// without an offset (the remote client, a cursor re-anchored by the live
+// window trim) fall back to the forward oldest-occurrence scan.
 //
 // The marker is provider-specific:
 //   - Claude entries expose a stable `uuid`; progress-wrapped entries
@@ -38,10 +61,15 @@ export type HistoryChunkRequest = {
   cwd: string
   providerSessionId: string
   beforeMarker: string
+  // Byte offset of the line `beforeMarker` came from, echoed back from the
+  // `offsets` of the chunk that delivered it. Optional: callers that never
+  // learned one (remote client, a cursor re-anchored on a live entry) get
+  // the marker-only forward scan.
+  beforeOffset?: number
   limit: number
 }
 
-export type InitialHistoryChunkRequest = Omit<HistoryChunkRequest, 'beforeMarker'>
+export type InitialHistoryChunkRequest = Omit<HistoryChunkRequest, 'beforeMarker' | 'beforeOffset'>
 
 export type HistoryChunk = {
   entries: Record<string, unknown>[]
@@ -53,6 +81,13 @@ export type HistoryChunk = {
   // the whole file just to page one older window would reintroduce the
   // read-everything cost this loader is specifically avoiding.
   totalEntries?: number
+  // Absolute byte offset of the first byte of each returned record's line,
+  // parallel to `entries`. The renderer's pagination cursor is the marker
+  // of the chunk's first KEPT line — frequently not the first returned one
+  // (Codex turn_context/session_meta, Claude snapshots map to nothing) — so
+  // it needs the offset of the very line it picked, not just the oldest.
+  // Numbers only, so a 200-record page adds ~2 KB to the IPC payload.
+  offsets?: number[]
 }
 
 // WHY 256 KiB: the initial window is 120 records and a typical Claude/Codex
@@ -101,10 +136,10 @@ async function resolveHistoryTranscriptPath(
  * Read exactly `[start, end)` from `handle`. A short read means the file is
  * smaller than the size we stat'ed a moment ago, i.e. it was truncated or
  * rewritten under us. Both providers append only, so that is not a state
- * this loader can make sense of: the blocks already consumed to the right
- * would no longer be contiguous with this one and any line assembled across
- * the gap would be garbage. Throwing turns it into the ordinary read-failed
- * path (an empty chunk), which is honest and what a vanished file produces.
+ * this loader can make sense of: the blocks already consumed would no
+ * longer be contiguous with this one and any line assembled across the gap
+ * would be garbage. Throwing turns it into the ordinary read-failed path
+ * (an empty chunk), which is honest and what a vanished file produces.
  */
 async function readRange(handle: FileHandle, start: number, end: number): Promise<Buffer> {
   const buf = Buffer.allocUnsafe(Math.max(0, end - start))
@@ -121,8 +156,9 @@ async function readRange(handle: FileHandle, start: number, end: number): Promis
 }
 
 /**
- * Walk the lines of `[0, size)` NEWEST FIRST, reading `blockBytes` at a time
- * backwards from `size`. `onLine` receives every line (blank ones and an
+ * Walk the lines of `[0, end)` NEWEST FIRST, reading `blockBytes` at a time
+ * backwards from `end`, which must sit on a line boundary (EOF, or the
+ * start of a line). `onLine` receives every line (blank ones and an
  * unterminated final line included — the caller decides what a line means)
  * together with the absolute offset of its first byte, and returns `true`
  * to stop. Returns the number of bytes read, which is what makes the
@@ -143,41 +179,91 @@ async function readRange(handle: FileHandle, start: number, end: number): Promis
  * and joining them when the line's leading newline finally appears is one
  * copy per byte. (The chunks are subarrays, so each block buffer stays
  * alive until its line completes; that is bounded by the line's length.)
+ *
+ * The empty segment between the newline that terminates the last line and
+ * `end` is NOT a line — readline never emitted one there either — so a
+ * newline-terminated file does not produce a phantom blank line first.
  */
 async function readLinesBackward(
   handle: FileHandle,
-  size: number,
+  end: number,
   blockBytes: number,
   onLine: (line: Buffer, start: number) => boolean,
 ): Promise<number> {
+  if (!(blockBytes > 0)) throw new RangeError(`blockBytes must be positive, got ${blockBytes}`)
   let bytesRead = 0
-  let end = size
+  let cursorEnd = end
   // The not-yet-terminated head of the line that continues to the LEFT of
-  // `end`, in file order (oldest chunk first). Empty when `end` sits right
-  // after a newline or at EOF.
+  // `cursorEnd`, in file order (oldest chunk first). Empty when `cursorEnd`
+  // sits right after a newline or at `end`.
   let pending: Buffer[] = []
-  while (end > 0) {
-    const start = Math.max(0, end - blockBytes)
-    const buf = await readRange(handle, start, end)
+  while (cursorEnd > 0) {
+    const start = Math.max(0, cursorEnd - blockBytes)
+    const buf = await readRange(handle, start, cursorEnd)
     bytesRead += buf.length
     // `cursor` is the exclusive end of the segment we have not yet assigned
     // to a line, scanning right to left.
     let cursor = buf.length
     for (let i = buf.length - 1; i >= 0; i -= 1) {
       if (buf[i] !== NEWLINE) continue
+      const lineStart = start + i + 1
       const head = buf.subarray(i + 1, cursor)
+      cursor = i
+      if (lineStart === end && head.length === 0 && pending.length === 0) continue
       const line = pending.length === 0 ? head : Buffer.concat([head, ...pending])
       pending = []
-      cursor = i
-      if (onLine(line, start + i + 1)) return bytesRead
+      if (onLine(line, lineStart)) return bytesRead
     }
     if (cursor > 0) pending.unshift(buf.subarray(0, cursor))
-    end = start
+    cursorEnd = start
   }
   // The file's first line has no newline before it. An empty `pending` here
-  // means the file starts with a newline (or is empty), which is no line.
+  // means the range starts with a newline (or is empty), which is no line.
   if (pending.length > 0) {
     onLine(pending.length === 1 ? pending[0]! : Buffer.concat(pending), 0)
+  }
+  return bytesRead
+}
+
+/**
+ * Forward twin of readLinesBackward: the lines of `[from, to)` OLDEST FIRST
+ * (`from` on a line boundary), each with its absolute start offset; the
+ * callback returns `true` to stop. Same byte-level line contract as the
+ * backward walk so both anchor paths agree on where a line starts, which
+ * is what lets an offset learned from one be verified by the other.
+ */
+async function readLinesForward(
+  handle: FileHandle,
+  from: number,
+  to: number,
+  blockBytes: number,
+  onLine: (line: Buffer, start: number) => boolean,
+): Promise<number> {
+  if (!(blockBytes > 0)) throw new RangeError(`blockBytes must be positive, got ${blockBytes}`)
+  let bytesRead = 0
+  let pos = from
+  let lineStart = from
+  let pending: Buffer[] = []
+  while (pos < to) {
+    const blockEnd = Math.min(to, pos + blockBytes)
+    const buf = await readRange(handle, pos, blockEnd)
+    bytesRead += buf.length
+    let cursor = 0
+    for (let i = 0; i < buf.length; i += 1) {
+      if (buf[i] !== NEWLINE) continue
+      const tail = buf.subarray(cursor, i)
+      const line = pending.length === 0 ? tail : Buffer.concat([...pending, tail])
+      pending = []
+      cursor = i + 1
+      const start = lineStart
+      lineStart = pos + i + 1
+      if (onLine(line, start)) return bytesRead
+    }
+    if (cursor < buf.length) pending.push(buf.subarray(cursor))
+    pos = blockEnd
+  }
+  if (pending.length > 0) {
+    onLine(pending.length === 1 ? pending[0]! : Buffer.concat(pending), lineStart)
   }
   return bytesRead
 }
@@ -206,10 +292,13 @@ async function countNewlines(handle: FileHandle, from: number, to: number): Prom
     if (bytesRead === 0) {
       throw new Error(`transcript shrank while counting at ${pos} of ${to}`)
     }
-    let i = buf.indexOf(NEWLINE, 0)
-    while (i !== -1 && i < bytesRead) {
+    // A short final read leaves stale bytes past `bytesRead` in the reused
+    // buffer; search only what this read filled.
+    const filled = buf.subarray(0, bytesRead)
+    let i = filled.indexOf(NEWLINE, 0)
+    while (i !== -1) {
       count += 1
-      i = buf.indexOf(NEWLINE, i + 1)
+      i = filled.indexOf(NEWLINE, i + 1)
     }
     pos += bytesRead
   }
@@ -225,6 +314,14 @@ async function countNewlines(handle: FileHandle, from: number, to: number): Prom
  * it was when `streamJsonl` yielded null for both. `\r\n` needs no special
  * casing: `trim()` sees a lone `\r` as blank and `JSON.parse` accepts the
  * trailing `\r` as whitespace.
+ *
+ * ONE deliberate difference from readline: a record containing a raw
+ * U+2028 / U+2029 (valid inside a JSON string, and Codex does write them)
+ * is ONE line here. Node's readline treats those code points as line
+ * terminators, so the old reader shredded such records into junk fragments
+ * (12 Codex records / 104 separators became 116 unparseable lines on the
+ * reviewing machine). Splitting on the 0x0A byte alone is the JSONL
+ * contract; those records now parse intact and count once.
  */
 function parseJsonlLine(line: Buffer): Record<string, unknown> | null | undefined {
   const text = line.toString('utf8')
@@ -236,14 +333,51 @@ function parseJsonlLine(line: Buffer): Record<string, unknown> | null | undefine
   }
 }
 
+function isValidOffset(offset: unknown, size: number): offset is number {
+  return typeof offset === 'number' && Number.isInteger(offset) && offset >= 0 && offset < size
+}
+
+/**
+ * Sanity check for an echoed cursor: is `offset` the start of a line whose
+ * record carries `marker`? Reads one byte before it (must be a newline) and
+ * the anchor line itself, forward in blocks — bounded by that one record's
+ * size. WHY this is worth a read: the offset came from a previous chunk of
+ * the same file, and both providers append only, so it is right unless the
+ * file was rewritten or the renderer is holding a cursor from a different
+ * transcript (post-/clear roll); either way a wrong offset would page from
+ * the wrong place forever, and this check costs one record.
+ */
+async function anchorLineCarriesMarker(
+  handle: FileHandle,
+  offset: number,
+  size: number,
+  blockBytes: number,
+  markerOf: (entry: Record<string, unknown>) => string | null,
+  marker: string,
+): Promise<boolean> {
+  if (offset > 0) {
+    const before = await readRange(handle, offset - 1, offset)
+    if (before[0] !== NEWLINE) return false
+  }
+  let carries = false
+  await readLinesForward(handle, offset, size, blockBytes, line => {
+    const value = parseJsonlLine(line)
+    carries = value !== null && value !== undefined && markerOf(value) === marker
+    return true
+  })
+  return carries
+}
+
 async function readInitialTranscriptTail(
   filePath: string,
   limit: number,
   blockBytes: number = TAIL_BLOCK_BYTES,
 ): Promise<{
   bytes: number
-  // Bytes read (and parsed) to assemble the window — bounded by the window
-  // plus one block, never by the file. Exposed for the span and for tests.
+  // Bytes read (and parsed) to assemble the window — proportional to the
+  // window plus one block. Not the whole I/O of the load: `totalEntries`
+  // still costs one no-decode newline count over the head (see
+  // countNewlines). Exposed for the span and for tests.
   tailBytes: number
   parseErrors: number
   // Usable records in the whole file: those parsed in the tail plus the
@@ -251,18 +385,11 @@ async function readInitialTranscriptTail(
   // exact for provider-written files).
   parsed: number
   entries: Record<string, unknown>[]
+  offsets: number[]
 }> {
   const size = await stat(filePath).then(s => s.size).catch(() => 0)
-  const empty = { bytes: size, tailBytes: 0, parseErrors: 0, parsed: 0, entries: [] }
+  const empty = { bytes: size, tailBytes: 0, parseErrors: 0, parsed: 0, entries: [], offsets: [] }
   if (size === 0 || limit <= 0) return empty
-
-  // #288: one local pool per load. Every parsed line freshly allocates its
-  // cwd/sessionId/role/type metadata strings; interning them against a pool
-  // scoped to this single load collapses them to one instance each. The pool
-  // dies with this function, so it can never become the global leak that a
-  // shared pool would. See internEntry.ts for the full retainer-trace
-  // evidence (cwd ×30k, role/type ×23k, sessionId ×20k per session).
-  const intern = makeStringPool()
 
   let handle: FileHandle
   try {
@@ -275,6 +402,7 @@ async function readInitialTranscriptTail(
     let parsedInTail = 0
     // Newest first while collecting; reversed once at the end.
     const newestFirst: Record<string, unknown>[] = []
+    const offsetsNewestFirst: number[] = []
     // Start offset of the oldest line the tail walk parsed. Everything in
     // [0, headEnd) is whole, unparsed lines. Stays 0 when the walk reached
     // the head of the file, in which case there is nothing left to count.
@@ -292,22 +420,23 @@ async function readInitialTranscriptTail(
         return false
       }
       parsedInTail += 1
-      internEntryFields(value, intern)
-      newestFirst.push(value)
       if (parsedInTail > limit) {
         headEnd = start
         return true
       }
+      newestFirst.push(value)
+      offsetsNewestFirst.push(start)
       return false
     })
     const headLines = await countNewlines(handle, 0, headEnd)
-    newestFirst.length = Math.min(newestFirst.length, limit)
+    internKept(newestFirst)
     return {
       bytes: size,
       tailBytes,
       parseErrors,
       parsed: parsedInTail + headLines,
       entries: newestFirst.reverse(),
+      offsets: offsetsNewestFirst.reverse(),
     }
   } catch {
     return empty
@@ -316,9 +445,29 @@ async function readInitialTranscriptTail(
   }
 }
 
+// #288: one local pool per load. Every parsed line freshly allocates its
+// cwd/sessionId/role/type metadata strings; interning them against a pool
+// scoped to this single load collapses them to one instance each. The pool
+// dies with this function, so it can never become the global leak that a
+// shared pool would. See internEntry.ts for the full retainer-trace
+// evidence (cwd ×30k, role/type ×23k, sessionId ×20k per session). Only
+// the entries that are actually returned are interned — the (limit+1)th
+// probe record and anything scanned past while hunting never need it.
+function internKept(entries: Record<string, unknown>[]): void {
+  const intern = makeStringPool()
+  for (const entry of entries) internEntryFields(entry, intern)
+}
+
+type OlderWindowRequest = {
+  kind: AgentProviderKind
+  beforeMarker: string
+  beforeOffset?: number
+  limit: number
+}
+
 async function readOlderTranscriptWindow(
   filePath: string,
-  params: { kind: AgentProviderKind; beforeMarker: string; limit: number },
+  params: OlderWindowRequest,
   blockBytes: number = TAIL_BLOCK_BYTES,
 ): Promise<{
   bytes: number
@@ -326,8 +475,12 @@ async function readOlderTranscriptWindow(
   parseErrors: number
   parsed: number
   foundMarker: boolean
+  // How the page was anchored — 'offset' is the exact O(page) path, 'marker'
+  // the forward oldest-occurrence scan, 'tail' the marker-missing fallback.
+  anchor: 'offset' | 'marker' | 'tail'
   hasMore: boolean
   entries: Record<string, unknown>[]
+  offsets: number[]
 }> {
   const size = await stat(filePath).then(s => s.size).catch(() => 0)
   const empty = {
@@ -336,19 +489,16 @@ async function readOlderTranscriptWindow(
     parseErrors: 0,
     parsed: 0,
     foundMarker: false,
+    anchor: 'tail' as const,
     hasMore: false,
     entries: [],
+    offsets: [],
   }
   if (size === 0) return empty
   const markerOf = params.kind === 'claude'
     ? extractClaudeHistoryMarker
     : extractCodexHistoryMarker
-
-  // #288: local pool for this older-window load (same rationale as the
-  // initial-tail reader above — intern the duplicated metadata, drop the
-  // pool when the load returns). Only entries we may return are interned;
-  // the ones scanned past while hunting the anchor never need it.
-  const intern = makeStringPool()
+  const limit = Math.max(0, params.limit)
 
   let handle: FileHandle
   try {
@@ -359,25 +509,48 @@ async function readOlderTranscriptWindow(
   try {
     let parseErrors = 0
     let parsed = 0
-    let hunting = true
-    // WHY the newest `limit + 1` records are kept while hunting: the
-    // historical fallback for an anchor that is NOT in the file is "page
-    // from the file tail", because a live-append race can leave the renderer
-    // asking before a marker the durable transcript never got. Walking
-    // newest-first, the tail is simply the first records we meet, so keeping
-    // them costs nothing extra and the fallback needs no second read.
-    const tailFallback: Record<string, unknown>[] = []
-    // Records before the anchor, newest first, up to `limit + 1` — the extra
-    // one exists only to make `hasMore` exact (see the initial reader).
-    const older: Record<string, unknown>[] = []
+    let tailBytes = 0
+    // Records before the anchor, up to `limit + 1` — the extra one exists
+    // only to make `hasMore` exact (see the initial reader).
+    const kept: Array<{ value: Record<string, unknown>; start: number }> = []
 
-    // WHY this anchors on the NEWEST occurrence of a duplicated marker where
-    // the forward scan anchored on the oldest: the renderer's window grows
-    // contiguously from the tail, so the occurrence at its edge is the newest
-    // one. Stopping at an older duplicate would skip every record between
-    // the two. Codex markers are synthesized from timestamp + payload id and
-    // can in principle collide; Claude uuids should not.
-    const tailBytes = await readLinesBackward(handle, size, blockBytes, line => {
+    if (
+      isValidOffset(params.beforeOffset, size) &&
+      (await anchorLineCarriesMarker(handle, params.beforeOffset, size, blockBytes, markerOf, params.beforeMarker))
+    ) {
+      // Exact path: the cursor line is where the renderer says it is, so the
+      // page is simply the records before that byte. Newest first, reversed
+      // at the end.
+      tailBytes = await readLinesBackward(handle, params.beforeOffset, blockBytes, (line, start) => {
+        const value = parseJsonlLine(line)
+        if (value === undefined) return false
+        if (value === null) {
+          parseErrors += 1
+          return false
+        }
+        parsed += 1
+        kept.push({ value, start })
+        return kept.length > limit
+      })
+      kept.reverse()
+      return finishWindow(size, tailBytes, parseErrors, parsed, true, 'offset', kept, limit)
+    }
+
+    // Marker-only path: the forward scan the loader always had, anchored on
+    // the OLDEST occurrence of the marker. WHY forward and oldest, given
+    // everything above is backward: this is the only anchoring that provably
+    // terminates when markers repeat — the renderer's next cursor is a line
+    // returned by this page, which sits strictly before this anchor, so the
+    // anchor position strictly decreases and reaches the head. It is lossy
+    // across a duplicate gap (records between two occurrences are skipped)
+    // and it parses from byte 0 to the anchor, exactly as before #747; both
+    // are why the exact offset path exists and why every chunk hands back
+    // offsets so the very next page can use it. The historical fallback for
+    // an anchor that is NOT in the file — page from the tail — survives too:
+    // a live-append race can leave the renderer asking before a marker the
+    // durable transcript never got.
+    let found = false
+    tailBytes = await readLinesForward(handle, 0, size, blockBytes, (line, start) => {
       const value = parseJsonlLine(line)
       if (value === undefined) return false
       if (value === null) {
@@ -385,32 +558,15 @@ async function readOlderTranscriptWindow(
         return false
       }
       parsed += 1
-      if (hunting) {
-        if (markerOf(value) === params.beforeMarker) {
-          hunting = false
-        } else if (tailFallback.length <= params.limit) {
-          internEntryFields(value, intern)
-          tailFallback.push(value)
-        }
-        return false
+      if (markerOf(value) === params.beforeMarker) {
+        found = true
+        return true
       }
-      internEntryFields(value, intern)
-      older.push(value)
-      return older.length > params.limit
+      kept.push({ value, start })
+      if (kept.length > limit + 1) kept.shift()
+      return false
     })
-    const foundMarker = !hunting
-    const kept = foundMarker ? older : tailFallback
-    const hasMore = kept.length > params.limit
-    kept.length = Math.min(kept.length, Math.max(0, params.limit))
-    return {
-      bytes: size,
-      tailBytes,
-      parseErrors,
-      parsed,
-      foundMarker,
-      hasMore,
-      entries: kept.reverse(),
-    }
+    return finishWindow(size, tailBytes, parseErrors, parsed, found, found ? 'marker' : 'tail', kept, limit)
   } catch {
     return empty
   } finally {
@@ -418,10 +574,41 @@ async function readOlderTranscriptWindow(
   }
 }
 
+function finishWindow(
+  bytes: number,
+  tailBytes: number,
+  parseErrors: number,
+  parsed: number,
+  foundMarker: boolean,
+  anchor: 'offset' | 'marker' | 'tail',
+  kept: Array<{ value: Record<string, unknown>; start: number }>,
+  limit: number,
+): Awaited<ReturnType<typeof readOlderTranscriptWindow>> {
+  const hasMore = kept.length > limit
+  // The ring/probe may hold one extra record beyond `limit`; it was only
+  // evidence for `hasMore`. Drop from the OLD end so the page stays the
+  // `limit` records immediately before the anchor.
+  const page = kept.slice(Math.max(0, kept.length - limit))
+  const entries = page.map(k => k.value)
+  internKept(entries)
+  return {
+    bytes,
+    tailBytes,
+    parseErrors,
+    parsed,
+    foundMarker,
+    anchor,
+    hasMore,
+    entries,
+    offsets: page.map(k => k.start),
+  }
+}
+
 /**
- * Locate `beforeMarker` from the tail of the transcript and return up to
- * `limit` entries immediately preceding it. `hasMore: true` means
- * there's still earlier history the renderer can request.
+ * Return up to `limit` entries immediately preceding the renderer's cursor
+ * (`beforeOffset` when it has one, else the oldest occurrence of
+ * `beforeMarker`). `hasMore: true` means there's still earlier history the
+ * renderer can request.
  */
 export async function loadOlderHistoryChunk(
   params: HistoryChunkRequest,
@@ -451,17 +638,19 @@ export async function loadOlderHistoryChunk(
  */
 export async function loadOlderHistoryChunkFromFile(
   filePath: string,
-  params: { kind: AgentProviderKind; beforeMarker: string; limit: number },
+  params: OlderWindowRequest,
 ): Promise<HistoryChunk> {
   const span = performanceService.span('historyLoader.loadOlderChunk', {
     kind: params.kind,
     limit: params.limit,
     hasBeforeMarker: params.beforeMarker.length > 0,
+    hasBeforeOffset: typeof params.beforeOffset === 'number',
   })
   try {
     const parsed = await readOlderTranscriptWindow(filePath, {
       kind: params.kind,
       beforeMarker: params.beforeMarker,
+      beforeOffset: params.beforeOffset,
       limit: params.limit,
     })
     return finishOlderChunk(span, parsed, filePath)
@@ -480,7 +669,7 @@ function finishOlderChunk(
     // filePath in the failure record — losing the file identity is what
     // made past transcript-path bugs (double-applied project dirs, wrong
     // rollout picked) invisible in the perf journal.
-    span.end({ result: 'empty-or-read-failed', filePath })
+    span.end({ result: 'empty-or-read-failed', filePath, anchor: parsed.anchor })
     return { entries: [], hasMore: false }
   }
   span.end({
@@ -490,10 +679,11 @@ function finishOlderChunk(
     parsed: parsed.parsed,
     parseErrors: parsed.parseErrors,
     foundMarker: parsed.foundMarker,
+    anchor: parsed.anchor,
     returned: parsed.entries.length,
     hasMore: parsed.hasMore,
   })
-  return { entries: parsed.entries, hasMore: parsed.hasMore }
+  return { entries: parsed.entries, hasMore: parsed.hasMore, offsets: parsed.offsets }
 }
 
 /**
@@ -566,14 +756,15 @@ function finishInitialChunk(
     entries: parsed.entries,
     hasMore: parsed.parsed > limit,
     totalEntries: parsed.parsed,
+    offsets: parsed.offsets,
   }
 }
 
 // Test seams. The readers take a block size so a test can force block
 // boundaries to fall inside records (and inside a multi-byte character)
 // with a small file instead of a multi-hundred-KB one, and they report the
-// bytes read for the window so "bounded by the window, not the file" is an
-// assertion rather than a belief. Production callers never pass a block
-// size.
+// bytes read for the window so "proportional to the window, not the file"
+// is an assertion rather than a belief. Production callers never pass a
+// block size.
 export const __readInitialTranscriptTailForTests = readInitialTranscriptTail
 export const __readOlderTranscriptWindowForTests = readOlderTranscriptWindow

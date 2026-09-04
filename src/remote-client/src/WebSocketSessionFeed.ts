@@ -302,12 +302,13 @@ export class WebSocketSessionFeed implements SessionFeed {
    *  newest-N chunk; present = the page immediately before it. */
   async getHistory(
     sessionId: string,
-    opts: { beforeMarker?: string; limit?: number } = {},
+    opts: { beforeMarker?: string; beforeOffset?: number; limit?: number } = {},
   ): Promise<{ ok: true; chunk: HistoryChunkResult } | { ok: false; error: string }> {
     const reply = await this.request({
       type: 'get-history',
       sessionId,
       beforeMarker: opts.beforeMarker,
+      beforeOffset: opts.beforeOffset,
       limit: opts.limit,
     })
     return reply.ok

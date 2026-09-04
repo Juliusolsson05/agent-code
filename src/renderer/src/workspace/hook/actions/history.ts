@@ -78,6 +78,11 @@ export function useHistoryActions(
           cwd: meta.cwd,
           providerSessionId: meta.providerSessionId,
           beforeMarker: runtime.historyOldestMarker,
+          // The byte position of that marker's line when we have it — the
+          // loader anchors exactly there instead of hunting the marker,
+          // which is what keeps paging exact and terminating when markers
+          // repeat (see historyLoader.ts). Absent → marker-only fallback.
+          beforeOffset: runtime.historyOldestOffset ?? undefined,
           limit: 200,
         })
 
@@ -88,6 +93,7 @@ export function useHistoryActions(
         let workActivity = runtime.workActivity
         let workContext = runtime.workContext
         let oldestMarker: string | null = runtime.historyOldestMarker
+        let oldestOffset: number | null = runtime.historyOldestOffset
         // Registry-owned mapper (#394 phase 2b). Chunk-scoped: starts
         // with a null turn cursor, which for Codex means pagination
         // chunks that begin mid-turn rely on `payload.turn_id` — the
@@ -99,7 +105,7 @@ export function useHistoryActions(
         // landed.
         const mapper = getRendererProviderCapabilities(kind).createTranscriptEntryMapper()
 
-        for (const rawEntry of chunk.entries) {
+        for (const [rawIndex, rawEntry] of chunk.entries.entries()) {
           // Older-history pagination walks records that predate the current
           // tail. Use them only to backfill an unknown badge; never let old
           // worktree evidence replace fresher live/current context.
@@ -119,6 +125,12 @@ export function useHistoryActions(
           // stay pinned to where the NEXT older page should start.
           if (mapped.length > 0 && marker && oldestMarker === runtime.historyOldestMarker) {
             oldestMarker = marker
+            // The offset of THIS raw line, not the chunk's first: the
+            // cursor is the first kept line, and leading records the
+            // mapper drops (Codex turn_context, Claude snapshots) would
+            // otherwise make the loader's marker-at-offset check fail and
+            // silently degrade every page to the slow scan.
+            oldestOffset = chunk.offsets?.[rawIndex] ?? null
           }
           for (const entry of mapped) {
             const uuid = (entry as { uuid?: string }).uuid
@@ -190,6 +202,12 @@ export function useHistoryActions(
                 ? current.toolIndexVersion + 1
                 : current.toolIndexVersion,
               historyOldestMarker: oldestMarker ?? current.historyOldestMarker,
+              // Moves in lockstep with the marker: an offset for a different
+              // line than the marker would fail the loader's sanity check
+              // (harmless, but every page would take the slow path).
+              historyOldestOffset: oldestMarker !== runtime.historyOldestMarker
+                ? oldestOffset
+                : current.historyOldestOffset,
               // Trust `chunk.hasMore` as the authoritative "is there
               // more history to fetch" signal. The old rule OR'd in
               // `prepend.length === 0` — i.e. "re-enable loading
