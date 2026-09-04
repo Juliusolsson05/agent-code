@@ -105,9 +105,10 @@ describe('CappedTextBuffer', () => {
     const cap = 1000
     const pieceSize = 37
     const buffer = new CappedTextBuffer(cap, pieceSize)
-    // The oracle only needs the newest `cap + maxUnits` code units: the
-    // buffer can never hold more than `cap`, so `endsWith` below never looks
-    // further back. Keeping the whole stream made this quadratic — every
+    // The oracle only needs the newest `cap` code units — the buffer can
+    // never hold more than `cap`, so `endsWith` below never looks further
+    // back; `maxUnits` on top is slack. Keeping the whole stream made this
+    // quadratic — every
     // `+=` built a cons string and every `endsWith` flattened it, copying a
     // ~3 MB stream per iteration (4,000 × ~1.5 MB); it took 20–50 s on a
     // loaded machine and tripped vitest's 5 s timeout.
@@ -135,9 +136,10 @@ describe('CappedTextBuffer', () => {
       const first = text.charCodeAt(0)
       expect(first >= 0xdc00 && first <= 0xdfff).toBe(false)
     }
-    // 4,000 iterations is well under a second of CPU; the generous budget is
-    // for a loaded machine running several vitest workers, where the default
-    // 5 s was tripped by contention rather than by the test.
+    // Measured 1.5–2.4 s solo on an M3 (≈20k expect calls dominate now, not
+    // the oracle); the generous budget is for a loaded machine running
+    // several vitest workers, where the default 5 s was tripped by
+    // contention rather than by the test.
   }, 20_000)
 
   it('does not start the tail of an oversized chunk on a low surrogate', () => {
