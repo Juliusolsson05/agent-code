@@ -1,5 +1,16 @@
 # Screen frames: drop spinner-only repaints and alias duplicate strings
 
+## 2026-09-04 review correction
+
+The original global duration/token/whitespace substitutions below are superseded:
+only complete recognized status/footer lines are normalized; multiline composer
+regions and ordinary content remain verbatim. The analogous headless package
+fix retains attribute-aware composer/condition parsing on every emitted frame.
+Successful session recovery now seeds the requesting renderer from the latest
+raw screen cache. This bypasses no ownership/recovery failure and does not reset
+the shared gate or broadcast to unrelated windows. Twenty-six focused gate,
+manager, IPC recovery and wire tests pass; full CI runs on the integrated head.
+
 Fixes #746. Refs #390, #103.
 
 ## Problem
