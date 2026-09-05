@@ -95,10 +95,48 @@ function mountNavigation(
   }
 
   const mounted = render(<Harness />)
-  return { actions, mounted, showToast, getState: () => state }
+  return { actions, mounted, showToast, getState: () => state, setState }
 }
 
 describe('useAgentIndexNavigationActions', () => {
+  it('uses the same navigation result for a stable ID and its UI label', async () => {
+    const labeled = mountNavigation(vi.fn().mockResolvedValue('a2'))
+    await act(async () => { expect(await labeled.actions.focusAgentByPaneLabel('A2')).toBe(true) })
+    const expected = labeled.getState()
+    labeled.mounted.unmount()
+    const stable = mountNavigation(vi.fn().mockResolvedValue('a2'))
+    await act(async () => { expect(await stable.actions.focusAgentBySessionId('a2')).toBe(true) })
+    expect(stable.getState()).toEqual(expected)
+    stable.mounted.unmount()
+  })
+
+  it('does not replace a different pane after focus moves while waking', async () => {
+    const state = makeState()
+    state.sessions.a3 = { cwd: '/work/alpha', kind: 'claude' }
+    state.tabs[0].root = { type: 'split', direction: 'vertical', ratio: 0.5,
+      a: { type: 'leaf', sessionId: 'a1' }, b: { type: 'leaf', sessionId: 'a3' } }
+    let finish!: () => void
+    const gate = new Promise<void>(resolve => { finish = resolve })
+    const harness = mountNavigation(vi.fn(() => gate), state)
+    const navigation = harness.actions.focusAgentBySessionId('a2')
+    harness.setState(current => ({ ...current, tabs: current.tabs.map(tab => ({ ...tab, focusedSessionId: 'a3' })) }))
+    await act(async () => { finish(); expect(await navigation).toBe(false) })
+    expect(harness.getState().tabs[0].root).toEqual(state.tabs[0].root)
+    expect(harness.getState().tabs[0].focusedSessionId).toBe('a3')
+    harness.mounted.unmount()
+  })
+
+  it('reveals a hidden related child without moving it out of its parent view', async () => {
+    const state = makeState()
+    state.sessions.a2.linkedParentId = 'a1'
+    const harness = mountNavigation(vi.fn().mockResolvedValue('a2'), state)
+    await act(async () => { expect(await harness.actions.focusAgentBySessionId('a2')).toBe(true) })
+    expect(harness.getState().tabs[0].root).toEqual(state.tabs[0].root)
+    expect(harness.getState().gridRelatedSelections).toEqual({ a1: 'a2' })
+    expect(harness.getState().detachedSessions.a2).toBeDefined()
+    harness.mounted.unmount()
+  })
+
   it('wakes a detached target before swapping it into the focused grid slot', async () => {
     const ensureSessionLive = vi.fn().mockResolvedValue('a2')
     const harness = mountNavigation(ensureSessionLive)

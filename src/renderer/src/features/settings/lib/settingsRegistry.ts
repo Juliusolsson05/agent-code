@@ -88,6 +88,7 @@ type ChoiceOption<T extends string> = {
 }
 
 export type SettingDefinition =
+  | { id: string; category: SettingCategoryId; title: string; description: string; keywords: string[]; metadata?: SettingMetadata; control: { type: 'external-control' } }
   | {
       id: string
       category: SettingCategoryId
@@ -555,6 +556,13 @@ export function getSettingsRegistry(): SettingDefinition[] {
       // this immediate would promise more than the integration can enforce.
       metadata: { scope: 'app', apply: 'new-session', storage: 'external-files' },
       control: { type: 'agent-code-conventions' },
+    },
+    {
+      id: 'external-control', category: 'agents', title: 'External operator MCP',
+      description: 'Let an external assistant discover commands, read agents and operate all Agent Code windows alongside computer use. Disabled by default and excluded from agents launched here.',
+      keywords: ['mcp', 'external', 'operator', 'codex', 'chatgpt', 'automation', 'windows', 'control'],
+      metadata: { scope: 'app', apply: 'immediate', storage: 'external-files' },
+      control: { type: 'external-control' },
     },
     {
       id: 'agent-code-custom-skills',

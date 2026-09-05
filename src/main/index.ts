@@ -3,14 +3,23 @@
 // reads env flags at module load) is imported. See
 // `./loadEnv.ts` for the rationale.
 import '@main/loadEnv.js'
+import { ExternalControlMcpHost } from './externalControlMcp/host'
+import { createExternalControlSettings } from './settings/externalControl'
+import { createExternalCodexIntegration } from './settings/externalCodexIntegration'
+import operatorSkillSource from '../../operator-skills/agent-code-computer-execution/SKILL.md?raw'
 
-import { app, crashReporter, dialog, Menu } from 'electron'
+import { app, clipboard, crashReporter, dialog, Menu } from 'electron'
 import { existsSync } from 'fs'
 import { readFile } from 'fs/promises'
 import { join } from 'path'
 import { performance } from 'perf_hooks'
 
 import { SessionManager } from '@main/sessionManager.js'
+import { createControlHost } from '@main/control/createControlHost.js'
+import { sessionHistoryControlCapabilities } from '@main/sessions/control.js'
+import { conditionBackendCapabilities } from '@main/sessions/conditionControl.js'
+import { terminalBackendCapabilities } from '@main/sessions/terminalControl.js'
+import { windowLifecycleControlCapabilities } from '@main/window/lifecycleControl.js'
 import { installSessionShutdownGate } from '@main/sessionShutdownGate.js'
 import { LspManager } from '@main/lspManager.js'
 import { compactAllGhostLogs, GhostJournalRegistry } from '@main/ghostJournal.js'
@@ -44,6 +53,9 @@ import {
   broadcastToWindows,
   createAppWindow,
   focusedWindowId,
+  getBrowserWindow,
+  listWindowIds,
+  windowIdFor,
   focusWindow,
   sendToFocusedWindow,
   sendToSessionWindow,
@@ -934,6 +946,18 @@ async function startApp(): Promise<void> {
     agentCodeConventionsService,
     workspaceFileStore,
   })
+  let externalHost: ExternalControlMcpHost
+  const externalSettings = createExternalControlSettings(STATE_DIR, {
+    integration: createExternalCodexIntegration(process.env.CODEX_HOME || join(app.getPath('home'), '.codex'), operatorSkillSource),
+    start: (port, token) => externalHost.start(port, token),
+    stop: () => externalHost.stop(), copy: text => clipboard.writeText(text),
+  })
+  const controlHost = createControlHost({ getBrowserWindow, windowIdFor, listWindowIds }, join(STATE_DIR, 'control-history'), [
+    ...sessionHistoryControlCapabilities(), ...conditionBackendCapabilities(manager), ...terminalBackendCapabilities(manager), ...windowLifecycleControlCapabilities(), ...externalSettings.capabilities,
+  ])
+  externalHost = new ExternalControlMcpHost(controlHost.forCaller({ kind: 'external', id: 'agent-code-control' }))
+  await externalSettings.initialize()
+  app.once('will-quit', () => { void externalSettings.dispose(); controlHost.dispose() })
   // Boot probe runs after the IPC is wired so its first `state` push
   // has a live subscriber to receive it on the renderer side.
   cliUpdateOrchestrator.scheduleBootProbe()

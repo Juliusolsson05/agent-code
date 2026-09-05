@@ -1,5 +1,6 @@
 import { useAppStore } from '@renderer/app-state/hooks'
 import { useWorkspace } from '@renderer/workspace/workspaceStore'
+import { useControlRegistration } from '@renderer/control/registerRendererHost'
 import { WorkspaceProvider } from '@renderer/workspace/WorkspaceContext'
 import { useKeybinds } from '@renderer/workspace/tile-tree/useKeybinds'
 import { TabBar } from '@renderer/workspace/tile-tree/TabBar'
@@ -91,6 +92,7 @@ export default function App() {
     defaultBuiltInMcpDomains,
   )
   useRenderedLeaseHygiene(workspace)
+  useControlRegistration(workspace)
   useDebugAutosave(workspace)
 
   // New Tab, Resume Session and the palette toggle are ordinary commands now,

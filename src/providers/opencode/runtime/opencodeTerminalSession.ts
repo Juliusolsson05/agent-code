@@ -1,3 +1,4 @@
+import { excludeExternalControlFromOpencode } from '@providers/shared/runtime/externalControlExclusion.js'
 import { EventEmitter } from 'events'
 import { spawn as ptySpawn } from 'node-pty'
 import type { IPty } from 'node-pty'
@@ -102,6 +103,7 @@ export class OpencodeTerminalSession extends EventEmitter implements AgentSessio
       else env[key] = value
     }
     addOpencodeBuiltInMcpLaunchConfig(this.builtInMcpServers, env)
+    excludeExternalControlFromOpencode(env)
 
     const providerSessionId = this.resumeSessionId ?? await createEmptyOpencodeSession({
       binary: this.binary,

@@ -1,7 +1,9 @@
+import { commandExecutionRequests, type CommandExecutionRequest } from '../commandExecutionRequests'
+import { useCommandExecutionRequest } from './useCommandExecutionRequest'
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import type { AgentProviderKind } from '@shared/types/providerKind'
 import { getProviderFeatures } from '@providers/shared/featureCapabilities'
-import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import ReactMarkdown from 'react-markdown'
 
 import { Button } from '@renderer/components/ui/button'
@@ -12,6 +14,7 @@ import {
   DialogTitle,
 } from '@renderer/components/ui/dialog'
 import { buildCommandRegistry } from '@renderer/features/command-palette/registry'
+import { usePaletteRequest } from './usePaletteRequest'
 import {
   dispatchCommand,
   dispatchResolvedRow,
@@ -161,6 +164,7 @@ function CommandStateBadge({ state }: { state: CommandState }) {
 }
 
 export function CommandPalette() {
+  const executionRequest = useSyncExternalStore(commandExecutionRequests.subscribe, commandExecutionRequests.snapshot)
   const open = useAppStore(state => state.commandPaletteOpen)
   // The pending invocation now lives in the STORE rather than in local state
   // here, because it no longer belongs only to the native menu. The keybinding
@@ -217,10 +221,11 @@ export function CommandPalette() {
   // in the app — flashed the palette open and shut. Separating "the host is
   // mounted" from "the user can see it" keeps the #494 cost model (build the
   // context only when something actually needs it) without the flash.
-  if (!open && !pendingCommandInvocation) return null
+  if (!open && !pendingCommandInvocation && !executionRequest) return null
   return (
     <OpenCommandPalette
       visible={open}
+      executionRequest={executionRequest}
       pendingMenuCommand={pendingCommandInvocation}
       onMenuCommandHandled={clearCommandInvocation}
     />
@@ -229,11 +234,13 @@ export function CommandPalette() {
 
 function OpenCommandPalette({
   visible,
+  executionRequest,
   pendingMenuCommand,
   onMenuCommandHandled,
 }: {
   /** False when mounted purely to service a keybinding or menu invocation. */
   visible: boolean
+  executionRequest: CommandExecutionRequest | null
   pendingMenuCommand: PendingCommandInvocation | null
   onMenuCommandHandled: () => void
 }) {
@@ -811,6 +818,8 @@ function OpenCommandPalette({
     ],
   )
 
+  useCommandExecutionRequest(executionRequest, commandContext)
+
   const commands = useMemo(() => buildCommandRegistry(commandContext), [commandContext])
 
   const promptTemplates = useMemo(
@@ -1098,6 +1107,9 @@ function OpenCommandPalette({
   const selectedCommand = useMemo(() => {
     return selectedPaletteRow?.kind === 'command' ? selectedPaletteRow.command : null
   }, [selectedPaletteRow])
+
+  usePaletteRequest({ visible, mode, query, selectedIndex, setQuery, setSelectedIndex,
+    commandIds: paletteRows.map(row => row.kind === 'command' ? row.command.id : null) })
 
   // Focus the search input whenever the palette becomes VISIBLE.
   //

@@ -308,7 +308,7 @@ export function useWorkspace(
   const ensureSessionLiveRef = useRef(ensureSessionLive)
   ensureSessionLiveRef.current = ensureSessionLive
 
-  const { focusAgentByPaneLabel } = useAgentIndexNavigationActions(
+  const { focusAgentByPaneLabel, focusAgentBySessionId } = useAgentIndexNavigationActions(
     setState,
     setTileTabs,
     refs,
@@ -924,6 +924,7 @@ export function useWorkspace(
     startNewAgentPlacement: paneActions.startNewAgentPlacement,
     commitNewAgentPlacement: paneActions.commitNewAgentPlacement,
     createDetachedDispatchAgent: paneActions.createDetachedDispatchAgent,
+    createDetachedSession: paneActions.createDetachedSession,
     createLinkedAgent: paneActions.createLinkedAgent,
     createOrchestrationAgent: paneActions.createOrchestrationAgent,
     attachDetachedToGrid: paneActions.attachDetachedToGrid,
@@ -938,6 +939,7 @@ export function useWorkspace(
     focusSession: paneActions.focusSession,
     focusSessionInTab: paneActions.focusSessionInTab,
     focusAgentByPaneLabel,
+    focusAgentBySessionId,
     setAgentTitle,
     setSessionAgentViewModeOverride,
     selectGridRelatedSession,

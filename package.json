@@ -29,7 +29,8 @@
     "package:mac": "node scripts/package-mac.mjs",
     "dist:mac": "npm run runtime:prepare:mac && npm run build && npm run package:mac",
     "start": "npm run build:app && electron-vite preview --skipBuild",
-    "typecheck": "npm run workflow-mcp:build && tsc -b --pretty false",
+    "typecheck:control-sdk": "tsc -p tsconfig.control-sdk.json --pretty false",
+    "typecheck": "npm run typecheck:control-sdk && npm run workflow-mcp:build && tsc -b --pretty false",
     "check:live-resume-probe": "npm --prefix packages/agent-transcript-parser run typecheck:probe",
     "test": "npm run workflow-mcp:build && NODE_ENV=test vitest run",
     "test:watch": "npm run workflow-mcp:build && NODE_ENV=test vitest",
@@ -67,6 +68,7 @@
     "postinstall": "electron-rebuild -f -w node-pty"
   },
   "dependencies": {
+    "@iarna/toml": "^2.2.5",
     "@iconify-json/vscode-icons": "1.2.67",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@openai/codex-sdk": "0.144.4",

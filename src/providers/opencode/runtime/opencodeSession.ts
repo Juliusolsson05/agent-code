@@ -1,3 +1,4 @@
+import { excludeExternalControlFromOpencode } from '@providers/shared/runtime/externalControlExclusion.js'
 // OpencodeSession — the AgentSession runtime for opencode (#406 step 3).
 //
 // Unlike ClaudeSession/CodexSession this wrapper owns NO PTY. Opencode
@@ -148,6 +149,7 @@ export class OpencodeSession extends EventEmitter implements AgentSession {
       else env[key] = value
     }
     addOpencodeBuiltInMcpLaunchConfig(this.builtInMcpServers, env)
+    excludeExternalControlFromOpencode(env)
 
     const headless = new OpencodeHeadless({
       mode: 'spawn',

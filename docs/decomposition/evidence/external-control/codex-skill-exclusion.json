@@ -1,0 +1,23 @@
+{
+  "codexVersion": "codex-cli 0.153.4",
+  "external": [
+    {
+      "name": "agent-code-computer-execution",
+      "enabled": true
+    },
+    {
+      "name": "other-disabled",
+      "enabled": false
+    }
+  ],
+  "internal": [
+    {
+      "name": "agent-code-computer-execution",
+      "enabled": false
+    },
+    {
+      "name": "other-disabled",
+      "enabled": false
+    }
+  ]
+}

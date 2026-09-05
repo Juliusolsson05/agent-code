@@ -1,3 +1,4 @@
+import { ExternalControlRow } from './ExternalControlRow'
 import type { Settings } from '@renderer/app-state/settings/types'
 import type {
   SettingActionContext,
@@ -212,6 +213,8 @@ function SettingRow({
               because the value lives in setup.json (main-owned), not
               in the renderer Settings store. See
               features/cli-updates/CliUpdateBehaviorRow.tsx. */}
+          {control.type === 'external-control' ? <ExternalControlRow /> : null}
+
           {control.type === 'command-keybindings' ? <CommandKeybindingsRow /> : null}
 
           {control.type === 'cli-update-behavior' ? <CliUpdateBehaviorRow /> : null}

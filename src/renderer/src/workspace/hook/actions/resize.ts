@@ -34,9 +34,9 @@ export function useResizeActions(
   resizeFocusedDirectional: (direction: 'left' | 'right' | 'up' | 'down', delta: number) => void
   setSplitRatio: (fromSessionId: SessionId, toSessionId: SessionId, ratio: number) => void
   setSplitRatioInTab: (tabId: TabId, fromSessionId: SessionId, toSessionId: SessionId, ratio: number) => void
-  normalizeLayout: () => void
-  hardNormalizeLayout: () => void
-  rotateLayout: () => void
+  normalizeLayout: (tabId?: TabId) => void
+  hardNormalizeLayout: (tabId?: TabId) => void
+  rotateLayout: (tabId?: TabId) => void
 } {
   const resizeFocused = useCallback(
     (delta: number) => {
@@ -109,15 +109,18 @@ export function useResizeActions(
     [setState, setTileTabs],
   )
 
+  // Optional tab IDs let callers act on an observed project without changing
+  // selection first. Human commands omit it and retain their active-tab scope;
+  // no SDK or MCP dependency belongs in these ordinary domain operations.
   // Keep the existing tree structure but set every split ratio to
   // 0.5. Equalizes spacing without rearranging panes — if you have
   // three vertical panes on the left and one on the right, they stay
   // that way but all dividers move to the midpoint.
-  const normalizeLayout = useCallback(() => {
+  const normalizeLayout = useCallback((tabId?: TabId) => {
     setState(prev => ({
       ...prev,
       tabs: prev.tabs.map(t =>
-        t.id === prev.activeTabId
+        t.id === (tabId ?? prev.activeTabId)
           ? { ...t, root: equalizeRatios(t.root) }
           : t,
       ),
@@ -127,9 +130,9 @@ export function useResizeActions(
   // Flatten the tree and rebuild as a balanced grid where every pane
   // gets equal space. Changes the arrangement — all panes end up in
   // a rows × cols grid. No sessions are spawned or killed.
-  const hardNormalizeLayout = useCallback(() => {
+  const hardNormalizeLayout = useCallback((tabId?: TabId) => {
     setState(prev => {
-      const tab = prev.tabs.find(t => t.id === prev.activeTabId)
+      const tab = prev.tabs.find(t => t.id === (tabId ?? prev.activeTabId))
       if (!tab) return prev
       const leaves = collectLeaves(tab.root)
       if (leaves.length <= 1) return prev
@@ -137,7 +140,7 @@ export function useResizeActions(
       return {
         ...prev,
         tabs: prev.tabs.map(t =>
-          t.id === prev.activeTabId ? { ...t, root: newRoot } : t,
+          t.id === (tabId ?? prev.activeTabId) ? { ...t, root: newRoot } : t,
         ),
       }
     })
@@ -145,11 +148,11 @@ export function useResizeActions(
 
   // Flip every split direction in the active tab's tree: vertical
   // becomes horizontal and vice versa. Turns rows into columns.
-  const rotateLayout = useCallback(() => {
+  const rotateLayout = useCallback((tabId?: TabId) => {
     setState(prev => ({
       ...prev,
       tabs: prev.tabs.map(t =>
-        t.id === prev.activeTabId
+        t.id === (tabId ?? prev.activeTabId)
           ? { ...t, root: rotateTree(t.root) }
           : t,
       ),

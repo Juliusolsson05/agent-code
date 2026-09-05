@@ -7,7 +7,7 @@ import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
 
-import { useSessionActions } from './session'
+import { killSessionBackendIfOwned, useSessionActions } from './session'
 
 const originalApiDescriptor = Object.getOwnPropertyDescriptor(window, 'api')
 
@@ -24,6 +24,16 @@ function ref<T>(current: T): MutableRefObject<T> {
 }
 
 describe('useSessionActions recovery retry', () => {
+  it('uses the captured spawn scope for cleanup before render refs catch up', async () => {
+    const killOwnedSession = vi.fn(async () => true)
+    Object.defineProperty(window, 'api', { configurable: true, value: { killOwnedSession } })
+    const refs = { stateRef: ref({ sessions: {} }) } as unknown as WorkspaceRefs
+    expect(await killSessionBackendIfOwned(refs, 'just-spawned')).toBe(false)
+    expect(killOwnedSession).not.toHaveBeenCalled()
+    expect(await killSessionBackendIfOwned(refs, 'just-spawned', { cwd: '/captured/project', kind: 'codex' })).toBe(true)
+    expect(killOwnedSession).toHaveBeenCalledExactlyOnceWith({ sessionId: 'just-spawned', cwd: '/captured/project', kind: 'codex', providerRuntime: undefined })
+  })
+
   it('seeds fresh sessions from Settings while an explicit empty list wins', async () => {
     let state = {
       tabs: [],
