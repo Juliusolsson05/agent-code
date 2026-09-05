@@ -64,3 +64,19 @@ it('reports a domain refusal instead of treating a resolved void transaction as 
   await invoke('agents.reload', { sessionId: 'source', revision: await revision() })
   await vi.waitFor(() => expect(report).toHaveBeenCalledWith(expect.objectContaining({ capabilityId: 'operations.finish', input: expect.objectContaining({ result: expect.objectContaining({ ok: false }) }) })))
 })
+
+it('keeps draft edits made during native rewind recoverable by undo', async () => {
+  const { invoke, revision, replaceSession, report, refs } = setup()
+  window.api.rewindToPrompt = vi.fn<typeof window.api.rewindToPrompt>().mockResolvedValue({ provider: 'codex', newProviderSessionId: 'rewound-native', newFilePath: '/recorded/rewound.jsonl', promptText: 'Historical prompt', promptImages: [], promptMode: 'prompt', promptTimestamp: null })
+  // The actual replacement contract is independently exercised in
+  // sessionReplacementHandoff: this boundary returns its latest carried draft,
+  // including edits made after the original lifecycle inspection.
+  replaceSession.mockImplementation(async () => {
+    useAppStore.getState().setWorkspaceRuntimes(previous => ({ ...previous, replacement: { ...emptyRuntime(), draftInput: 'Edited during replacement' } }))
+    refs.latestRuntimesRef.current = useAppStore.getState().workspaceRuntimes
+    return 'replacement'
+  })
+  await invoke('agents.rewind', { sessionId: 'source', revision: await revision(), address: { provider: 'codex', sessionId: 'native-source', line: 1 } })
+  await vi.waitFor(() => expect(report).toHaveBeenCalledWith(expect.objectContaining({ capabilityId: 'operations.finish' })))
+  expect(useAppStore.getState().workspaceRuntimes.replacement).toMatchObject({ draftInput: 'Historical prompt', pendingRewindUndo: { previousDraftInput: 'Edited during replacement' } })
+})

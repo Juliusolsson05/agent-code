@@ -1,3 +1,4 @@
+import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import {
   DEFAULT_PROVIDER,
   isAgentProviderKind,
@@ -1044,7 +1045,7 @@ export function useSessionActions(
               defaultDomains: refs.defaultBuiltInMcpDomainsRef.current,
             })
           : undefined
-      const oldDraft = refs.latestRuntimesRef.current[oldId]?.draftInput ?? ''
+      const draftFallback = refs.latestRuntimesRef.current[oldId]
       const newId = await spawn(cwd, {
         ...spawnOpts,
         providerRuntime,
@@ -1060,19 +1061,27 @@ export function useSessionActions(
       })
       const mainHandledPredecessor =
         pendingReplacementSuccessorsRef.current.delete(newId)
-      setRuntimes(prev => ({
-        ...prev,
-        [newId]: {
-          ...(prev[newId] ?? emptyRuntime()),
-          draftInput: oldDraft,
-        },
-      }))
-
       if (!mainHandledPredecessor) {
         await killSessionBackendIfOwned(refs, oldId)
       }
       setRuntimes(prev => {
-        const next = { ...prev }
+        // Replacement can await spawn and backend retirement while the user
+        // keeps editing. Transfer the latest draft in the same state update
+        // that retires its owner; a pre-await snapshot silently loses edits.
+        // All replacement paths share this contract. Rewind deliberately
+        // substitutes its historical prompt afterwards and keeps an undo copy.
+        const draft = prev[oldId] ?? draftFallback
+        const next = {
+          ...prev,
+          [newId]: {
+            ...(prev[newId] ?? emptyRuntime()),
+            draftInput: draft?.draftInput ?? '',
+            // Unsupported invisible attachments participate in submit guards.
+            // Preserve images only when the destination can expose them.
+            draftImages: isAgentProviderKind(nextKind) && getRendererProviderCapabilities(nextKind).supportsImageAttachments
+              ? (draft?.draftImages ?? []) : [],
+          },
+        }
         delete next[oldId]
         return next
       })

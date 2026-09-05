@@ -188,9 +188,6 @@ export function useProviderActions(
       }
 
       try {
-        const previousDraftInput = currentRuntime?.draftInput ?? ''
-        const previousDraftImages = currentRuntime?.draftImages ?? []
-
         const result = await window.api.rewindToPrompt({
           provider: kind,
           sourceProviderSessionId: previousProviderSessionId,
@@ -262,8 +259,11 @@ export function useProviderActions(
                 rewoundProviderSessionId: result.newProviderSessionId,
                 rewoundPromptText: result.promptText,
                 rewoundPromptTimestamp: result.promptTimestamp,
-                previousDraftInput,
-                previousDraftImages: previousDraftImages.slice(),
+                // The replacement owner just transferred the latest draft.
+                // Save that here, not the pre-export snapshot: edits made while
+                // native rewind/spawn awaited must remain recoverable by Undo.
+                previousDraftInput: runtime.draftInput,
+                previousDraftImages: runtime.draftImages.slice(),
                 builtInMcpDomains: meta.builtInMcpDomains,
               },
             },
