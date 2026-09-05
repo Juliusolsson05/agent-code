@@ -3,6 +3,7 @@ import { ControlError, defineCapability, paginate } from '@control-sdk'
 import { useAppStore } from '@renderer/app-state/store'
 import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
 import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
+import { observeWorkspace } from '@renderer/workspace/control'
 import { resolveTabSessions } from '@renderer/workspace/queries'
 import type { Workspace } from '@renderer/workspace/hook'
 
@@ -72,7 +73,7 @@ export function navigationControlCapabilities(getWorkspace: () => Workspace) {
         await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
         const store = useAppStore.getState()
         const visible = input.mode === 'reader' ? store.workspaceReaderMode?.focusedSessionId === input.sessionId
-          : input.mode === 'spotlight' ? store.workspaceSpotlight?.focusedSessionId === input.sessionId : !store.workspaceReaderMode && !store.workspaceSpotlight
+          : input.mode === 'spotlight' ? store.workspaceSpotlight?.focusedSessionId === input.sessionId : !store.workspaceReaderMode && !store.workspaceSpotlight && observeWorkspace(getWorkspace).focusedSessionId === input.sessionId
         if (!visible || hasAppInteractionOwner()) throw new ControlError('failed', 'View changed during navigation; inspect app.observe', 'unknown')
         return { sessionId: input.sessionId, mode: input.mode }
       },

@@ -45,4 +45,3 @@ export function dispatchRowTitle(
   }
   return row.title
 }
-

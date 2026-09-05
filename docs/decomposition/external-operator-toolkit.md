@@ -258,3 +258,27 @@ Schema reference issue introduced by structured error details; the error envelop
 now rebases references just like the value envelope. No user windows/providers
 were mutated during these isolated checks. Implementation is ready for the two
 independent orchestration reviews; required CI must pass on their final revision.
+
+### Independent orchestration review and corrections
+
+Both Agent Code orchestration reviewers reviewed the full feature at `961d542e`
+against `5d641845`: reviewer `96b42118-6a39-4e98-8faf-1b4501bcde0f` found no
+blockers; reviewer `8f6e2b0a-a700-44c6-804f-e76f4d13c038` reproduced two P2 races.
+Their focused unit and renderer checks passed. The corrections are:
+
+- #815: closing/burying a source during asynchronous replacement must not commit
+  an unplaced successor or claim completion. Replacement now checks the live
+  synchronous ownership store before predecessor retirement and inside placement
+  commit, cleans an uncommittable successor through owned-backend cleanup, and
+  transfers drafts only after successful placement. React ref lag is covered.
+- Workspace navigation now acknowledges the canonical effective focus, refusing
+  an unknown outcome when another tab/focus change wins during the frame wait.
+- Removed the extra blank line noted in the full-branch whitespace check.
+
+The three regression cases fail against `961d542e` and pass with the corrections;
+existing replacement draft-continuity checks also pass. Full types, test contract,
+and the complete renderer suite (121 files / 514 tests) pass after correction.
+Both reviewers will inspect the corrected revision; the final review outcomes,
+required CI evidence and actual merge state are tracked on PR #812. No merge is
+permitted before those gates pass. Known physical/provider trial limits above
+remain open and are not reclassified as fixed by these checks.
