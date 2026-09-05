@@ -41,27 +41,36 @@ export const createWorkspaceSlice: StateCreator<
   workspaceTileTabs: null,
 
   setWorkspaceState: next =>
-    set(state => ({
-      workspaceState: applyUpdater<WorkspaceState>(state.workspaceState, next),
-    }), false, 'workspace/setWorkspaceState'),
+    set(state => {
+      const workspaceState = applyUpdater<WorkspaceState>(state.workspaceState, next)
+      // Returning a fresh partial object defeats Zustand's root Object.is
+      // bailout even when the slice updater deliberately returned `prev`.
+      // These five setters carry high-frequency IPC updates; preserve that
+      // no-op signal before notifying every React selector in the application.
+      return Object.is(workspaceState, state.workspaceState) ? state : { workspaceState }
+    }, false, 'workspace/setWorkspaceState'),
 
   setWorkspaceRuntimes: next =>
-    set(state => ({
-      workspaceRuntimes: applyUpdater<Record<string, SessionRuntime>>(state.workspaceRuntimes, next),
-    }), false, 'workspace/setWorkspaceRuntimes'),
+    set(state => {
+      const workspaceRuntimes = applyUpdater<Record<string, SessionRuntime>>(state.workspaceRuntimes, next)
+      return Object.is(workspaceRuntimes, state.workspaceRuntimes) ? state : { workspaceRuntimes }
+    }, false, 'workspace/setWorkspaceRuntimes'),
 
   setWorkspaceSpotlight: next =>
-    set(state => ({
-      workspaceSpotlight: applyUpdater<SpotlightState | null>(state.workspaceSpotlight, next),
-    }), false, 'workspace/setWorkspaceSpotlight'),
+    set(state => {
+      const workspaceSpotlight = applyUpdater<SpotlightState | null>(state.workspaceSpotlight, next)
+      return Object.is(workspaceSpotlight, state.workspaceSpotlight) ? state : { workspaceSpotlight }
+    }, false, 'workspace/setWorkspaceSpotlight'),
 
   setWorkspaceReaderMode: next =>
-    set(state => ({
-      workspaceReaderMode: applyUpdater<ReaderModeState | null>(state.workspaceReaderMode, next),
-    }), false, 'workspace/setWorkspaceReaderMode'),
+    set(state => {
+      const workspaceReaderMode = applyUpdater<ReaderModeState | null>(state.workspaceReaderMode, next)
+      return Object.is(workspaceReaderMode, state.workspaceReaderMode) ? state : { workspaceReaderMode }
+    }, false, 'workspace/setWorkspaceReaderMode'),
 
   setWorkspaceTileTabs: next =>
-    set(state => ({
-      workspaceTileTabs: applyUpdater<TileTabsState | null>(state.workspaceTileTabs, next),
-    }), false, 'workspace/setWorkspaceTileTabs'),
+    set(state => {
+      const workspaceTileTabs = applyUpdater<TileTabsState | null>(state.workspaceTileTabs, next)
+      return Object.is(workspaceTileTabs, state.workspaceTileTabs) ? state : { workspaceTileTabs }
+    }, false, 'workspace/setWorkspaceTileTabs'),
 })
