@@ -162,3 +162,10 @@ this plan/issue for concrete findings. All work stays unmerged pending confirmat
   preference refusal. Production build/output verification passed (release-only
   runtime archives were not downloaded). No live provider or user workspace was
   modified by these trials. Actual #797/#800 trial evidence remains outstanding.
+
+- Review handoff: continuation PR #812. Related independent work now has PRs:
+  #808 owns #806 worktree optimization; #809 fixes #802 child-reader overlap;
+  #811 builds #803 discovery bounds on #809. This branch does not absorb their
+  implementations. #810's separate pane-runtime isolation should be checked for
+  ordinary shared-file conflicts at merge time. CI status belongs to #812; no
+  merge is authorized by opening or updating it.
