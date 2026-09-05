@@ -46,7 +46,7 @@ function tool(descriptor: CapabilityDescriptor, ids: Set<string>): Tool {
     outputSchema: { type: 'object', additionalProperties: false, required: ['ok'],
       properties: { ok: { type: 'boolean' },
         value: publishedSchema(descriptor.outputSchema, ids, '/properties/value') as Record<string, unknown>,
-        error: z.toJSONSchema(controlResultSchema.options[1].shape.error),
+        error: publishedSchema(z.toJSONSchema(controlResultSchema.options[1].shape.error), ids, '/properties/error') as Record<string, unknown>,
         operation: { ...z.toJSONSchema(controlOperationSchema), description: 'Execution receipt. pending means accepted, ui_opened means the surface was acknowledged, outcome_unknown requires observation before another effect. callId supports full history retrieval.' },
       },
       oneOf: [

@@ -1,6 +1,5 @@
 // See docs/design/provider-switching.md for the renderer/main transaction,
 // progress, and non-cancellable compaction lock invariants.
-import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import type { SessionId } from '@renderer/workspace/types'
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import type { AgentProviderKind, AgentProviderRuntime } from '@shared/types/providerKind'
@@ -111,7 +110,6 @@ export async function switchAgentProvider(params: {
     // Both states need the same pane replacement. Keeping that operation in
     // one closure prevents the two identity models from drifting on draft and
     // MCP-domain preservation.
-    const draftImages = refs.latestRuntimesRef.current[sessionId]?.draftImages ?? []
     const effectiveSourceDomains =
       meta.builtInMcpDomains === undefined
         ? undefined
@@ -134,22 +132,8 @@ export async function switchAgentProvider(params: {
     })
     if (!newSessionId) return { status: 'failed', message: 'Replacement failed' }
 
-    setRuntimes(prev => {
-      const runtime = prev[newSessionId]
-      if (!runtime) return prev
-      return {
-        ...prev,
-        [newSessionId]: {
-          ...runtime,
-          // A target without image attachment support must not inherit hidden
-          // image state: the invisible array participates in the empty-submit
-          // guard and could make an apparently blank composer send a prompt.
-          draftImages: getRendererProviderCapabilities(targetKind).supportsImageAttachments
-            ? draftImages
-            : [],
-        },
-      }
-    })
+    // The replacement owner transfers the latest supported draft atomically.
+    // A second snapshot here would overwrite edits made while spawn awaited.
     return { status: 'switched', newSessionId, targetKind }
   }
 
@@ -189,12 +173,6 @@ export async function switchAgentProvider(params: {
       // state is "I opened the wrong provider before starting", so a no-resume
       // replacement is the faithful operation.
       //
-      // `replaceSession` already preserves draftInput because several
-      // replacement flows want typed-but-unsent text to survive. It does not
-      // preserve draftImages, and broadening that helper would change
-      // reload/rewind/resume semantics. Image drafts are still part of the
-      // user's unsent empty-pane state, so this branch snapshots and restores
-      // them explicitly — but only when the target provider can render them.
       return await replaceTranscriptlessPane()
     }
 

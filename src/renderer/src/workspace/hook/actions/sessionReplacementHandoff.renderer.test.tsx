@@ -30,8 +30,9 @@ function ref<T>(current: T): MutableRefObject<T> {
 }
 
 describe('renderer session replacement handoff', () => {
-  it('names the local predecessor only on the central replaceSession spawn', async () => {
+  it.each(['claude', 'codex', 'terminal'] as const)('preserves current text and destination-supported images when replacing with %s', async (destination) => {
     vi.useFakeTimers()
+    const image = { id: 'draft-image', mediaType: 'image/png', base64Data: 'eA==', previewUrl: 'blob:draft', filename: 'draft.png' }
     const predecessorId = 'local-predecessor'
     let state = {
       tabs: [{
@@ -95,9 +96,9 @@ describe('renderer session replacement handoff', () => {
       refs.latestRuntimesRef.current = runtimes
     }
     const spawnSession = vi.fn()
-      .mockResolvedValueOnce({
-        sessionId: 'local-successor',
-        replacementTransactionId: 'replacement-transaction',
+      .mockImplementationOnce(async () => {
+        setRuntimes(previous => ({ ...previous, [predecessorId]: { ...previous[predecessorId], draftInput: 'edited while spawning', draftImages: [image] } }))
+        return { sessionId: 'local-successor', replacementTransactionId: 'replacement-transaction' }
       })
       .mockResolvedValueOnce({ sessionId: 'fresh-local-session' })
     const killOwnedSession = vi.fn(async () => false)
@@ -123,7 +124,7 @@ describe('renderer session replacement handoff', () => {
 
     await act(async () => {
       await result.current.replaceSession('/recorded/worktree', {
-        kind: 'codex',
+        kind: destination,
         resumeSessionId: 'recorded-provider-session',
         builtInMcpDomains: ['workflows'],
       })
@@ -131,14 +132,14 @@ describe('renderer session replacement handoff', () => {
     })
 
     expect(spawnSession).toHaveBeenCalledWith({
-      kind: 'codex',
+      kind: destination,
       cwd: '/recorded/worktree',
       resumeSessionId: 'recorded-provider-session',
       predecessorSessionId: predecessorId,
-      dangerousMode: false,
-      useProxy: true,
+      dangerousMode: destination === 'terminal' ? undefined : false,
+      useProxy: destination === 'terminal' ? undefined : true,
       recoverTmuxName: undefined,
-      builtInMcpDomains: ['workflows'],
+      builtInMcpDomains: destination === 'terminal' ? undefined : destination === 'codex' ? ['workflows'] : [],
     })
     // A transaction-bearing result means main already retired the predecessor
     // and is holding the successor pending durable workspace ownership. Sending
@@ -149,7 +150,8 @@ describe('renderer session replacement handoff', () => {
       root: { type: 'leaf', sessionId: 'local-successor' },
       focusedSessionId: 'local-successor',
     })
-    expect(runtimes['local-successor']?.draftInput).toBe('keep this draft')
+    expect(runtimes['local-successor']?.draftInput).toBe('edited while spawning')
+    expect(runtimes['local-successor']?.draftImages).toEqual(destination === 'claude' ? [image] : [])
 
     await act(async () => {
       await result.current.spawn('/recorded/worktree', { kind: 'codex' })

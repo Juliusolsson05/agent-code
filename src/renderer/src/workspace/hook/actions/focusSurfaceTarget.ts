@@ -10,8 +10,8 @@ export type FocusSurfaceTarget = {
   sessionId: SessionId
 }
 
-export function resolveFocusSurfaceTarget(state: WorkspaceState): FocusSurfaceTarget | null {
-  const sessionId = commandTargetSessionIdForState(state)
+export function resolveFocusSurfaceTarget(state: WorkspaceState, explicitSessionId?: SessionId): FocusSurfaceTarget | null {
+  const sessionId = explicitSessionId ?? commandTargetSessionIdForState(state)
   if (!sessionId || !state.sessions[sessionId]) return null
 
   if (state.dispatchMode) {

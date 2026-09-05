@@ -1,3 +1,4 @@
+import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import {
   DEFAULT_PROVIDER,
   isAgentProviderKind,
@@ -10,7 +11,7 @@ import { useCallback, useRef } from 'react'
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
 import { clearLiveEntryWindowSession } from '@renderer/session-runtime/liveEntryWindow'
-import type { SessionId, SessionKind, SessionMeta, TileNode } from '@renderer/workspace/types'
+import type { SessionId, SessionKind, SessionMeta, TileNode, WorkspaceState } from '@renderer/workspace/types'
 import type { BuiltInMcpDomain } from '@mcp/shared/types'
 import { resolveSessionBuiltInMcpDomains } from '@renderer/workspace/mcpDomains'
 import {
@@ -1044,7 +1045,15 @@ export function useSessionActions(
               defaultDomains: refs.defaultBuiltInMcpDomainsRef.current,
             })
           : undefined
-      const oldDraft = refs.latestRuntimesRef.current[oldId]?.draftInput ?? ''
+      const canCommit = (state: WorkspaceState) => {
+        const current = state.sessions[oldId]
+        return Boolean(current && current.cwd === oldMeta.cwd && current.kind === oldMeta.kind
+          && current.providerRuntime === oldMeta.providerRuntime
+          && !state.buried.some(row => row.sessionId === oldId)
+          && collectOwnedSessionIds(state).has(oldId))
+      }
+      if (!canCommit(snapshot)) return
+      const draftFallback = refs.latestRuntimesRef.current[oldId]
       const newId = await spawn(cwd, {
         ...spawnOpts,
         providerRuntime,
@@ -1060,32 +1069,31 @@ export function useSessionActions(
       })
       const mainHandledPredecessor =
         pendingReplacementSuccessorsRef.current.delete(newId)
-      setRuntimes(prev => ({
-        ...prev,
-        [newId]: {
-          ...(prev[newId] ?? emptyRuntime()),
-          draftInput: oldDraft,
-        },
-      }))
-
-      if (!mainHandledPredecessor) {
-        await killSessionBackendIfOwned(refs, oldId)
+      // A source can close or be buried while spawn awaits. Metadata alone
+      // is not ownership: committing an unplaced successor creates an invisible
+      // process and a false "completed" lifecycle receipt (#815). Read through
+      // the synchronous domain setter because React-owned refs can lag the last
+      // close action. A no-op updater preserves store identity and notifications.
+      let sourceOwned = false
+      setState(prev => { sourceOwned = canCommit(prev); return prev })
+      if (!sourceOwned) {
+        await killSession(newId, { cwd, kind: nextKind, providerRuntime })
+        return
       }
-      setRuntimes(prev => {
-        const next = { ...prev }
-        delete next[oldId]
-        return next
-      })
-      delete refs.seenUuidsRef.current[oldId]
-      clearLiveEntryWindowSession(oldId)
-      delete refs.latestScreenRef.current[oldId]
-
+      if (!mainHandledPredecessor) {
+        await killSessionBackendIfOwned(refs, oldId, oldMeta)
+      }
       // Swap the sessionId wherever this live session is placed. Grid sessions
       // live in one tile-tree leaf; detached Dispatch sessions live in
       // detachedSessions with no leaf at all.
       const idMap = new Map<SessionId, SessionId>([[oldId, newId]])
 
+      let committed = false
       setState(prev => {
+        // Backend retirement is another await. Recheck inside the actual remap
+        // commit, before touching the source draft or returning a successor ID.
+        if (!canCommit(prev)) return prev
+        committed = true
         const sessions = { ...prev.sessions }
         // WHY read the title from `prev` here instead of the pre-spawn
         // snapshot: provider switches and rewinds can wait on backend work,
@@ -1166,6 +1174,35 @@ export function useSessionActions(
           ),
         }
       })
+      if (!committed) {
+        await killSession(newId, { cwd, kind: nextKind, providerRuntime })
+        return
+      }
+      setRuntimes(prev => {
+        // Replacement can await spawn and backend retirement while the user
+        // keeps editing. Transfer the latest draft in the same state update
+        // that retires its owner; a pre-await snapshot silently loses edits.
+        // All replacement paths share this contract. Rewind deliberately
+        // substitutes its historical prompt afterwards and keeps an undo copy.
+        const draft = prev[oldId] ?? draftFallback
+        const next = {
+          ...prev,
+          [newId]: {
+            ...(prev[newId] ?? emptyRuntime()),
+            draftInput: draft?.draftInput ?? '',
+            // Unsupported invisible attachments participate in submit guards.
+            // Preserve images only when the destination can expose them.
+            draftImages: isAgentProviderKind(nextKind) && getRendererProviderCapabilities(nextKind).supportsImageAttachments
+              ? (draft?.draftImages ?? []) : [],
+          },
+        }
+        delete next[oldId]
+        return next
+      })
+      delete refs.seenUuidsRef.current[oldId]
+      clearLiveEntryWindowSession(oldId)
+      delete refs.latestScreenRef.current[oldId]
+
       return newId
     },
     [
@@ -1176,6 +1213,7 @@ export function useSessionActions(
       setRuntimes,
       setState,
       spawn,
+      killSession,
     ],
   )
 

@@ -369,6 +369,8 @@ export type MainProviderConfig = {
   createTerminalSession?: (opts: SessionOptions) => AgentSession
   /** List resumable sessions for a cwd. */
   listSessions: (cwd: string, limit: number) => Promise<SessionInfo[]>
+  /** A placeholder list must not be advertised as a complete empty catalog. */
+  sessionDiscoveryUnavailableReason?: string
   /**
    * List resumable sessions without cwd scoping when a caller genuinely needs a
    * global debug/resume inventory.

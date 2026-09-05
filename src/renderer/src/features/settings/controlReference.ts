@@ -16,7 +16,7 @@ export const controlReference = [
       "verify current state."
     ],
     "outcome": "The setting takes effect according to its documented apply policy.",
-    "cautions": "External setup updates the Codex config and Codex-only skill, preserving unrelated files; edited/unmanaged conflicts need attention. Restart the external client after setup or key rotation. Internal agents exclude both the operator MCP and skill. Some settings affect new sessions; others can reload live sessions. Command visibility is presentation rather than permission.",
+    "cautions": "External setup updates the Codex config and Codex-only skill, preserving unrelated files; edited/unmanaged conflicts need attention. Restart the external client after setup or key rotation. Internal agents exclude both the operator MCP and skill. settings.values/set exposes ordinary toggle/select choices with revisions; credentials, managed files and dangerous reload controls retain their UI flows. Some settings affect new sessions; others can reload live sessions. Command visibility is presentation rather than permission.",
     "commandIds": []
   },
   {

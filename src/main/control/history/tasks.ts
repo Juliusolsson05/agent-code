@@ -34,8 +34,9 @@ export function taskHistoryCapabilities(history: ControlHistory, ownerAvailable:
     return { origin, start, finish, routedOwner: routed?.success ? routed.data.owner : null }
   }
   const owns = (owner: ControlOwner, context: ControlContext) => {
-    if (owner.kind !== 'window' || context.caller.kind !== 'application' || context.caller.id !== owner.windowId || !ownerAvailable(owner)) {
-      throw new ControlError('stale_owner', 'Task reporting requires its registered renderer generation')
+    const reporter = owner.kind === 'window' ? owner.windowId : `control-main:${owner.generation}`
+    if (context.caller.kind !== 'application' || context.caller.id !== reporter || !ownerAvailable(owner)) {
+      throw new ControlError('stale_owner', 'Task reporting requires its registered host generation')
     }
   }
   return [
@@ -71,7 +72,7 @@ export function taskHistoryCapabilities(history: ControlHistory, ownerAvailable:
     }),
     defineCapability({
       id: 'operations.read', title: 'Read a long operation result', execution: 'main', effect: 'read',
-      description: 'Inspect a lifecycle operation accepted earlier by callId. Returns pending while its original renderer is available, completed/failed with the recorded domain result, or outcome_unknown after lost ownership or an uncertain failure. Persists across app restarts. Use history.read for complete steps and payloads; never resubmit an unknown operation merely because its window disappeared.',
+      description: 'Inspect a lifecycle operation accepted earlier by callId. Returns pending while its original main/window host is available, completed/failed with the recorded domain result, or outcome_unknown after lost ownership or an uncertain failure. Persists across app restarts. Use history.read for complete steps and payloads; never resubmit an unknown operation merely because its host disappeared.',
       input: z.object({ callId }).strict(), output: z.object({ callId: z.string(), capabilityId: z.string().nullable(), owner: controlOwnerSchema.nullable(),
         status: z.enum(['not_found', 'pending', 'completed', 'failed', 'outcome_unknown']), result: controlResultSchema.nullable() }),
       handler: async ({ callId }) => {
