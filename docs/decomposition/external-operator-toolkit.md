@@ -1,8 +1,9 @@
 # External operator toolkit continuation
 
 Approved scope: the user requested completing the existing plan beyond #794,
-prioritizing lifecycle/navigation, then batches and broader controls. No merge
-without fresh explicit confirmation. Tracking: #795; parent design: #793.
+prioritizing lifecycle/navigation, then batches and broader controls. On September 5
+the user authorized merge after completing implementation, two independent Agent
+Code orchestration reviews, resolving valid findings and passing final CI. Tracking: #795; parent design: #793.
 Base: `5d6418459d8eb6aa99819eaec70e1f0610c898a7`.
 
 ## A and D
@@ -169,3 +170,56 @@ this plan/issue for concrete findings. All work stays unmerged pending confirmat
   implementations. #810's separate pane-runtime isolation should be checked for
   ordinary shared-file conflicts at merge time. CI status belongs to #812; no
   merge is authorized by opening or updating it.
+
+
+## Final extension reconciliation (authorized September 5)
+
+PR #812 is already a feature implementation PR with its plan first, followed by
+implementation. Preserve its feature branch and commit history; no rewrite or
+plan-only replacement is needed. Existing conversations and lane assignments must
+remain unchanged during this work and reviewer creation.
+
+### 6. Close direct-control coverage gaps before review
+
+- **Produces:** `nativeHistory.search` over the existing prompt-index owner;
+  bounded, cancellable agent/operation observation waits; explicit agent display
+  and auto-follow preferences; supported image-path prompting and structured
+  delivery failure details; consistent preserve-selection lifecycle creation.
+  Update the running crash course and operator skill with these exact contracts.
+- **Verified by:** existing recorded transcript/index evidence, independent wait
+  cancellation/timeout/cursor/lifetime cases, real feature-owner view/draft tests,
+  provider refusal before any write, and isolated external MCP controls.
+- **Why separate:** a recent-session list is not topic search; a transport receipt
+  is not a committed message; an active process is not completed work. Establish
+  those distinctions before asking reviewers to evaluate the finished feature.
+- **Reality check:** `sessionIndex.searchSessionPrompts` (400 recent candidates
+  per provider), `agents.read` status projection, durable `operations.read`,
+  `PromptDeliveryResult`, provider `composer-occupied` readiness, workspace view
+  override and tail owners. Reuse these, not a new provider queue or archive index.
+
+| Agreed behavior | Delivered contract / final action |
+|---|---|
+| Historical topic lookup and exact rewind | Add prompt-index search with native IDs/cwd/snippets; exact addresses still come from nativeHistory.prompts. Search coverage is bounded and OpenCode indexing remains an explicit upstream limitation. |
+| Wait for attention/progress/operation completion | Add cancellable bounded status waits with scoped expiring cursors. Status changes/idle are evidence, not proof a user task succeeded; output detail remains agents.read. |
+| Prompt attachments and failures | Add Claude-supported prepared image paths, reject unsupported providers before wake/write, retain failure stage/retry disposition/written flags as structured error details. Do not bypass busy-provider admission. |
+| Native composer knowledge | Expose provider-reported occupied state when that contract exists; otherwise unknown. Never infer complete text or emptiness from xterm/ready. |
+| View and follow controls | Reuse configured/effective display-mode and own/global tail semantics with explicit desired values. |
+| Creation and continuation placement | Preserve default UI semantics, offer selectCreated:false for create/resume/duplicate; orchestration children already preserve lanes. |
+| Broad feature controls, history, setup, docs | Already implemented; validate live registration/HTTP and maintain docs. Visual editing, authentication, unusual provider dialogs and destructive worktree workflows retain their agreed UI routes. |
+
+A5/A6 own #808–811 and #813–814; do not absorb their canonicalization, rendering,
+subagent discovery or Remote fixes. #701 owns broader picker display identity.
+#797's real two-monitor trial and #800's real occupied/busy native trials cannot
+be claimed from isolated tests; retain honest evidence boundaries.
+
+### 7. Light Orch Review and authorized merge
+
+- **Produces:** two independent Agent Code orchestration reviewer results for the
+  completed #812 feature, recorded finding dispositions, final CI and merge SHA.
+- **Verified by:** read each review in full, fix valid findings, re-review changed
+  behavior, confirm required checks pass on the exact reviewed revision, then merge.
+- **Why separate:** implementation completion must precede review; a plan-only PR
+  or stale review cannot satisfy the user's review-and-merge instruction.
+- **Reality check:** actual orchestrated child IDs/results, current PR diff and
+  GitHub checks. Reviewers get full task context and may not edit, merge, prompt
+  existing agents or change the user's pane layout.
