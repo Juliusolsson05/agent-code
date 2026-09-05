@@ -1,5 +1,15 @@
 # Sessions: read only the transcript tail when loading history
 
+## 2026-09-04 review correction
+
+Cursor selection now uses an explicit one-time latch, not marker inequality.
+Duplicate markers can name different byte positions; commit the first renderable
+line's marker/offset pair even when the marker string is unchanged. Missing
+positions clear the offset instead of carrying an unrelated old position.
+Added renderer duplicate-marker/filtered-prefix coverage, invalid remote-offset
+schema cases and real WebSocket pagination through duplicate UUIDs. Fifty-seven
+focused tests and TypeScript pass; refreshed full CI passed on 621bff75.
+
 Fixes #747. Refs #87, #103, #93.
 
 ## Problem
