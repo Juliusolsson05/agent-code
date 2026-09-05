@@ -28,7 +28,7 @@
     "pack:mac": "npm run build && node scripts/package-mac.mjs --dir",
     "package:mac": "node scripts/package-mac.mjs",
     "dist:mac": "npm run runtime:prepare:mac && npm run build && npm run package:mac",
-    "start": "npm run build:app && electron-vite preview",
+    "start": "npm run build:app && electron-vite preview --skipBuild",
     "typecheck": "npm run workflow-mcp:build && tsc -b --pretty false",
     "check:live-resume-probe": "npm --prefix packages/agent-transcript-parser run typecheck:probe",
     "test": "npm run workflow-mcp:build && NODE_ENV=test vitest run",
