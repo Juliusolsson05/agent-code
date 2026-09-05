@@ -3,8 +3,10 @@
 // reads env flags at module load) is imported. See
 // `./loadEnv.ts` for the rationale.
 import '@main/loadEnv.js'
+import { ExternalControlMcpHost } from './externalControlMcp/host'
+import { createExternalControlSettings } from './settings/externalControl'
 
-import { app, crashReporter, dialog, Menu } from 'electron'
+import { app, clipboard, crashReporter, dialog, Menu } from 'electron'
 import { existsSync } from 'fs'
 import { readFile } from 'fs/promises'
 import { join } from 'path'
@@ -939,8 +941,17 @@ async function startApp(): Promise<void> {
     agentCodeConventionsService,
     workspaceFileStore,
   })
-  const controlHost = createControlHost({ getBrowserWindow, windowIdFor, listWindowIds }, join(STATE_DIR, 'control-history'), sessionHistoryControlCapabilities())
-  app.once('will-quit', () => controlHost.dispose())
+  let externalHost: ExternalControlMcpHost
+  const externalSettings = createExternalControlSettings(STATE_DIR, {
+    start: (port, token) => externalHost.start(port, token),
+    stop: () => externalHost.stop(), copy: text => clipboard.writeText(text),
+  })
+  const controlHost = createControlHost({ getBrowserWindow, windowIdFor, listWindowIds }, join(STATE_DIR, 'control-history'), [
+    ...sessionHistoryControlCapabilities(), ...externalSettings.capabilities,
+  ])
+  externalHost = new ExternalControlMcpHost(controlHost.forCaller({ kind: 'external', id: 'agent-code-control' }))
+  await externalSettings.initialize()
+  app.once('will-quit', () => { void externalSettings.dispose(); controlHost.dispose() })
   // Boot probe runs after the IPC is wired so its first `state` push
   // has a live subscriber to receive it on the renderer side.
   cliUpdateOrchestrator.scheduleBootProbe()

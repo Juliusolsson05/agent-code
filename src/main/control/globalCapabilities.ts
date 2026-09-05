@@ -19,8 +19,8 @@ export function globalControlCapabilities(observe: ObserveWindows) {
     defineCapability({
       id: 'agents.search', title: 'Search agents across windows', execution: 'main', effect: 'read',
       description: 'Find existing agents across every window/project, including related, detached and buried agents. Results carry stable ownership for direct navigation. Incomplete windows are reported, never silently dropped.',
-      input: z.object({ query: z.string().default(''), windowId: z.string().optional(), tabId: z.string().optional(),
-        provider: z.string().optional(), placement: z.string().optional(), ...pageInput }).strict(),
+      input: z.object({ query: z.string().default('').describe('Case-insensitive substring of agent ID, title, directory or provider. Empty searches all agents.'), windowId: z.string().optional().describe('Optional stable window ID from app.windows to restrict the cross-window search.'), tabId: z.string().optional().describe('Optional project tab ID from app.observe.'),
+        provider: z.enum(['claude', 'codex', 'opencode']).optional().describe('Restrict to one provider.'), placement: z.enum(['grid', 'related', 'dispatch', 'detached', 'buried', 'reader', 'spotlight']).optional().describe('Restrict to agents with this placement; mirrored placements still identify the same agent.'), ...pageInput }).strict(),
       output: pageSchema(match).extend({ unavailableWindows: z.array(z.object({ windowId: z.string(), error: z.string() })) }),
       handler: async (input, context) => {
         const windows = (await observe(context)).filter(window => !input.windowId || window.windowId === input.windowId)

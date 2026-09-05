@@ -494,6 +494,31 @@ that a synthetic provider-transition harness ran here.
 
 ### Stage 7 — external MCP adapter and hybrid operator trial
 
+**Status: protocol, multi-window routing and exclusion verified.** The removable
+`main/externalControlMcp/` adapter imports only its own modules, SDK contracts and
+protocol/platform dependencies. It wraps registered public capabilities as `ac_*`
+tools, publishes input/output schemas, accepts explicit window/generation routing,
+and records full authenticated protocol requests/responses without HTTP secrets.
+A main-owned connection setting applies to all windows, persists disabled by
+default, copies private configuration locally and supports key rotation/disable.
+
+Verification uses a real SDK HTTP client against two isolated context-isolated
+Electron windows, real renderer registration/catalogs and a temporary durable
+journal. It covers automatic agent ownership, explicit window selection, ambiguous
+ownership, reload rejection, per-window bindings, crash-course retrieval, call
+history and continuing SDK operation after server disable. A separate HTTP codec
+probe covers recursive output schemas, large Unicode payloads, private capability
+exclusion, origin/auth rejection and full protocol records. Settings tests cover
+private persistence, rotation and credentials staying out of tool results.
+
+`provider-exclusion.json` records actual disposable Claude/Codex CLI observations
+and the narrower OpenCode configuration/source evidence. No user MCP configuration
+was changed. Full native-provider/computer-use smoke coverage remains in final
+integration (stage 10); these protocol trials are not presented as that coverage.
+The user explicitly waived a broad recording harness, so this distinction stays
+visible instead of inventing provider recordings to fill a test-count target.
+
+
 - **Produces:** opt-in loopback MCP host, connection UI, wrappers generated from
   public SDK schemas, full transport-call capture, and internal-launch exclusion.
 - **Verified by:** connect a real external client; search/show/open picker/read/
@@ -627,3 +652,27 @@ If a stage invalidates the public boundary, authoritative owner, or promised
 result semantics, stop that implementation path, revise this artifact with the
 new evidence, and obtain approval for a materially changed design. Routine
 implementation details within the approved boundary do not need repeated approval.
+
+## Operator documentation and skill addition (2026-09-05)
+
+User steering explicitly requires multi-window operation, model-facing tool
+clarity checked against MCP documentation, and the `agent-code-computer-execution`
+skill. These extend the approved operator surface; no new implementation approval
+is needed. Its source lives in
+`operator-skills/agent-code-computer-execution/SKILL.md`, outside app-managed and
+provider auto-discovery directories. It is intended to be installed by the external
+operator client, not distributed automatically to managed agents. It uses the live
+`app.describe` and catalogs instead of copying the complete UI manual.
+
+Tool descriptions and field-level Zod descriptions remain beside the owning
+capability. The MCP adapter translates capability references to their public tool
+names, adds explicit window/generation/request-key routing and publishes the actual
+SDK result envelope as outputSchema. Structured results are also serialized in a
+text block for compatible clients. Annotations remain hints; application-only
+capabilities are excluded from discovery and rejected by the SDK for external callers.
+
+Source guidance checked: the official MCP 2025-11-25 tools specification (matching
+the installed SDK's supported protocol generation), current MCP server concepts,
+and Anthropic's Writing effective tools for AI agents. The concrete authoring rule
+is purpose/selection, parameter sources and units, result meaning, significant
+side effects, and useful continuation/recovery instructions—not word-count tests.

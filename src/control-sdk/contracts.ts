@@ -52,6 +52,7 @@ export type CapabilityDescriptor = Readonly<{
   completion: 'completed' | 'accepted'
   target?: { kind: 'session' | 'project'; field: string }
   replicated?: boolean
+  visibility?: 'operator' | 'application'
   inputSchema: Record<string, unknown>
   outputSchema: Record<string, unknown>
 }>
@@ -68,6 +69,7 @@ export const capabilityDescriptorSchema = z.object({
   completion: z.enum(['completed', 'accepted']),
   target: z.object({ kind: z.enum(['session', 'project']), field: z.string().min(1) }).strict().optional(),
   replicated: z.boolean().optional(),
+  visibility: z.enum(['operator', 'application']).optional(),
   inputSchema: z.record(z.string(), z.json()), outputSchema: z.record(z.string(), z.json()),
 }).strict()
 

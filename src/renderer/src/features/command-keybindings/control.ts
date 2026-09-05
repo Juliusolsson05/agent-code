@@ -53,7 +53,7 @@ export function keybindingControlCapabilities() {
   return [defineCapability({
     id: 'keybindings.list', title: 'List keyboard and mouse interactions',
     description: 'Read every command binding including unbound/custom/unknown saved entries, plus fixed contextual/native interactions and configured dictation/mouse chords. Pagination retains all entries. External editor/provider keymaps are distinguished from app-owned bindings.',
-    execution: 'window', effect: 'read', input: z.object({ query: z.string().default(''), ...pageInput }).strict(),
+    execution: 'window', effect: 'read', input: z.object({ query: z.string().default('').describe('Search binding strings, command IDs, descriptions or interaction contexts. Empty string enumerates all app-owned and declared external bindings.'), ...pageInput }).strict(),
     output: pageSchema(bindingSchema),
     handler: input => paginate(rankEntries(keybindingReference(), input.query, entry => [primary(entry.id), ...entry.bindings.map(primary), body(entry.description), body(entry.context)]), input, `keybindings:${input.query}`),
   })]

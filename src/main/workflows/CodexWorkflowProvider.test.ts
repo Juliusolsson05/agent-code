@@ -88,6 +88,7 @@ describe('createCodexWorkflowProvider', () => {
 
     expect(codexConstructor).toHaveBeenCalledWith({
       codexPathOverride: '/opt/agent-code/bin/codex',
+      config: { mcp_servers: { 'agent-code-control': { enabled: false, url: 'http://127.0.0.1:1/disabled-agent-code-control' } } },
       providerHostFilePath: '/opt/agent-code/workflowProviderHost.js',
       configurationIsolation: {
         codexHome: '/tmp/agent-code-workflow-codex',

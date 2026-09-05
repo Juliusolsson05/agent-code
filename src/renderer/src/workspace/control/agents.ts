@@ -9,9 +9,9 @@ import { AGENT_PROVIDER_RUNTIMES } from '@shared/types/providerKind'
 import { buildPlacementTargets } from '@renderer/features/workspace/lib/newAgentPlacement'
 import { setAgentTitleInWorkspace } from '@renderer/workspace/agentTitle'
 
-const sessionInput = z.object({ sessionId: z.string().min(1) }).strict()
+const sessionInput = z.object({ sessionId: z.string().min(1).describe('Stable agent sessionId from agents.search/list; not a provider-native transcript ID or numbered tile.') }).strict()
 const sessionReference = workspaceObservationSchema.shape.sessions.element
-const provider = z.enum(['claude', 'codex', 'opencode'])
+const provider = z.enum(['claude', 'codex', 'opencode']).describe('Provider for the new agent; its CLI must already be configured in Agent Code.')
 
 export function agentControlCapabilities(getWorkspace: () => Workspace) {
   const observe = () => observeWorkspace(getWorkspace)
@@ -42,8 +42,8 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
     defineCapability({
       id: 'placement.list', target: { kind: 'project', field: 'tabId' }, title: 'List grid placement choices', execution: 'window', effect: 'read',
       description: 'List actual placement-overlay targets around an explicit grid anchor, including root wrapping. Coordinates are normalized to the project grid.',
-      input: z.object({ tabId: z.string(), anchorSessionId: z.string() }).strict(),
-      output: z.object({ revision: z.string(), targets: z.array(z.object({ id: z.string(), label: z.string(), kind: z.string(),
+      input: z.object({ tabId: z.string().describe('Project tab ID from app.observe in the target window.'), anchorSessionId: z.string().describe('Existing agent in this project that supplies the working directory or grid placement anchor.') }).strict(),
+      output: z.object({ revision: z.string().describe('Revision returned by placement.list; prevents applying an outdated layout target.'), targets: z.array(z.object({ id: z.string(), label: z.string(), kind: z.string(),
         direction: z.string(), side: z.string(), scope: z.string(), rect: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() }) })) }),
       handler: ({ tabId, anchorSessionId }) => {
         const targets = placements(tabId, anchorSessionId)
@@ -53,7 +53,7 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
     defineCapability({
       id: 'placement.attach', target: { kind: 'session', field: 'sessionId' }, title: 'Attach an agent to the grid', execution: 'window', effect: 'mutation',
       description: 'Attach an existing detached agent using a target and revision from placement.list. Uses the existing placement operation and revalidates the anchor after wake.',
-      input: sessionInput.extend({ tabId: z.string(), anchorSessionId: z.string(), targetId: z.string(), revision: z.string() }),
+      input: sessionInput.extend({ tabId: z.string().describe('Project tab ID from app.observe in the target window.'), anchorSessionId: z.string().describe('Existing agent in this project that supplies the working directory or grid placement anchor.'), targetId: z.string().describe('Exact target ID returned by placement.list for this anchor.'), revision: z.string().describe('Revision returned by placement.list; prevents applying an outdated layout target.') }),
       output: sessionReference,
       handler: async ({ sessionId, tabId, anchorSessionId, targetId, revision }) => {
         requireUi()
@@ -74,7 +74,7 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
     defineCapability({
       id: 'agents.list', title: 'Find agents', execution: 'window', effect: 'read',
       description: 'Search all agents by stable ID, title, directory and provider, including detached and buried records. Reading never wakes an agent.',
-      input: z.object({ query: z.string().default(''), tabId: z.string().optional(), ...pageInput }).strict(),
+      input: z.object({ query: z.string().default('').describe('Case-insensitive substring of session ID, title, working directory or provider. Empty lists all agents in this window.'), tabId: z.string().describe('Project tab ID from app.observe in the target window.').optional(), ...pageInput }).strict(),
       output: pageSchema(sessionReference),
       handler: input => {
         const query = input.query.trim().toLocaleLowerCase()
@@ -92,7 +92,7 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
     defineCapability({
       id: 'agents.show', target: { kind: 'session', field: 'sessionId' }, title: 'Show an existing agent', execution: 'window', effect: 'ui',
       description: 'Focus this exact agent through the existing Grid, Dispatch, tiled-tab or related-child route. May wake a detached agent under the same ID. Never creates a replacement agent; buried records require agents.restore first.',
-      input: sessionInput.extend({ intent: z.enum(['reuse-existing-view', 'open-in-focused-tiled-dispatch-lane']).default('reuse-existing-view') }),
+      input: sessionInput.extend({ intent: z.enum(['reuse-existing-view', 'open-in-focused-tiled-dispatch-lane']).default('reuse-existing-view').describe('Reuse the existing agent view, or explicitly place it into the currently focused tiled Dispatch lane.') }),
       output: z.object({ session: sessionReference, mode: workspaceObservationSchema.shape.mode,
         bounds: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() }) }),
       handler: async ({ sessionId, intent }) => {
@@ -131,7 +131,7 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
     defineCapability({
       id: 'agents.titleSet', target: { kind: 'session', field: 'sessionId' }, title: 'Set an agent title', execution: 'window', effect: 'mutation',
       description: 'Set or clear the exact agent title using the same normalization and length policy as the UI. Does not send a prompt.',
-      input: sessionInput.extend({ title: z.string() }), output: z.object({ sessionId: z.string(), title: z.string() }),
+      input: sessionInput.extend({ title: z.string().describe('Agent display title; empty clears a custom title. Normal UI normalization applies.') }), output: z.object({ sessionId: z.string(), title: z.string().describe('Agent display title; empty clears a custom title. Normal UI normalization applies.') }),
       handler: ({ sessionId, title }) => {
         requireReady(); requireSession(sessionId)
         setTitle(sessionId, title)
@@ -141,7 +141,7 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
     defineCapability({
       id: 'agents.pinSet', target: { kind: 'session', field: 'sessionId' }, title: 'Set agent pin', execution: 'window', effect: 'mutation',
       description: 'Pin or unpin an exact agent. This is an explicit desired value, so repeating the intention cannot toggle it back.',
-      input: sessionInput.extend({ pinned: z.boolean() }), output: z.object({ sessionId: z.string(), pinned: z.boolean() }),
+      input: sessionInput.extend({ pinned: z.boolean().describe('Desired pin state; this sets a value rather than toggling it.') }), output: z.object({ sessionId: z.string(), pinned: z.boolean().describe('Desired pin state; this sets a value rather than toggling it.') }),
       handler: ({ sessionId, pinned }) => {
         requireReady(); requireSession(sessionId)
         const workspace = getWorkspace()
@@ -153,8 +153,8 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
     defineCapability({
       id: 'projects.open', title: 'Open a project', execution: 'window', effect: 'mutation',
       description: 'Open a directory in a new project tab with an initial agent. Reuses an existing tab with that exact directory unless createDuplicate is explicit.',
-      input: z.object({ cwd: z.string().min(1), provider: provider.default('claude'), createDuplicate: z.boolean().default(false) }).strict(),
-      output: z.object({ tabId: z.string(), sessionId: z.string(), created: z.boolean() }),
+      input: z.object({ cwd: z.string().min(1).describe('Absolute local directory to open as a project.'), provider: provider.default('claude'), createDuplicate: z.boolean().default(false).describe('False reuses one existing project with exactly this directory; true explicitly creates another tab.') }).strict(),
+      output: z.object({ tabId: z.string().describe('Project tab ID from app.observe in the target window.'), sessionId: z.string(), created: z.boolean() }),
       handler: async ({ cwd, provider: kind, createDuplicate }) => {
         requireUi()
         const state = useAppStore.getState().workspaceState
@@ -171,8 +171,8 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
     defineCapability({
       id: 'agents.create', target: { kind: 'project', field: 'tabId' }, title: 'Create a project agent', execution: 'window', effect: 'mutation',
       description: 'Create an ordinary detached agent in the explicit project, anchored to an existing agent directory. Returns its exact ID; agents.show can then reveal it without creating another process.',
-      input: z.object({ tabId: z.string(), anchorSessionId: z.string(), provider,
-        providerRuntime: z.enum(AGENT_PROVIDER_RUNTIMES).optional(), title: z.string().optional() }).strict(),
+      input: z.object({ tabId: z.string().describe('Project tab ID from app.observe in the target window.'), anchorSessionId: z.string().describe('Existing agent in this project that supplies the working directory or grid placement anchor.'), provider,
+        providerRuntime: z.enum(AGENT_PROVIDER_RUNTIMES).optional().describe('Omit for the normal structured agent view. terminal requests the provider-native terminal runtime.'), title: z.string().describe('Agent display title; empty clears a custom title. Normal UI normalization applies.').optional() }).strict(),
       output: sessionReference,
       handler: async ({ tabId, anchorSessionId, provider: kind, providerRuntime, title }) => {
         requireUi(); requireSession(anchorSessionId)
@@ -188,7 +188,7 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
     defineCapability({
       id: 'agents.prompt', target: { kind: 'session', field: 'sessionId' }, title: 'Send an agent prompt', execution: 'window', effect: 'mutation', completion: 'accepted',
       description: 'Deliver text to the exact agent through the provider delivery protocol. Reports user, queue or transport acceptance, not task completion. Preserves the composer draft and never retries an uncertain write.',
-      input: sessionInput.extend({ prompt: z.string().min(1).max(1_000_000) }),
+      input: sessionInput.extend({ prompt: z.string().min(1).max(1_000_000).describe('Exact text to deliver once. A successful acceptance can be queued; inspect agents.read for actual progress.') }),
       output: z.object({ sessionId: z.string(), acceptance: z.object({ kind: z.enum(['user', 'queue', 'transport']), acceptedAt: z.number(), entryId: z.string().optional() }) }),
       handler: async ({ sessionId, prompt }) => {
         requireReady(); requireSession(sessionId)

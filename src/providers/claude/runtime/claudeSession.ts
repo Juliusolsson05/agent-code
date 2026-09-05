@@ -1,3 +1,4 @@
+import { excludeExternalControlFromClaude } from '@providers/shared/runtime/externalControlExclusion.js'
 import { EventEmitter } from 'events'
 import { randomUUID } from 'crypto'
 import { spawn as ptySpawn } from 'node-pty'
@@ -1129,6 +1130,7 @@ export class ClaudeSession extends EventEmitter {
     // WHY materialization happens immediately before spawn inside the rollback-protected region:
     // proxy setup contains several awaited operations. Creating the credential file at the top of
     // start() left it behind when any of those operations failed before the old catch boundary.
+    excludeExternalControlFromClaude(args)
     this.privateMcpConfig = await createPrivateClaudeMcpConfig(this.builtInMcpServers)
     if (this.privateMcpConfig) args.push('--mcp-config', this.privateMcpConfig.path)
   }

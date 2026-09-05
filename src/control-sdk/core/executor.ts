@@ -88,6 +88,7 @@ export function createControlExecutor(ports: {
             await write('step', { step: 'resolve-owner', kind, id, owners, state: 'completed' })
             return owners
           } : undefined)
+          if (resolved.descriptor.visibility === 'application' && caller.kind === 'external') throw new ControlError('unavailable', 'This capability is reserved for local application actions')
           owner = resolved.owner
           completionKind = resolved.descriptor.completion
           effect = resolved.descriptor.effect

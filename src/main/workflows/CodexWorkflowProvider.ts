@@ -1,3 +1,4 @@
+import { DISABLED_CODEX_EXTERNAL_CONTROL } from '@providers/shared/runtime/externalControlExclusion.js'
 import { createHash } from 'node:crypto'
 import { readFileSync, statSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
@@ -53,6 +54,7 @@ export function createCodexWorkflowProvider(
   // servers, plugins, and apps the user enabled for an ordinary chat.
   return new CodexAgentProvider({
     codexPathOverride: codexPath,
+    config: DISABLED_CODEX_EXTERNAL_CONTROL,
     providerHostFilePath: options.providerHostFilePath,
     configurationIsolation: {
       codexHome: options.codexHome,

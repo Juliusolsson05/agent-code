@@ -1,3 +1,4 @@
+import { excludeExternalControlFromCodex } from '@providers/shared/runtime/externalControlExclusion.js'
 import { EventEmitter } from 'events'
 import { mkdir } from 'fs/promises'
 import { join } from 'path'
@@ -330,6 +331,7 @@ export class CodexSession extends EventEmitter {
       args.push('--dangerously-bypass-approvals-and-sandbox')
     }
     addCodexBuiltInMcpLaunchConfig(this.builtInMcpServers, args, cleanEnv)
+    excludeExternalControlFromCodex(args)
     if (this.useProxy) {
       // Mirror the Claude proxy's on-disk layout so a single
       // bundle-inspection tool can read either provider's

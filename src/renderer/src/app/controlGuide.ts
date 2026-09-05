@@ -81,6 +81,10 @@ Agent Status, Usage and Performance answer different questions: session attentio
     id: 'hybrid-operation', title: 'Operating with MCP and computer use',
     markdown: `Use this loop: discover → observe → act → verify. Start with the crash course and capability catalog, identify the target window/project/session, and prefer a dedicated operation for precise or tedious actions. Use command search when the action's name is unfamiliar. The catalog is broader than direct automation: UI-only features still have descriptions and an opening route.
 
+The external operator connection is in Settings → Agents → External operator MCP. It is off by default, listens only on this computer and applies to all Agent Code windows. Copy its Codex or JSON configuration into the external client; do not install it as an internal agent MCP. Its reserved server name is agent-code-control. Changing the connection key requires copying a new configuration.
+
+Use ac_app_windows for stable window IDs and ac_app_observe for their projects and agent placements. Pass _control.windowId to window-scoped tools; an optional _control.generation rejects a renderer reload. Agent tools normally resolve sessionId across all windows. Window display numbers can change after a close, so retain the stable ID.
+
 For a visual task, open the real command picker or the relevant surface, then click or type with computer use. Inspect the surface after handoff; opening a picker must not silently press Enter. After clicking, read fresh state through control before the next dependent step. A previously focused pane or active project is not a reliable target after an asynchronous operation.
 
 Use stable IDs and explicit destinations. Resolve ambiguous search results instead of choosing the newest or first agent. Honor blocking modals and current input ownership. Treat accepted, completed, unavailable and outcome-unknown as different results. Retrying an operation whose effect is uncertain can submit a prompt or create an agent twice; use the returned operation identity/history first.

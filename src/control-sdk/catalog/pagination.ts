@@ -2,7 +2,7 @@ import { z } from 'zod'
 import { ControlError } from '../contracts'
 
 export const pageInput = {
-  cursor: z.string().optional(), limit: z.number().int().min(1).max(200).default(40),
+  cursor: z.string().optional().describe('Opaque nextCursor from the previous page. Keep the same filters and window; restart without it if the reference changed.'), limit: z.number().int().min(1).max(200).default(40).describe('Maximum entries per page. Continue with nextCursor until complete is true.'),
 }
 export function pageSchema<T extends z.ZodType>(item: T) {
   return z.object({ items: z.array(item), total: z.number().int(), revision: z.string(), nextCursor: z.string().nullable(), complete: z.boolean() })

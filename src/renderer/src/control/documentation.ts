@@ -14,7 +14,7 @@ export function documentationCapabilities() {
       id: 'app.describe', title: 'Agent Code crash course and full UI guide',
       description: 'Start here. Learn what Agent Code is, the whole UI, layouts, agents, prompts, output, files, settings and hybrid MCP/computer operation. Default: a complete crash course. Full mode adds every feature page; section and pagination retrieve the entire documentation through this one capability.',
       execution: 'window', effect: 'read', replicated: true,
-      input: z.object({ mode: z.enum(['crash_course', 'overview', 'full']).default('crash_course'), section: z.string().optional(), ...pageInput }).strict(),
+      input: z.object({ mode: z.enum(['crash_course', 'overview', 'full']).default('crash_course').describe('crash_course: full onboarding guide. overview: purpose and UI map. full: guide plus every feature page; follow nextCursor.'), section: z.string().optional().describe('Exact section ID from sectionIndex; selects that section regardless of mode.'), ...pageInput }).strict(),
       output: pageSchema(sectionSchema).extend({ mode: z.string(), sectionIndex: z.array(z.object({ id: z.string(), title: z.string() })), featureCount: z.number(), commandCount: z.number() }),
       handler: input => {
         const all = [...appGuideSections, ...featureReferences.map(feature => ({
@@ -34,14 +34,14 @@ export function documentationCapabilities() {
     defineCapability({
       id: 'features.list', title: 'Search all application features',
       description: 'List or search the complete feature guide, including functionality operated through the UI. Reference entries do not imply a direct automation tool exists.',
-      execution: 'window', effect: 'read', input: z.object({ query: z.string().default(''), ...pageInput }).strict(),
+      execution: 'window', effect: 'read', input: z.object({ query: z.string().default('').describe('Search titles and descriptions; empty string enumerates the complete reference.'), ...pageInput }).strict(),
       output: pageSchema(featureReferenceSchema),
       handler: input => paginate(rankEntries(featureReferences, input.query, feature => [primary(feature.title), body(feature.purpose), body(feature.ui)]), input, `features:${input.query}`),
     }),
     defineCapability({
       id: 'features.describe', title: 'Read a feature guide',
       description: 'Explain a feature’s purpose, UI location, prerequisites, workflow, outcome and limitations, with live descriptions and bindings for its related commands.',
-      execution: 'window', effect: 'read', input: z.object({ featureId: z.string() }).strict(),
+      execution: 'window', effect: 'read', input: z.object({ featureId: z.string().describe('Feature ID returned by features.list; do not use a command ID.') }).strict(),
       output: featureReferenceSchema.extend({ commands: z.array(z.object({ id: z.string(), title: z.string(), description: z.string(), bindings: z.array(z.string()) })) }),
       handler: ({ featureId }) => {
         const feature = featureReferences.find(entry => entry.id === featureId)
@@ -52,7 +52,7 @@ export function documentationCapabilities() {
     defineCapability({
       id: 'settings.reference', title: 'Read the settings reference',
       description: 'Enumerate all settings UI entries with descriptions, categories, control types and scope/apply/storage metadata. Does not reveal stored credentials or change settings.',
-      execution: 'window', effect: 'read', input: z.object({ query: z.string().default(''), ...pageInput }).strict(),
+      execution: 'window', effect: 'read', input: z.object({ query: z.string().default('').describe('Search titles and descriptions; empty string enumerates the complete reference.'), ...pageInput }).strict(),
       output: pageSchema(z.object({ id: z.string(), title: z.string(), description: z.string(), category: z.string(), controlType: z.string(), scope: z.string(), apply: z.string(), storage: z.string() })),
       handler: input => {
         const entries = getSettingsRegistry().map(setting => {

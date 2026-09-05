@@ -4,7 +4,7 @@ import { createControlExecutor, createControlRegistry } from '@control-sdk/host'
 import {
   controlRegistrationSchema, controlRequestSchema, rendererControlResponseSchema,
   ControlError, workspaceObservationSchema,
-  type ControlCaller, type ControlRequest, type RegisteredCapability,
+  type ControlCaller, type ControlRequest, type RegisteredCapability, type ControlOperatorPort,
 } from '@control-sdk'
 import { ControlRendererBridge } from './rendererBridge'
 import { windowControlCapabilities } from '@main/window/control'
@@ -31,7 +31,8 @@ export function createControlHost(windowAccess: {
     return parsed.success ? { windowId, owner, workspace: parsed.data } : { windowId, owner, error: 'Invalid workspace observation' }
   }))
   const history = new FileControlHistory(historyDirectory)
-  const executor = createControlExecutor({ history, instanceId: randomUUID(), id: randomUUID,
+  const instanceId = randomUUID()
+  const executor = createControlExecutor({ history, instanceId, id: randomUUID,
     now: () => new Date().toISOString(), catalog: () => registry.list(),
     ownershipEvidence: async (kind, id, context) => {
       const observed = await observeWindows(context)
@@ -72,8 +73,11 @@ export function createControlHost(windowAccess: {
   }
 
   const unregisterMain = registry.register({ kind: 'main', generation: randomUUID() }, [...windowControlCapabilities(() =>
-    listWindowIds().map(windowId => ({
-      windowId, focused: getBrowserWindow(windowId)?.isFocused() ?? false,
+    listWindowIds().map((windowId, index) => ({
+      windowId, number: index + 1, title: getBrowserWindow(windowId)?.getTitle() ?? '',
+      minimized: getBrowserWindow(windowId)?.isMinimized() ?? false,
+      bounds: getBrowserWindow(windowId)?.getBounds() ?? { x: 0, y: 0, width: 0, height: 0 },
+      focused: getBrowserWindow(windowId)?.isFocused() ?? false,
       generation: windows.get(windowId)?.generation ?? null,
     })),
   ), ...historyCapabilities(history), ...globalControlCapabilities(observeWindows), ...additionalCapabilities])
@@ -134,7 +138,15 @@ export function createControlHost(windowAccess: {
     catalog: () => registry.list(),
     forCaller: (identity: ControlCaller) => {
       const caller = Object.freeze({ ...identity })
-      return { invoke: (request: ControlRequest) => executor.invoke(controlRequestSchema.parse(request), caller) }
+      return {
+        catalog: () => registry.list(),
+        invoke: (request: ControlRequest) => executor.invoke(controlRequestSchema.parse(request), caller),
+        recordTransport: async (event: Parameters<ControlOperatorPort['recordTransport']>[0]) => {
+          await history.append({ callId: event.id, instanceId, capabilityId: `mcp.${event.method}`,
+            caller: `${caller.kind}:${caller.id}`, at: new Date().toISOString(),
+            kind: event.direction === 'request' ? 'transport' : 'result' }, { direction: event.direction, payload: event.payload })
+        },
+      }
     },
     dispose() {
       for (const window of [...windows.values()]) window.dispose()

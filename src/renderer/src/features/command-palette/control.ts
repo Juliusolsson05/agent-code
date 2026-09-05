@@ -44,7 +44,7 @@ export function commandControlCapabilities() {
     defineCapability({
       id: 'ui.commandPickerOpen', title: 'Open the command picker', execution: 'window', effect: 'ui',
       description: 'Open the real command picker with a query and optional stable command selection. Waits for rendered acknowledgement; never presses Enter. Hidden/inapplicable selections are reported as not found.',
-      input: z.object({ query: z.string().max(2000).default(''), commandId: z.string().optional() }).strict(),
+      input: z.object({ query: z.string().max(2000).default('').describe('Literal text to place in the actual picker search field.'), commandId: z.string().optional().describe('Optional command ID from commands.list to select if visible and applicable. This does not run the command.') }).strict(),
       output: z.object({ query: z.string(), selectedCommandId: z.string().nullable(), requestedSelectionFound: z.boolean(), visibleRows: z.number() }),
       handler: async input => {
         const store = useAppStore.getState()
@@ -58,14 +58,14 @@ export function commandControlCapabilities() {
     defineCapability({
       id: 'commands.list', title: 'Search all commands',
       description: 'Enumerate or search every app command by title, keywords and description, including hidden commands. Returns current bindings and complete pagination; listing never executes commands.',
-      execution: 'window', effect: 'read', input: z.object({ query: z.string().default(''), ...pageInput }).strict(),
+      execution: 'window', effect: 'read', input: z.object({ query: z.string().default('').describe('Search app command titles, keywords and descriptions. Empty string lists all commands, including hidden and unbound entries.'), ...pageInput }).strict(),
       output: pageSchema(commandSchema),
       handler: input => paginate(rankEntries(commandReference(), input.query, commandSearchFields), input, `commands:${input.query}`),
     }),
     defineCapability({
       id: 'commands.describe', title: 'Describe a command',
       description: 'Get the complete description, UI route, risk, surface and effective bindings for one stable command ID.',
-      execution: 'window', effect: 'read', input: z.object({ commandId: z.string() }).strict(), output: commandSchema,
+      execution: 'window', effect: 'read', input: z.object({ commandId: z.string().describe('Exact command ID from commands.list, not its title or an MCP tool name.') }).strict(), output: commandSchema,
       handler: ({ commandId }) => {
         const command = commandReference().find(entry => entry.id === commandId)
         if (!command) throw new ControlError('unavailable', `Unknown command: ${commandId}`)

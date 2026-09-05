@@ -35,7 +35,7 @@ export function sessionHistoryControlCapabilities() {
   }
   const identity = (request: Request) => JSON.stringify([request.provider, request.cwd, request.providerSessionId])
   return [defineCapability({
-    id: 'transcripts.page', title: 'Read provider history window', execution: 'main', effect: 'read',
+    id: 'transcripts.page', visibility: 'application', title: 'Read provider history window', execution: 'main', effect: 'read',
     description: 'SDK backing operation for agent reads. Reads exact provider file windows or a supported OpenCode export without waking an agent. Opaque cursors expire and reject changed transcript boundaries.',
     input: transcriptPageInput, output: transcriptPageOutput,
     handler: async request => {

@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { createRequire } from 'node:module'
+import { builtinModules, createRequire } from 'node:module'
 import { mkdtemp, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { resolve, join } from 'node:path'
@@ -61,6 +61,9 @@ it('routes real renderer observations across two windows and survives reload wit
     await writeFile(main, `
       import { app, BrowserWindow } from 'electron'
       import { createControlHost } from '${resolve(root, 'src/main/control/createControlHost.ts')}'
+      import { ExternalControlMcpHost } from '${resolve(root, 'src/main/externalControlMcp/host.ts')}'
+      import { Client } from '${resolve(root, 'node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js')}'
+      import { StreamableHTTPClientTransport } from '${resolve(root, 'node_modules/@modelcontextprotocol/sdk/dist/esm/client/streamableHttp.js')}'
       app.setPath('userData', ${JSON.stringify(join(directory, 'user-data'))})
       app.disableHardwareAcceleration()
       app.on('window-all-closed', () => {})
@@ -74,7 +77,16 @@ it('routes real renderer observations across two windows and survives reload wit
         windowIdFor: sender => [...windows].find(([,window]) => window.webContents === sender)?.[0] ?? null,
         listWindowIds: () => [...windows.keys()],
       }, ${JSON.stringify(join(directory, 'control-history'))})
-      const caller = host.forCaller({kind: 'application', id: 'electron-trial'})
+      const external = new ExternalControlMcpHost(host.forCaller({kind: 'external', id: 'electron-trial'}))
+      const boundPort = await external.start(0, 'trial-only-token')
+      const client = new Client({name: 'control-trial', version: '1.0'})
+      await client.connect(new StreamableHTTPClientTransport(new URL('http://127.0.0.1:' + boundPort + '/mcp'), {requestInit: {headers: {Authorization: 'Bearer trial-only-token'}}}))
+      const caller = { invoke: async request => {
+        const name = 'ac_' + request.capabilityId.replace(/([a-z0-9])([A-Z])/g, '$1_$2').replaceAll('.', '_').toLowerCase()
+        const routing = {...(request.requestKey ? {requestKey: request.requestKey} : {}), ...(request.owner?.kind === 'window' ? {windowId: request.owner.windowId, generation: request.owner.generation} : {})}
+        const result = await client.callTool({name, arguments: {...request.input, _control: routing}})
+        return result.structuredContent
+      }}
       const owner = id => host.catalog().find(row => row.descriptor.id === 'workspace.observe' && row.owner.windowId === id)?.owner
       async function registered(id, previous) {
         for (let attempt=0; attempt<1000; attempt++) {
@@ -94,6 +106,8 @@ it('routes real renderer observations across two windows and survives reload wit
         }
         const left = await registered('left')
         const right = await registered('right')
+        const listed = await client.listTools()
+        const windowList = await caller.invoke({capabilityId: 'app.windows', input: {}})
         const observe = target => caller.invoke({capabilityId: 'workspace.observe', input: {}, owner: target})
         const routed = await caller.invoke({capabilityId: 'agents.titleSet', input: {sessionId: 'right-agent', title: 'Routed title'}, requestKey: 'title-intention'})
         const fleet = await caller.invoke({capabilityId: 'agents.search', input: {query: 'Routed title'}})
@@ -109,7 +123,11 @@ it('routes real renderer observations across two windows and survives reload wit
         const stale = await observe(left)
         const afterReload = await observe(replacement)
         const surviving = await observe(right)
-        console.log('CONTROL_TRIAL=' + JSON.stringify({routed,fleet,ambiguous,first,second,guide,binding,stale,afterReload,surviving,changed: left.generation !== replacement.generation}))
+        const callHistory = await caller.invoke({capabilityId: 'history.read', input: {callId: routed.operation.callId}})
+        await client.close()
+        await external.stop()
+        const sdkAfterDisable = await host.forCaller({kind: 'application', id: 'after-disable'}).invoke({capabilityId: 'workspace.observe', input: {}, owner: right})
+        console.log('CONTROL_TRIAL=' + JSON.stringify({toolCount:listed.tools.length,windowList,callHistory,sdkAfterDisable,routed,fleet,ambiguous,first,second,guide,binding,stale,afterReload,surviving,changed: left.generation !== replacement.generation}))
         host.dispose()
         for (const window of windows.values()) window.destroy()
         clearTimeout(deadline)
@@ -122,7 +140,7 @@ it('routes real renderer observations across two windows and survives reload wit
     for (const [entry, name, format, external] of [
       [preload, 'preload.cjs', 'cjs', ['electron']],
       [renderer, 'renderer.js', 'iife', []],
-      [main, 'main.mjs', 'es', ['electron', /^node:/]],
+      [main, 'main.mjs', 'es', ['electron', ...builtinModules, /^node:/]],
     ] as const) {
       const buildStarted = performance.now()
       await build({
@@ -146,6 +164,10 @@ it('routes real renderer observations across two windows and survives reload wit
     const line = stdout.split('\n').find(value => value.startsWith('CONTROL_TRIAL='))
     expect(line, stdout).toBeTruthy()
     const evidence = JSON.parse(line!.slice('CONTROL_TRIAL='.length))
+    expect(evidence.toolCount).toBeGreaterThan(20)
+    expect(evidence.windowList.value.windows.map((window: { windowId: string }) => window.windowId)).toEqual(['left', 'right'])
+    expect(evidence.callHistory.value.state).toBe('recorded')
+    expect(evidence.sdkAfterDisable).toMatchObject({ok: true, value: {activeTabId: 'right'}})
     expect(evidence.routed).toMatchObject({ok: true, value: {sessionId: 'right-agent', title: 'Routed title'}, operation: {owner: {windowId: 'right'}}})
     expect(evidence.fleet).toMatchObject({ok: true, value: {total: 1, items: [{sessionId: 'right-agent', title: 'Routed title', owner: {windowId: 'right'}}]}})
     expect(evidence.ambiguous).toMatchObject({ok: false, error: {code: 'ambiguous_owner', outcome: 'not_started'}})

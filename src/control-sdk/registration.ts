@@ -12,6 +12,14 @@ export interface Capability<I extends z.ZodType, O extends z.ZodType> extends Re
   execute(input: unknown, context: ControlContext): Promise<ControlResult<z.output<O>>>
 }
 
+// Tool documentation is part of the feature contract, not a late MCP copy edit.
+// Describe when to use the operation, the observed result, and any consequential
+// side effect or prerequisite. Put identifier sources, units and cursor rules
+// on the Zod fields with .describe(), where they become inputSchema metadata.
+// These conventions follow https://modelcontextprotocol.io/specification/2025-11-25/server/tools
+// and https://www.anthropic.com/engineering/writing-tools-for-agents; they are
+// authoring guidance, not a prose-length or keyword-count test.
+//
 // WHY schemas belong beside the handler: adding a control operation should be
 // one feature edit, not coordinated copies of argument rules in IPC and MCP.
 // The protocol adapter only sees serializable descriptors. It cannot inherit a
@@ -24,6 +32,7 @@ export function defineCapability<I extends z.ZodType, O extends z.ZodType>(defin
   effect: 'read' | 'ui' | 'mutation'
   completion?: 'completed' | 'accepted'
   target?: CapabilityDescriptor['target']
+  visibility?: CapabilityDescriptor['visibility']
   replicated?: boolean
   input: I
   output: O
@@ -42,6 +51,7 @@ export function defineCapability<I extends z.ZodType, O extends z.ZodType>(defin
     completion: definition.completion ?? 'completed',
     ...(definition.target ? { target: Object.freeze({ ...definition.target }) } : {}),
     ...(definition.replicated ? { replicated: true } : {}),
+    ...(definition.visibility ? { visibility: definition.visibility } : {}),
     inputSchema: z.toJSONSchema(definition.input, { io: 'input' }),
     outputSchema: z.toJSONSchema(definition.output),
   })
