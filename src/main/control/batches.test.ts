@@ -22,7 +22,7 @@ it('keeps independent cross-window receipts and never redelivers an uncertain ch
     handler: (input, context) => {
       expect(context.caller).toEqual(caller)
       deliveries.push(input.sessionId)
-      if (input.sessionId === 'uncertain') throw new ControlError('failed', 'Lost acknowledgment after write', 'unknown')
+      if (input.sessionId === 'uncertain') throw new ControlError('failed', 'Lost acknowledgment after write', 'unknown', { stage: 'after-enter', retrySafe: false, promptWritten: true, enterWritten: true })
       return { acceptance: 'transport' }
     },
   })]))
@@ -33,11 +33,11 @@ it('keeps independent cross-window receipts and never redelivers an uncertain ch
   const items = [{ itemKey: 'first', sessionId: 'accepted', prompt: 'first request', owner: owners[0] },
     { itemKey: 'second', sessionId: 'uncertain', prompt: 'second request', owner: owners[1] }]
   const run = (selected = items) => current.invoke({ capabilityId: 'agents.batchPrompt', input: { batchKey: 'trial', items: selected } }, caller)
-  expect(await run()).toMatchObject({ ok: true, value: { succeeded: 1, failed: 1, items: [{ result: { ok: true } }, { result: { ok: false, error: { outcome: 'unknown' } } }] } })
+  expect(await run()).toMatchObject({ ok: true, value: { succeeded: 1, failed: 1, items: [{ result: { ok: true } }, { result: { ok: false, error: { outcome: 'unknown', details: { stage: 'after-enter', retrySafe: false } } } }] } })
   expect(deliveries).toEqual(['accepted', 'uncertain'])
   current = executor()
   // Reordered/subset retry has a new parent call but the same child intention.
-  expect(await run([items[1]])).toMatchObject({ ok: true, value: { failed: 1, items: [{ result: { error: { outcome: 'unknown' }, operation: { reusedCallId: expect.any(String) } } }] } })
+  expect(await run([items[1]])).toMatchObject({ ok: true, value: { failed: 1, items: [{ result: { error: { outcome: 'unknown', details: { stage: 'after-enter', retrySafe: false } }, operation: { reusedCallId: expect.any(String) } } }] } })
   expect(deliveries).toEqual(['accepted', 'uncertain'])
   expect(await run([{ ...items[0], prompt: 'different intention under old key' }])).toMatchObject({ ok: true, value: { failed: 1, items: [{ result: { error: { code: 'idempotency_conflict' } } }] } })
   expect(deliveries).toEqual(['accepted', 'uncertain'])

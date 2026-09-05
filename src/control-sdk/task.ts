@@ -16,7 +16,7 @@ export async function startControlTask(context: ControlContext, invoke: (request
     let result: ControlResult
     try { result = { ok: true, value: z.json().parse(await run()) } }
     catch (error) {
-      result = error instanceof ControlError ? controlFailure(error.code, error.message, error.outcome)
+      result = error instanceof ControlError ? controlFailure(error.code, error.message, error.outcome, error.details)
         : controlFailure('failed', error instanceof Error ? error.message : 'Lifecycle operation failed', 'unknown')
     }
     // No automatic retry with a new intention: the domain may already have

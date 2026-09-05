@@ -47,7 +47,7 @@ it('does not retry an uncertain provider write and keeps its delivery evidence',
     retrySafe: false, disposition: 'do-not-retry', promptWritten: true, enterWritten: true }
   deliverPrompt.mockResolvedValue(failure)
   const result = await invoke('agents.prompt', { sessionId: 'agent', prompt: 'next task' })
-  expect(result).toMatchObject({ ok: false, error: { outcome: 'unknown', message: JSON.stringify(failure) } })
+  expect(result).toMatchObject({ ok: false, error: { outcome: 'unknown', message: failure.message, details: failure } })
   expect(deliverPrompt).toHaveBeenCalledTimes(1)
 })
 
@@ -57,4 +57,18 @@ it('uses the existing title policy and does not wake agents for metadata reads o
   expect(await invoke('agents.titleSet', { sessionId: 'agent', title: '  Named agent  ' })).toMatchObject({ ok: true, value: { title: 'Named agent' } })
   expect(await invoke('agents.locate', { sessionId: 'agent' })).toMatchObject({ ok: true, value: { title: 'Named agent' } })
   expect(wake).not.toHaveBeenCalled()
+})
+
+// Attachment inputs exercise the actual provider boundary above; unsupported
+// providers must reject before wake, rather than silently discard attachments.
+it('forwards supported attachment paths without changing the app draft, and rejects unsupported providers before wake', async () => {
+  const wake = vi.fn().mockResolvedValue(undefined)
+  const { invoke, deliverPrompt } = setup(wake)
+  expect(await invoke('agents.prompt', { sessionId: 'agent', prompt: 'inspect image', imagePaths: ['/tmp/operator-image.png'] })).toMatchObject({ ok: true })
+  expect(deliverPrompt).toHaveBeenCalledWith('agent', 'inspect image', ['/tmp/operator-image.png'])
+  expect(useAppStore.getState().workspaceRuntimes.agent.draftInput).toBe('unfinished human draft')
+  useAppStore.getState().setWorkspaceState(state => ({ ...state, sessions: { agent: { cwd: '/trial', kind: 'codex' } } }))
+  wake.mockClear(); deliverPrompt.mockClear()
+  expect(await invoke('agents.prompt', { sessionId: 'agent', prompt: 'inspect image', imagePaths: ['/tmp/operator-image.png'] })).toMatchObject({ ok: false, error: { outcome: 'not_started' } })
+  expect(wake).not.toHaveBeenCalled(); expect(deliverPrompt).not.toHaveBeenCalled()
 })

@@ -168,8 +168,7 @@ this plan/issue for concrete findings. All work stays unmerged pending confirmat
   #808 owns #806 worktree optimization; #809 fixes #802 child-reader overlap;
   #811 builds #803 discovery bounds on #809. This branch does not absorb their
   implementations. #810's separate pane-runtime isolation should be checked for
-  ordinary shared-file conflicts at merge time. CI status belongs to #812; no
-  merge is authorized by opening or updating it.
+  ordinary shared-file conflicts at merge time. CI status belongs to #812. The later explicit user authorization below permits merge only after completed implementation, two independent orchestration reviews, valid-finding resolution and final passing CI.
 
 
 ## Final extension reconciliation (authorized September 5)
@@ -223,3 +222,39 @@ be claimed from isolated tests; retain honest evidence boundaries.
 - **Reality check:** actual orchestrated child IDs/results, current PR diff and
   GitHub checks. Reviewers get full task context and may not edit, merge, prompt
   existing agents or change the user's pane layout.
+
+### Final direct-control implementation checkpoint
+
+- Added nativeHistory.search using the existing prompt-index owner (400 recent
+  candidates/provider; Claude/Codex only; best-effort), and full-text filtering of
+  exact native prompt addresses. This does not close #96/#739/#773 or change their
+  separately owned indexing/identity/UI implementation.
+- Added observations.wait/cancelWait: deadline covers stalled reads; bounded
+  active waits/cursor cache; caller/target/backend/renderer-bound cursors; explicit
+  timeout, cancellation, expired cursor and unavailable outcomes. Agent settled
+  means input-ready idle with no queue/conditions, never task-success proof.
+- Added exact-agent display override and auto-follow desired-state controls plus
+  window Tail All, reusing existing owners and reporting effective preferences.
+- Prompt failures retain structured delivery evidence through SDK/history/batches;
+  Claude image paths are supported, unsupported providers reject before wake/send.
+  Native input reads report provider-known occupied state without inventing text.
+- Resume/duplicate accept selectCreated:false like create. Creation reports cached
+  readiness. Crash course and operator skill document all new contracts.
+- Remaining deliberate limits: full native composer text and universal provider
+  queue controls, unbounded archive/assistant/OpenCode search, long-lived durable
+  event subscriptions (waits are bounded status polls), worktree mutations and
+  uncommon/destructive UI controls. Actual two-monitor activation and busy/native
+  draft committed-text trials remain outstanding feedback evidence (#797/#800).
+  Isolated transport tests and provider-boundary tests cannot substitute for that.
+
+Final extension pre-review verification: full typecheck and test contract passed;
+119 renderer files / 511 tests passed. Targeted unit checks passed, including
+recorded native transcript search and exact addresses, durable batch error details,
+wait deadline/caller/cursor boundaries and import isolation. Actual Electron HTTP
+MCP trial passed with two isolated windows, right-only Tail All, bounded wait,
+settings mutation, renderer reload and stale ownership; real workflow-worker and
+HTTP codec system checks also passed. The codec trial caught an embedded JSON
+Schema reference issue introduced by structured error details; the error envelope
+now rebases references just like the value envelope. No user windows/providers
+were mutated during these isolated checks. Implementation is ready for the two
+independent orchestration reviews; required CI must pass on their final revision.

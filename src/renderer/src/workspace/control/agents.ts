@@ -186,32 +186,42 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
     }),
     defineCapability({
       id: 'agents.create', target: { kind: 'project', field: 'tabId' }, title: 'Create a project agent', execution: 'window', effect: 'mutation',
-      description: 'Create an ordinary detached agent in the explicit project, anchored to an existing agent directory. Detached means outside the project grid, not hidden: selectCreated defaults true, activates the project and selects the new agent in the Dispatch lane focused when creation began, replacing that view without closing its agent. Set selectCreated:false to preserve tabs and lane assignments, then use layout.read and dispatch.configure (lane-select) to place the returned ID in an explicit lane.',
+      description: 'Create an ordinary detached agent in the explicit project, anchored to an existing agent directory. Detached means outside the project grid, not hidden: selectCreated defaults true, activates the project and selects the new agent in the Dispatch lane focused when creation began, replacing that view without closing its agent. Set selectCreated:false to preserve tabs and lane assignments, then use layout.read and dispatch.configure (lane-select) to place the returned ID in an explicit lane. readiness is a cached observation, not admission to send; agents.prompt performs provider checks.',
       input: z.object({ tabId: z.string().describe('Project tab ID from app.observe in the target window.'), anchorSessionId: z.string().describe('Existing agent in this project that supplies the working directory or grid placement anchor.'), provider,
         selectCreated: z.boolean().default(true).describe('False preserves the current tab and every Dispatch lane; true selects the created agent using normal UI creation behavior.'), providerRuntime: z.enum(AGENT_PROVIDER_RUNTIMES).optional().describe('Omit for the normal structured agent view. terminal requests the provider-native terminal runtime.'), title: z.string().describe('Agent display title; empty clears a custom title. Normal UI normalization applies.').optional() }).strict(),
-      output: sessionReference,
+      output: sessionReference.extend({ readiness: z.object({ inputReady: z.boolean().nullable(), sessionRunId: z.string().nullable() }) }),
       handler: async ({ tabId, anchorSessionId, provider: kind, providerRuntime, title, selectCreated }) => {
         requireUi(); requireSession(anchorSessionId)
+        if (providerRuntime && kind !== 'opencode') throw new ControlError('invalid_input', 'Only OpenCode supports the terminal runtime')
         if (!resolveTabSessions(useAppStore.getState().workspaceState, tabId).includes(anchorSessionId)) {
           throw new ControlError('unavailable', 'Anchor does not belong to that project')
         }
         const sessionId = await getWorkspace().createDetachedDispatchAgent({ kind, providerRuntime }, { tabId, anchorSessionId }, undefined, { selectCreated })
         if (!sessionId) throw new ControlError('failed', 'Agent creation did not produce a placed session; inspect the project', 'unknown')
         if (title !== undefined) setTitle(sessionId, title)
-        return requireSession(sessionId)
+        const runtime = useAppStore.getState().workspaceRuntimes[sessionId]
+        return { ...requireSession(sessionId), readiness: { inputReady: runtime?.inputReady ?? null, sessionRunId: runtime?.sessionRunId ?? null } }
       },
     }),
     defineCapability({
       id: 'agents.prompt', target: { kind: 'session', field: 'sessionId' }, title: 'Send an agent prompt', execution: 'window', effect: 'mutation', completion: 'accepted',
-      description: 'Deliver text to the exact agent through the provider delivery protocol. Reports user, queue or transport acceptance, not task completion. Preserves the Agent Code composer draft and never retries an uncertain write. Native TUI drafts are separate: agents.inputInspect reports available knowledge; provider delivery checks remain authoritative and transport acceptance is not proof of the exact committed text.',
-      input: sessionInput.extend({ prompt: z.string().min(1).max(1_000_000).describe('Exact text to deliver once. A successful acceptance can be queued; inspect agents.read for actual progress.') }),
+      description: 'Deliver text to the exact agent through the provider delivery protocol. Reports user, queue or transport acceptance, not task completion. Refusals expose error.details with stage, retrySafe, disposition, promptWritten and enterWritten; inspect those before retrying. Preserves the Agent Code composer draft and never retries an uncertain write. Native TUI drafts are separate: agents.inputInspect reports available knowledge; provider delivery checks remain authoritative and transport acceptance is not proof of the exact committed text.',
+      input: sessionInput.extend({ prompt: z.string().min(1).max(1_000_000).describe('Exact text to deliver once. A successful acceptance can be queued; inspect agents.read for actual progress.'), imagePaths: z.array(z.string().min(1).max(4096)).max(20).optional().describe('Prepared absolute local image paths. Only Claude supports this attachment delivery contract. Paths must already exist; this does not modify the app-owned draft.') }),
       output: z.object({ sessionId: z.string(), acceptance: z.object({ kind: z.enum(['user', 'queue', 'transport']), acceptedAt: z.number(), entryId: z.string().optional() }) }),
-      handler: async ({ sessionId, prompt }) => {
-        requireReady(); requireSession(sessionId)
+      handler: async ({ sessionId, prompt, imagePaths }) => {
+        requireReady()
+        const session = requireSession(sessionId)
+        // Codex's text-only delivery currently ignores imagePaths. Refuse
+        // unsupported attachments BEFORE wake/write instead of silently sending
+        // a different task from the one the operator supplied.
+        if (imagePaths?.length && session.provider !== 'claude') throw new ControlError('unavailable', 'Image-path delivery is supported only by Claude')
+        if (imagePaths?.some(path => !path.startsWith('/') && !/^[A-Za-z]:[\\/]/.test(path))) throw new ControlError('invalid_input', 'Use absolute local image paths')
         await getWorkspace().ensureSessionLive(sessionId, 'control.send-prompt')
-        requireReady(); requireSession(sessionId)
-        const delivery = await window.api.deliverPrompt(sessionId, prompt)
-        if (!delivery.ok) throw new ControlError('failed', JSON.stringify(delivery), delivery.retrySafe ? 'not_started' : 'unknown')
+        requireReady()
+        const current = requireSession(sessionId)
+        if (current.provider !== session.provider) throw new ControlError('stale_owner', 'Provider changed while waking; inspect before sending')
+        const delivery = await (imagePaths?.length ? window.api.deliverPrompt(sessionId, prompt, imagePaths) : window.api.deliverPrompt(sessionId, prompt))
+        if (!delivery.ok) throw new ControlError('failed', delivery.message, delivery.retrySafe ? 'not_started' : 'unknown', delivery)
         return { sessionId, acceptance: delivery.acceptance }
       },
     }),

@@ -115,12 +115,12 @@ shows unsaved/conflicting buffers; `ac_editor_open` preserves those edits.
 Use `ac_agents_prompt` with the exact session and the user's intended prompt.
 A successful response confirms provider acceptance, which may be a queue or
 transport acknowledgment. It does not mean the task finished. The tool preserves
-Agent Code’s app-owned draft; do not also click Send for the same prompt.
+Agent Code’s app-owned draft; do not also click Send for the same prompt. Optional `imagePaths` are prepared absolute local files and supported only for Claude. Refusals expose structured `error.details` with stage, retrySafe, disposition, promptWritten and enterWritten; do not turn an uncertain delivery into a second attempt with a new key.
 
 To edit unsent text, read `ac_agents_draft_get` and supply its revision to
 `ac_agents_draft_set`. Replace preserves attachments; clear removes them; undo
 restores text only. Draft editing never submits a prompt. `ac_agents_input_inspect` separately reports
-native provider draft knowledge. `unknown` is not empty; an xterm accessibility
+native provider draft knowledge. `occupied` means provider-reported occupied input, without complete text; resolve through that UI. `unknown` is not empty; an xterm accessibility
 “Terminal input” value is transport state and may omit existing TUI text. Prefer
 typed prompt delivery with its provider checks. If computer paste/Return is
 needed, establish the full native composer first and verify the committed prompt;
@@ -178,16 +178,16 @@ stable; if the subset changes, use a new parent `_control.requestKey`. Retrying 
 unknown child under another key risks duplicate delivery. Batch acceptance says
 nothing about task completion; monitor each agent and its conditions.
 
-`ac_settings_values/set` handles advertised ordinary choices with revisions.
-Use `ac_settings_reference` and the UI for other settings. `ac_templates_list/read`
+`ac_settings_values` / `ac_settings_set` handles advertised ordinary choices with revisions.
+Use `ac_settings_reference` and the UI for other settings. `ac_templates_list` / `ac_templates_read`
 finds reusable prompts; insertion needs both template and draft revisions and an
 explicit project for dynamic context. Inspect the draft before sending. Save/delete
-only changes custom templates. `ac_ui_surfaces/surface_set` selects named panels;
+only changes custom templates. `ac_ui_surfaces` / `ac_ui_surface_set` selects named panels;
 `ac_usage_read` and `ac_worktrees_read` provide read-only evidence.
 
 For existing workflows, list definitions for the exact cwd, then start with JSON
 arguments. Ordinary source approval may need computer use. Poll the returned task
-callId through `ac_operations_read` for runId, then use `ac_workflows_status/events/result`.
+callId through `ac_operations_read` for runId, then use `ac_workflows_status`, `ac_workflows_events` and `ac_workflows_result`.
 Cancel/resume is limited to the external connection's runs. Clients sharing this
 connection share that ownership; it is not a per-person identity. Internal agent
 runs keep their owner, and workflow workers do not gain this operator toolkit.
@@ -204,7 +204,7 @@ Use `ac_native_history_list` for a bounded recent catalog outside the workspace,
 and `ac_native_history_prompts` for exact rewind addresses. Native IDs are not
 Agent Code session IDs. Resume continues the native conversation; duplicate
 branches a copy. OpenCode discovery can be unavailable while known IDs still work. This catalog is
-not a full historical topic search.
+not a full archive search. Use `ac_native_history_search` to search user-prompt text across the existing Claude/Codex index, including closed conversations. It searches at most 400 recent candidates per provider, is best-effort, and does not search assistant text or OpenCode. Inspect coverage and paginate results; a missing match does not prove absence. `ac_native_history_prompts` also supports a full-text substring query within a known native transcript.
 
 `ac_placement_inspect` explains detach/bury consequences before their revision-bound
 operations. Last-pane bury also archives detached children. `ac_views_agent_set`
@@ -215,7 +215,31 @@ began, replacing that view without closing its agent. To preserve current tabs a
 lanes, use `ac_agents_create` with `selectCreated:false`. Then read `ac_layout_read`
 and use `ac_dispatch_configure` with `change.action:"lane-select"`, the target
 `laneIndex`, the returned session ID and a fresh revision. Resume/duplicate also
-select their created agent using normal creation behavior; inspect lanes afterwards.
+accept `selectCreated:false` to preserve tabs/lanes; default true uses normal creation selection. Creation readiness is a cached observation, not admission to send.
+
+## Wait and set display preferences
+
+Use `ac_observations_wait` for a bounded status wait (at most 10 seconds), with a
+caller-chosen `waitId` and an exact agent or lifecycle-operation target. For agent
+waits, put the window owner inside `target.owner`; this is a main-owned tool.
+`until: "change"` compares against `after` (the prior wait cursor), or the first
+observation. `attention` means visible conditions/exit; `settled` means observed
+input-ready idle without queued prompts/conditions, or a terminal operation result.
+Neither means an agent completed your particular task successfully. Read output
+and verify the requested outcome. Read `snapshot` even for a failed operation.
+
+Handle `timeout`, `cancelled`, `unavailable` and `cursor_expired` explicitly.
+Use the fresh status cursor to continue; these cursors are separate from transcript
+cursors and expire after five minutes, eviction, restart or target identity change.
+Cancel concurrently with `ac_observations_cancel_wait` and the same waitId; that
+cancels the wait, not the agent. Use bounded waits instead of tight status polling.
+
+Read `ac_views_preferences_read` before `ac_views_mode_set` or
+`ac_views_follow_set` and supply its revision. Mode null inherits the global mode;
+provider constraints still apply. Follow is the rendered-feed preference; Tail All
+can keep it enabled even when the individual preference is false. Change the
+window-wide override with `ac_views_tail_all_set`, supplying its expected current
+value. Hidden panes may suspend scrolling. These controls preserve pane layout.
 
 ## Recover and verify
 

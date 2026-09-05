@@ -39,6 +39,7 @@ it('routes real renderer observations across two windows and survives reload wit
       import { registerRendererHost } from '${resolve(root, 'src/renderer/src/control/registerRendererHost.ts')}'
       import { workspaceControlCapabilities } from '${resolve(root, 'src/renderer/src/workspace/control.ts')}'
       import { agentControlCapabilities } from '${resolve(root, 'src/renderer/src/workspace/control/agents.ts')}'
+      import { preferenceControlCapabilities } from '${resolve(root, 'src/renderer/src/workspace/control/preferences.ts')}'
       import { settingsControlCapabilities } from '${resolve(root, 'src/renderer/src/features/settings/control.ts')}'
       import { commandControlCapabilities } from '${resolve(root, 'src/renderer/src/features/command-palette/control.ts')}'
       import { keybindingControlCapabilities } from '${resolve(root, 'src/renderer/src/features/command-keybindings/control.ts')}'
@@ -55,7 +56,7 @@ it('routes real renderer observations across two windows and survives reload wit
       registerRendererHost([
         ...workspaceControlCapabilities(() => ({restoreStatus: 'fresh'})),
         ...agentControlCapabilities(() => ({restoreStatus: 'fresh'})),
-        ...settingsControlCapabilities(() => ({restoreStatus: 'fresh'})),
+        ...preferenceControlCapabilities(() => ({restoreStatus: 'fresh'})), ...settingsControlCapabilities(() => ({restoreStatus: 'fresh'})),
         ...commandControlCapabilities(), ...keybindingControlCapabilities(), ...documentationCapabilities(),
       ])
         .catch(error => { document.body.textContent = String(error); console.error(error) })
@@ -117,6 +118,11 @@ it('routes real renderer observations across two windows and survives reload wit
         if (!preference) throw new Error('Expected the existing contrast setting')
         const changedPreference = await caller.invoke({capabilityId: 'settings.set', input: {settingId: preference.id, revision: preference.revision, value: !preference.value}, owner: right, requestKey: 'preference-intention'})
         const stalePreference = await caller.invoke({capabilityId: 'settings.set', input: {settingId: preference.id, revision: preference.revision, value: preference.value}, owner: right, requestKey: 'stale-preference-intention'})
+        const viewBefore = await caller.invoke({capabilityId: 'views.preferencesRead', input: {sessionId: 'right-agent'}, owner: right})
+        const tailAll = await caller.invoke({capabilityId: 'views.tailAllSet', input: {expected: viewBefore.value.tailAll, enabled: true}, owner: right})
+        const viewAfter = await caller.invoke({capabilityId: 'views.preferencesRead', input: {sessionId: 'right-agent'}, owner: right})
+        const leftView = await caller.invoke({capabilityId: 'views.preferencesRead', input: {sessionId: 'left-agent'}, owner: left})
+        const boundedWait = await caller.invoke({capabilityId: 'observations.wait', input: {waitId: 'missing-task', target: {kind: 'operation', callId: 'absent'}, until: 'settled', timeoutMs: 100}})
         const observe = target => caller.invoke({capabilityId: 'workspace.observe', input: {}, owner: target})
         const routed = await caller.invoke({capabilityId: 'agents.titleSet', input: {sessionId: 'right-agent', title: 'Routed title'}, requestKey: 'title-intention'})
         const fleet = await caller.invoke({capabilityId: 'agents.search', input: {query: 'Routed title'}})
@@ -136,7 +142,7 @@ it('routes real renderer observations across two windows and survives reload wit
         await client.close()
         await external.stop()
         const sdkAfterDisable = await host.forCaller({kind: 'application', id: 'after-disable'}).invoke({capabilityId: 'workspace.observe', input: {}, owner: right})
-        console.log('CONTROL_TRIAL=' + JSON.stringify({identity,trialPid:process.pid,changedPreference,stalePreference,preference,toolCount:listed.tools.length,windowList,callHistory,sdkAfterDisable,routed,fleet,ambiguous,first,second,guide,binding,stale,afterReload,surviving,changed: left.generation !== replacement.generation}))
+        console.log('CONTROL_TRIAL=' + JSON.stringify({viewBefore,viewAfter,leftView,tailAll,boundedWait,identity,trialPid:process.pid,changedPreference,stalePreference,preference,toolCount:listed.tools.length,windowList,callHistory,sdkAfterDisable,routed,fleet,ambiguous,first,second,guide,binding,stale,afterReload,surviving,changed: left.generation !== replacement.generation}))
         host.dispose()
         for (const window of windows.values()) window.destroy()
         clearTimeout(deadline)
@@ -173,6 +179,9 @@ it('routes real renderer observations across two windows and survives reload wit
     const line = stdout.split('\n').find(value => value.startsWith('CONTROL_TRIAL='))
     expect(line, stdout).toBeTruthy()
     const evidence = JSON.parse(line!.slice('CONTROL_TRIAL='.length))
+    expect(evidence.viewAfter).toMatchObject({ok: true, value: {tailAll: true, followEnabled: true}})
+    expect(evidence.leftView).toMatchObject({ok: true, value: {tailAll: false}})
+    expect(evidence.boundedWait).toMatchObject({ok: true, value: {status: 'timeout'}})
     expect(evidence.identity).toMatchObject({ok: true, value: {pid: evidence.trialPid, executablePath: executable}})
     expect(evidence.changedPreference).toMatchObject({ok: true, value: {id: evidence.preference.id, value: !evidence.preference.value}, operation: {owner: {windowId: 'right'}}})
     expect(evidence.stalePreference).toMatchObject({ok: false, error: {code: 'stale_cursor', outcome: 'not_started'}})

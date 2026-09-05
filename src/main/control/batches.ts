@@ -29,11 +29,11 @@ export function batchControlCapabilities(invoke: Invoke) {
     defineCapability({ id: 'agents.batchPrompt', title: 'Deliver a batch with per-agent receipts', execution: 'main', effect: 'mutation',
       description: 'Deliver up to 20 independent prompts through agents.prompt, including its provider checks and app-draft preservation. Returns each child receipt/error; success counts acceptance, not finished work. Every child has a durable request key derived from batchKey + itemKey under your original caller identity. To inspect/retry a partial batch, retain those keys and the exact item arguments; never generate new keys for uncertain deliveries. Changing arguments under an existing key conflicts. The batch is not atomic and continues after a child fails.',
       input: z.object({ batchKey: z.string().min(1).max(80).describe('Stable identity of this batch intention. Retain it with each itemKey across partial retry requests.'),
-        items: z.array(z.object({ itemKey: key, owner, sessionId: z.string().min(1), prompt: z.string().min(1).max(32000) }).strict()).min(1).max(20).refine(unique, 'Item keys must be unique') }).strict(), output,
+        items: z.array(z.object({ itemKey: key, owner, sessionId: z.string().min(1), prompt: z.string().min(1).max(32000), imagePaths: z.array(z.string().min(1).max(4096)).max(20).optional() }).strict()).min(1).max(20).refine(unique, 'Item keys must be unique') }).strict(), output,
       handler: async (input, context) => {
         const items: z.infer<typeof result>[] = []
         for (const item of input.items) items.push({ itemKey: item.itemKey, sessionId: item.sessionId,
-          result: controlResultSchema.parse(await invoke({ capabilityId: 'agents.prompt', input: { sessionId: item.sessionId, prompt: item.prompt }, owner: item.owner,
+          result: controlResultSchema.parse(await invoke({ capabilityId: 'agents.prompt', input: { sessionId: item.sessionId, prompt: item.prompt, ...(item.imagePaths ? { imagePaths: item.imagePaths } : {}) }, owner: item.owner,
             // Length-delimited keys prevent ("a:b", "c") colliding with
             // ("a", "b:c"). These are intention IDs, never secret credentials.
             requestKey: `batch:${input.batchKey.length}:${input.batchKey}:${item.itemKey}` }, context.caller)) })

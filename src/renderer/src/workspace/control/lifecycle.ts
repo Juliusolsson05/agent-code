@@ -53,8 +53,8 @@ export function lifecycleControlCapabilities(getWorkspace: () => Workspace) {
   }
   return [
     defineCapability({ id: 'agents.resume', title: 'Resume a native session in a project', execution: 'window', effect: 'mutation', completion: 'accepted', target: { kind: 'project', field: 'tabId' },
-      description: 'Open a known native conversation as a new detached agent in an explicit project. Supply provider/nativeSessionId/cwd from nativeHistory.list; known OpenCode IDs are supported. This resumes the same native conversation, not a copy; the ordinary backend ownership policy applies if already open. Returns a task callId; operations.read reports the exact newSessionId. Creation selects the captured focused Dispatch lane without closing its previous agent. Use agents.show or placement.attach afterward.',
-      input: z.object({ tabId: z.string(), anchorSessionId: z.string(), provider: z.enum(['claude', 'codex', 'opencode']), nativeSessionId: z.string().min(1), cwd: z.string().min(1), runtime: z.enum(['terminal']).optional() }).strict(), output: accepted,
+      description: 'Open a known native conversation as a new detached agent in an explicit project. Supply provider/nativeSessionId/cwd from nativeHistory.list; known OpenCode IDs are supported. This resumes the same native conversation, not a copy; the ordinary backend ownership policy applies if already open. Returns a task callId; operations.read reports the exact newSessionId. Creation selects the captured focused Dispatch lane by default; selectCreated:false preserves placement. Use agents.show or placement.attach afterward.',
+      input: z.object({ tabId: z.string(), anchorSessionId: z.string(), provider: z.enum(['claude', 'codex', 'opencode']), nativeSessionId: z.string().min(1), cwd: z.string().min(1), runtime: z.enum(['terminal']).optional(), selectCreated: z.boolean().default(true).describe('False preserves the active tab and all lane selections.') }).strict(), output: accepted,
       handler: (input, context) => {
         const check = () => {
           if (getWorkspace().restoreStatus === 'pending' || hasAppInteractionOwner()) throw new ControlError('unavailable', 'Wait for restoration or finish the input-owning surface')
@@ -65,15 +65,15 @@ export function lifecycleControlCapabilities(getWorkspace: () => Workspace) {
         return startControlTask(context, async () => {
           check()
           const newSessionId = await getWorkspace().createDetachedSession({ kind: input.provider, providerRuntime: input.runtime },
-            { tabId: input.tabId, anchorSessionId: input.anchorSessionId }, { cwd: input.cwd, resumeSessionId: input.nativeSessionId })
+            { tabId: input.tabId, anchorSessionId: input.anchorSessionId }, { cwd: input.cwd, resumeSessionId: input.nativeSessionId }, { selectCreated: input.selectCreated })
           if (!newSessionId) throw new ControlError('failed', 'Resume did not commit a placed session; inspect before retrying', 'unknown')
           return { newSessionId, nativeSessionId: input.nativeSessionId }
         })
       },
     }),
     defineCapability({ id: 'agents.duplicate', title: 'Branch an exact agent conversation', execution: 'window', effect: 'mutation', completion: 'accepted', target: { kind: 'session', field: 'sessionId' },
-      description: 'Copy an idle native conversation to a new native identity and create a detached agent in the chosen project. Preserves provider/runtime and enabled built-in domain names; leaves the source and its draft intact. Requires a fresh lifecycle revision and an explicit target project/anchor in the same window. Use operations.read for both new IDs, then agents.show or placement.attach. Creation selects the lane focused when it begins without closing its previous agent. A failed placement can leave a native transcript copy; do not blindly retry unknown outcomes.',
-      input: target.extend({ revision, tabId: z.string(), anchorSessionId: z.string() }), output: accepted,
+      description: 'Copy an idle native conversation to a new native identity and create a detached agent in the chosen project. Preserves provider/runtime and enabled built-in domain names; leaves the source and its draft intact. Requires a fresh lifecycle revision and an explicit target project/anchor in the same window. Use operations.read for both new IDs, then agents.show or placement.attach. Creation selects the captured focused lane by default; selectCreated:false preserves placement. A failed placement can leave a native transcript copy; do not blindly retry unknown outcomes.',
+      input: target.extend({ revision, tabId: z.string(), anchorSessionId: z.string(), selectCreated: z.boolean().default(true).describe('False preserves the active tab and all lane selections.') }), output: accepted,
       handler: (input, context) => {
         const check = () => {
           const value = guard(input)
@@ -92,7 +92,7 @@ export function lifecycleControlCapabilities(getWorkspace: () => Workspace) {
             throw new ControlError('failed', `Native copy ${clone.newProviderSessionId} exists but the source/placement changed: ${String(error)}`, 'unknown')
           }
           const newSessionId = await getWorkspace().createDetachedSession({ kind: value.provider, providerRuntime: meta.providerRuntime },
-            { tabId: input.tabId, anchorSessionId: input.anchorSessionId }, { cwd: value.cwd, resumeSessionId: clone.newProviderSessionId, builtInMcpDomains: meta.builtInMcpDomains })
+            { tabId: input.tabId, anchorSessionId: input.anchorSessionId }, { cwd: value.cwd, resumeSessionId: clone.newProviderSessionId, builtInMcpDomains: meta.builtInMcpDomains }, { selectCreated: input.selectCreated })
           if (!newSessionId) throw new ControlError('failed', `Native copy ${clone.newProviderSessionId} exists but no placement was committed`, 'unknown')
           return { sourceSessionId: input.sessionId, newSessionId, nativeSessionId: clone.newProviderSessionId }
         })

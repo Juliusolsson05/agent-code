@@ -3,6 +3,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 const source = vi.hoisted(() => ({ path: '', list: vi.fn() }))
+vi.mock('@providers/claude/runtime/sessionList.js', () => ({ listSessionsForCwd: async () => [{ sessionId: 'source', cwd: '/trial', lastModified: 1, summary: 'Recorded conversation' }] }))
+vi.mock('@shared/runtime/projectDir.js', () => ({ getProjectDirForCwd: () => source.path.slice(0, source.path.lastIndexOf('/')) }))
+vi.mock('@providers/codex/runtime/projectDir.js', () => ({ getCodexSessionsDir: () => source.path + '.absent' }))
 vi.mock('@providers/registry.main', () => ({ getMainProvider: (id: string) => id === 'opencode'
   ? { sessionDiscoveryUnavailableReason: 'OpenCode discovery unavailable (#773)' } : { listSessions: source.list, listAllSessions: source.list } }))
 vi.mock('@main/providerSwitch/shared.js', () => ({ getClaudeSessionFilePath: async () => source.path, writeProjectedClaudeSessionFile: vi.fn(), projectedClaudeSessionId: vi.fn() }))
@@ -27,6 +30,11 @@ it('pages exact rewind references from the recorded Claude transcript through th
   const page = first.value as { items: Array<{ address: unknown; totalChars: number; text: string }>; nextCursor: string }
   expect(page.items[0]).toMatchObject({ address: native.at(-1)!.address, text: native.at(-1)!.text.slice(0, 20), totalChars: native.at(-1)!.text.length })
   expect(await cap.execute({ ...input, cursor: page.nextCursor }, context)).toMatchObject({ ok: true, value: { items: [{ address: native.at(-2)!.address }] } })
+  const search = nativeHistoryControlCapabilities().find(cap => cap.descriptor.id === 'nativeHistory.search')!
+  const query = native.find(row => row.text.trim().length > 20)!.text.trim().slice(0, 60)
+  expect(await search.execute({ query, cwd: '/trial' }, context)).toMatchObject({ ok: true, value: { items: [expect.objectContaining({ provider: 'claude', nativeSessionId: 'source', cwd: '/trial' })], coverage: { exhaustive: false, candidatesPerProvider: 400 } } })
+  const exact = native.at(-1)!.text
+  expect(await cap.execute({ ...input, query: exact, previewChars: 0 }, context)).toMatchObject({ ok: true, value: { items: [{ address: native.at(-1)!.address, text: '', totalChars: exact.length }] } })
   expect(await cap.execute({ ...input, previewChars: 0, cursor: page.nextCursor }, context)).toMatchObject({ ok: false, error: { code: 'stale_cursor' } })
 })
 it('reports unsupported discovery and IO failures rather than a complete empty account', async () => {

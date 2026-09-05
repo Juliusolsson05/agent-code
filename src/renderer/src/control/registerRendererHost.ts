@@ -14,6 +14,7 @@ import { draftControlCapabilities } from '@renderer/workspace/control/drafts'
 import { conditionControlCapabilities } from '@renderer/workspace/control/conditions'
 import { layoutControlCapabilities } from '@renderer/workspace/control/layout'
 import { lifecycleControlCapabilities } from '@renderer/workspace/control/lifecycle'
+import { preferenceControlCapabilities } from '@renderer/workspace/control/preferences'
 import { navigationControlCapabilities } from '@renderer/workspace/control/navigation'
 import { terminalControlCapabilities } from '@renderer/workspace/control/terminals'
 import { editorControlCapabilities } from '@renderer/features/global-editor/control'
@@ -81,6 +82,7 @@ export function useControlRegistration(workspace: Workspace): void {
       ...terminalControlCapabilities(() => current.current),
       ...lifecycleControlCapabilities(() => current.current),
       ...navigationControlCapabilities(() => current.current),
+      ...preferenceControlCapabilities(() => current.current),
       ...editorControlCapabilities(),
       ...settingsControlCapabilities(() => current.current),
       ...templateControlCapabilities(() => current.current),
