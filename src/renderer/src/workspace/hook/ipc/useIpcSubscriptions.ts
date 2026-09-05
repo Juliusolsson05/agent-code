@@ -618,9 +618,10 @@ export function useIpcSubscriptions(
     // Memory gauges (#375 part A) — reads the ref mirrors, never React
     // state, so the sweep is O(sessions) with zero render impact. Lives in
     // this effect (not its own hook) so it shares the one atomic teardown
-    // with every other subscription. perf.gauge no-ops when telemetry is
-    // off, and the byte estimators sample rather than stringify wholesale,
-    // so this is deliberately NOT gated on any flag.
+    // with every other subscription. The emitter gates before traversing or
+    // serializing anything when telemetry is off. Keep the timer alive so a
+    // late initializePerformance response can enable collection without
+    // reattaching every session subscription.
     const memoryGaugeTimer = window.setInterval(() => {
       emitRendererMemoryGauges(
         refs.latestRuntimesRef.current,
