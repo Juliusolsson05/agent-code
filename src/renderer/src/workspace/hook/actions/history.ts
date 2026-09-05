@@ -94,6 +94,7 @@ export function useHistoryActions(
         let workContext = runtime.workContext
         let oldestMarker: string | null = runtime.historyOldestMarker
         let oldestOffset: number | null = runtime.historyOldestOffset
+        let cursorSelected = false
         // Registry-owned mapper (#394 phase 2b). Chunk-scoped: starts
         // with a null turn cursor, which for Codex means pagination
         // chunks that begin mid-turn rely on `payload.turn_id` — the
@@ -123,7 +124,13 @@ export function useHistoryActions(
           // Marker policy (site-owned): only the FIRST kept line of the
           // chunk replaces the pagination cursor — `oldestMarker` must
           // stay pinned to where the NEXT older page should start.
-          if (mapped.length > 0 && marker && oldestMarker === runtime.historyOldestMarker) {
+          // WHY selection needs its own latch: markers are not unique. The
+          // first older record may have the SAME marker as the current anchor,
+          // at an earlier byte position. Marker equality would leave selection
+          // armed and let a later record move the cursor forward within this
+          // page, or prevent its offset from advancing at all on commit.
+          if (mapped.length > 0 && marker && !cursorSelected) {
+            cursorSelected = true
             oldestMarker = marker
             // The offset of THIS raw line, not the chunk's first: the
             // cursor is the first kept line, and leading records the
@@ -202,10 +209,10 @@ export function useHistoryActions(
                 ? current.toolIndexVersion + 1
                 : current.toolIndexVersion,
               historyOldestMarker: oldestMarker ?? current.historyOldestMarker,
-              // Moves in lockstep with the marker: an offset for a different
-              // line than the marker would fail the loader's sanity check
-              // (harmless, but every page would take the slow path).
-              historyOldestOffset: oldestMarker !== runtime.historyOldestMarker
+              // Commit the selected pair even when only the byte position
+              // changed. Repeated marker strings still represent distinct
+              // physical records; retaining the old offset re-requests a page.
+              historyOldestOffset: cursorSelected
                 ? oldestOffset
                 : current.historyOldestOffset,
               // Trust `chunk.hasMore` as the authoritative "is there

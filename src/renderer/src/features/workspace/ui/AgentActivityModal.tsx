@@ -117,6 +117,10 @@ export function AgentActivityModal({ open, workspace, onClose }: Props) {
   }, [open])
 
   const rows = useMemo<Row[]>(() => {
+    // The timer was open-gated, but runtime changes still scanned every agent
+    // while the Dialog was closed. Preserve mounted selection/effect state and
+    // skip only invisible derivation; opening rebuilds the current snapshot.
+    if (!open) return []
     // Intentional read of nowTick — forces recompute so "active-now"
     // agents that finish between ticks flip to idle with the timer,
     // not only on store-update. Cheap, guarded by `open`.
@@ -220,7 +224,7 @@ export function AgentActivityModal({ open, workspace, onClose }: Props) {
       built.sort(compareByActivity)
     }
     return built
-  }, [workspace.state.tabs, workspace.state.sessions, workspace.state.activeTabId, workspace.runtimes, nowTick, sortMode])
+  }, [open, workspace.state.tabs, workspace.state.sessions, workspace.state.activeTabId, workspace.runtimes, nowTick, sortMode])
 
   const tabGroups = useMemo<TabGroup[]>(() => {
     if (sortMode !== 'tabs') return []
