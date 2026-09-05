@@ -1,4 +1,6 @@
 import type { SessionManager } from '@main/sessionManager.js'
+import { aliasScreenSnapshotForWire } from '@shared/types/session.js'
+import type { AgentScreenSnapshot } from '@shared/types/session.js'
 import type { LspManager } from '@main/lspManager.js'
 
 import {
@@ -53,8 +55,14 @@ export function wireSessionForwarder(
   const subAgents = new SubAgentWatcherManager((sessionId, map) =>
     sendToSessionWindow(sessionId, 'session:sub-agents', { sessionId, subAgents: map }),
   )
-  const screens = new LatestSessionIpcCoalescer(payload =>
-    sendToSessionWindow(payload.sessionId, 'session:screen', payload),
+  // WHY the alias happens here and not at the manager (#746): the remote
+  // server and the recorder-independent readers take the full payload from
+  // the manager; only the renderer IPC edge pays structured-clone bytes for
+  // the duplicate `recent` strings, and only the preload expands them back.
+  // (The session recorder taps this send, so recordings carry the wire form;
+  // replay treats screen frames as no-op ticks and never reads the fields.)
+  const screens = new LatestSessionIpcCoalescer<{ sessionId: string } & AgentScreenSnapshot>(payload =>
+    sendToSessionWindow(payload.sessionId, 'session:screen', aliasScreenSnapshotForWire(payload)),
   )
   const processStates = new LatestSessionIpcCoalescer(payload =>
     sendToSessionWindow(payload.sessionId, 'session:process-state', payload),

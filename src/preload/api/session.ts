@@ -4,6 +4,8 @@ import { ipcRenderer } from 'electron'
 import type { PromptDeliveryResult } from '@shared/types/providerConfig.js'
 
 import { subscribe } from '@preload/api/ipc.js'
+import { expandScreenSnapshotFromWire } from '@shared/types/session.js'
+import type { AgentScreenSnapshotWire } from '@shared/types/session.js'
 import type {
   SessionExitEvent,
   SessionHistoryChunk,
@@ -32,6 +34,8 @@ import type {
   TranscriptPathResult,
   Unsub,
 } from '@preload/api/types.js'
+
+type SessionScreenWireEvent = Omit<SessionScreenEvent, 'recent' | 'recentMarkdown'> & AgentScreenSnapshotWire
 
 // Session lifecycle + I/O bridge methods.
 //
@@ -201,8 +205,13 @@ export const sessionApi = {
   onSessionInputReadiness: (cb: (e: SessionInputReadinessEvent) => void): Unsub =>
     subscribe('session:input-readiness', cb),
 
+  // The forwarder omits `recent`/`recentMarkdown` when they duplicate the
+  // viewport strings (#746); expand here so no renderer code ever sees the
+  // optional wire form.
   onSessionScreen: (cb: (e: SessionScreenEvent) => void): Unsub =>
-    subscribe('session:screen', cb),
+    subscribe('session:screen', (e: SessionScreenWireEvent) =>
+      cb(expandScreenSnapshotFromWire(e) as SessionScreenEvent),
+    ),
 
   // The singular `session:jsonl-entry` bridge method was removed: main
   // emits JSONL ONLY through the coalescer as `session:jsonl-entries`

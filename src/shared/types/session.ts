@@ -212,6 +212,43 @@ export type AgentScreenSnapshot = {
 }
 
 /**
+ * Wire form of a screen frame on the renderer IPC edge (#746). An alt-screen
+ * TUI has no scrollback, so `recent` was byte-identical to `plain` (and
+ * `recentMarkdown` to `markdown`) in 100% of recorded Claude frames, and
+ * Electron's structured clone serialises each string occurrence separately —
+ * every such frame crossed IPC at twice its size. The forwarder omits the
+ * duplicate fields; the preload puts them back, so no renderer type or
+ * consumer ever sees the optional form. Codex frames, which have real
+ * scrollback, pass through unchanged.
+ */
+export type AgentScreenSnapshotWire = {
+  plain: string
+  markdown: string
+  recent?: string
+  recentMarkdown?: string
+}
+
+export function aliasScreenSnapshotForWire<T extends AgentScreenSnapshot>(
+  snapshot: T,
+): Omit<T, 'recent' | 'recentMarkdown'> & AgentScreenSnapshotWire {
+  const { recent, recentMarkdown, ...rest } = snapshot
+  const wire: Omit<T, 'recent' | 'recentMarkdown'> & AgentScreenSnapshotWire = rest
+  if (recent !== snapshot.plain) wire.recent = recent
+  if (recentMarkdown !== snapshot.markdown) wire.recentMarkdown = recentMarkdown
+  return wire
+}
+
+export function expandScreenSnapshotFromWire<T extends AgentScreenSnapshotWire>(
+  wire: T,
+): T & AgentScreenSnapshot {
+  return {
+    ...wire,
+    recent: wire.recent ?? wire.plain,
+    recentMarkdown: wire.recentMarkdown ?? wire.markdown,
+  }
+}
+
+/**
  * Provider transcript-entry payload. Kept as `Record<string, unknown>`
  * at this seam because Claude and Codex ship entries with fundamentally
  * different shapes on the same event (`type:'user'|'assistant'|...` vs
