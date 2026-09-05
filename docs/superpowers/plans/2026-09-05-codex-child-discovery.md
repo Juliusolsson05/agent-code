@@ -1,6 +1,6 @@
 # Bounded Codex child discovery
 
-Status: implementing. Issue #803. Depends on #809 (serialized refreshes),
+Status: implemented; local validation complete; PR/CI review pending. Issue #803. Depends on #809 (serialized refreshes),
 base fix/subagent-refresh-coalescing at 689b110e. Retarget to main only after
 that dependency merges; this PR must not reintroduce concurrent offset owners.
 
@@ -32,3 +32,15 @@ symlink loops and deletion do not break progress. Re-run #802 regressions and
 focused subagent tests, typecheck and test contract. Record operation counts,
 not inferred production speedups. Review the diff, synchronize #803/#809, open a
 complete Conventional dependent PR and complete CI/review. Do not merge.
+
+## Evidence and scope decision
+
+39 focused subagent tests pass. The 1,000-file/three-missing-child fixture uses
+11 directory reads and zero file stats for discovery; 1,000 unrelated parent
+records and three sequential retries add no scans in the same window. Late
+creation, positive-path tailing, deletion/replacement, symlink cycles and root
+changes are covered. The budget is per tracker, not a global all-parent cache:
+this avoids retaining an archive-sized shared index and keeps lifetime ownership
+with the tracker. Cross-parent scan sharing can be measured separately.
+
+Typecheck, testing contract and diff checks pass.
