@@ -521,6 +521,7 @@ export const WAKE_CALLERS = [
   // storm here means an orchestration loop rather than a UI remount.
   'orchestration.read-agent',
   'orchestration.send-prompt',
+  'control.send-prompt',
 ] as const
 
 export type WakeCaller = (typeof WAKE_CALLERS)[number]

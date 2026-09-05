@@ -13,7 +13,7 @@ export function documentationCapabilities() {
     defineCapability({
       id: 'app.describe', title: 'Agent Code crash course and full UI guide',
       description: 'Start here. Learn what Agent Code is, the whole UI, layouts, agents, prompts, output, files, settings and hybrid MCP/computer operation. Default: a complete crash course. Full mode adds every feature page; section and pagination retrieve the entire documentation through this one capability.',
-      execution: 'window', effect: 'read',
+      execution: 'window', effect: 'read', replicated: true,
       input: z.object({ mode: z.enum(['crash_course', 'overview', 'full']).default('crash_course'), section: z.string().optional(), ...pageInput }).strict(),
       output: pageSchema(sectionSchema).extend({ mode: z.string(), sectionIndex: z.array(z.object({ id: z.string(), title: z.string() })), featureCount: z.number(), commandCount: z.number() }),
       handler: input => {

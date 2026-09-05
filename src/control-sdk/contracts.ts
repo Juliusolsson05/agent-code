@@ -50,6 +50,8 @@ export type CapabilityDescriptor = Readonly<{
   execution: 'main' | 'window'
   effect: 'read' | 'ui' | 'mutation'
   completion: 'completed' | 'accepted'
+  target?: { kind: 'session' | 'project'; field: string }
+  replicated?: boolean
   inputSchema: Record<string, unknown>
   outputSchema: Record<string, unknown>
 }>
@@ -64,6 +66,8 @@ export const capabilityDescriptorSchema = z.object({
   title: z.string().min(1), description: z.string().min(1),
   execution: z.enum(['main', 'window']), effect: z.enum(['read', 'ui', 'mutation']),
   completion: z.enum(['completed', 'accepted']),
+  target: z.object({ kind: z.enum(['session', 'project']), field: z.string().min(1) }).strict().optional(),
+  replicated: z.boolean().optional(),
   inputSchema: z.record(z.string(), z.json()), outputSchema: z.record(z.string(), z.json()),
 }).strict()
 

@@ -8,6 +8,8 @@ import { declaredTier, isVisibleInPicker } from './pickerVisibility'
 import { useAppStore } from '@renderer/app-state/store'
 import { buildDefaultKeybindings } from '@renderer/features/command-keybindings/defaults'
 import { resolveEffectiveKeybindings } from '@renderer/features/command-keybindings/resolve'
+import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
+import { paletteRequests } from './paletteRequests'
 
 const commandSchema = z.object({
   id: z.string(), title: z.string(), titleRequiresContext: z.boolean(), description: z.string(),
@@ -39,6 +41,20 @@ export function commandReference() {
 
 export function commandControlCapabilities() {
   return [
+    defineCapability({
+      id: 'ui.commandPickerOpen', title: 'Open the command picker', execution: 'window', effect: 'ui',
+      description: 'Open the real command picker with a query and optional stable command selection. Waits for rendered acknowledgement; never presses Enter. Hidden/inapplicable selections are reported as not found.',
+      input: z.object({ query: z.string().max(2000).default(''), commandId: z.string().optional() }).strict(),
+      output: z.object({ query: z.string(), selectedCommandId: z.string().nullable(), requestedSelectionFound: z.boolean(), visibleRows: z.number() }),
+      handler: async input => {
+        const store = useAppStore.getState()
+        if (hasAppInteractionOwner() && !store.commandPaletteOpen) throw new ControlError('unavailable', 'Another surface owns input; inspect or close it first')
+        if (input.commandId && !builtInCommandCatalog.some(command => command.id === input.commandId)) throw new ControlError('unavailable', 'Unknown command ID')
+        const acknowledgement = paletteRequests.open(input)
+        store.openCommandPalette()
+        return acknowledgement
+      },
+    }),
     defineCapability({
       id: 'commands.list', title: 'Search all commands',
       description: 'Enumerate or search every app command by title, keywords and description, including hidden commands. Returns current bindings and complete pagination; listing never executes commands.',

@@ -308,7 +308,7 @@ export function useWorkspace(
   const ensureSessionLiveRef = useRef(ensureSessionLive)
   ensureSessionLiveRef.current = ensureSessionLive
 
-  const { focusAgentByPaneLabel } = useAgentIndexNavigationActions(
+  const { focusAgentByPaneLabel, focusAgentBySessionId } = useAgentIndexNavigationActions(
     setState,
     setTileTabs,
     refs,
@@ -938,6 +938,7 @@ export function useWorkspace(
     focusSession: paneActions.focusSession,
     focusSessionInTab: paneActions.focusSessionInTab,
     focusAgentByPaneLabel,
+    focusAgentBySessionId,
     setAgentTitle,
     setSessionAgentViewModeOverride,
     selectGridRelatedSession,

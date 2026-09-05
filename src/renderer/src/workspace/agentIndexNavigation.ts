@@ -1,6 +1,6 @@
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 
-import { selectedGridRelatedSessionId } from '@renderer/workspace/gridRelatedAgents'
+import { buildGridRelatedAgentTabs, selectedGridRelatedSessionId } from '@renderer/workspace/gridRelatedAgents'
 import { withLaneSession } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import {
   collectLeaves,
@@ -268,6 +268,17 @@ function findExistingGridViewSlot(
         selectedGridRelatedSessionId(state, tab.id, ownerSessionId) ===
         targetSessionId
       ) {
+        return { tabId: tab.id, ownerSessionId }
+      }
+    }
+  }
+  // A hidden related mini-tab is an existing view route too. Prefer physical
+  // and already selected slots above; then reveal a valid related child in its
+  // owner's pane before considering a detached-to-grid swap. Both UI labels
+  // and stable-ID navigation must agree about this placement ownership.
+  for (const tab of state.tabs) {
+    for (const ownerSessionId of collectLeaves(tab.root)) {
+      if (buildGridRelatedAgentTabs(state, tab.id, ownerSessionId).some(child => child.sessionId === targetSessionId)) {
         return { tabId: tab.id, ownerSessionId }
       }
     }

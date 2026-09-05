@@ -382,7 +382,7 @@ export function usePaneActions(
   createDetachedDispatchAgent: (
     selection: SessionSpawnSelection & { kind: Exclude<SessionKind, 'terminal'> },
     projectOverride?: { tabId: TabId; anchorSessionId: SessionId },
-  ) => Promise<void>
+  ) => Promise<SessionId | null>
   createLinkedAgent: (
     selection: SessionSpawnSelection & { kind: Exclude<SessionKind, 'terminal'> },
     parentId: SessionId,
@@ -682,7 +682,7 @@ export function usePaneActions(
         ? { ...resolved, tabId: projectOverride.tabId, cwdSessionId: projectOverride.anchorSessionId }
         : resolved
       const tab = snapshot.tabs.find(t => t.id === target.tabId)
-      if (!tab) return
+      if (!tab) return null
 
       const leafIds = collectLeaves(tab.root)
       const cwd =
@@ -694,7 +694,7 @@ export function usePaneActions(
         leafIds.map(id => snapshot.sessions[id]?.cwd).find(Boolean)
       if (!cwd) {
         showToast('Could not create dispatch agent: no project directory found')
-        return
+        return null
       }
 
       let sessionId: SessionId
@@ -706,13 +706,15 @@ export function usePaneActions(
             ? err.message
             : 'Failed to create dispatch agent',
         )
-        return
+        return null
       }
 
+      let placed = false
       setState(prev => {
         const latestTab = prev.tabs.find(t => t.id === tab.id)
         const projectTabIndex = prev.tabs.findIndex(t => t.id === tab.id)
         if (!latestTab) return prev
+        placed = true
         // Detached sessions are live workspace sessions with project affinity,
         // not children of Dispatch Mode. We deliberately do not insert this id
         // into latestTab.root, because the whole point is that creating ten
@@ -728,7 +730,16 @@ export function usePaneActions(
           dispatchMode: applyDispatchSpawnFocus(prev.dispatchMode, sessionId, target.laneIndex),
         }
       })
+      // A caller needs the exact spawned ID; comparing a before/after census
+      // could accidentally claim an agent created concurrently by the UI.
+      // If the owning project disappeared during spawn, retire only this new
+      // process instead of leaving an unowned live session behind.
+      if (!placed) {
+        await sessionActions.killSession(sessionId, { cwd, kind, providerRuntime })
+        return null
+      }
       closeNewAgentPlacement()
+      return sessionId
     },
     [closeNewAgentPlacement, refs.stateRef, sessionActions, setState, showToast],
   )

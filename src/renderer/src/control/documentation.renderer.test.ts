@@ -74,7 +74,7 @@ describe('control discovery against the real app catalog and settings', () => {
     // description is deliberately outside the title/keyword path.
     const command = builtInCommandCatalog.find(entry => entry.id === 'toggle-reader-mode')!
     const query = command.description
-    const result = await commandControlCapabilities()[0].execute({ query }, context)
+    const result = await commandControlCapabilities().find(capability => capability.descriptor.id === 'commands.list')!.execute({ query }, context)
     if (!result.ok) throw new Error(result.error.message)
     expect((result.value as { items: Array<{ id: string }> }).items.map(item => item.id)).toContain(command.id)
     const resolved = builtInCommandCatalog.map(entry => ({ ...entry, title: typeof entry.title === 'string' ? entry.title : entry.id, keywords: entry.keywords ?? [], state: null, keepPaletteOpen: false }))

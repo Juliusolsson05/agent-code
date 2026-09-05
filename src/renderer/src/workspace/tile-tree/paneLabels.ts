@@ -48,6 +48,16 @@ export type AgentPaneLabelTarget = {
   kind: AgentProviderKind
 }
 
+/** Stable identity entry point for bookmarks, automation and future UI links.
+ * Membership still comes from the canonical project query; a buried record is
+ * intentionally not a navigable live placement until explicitly restored. */
+export function resolveAgentSessionTarget(state: WorkspaceState, sessionId: SessionId): AgentPaneLabelTarget | null {
+  const owners = state.tabs.filter(tab => resolveTabSessions(state, tab.id).includes(sessionId))
+  if (owners.length !== 1) return null
+  const tab = owners[0]
+  return buildAgentPaneLabelTarget(state, paneLabelForSession(state, tab.id, sessionId), sessionId, tab.id)
+}
+
 /**
  * Resolve the compact label the user can already see in pane/Dispatch chrome.
  *

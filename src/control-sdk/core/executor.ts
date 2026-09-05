@@ -15,6 +15,8 @@ function canonical(value: unknown): string {
 export function createControlExecutor(ports: {
   history: ControlHistory; instanceId: string; id(): string; now(): string
   catalog(): CapabilityListing[]
+  activateOwner?(owner: CapabilityListing['owner']): Promise<void>
+  ownershipEvidence?(kind: 'session' | 'project', id: string, context: Omit<ControlContext, 'owner'>): Promise<CapabilityListing['owner'][]>
   dispatch(request: ControlRequest, context: Omit<ControlContext, 'owner'>): Promise<ControlResult>
 }) {
   // Only admission is serialized. Slow agents in one window cannot block
@@ -80,12 +82,22 @@ export function createControlExecutor(ports: {
             }
           }
         } else {
-          const resolved = resolveOwner(request, ports.catalog())
+          const resolved = await resolveOwner(request, ports.catalog(), ports.ownershipEvidence ? async (kind, id) => {
+            await write('step', { step: 'resolve-owner', kind, id, state: 'started' })
+            const owners = await ports.ownershipEvidence!(kind, id, { requestId: callId, caller })
+            await write('step', { step: 'resolve-owner', kind, id, owners, state: 'completed' })
+            return owners
+          } : undefined)
           owner = resolved.owner
           completionKind = resolved.descriptor.completion
           effect = resolved.descriptor.effect
           await write('dispatched', { owner })
           dispatched = true
+          if (effect === 'ui' && ports.activateOwner) {
+            await write('step', { step: 'activate-owner', owner, state: 'started' })
+            await ports.activateOwner(owner)
+            await write('step', { step: 'activate-owner', owner, state: 'completed' })
+          }
           result = await ports.dispatch({ ...request, owner }, { requestId: callId, caller })
         }
       } catch (error) {

@@ -23,6 +23,8 @@ export function defineCapability<I extends z.ZodType, O extends z.ZodType>(defin
   execution: 'main' | 'window'
   effect: 'read' | 'ui' | 'mutation'
   completion?: 'completed' | 'accepted'
+  target?: CapabilityDescriptor['target']
+  replicated?: boolean
   input: I
   output: O
   handler(input: z.output<I>, context: ControlContext): z.input<O> | Promise<z.input<O>>
@@ -30,6 +32,7 @@ export function defineCapability<I extends z.ZodType, O extends z.ZodType>(defin
   if (!/^[a-z][a-zA-Z0-9]*(?:\.[a-z][a-zA-Z0-9]*)+$/.test(definition.id)) {
     throw new Error(`Control capability needs a namespaced ID: ${definition.id}`)
   }
+  if (definition.replicated && (definition.effect !== 'read' || definition.target)) throw new Error('Only target-free reads may be replicated')
   const descriptor: CapabilityDescriptor = Object.freeze({
     id: definition.id,
     title: definition.title,
@@ -37,6 +40,8 @@ export function defineCapability<I extends z.ZodType, O extends z.ZodType>(defin
     execution: definition.execution,
     effect: definition.effect,
     completion: definition.completion ?? 'completed',
+    ...(definition.target ? { target: Object.freeze({ ...definition.target }) } : {}),
+    ...(definition.replicated ? { replicated: true } : {}),
     inputSchema: z.toJSONSchema(definition.input, { io: 'input' }),
     outputSchema: z.toJSONSchema(definition.output),
   })

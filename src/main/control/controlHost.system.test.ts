@@ -38,6 +38,7 @@ it('routes real renderer observations across two windows and survives reload wit
     await writeFile(renderer, `
       import { registerRendererHost } from '${resolve(root, 'src/renderer/src/control/registerRendererHost.ts')}'
       import { workspaceControlCapabilities } from '${resolve(root, 'src/renderer/src/workspace/control.ts')}'
+      import { agentControlCapabilities } from '${resolve(root, 'src/renderer/src/workspace/control/agents.ts')}'
       import { commandControlCapabilities } from '${resolve(root, 'src/renderer/src/features/command-palette/control.ts')}'
       import { keybindingControlCapabilities } from '${resolve(root, 'src/renderer/src/features/command-keybindings/control.ts')}'
       import { documentationCapabilities } from '${resolve(root, 'src/renderer/src/control/documentation.ts')}'
@@ -48,9 +49,11 @@ it('routes real renderer observations across two windows and survives reload wit
         activeTabId: id, dispatchMode: null, sessions: { [id + '-agent']: {cwd: '/control-trial/' + id, kind: 'codex'} },
         detachedSessions: {}, buried: [], pinnedSessionIds: []
       }})
+      window.addAmbiguousAgent = () => useAppStore.getState().setWorkspaceState(state => ({ ...state, sessions: { ...state.sessions, 'right-agent': {cwd: '/ambiguous', kind: 'codex'} } }))
       window.changeTrialBinding = () => useAppStore.getState().setSettings({ commandKeybindingOverrides: {'new-tab': ['Cmd+Alt+T']} })
       registerRendererHost([
         ...workspaceControlCapabilities(() => ({restoreStatus: 'fresh'})),
+        ...agentControlCapabilities(() => ({restoreStatus: 'fresh'})),
         ...commandControlCapabilities(), ...keybindingControlCapabilities(), ...documentationCapabilities(),
       ])
         .catch(error => { document.body.textContent = String(error); console.error(error) })
@@ -92,9 +95,13 @@ it('routes real renderer observations across two windows and survives reload wit
         const left = await registered('left')
         const right = await registered('right')
         const observe = target => caller.invoke({capabilityId: 'workspace.observe', input: {}, owner: target})
+        const routed = await caller.invoke({capabilityId: 'agents.titleSet', input: {sessionId: 'right-agent', title: 'Routed title'}, requestKey: 'title-intention'})
+        const fleet = await caller.invoke({capabilityId: 'agents.search', input: {query: 'Routed title'}})
+        await windows.get('left').webContents.executeJavaScript('window.addAmbiguousAgent()')
+        const ambiguous = await caller.invoke({capabilityId: 'agents.titleSet', input: {sessionId: 'right-agent', title: 'Wrong'}, requestKey: 'ambiguous-intention'})
         const first = await observe(left)
         const second = await observe(right)
-        const guide = await caller.invoke({capabilityId: 'app.describe', input: {section: 'ui-map'}, owner: left})
+        const guide = await caller.invoke({capabilityId: 'app.describe', input: {section: 'ui-map'}})
         await windows.get('left').webContents.executeJavaScript('window.changeTrialBinding()')
         const binding = await caller.invoke({capabilityId: 'commands.describe', input: {commandId: 'new-tab'}, owner: left})
         windows.get('left').reload()
@@ -102,7 +109,7 @@ it('routes real renderer observations across two windows and survives reload wit
         const stale = await observe(left)
         const afterReload = await observe(replacement)
         const surviving = await observe(right)
-        console.log('CONTROL_TRIAL=' + JSON.stringify({first,second,guide,binding,stale,afterReload,surviving,changed: left.generation !== replacement.generation}))
+        console.log('CONTROL_TRIAL=' + JSON.stringify({routed,fleet,ambiguous,first,second,guide,binding,stale,afterReload,surviving,changed: left.generation !== replacement.generation}))
         host.dispose()
         for (const window of windows.values()) window.destroy()
         clearTimeout(deadline)
@@ -117,17 +124,19 @@ it('routes real renderer observations across two windows and survives reload wit
       [renderer, 'renderer.js', 'iife', []],
       [main, 'main.mjs', 'es', ['electron', /^node:/]],
     ] as const) {
+      const buildStarted = performance.now()
       await build({
         configFile: false, root, logLevel: 'silent', resolve: { alias },
         // Library mode leaves NODE_ENV to its consumer, whereas the production
         // Electron renderer is an app build. Supply that same browser constant
         // here; exposing a fake Node process would conceal real renderer leaks.
         define: format === 'iife' ? { 'process.env.NODE_ENV': JSON.stringify('production') } : {},
-        build: { target: 'esnext', outDir: directory, emptyOutDir: false, minify: false,
+        build: { reportCompressedSize: false, target: 'esnext', outDir: directory, emptyOutDir: false, minify: false,
           lib: { entry, name: 'ControlTrial', formats: [format], fileName: () => name },
           rollupOptions: { external: [...external] },
         },
       })
+      console.info(`[control trial] bundled ${name} in ${Math.round(performance.now() - buildStarted)}ms`)
     }
     await writeFile(join(directory, 'index.html'), '<html><head><meta http-equiv="Content-Security-Policy" content="default-src \'self\'; script-src \'self\'"></head><body><script src="renderer.js"></script></body></html>')
     const executable = createRequire(import.meta.url)('electron') as string
@@ -137,6 +146,9 @@ it('routes real renderer observations across two windows and survives reload wit
     const line = stdout.split('\n').find(value => value.startsWith('CONTROL_TRIAL='))
     expect(line, stdout).toBeTruthy()
     const evidence = JSON.parse(line!.slice('CONTROL_TRIAL='.length))
+    expect(evidence.routed).toMatchObject({ok: true, value: {sessionId: 'right-agent', title: 'Routed title'}, operation: {owner: {windowId: 'right'}}})
+    expect(evidence.fleet).toMatchObject({ok: true, value: {total: 1, items: [{sessionId: 'right-agent', title: 'Routed title', owner: {windowId: 'right'}}]}})
+    expect(evidence.ambiguous).toMatchObject({ok: false, error: {code: 'ambiguous_owner', outcome: 'not_started'}})
     expect(evidence.first).toMatchObject({ ok: true, value: { activeTabId: 'left' } })
     expect(evidence.second).toMatchObject({ ok: true, value: { activeTabId: 'right' } })
     expect(evidence.stale).toMatchObject({ ok: false, error: { code: 'stale_owner', outcome: 'not_started' } })
@@ -148,4 +160,7 @@ it('routes real renderer observations across two windows and survives reload wit
   } finally {
     await rm(directory, { recursive: true, force: true })
   }
-}, 90_000)
+// Three real production bundles are built before Electron starts. The app
+// retains its separate 25s deadline; build time under concurrent CI load is
+// not part of the control protocol's responsiveness contract.
+}, 180_000)

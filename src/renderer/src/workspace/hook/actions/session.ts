@@ -87,7 +87,7 @@ export type SessionActions = {
     caller: WakeCaller,
     options?: SessionWakeOptions,
   ) => Promise<SessionWakeResult>
-  killSession: (sessionId: SessionId) => Promise<void>
+  killSession: (sessionId: SessionId, capturedOwner?: Pick<SessionMeta, 'cwd' | 'kind' | 'providerRuntime'>) => Promise<void>
   replaceSession: (
     cwd: string,
     opts?: {
@@ -118,8 +118,12 @@ export type SessionWakeOptions = {
 export async function killSessionBackendIfOwned(
   refs: WorkspaceRefs,
   sessionId: SessionId,
+  capturedOwner?: Pick<SessionMeta, 'cwd' | 'kind' | 'providerRuntime'>,
 ): Promise<boolean> {
-  const meta = refs.stateRef.current.sessions[sessionId]
+  // Spawn cleanup may run before React refreshes stateRef. Its caller already
+  // knows the exact scope it just created; main still performs the atomic
+  // ownership check. Ordinary close paths continue using the live metadata.
+  const meta = capturedOwner ?? refs.stateRef.current.sessions[sessionId]
   if (!meta) return false
   // WHY this proof lives in main as one atomic check+kill: renderer runtime
   // flags are advisory and can be reset by retry, soft reload, or a delayed
@@ -930,8 +934,8 @@ export function useSessionActions(
   )
 
   const killSession = useCallback(
-    async (sessionId: SessionId) => {
-      await killSessionBackendIfOwned(refs, sessionId)
+    async (sessionId: SessionId, capturedOwner?: Pick<SessionMeta, 'cwd' | 'kind' | 'providerRuntime'>) => {
+      await killSessionBackendIfOwned(refs, sessionId, capturedOwner)
       setRuntimes(prev => {
         const next = { ...prev }
         delete next[sessionId]

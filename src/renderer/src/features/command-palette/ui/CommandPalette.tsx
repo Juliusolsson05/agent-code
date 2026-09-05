@@ -12,6 +12,7 @@ import {
   DialogTitle,
 } from '@renderer/components/ui/dialog'
 import { buildCommandRegistry } from '@renderer/features/command-palette/registry'
+import { usePaletteRequest } from './usePaletteRequest'
 import {
   dispatchCommand,
   dispatchResolvedRow,
@@ -1098,6 +1099,9 @@ function OpenCommandPalette({
   const selectedCommand = useMemo(() => {
     return selectedPaletteRow?.kind === 'command' ? selectedPaletteRow.command : null
   }, [selectedPaletteRow])
+
+  usePaletteRequest({ visible, mode, query, selectedIndex, setQuery, setSelectedIndex,
+    commandIds: paletteRows.map(row => row.kind === 'command' ? row.command.id : null) })
 
   // Focus the search input whenever the palette becomes VISIBLE.
   //

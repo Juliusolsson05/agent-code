@@ -406,7 +406,38 @@ with the external transport in stage 7.
   actual persisted artifacts from fault probes. Newly injected faults are
   labeled contract probes, not fabricated production recordings.
 
-### Stage 5 — navigation and the first feature-owned control slice
+### Stage 5 — navigation and the first feature-owned control slice (verified)
+
+Implementation: registered cross-window search/observation, stable-ID locate/show,
+explicit buried restoration, title/pin, project-open, detached create, grid
+placement discovery/attach, and provider prompt delivery. The feature owns each
+handler. UI labels and stable IDs share the existing navigation action/reducer;
+hidden related children can use their parent's view, and a wake cannot replace
+a different slot after focus moves. Showing verifies focus, a rendered pane and
+its window-relative bounds. The executor records owner resolution/window focus
+steps. Target arbitration uses all live window observations and rejects missing
+or duplicate ownership. App documentation alone opts into replicated-read
+routing, so the crash course works as the operator's first call in a multi-window
+app; window-specific shortcuts and actions retain explicit ownership.
+
+The command picker stays lazy. A feature-owned request rendezvous acknowledges
+the rendered query/selection on a frame and never executes the highlighted row.
+Creation returns the actual spawn ID instead of inferring it from a before/after
+census. If the project disappears during spawn, cleanup carries the captured
+scope to main's existing atomic ownership check, including before React refs
+catch up. Prompt delivery preserves drafts and distinguishes acceptance from
+completion; post-write uncertainty is never retried.
+
+Verification: full app typecheck and the neutral SDK check passed. Fifty-seven
+focused checks plus two placement/restore checks passed, including all existing
+seven-kind navigation cases, stable-ID/UI equivalence, focus-during-wake, hidden
+related reveal, picker frame acknowledgement, prompt target revalidation and
+uncertain delivery. The actual two-window Electron trial routed a title mutation
+to the right window from only its session ID, found it globally, rejected an
+injected duplicate owner, retrieved the owner-free UI guide, and survived reload.
+The trial builds real production bundles with a separate build budget; its app
+runtime deadline remains 25 seconds. The full packaged hybrid operator trial
+remains in stages 7/10; these checks do not claim provider tasks were run.
 
 - **Produces:** registered search/locate/show/palette-open capabilities and an
   explicit-ID domain navigation action shared with the existing UI path.

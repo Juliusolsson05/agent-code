@@ -5,6 +5,7 @@ import {
   type RegisteredCapability,
 } from '@control-sdk'
 import { workspaceControlCapabilities } from '@renderer/workspace/control'
+import { agentControlCapabilities } from '@renderer/workspace/control/agents'
 import { commandControlCapabilities } from '@renderer/features/command-palette/control'
 import { keybindingControlCapabilities } from '@renderer/features/command-keybindings/control'
 import { documentationCapabilities } from './documentation'
@@ -60,6 +61,7 @@ export function useControlRegistration(workspace: Workspace): void {
     let dispose: (() => void) | undefined
     void registerRendererHost([
       ...workspaceControlCapabilities(() => current.current),
+      ...agentControlCapabilities(() => current.current),
       ...commandControlCapabilities(),
       ...keybindingControlCapabilities(),
       ...documentationCapabilities(),

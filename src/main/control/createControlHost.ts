@@ -3,12 +3,14 @@ import { ipcMain, type BrowserWindow, type WebContents, type IpcMainInvokeEvent 
 import { createControlExecutor, createControlRegistry } from '@control-sdk/host'
 import {
   controlRegistrationSchema, controlRequestSchema, rendererControlResponseSchema,
+  ControlError, workspaceObservationSchema,
   type ControlCaller, type ControlRequest, type RegisteredCapability,
 } from '@control-sdk'
 import { ControlRendererBridge } from './rendererBridge'
 import { windowControlCapabilities } from '@main/window/control'
 import { FileControlHistory } from './history/FileControlHistory'
 import { historyCapabilities } from './history/control'
+import { globalControlCapabilities, type ObserveWindows } from './globalCapabilities'
 
 export function createControlHost(windowAccess: {
   getBrowserWindow(id: string): BrowserWindow | null
@@ -19,9 +21,40 @@ export function createControlHost(windowAccess: {
   // adapter is the existing window registry, never an SDK-owned window store.
   const { getBrowserWindow, windowIdFor, listWindowIds } = windowAccess
   const registry = createControlRegistry()
+  const observeWindows: ObserveWindows = context => Promise.all(listWindowIds().map(async windowId => {
+    const owner = registry.list().find(row => row.descriptor.id === 'workspace.observe'
+      && row.owner.kind === 'window' && row.owner.windowId === windowId)?.owner
+    if (!owner) return { windowId, owner: null, error: 'Window has not registered its workspace' }
+    const result = await registry.invoke({ capabilityId: 'workspace.observe', input: {}, owner }, context)
+    if (!result.ok) return { windowId, owner, error: result.error.message }
+    const parsed = workspaceObservationSchema.safeParse(result.value)
+    return parsed.success ? { windowId, owner, workspace: parsed.data } : { windowId, owner, error: 'Invalid workspace observation' }
+  }))
   const history = new FileControlHistory(historyDirectory)
   const executor = createControlExecutor({ history, instanceId: randomUUID(), id: randomUUID,
     now: () => new Date().toISOString(), catalog: () => registry.list(),
+    ownershipEvidence: async (kind, id, context) => {
+      const observed = await observeWindows(context)
+      if (observed.some(window => window.error)) throw new ControlError('unavailable', 'Some windows could not be observed; provide an explicit owner or wait for registration')
+      return observed.filter(window => kind === 'session' ? window.workspace?.sessions.some(session => session.sessionId === id)
+        : window.workspace?.tabs.some(tab => tab.id === id)).flatMap(window => window.owner ? [window.owner] : [])
+    },
+    activateOwner: async owner => {
+      if (owner.kind !== 'window') return
+      const window = getBrowserWindow(owner.windowId)
+      if (!window || window.isDestroyed()) throw new Error('Target window disappeared')
+      if (window.isMinimized()) window.restore()
+      window.show()
+      window.focus()
+      if (window.isFocused()) return
+      await new Promise<void>((resolve, reject) => {
+        const cleanup = () => { clearTimeout(timeout); window.removeListener('focus', focused) }
+        const focused = () => { cleanup(); resolve() }
+        const timeout = setTimeout(() => { cleanup(); reject(new Error('Window focus was not acknowledged')) }, 2500)
+        window.once('focus', focused)
+        if (window.isFocused()) focused()
+      })
+    },
     dispatch: (request, context) => registry.invoke(request, context) })
   const bridge = new ControlRendererBridge((windowId, message) => {
     const window = getBrowserWindow(windowId)
@@ -43,7 +76,7 @@ export function createControlHost(windowAccess: {
       windowId, focused: getBrowserWindow(windowId)?.isFocused() ?? false,
       generation: windows.get(windowId)?.generation ?? null,
     })),
-  ), ...historyCapabilities(history)])
+  ), ...historyCapabilities(history), ...globalControlCapabilities(observeWindows)])
 
   ipcMain.handle('control:register', (event, raw: unknown) => {
     const windowId = senderWindow(event)
