@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { APP_STORE_STORAGE_KEY } from '@renderer/app-state/localStorageMigration'
 import type { AppStore } from '@renderer/app-state/types'
@@ -17,6 +17,20 @@ function createStorageMock(): {
 }
 
 let storage: ReturnType<typeof createStorageMock>
+
+beforeAll(async () => {
+  // The real store reaches the provider/settings graph. Transform that graph
+  // during suite setup, not inside the first persistence assertion's deadline:
+  // otherwise a cold Vite import can time out and continue writing against the
+  // next case's storage. Every case still resets modules and owns a fresh store;
+  // this warms transformed source, never the identity/durability cache tested.
+  vi.stubGlobal('localStorage', createStorageMock())
+  try {
+    await import('./store')
+  } finally {
+    vi.unstubAllGlobals()
+  }
+})
 
 beforeEach(() => {
   // Persistence owns an identity cache for this store instance. Reset modules
