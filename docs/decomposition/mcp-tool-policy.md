@@ -20,4 +20,8 @@ Config ownership stays in the settings integration (extract a local module if ne
 - Live app still runs old code until a user-controlled update/restart; do not hot-patch that process.
 
 ## Validation record
-Pending implementation. Plan is the first commit; PR will include the working fix, not just this document. No merge authorization.
+- Stage 1 verified: the captured structural fixture fails against the original integration with the same ownership error; the credential-conflict assertion already passes.
+- Stage 2 verified: `externalCodexConfig.ts` owns the pure transformation and has a single production consumer, the existing file integration. Migration preserves exact policy bytes; restart, policy edit, retry, rotation, disable/re-enable, unrelated tables and multiline-string/bare-key ownership boundaries pass. Existing symlink, skill ownership, unmanaged connection and invalid-table checks also pass.
+- Stage 3 verified locally: 9 tests across 5 settings/transport files pass; full `npm run typecheck`, `npm run test:contract` and `git diff --check` pass. A separate curl trial runs the actual integration/settings/host against a private temporary copy of the current user config: initialize, tools/list and tools/call each return HTTP 200; the real status capability reports running; policy values are preserved; the live config remains byte-identical. The trial publishes only the real status capability and does not exercise live renderer agent controls.
+- Codex's vendored `config/src/mcp_types.rs` confirms transport is required even for disabled servers, and `enabled = false` skips initialization. This is why retained policy uses a disabled URL-only definition rather than leaving an invalid policy-only table.
+- No app restart or live configuration mutation was performed. The currently running app still needs the fixed build to recover. No merge authorization; PR/CI status will be tracked on #817.

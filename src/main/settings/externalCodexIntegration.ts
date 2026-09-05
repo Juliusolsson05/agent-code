@@ -1,14 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { lstat, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { isDeepStrictEqual } from 'node:util'
-import { parse } from '@iarna/toml'
+import { reconcileExternalCodexConfig } from './externalCodexConfig'
 
-const begin = '# agent-code-external-control:v1 '
-const end = '# /agent-code-external-control\n'
 const skillMarker = '\n<!-- agent-code-external-operator:v1 '
 const sha = (value: string) => createHash('sha256').update(value).digest('hex')
-const serverName = 'agent-code-control'
 
 // This writer is intentionally separate from the all-provider skill manager:
 // installing the operator into ~/.agents/skills would advertise it to the very
@@ -30,40 +26,7 @@ export function createExternalCodexIntegration(codexHome: string, skillSource: s
           throw new Error(`Operator skill is not app-owned or was edited: ${skillPath}`)
         }
       }
-      const original = parseConfig(existing ?? '')
-      let remaining = existing ?? ''
-      const offset = remaining.indexOf(begin)
-      if (offset >= 0) {
-        const bodyStart = remaining.indexOf('\n', offset) + 1
-        const endStart = remaining.indexOf(end, bodyStart)
-        if (offset > 0 && remaining[offset - 1] !== '\n' || !bodyStart || endStart < 0
-          || remaining.slice(offset, bodyStart) !== `${begin}${sha(remaining.slice(bodyStart, endStart))}\n`
-          || remaining.indexOf(begin, bodyStart) >= 0) {
-          throw new Error(`Managed Codex connection was edited; preserve or remove that block manually: ${configPath}`)
-        }
-        remaining = remaining.slice(0, offset) + remaining.slice(endStart + end.length)
-        // A marker inside a TOML multiline string is not ownership. Likewise,
-        // removing our table must not change the meaning of a user's later keys.
-        const withoutOwned = structuredClone(original)
-        const servers = withoutOwned.mcp_servers as Record<string, unknown> | undefined
-        if (!servers || !Object.hasOwn(servers, serverName)) throw new Error('Codex connection ownership markers are outside the expected table')
-        delete servers[serverName]
-        if (Object.keys(servers).length === 0) delete withoutOwned.mcp_servers
-        const parsedRemaining = parseConfig(remaining)
-        if (parsedRemaining.mcp_servers && Object.keys(parsedRemaining.mcp_servers).length === 0) delete parsedRemaining.mcp_servers
-        if (!isDeepStrictEqual(withoutOwned, parsedRemaining)) throw new Error('Removing the managed connection would change unrelated Codex configuration')
-      } else if (Object.hasOwn((original.mcp_servers as object | undefined) ?? {}, serverName)) {
-        throw new Error(`Codex already has an unmanaged ${serverName} connection: ${configPath}`)
-      }
-      let next = remaining
-      if (connection) {
-        const body = `[mcp_servers.agent-code-control]\nurl = ${JSON.stringify(connection.url)}\nhttp_headers = { Authorization = ${JSON.stringify(`Bearer ${connection.token}`)} }\n`
-        next += `${next && !next.endsWith('\n') ? '\n' : ''}${begin}${sha(body)}\n${body}${end}`
-      }
-      // Validation, not serialization: comments, ordering and unrelated bytes
-      // survive unchanged. Inline mcp_servers tables cannot be extended this way;
-      // report that unsupported shape instead of writing invalid TOML.
-      parseConfig(next)
+      const next = reconcileExternalCodexConfig(existing ?? '', connection)
       // Validate both destinations before either mutation. On a later I/O failure
       // Settings stops the listener; the next retry recognizes any completed half.
       if (connection) await replaceObserved(skillPath, oldSkill, skill)
@@ -71,13 +34,6 @@ export function createExternalCodexIntegration(codexHome: string, skillSource: s
       if (!connection && oldSkill !== null) await replaceObserved(skillPath, oldSkill, null)
     },
   }
-}
-
-function parseConfig(text: string) {
-  try { return parse(text) }
-  // Parser errors can quote a line containing a bearer. Never expose them in
-  // Settings, SDK history or logs; the path and repair action are sufficient.
-  catch { throw new Error('Codex config.toml is invalid or uses a table shape that cannot be extended safely') }
 }
 
 async function readRegular(path: string): Promise<string | null> {
