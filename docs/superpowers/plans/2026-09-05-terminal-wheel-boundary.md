@@ -18,8 +18,8 @@ reported scrolling problem or change providers' alternate-screen behavior.
 ## Verification
 
 - Shared bubbling helper attached/disposed by all three terminal hosts.
-- 25 affected renderer tests pass, including all host lifetimes; type-check and
-  the test contract pass.
+- After integrating the approved batch, 43 affected renderer/GPU-helper tests
+  pass, including all host lifetimes; type-check and the test contract pass.
 - Real Electron wheel probe: control moves the outer panel 120px at the boundary;
   patched keeps it at 0px. Normal scrollback, output anchoring, alternate-screen
   arrows, and SGR mouse reporting pass in both modes.
