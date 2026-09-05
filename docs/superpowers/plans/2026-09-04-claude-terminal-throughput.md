@@ -1,6 +1,7 @@
 # Terminal throughput: route PTY data once and render with WebGL
 
-Fixes #768. Refs #103, #390, #745, #749, #760.
+Refs #768, #103, #390, #745, #749, #760. This slice does not complete the
+broader host-core/registry acceptance criteria of #768.
 
 ## Expanded evidence and scope
 
@@ -121,3 +122,19 @@ Generation slices (shared implementations and final signatures stay parent-owned
 - TypeScript, focused Vitest projects, and a production package build pass.
 - The production build emits the WebGL addon as a lazy chunk rather than adding
   it to the feed-first entry bundle.
+
+## Recorded verification
+
+- Forty focused tests across seven files passed after the final inline changes;
+  local TypeScript and test-contract checks passed.
+- A real isolated Electron smoke test activated WebGL, forced context loss,
+  observed DOM fallback, and verified subsequent output and injected keyboard
+  input. Screenshots were inspected; synthetic data only.
+- The first local package build passed and emitted a separate 139.52 kB WebGL
+  chunk. A duplicate local rebuild was stopped after eleven minutes of host
+  contention once full macOS CI verified the final source instead.
+- PR #783 CI run 33935407941 passed both gates, including all test layers,
+  coverage and distributable output. Documentation-only follow-up remains
+  subject to the repository's normal CI rerun.
+- The live app was not restarted. No measured live FPS/key-to-echo claim is
+  made; Bringdown and existing direct-PTY agent processes were preserved.
