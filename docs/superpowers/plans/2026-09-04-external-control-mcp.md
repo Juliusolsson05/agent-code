@@ -1,4 +1,4 @@
-Status: Initial release implemented; verification and merge in progress. Tracking issue: #793.
+Status: Initial release implemented. Issue #793 and PR #794 track verification and merge.
 
 2026-09-05 delivery scope: the user requested merging the first working release
 with Settings-managed global Codex MCP and operator skill setup. Shipped coverage

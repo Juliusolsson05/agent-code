@@ -1,6 +1,6 @@
 # Internal control SDK and MCP isolation
 
-Status: Approved by the user on 2026-09-04. Implementation in progress.
+Status: Approved by the user on 2026-09-04. Initial release implemented; PR #794 tracks verification and merge.
 Stages 0–7 verified; common Stage 8 controls implemented. Initial release now includes
 Settings-managed global external Codex setup; advanced lifecycle/batch/workflow
 controls remain follow-up scope per the user’s 2026-09-05 delivery instruction.
@@ -779,3 +779,13 @@ or universal provider skill installation is promised in this first release.
 The dependency audit still enforces SDK neutrality and feature-owned adapters.
 The only new runtime library is `@iarna/toml`, used to validate user configuration
 without reserializing its comments or unrelated settings.
+
+Final review also verified pre-install exclusions through a symlinked CODEX_HOME:
+the same canonical skill path is reserved before and after Settings installs it.
+The standalone SDK type gate caught runtime-specific diagnostics in the task
+launcher; logging is now injected by the renderer and both SDK and app checks pass.
+Full renderer suite: 114 files / 496 tests pass. The full local core run passes
+2,130 tests with one unchanged provenance assertion failing because a historical
+developer-local recording is absent; its source and committed fixtures match main.
+The PR records CI results separately rather than treating this local corpus as
+portable evidence.

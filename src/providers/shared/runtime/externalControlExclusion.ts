@@ -1,5 +1,5 @@
 import { homedir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { dirname, join, relative, resolve } from 'node:path'
 import { realpathSync } from 'node:fs'
 
 // The external operator is intentionally not one of Agent Code's per-session
@@ -19,11 +19,19 @@ export const DISABLED_CODEX_EXTERNAL_CONTROL = {
 
 export function disabledExternalOperatorSkill(codexHome = process.env.CODEX_HOME || join(homedir(), '.codex')) {
   const path = resolve(codexHome, 'skills', 'agent-code-computer-execution', 'SKILL.md')
-  // Codex canonicalizes discovered skill paths. Resolve symlinked home roots in
-  // exactly the same way; before installation the stable absolute path suffices.
-  let canonical = path
-  try { canonical = realpathSync(path) } catch { /* not installed yet */ }
-  return { path: canonical, enabled: false }
+  // Internal agents can start BEFORE Settings installs the skill. Canonicalize
+  // the deepest existing ancestor as well as an existing file: a symlinked
+  // CODEX_HOME must yield the same exclusion before and after installation,
+  // otherwise a running agent's later skill refresh could discover a new path.
+  let ancestor = path
+  while (true) {
+    try { return { path: join(realpathSync(ancestor), relative(ancestor, path)), enabled: false } }
+    catch {
+      const parent = dirname(ancestor)
+      if (parent === ancestor) return { path, enabled: false }
+      ancestor = parent
+    }
+  }
 }
 
 export function excludeExternalControlFromCodex(args: string[], codexHome?: string): void {
