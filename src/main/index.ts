@@ -11,6 +11,7 @@ import { join } from 'path'
 import { performance } from 'perf_hooks'
 
 import { SessionManager } from '@main/sessionManager.js'
+import { createControlHost } from '@main/control/createControlHost.js'
 import { installSessionShutdownGate } from '@main/sessionShutdownGate.js'
 import { LspManager } from '@main/lspManager.js'
 import { compactAllGhostLogs, GhostJournalRegistry } from '@main/ghostJournal.js'
@@ -44,6 +45,9 @@ import {
   broadcastToWindows,
   createAppWindow,
   focusedWindowId,
+  getBrowserWindow,
+  listWindowIds,
+  windowIdFor,
   focusWindow,
   sendToFocusedWindow,
   sendToSessionWindow,
@@ -934,6 +938,8 @@ async function startApp(): Promise<void> {
     agentCodeConventionsService,
     workspaceFileStore,
   })
+  const controlHost = createControlHost({ getBrowserWindow, windowIdFor, listWindowIds })
+  app.once('will-quit', () => controlHost.dispose())
   // Boot probe runs after the IPC is wired so its first `state` push
   // has a live subscriber to receive it on the renderer side.
   cliUpdateOrchestrator.scheduleBootProbe()

@@ -41,6 +41,45 @@ export type CapabilityDescriptor = Readonly<{
 
 export type CapabilityListing = { descriptor: CapabilityDescriptor; owner: ControlOwner }
 
+// These are the only shapes allowed across the control IPC bridge. Schemas are
+// data; executable closures stay in their owning process. A renderer cannot
+// register a main-owned capability or choose another window's identity.
+export const capabilityDescriptorSchema = z.object({
+  id: z.string().regex(/^[a-z][a-zA-Z0-9]*(?:\.[a-z][a-zA-Z0-9]*)+$/),
+  title: z.string().min(1), description: z.string().min(1),
+  execution: z.enum(['main', 'window']), effect: z.enum(['read', 'ui', 'mutation']),
+  completion: z.enum(['completed', 'accepted']),
+  inputSchema: z.record(z.string(), z.json()), outputSchema: z.record(z.string(), z.json()),
+}).strict()
+
+export const controlRegistrationSchema = z.object({
+  generation: z.string().min(1),
+  capabilities: z.array(capabilityDescriptorSchema).max(4096),
+}).strict()
+export type ControlRegistration = z.infer<typeof controlRegistrationSchema>
+
+export const controlRequestSchema = z.object({
+  capabilityId: z.string().min(1), input: z.json(), owner: controlOwnerSchema.optional(),
+}).strict()
+
+export const controlResultSchema = z.discriminatedUnion('ok', [
+  z.object({ ok: z.literal(true), value: z.json() }).strict(),
+  z.object({ ok: z.literal(false), error: z.object({
+    code: z.enum(['unavailable', 'ambiguous_owner', 'stale_owner', 'invalid_input', 'invalid_output', 'failed']),
+    message: z.string(), outcome: z.enum(['not_started', 'unknown']),
+  }).strict() }).strict(),
+])
+
+export type RendererControlRequest = {
+  request: ControlRequest
+  context: ControlContext
+}
+
+export const rendererControlResponseSchema = z.object({
+  requestId: z.string().min(1), generation: z.string().min(1), result: controlResultSchema,
+}).strict()
+export type RendererControlResponse = z.infer<typeof rendererControlResponseSchema>
+
 export type ControlRequest = Readonly<{
   capabilityId: string
   input: unknown

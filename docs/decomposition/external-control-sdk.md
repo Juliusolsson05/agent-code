@@ -1,7 +1,7 @@
 # Internal control SDK and MCP isolation
 
 Status: Approved by the user on 2026-09-04. Implementation in progress.
-Stages 0–1 verified; Stage 2 is next.
+Stages 0–2 verified; Stage 3 is next.
 
 Product scope: [external control plan](../superpowers/plans/2026-09-04-external-control-mcp.md).
 Source evidence: [source inventory](evidence/external-control/source-inventory.json).
@@ -306,7 +306,21 @@ so the SDK preserves string window IDs rather than inventing Electron IDs.
 - **Reality check:** existing `SessionFeed` separation, IPC contracts, and source
   types identify actual boundaries. Compile checks prove contracts, not behavior.
 
-### Stage 2 — main/renderer registration and one canonical observation
+### Stage 2 — main/renderer registration and one canonical observation (verified)
+
+Implementation: main control composition and correlated renderer bridge, typed
+preload, window-level registration/cleanup, `app.windows`, and feature-owned
+`workspace.observe`. Observation reads the live store without subscriptions or
+provider wake; it preserves related, detached, buried, and mirrored placements.
+Verification: full application typecheck passed. Twelve SDK/bridge unit checks
+and two renderer checks passed. The colocated Electron system trial bundled the
+actual host, preload, registration, and workspace capability, opened two isolated
+context-isolated/sandboxed windows, observed distinct workspace IDs, reloaded one,
+rejected its old generation, and continued observing the other. The final trial
+passed twice, including after registration cleanup changes. Its workspace data
+is a deterministic setup, not a recording of private user data. No providers or
+normal app bootstrap were started. Run renderer checks with the repo's Node 24
+version; the shell's Node 25 exposed an incompatible native localStorage global.
 
 - **Produces:** main composition, typed preload transport, feature registration,
   and an SDK observation listing entity IDs, placements, owners, and generations.

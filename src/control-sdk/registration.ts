@@ -9,6 +9,7 @@ export interface RegisteredCapability {
 export interface Capability<I extends z.ZodType, O extends z.ZodType> extends RegisteredCapability {
   readonly input: I
   readonly output: O
+  execute(input: unknown, context: ControlContext): Promise<ControlResult<z.output<O>>>
 }
 
 // WHY schemas belong beside the handler: adding a control operation should be

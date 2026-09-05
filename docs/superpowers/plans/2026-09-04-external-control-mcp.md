@@ -351,7 +351,12 @@ must be reflected by the next MCP observation without restarting the app.
 
 ### 4.5 The app and every feature explained through MCP
 
-`ac_app_describe` provides a short orientation plus access to an expanded guide:
+`ac_app_describe` is a dedicated crash-course tool. Its default response teaches
+what Agent Code is, how the whole UI is organized, and how to operate it; it is
+not merely a feature index or a tool list. An explicit overview mode can be
+shorter. Full documentation remains available by section and through a
+paginated full-guide mode, so the operator can retrieve every part from this
+one tool. The crash course and expanded guide cover:
 what Agent Code is for, what runs locally, how providers fit in, the window/tab/
 agent model, major screen regions, Grid versus Dispatch, agent view versus raw
 terminal, and the discover-act-observe workflow. The guide links to a complete

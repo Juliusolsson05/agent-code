@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest'
 const root = resolve(import.meta.dirname, '../..')
 const config = ts.readConfigFile(resolve(root, 'tsconfig.node.json'), ts.sys.readFile)
 const options = ts.parseJsonConfigFileContent(config.config, ts.sys, root).options
+const resolutionCache = ts.createModuleResolutionCache(root, name => name, options)
 const sdk = 'src/control-sdk/'
 const mcp = 'src/main/externalControlMcp/'
 const hostConsumers = new Set([
@@ -99,12 +100,15 @@ describe('control SDK dependency boundary', () => {
     for (const file of sourceFiles(resolve(root, 'src'))) {
       const from = relative(root, file)
       for (const specifier of specifiers(readFileSync(file, 'utf8'))) {
-        const resolved = specifier === null ? undefined : ts.resolveModuleName(specifier, file, options, ts.sys).resolvedModule?.resolvedFileName
+        const resolved = specifier === null ? undefined : ts.resolveModuleName(specifier, file, options, ts.sys, resolutionCache).resolvedModule?.resolvedFileName
         const target = resolved ? relative(root, resolved) : undefined
         const reason = violation(from, target, specifier)
         if (reason) failures.push(`${from}: ${specifier} → ${target ?? 'external/unresolved'}: ${reason}`)
       }
     }
     expect(failures, failures.join('\n')).toEqual([])
-  })
+  // This visits the entire source graph, including large generated catalogs.
+  // The deadline measures a filesystem audit under concurrent CI load, not a
+  // latency contract for the application. Do not relax any forbidden edges.
+  }, 30_000)
 })
