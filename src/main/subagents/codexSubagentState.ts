@@ -511,32 +511,43 @@ function sessionsRootFromRolloutPath(path: string): string | null {
   }
 }
 
-async function findFileContaining(root: string, needle: string): Promise<string | null> {
-  async function walk(dir: string): Promise<string | null> {
-    let entries: string[]
+// Bound negative discovery independently of the 1.2 s activity poll. A new
+// child may wait up to this interval + one poll + scan time, but parent bursts
+// (including bursts of newly spawned ids) cannot defeat the scan budget.
+export const CODEX_CHILD_DISCOVERY_RETRY_MS = 5000
+
+async function findChildRollouts(
+  root: string,
+  missing: Set<string>,
+  stopped: () => boolean,
+): Promise<Map<string, string>> {
+  const found = new Map<string, string>()
+  async function walk(dir: string): Promise<void> {
+    if (stopped() || found.size === missing.size) return
+    let entries
     try {
-      entries = await readdir(dir)
+      entries = await readdir(dir, { withFileTypes: true })
     } catch {
-      return null
+      return // A newly created/moved date directory is retried next window.
     }
     for (const entry of entries) {
-      const path = join(dir, entry)
-      let info
-      try {
-        info = await stat(path)
-      } catch {
-        continue
-      }
-      if (info.isDirectory()) {
-        const found = await walk(path)
-        if (found) return found
-      } else if (entry.endsWith('.jsonl') && entry.includes(needle)) {
-        return path
+      if (stopped() || found.size === missing.size) return
+      const path = join(dir, entry.name)
+      if (entry.isDirectory()) {
+        await walk(path)
+      } else if (entry.isFile() && entry.name.endsWith('.jsonl')) {
+        // Directory-entry types remove one stat per archived file. In
+        // particular, never follow symlinks: a linked ancestor can recurse
+        // forever, and a linked foreign archive is not this root's discovery
+        // authority. Retain only matches for currently tracked children.
+        for (const id of missing) {
+          if (!found.has(id) && entry.name.includes(id)) found.set(id, path)
+        }
       }
     }
-    return null
   }
-  return walk(root)
+  await walk(root)
+  return found
 }
 
 export class CodexSubAgentTracker {
@@ -561,16 +572,32 @@ export class CodexSubAgentTracker {
   private dirty = false
   private stopped = false
   private readonly refreshLoop = new CoalescedRefresh(() => this.poll())
+  private nextDiscoveryAt = 0
 
-  constructor(private readonly onChange: (subAgents: Record<string, SubAgentState>) => void) {}
+  constructor(
+    private readonly onChange: (subAgents: Record<string, SubAgentState>) => void,
+    private readonly now: () => number = Date.now,
+  ) {}
 
   observeParentEntry(entry: JsonlEntry, file: string): void {
     if (this.stopped) return
+    const oldRoot = this.parentFile ? sessionsRootFromRolloutPath(this.parentFile) : null
+    const rootChanged = oldRoot !== sessionsRootFromRolloutPath(file)
+    if (rootChanged) {
+      // Offsets are meaningful only in their original files. A root change
+      // must not attach a new provider archive to cached old-path fold state.
+      this.childPathByAgentId.clear()
+      this.childOffsetByAgentId.clear()
+      this.childPartialByAgentId.clear()
+      this.childAccByAgentId.clear()
+      this.nextDiscoveryAt = 0
+    }
     this.parentFile = file
+    let changed = rootChanged
     const spawn = extractCodexSpawnCall(entry)
     if (spawn) {
       this.spawnsByCallId.set(spawn.callId, spawn)
-      this.dirty = true
+      changed = true
     }
     const output = extractCodexSpawnOutput(entry)
     if (output) {
@@ -580,7 +607,7 @@ export class CodexSubAgentTracker {
       // at the same moment, but emit() still needs to rebuild the record with the
       // parent spawn/output metadata. Mark dirty without touching the byte offset;
       // the accumulator remains the source of truth for child-derived fields.
-      this.dirty = true
+      changed = true
     }
     const waitCallId = isCodexWaitAgentCall(entry)
     if (waitCallId) this.waitCallIds.add(waitCallId)
@@ -602,17 +629,20 @@ export class CodexSubAgentTracker {
       // here is the exact key to drop.
       const consumedCallId = stringField(asRecord(entry.payload), 'call_id')
       if (consumedCallId) this.waitCallIds.delete(consumedCallId)
-      this.dirty = true
+      changed = true
     }
     const notification = extractCodexSubagentNotification(entry)
     if (notification) {
       this.notificationsByAgentId.set(notification.agentId, notification)
       // Notification status is parent-rollout metadata, not child bytes. A
       // completion notice must repaint even when the child file is quiescent.
-      this.dirty = true
+      changed = true
     }
     if (this.knownAgentIds().length > 0) this.ensureTimer()
-    void this.refresh()
+    if (changed) {
+      this.dirty = true
+      void this.refresh()
+    }
   }
 
   private ensureTimer(): void {
@@ -681,27 +711,43 @@ export class CodexSubAgentTracker {
   private async readKnownChildren(): Promise<void> {
     const root = this.parentFile ? sessionsRootFromRolloutPath(this.parentFile) : null
     if (!root) return
-    for (const agentId of this.knownAgentIds()) {
-      // Per-iteration stop guard (PR #317). This loop awaits IO between every
-      // child; stop() can land mid-loop and clear the maps. Bail immediately so
-      // we never write derived state back into a tracker that has been torn down.
+    const ids = this.knownAgentIds()
+    const missing = new Set(ids.filter(id => !this.childPathByAgentId.has(id)))
+    if (missing.size > 0 && this.now() >= this.nextDiscoveryAt) {
+      // One traversal serves ALL unresolved children, including misses from a
+      // previous pass. No archive-sized filename cache is retained and no new
+      // child bypasses the cooldown. #802 supplies the single in-flight owner.
+      this.nextDiscoveryAt = this.now() + CODEX_CHILD_DISCOVERY_RETRY_MS
+      const found = await findChildRollouts(root, missing, () => this.stopped)
+      if (this.stopped || sessionsRootFromRolloutPath(this.parentFile!) !== root) return
+      for (const [id, path] of found) this.childPathByAgentId.set(id, path)
+    }
+    for (const agentId of ids) {
       if (this.stopped) return
-      let path = this.childPathByAgentId.get(agentId) ?? null
-      if (!path) {
-        path = await findFileContaining(root, agentId)
-        if (this.stopped) return
-        if (path) this.childPathByAgentId.set(agentId, path)
-      }
+      const path = this.childPathByAgentId.get(agentId)
       if (!path) continue
-      const changed = await this.readAppendedChild(agentId, path)
-      if (this.stopped) return
-      if (changed) this.dirty = true
+      try {
+        const changed = await this.readAppendedChild(agentId, path)
+        if (this.stopped) return
+        if (changed) this.dirty = true
+      } catch (error) {
+        if (this.stopped) return
+        // A removed rollout must not poison every later child's activity
+        // poll. Rediscover it in the next bounded window, with fresh offsets.
+        const code = (error as NodeJS.ErrnoException).code
+        if ((code === 'ENOENT' || code === 'ENOTDIR') && this.childPathByAgentId.get(agentId) === path) {
+          this.childPathByAgentId.delete(agentId)
+          this.childOffsetByAgentId.delete(agentId)
+          this.childPartialByAgentId.delete(agentId)
+          this.childAccByAgentId.delete(agentId)
+        }
+      }
     }
   }
 
   private async readAppendedChild(agentId: string, path: string): Promise<boolean> {
     const { size } = await stat(path)
-    if (this.stopped) return false
+    if (this.stopped || this.childPathByAgentId.get(agentId) !== path) return false
     let from = this.childOffsetByAgentId.get(agentId) ?? 0
     if (size < from) {
       // Rollouts are append-only in normal Codex operation, but editors/tests can
@@ -717,7 +763,7 @@ export class CodexSubAgentTracker {
     const appended = await readRange(path, from, size)
     // readKnownChildren's outer guard is too late: these maps must not be
     // repopulated after stop(), even if an open range read finishes afterwards.
-    if (this.stopped) return false
+    if (this.stopped || this.childPathByAgentId.get(agentId) !== path) return false
     const text = (this.childPartialByAgentId.get(agentId) ?? '') + appended.text
     const lastNl = text.lastIndexOf('\n')
     this.childOffsetByAgentId.set(agentId, appended.nextOffset)
