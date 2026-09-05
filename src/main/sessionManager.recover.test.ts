@@ -213,9 +213,13 @@ describe('SessionManager recover', () => {
     })
 
     startGate.resolve()
+    // The claim winner sees 'spawned'; the joiner sees 'joined' (#772) so
+    // the renderer can skip the readiness wait for a start it did not own.
+    // Order is deterministic: `first` made the synchronous claim, `second`
+    // found it in flight.
     await expect(Promise.all([first, second])).resolves.toEqual([
       expect.objectContaining({ ok: true, disposition: 'spawned' }),
-      expect.objectContaining({ ok: true, disposition: 'spawned' }),
+      expect.objectContaining({ ok: true, disposition: 'joined' }),
     ])
     expect(createSession).toHaveBeenCalledTimes(1)
   })
@@ -282,7 +286,9 @@ describe('SessionManager recover', () => {
 
     const first = manager.recover(options)
     await expect(first).resolves.toMatchObject({ ok: true, disposition: 'spawned' })
-    await expect(reentrant).resolves.toMatchObject({ ok: true, disposition: 'spawned' })
+    // The re-entrant call joined the claim `first` was still building, so
+    // it reports 'joined' (#772) — never a second 'spawned'.
+    await expect(reentrant).resolves.toMatchObject({ ok: true, disposition: 'joined' })
     expect(createSession).toHaveBeenCalledTimes(1)
   })
 

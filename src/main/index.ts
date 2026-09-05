@@ -33,6 +33,11 @@ import {
   setLiveRecordingDirsProvider,
 } from '@main/storage/debugRetention.js'
 import { cleanupClaudeImageCacheDir } from '@main/storage/claudeImageCache.js'
+import {
+  installMitmproxyExitSweep,
+  reapOwnedMitmproxyProcesses,
+  reapStaleMitmproxyProcesses,
+} from '@main/proxy/mitmproxyReaper.js'
 import { acquireStateProcessLock } from '@main/storage/processLock.js'
 import type { StateProcessLock } from '@main/storage/processLock.js'
 import {
@@ -426,6 +431,52 @@ async function startApp(): Promise<void> {
   })
   installWindowIncidentHooks(appRunJournal)
   orchestrationBridge.setJournal(appRunJournal)
+
+  // mitmproxy process hygiene (#767): per-session mitmdump children are
+  // spawned undetached by claude-code-headless and survive every death of
+  // this process that skips will-quit (Force Quit, native crash, the
+  // process.exit(1) in installProcessCrashHooks above). Two layers here:
+  //
+  //   - The exit sweep SIGKILLs our own marked children synchronously on
+  //     Node's 'exit' event, which the crash hooks' process.exit(1) does reach.
+  //   - The startup reaper kills marked mitmdumps whose owner is dead —
+  //     leftovers from a previous run that died without ANY handler running.
+  //     It is placed here, after the state lock, because the ppid reasoning
+  //     in selectStaleMitmproxyProcesses relies on this process being the
+  //     only live Agent Code main for this state directory.
+  //
+  // Fire-and-forget: a slow `ps` or a wedged orphan must not delay boot,
+  // and the report is journaled whenever it lands. Recorded even at zero so
+  // every run carries a baseline row — "no orphans" is a fact worth having
+  // in the timeline when the next leak hunt starts.
+  installMitmproxyExitSweep()
+  void reapStaleMitmproxyProcesses()
+    .then(report => {
+      appRunJournal?.record({
+        area: 'proxy',
+        name: 'proxy.mitmdump.stale_reaped',
+        severity: report.survived > 0 ? 'warn' : 'info',
+        data: { ...report },
+      })
+      performanceService.record({
+        kind: 'metric',
+        process: 'main',
+        area: 'proxy',
+        name: 'proxy.mitmdump.stale_reaped',
+        metricType: 'counter',
+        value: report.reaped,
+        count: report.stale,
+        data: {
+          scanned: report.scanned,
+          survived: report.survived,
+          keptOwnedBySelf: report.keptOwnedBySelf,
+          keptLiveForeignOwner: report.keptLiveForeignOwner,
+        },
+      })
+    })
+    .catch(err => {
+      appRunJournal?.recordError('proxy.mitmdump.stale_reap.error', err)
+    })
   try {
     // Native crashes (V8 aborts, SIGSEGV in native addons, GPU-process death)
     // never reach JS, so the JSONL hooks above cannot see them. Crashpad writes
@@ -1043,7 +1094,38 @@ app.on('before-quit', (event) => {
 
 const sessionShutdownGate = installSessionShutdownGate({
   app,
-  getManager: () => manager,
+  getManager: () => {
+    const current = manager
+    if (!current) return null
+    return {
+      killAll: async () => {
+        await current.killAll()
+        // WHY a second sweep after killAll: killAll stops the sessions it
+        // knows about, and each ClaudeSession.stop() already terminates its
+        // own mitmdump under a deadline. This catches what that snapshot
+        // cannot — a proxy whose session was mid-start when shutdown began,
+        // or a stop() that gave up — by asking the kernel which marked
+        // mitmdumps still have THIS process as parent. Composed here rather
+        // than inside SessionManager or the gate so neither learns about a
+        // Claude-specific child process. Never rejects: a failed sweep must
+        // not hold quit (the gate is fail-closed on rejection), and the
+        // startup reaper on the next launch is the backstop anyway.
+        try {
+          const report = await reapOwnedMitmproxyProcesses()
+          if (report.owned > 0) {
+            appRunJournal?.record({
+              area: 'proxy',
+              name: 'proxy.mitmdump.quit_sweep',
+              severity: 'warn',
+              data: { ...report },
+            })
+          }
+        } catch (err) {
+          appRunJournal?.recordError('proxy.mitmdump.quit_sweep.error', err)
+        }
+      },
+    }
+  },
   platform: process.platform,
   onLastWindowClosed: () => {
     // WHY these provider-neutral resources still stop at last-window close on

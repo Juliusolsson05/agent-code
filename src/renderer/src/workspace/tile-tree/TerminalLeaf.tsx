@@ -1,4 +1,6 @@
 import { useEffect, useRef } from 'react'
+import { focusIsUnowned } from '@renderer/workspace/tile-tree/TileLeaf/useInteractiveOwnership'
+import { useAgentTerminalOwnerVisible } from '@renderer/workspace/terminal/AgentTerminalOwnership'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 
@@ -77,9 +79,19 @@ export function TerminalLeaf({
   const dictationEnabled = useAppStore(state => state.settings.dictationEnabled)
   const dictationProvider = useAppStore(state => state.settings.dictationProvider)
   const dictationShortcut = useAppStore(state => state.settings.dictationShortcut)
+  // Declared before the dictation hook so the registration below can gate on
+  // it (hook order is call order; the visibility answer must exist first).
+  const ownerVisible = useAgentTerminalOwnerVisible()
   useComposerDictation({
-    enabled: dictationEnabled,
-    focused,
+    // WHY both flags are visibility-gated (#757 round-4 review): this leaf
+    // stays mounted (display:none) while Reader/Spotlight/Settings own the
+    // screen, and the retained tree keeps focusedSessionId pointing at it.
+    // The dictation registry prefers the focused target, so an ungated
+    // registration meant the global Fn hotkey transcribed straight into
+    // this INVISIBLE pane's PTY. Both siblings (TileLeaf, AgentTerminalLeaf)
+    // already gate the same way; this was the one leaf kind that didn't.
+    enabled: dictationEnabled && ownerVisible,
+    focused: focused && ownerVisible,
     provider: dictationProvider,
     shortcut: dictationShortcut,
     sink: { kind: 'terminal', sessionId },
@@ -99,6 +111,19 @@ export function TerminalLeaf({
   const termRef = useRef<Terminal | null>(null)
   const focusedRef = useRef(focused)
   focusedRef.current = focused
+  // WHY a shell pane tracks visibility itself (#752 review): agent panes get
+  // their "may I measure / who owns the PTY size" answer from
+  // MountedAgentTerminalOwner, which TerminalLeaf never had — a shell has no
+  // inline debug twin to arbitrate with. But retention under display:none
+  // gives it the same stale-size problem: Spotlight's copy resizes the PTY
+  // to full width, and on reveal the retained leaf's fit equals its old
+  // cols/rows, so the de-dupe swallows the resize the shell now needs.
+  const ownerVisibleRef = useRef(ownerVisible)
+  ownerVisibleRef.current = ownerVisible
+  const onVisibilityChangeRef = useRef<((visible: boolean) => void) | null>(null)
+  useEffect(() => {
+    onVisibilityChangeRef.current?.(ownerVisible)
+  }, [ownerVisible])
   // FitAddon instance — held for resize callbacks.
   const fitRef = useRef<FitAddon | null>(null)
 
@@ -145,6 +170,10 @@ export function TerminalLeaf({
     const fitAndNotifyResize = () => {
       resizeFrame = null
       if (!term || !fit) return
+      // A display:none box measures as nothing; FitAddon's NaN guard would
+      // catch it, but never even asking keeps the guard from being the only
+      // thing between a hidden pane and a 2×1 resize on a live shell.
+      if (!ownerVisibleRef.current) return
       try {
         fit.fit()
         const { cols, rows } = term
@@ -179,6 +208,23 @@ export function TerminalLeaf({
     const scheduleFitAndNotifyResize = () => {
       if (resizeFrame !== null) return
       resizeFrame = requestAnimationFrame(fitAndNotifyResize)
+    }
+
+    onVisibilityChangeRef.current = visible => {
+      if (!visible) {
+        // Mirror AgentTerminalLeaf's ownership loss: whatever size we last
+        // sent no longer describes the PTY once another leaf (Spotlight's)
+        // may have resized it, and a queued measurement must not replay.
+        pendingResize = null
+        lastCols = 0
+        lastRows = 0
+        if (resizeFrame !== null) {
+          cancelAnimationFrame(resizeFrame)
+          resizeFrame = null
+        }
+        return
+      }
+      scheduleFitAndNotifyResize()
     }
 
     try {
@@ -331,7 +377,7 @@ export function TerminalLeaf({
           // focus might have drifted to somewhere else — this
           // re-focus closes the gap if the pane is still the
           // workspace-focused one.
-          if (focusedRef.current) liveTerm.focus()
+          if (focusedRef.current && ownerVisibleRef.current) liveTerm.focus()
         })
         .catch(err => {
           showPaneToastRef.current(
@@ -394,6 +440,7 @@ export function TerminalLeaf({
       }
       term?.dispose()
       termRef.current = null
+      onVisibilityChangeRef.current = null
       fitRef.current = null
     }
     // sessionId is the identity of the session we're attached to —
@@ -413,9 +460,15 @@ export function TerminalLeaf({
   // focused at the workspace level. For that we have the
   // synchronous `focusTerminal()` handler below, wired into the
   // outer div's onMouseDown.
+  const prevFocusedRef = useRef(focused)
   useEffect(() => {
-    if (focused) termRef.current?.focus()
-  }, [focused])
+    const focusChanged = prevFocusedRef.current !== focused
+    prevFocusedRef.current = focused
+    if (!focused || !ownerVisible) return
+    // On a reveal only take an unowned focus (see focusIsUnowned): editor-
+    // fullscreen exit must leave the caret in Monaco.
+    if (focusChanged || focusIsUnowned()) termRef.current?.focus()
+  }, [focused, ownerVisible])
 
   // Imperative re-focus. Called from outer-div mousedown so that
   // ANY click inside the terminal pane re-focuses xterm's helper

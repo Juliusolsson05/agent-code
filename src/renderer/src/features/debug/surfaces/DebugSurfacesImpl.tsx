@@ -85,9 +85,10 @@ export function DebugSurfacesImpl() {
           sessionId={targetId}
           runtime={runtime}
           kind={kind}
-          // WHY policy is not enough here: Settings and Reader unmount the
-          // workspace even though the target remains configured for Terminal,
-          // while Spotlight can mount a different session. The interactive
+          // WHY policy is not enough here: Settings and Reader hide the
+          // retained workspace (#752) so its pane releases its dimension claim
+          // even though the target remains configured for Terminal, while
+          // Spotlight can mount a different session. The interactive
           // debug xterm conflicts only with a real, mounted AgentTerminalLeaf
           // that can currently resize this exact PTY.
         inlineRawTerminalDisabled={paneTerminalClaimsDimensions}

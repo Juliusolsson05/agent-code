@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { RetainedWorkspaceSurface } from '@renderer/app/shell/RetainedWorkspaceSurface'
 import { GlobalEditorWorkspaceSlot } from '@renderer/features/global-editor/ui/GlobalEditorWorkspaceSlot'
 import { AgentInlineTerminal } from '@renderer/features/debug/ui/AgentInlineTerminal'
 import { emptyRuntime } from '@renderer/session-runtime/state'
@@ -565,5 +566,81 @@ describe('AgentTerminalLeaf dimension ownership', () => {
     act(() => flushAnimationFrames())
     expect(xtermHarness.fit).toHaveBeenCalledTimes(4)
     expect(resize).toHaveBeenCalledTimes(3)
+  })
+  it('sends exactly one resize when a retained pane is revealed after a takeover', async () => {
+    // #752: Reader/Spotlight/Settings hide the workspace instead of
+    // unmounting it. While hidden the pane must not measure a display:none
+    // box; on reveal it must remeasure and resize the PTY even if its size
+    // equals what it sent before (Spotlight's copy may have changed the PTY).
+    const runtime = {
+      ...emptyRuntime(),
+      processStatus: 'started' as const,
+    }
+    const tree = (hidden: boolean) => (
+      <AgentTerminalOwnershipProvider>
+        <RetainedWorkspaceSurface hidden={hidden}>
+          <GlobalEditorWorkspaceSlot open editorFullscreen={false} splitWorkspaceWidth="60%">
+            <MountedAgentTerminalOwner sessionId="session-1">
+              <AgentTerminalLeaf
+                sessionId="session-1"
+                focused
+                onFocusRequest={() => {}}
+                workspace={workspace}
+                runtime={runtime}
+                projectDir="/tmp/project"
+                provider="codex"
+              />
+            </MountedAgentTerminalOwner>
+          </GlobalEditorWorkspaceSlot>
+        </RetainedWorkspaceSurface>
+      </AgentTerminalOwnershipProvider>
+    )
+    const view = render(tree(false))
+    await act(async () => {
+      attach.resolve('')
+      await attach.promise
+    })
+    act(() => flushAnimationFrames())
+    expect(resize).toHaveBeenCalledTimes(1)
+    expect(resize).toHaveBeenLastCalledWith('session-1', 120, 40)
+
+    view.rerender(tree(true))
+    act(() => flushAnimationFrames())
+    expect(resize).toHaveBeenCalledTimes(1)
+
+    view.rerender(tree(false))
+    act(() => flushAnimationFrames())
+    expect(resize).toHaveBeenCalledTimes(2)
+    expect(resize).toHaveBeenLastCalledWith('session-1', 120, 40)
+  })
+  it('wakes a spawning backend without waiting for input readiness (#772)', async () => {
+    const runtime = {
+      ...emptyRuntime(),
+      processStatus: 'spawning' as const,
+    }
+    render(
+      <AgentTerminalOwnershipProvider>
+        <MountedAgentTerminalOwner sessionId="session-1">
+          <AgentTerminalLeaf
+            sessionId="session-1"
+            focused
+            onFocusRequest={() => {}}
+            workspace={workspace}
+            runtime={runtime}
+            projectDir="/tmp/project"
+            provider="codex"
+          />
+        </MountedAgentTerminalOwner>
+      </AgentTerminalOwnershipProvider>,
+    )
+    await act(async () => {
+      attach.resolve('')
+      await attach.promise
+    })
+    expect(workspace.ensureSessionLive).toHaveBeenCalledWith(
+      'session-1',
+      'agent-terminal-leaf.mount',
+      { awaitInputReady: false },
+    )
   })
 })

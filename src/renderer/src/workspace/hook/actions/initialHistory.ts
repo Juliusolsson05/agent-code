@@ -188,6 +188,11 @@ export async function loadInitialHistoryForSession({
 
       const initialEntries: Entry[] = []
       let initialOldestMarker: string | null = null
+      // Byte offset of the marker's line (chunk.offsets is parallel to
+      // chunk.entries); echoed to the loader so the first older page is
+      // anchored exactly. See historyLoader.ts for why a marker alone is
+      // not enough.
+      let initialOldestOffset: number | null = null
       let workActivity = current.workActivity
       let workContext = current.workContext
       // Registry-owned mapper (#394 phase 2b); chunk-scoped, so the
@@ -202,7 +207,7 @@ export async function loadInitialHistoryForSession({
       // emptyRuntime() (feed audit Finding 1).
       let toolIndexChanged = false
 
-      for (const raw of chunk.entries) {
+      for (const [rawIndex, raw] of chunk.entries.entries()) {
         workActivity = ingestWorktreeRawEvent({
           state: workActivity,
           raw,
@@ -217,6 +222,7 @@ export async function loadInitialHistoryForSession({
         // loads.
         if (mapped.length > 0 && marker && !initialOldestMarker) {
           initialOldestMarker = marker
+          initialOldestOffset = chunk.offsets?.[rawIndex] ?? null
         }
         for (const entry of mapped) {
           const uuid = (entry as { uuid?: string }).uuid
@@ -288,6 +294,9 @@ export async function loadInitialHistoryForSession({
           // called for a session with no on-disk transcript yet.
           totalEntries: resolvedTotalEntries,
           historyOldestMarker: initialOldestMarker ?? current.historyOldestMarker,
+          historyOldestOffset: initialOldestMarker !== null
+            ? initialOldestOffset
+            : current.historyOldestOffset,
           hasOlderHistory: chunk.hasMore,
           transcriptStatus: 'ready',
           transcriptStatusChangedAt: Date.now(),

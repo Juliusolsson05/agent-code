@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef } from 'react'
+import { focusIsUnowned } from '@renderer/workspace/tile-tree/TileLeaf/useInteractiveOwnership'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 
@@ -15,7 +16,7 @@ import { isSessionExited } from '@renderer/workspace/providerSessionIdentity'
 import { shortenCwd } from '@renderer/workspace/tile-tree/TileLeaf/labels'
 import { PaneToast } from '@renderer/workspace/tile-tree/TileLeaf/PaneToast'
 import { useComposerDictation } from '@renderer/workspace/tile-tree/TileLeaf/useComposerDictation'
-import { useAgentTerminalDimensionActive } from '@renderer/workspace/terminal/AgentTerminalOwnership'
+import { useAgentTerminalDimensionActive, useAgentTerminalOwnerVisible } from '@renderer/workspace/terminal/AgentTerminalOwnership'
 import { subscribeToAgentPtyData } from '@renderer/workspace/terminal/sessionDataDispatcher'
 import { attachXtermWebglRenderer } from '@renderer/workspace/terminal/xtermWebglRenderer'
 import { AgentTitleHeader } from '@renderer/workspace/tile-tree/AgentTitleHeader'
@@ -75,6 +76,7 @@ export function AgentTerminalLeaf({
   const focusedRef = useRef(focused)
   focusedRef.current = focused
   const dimensionActive = useAgentTerminalDimensionActive()
+  const ownerVisible = useAgentTerminalOwnerVisible()
   const dimensionActiveRef = useRef(false)
   const dimensionOwnershipEpochRef = useRef(0)
   const onDimensionOwnershipChangeRef = useRef<((active: boolean) => void) | null>(null)
@@ -92,8 +94,11 @@ export function AgentTerminalLeaf({
   }, [dimensionActive])
 
   useComposerDictation({
-    enabled: dictationEnabled,
-    focused,
+    // A retained, hidden pane (Reader/Spotlight/Settings, #752) is still the
+    // workspace-focused one; it must be neither the dictation target nor a
+    // fallback (`enabled`), while an unfocused visible pane stays a fallback.
+    enabled: dictationEnabled && ownerVisible,
+    focused: focused && dimensionActive,
     provider: dictationProvider,
     shortcut: dictationShortcut,
     sink: { kind: 'terminal', sessionId },
@@ -278,10 +283,10 @@ export function AgentTerminalLeaf({
       // callbacks current without making them part of xterm's mount contract.
       //
       // WHY the wake is conditional (#596): this effect runs on every MOUNT,
-      // and this component is unmounted and remounted constantly — entering
-      // and leaving Spotlight/Reader/Settings (which render outside
-      // GlobalEditorShell, so the whole tile tree goes away), and on every tab
-      // switch. Waking unconditionally meant each of those round-tripped
+      // and this component is still remounted on every tab switch and layout
+      // change (Reader/Spotlight/Settings stopped unmounting it in #752, but
+      // Spotlight mounts a second leaf). Waking unconditionally meant each of
+      // those round-tripped
       // through recoverSession for an agent that was already running, flapped
       // its runtime status spawning→started, and — until the companion fix in
       // ensureSessionLive — armed a 30-second timer that KILLED the live
@@ -364,12 +369,19 @@ export function AgentTerminalLeaf({
           // backend is gone — tryAttach only proves an entry existed.
           // Attach already succeeded; this wake is secondary. Tagged `mount`
           // because no retry follows it — the tags were swapped in review.
-          if (needsWake) await ensureSessionLiveRef.current(sessionId, 'agent-terminal-leaf.mount')
+          if (needsWake) {
+            await ensureSessionLiveRef.current(sessionId, 'agent-terminal-leaf.mount', { awaitInputReady: false })
+          }
           return
         }
         // Attach failed, so wake and RETRY the attach below. This is the site
         // the `attach-retry` tag describes.
-        if (needsWake) await ensureSessionLiveRef.current(sessionId, 'agent-terminal-leaf.attach-retry')
+        // WHY the raw terminal never waits for input-ready (#772): readiness is
+        // a composer concept; this pane wants the PTY as soon as the backend
+        // is live so the user watches the TUI boot instead of a blank box.
+        if (needsWake) {
+          await ensureSessionLiveRef.current(sessionId, 'agent-terminal-leaf.attach-retry', { awaitInputReady: false })
+        }
         if (await tryAttach()) return
         if (disposed) return
         // Wake reported success but there is still nothing to attach to. Say
@@ -414,9 +426,17 @@ export function AgentTerminalLeaf({
     }
   }, [sessionId])
 
+  // Also re-runs when the pane is revealed after a takeover (#752): the
+  // remount used to refocus xterm for free; retained panes need it here —
+  // but only when focus is unowned, so editor-fullscreen exit leaves the
+  // caret in Monaco (see focusIsUnowned).
+  const prevFocusedRef = useRef(focused)
   useEffect(() => {
-    if (focused) termRef.current?.focus()
-  }, [focused])
+    const focusChanged = prevFocusedRef.current !== focused
+    prevFocusedRef.current = focused
+    if (!focused || !dimensionActive) return
+    if (focusChanged || focusIsUnowned()) termRef.current?.focus()
+  }, [focused, dimensionActive])
 
   const focusTerminal = () => {
     termRef.current?.focus()

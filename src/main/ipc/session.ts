@@ -21,6 +21,7 @@ import type {
   SessionRecoveryCancellationOptions,
   SessionRecoverOptions,
 } from '@shared/types/session.js'
+import { aliasScreenSnapshotForWire } from '@shared/types/session.js'
 import {
   claimSessionForWindow,
   releaseSession,
@@ -95,7 +96,19 @@ export function registerSessionIpc(
     // id it is restoring — so the claim can happen before the call rather than
     // through a mint hook.
     claimSessionForWindow(options.sessionId, windowIdFor(evt.sender))
-    return await manager.recover(options)
+    const result = await manager.recover(options)
+    // A fresh/reloaded renderer has no previous screen even when this backend
+    // is already live. The spinner gate may now suppress every subsequent
+    // repaint, and an idle backend may emit none. Seed this requesting renderer
+    // from the latest RAW cache after successful recovery; do not reset the
+    // global gate or broadcast to unrelated windows just to satisfy one joiner.
+    // Read after await so a frame received during recovery cannot be replayed
+    // behind a newer cached value. Failed/conflicting recoveries reveal nothing.
+    if (result.ok && !evt.sender.isDestroyed()) {
+      const screen = manager.getScreenSnapshot(options.sessionId)
+      if (screen) evt.sender.send('session:screen', aliasScreenSnapshotForWire({ sessionId: options.sessionId, ...screen }))
+    }
+    return result
   })
 
   ipcMain.handle(
@@ -397,6 +410,7 @@ export function registerSessionIpc(
         cwd: string
         providerSessionId: string
         beforeMarker: string
+        beforeOffset?: number
         limit?: number
       },
     ) => {

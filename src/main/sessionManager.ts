@@ -40,6 +40,7 @@ import { resolveToolPath } from '@main/setup/binaryResolver.js'
 import { updateToolPaths } from '@main/setup/setupState.js'
 import { forgetFeedDebugSession } from '@main/storage/feedDebugLog.js'
 import { CappedTextBuffer } from '@main/sessions/cappedTextBuffer.js'
+import { ScreenFrameGate } from '@main/sessions/screenFrameGate.js'
 import type {
   ConditionCustomAction,
   ProviderConditionSnapshot,
@@ -469,6 +470,8 @@ export class SessionManager extends EventEmitter {
   // per event (a reference store, no clone); entries die with the session
   // in cleanupSessionState.
   private readonly lastScreenSnapshot = new Map<string, AgentScreenSnapshot>()
+  // See screenFrameGate.ts — drops spinner-only repaints before they fan out.
+  private readonly screenFrameGate = new ScreenFrameGate()
   private readonly lastConditionsSnapshot = new Map<string, ProviderConditionSnapshot>()
   private readonly lastInputReadiness = new Map<string, SessionInputReadiness>()
   // WHY this is one manager-global sequence instead of a bounded per-id map:
@@ -856,6 +859,7 @@ export class SessionManager extends EventEmitter {
     // session's screen/conditions to a late subscriber would present it as
     // live (the exact stale-state bug the remote late-joiner replay had).
     this.lastScreenSnapshot.delete(sessionId)
+    this.screenFrameGate.forget(sessionId)
     this.lastConditionsSnapshot.delete(sessionId)
     this.lastTranscriptFile.delete(sessionId)
     this.codexCandidateObservationEdges.delete(sessionId)
@@ -1600,7 +1604,18 @@ export class SessionManager extends EventEmitter {
           kind,
           lifecycle: 'spawning',
         })
-        return existingClaim.promise
+        // WHY the joiner sees `joined`, not the claim's own `spawned` (#772):
+        // the renderer's wake applies a readiness deadline to spawned
+        // backends and, on timeout, kills them. A pane that merely joined
+        // the rehydrate recovery in flight (AgentTerminalLeaf on mount)
+        // inherited that deadline and killed a healthy TUI that was still
+        // booting under the restart herd. The physical start is one and the
+        // same; only the caller's relationship to it differs.
+        return existingClaim.promise.then(result =>
+          result.ok && result.disposition === 'spawned'
+            ? { ...result, disposition: 'joined' as const }
+            : result,
+        )
       }
       this.lifecycle.session('recover.conflict', options.sessionId, {
         kind,
@@ -2671,7 +2686,25 @@ export class SessionManager extends EventEmitter {
       session.on('screen', (snap: AgentScreenSnapshot) => {
         if (!ownsEntry()) return
         this.markActivity(sessionId)
+        // Raw latest for MCP/debug readers (getScreenSnapshot) — kept even
+        // for frames the gate below drops, so a reader always sees the
+        // current spinner state.
         this.lastScreenSnapshot.set(sessionId, snap)
+        // WHY frames are gated HERE (#746): this emit is the single feed for
+        // the renderer forwarder, the remote server and the session
+        // recorder, and 99% of consecutive frames while an agent thinks
+        // differ only in spinner chrome. Everything that must see every raw
+        // frame (condition parsers, composer-ready, the prompt gate) already
+        // ran inside the headless package or the provider session.
+        const droppedBefore = this.screenFrameGate.droppedBeforeLastEmit(sessionId)
+        if (!this.screenFrameGate.shouldEmit(sessionId, snap)) return
+        // One journal sample per EMITTED frame carrying the run of drops it
+        // ended; a per-drop record would cost more than the frames saved.
+        if (droppedBefore > 0) {
+          performanceService.metric('session.screen.gate.dropped', droppedBefore, 'sample', {
+            sessionId,
+          })
+        }
         this.emit('screen', { sessionId, ...snap })
       })
       session.on('jsonl-entry', (
@@ -2825,6 +2858,10 @@ export class SessionManager extends EventEmitter {
       // inherit the dead one's `since` (fabricating elapsed) and, because the
       // first verdict then looked unchanged, skip arming the sampler entirely.
       this.lastGateEvaluation.delete(sessionId)
+      // Same reasoning for the screen-frame gate (#761 review): a superseded
+      // backend's last normalized frame must not swallow the fresh one's
+      // identical-looking first frame.
+      this.screenFrameGate.forget(sessionId)
       this.rememberSessionId(sessionId)
       this.throwIfSpawnCancelled(recoveryClaim, codexReplacementHandoff)
       // Hoisted out of the try so the catch can report a duration too: a

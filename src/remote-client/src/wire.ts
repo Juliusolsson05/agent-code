@@ -66,7 +66,15 @@ export type InboundMessage =
   | { type: 'send-prompt'; sessionId: string; text: string }
   | { type: 'submit'; sessionId: string }
   | { type: 'interrupt'; sessionId: string }
-  | { type: 'get-history'; sessionId: string; beforeMarker?: string; limit?: number }
+  | {
+      type: 'get-history'
+      sessionId: string
+      beforeMarker?: string
+      /** Byte offset of beforeMarker's line (from a chunk's `offsets`); the
+       *  server anchors the page exactly there when present. */
+      beforeOffset?: number
+      limit?: number
+    }
   | {
       type: 'permission-reply'
       sessionId: string
@@ -81,6 +89,11 @@ export type HistoryChunkResult = {
   entries: Array<Record<string, unknown>>
   hasMore: boolean
   totalEntries?: number
+  /** Byte offset of each entry's transcript line, parallel to `entries`;
+   *  echo the cursor line's offset as `beforeOffset` for an exact next
+   *  page. The client's store does not use it yet and pages on the marker
+   *  alone (the server's forward scan, as before). */
+  offsets?: number[]
   /** Which transcript file the server read. The client compares this
    *  against the file its live frames carry to detect a stale serve from
    *  the post-/clear cache window — see TranscriptStore.chunkFileConflicts. */

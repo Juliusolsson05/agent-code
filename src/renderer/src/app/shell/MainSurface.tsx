@@ -9,6 +9,7 @@ import { DispatchLayout } from '@renderer/workspace/dispatch/DispatchLayout'
 import { TileTree } from '@renderer/workspace/tile-tree/TileTree'
 import { NewAgentPlacementOverlay } from '@renderer/features/workspace/ui/NewAgentPlacementOverlay'
 import { usePlacementOverlay } from '@renderer/features/workspace/surfaces/usePlacementOverlay'
+import { RetainedWorkspaceSurface } from './RetainedWorkspaceSurface'
 import { WelcomeEmpty } from './WelcomeEmpty'
 
 // The main-area mode routing, extracted verbatim from App.tsx (#494).
@@ -37,6 +38,16 @@ export function MainSurface({ onNewTabRequest }: { onNewTabRequest: () => void }
     ? state.tabs.some(tab => tab.id === spotlightTabId)
     : false
 
+  // Exactly one takeover surface at a time, in the priority order the old
+  // if/else ladder had. Settings wins over Reader wins over Spotlight.
+  const takeover = settingsPageOpen
+    ? 'settings'
+    : workspace.readerMode && readerModeTabExists
+      ? 'reader'
+      : workspace.spotlight && spotlightTabExists
+        ? 'spotlight'
+        : null
+
   return (
     <>
       {/*
@@ -61,6 +72,15 @@ export function MainSurface({ onNewTabRequest }: { onNewTabRequest: () => void }
           the desired behaviour: focus modes are a temporary
           context, not a "close the editor" instruction.
 
+        WHY the workspace is RETAINED, not replaced, under a takeover (#752):
+          the takeover surfaces used to render instead of the shell, which
+          unmounted every pane — every xterm disposed, every PTY detached,
+          and on exit every terminal re-attached and replayed its whole
+          buffer. RetainedWorkspaceSurface keeps the shell mounted under
+          display:none while a takeover is active, the same way Global
+          Editor fullscreen retains it, so leaving Reader Mode is a style
+          change rather than a rebuild.
+
         WHY TileTabs / Dispatch / TileTree stay inside the shell:
           These ARE the workspace. The point of the editor overlay
           is to be alongside them, so reading code does not require
@@ -72,7 +92,7 @@ export function MainSurface({ onNewTabRequest }: { onNewTabRequest: () => void }
         positions — survives toggling between Dispatch / TileTree
         and Welcome.
       */}
-      {settingsPageOpen ? (
+      {takeover === 'settings' ? (
         <SettingsPage
           onClose={closeSettingsPage}
           workspace={workspace}
@@ -80,11 +100,12 @@ export function MainSurface({ onNewTabRequest }: { onNewTabRequest: () => void }
           onChange={setSettings}
           onReset={resetSettings}
         />
-      ) : workspace.readerMode && readerModeTabExists ? (
+      ) : takeover === 'reader' ? (
         <ReaderView workspace={workspace} />
-      ) : workspace.spotlight && spotlightTabExists ? (
+      ) : takeover === 'spotlight' ? (
         <SpotlightView workspace={workspace} agentViewMode={settings.agentViewMode} />
-      ) : (
+      ) : null}
+      <RetainedWorkspaceSurface hidden={takeover !== null}>
         <GlobalEditorShell workspace={workspace}>
           {workspace.tileTabs ? (
             <TileTabsView workspace={workspace} agentViewMode={settings.agentViewMode} />
@@ -129,7 +150,7 @@ export function MainSurface({ onNewTabRequest }: { onNewTabRequest: () => void }
             <WelcomeEmpty onNewTabRequest={onNewTabRequest} />
           )}
         </GlobalEditorShell>
-      )}
+      </RetainedWorkspaceSurface>
     </>
   )
 }

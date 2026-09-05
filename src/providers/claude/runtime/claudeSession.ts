@@ -1,9 +1,12 @@
 import { EventEmitter } from 'events'
 import { randomUUID } from 'crypto'
-import { join } from 'path'
 import { spawn as ptySpawn } from 'node-pty'
 
 import type { SlashPickerState } from '@preload/index.js'
+import {
+  MITMPROXY_SHARED_CONF_DIR,
+  stopProxyServerWithDeadline,
+} from '@main/proxy/mitmproxyReaper.js'
 import { PROXY_EVENTS_DIR } from '@main/storage/paths.js'
 import { resolveBundledTool } from '@main/setup/runtimeTools.js'
 import { getToolPath } from '@main/setup/toolchain.js'
@@ -311,7 +314,12 @@ export class ClaudeSession extends EventEmitter {
 
       const proxy = await createProxyServer({
         storageRoot: PROXY_EVENTS_DIR,
-        confDir: join(PROXY_EVENTS_DIR, '_shared-conf'),
+        // WHY the shared constant and not an inline join: `--set confdir=<this>`
+        // is the argv token the mitmproxy reaper uses to recognise processes
+        // Agent Code started (see mitmproxyReaper.ts). Spawning with the same
+        // constant we later search for makes the identification exact by
+        // construction instead of by two strings that happen to agree.
+        confDir: MITMPROXY_SHARED_CONF_DIR,
         cwd: this.cwd,
         sessionKey: this.resumeSessionId
           ? `resume-${this.resumeSessionId}`
@@ -1087,7 +1095,21 @@ export class ClaudeSession extends EventEmitter {
       this.proxyEventHandler = null
     }
     try {
-      await this.proxyServer.stop()
+      // WHY a deadline around the package's stop(): ProxyServer.stop()
+      // awaits `child.once('exit')` after SIGTERM/SIGKILL, and that promise
+      // never settles if mitmdump already died on its own (the exit event
+      // fired before the listener existed). Left unbounded, one dead proxy
+      // hangs this stop(), SessionManager.killAll(), and the will-quit gate
+      // — the user Force Quits, and every OTHER session's mitmdump is
+      // orphaned (#767). The wrapper races stop() against a deadline and,
+      // on timeout, finds our child by port and terminates it itself.
+      const result = await stopProxyServerWithDeadline(this.proxyServer)
+      if (result.outcome !== 'stopped') {
+        console.warn(
+          `[claudeSession] proxy.stop() exceeded its deadline for session ${this.shellSessionId ?? '<unknown>'}; ` +
+            `${result.outcome}${result.processes.length ? ` (${result.processes.map(p => `${p.pid}:${p.outcome}`).join(', ')})` : ''}`,
+        )
+      }
     } catch (err) {
       // Best-effort shutdown, but not silent: if mitmdump hangs on
       // exit or the runtime dir can't be cleaned, a leaked proxy

@@ -387,6 +387,40 @@ describe('inbound scope enforcement on a live socket', () => {
     ws.close()
   })
 
+  it('get-history carries physical cursors through duplicate markers without skipping records', async () => {
+    const transcript = join(dir, 'duplicate-cursors.jsonl')
+    const lines = Array.from({ length: 5 }, (_, index) => JSON.stringify({
+      type: 'user', uuid: 'same', message: { role: 'user', content: `prompt ${index}` },
+    }))
+    await writeFile(transcript, lines.join('\n') + '\n', 'utf8')
+    ;(manager.resolveTranscriptFile as ReturnType<typeof vi.fn>).mockResolvedValue(transcript)
+    const { ws, frames, token } = await openAuthed()
+    let beforeOffset: number | undefined
+    const contents: string[] = []
+    // Bound the fixture loop so a cursor regression fails instead of hanging
+    // CI. Marker-only fallback would skip most of these identical UUIDs.
+    for (let page = 0; page < 3; page += 1) {
+      ws.send(JSON.stringify({ token, id: `cursor-${page}`, message: {
+        type: 'get-history', sessionId: 's1', limit: 2,
+        ...(beforeOffset === undefined ? {} : { beforeMarker: 'same', beforeOffset }),
+      } }))
+      await waitFor(frames, f => framesOfType(f, 'reply').length > page)
+      const reply = framesOfType(frames, 'reply')[page] as {
+        ok: boolean
+        result: { entries: Array<{ message: { content: string } }>; offsets: number[]; hasMore: boolean }
+      }
+      expect(reply.ok).toBe(true)
+      contents.unshift(...reply.result.entries.map(entry => entry.message.content))
+      expect(reply.result.offsets).toHaveLength(reply.result.entries.length)
+      const next = reply.result.offsets[0]!
+      if (beforeOffset !== undefined) expect(next).toBeLessThan(beforeOffset)
+      beforeOffset = next
+      expect(reply.result.hasMore).toBe(page < 2)
+    }
+    expect(contents).toEqual(['prompt 0', 'prompt 1', 'prompt 2', 'prompt 3', 'prompt 4'])
+    ws.close()
+  })
+
   it('get-history fails cleanly before any transcript exists', async () => {
     const { ws, frames, token } = await openAuthed()
     ws.send(JSON.stringify({

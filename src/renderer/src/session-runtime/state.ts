@@ -473,6 +473,15 @@ export type SessionRuntime = {
   unreadKind: 'output' | 'attention' | null
   paneToast: string | null
   historyOldestMarker: string | null
+  /** Byte offset of the transcript line `historyOldestMarker` came from,
+   *  echoed to the loader as `beforeOffset` so the older page is anchored
+   *  exactly (markers repeat in real transcripts — see historyLoader.ts).
+   *  null whenever the marker came from somewhere without a byte position:
+   *  a live jsonl burst, or the live-window trim re-anchoring on a retained
+   *  entry. The loader then falls back to its marker-only scan, which is
+   *  slower but terminates, and the page it returns carries offsets that
+   *  re-arm the exact cursor. */
+  historyOldestOffset: number | null
   hasOlderHistory: boolean
   loadingOlderHistory: boolean
   // True while a bulk bootstrap burst is being delivered — set when
@@ -799,6 +808,7 @@ export function emptyRuntime(): SessionRuntime {
     unreadKind: null,
     paneToast: null,
     historyOldestMarker: null,
+    historyOldestOffset: null,
     hasOlderHistory: false,
     loadingOlderHistory: false,
     bootstrapping: false,
