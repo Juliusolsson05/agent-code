@@ -48,3 +48,25 @@ slice may extend real-store tests for no-op subscriber notifications, unchanged
 settings zero serialization/write, changed settings persistence, failed-write
 retry, and rehydrate/clear. Existing migration and palette tests must remain
 green. Run TypeScript and focused renderer/store tests; preserve all user state.
+
+## Audit findings and boundaries
+
+- #781: settings identity cache and no-op root preservation implemented with
+  real-store persistence/notification regression tests.
+- #782: closed modal row derivations gated without changing modal lifetimes;
+  all three mounted-component regression tests passed locally.
+- #763: broad workspace context remains the main architectural follow-up.
+  Twenty-two surface wrappers consume that context. Its methods close over
+  current state, so memoizing the entire object is not a safe shortcut.
+- #784: unrelated preferences and dispatch flags still trigger theme DOM work
+  and remote theme IPC. Theme-specific projection needs separate coverage.
+- CommandPalette already gates its expensive inner component when closed,
+  except while processing a pending invocation. Preserve that intentional
+  native-command path; its large selector count is not by itself idle work.
+- Feed already has memoization/index caches. Persistent terminal ownership
+  (#760), screen-interest work (#762), and history loading (#769) remain
+  separate tasks, not fixes claimed by this renderer branch.
+
+The syntax inventory is not a semantic review of every component and does not
+establish a measured FPS gain. This branch removes demonstrated work, while
+larger subscription changes still need per-pane rendering correctness tests.
