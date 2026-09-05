@@ -1,5 +1,5 @@
 import { useAppStore } from '@renderer/app-state/hooks'
-import { useWorkspaceContext } from '@renderer/workspace/WorkspaceContext'
+import { useWorkspaceLayoutContext } from '@renderer/workspace/WorkspaceContext'
 import { SettingsPage } from '@renderer/features/settings/ui/SettingsPage'
 import { ReaderView } from '@renderer/features/reader/ui/ReaderView'
 import { SpotlightView } from '@renderer/features/spotlight/ui/SpotlightView'
@@ -21,7 +21,7 @@ import { WelcomeEmpty } from './WelcomeEmpty'
 // clickable escape hatch. Otherwise the main area renders null
 // and the app looks bricked.
 export function MainSurface({ onNewTabRequest }: { onNewTabRequest: () => void }) {
-  const workspace = useWorkspaceContext()
+  const workspace = useWorkspaceLayoutContext()
   const settings = useAppStore(state => state.settings)
   const setSettings = useAppStore(state => state.setSettings)
   const resetSettings = useAppStore(state => state.resetSettings)

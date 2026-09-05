@@ -14,6 +14,10 @@ import type {
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import { commandTargetSessionIdForState } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 
+// Missing sessions need a stable read-only fallback so merely asking for their
+// state cannot invalidate a memo boundary. Reducers still allocate their own.
+const EMPTY_RUNTIME = emptyRuntime()
+
 // -----------------------------------------------------------------------------
 // Cross-cutting runtime helpers
 //
@@ -24,7 +28,6 @@ import { commandTargetSessionIdForState } from '@renderer/workspace/hook/selecto
 // -----------------------------------------------------------------------------
 
 export function useWorkspaceHelpers(
-  runtimes: Record<SessionId, SessionRuntime>,
   setRuntimes: WorkspaceSetRuntimes,
   refs: WorkspaceRefs,
 ): {
@@ -86,9 +89,9 @@ export function useWorkspaceHelpers(
 
   const getRuntime = useCallback(
     (sessionId: SessionId): SessionRuntime => {
-      return runtimes[sessionId] ?? emptyRuntime()
+      return refs.latestRuntimesRef.current[sessionId] ?? EMPTY_RUNTIME
     },
-    [runtimes],
+    [refs.latestRuntimesRef],
   )
 
   const toggleTailMode = useCallback(

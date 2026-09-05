@@ -1,4 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { useAppStore } from '@renderer/app-state/hooks'
+import { useShallow } from 'zustand/react/shallow'
 
 import { resolveTabSessions } from '@renderer/workspace/queries'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
@@ -21,7 +23,12 @@ type Props = {
 }
 
 export function TabBar({ workspace, onNewTabRequest }: Props) {
-  const { state, runtimes, activateTab, closeTab } = workspace
+  const { state, activateTab, closeTab } = workspace
+  // Only the running flags affect tab counts. Text, spinner, draft and debug
+  // mutations must not render all tab buttons merely because their map changed.
+  const runningIds = useAppStore(useShallow(store => Object.keys(store.workspaceRuntimes)
+    .filter(id => store.workspaceRuntimes[id]?.sessionStatus === 'running')))
+  const running = useMemo(() => new Set(runningIds), [runningIds])
 
   // Dynamic traffic light inset from main process. Updated on
   // resize / zoom / display change. 70 is the fallback for the
@@ -64,10 +71,7 @@ export function TabBar({ workspace, onNewTabRequest }: Props) {
           // runtimes. Pure derivation — no extra state needed.
           const sessionIds = resolveTabSessions(state, tab.id)
           const total = sessionIds.length
-          const alive = sessionIds.filter(id => {
-            const rt = runtimes[id]
-            return rt?.sessionStatus === 'running'
-          }).length
+          const alive = sessionIds.filter(id => running.has(id)).length
           const allDone = alive === 0
 
           return (

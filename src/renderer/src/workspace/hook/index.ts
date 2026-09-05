@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createElement, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
 import { useGlobalToast } from '@renderer/ui/GlobalToast'
@@ -25,13 +25,11 @@ import { useHistoryActions } from '@renderer/workspace/hook/actions/history'
 import { useUndoCloseAction } from '@renderer/workspace/hook/actions/undoClose'
 import { useDispatchActions } from '@renderer/workspace/hook/actions/dispatch'
 import { useAgentIndexNavigationActions } from '@renderer/workspace/hook/actions/agentIndexNavigation'
-import { useAutoSave } from '@renderer/workspace/hook/persistence/useAutoSave'
+import { createDraftChanges, WorkspaceRuntimeServices } from './persistence/WorkspaceRuntimeServices'
 import { useBootstrap } from '@renderer/workspace/hook/persistence/useBootstrap'
 import type { WorkspaceRestoreStatus } from '@renderer/workspace/hook/persistence/useBootstrap'
 import { useFeedDebugPersist } from '@renderer/workspace/hook/persistence/useFeedDebugPersist'
-import { useCodexTranscriptObservationOutbox } from '@renderer/lifecycle/codexTranscriptObservationOutbox'
 import {
-  usePickerSanity,
   usePinnedSessionIdsSanity,
   useReaderModeSanity,
   useSpotlightSanity,
@@ -97,7 +95,10 @@ export function useWorkspace(
 
   const state = useAppStore(store => store.workspaceState)
   const setState = useAppStore(store => store.setWorkspaceState)
-  const runtimes = useAppStore(store => store.workspaceRuntimes)
+  // Runtime rendering is owned by session subscribers, not the composition
+  // root. The snapshot seeds refs only; an imperative subscription below keeps
+  // callbacks current even when no layout render is scheduled.
+  const runtimes = useAppStore.getState().workspaceRuntimes
   const setRuntimes = useAppStore(store => store.setWorkspaceRuntimes)
   const spotlight = useAppStore(store => store.workspaceSpotlight)
   const setSpotlight = useAppStore(store => store.setWorkspaceSpotlight)
@@ -120,14 +121,21 @@ export function useWorkspace(
   refs.stateRef.current = state
   refs.latestStateRef.current = state
   refs.latestRuntimesRef.current = runtimes
+  useLayoutEffect(() => {
+    refs.latestRuntimesRef.current = useAppStore.getState().workspaceRuntimes
+    return useAppStore.subscribe(store => store.workspaceRuntimes, next => {
+      refs.latestRuntimesRef.current = next
+    })
+  }, [refs])
   refs.latestTileTabsRef.current = tileTabs
   refs.dangerousAgentsRef.current = dangerousAgentsEnabled
   refs.useProxyStreamingRef.current = useProxyStreaming
   refs.defaultBuiltInMcpDomainsRef.current = defaultBuiltInMcpDomains
 
-  // ---- Draft version counter (React state because the save effect
-  //      reads it as a dep) ----
-  const [draftVersion, setDraftVersion] = useState(0)
+  // Draft changes invalidate the autosave service, not the whole controller.
+  // The service observes this stable signal even when App does not rerender.
+  const draftChanges = useMemo(createDraftChanges, [])
+  const setDraftVersion = draftChanges.bump
   const [bootstrapComplete, setBootstrapComplete] = useState(false)
   // Surfaces the bootstrap outcome to the UI so it can render a banner
   // when the workspace is in a partial-restore / persisted-fallback
@@ -247,7 +255,7 @@ export function useWorkspace(
     releaseAllRenderedViewLeases,
     scrollFocusedToLatest,
   } =
-    useWorkspaceHelpers(runtimes, setRuntimes, refs)
+    useWorkspaceHelpers(setRuntimes, refs)
 
   // ---- Pane toast (needs updateRuntime, so after helpers) ----
   const showPaneToast = usePaneToast(refs.paneToastTimers, updateRuntime)
@@ -862,9 +870,7 @@ export function useWorkspace(
   // see the WHY on useIpcSubscriptions.
   const sessionFeed = useSessionFeed()
   useIpcSubscriptions(sessionFeed, refs, setState, setRuntimes, updateRuntime, appendFeedDebug)
-  useCodexTranscriptObservationOutbox(runtimes)
   useWorkspaceAdoption(refs, setState, setRuntimes, bootstrapComplete)
-  useAutoSave(state, draftVersion, refs, bootstrapComplete)
   useBootstrap(
     refs,
     setState,
@@ -879,7 +885,6 @@ export function useWorkspace(
   useFeedDebugPersist(runtimes, refs)
   useSpotlightSanity(spotlight, state, setSpotlight)
   useReaderModeSanity(readerMode, state, setReaderMode)
-  usePickerSanity(runtimes, pickerCancel)
   useTileTabsSanity(tileTabs, state.tabs, setTileTabs)
   usePinnedSessionIdsSanity(state, setState)
 
@@ -896,7 +901,12 @@ export function useWorkspace(
   // ---- Return the stable Workspace shape ----
   return {
     state,
-    runtimes,
+    // Imperative commands/debug capture read the latest committed store.
+    // Renderers must subscribe through useSessionRuntime/useWorkspaceContext.
+    get runtimes() { return refs.latestRuntimesRef.current },
+    runtimeServices: createElement(WorkspaceRuntimeServices, {
+      state, refs, bootstrapComplete, draftChanges, pickerCancel,
+    }),
     activeTab,
     spotlight,
     tileTabs,

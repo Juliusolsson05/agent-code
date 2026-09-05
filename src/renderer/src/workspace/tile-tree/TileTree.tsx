@@ -1,5 +1,6 @@
 import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
-import { useCallback, useRef } from 'react'
+import { memo, useCallback, useRef } from 'react'
+import { useSessionRuntime } from '@renderer/workspace/useSessionRuntime'
 
 import { getRendererProvider } from '@providers/registry.renderer'
 import type { AgentViewMode } from '@renderer/app-state/settings/types'
@@ -31,7 +32,7 @@ type Props = {
   showWorktreeBadges?: boolean
 }
 
-export function TileTree({
+export const TileTree = memo(function TileTree({
   tabId,
   node,
   focusedSessionId,
@@ -89,7 +90,7 @@ export function TileTree({
       workspace={workspace}
     />
   )
-}
+})
 
 export function renderWorkspaceLeaf(
   sessionId: SessionId,
@@ -99,10 +100,47 @@ export function renderWorkspaceLeaf(
   agentViewMode: AgentViewMode = 'agent',
   showStatusMode = true,
   showWorktreeBadges = true,
-  onFocusRequest: () => void = () => workspace.focusSessionInTab(tabId, sessionId),
+  onFocusRequest?: () => void,
   showRelatedAgentTabs = false,
   surfacePaneLabel?: string,
 ) {
+  return <WorkspaceLeaf
+    sessionId={sessionId}
+    focusedSessionId={focusedSessionId}
+    workspace={workspace}
+    tabId={tabId}
+    agentViewMode={agentViewMode}
+    showStatusMode={showStatusMode}
+    showWorktreeBadges={showWorktreeBadges}
+    onFocusRequest={onFocusRequest}
+    showRelatedAgentTabs={showRelatedAgentTabs}
+    surfacePaneLabel={surfacePaneLabel}
+  />
+}
+
+// The subscription belongs below the recursive layout and above provider/view
+// selection: a runtime can change Hybrid's surface, but another session's
+// output must not traverse this pane or recreate any terminal callbacks.
+const WorkspaceLeaf = memo(function WorkspaceLeaf({
+  sessionId, focusedSessionId, workspace, tabId, agentViewMode,
+  showStatusMode, showWorktreeBadges, onFocusRequest, showRelatedAgentTabs,
+  surfacePaneLabel,
+}: {
+  sessionId: SessionId
+  focusedSessionId: SessionId | null
+  workspace: Workspace
+  tabId: TabId
+  agentViewMode: AgentViewMode
+  showStatusMode: boolean
+  showWorktreeBadges: boolean
+  onFocusRequest?: () => void
+  showRelatedAgentTabs: boolean
+  surfacePaneLabel?: string
+}) {
+  const requestFocus = useCallback(() => {
+    if (onFocusRequest) onFocusRequest()
+    else workspace.focusSessionInTab(tabId, sessionId)
+  }, [onFocusRequest, workspace, tabId, sessionId])
   const relatedTabs = showRelatedAgentTabs
     ? buildGridRelatedAgentTabs(workspace.state, tabId, sessionId)
     : []
@@ -112,6 +150,7 @@ export function renderWorkspaceLeaf(
   const renderedSessionId = workspace.state.sessions[selectedSessionId] ? selectedSessionId : sessionId
   const meta = workspace.state.sessions[renderedSessionId]
   const kind = meta?.kind ?? DEFAULT_PROVIDER
+  const runtime = useSessionRuntime(workspace, renderedSessionId)
   // WHY a parent-owned label may override the tab-local coordinate: Dispatch
   // renders one globally ordered visible-row stream, so its D23 identity can
   // legitimately differ from this session's position inside its owning tab.
@@ -127,14 +166,13 @@ export function renderWorkspaceLeaf(
         sessionId={sessionId}
         paneLabel={paneLabel}
         focused={sessionId === focusedSessionId}
-        onFocusRequest={onFocusRequest}
+        onFocusRequest={requestFocus}
         workspace={workspace}
       />
     )
   }
 
   const provider = getRendererProvider(kind)
-  const runtime = workspace.getRuntime(renderedSessionId)
   if (getEffectiveAgentSurfaceForSession({
     kind,
     providerRuntime: meta?.providerRuntime,
@@ -149,7 +187,7 @@ export function renderWorkspaceLeaf(
           paneLabel={paneLabel}
           agentTitle={meta?.title}
           focused={sessionId === focusedSessionId}
-          onFocusRequest={onFocusRequest}
+          onFocusRequest={requestFocus}
           workspace={workspace}
           runtime={runtime}
           projectDir={runtime.projectDir ?? meta?.cwd ?? null}
@@ -166,7 +204,7 @@ export function renderWorkspaceLeaf(
       runtime={runtime}
       paneLabel={paneLabel}
       focused={sessionId === focusedSessionId}
-      onFocusRequest={onFocusRequest}
+      onFocusRequest={requestFocus}
       workspace={workspace}
       showStatusMode={showStatusMode}
       showWorktreeBadges={showWorktreeBadges}
@@ -179,7 +217,7 @@ export function renderWorkspaceLeaf(
       }}
     />
   )
-}
+})
 
 function firstLeafId(n: TileNode): SessionId {
   let current = n

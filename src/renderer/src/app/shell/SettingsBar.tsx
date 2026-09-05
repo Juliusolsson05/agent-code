@@ -4,12 +4,12 @@ import { SystemPerfHeader } from '@renderer/features/system-perf/ui/SystemPerfHe
 import { UsageHeaderIndicator } from '@renderer/features/usage/ui/UsageHeaderIndicator'
 import { useAppStore } from '@renderer/app-state/hooks'
 import { useCaffeinateStore } from '@renderer/features/caffeinate/store'
-import { useWorkspaceContext } from '@renderer/workspace/WorkspaceContext'
+import { useWorkspaceLayoutContext } from '@renderer/workspace/WorkspaceContext'
 
 // Settings bar — compact row under tabs holding app chrome.
 // (Extracted verbatim from App.tsx by #494.)
 export function SettingsBar() {
-  const workspace = useWorkspaceContext()
+  const workspace = useWorkspaceLayoutContext()
   const settings = useAppStore(state => state.settings)
   const setSettings = useAppStore(state => state.setSettings)
   const performancePanelOpen = useAppStore(state => state.performancePanelOpen)
