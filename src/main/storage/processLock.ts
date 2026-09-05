@@ -43,7 +43,11 @@ export type StateProcessLock =
       reason: 'active-owner' | 'unreadable-lock'
     }
 
-function defaultIsPidRunning(pid: number): boolean {
+// Exported (not only used as the lock's default) because the mitmproxy reaper
+// (src/main/proxy/mitmproxyReaper.ts) needs the same liveness answer with the
+// same EPERM semantics: a pid we cannot signal is still an owner we must not
+// clean up after. One definition keeps the two callers from disagreeing.
+export function isPidRunning(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0) return false
   try {
     process.kill(pid, 0)
@@ -69,7 +73,7 @@ function commandLineForPid(pid: number): string | null {
 }
 
 function defaultIsLockOwnerActive(owner: StateProcessLockOwner): LockOwnerActivity {
-  if (!defaultIsPidRunning(owner.pid)) return 'inactive'
+  if (!isPidRunning(owner.pid)) return 'inactive'
   const commandLine = commandLineForPid(owner.pid)
   if (!commandLine) return 'inconclusive'
   const ownerExecutable = basename(owner.argv0)
