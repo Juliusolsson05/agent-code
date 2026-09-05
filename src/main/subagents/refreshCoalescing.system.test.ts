@@ -20,7 +20,7 @@ vi.mock('node:fs/promises', async importOriginal => {
   const sync = await import('node:fs')
   return {
     ...original,
-    readdir: async (path: string) => sync.readdirSync(path),
+    readdir: async (path: string, options?: { withFileTypes: true }) => options ? sync.readdirSync(path, options) : sync.readdirSync(path),
     stat: async (path: string) => sync.statSync(path),
     readFile: async (path: string, encoding: BufferEncoding) => sync.readFileSync(path, encoding),
   }
