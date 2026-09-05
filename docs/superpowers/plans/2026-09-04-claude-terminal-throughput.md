@@ -25,6 +25,18 @@ default. Retain the complete build/resource pipeline, then use preview's
 package-script contract test. This is a startup-only fix, not evidence of live
 terminal latency improvement.
 
+Inline typing follow-up: address the user-engagement part of #751 by taking
+badge acknowledgement off xterm's `onData` transport path. Only DOM keyboard,
+paste, composition and existing pointer engagement should acknowledge a pane;
+live protocol responses still reach the provider unchanged. Do not classify
+escape sequences heuristically, since real keys and terminal replies overlap.
+Coalesce inline debug ResizeObserver work to one animation frame and notify
+the provider only when the cell grid changes. Refit after font changes and
+cancel queued work on teardown. Memoize the scalar-prop inline component so
+unrelated workspace stream updates do not revisit its React subtree.
+Extend the existing mounted-host test slice with engagement-vs-query and
+inline resize scheduling contracts before final verification.
+
 ## Problem
 
 A live 2026-09-04 run had one Claude raw terminal with unusably low frame rate
