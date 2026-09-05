@@ -1,5 +1,20 @@
 # Proxy: reap mitmproxy children on stop and quit, kill stale ones at startup
 
+## 2026-09-04 signal-safety refinement
+
+The original marker/PPID selection remains only candidate discovery. Before each
+signal, including delayed SIGKILL and synchronous exit cleanup, re-read kernel
+command, start timestamp, parent and arguments. Unknown or changed identities
+fail closed and are not counted as reaped. Inspection has deadlines; synchronous
+exit cleanup also stops scheduling new inspections after a bounded budget.
+Native mitmdump and ordinary Python-script launchers are recognized; unknown
+interpreter layouts are conservatively retained. This is not atomic pidfd-based
+signalling: second-resolution start timestamps and the final check-to-signal
+race are explicit residual limits. Thirty-three focused tests pass, including
+PID replacement during grace and refusal to signal unrelated executables.
+No real live proxy process was signalled; force-quit qualification remains an
+owner-controlled test because this application owns active sessions.
+
 Refs #767 (item 5, the process-hygiene half). Refs #495 (A9 rollback), #119.
 
 ## Problem
