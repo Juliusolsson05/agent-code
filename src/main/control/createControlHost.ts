@@ -13,6 +13,7 @@ import { FileControlHistory } from './history/FileControlHistory'
 import { historyCapabilities } from './history/control'
 import { taskHistoryCapabilities } from './history/tasks'
 import { globalControlCapabilities, type ObserveWindows } from './globalCapabilities'
+import { batchControlCapabilities } from './batches'
 
 export function createControlHost(windowAccess: {
   getBrowserWindow(id: string): BrowserWindow | null
@@ -73,7 +74,7 @@ export function createControlHost(windowAccess: {
       generation: windows.get(windowId)?.generation ?? null,
     })),
   ), ...historyCapabilities(history), ...taskHistoryCapabilities(history, owner => registry.list().some(row => JSON.stringify(row.owner) === JSON.stringify(owner))),
-  ...globalControlCapabilities(observeWindows), ...additionalCapabilities])
+  ...globalControlCapabilities(observeWindows), ...batchControlCapabilities((request, caller) => executor.invoke(request, caller)), ...additionalCapabilities])
 
   ipcMain.handle('control:register', (event, raw: unknown) => {
     const windowId = senderWindow(event)

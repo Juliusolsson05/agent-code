@@ -124,3 +124,8 @@ this plan/issue for concrete findings. All work stays unmerged pending confirmat
   passed 11 files/25 tests, including recorded native prompts and Dispatch
   coordinates. OS two-monitor activation and occupied native-draft trials remain
   external verification; do not label those reproduced/fixed on unit evidence.
+- Stage 3 verified: bounded multi-window batch read/prompt adapters reuse the
+  executor with the original caller. Real file-journal checks prove per-child
+  accepted/unknown receipts, no redelivery after an executor restart/subset retry,
+  and argument conflicts. Full typecheck passed. The batch is deliberately not
+  atomic; independent read cursors and child call IDs remain visible.
