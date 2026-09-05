@@ -8,6 +8,8 @@ export { paginate, pageSchema, pageInput } from './catalog/pagination'
 export { featureReferenceSchema } from './catalog/features'
 export type { FeatureReference } from './catalog/features'
 export type { InteractionReference } from './catalog/interactions'
+export { historyEventSchema } from './history'
+export type { ControlHistory, HistoryEvent, HistoryWrite } from './history'
 export {
   capabilityDescriptorSchema, controlRegistrationSchema, controlRequestSchema,
   controlResultSchema, rendererControlResponseSchema,

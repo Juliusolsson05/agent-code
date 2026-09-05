@@ -1,22 +1,28 @@
 import { randomUUID } from 'node:crypto'
 import { ipcMain, type BrowserWindow, type WebContents, type IpcMainInvokeEvent } from 'electron'
-import { createControlRegistry } from '@control-sdk/host'
+import { createControlExecutor, createControlRegistry } from '@control-sdk/host'
 import {
   controlRegistrationSchema, controlRequestSchema, rendererControlResponseSchema,
   type ControlCaller, type ControlRequest, type RegisteredCapability,
 } from '@control-sdk'
 import { ControlRendererBridge } from './rendererBridge'
 import { windowControlCapabilities } from '@main/window/control'
+import { FileControlHistory } from './history/FileControlHistory'
+import { historyCapabilities } from './history/control'
 
 export function createControlHost(windowAccess: {
   getBrowserWindow(id: string): BrowserWindow | null
   windowIdFor(sender: WebContents): string | null
   listWindowIds(): string[]
-}) {
+}, historyDirectory: string) {
   // Inject the window adapter for isolated Electron trials. The production
   // adapter is the existing window registry, never an SDK-owned window store.
   const { getBrowserWindow, windowIdFor, listWindowIds } = windowAccess
   const registry = createControlRegistry()
+  const history = new FileControlHistory(historyDirectory)
+  const executor = createControlExecutor({ history, instanceId: randomUUID(), id: randomUUID,
+    now: () => new Date().toISOString(), catalog: () => registry.list(),
+    dispatch: (request, context) => registry.invoke(request, context) })
   const bridge = new ControlRendererBridge((windowId, message) => {
     const window = getBrowserWindow(windowId)
     if (!window || window.isDestroyed() || window.webContents.isDestroyed()) throw new Error('Window unavailable')
@@ -32,12 +38,12 @@ export function createControlHost(windowAccess: {
     return id
   }
 
-  const unregisterMain = registry.register({ kind: 'main', generation: randomUUID() }, windowControlCapabilities(() =>
+  const unregisterMain = registry.register({ kind: 'main', generation: randomUUID() }, [...windowControlCapabilities(() =>
     listWindowIds().map(windowId => ({
       windowId, focused: getBrowserWindow(windowId)?.isFocused() ?? false,
       generation: windows.get(windowId)?.generation ?? null,
     })),
-  ))
+  ), ...historyCapabilities(history)])
 
   ipcMain.handle('control:register', (event, raw: unknown) => {
     const windowId = senderWindow(event)
@@ -88,14 +94,14 @@ export function createControlHost(windowAccess: {
   })
   ipcMain.handle('control:invoke', (event, raw: unknown) => {
     const id = senderWindow(event)
-    return registry.invoke(controlRequestSchema.parse(raw), { requestId: randomUUID(), caller: { kind: 'application', id } })
+    return executor.invoke(controlRequestSchema.parse(raw), { kind: 'application', id })
   })
 
   return {
     catalog: () => registry.list(),
     forCaller: (identity: ControlCaller) => {
       const caller = Object.freeze({ ...identity })
-      return { invoke: (request: ControlRequest) => registry.invoke(controlRequestSchema.parse(request), { requestId: randomUUID(), caller }) }
+      return { invoke: (request: ControlRequest) => executor.invoke(controlRequestSchema.parse(request), caller) }
     },
     dispose() {
       for (const window of [...windows.values()]) window.dispose()

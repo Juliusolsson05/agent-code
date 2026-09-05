@@ -70,7 +70,7 @@ it('routes real renderer observations across two windows and survives reload wit
         getBrowserWindow: id => windows.get(id) ?? null,
         windowIdFor: sender => [...windows].find(([,window]) => window.webContents === sender)?.[0] ?? null,
         listWindowIds: () => [...windows.keys()],
-      })
+      }, ${JSON.stringify(join(directory, 'control-history'))})
       const caller = host.forCaller({kind: 'application', id: 'electron-trial'})
       const owner = id => host.catalog().find(row => row.descriptor.id === 'workspace.observe' && row.owner.windowId === id)?.owner
       async function registered(id, previous) {
@@ -115,7 +115,7 @@ it('routes real renderer observations across two windows and survives reload wit
     for (const [entry, name, format, external] of [
       [preload, 'preload.cjs', 'cjs', ['electron']],
       [renderer, 'renderer.js', 'iife', []],
-      [main, 'main.mjs', 'es', ['electron', 'node:crypto']],
+      [main, 'main.mjs', 'es', ['electron', /^node:/]],
     ] as const) {
       await build({
         configFile: false, root, logLevel: 'silent', resolve: { alias },

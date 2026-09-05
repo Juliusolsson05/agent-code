@@ -938,7 +938,7 @@ async function startApp(): Promise<void> {
     agentCodeConventionsService,
     workspaceFileStore,
   })
-  const controlHost = createControlHost({ getBrowserWindow, windowIdFor, listWindowIds })
+  const controlHost = createControlHost({ getBrowserWindow, windowIdFor, listWindowIds }, join(STATE_DIR, 'control-history'))
   app.once('will-quit', () => controlHost.dispose())
   // Boot probe runs after the IPC is wired so its first `state` push
   // has a live subscriber to receive it on the renderer side.

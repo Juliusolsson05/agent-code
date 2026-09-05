@@ -370,7 +370,29 @@ shortcut change immediately through the registered command capability.
   declarations and the full application inventory, not a guessed tool list.
   Authored feature explanations remain subject to product review.
 
-### Stage 4 — operation execution and durable invocation history
+### Stage 4 — operation execution and durable invocation history (verified)
+
+Implementation: the neutral executor owns owner arbitration, durable intent,
+concurrent admission and caller-scoped retry keys. A separate main-process
+filesystem adapter writes private, fsynced JSONL events and immutable SHA-256
+payloads. Every authenticated SDK invocation has its own call ID, including
+retries; replay returns the original result or explicit uncertainty after a
+missing final write. A reused key with changed arguments is rejected. History
+list/read/payload capabilities preserve complete data and lossless UTF-8 byte
+continuations; list snapshots stop before their own read so pagination finishes.
+The store is lazy and its directory is injected, including in Electron trials.
+A damaged tail is preserved and blocks new dispatch instead of being truncated.
+
+Verification: 13 focused registry, boundary and real-temporary-filesystem checks
+passed, including concurrent retry/reopen, lost final-write recovery, damaged
+tail preservation, private file mode, large Unicode reconstruction and bounded
+history paging. The two-window Electron trial passed with actual persisted
+execution, reload and live catalogs. Its main bundle now externalizes Node
+builtins rather than treating filesystem imports as browser dependencies.
+These are controlled fault probes, not production traffic recordings. Entity
+placement remains feature-owned; the private resolver arbitrates explicit
+window generations, never focus guesses. Protocol-frame recording is connected
+with the external transport in stage 7.
 
 - **Produces:** private target resolution, execution lifecycle, deduplication,
   a persistence port/implementation, and SDK history list/read/payload methods.

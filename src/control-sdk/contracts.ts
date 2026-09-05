@@ -24,6 +24,7 @@ export type ControlFailureCode =
   | 'unavailable' | 'ambiguous_owner' | 'stale_owner'
   | 'invalid_input' | 'invalid_output' | 'failed'
   | 'stale_cursor' | 'invalid_cursor'
+  | 'history_unavailable' | 'idempotency_conflict' | 'interrupted'
 
 export class ControlError extends Error {
   constructor(readonly code: ControlFailureCode, message: string, readonly outcome: 'not_started' | 'unknown' = 'not_started') {
@@ -32,9 +33,15 @@ export class ControlError extends Error {
   }
 }
 
-export type ControlResult<T = unknown> =
+export const controlOperationSchema = z.object({
+  callId: z.string(), instanceId: z.string(), owner: controlOwnerSchema.optional(),
+  status: z.enum(['completed', 'ui_opened', 'pending', 'blocked', 'outcome_unknown']),
+  reusedCallId: z.string().optional(), historyWarning: z.string().optional(),
+}).strict()
+export type ControlResult<T = unknown> = (
   | { ok: true; value: T }
   | { ok: false; error: { code: ControlFailureCode; message: string; outcome: 'not_started' | 'unknown' } }
+) & { operation?: z.infer<typeof controlOperationSchema> }
 
 export type CapabilityDescriptor = Readonly<{
   id: string
@@ -68,14 +75,15 @@ export type ControlRegistration = z.infer<typeof controlRegistrationSchema>
 
 export const controlRequestSchema = z.object({
   capabilityId: z.string().min(1), input: z.json(), owner: controlOwnerSchema.optional(),
+  requestKey: z.string().min(1).max(256).optional(),
 }).strict()
 
 export const controlResultSchema = z.discriminatedUnion('ok', [
-  z.object({ ok: z.literal(true), value: z.json() }).strict(),
+  z.object({ ok: z.literal(true), value: z.json(), operation: controlOperationSchema.optional() }).strict(),
   z.object({ ok: z.literal(false), error: z.object({
-    code: z.enum(['unavailable', 'ambiguous_owner', 'stale_owner', 'invalid_input', 'invalid_output', 'failed', 'stale_cursor', 'invalid_cursor']),
+    code: z.enum(['unavailable', 'ambiguous_owner', 'stale_owner', 'invalid_input', 'invalid_output', 'failed', 'stale_cursor', 'invalid_cursor', 'history_unavailable', 'idempotency_conflict', 'interrupted']),
     message: z.string(), outcome: z.enum(['not_started', 'unknown']),
-  }).strict() }).strict(),
+  }).strict(), operation: controlOperationSchema.optional() }).strict(),
 ])
 
 export type RendererControlRequest = {
@@ -92,6 +100,7 @@ export type ControlRequest = Readonly<{
   capabilityId: string
   input: unknown
   owner?: ControlOwner
+  requestKey?: string
 }>
 
 // A transport owns identity; none of these fields are accepted from tool input.
