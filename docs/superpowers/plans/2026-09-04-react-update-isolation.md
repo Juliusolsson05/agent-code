@@ -31,6 +31,16 @@ returns the original slice. Address these before larger pane-subscription work.
   Pane-scoped subscriptions and context restructuring need their own rendering
   correctness tests; do not freeze closures with broad memo comparators.
 
+The full syntax inventory covers 692 production TS/TSX files across the three
+renderer trees (278 TSX files; 269 store calls; 69 workspace/context calls).
+These counts are discovery, not proof of waste. Manual follow-up confirmed
+three closed modals still enumerate/sort all agent rows on runtime changes:
+Agent Activity, Close Old Agents, and Bulk Provider Switch. Gate their row
+builders on `open` and include it in memo dependencies. Preserve mounted state,
+open-time resets, and action-time revalidation; do not replace their lifetimes
+with conditional mounts. Add closed/open/update/close behavioral coverage in a
+second independent test-generation slice.
+
 ## Verification and generation slices
 
 Parent owns production design and source changes. A disjoint test-generation
