@@ -227,9 +227,14 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
       : null
 
   const agentRows = useMemo<AgentRow[]>(() => {
+    // Dialog hides content, not this component's hooks. Do not scan every
+    // retained transcript on visible agents' updates for an invisible preview.
+    // Keep the mounted state and action-time revalidation lifetime unchanged;
+    // the open dependency rebuilds current rows as soon as the user shows it.
+    if (!open) return []
     void nowTick
     return buildAgentRows(workspace.state, workspace.runtimes, Date.now())
-  }, [workspace.runtimes, workspace.state, nowTick])
+  }, [open, workspace.runtimes, workspace.state, nowTick])
 
   const selectedProjectSet = useMemo(
     () => selectedProjects,
