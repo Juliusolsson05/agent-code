@@ -1,6 +1,6 @@
 # Worktree reconciliation performance
 
-Status: implementation in progress. Issue: #806. Base: origin/main 5d641845.
+Status: implemented; PR/CI review pending. Issue: #806. Base: origin/main 5d641845.
 
 ## Scope and invariants
 
@@ -40,3 +40,25 @@ Prior isolated audit: 1000/1000 value-identical canonical projections changed
 identity; retained 500-record replay cost about 2 ms per unrelated batch. These
 are not app-wide typing latency claims. Record reproducible measurements below
 before proposing completion.
+
+The standalone `scripts/benchmark-worktree-reconciliation.mts` measured 200
+irrelevant batches per window size on this Mac (same process setup per run):
+
+| Retained records | Before median / p95 ms | After median / p95 ms | Identity changes before → after |
+| --- | --- | --- | --- |
+| 0 | 0.001959 / 0.008416 | 0.000667 / 0.002292 | 200 → 0 |
+| 100 | 0.312375 / 0.442167 | 0.000458 / 0.001375 | 200 → 0 |
+| 500 | 2.118166 / 2.476792 | 0.000333 / 0.000375 | 200 → 0 |
+
+The first regression run on unchanged production code failed four of five
+new tests at identity assertions; the stale-hydration control passed. With the
+fix, the focused shared/renderer fixture suite passed 20 tests before adding
+explicit cwd-change and empty-catalog invalidation controls. No wall-clock
+threshold is enforced in tests; a provider-record getter proves no replay.
+
+Final local verification: full typecheck, test contract and five-fixture privacy
+verification passed; 24 focused unit tests and two worktree-bar renderer tests
+passed. Full unit suite: 2138 passed, one failed because the existing image
+corpus check references a removed private session. The identical failure was
+reproduced on unchanged main (tracked by #684/#669/#641); no test was skipped or
+weakened. All seven new regression tests pass. Public CI remains the gate.
