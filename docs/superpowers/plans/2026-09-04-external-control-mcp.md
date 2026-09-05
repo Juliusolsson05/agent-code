@@ -30,6 +30,12 @@ Computer use covers interactions that remain practical visually, especially
 visual judgment and richer editing within an already-open surface. It is not
 an excuse to defer the app's hardest navigation paths.
 
+The MCP is also the operator's complete reference for the application: all
+commands, all Agent Code keybindings, a description of the app as a whole, and
+descriptions of every shipped feature, including features without commands or
+direct tools. Complete discoverability and explanation are delivery requirements
+even though complete direct automation is not.
+
 The server is a separate, opt-in external control surface. Agent Code's own
 agents do not receive it by default. Existing Orchestration, Agent Management,
 AI Workspace, transcript, and Workflow MCP domains retain their scopes.
@@ -184,10 +190,15 @@ Names and arguments are proposed API contracts, not existing exports.
 | Tool | Main arguments | Result |
 |---|---|---|
 | `ac_help` | Optional topic | Short app vocabulary, operating loop, and links to deeper command descriptions |
+| `ac_app_describe` | Overview or expanded section, cursor | What the app does, its UI structure, concepts, operating workflows, and a complete feature index |
+| `ac_features_list` | Optional category/filter, cursor | Every shipped feature with summary, availability, and its description/UI/tool references |
+| `ac_feature_describe` | `featureId`, optional live target | Purpose, behavior, how to use it, entry points, commands, shortcuts, direct tools, and relevant limitations |
 | `ac_state` | Optional window/scope; bounded detail level | Instance identity, windows, tabs, agents, active surfaces, placement, readiness, and pending conditions |
 | `ac_agents_search` | Query plus optional project/window/provider/activity/placement filters; cursor | Matching existing agents with stable IDs, locations, distinguishing evidence, and a direct show route |
+| `ac_commands_list` | Optional category/surface/target, cursor | Complete command inventory, including hidden/unavailable commands and contextual command families |
 | `ac_commands_search` | `query`, optional target/category, `limit`, cursor | Ranked command descriptions with availability, current state, shortcut, and recommended route |
 | `ac_command_describe` | `commandId`, optional target | Full command contract, tool/schema reference, effects, prerequisites, and UI fallback |
+| `ac_keybindings_list` | Optional command/context/query; effective/default/both view; cursor | All shortcuts, alternate chords, customization/unbound state, ownership, and contextual meaning |
 | `ac_palette_open` | `windowId`, optional `query`, `commandId` | Acknowledged visible palette, query, selected command if present, and current target |
 | `ac_command_run` | `commandId`, explicit target, `requestId` | Completion, opened surface, pending operation, blocked/unavailable, or failure |
 | `ac_wait` | Event cursor or operation ID, scope, bounded timeout | Relevant changes, completion, input needed, timeout, or an expired-cursor indication |
@@ -270,6 +281,117 @@ The existing palette purposely avoids a heavyweight workspace subscription
 while closed. Extract a reusable, lazily evaluated command-context adapter or
 use a bounded request host mounted on demand. Do not keep the whole picker
 mounted merely to service MCP search or background observations.
+
+### 4.4 Complete command and keybinding reference
+
+Searching is not the only way to retrieve the catalog. `ac_commands_list` must
+allow the operator to enumerate everything without guessing search terms.
+Default enumeration includes user-hidden commands and unavailable/debug-gated
+commands with their actual status. Filtering to runnable or visible commands is
+an explicit option. Each row links to its full description, owning feature,
+effective shortcuts, direct tool if implemented, and UI route.
+
+Generated provider commands belong in the complete list. Contextual families,
+such as `A2` / `A2!` agent navigation, expose their grammar and the live target
+list through the appropriate inventory. Do not pretend an infinite family of
+search-generated IDs is a finite static catalog, or silently omit that feature.
+
+`ac_keybindings_list` returns every binding, not just the primary shortcut that
+the current palette row displays. Its records include:
+
+- Stable command/interaction ID and a description of what the binding does.
+- All normalized chords and platform-appropriate display labels.
+- Shipped defaults, effective bindings, and whether the user customized them.
+- Explicitly unbound state: an empty override is different from inheriting
+  defaults. Also include commands with no assigned chord when listing commands.
+- Context: Grid, Dispatch, editor, composer, picker/modal, global, or native.
+- Conditions that change meaning or availability, plus known precedence,
+  reservations, and conflicts where the app can establish them.
+- Owner/source: customizable command, fixed app interaction, native menu role,
+  embedded editor, or forwarded provider/terminal input.
+
+Use `resolveEffectiveKeybindings` with the same context resolver as the runtime
+router; join it to command descriptions and the shipped default table. Preserve
+all alternate bindings and unresolved saved overrides with an explanatory status.
+Do not invent a second implementation of override resolution.
+
+The customizable-command table is not the whole keyboard surface. Inventory the
+fixed interactions in `reservations.ts`, `useKeybinds.ts`, palette/modal handlers,
+composer handlers, editor integration, native menu accelerators, and dictation
+hotkeys. Include configured mouse chords in the interaction reference with their
+input type distinguished. Reuse existing declarations; add concise descriptors
+beside owning handlers where none exist. Reservations alone are neither a full
+interaction inventory nor proof that the current runtime consumes a chord.
+
+For embedded-editor bindings, use the loaded editor's registered actions/keymap
+where available. For terminal/provider input, distinguish the app's forwarding
+behavior from the downstream program's version-dependent keymap. Describe known
+native interaction routes and report unknown external mappings honestly rather
+than claiming to enumerate arbitrary shell programs or user-installed plugins.
+
+Full listings are cursor-paginated and carry catalog/settings revisions so every
+page can be retrieved and a changed snapshot can be detected. Return total count,
+next cursor, and whether the page is complete; never present a top-N sample as
+"all commands" or "all shortcuts." Opening Settings and changing a shortcut
+must be reflected by the next MCP observation without restarting the app.
+
+### 4.5 The app and every feature explained through MCP
+
+`ac_app_describe` provides a short orientation plus access to an expanded guide:
+what Agent Code is for, what runs locally, how providers fit in, the window/tab/
+agent model, major screen regions, Grid versus Dispatch, agent view versus raw
+terminal, and the discover-act-observe workflow. The guide links to a complete
+feature index rather than burying every feature in one large initialization
+prompt. The complete guide remains retrievable section by section through MCP.
+
+Every feature description answers:
+
+1. What is it, what problem does it solve, and when would the user use it?
+2. Where is it in the UI, and how can the operator open or reveal it?
+3. What does it operate on, and what state or provider prerequisites apply?
+4. Which commands, keybindings, settings, and MCP tools are associated with it?
+5. What is a representative workflow, including any computer-use continuation?
+6. What outcome is visible, and which important limitations or lifecycle effects
+   must the operator understand?
+
+The release inventory must cover these areas, expanding to individual features
+within them rather than declaring a whole subsystem documented by its name:
+
+- Windows, project tabs, tiled tabs, pane labels, focus/navigation, and layout.
+- Dispatch/global Dispatch, rows/lanes, project scoping, pins, and color flags.
+- Agent creation, naming, relationships, lifecycle, detach/bury/revive, recovery.
+- Providers/runtime choices, model/native configuration routes, switching,
+  compaction, duplicate/resume, rewind, and undo behavior.
+- Composer, prompt queue/suggestions, images, history, templates, quoting, and
+  copying responses/code blocks.
+- Conversation rendering, tools/results, Reader, Spotlight, auto-follow,
+  previews, and raw agent-terminal view.
+- Persistent terminals and how their behavior differs from agent sessions.
+- File explorer, global editor, search, buffers, save/conflict behavior, LSP,
+  and curated AI Workspaces.
+- Built-in MCP domains, agent orchestration/management, and existing workflows.
+- Conventions, custom/installed skills, provider deployment, and settings.
+- Appearance/themes, command visibility, shortcuts, and input customization.
+- Dictation, its controls/history, and relevant setup.
+- Git/worktrees, activity/status, usage, performance, and caffeinate.
+- Remote access/pairing, setup, toolchain/provider updates, and diagnostics.
+- External control itself, connection state, hybrid operation, and revocation.
+
+Maintain feature descriptions as feature-owned data adjacent to implementation.
+An assembled feature catalog references command, settings, surface, and tool IDs;
+generate the mechanical lists and live status from those sources. The explanation
+of purpose/workflows is authored and reviewed, not guessed from filenames.
+
+Use the inspected repository layout, surface registry, settings registry, and
+command owners to establish the initial complete inventory. Features without
+commands still need entries. A feature folder is evidence to inspect, not an
+automatic one-to-one definition of a product feature. Subsequent feature changes
+update their descriptors in the same diff; coverage checks catch missing/broken
+references, and review checks whether the explanation remains true.
+
+The operator must be able to ask "what else can this app do?" and get a complete
+index, including opt-in/experimental features with accurate status. An unwrapped
+feature must still be discoverable and explained, with a UI route.
 
 ## 5. Broad direct coverage for common and difficult operations
 
@@ -533,6 +655,8 @@ src/preload/api/control.ts Typed renderer requests, responses, and registration
 src/renderer/src/features/control/
   controlBridge.ts         Renderer request handling through existing app actions
   commandDescriptions.ts   Serializable catalog projections and UI routes
+  keybindingReference.ts   Effective and fixed interaction reference projections
+  featureCatalog.ts        Assembles feature-owned app guides and cross-references
   controlSnapshot.ts       Bounded live state projection
 
 src/renderer/src/features/command-palette/
@@ -555,6 +679,8 @@ if a new alias is actually necessary.
 - Create/link the feature Issue and synchronize this plan with its acceptance
   criteria before implementation.
 - Enumerate actual catalog exports, settings entry points, and relevant surfaces.
+- Inventory all keyboard/mouse interaction owners and shipped features, including
+  fixed shortcuts and features without palette commands.
 - Assign every command a proposed route and mark the Tier A/B wrappers.
 - Record representative user intentions for search and a small operator script.
 - Decide the minimal protocol and reserved external server identity.
@@ -566,17 +692,24 @@ Exit: a reviewable command coverage map where UI routes count as supported.
 - Extend command descriptors and add serializable projections.
 - Normalize descriptions and keywords, including generated command families.
 - Add description matching to the shared command-search policy.
+- Build complete command/keybinding listings from real defaults, customizations,
+  fixed-interaction descriptors, and runtime context.
+- Author the app overview and feature-owned descriptions, with a complete feature
+  index and shared command/shortcut/settings/UI references.
 - Preserve browse order, visibility preferences, state badges, and relevance
   ahead of stars/history.
 - Classify commands without running their handlers or mounting the full UI.
 
-Exit: the user can find commands by their descriptions; the same catalog can
-answer MCP discovery queries without duplicating command definitions.
+Exit: the user can find commands by their descriptions; the same catalogs can
+list all commands and shortcuts and explain the whole app and every shipped
+feature without duplicating runtime definitions.
 
 ### Phase 2 — connect and hand off to the picker
 
 - Implement independent host settings, authentication, renderer registration,
   compact observations, and discovery tools.
+- Expose the full command list, complete keybinding reference, app overview,
+  feature index, and detailed feature descriptions through the MCP tools.
 - Add one-shot palette open intents, explicit window routing, and acknowledgements.
 - Implement `ac_command_run` only for classified supported routes, with fresh
   admission, interaction ownership, and truthful effects.
@@ -634,8 +767,8 @@ the remaining interactions rather than carrying the app's navigation burden.
 - Provide a concise setup/help flow for the external operator. Installation must
   not silently enable the server in internal agents.
 - Add contract checks for new command classifications, schema/tool-reference
-  validity, and stale UI routes. Keep tests behavioral rather than asserting an
-  arbitrary number of tools.
+  validity, stale UI routes, complete shortcut projections, and feature-reference
+  coverage. Keep tests behavioral rather than asserting an arbitrary tool count.
 - Run the relevant unit/system/renderer checks, typecheck, and package validation.
 - Update Issue/PR verification and this plan's status; merge only on explicit approval.
 
@@ -690,11 +823,24 @@ implementation should colocate meaningful Vitest coverage with its owners.
 20. **Operational breadth:** discover/apply a saved template, change a supported
     ordinary setting, inspect usage/worktrees, and run/read an existing workflow
     through the appropriate external ownership path.
+21. **Complete command enumeration:** paginate through all static/generated
+    commands, including hidden/unavailable rows; contextual families describe
+    their grammar and link to live targets. No page silently omits the remainder.
+22. **Actual shortcuts:** customize a command, add a second chord, explicitly
+    unbind another, and verify the MCP output matches the runtime. Include fixed,
+    editor/native, composer/modal, and mouse interactions with correct ownership.
+23. **Complete app guide:** enumerate the feature index and retrieve explanations
+    for command-backed and UI-only features, including disabled/experimental
+    ones. Every description has valid entry points and truthful capability status.
+24. **Reference stays current:** after settings, focus, provider capabilities, or
+    catalog revision changes, subsequent observations identify the new revision
+    and update shortcuts/availability rather than serving a misleading cached list.
 
 ## 11. Definition of done
 
-The feature is complete when the external operator can discover the full
-command catalog with useful descriptions, reliably open the real picker and
+The feature is complete when the external operator can enumerate all commands
+and keybindings, retrieve a whole-app guide and descriptions of every shipped
+feature, search the catalog by useful descriptions, reliably open the real picker and
 supported UI entry points, find/reveal existing agents across the whole app,
 use the Tier A/B/C direct surface for common and UI-difficult work, and alternate
 between MCP and computer use while observing the same app state.
