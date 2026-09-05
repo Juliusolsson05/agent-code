@@ -379,7 +379,7 @@ export function usePaneActions(
   ) => Promise<void>
   startNewAgentPlacement: () => void
   commitNewAgentPlacement: (selection: SessionSpawnSelection, target: PlacementTarget) => Promise<void>
-  createDetachedSession: (selection: SessionSpawnSelection, projectOverride?: { tabId: TabId; anchorSessionId: SessionId }) => Promise<SessionId | null>
+  createDetachedSession: (selection: SessionSpawnSelection, projectOverride?: { tabId: TabId; anchorSessionId: SessionId }, continuation?: SplitFocusedContinuation) => Promise<SessionId | null>
   createDetachedDispatchAgent: (
     selection: SessionSpawnSelection & { kind: Exclude<SessionKind, 'terminal'> },
     projectOverride?: { tabId: TabId; anchorSessionId: SessionId },
@@ -399,6 +399,7 @@ export function usePaneActions(
   }) => Promise<OrchestrationAgentRecord>
   attachDetachedToGrid: (sessionId: SessionId, targetTabId: string, target: PlacementTarget) => Promise<void>
   attachAllDetachedForTab: (tabId: string) => Promise<void>
+  detachSessionToDispatch: (sessionId: SessionId) => void
   detachFocusedToDispatch: () => void
   closeFocused: () => Promise<void>
   /** Resolves true when the session was actually closed, false when it did
@@ -666,6 +667,7 @@ export function usePaneActions(
       // whose grid leaves are all closed has no leaf cwd to fall back on and
       // Dispatch agents are never inserted into tab.root.
       projectOverride?: { tabId: TabId; anchorSessionId: SessionId },
+      continuation?: SplitFocusedContinuation,
     ) => {
       const { kind, providerRuntime } = selection
       const snapshot = refs.stateRef.current
@@ -686,7 +688,9 @@ export function usePaneActions(
       if (!tab) return null
 
       const leafIds = collectLeaves(tab.root)
-      const cwd =
+      // A native continuation owns its cwd; the project only owns placement.
+      // Reusing the anchor cwd here can resume a transcript in another repo.
+      const cwd = continuation?.cwd ??
         (target.cwdSessionId ? snapshot.sessions[target.cwdSessionId]?.cwd : null) ??
         // Do NOT fall back to tab.focusedSessionId: in Tiled Dispatch that's
         // stale grid focus (the focused lane's session is already
@@ -700,7 +704,7 @@ export function usePaneActions(
 
       let sessionId: SessionId
       try {
-        sessionId = await sessionActions.spawn(cwd, { kind, providerRuntime })
+        sessionId = await sessionActions.spawn(cwd, { kind, providerRuntime, resumeSessionId: continuation?.resumeSessionId, builtInMcpDomains: continuation?.builtInMcpDomains })
       } catch (err) {
         showToast(
           err instanceof Error && err.message.length > 0
@@ -1198,13 +1202,8 @@ export function usePaneActions(
   //      return null and the tab.root type cannot represent an empty
   //      tree. We don't want to silently close the tab either, so we
   //      refuse and ask the user to add another pane first.
-  const detachFocusedToDispatch = useCallback(() => {
+  const detachSessionToDispatch = useCallback((sessionId: SessionId) => {
     const snapshot = refs.stateRef.current
-    const sessionId = commandTargetSessionIdForState(snapshot)
-    if (!sessionId) {
-      showToast('No focused session to detach')
-      return
-    }
     const meta = snapshot.sessions[sessionId]
     if (!meta) return
     const tab = snapshot.tabs.find(t => collectLeaves(t.root).includes(sessionId))
@@ -1265,6 +1264,12 @@ export function usePaneActions(
     showToast(`Detached "${cwdBase}" to Dispatch`)
   }, [refs.stateRef, setState, showToast])
 
+
+  const detachFocusedToDispatch = useCallback(() => {
+    const id = commandTargetSessionIdForState(refs.stateRef.current)
+    if (id) detachSessionToDispatch(id)
+    else showToast('No focused session to detach')
+  }, [refs.stateRef, detachSessionToDispatch, showToast])
 
   const commitNewAgentPlacement = useCallback(
     async (selection: SessionSpawnSelection, target: PlacementTarget) => {
@@ -2269,6 +2274,7 @@ export function usePaneActions(
     createOrchestrationAgent,
     attachDetachedToGrid,
     attachAllDetachedForTab,
+    detachSessionToDispatch,
     detachFocusedToDispatch,
     closeFocused,
     closeSession,

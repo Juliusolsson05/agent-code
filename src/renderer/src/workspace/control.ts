@@ -6,6 +6,9 @@ import { resolveTabSessions } from '@renderer/workspace/queries'
 import { buildGridRelatedAgentTabs, selectedGridRelatedSessionId } from '@renderer/workspace/gridRelatedAgents'
 import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
 import { commandTargetSessionIdForState } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
+import { buildVisibleDispatchRows } from '@renderer/workspace/dispatch/dispatchSelectors'
+import { dispatchRowTitle } from '@renderer/workspace/dispatch/rowTitle'
+import { paneLabelForSession, resolveAgentPaneLabel } from '@renderer/workspace/tile-tree/paneLabels'
 import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
 import type { Workspace } from '@renderer/workspace/hook'
 
@@ -61,12 +64,24 @@ export function observeWorkspace(getWorkspace: () => Pick<Workspace, 'restoreSta
   // Buried metadata can outlive its sessions entry. Preserve that real
   // identity rather than dropping it or inventing a second agent.
   const sessions = { ...Object.fromEntries(state.buried.map(record => [record.sessionId, record.sessionMeta])), ...state.sessions }
+  const dispatchRows = state.dispatchMode && !tileTabs ? buildVisibleDispatchRows(state) : []
+  const identity = (sessionId: string, meta: (typeof sessions)[string]) => {
+    const row = dispatchRows.find(row => row.sessionId === sessionId)
+    const tab = state.tabs.find(tab => resolveTabSessions(state, tab.id).includes(sessionId))
+    const localLabel = tab ? paneLabelForSession(state, tab.id, sessionId) : null
+    // Dispatch labels can shadow project-local labels. Only advertise a
+    // fallback that the app's label resolver maps back to this same session.
+    const displayLabel = row?.label ?? (localLabel && resolveAgentPaneLabel(state, localLabel, tileTabs)?.sessionId === sessionId ? localLabel : null)
+    const displayedTitle = row ? dispatchRowTitle(row, store.workspaceRuntimes[sessionId]?.entries)
+      : meta.title?.trim() || meta.cwd.split('/').filter(Boolean).pop() || meta.cwd
+    return { displayLabel, displayedTitle }
+  }
   return {
     observedAt: Date.now(), focusedSessionId, ui: { commandPickerOpen: store.commandPaletteOpen, settingsOpen: store.settingsPageOpen, inputOwnedBySurface: hasAppInteractionOwner() }, restoreStatus: getWorkspace().restoreStatus, activeTabId: state.activeTabId,
     mode: tileTabs ? 'tiled-tabs' as const : state.dispatchMode?.tiled ? 'tiled-dispatch' as const : state.dispatchMode ? 'dispatch' as const : 'grid' as const,
     tabs: state.tabs.map(tab => ({ id: tab.id, title: tab.title, focusedSessionId: tab.focusedSessionId, sessionIds: resolveTabSessions(state, tab.id) })),
     sessions: Object.entries(sessions).map(([sessionId, meta]) => ({
-      sessionId, title: meta.title ?? '', cwd: meta.cwd, provider: meta.kind ?? DEFAULT_PROVIDER,
+      sessionId, ...identity(sessionId, meta), title: meta.title ?? '', cwd: meta.cwd, provider: meta.kind ?? DEFAULT_PROVIDER,
       providerRuntime: meta.providerRuntime ?? null, providerSessionId: meta.providerSessionId ?? null,
       pinned: state.pinnedSessionIds?.includes(sessionId) ?? false, placements: placements.get(sessionId) ?? [],
     })),

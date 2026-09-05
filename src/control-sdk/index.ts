@@ -29,3 +29,4 @@ export { operatorRoutingSchema, externalConnectionStatusSchema } from './operato
 export type { ControlOperatorPort, ExternalConnectionStatus } from './operator'
 
 export { startControlTask } from './task'
+export { nativeInputOutput } from './catalog/input'

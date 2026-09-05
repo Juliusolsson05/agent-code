@@ -96,7 +96,7 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
         const query = input.query.trim().toLocaleLowerCase()
         const rows = observe().sessions.filter(session => session.provider !== 'terminal'
           && (!input.tabId || session.placements.some(placement => placement.tabId === input.tabId))
-          && [session.sessionId, session.title, session.cwd, session.provider].some(value => value.toLocaleLowerCase().includes(query)))
+          && [session.sessionId, session.title, session.displayedTitle, session.displayLabel ?? '', session.cwd, session.provider].some(value => value.toLocaleLowerCase().includes(query)))
         return paginate(rows, input, `agents:${query}:${input.tabId ?? ''}`)
       },
     }),
@@ -203,7 +203,7 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
     }),
     defineCapability({
       id: 'agents.prompt', target: { kind: 'session', field: 'sessionId' }, title: 'Send an agent prompt', execution: 'window', effect: 'mutation', completion: 'accepted',
-      description: 'Deliver text to the exact agent through the provider delivery protocol. Reports user, queue or transport acceptance, not task completion. Preserves the composer draft and never retries an uncertain write.',
+      description: 'Deliver text to the exact agent through the provider delivery protocol. Reports user, queue or transport acceptance, not task completion. Preserves the Agent Code composer draft and never retries an uncertain write. Native TUI drafts are separate: agents.inputInspect reports available knowledge; provider delivery checks remain authoritative and transport acceptance is not proof of the exact committed text.',
       input: sessionInput.extend({ prompt: z.string().min(1).max(1_000_000).describe('Exact text to deliver once. A successful acceptance can be queued; inspect agents.read for actual progress.') }),
       output: z.object({ sessionId: z.string(), acceptance: z.object({ kind: z.enum(['user', 'queue', 'transport']), acceptedAt: z.number(), entryId: z.string().optional() }) }),
       handler: async ({ sessionId, prompt }) => {

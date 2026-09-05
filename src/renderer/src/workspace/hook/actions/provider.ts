@@ -12,7 +12,7 @@ import type { WorkspaceSetRuntimes } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import type { SessionActions } from '@renderer/workspace/hook/actions/session'
 import { resumableProviderSessionId } from '@renderer/workspace/providerSessionIdentity'
-import { switchAgentProvider } from '@renderer/workspace/hook/actions/providerSwitchCore'
+import { switchAgentProvider, type SwitchAgentProviderResult } from '@renderer/workspace/hook/actions/providerSwitchCore'
 import { providerChoiceLabel } from '@renderer/workspace/providerChoices'
 
 // Provider-level actions on the focused pane.
@@ -25,6 +25,14 @@ import { providerChoiceLabel } from '@renderer/workspace/providerChoices'
 //                           re-homes onto a truncated transcript with
 //                           the prompt prefilled as an unsent draft.
 
+// Domain outcomes are shared by UI commands and external control. A returned
+// Promise<void> cannot distinguish a declined operation from a replacement;
+// the transport must not infer success from a toast or a changed session census.
+export type AgentLifecycleResult =
+  | { status: 'completed'; sourceSessionId: SessionId; newSessionId: SessionId }
+  | { status: 'skipped'; reason: string }
+  | { status: 'failed'; message: string }
+
 export function useProviderActions(
   refs: WorkspaceRefs,
   setRuntimes: WorkspaceSetRuntimes,
@@ -35,7 +43,10 @@ export function useProviderActions(
     sourceSessionId: SessionId,
     targetKind: AgentProviderKind,
     targetProviderRuntime?: AgentProviderRuntime,
-  ) => Promise<void>
+  ) => Promise<SwitchAgentProviderResult>
+  reloadSessionAgent: (sourceSessionId: SessionId) => Promise<AgentLifecycleResult>
+  rewindSessionToPrompt: (sourceSessionId: SessionId, anchor: RewindPromptAddress) => Promise<AgentLifecycleResult>
+  undoSessionRewind: (sourceSessionId: SessionId) => Promise<AgentLifecycleResult>
   reloadFocusedAgent: () => Promise<void>
   rewindFocusedToPrompt: (
     anchor: RewindPromptAddress,
@@ -46,16 +57,16 @@ export function useProviderActions(
     sourceSessionId: SessionId,
     targetKind: AgentProviderKind,
     targetProviderRuntime?: AgentProviderRuntime,
-  ) => {
+  ): Promise<SwitchAgentProviderResult> => {
     const current = refs.stateRef.current
     const meta = current.sessions[sourceSessionId]
-    if (!meta) return
+    if (!meta) return { status: 'skipped', reason: 'Session no longer exists' }
 
     const sourceKind = meta.kind ?? DEFAULT_PROVIDER
     if (!isAgentProviderKind(sourceKind)) {
       // Non-agent (terminal) pane — nothing to switch.
       showPaneToast(sourceSessionId, 'Only agent panes can switch provider')
-      return
+      return { status: 'skipped', reason: 'Only agent panes can switch provider' }
     }
     const result = await switchAgentProvider({
       sessionId: sourceSessionId,
@@ -77,14 +88,13 @@ export function useProviderActions(
     } else {
       showPaneToast(sourceSessionId, result.reason)
     }
+    return result
   }, [refs, sessionActions, setRuntimes, showPaneToast])
 
-  const reloadFocusedAgent = useCallback(async () => {
+  const reloadSessionAgent = useCallback(async (sourceSessionId: SessionId): Promise<AgentLifecycleResult> => {
     const current = refs.stateRef.current
-    const sourceSessionId = commandTargetSessionIdForState(current)
-    if (!sourceSessionId) return
     const meta = current.sessions[sourceSessionId]
-    if (!meta) return
+    if (!meta) return { status: 'skipped', reason: 'Session no longer exists' }
 
     const kind = meta.kind ?? DEFAULT_PROVIDER
     if (!isAgentProviderKind(kind)) {
@@ -92,31 +102,34 @@ export function useProviderActions(
       // right for any current OR future provider set. The previous
       // "Claude and Codex" wording rotted the moment OpenCode was registered.
       showPaneToast(sourceSessionId, 'Only agent panes can reload')
-      return
+      return { status: 'skipped', reason: 'Only agent panes can reload' }
     }
     const resumeSessionId = resumableProviderSessionId(meta)
     if (!resumeSessionId) {
       showPaneToast(sourceSessionId, 'Provider session id is not ready yet')
-      return
+      return { status: 'skipped', reason: 'Provider session id is not ready yet' }
     }
 
     try {
       const newSessionId = await sessionActions.replaceSession(meta.cwd, {
         kind,
+        targetSessionId: sourceSessionId,
         resumeSessionId,
         builtInMcpDomains: meta.builtInMcpDomains,
       })
-      if (!newSessionId) return
+      if (!newSessionId) return { status: 'failed', message: 'Replacement was not committed' }
       showPaneToast(
         newSessionId,
         `${getRendererProviderCapabilities(kind).shortLabel} reloaded`,
       )
+      return { status: 'completed', sourceSessionId, newSessionId }
     } catch (err) {
       const message =
         err instanceof Error && err.message.length > 0
           ? err.message
           : 'Reload failed'
       showPaneToast(sourceSessionId, message)
+      return { status: 'failed', message }
     }
   }, [refs.stateRef, sessionActions, showPaneToast])
 
@@ -141,13 +154,11 @@ export function useProviderActions(
   //     toast and return. Rewinding while a response is streaming
   //     exercises every race we have around the live-to-committed
   //     handoff at once; requiring idle is the safe path.
-  const rewindFocusedToPrompt = useCallback(
-    async (anchor: RewindPromptAddress) => {
+  const rewindSessionToPrompt = useCallback(
+    async (sourceSessionId: SessionId, anchor: RewindPromptAddress): Promise<AgentLifecycleResult> => {
       const current = refs.stateRef.current
-      const sourceSessionId = commandTargetSessionIdForState(current)
-      if (!sourceSessionId) return
       const meta = current.sessions[sourceSessionId]
-      if (!meta) return
+      if (!meta) return { status: 'skipped', reason: 'Session no longer exists' }
 
       const kind = meta.kind ?? DEFAULT_PROVIDER
       if (!isAgentProviderKind(kind)) {
@@ -155,25 +166,25 @@ export function useProviderActions(
         // Terminal panes are the only non-agent kind today; the wording will
         // continue to read right when future providers register.
         showPaneToast(sourceSessionId, 'Only agent panes support rewind')
-        return
+        return { status: 'skipped', reason: 'Only agent panes support rewind' }
       }
       const previousProviderSessionId = resumableProviderSessionId(meta)
       if (!previousProviderSessionId) {
         showPaneToast(sourceSessionId, 'Provider session id is not ready yet')
-        return
+        return { status: 'skipped', reason: 'Provider session id is not ready yet' }
       }
       if (kind !== anchor.provider) {
         showPaneToast(
           sourceSessionId,
           `Prompt address is for ${anchor.provider} but focused pane is ${kind}`,
         )
-        return
+        return { status: 'skipped', reason: 'Prompt provider differs from this session' }
       }
 
       const currentRuntime = refs.latestRuntimesRef.current[sourceSessionId]
       if (currentRuntime?.processActive || currentRuntime?.semantic.currentTurn) {
         showPaneToast(sourceSessionId, 'Wait for the current turn to finish before rewinding')
-        return
+        return { status: 'skipped', reason: 'Wait for the current turn to finish before rewinding' }
       }
 
       try {
@@ -193,7 +204,7 @@ export function useProviderActions(
           builtInMcpDomains: meta.builtInMcpDomains,
           targetSessionId: sourceSessionId,
         })
-        if (!newSessionId) return
+        if (!newSessionId) return { status: 'failed', message: 'Replacement was not committed' }
 
         // `replaceSession` copied the PRIOR pane's draft forward.
         // For rewind we deliberately clobber that draft with the
@@ -260,43 +271,43 @@ export function useProviderActions(
         })
 
         showPaneToast(newSessionId, 'Rewound to prompt - Undo Rewind available until next submit')
+        return { status: 'completed', sourceSessionId, newSessionId }
       } catch (err) {
         const message =
           err instanceof Error && err.message.length > 0
             ? err.message
             : 'Rewind failed'
         showPaneToast(sourceSessionId, message)
+        return { status: 'failed', message }
       }
     },
     [refs.latestRuntimesRef, refs.stateRef, sessionActions, setRuntimes, showPaneToast],
   )
 
-  const undoLastRewind = useCallback(async () => {
+  const undoSessionRewind = useCallback(async (sourceSessionId: SessionId): Promise<AgentLifecycleResult> => {
     const current = refs.stateRef.current
-    const sourceSessionId = commandTargetSessionIdForState(current)
-    if (!sourceSessionId) return
     const meta = current.sessions[sourceSessionId]
-    if (!meta) return
+    if (!meta) return { status: 'skipped', reason: 'Session no longer exists' }
 
     const runtime = refs.latestRuntimesRef.current[sourceSessionId]
     const pending = runtime?.pendingRewindUndo ?? null
     if (!pending) {
       showPaneToast(sourceSessionId, 'No rewind to undo')
-      return
+      return { status: 'skipped', reason: 'No rewind to undo' }
     }
 
     const kind = meta.kind ?? DEFAULT_PROVIDER
     if (kind !== pending.provider) {
       showPaneToast(sourceSessionId, 'Rewind undo no longer matches this pane')
-      return
+      return { status: 'skipped', reason: 'Rewind undo no longer matches this pane' }
     }
     if (meta.providerSessionId !== pending.rewoundProviderSessionId) {
       showPaneToast(sourceSessionId, 'Rewind undo is no longer available')
-      return
+      return { status: 'skipped', reason: 'Rewind undo is no longer available' }
     }
     if (runtime.processActive || runtime.semantic.currentTurn) {
       showPaneToast(sourceSessionId, 'Wait for the current turn to finish before undoing rewind')
-      return
+      return { status: 'skipped', reason: 'Wait for the current turn to finish before undoing rewind' }
     }
 
     try {
@@ -306,7 +317,7 @@ export function useProviderActions(
         builtInMcpDomains: pending.builtInMcpDomains,
         targetSessionId: sourceSessionId,
       })
-      if (!newSessionId) return
+      if (!newSessionId) return { status: 'failed', message: 'Replacement was not committed' }
 
       setRuntimes(prev => {
         const restored = prev[newSessionId]
@@ -328,14 +339,32 @@ export function useProviderActions(
       })
 
       showPaneToast(newSessionId, 'Undid rewind')
+      return { status: 'completed', sourceSessionId, newSessionId }
     } catch (err) {
       const message =
         err instanceof Error && err.message.length > 0
           ? err.message
           : 'Undo rewind failed'
       showPaneToast(sourceSessionId, message)
+      return { status: 'failed', message }
     }
   }, [refs.latestRuntimesRef, refs.stateRef, sessionActions, setRuntimes, showPaneToast])
 
-  return { switchSessionProvider, reloadFocusedAgent, rewindFocusedToPrompt, undoLastRewind }
+  // UI commands capture focus once, before any asynchronous work. External
+  // callers use the explicit methods directly and never move selection as a
+  // substitute for specifying an operation target.
+  const reloadFocusedAgent = useCallback(async () => {
+    const id = commandTargetSessionIdForState(refs.stateRef.current)
+    if (id) await reloadSessionAgent(id)
+  }, [refs.stateRef, reloadSessionAgent])
+  const rewindFocusedToPrompt = useCallback(async (anchor: RewindPromptAddress) => {
+    const id = commandTargetSessionIdForState(refs.stateRef.current)
+    if (id) await rewindSessionToPrompt(id, anchor)
+  }, [refs.stateRef, rewindSessionToPrompt])
+  const undoLastRewind = useCallback(async () => {
+    const id = commandTargetSessionIdForState(refs.stateRef.current)
+    if (id) await undoSessionRewind(id)
+  }, [refs.stateRef, undoSessionRewind])
+  return { switchSessionProvider, reloadSessionAgent, rewindSessionToPrompt, undoSessionRewind,
+    reloadFocusedAgent, rewindFocusedToPrompt, undoLastRewind }
 }

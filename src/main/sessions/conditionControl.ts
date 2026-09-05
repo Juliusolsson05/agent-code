@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { z } from 'zod'
 import { ControlError, defineCapability, conditionTargetInput, conditionReadOutput, conditionReplyInput, conditionBackendIdentity, conditionReplyOutput } from '@control-sdk'
 import { makeDispatch } from '@shared/conditions-core/dispatch'
 import type { SessionManager } from '@main/sessionManager'
@@ -19,6 +20,22 @@ export function conditionBackendCapabilities(manager: Pick<SessionManager, 'getB
     return { backend, conditions, revision }
   }
   return [
+    defineCapability({
+      id: 'sessions.interrupt', visibility: 'application', title: 'Request backend Stop', execution: 'main', effect: 'mutation', completion: 'accepted',
+      description: 'Backing Stop operation; validates the observed backend and condition revision before sending the ordinary composer Escape signal.',
+      input: conditionTargetInput.extend(conditionBackendIdentity.shape).extend({ revision: z.string() }),
+      output: z.object({ sessionId: z.string(), sessionRunId: z.string(), accepted: z.literal(true) }),
+      handler: input => {
+        const { backend, conditions, revision } = observe(input)
+        if (!backend.sessionRunId || input.revision !== revision) throw new ControlError('stale_cursor', 'Backend or conditions changed; inspect again')
+        if (conditions.length) throw new ControlError('unavailable', 'Resolve the advertised condition before requesting Stop')
+        // TileLeaf's Stop sends Escape, not SIGINT or process termination. Use
+        // that same write path so delivery reservations and provider handling
+        // remain authoritative. Observation and admission share one JS turn.
+        if (!manager.write(input.sessionId, '\u001b')) throw new ControlError('unavailable', 'Backend refused Stop input')
+        return { sessionId: input.sessionId, sessionRunId: backend.sessionRunId, accepted: true as const }
+      },
+    }),
     defineCapability({
       id: 'sessions.conditionsRead', visibility: 'application', title: 'Read authoritative conditions', execution: 'main', effect: 'read',
       description: 'Backing operation for the owning window; reads current backend conditions without spawning or attaching.',

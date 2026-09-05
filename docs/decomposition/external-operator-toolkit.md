@@ -107,3 +107,20 @@ this plan/issue for concrete findings. All work stays unmerged pending confirmat
 ## Checkpoints
 
 - Planning: source owners inspected; no new feedback linked to #793 at start.
+
+- Feedback checkpoint: #796–#801 arrived during implementation. This stage now
+  includes canonical visible labels/displayed titles, explicit effective tiled
+  focus, app/process attachment identity, application activation before window
+  focus, native-draft uncertainty and the multi-lane navigation recipe. The
+  activation root cause is a supported hypothesis until the two-monitor trial
+  verifies it; no focus acknowledgment is bypassed. #800's real committed-prompt
+  trial remains external evidence, not a fabricated passing fixture.
+- Lifecycle adapters and native prompt catalogs are implemented. Initial existing
+  checks: 11 files/33 tests passed; new lifecycle/placement/focus checks: 3 files/8
+  tests passed. Recorded label/focus transitions and native catalog checks are
+  being verified before the batch stage.
+- Stage 1/2 code checkpoint: full TypeScript including the standalone neutral SDK
+  passed. The combined lifecycle/navigation/catalog/feedback/import-boundary run
+  passed 11 files/25 tests, including recorded native prompts and Dispatch
+  coordinates. OS two-monitor activation and occupied native-draft trials remain
+  external verification; do not label those reproduced/fixed on unit evidence.

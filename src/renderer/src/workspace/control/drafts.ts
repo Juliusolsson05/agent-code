@@ -26,7 +26,7 @@ export function draftControlCapabilities(getWorkspace: () => Workspace) {
   return [
     defineCapability({
       id: 'agents.draftGet', title: 'Read an agent composer draft', execution: 'window', effect: 'read', target: { kind: 'session', field: 'sessionId' },
-      description: 'Read unsent composer text and attachment references without waking the agent. Includes a content revision for safe edits. Large drafts page by UTF-16 offset; keep the returned revision while continuing. No attachment binary data is returned.',
+      description: 'Read Agent Code-owned unsent composer text and attachment references without waking the agent. Includes a content revision for safe edits. Large drafts page by UTF-16 offset; keep the returned revision while continuing. No attachment binary data is returned. This is not the native provider terminal draft; agents.inputInspect reports that separate knowledge boundary.',
       input: z.object({ ...identity, offset: z.number().int().min(0).default(0).describe('UTF-16 nextOffset from the previous page; starts at zero.'),
         revision: z.string().optional().describe('Revision from the first page; required when offset is nonzero.'),
         maxChars: z.number().int().min(256).max(262144).default(24000).describe('Maximum UTF-16 code units per page.') }).strict(),

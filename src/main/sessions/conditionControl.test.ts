@@ -41,3 +41,26 @@ it('routes the recorded trust choice intact and rejects stale process/dialog ide
   expect(resolveCondition).toHaveBeenCalledTimes(1)
   expect(write).not.toHaveBeenCalled()
 })
+
+it('sends the ordinary Stop byte only to the observed process with no current condition', async () => {
+  let run = 'original'
+  let conditions: Record<string, unknown> = {}
+  const write = vi.fn().mockReturnValue(true)
+  const manager = { getBackendSnapshot: () => ({ sessionId: 'agent', cwd: '/trial', kind: 'codex', sessionRunId: run }),
+    getConditionsSnapshot: () => ({ provider: 'codex', conditions }), write } as unknown as Parameters<typeof conditionBackendCapabilities>[0]
+  const caps = conditionBackendCapabilities(manager)
+  const invoke = (id: string, input: unknown) => caps.find(cap => cap.descriptor.id === id)!.execute(input, context)
+  const identity = { sessionId: 'agent', cwd: '/trial', provider: 'codex' }
+  const result = await invoke('sessions.conditionsRead', identity)
+  if (!result.ok) throw new Error(JSON.stringify(result))
+  const input = { ...identity, revision: (result.value as { revision: string }).revision }
+  run = 'replacement'
+  expect(await invoke('sessions.interrupt', input)).toMatchObject({ ok: false, error: { code: 'stale_cursor' } })
+  expect(write).not.toHaveBeenCalled()
+  run = 'original'
+  expect(await invoke('sessions.interrupt', input)).toMatchObject({ ok: true, value: { accepted: true } })
+  expect(write).toHaveBeenCalledExactlyOnceWith('agent', '\x1b')
+  conditions = { trust: buildClaudeTrustDialogCondition(detectTrustDialog(screen))! }
+  expect(await invoke('sessions.interrupt', input)).toMatchObject({ ok: false, error: { code: 'stale_cursor' } })
+  expect(write).toHaveBeenCalledTimes(1)
+})

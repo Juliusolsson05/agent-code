@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { z } from 'zod'
-import { ControlError, defineCapability, terminalReadInput, terminalReadOutput, terminalInput, terminalInputOutput } from '@control-sdk'
+import { ControlError, defineCapability, nativeInputOutput, terminalReadInput, terminalReadOutput, terminalInput, terminalInputOutput } from '@control-sdk'
 import type { SessionManager } from '@main/sessionManager'
 
 const ownership = { cwd: z.string(), provider: z.string() }
@@ -20,6 +20,16 @@ export function terminalBackendCapabilities(manager: Pick<SessionManager, 'getBa
     return backend as typeof backend & { sessionRunId: string }
   }
   return [
+    defineCapability({ id: 'sessions.inputInspect', visibility: 'application', title: 'Inspect native input knowledge', execution: 'main', effect: 'read',
+      description: 'Backing input observation; never derives native draft emptiness from terminal transport or readiness.',
+      input: z.object({ sessionId: z.string(), ...ownership }).strict(), output: nativeInputOutput,
+      handler: input => {
+        const backend = manager.getBackendSnapshot(input.sessionId)
+        if (backend && (backend.cwd !== input.cwd || backend.kind !== input.provider)) throw new ControlError('unavailable', 'Backend identity changed')
+        return { sessionId: input.sessionId, sessionRunId: backend?.sessionRunId ?? null, backendPresent: Boolean(backend), inputReady: backend?.input.ready ?? null,
+          nativeDraft: { state: 'unknown' as const, text: null, reason: 'The provider port does not expose a complete native composer snapshot. Readiness and the terminal accessibility input value do not prove an empty draft. agents.draftGet reads only the separate Agent Code draft.' } }
+      },
+    }),
     defineCapability({
       id: 'sessions.terminalRead', visibility: 'application', title: 'Read retained raw output', execution: 'main', effect: 'read',
       description: 'Backing read without attach, resize, wake or subscription changes. Frozen pages retain the current backend identity.',
