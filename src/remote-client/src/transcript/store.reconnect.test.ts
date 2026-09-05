@@ -23,6 +23,7 @@ function fixture() {
       }
     },
   }) as unknown as WebSocketSessionFeed
+  getHistory.mockResolvedValue({ ok: false, error: 'No transcript yet' })
   const store = new TranscriptStore(feed)
   return { store, getHistory, list, emit: (name: string, value: unknown) => { for (const cb of listeners.get(name) ?? []) cb(value) } }
 }
@@ -62,6 +63,7 @@ describe('remote transcript reconnect recovery', () => {
 
   it('ignores an in-flight old history reply after disconnect, even for the same file', async () => {
     const f = fixture()
+    f.store.subscribe('s', () => {})
     const old = deferred<{ ok: true; chunk: HistoryChunkResult }>()
     try {
       f.getHistory.mockReturnValueOnce(old.promise)
@@ -78,6 +80,7 @@ describe('remote transcript reconnect recovery', () => {
   it('uses committed content after reconnect until a complete new semantic turn starts', () => {
     const f = fixture()
     try {
+      f.store.subscribe('s', () => {})
       f.store.getSnapshot('s')
       f.emit('onConnectionState', 'closed')
       f.emit('onSessionSemanticEvent', { sessionId: 's', event: { type: 'block_started', source: 'proxy', turnId: 'lost-prefix', blockId: 'b', blockType: 'text' } })
