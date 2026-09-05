@@ -1,7 +1,7 @@
 # Internal control SDK and MCP isolation
 
 Status: Approved by the user on 2026-09-04. Implementation in progress.
-Stages 0–2 verified; Stage 3 is next.
+Stages 0–3 verified; Stage 4 is next.
 
 Product scope: [external control plan](../superpowers/plans/2026-09-04-external-control-mcp.md).
 Source evidence: [source inventory](evidence/external-control/source-inventory.json).
@@ -335,7 +335,29 @@ version; the shell's Node 25 exposed an incompatible native localStorage global.
   patterns, and narrow observed snapshots from this dev scenario. No provider
   activity is required just to establish window/layout identity.
 
-### Stage 3 — app, feature, command, and keybinding catalogs
+### Stage 3 — app, feature, command, and keybinding catalogs (verified)
+
+Implementation: `app.describe` defaults to a ten-section crash course and can
+retrieve individual sections or the paginated full guide. Thirty-six authored
+feature pages live beside 32 feature owners; shared/feed infrastructure is
+explicitly assigned to its user-facing page. Command references enumerate the
+real unfiltered catalog. Command-picker and control search share description
+matching while preserving title priority. Keybinding references use the actual
+router's defaults/override resolver (including its existing global context for
+custom bindings without defaults), plus feature-owned contextual descriptions,
+native reservations and configured keyboard/mouse inputs. External
+Monaco/provider keymaps are identified as external rather than invented as
+complete app-owned mappings. Settings documentation reads the real registry.
+Pagination fingerprints its contents and rejects stale cursors after a change.
+
+Verification: full application typecheck passed; 16 focused unit checks and four
+renderer checks passed. The feature-owner coverage gate covers every current
+feature directory and validates command links. Full-guide pagination retrieved
+all sections without duplication, including late feature pages. Real catalog
+description search, hidden commands, explicit unbinding, saved unknown IDs,
+mouse configuration and changed-page invalidation were exercised. The actual
+two-window Electron trial also retrieved the UI guide and reflected a settings
+shortcut change immediately through the registered command capability.
 
 - **Produces:** SDK catalog methods, feature-owned descriptions, complete command
   and shortcut projections, shared description-search rules, and versioned pages.

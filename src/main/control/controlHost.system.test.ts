@@ -38,6 +38,9 @@ it('routes real renderer observations across two windows and survives reload wit
     await writeFile(renderer, `
       import { registerRendererHost } from '${resolve(root, 'src/renderer/src/control/registerRendererHost.ts')}'
       import { workspaceControlCapabilities } from '${resolve(root, 'src/renderer/src/workspace/control.ts')}'
+      import { commandControlCapabilities } from '${resolve(root, 'src/renderer/src/features/command-palette/control.ts')}'
+      import { keybindingControlCapabilities } from '${resolve(root, 'src/renderer/src/features/command-keybindings/control.ts')}'
+      import { documentationCapabilities } from '${resolve(root, 'src/renderer/src/control/documentation.ts')}'
       import { useAppStore } from '${resolve(root, 'src/renderer/src/app-state/store.ts')}'
       const id = location.hash.slice(1)
       useAppStore.setState({ workspaceState: {
@@ -45,7 +48,11 @@ it('routes real renderer observations across two windows and survives reload wit
         activeTabId: id, dispatchMode: null, sessions: { [id + '-agent']: {cwd: '/control-trial/' + id, kind: 'codex'} },
         detachedSessions: {}, buried: [], pinnedSessionIds: []
       }})
-      registerRendererHost(workspaceControlCapabilities(() => ({restoreStatus: 'fresh'})))
+      window.changeTrialBinding = () => useAppStore.getState().setSettings({ commandKeybindingOverrides: {'new-tab': ['Cmd+Alt+T']} })
+      registerRendererHost([
+        ...workspaceControlCapabilities(() => ({restoreStatus: 'fresh'})),
+        ...commandControlCapabilities(), ...keybindingControlCapabilities(), ...documentationCapabilities(),
+      ])
         .catch(error => { document.body.textContent = String(error); console.error(error) })
     `)
     await writeFile(main, `
@@ -87,12 +94,15 @@ it('routes real renderer observations across two windows and survives reload wit
         const observe = target => caller.invoke({capabilityId: 'workspace.observe', input: {}, owner: target})
         const first = await observe(left)
         const second = await observe(right)
+        const guide = await caller.invoke({capabilityId: 'app.describe', input: {section: 'ui-map'}, owner: left})
+        await windows.get('left').webContents.executeJavaScript('window.changeTrialBinding()')
+        const binding = await caller.invoke({capabilityId: 'commands.describe', input: {commandId: 'new-tab'}, owner: left})
         windows.get('left').reload()
         const replacement = await registered('left', left.generation)
         const stale = await observe(left)
         const afterReload = await observe(replacement)
         const surviving = await observe(right)
-        console.log('CONTROL_TRIAL=' + JSON.stringify({first,second,stale,afterReload,surviving,changed: left.generation !== replacement.generation}))
+        console.log('CONTROL_TRIAL=' + JSON.stringify({first,second,guide,binding,stale,afterReload,surviving,changed: left.generation !== replacement.generation}))
         host.dispose()
         for (const window of windows.values()) window.destroy()
         clearTimeout(deadline)
@@ -133,6 +143,8 @@ it('routes real renderer observations across two windows and survives reload wit
     expect(evidence.afterReload).toMatchObject({ ok: true, value: { activeTabId: 'left' } })
     expect(evidence.surviving).toMatchObject({ ok: true, value: { activeTabId: 'right' } })
     expect(evidence.changed).toBe(true)
+    expect(evidence.guide).toMatchObject({ ok: true, value: { total: 1, items: [{ id: 'ui-map' }] } })
+    expect(evidence.binding).toMatchObject({ ok: true, value: { id: 'new-tab', bindings: ['Cmd+Alt+T'] } })
   } finally {
     await rm(directory, { recursive: true, force: true })
   }

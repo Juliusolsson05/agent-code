@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { controlFailure, type CapabilityDescriptor, type ControlContext, type ControlResult } from './contracts'
+import { ControlError, controlFailure, type CapabilityDescriptor, type ControlContext, type ControlResult } from './contracts'
 
 export interface RegisteredCapability {
   readonly descriptor: CapabilityDescriptor
@@ -58,6 +58,7 @@ export function defineCapability<I extends z.ZodType, O extends z.ZodType>(defin
         if (!json.success) return controlFailure('invalid_output', 'Capability returned a non-JSON value', 'unknown')
         return { ok: true, value: JSON.parse(JSON.stringify(json.data)) as z.output<O> }
       } catch (error) {
+        if (error instanceof ControlError) return controlFailure(error.code, error.message, error.outcome)
         // A thrown handler may already have performed its effect. Only failure
         // before dispatch is evidence that automatic resubmission is safe.
         return controlFailure('failed', error instanceof Error ? error.message : 'Capability failed', 'unknown')

@@ -5,6 +5,9 @@ import {
   type RegisteredCapability,
 } from '@control-sdk'
 import { workspaceControlCapabilities } from '@renderer/workspace/control'
+import { commandControlCapabilities } from '@renderer/features/command-palette/control'
+import { keybindingControlCapabilities } from '@renderer/features/command-keybindings/control'
+import { documentationCapabilities } from './documentation'
 import type { Workspace } from '@renderer/workspace/hook'
 
 export async function registerRendererHost(capabilities: readonly RegisteredCapability[]): Promise<() => void> {
@@ -55,7 +58,12 @@ export function useControlRegistration(workspace: Workspace): void {
     if (!window.api?.controlRegister) return
     let stopped = false
     let dispose: (() => void) | undefined
-    void registerRendererHost(workspaceControlCapabilities(() => current.current)).then(cleanup => {
+    void registerRendererHost([
+      ...workspaceControlCapabilities(() => current.current),
+      ...commandControlCapabilities(),
+      ...keybindingControlCapabilities(),
+      ...documentationCapabilities(),
+    ]).then(cleanup => {
       if (stopped) cleanup()
       else dispose = cleanup
     }).catch(error => console.warn('[control] registration failed:', error))

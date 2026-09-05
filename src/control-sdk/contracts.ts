@@ -23,6 +23,14 @@ export type ControlContext = Readonly<{
 export type ControlFailureCode =
   | 'unavailable' | 'ambiguous_owner' | 'stale_owner'
   | 'invalid_input' | 'invalid_output' | 'failed'
+  | 'stale_cursor' | 'invalid_cursor'
+
+export class ControlError extends Error {
+  constructor(readonly code: ControlFailureCode, message: string, readonly outcome: 'not_started' | 'unknown' = 'not_started') {
+    super(message)
+    this.name = 'ControlError'
+  }
+}
 
 export type ControlResult<T = unknown> =
   | { ok: true; value: T }
@@ -65,7 +73,7 @@ export const controlRequestSchema = z.object({
 export const controlResultSchema = z.discriminatedUnion('ok', [
   z.object({ ok: z.literal(true), value: z.json() }).strict(),
   z.object({ ok: z.literal(false), error: z.object({
-    code: z.enum(['unavailable', 'ambiguous_owner', 'stale_owner', 'invalid_input', 'invalid_output', 'failed']),
+    code: z.enum(['unavailable', 'ambiguous_owner', 'stale_owner', 'invalid_input', 'invalid_output', 'failed', 'stale_cursor', 'invalid_cursor']),
     message: z.string(), outcome: z.enum(['not_started', 'unknown']),
   }).strict() }).strict(),
 ])
