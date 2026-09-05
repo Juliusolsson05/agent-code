@@ -106,7 +106,7 @@ export const useAppStore = create<AppStore>()(
               ...data?.settings,
               savedPromptTemplates: data?.settings?.savedPromptTemplates ?? legacyPromptTemplates,
             }),
-          } as Partial<AppStore>
+          }
         },
       },
     ),
