@@ -218,6 +218,130 @@ describe('useSessionActions recovery retry', () => {
     })
   })
 
+  // #772: a readiness deadline must never kill a backend that is alive but
+  // slow to boot; only an observed exit or start failure may.
+  function spawnedNotReadyHarness(sessionId: string, providerRuntime?: 'terminal') {
+    let state = {
+      tabs: [{
+        id: 'tab-1',
+        title: 'Project',
+        focusedSessionId: sessionId,
+        root: { type: 'leaf' as const, sessionId },
+      }],
+      activeTabId: 'tab-1',
+      sessions: {
+        [sessionId]: {
+          cwd: '/tmp/project',
+          kind: (providerRuntime ? 'opencode' : 'claude') as 'opencode' | 'claude',
+          ...(providerRuntime ? { providerRuntime } : {}),
+        },
+      },
+      detachedSessions: {},
+      buried: [],
+      pinnedSessionIds: [],
+      dispatchMode: null,
+    } as WorkspaceState
+    let runtimes: Record<SessionId, SessionRuntime> = {
+      [sessionId]: { ...emptyRuntime(), processStatus: 'spawning', inputReady: false },
+    }
+    const refs = {
+      stateRef: ref(state),
+      latestStateRef: ref(state),
+      latestRuntimesRef: ref(runtimes),
+      dangerousAgentsRef: ref(false),
+      useProxyStreamingRef: ref(false),
+      defaultBuiltInMcpDomainsRef: ref([]),
+    } as unknown as WorkspaceRefs
+    const setState = (next: WorkspaceState | ((prev: WorkspaceState) => WorkspaceState)) => {
+      state = typeof next === 'function' ? next(state) : next
+      refs.stateRef.current = state
+      refs.latestStateRef.current = state
+    }
+    const setRuntimes = (
+      next: Record<SessionId, SessionRuntime> |
+        ((prev: Record<SessionId, SessionRuntime>) => Record<SessionId, SessionRuntime>),
+    ) => {
+      runtimes = typeof next === 'function' ? next(runtimes) : next
+      refs.latestRuntimesRef.current = runtimes
+    }
+    const recoverSession = vi.fn(async () => ({
+      ok: true as const,
+      disposition: 'spawned' as const,
+      snapshot: {
+        sessionId,
+        sessionRunId: '66666666-6666-4666-8666-666666666666',
+        kind: (providerRuntime ? 'opencode' : 'claude') as 'opencode' | 'claude',
+        ...(providerRuntime ? { providerRuntime } : {}),
+        cwd: '/tmp/project',
+        lifecycle: 'live' as const,
+        input: { ready: false, revision: 1, reason: 'starting' as const },
+        builtInMcpDomains: [],
+      },
+    }))
+    const killOwnedSession = vi.fn(async () => true)
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: { recoverSession, killOwnedSession, ghostRead: vi.fn(async () => []) },
+    })
+    const { result } = renderHook(() => useSessionActions(state, setState, setRuntimes, refs))
+    return { result, recoverSession, killOwnedSession, runtimes: () => runtimes, setRuntimes }
+  }
+
+  it('does not kill a spawned backend that is alive but not ready when the deadline passes', async () => {
+    vi.useFakeTimers()
+    try {
+      const sessionId = 'slow-boot'
+      const h = spawnedNotReadyHarness(sessionId)
+      let wake: Promise<unknown> | undefined
+      await act(async () => {
+        wake = h.result.current.ensureSessionLive(sessionId, 'tile-leaf.send')
+        await vi.advanceTimersByTimeAsync(31_000)
+      })
+      await expect(wake).resolves.toMatchObject({ sessionId })
+      expect(h.killOwnedSession).not.toHaveBeenCalled()
+      expect(h.runtimes()[sessionId]).toMatchObject({ processStatus: 'started', inputReady: false, exited: null })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('still fails the wake when the backend exits before it is ready', async () => {
+    vi.useFakeTimers()
+    try {
+      const sessionId = 'dies-early'
+      const h = spawnedNotReadyHarness(sessionId)
+      let wake: Promise<unknown> | undefined
+      await act(async () => {
+        wake = h.result.current.ensureSessionLive(sessionId, 'tile-leaf.send')
+        wake.catch(() => undefined)
+        await vi.advanceTimersByTimeAsync(100)
+        h.setRuntimes(prev => ({ ...prev, [sessionId]: { ...prev[sessionId]!, exited: 1 } }))
+        await vi.advanceTimersByTimeAsync(100)
+      })
+      await expect(wake).rejects.toThrow(/exited/)
+      expect(h.killOwnedSession).toHaveBeenCalledTimes(1)
+      expect(h.runtimes()[sessionId]?.processStatus).toBe('failed')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('skips the readiness wait for the terminal runtime and for callers that opt out', async () => {
+    const terminal = spawnedNotReadyHarness('tui-pane', 'terminal')
+    await act(async () => {
+      await expect(terminal.result.current.ensureSessionLive('tui-pane', 'tile-leaf.send')).resolves.toMatchObject({ sessionId: 'tui-pane' })
+    })
+    expect(terminal.killOwnedSession).not.toHaveBeenCalled()
+
+    const optOut = spawnedNotReadyHarness('raw-pane')
+    await act(async () => {
+      await expect(
+        optOut.result.current.ensureSessionLive('raw-pane', 'agent-terminal-leaf.attach-retry', { awaitInputReady: false }),
+      ).resolves.toMatchObject({ sessionId: 'raw-pane' })
+    })
+    expect(optOut.killOwnedSession).not.toHaveBeenCalled()
+  })
+
   it('carries the latest pane title across a delayed session replacement', async () => {
     const sessionId = 'source-session'
     let state = {

@@ -364,12 +364,19 @@ export function AgentTerminalLeaf({
           // backend is gone — tryAttach only proves an entry existed.
           // Attach already succeeded; this wake is secondary. Tagged `mount`
           // because no retry follows it — the tags were swapped in review.
-          if (needsWake) await ensureSessionLiveRef.current(sessionId, 'agent-terminal-leaf.mount')
+          if (needsWake) {
+            await ensureSessionLiveRef.current(sessionId, 'agent-terminal-leaf.mount', { awaitInputReady: false })
+          }
           return
         }
         // Attach failed, so wake and RETRY the attach below. This is the site
         // the `attach-retry` tag describes.
-        if (needsWake) await ensureSessionLiveRef.current(sessionId, 'agent-terminal-leaf.attach-retry')
+        // WHY the raw terminal never waits for input-ready (#772): readiness is
+        // a composer concept; this pane wants the PTY as soon as the backend
+        // is live so the user watches the TUI boot instead of a blank box.
+        if (needsWake) {
+          await ensureSessionLiveRef.current(sessionId, 'agent-terminal-leaf.attach-retry', { awaitInputReady: false })
+        }
         if (await tryAttach()) return
         if (disposed) return
         // Wake reported success but there is still nothing to attach to. Say
