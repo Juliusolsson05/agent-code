@@ -1,5 +1,10 @@
 Status: Proposed — planning only; no runtime implementation has started.
 
+Architecture and execution gates:
+[internal control SDK decomposition](../../decomposition/external-control-sdk.md).
+This product plan defines scope; the decomposition defines implementation order
+and the feature-registration boundary, pending explicit approval.
+
 # External control MCP and command discovery
 
 ## Product outcome
@@ -781,31 +786,42 @@ Recheck supported configuration details when implementing the installation flow.
 
 ## 8. File ownership and proposed additions
 
-Use the existing app repository, not a new submodule. The implementation is
-tightly coupled to live app state; a standalone process/package adds lifecycle
-and packaging work before it offers an independent consumer.
+Use the existing app repository, not a new submodule. A small internal control
+SDK supplies capability registration and invocation. Features expose handlers
+beside their domain code, reusing the same operations as the UI; MCP discovers
+and calls them through the SDK. Ordinary UI execution remains independent of
+the control host. "Public SDK" means supported internal imports, not publication
+or a mandatory new application-wide API.
 
 ```text
-src/shared/control/
-  types.ts                 Plain observation, result, target, and event contracts
-  schemas.ts               Boundary schemas for implemented control operations
+src/control-sdk/
+  contracts/               Typed capability definitions, inputs/results, targets
+  registration/            Registration lifecycle and supported feature API
+  client/                  Typed invocation contract
+  core/                    Registry, execution, private target reconciliation
+  ports/                   Injected transport/storage/observation requirements
+  catalog/                 Description and reference queries
+  history/                 Durable invocation semantics
+  reads/                   Canonical depth/range/live-history projections
 
 src/main/control/
-  ControlService.ts        External client/operation lifetime and dispatch
-  ControlRendererBridge.ts Window routing, request correlation, generation checks
-  ControlMcpHost.ts        Independent opt-in local server lifecycle
-  registerControlTools.ts  Discovery tools and operation-backed MCP wrappers
-  ControlHistoryStore.ts   Durable calls, lifecycle events, and payload references
-  AgentReadService.ts      Depth/range projections, live reads, and continuations
+  createControlHost.ts      Composition and feature installation
+  rendererBridge.ts         Window routing, correlation, generation checks
+  adapters/                 Main infrastructure such as window/storage ports
 
 src/preload/api/control.ts Typed renderer requests, responses, and registration
 
-src/renderer/src/features/control/
-  controlBridge.ts         Renderer request handling through existing app actions
-  commandDescriptions.ts   Serializable catalog projections and UI routes
-  keybindingReference.ts   Effective and fixed interaction reference projections
-  featureCatalog.ts        Assembles feature-owned app guides and cross-references
-  controlSnapshot.ts       Bounded live state projection
+src/renderer/src/control/
+  registerRendererHost.ts   Window registration and teardown composition
+
+src/main/<domain>/control.ts
+src/renderer/src/features/<feature>/control.ts
+  Feature-owned descriptors/handlers; workspace registrations beside its actions
+
+src/main/externalControlMcp/
+  host.ts                  Independent opt-in authenticated MCP lifecycle
+  tools.ts                 Tool mappings and protocol serialization only
+  connectionSettings.ts    External connection setup and revocation
 
 src/renderer/src/features/command-palette/
   Existing catalog, types, ranker, dispatcher, and UI updated incrementally
@@ -816,11 +832,19 @@ src/renderer/src/workspace/hook/actions/
 
 These filenames describe ownership, not a requirement for a class per concept.
 Keep small pieces together until real complexity warrants splitting them. Keep
-operation definitions with their owning feature where possible. Node-only
-transport imports never enter renderer code; update Vite/TypeScript aliases only
-if a new alias is actually necessary.
+operation definitions with their owning feature. Feature registrations import
+only the supported SDK contract and their domain dependencies. MCP cannot import
+feature handlers, stores, or SDK internals; normal UI does not need to invoke the
+SDK. Enforce these boundaries with resolved-import checks. Node-only transport
+imports never enter renderer code; update aliases only if necessary.
 
 ## 9. Implementation sequence and review checkpoints
+
+The phases below group product coverage and their exit scenarios. They are not
+the dependency order: follow Stages 0–10 in the decomposition, which establishes
+registration, routing, history, and real feature capabilities before attaching
+the MCP adapter. The earlier phase grouping is retained to track all agreed
+scope, not to require a host before its substrate or a rewrite of normal UI.
 
 ### Phase 0 — record scope and create the coverage map
 

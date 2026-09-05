@@ -1,0 +1,176 @@
+{
+  "sourceCommit": "4c641f68c86b7c17ad04e1f3827b98bd581c6693",
+  "evidenceKind": "tracked-source-inventory",
+  "notEvidenceOf": "live execution, semantic correctness, measured tool usage, or passing tests",
+  "productionTypeScriptFiles": 976,
+  "productionTypeScriptLines": 199648,
+  "navigationKinds": [
+    "focus-grid-pane",
+    "focus-tiled-tab-pane",
+    "replace-focused-tiled-tab",
+    "focus-classic-dispatch",
+    "focus-existing-tiled-dispatch-lane",
+    "replace-focused-tiled-dispatch-lane",
+    "swap-detached-into-focused-grid-pane"
+  ],
+  "seams": [
+    {
+      "role": "catalog",
+      "path": "src/renderer/src/features/command-palette/catalog.ts",
+      "sha256": "e08b6363c9d1ed5521920041b96148bb83a7168dc09f0507f27ee3ab200de0b2",
+      "lines": 153,
+      "neighboringTests": [
+        "src/renderer/src/features/command-palette/catalog.test.ts",
+        "src/renderer/src/rendering/evidence/catalogCoverage.test.ts"
+      ]
+    },
+    {
+      "role": "command_dispatch",
+      "path": "src/renderer/src/features/command-palette/executeCommand.ts",
+      "sha256": "b9fd60629a2567e8a38de3d281980087443377695fdd456bbf566039c5edc476",
+      "lines": 290,
+      "neighboringTests": [
+        "src/renderer/src/features/command-palette/executeCommand.test.ts"
+      ]
+    },
+    {
+      "role": "command_admission",
+      "path": "src/renderer/src/features/command-palette/resolveInvocation.ts",
+      "sha256": "6c377a9984489ef01d692b07afb8d8e6a175963af7b612bfb1e4a326031ebeed",
+      "lines": 88,
+      "neighboringTests": [
+        "src/renderer/src/features/command-palette/resolveInvocation.test.ts"
+      ]
+    },
+    {
+      "role": "keybindings",
+      "path": "src/renderer/src/features/command-keybindings/resolve.ts",
+      "sha256": "b1d29deeee26fc78a6a3340e0fdc97777b28a7f2bf96762dfc0443be43dca4a0",
+      "lines": 194,
+      "neighboringTests": [
+        "src/renderer/src/features/command-keybindings/resolve.test.ts",
+        "src/renderer/src/features/command-palette/resolveInvocation.test.ts"
+      ]
+    },
+    {
+      "role": "fixed_interactions",
+      "path": "src/renderer/src/features/command-keybindings/reservations.ts",
+      "sha256": "5b1b1d7aca7555cba6abb946d8ef6a54298c80d44741b85e8b5b4e5145365b77",
+      "lines": 478,
+      "neighboringTests": [
+        "src/renderer/src/features/command-keybindings/reservations.test.ts"
+      ]
+    },
+    {
+      "role": "agent_navigation",
+      "path": "src/renderer/src/workspace/agentIndexNavigation.ts",
+      "sha256": "9851722475bb245958b77460f579a8e935f5e96de7d2ea4af2b1e496327e7b0b",
+      "lines": 300,
+      "neighboringTests": [
+        "src/renderer/src/workspace/agentIndexNavigation.test.ts",
+        "src/renderer/src/workspace/hook/actions/agentIndexNavigation.renderer.test.tsx"
+      ]
+    },
+    {
+      "role": "navigation_effects",
+      "path": "src/renderer/src/workspace/hook/actions/agentIndexNavigation.ts",
+      "sha256": "b6a90e89b0cc330e8122f245530494bfbb41e8616e19101d3f1aa8d90fb3b14c",
+      "lines": 103,
+      "neighboringTests": [
+        "src/renderer/src/workspace/agentIndexNavigation.test.ts",
+        "src/renderer/src/workspace/hook/actions/agentIndexNavigation.renderer.test.tsx"
+      ]
+    },
+    {
+      "role": "window_routing",
+      "path": "src/main/window/windowRegistry.ts",
+      "sha256": "d8e64f4c1c5c7ce7f8ef5de0c20effacc24ffae7409fc36266851e5afdd2906b",
+      "lines": 624,
+      "neighboringTests": [
+        "src/main/window/windowRegistry.test.ts"
+      ]
+    },
+    {
+      "role": "renderer_actions",
+      "path": "src/renderer/src/workspace/hook/index.ts",
+      "sha256": "01e8d65b6716bc06598e5d416ea3a55d93d7c6a828e9f09498f6cdb3710a55f7",
+      "lines": 1022,
+      "neighboringTests": [
+        "src/main/subagents/index.test.ts",
+        "src/main/worktreeActivity/indexStore.test.ts",
+        "src/providers/claude/renderer/components/ask-user-question/index.renderer.test.tsx",
+        "src/providers/claude/renderer/components/multi-edit/index.renderer.test.tsx",
+        "src/providers/claude/renderer/components/task-activity/index.renderer.test.tsx",
+        "src/providers/codex/renderer/components/apply-patch/index.renderer.test.tsx",
+        "src/providers/codex/renderer/components/image-generation/index.renderer.test.tsx",
+        "src/providers/codex/renderer/components/native-spawn/index.renderer.test.tsx",
+        "src/providers/codex/renderer/components/tool-result/index.renderer.test.tsx",
+        "src/providers/codex/renderer/components/update-plan/index.renderer.test.tsx",
+        "src/providers/codex/renderer/components/web/index.renderer.test.tsx",
+        "src/providers/shared/renderer/components/lazy-prose/index.renderer.test.tsx"
+      ]
+    },
+    {
+      "role": "live_feed",
+      "path": "src/shared/sessionFeed/SessionFeed.ts",
+      "sha256": "1b4faf1fb98ea1b8a46e7a4525616d2da3036712d4a6f7036a7be23277a4b9af",
+      "lines": 95,
+      "neighboringTests": [
+        "src/main/remote/SessionFeedSource.test.ts",
+        "src/remote-client/src/WebSocketSessionFeed.integration.test.ts",
+        "src/renderer/src/features/sessionFeed/IpcSessionFeed.test.ts",
+        "src/renderer/src/features/sessionFeed/SessionFeedContext.renderer.test.tsx"
+      ]
+    },
+    {
+      "role": "mcp_host",
+      "path": "src/mcp/runtime/BuiltInMcpHttpHost.ts",
+      "sha256": "3b9a457947abc88c2a7f896a6ca26e68094e16258c20a41332abd6276518446c",
+      "lines": 484,
+      "neighboringTests": [
+        "src/mcp/runtime/BuiltInMcpHttpHost.test.ts"
+      ]
+    },
+    {
+      "role": "agent_management_bridge",
+      "path": "src/main/agentManagement/AgentManagementBridge.ts",
+      "sha256": "bdade6df46321e358466626fef495ca3c43c5e55c47704c3ba22d2ba59d014f5",
+      "lines": 568,
+      "neighboringTests": [
+        "src/main/agentManagement/AgentManagementBridge.test.ts"
+      ]
+    },
+    {
+      "role": "provider_launch",
+      "path": "src/providers/shared/runtime/builtInMcpLaunch.ts",
+      "sha256": "4b5e37bec4a5ca51e087ae863529b1e375b869d45d680c3a9f0375374cd40360",
+      "lines": 178,
+      "neighboringTests": [
+        "src/providers/shared/runtime/builtInMcpLaunch.test.ts"
+      ]
+    },
+    {
+      "role": "file_reader",
+      "path": "src/main/agentTranscripts/AgentTranscriptReader.ts",
+      "sha256": "d503137d8c30d7af89dab1b476d225af66ca96d833cab54a4c8092f5480d40c1",
+      "lines": 1082,
+      "neighboringTests": []
+    },
+    {
+      "role": "conversation_projection",
+      "path": "src/renderer/src/workspace/agentManagementMcp.ts",
+      "sha256": "802fd3ebd40be88c2adbc4d6d9a6d65036e55eafaa9b2042eb55a8b96f8254e1",
+      "lines": 444,
+      "neighboringTests": [
+        "src/renderer/src/workspace/agentManagementMcp.test.ts"
+      ]
+    },
+    {
+      "role": "workspace_paths",
+      "path": "src/main/storage/paths.ts",
+      "sha256": "91006213e32be99f761cf8424e2dc56d8a94c1d32e2f4417f855e157faf24291",
+      "lines": 92,
+      "neighboringTests": []
+    }
+  ]
+}
