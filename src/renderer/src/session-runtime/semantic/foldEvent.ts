@@ -62,6 +62,20 @@ function eventTargetsDifferentTurn(
   return typeof ev.turnId === 'string' && ev.turnId !== currentTurn.turnId
 }
 
+function stringifySemanticInput(value: unknown): string | undefined {
+  // WHY stringify the provider object at the reducer boundary: OpenCode's SSE
+  // `tool_input_finalized` carries a parsed object (`input`) instead of the raw
+  // JSON string Claude/Codex expose. The rest of the runtime already treats
+  // `inputJson` as the generic disclosure/debug slot, so serializing once here
+  // keeps every downstream consumer provider-neutral instead of forcing each
+  // renderer branch to invent its own OpenCode-only raw-input rule.
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return undefined
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Per-provider fold policy (2026-07-06 opencode rendering fix)
 // ---------------------------------------------------------------------------
@@ -643,15 +657,23 @@ export function foldSemanticEvent(
       if (idx === null) break
       const block = currentTurn.blocks[idx]
       if (!block) break
+      const finalizedInput = asRecord(ev.parsed) ?? asRecord(ev.input) ?? block.parsedInput
+      const finalizedInputJson =
+        typeof ev.inputJson === 'string'
+          ? ev.inputJson
+          : ev.input !== undefined
+            ? stringifySemanticInput(ev.input) ?? block.inputJson
+            : block.inputJson
       currentTurn = {
         ...currentTurn,
         blocks: {
           ...currentTurn.blocks,
           [idx]: {
             ...block,
-            inputJson: typeof ev.inputJson === 'string' ? ev.inputJson : block.inputJson,
-            inputJsonValid: Boolean(ev.parsed),
-            parsedInput: asRecord(ev.parsed) ?? block.parsedInput,
+            inputJson: finalizedInputJson,
+            inputJsonValid:
+              finalizedInput === block.parsedInput ? block.inputJsonValid : Boolean(finalizedInput),
+            parsedInput: finalizedInput,
             parseError:
               typeof ev.parseError === 'string' ? ev.parseError : block.parseError,
             finalized: true,

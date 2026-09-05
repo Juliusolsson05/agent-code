@@ -1,0 +1,21 @@
+{
+  "evidence": "Synthetic from the 2026-07-19 OpenCode SSE/reducer shape; values are reduced while preserving fp2-dc7d1b61.",
+  "semanticBlock": {
+    "blockIndex": 0,
+    "kind": "tool_use",
+    "toolName": "todowrite",
+    "toolUseId": "todo-live",
+    "inputJson": "{\"todos\":[{\"content\":\"Verify renderer\",\"status\":\"in_progress\",\"priority\":\"high\"}]}",
+    "inputJsonValid": true,
+    "parsedInput": {
+      "todos": [
+        {
+          "content": "Verify renderer",
+          "status": "in_progress",
+          "priority": "high"
+        }
+      ]
+    },
+    "finalized": true
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "evidence": "Synthetic from the 2026-07-19 OpenCode SSE/reducer shape; values are reduced while preserving fp2-1549305d.",
+  "semanticBlock": {
+    "blockIndex": 0,
+    "kind": "tool_use",
+    "toolName": "read",
+    "toolUseId": "read-live-prefix",
+    "inputJson": "{\"filePath\":\"/workspace/project/src/example.ts\",\"offset\":1,\"limit\":2}",
+    "parsedInput": {
+      "filePath": "/workspace/project/src/example.ts",
+      "offset": 1,
+      "limit": 2
+    }
+  }
+}

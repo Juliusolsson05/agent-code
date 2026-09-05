@@ -50,6 +50,7 @@ import {
 } from '@providers/opencode/renderer/transcript/mapper'
 import { opencodeComposerSubmit } from '@providers/opencode/renderer/composerSubmit'
 import { renderOpencodeOperation } from '@providers/opencode/renderer/rows/dispatch'
+import { renderOpencodeSemanticBlock } from '@providers/opencode/renderer/semantic/dispatch'
 import { codexComposerSubmit } from '@providers/codex/renderer/composerSubmit'
 import { CODEX_IDENTITY } from '@providers/codex/renderer/identity'
 import {
@@ -306,6 +307,7 @@ const opencodeCapabilities: RendererProviderCapabilities = {
   // a real todo list; everything else falls through to the generic rows.
   renderOperation: renderOpencodeOperation,
   classifyDurableEntry: () => null,
+  renderSemanticBlock: renderOpencodeSemanticBlock,
   // opencode has no subagent-spawn tool yet (no fleet fanout on this backend).
   isSpawnTool: () => false,
   createTranscriptEntryMapper: () => createOpencodeTranscriptEntryMapper(),
