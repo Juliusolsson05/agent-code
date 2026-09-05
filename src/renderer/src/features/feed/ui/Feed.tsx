@@ -1,4 +1,5 @@
 import { TaskNotificationsContext } from '@renderer/features/feed/context'
+import { useAgentTerminalOwnerVisible } from '@renderer/workspace/terminal/AgentTerminalOwnership'
 import { RenderShapeCaptureProvider } from '@renderer/features/feed/evidence/RenderShapeCaptureContext'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import {
@@ -570,6 +571,7 @@ function FeedImpl({
   const semanticHistorySignal = semanticHistory
     .map(semanticTurnScrollSignal)
     .join('|')
+  const workspaceVisible = useAgentTerminalOwnerVisible()
   useEffect(() => {
     // During a bulk bootstrap burst we skip per-append auto-scroll.
     // The pin-once-on-transition effect below lands us at the bottom
@@ -578,13 +580,18 @@ function FeedImpl({
     // the LazyEntry observer cascade. See docs/superpowers/plans/
     // 2026-04-15-bootstrap-replay-perf.md.
     if (bootstrapping) return
+    // While the workspace is retained under display:none (editor fullscreen,
+    // Reader/Spotlight/Settings — #752) scrollHeight is 0 and a pin would be
+    // a no-op; the flag in the deps makes the reveal re-run this effect, so
+    // a sticky-bottom feed that grew while hidden comes back at the bottom.
+    if (!workspaceVisible) return
     if (!tailMode && !stickyBottomRef.current) return
     // scrollTop = scrollHeight pins to bottom without the smooth-scroll
     // overshoot scrollIntoView sometimes produces. Direct, instant,
     // no animation frames.
     const el = scrollerRef.current
     if (el) el.scrollTop = el.scrollHeight
-  }, [entries.length, tailMode, semanticTurnSignal, semanticHistorySignal, bootstrapping])
+  }, [entries.length, tailMode, semanticTurnSignal, semanticHistorySignal, bootstrapping, workspaceVisible])
 
   // Pin-once on the bootstrap → live transition. Runs exactly once per
   // transition thanks to the previous-value ref: we read the prior

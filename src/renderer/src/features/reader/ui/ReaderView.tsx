@@ -384,8 +384,9 @@ function ReaderBody({
         </div>
       )}
       {/* Pane toast, rendered here as well as in TileLeaf.
-          WHY: Reader Mode is a full takeover — no TileLeaf is mounted, so
-          the toast TileLeaf normally paints never reaches the screen. That
+          WHY: Reader Mode takes over the screen — the workspace and its
+          TileLeaf stay mounted but hidden (display:none, #752), so the
+          toast TileLeaf normally paints never reaches the screen. That
           left "Reply to Selection" with no feedback whatsoever in Reader
           Mode: the draft is written to a composer the reader does not
           show, the palette closes, and nothing visibly happens. Any

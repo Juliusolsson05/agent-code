@@ -33,11 +33,28 @@ export function AgentTerminalOwnerVisibilityProvider({
   visible: boolean
   children: ReactNode
 }) {
+  // WHY visibility COMPOSES with the enclosing provider instead of replacing
+  // it (#752 review): the Global Editor slot provides its own value for the
+  // editor-fullscreen case and sits INSIDE the retained workspace surface.
+  // React resolves the nearest provider, so a plain override made the
+  // outer "hidden by Reader/Spotlight/Settings" signal invisible to every
+  // pane whenever the editor was not fullscreen — the retained pane kept its
+  // dimension claim, kept measuring a display:none box, and the inline
+  // debug terminal stayed disabled. A subtree is visible only if every
+  // enclosing shell says so.
+  const parentVisible = useContext(AgentTerminalOwnerVisibilityContext)
   return (
-    <AgentTerminalOwnerVisibilityContext.Provider value={visible}>
+    <AgentTerminalOwnerVisibilityContext.Provider value={parentVisible && visible}>
       {children}
     </AgentTerminalOwnerVisibilityContext.Provider>
   )
+}
+
+/** True when no enclosing shell has hidden this subtree (editor fullscreen
+ *  or a Reader/Spotlight/Settings takeover). Panes use it to decide whether
+ *  "focused" may mean "owns keyboard input" and whether a fit is real. */
+export function useAgentTerminalOwnerVisible(): boolean {
+  return useContext(AgentTerminalOwnerVisibilityContext)
 }
 
 export function AgentTerminalOwnershipProvider({ children }: { children: ReactNode }) {
