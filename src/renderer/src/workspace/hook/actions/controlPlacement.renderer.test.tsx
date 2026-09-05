@@ -50,3 +50,28 @@ it('keeps native continuation cwd and target project separate from focus', async
   expect(harness.getState().tabs[0].root).toEqual(initial.tabs[0].root)
   harness.mounted.unmount()
 })
+
+// Reproduce the operator's two-lane creation observation through the real
+// placement owner: detached membership must not imply preserved selection.
+it.each([true, false])('creation selectCreated=%s preserves or replaces the captured lane explicitly', async selectCreated => {
+  const initial = state()
+  initial.sessions.hermes = { kind: 'codex', cwd: '/other' }
+  initial.tabs.push({ id: 'other', title: 'Other', root: { type: 'leaf', sessionId: 'hermes' }, focusedSessionId: 'hermes' })
+  initial.activeTabId = 'other'
+  initial.dispatchMode = { scope: 'global', focusedSessionId: 'anchor', tiled: {
+    focusedLane: 1, lanes: [{ selectedSessionId: 'anchor' }, { selectedSessionId: 'hermes' }],
+  } }
+  const harness = mountPaneActions(initial, { spawnSessionId: 'new-agent' })
+  await act(async () => {
+    await harness.actions.createDetachedSession({ kind: 'codex' },
+      { tabId: 'project', anchorSessionId: 'anchor' }, undefined, { selectCreated })
+  })
+  const next = harness.getState()
+  expect(next.activeTabId).toBe(selectCreated ? 'project' : 'other')
+  expect(next.dispatchMode?.tiled?.lanes.map(lane => lane.selectedSessionId))
+    .toEqual(['anchor', selectCreated ? 'new-agent' : 'hermes'])
+  expect(next.sessions.hermes).toEqual(initial.sessions.hermes)
+  expect(next.detachedSessions['new-agent'].projectTabId).toBe('project')
+  expect(harness.sessionActions.killSession).not.toHaveBeenCalled()
+  harness.mounted.unmount()
+})

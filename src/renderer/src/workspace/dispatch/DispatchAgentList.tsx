@@ -45,6 +45,7 @@ export const DispatchAgentList = memo(function DispatchAgentList({
   onToggleExpandedParent,
   onToggleCapChildren,
   onPickRowProject,
+  targetLaneIndex,
 }: {
   groups: ReturnType<typeof buildDispatchGroups>
   pinnedRows: DispatchAgentRow[]
@@ -65,6 +66,10 @@ export const DispatchAgentList = memo(function DispatchAgentList({
   onToggleExpandedParent?: (parentSessionId: SessionId) => void
   onToggleCapChildren?: () => void
   onPickRowProject?: () => void
+  // The row owner supplies the exact destination, including its first-lane
+  // fallback when focus is in another row. Re-deriving global focus here would
+  // give misleading help for an unfocused row's index.
+  targetLaneIndex?: number
   // Sessions that must render as unselectable in this index. Used by Tiled
   // Dispatch's lane-0 index to grey out agents already shown in another lane
   // (the one-session-per-lane invariant — without this, clicking a claimed
@@ -229,6 +234,7 @@ export const DispatchAgentList = memo(function DispatchAgentList({
                 disabled={disabledSessionIds?.has(row.sessionId) ?? false}
                 showWorktreeBadges={showWorktreeBadges}
                 focusSessionInTab={focusSessionInTab}
+                targetLaneIndex={targetLaneIndex}
                 projectChip={`${tabIndexLabel(row.tabIndex)} · ${row.tabTitle}`}
               />
             ))}
@@ -253,6 +259,7 @@ export const DispatchAgentList = memo(function DispatchAgentList({
                   disabled={disabledSessionIds?.has(item.row.sessionId) ?? false}
                   showWorktreeBadges={showWorktreeBadges}
                   focusSessionInTab={focusSessionInTab}
+                  targetLaneIndex={targetLaneIndex}
                 />
               ) : (
                 <button
@@ -339,6 +346,7 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
   showWorktreeBadges,
   focusSessionInTab,
   projectChip,
+  targetLaneIndex,
 }: {
   row: DispatchAgentRow
   active: boolean
@@ -353,6 +361,7 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
   // rows already live under a group header that names the project,
   // so a chip would just duplicate that information.
   projectChip?: string
+  targetLaneIndex?: number
 }) {
   const runtime = useAppStore(useShallow(state => {
     const current = state.workspaceRuntimes[row.sessionId]
@@ -392,7 +401,7 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
       type="button"
       onClick={onSelect}
       disabled={disabled}
-      title={disabled ? 'shown in another lane' : title}
+      title={disabled ? 'shown in another lane' : targetLaneIndex === undefined ? title : `${title} — Show in lane ${targetLaneIndex + 1}, replacing its view. Other views of this agent remain open.`}
       data-dispatch-active={active ? 'true' : undefined}
       // WHY this marker exists: clicking a Dispatch row lands DOM focus on this
       // <button>, which the bare-Enter composer router (composerEnterRegistry)

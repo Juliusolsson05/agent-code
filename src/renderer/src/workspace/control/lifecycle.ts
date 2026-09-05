@@ -53,7 +53,7 @@ export function lifecycleControlCapabilities(getWorkspace: () => Workspace) {
   }
   return [
     defineCapability({ id: 'agents.resume', title: 'Resume a native session in a project', execution: 'window', effect: 'mutation', completion: 'accepted', target: { kind: 'project', field: 'tabId' },
-      description: 'Open a known native conversation as a new detached agent in an explicit project. Supply provider/nativeSessionId/cwd from nativeHistory.list; known OpenCode IDs are supported. This resumes the same native conversation, not a copy; the ordinary backend ownership policy applies if already open. Returns a task callId; operations.read reports the exact newSessionId. Use agents.show or placement.attach afterward.',
+      description: 'Open a known native conversation as a new detached agent in an explicit project. Supply provider/nativeSessionId/cwd from nativeHistory.list; known OpenCode IDs are supported. This resumes the same native conversation, not a copy; the ordinary backend ownership policy applies if already open. Returns a task callId; operations.read reports the exact newSessionId. Creation selects the captured focused Dispatch lane without closing its previous agent. Use agents.show or placement.attach afterward.',
       input: z.object({ tabId: z.string(), anchorSessionId: z.string(), provider: z.enum(['claude', 'codex', 'opencode']), nativeSessionId: z.string().min(1), cwd: z.string().min(1), runtime: z.enum(['terminal']).optional() }).strict(), output: accepted,
       handler: (input, context) => {
         const check = () => {
@@ -72,7 +72,7 @@ export function lifecycleControlCapabilities(getWorkspace: () => Workspace) {
       },
     }),
     defineCapability({ id: 'agents.duplicate', title: 'Branch an exact agent conversation', execution: 'window', effect: 'mutation', completion: 'accepted', target: { kind: 'session', field: 'sessionId' },
-      description: 'Copy an idle native conversation to a new native identity and create a detached agent in the chosen project. Preserves provider/runtime and enabled built-in domain names; leaves the source and its draft intact. Requires a fresh lifecycle revision and an explicit target project/anchor in the same window. Use operations.read for both new IDs, then agents.show or placement.attach. A failed placement can leave a native transcript copy; do not blindly retry unknown outcomes.',
+      description: 'Copy an idle native conversation to a new native identity and create a detached agent in the chosen project. Preserves provider/runtime and enabled built-in domain names; leaves the source and its draft intact. Requires a fresh lifecycle revision and an explicit target project/anchor in the same window. Use operations.read for both new IDs, then agents.show or placement.attach. Creation selects the lane focused when it begins without closing its previous agent. A failed placement can leave a native transcript copy; do not blindly retry unknown outcomes.',
       input: target.extend({ revision, tabId: z.string(), anchorSessionId: z.string() }), output: accepted,
       handler: (input, context) => {
         const check = () => {
@@ -88,7 +88,9 @@ export function lifecycleControlCapabilities(getWorkspace: () => Workspace) {
           const clone = await window.api.duplicateSession({ provider: value.provider, sourceProviderSessionId: value.nativeSessionId!, cwd: value.cwd })
           // The source can change during export. Never place a clone under a
           // newly selected project or pretend to have branched the new state.
-          check()
+          try { check() } catch (error) {
+            throw new ControlError('failed', `Native copy ${clone.newProviderSessionId} exists but the source/placement changed: ${String(error)}`, 'unknown')
+          }
           const newSessionId = await getWorkspace().createDetachedSession({ kind: value.provider, providerRuntime: meta.providerRuntime },
             { tabId: input.tabId, anchorSessionId: input.anchorSessionId }, { cwd: value.cwd, resumeSessionId: clone.newProviderSessionId, builtInMcpDomains: meta.builtInMcpDomains })
           if (!newSessionId) throw new ControlError('failed', `Native copy ${clone.newProviderSessionId} exists but no placement was committed`, 'unknown')

@@ -379,10 +379,12 @@ export function usePaneActions(
   ) => Promise<void>
   startNewAgentPlacement: () => void
   commitNewAgentPlacement: (selection: SessionSpawnSelection, target: PlacementTarget) => Promise<void>
-  createDetachedSession: (selection: SessionSpawnSelection, projectOverride?: { tabId: TabId; anchorSessionId: SessionId }, continuation?: SplitFocusedContinuation) => Promise<SessionId | null>
+  createDetachedSession: (selection: SessionSpawnSelection, projectOverride?: { tabId: TabId; anchorSessionId: SessionId }, continuation?: SplitFocusedContinuation, placement?: { selectCreated: boolean }) => Promise<SessionId | null>
   createDetachedDispatchAgent: (
     selection: SessionSpawnSelection & { kind: Exclude<SessionKind, 'terminal'> },
     projectOverride?: { tabId: TabId; anchorSessionId: SessionId },
+    continuation?: SplitFocusedContinuation,
+    placement?: { selectCreated: boolean },
   ) => Promise<SessionId | null>
   createLinkedAgent: (
     selection: SessionSpawnSelection & { kind: Exclude<SessionKind, 'terminal'> },
@@ -668,6 +670,7 @@ export function usePaneActions(
       // Dispatch agents are never inserted into tab.root.
       projectOverride?: { tabId: TabId; anchorSessionId: SessionId },
       continuation?: SplitFocusedContinuation,
+      placement?: { selectCreated: boolean },
     ) => {
       const { kind, providerRuntime } = selection
       const snapshot = refs.stateRef.current
@@ -727,12 +730,16 @@ export function usePaneActions(
         // Mode is turned off.
         return {
           ...prev,
-          activeTabId: latestTab.id,
+          // Detached describes grid membership, not focus. UI creation has
+          // always selected the captured lane; external operators can preserve
+          // the entire current view, then explicitly assign the returned ID to
+          // a chosen lane using a fresh layout revision.
+          activeTabId: placement?.selectCreated === false ? prev.activeTabId : latestTab.id,
           detachedSessions: {
             ...prev.detachedSessions,
             [sessionId]: detachedDispatchRecord(sessionId, latestTab, projectTabIndex),
           },
-          dispatchMode: applyDispatchSpawnFocus(prev.dispatchMode, sessionId, target.laneIndex),
+          dispatchMode: placement?.selectCreated === false ? prev.dispatchMode : applyDispatchSpawnFocus(prev.dispatchMode, sessionId, target.laneIndex),
         }
       })
       // A caller needs the exact spawned ID; comparing a before/after census
@@ -743,7 +750,7 @@ export function usePaneActions(
         await sessionActions.killSession(sessionId, { cwd, kind, providerRuntime })
         return null
       }
-      closeNewAgentPlacement()
+      if (placement?.selectCreated !== false) closeNewAgentPlacement()
       return sessionId
     },
     [closeNewAgentPlacement, refs.stateRef, sessionActions, setState, showToast],

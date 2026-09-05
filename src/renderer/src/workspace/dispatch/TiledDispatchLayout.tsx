@@ -312,6 +312,7 @@ function GridRowView({
           }
           dispatchScope={workspace.state.dispatchMode?.scope === 'global' ? 'global' : 'project'}
           focusSessionInTab={(_tabId, sessionId) => selectIntoRow(sessionId)}
+          targetLaneIndex={focusedLaneInRow ?? start}
           showWorktreeBadges={showWorktreeBadges}
           onCreateAgentInProject={onCreateAgentInProject}
           gridRow={gridRow}
