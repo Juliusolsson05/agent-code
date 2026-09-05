@@ -36,6 +36,12 @@ descriptions of every shipped feature, including features without commands or
 direct tools. Complete discoverability and explanation are delivery requirements
 even though complete direct automation is not.
 
+The operator can also retrieve a complete local history of its MCP activity:
+what it requested, the arguments and targets, what actually ran, and the returned
+results or errors. Agent-output reading is a separate lightweight surface whose
+default is user prompts and all user-visible assistant messages, with selectable
+depth for activity and full available transcript detail.
+
 The server is a separate, opt-in external control surface. Agent Code's own
 agents do not receive it by default. Existing Orchestration, Agent Management,
 AI Workspace, transcript, and Workflow MCP domains retain their scopes.
@@ -202,6 +208,9 @@ Names and arguments are proposed API contracts, not existing exports.
 | `ac_palette_open` | `windowId`, optional `query`, `commandId` | Acknowledged visible palette, query, selected command if present, and current target |
 | `ac_command_run` | `commandId`, explicit target, `requestId` | Completion, opened surface, pending operation, blocked/unavailable, or failure |
 | `ac_wait` | Event cursor or operation ID, scope, bounded timeout | Relevant changes, completion, input needed, timeout, or an expired-cursor indication |
+| `ac_history_list` | Optional operator/session/tool/status/time filters; cursor | Complete chronological inventory of MCP calls and their current/final outcomes |
+| `ac_history_read` | Call/operation ID or event range; summary/full detail; cursor | Recorded requests, arguments, targets, execution steps, exact retained results/errors, and payload references |
+| `ac_history_payload_read` | Payload reference, offset/cursor, bounded limit | Full retained large request/result content in retrievable chunks |
 
 Mutating tools, including palette open and the dedicated tools below, share a
 client-supplied `requestId` contract even where omitted from the table for space.
@@ -453,7 +462,7 @@ result kinds, related-child reveal, cross-window routing, and buried revival.
 | `ac_agent_show` | Reveal an existing agent across modes/windows, with explicit destination/restore intent | Mode-aware agent-index navigation and revive actions |
 | `ac_agent_create` | Provider/runtime, project tab, title, and placement; return IDs and current readiness | Pane/session actions and provider choice registry |
 | `ac_agent_prompt` | Submit text and optional supported attachments to an explicit agent; return delivery disposition | Wake/readiness and provider prompt-delivery paths |
-| `ac_agent_read` | Bounded latest messages/output, activity, and transcript availability; no wake merely to inspect | Existing transcript readers and renderer projections |
+| `ac_agent_read` | Default conversation view: user prompts and all user-visible assistant messages; explicit depth/range/cursors; no wake merely to inspect | Existing transcript readers and renderer projections |
 | `ac_agent_interrupt` | Interrupt the named backend lifetime; report observation rather than claim instantaneous cancellation | SessionManager/provider control |
 | `ac_agent_title_set` | Set a title directly and reflect it in the UI | Agent-title workspace operations |
 | `ac_view_set` | Explicit supported workspace/session modes and auto-follow state; unsupported combinations explain themselves | Dispatch, Reader, Spotlight, and view-mode actions |
@@ -491,7 +500,7 @@ semantics for busy/queued delivery rather than promising universal queue control
 
 | Tool/family | Scope and constraints |
 |---|---|
-| `ac_agents_read` / `ac_agents_prompt` | Bounded reads or explicit per-agent messages for named IDs; return per-target outcomes and correlate partial success so retries do not repeat delivered messages |
+| `ac_agents_read` / `ac_agents_prompt` | Reads share the single-agent depth/range contract and independent cursors; explicit per-agent messages return per-target outcomes and correlate partial success so retries do not repeat delivered messages |
 | `ac_prompt_templates_list` / `ac_prompt_template_apply` | Discover saved templates, fill known variables, and explicitly choose draft insertion or send; missing variables remain actionable |
 | `ac_settings_search` / `ac_setting_set` | Find descriptions/current values and set supported ordinary values from existing schemas; commands with side effects use their real operation, not a raw store patch |
 | `ac_workflows_list` / `ac_workflow_run` / `ac_workflow_read` | Run and inspect existing workflows from an external operator; reuse WorkflowService while giving runs explicit external ownership instead of inventing an internal parent session |
@@ -552,6 +561,75 @@ per-window revisions/observation times. Validate entity generations and the
 relevant state again at mutation time. Do not invalidate every action simply
 because an unrelated agent streamed another token.
 
+### Lightweight agent reads with selectable depth
+
+`ac_agent_read` and `ac_agents_read` share one contract. Detail depth controls
+which kinds of content are included; history range and pagination independently
+control how much is returned. Do not use "depth" to conflate a shorter history
+with a more detailed transcript.
+
+| Depth | Included by default | Intended use |
+|---|---|---|
+| `status` | Identity, activity/readiness, pending input, last activity, whether new output exists | Cheap fleet monitoring |
+| `conversation` (default) | User prompts and every user-visible assistant message in the selected range, in order | Read what the user asked and what the agent said |
+| `activity` | Conversation plus compact tool/action records, targets, completion/exit status, and bounded result excerpts | Understand what work produced an answer |
+| `full` | Available conversation and tool-call/result detail with references to full retained payloads and provider records | Investigate a specific action or inspect the full available execution record |
+
+The default is not a generated summary, only the final assistant response, or a
+dump of provider event JSON. Include assistant progress/commentary/preambles as
+well as the final response, preserving their text and order. Filter out tool
+calls, tool results, synthetic protocol carriers, system bookkeeping, and
+provider-internal events unless the requested depth includes them. Role labels
+alone are insufficient: some providers place tool-result blocks in user-shaped
+records. Those are not user prompts.
+
+Range options should include `session` (default), `current_exchange`, `latest`,
+an explicit message/turn boundary, and incremental reads after a cursor. A
+session-range read exposes the whole conversation through pagination rather
+than silently restricting it to the latest answer. `current_exchange` means the
+latest accepted user prompt and every subsequent assistant message; queued but
+unaccepted prompts remain separately identified. `latest` supports a cheap
+explicit tail when that is what the caller wants.
+
+Use conservative defaults, initially a page budget such as 24,000 characters
+and 50 messages, tuned by actual trials. These are transport budgets, not a
+license to discard content. Include `hasMore`, continuation cursors, range/
+snapshot boundaries, and truncation detail. A single message that exceeds a
+page budget needs a message-content continuation, not an irrecoverable clipped
+string. Attachments are small typed references by default; do not dump base64.
+
+An active agent can be read before its transcript file catches up. Include the
+current visible assistant text with `partial: true` and an explicit live source,
+then reconcile it with committed history using existing ownership/identity
+rules. Do not show both copies or pretend a partial reply is final. Readers use
+structured state/transcripts and do not require the pane to be rendered or
+focused. Reading never wakes a parked backend.
+
+Each result includes stable message IDs, role, available timestamps, completion
+state, source/availability, and a transcript revision/cursor. Incremental reads
+return appended messages plus revisions to a previously partial message, with
+upsert semantics so the operator can replace that message instead of appending
+a duplicate. Compaction, rewind, or provider replacement can invalidate an old
+cursor: report a reset/remapping boundary instead of silently skipping content.
+
+For multi-agent reads, apply the requested depth consistently and return each
+agent's status, cursor, and completeness separately. Enforce a total response
+budget fairly; one verbose agent must not make other agents look empty. Report
+deferred agents and how to continue. Do not silently downgrade conversation
+reads to status-only summaries without identifying the omitted content.
+
+Reuse `AgentTranscriptReader`, existing conversation projections, and the live
+renderer/feed ownership rules where their contracts fit. The current file-reader
+implementation detects Claude/Codex files; it is not proof of OpenCode support.
+Use OpenCode's supported history API through its adapter rather than forcing it
+through a JSONL reader. Mark unavailable provider detail as unavailable.
+
+The read path must be lightweight in actual work, not just in response size:
+avoid serializing complete runtimes, repeatedly parsing the entire history for
+a tail/delta, waking agents, mounting the feed, or invoking a model to summarize.
+Use bounded projections, per-session cursors/indexes, and lazy payload retrieval.
+Keep summary/status views cheap; full inspection is an explicit request.
+
 ### Result vocabulary
 
 Use a shared discriminated result envelope with `requestId`, `instanceId`,
@@ -595,6 +673,73 @@ output advanced, and operation completed; do not stream every provider token
 into the operator context. Return partial renderer failures without blocking
 inspection of healthy windows.
 
+### Complete MCP operation history
+
+Operation history is a product capability with its own durable store, separate
+from agent conversation history and lightweight incident diagnostics. It answers
+"what did the operator do through MCP?" without guessing from the current UI or
+the final conversation transcript.
+
+Record every authenticated tool invocation, including searches/reads, UI-open
+requests, mutations, blocked/failed calls, and deduplicated retries. Each call
+has an ordered lifecycle: received/validated, dispatched where applicable,
+progress or child steps, and final or uncertain outcome. A refused request must
+not look as though its action executed.
+
+Records include:
+
+- Call ID, client request ID, operation ID where applicable, operator identity,
+  tool/command name, timestamps, app instance, and relevant target generations.
+- Validated arguments, including actual submitted prompt text and resolved
+  target IDs, plus explicit annotations for redacted credential fields.
+- Execution steps and concrete effects such as created IDs, placement changes,
+  provider replacements, and per-target batch outcomes.
+- The actual returned result or error. Large text/structured payloads live in
+  immutable local artifacts with references, sizes, and digests; summaries in
+  the index are navigation aids, not substitutes for retained full content.
+- Whether a retry reused an earlier operation/result, anything remains pending,
+  and whether the outcome is unknown after a timeout or crash.
+
+Persist an intent record before dispatching a mutation and append outcome
+records as evidence arrives. Preserve late acknowledgements. A crash between
+dispatch and completion leaves an unresolved operation to reconcile; logging
+alone does not provide exactly-once execution. A restarted app and reconnected
+operator can read the existing history without rerunning any recorded calls.
+
+`ac_history_list` enumerates the full retained call history with filters and
+stable cursors. `ac_history_read` exposes an exact call or ordered event range
+at summary/full detail. `ac_history_payload_read` retrieves large request/result
+payloads in chunks so the whole retained log remains accessible over MCP, not
+only through a local path. Captured results describe what was returned at that
+time; never reconstruct an old result from the agent's newer current state.
+
+History reads themselves get a call record. Freeze their read boundary before
+servicing the call, and store returned history entries as references to immutable
+event IDs/payloads rather than recursively embedding the log into itself. This
+keeps the recorded response reconstructable without exponential duplication.
+
+The full history includes normal non-credential arguments/results by default
+while control MCP is enabled, including prompt text sent through its tools. Keep
+it local and private to the application user. Never persist transport tokens,
+authorization headers, or declared credential fields; mark those omissions.
+An attachment reference or a redacted field must not be described as preserved
+byte-for-byte content. Do not copy these full payloads into ordinary crash logs.
+
+History survives renderer reloads, reconnects, app restarts, and agent closure.
+Retention and storage limits are explicit settings with visible retained ranges
+and missing/pruned-payload markers. Do not silently prune data and keep calling
+the result a full log. Initially retain records/payloads until explicit cleanup
+or a configured retention policy applies. Register storage with the app's storage
+management and make exports/cleanup possible through the appropriate UI route.
+If durable recording cannot be established, refuse a new mutation before dispatch
+rather than execute it without the promised record. Read-only recovery tools
+remain available with an explicit history-recording-unavailable indication.
+
+MCP history does not claim to capture every computer-use click. Record an
+MCP-initiated UI opening and any reliably correlated resulting state change;
+unattributed mouse interaction is not fabricated as a tool invocation. The app
+snapshot remains the authority for where the hybrid workflow is now.
+
 ## 7. External server lifecycle and isolation
 
 Use a separate external-control HTTP host in Electron main. Reuse the SDK and
@@ -614,7 +759,8 @@ extract small transport helpers if needed; do not add `external_control` to
   broad environment inheritance, and normal diagnostics. Setup can present a
   credential through its dedicated user-facing connection flow.
 - Record concise operation identity, target, and disposition in existing local
-  diagnostics. Avoid logging complete prompts or transcripts by default.
+  diagnostics. The separate product history retains full non-credential request/
+  result payloads as specified above; normal diagnostics reference its IDs.
 
 Codex supports local Streamable HTTP MCP with bearer authentication. Its clients
 share MCP configuration, so a globally enabled server may also be discovered by
@@ -649,6 +795,8 @@ src/main/control/
   ControlRendererBridge.ts Window routing, request correlation, generation checks
   ControlMcpHost.ts        Independent opt-in local server lifecycle
   registerControlTools.ts  Discovery tools and operation-backed MCP wrappers
+  ControlHistoryStore.ts   Durable calls, lifecycle events, and payload references
+  AgentReadService.ts      Depth/range projections, live reads, and continuations
 
 src/preload/api/control.ts Typed renderer requests, responses, and registration
 
@@ -684,6 +832,8 @@ if a new alias is actually necessary.
 - Assign every command a proposed route and mark the Tier A/B wrappers.
 - Record representative user intentions for search and a small operator script.
 - Decide the minimal protocol and reserved external server identity.
+- Specify history event/payload storage and the shared agent-read depth/range
+  contract before adding tools, so observability is not retrofitted later.
 
 Exit: a reviewable command coverage map where UI routes count as supported.
 
@@ -708,6 +858,8 @@ feature without duplicating runtime definitions.
 
 - Implement independent host settings, authentication, renderer registration,
   compact observations, and discovery tools.
+- Implement durable MCP history and its list/read/payload tools with the host;
+  even the first picker/search trial must have retrievable call outcomes.
 - Expose the full command list, complete keybinding reference, app overview,
   feature index, and detailed feature descriptions through the MCP tools.
 - Add one-shot palette open intents, explicit window routing, and acknowledgements.
@@ -729,6 +881,9 @@ This is an intermediate milestone, not the completed product.
 - Extract and expose explicitly targeted project, agent, prompt, focus, view,
   pin, and placement operations in small vertical slices.
 - Add operation/result correlation, deduplication, bounded agent reads, and waits.
+- Make conversation depth the default, including all user-visible assistant
+  messages; add status/activity/full modes, paginated session reads, current-
+  exchange/tail ranges, incremental updates, and large-message continuations.
 - Preserve draft ownership, wake semantics, and provider-specific delivery outcomes.
 - Run the "open project, create agents, prompt, monitor, focus" scenario.
 
@@ -764,6 +919,9 @@ the remaining interactions rather than carrying the app's navigation burden.
 ### Phase 6 — packaging and durable maintenance
 
 - Verify the packaged app can enable, disable, reconnect, and revoke the server.
+- Verify history survives restart/agent closure, full payloads remain retrievable,
+  and any storage/retention gap is explicit. Verify live/incremental reads stay
+  bounded under long sessions and multi-agent activity.
 - Provide a concise setup/help flow for the external operator. Installation must
   not silently enable the server in internal agents.
 - Add contract checks for new command classifications, schema/tool-reference
@@ -835,6 +993,26 @@ implementation should colocate meaningful Vitest coverage with its owners.
 24. **Reference stays current:** after settings, focus, provider capabilities, or
     catalog revision changes, subsequent observations identify the new revision
     and update shortcuts/availability rather than serving a misleading cached list.
+25. **Default conversation read:** a session with multiple user prompts, assistant
+    progress messages, a final reply, and tool-result carriers returns all real
+    user/assistant messages through pagination; tools/protocol records are absent
+    by default, and assistant updates are not reduced to the final response.
+26. **Depth and range are independent:** status/conversation/activity/full honor
+    the selected session/current-exchange/tail range and expose omitted payloads
+    with continuations. Increasing depth does not silently change the time range.
+27. **Live incremental read:** partial assistant text updates under one identity,
+    commits without duplication, and survives normal polling. Rewind/replacement
+    reports an explicit reset; a long message is recoverable across chunk reads.
+28. **Full operation history:** successful, blocked, failed, pending, and retried
+    calls are reconstructable with their real arguments/results and identities
+    after restart. Large payloads and batch partial outcomes are fully readable.
+29. **History correctness under failure:** a crash after dispatch remains an
+    unknown outcome, credential fields are marked/redacted, a history read cannot
+    recursively inflate storage, and retention/disk failures never masquerade as
+    complete evidence or trigger silent replay of a mutation.
+30. **Lightweight multi-agent reads:** status/delta requests avoid full-history
+    serialization and feed mounts; page budgets and per-agent continuations
+    prevent a verbose agent from hiding another agent's output.
 
 ## 11. Definition of done
 
@@ -844,6 +1022,11 @@ feature, search the catalog by useful descriptions, reliably open the real picke
 supported UI entry points, find/reveal existing agents across the whole app,
 use the Tier A/B/C direct surface for common and UI-difficult work, and alternate
 between MCP and computer use while observing the same app state.
+
+The operator can retrieve its full retained MCP call history and exact recorded
+results, with explicit gaps/redactions when applicable. Agent reads default to
+user prompts and all user-visible assistant messages and offer independent
+detail depth, history range, and incremental/paginated access.
 
 The server remains separately enabled and excluded from internal agents by
 default. Existing command behavior, provider semantics, and UI ownership remain
