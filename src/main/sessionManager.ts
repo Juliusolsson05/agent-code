@@ -1600,7 +1600,18 @@ export class SessionManager extends EventEmitter {
           kind,
           lifecycle: 'spawning',
         })
-        return existingClaim.promise
+        // WHY the joiner sees `joined`, not the claim's own `spawned` (#772):
+        // the renderer's wake applies a readiness deadline to spawned
+        // backends and, on timeout, kills them. A pane that merely joined
+        // the rehydrate recovery in flight (AgentTerminalLeaf on mount)
+        // inherited that deadline and killed a healthy TUI that was still
+        // booting under the restart herd. The physical start is one and the
+        // same; only the caller's relationship to it differs.
+        return existingClaim.promise.then(result =>
+          result.ok && result.disposition === 'spawned'
+            ? { ...result, disposition: 'joined' as const }
+            : result,
+        )
       }
       this.lifecycle.session('recover.conflict', options.sessionId, {
         kind,

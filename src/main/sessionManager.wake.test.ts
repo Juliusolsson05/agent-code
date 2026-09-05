@@ -206,9 +206,11 @@ describe('SessionManager restart wake recovery', () => {
     })
 
     releaseStart()
+    // #772: the joiner must learn it did NOT start this backend, so its own
+    // readiness deadline can never be turned into a kill of the shared start.
     await expect(Promise.all([firstSpawn, secondSpawn])).resolves.toEqual([
       expect.objectContaining({ ok: true, disposition: 'spawned' }),
-      expect.objectContaining({ ok: true, disposition: 'spawned' }),
+      expect.objectContaining({ ok: true, disposition: 'joined' }),
     ])
     expect(createSession).toHaveBeenCalledTimes(1)
   })

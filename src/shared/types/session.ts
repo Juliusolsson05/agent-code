@@ -130,7 +130,12 @@ export type SessionRecoverFailureCode =
 export type SessionRecoverResult =
   | {
       ok: true
-      disposition: 'adopted' | 'spawned'
+      /** `adopted`: main already owned a live backend. `spawned`: this call
+       *  started one. `joined`: this call attached to a recovery another
+       *  caller had already started (#772) — the backend is being spawned,
+       *  but not by this caller, so a readiness deadline on THIS call must
+       *  never be allowed to kill it. */
+      disposition: 'adopted' | 'spawned' | 'joined'
       snapshot: SessionBackendSnapshot
       tmuxName?: string
     }

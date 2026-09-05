@@ -1,5 +1,13 @@
 # Workspace: keep terminals alive across Reader, Spotlight and Settings
 
+## 2026-09-04 integration
+
+Retain the merged dispatcher/WebGL/engagement/resize coverage alongside hidden
+visibility and dictation tests. Stack this PR on the validated wake fix #776,
+preserving both wake-without-readiness and retention-reveal regressions in the
+shared host suite. Merge #776 first, then this PR; no live app restart is part
+of validation. Earlier standalone integration passed full CI before stacking.
+
 Fixes #752. Refs #745, #749, #103, #390.
 
 ## Problem
