@@ -277,11 +277,11 @@ describe('WebSocketSessionFeed against a live RemoteServer', () => {
     ) as { input: { entries: Array<Record<string, unknown>> } }
     const durableQueuedPrompt = recordedBundle.input.entries[13]!
     await writeFile(transcript, disk.map(d => JSON.stringify(d)).join('\n') + '\n', 'utf8')
-    ;(manager.resolveTranscriptFile as ReturnType<typeof vi.fn>).mockResolvedValue(transcript)
 
     const f = makeFeed()
     const store = new TranscriptStore(f)
     await waitForOpen(f)
+    store.subscribe('s1', () => {})
 
     manager.emit('started', { sessionId: 's1', kind: 'claude', projectDir: '/repo' })
     // Live entry arrives FIRST (before backfill) — the desktop-order case.
@@ -311,6 +311,8 @@ describe('WebSocketSessionFeed against a live RemoteServer', () => {
     )
 
     // Backfill prepends the older records and skips the duplicate.
+    ;(manager.resolveTranscriptFile as ReturnType<typeof vi.fn>).mockResolvedValue(transcript)
+    await vi.waitFor(() => expect(store.getSnapshot('s1').loadingOlderHistory).toBe(false))
     await store.loadInitialHistory('s1')
     await vi.waitFor(() =>
       expect(store.getSnapshot('s1').entries.map(e => e.uuid)).toEqual([

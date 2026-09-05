@@ -1,6 +1,6 @@
 # Remote transcript retention
 
-Status: planned. Issue #805. Depends on #813 (fix/remote-output-backpressure,
+Status: implemented and locally verified. Issue #805. Depends on #813 (fix/remote-output-backpressure,
 61823921); separate PR against that branch. Main remains 5d641845. No edits to
 A5 desktop rendering/worktree paths or the external operator toolkit.
 
@@ -39,3 +39,35 @@ above its target; never drop active ownership merely to hit a number. Explicit
 older-history reading may exceed the live target during its grace period.
 Synchronize issue/PR acceptance criteria and document these constraints. Review
 checks/feedback, leave clean committed worktrees; do not merge.
+
+## Implemented evidence and constraints
+
+Ten remote retention regressions use real Claude/Codex/OpenCode mappers and
+semantic folds. The zero-view regression fails against the parent #813 store
+with 4096 retained entries; after the fix all three synthetic sessions retain
+zero entries, tool indexes and seen UUIDs. Local remote plus shared window tests
+pass (137 tests / 14 files). This is logical payload/cardinality evidence, not a
+browser heap or production throughput benchmark.
+
+A 2100-entry live burst trims to 1500 with matching indexes and totalEntries
+unchanged. A 300-entry, 128 KiB-per-entry burst triggers the byte budget below
+the count threshold and trims under the shared 24 MiB estimate target. Exact
+history offsets survive trims and all-duplicate pages. Older pages reload
+trimmed UUIDs in order, while live replay cannot append them at the tail.
+Tool-result indexes rebuild chronologically before notifying subscribers so
+historical duplicate tool ids cannot overwrite newer retained results.
+
+The pure shared planner retains paired tool entries and semantic owners. The
+remote adapter additionally refuses cuts inside one raw provider record; it
+never adjusts a planned cut in a way that could invalidate pair safety.
+Identity-only tombstones remain for a continuously viewed session, and safety
+constraints/history-reading grace can exceed the nominal count/byte targets.
+All body and identity state is released on last unsubscribe. Live frames lack
+byte offsets and use the provider marker fallback until history supplies an
+exact cursor. No protocol migration or desktop implementation change is needed.
+
+Typecheck, test contract, client production build and diff check pass; the
+existing client chunk-size/mixed-import warnings remain. Re-selection also
+clears the authority of a file hint observed while unviewed, so a newer history
+file can establish identity without waiting for another live append. New live
+frames in the selected view still win over a stale history reply.
