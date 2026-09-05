@@ -9,13 +9,24 @@ repositories is not equivalent to upgrading their gitlinks: reproducible builds
 consume exact pins. Validate the upgrade separately so a newer dependency does
 not silently replace the working integration underneath live direct-PTY agents.
 
-Use only merged remote main heads: Claude 7148deb, Codex 4ff1fd9, parser
+The initial candidate used merged remote main heads: Claude 7148deb, Codex 4ff1fd9, parser
 2fdfc09, voice 3c6f962, OpenCode 4f2ef5d, Workflow MCP 64ec5ea. The first three
 have identical source trees to their current pins; voice changes development
 dependencies. Workflow MCP has divergent/re-written history and substantive
 service/lease/standalone changes, so commit ancestry alone cannot establish
 compatibility. Its tracked node_modules symlink is a portability concern to
 record and validate, not a reason to rewrite package history from this repo.
+
+## Review repair candidate
+
+Clean macOS/Linux consumer CI confirmed that the tracked Workflow dependency
+symlinks break npm ci. With the owner's approval to pursue the audit actions,
+validate upstream repairs before promotion: Workflow #58 refreshes three exact
+Alpine revisions, and stacked #56 removes root/standalone dependency symlinks.
+The host now pins their combined b4b98f8 candidate, explicitly not merged main.
+Merge order is #58, #56, then this host update after full consumer CI. The root
+lockfile also carries a focused Voice Node/Undici metadata/type update (8/8),
+without unrelated optional-platform pruning. Original main remains untouched.
 
 ## Implementation and verification
 
