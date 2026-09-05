@@ -113,6 +113,10 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
   const batch = workspace.state.lastProviderSwitchBatch ?? null
 
   const agentRows = useMemo<AgentRow[]>(() => {
+    // A closed Dialog still mounts these hooks. Gate only the invisible
+    // preview, so in-flight switch state and callbacks keep their lifetime.
+    // Runtime ticks should spend their budget on visible panes, not this list.
+    if (!open) return []
     void nowTick
     const rows: AgentRow[] = []
     const seen = new Set<SessionId>()
@@ -151,7 +155,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
       return a.tabIndex - b.tabIndex
     })
     return rows
-  }, [workspace.runtimes, workspace.state, source, nowTick])
+  }, [open, workspace.runtimes, workspace.state, source, nowTick])
 
   const matchingRows = useMemo(() => {
     if (scopeMode === 'all') return agentRows

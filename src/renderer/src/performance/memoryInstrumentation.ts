@@ -24,9 +24,9 @@ import * as perf from './client'
 // cadence is a correctness knob, the gauge cadence is a cost knob, and tying
 // them would make someone tune one and silently change the other).
 //
-// Nothing here is gated on the perf flag BEYOND what perf.gauge already does
-// (enqueue no-ops when telemetry is off): the sampling below is O(sessions ×
-// SAMPLE_CAP stringifys) every 30s, which is noise even with telemetry on.
+// Gate BEFORE calculating gauge arguments. perf.gauge discards records when
+// disabled, but JavaScript evaluates byte estimates before calling it; the old
+// downstream gate therefore still serialized every session every 30 seconds.
 // -----------------------------------------------------------------------------
 
 /** Cap on how many items a byte estimate stringifies per collection.
@@ -52,10 +52,14 @@ const SAMPLE_CAP = 64
 
 export function estimateJsonBytesSampled(items: readonly unknown[]): number {
   if (items.length === 0) return 0
-  const step = Math.max(1, Math.floor(items.length / SAMPLE_CAP))
+  const count = Math.min(items.length, SAMPLE_CAP)
   let sampled = 0
   let sampledBytes = 0
-  for (let i = 0; i < items.length; i += step) {
+  for (let sample = 0; sample < count; sample += 1) {
+    // Fractional spacing covers the whole collection with exactly the cap.
+    // A floor-rounded step of 1 used to serialize 127 items for a 127-row
+    // collection despite promising a 64-item ceiling.
+    const i = Math.floor(sample * items.length / count)
     sampled += 1
     sampledBytes += estimateJsonBytes(items[i])
   }
@@ -72,6 +76,7 @@ export function emitRendererMemoryGauges(
   runtimes: Record<string, SessionRuntime>,
   seenUuids: Record<string, Set<string>>,
 ): void {
+  if (!perf.getPerformanceConfig().enabled) return
   for (const [sessionId, runtime] of Object.entries(runtimes)) {
     // Terminal panes and empty placeholders: skip entirely rather than emit
     // rows of zeros — keeps the journal grep-able and the sweep O(active

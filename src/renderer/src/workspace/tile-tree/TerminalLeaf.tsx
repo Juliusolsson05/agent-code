@@ -14,6 +14,8 @@ import {
 } from '@renderer/app-state/settings/theme'
 import { readXtermTheme, syncXtermTheme } from '@renderer/workspace/tile-tree/xtermTheme'
 import { createTerminalInputForwarder } from '@renderer/workspace/tile-tree/terminalInputForwarder'
+import { subscribeToTerminalData } from '@renderer/workspace/terminal/sessionDataDispatcher'
+import { attachXtermWebglRenderer } from '@renderer/workspace/terminal/xtermWebglRenderer'
 
 // TerminalLeaf — one pane that hosts a plain shell session.
 //
@@ -97,15 +99,6 @@ export function TerminalLeaf({
   })
 
   const acknowledgeSession = workspace.acknowledgeSession
-  // WHY this is a ref instead of an effect dependency: the effect below owns
-  // the xterm instance and its PTY subscriptions. Re-running it for a helper
-  // identity change would tear down scrollback and re-arm attach races even
-  // though the terminal session itself did not change. The session id is the
-  // real lifecycle boundary; the ref lets the data handler call the latest
-  // acknowledgement function without making helper identity part of xterm's
-  // mount/unmount contract.
-  const acknowledgeSessionRef = useRef(acknowledgeSession)
-  acknowledgeSessionRef.current = acknowledgeSession
   const ensureSessionLiveRef = useRef(workspace.ensureSessionLive)
   ensureSessionLiveRef.current = workspace.ensureSessionLive
   const showPaneToastRef = useRef(workspace.showPaneToast)
@@ -151,6 +144,7 @@ export function TerminalLeaf({
     // these match the inner try block's scope.
     let term: Terminal | null = null
     let fit: FitAddon | null = null
+    let webglRenderer: ReturnType<typeof attachXtermWebglRenderer> | null = null
     let onDataDisposable: { dispose(): void } | null = null
     let offTerminalData: (() => void) | null = null
     let resizeObserver: ResizeObserver | null = null
@@ -258,6 +252,7 @@ export function TerminalLeaf({
       fit = new FitAddon()
       term.loadAddon(fit)
       term.open(container)
+      webglRenderer = attachXtermWebglRenderer(term)
       termRef.current = term
       fitRef.current = fit
 
@@ -285,7 +280,6 @@ export function TerminalLeaf({
       })
       onDataDisposable = term.onData(data => {
         if (forwarder.replaying) return
-        acknowledgeSessionRef.current(sessionId)
         if (!attachedBackfillDone) {
           pendingInput.push(data)
           // A held key during restart wake should not grow without bound if the
@@ -332,16 +326,13 @@ export function TerminalLeaf({
       // silently dropped and the user sees a blank terminal with
       // just a blinking cursor. Exactly the bug reported.
       const backlogQueue: string[] = []
-      offTerminalData = window.api.onSessionTerminalData(
-        ({ sessionId: sid, data }) => {
-          if (sid !== sessionId) return
-          if (!attachedBackfillDone) {
-            backlogQueue.push(data)
-            return
-          }
-          term?.write(data)
-        },
-      )
+      offTerminalData = subscribeToTerminalData(sessionId, data => {
+        if (!attachedBackfillDone) {
+          backlogQueue.push(data)
+          return
+        }
+        term?.write(data)
+      })
       // WHY wake uses callback refs instead of making workspace an effect
       // dependency: this effect owns xterm's lifetime. The workspace object is
       // rebuilt for ordinary renderer state changes, but the shell attachment
@@ -443,6 +434,7 @@ export function TerminalLeaf({
       resizeObserver?.disconnect()
       onDataDisposable?.dispose()
       offTerminalData?.()
+      webglRenderer?.dispose()
       if (onThemeChangedListenerRef) {
         window.removeEventListener(THEME_CHANGED_EVENT, onThemeChangedListenerRef)
       }
@@ -522,6 +514,13 @@ export function TerminalLeaf({
         acknowledgeSession(sessionId)
         focusTerminal()
       }}
+      // xterm's onData also carries automatic protocol responses. A shell
+      // querying its cursor must neither clear unread state nor schedule React
+      // work. DOM capture attributes engagement without guessing from bytes
+      // and runs even when xterm stops the keyboard event from bubbling.
+      onKeyDownCapture={() => acknowledgeSession(sessionId)}
+      onPasteCapture={() => acknowledgeSession(sessionId)}
+      onCompositionEndCapture={() => acknowledgeSession(sessionId)}
     >
       {/* Compact header to match TileLeaf's status strip so a
           mixed layout doesn't look ragged. We don't have CC-style
