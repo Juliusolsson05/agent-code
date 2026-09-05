@@ -60,3 +60,13 @@ Host:
 - The same treatment for `codex-headless` (#765 names it; separate
   submodule PR).
 - Any change to the app-side emit gate (#761 already merged).
+# 2026-09-04 review refinement
+
+The reviewed candidate is fb390e6, which includes the content-safe repair and
+merged package main. It supersedes the original broad normalization and parser
+skip described below. Only recognized status-line markdown is reused; normal
+content and multiline drafts stay meaningful, and composer attributes plus
+picker/condition state are evaluated on every emitted frame. Twenty-six focused
+tests and package CI passed on the repair before the tree-identical main merge.
+Host CI validates this exact pin. Merge Claude #52 first; preserve this descendant
+if Agent Code #788's package-main ancestry update is merged as well.
