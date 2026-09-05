@@ -1,6 +1,6 @@
 # Subagent refresh coalescing
 
-Status: implementing. Issue #802. Base: origin/main at 5d641845.
+Status: implemented; PR/CI review pending. Issue #802. Base: origin/main at 5d641845.
 
 ## Outcome and boundaries
 
@@ -35,3 +35,13 @@ user confirmation.
 Issue #803 will use a separate branch/PR based on this branch because both touch
 Codex refresh ownership. Remote #804 starts independently from main; remote #805
 will explicitly depend on that resynchronization contract. Complete all four.
+
+## Implementation evidence
+
+- Shared CoalescedRefresh now owns each tracker’s poll loop; post-await stop
+  guards prevent offset/accumulator revival. No discovery policy changes here.
+- 34 focused tests pass (including 10 new lifecycle/concurrency cases). The
+  baseline fails both provider burst cases: up to 52 overlapping range reads
+  versus one after coalescing. A late append causes exactly two sequential reads.
+- Typecheck and testing contract passed; final incremental typecheck and CI
+  review complete the validation. Evidence is synthetic, not production speedup.
