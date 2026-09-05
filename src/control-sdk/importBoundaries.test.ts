@@ -40,6 +40,7 @@ function specifiers(source: string): Array<string | null> {
 
 function violation(from: string, target: string | undefined, specifier: string | null): string | undefined {
   const integration = /\/control(?:\.ts|\/)/.test(from)
+  if (target?.startsWith('src/main/workflows/externalOperator/') && from !== 'src/main/workflows/control.ts' && !from.startsWith('src/main/workflows/externalOperator/')) return 'external workflow ownership has one control consumer'
   if (specifier === null) {
     return from.startsWith(sdk) || from.startsWith(mcp) || integration ? 'computed import hides control dependency' : undefined
   }

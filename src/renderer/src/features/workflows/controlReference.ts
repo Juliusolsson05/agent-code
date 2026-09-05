@@ -17,7 +17,7 @@ export const controlReference = [
       "inspect outputs."
     ],
     "outcome": "The workflow run exposes its state and outputs.",
-    "cautions": "A workflow has its own ownership and lifecycle; it is not an anonymous internal agent.",
+    "cautions": "Use workflows.list/start, then operations.read for runId and workflows.status/events/result. Source approval remains required. Cancel/resume only controls runs attributed to this external connection; internal runs retain their owner. All clients sharing the connection share its identity.",
     "commandIds": []
   }
 ] satisfies FeatureReference[]

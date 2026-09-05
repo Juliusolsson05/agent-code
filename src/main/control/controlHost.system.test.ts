@@ -39,6 +39,7 @@ it('routes real renderer observations across two windows and survives reload wit
       import { registerRendererHost } from '${resolve(root, 'src/renderer/src/control/registerRendererHost.ts')}'
       import { workspaceControlCapabilities } from '${resolve(root, 'src/renderer/src/workspace/control.ts')}'
       import { agentControlCapabilities } from '${resolve(root, 'src/renderer/src/workspace/control/agents.ts')}'
+      import { settingsControlCapabilities } from '${resolve(root, 'src/renderer/src/features/settings/control.ts')}'
       import { commandControlCapabilities } from '${resolve(root, 'src/renderer/src/features/command-palette/control.ts')}'
       import { keybindingControlCapabilities } from '${resolve(root, 'src/renderer/src/features/command-keybindings/control.ts')}'
       import { documentationCapabilities } from '${resolve(root, 'src/renderer/src/control/documentation.ts')}'
@@ -54,6 +55,7 @@ it('routes real renderer observations across two windows and survives reload wit
       registerRendererHost([
         ...workspaceControlCapabilities(() => ({restoreStatus: 'fresh'})),
         ...agentControlCapabilities(() => ({restoreStatus: 'fresh'})),
+        ...settingsControlCapabilities(() => ({restoreStatus: 'fresh'})),
         ...commandControlCapabilities(), ...keybindingControlCapabilities(), ...documentationCapabilities(),
       ])
         .catch(error => { document.body.textContent = String(error); console.error(error) })
@@ -61,6 +63,7 @@ it('routes real renderer observations across two windows and survives reload wit
     await writeFile(main, `
       import { app, BrowserWindow } from 'electron'
       import { createControlHost } from '${resolve(root, 'src/main/control/createControlHost.ts')}'
+      import { applicationIdentityCapabilities } from '${resolve(root, 'src/main/window/identityControl.ts')}'
       import { ExternalControlMcpHost } from '${resolve(root, 'src/main/externalControlMcp/host.ts')}'
       import { Client } from '${resolve(root, 'node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js')}'
       import { StreamableHTTPClientTransport } from '${resolve(root, 'node_modules/@modelcontextprotocol/sdk/dist/esm/client/streamableHttp.js')}'
@@ -76,7 +79,7 @@ it('routes real renderer observations across two windows and survives reload wit
         getBrowserWindow: id => windows.get(id) ?? null,
         windowIdFor: sender => [...windows].find(([,window]) => window.webContents === sender)?.[0] ?? null,
         listWindowIds: () => [...windows.keys()],
-      }, ${JSON.stringify(join(directory, 'control-history'))})
+      }, ${JSON.stringify(join(directory, 'control-history'))}, applicationIdentityCapabilities())
       const external = new ExternalControlMcpHost(host.forCaller({kind: 'external', id: 'electron-trial'}))
       const boundPort = await external.start(0, 'trial-only-token')
       const client = new Client({name: 'control-trial', version: '1.0'})
@@ -108,6 +111,12 @@ it('routes real renderer observations across two windows and survives reload wit
         const right = await registered('right')
         const listed = await client.listTools()
         const windowList = await caller.invoke({capabilityId: 'app.windows', input: {}})
+        const identity = await caller.invoke({capabilityId: 'app.identity', input: {}})
+        const preferences = await caller.invoke({capabilityId: 'settings.values', input: {query: 'contrast'}, owner: right})
+        const preference = preferences.value.items.find(item => typeof item.value === 'boolean')
+        if (!preference) throw new Error('Expected the existing contrast setting')
+        const changedPreference = await caller.invoke({capabilityId: 'settings.set', input: {settingId: preference.id, revision: preference.revision, value: !preference.value}, owner: right, requestKey: 'preference-intention'})
+        const stalePreference = await caller.invoke({capabilityId: 'settings.set', input: {settingId: preference.id, revision: preference.revision, value: preference.value}, owner: right, requestKey: 'stale-preference-intention'})
         const observe = target => caller.invoke({capabilityId: 'workspace.observe', input: {}, owner: target})
         const routed = await caller.invoke({capabilityId: 'agents.titleSet', input: {sessionId: 'right-agent', title: 'Routed title'}, requestKey: 'title-intention'})
         const fleet = await caller.invoke({capabilityId: 'agents.search', input: {query: 'Routed title'}})
@@ -127,7 +136,7 @@ it('routes real renderer observations across two windows and survives reload wit
         await client.close()
         await external.stop()
         const sdkAfterDisable = await host.forCaller({kind: 'application', id: 'after-disable'}).invoke({capabilityId: 'workspace.observe', input: {}, owner: right})
-        console.log('CONTROL_TRIAL=' + JSON.stringify({toolCount:listed.tools.length,windowList,callHistory,sdkAfterDisable,routed,fleet,ambiguous,first,second,guide,binding,stale,afterReload,surviving,changed: left.generation !== replacement.generation}))
+        console.log('CONTROL_TRIAL=' + JSON.stringify({identity,trialPid:process.pid,changedPreference,stalePreference,preference,toolCount:listed.tools.length,windowList,callHistory,sdkAfterDisable,routed,fleet,ambiguous,first,second,guide,binding,stale,afterReload,surviving,changed: left.generation !== replacement.generation}))
         host.dispose()
         for (const window of windows.values()) window.destroy()
         clearTimeout(deadline)
@@ -164,6 +173,9 @@ it('routes real renderer observations across two windows and survives reload wit
     const line = stdout.split('\n').find(value => value.startsWith('CONTROL_TRIAL='))
     expect(line, stdout).toBeTruthy()
     const evidence = JSON.parse(line!.slice('CONTROL_TRIAL='.length))
+    expect(evidence.identity).toMatchObject({ok: true, value: {pid: evidence.trialPid, executablePath: executable}})
+    expect(evidence.changedPreference).toMatchObject({ok: true, value: {id: evidence.preference.id, value: !evidence.preference.value}, operation: {owner: {windowId: 'right'}}})
+    expect(evidence.stalePreference).toMatchObject({ok: false, error: {code: 'stale_cursor', outcome: 'not_started'}})
     expect(evidence.toolCount).toBeGreaterThan(20)
     expect(evidence.windowList.value.windows.map((window: { windowId: string }) => window.windowId)).toEqual(['left', 'right'])
     expect(evidence.callHistory.value.state).toBe('recorded')

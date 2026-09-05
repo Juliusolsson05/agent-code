@@ -129,3 +129,36 @@ this plan/issue for concrete findings. All work stays unmerged pending confirmat
   accepted/unknown receipts, no redelivery after an executor restart/subset retry,
   and argument conflicts. Full typecheck passed. The batch is deliberately not
   atomic; independent read cursors and child call IDs remain visible.
+
+- September 5 operator gap report reviewed alongside #796–806. Creation's default
+  selects the captured focused lane; `selectCreated:false` preserves current tab
+  and all lane assignments, followed by explicit `dispatch.configure/lane-select`.
+  The shared index explains its target lane in UI help (#799).
+- #802–803 are subagent projection correctness/discovery performance dependencies,
+  not missing operator operations. #804–805 are separate Remote transport/store
+  work. A5 owns #806: this branch only calls the existing worktree dump owner and
+  does not change its reconciler, canonicalizer or projection caches.
+- #807 records an existing replacement draft-loss bug demonstrated by a failing
+  real-hook regression: edits during spawn were replaced by the old snapshot and
+  supported attachments were dropped. Draft transfer is centralized at retirement;
+  provider switch must not reapply a stale branch-specific image snapshot.
+- Stage 4 implements templates, registry-backed ordinary settings, named surfaces,
+  usage/worktree reads and external workflow runs. External workflow ownership is
+  isolated in `main/workflows/externalOperator`, with only `workflows/control.ts`
+  allowed to import it. Main-owned durable tasks admit before workflow approval;
+  they cannot be finalized by a window caller. Existing source approval remains.
+- Remaining evidence/coverage: two-monitor activation; occupied native draft and
+  busy-provider admission/commit trials; full cross-provider historical topic
+  search (#96/#739 and unsupported OpenCode discovery #773). Recent native session
+  catalogs/prompt pages are not a full archive search. Batch acceptance does not
+  imply worker completion or provide a durable wait/subscription API.
+
+- Stage 4/5 verification: standalone SDK/full types passed; renderer suite passed
+  118 files/509 tests. Full unit run passed every assertion except the unchanged
+  local image-fixture provenance check referencing a missing private transcript.
+  That check is retained. The real workflow-worker check is classified as system.
+  The isolated Electron/HTTP MCP trial passed with two windows, reload/stale-owner
+  rejection, actual process identity, a right-window preference mutation and stale
+  preference refusal. Production build/output verification passed (release-only
+  runtime archives were not downloaded). No live provider or user workspace was
+  modified by these trials. Actual #797/#800 trial evidence remains outstanding.

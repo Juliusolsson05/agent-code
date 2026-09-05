@@ -4,7 +4,7 @@ import { createControlExecutor, createControlRegistry } from '@control-sdk/host'
 import {
   controlRegistrationSchema, controlRequestSchema, rendererControlResponseSchema,
   ControlError, workspaceObservationSchema,
-  type ControlCaller, type ControlRequest, type RegisteredCapability, type ControlOperatorPort,
+  type ControlCaller, type ControlRequest, type RegisteredCapability, type ControlOperatorPort, type ControlContext, type ControlResult,
 } from '@control-sdk'
 import { ControlRendererBridge } from './rendererBridge'
 import { windowControlCapabilities } from '@main/window/control'
@@ -19,11 +19,14 @@ export function createControlHost(windowAccess: {
   getBrowserWindow(id: string): BrowserWindow | null
   windowIdFor(sender: WebContents): string | null
   listWindowIds(): string[]
-}, historyDirectory: string, additionalCapabilities: readonly RegisteredCapability[] = []) {
+}, historyDirectory: string, additionalCapabilities: readonly RegisteredCapability[] | ((ports: {
+  invokeTask: (context: ControlContext, request: ControlRequest) => Promise<ControlResult>
+}) => readonly RegisteredCapability[]) = []) {
   // Inject the window adapter for isolated Electron trials. The production
   // adapter is the existing window registry, never an SDK-owned window store.
   const { getBrowserWindow, windowIdFor, listWindowIds } = windowAccess
   const registry = createControlRegistry()
+  const mainOwner = { kind: 'main' as const, generation: randomUUID() }
   const observeWindows: ObserveWindows = context => Promise.all(listWindowIds().map(async windowId => {
     const owner = registry.list().find(row => row.descriptor.id === 'workspace.observe'
       && row.owner.kind === 'window' && row.owner.windowId === windowId)?.owner
@@ -65,7 +68,14 @@ export function createControlHost(windowAccess: {
     return id
   }
 
-  const unregisterMain = registry.register({ kind: 'main', generation: randomUUID() }, [...windowControlCapabilities(() =>
+  // This private composition port is only for main-owned task journal writes.
+  // Features keep the original caller for their own domain authorization; an
+  // external request never gets this application identity from tool input.
+  const additional = typeof additionalCapabilities === 'function' ? additionalCapabilities({ invokeTask: (context, request) => {
+    if (JSON.stringify(context.owner) !== JSON.stringify(mainOwner) || !['operations.start', 'operations.finish'].includes(request.capabilityId)) throw new ControlError('unavailable', 'Main task port only records its own lifecycle')
+    return executor.invoke(request, { kind: 'application', id: `control-main:${mainOwner.generation}` })
+  } }) : additionalCapabilities
+  const unregisterMain = registry.register(mainOwner, [...windowControlCapabilities(() =>
     listWindowIds().map((windowId, index) => ({
       windowId, number: index + 1, title: getBrowserWindow(windowId)?.getTitle() ?? '',
       minimized: getBrowserWindow(windowId)?.isMinimized() ?? false,
@@ -74,7 +84,7 @@ export function createControlHost(windowAccess: {
       generation: windows.get(windowId)?.generation ?? null,
     })),
   ), ...historyCapabilities(history), ...taskHistoryCapabilities(history, owner => registry.list().some(row => JSON.stringify(row.owner) === JSON.stringify(owner))),
-  ...globalControlCapabilities(observeWindows), ...batchControlCapabilities((request, caller) => executor.invoke(request, caller)), ...additionalCapabilities])
+  ...globalControlCapabilities(observeWindows), ...batchControlCapabilities((request, caller) => executor.invoke(request, caller)), ...additional])
 
   ipcMain.handle('control:register', (event, raw: unknown) => {
     const windowId = senderWindow(event)

@@ -1,3 +1,7 @@
+import { settingsControlCapabilities } from '@renderer/features/settings/control'
+import { templateControlCapabilities } from '@renderer/features/prompt-templates/control'
+import { worktreeControlCapabilities } from '@renderer/features/worktrees/control'
+import { surfaceControlCapabilities } from '@renderer/app-state/uiShell/control'
 import { useEffect, useRef } from 'react'
 import { createControlRegistry } from '@control-sdk/host'
 import {
@@ -78,6 +82,10 @@ export function useControlRegistration(workspace: Workspace): void {
       ...lifecycleControlCapabilities(() => current.current),
       ...navigationControlCapabilities(() => current.current),
       ...editorControlCapabilities(),
+      ...settingsControlCapabilities(() => current.current),
+      ...templateControlCapabilities(() => current.current),
+      ...worktreeControlCapabilities(() => current.current),
+      ...surfaceControlCapabilities(),
       ...commandControlCapabilities(),
       ...keybindingControlCapabilities(),
       ...documentationCapabilities(),

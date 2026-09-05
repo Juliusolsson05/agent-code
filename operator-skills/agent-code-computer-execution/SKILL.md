@@ -67,7 +67,8 @@ For example, to focus “A5 in window two” while preserving `[A5, B7, B8, B9]`
    `intent: "reuse-existing-view"` and that window/generation.
 4. Verify the foreground window and lane selections before computer input.
 
-Clicking A5 in the shared Dispatch index places it into the **focused lane**,
+Clicking A5 in a Dispatch row’s shared index places it into that row’s **focused lane**
+(or its first lane when focus is in another row),
 even if another lane already shows A5. That can change `[A5, B7, B8, B9]` to
 `[A5, A5, B8, B9]`: two views of one process, not a new agent. Use explicit
 `open-in-focused-tiled-dispatch-lane` only when that replacement is intended.
@@ -168,6 +169,29 @@ Finish its dialog with computer use and call `ac_operations_read` with the retur
 callId to learn whether it closed or was cancelled. Do not interpret acceptance as
 completion or issue a second close while confirmation is pending.
 
+## Batches and broader controls
+
+`ac_agents_batch_read` and `ac_agents_batch_prompt` accept up to 20 independent
+items. Inspect every child result, including failures. Keep each read cursor with
+its own agent/depth. For partial prompt retries, keep `batchKey` and each `itemKey`
+stable; if the subset changes, use a new parent `_control.requestKey`. Retrying an
+unknown child under another key risks duplicate delivery. Batch acceptance says
+nothing about task completion; monitor each agent and its conditions.
+
+`ac_settings_values/set` handles advertised ordinary choices with revisions.
+Use `ac_settings_reference` and the UI for other settings. `ac_templates_list/read`
+finds reusable prompts; insertion needs both template and draft revisions and an
+explicit project for dynamic context. Inspect the draft before sending. Save/delete
+only changes custom templates. `ac_ui_surfaces/surface_set` selects named panels;
+`ac_usage_read` and `ac_worktrees_read` provide read-only evidence.
+
+For existing workflows, list definitions for the exact cwd, then start with JSON
+arguments. Ordinary source approval may need computer use. Poll the returned task
+callId through `ac_operations_read` for runId, then use `ac_workflows_status/events/result`.
+Cancel/resume is limited to the external connection's runs. Clients sharing this
+connection share that ownership; it is not a per-person identity. Internal agent
+runs keep their owner, and workflow workers do not gain this operator toolkit.
+
 ## Lifecycle and views
 
 Read `ac_agents_lifecycle_read` before reload, switch, duplicate, rewind or undo.
@@ -176,14 +200,22 @@ callId; `ac_operations_read` returns the final replacement ID. Re-find that ID
 before further actions. Reload/rewind/duplicate require idle native conversations;
 `ac_agents_interrupt` requests the ordinary Stop signal, not process termination.
 
-Use `ac_native_history_list` to find conversations outside the current workspace,
+Use `ac_native_history_list` for a bounded recent catalog outside the workspace,
 and `ac_native_history_prompts` for exact rewind addresses. Native IDs are not
 Agent Code session IDs. Resume continues the native conversation; duplicate
-branches a copy. OpenCode discovery can be unavailable while known IDs still work.
+branches a copy. OpenCode discovery can be unavailable while known IDs still work. This catalog is
+not a full historical topic search.
 
 `ac_placement_inspect` explains detach/bury consequences before their revision-bound
 operations. Last-pane bury also archives detached children. `ac_views_agent_set`
 selects Reader, Spotlight or normal workspace by desired state, without toggles.
+
+Creating a detached agent normally selects it in the lane focused when creation
+began, replacing that view without closing its agent. To preserve current tabs and
+lanes, use `ac_agents_create` with `selectCreated:false`. Then read `ac_layout_read`
+and use `ac_dispatch_configure` with `change.action:"lane-select"`, the target
+`laneIndex`, the returned session ID and a fresh revision. Resume/duplicate also
+select their created agent using normal creation behavior; inspect lanes afterwards.
 
 ## Recover and verify
 
