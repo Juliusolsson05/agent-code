@@ -17,7 +17,37 @@ vi.mock('@providers/registry.main.js', () => ({
   getMainProvider: () => ({ listSessions: harness.listSessions }),
 }))
 
+vi.mock('@main/window/windowRegistry.js', () => ({
+  claimSessionForWindow: vi.fn(),
+  releaseSession: vi.fn(),
+  windowIdFor: () => 'requesting-window',
+}))
+
 const { registerSessionIpc } = await import('./session.js')
+
+describe('recovered renderer screen seed', () => {
+  it.each([
+    { ok: true, destroyed: false, available: true, sends: 1 },
+    { ok: false, destroyed: false, available: true, sends: 0 },
+    { ok: true, destroyed: true, available: true, sends: 0 },
+    { ok: true, destroyed: false, available: false, sends: 0 },
+  ])('seeds only successful live requesters ($ok/$destroyed/$available)', async ({ ok, destroyed, available, sends }) => {
+    const screen = { plain: 'latest raw tick', markdown: 'latest raw tick', recent: 'latest raw tick', recentMarkdown: 'latest raw tick' }
+    const recover = vi.fn(async () => ({ ok }))
+    const getScreenSnapshot = vi.fn(() => available ? screen : null)
+    registerSessionIpc({ recover, getScreenSnapshot } as never, {} as never)
+    const sender = { isDestroyed: () => destroyed, send: vi.fn() }
+    await expect(harness.handlers.get('session:recover')!({ sender }, { sessionId: 's1' })).resolves.toEqual({ ok })
+    expect(sender.send).toHaveBeenCalledTimes(sends)
+    if (sends) {
+      expect(getScreenSnapshot).toHaveBeenCalledWith('s1')
+      expect(recover.mock.invocationCallOrder[0]).toBeLessThan(getScreenSnapshot.mock.invocationCallOrder[0]!)
+      expect(sender.send).toHaveBeenCalledWith('session:screen', {
+        sessionId: 's1', plain: screen.plain, markdown: screen.markdown,
+      })
+    }
+  })
+})
 
 describe('session input transcript observations', () => {
   beforeEach(() => {

@@ -909,7 +909,7 @@ export const sessionCommands: CommandDef[] = [
     pickerVisibility: 'advanced',
     surface: 'session',
     title: 'Switch Provider',
-    description: '**What it does:** Moves the focused agent to the next available provider.\n\n**Use when:** You want to continue the same work with Claude, Codex, or OpenCode.\n\n**Notes:** Saved sessions are translated; empty panes are replaced with a fresh pane.',
+    description: '**What it does:** Opens a destination picker for continuing the focused agent with Claude, Codex, OpenCode, or OpenCode Terminal.\n\n**Use when:** You want to continue the same work with a different provider.\n\n**Notes:** Saved sessions are translated; empty panes are replaced with a fresh pane.',
     keywords: ['provider', 'switch', 'claude', 'codex', 'opencode', 'translate'],
     getState: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
@@ -934,7 +934,16 @@ export const sessionCommands: CommandDef[] = [
       // provider from declaring the product paths it supports.
       return getProviderFeatures(kind).switchTargets.length > 0
     },
-    run: ({ workspace }) => workspace.switchFocusedProvider(),
+    run: ({ workspace, ui }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return
+      // WHY capture before closing the palette: command targeting in Dispatch
+      // can differ from the active grid tab and may change while a modal is
+      // open. The picker carries this exact id through selection instead of
+      // re-reading whichever pane happens to be focused at commit time.
+      ui.closePalette()
+      ui.openProviderSwitchPicker(sessionId)
+    },
   },
   {
     id: 'toggle-git-bar',

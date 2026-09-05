@@ -1,11 +1,6 @@
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
-import {
-  AGENT_PROVIDER_KINDS,
-  DEFAULT_PROVIDER,
-  isAgentProviderKind,
-} from '@shared/types/providerKind'
-import type { AgentProviderKind } from '@shared/types/providerKind'
-import { getProviderFeatures } from '@providers/shared/featureCapabilities'
+import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
+import type { AgentProviderKind, AgentProviderRuntime } from '@shared/types/providerKind'
 import type { RewindPromptAddress } from '@shared/types/transcriptRewind'
 import { useCallback } from 'react'
 
@@ -18,29 +13,17 @@ import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import type { SessionActions } from '@renderer/workspace/hook/actions/session'
 import { resumableProviderSessionId } from '@renderer/workspace/providerSessionIdentity'
 import { switchAgentProvider } from '@renderer/workspace/hook/actions/providerSwitchCore'
+import { providerChoiceLabel } from '@renderer/workspace/providerChoices'
 
 // Provider-level actions on the focused pane.
 //
-// switchFocusedProvider   — translate the focused session to the next
-//                           registered provider and re-home its pane.
+// switchSessionProvider   — translate one captured session to an explicit
+//                           provider/runtime destination and re-home its pane.
 // reloadFocusedAgent      — respawn the focused agent session with
 //                           resume so the conversation history replays.
 // rewindFocusedToPrompt   — user picks a past user prompt; pane
 //                           re-homes onto a truncated transcript with
 //                           the prompt prefilled as an unsent draft.
-
-export function nextSwitchTarget(sourceKind: AgentProviderKind): AgentProviderKind | null {
-  const sourceIndex = AGENT_PROVIDER_KINDS.indexOf(sourceKind)
-  const declaredTargets = getProviderFeatures(sourceKind).switchTargets
-  return Array.from(
-    { length: AGENT_PROVIDER_KINDS.length - 1 },
-    (_, offset) => AGENT_PROVIDER_KINDS[
-      (sourceIndex + offset + 1) % AGENT_PROVIDER_KINDS.length
-    ],
-  ).find((candidate): candidate is AgentProviderKind => (
-    candidate !== undefined && declaredTargets.includes(candidate)
-  )) ?? null
-}
 
 export function useProviderActions(
   refs: WorkspaceRefs,
@@ -48,17 +31,23 @@ export function useProviderActions(
   showPaneToast: (sessionId: SessionId, message: string, durationMs?: number) => void,
   sessionActions: SessionActions,
 ): {
-  switchFocusedProvider: () => Promise<void>
+  switchSessionProvider: (
+    sourceSessionId: SessionId,
+    targetKind: AgentProviderKind,
+    targetProviderRuntime?: AgentProviderRuntime,
+  ) => Promise<void>
   reloadFocusedAgent: () => Promise<void>
   rewindFocusedToPrompt: (
     anchor: RewindPromptAddress,
   ) => Promise<void>
   undoLastRewind: () => Promise<void>
 } {
-  const switchFocusedProvider = useCallback(async () => {
+  const switchSessionProvider = useCallback(async (
+    sourceSessionId: SessionId,
+    targetKind: AgentProviderKind,
+    targetProviderRuntime?: AgentProviderRuntime,
+  ) => {
     const current = refs.stateRef.current
-    const sourceSessionId = commandTargetSessionIdForState(current)
-    if (!sourceSessionId) return
     const meta = current.sessions[sourceSessionId]
     if (!meta) return
 
@@ -68,23 +57,10 @@ export function useProviderActions(
       showPaneToast(sourceSessionId, 'Only agent panes can switch provider')
       return
     }
-    // One command now has three possible destinations. Preserve the old
-    // one-keystroke behavior by cycling registry order, but consult the
-    // declared edge list at every step so a temporarily unsupported direction
-    // is skipped rather than attempted. The bulk modal remains the explicit
-    // source→target picker for users who do not want the cycle order.
-    const targetKind = nextSwitchTarget(sourceKind)
-    if (!targetKind) {
-      showPaneToast(
-        sourceSessionId,
-        `${getRendererProviderCapabilities(sourceKind).shortLabel} has no switch destination`,
-      )
-      return
-    }
-
     const result = await switchAgentProvider({
       sessionId: sourceSessionId,
       targetKind,
+      targetProviderRuntime,
       refs,
       setRuntimes,
       sessionActions,
@@ -94,7 +70,7 @@ export function useProviderActions(
     if (result.status === 'switched') {
       showPaneToast(
         result.newSessionId,
-        `Switched to ${getRendererProviderCapabilities(result.targetKind).shortLabel}`,
+        `Switched to ${providerChoiceLabel(result.targetKind, targetProviderRuntime)}`,
       )
     } else if (result.status === 'failed') {
       showPaneToast(sourceSessionId, result.message)
@@ -361,5 +337,5 @@ export function useProviderActions(
     }
   }, [refs.latestRuntimesRef, refs.stateRef, sessionActions, setRuntimes, showPaneToast])
 
-  return { switchFocusedProvider, reloadFocusedAgent, rewindFocusedToPrompt, undoLastRewind }
+  return { switchSessionProvider, reloadFocusedAgent, rewindFocusedToPrompt, undoLastRewind }
 }

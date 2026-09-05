@@ -297,6 +297,15 @@ export type UiShellState = {
    * and persisting it in WorkspaceState would make a quota inspection look
    * like durable workspace data. */
   usageModalOpen: boolean
+  /**
+   * Session captured when the single-agent Switch Provider command ran.
+   *
+   * WHY this stores an id rather than a boolean: Dispatch focus is independent
+   * from active-tab focus and can move while the modal is open. The eventual
+   * provider choice must apply to the pane the user invoked the command for,
+   * not the pane that happens to be focused when they press Enter.
+   */
+  providerSwitchPickerSessionId: SessionId | null
   /** Non-null when the Rewind-to-Prompt modal is open. Value is the
    *  sessionId whose transcript the modal is showing prompts for.
    *  Selecting a prompt in the modal calls

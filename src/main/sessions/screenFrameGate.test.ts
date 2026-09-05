@@ -21,7 +21,7 @@ const CLAUDE_THINKING_NEXT_TICK = [
   '  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents                          /rc',
 ].join('\n')
 
-const CODEX_WORKING = ['• Working (12s • esc to interrupt)', '', '› Ask Codex to do anything   '].join('\n')
+const CODEX_WORKING = ['• Working (12s • esc to interrupt)', '', '› Ask Codex to do anything'].join('\n')
 const CODEX_WORKING_NEXT_TICK = ['• Working (13s • esc to interrupt)', '', '› Ask Codex to do anything'].join('\n')
 
 describe('normalizeVolatileScreenText', () => {
@@ -52,6 +52,18 @@ describe('normalizeVolatileScreenText', () => {
 })
 
 describe('ScreenFrameGate', () => {
+  it.each([
+    ['❯ wait 5s', '❯ wait 6s'],
+    ['❯ budget 100 tokens', '❯ budget 200 tokens'],
+    ['❯ /rc connecting…', '❯ /rc'],
+    ['result took 5s', 'result took 6s'],
+    ['❯ draft', '❯ draft '],
+    ['───\n❯ paste\n✻ Working… (5s)\n───', '───\n❯ paste\n✽ Working… (6s)\n───'],
+  ])('forwards real content changes: %s', (before, after) => {
+    const gate = new ScreenFrameGate()
+    gate.shouldEmit('s1', { plain: before, recent: before })
+    expect(gate.shouldEmit('s1', { plain: after, recent: after })).toBe(true)
+  })
   it('emits the first frame and drops the spinner ticks that follow', () => {
     const gate = new ScreenFrameGate()
     expect(gate.shouldEmit('s1', { plain: CLAUDE_THINKING, recent: CLAUDE_THINKING })).toBe(true)

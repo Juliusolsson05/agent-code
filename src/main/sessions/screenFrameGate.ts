@@ -1,68 +1,31 @@
-// Screen-frame gate: drop repaints that differ only in volatile TUI chrome.
-//
-// WHY this exists (#746): `session:screen` is the highest-volume IPC channel
-// and almost all of it is redundant. One Claude session recorded 4,728
-// frames in 13 minutes (6 Hz, 8.3 KB each) and 99% of consecutive frames
-// differed only in the spinner line — the glyph rotating through ·✢✳✶✻✽,
-// the elapsed timer ticking, the token counter — or in the `/rc connecting…`
-// blink of the status line. Every one of those frames was cloned through the
-// coalescer, sent to the renderer (a new runtime object, a workspace
-// re-render), forwarded to the remote client and JSON-stringified by the
-// session recorder. The headless terminal already gates on EXACT equality
-// of the plain text, which by construction never fires while a spinner
-// animates.
-//
-// WHY normalize-and-compare rather than a time throttle: a throttle still
-// emits N frames per second of pure spinner for as long as an agent thinks;
-// this emits zero, and still passes a composer keystroke or a new output
-// line within the same 100 ms tick, because anything outside the volatile
-// shapes changes the normalized text.
-//
-// WHY the emitted frame is the RAW one: normalization is only the
-// comparison key. Consumers keep seeing the real spinner glyph and timer on
-// every frame that carries a real change, so the debug panel and remote
-// client are never shown a rewritten screen.
-//
-// WHY the gate sits at the manager's re-emit and not in the providers or
-// the headless package: the manager is the one point feeding the forwarder
-// (renderer IPC), the remote server and the recorder, and everything that
-// must see every raw frame — condition parsers, composer-ready detection,
-// the prompt gate — runs in the headless package or the provider session,
-// i.e. BEFORE the manager. `lastScreenSnapshot` (MCP/debug readers) is
-// still updated from the raw frame by the caller.
-//
-// WHY these shapes and no more: each rule is backed by a recorded
-// consecutive-frame diff (session-recordings, 2026-09-03). Adding a rule
-// for text that is not demonstrably volatile would hide real changes; the
-// cost of a missing rule is one extra emitted frame, which is the status
-// quo.
-
-// The glyph cycle the headless ScreenParser documents (it also lists ✺).
-const CLAUDE_SPINNER_GLYPHS = '·✢✳✶✻✽✺'
-const CODEX_BRAILLE_GLYPHS = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
-const SPINNER_LINE_START = new RegExp(`^(\\s*)[${CLAUDE_SPINNER_GLYPHS}${CODEX_BRAILLE_GLYPHS}](?=\\s|$)`)
-// `5s`, `12s`, `1m 9s`, `2h 3m 4s` — the elapsed counters every TUI spinner
-// carries. Word-bounded so `k8s`, `s3`, hex and version strings survive.
-// Static durations in transcript text (`took 3s`) are rewritten too; that
-// is harmless for the comparison because static text cannot produce a
-// timer-only diff, and the emitted frame is never the rewritten one.
-const ELAPSED_TIMER = /\b(?:\d+h\s*)?(?:\d+m\s*)?\d+s\b/g
-// `↓ 1.2k tokens`, `↑ 340 tokens`, `(2.3k tokens)`.
+// Comparison-only normalization. Never rewrite arbitrary durations, counts or
+// /rc strings: those can be real composer edits, command arguments or output.
+// Global replacements made "wait 5s" and "wait 6s" equivalent (#53). Unknown
+// chrome costs a full frame; it must never broaden the fast path to content.
+const CLAUDE_STATUS = /^(\s*)[·✢✳✶✻✽✺] ([A-Za-z][A-Za-z' -]*…) \(((?:\d+h\s*)?(?:\d+m\s*)?\d+s)((?: · [↑↓] \d+(?:\.\d+)?k? tokens)?(?: · thinking…)?)\)[ \t]*$/
+const CODEX_STATUS = /^(\s*)[•⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Working \((?:\d+h\s*)?(?:\d+m\s*)?\d+s • esc to interrupt\)[ \t]*$/
 const TOKEN_COUNTER = /\b\d+(?:\.\d+)?k?\s+tokens\b/g
-// The remote-control status blinks "connecting…" on and off every frame.
-const RC_CONNECTING = /\/rc connecting…/g
-const TRAILING_WHITESPACE = /[ \t]+$/gm
+const RC_FOOTER = /^ {2}⏵⏵ bypass permissions on \(shift\+tab to cycle\).*\/rc(?: connecting…)?[ \t]*$/
 
 export function normalizeVolatileScreenText(text: string): string {
-  if (text.length === 0) return text
-  return text
-    .split('\n')
-    .map(line => line.replace(SPINNER_LINE_START, '$1⋯'))
-    .join('\n')
-    .replace(ELAPSED_TIMER, 'Ns')
-    .replace(TOKEN_COUNTER, 'N tokens')
-    .replace(RC_CONNECTING, '/rc')
-    .replace(TRAILING_WHITESPACE, '')
+  let insideComposer = false
+  return text.split('\n').map(line => {
+    // Claude's multiline composer is bounded by horizontal rules. Even a
+    // pasted exact status signature inside that region is user content. Other
+    // divider layouts may conservatively disable caching, which is harmless.
+    if (/^\s*─{3,}\s*$/.test(line)) {
+      insideComposer = !insideComposer
+      return line
+    }
+    if (insideComposer) return line
+    const claude = CLAUDE_STATUS.exec(line)
+    if (claude) return claude[1] + '⋯ ' + claude[2] + ' (Ns' + claude[4]!.replace(TOKEN_COUNTER, 'N tokens') + ')'
+    const codex = CODEX_STATUS.exec(line)
+    if (codex) return codex[1] + '⋯ Working (Ns • esc to interrupt)'
+    if (RC_FOOTER.test(line)) return line.replace(/\/rc connecting…/, '/rc').trimEnd()
+    // Do not trim drafts or normalize arbitrary bullet-prefixed output.
+    return line
+  }).join('\n')
 }
 
 export type GatedScreenFrame = {

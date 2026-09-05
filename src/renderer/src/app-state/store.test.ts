@@ -170,3 +170,24 @@ describe('palette sub-mode', () => {
     expect(shouldClose).toBe(true)
   })
 })
+
+describe('provider switch picker intent', () => {
+  beforeEach(() => {
+    vi.resetModules()
+    vi.stubGlobal('localStorage', createStorageMock())
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('captures and clears the exact command-target session', async () => {
+    const { useAppStore } = await import('@renderer/app-state/store')
+
+    useAppStore.getState().openProviderSwitchPicker('dispatch-agent')
+    expect(useAppStore.getState().providerSwitchPickerSessionId).toBe('dispatch-agent')
+
+    useAppStore.getState().closeProviderSwitchPicker()
+    expect(useAppStore.getState().providerSwitchPickerSessionId).toBeNull()
+  })
+})
