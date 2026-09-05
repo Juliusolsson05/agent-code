@@ -15,6 +15,8 @@ import { performance } from 'perf_hooks'
 import { SessionManager } from '@main/sessionManager.js'
 import { createControlHost } from '@main/control/createControlHost.js'
 import { sessionHistoryControlCapabilities } from '@main/sessions/control.js'
+import { conditionBackendCapabilities } from '@main/sessions/conditionControl.js'
+import { windowLifecycleControlCapabilities } from '@main/window/lifecycleControl.js'
 import { installSessionShutdownGate } from '@main/sessionShutdownGate.js'
 import { LspManager } from '@main/lspManager.js'
 import { compactAllGhostLogs, GhostJournalRegistry } from '@main/ghostJournal.js'
@@ -947,7 +949,7 @@ async function startApp(): Promise<void> {
     stop: () => externalHost.stop(), copy: text => clipboard.writeText(text),
   })
   const controlHost = createControlHost({ getBrowserWindow, windowIdFor, listWindowIds }, join(STATE_DIR, 'control-history'), [
-    ...sessionHistoryControlCapabilities(), ...externalSettings.capabilities,
+    ...sessionHistoryControlCapabilities(), ...conditionBackendCapabilities(manager), ...windowLifecycleControlCapabilities(), ...externalSettings.capabilities,
   ])
   externalHost = new ExternalControlMcpHost(controlHost.forCaller({ kind: 'external', id: 'agent-code-control' }))
   await externalSettings.initialize()

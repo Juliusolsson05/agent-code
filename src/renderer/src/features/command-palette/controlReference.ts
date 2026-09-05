@@ -16,7 +16,7 @@ export const controlReference = [
       "finish any opened dialog."
     ],
     "outcome": "The picker invokes the selected command or hands off to its interactive surface.",
-    "cautions": "Opening or selecting a row is not the same as submitting it. Contextual admission can refuse a listed command.",
+    "cautions": "Opening or selecting a row is not the same as submitting it. Contextual admission can refuse a listed command. commands.run uses that same admission and can require the observed selected session; dispatcher completion does not imply a dialog or background task completed.",
     "commandIds": [
       "open-command-palette"
     ]

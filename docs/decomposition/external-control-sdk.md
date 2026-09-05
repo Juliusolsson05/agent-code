@@ -532,6 +532,29 @@ visible instead of inventing provider recordings to fill a test-count target.
 
 ### Stage 8 — Tier B operations through the same SDK
 
+First control slices implemented (2026-09-05): contextual command dispatch,
+revision-checked draft reads/edits, backend-authoritative advertised condition
+actions, explicit project layout and Dispatch row/lane operations, editor buffer
+inventory/navigation, and window create/focus. These do not complete Stage 8;
+remaining lifecycle/provider/history/terminal slices still follow this gate.
+
+The command host mounts lazily and rejects stale selection or a competing native
+invocation. Draft integration uses the real composer setters and persistence
+notification. Condition reconciliation is confined to the main-owned adapter:
+renderer metadata proves scope; the manager supplies current backend generation
+and action state; validation and dispatch have no intervening await. No arbitrary
+condition payload or guessed key sequence is accepted. Grid shape passes explicit
+source-row identity to the existing owner rather than rebuilding its invariants.
+
+Evidence: the real composer hooks and dispatcher were exercised through React;
+the existing persisted `dispatch-global-d23` workspace drove layout edits. The
+condition test uses the recorded Claude 2.1.251 screen preserved by the pinned
+headless parser test (debug bundle `2026-08-30T23-51-06-471-9bd68e14`), copied
+verbatim with its already-neutralized path into
+`testing/fixtures/external-control/claude-trust-2.1.251.txt`. Its real parser and
+condition module produce the advertised actions. This verifies semantic trust
+dispatch and stale generation/dialog refusal, not every provider's live dialog.
+
 - **Produces:** implemented SDK methods/adapters and MCP wrappers for lifecycle,
   provider switching, conditions, Dispatch/layout, terminal I/O, history/rewind,
   drafts, and editor navigation, as listed in the product plan.

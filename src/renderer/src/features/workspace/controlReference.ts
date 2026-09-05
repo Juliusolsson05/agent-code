@@ -41,7 +41,7 @@ export const controlReference = [
       "pin frequently used sessions."
     ],
     "outcome": "Each lane shows its selected session; mirrored lanes share the same session.",
-    "cautions": "Removing a lane and closing its agent are separate actions. Empty lanes stay empty until selected.",
+    "cautions": "Removing a lane and closing its agent are separate actions. Empty lanes stay empty until selected. layout.read returns the revision required by dispatch.configure, layout.adjust and tabs.reorder. Grid edits carry explicit sourceRow identities to preserve each retained row's agents and project filters.",
     "commandIds": [
       "dispatch-mode",
       "global-dispatch",

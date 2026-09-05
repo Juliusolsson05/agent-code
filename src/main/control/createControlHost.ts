@@ -8,6 +8,7 @@ import {
 } from '@control-sdk'
 import { ControlRendererBridge } from './rendererBridge'
 import { windowControlCapabilities } from '@main/window/control'
+import { focusWindow } from '@main/window/focusWindow'
 import { FileControlHistory } from './history/FileControlHistory'
 import { historyCapabilities } from './history/control'
 import { globalControlCapabilities, type ObserveWindows } from './globalCapabilities'
@@ -44,17 +45,7 @@ export function createControlHost(windowAccess: {
       if (owner.kind !== 'window') return
       const window = getBrowserWindow(owner.windowId)
       if (!window || window.isDestroyed()) throw new Error('Target window disappeared')
-      if (window.isMinimized()) window.restore()
-      window.show()
-      window.focus()
-      if (window.isFocused()) return
-      await new Promise<void>((resolve, reject) => {
-        const cleanup = () => { clearTimeout(timeout); window.removeListener('focus', focused) }
-        const focused = () => { cleanup(); resolve() }
-        const timeout = setTimeout(() => { cleanup(); reject(new Error('Window focus was not acknowledged')) }, 2500)
-        window.once('focus', focused)
-        if (window.isFocused()) focused()
-      })
+      await focusWindow(window)
     },
     dispatch: (request, context) => registry.invoke(request, context) })
   const bridge = new ControlRendererBridge((windowId, message) => {

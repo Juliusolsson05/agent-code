@@ -6,6 +6,10 @@ import {
 } from '@control-sdk'
 import { workspaceControlCapabilities } from '@renderer/workspace/control'
 import { agentControlCapabilities } from '@renderer/workspace/control/agents'
+import { draftControlCapabilities } from '@renderer/workspace/control/drafts'
+import { conditionControlCapabilities } from '@renderer/workspace/control/conditions'
+import { layoutControlCapabilities } from '@renderer/workspace/control/layout'
+import { editorControlCapabilities } from '@renderer/features/global-editor/control'
 import { commandControlCapabilities } from '@renderer/features/command-palette/control'
 import { keybindingControlCapabilities } from '@renderer/features/command-keybindings/control'
 import { createAgentReadControl } from '@renderer/features/feed/controlRead/control'
@@ -64,6 +68,10 @@ export function useControlRegistration(workspace: Workspace): void {
     void registerRendererHost([
       ...workspaceControlCapabilities(() => current.current),
       ...agentControlCapabilities(() => current.current),
+      ...draftControlCapabilities(() => current.current),
+      ...conditionControlCapabilities(),
+      ...layoutControlCapabilities(() => current.current),
+      ...editorControlCapabilities(),
       ...commandControlCapabilities(),
       ...keybindingControlCapabilities(),
       ...documentationCapabilities(),

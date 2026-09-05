@@ -65,6 +65,13 @@ unbound, fixed and contextual interactions, including mouse controls. Use the
 reported binding and context instead of guessing a shortcut. A catalog entry is
 reference information, not proof that the command is currently available.
 
+`ac_commands_run` invokes an exact catalog command through the app's contextual
+dispatcher. Prefer dedicated tools when available. Supply `expectedSessionId`
+for an agent command so a changed selection is rejected. `dispatch: "ran"` means
+the dispatcher returned; finish any dialog and verify background work separately.
+It acts in the chosen window's selected context. Use `ac_app_window_focus` before
+a computer-use handoff when that window needs to become foreground.
+
 `ac_ui_command_picker_open` opens the real picker with a query and optional
 `commandId`. It reports the rendered selection and does not execute it. If
 `requestedSelectionFound` is false, inspect the picker and revise the route; do
@@ -74,12 +81,28 @@ with computer use, then observe the resulting state.
 If another surface owns input, inspect it before continuing. A screenshot or
 selection made in one window cannot justify keystrokes in another.
 
+Use `ac_layout_read` before layout or Dispatch edits and refresh its revision
+after each change. Lane and row indices are local to that revision. When changing
+Dispatch row structure, retain each row's `sourceRow` identity; use null only for
+a new empty row. Removing a lane does not close its agent. `ac_editor_buffers`
+shows unsaved/conflicting buffers; `ac_editor_open` preserves those edits.
+
 ## Prompt agents and read progress
 
 Use `ac_agents_prompt` with the exact session and the user's intended prompt.
 A successful response confirms provider acceptance, which may be a queue or
 transport acknowledgment. It does not mean the task finished. The tool preserves
 the composer's draft; do not also click Send for the same prompt.
+
+To edit unsent text, read `ac_agents_draft_get` and supply its revision to
+`ac_agents_draft_set`. Replace preserves attachments; clear removes them; undo
+restores text only. Draft editing never submits a prompt.
+
+Use `ac_agents_conditions_read` to inspect a blocking provider condition. Reply
+only with an advertised action ID and its current revision using
+`ac_agents_conditions_reply`, within the user's authorization. Read again after
+the action. Use the actual UI for custom answers absent from the action list;
+do not synthesize keystrokes from a remembered dialog layout.
 
 For reads, `ac_agents_read` defaults to actual user prompts and all visible
 assistant prose, including intermediate updates. Select depth and range separately:

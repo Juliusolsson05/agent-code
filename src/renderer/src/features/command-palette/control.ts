@@ -1,3 +1,5 @@
+import { commandExecutionRequests, CommandExecutionBusy, CommandExecutionTimeout } from './commandExecutionRequests'
+import { commandTargetSessionIdForState } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import { z } from 'zod'
 import { ControlError, defineCapability, pageInput, pageSchema, paginate } from '@control-sdk'
 import { builtInCommandCatalog } from './catalog'
@@ -41,6 +43,29 @@ export function commandReference() {
 
 export function commandControlCapabilities() {
   return [
+    defineCapability({
+      id: 'commands.run', title: 'Run an app command', execution: 'window', effect: 'mutation', completion: 'accepted',
+      description: 'Invoke an exact command through the same contextual dispatcher as the menu and shortcuts. Use a dedicated tool when available; this route operates on the selected context in the chosen window. Pass expectedSessionId for agent-specific commands to reject selection changes. A ran result means the command dispatcher returned; dialogs, background tasks and provider work may still be pending. Observe the app afterward. Hidden commands remain callable when applicable; blocking surfaces are respected.',
+      input: z.object({ commandId: z.string().describe('Exact ID from commands.list, not the MCP tool name or command title.'),
+        expectedSessionId: z.string().optional().describe('For an agent-specific command, the selected agent you observed; rejects another agent becoming selected before dispatch.') }).strict(),
+      output: z.object({ commandId: z.string(), dispatch: z.literal('ran'), selectedSessionId: z.string().nullable(), commandPickerOpen: z.boolean(), settingsOpen: z.boolean() }),
+      handler: async input => {
+        if (!builtInCommandCatalog.some(command => command.id === input.commandId)) throw new ControlError('unavailable', 'Unknown command; search commands.list')
+        try {
+          const result = await commandExecutionRequests.request(input)
+          if (result.status !== 'ran') throw new ControlError(result.status === 'failed' ? 'failed' : 'unavailable',
+            result.status === 'unavailable' ? result.reason : result.status === 'failed' ? String(result.error) : `Command ${result.status}; inspect the current UI`,
+            result.status === 'failed' ? 'unknown' : 'not_started')
+          const store = useAppStore.getState()
+          return { commandId: result.id, dispatch: 'ran' as const, selectedSessionId: commandTargetSessionIdForState(store.workspaceState),
+            commandPickerOpen: store.commandPaletteOpen, settingsOpen: store.settingsPageOpen }
+        } catch (error) {
+          if (error instanceof CommandExecutionBusy) throw new ControlError('unavailable', error.message)
+          if (error instanceof CommandExecutionTimeout) throw new ControlError('unavailable', error.message, error.started ? 'unknown' : 'not_started')
+          throw error
+        }
+      },
+    }),
     defineCapability({
       id: 'ui.commandPickerOpen', title: 'Open the command picker', execution: 'window', effect: 'ui',
       description: 'Open the real command picker with a query and optional stable command selection. Waits for rendered acknowledgement; never presses Enter. Hidden/inapplicable selections are reported as not found.',
