@@ -2,6 +2,22 @@
 
 Fixes #768. Refs #103, #390, #745, #749, #760.
 
+## Expanded evidence and scope
+
+The 2026-09-04 follow-up trace (25.3 minutes) contained 5,369 feed-debug
+appends, up to 656 ms of elapsed IPC/write latency per append. Address #748
+in a separate implementation commit: flush from the latest runtime refs on a
+one-second cadence, preserve the existing one-in-flight and durable cursor
+rules, retry on the next tick after failure, and best-effort flush on teardown.
+Do not immediately drain on completion or reschedule the timer on every render.
+This accepts up to one second of additional diagnostic loss on abrupt crash;
+transcripts and ghost recovery writes are independent and unchanged.
+
+Also address the disabled-telemetry sampling part of #767: return before
+traversal/stringification when performance collection is disabled. Cap each
+collection at exactly 64 samples (the current floor-step loop can take 127).
+Verify both disabled zero-work and enabled bounded-sampling contracts.
+
 ## Problem
 
 A live 2026-09-04 run had one Claude raw terminal with unusably low frame rate
@@ -64,6 +80,15 @@ to adopt later.
   from the PTY hot path.
 
 ## Verification
+
+Generation slices (shared implementations and final signatures stay parent-owned):
+
+- Mounted-host coverage: `AgentTerminalLeaf.dimensionOwnership.renderer.test.tsx`
+  exercises keyed PTY delivery across simultaneous agent/inline/shell hosts,
+  replay/input preservation, and cleanup.
+- GPU lifecycle coverage: `xtermWebglRenderer.test.ts` exercises successful
+  activation, disposal, context loss, failed activation, and imports resolving
+  after teardown against `attachXtermWebglRenderer`'s existing contract.
 
 - Unit tests prove one underlying channel subscription serves many session
   handlers, routes only to the matching id, removes per-session closures, and
