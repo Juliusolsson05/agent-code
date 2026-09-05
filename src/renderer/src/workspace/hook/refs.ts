@@ -19,10 +19,11 @@ import type { ConfigurableBuiltInMcpDomain } from '@mcp/shared/types'
 // need 15 separate useRef lines. Ref identity is stable across renders
 // (useRef contract), so putting them together doesn't cost anything.
 //
-// NOTE: this hook updates `stateRef.current = state` style mirrors in
-// the caller's render body (not here) — the mirrors are per-render
-// writes, not per-action. That's what lets IPC callbacks close over
-// stale React state and still read the live value via .current.
+// Layout/settings mirrors are refreshed in the caller's render body. Runtime
+// state additionally has a synchronous store subscription there: runtime-only
+// updates no longer render the controller, but IPC/actions must see them before
+// React commits any subscribed pane. Keep that subscription and its cleanup
+// coupled to this identity-stable ref bundle.
 // -----------------------------------------------------------------------------
 
 export type WorkspaceRefs = {

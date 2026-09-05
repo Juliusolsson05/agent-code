@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { useAppStore } from '@renderer/app-state/hooks'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 
@@ -14,6 +15,11 @@ import type { Workspace } from '@renderer/workspace/workspaceStore'
 export function useRenderedLeaseHygiene(workspace: Workspace): void {
   const agentViewMode = useAppStore(state => state.settings.agentViewMode)
   const settingsPageOpen = useAppStore(state => state.settingsPageOpen)
+  // The controller no longer renders on every runtime replacement. A picker
+  // acquired while its surface is hidden must still be cleared, but ordinary
+  // terminal/text/debug changes cannot invalidate this cross-cutting guard.
+  const leaseSignals = useAppStore(useShallow(state => Object.entries(state.workspaceRuntimes)
+    .flatMap(([id, runtime]) => [id, runtime.assistantPicker, runtime.codeBlockPicker, runtime.renderedViewLeases])))
 
   useEffect(() => {
     if (agentViewMode !== 'terminal') return
@@ -31,7 +37,7 @@ export function useRenderedLeaseHygiene(workspace: Workspace): void {
       if (runtime?.codeBlockPicker) workspace.setCodeBlockPicker(sessionId, null)
       workspace.releaseAllRenderedViewLeases(sessionId)
     }
-  }, [agentViewMode, workspace])
+  }, [agentViewMode, workspace, leaseSignals])
 
   useEffect(() => {
     // NOTE the field is `readerMode`, not `reader` (cross-app audit V1): the
@@ -58,5 +64,5 @@ export function useRenderedLeaseHygiene(workspace: Workspace): void {
       workspace.releaseRenderedViewLease(sessionId, 'copy-assistant-message')
       workspace.releaseRenderedViewLease(sessionId, 'copy-code-block')
     }
-  }, [settingsPageOpen, workspace])
+  }, [settingsPageOpen, workspace, leaseSignals])
 }

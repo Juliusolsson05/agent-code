@@ -24,6 +24,7 @@ vi.mock('@renderer/app-state/hooks', () => ({
 
 vi.mock('@renderer/workspace/WorkspaceContext', () => ({
   useWorkspaceContext: () => harness.workspace,
+  useWorkspaceLayoutContext: () => harness.workspace,
 }))
 
 vi.mock('@renderer/features/workspace/surfaces/usePlacementOverlay', () => ({
@@ -95,6 +96,7 @@ describe('terminal dimension ownership across main-surface takeovers', () => {
       root: { type: 'leaf', sessionId: 'session-1' },
     }
     harness.appState = {
+      workspaceRuntimes: {},
       debugPanelOpen: true,
       feedDebugPanelOpen: false,
       proxyDebugPanelOpen: false,

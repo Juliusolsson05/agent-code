@@ -1,4 +1,6 @@
 import { shortenCwd } from '@renderer/workspace/tile-tree/TileLeaf/labels'
+import { useAppStore } from '@renderer/app-state/hooks'
+import { useShallow } from 'zustand/react/shallow'
 import { PaneHeaderColorFlag } from '@renderer/workspace/tile-tree/TileLeaf/PaneHeaderColorFlag'
 import type { GridRelatedAgentTab } from '@renderer/workspace/gridRelatedAgents'
 import { dispatchAttentionLabelFromConditions } from '@renderer/workspace/conditions/selectors'
@@ -54,6 +56,14 @@ export function PaneHeader({
   ownerSessionId?: string
   onSelectRelatedSession?: (sessionId: string) => void
 }) {
+  // Related agents can change without rerendering this session. Only the two
+  // painted status values are dependencies; subscribing to their entire
+  // runtimes would couple every related transcript delta back to this header.
+  const relatedStatus = useAppStore(useShallow(state => relatedAgentTabs.flatMap(tab => {
+    const runtime = state.workspaceRuntimes[tab.sessionId] ?? runtimes?.[tab.sessionId]
+    return [runtime?.sessionStatus === 'running',
+      dispatchAttentionLabelFromConditions(runtime?.conditions ?? null) ?? (runtime?.processError ? 'ERROR' : null)]
+  })))
   return (
     <div className="border-b border-border bg-surface text-muted font-code select-none">
       <div
@@ -115,12 +125,10 @@ export function PaneHeader({
       <AgentTitleHeader title={agentTitle} />
       {relatedAgentTabs.length > 0 && (
         <div className="flex items-center gap-1 overflow-x-auto border-t border-border/70 px-2 py-1 text-[10px]">
-          {relatedAgentTabs.map(tab => {
+          {relatedAgentTabs.map((tab, index) => {
             const active = tab.sessionId === selectedRelatedSessionId
-            const runtime = runtimes?.[tab.sessionId]
-            const running = runtime?.sessionStatus === 'running'
-            const attention = dispatchAttentionLabelFromConditions(runtime?.conditions ?? null)
-              ?? (runtime?.processError ? 'ERROR' : null)
+            const running = relatedStatus[index * 2]
+            const attention = relatedStatus[index * 2 + 1]
             const title = `${tab.relation}: ${tab.title}${tab.placement === 'detached' ? ' (detached)' : ''}`
             return (
               <button

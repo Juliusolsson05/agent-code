@@ -810,7 +810,6 @@ export function TileLeaf({
         isSessionLive={isSessionLive}
         relatedAgentTabs={relatedAgentTabs}
         selectedRelatedSessionId={selectedRelatedSessionId ?? sessionId}
-        runtimes={workspace.runtimes}
         ownerSessionId={ownerSessionId ?? sessionId}
         onSelectRelatedSession={onSelectRelatedSession}
       />
