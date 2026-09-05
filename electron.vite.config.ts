@@ -42,6 +42,8 @@ const headlessAlias = [
 // will green-light an import the runtime can't load. Keep the alias
 // names and targets in sync across all three configs.
 const projectAlias = {
+  '@control-sdk/host': resolve(__dirname, 'src/control-sdk/host.ts'),
+  '@control-sdk': resolve(__dirname, 'src/control-sdk/index.ts'),
   '@main': resolve(__dirname, 'src/main'),
   '@preload': resolve(__dirname, 'src/preload'),
   '@renderer': resolve(__dirname, 'src/renderer/src'),

@@ -28,6 +28,8 @@ import { defineConfig } from 'vitest/config'
 const root = import.meta.dirname
 
 export const alias = [
+  { find: '@control-sdk/host', replacement: resolve(root, 'src/control-sdk/host.ts') },
+  { find: '@control-sdk', replacement: resolve(root, 'src/control-sdk/index.ts') },
   { find: /^claude-code-headless\/(.+)$/, replacement: `${resolve(root, 'packages/claude-code-headless/src')}/$1` },
   { find: 'claude-code-headless', replacement: resolve(root, 'packages/claude-code-headless/src/index.ts') },
   { find: /^codex-headless\/(.+)$/, replacement: `${resolve(root, 'packages/codex-headless/src')}/$1` },

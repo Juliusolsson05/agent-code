@@ -35,6 +35,8 @@
       "agent-transcript-parser": ["./packages/agent-transcript-parser/src/index.ts"],
       "agent-transcript-parser/*": ["./packages/agent-transcript-parser/src/*"],
       "workflow-mcp/state": ["./packages/workflow-mcp/src/state.ts"],
+      "@control-sdk": ["./src/control-sdk/index.ts"],
+      "@control-sdk/host": ["./src/control-sdk/host.ts"],
       "@main/*": ["./src/main/*"],
       "@preload/*": ["./src/preload/*"],
       "@renderer/*": ["./src/renderer/src/*"],
@@ -44,6 +46,7 @@
     }
   },
   "include": [
+    "src/control-sdk/**/*",
     "src/renderer/**/*",
     // Renderer specs use the DOM matchers installed by the Vitest setup module. The setup lived
     // outside every web include glob, so runtime tests passed while the authoritative web checker

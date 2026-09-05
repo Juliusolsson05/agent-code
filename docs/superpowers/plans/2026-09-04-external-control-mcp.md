@@ -1,9 +1,9 @@
-Status: Proposed — planning only; no runtime implementation has started.
+Status: Approved — implementation in progress. Tracking issue: #793.
 
 Architecture and execution gates:
 [internal control SDK decomposition](../../decomposition/external-control-sdk.md).
 This product plan defines scope; the decomposition defines implementation order
-and the feature-registration boundary, pending explicit approval.
+and the approved feature-registration boundary.
 
 # External control MCP and command discovery
 
@@ -56,8 +56,8 @@ AI Workspace, transcript, and Workflow MCP domains retain their scopes.
 - Investigated base: `4c641f68c86b7c17ad04e1f3827b98bd581c6693` on `origin/main`.
 - Worktree/branch: `agent-code-external-control-mcp` / `feat/external-control-mcp`.
 - This document is the first artifact committed on that feature branch.
-- Search for and create/link the feature Issue before production implementation.
-  The Issue will record motivation, agreed scope, and acceptance scenarios.
+- Feature issue: [#793](https://github.com/Juliusolsson05/agent-code/issues/793),
+  recording motivation, agreed scope, and acceptance scenarios.
 - Implementation PRs reference that Issue. A plan commit is not evidence that
   the product exists; do not close the Issue or mark this plan complete for it.
 - No app configuration, MCP installation, provider processes, or user workspace

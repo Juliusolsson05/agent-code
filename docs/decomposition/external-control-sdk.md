@@ -1,11 +1,11 @@
 # Internal control SDK and MCP isolation
 
-Status: Proposed — awaiting explicit approval of this decomposition. No
-implementation code has been written. Stage 0 source inventory is collected.
+Status: Approved by the user on 2026-09-04. Implementation in progress.
+Stages 0–1 verified; Stage 2 is next.
 
 Product scope: [external control plan](../superpowers/plans/2026-09-04-external-control-mcp.md).
 Source evidence: [source inventory](evidence/external-control/source-inventory.json).
-Issue: to be linked when the feature record is created.
+Issue: [#793](https://github.com/Juliusolsson05/agent-code/issues/793).
 
 ## Why this decomposition applies
 
@@ -266,7 +266,7 @@ decomposition. Approval of this artifact authorizes progressing through verified
 stages without asking again after each stage. A changed boundary or unresolved
 semantic contradiction triggers revision, not another local conditional.
 
-### Stage 0 — source and ownership census (collected, review pending)
+### Stage 0 — source and ownership census (verified)
 
 - **Produces:** `docs/decomposition/evidence/external-control/source-inventory.json`
   and the A/ownership tables in this document, tied to a source commit.
@@ -278,7 +278,19 @@ semantic contradiction triggers revision, not another local conditional.
 - **Reality check:** actual catalog, resolver, navigation, window/session, feed,
   bridge, launch, and transcript source. It is not recorded usage or test evidence.
 
-### Stage 1 — registration contracts and enforceable dependency boundary
+### Stage 1 — registration contracts and enforceable dependency boundary (verified)
+
+Implementation: `src/control-sdk/` contains typed capability definitions,
+owner-scoped registry, invocation client, explicit feature/host entry points,
+and JSON descriptors/results. `tsconfig.control-sdk.json` compiles the production
+SDK with no Node, DOM, React, or Electron ambient types; the normal typecheck
+runs this gate. Colocated import-boundary tests scan resolved source imports.
+Verification: neutral compilation passed; 9 focused checks passed, covering
+pre-dispatch validation, trusted caller identity, window ambiguity, duplicate
+batch registration, stale/in-flight generations, uncertain failures, catalog
+isolation, and import rules. These are deterministic contract probes, not
+recordings of production usage. The existing app uses UUID window identities,
+so the SDK preserves string window IDs rather than inventing Electron IDs.
 
 - **Produces:** minimal capability definition/registration/invocation contracts,
   typed results, a registry factory, and a resolved-import boundary check wired

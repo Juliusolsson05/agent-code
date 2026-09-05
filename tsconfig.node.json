@@ -45,6 +45,8 @@
       "workflow-mcp": ["./packages/workflow-mcp/src/index.ts"],
       "workflow-mcp/state": ["./packages/workflow-mcp/src/state.ts"],
       "workflow-mcp/worker": ["./packages/workflow-mcp/src/worker.ts"],
+      "@control-sdk": ["./src/control-sdk/index.ts"],
+      "@control-sdk/host": ["./src/control-sdk/host.ts"],
       "@main/*": ["./src/main/*"],
       "@preload/*": ["./src/preload/*"],
       "@renderer/*": ["./src/renderer/src/*"],
@@ -54,6 +56,7 @@
     }
   },
   "include": [
+    "src/control-sdk/**/*",
     "electron.vite.config.ts",
     "src/main/**/*",
     "src/preload/**/*",
