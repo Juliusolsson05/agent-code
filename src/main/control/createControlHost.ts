@@ -16,7 +16,7 @@ export function createControlHost(windowAccess: {
   getBrowserWindow(id: string): BrowserWindow | null
   windowIdFor(sender: WebContents): string | null
   listWindowIds(): string[]
-}, historyDirectory: string) {
+}, historyDirectory: string, additionalCapabilities: readonly RegisteredCapability[] = []) {
   // Inject the window adapter for isolated Electron trials. The production
   // adapter is the existing window registry, never an SDK-owned window store.
   const { getBrowserWindow, windowIdFor, listWindowIds } = windowAccess
@@ -76,7 +76,7 @@ export function createControlHost(windowAccess: {
       windowId, focused: getBrowserWindow(windowId)?.isFocused() ?? false,
       generation: windows.get(windowId)?.generation ?? null,
     })),
-  ), ...historyCapabilities(history), ...globalControlCapabilities(observeWindows)])
+  ), ...historyCapabilities(history), ...globalControlCapabilities(observeWindows), ...additionalCapabilities])
 
   ipcMain.handle('control:register', (event, raw: unknown) => {
     const windowId = senderWindow(event)

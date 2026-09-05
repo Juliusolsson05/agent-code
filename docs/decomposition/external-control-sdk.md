@@ -455,6 +455,31 @@ remains in stages 7/10; these checks do not claim provider tasks were run.
 
 ### Stage 6 — lightweight canonical agent reads
 
+**Status: verified and implemented.** `features/feed/controlRead/` is the only
+control consumer of the canonical adapter/ledger/feed bridge. `agents.read`
+exposes independent depth/range, frozen message pages, delta upserts and transient
+removals, status-only polling, and separate older-history cursors. Default prose
+includes visible intermediate assistant blocks and actual user prompts; queued
+prompt carriers and compact summaries cannot become user prompts.
+
+The main-owned `sessions/control.ts` adapts existing file-window readers and the
+supported OpenCode export operation as `transcripts.page`; it never wakes agents
+or populates UI runtime/scroll state. Exact file cursors validate inode, size and
+record hash, including records without UI markers. A deliberate same-size boundary
+rewrite exposed the existing reader's catch-to-empty fallback; strict control reads
+propagate failures while ordinary UI fallback policy remains unchanged.
+
+Evidence: `evidence/external-control/read-corpus.json` identifies three existing
+provider incident fixtures and hashes, with the OpenCode reconstruction gap stated.
+Focused checks cover UI-visible assistant-block parity, full-depth prose retention,
+lossless frozen message paging, Unicode boundaries, unchanged delta/replacement
+reset, no-IO status/no-wake cold reads, all cold Claude history across more than
+16 snapshots, repeatable archive cursors, and real-file position/rewrite probes.
+The fixtures are static real observations; live partial-to-committed behavior and
+native terminal visibility remain part of the stage 7 operator trial, not a claim
+that a synthetic provider-transition harness ran here.
+
+
 - **Produces:** one SDK agent-read service and `ConversationSlice` contract with
   conversation-default depth, independent range, payload continuations, and deltas.
 - **Verified by:** compare reads to real user/assistant records and the visible

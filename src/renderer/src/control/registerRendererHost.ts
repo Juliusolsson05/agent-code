@@ -8,6 +8,7 @@ import { workspaceControlCapabilities } from '@renderer/workspace/control'
 import { agentControlCapabilities } from '@renderer/workspace/control/agents'
 import { commandControlCapabilities } from '@renderer/features/command-palette/control'
 import { keybindingControlCapabilities } from '@renderer/features/command-keybindings/control'
+import { createAgentReadControl } from '@renderer/features/feed/controlRead/control'
 import { documentationCapabilities } from './documentation'
 import type { Workspace } from '@renderer/workspace/hook'
 
@@ -57,6 +58,7 @@ export function useControlRegistration(workspace: Workspace): void {
     // Optional desktop integration: the phone client and small renderer tests
     // have no control transport. Their ordinary UI must continue to work.
     if (!window.api?.controlRegister) return
+    const reads = createAgentReadControl()
     let stopped = false
     let dispose: (() => void) | undefined
     void registerRendererHost([
@@ -65,10 +67,11 @@ export function useControlRegistration(workspace: Workspace): void {
       ...commandControlCapabilities(),
       ...keybindingControlCapabilities(),
       ...documentationCapabilities(),
+      ...reads.capabilities,
     ]).then(cleanup => {
       if (stopped) cleanup()
       else dispose = cleanup
     }).catch(error => console.warn('[control] registration failed:', error))
-    return () => { stopped = true; dispose?.() }
+    return () => { stopped = true; dispose?.(); reads.dispose() }
   }, [])
 }

@@ -1,6 +1,7 @@
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
 import type { FileHandle } from 'fs/promises'
 import { open, stat } from 'fs/promises'
+import { createHash } from 'node:crypto'
 
 import { performanceService } from '@main/performance/PerformanceService.js'
 import { makeStringPool, internEntryFields } from '@main/sessions/internEntry.js'
@@ -372,6 +373,7 @@ async function readInitialTranscriptTail(
   filePath: string,
   limit: number,
   blockBytes: number = TAIL_BLOCK_BYTES,
+  strict = false,
 ): Promise<{
   bytes: number
   // Bytes read (and parsed) to assemble the window — proportional to the
@@ -387,14 +389,15 @@ async function readInitialTranscriptTail(
   entries: Record<string, unknown>[]
   offsets: number[]
 }> {
-  const size = await stat(filePath).then(s => s.size).catch(() => 0)
+  const size = await stat(filePath).then(s => s.size).catch(error => { if (strict) throw error; return 0 })
   const empty = { bytes: size, tailBytes: 0, parseErrors: 0, parsed: 0, entries: [], offsets: [] }
   if (size === 0 || limit <= 0) return empty
 
   let handle: FileHandle
   try {
     handle = await open(filePath, 'r')
-  } catch {
+  } catch (error) {
+    if (strict) throw error
     return empty
   }
   try {
@@ -438,7 +441,8 @@ async function readInitialTranscriptTail(
       entries: newestFirst.reverse(),
       offsets: offsetsNewestFirst.reverse(),
     }
-  } catch {
+  } catch (error) {
+    if (strict) throw error
     return empty
   } finally {
     await handle.close().catch(() => {})
@@ -463,7 +467,13 @@ type OlderWindowRequest = {
   beforeMarker: string
   beforeOffset?: number
   limit: number
+  // Control readers must also traverse records without a UI message marker.
+  // Their exact byte cursor carries this parsed-record digest; unlike the UI's
+  // recovery fallback, a changed anchor must explicitly invalidate that cursor.
+  beforeRecordHash?: string
 }
+
+export class HistoryCursorChangedError extends Error {}
 
 async function readOlderTranscriptWindow(
   filePath: string,
@@ -494,8 +504,11 @@ async function readOlderTranscriptWindow(
     entries: [],
     offsets: [],
   }
-  if (size === 0) return empty
-  const markerOf = params.kind === 'claude'
+  if (size === 0) {
+    if (params.beforeRecordHash) throw new HistoryCursorChangedError('Transcript cursor boundary is no longer readable')
+    return empty
+  }
+  const markerOf = params.beforeRecordHash ? (entry: Record<string, unknown>) => createHash('sha256').update(JSON.stringify(entry)).digest('hex') : params.kind === 'claude'
     ? extractClaudeHistoryMarker
     : extractCodexHistoryMarker
   const limit = Math.max(0, params.limit)
@@ -503,7 +516,8 @@ async function readOlderTranscriptWindow(
   let handle: FileHandle
   try {
     handle = await open(filePath, 'r')
-  } catch {
+  } catch (error) {
+    if (params.beforeRecordHash) throw error
     return empty
   }
   try {
@@ -516,7 +530,7 @@ async function readOlderTranscriptWindow(
 
     if (
       isValidOffset(params.beforeOffset, size) &&
-      (await anchorLineCarriesMarker(handle, params.beforeOffset, size, blockBytes, markerOf, params.beforeMarker))
+      (await anchorLineCarriesMarker(handle, params.beforeOffset, size, blockBytes, markerOf, params.beforeRecordHash ?? params.beforeMarker))
     ) {
       // Exact path: the cursor line is where the renderer says it is, so the
       // page is simply the records before that byte. Newest first, reversed
@@ -535,6 +549,8 @@ async function readOlderTranscriptWindow(
       kept.reverse()
       return finishWindow(size, tailBytes, parseErrors, parsed, true, 'offset', kept, limit)
     }
+
+    if (params.beforeRecordHash) throw new HistoryCursorChangedError('Transcript cursor no longer identifies the recorded boundary')
 
     // Marker-only path: the forward scan the loader always had, anchored on
     // the OLDEST occurrence of the marker. WHY forward and oldest, given
@@ -567,7 +583,8 @@ async function readOlderTranscriptWindow(
       return false
     })
     return finishWindow(size, tailBytes, parseErrors, parsed, found, found ? 'marker' : 'tail', kept, limit)
-  } catch {
+  } catch (error) {
+    if (params.beforeRecordHash) throw error
     return empty
   } finally {
     await handle.close().catch(() => {})
@@ -651,6 +668,7 @@ export async function loadOlderHistoryChunkFromFile(
       kind: params.kind,
       beforeMarker: params.beforeMarker,
       beforeOffset: params.beforeOffset,
+      beforeRecordHash: params.beforeRecordHash,
       limit: params.limit,
     })
     return finishOlderChunk(span, parsed, filePath)
@@ -719,13 +737,14 @@ export async function loadInitialHistoryChunk(
 export async function loadInitialHistoryChunkFromFile(
   filePath: string,
   limit: number,
+  strict = false,
 ): Promise<HistoryChunk> {
   const span = performanceService.span('historyLoader.loadInitialChunk', {
     limit,
     fromFile: true,
   })
   try {
-    const parsed = await readInitialTranscriptTail(filePath, limit)
+    const parsed = await readInitialTranscriptTail(filePath, limit, TAIL_BLOCK_BYTES, strict)
     return finishInitialChunk(span, parsed, limit, filePath)
   } catch (err) {
     span.fail(err)

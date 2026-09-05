@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -457,4 +458,27 @@ describe('readOlderTranscriptWindow', () => {
     expect(reached).toEqual([...Array.from({ length: 20 }, (_, i) => i), ...Array.from({ length: 30 }, (_, i) => 50 + i)])
     expect(pages).toBe(4)
   })
+})
+
+
+it('control cursors page records without UI markers and reject an edited boundary instead of falling back', async () => {
+  // This is a file-position fault probe. Record bodies are real checked-in
+  // provider data; the edit deliberately simulates replacement under a cursor.
+  const fixture = JSON.parse(readFileSync(new URL('../../../testing/fixtures/rendering-bundles/2026-07-07T13-17-48-452-5b19529f.json', import.meta.url), 'utf8'))
+  const records: Entry[] = fixture.input.entries
+  const file = join(root, 'real-records.jsonl')
+  writeFileSync(file, records.map(record => JSON.stringify(record)).join('\n') + '\n')
+  const tail = await loadInitialHistoryChunkFromFile(file, 12)
+  const hash = createHash('sha256').update(JSON.stringify(tail.entries[0])).digest('hex')
+  const request = { kind: 'claude' as const, beforeMarker: '', beforeOffset: tail.offsets![0], beforeRecordHash: hash, limit: 12 }
+  const previous = await loadOlderHistoryChunkFromFile(file, request)
+  expect(previous.entries).toEqual(records.slice(-24, -12))
+  const changed = readFileSync(file, 'utf8')
+  const offset = request.beforeOffset
+  const buffer = Buffer.from(changed)
+  // Same inode/size; only the exact boundary hash can detect this edit.
+  const at = buffer.indexOf(Buffer.from('"'), offset) + 1
+  buffer[at] = buffer[at] === 120 ? 121 : 120
+  writeFileSync(file, buffer)
+  await expect(loadOlderHistoryChunkFromFile(file, request)).rejects.toThrow('boundary')
 })

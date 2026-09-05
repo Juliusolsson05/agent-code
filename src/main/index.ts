@@ -12,6 +12,7 @@ import { performance } from 'perf_hooks'
 
 import { SessionManager } from '@main/sessionManager.js'
 import { createControlHost } from '@main/control/createControlHost.js'
+import { sessionHistoryControlCapabilities } from '@main/sessions/control.js'
 import { installSessionShutdownGate } from '@main/sessionShutdownGate.js'
 import { LspManager } from '@main/lspManager.js'
 import { compactAllGhostLogs, GhostJournalRegistry } from '@main/ghostJournal.js'
@@ -938,7 +939,7 @@ async function startApp(): Promise<void> {
     agentCodeConventionsService,
     workspaceFileStore,
   })
-  const controlHost = createControlHost({ getBrowserWindow, windowIdFor, listWindowIds }, join(STATE_DIR, 'control-history'))
+  const controlHost = createControlHost({ getBrowserWindow, windowIdFor, listWindowIds }, join(STATE_DIR, 'control-history'), sessionHistoryControlCapabilities())
   app.once('will-quit', () => controlHost.dispose())
   // Boot probe runs after the IPC is wired so its first `state` push
   // has a live subscriber to receive it on the renderer side.
