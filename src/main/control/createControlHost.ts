@@ -11,6 +11,7 @@ import { windowControlCapabilities } from '@main/window/control'
 import { focusWindow } from '@main/window/focusWindow'
 import { FileControlHistory } from './history/FileControlHistory'
 import { historyCapabilities } from './history/control'
+import { taskHistoryCapabilities } from './history/tasks'
 import { globalControlCapabilities, type ObserveWindows } from './globalCapabilities'
 
 export function createControlHost(windowAccess: {
@@ -71,7 +72,8 @@ export function createControlHost(windowAccess: {
       focused: getBrowserWindow(windowId)?.isFocused() ?? false,
       generation: windows.get(windowId)?.generation ?? null,
     })),
-  ), ...historyCapabilities(history), ...globalControlCapabilities(observeWindows), ...additionalCapabilities])
+  ), ...historyCapabilities(history), ...taskHistoryCapabilities(history, owner => registry.list().some(row => JSON.stringify(row.owner) === JSON.stringify(owner))),
+  ...globalControlCapabilities(observeWindows), ...additionalCapabilities])
 
   ipcMain.handle('control:register', (event, raw: unknown) => {
     const windowId = senderWindow(event)

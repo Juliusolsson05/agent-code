@@ -44,14 +44,14 @@ export function ExternalControlRow() {
     finally { setBusy(false) }
   }
   return <div className="flex flex-col gap-2 text-[12px]">
-    <div className="text-muted">{status ? status.running ? 'Running · all Agent Code windows' : status.enabled ? 'Enabled · connection needs attention' : 'Disabled' : 'Loading connection…'}</div>
+    <div className="text-muted">{status ? status.running ? 'Running · global Codex connection installed' : status.enabled ? 'Enabled · connection needs attention' : 'Disabled' : 'Loading connection…'}</div>
     <label className="flex items-center justify-between gap-2">Local port
       <input aria-label="External control port" type="number" min={1024} max={65535} value={port} disabled={busy}
         onChange={event => setPort(event.target.value)} className="w-24 rounded-control border border-border bg-canvas px-2 py-1" />
     </label>
     <div className="flex flex-wrap gap-2">
       <Button variant="outline" disabled={busy || !status} onClick={() => void configure(!status?.enabled)}>{status?.enabled ? 'Disable' : 'Enable'}</Button>
-      {status?.enabled && <Button variant="outline" disabled={busy} onClick={() => void configure(true)}>Apply port / retry</Button>}
+      {(status?.enabled || status?.error) && <Button variant="outline" disabled={busy} onClick={() => void configure(status?.enabled ?? false)}>Apply port / retry</Button>}
       {status?.running && <>
         <Button variant="outline" disabled={busy} onClick={() => void copy('codex')}>Copy Codex config</Button>
         <Button variant="outline" disabled={busy} onClick={() => void copy('json')}>Copy JSON config</Button>
@@ -59,7 +59,8 @@ export function ExternalControlRow() {
       </>}
     </div>
     {status?.url && <code className="break-all text-muted">{status.url}</code>}
-    <p className="text-muted">Connect your external assistant, then ask it to call <code>ac_app_describe</code> for the crash course and <code>ac_app_windows</code> to choose a window. Rotating the key requires copying a new configuration.</p>
+    <p className="text-muted">Enable to install the connection and operator skill globally for external Codex. Restart your external client after setup or key rotation, then call <code>ac_app_describe</code> for the crash course and <code>ac_app_windows</code> to choose a window. Agent Code updates its managed configuration automatically. Its own agents exclude this connection and skill.</p>
+    {status?.codex && <div className="break-all text-muted">Codex config: {status.codex.configPath}<br />Operator skill: {status.codex.skillPath}</div>}
     {(message || status?.error) && <div role="status" className="break-words text-muted">{status?.error ?? message}</div>}
   </div>
 }

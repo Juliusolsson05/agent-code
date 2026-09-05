@@ -1,4 +1,13 @@
-Status: Approved — implementation in progress. Tracking issue: #793.
+Status: Initial release implemented; verification and merge in progress. Tracking issue: #793.
+
+2026-09-05 delivery scope: the user requested merging the first working release
+with Settings-managed global Codex MCP and operator skill setup. Shipped coverage
+includes multi-window navigation, discovery and crash course, create/prompt/read,
+drafts, provider conditions, guarded commands, layout/Dispatch, editor open,
+terminal create/read/input, confirmed close with durable task results, and full
+invocation history. The broader lifecycle/provider-switch/rewind, bulk tasks,
+settings/template editing and workflow tool families below remain follow-up
+scope. Their existing UI and command routes remain available to computer use.
 
 Architecture and execution gates:
 [internal control SDK decomposition](../../decomposition/external-control-sdk.md).

@@ -35,7 +35,7 @@ export class ControlRendererBridge {
       timer.unref?.()
       this.pending.set(requestId, { windowId, generation, resolve, timer })
       try {
-        this.send(windowId, { request, context: { ...context, requestId } })
+        this.send(windowId, { request, context: { ...context, operationId: context.operationId ?? context.requestId, requestId } })
       } catch {
         this.finish(requestId, controlFailure('unavailable', 'Renderer transport closed', 'unknown'))
       }

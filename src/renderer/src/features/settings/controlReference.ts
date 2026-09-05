@@ -6,7 +6,7 @@ export const controlReference = [
   {
     "id": "settings",
     "title": "Settings, appearance and view behavior",
-    "purpose": "Configure appearance, workspace behavior, agent defaults, safety and input preferences.",
+    "purpose": "Configure appearance, workspace behavior, agent defaults, safety and input preferences. Settings → Agents → External operator MCP enables an app-managed global Codex connection and operator skill, disabled by default.",
     "ui": "Settings panel and its categories.",
     "prerequisites": "The relevant setting and its scope/apply/storage metadata.",
     "workflow": [
@@ -16,7 +16,7 @@ export const controlReference = [
       "verify current state."
     ],
     "outcome": "The setting takes effect according to its documented apply policy.",
-    "cautions": "Some settings affect new sessions; others can reload live sessions. Command visibility is presentation rather than permission.",
+    "cautions": "External setup updates the Codex config and Codex-only skill, preserving unrelated files; edited/unmanaged conflicts need attention. Restart the external client after setup or key rotation. Internal agents exclude both the operator MCP and skill. Some settings affect new sessions; others can reload live sessions. Command visibility is presentation rather than permission.",
     "commandIds": []
   },
   {

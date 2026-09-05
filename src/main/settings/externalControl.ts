@@ -15,6 +15,7 @@ export function createExternalControlSettings(directory: string, port: {
   start(port: number, token: string): Promise<number>
   stop(): Promise<void>
   copy(text: string): void
+  integration?: { configPath: string; skillPath: string; reconcile(connection: { url: string; token: string } | null): Promise<void> }
 }) {
   let enabled = false
   let configuredPort = 47653
@@ -24,7 +25,7 @@ export function createExternalControlSettings(directory: string, port: {
   let serial: Promise<unknown> = Promise.resolve()
   const path = join(directory, 'external-control.json')
   const status = (): ExternalConnectionStatus => ({ enabled, running: runningPort !== null, port: configuredPort,
-    url: runningPort === null ? null : `http://127.0.0.1:${runningPort}/mcp`, serverName: 'agent-code-control', error })
+    url: runningPort === null ? null : `http://127.0.0.1:${runningPort}/mcp`, serverName: 'agent-code-control', error, codex: port.integration ? { configPath: port.integration.configPath, skillPath: port.integration.skillPath, managed: enabled && runningPort !== null && error === null } : null })
   const exclusive = <T>(run: () => Promise<T>): Promise<T> => {
     const next = serial.then(run); serial = next.catch(() => {}); return next
   }
@@ -37,9 +38,14 @@ export function createExternalControlSettings(directory: string, port: {
   }
   const reconcile = async () => {
     await port.stop(); runningPort = null; error = null
-    if (enabled) {
-      try { runningPort = await port.start(configuredPort, token!) }
-      catch (cause) { error = cause instanceof Error ? cause.message : String(cause) }
+    try {
+      if (enabled) {
+        runningPort = await port.start(configuredPort, token!)
+        await port.integration?.reconcile({ url: `http://127.0.0.1:${runningPort}/mcp`, token: token! })
+      } else await port.integration?.reconcile(null)
+    } catch (cause) {
+      await port.stop(); runningPort = null
+      error = cause instanceof Error ? cause.message : String(cause)
     }
     return status()
   }

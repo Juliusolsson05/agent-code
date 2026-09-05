@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { startControlTask } from './startTask'
 import { ControlError, defineCapability, pageInput, pageSchema, paginate } from '@control-sdk'
 import { useAppStore } from '@renderer/app-state/store'
 import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
@@ -18,9 +19,9 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
   const setTitle = (sessionId: string, title: string) => useAppStore.getState().setWorkspaceState(
     state => setAgentTitleInWorkspace(state, sessionId, title),
   )
-  const requireSession = (sessionId: string, allowBuried = false) => {
+  const requireSession = (sessionId: string, allowBuried = false, allowTerminal = false) => {
     const current = observe().sessions.find(session => session.sessionId === sessionId)
-    if (!current || current.provider === 'terminal') throw new ControlError('unavailable', 'Agent does not exist in this window')
+    if (!current || (!allowTerminal && current.provider === 'terminal')) throw new ControlError('unavailable', 'Agent does not exist in this window')
     if (!allowBuried && current.placements.some(placement => placement.kind === 'buried')) {
       throw new ControlError('unavailable', 'Agent is buried; restore it explicitly before acting')
     }
@@ -40,6 +41,21 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
   }
   return [
     defineCapability({
+      id: 'agents.close', target: { kind: 'session', field: 'sessionId' }, title: 'Close an agent', execution: 'window', effect: 'mutation', completion: 'accepted',
+      description: 'Request the normal close of an exact agent, including the app’s existing child-cascade confirmation. Returns an accepted callId immediately; finish any confirmation with computer use and read operations.read for the eventual closed result. Does not bypass confirmation or force-kill a process.',
+      input: sessionInput, output: z.object({ callId: z.string(), accepted: z.literal(true) }),
+      handler: ({ sessionId }, context) => {
+        requireUi(); requireSession(sessionId)
+        return startControlTask(context, async () => {
+          // Admission crosses IPC. Recheck the exact captured target and surface
+          // before opening the ordinary confirmation gate; never follow focus.
+          requireUi(); requireSession(sessionId)
+          const closed = await getWorkspace().closeSession(sessionId)
+          return { sessionId, closed }
+        })
+      },
+    }),
+    defineCapability({
       id: 'placement.list', target: { kind: 'project', field: 'tabId' }, title: 'List grid placement choices', execution: 'window', effect: 'read',
       description: 'List actual placement-overlay targets around an explicit grid anchor, including root wrapping. Coordinates are normalized to the project grid.',
       input: z.object({ tabId: z.string().describe('Project tab ID from app.observe in the target window.'), anchorSessionId: z.string().describe('Existing agent in this project that supplies the working directory or grid placement anchor.') }).strict(),
@@ -52,19 +68,19 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
     }),
     defineCapability({
       id: 'placement.attach', target: { kind: 'session', field: 'sessionId' }, title: 'Attach an agent to the grid', execution: 'window', effect: 'mutation',
-      description: 'Attach an existing detached agent using a target and revision from placement.list. Uses the existing placement operation and revalidates the anchor after wake.',
+      description: 'Attach an existing detached agent or terminal using a target and revision from placement.list. Uses the existing placement operation and revalidates the anchor after wake.',
       input: sessionInput.extend({ tabId: z.string().describe('Project tab ID from app.observe in the target window.'), anchorSessionId: z.string().describe('Existing agent in this project that supplies the working directory or grid placement anchor.'), targetId: z.string().describe('Exact target ID returned by placement.list for this anchor.'), revision: z.string().describe('Revision returned by placement.list; prevents applying an outdated layout target.') }),
       output: sessionReference,
       handler: async ({ sessionId, tabId, anchorSessionId, targetId, revision }) => {
         requireUi()
-        const session = requireSession(sessionId)
+        const session = requireSession(sessionId, false, true)
         if (!session.placements.some(placement => placement.kind === 'detached')) throw new ControlError('unavailable', 'Agent is already attached')
         const targets = placements(tabId, anchorSessionId)
         if (paginate(targets, { limit: 200 }, `placement:${tabId}:${anchorSessionId}`).revision !== revision) throw new ControlError('stale_cursor', 'Placement changed; list targets again')
         const target = targets.find(target => target.id === targetId)
         if (!target) throw new ControlError('unavailable', 'Placement target no longer exists')
         await getWorkspace().attachDetachedToGrid(sessionId, tabId, target)
-        const placed = requireSession(sessionId)
+        const placed = requireSession(sessionId, false, true)
         if (!placed.placements.some(placement => placement.kind === 'grid' && placement.tabId === tabId)) {
           throw new ControlError('failed', 'Attachment was not observed; inspect current placement', 'unknown')
         }

@@ -5,6 +5,8 @@
 import '@main/loadEnv.js'
 import { ExternalControlMcpHost } from './externalControlMcp/host'
 import { createExternalControlSettings } from './settings/externalControl'
+import { createExternalCodexIntegration } from './settings/externalCodexIntegration'
+import operatorSkillSource from '../../operator-skills/agent-code-computer-execution/SKILL.md?raw'
 
 import { app, clipboard, crashReporter, dialog, Menu } from 'electron'
 import { existsSync } from 'fs'
@@ -16,6 +18,7 @@ import { SessionManager } from '@main/sessionManager.js'
 import { createControlHost } from '@main/control/createControlHost.js'
 import { sessionHistoryControlCapabilities } from '@main/sessions/control.js'
 import { conditionBackendCapabilities } from '@main/sessions/conditionControl.js'
+import { terminalBackendCapabilities } from '@main/sessions/terminalControl.js'
 import { windowLifecycleControlCapabilities } from '@main/window/lifecycleControl.js'
 import { installSessionShutdownGate } from '@main/sessionShutdownGate.js'
 import { LspManager } from '@main/lspManager.js'
@@ -945,11 +948,12 @@ async function startApp(): Promise<void> {
   })
   let externalHost: ExternalControlMcpHost
   const externalSettings = createExternalControlSettings(STATE_DIR, {
+    integration: createExternalCodexIntegration(process.env.CODEX_HOME || join(app.getPath('home'), '.codex'), operatorSkillSource),
     start: (port, token) => externalHost.start(port, token),
     stop: () => externalHost.stop(), copy: text => clipboard.writeText(text),
   })
   const controlHost = createControlHost({ getBrowserWindow, windowIdFor, listWindowIds }, join(STATE_DIR, 'control-history'), [
-    ...sessionHistoryControlCapabilities(), ...conditionBackendCapabilities(manager), ...windowLifecycleControlCapabilities(), ...externalSettings.capabilities,
+    ...sessionHistoryControlCapabilities(), ...conditionBackendCapabilities(manager), ...terminalBackendCapabilities(manager), ...windowLifecycleControlCapabilities(), ...externalSettings.capabilities,
   ])
   externalHost = new ExternalControlMcpHost(controlHost.forCaller({ kind: 'external', id: 'agent-code-control' }))
   await externalSettings.initialize()

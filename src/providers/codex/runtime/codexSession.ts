@@ -331,7 +331,7 @@ export class CodexSession extends EventEmitter {
       args.push('--dangerously-bypass-approvals-and-sandbox')
     }
     addCodexBuiltInMcpLaunchConfig(this.builtInMcpServers, args, cleanEnv)
-    excludeExternalControlFromCodex(args)
+    excludeExternalControlFromCodex(args, cleanEnv.CODEX_HOME)
     if (this.useProxy) {
       // Mirror the Claude proxy's on-disk layout so a single
       // bundle-inspection tool can read either provider's

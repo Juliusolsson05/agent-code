@@ -11,8 +11,10 @@ it('applies the observed Claude/Codex launch exclusions without replacing unrela
   expect(JSON.parse(claude[3])).toEqual({ deniedMcpServers: [{ serverName: 'agent-code-control' }] })
   const codex = ['--config', 'features.example=false']
   excludeExternalControlFromCodex(codex)
-  expect(codex).toEqual(['--config', 'features.example=false', '--config', 'mcp_servers.agent-code-control.enabled=false',
+  expect(codex.slice(0, 6)).toEqual(['--config', 'features.example=false', '--config', 'mcp_servers.agent-code-control.enabled=false',
     '--config', 'mcp_servers.agent-code-control.url="http://127.0.0.1:1/disabled-agent-code-control"'])
+  expect(codex[7]).toContain('agent-code-computer-execution/SKILL.md')
+  expect(codex[7]).toContain('enabled=false')
 })
 
 it('overrides inherited OpenCode control access while preserving unrelated configuration', () => {

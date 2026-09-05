@@ -16,6 +16,8 @@ export type ControlCaller = Readonly<{
 
 export type ControlContext = Readonly<{
   requestId: string
+  /** Original durable call ID when a bridge needs its own request correlation. */
+  operationId?: string
   caller: ControlCaller
   owner: ControlOwner
 }>

@@ -1,3 +1,7 @@
+import { homedir } from 'node:os'
+import { join, resolve } from 'node:path'
+import { realpathSync } from 'node:fs'
+
 // The external operator is intentionally not one of Agent Code's per-session
 // MCP domains. Reserve its published name at the last provider launch boundary,
 // including resume/recovery, so a global user configuration cannot hand every
@@ -13,9 +17,23 @@ export const DISABLED_CODEX_EXTERNAL_CONTROL = {
   mcp_servers: { [EXTERNAL_OPERATOR_SERVER_NAME]: { enabled: false, url: 'http://127.0.0.1:1/disabled-agent-code-control' } },
 } as const
 
-export function excludeExternalControlFromCodex(args: string[]): void {
+export function disabledExternalOperatorSkill(codexHome = process.env.CODEX_HOME || join(homedir(), '.codex')) {
+  const path = resolve(codexHome, 'skills', 'agent-code-computer-execution', 'SKILL.md')
+  // Codex canonicalizes discovered skill paths. Resolve symlinked home roots in
+  // exactly the same way; before installation the stable absolute path suffices.
+  let canonical = path
+  try { canonical = realpathSync(path) } catch { /* not installed yet */ }
+  return { path: canonical, enabled: false }
+}
+
+export function excludeExternalControlFromCodex(args: string[], codexHome?: string): void {
   args.push('--config', `mcp_servers.${EXTERNAL_OPERATOR_SERVER_NAME}.enabled=false`,
     '--config', `mcp_servers.${EXTERNAL_OPERATOR_SERVER_NAME}.url="http://127.0.0.1:1/disabled-agent-code-control"`)
+  // Skill rules are collected from User and SessionFlags layers separately
+  // (codex core-skills/config_rules.rs), so this adds a session-only deny while
+  // retaining unrelated user disables. Do not copy/edit the global skills list.
+  const skill = disabledExternalOperatorSkill(codexHome)
+  args.push('--config', `skills.config=[{path=${JSON.stringify(skill.path)},enabled=false}]`)
 }
 
 export function excludeExternalControlFromClaude(args: string[]): void {

@@ -79,7 +79,7 @@ export const controlReference = [
       "read output and exit state."
     ],
     "outcome": "Commands run in the selected terminal; agent terminal view exposes its existing provider process.",
-    "cautions": "Terminal keystrokes belong to the running program. Closing a view, interrupting a job and killing a session differ.",
+    "cautions": "Use terminals.create/read/input for detached terminal creation and retained raw PTY output with exact run-bound input. Retained output is bounded and is not unlimited history. Terminal keystrokes belong to the running program. Closing a view, interrupting a job and killing a session differ.",
     "commandIds": []
   }
 ] satisfies FeatureReference[]

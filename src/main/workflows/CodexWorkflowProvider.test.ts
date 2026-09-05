@@ -88,7 +88,12 @@ describe('createCodexWorkflowProvider', () => {
 
     expect(codexConstructor).toHaveBeenCalledWith({
       codexPathOverride: '/opt/agent-code/bin/codex',
-      config: { mcp_servers: { 'agent-code-control': { enabled: false, url: 'http://127.0.0.1:1/disabled-agent-code-control' } } },
+      config: { mcp_servers: { 'agent-code-control': { enabled: false, url: 'http://127.0.0.1:1/disabled-agent-code-control' } },
+        skills: { config: [
+          { path: '/tmp/agent-code-workflow-codex/skills/agent-code-computer-execution/SKILL.md', enabled: false },
+          { path: '/tmp/interactive-codex/skills/agent-code-computer-execution/SKILL.md', enabled: false },
+        ] },
+      },
       providerHostFilePath: '/opt/agent-code/workflowProviderHost.js',
       configurationIsolation: {
         codexHome: '/tmp/agent-code-workflow-codex',

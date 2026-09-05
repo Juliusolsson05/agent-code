@@ -1,7 +1,9 @@
 # Internal control SDK and MCP isolation
 
 Status: Approved by the user on 2026-09-04. Implementation in progress.
-Stages 0–3 verified; Stage 4 is next.
+Stages 0–7 verified; common Stage 8 controls implemented. Initial release now includes
+Settings-managed global external Codex setup; advanced lifecycle/batch/workflow
+controls remain follow-up scope per the user’s 2026-09-05 delivery instruction.
 
 Product scope: [external control plan](../superpowers/plans/2026-09-04-external-control-mcp.md).
 Source evidence: [source inventory](evidence/external-control/source-inventory.json).
@@ -555,6 +557,30 @@ verbatim with its already-neutralized path into
 condition module produce the advertised actions. This verifies semantic trust
 dispatch and stale generation/dialog refusal, not every provider's live dialog.
 
+Intermediate gate for long lifecycle actions:
+
+- **Produces:** `main/control/history/tasks.ts`, a durable task status adapter,
+  and a small renderer lifecycle-task launcher. Public `operations.read` reads
+  the task recorded under its original call ID; application-only start/finish
+  capabilities append task steps to that same history.
+- **Verified by:** task admission is durable before domain work begins; only the
+  owning renderer can finish it; a finish remains readable after host restart;
+  an unfinished task whose renderer generation is gone reports unknown rather
+  than claiming completion or retrying. Test this gate before lifecycle wrappers.
+- **Why separate:** the existing 30-second renderer bridge cannot represent a
+  five-minute provider compaction or an unanswered close confirmation. A generic
+  timeout loses later results, while increasing the timeout couples the action
+  lifetime to one client's HTTP request. These jobs use the existing journal,
+  not a second persistence system or an SDK-owned application state machine.
+- **Reality check:** `switchAgentProvider` allows long compaction/projection,
+  `runCloseConfirmationGate` awaits the actual human dialog, and renderer
+  registration already supplies the generation needed to detect lost ownership.
+
+The start/finish adapters may write history, but may not import workspace or
+provider code. The renderer launcher may invoke feature-owned operations, but
+does not duplicate their transactions. Task result projection has one consumer:
+the public status capability. Other features must not parse journal task events.
+
 - **Produces:** implemented SDK methods/adapters and MCP wrappers for lifecycle,
   provider switching, conditions, Dispatch/layout, terminal I/O, history/rewind,
   drafts, and editor navigation, as listed in the product plan.
@@ -699,3 +725,57 @@ the installed SDK's supported protocol generation), current MCP server concepts,
 and Anthropic's Writing effective tools for AI agents. The concrete authoring rule
 is purpose/selection, parameter sources and units, result meaning, significant
 side effects, and useful continuation/recovery instructions—not word-count tests.
+
+## First release: app-managed external Codex (2026-09-05)
+
+The user explicitly requested global Codex setup and merging the first release.
+This supersedes the earlier manual-install-only skill distribution decision.
+
+- **Produces:** `src/main/settings/externalCodexIntegration.ts`, an ownership-checked
+  global MCP configuration and Codex-only operator skill installer, invoked only
+  by the main-owned Settings preference; packaged skill source remains in
+  `operator-skills/agent-code-computer-execution/SKILL.md`.
+- **Verified by:** disposable-home install, rotation, disable, conflict and restart
+  tests; actual Codex app-server skill discovery with internal launch overrides;
+  production build and the existing multi-window MCP system trial.
+- **Why separate:** config/skill filesystem ownership must not enter capability
+  handlers or be mixed with the all-provider conventions distributor. Enabling
+  external operation must never give internal agents the operator tools/skill.
+- **Reality check:** official Codex MCP global config and local skill documentation;
+  vendored `core-skills/src/config_rules.rs` reads user and session flag layers
+  separately, preserving unrelated user skill disables under session overrides.
+
+The installer is the only writer for this integration. MCP imports none of it.
+Codex runtime adapters independently apply the reserved MCP deny and a path-based
+operator skill disable for launch/resume/recovery and workflows. Plain Markdown
+ships inside the main bundle so development and packaged installs use identical
+source bytes. Unknowns: externally edited config, custom CODEX_HOME, symlinks,
+concurrent Codex settings writes, and reload behavior of already-open clients.
+Conflicts are surfaced without taking ownership; users may need to restart their
+external client after installation or key rotation. No cloud ChatGPT deployment
+or universal provider skill installation is promised in this first release.
+
+### Initial-release verification checkpoint
+
+- Global setup install/rotation/upgrade/disable and ownership-conflict tests pass
+  against temporary real files. A setup failure stops the listener. Tokens never
+  enter status/results, and TOML parse errors are not echoed.
+- Codex 0.153.4 app-server `skills/list` in a disposable CODEX_HOME observed the
+  operator enabled externally and disabled with the internal launch overrides;
+  an unrelated disabled skill remained disabled. Evidence:
+  `evidence/external-control/codex-skill-exclusion.json`.
+- Terminal reads were verified against SessionManager’s retained PTY replay with
+  frozen Unicode pages, no attach/resize effects, and exact backend-run input.
+- Confirmed agent close now consumes the durable task launcher. Task admission
+  precedes effects; results survive journal reopen; losing a renderer generation
+  reports unknown rather than redispatching. No provider-switch/rewind promise
+  is made by this initial lifecycle slice.
+- The full TypeScript build, skill validator, testing contract, production
+  application build and output verifier pass. The real two-window Electron/MCP
+  trial and HTTP transport trial pass. No signed DMG or full-app provider session
+  trial against the user’s own state was performed. Runtime archive preparation
+  remains the existing release pipeline’s responsibility.
+
+The dependency audit still enforces SDK neutrality and feature-owned adapters.
+The only new runtime library is `@iarna/toml`, used to validate user configuration
+without reserializing its comments or unrelated settings.

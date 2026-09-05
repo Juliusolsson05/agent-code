@@ -1,4 +1,4 @@
-import { DISABLED_CODEX_EXTERNAL_CONTROL } from '@providers/shared/runtime/externalControlExclusion.js'
+import { DISABLED_CODEX_EXTERNAL_CONTROL, disabledExternalOperatorSkill } from '@providers/shared/runtime/externalControlExclusion.js'
 import { createHash } from 'node:crypto'
 import { readFileSync, statSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
@@ -54,7 +54,11 @@ export function createCodexWorkflowProvider(
   // servers, plugins, and apps the user enabled for an ordinary chat.
   return new CodexAgentProvider({
     codexPathOverride: codexPath,
-    config: DISABLED_CODEX_EXTERNAL_CONTROL,
+    config: { ...DISABLED_CODEX_EXTERNAL_CONTROL,
+      // Workflows use a private home, but also exclude the external source home
+      // in case discovery is extended to it by a future CLI or configuration.
+      skills: { config: [disabledExternalOperatorSkill(options.codexHome), disabledExternalOperatorSkill(options.sessionSourceHome)] },
+    },
     providerHostFilePath: options.providerHostFilePath,
     configurationIsolation: {
       codexHome: options.codexHome,

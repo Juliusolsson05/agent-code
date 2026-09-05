@@ -20,5 +20,6 @@ export const operatorRoutingSchema = z.object({
 export const externalConnectionStatusSchema = z.object({
   enabled: z.boolean(), running: z.boolean(), port: z.number().int(), url: z.string().nullable(),
   serverName: z.literal('agent-code-control'), error: z.string().nullable(),
+  codex: z.object({ configPath: z.string(), skillPath: z.string(), managed: z.boolean() }).nullable(),
 })
 export type ExternalConnectionStatus = z.infer<typeof externalConnectionStatusSchema>

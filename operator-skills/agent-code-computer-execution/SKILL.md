@@ -22,7 +22,8 @@ manual or every command.
 Discover available tools before using them: clients may prefix the `ac_` names.
 If the control MCP is absent, use computer use for authorized work and report the
 missing connection if it prevents reliable progress. The app's Settings → Agents
-→ External operator MCP offers connection configuration. Do not attach this
+→ External operator MCP installs the global external Codex connection and this skill.
+Restart the external client after enabling it or rotating its key. Do not attach this
 external server to the agents being operated or edit their MCP configuration.
 
 ## Select the correct window and agent
@@ -129,6 +130,17 @@ missing durable history or native-terminal live output may require computer use;
 an empty result alone is not evidence that the agent did nothing. Reads never
 wake the agent. Check output or the relevant app state for completion and summarize
 progress at a useful cadence rather than repeatedly fetching full history.
+
+Use `ac_terminals_create` for a detached terminal in an observed project. Read
+`ac_terminals_read` for the retained raw PTY output, starting with a recent tail;
+`range: "retained"` pages the complete retained buffer, not unlimited shell history.
+Send exact bytes with `ac_terminals_input` and the observed `sessionRunId`; it does
+not append Enter. These tools never wake a missing process.
+
+`ac_agents_close` uses the normal close flow and child-cascade confirmation.
+Finish its dialog with computer use and call `ac_operations_read` with the returned
+callId to learn whether it closed or was cancelled. Do not interpret acceptance as
+completion or issue a second close while confirmation is pending.
 
 ## Recover and verify
 

@@ -379,6 +379,7 @@ export function usePaneActions(
   ) => Promise<void>
   startNewAgentPlacement: () => void
   commitNewAgentPlacement: (selection: SessionSpawnSelection, target: PlacementTarget) => Promise<void>
+  createDetachedSession: (selection: SessionSpawnSelection, projectOverride?: { tabId: TabId; anchorSessionId: SessionId }) => Promise<SessionId | null>
   createDetachedDispatchAgent: (
     selection: SessionSpawnSelection & { kind: Exclude<SessionKind, 'terminal'> },
     projectOverride?: { tabId: TabId; anchorSessionId: SessionId },
@@ -654,7 +655,7 @@ export function usePaneActions(
 
   const createDetachedDispatchAgent = useCallback(
     async (
-      selection: SessionSpawnSelection & { kind: Exclude<SessionKind, 'terminal'> },
+      selection: SessionSpawnSelection,
       // Explicit project override, supplied by the Dispatch header "+".
       //
       // WHY it must override BOTH halves rather than just the tab: cwd is
@@ -2260,6 +2261,9 @@ export function usePaneActions(
     splitFocused,
     startNewAgentPlacement,
     commitNewAgentPlacement,
+    // Shells and agents share detached placement and post-spawn ownership
+    // checks. Preserve the narrower agent entry point for existing pickers.
+    createDetachedSession: createDetachedDispatchAgent,
     createDetachedDispatchAgent,
     createLinkedAgent,
     createOrchestrationAgent,

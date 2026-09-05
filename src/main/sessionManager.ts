@@ -4540,6 +4540,17 @@ export class SessionManager extends EventEmitter {
     return Array.from(this.sessions.keys())
   }
 
+  // Inspect retained PTY output without becoming a live terminal subscriber.
+  // attachTerminal/attachAgentPty also change streaming and resize ownership;
+  // using them for a one-shot read could disrupt an existing xterm view. This
+  // getter deliberately exposes only the replay already retained by the owner.
+  getRawOutputSnapshot(sessionId: string): { raw: string; capChars: number } | null {
+    const entry = this.sessions.get(sessionId)
+    if (!entry) return null
+    const buffer = (entry.kind === 'terminal' ? this.terminalBuffers : this.agentPtyBuffers).get(sessionId)
+    return buffer ? { raw: buffer.read(), capChars: buffer.cap } : null
+  }
+
   /** Latest screen snapshot observed for a live session, or null before the
    *  first frame. See the cache fields' WHY comment — this exists for
    *  late-attaching consumers (remote companion) to seed their state. */

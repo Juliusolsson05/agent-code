@@ -13,6 +13,7 @@ export { agentReadInput, agentReadOutput, conversationMessageSchema } from './ca
 export type { AgentReadInput, AgentReadOutput, ReadDepth } from './catalog/conversation'
 export { transcriptPageInput, transcriptPageOutput } from './catalog/transcripts'
 export { conditionTargetInput, conditionReadOutput, conditionReplyInput, conditionBackendIdentity, conditionReplyOutput } from './catalog/conditions'
+export { terminalReadInput, terminalReadOutput, terminalInput, terminalInputOutput } from './catalog/terminals'
 export { historyEventSchema } from './history'
 export type { ControlHistory, HistoryEvent, HistoryWrite } from './history'
 export {
@@ -26,3 +27,5 @@ export type {
 } from './contracts'
 export { operatorRoutingSchema, externalConnectionStatusSchema } from './operator'
 export type { ControlOperatorPort, ExternalConnectionStatus } from './operator'
+
+export { startControlTask } from './task'
