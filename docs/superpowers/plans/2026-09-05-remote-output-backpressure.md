@@ -1,6 +1,6 @@
 # Bounded remote output and reconnect recovery
 
-Status: implementing. Issue #804. Base origin/main at 5d641845.
+Status: implemented and locally verified. Issue #804. Base origin/main at 5d641845.
 
 ## Outcome
 
@@ -37,3 +37,21 @@ with the audit's synthetic 31.5 MiB backlog, not production memory/CPU claims.
 Review, synchronize #804, open a complete PR, and address checks/review. Do not
 merge. #805 will depend on this PR because it changes the same store lifecycle
 and must preserve this reconnect/backfill contract while bounding retention.
+
+## Evidence and decisions
+
+All remote transport/store tests pass: 105 tests in 12 files, including an
+actual paused receiver bounded to 4 MiB while a healthy receiver receives every
+frame, reconnect/backfill across 310 durable entries, and an interrupted prompt
+sent exactly once. A healthy bootstrap totaling more than 4 MiB is paced by
+write completion; cached values are read immediately before each write.
+Typecheck, test contract, client production build and diff check pass. Existing
+client bundle size/mixed import warnings remain. The audit previously measured
+31.5 MiB queued for a synthetic paused receiver; these are reproducible bounds,
+not a measurement of production memory savings.
+
+History pages retain a contiguous newest suffix up to 3 MiB with matching byte
+offsets and an older-history cursor. Individual records above that budget fail
+explicitly. Reconnect discards the disconnected history window and hides a
+partial semantic turn until a fresh turn boundary or durable completion. This
+trades temporary streaming continuity for correct history after dropped output.

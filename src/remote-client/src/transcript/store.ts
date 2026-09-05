@@ -1,3 +1,4 @@
+import { REMOTE_HISTORY_TOO_LARGE } from '@shared/remoteOutputLimits'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { foldSemanticEvent } from '@renderer/session-runtime/semantic/foldEvent'
 import { reduceStreamPhase } from '@renderer/session-runtime/semantic/streamPhaseMachine'
@@ -91,6 +92,7 @@ type SessionState = {
   historyOldestMarker: string | null
   historyLoaded: boolean
   historyLoading: boolean
+  awaitingSemanticStart: boolean
 }
 
 type Mapper = ReturnType<
@@ -136,6 +138,17 @@ export class TranscriptStore {
 
   constructor(private readonly feed: WebSocketSessionFeed) {
     this.unsubs.push(
+      feed.onConnectionState(connection => {
+        if (connection !== 'closed') return
+        // A reconnect can have missed MORE than one page. Prepending a fresh
+        // tail to the old window would silently join two disconnected ranges.
+        // Drop the window and backfill anew on the next server session-list;
+        // older pages remain available through the durable cursor contract.
+        for (const id of this.sessions.keys()) {
+          this.resetTranscript(id)
+          this.state(id).awaitingSemanticStart = true
+        }
+      }),
       feed.onSessionJsonlEntries(e => {
         this.ingestLiveEntries(e.sessionId, e.entries as Array<{ entry: unknown; file: string }>)
       }),
@@ -190,7 +203,7 @@ export class TranscriptStore {
         // loadInitialHistory once per mount (review finding). The list
         // frame doubles as the "connection is live again" signal.
         for (const [sessionId, state] of this.sessions) {
-          if (!state.historyLoaded && !state.historyLoading && this.listeners.has(sessionId)) {
+          if (!state.historyLoaded && !state.historyLoading && (this.listeners.get(sessionId)?.size ?? 0) > 0) {
             void this.loadInitialHistory(sessionId)
           }
         }
@@ -237,10 +250,14 @@ export class TranscriptStore {
    *  hook above and from live-entry arrival. */
   async loadInitialHistory(sessionId: string): Promise<void> {
     const state = this.state(sessionId)
-    if (state.historyLoaded || state.historyLoading) return
+    if (state.historyLoaded || state.historyLoading || state.transcript.historyError === REMOTE_HISTORY_TOO_LARGE) return
     state.historyLoading = true
     this.mutate(sessionId, t => ({ ...t, loadingOlderHistory: true }))
     const result = await this.feed.getHistory(sessionId, { limit: 120 })
+    // Disconnect, transcript roll, removal or disposal may replace this state
+    // while the network request is pending. Its reply has no authority over
+    // the new window, even when it names the same transcript file.
+    if (this.sessions.get(sessionId) !== state) return
     state.historyLoading = false
     if (!result.ok) {
       // "No transcript yet" is normal for a brand-new session — live frames
@@ -297,8 +314,14 @@ export class TranscriptStore {
     }
     this.mutate(sessionId, t => ({ ...t, loadingOlderHistory: true }))
     const result = await this.feed.getHistory(sessionId, { beforeMarker, limit: 200 })
+    if (this.sessions.get(sessionId) !== state) return
     if (!result.ok || this.chunkFileConflicts(state, result.chunk?.file)) {
-      this.mutate(sessionId, t => ({ ...t, loadingOlderHistory: false }))
+      this.mutate(sessionId, t => ({
+        ...t,
+        loadingOlderHistory: false,
+        historyError: result.ok ? t.historyError : result.error,
+        hasOlderHistory: !result.ok && result.error === REMOTE_HISTORY_TOO_LARGE ? false : t.hasOlderHistory,
+      }))
       return
     }
     const marker = this.ingestRawEntries(
@@ -333,6 +356,7 @@ export class TranscriptStore {
         historyOldestMarker: null,
         historyLoaded: false,
         historyLoading: false,
+        awaitingSemanticStart: false,
       }
       this.sessions.set(sessionId, state)
     }
@@ -414,7 +438,7 @@ export class TranscriptStore {
     // Live-entry arrival is also the backfill retry trigger for sessions
     // whose initial get-history failed with "no transcript on disk yet".
     const fresh = this.state(sessionId)
-    if (!fresh.historyLoaded && !fresh.historyLoading && this.listeners.has(sessionId)) {
+    if (!fresh.historyLoaded && !fresh.historyLoading && (this.listeners.get(sessionId)?.size ?? 0) > 0) {
       void this.loadInitialHistory(sessionId)
     }
   }
@@ -459,6 +483,7 @@ export class TranscriptStore {
       historyOldestMarker: null,
       historyLoaded: false,
       historyLoading: false,
+      awaitingSemanticStart: false,
     })
     const set = this.listeners.get(sessionId)
     if (set) for (const cb of [...set]) cb()
@@ -524,6 +549,13 @@ export class TranscriptStore {
     const state = this.state(sessionId)
     const record = asRecord(event)
     if (!record) return
+    if (state.awaitingSemanticStart) {
+      // We did not see the prefix of the interrupted semantic turn. Rendering
+      // its suffix as a complete live answer is misleading. Durable JSONL
+      // still flows; live semantic painting resumes at the next turn boundary.
+      if (record.type !== 'turn_started') return
+      state.awaitingSemanticStart = false
+    }
 
     // Desktop order: fold first, then the shared phase machine over the
     // POST-fold turn (reduceStreamPhase's caller contract).
