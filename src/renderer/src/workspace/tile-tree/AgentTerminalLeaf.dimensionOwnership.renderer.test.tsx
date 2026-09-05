@@ -499,6 +499,25 @@ describe('AgentTerminalLeaf dimension ownership', () => {
     },
   )
 
+  it.each(['agent', 'shell', 'inline'] as const)('owns boundary wheel input only while the %s terminal is mounted', async kind => {
+    const view = render(kind === 'agent' ? agentPane('wheel-agent') : kind === 'shell'
+      ? shellPane('wheel-shell') : <AgentInlineTerminal sessionId="wheel-inline" active />)
+    await act(async () => {
+      attach.resolve('')
+      await attach.promise
+    })
+    const container = xtermHarness.instances[0]!.container!
+    const wheel = () => new WheelEvent('wheel', { deltaY: 120, bubbles: true, cancelable: true })
+    const mounted = wheel()
+    container.dispatchEvent(mounted)
+    expect(mounted.defaultPrevented).toBe(true)
+    expect(api.sendInput).not.toHaveBeenCalled()
+    view.unmount()
+    const unmounted = wheel()
+    container.dispatchEvent(unmounted)
+    expect(unmounted.defaultPrevented).toBe(false)
+  })
+
   it('coalesces inline-terminal layout bursts and only resizes the backend when grid dimensions change', async () => {
     const view = render(<AgentInlineTerminal sessionId="inline-layout" active />)
     await act(async () => {

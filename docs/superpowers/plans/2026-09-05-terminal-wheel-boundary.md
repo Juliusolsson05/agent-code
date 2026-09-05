@@ -14,3 +14,13 @@ reaches the terminal host unconsumed. Preserve modifier and horizontal gestures.
 
 This is separate from #789's atlas repair. It does not claim to reproduce every
 reported scrolling problem or change providers' alternate-screen behavior.
+
+## Verification
+
+- Shared bubbling helper attached/disposed by all three terminal hosts.
+- 25 affected renderer tests pass, including all host lifetimes; type-check and
+  the test contract pass.
+- Real Electron wheel probe: control moves the outer panel 120px at the boundary;
+  patched keeps it at 0px. Normal scrollback, output anchoring, alternate-screen
+  arrows, and SGR mouse reporting pass in both modes.
+- Probe retained as scripts/smoke-terminal-wheel.mjs, including --control.

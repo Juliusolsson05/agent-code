@@ -10,6 +10,7 @@ import { readXtermTheme, syncXtermTheme } from '@renderer/workspace/tile-tree/xt
 import { createTerminalInputForwarder } from '@renderer/workspace/tile-tree/terminalInputForwarder'
 import { subscribeToAgentPtyData } from '@renderer/workspace/terminal/sessionDataDispatcher'
 import { attachXtermWebglRenderer } from '@renderer/workspace/terminal/xtermWebglRenderer'
+import { attachTerminalWheelBoundary } from '@renderer/workspace/terminal/terminalWheelBoundary'
 
 type Props = {
   sessionId: string
@@ -48,6 +49,7 @@ export const AgentInlineTerminal = memo(function AgentInlineTerminal({ sessionId
     let term: Terminal | null = null
     let fit: FitAddon | null = null
     let webglRenderer: ReturnType<typeof attachXtermWebglRenderer> | null = null
+    let wheelBoundary: ReturnType<typeof attachTerminalWheelBoundary> | null = null
     let onDataDisposable: { dispose(): void } | null = null
     let offPtyData: (() => void) | null = null
     let resizeObserver: ResizeObserver | null = null
@@ -73,6 +75,7 @@ export const AgentInlineTerminal = memo(function AgentInlineTerminal({ sessionId
       fit = new FitAddon()
       term.loadAddon(fit)
       term.open(container)
+      wheelBoundary = attachTerminalWheelBoundary(container)
       webglRenderer = attachXtermWebglRenderer(term)
       termRef.current = term
 
@@ -161,6 +164,7 @@ export const AgentInlineTerminal = memo(function AgentInlineTerminal({ sessionId
       onDataDisposable?.dispose()
       offPtyData?.()
       webglRenderer?.dispose()
+      wheelBoundary?.dispose()
       if (onThemeChangedListener) {
         window.removeEventListener(THEME_CHANGED_EVENT, onThemeChangedListener)
       }
