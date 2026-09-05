@@ -3,6 +3,7 @@ import { getRendererProviderCapabilities } from '@providers/registry.renderer.ca
 import { foldSemanticEvent } from '@renderer/session-runtime/semantic/foldEvent'
 import { reduceStreamPhase } from '@renderer/session-runtime/semantic/streamPhaseMachine'
 import type { StreamPhaseState } from '@renderer/session-runtime/semantic/streamPhaseMachine'
+import { historyMarkerOf, stampHistoryMarker, planLiveEntryTrim, OLDER_PREPEND_TRIM_GRACE_MS } from '@renderer/session-runtime/liveEntryWindow'
 import { indexEntryIntoMaps } from '@renderer/session-runtime/entries'
 import { emptySemanticRuntime } from '@renderer/session-runtime/state'
 import type { SemanticLiveTurn, SemanticRuntimeState } from '@renderer/session-runtime/state'
@@ -80,6 +81,11 @@ type SessionState = {
   transcript: SessionTranscript
   semantic: SemanticRuntimeState
   seen: Set<string>
+  // Tombstones contain identities only, never entry/tool bodies. Live replay
+  // must not append trimmed old rows at the tail; explicit pagination may
+  // reload them. Both sets die when the last view releases this session.
+  trimmed: Set<string>
+  olderPrependAt: number | null
   /** Session-lifetime mapper for LIVE entries only (codex cursor). Created
    *  lazily once the kind is KNOWN from the session list — memoizing a
    *  mapper built on a fallback guess would bake the wrong provider in for
@@ -90,6 +96,7 @@ type SessionState = {
    *  Disagreement between the two = the provider rolled the transcript. */
   transcriptFile: string | null
   historyOldestMarker: string | null
+  historyOldestOffset: number | undefined
   historyLoaded: boolean
   historyLoading: boolean
   awaitingSemanticStart: boolean
@@ -131,12 +138,18 @@ function emptyTranscript(): SessionTranscript {
   }
 }
 
+// Entry-scoped cursor metadata dies with the entry. A single raw provider line
+// may yield multiple feed entries: they are one pagination unit and must never
+// be split by a trim. Offset is available on history replies, not live frames.
+const entryCursors = new WeakMap<Entry, { group: object; offset?: number }>()
+const NO_GHOSTS: ReadonlyMap<string, never> = new Map<string, never>()
+
 export class TranscriptStore {
   private readonly sessions = new Map<string, SessionState>()
   private readonly listeners = new Map<string, Set<() => void>>()
   private readonly unsubs: Array<() => void> = []
 
-  constructor(private readonly feed: WebSocketSessionFeed) {
+  constructor(private readonly feed: WebSocketSessionFeed, private readonly now = Date.now) {
     this.unsubs.push(
       feed.onConnectionState(connection => {
         if (connection !== 'closed') return
@@ -225,8 +238,26 @@ export class TranscriptStore {
       set = new Set()
       this.listeners.set(sessionId, set)
     }
+    const state = this.sessions.get(sessionId)
+    if (set.size === 0 && state) {
+      // File identity observed while unviewed is only a hint. A provider may
+      // have rolled without another forwarded entry; let the new backfill
+      // establish identity unless a live frame in THIS view wins the race.
+      state.transcriptFile = null
+    }
     set.add(cb)
-    return () => set?.delete(cb)
+    return () => {
+      set.delete(cb)
+      if (set.size > 0 || this.listeners.get(sessionId) !== set) return
+      this.listeners.delete(sessionId)
+      // Selecting another session/list screen is an ownership boundary, not
+      // merely a render pause. Keeping the last snapshot would retain the
+      // entire transcript through indexes, semantic folds and mapper state.
+      const file = this.state(sessionId).transcriptFile
+      this.resetTranscript(sessionId)
+      this.state(sessionId).transcriptFile = file
+      this.state(sessionId).awaitingSemanticStart = true
+    }
   }
 
   getSnapshot(sessionId: string): SessionTranscript {
@@ -243,12 +274,13 @@ export class TranscriptStore {
 
   // --- backfill ---
 
-  /** Load the initial newest-N chunk once per session. Prepends behind any
+  /** Load the initial newest-N chunk once per viewed window. Prepends behind any
    *  live entries that already arrived — the shared seen-set makes the
    *  overlap safe, exactly like the desktop's initialHistory action.
    *  Failure leaves the flags retryable; retries fire from the session-list
    *  hook above and from live-entry arrival. */
   async loadInitialHistory(sessionId: string): Promise<void> {
+    if (!this.isViewed(sessionId)) return
     const state = this.state(sessionId)
     if (state.historyLoaded || state.historyLoading || state.transcript.historyError === REMOTE_HISTORY_TOO_LARGE) return
     state.historyLoading = true
@@ -287,8 +319,12 @@ export class TranscriptStore {
       sessionId,
       result.chunk.entries as Array<Record<string, unknown>>,
       'prepend',
+      result.chunk.offsets,
     )
-    if (marker) state.historyOldestMarker = marker
+    if (marker) {
+      state.historyOldestMarker = marker.marker
+      state.historyOldestOffset = marker.offset
+    }
     this.mutate(sessionId, t => ({
       ...t,
       loadingOlderHistory: false,
@@ -299,9 +335,11 @@ export class TranscriptStore {
       hasOlderHistory: result.chunk.hasMore && state.historyOldestMarker !== null,
       totalEntries: result.chunk.totalEntries ?? t.entries.length,
     }))
+    this.trimLiveWindow(sessionId)
   }
 
   async loadOlderHistory(sessionId: string): Promise<void> {
+    if (!this.isViewed(sessionId)) return
     const state = this.state(sessionId)
     if (state.transcript.loadingOlderHistory || !state.transcript.hasOlderHistory) return
     const beforeMarker = state.historyOldestMarker
@@ -313,7 +351,11 @@ export class TranscriptStore {
       return
     }
     this.mutate(sessionId, t => ({ ...t, loadingOlderHistory: true }))
-    const result = await this.feed.getHistory(sessionId, { beforeMarker, limit: 200 })
+    const result = await this.feed.getHistory(sessionId, {
+      beforeMarker,
+      ...(state.historyOldestOffset === undefined ? {} : { beforeOffset: state.historyOldestOffset }),
+      limit: 200,
+    })
     if (this.sessions.get(sessionId) !== state) return
     if (!result.ok || this.chunkFileConflicts(state, result.chunk?.file)) {
       this.mutate(sessionId, t => ({
@@ -324,12 +366,17 @@ export class TranscriptStore {
       }))
       return
     }
+    state.olderPrependAt = this.now()
     const marker = this.ingestRawEntries(
       sessionId,
       result.chunk.entries as Array<Record<string, unknown>>,
       'prepend',
+      result.chunk.offsets,
     )
-    if (marker) state.historyOldestMarker = marker
+    if (marker) {
+      state.historyOldestMarker = marker.marker
+      state.historyOldestOffset = marker.offset
+    }
     this.mutate(sessionId, t => ({
       ...t,
       loadingOlderHistory: false,
@@ -350,13 +397,16 @@ export class TranscriptStore {
         transcript: emptyTranscript(),
         semantic: emptySemanticRuntime(),
         seen: new Set(),
+        trimmed: new Set(),
+        olderPrependAt: null,
         liveMapper: null,
         kind: null,
         transcriptFile: null,
         historyOldestMarker: null,
+        historyOldestOffset: undefined,
         historyLoaded: false,
         historyLoading: false,
-        awaitingSemanticStart: false,
+        awaitingSemanticStart: true,
       }
       this.sessions.set(sessionId, state)
     }
@@ -429,6 +479,8 @@ export class TranscriptStore {
       this.state(sessionId).transcriptFile = file
     }
 
+    if (!this.isViewed(sessionId)) return
+
     this.ingestRawEntries(
       sessionId,
       items.map(x => x.entry as Record<string, unknown>),
@@ -452,6 +504,7 @@ export class TranscriptStore {
         conditions: prev.transcript.conditions,
         workingStatus: prev.transcript.workingStatus,
         screenText: prev.transcript.screenText,
+        exited: prev.transcript.exited,
       },
       // The fold state resets WITH the transcript (review finding — this used
       // to carry prev.semantic across the roll). ingestSemanticEvent folds
@@ -470,20 +523,23 @@ export class TranscriptStore {
       // the normal path this reset runs before any new-turn semantic event
       // exists, and everything it wipes belongs to the OLD conversation —
       // exactly the intent. If jsonl-watcher latency ever inverted that
-      // ordering, the loss is bounded and self-healing: foldSemanticEvent
-      // re-opens a turn from later `turn_started`/`turn_delta` events, and
-      // the turn's content still commits through the jsonl entries — a brief
+      // ordering, the turn's content still commits through the jsonl entries.
+      // Semantic painting waits for a fresh turn_started (a suffix alone has
+      // no authority after a reset). This trades a temporary
       // live-streaming gap versus guaranteed cross-conversation contamination
       // the other way.
       semantic: emptySemanticRuntime(),
       seen: new Set(),
+      trimmed: new Set(),
+      olderPrependAt: null,
       liveMapper: null,
       kind: prev.kind,
       transcriptFile: null,
       historyOldestMarker: null,
+      historyOldestOffset: undefined,
       historyLoaded: false,
       historyLoading: false,
-      awaitingSemanticStart: false,
+      awaitingSemanticStart: true,
     })
     const set = this.listeners.get(sessionId)
     if (set) for (const cb of [...set]) cb()
@@ -496,31 +552,36 @@ export class TranscriptStore {
     sessionId: string,
     raws: Array<Record<string, unknown>>,
     mode: 'append' | 'prepend',
-  ): string | null {
+    offsets?: number[],
+  ): { marker: string; offset?: number } | null {
     if (raws.length === 0) return null
     const state = this.state(sessionId)
     const mapper = mode === 'append' ? this.liveMapperOf(sessionId) : this.chunkMapper(sessionId)
 
     const kept: Entry[] = []
-    let firstKeptMarker: string | null = null
+    let firstKeptMarker: { marker: string; offset?: number } | null = null
     let toolIndexChanged = false
 
-    for (const raw of raws) {
+    for (const [rawIndex, raw] of raws.entries()) {
       const mapped = mapper.map(raw)
+      const cursor = { group: {}, offset: offsets?.[rawIndex] }
       if (
         mode === 'prepend' &&
         firstKeptMarker === null &&
         mapped.entries.length > 0 &&
         mapped.historyMarker
       ) {
-        firstKeptMarker = mapped.historyMarker
+        firstKeptMarker = { marker: mapped.historyMarker, offset: cursor.offset }
       }
       for (const entry of mapped.entries) {
         const uuid = typeof entry.uuid === 'string' ? entry.uuid : null
         if (uuid) {
-          if (state.seen.has(uuid)) continue
+          if (state.seen.has(uuid) && !(mode === 'prepend' && state.trimmed.has(uuid))) continue
           state.seen.add(uuid)
+          state.trimmed.delete(uuid)
         }
+        stampHistoryMarker(entry, mapped.historyMarker)
+        entryCursors.set(entry, cursor)
         kept.push(entry)
         if (
           indexEntryIntoMaps(
@@ -536,16 +597,71 @@ export class TranscriptStore {
 
     if (kept.length === 0 && !toolIndexChanged) return firstKeptMarker
 
+    const entries = mode === 'append' ? [...state.transcript.entries, ...kept] : [...kept, ...state.transcript.entries]
+    if (mode === 'prepend' && toolIndexChanged) {
+      // Older pages may repeat a tool id with an earlier body. Replaying the
+      // complete retained order keeps the newest block authoritative instead
+      // of letting a prepended historical result overwrite a live result.
+      // Finish this before notifying subscribers: a snapshot's version must
+      // never advertise indexes that still contain historical winners.
+      state.transcript.toolUseIndex.clear()
+      state.transcript.toolResultIndex.clear()
+      for (const entry of entries) {
+        indexEntryIntoMaps(entry, state.transcript.toolUseIndex, state.transcript.toolResultIndex)
+      }
+    }
     this.mutate(sessionId, t => ({
       ...t,
-      entries: mode === 'append' ? [...t.entries, ...kept] : [...kept, ...t.entries],
+      entries,
       totalEntries: t.totalEntries + (mode === 'append' ? kept.length : 0),
       toolIndexVersion: toolIndexChanged ? t.toolIndexVersion + 1 : t.toolIndexVersion,
     }))
+    if (mode === 'append') this.trimLiveWindow(sessionId)
     return firstKeptMarker
   }
 
+  private isViewed(sessionId: string): boolean {
+    return (this.listeners.get(sessionId)?.size ?? 0) > 0
+  }
+
+  private trimLiveWindow(sessionId: string): void {
+    const state = this.state(sessionId)
+    const t = state.transcript
+    if (t.loadingOlderHistory) return
+    if (state.olderPrependAt !== null && this.now() - state.olderPrependAt < OLDER_PREPEND_TRIM_GRACE_MS) return
+    // Reuse only the desktop's pure safety policy. Remote has no ghosts and
+    // must not register ids in desktop-global tombstone/grace registries.
+    // Current/history semantic owners and cross-entry tool pairs can pin the
+    // window above its target; losing ownership to hit a cap repaints copies.
+    const plan = planLiveEntryTrim(t.entries, state.semantic, NO_GHOSTS)
+    if (!plan) return
+    const cut = plan.cut
+    // A raw line can map to several entries (OpenCode tool fan-out). A cursor
+    // addresses the whole line. Splitting it would make its trimmed children
+    // unreachable; moving the cut ourselves could invalidate tool-pair safety.
+    // Keep the window until a later burst permits a whole-record boundary.
+    if (entryCursors.get(t.entries[cut - 1])?.group === entryCursors.get(t.entries[cut])?.group) return
+    const marker = historyMarkerOf(t.entries[cut])
+    if (!marker) return
+    const entries = t.entries.slice(cut)
+    for (const entry of t.entries.slice(0, cut)) state.trimmed.add(entry.uuid!)
+    state.historyOldestMarker = marker
+    state.historyOldestOffset = entryCursors.get(entries[0])?.offset
+    // Slicing entries alone leaves tool-result bodies retained by the indexes.
+    // Rebuild in chronological order so each id still resolves to its latest
+    // retained block. The planner guarantees a retained result keeps its use.
+    const toolUseIndex = new Map<string, ToolUseBlock>()
+    const toolResultIndex = new Map<string, ToolResultBlock>()
+    for (const entry of entries) indexEntryIntoMaps(entry, toolUseIndex, toolResultIndex)
+    this.mutate(sessionId, prev => ({
+      ...prev, entries, toolUseIndex, toolResultIndex,
+      toolIndexVersion: prev.toolIndexVersion + 1,
+      hasOlderHistory: true,
+    }))
+  }
+
   private ingestSemanticEvent(sessionId: string, event: unknown): void {
+    if (!this.isViewed(sessionId)) return
     const state = this.state(sessionId)
     const record = asRecord(event)
     if (!record) return
