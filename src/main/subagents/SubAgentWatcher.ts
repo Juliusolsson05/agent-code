@@ -9,6 +9,7 @@ import {
 } from './subagentState.js'
 import type { SubAgentAccumulator, SubAgentMeta } from './subagentState.js'
 import { readRange } from './shared.js'
+import { CoalescedRefresh } from './CoalescedRefresh.js'
 
 // One poller per session, watching <sessionDir>/subagents/.
 //
@@ -76,6 +77,7 @@ export class SubAgentWatcher {
   private prunedAgents = new Set<string>()
   private dirty = false
   private stopped = false
+  private readonly refreshLoop = new CoalescedRefresh(() => this.tick())
 
   constructor(
     private readonly subagentsDir: string,
@@ -84,15 +86,17 @@ export class SubAgentWatcher {
   ) {}
 
   start(): void {
+    if (this.stopped || this.timer) return
     // Kick once immediately so an already-populated dir surfaces fast, then
     // poll. The first tick also covers the common "dir created moments later"
     // case — readdir simply throws and we retry next tick.
-    void this.tick()
-    this.timer = setInterval(() => void this.tick(), POLL_MS)
+    void this.refreshLoop.request()
+    this.timer = setInterval(() => void this.refreshLoop.request(), POLL_MS)
   }
 
   stop(): void {
     this.stopped = true
+    this.refreshLoop.stop()
     if (this.timer) clearInterval(this.timer)
     this.timer = null
     this.offsets.clear()
@@ -106,9 +110,10 @@ export class SubAgentWatcher {
 
   /** Force a re-emit (e.g. the parent transcript just produced a tool_result
    *  that flips a subagent running→done). */
-  refresh(): void {
+  refresh(): Promise<void> {
+    if (this.stopped) return Promise.resolve()
     this.dirty = true
-    void this.tick()
+    return this.refreshLoop.request()
   }
 
   private async tick(): Promise<void> {
@@ -120,7 +125,7 @@ export class SubAgentWatcher {
       // tick. Any other transient FS error is also safe to retry.
       return
     }
-    if (this.dirty) {
+    if (!this.stopped && this.dirty) {
       this.dirty = false
       this.emit()
     }
@@ -129,12 +134,14 @@ export class SubAgentWatcher {
   private async rescan(): Promise<void> {
     const files = await readdir(this.subagentsDir)
     for (const f of files) {
+      if (this.stopped) return
       if (f.endsWith('.meta.json')) {
         const agentId = f.slice('agent-'.length, -'.meta.json'.length)
         if (this.prunedAgents.has(agentId)) continue // finding-16: reclaimed
         if (this.metaByAgent.has(agentId)) continue // meta is written once
         try {
           const raw = await readFile(join(this.subagentsDir, f), 'utf8')
+          if (this.stopped) return
           this.metaByAgent.set(agentId, JSON.parse(raw) as SubAgentMeta)
           this.dirty = true
         } catch {
@@ -153,6 +160,7 @@ export class SubAgentWatcher {
 
   private async readAppended(agentId: string, path: string): Promise<void> {
     const { size } = await stat(path)
+    if (this.stopped) return
     const from = this.offsets.get(agentId) ?? 0
     if (size <= from) return
 
@@ -166,6 +174,9 @@ export class SubAgentWatcher {
     // Reading only `[from, size)` keeps the watcher proportional to new bytes,
     // which is the actual invariant future code should preserve.
     const appended = await readRange(path, from, size)
+    // stop() clears all fold state while this read may still be in flight.
+    // Never repopulate an offset/accumulator or emit for a dead session.
+    if (this.stopped) return
     const text = (this.partialByAgent.get(agentId) ?? '') + appended.text
     const lastNl = text.lastIndexOf('\n')
     if (lastNl < 0) {

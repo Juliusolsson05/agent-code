@@ -2,6 +2,7 @@ import { basename, dirname, join } from 'node:path'
 import { readdir, stat } from 'node:fs/promises'
 import type { JsonlEntry, SubAgentState, SubAgentToolCall } from '@preload/api/types.js'
 import { asRecord } from '@shared/lib/asRecord.js'
+import { CoalescedRefresh } from './CoalescedRefresh.js'
 import {
   capToolCalls,
   headlineFromInput,
@@ -559,10 +560,12 @@ export class CodexSubAgentTracker {
   private parentFile: string | null = null
   private dirty = false
   private stopped = false
+  private readonly refreshLoop = new CoalescedRefresh(() => this.poll())
 
   constructor(private readonly onChange: (subAgents: Record<string, SubAgentState>) => void) {}
 
   observeParentEntry(entry: JsonlEntry, file: string): void {
+    if (this.stopped) return
     this.parentFile = file
     const spawn = extractCodexSpawnCall(entry)
     if (spawn) {
@@ -625,6 +628,7 @@ export class CodexSubAgentTracker {
 
   stop(): void {
     this.stopped = true
+    this.refreshLoop.stop()
     if (this.timer) clearInterval(this.timer)
     this.timer = null
     // Mirror SubAgentWatcher.stop() (PR #300): clearing the timer alone left
@@ -645,7 +649,11 @@ export class CodexSubAgentTracker {
     this.childAccByAgentId.clear()
   }
 
-  async refresh(): Promise<void> {
+  refresh(): Promise<void> {
+    return this.refreshLoop.request()
+  }
+
+  private async poll(): Promise<void> {
     if (this.stopped || !this.parentFile) return
     await this.readKnownChildren()
     // POST-AWAIT stop guard (PR #317, race fix). The pre-await check above only
@@ -693,6 +701,7 @@ export class CodexSubAgentTracker {
 
   private async readAppendedChild(agentId: string, path: string): Promise<boolean> {
     const { size } = await stat(path)
+    if (this.stopped) return false
     let from = this.childOffsetByAgentId.get(agentId) ?? 0
     if (size < from) {
       // Rollouts are append-only in normal Codex operation, but editors/tests can
@@ -706,6 +715,9 @@ export class CodexSubAgentTracker {
     if (size <= from) return false
 
     const appended = await readRange(path, from, size)
+    // readKnownChildren's outer guard is too late: these maps must not be
+    // repopulated after stop(), even if an open range read finishes afterwards.
+    if (this.stopped) return false
     const text = (this.childPartialByAgentId.get(agentId) ?? '') + appended.text
     const lastNl = text.lastIndexOf('\n')
     this.childOffsetByAgentId.set(agentId, appended.nextOffset)
