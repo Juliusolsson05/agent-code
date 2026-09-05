@@ -18,6 +18,13 @@ traversal/stringification when performance collection is disabled. Cap each
 collection at exactly 64 samples (the current floor-step loop can take 127).
 Verify both disabled zero-work and enabled bounded-sampling contracts.
 
+The supplied startup log also proves a second main/preload/renderer build
+after `build:app` completes (#779). Installed electron-vite preview builds by
+default. Retain the complete build/resource pipeline, then use preview's
+`--skipBuild` flag; protect build-before-launch and no-duplicate-build in a
+package-script contract test. This is a startup-only fix, not evidence of live
+terminal latency improvement.
+
 ## Problem
 
 A live 2026-09-04 run had one Claude raw terminal with unusably low frame rate
@@ -50,8 +57,9 @@ the dispatcher looks up that id before invoking any host code.
 
 The dispatcher keeps the underlying listener for the renderer lifetime after
 its first subscriber. Terminal panes mount and unmount frequently, and
-churning the global IPC listener would turn React lifecycle timing into another
-event-loss boundary. Per-session registrations still unsubscribe immediately,
+churning the global IPC listener adds unnecessary preload setup/cleanup. The
+dispatcher does not buffer unowned data; attach/backfill still owns replay.
+Per-session registrations still unsubscribe immediately,
 and an empty key is removed from the map so detached sessions retain no host
 closures.
 
