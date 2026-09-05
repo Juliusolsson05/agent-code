@@ -174,6 +174,9 @@ export const sessionApi = {
     cwd: string
     providerSessionId: string
     beforeMarker: string
+    // Byte offset of the marker's line, from the previous chunk's
+    // `offsets`; lets main anchor the page exactly. See historyLoader.ts.
+    beforeOffset?: number
     limit?: number
   }): Promise<SessionHistoryChunk> =>
     ipcRenderer.invoke('session:load-older-history', params),

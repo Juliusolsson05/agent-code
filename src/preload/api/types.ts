@@ -275,6 +275,10 @@ export type SessionHistoryChunk = {
   // should treat absence as "unknown / not provided" and avoid using
   // it as a denominator unless it's a positive number.
   totalEntries?: number
+  // Byte offset of each entry's transcript line, parallel to `entries`.
+  // The renderer echoes the one for its pagination cursor line back as
+  // `beforeOffset`. See `HistoryChunk.offsets` in historyLoader.ts.
+  offsets?: number[]
 }
 
 export type TranscriptPathRequest = {

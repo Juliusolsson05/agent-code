@@ -16,6 +16,12 @@ function frame(message: unknown): unknown {
 }
 
 describe('allowed inbound messages', () => {
+  it('preserves a zero byte-offset cursor across the remote schema', () => {
+    const message = { type: 'get-history', sessionId: 's1', beforeMarker: 'same', beforeOffset: 0 }
+    const result = parseInboundFrame(frame(message))
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.frame.message).toEqual(message)
+  })
   it.each([
     ['ping', { type: 'ping' }],
     ['send-prompt', { type: 'send-prompt', sessionId: 's1', text: 'hello agent' }],
@@ -77,6 +83,9 @@ describe('out-of-scope and malformed frames', () => {
     ['no type at all', { sessionId: 's1' }],
     ['get-history without sessionId', { type: 'get-history' }],
     ['get-history with absurd limit', { type: 'get-history', sessionId: 's1', limit: 100000 }],
+    ['get-history with negative offset', { type: 'get-history', sessionId: 's1', beforeOffset: -1 }],
+    ['get-history with fractional offset', { type: 'get-history', sessionId: 's1', beforeOffset: 1.5 }],
+    ['get-history with string offset', { type: 'get-history', sessionId: 's1', beforeOffset: '100' }],
   ])('%s is rejected', (_label, message) => {
     const result = parseInboundFrame(frame(message))
     expect(result.ok).toBe(false)

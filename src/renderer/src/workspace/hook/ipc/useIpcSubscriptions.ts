@@ -2208,6 +2208,15 @@ export function useIpcSubscriptions(
               historyOldestMarker: entriesTrimmed > 0
                 ? trimmedOldestMarker
                 : oldestMarker,
+              // A marker learned here has no byte position: live frames do
+              // not carry offsets and a trim re-anchors on a retained entry
+              // whose line position was never recorded. Drop the offset so
+              // the next older page takes the loader's marker-only path
+              // (slower, terminating) and re-arms the exact cursor from the
+              // offsets that page returns. Untouched when the marker is.
+              historyOldestOffset: entriesTrimmed > 0 || oldestMarker !== current.historyOldestMarker
+                ? null
+                : current.historyOldestOffset,
               ...(entriesTrimmed > 0 ? { hasOlderHistory: true } : {}),
               bootstrapping: true,
               queuedMessages,

@@ -674,6 +674,7 @@ export class RemoteServer extends EventEmitter {
           ? await loadOlderHistoryChunkFromFile(file, {
               kind,
               beforeMarker: msg.beforeMarker,
+              beforeOffset: msg.beforeOffset,
               limit: msg.limit ?? 200,
             })
           : await loadInitialHistoryChunkFromFile(file, msg.limit ?? 120)
