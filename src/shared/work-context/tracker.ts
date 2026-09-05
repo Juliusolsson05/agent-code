@@ -215,11 +215,14 @@ export function canonicalizeWorktreeActivity(
   state: WorktreeActivityState,
   worktrees: WorktreeIdentity[],
 ): WorktreeActivityState {
-  return {
-    ...state,
-    active: canonicalizeContext(state.active, worktrees),
-    primary: canonicalizeContext(state.primary, worktrees),
-  }
+  const active = canonicalizeContext(state.active, worktrees)
+  const primary = canonicalizeContext(state.primary, worktrees)
+  // Catalog refresh is not activity. The live renderer uses these references
+  // to decide whether a session needs a state update; cloning on every Git
+  // cache hit made even quiet sibling sessions rerender and append diagnostics.
+  return active === state.active && primary === state.primary
+    ? state
+    : { ...state, active, primary }
 }
 
 export function deriveAgentWorkContext(
@@ -248,6 +251,12 @@ function canonicalizeContext(
   if (!context?.worktreePath) return context
   const matched = matchWorktree(context.worktreePath, worktrees)
   if (!matched) return context
+  const repoRoot = worktrees[0]?.path ?? context.repoRoot
+  if (
+    context.worktreePath === matched.path &&
+    context.branch === matched.branch &&
+    context.repoRoot === repoRoot
+  ) return context
   return {
     ...context,
     worktreePath: matched.path,
@@ -255,6 +264,6 @@ function canonicalizeContext(
     // provider's earlier branch string here would undo contextFromPath's Git
     // authority whenever an async cache refresh canonicalizes existing state.
     branch: matched.branch,
-    repoRoot: worktrees[0]?.path ?? context.repoRoot,
+    repoRoot,
   }
 }
