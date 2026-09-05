@@ -28,6 +28,11 @@ external server to the agents being operated or edit their MCP configuration.
 
 ## Select the correct window and agent
 
+For computer attachment, first use `ac_app_identity`: match the running PID and
+exact executable/bundle path. Development checkouts can share the Electron bundle
+ID and title. Attach to the existing process; opening a guessed executable can
+launch an unrelated blank Electron window.
+
 Use `ac_app_windows` to get stable window IDs and current renderer generations,
 then `ac_app_observe` for the project tabs, agents, layout and input-owning surfaces
 in each window. A window, project tab, grid tile and agent session are different
@@ -52,6 +57,23 @@ to display that exact session. Showing an agent may wake it. Buried agents requi
 explicit restoration; do not create a replacement just because a session is off
 screen. After a tool changes focus or opens a surface, inspect the actual selected
 window before clicking or typing.
+
+For example, to focus “A5 in window two” while preserving `[A5, B7, B8, B9]`:
+
+1. Match window two using `ac_app_windows` and its projects in `ac_app_observe`.
+2. Search `{label: "A5", windowId: "<that stable ID>"}`. Check `displayedTitle`,
+   provider and conversation; the same label in another window is another agent.
+3. Locate the returned stable session ID, then call `ac_agents_show` with
+   `intent: "reuse-existing-view"` and that window/generation.
+4. Verify the foreground window and lane selections before computer input.
+
+Clicking A5 in a Dispatch row’s shared index places it into that row’s **focused lane**
+(or its first lane when focus is in another row),
+even if another lane already shows A5. That can change `[A5, B7, B8, B9]` to
+`[A5, A5, B8, B9]`: two views of one process, not a new agent. Use explicit
+`open-in-focused-tiled-dispatch-lane` only when that replacement is intended.
+`layout.read.effectiveFocusedSessionId` is the current command target;
+`dispatch.classicFocusedSessionId` only remembers classic Dispatch selection.
 
 ## Choose MCP or computer use
 
@@ -93,11 +115,16 @@ shows unsaved/conflicting buffers; `ac_editor_open` preserves those edits.
 Use `ac_agents_prompt` with the exact session and the user's intended prompt.
 A successful response confirms provider acceptance, which may be a queue or
 transport acknowledgment. It does not mean the task finished. The tool preserves
-the composer's draft; do not also click Send for the same prompt.
+Agent Code’s app-owned draft; do not also click Send for the same prompt.
 
 To edit unsent text, read `ac_agents_draft_get` and supply its revision to
 `ac_agents_draft_set`. Replace preserves attachments; clear removes them; undo
-restores text only. Draft editing never submits a prompt.
+restores text only. Draft editing never submits a prompt. `ac_agents_input_inspect` separately reports
+native provider draft knowledge. `unknown` is not empty; an xterm accessibility
+“Terminal input” value is transport state and may omit existing TUI text. Prefer
+typed prompt delivery with its provider checks. If computer paste/Return is
+needed, establish the full native composer first and verify the committed prompt;
+do not clear uncertain existing text just to make room.
 
 Use `ac_agents_conditions_read` to inspect a blocking provider condition. Reply
 only with an advertised action ID and its current revision using
@@ -141,6 +168,54 @@ not append Enter. These tools never wake a missing process.
 Finish its dialog with computer use and call `ac_operations_read` with the returned
 callId to learn whether it closed or was cancelled. Do not interpret acceptance as
 completion or issue a second close while confirmation is pending.
+
+## Batches and broader controls
+
+`ac_agents_batch_read` and `ac_agents_batch_prompt` accept up to 20 independent
+items. Inspect every child result, including failures. Keep each read cursor with
+its own agent/depth. For partial prompt retries, keep `batchKey` and each `itemKey`
+stable; if the subset changes, use a new parent `_control.requestKey`. Retrying an
+unknown child under another key risks duplicate delivery. Batch acceptance says
+nothing about task completion; monitor each agent and its conditions.
+
+`ac_settings_values/set` handles advertised ordinary choices with revisions.
+Use `ac_settings_reference` and the UI for other settings. `ac_templates_list/read`
+finds reusable prompts; insertion needs both template and draft revisions and an
+explicit project for dynamic context. Inspect the draft before sending. Save/delete
+only changes custom templates. `ac_ui_surfaces/surface_set` selects named panels;
+`ac_usage_read` and `ac_worktrees_read` provide read-only evidence.
+
+For existing workflows, list definitions for the exact cwd, then start with JSON
+arguments. Ordinary source approval may need computer use. Poll the returned task
+callId through `ac_operations_read` for runId, then use `ac_workflows_status/events/result`.
+Cancel/resume is limited to the external connection's runs. Clients sharing this
+connection share that ownership; it is not a per-person identity. Internal agent
+runs keep their owner, and workflow workers do not gain this operator toolkit.
+
+## Lifecycle and views
+
+Read `ac_agents_lifecycle_read` before reload, switch, duplicate, rewind or undo.
+Use its supported choices and current revision. These operations return a task
+callId; `ac_operations_read` returns the final replacement ID. Re-find that ID
+before further actions. Reload/rewind/duplicate require idle native conversations;
+`ac_agents_interrupt` requests the ordinary Stop signal, not process termination.
+
+Use `ac_native_history_list` for a bounded recent catalog outside the workspace,
+and `ac_native_history_prompts` for exact rewind addresses. Native IDs are not
+Agent Code session IDs. Resume continues the native conversation; duplicate
+branches a copy. OpenCode discovery can be unavailable while known IDs still work. This catalog is
+not a full historical topic search.
+
+`ac_placement_inspect` explains detach/bury consequences before their revision-bound
+operations. Last-pane bury also archives detached children. `ac_views_agent_set`
+selects Reader, Spotlight or normal workspace by desired state, without toggles.
+
+Creating a detached agent normally selects it in the lane focused when creation
+began, replacing that view without closing its agent. To preserve current tabs and
+lanes, use `ac_agents_create` with `selectCreated:false`. Then read `ac_layout_read`
+and use `ac_dispatch_configure` with `change.action:"lane-select"`, the target
+`laneIndex`, the returned session ID and a fresh revision. Resume/duplicate also
+select their created agent using normal creation behavior; inspect lanes afterwards.
 
 ## Recover and verify
 

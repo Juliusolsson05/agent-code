@@ -96,7 +96,7 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
         const query = input.query.trim().toLocaleLowerCase()
         const rows = observe().sessions.filter(session => session.provider !== 'terminal'
           && (!input.tabId || session.placements.some(placement => placement.tabId === input.tabId))
-          && [session.sessionId, session.title, session.cwd, session.provider].some(value => value.toLocaleLowerCase().includes(query)))
+          && [session.sessionId, session.title, session.displayedTitle, session.displayLabel ?? '', session.cwd, session.provider].some(value => value.toLocaleLowerCase().includes(query)))
         return paginate(rows, input, `agents:${query}:${input.tabId ?? ''}`)
       },
     }),
@@ -186,16 +186,16 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
     }),
     defineCapability({
       id: 'agents.create', target: { kind: 'project', field: 'tabId' }, title: 'Create a project agent', execution: 'window', effect: 'mutation',
-      description: 'Create an ordinary detached agent in the explicit project, anchored to an existing agent directory. Returns its exact ID; agents.show can then reveal it without creating another process.',
+      description: 'Create an ordinary detached agent in the explicit project, anchored to an existing agent directory. Detached means outside the project grid, not hidden: selectCreated defaults true, activates the project and selects the new agent in the Dispatch lane focused when creation began, replacing that view without closing its agent. Set selectCreated:false to preserve tabs and lane assignments, then use layout.read and dispatch.configure (lane-select) to place the returned ID in an explicit lane.',
       input: z.object({ tabId: z.string().describe('Project tab ID from app.observe in the target window.'), anchorSessionId: z.string().describe('Existing agent in this project that supplies the working directory or grid placement anchor.'), provider,
-        providerRuntime: z.enum(AGENT_PROVIDER_RUNTIMES).optional().describe('Omit for the normal structured agent view. terminal requests the provider-native terminal runtime.'), title: z.string().describe('Agent display title; empty clears a custom title. Normal UI normalization applies.').optional() }).strict(),
+        selectCreated: z.boolean().default(true).describe('False preserves the current tab and every Dispatch lane; true selects the created agent using normal UI creation behavior.'), providerRuntime: z.enum(AGENT_PROVIDER_RUNTIMES).optional().describe('Omit for the normal structured agent view. terminal requests the provider-native terminal runtime.'), title: z.string().describe('Agent display title; empty clears a custom title. Normal UI normalization applies.').optional() }).strict(),
       output: sessionReference,
-      handler: async ({ tabId, anchorSessionId, provider: kind, providerRuntime, title }) => {
+      handler: async ({ tabId, anchorSessionId, provider: kind, providerRuntime, title, selectCreated }) => {
         requireUi(); requireSession(anchorSessionId)
         if (!resolveTabSessions(useAppStore.getState().workspaceState, tabId).includes(anchorSessionId)) {
           throw new ControlError('unavailable', 'Anchor does not belong to that project')
         }
-        const sessionId = await getWorkspace().createDetachedDispatchAgent({ kind, providerRuntime }, { tabId, anchorSessionId })
+        const sessionId = await getWorkspace().createDetachedDispatchAgent({ kind, providerRuntime }, { tabId, anchorSessionId }, undefined, { selectCreated })
         if (!sessionId) throw new ControlError('failed', 'Agent creation did not produce a placed session; inspect the project', 'unknown')
         if (title !== undefined) setTitle(sessionId, title)
         return requireSession(sessionId)
@@ -203,7 +203,7 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
     }),
     defineCapability({
       id: 'agents.prompt', target: { kind: 'session', field: 'sessionId' }, title: 'Send an agent prompt', execution: 'window', effect: 'mutation', completion: 'accepted',
-      description: 'Deliver text to the exact agent through the provider delivery protocol. Reports user, queue or transport acceptance, not task completion. Preserves the composer draft and never retries an uncertain write.',
+      description: 'Deliver text to the exact agent through the provider delivery protocol. Reports user, queue or transport acceptance, not task completion. Preserves the Agent Code composer draft and never retries an uncertain write. Native TUI drafts are separate: agents.inputInspect reports available knowledge; provider delivery checks remain authoritative and transport acceptance is not proof of the exact committed text.',
       input: sessionInput.extend({ prompt: z.string().min(1).max(1_000_000).describe('Exact text to deliver once. A successful acceptance can be queued; inspect agents.read for actual progress.') }),
       output: z.object({ sessionId: z.string(), acceptance: z.object({ kind: z.enum(['user', 'queue', 'transport']), acceptedAt: z.number(), entryId: z.string().optional() }) }),
       handler: async ({ sessionId, prompt }) => {

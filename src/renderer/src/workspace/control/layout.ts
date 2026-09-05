@@ -4,6 +4,7 @@ import { useAppStore } from '@renderer/app-state/store'
 import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
 import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 import { normalizeGridShape, MAX_DISPATCH_ROWS, MAX_DISPATCH_TILES, MAX_DISPATCH_LANES, INDEX_FRACTION_MIN, INDEX_FRACTION_MAX } from '@renderer/workspace/dispatch/gridShape'
+import { observeWorkspace } from '@renderer/workspace/control'
 import type { Workspace } from '@renderer/workspace/hook'
 
 const tabId = z.string().describe('Stable project tab ID from app.observe in this window.')
@@ -16,14 +17,19 @@ const rowIndex = z.number().int().min(0).describe('Zero-based row index from lay
 const laneIndex = z.number().int().min(0).describe('Zero-based flat lane index from layout.read; rows are laid out in row-major order.')
 const scope = z.enum(['project', 'global']).describe('Project uses the active project; global includes every project in this window.')
 const layoutOutput = z.object({ revision: z.string(), activeTabId: z.string(), tabs: z.array(z.object({ id: z.string(), root: z.json() })),
-  dispatch: z.json().nullable() })
+  dispatch: z.json().nullable(), effectiveFocusedSessionId: z.string().nullable() })
 
 export function layoutControlCapabilities(getWorkspace: () => Workspace) {
   const read = () => {
     const { workspaceState: state } = useAppStore.getState()
     const dispatch = state.dispatchMode ? { ...state.dispatchMode,
+      // Stored focusedSessionId remembers classic Dispatch selection. Tiled
+      // command targeting follows its focused lane instead (#798). Preserve
+      // that memory under an honest name and expose the effective target.
+      classicFocusedSessionId: state.dispatchMode.focusedSessionId,
+      focusedSessionId: observeWorkspace(getWorkspace).focusedSessionId,
       ...(state.dispatchMode.tiled ? { tiled: normalizeGridShape(state.dispatchMode.tiled) } : {}) } : null
-    const value = { activeTabId: state.activeTabId, tabs: state.tabs.map(({ id, root }) => ({ id, root })), dispatch }
+    const value = { effectiveFocusedSessionId: observeWorkspace(getWorkspace).focusedSessionId, activeTabId: state.activeTabId, tabs: state.tabs.map(({ id, root }) => ({ id, root })), dispatch }
     return { ...JSON.parse(JSON.stringify(value)), revision: paginate([value], { limit: 1 }, 'workspace-layout').revision }
   }
   const admit = (expected: string) => {
@@ -39,7 +45,7 @@ export function layoutControlCapabilities(getWorkspace: () => Workspace) {
   return [
     defineCapability({
       id: 'layout.read', title: 'Read project trees and Dispatch layout', execution: 'window', effect: 'read', input: z.object({}).strict(), output: layoutOutput,
-      description: 'Read exact project tile trees, active tab and normalized Dispatch rows/lanes with a revision for edits. Tree split direction vertical means left/right; horizontal means top/bottom; ratio is the a-child share. Dispatch lanes are flat row-major indices, rows specify their lengths. Reading does not focus or wake agents.',
+      description: 'Read exact project tile trees, active tab and normalized Dispatch rows/lanes with a revision for edits. Tree split direction vertical means left/right; horizontal means top/bottom; ratio is the a-child share. Dispatch lanes are flat row-major indices, rows specify their lengths. effectiveFocusedSessionId is the current command target; dispatch.classicFocusedSessionId is only remembered classic selection. Reading does not focus or wake agents.',
       handler: read,
     }),
     defineCapability({

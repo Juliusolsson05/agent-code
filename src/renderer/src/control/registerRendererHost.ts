@@ -1,3 +1,7 @@
+import { settingsControlCapabilities } from '@renderer/features/settings/control'
+import { templateControlCapabilities } from '@renderer/features/prompt-templates/control'
+import { worktreeControlCapabilities } from '@renderer/features/worktrees/control'
+import { surfaceControlCapabilities } from '@renderer/app-state/uiShell/control'
 import { useEffect, useRef } from 'react'
 import { createControlRegistry } from '@control-sdk/host'
 import {
@@ -9,6 +13,8 @@ import { agentControlCapabilities } from '@renderer/workspace/control/agents'
 import { draftControlCapabilities } from '@renderer/workspace/control/drafts'
 import { conditionControlCapabilities } from '@renderer/workspace/control/conditions'
 import { layoutControlCapabilities } from '@renderer/workspace/control/layout'
+import { lifecycleControlCapabilities } from '@renderer/workspace/control/lifecycle'
+import { navigationControlCapabilities } from '@renderer/workspace/control/navigation'
 import { terminalControlCapabilities } from '@renderer/workspace/control/terminals'
 import { editorControlCapabilities } from '@renderer/features/global-editor/control'
 import { commandControlCapabilities } from '@renderer/features/command-palette/control'
@@ -73,7 +79,13 @@ export function useControlRegistration(workspace: Workspace): void {
       ...conditionControlCapabilities(),
       ...layoutControlCapabilities(() => current.current),
       ...terminalControlCapabilities(() => current.current),
+      ...lifecycleControlCapabilities(() => current.current),
+      ...navigationControlCapabilities(() => current.current),
       ...editorControlCapabilities(),
+      ...settingsControlCapabilities(() => current.current),
+      ...templateControlCapabilities(() => current.current),
+      ...worktreeControlCapabilities(() => current.current),
+      ...surfaceControlCapabilities(),
       ...commandControlCapabilities(),
       ...keybindingControlCapabilities(),
       ...documentationCapabilities(),

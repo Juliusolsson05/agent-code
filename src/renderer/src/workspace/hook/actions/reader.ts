@@ -26,9 +26,25 @@ export function useReaderActions(
   setState: WorkspaceSetState,
   refs: WorkspaceRefs,
 ): {
+  setReaderModeTarget: (sessionId: SessionId | null) => boolean
   toggleReaderMode: () => void
   setReaderModeSession: (sessionId: SessionId) => void
 } {
+  // Explicit desired state lets command clients select a non-focused agent
+  // without a focus-then-toggle race. Ownership uses the same placement query
+  // as UI toggles, including detached and related sessions.
+  const setReaderModeTarget = useCallback((sessionId: SessionId | null) => {
+    if (sessionId === null) { setReaderMode(null); return true }
+    const current = refs.stateRef.current
+    const target = resolveFocusSurfaceTarget(current, sessionId)
+    if (!target) return false
+    if (!isAgentProviderKind(current.sessions[sessionId]?.kind ?? DEFAULT_PROVIDER)) return false
+    setSpotlight(null)
+    setState(prev => ({ ...prev, activeTabId: target.tabId }))
+    setReaderMode({ tabId: target.tabId, focusedSessionId: sessionId })
+    return true
+  }, [refs.stateRef, setReaderMode, setState, setSpotlight])
+
   const toggleReaderMode = useCallback(() => {
     const current = refs.stateRef.current
     const target = resolveFocusSurfaceTarget(current)
@@ -108,5 +124,5 @@ export function useReaderActions(
     [refs.stateRef, setReaderMode, setState],
   )
 
-  return { toggleReaderMode, setReaderModeSession }
+  return { setReaderModeTarget, toggleReaderMode, setReaderModeSession }
 }

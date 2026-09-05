@@ -16,7 +16,7 @@ export const controlReference = [
       "submit deliberately."
     ],
     "outcome": "The intended prompt text is available for the target agent.",
-    "cautions": "Template selection, draft insertion and prompt delivery have different completion states.",
+    "cautions": "templates.list/read describes stored or dynamic bodies. templates.insert requires template/draft revisions and an explicit project, preserves attachments and never sends. templates.save/delete changes custom templates only. Inspect the resulting draft before delivery.",
     "commandIds": [
       "prompt-template",
       "manage-prompt-templates",

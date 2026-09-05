@@ -41,7 +41,7 @@ export const controlReference = [
       "pin frequently used sessions."
     ],
     "outcome": "Each lane shows its selected session; mirrored lanes share the same session.",
-    "cautions": "Removing a lane and closing its agent are separate actions. Empty lanes stay empty until selected. layout.read returns the revision required by dispatch.configure, layout.adjust and tabs.reorder. Grid edits carry explicit sourceRow identities to preserve each retained row's agents and project filters.",
+    "cautions": "To focus an agent already shown in another lane, use agents.show with reuse-existing-view. Clicking the shared index replaces the focused lane selection, and intentional mirrors remain supported. Visible labels are window-local; agents.search accepts exact label plus windowId. Removing a lane and closing its agent are separate actions. Empty lanes stay empty until selected. layout.read returns the revision required by dispatch.configure, layout.adjust and tabs.reorder. Grid edits carry explicit sourceRow identities to preserve each retained row's agents and project filters.",
     "commandIds": [
       "dispatch-mode",
       "global-dispatch",
@@ -60,10 +60,10 @@ export const controlReference = [
       "Inspect the current provider and readiness",
       "choose the supported operation",
       "wait for its actual outcome",
-      "observe the same session again."
+      "read operations.read for the new session ID and observe that replacement."
     ],
     "outcome": "The chosen provider or history state is visible and ready for the next step.",
-    "cautions": "A live process does not establish input readiness. Provider switch can change the provider conversation identity. Rewind is not a harmless view change.",
+    "cautions": "Use agents.lifecycleRead for supported choices/revisions and nativeHistory.list/prompts for native identities/rewind addresses. Resume, duplicate, switch, reload, rewind and undoRewind report final IDs through operations.read. A live process does not establish input readiness. Provider switch can change the provider conversation identity. Rewind is not a harmless view change.",
     "commandIds": []
   },
   {
@@ -79,7 +79,7 @@ export const controlReference = [
       "read output and exit state."
     ],
     "outcome": "Commands run in the selected terminal; agent terminal view exposes its existing provider process.",
-    "cautions": "Use terminals.create/read/input for detached terminal creation and retained raw PTY output with exact run-bound input. Retained output is bounded and is not unlimited history. Terminal keystrokes belong to the running program. Closing a view, interrupting a job and killing a session differ.",
+    "cautions": "Use terminals.create/read/input for detached terminal creation and retained raw PTY output with exact run-bound input. Retained output is bounded and is not unlimited history. agents.inputInspect reports native draft knowledge separately from agents.draftGet: unknown never means empty, and xterm accessibility input is not the full TUI draft. Terminal keystrokes belong to the running program. Closing a view, interrupting a job and killing a session differ.",
     "commandIds": []
   }
 ] satisfies FeatureReference[]
