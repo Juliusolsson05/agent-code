@@ -5,6 +5,7 @@ import {
   killOwnedMitmproxyProcessesSync,
   mitmproxyOwnerMarker,
   parsePsRows,
+  sameMitmproxyProcess,
   reapOwnedMitmproxyProcesses,
   reapStaleMitmproxyProcesses,
   selectStaleMitmproxyProcesses,
@@ -19,6 +20,7 @@ afterEach(() => vi.useRealTimers())
 const CONF_DIR = '/Users/someone/.config/agent-code/proxy/_shared-conf'
 const MARKER = mitmproxyOwnerMarker(CONF_DIR)
 const SELF_PID = 7_117
+const STARTED_AT = 'Fri Sep 4 12:00:00 2026'
 
 // The exact argv shape ProxyServer.startUnlocked produces, as `ps -o args=`
 // prints it (verified against a live dev instance on 2026-09-03).
@@ -31,7 +33,7 @@ function mitmdumpArgs(port: number, confDir: string = CONF_DIR): string {
 }
 
 function row(pid: number, ppid: number, args: string): ProcessRow {
-  return { pid, ppid, args }
+  return { pid, ppid, args, startedAt: STARTED_AT }
 }
 
 function esrch(): NodeJS.ErrnoException {
@@ -41,8 +43,8 @@ function esrch(): NodeJS.ErrnoException {
 describe('ps row parsing', () => {
   it('keeps the whole command line including spaces and right-aligned pids', () => {
     const text = [
-      '    1     0 /sbin/launchd',
-      ` 75312 ${SELF_PID} ${mitmdumpArgs(57337)}`,
+      `    1     0 ${STARTED_AT} /sbin/launchd`,
+      ` 75312 ${SELF_PID} ${STARTED_AT} ${mitmdumpArgs(57337)}`,
       '',
       'garbage line without numbers',
     ].join('\n')
@@ -125,6 +127,21 @@ describe('selectStaleMitmproxyProcesses', () => {
 })
 
 describe('terminateProcessWithGrace', () => {
+  it('does not escalate after PID identity changes during the grace period', async () => {
+    vi.useFakeTimers()
+    const kill = vi.fn()
+    const canSignal = vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false)
+    const result = terminateProcessWithGrace(42, { kill, canSignal, isPidRunning: () => true, graceMs: 100, pollMs: 10 })
+    await vi.advanceTimersByTimeAsync(100)
+    await expect(result).resolves.toBe('identity-changed')
+    expect(kill.mock.calls).toEqual([[42, 'SIGTERM']])
+  })
+
+  it('sends no signal when initial identity cannot be proven', async () => {
+    const kill = vi.fn()
+    await expect(terminateProcessWithGrace(42, { kill, canSignal: async () => false, isPidRunning: () => true })).resolves.toBe('identity-changed')
+    expect(kill).not.toHaveBeenCalled()
+  })
   function fakeProcess(options: { exitAfterTermMs?: number; ignoreTerm?: boolean; ignoreKill?: boolean } = {}) {
     let alive = true
     const signals: NodeJS.Signals[] = []
@@ -192,6 +209,36 @@ describe('terminateProcessWithGrace', () => {
     await expect(
       terminateProcessWithGrace(42, { kill, isPidRunning: () => true }),
     ).rejects.toThrow('EPERM')
+  })
+})
+
+describe('signal identity boundary', () => {
+  const expected = row(42, SELF_PID, mitmdumpArgs(50001))
+  it('accepts the same native proxy including executable paths with spaces', () => {
+    expect(sameMitmproxyProcess(expected, { row: expected, command: '/Applications/Agent Code.app/mitmdump' })).toBe(true)
+  })
+  it('accepts a normal Python mitmdump launcher but not an unrelated Python script carrying the marker', () => {
+    const python = { ...expected, args: '/usr/bin/python3 /opt/homebrew/bin/mitmdump --set ' + MARKER }
+    expect(sameMitmproxyProcess(python, { row: python, command: '/usr/bin/python3' })).toBe(true)
+    const unrelated = { ...expected, args: '/usr/bin/python3 unrelated.py --set ' + MARKER }
+    expect(sameMitmproxyProcess(unrelated, { row: unrelated, command: '/usr/bin/python3' })).toBe(false)
+  })
+  it('does not kill a recycled PID in the synchronous exit sweep', () => {
+    const kill = vi.fn()
+    expect(killOwnedMitmproxyProcessesSync({
+      listProcessesSync: () => [expected], marker: MARKER, selfPid: SELF_PID, kill,
+      inspectProcessSync: () => ({ row: { ...expected, startedAt: 'Fri Sep 4 12:01:00 2026' }, command: 'mitmdump' }),
+    })).toBe(0)
+    expect(kill).not.toHaveBeenCalled()
+  })
+  it.each([
+    { row: { ...expected, startedAt: 'Fri Sep 4 12:01:00 2026' }, command: 'mitmdump' },
+    { row: { ...expected, ppid: 999 }, command: 'mitmdump' },
+    { row: { ...expected, args: mitmdumpArgs(50002) }, command: 'mitmdump' },
+    { row: expected, command: '/usr/bin/echo' },
+    null,
+  ])('rejects replacement, reassignment and unrelated executables', current => {
+    expect(sameMitmproxyProcess(expected, current)).toBe(false)
   })
 })
 
@@ -271,6 +318,7 @@ describe('quit-time sweeps', () => {
     })
     const killed = killOwnedMitmproxyProcessesSync({
       listProcessesSync: () => rows,
+      inspectProcessSync: pid => ({ row: rows.find(item => item.pid === pid)!, command: '/opt/homebrew/bin/mitmdump' }),
       marker: MARKER,
       selfPid: SELF_PID,
       kill,

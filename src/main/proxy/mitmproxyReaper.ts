@@ -1,5 +1,5 @@
 import { execFile, execFileSync } from 'node:child_process'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { promisify } from 'node:util'
 
 import { PROXY_EVENTS_DIR } from '@main/storage/paths.js'
@@ -91,22 +91,23 @@ export function mitmproxyOwnerMarker(confDir: string = MITMPROXY_SHARED_CONF_DIR
 export type ProcessRow = {
   pid: number
   ppid: number
+  /** Kernel start timestamp: PID liveness alone is not process identity. */
+  startedAt: string
   /** Full command line as `ps -o args=` prints it (argv joined by spaces). */
   args: string
 }
 
 /**
- * Parse `ps -o pid=,ppid=,args=` output. Leading whitespace is right-aligned
- * pid padding; everything after the second number is the command line and
- * may itself contain spaces (paths under `Application Support`, a home
- * directory with a space), which is why this is a regex and not a split.
+ * Parse `ps -o pid=,ppid=,lstart=,args=` under LC_ALL=C. The fixed timestamp
+ * fields distinguish process generations; everything afterwards is preserved
+ * verbatim because executable and configuration paths may contain spaces.
  */
 export function parsePsRows(text: string): ProcessRow[] {
   const rows: ProcessRow[] = []
   for (const line of text.split('\n')) {
-    const match = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line)
+    const match = /^\s*(\d+)\s+(\d+)\s+(\w{3}\s+\w{3}\s+\d+\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(.*)$/.exec(line)
     if (!match) continue
-    rows.push({ pid: Number(match[1]), ppid: Number(match[2]), args: match[3] })
+    rows.push({ pid: Number(match[1]), ppid: Number(match[2]), startedAt: match[3].replace(/\s+/g, ' '), args: match[4] })
   }
   return rows
 }
@@ -211,7 +212,8 @@ export function selectOwnedMitmproxyProcesses(
   return rows.filter(row => row.ppid === ctx.selfPid && hasMitmproxyOwnerMarker(row.args, ctx.marker))
 }
 
-const PS_ARGS = ['-e', '-ww', '-o', 'pid=,ppid=,args=']
+const PS_FIELDS = 'pid=,ppid=,lstart=,args='
+const PS_ARGS = ['-e', '-ww', '-o', PS_FIELDS]
 // ~700 processes × a few hundred bytes on a busy dev machine is well under a
 // megabyte; the cap only exists so a pathological host cannot make us buffer
 // without bound.
@@ -229,6 +231,8 @@ export async function listProcesses(): Promise<ProcessRow[]> {
   const { stdout } = await execFileAsync('ps', PS_ARGS, {
     encoding: 'utf8',
     maxBuffer: PS_MAX_BUFFER,
+    env: { ...process.env, LC_ALL: 'C' },
+    timeout: 1_000,
   })
   return parsePsRows(stdout)
 }
@@ -240,12 +244,16 @@ export function listProcessesSync(): ProcessRow[] {
     execFileSync('ps', PS_ARGS, {
       encoding: 'utf8',
       maxBuffer: PS_MAX_BUFFER,
+      env: { ...process.env, LC_ALL: 'C' },
+      timeout: 1_000,
       stdio: ['ignore', 'pipe', 'ignore'],
     }),
   )
 }
 
 export type TerminateOutcome =
+  /** Identity/ownership changed or could not be proven. No further signals. */
+  | 'identity-changed'
   /** Not running before we sent anything (or gone by the time SIGTERM went out). */
   | 'already-gone'
   /** Exited inside the grace window after SIGTERM. The good path. */
@@ -255,7 +263,62 @@ export type TerminateOutcome =
   /** Still reported running after SIGKILL and its wait. Journal it; nothing more we can do. */
   | 'survived'
 
+export type ProcessIdentity = { row: ProcessRow; command: string }
+
+// WHY the command is queried separately: ps flattens argv without escaping
+// spaces. A marker occurring in another program's arguments is not proof that
+// program is mitmdump. The kernel command plus the start timestamp, parent and
+// unchanged arguments all have to match. Unknown interpreter layouts fail
+// closed. This is not a pidfd: ps timestamps have second precision and a tiny
+// check-to-signal race remains on POSIX; never claim atomic PID-reuse safety.
+export function sameMitmproxyProcess(expected: ProcessRow, current: ProcessIdentity | null): boolean {
+  if (!current || !expected.startedAt) return false
+  const { row, command } = current
+  if (row.pid !== expected.pid || row.ppid !== expected.ppid ||
+      row.startedAt !== expected.startedAt || row.args !== expected.args) return false
+  const executable = basename(command)
+  return executable === 'mitmdump' || (
+    /^python(?:\d+(?:\.\d+)*)?$/i.test(executable) &&
+    /^\S*python[\d.]*\s+\S*\/mitmdump(?:\s|$)/i.test(row.args)
+  )
+}
+
+const INSPECT_OPTIONS = {
+  encoding: 'utf8' as const,
+  maxBuffer: PS_MAX_BUFFER,
+  timeout: 1_000,
+  env: { ...process.env, LC_ALL: 'C' },
+}
+
+async function inspectProcess(pid: number): Promise<ProcessIdentity | null> {
+  try {
+    const [details, command] = await Promise.all([
+      execFileAsync('ps', ['-p', String(pid), '-ww', '-o', PS_FIELDS], INSPECT_OPTIONS),
+      execFileAsync('ps', ['-p', String(pid), '-o', 'comm='], INSPECT_OPTIONS),
+    ])
+    const row = parsePsRows(details.stdout)[0]
+    return row ? { row, command: command.stdout.trim() } : null
+  } catch { return null }
+}
+
+function inspectProcessSync(pid: number): ProcessIdentity | null {
+  try {
+    const row = parsePsRows(execFileSync('ps', ['-p', String(pid), '-ww', '-o', PS_FIELDS], INSPECT_OPTIONS))[0]
+    const command = execFileSync('ps', ['-p', String(pid), '-o', 'comm='], INSPECT_OPTIONS).trim()
+    return row ? { row, command } : null
+  } catch { return null }
+}
+
+function guardedTerminator(deps: ReapDeps): (pid: number, row: ProcessRow) => Promise<TerminateOutcome> {
+  return (pid, expected) => terminateProcessWithGrace(pid, {
+    isPidRunning: deps.isPidRunning,
+    canSignal: async () => sameMitmproxyProcess(expected, await (deps.inspectProcess ?? inspectProcess)(pid)),
+  })
+}
+
 export type TerminateDeps = {
+  /** Revalidate immediately before EACH signal, including delayed SIGKILL. */
+  canSignal?: () => Promise<boolean>
   /** Must throw an ErrnoException with code ESRCH when the pid is gone. */
   kill?: (pid: number, signal: NodeJS.Signals) => void
   isPidRunning?: (pid: number) => boolean
@@ -337,8 +400,10 @@ export async function terminateProcessWithGrace(
   const pollMs = deps.pollMs ?? DEFAULT_TERMINATE_POLL_MS
 
   if (!isPidRunning(pid)) return 'already-gone'
+  if (deps.canSignal && !await deps.canSignal()) return 'identity-changed'
   if (!signalOrGone(kill, pid, 'SIGTERM')) return 'already-gone'
   if (await waitForExit(pid, isPidRunning, graceMs, pollMs)) return 'exited-on-term'
+  if (deps.canSignal && !await deps.canSignal()) return 'identity-changed'
   // Gone between the last poll and the SIGKILL: it did honour SIGTERM,
   // just slowly. Report it as such so the journal does not over-count kills.
   if (!signalOrGone(kill, pid, 'SIGKILL')) return 'exited-on-term'
@@ -347,6 +412,7 @@ export async function terminateProcessWithGrace(
 }
 
 export type ReapDeps = {
+  inspectProcess?: (pid: number) => Promise<ProcessIdentity | null>
   listProcesses?: () => Promise<ProcessRow[]>
   marker?: string
   selfPid?: number
@@ -377,14 +443,14 @@ export type StaleReapReport = {
 
 async function terminateAll(
   rows: readonly ProcessRow[],
-  terminate: (pid: number) => Promise<TerminateOutcome>,
+  terminate: (pid: number, row: ProcessRow) => Promise<TerminateOutcome>,
 ): Promise<ReapedProcess[]> {
   // Parallel on purpose: each terminate spends most of its time sleeping in
   // the grace window, and twenty orphans serially would be forty seconds.
   return await Promise.all(
     rows.map(async (row): Promise<ReapedProcess> => {
       try {
-        return { pid: row.pid, ppid: row.ppid, outcome: await terminate(row.pid) }
+        return { pid: row.pid, ppid: row.ppid, outcome: await terminate(row.pid, row) }
       } catch (err) {
         return {
           pid: row.pid,
@@ -401,7 +467,7 @@ function countReaped(processes: readonly ReapedProcess[]): { reaped: number; sur
   let reaped = 0
   let survived = 0
   for (const entry of processes) {
-    if (entry.outcome === 'survived' || entry.outcome === 'error') survived += 1
+    if (entry.outcome === 'survived' || entry.outcome === 'error' || entry.outcome === 'identity-changed') survived += 1
     else reaped += 1
   }
   return { reaped, survived }
@@ -426,8 +492,7 @@ export async function reapStaleMitmproxyProcesses(deps: ReapDeps = {}): Promise<
     selfPid: deps.selfPid ?? process.pid,
     isPidRunning: deps.isPidRunning ?? defaultIsPidRunning,
   })
-  const terminate =
-    deps.terminate ?? ((pid: number) => terminateProcessWithGrace(pid, { isPidRunning: deps.isPidRunning }))
+  const terminate = deps.terminate ?? guardedTerminator(deps)
   const processes = await terminateAll(selection.stale, terminate)
   return {
     scanned: rows.length,
@@ -461,13 +526,13 @@ export async function reapOwnedMitmproxyProcesses(deps: ReapDeps = {}): Promise<
     marker: deps.marker ?? mitmproxyOwnerMarker(),
     selfPid: deps.selfPid ?? process.pid,
   })
-  const terminate =
-    deps.terminate ?? ((pid: number) => terminateProcessWithGrace(pid, { isPidRunning: deps.isPidRunning }))
+  const terminate = deps.terminate ?? guardedTerminator(deps)
   const processes = await terminateAll(owned, terminate)
   return { scanned: rows.length, owned: owned.length, ...countReaped(processes), processes }
 }
 
 export type SyncKillDeps = {
+  inspectProcessSync?: (pid: number) => ProcessIdentity | null
   listProcessesSync?: () => ProcessRow[]
   marker?: string
   selfPid?: number
@@ -490,11 +555,17 @@ export function killOwnedMitmproxyProcessesSync(deps: SyncKillDeps = {}): number
   const kill = deps.kill ?? process.kill.bind(process)
   let killed = 0
   const rows = (deps.listProcessesSync ?? listProcessesSync)()
+  // Exit cannot await work, but it also must not spend unbounded time querying
+  // one identity per orphan. Anything beyond this best-effort budget is left
+  // for the next startup sweep after the process lock has been acquired.
+  const deadline = Date.now() + 2_000
   for (const row of selectOwnedMitmproxyProcesses(rows, {
     marker: deps.marker ?? mitmproxyOwnerMarker(),
     selfPid: deps.selfPid ?? process.pid,
   })) {
+    if (Date.now() >= deadline) break
     try {
+      if (!sameMitmproxyProcess(row, (deps.inspectProcessSync ?? inspectProcessSync)(row.pid))) continue
       kill(row.pid, 'SIGKILL')
       killed += 1
     } catch {
@@ -595,7 +666,6 @@ export async function stopProxyServerWithDeadline(
     hasListenPort(row.args, proxy.info.proxyPort),
   )
   if (matches.length === 0) return { outcome: 'escalated-not-found', processes: [] }
-  const terminate =
-    deps.terminate ?? ((pid: number) => terminateProcessWithGrace(pid, { isPidRunning: deps.isPidRunning }))
+  const terminate = deps.terminate ?? guardedTerminator(deps)
   return { outcome: 'escalated', processes: await terminateAll(matches, terminate) }
 }

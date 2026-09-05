@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { memo, useEffect, useRef } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 
@@ -8,6 +8,8 @@ import {
 } from '@renderer/app-state/settings/theme'
 import { readXtermTheme, syncXtermTheme } from '@renderer/workspace/tile-tree/xtermTheme'
 import { createTerminalInputForwarder } from '@renderer/workspace/tile-tree/terminalInputForwarder'
+import { subscribeToAgentPtyData } from '@renderer/workspace/terminal/sessionDataDispatcher'
+import { attachXtermWebglRenderer } from '@renderer/workspace/terminal/xtermWebglRenderer'
 
 type Props = {
   sessionId: string
@@ -32,7 +34,9 @@ type Props = {
 //   the normal composer, but intentionally bypass composer affordances
 //   such as prompt history and slash-mode. This is a raw provider TUI.
 
-export function AgentInlineTerminal({ sessionId, active }: Props) {
+// Its props are scalar identity/visibility, while xterm owns live output. Feed
+// updates in the surrounding debug rail must not revisit this React subtree.
+export const AgentInlineTerminal = memo(function AgentInlineTerminal({ sessionId, active }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
 
@@ -43,6 +47,7 @@ export function AgentInlineTerminal({ sessionId, active }: Props) {
 
     let term: Terminal | null = null
     let fit: FitAddon | null = null
+    let webglRenderer: ReturnType<typeof attachXtermWebglRenderer> | null = null
     let onDataDisposable: { dispose(): void } | null = null
     let offPtyData: (() => void) | null = null
     let resizeObserver: ResizeObserver | null = null
@@ -68,14 +73,20 @@ export function AgentInlineTerminal({ sessionId, active }: Props) {
       fit = new FitAddon()
       term.loadAddon(fit)
       term.open(container)
+      webglRenderer = attachXtermWebglRenderer(term)
       termRef.current = term
 
+      let lastCols = 0
+      let lastRows = 0
       const fitAndResizeBackend = () => {
-        if (!term || !fit) return
+        rafId = null
+        if (disposed || !term || !fit) return
         try {
           fit.fit()
           const { cols, rows } = term
-          if (cols > 0 && rows > 0) {
+          if (cols > 0 && rows > 0 && (cols !== lastCols || rows !== lastRows)) {
+            lastCols = cols
+            lastRows = rows
             void window.api.resize(sessionId, cols, rows)
           }
         } catch {
@@ -85,8 +96,17 @@ export function AgentInlineTerminal({ sessionId, active }: Props) {
         }
       }
 
-      rafId = window.requestAnimationFrame(fitAndResizeBackend)
-      resizeObserver = new ResizeObserver(fitAndResizeBackend)
+      // ResizeObserver can fire repeatedly while a rail is dragged and may
+      // notify again after fit changes xterm's DOM. One layout read per frame
+      // and one PTY notification per changed cell grid avoid redundant provider
+      // repaints competing with keystrokes. Do not debounce until resizing ends:
+      // the visible terminal must keep following the user's drag.
+      const scheduleFit = () => {
+        if (disposed || rafId !== null) return
+        rafId = window.requestAnimationFrame(fitAndResizeBackend)
+      }
+      scheduleFit()
+      resizeObserver = new ResizeObserver(scheduleFit)
       resizeObserver.observe(container)
 
       // See terminalInputForwarder.ts (#745): replies to replayed content
@@ -100,8 +120,7 @@ export function AgentInlineTerminal({ sessionId, active }: Props) {
 
       let attachedBackfillDone = false
       const backlogQueue: string[] = []
-      offPtyData = window.api.onSessionAgentPtyData(({ sessionId: sid, data }) => {
-        if (sid !== sessionId) return
+      offPtyData = subscribeToAgentPtyData(sessionId, data => {
         if (!attachedBackfillDone) {
           backlogQueue.push(data)
           return
@@ -127,6 +146,7 @@ export function AgentInlineTerminal({ sessionId, active }: Props) {
         if (!term) return
         term.options.fontFamily = getActiveAppFontFamily()
         syncXtermTheme(term)
+        scheduleFit()
       }
       window.addEventListener(THEME_CHANGED_EVENT, onThemeChangedListener)
     } catch (err) {
@@ -140,6 +160,7 @@ export function AgentInlineTerminal({ sessionId, active }: Props) {
       resizeObserver?.disconnect()
       onDataDisposable?.dispose()
       offPtyData?.()
+      webglRenderer?.dispose()
       if (onThemeChangedListener) {
         window.removeEventListener(THEME_CHANGED_EVENT, onThemeChangedListener)
       }
@@ -161,4 +182,4 @@ export function AgentInlineTerminal({ sessionId, active }: Props) {
       <div ref={containerRef} className="h-full w-full overflow-hidden relative" />
     </div>
   )
-}
+})
