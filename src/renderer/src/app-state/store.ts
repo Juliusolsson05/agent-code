@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { createJSONStorage, devtools, persist, subscribeWithSelector } from 'zustand/middleware'
+import { devtools, persist, subscribeWithSelector } from 'zustand/middleware'
 
 import { createSettingsSlice } from '@renderer/app-state/settings/slice'
 import { createUiShellSlice } from '@renderer/app-state/uiShell/slice'
@@ -7,6 +7,7 @@ import { createWorkspaceSlice } from '@renderer/app-state/workspace/slice'
 import type { AppStore } from '@renderer/app-state/types'
 import type { Settings } from '@renderer/app-state/settings/types'
 import { coerceSettings } from '@renderer/app-state/settings/persistence'
+import { createSettingsStorage } from '@renderer/app-state/settings/storage'
 import {
   APP_STORE_STORAGE_KEY,
   PROMPT_TEMPLATES_STORAGE_KEY,
@@ -70,7 +71,7 @@ export const useAppStore = create<AppStore>()(
         // synchronously, so older blobs must be backfilled before workspace
         // bootstrap can create or recover an agent.
         version: 10,
-        storage: createJSONStorage(() => localStorage),
+        storage: createSettingsStorage(),
         partialize: state => ({ settings: state.settings }),
         merge: (persisted, current) => {
           const data = persisted as { settings?: Partial<Settings> } | undefined
@@ -105,7 +106,7 @@ export const useAppStore = create<AppStore>()(
               ...data?.settings,
               savedPromptTemplates: data?.settings?.savedPromptTemplates ?? legacyPromptTemplates,
             }),
-          } as Partial<AppStore>
+          }
         },
       },
     ),

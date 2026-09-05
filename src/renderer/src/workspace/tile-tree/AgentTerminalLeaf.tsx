@@ -16,6 +16,8 @@ import { shortenCwd } from '@renderer/workspace/tile-tree/TileLeaf/labels'
 import { PaneToast } from '@renderer/workspace/tile-tree/TileLeaf/PaneToast'
 import { useComposerDictation } from '@renderer/workspace/tile-tree/TileLeaf/useComposerDictation'
 import { useAgentTerminalDimensionActive } from '@renderer/workspace/terminal/AgentTerminalOwnership'
+import { subscribeToAgentPtyData } from '@renderer/workspace/terminal/sessionDataDispatcher'
+import { attachXtermWebglRenderer } from '@renderer/workspace/terminal/xtermWebglRenderer'
 import { AgentTitleHeader } from '@renderer/workspace/tile-tree/AgentTitleHeader'
 import { createTerminalInputForwarder } from '@renderer/workspace/tile-tree/terminalInputForwarder'
 
@@ -59,8 +61,6 @@ export function AgentTerminalLeaf({
   const dictationProvider = useAppStore(state => state.settings.dictationProvider)
   const dictationShortcut = useAppStore(state => state.settings.dictationShortcut)
   const acknowledgeSession = workspace.acknowledgeSession
-  const acknowledgeSessionRef = useRef(acknowledgeSession)
-  acknowledgeSessionRef.current = acknowledgeSession
   const ensureSessionLiveRef = useRef(workspace.ensureSessionLive)
   ensureSessionLiveRef.current = workspace.ensureSessionLive
   // The mount effect is keyed on sessionId alone (see its WHY comment), so it
@@ -106,6 +106,7 @@ export function AgentTerminalLeaf({
 
     let term: Terminal | null = null
     let fit: FitAddon | null = null
+    let webglRenderer: ReturnType<typeof attachXtermWebglRenderer> | null = null
     let onDataDisposable: { dispose(): void } | null = null
     let offPtyData: (() => void) | null = null
     let resizeObserver: ResizeObserver | null = null
@@ -225,6 +226,7 @@ export function AgentTerminalLeaf({
       fit = new FitAddon()
       term.loadAddon(fit)
       term.open(container)
+      webglRenderer = attachXtermWebglRenderer(term)
       termRef.current = term
 
       if (dimensionActiveRef.current) scheduleFitAndResizeBackend()
@@ -238,9 +240,9 @@ export function AgentTerminalLeaf({
         void window.api.sendInput(sessionId, data)
       })
       onDataDisposable = term.onData(data => {
-        // A reply to replayed content is not user activity: no acknowledgement.
+        // Transport output also includes xterm-generated query responses. DOM
+        // engagement below owns unread acknowledgement, never these bytes.
         if (forwarder.replaying) return
-        acknowledgeSessionRef.current(sessionId)
         if (!attachedBackfillDone) {
           pendingInput.push(data)
           // Holding a key while an agent terminal is waking should not turn an
@@ -256,8 +258,7 @@ export function AgentTerminalLeaf({
       // Subscribe before attach, then replay the buffer before draining live
       // bytes. This mirrors TerminalLeaf's attach contract and prevents the
       // provider prompt/repaint that arrived before mount from being lost.
-      offPtyData = window.api.onSessionAgentPtyData(({ sessionId: sid, data }) => {
-        if (sid !== sessionId) return
+      offPtyData = subscribeToAgentPtyData(sessionId, data => {
         if (!attachedBackfillDone) {
           backlogQueue.push(data)
           // Attach should resolve quickly, but cap the pre-attach queue anyway
@@ -408,6 +409,7 @@ export function AgentTerminalLeaf({
       resizeObserver?.disconnect()
       onDataDisposable?.dispose()
       offPtyData?.()
+      webglRenderer?.dispose()
       if (onThemeChangedListener) {
         window.removeEventListener(THEME_CHANGED_EVENT, onThemeChangedListener)
       }
@@ -440,6 +442,14 @@ export function AgentTerminalLeaf({
         acknowledgeSession(sessionId)
         focusTerminal()
       }}
+      // WHY DOM capture, not onData or escape-sequence classification: xterm
+      // mixes real keys and terminal protocol replies in onData and can stop
+      // bubbling keyboard events. Capture observes actual engagement without
+      // feeding every spinner/DSR response through React state. Paste and IME
+      // commits need their own events because neither requires a normal key.
+      onKeyDownCapture={() => acknowledgeSession(sessionId)}
+      onPasteCapture={() => acknowledgeSession(sessionId)}
+      onCompositionEndCapture={() => acknowledgeSession(sessionId)}
     >
       <div className="border-b border-border bg-surface">
         <div className="flex items-center justify-between gap-3 px-3 py-1 text-[10px] text-muted font-code select-none">
