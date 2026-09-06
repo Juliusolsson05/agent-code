@@ -25,9 +25,23 @@ export function useSpotlightActions(
   setState: WorkspaceSetState,
   refs: WorkspaceRefs,
 ): {
+  setSpotlightTarget: (sessionId: SessionId | null) => boolean
   toggleSpotlight: () => void
   setSpotlightSession: (sessionId: SessionId) => void
 } {
+  // Explicit desired state lets command clients select a non-focused agent
+  // without a focus-then-toggle race. Ownership uses the same placement query
+  // as UI toggles, including detached and related sessions.
+  const setSpotlightTarget = useCallback((sessionId: SessionId | null) => {
+    if (sessionId === null) { setSpotlight(null); return true }
+    const current = refs.stateRef.current
+    const target = resolveFocusSurfaceTarget(current, sessionId)
+    if (!target) return false
+    setState(prev => ({ ...prev, activeTabId: target.tabId }))
+    setSpotlight({ tabId: target.tabId, focusedSessionId: sessionId })
+    return true
+  }, [refs.stateRef, setSpotlight, setState])
+
   const toggleSpotlight = useCallback(() => {
     const current = refs.stateRef.current
     const target = resolveFocusSurfaceTarget(current)
@@ -91,5 +105,5 @@ export function useSpotlightActions(
     [refs.stateRef, setSpotlight, setState],
   )
 
-  return { toggleSpotlight, setSpotlightSession }
+  return { setSpotlightTarget, toggleSpotlight, setSpotlightSession }
 }

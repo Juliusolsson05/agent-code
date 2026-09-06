@@ -152,7 +152,7 @@ const HEAD_CWD_WINDOW_BYTES = 64 * 1024
 // crowd this project's Claude sessions out of the search. Sessions older
 // than the bound are not searchable — the price of never freezing on a
 // keystroke; raise the bound (and the cache) rather than remove it.
-const SEARCH_CANDIDATES_PER_PROVIDER = 400
+export const SEARCH_CANDIDATES_PER_PROVIDER = 400
 
 /** Keyed by provider session id. Codex session ids are globally
  *  unique (uuid); Claude session ids are uuids too. No collisions

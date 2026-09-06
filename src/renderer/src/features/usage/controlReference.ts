@@ -15,7 +15,7 @@ export const controlReference = [
       "adjust workload if needed."
     ],
     "outcome": "Usage evidence is displayed.",
-    "cautions": "A usage indicator is not an agent progress or completion signal.",
+    "cautions": "usage.read returns quota/cache/error evidence through the existing provider reader, without exposing credentials. A usage indicator is not an agent progress or completion signal.",
     "commandIds": [
       "usage.open"
     ]

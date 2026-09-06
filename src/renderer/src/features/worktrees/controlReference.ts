@@ -15,7 +15,7 @@ export const controlReference = [
       "target the agent to that directory."
     ],
     "outcome": "The operator can distinguish checkouts and their work.",
-    "cautions": "A worktree path and a visual tab are different things. Activity evidence can lag a backend transition.",
+    "cautions": "worktrees.read pages the existing catalog for an explicit agent cwd; creation/deletion use the ordinary UI. A worktree path and a visual tab are different things. Activity evidence can lag a backend transition.",
     "commandIds": []
   }
 ] satisfies FeatureReference[]

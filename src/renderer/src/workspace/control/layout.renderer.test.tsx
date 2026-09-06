@@ -57,3 +57,34 @@ it('preserves recorded workspace identities through row edits and refuses a stal
   expect(useAppStore.getState().workspaceState.activeTabId).toBe('tab-1')
   expect(useAppStore.getState().workspaceState.tabs.find(tab => tab.id === 'tab-4')!.root).toMatchObject({ direction: 'horizontal' })
 })
+
+it('reports effective tiled focus separately from remembered classic selection after lane replacement and removal (#798)', async () => {
+  useAppStore.setState({ workspaceState: structuredClone(fixture.state) as unknown as WorkspaceState, workspaceTileTabs: null, workspaceReaderMode: null, workspaceSpotlight: null })
+  const mounted = renderHook(() => {
+    const state = useAppStore(store => store.workspaceState)
+    const refs = useRef(makeRefs(state)).current
+    refs.stateRef.current = state; refs.latestStateRef.current = state
+    const store = useAppStore.getState()
+    return { ...useDispatchActions(state, store.setWorkspaceState, store.setWorkspaceTileTabs, () => {}, refs, vi.fn(), () => {}), restoreStatus: 'fresh' }
+  })
+  const caps = layoutControlCapabilities(() => mounted.result.current as unknown as Workspace)
+  const invoke = (id: string, input: unknown) => caps.find(cap => cap.descriptor.id === id)!.execute(input, context)
+  const read = async () => {
+    const result = await invoke('layout.read', {})
+    if (!result.ok) throw new Error(JSON.stringify(result))
+    return result.value as unknown as { revision: string; effectiveFocusedSessionId: string | null; dispatch: { focusedSessionId: string | null; classicFocusedSessionId: string | null } }
+  }
+  const configure = async (change: unknown) => { const revision = (await read()).revision; await act(async () => { expect(await invoke('dispatch.configure', { revision, change })).toMatchObject({ ok: true }) }) }
+  await configure({ action: 'grid', rows: [{ sourceRow: 0, length: 4 }] })
+  await configure({ action: 'lane-select', laneIndex: 1, sessionId: 'session-23' })
+  await configure({ action: 'lane-focus', laneIndex: 1 })
+  expect((await read()).effectiveFocusedSessionId).toBe('session-23')
+  await configure({ action: 'lane-select', laneIndex: 1, sessionId: 'session-1' })
+  const replaced = await read()
+  expect(replaced.dispatch.focusedSessionId).toBe(replaced.effectiveFocusedSessionId)
+  expect(replaced.effectiveFocusedSessionId).toBe('session-1')
+  await configure({ action: 'grid', rows: [{ sourceRow: 0, length: 1 }] })
+  const removed = await read()
+  expect(removed.dispatch.focusedSessionId).toBe(removed.effectiveFocusedSessionId)
+  expect(removed.effectiveFocusedSessionId).not.toBe('session-23')
+})

@@ -1,0 +1,20 @@
+# agent-code-external-control:v1 22716e1cab2a8f141d928eb689444d53f038784ffa071a590f1a42a02adb9ebb
+[mcp_servers.agent-code-control]
+url = "http://127.0.0.1:47653/mcp"
+http_headers = { Authorization = "Bearer fixture-only-token" }
+
+[mcp_servers.agent-code-control.tools.ac_agents_prompt]
+approval_mode = "approve"
+
+[mcp_servers.agent-code-control.tools.ac_app_window_focus]
+approval_mode = "approve"
+
+[mcp_servers.agent-code-control.tools.ac_dispatch_configure]
+approval_mode = "approve"
+
+[mcp_servers.agent-code-control.tools.ac_agents_show]
+approval_mode = "approve"
+
+[mcp_servers.agent-code-control.tools.ac_commands_run]
+approval_mode = "approve"
+# /agent-code-external-control

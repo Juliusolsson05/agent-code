@@ -789,3 +789,15 @@ Full renderer suite: 114 files / 496 tests pass. The full local core run passes
 developer-local recording is absent; its source and committed fixtures match main.
 The PR records CI results separately rather than treating this local corpus as
 portable evidence.
+
+
+## Continuation coverage after the first release
+
+The approved continuation is tracked in #795 and
+`external-operator-toolkit.md`: exact lifecycle/native catalogs, explicit view and
+placement, durable per-child batches, templates/ordinary settings, external
+workflow ownership and reads, usage/worktrees and named surfaces. The live
+`app.describe` guide and feature/tool catalogs describe current behavior; they are
+not a promise that every provider-native operation has a typed wrapper. Full topic
+search, provider draft/commit evidence and real multi-monitor/busy-input trials
+remain tracked limitations. #802–806 stay separate subsystem work; A5 owns #806.

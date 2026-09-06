@@ -279,12 +279,12 @@ export function useWorkspace(
     useStreamingActions(setRuntimes, isCodexSession)
   const { pickerEnter, pickerMove, pickerCancel, pickerConfirm, setCodeBlockPicker } =
     usePickerActions(setRuntimes, refs, showPaneToast)
-  const { toggleSpotlight, setSpotlightSession } = useSpotlightActions(
+  const { setSpotlightTarget, toggleSpotlight, setSpotlightSession } = useSpotlightActions(
     setSpotlight,
     setState,
     refs,
   )
-  const { toggleReaderMode, setReaderModeSession } = useReaderActions(
+  const { setReaderModeTarget, toggleReaderMode, setReaderModeSession } = useReaderActions(
     setReaderMode,
     setSpotlight,
     setState,
@@ -832,7 +832,7 @@ export function useWorkspace(
     return off
   }, [refs, setRuntimes])
 
-  const { switchSessionProvider, reloadFocusedAgent, rewindFocusedToPrompt, undoLastRewind } =
+  const { switchSessionProvider, reloadSessionAgent, rewindSessionToPrompt, undoSessionRewind, reloadFocusedAgent, rewindFocusedToPrompt, undoLastRewind } =
     useProviderActions(refs, setRuntimes, showPaneToast, sessionActions)
 
   // Bulk provider switch (Switch Agents modal) + remembered-batch return. Uses
@@ -915,6 +915,7 @@ export function useWorkspace(
     readerMode,
     dispatchMode: state.dispatchMode,
     restoreStatus,
+    setReaderModeTarget,
     toggleReaderMode,
     setReaderModeSession,
     latestScreenRef: refs.latestScreenRef,
@@ -941,6 +942,7 @@ export function useWorkspace(
     createOrchestrationAgent: paneActions.createOrchestrationAgent,
     attachDetachedToGrid: paneActions.attachDetachedToGrid,
     attachAllDetachedForTab: paneActions.attachAllDetachedForTab,
+    detachSessionToDispatch: paneActions.detachSessionToDispatch,
     detachFocusedToDispatch: paneActions.detachFocusedToDispatch,
     closeFocused: paneActions.closeFocused,
     closeSession: paneActions.closeSession,
@@ -987,11 +989,15 @@ export function useWorkspace(
     reloadFocusedAgent,
     softReloadAgentView,
     switchSessionProvider,
+    reloadSessionAgent,
+    rewindSessionToPrompt,
+    undoSessionRewind,
     switchAgentsToProvider,
     returnLastProviderSwitchBatch,
     rewindFocusedToPrompt,
     undoLastRewind,
     reloadAgentSessions,
+    setSpotlightTarget,
     toggleSpotlight,
     setSpotlightSession,
     openTileTabs,

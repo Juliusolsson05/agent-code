@@ -29,7 +29,7 @@ export type ControlFailureCode =
   | 'history_unavailable' | 'idempotency_conflict' | 'interrupted'
 
 export class ControlError extends Error {
-  constructor(readonly code: ControlFailureCode, message: string, readonly outcome: 'not_started' | 'unknown' = 'not_started') {
+  constructor(readonly code: ControlFailureCode, message: string, readonly outcome: 'not_started' | 'unknown' = 'not_started', readonly details?: unknown) {
     super(message)
     this.name = 'ControlError'
   }
@@ -42,7 +42,7 @@ export const controlOperationSchema = z.object({
 }).strict()
 export type ControlResult<T = unknown> = (
   | { ok: true; value: T }
-  | { ok: false; error: { code: ControlFailureCode; message: string; outcome: 'not_started' | 'unknown' } }
+  | { ok: false; error: { code: ControlFailureCode; message: string; outcome: 'not_started' | 'unknown'; details?: unknown } }
 ) & { operation?: z.infer<typeof controlOperationSchema> }
 
 export type CapabilityDescriptor = Readonly<{
@@ -90,7 +90,7 @@ export const controlResultSchema = z.discriminatedUnion('ok', [
   z.object({ ok: z.literal(true), value: z.json(), operation: controlOperationSchema.optional() }).strict(),
   z.object({ ok: z.literal(false), error: z.object({
     code: z.enum(['unavailable', 'ambiguous_owner', 'stale_owner', 'invalid_input', 'invalid_output', 'failed', 'stale_cursor', 'invalid_cursor', 'history_unavailable', 'idempotency_conflict', 'interrupted']),
-    message: z.string(), outcome: z.enum(['not_started', 'unknown']),
+    message: z.string(), outcome: z.enum(['not_started', 'unknown']), details: z.json().optional(),
   }).strict(), operation: controlOperationSchema.optional() }).strict(),
 ])
 
@@ -122,6 +122,7 @@ export function controlFailure(
   code: ControlFailureCode,
   message: string,
   outcome: 'not_started' | 'unknown' = 'not_started',
+  details?: unknown,
 ): ControlResult<never> {
-  return { ok: false, error: { code, message, outcome } }
+  return { ok: false, error: { code, message, outcome, ...(details === undefined ? {} : { details }) } }
 }

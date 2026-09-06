@@ -103,7 +103,7 @@ export function createControlExecutor(ports: {
         }
       } catch (error) {
         result = error instanceof ControlError
-          ? controlFailure(error.code, error.message, error.outcome)
+          ? controlFailure(error.code, error.message, error.outcome, error.details)
           : controlFailure(dispatched || previous ? 'failed' : 'history_unavailable',
             error instanceof Error ? error.message : 'Control execution failed', dispatched || previous ? 'unknown' : 'not_started')
       }

@@ -108,6 +108,7 @@ const opencodeMain: MainProviderConfig = {
   // Known `ses_` identities are fully resumable/transformable through the CLI;
   // returning an empty list keeps only discovery unavailable.
   listSessions: async () => [],
+  sessionDiscoveryUnavailableReason: 'OpenCode native session discovery is not implemented (#773). Known ses_ identities remain resumable.',
   // Opencode has no per-cwd project dir concept; the storage root is
   // server-owned. Returning cwd keeps consumers (which only display
   // it) harmless.
