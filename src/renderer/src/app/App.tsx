@@ -105,6 +105,7 @@ export default function App() {
 
   return (
     <WorkspaceProvider workspace={workspace}>
+      {workspace.runtimeServices}
       <div className="relative h-screen flex flex-col bg-canvas text-ink font-code min-h-0">
         <SetupGate />
         <RestoreBanner />

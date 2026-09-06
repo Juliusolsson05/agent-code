@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import { act, cleanup, renderHook } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 import { useAppStore } from '@renderer/app-state/store'
@@ -17,8 +16,12 @@ it('inserts dynamic project context into the named agent without following focus
     sessions: { target: { kind: 'claude', cwd: '/target', providerSessionId: 'native-target' }, other: { kind: 'codex', cwd: '/other', providerSessionId: 'native-other' } }, detachedSessions: {}, buried: [],
   }, workspaceRuntimes: { target: emptyRuntime(), other: { ...emptyRuntime(), draftInput: 'Other human draft' } } })
   const mounted = renderHook(() => {
-    const [, setVersion] = useState(0), setRuntimes = useAppStore.getState().setWorkspaceRuntimes
-    return { ...useDraftActions(setRuntimes, (id, patch) => setRuntimes(prev => ({ ...prev, [id]: { ...prev[id], ...patch } })), setVersion), restoreStatus: 'fresh' }
+    const setRuntimes = useAppStore.getState().setWorkspaceRuntimes
+    // The production wiring passes draftChanges.bump, which forces draft
+    // surfaces to re-read through a React version state. This harness reads
+    // drafts imperatively via inspectAgentDraft, so a stable no-op bump is
+    // behaviorally faithful to the old setVersion argument.
+    return { ...useDraftActions(setRuntimes, (id, patch) => setRuntimes(prev => ({ ...prev, [id]: { ...prev[id], ...patch } })), () => {}), restoreStatus: 'fresh' }
   })
   const resolveTranscriptPaths = vi.fn(async requests => requests.map((request: object) => ({ ...request, transcriptPath: '/recorded/source.jsonl', exists: true })))
   window.api = { ...originalApi, resolveTranscriptPaths }
