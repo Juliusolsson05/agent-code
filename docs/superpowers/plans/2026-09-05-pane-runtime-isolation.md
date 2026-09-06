@@ -70,3 +70,19 @@ test (existing #700), under substantially increased machine load (146.97 s
 suite versus 24.52 s earlier). No retry policy, timeout, or test assertion was
 weakened. Full typecheck, test contract and checked-in fixture privacy gates
 passed during implementation; final typecheck and public CI tracked in the PR.
+
+## Independent review resolution (heads cccae6e1 / a96f00a2)
+
+Both reviewers approved; one latent coupling fixed in this increment. PaneHeader
+shares the phone bundle, whose stub store (appStateHooks.ts) has NO
+`workspaceRuntimes` key; the new related-status store read was safe only because
+SessionView passes an empty chip list. The read is now optional-chained with a
+WHY comment, and a dedicated renderer regression mounts the two phone shapes
+(empty chips; keyless store with chips) plus the desktop store path. Also
+adopted from review: `getRuntime`'s shared fallback runtime documents its
+never-mutate invariant; `useFeedDebugPersist` no longer takes a render-time
+snapshot it ignored; the draft-version signal types honestly as `() => void`
+instead of a React state setter whose argument was discarded. The one remaining
+runtime-derived root invalidation is the picker/lease shallow subscription in
+useRenderedLeaseHygiene — it fires only on user commands, is no-op guarded, and
+is the previous universal behavior; kept deliberately.

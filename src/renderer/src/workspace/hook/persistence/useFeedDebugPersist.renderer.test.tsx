@@ -53,15 +53,15 @@ describe('feed debug persistence cadence and durability', () => {
   it('coalesces continuously replaced runtimes into one ordered batch on the fixed tick', async () => {
     const refs = makeRefs({ a: emptyRuntime() })
     const { rerender } = renderHook(
-      ({ runtimes }) => useFeedDebugPersist(runtimes, refs),
-      { initialProps: { runtimes: refs.latestRuntimesRef.current } },
+      () => useFeedDebugPersist(refs),
+      { initialProps: {} },
     )
 
     // Continuous provider traffic must neither flush on every React effect nor
     // postpone the timer indefinitely as a trailing debounce would.
     for (let index = 0; index < 20; index += 1) {
       refs.latestRuntimesRef.current = { a: add(refs.latestRuntimesRef.current.a!, `row ${index}`) }
-      rerender({ runtimes: refs.latestRuntimesRef.current })
+      rerender()
       await advance(40)
     }
     await advance(199)
@@ -77,7 +77,7 @@ describe('feed debug persistence cadence and durability', () => {
     const pending = deferred()
     append.mockImplementation(({ sessionId }) => sessionId === 'a' ? pending.promise : Promise.resolve())
     const refs = makeRefs({ a: add(emptyRuntime(), 'a1'), b: add(emptyRuntime(), 'b1') })
-    renderHook(() => useFeedDebugPersist(refs.latestRuntimesRef.current, refs))
+    renderHook(() => useFeedDebugPersist(refs))
     await advance(1000)
     expect(append).toHaveBeenCalledTimes(2)
     refs.latestRuntimesRef.current = {
@@ -109,7 +109,7 @@ describe('feed debug persistence cadence and durability', () => {
     append.mockReturnValueOnce(pending.promise)
     const refs = makeRefs({ a: add(add(emptyRuntime(), 'already durable'), 'pending') })
     refs.persistedFeedDebugIdRef.current.a = 1
-    renderHook(() => useFeedDebugPersist(refs.latestRuntimesRef.current, refs))
+    renderHook(() => useFeedDebugPersist(refs))
     await advance(1000)
     expect(refs.inFlightFeedDebugIdRef.current.a).toBe(2)
     await act(async () => { pending.reject(new Error('disk unavailable')); await Promise.resolve() })
@@ -128,7 +128,7 @@ describe('feed debug persistence cadence and durability', () => {
   it('leaves empty and already durable sessions quiet', async () => {
     const refs = makeRefs({ empty: emptyRuntime(), durable: add(emptyRuntime(), 'saved') })
     refs.persistedFeedDebugIdRef.current.durable = 1
-    const { unmount } = renderHook(() => useFeedDebugPersist(refs.latestRuntimesRef.current, refs))
+    const { unmount } = renderHook(() => useFeedDebugPersist(refs))
     await advance(3000)
     unmount()
     expect(append).not.toHaveBeenCalled()
@@ -136,7 +136,7 @@ describe('feed debug persistence cadence and durability', () => {
 
   it('flushes the latest refs once on unmount and removes the interval', async () => {
     const refs = makeRefs({ a: emptyRuntime() })
-    const { unmount } = renderHook(() => useFeedDebugPersist(refs.latestRuntimesRef.current, refs))
+    const { unmount } = renderHook(() => useFeedDebugPersist(refs))
     refs.latestRuntimesRef.current = { a: add(emptyRuntime(), 'last record') }
     unmount()
     expect(append).toHaveBeenCalledExactlyOnceWith({
@@ -153,7 +153,7 @@ describe('feed debug persistence cadence and durability', () => {
     const pending = deferred()
     append.mockReturnValueOnce(pending.promise)
     const refs = makeRefs({ a: add(emptyRuntime(), 'first') })
-    const { unmount } = renderHook(() => useFeedDebugPersist(refs.latestRuntimesRef.current, refs))
+    const { unmount } = renderHook(() => useFeedDebugPersist(refs))
     await advance(1000)
     refs.latestRuntimesRef.current = { a: add(refs.latestRuntimesRef.current.a!, 'later') }
     unmount()

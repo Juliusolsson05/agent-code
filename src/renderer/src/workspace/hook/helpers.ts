@@ -16,6 +16,13 @@ import { commandTargetSessionIdForState } from '@renderer/workspace/hook/selecto
 
 // Missing sessions need a stable read-only fallback so merely asking for their
 // state cannot invalidate a memo boundary. Reducers still allocate their own.
+//
+// INVARIANT: this object is SHARED across every missing session and must never
+// be mutated in place. Update paths always build fresh reducer-owned runtimes
+// (spread + patch), so a `getRuntime()` result is only ever read; an in-place
+// edit on it would silently contaminate every session that has no stored
+// runtime yet — until one session is created, then exactly one shared object
+// is shared by all of them at once (the worst possible time to corrupt it).
 const EMPTY_RUNTIME = emptyRuntime()
 
 // -----------------------------------------------------------------------------

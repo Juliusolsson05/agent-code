@@ -135,7 +135,6 @@ export function useWorkspace(
   // Draft changes invalidate the autosave service, not the whole controller.
   // The service observes this stable signal even when App does not rerender.
   const draftChanges = useMemo(createDraftChanges, [])
-  const setDraftVersion = draftChanges.bump
   const [bootstrapComplete, setBootstrapComplete] = useState(false)
   // Surfaces the bootstrap outcome to the UI so it can render a banner
   // when the workspace is in a partial-restore / persisted-fallback
@@ -268,7 +267,7 @@ export function useWorkspace(
   const { setDraftInput, setDraftImages, clearDraft, undoClearDraft } = useDraftActions(
     setRuntimes,
     updateRuntime,
-    setDraftVersion,
+    draftChanges.bump,
   )
   const {
     setStreamingBaseline,
@@ -882,7 +881,10 @@ export function useWorkspace(
     defaultWorkspaceMode,
     dispatchActions.enterDispatchMode,
   )
-  useFeedDebugPersist(runtimes, refs)
+  // The persist effect reads current refs on its own timer, so it needs no
+  // render-time snapshot — passing `runtimes` here would suggest a reactivity
+  // dependency that deliberately does not exist.
+  useFeedDebugPersist(refs)
   useSpotlightSanity(spotlight, state, setSpotlight)
   useReaderModeSanity(readerMode, state, setReaderMode)
   useTileTabsSanity(tileTabs, state.tabs, setTileTabs)

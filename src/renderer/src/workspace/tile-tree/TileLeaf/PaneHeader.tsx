@@ -59,8 +59,19 @@ export function PaneHeader({
   // Related agents can change without rerendering this session. Only the two
   // painted status values are dependencies; subscribing to their entire
   // runtimes would couple every related transcript delta back to this header.
+  //
+  // WHY the store read is optional-chained instead of a bare index: the phone
+  // shares this header, and the phone bundle stubs @renderer/app-state/hooks
+  // to a `{ settings }`-only store
+  // (src/remote-client/src/stubs/appStateHooks.ts) that has NO
+  // `workspaceRuntimes` key. SessionView passes `relatedAgentTabs={[]}`, so
+  // today the flatMap body never runs and the key is never touched; the `?.`
+  // keeps a hypothetical future phone caller that passes chips from throwing
+  // on the missing key, degrading to the `runtimes` prop and then to
+  // "unknown" instead. Un-optional-chained, this whole header is sound on the
+  // phone only by the empty-array accident of one call site.
   const relatedStatus = useAppStore(useShallow(state => relatedAgentTabs.flatMap(tab => {
-    const runtime = state.workspaceRuntimes[tab.sessionId] ?? runtimes?.[tab.sessionId]
+    const runtime = state.workspaceRuntimes?.[tab.sessionId] ?? runtimes?.[tab.sessionId]
     return [runtime?.sessionStatus === 'running',
       dispatchAttentionLabelFromConditions(runtime?.conditions ?? null) ?? (runtime?.processError ? 'ERROR' : null)]
   })))
