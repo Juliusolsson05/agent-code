@@ -86,3 +86,20 @@ instead of a React state setter whose argument was discarded. The one remaining
 runtime-derived root invalidation is the picker/lease shallow subscription in
 useRenderedLeaseHygiene — it fires only on user commands, is no-op guarded, and
 is the previous universal behavior; kept deliberately.
+
+## Post-review main merge and merged-tree CI (head c8126f48 + origin/main)
+
+Reviewer confirmation landed for heads cccae6e1/a96f00a2 and 29e2dc81/c8126f48,
+then pushing the fix head exposed what the stale worktree base hid: origin/main
+had advanced past merge-base 5d641845 (external operator toolkit #812, MCP tool
+policy #818) while this branch was in review, and those PRs added new control
+tests that call the pre-isolation hook signatures. The merged-tree quality-gate
+caught exactly two TS errors (control.renderer.test.tsx's third argument to
+useDraftActions; preferences.renderer.test.tsx's 3-arg useWorkspaceHelpers).
+origin/main was merged into this branch (no production conflicts), and the two
+tests were adapted: the draft harness now passes a no-op bumpDraftChanges (it
+reads drafts imperatively via inspectAgentDraft), and the preferences harness
+passes only (setRuntimes, refs) since useWorkspaceHelpers now reads runtimes
+through refs and toggles via the store updater. No production code changed in
+this step. Merged-tree verification: forced typecheck clean, full renderer run
+123 files / 523 tests green (Node 24, two workers), worktree suites unaffected.
