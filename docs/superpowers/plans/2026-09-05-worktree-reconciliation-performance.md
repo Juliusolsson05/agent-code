@@ -62,3 +62,19 @@ passed. Full unit suite: 2138 passed, one failed because the existing image
 corpus check references a removed private session. The identical failure was
 reproduced on unchanged main (tracked by #684/#669/#641); no test was skipped or
 weakened. All seven new regression tests pass. Public CI remains the gate.
+
+## Independent review resolution (cc cccae6e1)
+
+Both orchestrated reviewers approving, no correctness defects in the invalidation
+keys, identity retention, or accounting-reversal path. Adopted: renamed
+`LiveWorktreeReconciler.performance.test.ts` to
+`LiveWorktreeReconciler.invalidation.test.ts` — it asserts identity/invalidation
+contracts, never timing, and "performance" implied a benchmark tier this repo
+does not have. Recorded as boundaries rather than defects: `sameCatalog`
+compares `head`, so any commit in any checkout invalidates catalog identity and
+replays the bounded evidence window for that cwd at the next refresh (correct,
+but worth knowing); the replay cache freezes fold-time timestamps for quiet
+sessions, which no renderer reads. A pre-existing, unrelated evidence-loss edge —
+>500 relevant records buffered before the first successful Git IPC reply get
+folded against an empty catalog and dropped — was filed separately, not fixed
+in this PR.
