@@ -21,6 +21,7 @@ import { subscribeToAgentPtyData } from '@renderer/workspace/terminal/sessionDat
 import { attachXtermWebglRenderer } from '@renderer/workspace/terminal/xtermWebglRenderer'
 import { AgentTitleHeader } from '@renderer/workspace/tile-tree/AgentTitleHeader'
 import { createTerminalInputForwarder } from '@renderer/workspace/tile-tree/terminalInputForwarder'
+import { AgentTerminalActions } from '@renderer/workspace/tile-tree/AgentTerminalActions'
 
 type Props = {
   sessionId: SessionId
@@ -61,6 +62,7 @@ export function AgentTerminalLeaf({
   const dictationEnabled = useAppStore(state => state.settings.dictationEnabled)
   const dictationProvider = useAppStore(state => state.settings.dictationProvider)
   const dictationShortcut = useAppStore(state => state.settings.dictationShortcut)
+  const mouseModeEnabled = useAppStore(state => state.settings.mouseModeEnabled)
   const acknowledgeSession = workspace.acknowledgeSession
   const ensureSessionLiveRef = useRef(workspace.ensureSessionLive)
   ensureSessionLiveRef.current = workspace.ensureSessionLive
@@ -70,6 +72,11 @@ export function AgentTerminalLeaf({
   runtimeRef.current = runtime
   const showPaneToastRef = useRef(workspace.showPaneToast)
   showPaneToastRef.current = workspace.showPaneToast
+  // Published by the mount effect (which owns the forwarder and the pre-attach
+  // queue) so the Mouse Mode Submit button can inject Enter exactly as the
+  // Enter key would. A no-op until the effect has run; the effect always
+  // overwrites it on (re)mount, keyed as it is on sessionId alone.
+  const submitEnterRef = useRef<() => void>(() => {})
 
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
@@ -244,6 +251,23 @@ export function AgentTerminalLeaf({
       const forwarder = createTerminalInputForwarder(data => {
         void window.api.sendInput(sessionId, data)
       })
+      // WHY the Submit button reuses the keypress pipeline instead of calling
+      // window.api.sendInput directly: the leaf only forwards keystrokes AFTER
+      // attach (pendingInput) and only outside the replay window (the
+      // forwarder latch). A direct call would skip both, so its Enter could
+      // hit the provider before the PTY exists or while xterm is still parsing
+      // the attach replay — more powerful than the Enter key it replaces.
+      // Pushing '\r' down the same path keeps a mouse click and a real keypress
+      // indistinguishable to the backend. '\r' is xterm's Enter byte here
+      // because this terminal is created with convertEol: false below.
+      submitEnterRef.current = () => {
+        if (forwarder.replaying) return
+        if (!attachedBackfillDone) {
+          pendingInput.push('\r')
+          return
+        }
+        forwarder.onData('\r')
+      }
       onDataDisposable = term.onData(data => {
         // Transport output also includes xterm-generated query responses. DOM
         // engagement below owns unread acknowledgement, never these bytes.
@@ -490,6 +514,14 @@ export function AgentTerminalLeaf({
           className="h-full min-h-0 min-w-0 overflow-hidden relative"
         />
       </div>
+      {/* Mouse Mode only, mirroring ComposerActions' gating in TileLeaf. A raw
+          terminal has no composer or draft, so Submit is this surface's only
+          action — the Enter byte a keyboard user presses after dictating or
+          pasting. Gated on the setting because the row costs pane height in
+          every agent pane and a keyboard user gets nothing from it. */}
+      {mouseModeEnabled ? (
+        <AgentTerminalActions onSubmit={() => submitEnterRef.current()} />
+      ) : null}
       {/* WHY terminal mode still renders PaneToast:
         Pane toasts are runtime feedback from commands/actions, not a feed-only
         visual. Hybrid can legitimately fall back to AgentTerminalLeaf right
