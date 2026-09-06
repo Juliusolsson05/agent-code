@@ -10,6 +10,11 @@
 
 **Related:** Issue #819; design doc `docs/superpowers/specs/2026-09-05-mouse-mode-terminal-submit-design.md`; mouse-first plan PR #617.
 
+> **Where the implementation diverged from this plan**, so the next reader trusts the code over the doc:
+>
+> - **The focus test asserts `defaultPrevented` via a dispatched native `MouseEvent`, not `fireEvent`'s return value.** RTL's synthetic mouse-down object reports `undefined` for `defaultPrevented` after React processes the handler in this happy-dom setup. The component behavior is unchanged.
+> - **`AgentTerminalActions.renderer.test.tsx` imports `act`** for that dispatched event; everything else matches the plan verbatim.
+
 ---
 
 ## Environment note (read first)
@@ -37,7 +42,7 @@ All work happens in the worktree `.worktrees/mouse-mode-terminal-submit` on `fea
 Create `src/renderer/src/workspace/tile-tree/AgentTerminalActions.renderer.test.tsx`:
 
 ```tsx
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
 import { AgentTerminalActions } from './AgentTerminalActions'
@@ -52,8 +57,13 @@ describe('AgentTerminalActions', () => {
 
   it('prevents default on mousedown so xterm keeps focus', () => {
     render(<AgentTerminalActions onSubmit={() => {}} />)
-    const event = fireEvent.mouseDown(screen.getByRole('button', { name: 'Submit' }))
-    expect(event.defaultPrevented).toBe(true)
+    const button = screen.getByRole('button', { name: 'Submit' })
+    // Dispatch a real cancelable mousedown rather than relying on fireEvent's
+    // return value: RTL's synthetic object does not reflect defaultPrevented
+    // after React processes the handler in this environment.
+    const mousedown = new MouseEvent('mousedown', { bubbles: true, cancelable: true })
+    act(() => { button.dispatchEvent(mousedown) })
+    expect(mousedown.defaultPrevented).toBe(true)
   })
 
   it('still lets mousedown bubble so the owning leaf engages the session', () => {
@@ -525,7 +535,7 @@ Run:
 export PATH="$HOME/.nvm/versions/node/v24.14.1/bin:$PATH"
 npm run test:renderer
 ```
-Expected: 124 test files pass, 0 failures (121 baseline + 2 new files; the extra file is `AgentTerminalActions.renderer.test.tsx` which the `npm run test:renderer` glob picks up alongside `AgentTerminalLeaf.submit.renderer.test.tsx`).
+Expected: 123 test files pass, 0 failures (121 baseline + the two new files `AgentTerminalActions.renderer.test.tsx` and `AgentTerminalLeaf.submit.renderer.test.tsx`, which add 8 tests: 5 + 3).
 
 - [ ] **Step 4: Confirm submodule integrity**
 
