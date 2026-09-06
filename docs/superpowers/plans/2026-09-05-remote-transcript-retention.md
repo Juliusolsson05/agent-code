@@ -71,3 +71,17 @@ existing client chunk-size/mixed-import warnings remain. Re-selection also
 clears the authority of a file hint observed while unviewed, so a newer history
 file can establish identity without waiting for another live append. New live
 frames in the selected view still win over a stale history reply.
+
+## Clean-build review correction
+
+The first full CI run passed tests and coverage but failed the remote production
+build: the shared planner introduces a runtime import of
+`agent-transcript-parser/ghost`, whose package export points at unbuilt `dist/`.
+A prebuilt parser in the original local dependency links had masked this.
+The remote Vite config now aliases that pure leaf to pinned submodule source,
+matching the desktop build convention without adding a ghost plane or changing
+desktop files. The failure reproduced locally after pointing this worktree's
+parser dependency at its own unbuilt checkout; the shared node_modules and
+running app were left untouched. The same unbuilt checkout now passes the full `npm run test:package` gate.
+The parser still has no dist directory. CI will rerun after rebasing onto
+current main f7507980 (toolkit #812 and MCP repair #818).

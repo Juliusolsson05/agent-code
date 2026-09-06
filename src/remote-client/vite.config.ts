@@ -72,13 +72,21 @@ export default defineConfig({
         find: 'workflow-mcp/state',
         replacement: resolve(src, '..', 'packages', 'workflow-mcp', 'src', 'state.ts'),
       },
+      {
+        // The live-window planner imports the pure parser ghost helpers even
+        // though the phone has no ghost plane. Resolve pinned source just as
+        // the desktop build does: file: package exports point at dist/, which
+        // exists on a warmed developer checkout but not in a clean CI clone.
+        // Do not externalize it; the phone needs a self-contained browser bundle.
+        find: 'agent-transcript-parser/ghost',
+        replacement: resolve(src, '..', 'packages', 'agent-transcript-parser', 'src', 'ghost.ts'),
+      },
       { find: '@renderer', replacement: resolve(src, 'renderer', 'src') },
       { find: '@providers', replacement: resolve(src, 'providers') },
       { find: '@shared', replacement: resolve(src, 'shared') },
       { find: '@mcp', replacement: resolve(src, 'mcp') },
-      // agent-transcript-parser is a file: workspace package; the desktop
-      // resolves it via node_modules symlink, which works here too — no
-      // alias needed. The headless packages never appear in renderer code.
+      // Other parser references are type-only. Keep runtime leaf imports
+      // source-aliased above; headless packages never enter the phone bundle.
     ],
   },
   build: {
