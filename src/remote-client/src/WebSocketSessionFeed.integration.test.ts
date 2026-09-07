@@ -367,3 +367,59 @@ describe('WebSocketSessionFeed against a live RemoteServer', () => {
     })
   })
 })
+
+
+describe('remote reconnect after bounded output overflow', () => {
+  it('backfills a previously loaded session after overflow and retains access to every missed page', async () => {
+    const transcript = join(dir, 'reconnect.jsonl')
+    const entry = (i: number) => ({ type: 'user', uuid: `reconnect-${i}`, message: { role: 'user', content: `synthetic-${i}` } })
+    await writeFile(transcript, Array.from({ length: 10 }, (_, i) => JSON.stringify(entry(i))).join('\n') + '\n')
+    ;(manager.resolveTranscriptFile as ReturnType<typeof vi.fn>).mockResolvedValue(transcript)
+    const f = makeFeed()
+    const store = new TranscriptStore(f)
+    const unsub = store.subscribe('s1', () => {})
+    try {
+      await waitForOpen(f)
+      manager.emit('started', { sessionId: 's1', kind: 'claude', projectDir: '/synthetic' })
+      await vi.waitFor(() => expect(store.getSnapshot('s1').entries).toHaveLength(10))
+      const oldSocket = Reflect.get(f, 'socket') as NodeWebSocket
+      const accepted = [...Reflect.get(server, 'sockets')] as Array<{ ws: NodeWebSocket }>
+      const serverSocket = accepted[0]!.ws
+      oldSocket.pause()
+      await writeFile(transcript, Array.from({ length: 310 }, (_, i) => JSON.stringify(entry(i))).join('\n') + '\n')
+      for (let i = 0; i < 160; i++) {
+        manager.emit('screen', { sessionId: 's1', recent: `${i}:` + 'x'.repeat(64 * 1024) })
+        if (i % 8 === 0) await new Promise(setImmediate)
+      }
+      await vi.waitFor(() => expect(serverSocket.readyState).toBe(NodeWebSocket.CLOSED))
+      oldSocket.resume()
+      await vi.waitFor(() => {
+        expect(Reflect.get(f, 'socket')).not.toBe(oldSocket)
+        expect(store.getSnapshot('s1').entries[0]?.uuid).toBe('reconnect-190')
+        expect(store.getSnapshot('s1').entries).toHaveLength(120)
+      }, { timeout: 6000 })
+      await store.loadOlderHistory('s1')
+      expect(store.getSnapshot('s1').entries.map(e => e.uuid)).toEqual(Array.from({ length: 310 }, (_, i) => `reconnect-${i}`))
+    } finally { unsub(); store.dispose() }
+  }, 15000)
+
+  it('rejects an interrupted prompt as uncertain and never replays it on reconnect', async () => {
+    let finish!: (value: unknown) => void
+    const result = new Promise(resolve => { finish = resolve })
+    ;(manager.deliverPromptToAgent as ReturnType<typeof vi.fn>).mockReturnValue(result)
+    const f = makeFeed()
+    await waitForOpen(f)
+    const delivery = f.deliverPrompt('s1', 'synthetic prompt')
+    await vi.waitFor(() => expect(manager.deliverPromptToAgent).toHaveBeenCalledTimes(1))
+    const oldSocket = Reflect.get(f, 'socket') as NodeWebSocket
+    oldSocket.close()
+    expect(await delivery).toMatchObject({ ok: false, retrySafe: false, disposition: 'do-not-retry' })
+    finish({ ok: true, acceptance: { kind: 'transport', acceptedAt: 1 } })
+    await vi.waitFor(() => {
+      const current = Reflect.get(f, 'socket') as NodeWebSocket | null
+      expect(current).not.toBe(oldSocket)
+      expect(current?.readyState).toBe(NodeWebSocket.OPEN)
+    }, { timeout: 6000 })
+    expect(manager.deliverPromptToAgent).toHaveBeenCalledTimes(1)
+  }, 10000)
+})

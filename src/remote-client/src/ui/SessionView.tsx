@@ -378,6 +378,9 @@ export function SessionView({
         </div>
         )}
 
+        {transcript.historyError && transcript.entries.length > 0 && (
+          <div className="working" role="status">{transcript.historyError}</div>
+        )}
         {working && <div className="working">● {working}</div>}
 
         {/* The REAL desktop condition rendering. The generic core outlet routes
