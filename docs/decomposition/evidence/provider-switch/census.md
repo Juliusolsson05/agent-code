@@ -22,7 +22,7 @@ Claude rate-limit message, which is a Claude Code product string, not user data.
 
 Every `*.jsonl` under `~/.claude/projects` and `~/.codex/sessions` was streamed
 line by line and each record parsed — 3,328 files, 7.15 GB, no sampling — and
-the five Task 0 relationship predicates evaluated against each file. For each
+the seven Task 0 relationship predicates evaluated against each file. For each
 predicate the smallest matching candidate was then handed to the committed
 extractor (`testing/corpus/extract-observed-sequences.mts`), which applies its
 own smallest-candidate rule and the existing redaction before writing a fixture.
@@ -55,10 +55,12 @@ below, measured by a second streaming pass over the same stores.
 | Relationship | Predicate | Matching files |
 |---|---|---:|
 | `codex-sequence-compacted-once` | exactly one `compacted` record | 230 |
+| `codex-sequence-compacted-history` | exactly one `compacted` record, with ≥ 50 % of the estimated semantic characters before it | 181 |
 | `codex-sequence-compacted-multi` | at least three `compacted` records | 181 |
 | `codex-sequence-rate-limit-snapshot` | `token_count` payload with `rate_limits.rate_limit_reached_type` set | **0** |
 | `claude-sequence-rate-limit` | assistant record with `isApiErrorMessage: true` and `error: "rate_limit"` | 7 |
 | `claude-sequence-oversized` | estimated semantic characters > 581,400 | 90 (91 on the later distribution pass) |
+| `claude-sequence-oversized-turns` | the same, and still > 581,400 with every `tool_result` counted as zero | 13 |
 
 Context: 523 Codex rollouts carry at least one `compacted` record (27 % of the
 store). 113 Claude transcripts carry an `isApiErrorMessage` record at all; the
@@ -73,8 +75,12 @@ one live, as the decomposition already anticipates.
 
 ## Selected fixtures
 
-Selection is by smallest serialized kept-record bytes, which coincided with
-smallest file size for all four cases.
+Selection is by smallest serialized kept-record bytes. For the four round-0
+cases that also happened to be the smallest file; for both round-2 cases it did
+not — `codex-sequence-compacted-history` comes from a 750,349-byte rollout
+rather than the qualifying 582,221-byte one, and `claude-sequence-oversized-turns`
+from a 10,629,353-byte transcript rather than the qualifying 7,870,294-byte one,
+because those keep fewer relationship-bearing records.
 
 | Case | Source file bytes | Records kept | Kept bytes (raw) | Committed `source.jsonl` bytes |
 |---|---:|---:|---:|---:|
@@ -82,10 +88,14 @@ smallest file size for all four cases.
 | `codex-sequence-compacted-multi` | 694,068 | 154 of 495 | 323,602 | 27,334 |
 | `claude-sequence-rate-limit` | 439,615 | 71 of 115 | 390,749 | 61,757 |
 | `claude-sequence-oversized` | 1,293,112 | 67 of 70 | 1,261,111 | 63,960 |
+| `codex-sequence-compacted-history` | 750,349 | 83 of 195 | 346,308 | 27,215 |
+| `claude-sequence-oversized-turns` | 10,629,353 | 1,461 of 1,939 | 6,214,351 | 1,421,213 |
 
-All four are far below the 2 MB fixture cap. They are larger than the ~8 KB
-sequence fixtures already in the corpus because they keep whole rollouts, but
-redaction collapses them by a further 20–95×.
+All six are below the 2 MB fixture cap; the largest,
+`claude-sequence-oversized-turns`, is 1,421,213 bytes — 67.7 % of it, and the
+only one where the cap is a live constraint rather than a formality. They are
+larger than the ~8 KB sequence fixtures already in the corpus because they keep
+whole rollouts, but redaction collapses them by a further 4–95×.
 
 ## Bytes by entry kind
 
@@ -175,6 +185,99 @@ are identical at both commits.
 
 `estimateConversationCharacters`: 644,901 (Real), 3,037 (Fixture).
 Tool-result share of measured bytes: **92.1 %**.
+
+## The two majority-shape fixtures
+
+Round 2. The distributions below showed that both size-selected fixtures sit at
+the mild end of their populations, so the controller ruled that Stage 0 gains
+two more, selected by relationships that demand the majority shape. Extracted
+through the same extractor and redaction; measured against the parser at
+**`bffecd6`** (Stage 1), the commit these fixtures were added on top of.
+
+### `codex-sequence-compacted-history` — 83 records, 83 entries
+
+Selects a rollout with exactly one `compacted` record where at least half of
+`estimateSemanticCharacters` precedes it. 181 of the 1,937 local rollouts
+qualify; this is the smallest by kept-record bytes.
+
+| Entry kind | Entries | Real bytes | Share | Fixture bytes |
+|---|---:|---:|---:|---:|
+| tool-result | 15 | 164,191 | 70.6 % | 613 |
+| message/assistant | 9 | 29,873 | 12.9 % | 351 |
+| message/developer | 5 | 19,200 | 8.3 % | 195 |
+| tool-call | 15 | 12,425 | 5.3 % | 210 |
+| message/user | 13 | 6,771 | 2.9 % | 507 |
+| reasoning | 13 | 0 | 0 % | 0 |
+| compaction | 1 | 0 | 0 % | 12 |
+| opaque | 12 | 0 | 0 % | 0 |
+| **total** | **83** | **232,460** | | **1,888** |
+
+`estimateConversationCharacters`: 233,606 (Real), 3,125 (Fixture).
+Tool-result share: **70.6 %**.
+
+**Characters before the compaction.** The compaction is conversation entry 23
+of 83 — the point of this fixture, against `codex-sequence-compacted-once`
+where it is entry 2 with nothing before it. The share depends on which measure
+is used, and the two disagree sharply:
+
+| Measure | Before | After | Share before |
+|---|---:|---:|---:|
+| `estimateSemanticCharacters` (the selection predicate) | 39,050 | 20,823 | **65.2 %** |
+| `estimateEntryCharacters` (what the planner budgets) | 40,237 | 192,223 | **17.3 %** |
+
+Both are correct; they count different things, and the gap is a fact about the
+selection helper, not about this rollout. `estimateSemanticCharacters` sees only
+59,873 of this rollout's 232,460 planner characters — 26 % — because modern
+Codex tool traffic hides from it: a `custom_tool_call` keeps its input in
+`payload.input` (the helper reads only `payload.arguments`) and a
+`custom_tool_call_output` keeps its output in `payload.output` **as a list**
+(the helper reads only a string). Both are concentrated after the compaction
+here. The fixture still does its job — 23 entries and 40,237 planner characters
+of real pre-compaction history where `compacted-once` has zero — but the
+"≥ 50 %" clause is a property of the selection estimate, and a Stage 2 test that
+wants a decoded majority before the compaction must re-select on the planner's
+measure.
+
+### `claude-sequence-oversized-turns` — 1,461 records, 1,470 entries
+
+Selects a transcript that is over budget **and** still over budget with every
+`tool_result` counted as zero: the population that forces the drop rung. 13
+local transcripts qualify; this is the smallest by kept-record bytes.
+
+| Entry kind | Entries | Real bytes | Share | Fixture bytes |
+|---|---:|---:|---:|---:|
+| message/user | 110 | 1,291,761 | 41.1 % | 4,415 |
+| tool-call | 364 | 869,924 | 27.7 % | 17,756 |
+| tool-result | 364 | 733,557 | 23.3 % | 7,519 |
+| message/assistant | 263 | 225,978 | 7.2 % | 10,257 |
+| compaction | 1 | 20,535 | 0.7 % | 12 |
+| reasoning | 258 | 0 | 0 % | 3,096 |
+| opaque | 110 | 0 | 0 % | 0 |
+| **total** | **1,470** | **3,141,755** | | **43,055** |
+
+`estimateConversationCharacters`: 3,162,471 (Real), 65,352 (Fixture).
+Tool-result share: **23.3 %**.
+
+**After zeroing tool results**, by both measures:
+
+| Measure | Full | Tool results zeroed | Versus the 581,400 budget |
+|---|---:|---:|---|
+| `estimateSemanticCharacters` (the selection predicate) | 1,607,210 | 894,987 | still **1.54×** over |
+| `estimateEntryCharacters` (what the planner budgets) | 3,162,471 | 2,408,198 | still **4.14×** over |
+
+This is the fixture the corpus was missing. At 5.44× the budget it cannot be
+fitted by clearing tool results — user prompts alone (1,291,761 characters) are
+more than twice the whole budget — so `dropOldestTurns` must fire, and Stage 2
+can finally assert what it drops and what it keeps. It also carries one real
+compaction (20,535 characters of carrier summary), so the interaction between an
+existing compaction and the drop rung is exercised on real data.
+
+Note the selection predicate found 13 transcripts where the earlier
+distribution found 46. Both are right about different measures: the 46 came from
+the planner's measure, which counts tool-call inputs (869,924 characters in this
+fixture — Claude `Write`/`Edit` payloads), while `estimateSemanticCharacters`
+ignores them. The 13 are therefore a strict, conservative subset: every one of
+them is over budget on prompts and replies alone.
 
 ## Population distributions
 
@@ -352,10 +455,12 @@ Field names on the rate-limit record, useful for Stage 4's exhaustion signal
    compaction. `claude-sequence-oversized` is 1.11× the budget where the
    population median is 3.55×, and it is one of the cases clearing tool results
    alone fixes. Neither is wrong as evidence of *wire shape*, which is all they
-   claim, but neither can carry a threshold. Stage 2 needs two further
-   extractions with a second clause in the predicate — at least N characters of
-   content before the `compacted` record, and at least M× the budget remaining
-   after tool results are cleared — not a hand edit of these fixtures.
+   claim, but neither can carry a threshold. **Resolved in round 2** by
+   `codex-sequence-compacted-history` and `claude-sequence-oversized-turns`,
+   whose predicates carry the missing second clause. The four original fixtures
+   are kept: the mild shapes are real too, and a ladder that only ever sees the
+   hard case is as untested as one that only ever sees the easy case. Stage 2
+   should assert against both members of each pair.
 4. **No Codex rate-limit snapshot exists locally.** Stage 4 cannot be built
    against a recorded `rate_limit_reached_type`; it must capture one during
    verification, and until then the derivation is unproven against real bytes.
