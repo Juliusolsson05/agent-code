@@ -1,7 +1,9 @@
 # Quota-independent provider switch
 
-Status: Decomposition written 2026-09-05, awaiting user approval before any
-implementation stage starts. Feature issue: [#821](https://github.com/Juliusolsson05/agent-code/issues/821).
+Status: Decomposition written 2026-09-05, approved 2026-09-07 as part of the
+loose-ends takeover (docs/superpowers/plans/2026-09-07-loose-ends-takeover.md);
+Stage 0 census is committed before any product code and presented, not gated.
+Feature issue: [#821](https://github.com/Juliusolsson05/agent-code/issues/821).
 Hazard issue: [#820](https://github.com/Juliusolsson05/agent-code/issues/820).
 Package issues: [agent-transcript-parser#24](https://github.com/Juliusolsson05/agent-transcript-parser/issues/24),
 [codex-headless#46](https://github.com/Juliusolsson05/codex-headless/issues/46).
@@ -277,7 +279,9 @@ characters; Codex `gpt-6-astra` 272k at 95 percent → 581,400 characters
    is conservative but unverified against `opencode import`.
 8. Whether PR #810 (workspace hook isolation) lands first; if so
    `bulkProviderSwitch.ts` wiring in `hook/index.ts` must be rebased, not merged
-   blindly.
+   blindly. Resolved 2026-09-07: #810 merged on 2026-09-06 (408e3e39). Task 8's
+   hook/index.ts wiring rebases onto the per-session subscription shape; read
+   hook/index.ts before editing it.
 
 ## Fixture plan
 
@@ -299,3 +303,9 @@ operator toolkit (#812, merged) owns `main/control` and `externalControlMcp`.
 This work does not touch those directories. The only shared file is
 `src/renderer/src/workspace/hook/index.ts`, where the bulk actions are wired;
 changes there are limited to passing new parameters through.
+
+2026-09-07: every coordinating agent (A5/A6/A8, the toolkit lane) is closed and
+its work is merged (#808–#814, #812, #818). No file is reserved. The constraint
+that survives is not to overlap the other workstreams of the takeover plan
+(#822 fix in work-context/, the PaneHeader test hook, PR #823), none of which
+touch this feature's file map.
