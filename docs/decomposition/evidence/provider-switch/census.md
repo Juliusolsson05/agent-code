@@ -39,6 +39,10 @@ Both were produced with the census script in the Task 0 brief (kept out of the
 repository), extended only to apply each case's `keep` predicate and to report
 counts, `estimateConversationCharacters`, and the tool-result share.
 
+A per-fixture number describes one transcript. Where a conclusion is about how
+often something happens, the numbers come instead from the population section
+below, measured by a second streaming pass over the same stores.
+
 ## Local corpus scale, 2026-09-07
 
 | Store | Files | Bytes |
@@ -54,7 +58,7 @@ counts, `estimateConversationCharacters`, and the tool-result share.
 | `codex-sequence-compacted-multi` | at least three `compacted` records | 181 |
 | `codex-sequence-rate-limit-snapshot` | `token_count` payload with `rate_limits.rate_limit_reached_type` set | **0** |
 | `claude-sequence-rate-limit` | assistant record with `isApiErrorMessage: true` and `error: "rate_limit"` | 7 |
-| `claude-sequence-oversized` | estimated semantic characters > 581,400 | 90 |
+| `claude-sequence-oversized` | estimated semantic characters > 581,400 | 90 (91 on the later distribution pass) |
 
 Context: 523 Codex rollouts carry at least one `compacted` record (27 % of the
 store). 113 Claude transcripts carry an `isApiErrorMessage` record at all; the
@@ -137,9 +141,26 @@ Tool-result share of measured bytes: **33.5 %**.
 `estimateConversationCharacters`: 133,788 (Real), 3,319 (Fixture).
 Tool-result share of measured bytes: **89.5 %**.
 
-The single `opaque` entry is the rate-limit record itself: today's Claude
-decoder emits it as an opaque entry, which is what Stage 1 changes to carry
-`nativeType: "api_error"`.
+The single `opaque` entry is **not** the rate-limit record. It is the
+`isMeta: true` user record at fixture line 6, which the meta-prompt rule in
+`claude/conversation/decode.ts` keeps out of semantic history. The rate-limit
+record decoded as an **ordinary assistant message** — that is precisely the
+defect Stage 1 exists to fix, and the reason this fixture was extracted.
+
+Measured against the parser at the Task 0 commit (`7f9a14d`). Stage 1
+(`bffecd6`) has since added the `api_error` rule, and re-running the same
+measurement at that commit moves the rate-limit record out of assistant text:
+
+| | opaque entries | message/assistant | total characters | tool-result share |
+|---|---:|---:|---:|---:|
+| at `7f9a14d` (table above) | 1 | 2 entries / 276 | 132,979 | 89.5 % |
+| at `bffecd6` (Stage 1) | 2 | 1 entry / 95 | 132,798 | 89.6 % |
+
+So the record is worth 181 characters of history that a projection used to
+carry into the target provider as if the model had written it. The ladder
+conclusions below are unaffected — the shift is 0.14 % of this transcript — and
+the other three fixtures contain no `isApiErrorMessage` records, so their tables
+are identical at both commits.
 
 ### `claude-sequence-oversized` — 67 records, 67 entries
 
@@ -155,19 +176,80 @@ decoder emits it as an opaque entry, which is what Stage 1 changes to carry
 `estimateConversationCharacters`: 644,901 (Real), 3,037 (Fixture).
 Tool-result share of measured bytes: **92.1 %**.
 
+## Population distributions
+
+A fixture is the *smallest* member of its population by construction, which
+makes it the worst possible basis for a claim about how often a ladder rung
+fires. The two conclusions below that decide Task 2's thresholds are therefore
+stated from the whole population, not from the fixture. These numbers come from
+a second streaming pass over the same stores that replicates
+`estimateEntryCharacters` record by record; it reproduces
+`estimateConversationCharacters` exactly on all four fixtures (97,288 /
+182,484 / 133,788 / 644,901) and their compaction entry indexes, so
+"planner characters" below is the same quantity `planConversationContext`
+compares against a budget.
+
+### All Claude transcripts over the Codex budget (n = 91)
+
+The oversized predicate matched 91 local transcripts on the second pass, one
+more than the first (transcripts are still being written on this machine; the
+three smallest are unchanged, so fixture selection is unaffected). Of the 91,
+**90** exceed 581,400 planner characters — the extractor's cheaper raw-record
+estimate over-selects by one file.
+
+| Statistic | min | p25 | median | p75 | p90 | max |
+|---|---:|---:|---:|---:|---:|---:|
+| planner characters ÷ 581,400 | 0.95 | 1.86 | **3.55** | 5.77 | 8.82 | **38.00** |
+| planner characters | 554,922 | — | 2,062,214 | — | 5,128,657 | 22,093,522 |
+| tool-result share of characters | 23.3 % | **49.2 %** | **71.8 %** | **85.0 %** | — | 96.7 % |
+| conversation entries | 67 | — | 1,514 | — | — | 13,577 |
+| file bytes | 1,293,112 | — | 6,900,486 | — | — | 56,288,285 |
+
+After clearing **every** tool-result output in each of the 91:
+
+| Statistic | Value |
+|---|---|
+| still over budget | **46 of 91 (50.5 %)** |
+| still over budget with a 64-character placeholder per cleared result | 47 of 91 |
+| remaining characters | min 32,241 · median 605,172 · p90 2,214,532 · max 7,216,650 |
+| remaining ÷ budget | median **1.04** · p90 3.81 · max **12.41** |
+
+The committed `claude-sequence-oversized` fixture sits at ratio 1.11 with a
+92.0 % tool-result share and 67 entries: the *least* stressing member of this
+population on every axis, and one of the 45 that clearing alone does fix.
+
+### All single-`compacted` Codex rollouts (n = 230)
+
+| Statistic | Value |
+|---|---|
+| compaction at conversation entry index 2 | **19 of 230 (8.3 %)** |
+| compaction anywhere else | **211 of 230 (91.7 %)** |
+| entry index of the compaction | min 2 · median **159** · p90 598 · max 3,751 |
+| zero characters before the compaction | 18 of 230 (7.8 %) |
+| share of characters before the compaction, for the 211 | q1 60.0 % · median **74.3 %** · q3 86.6 % |
+| characters before the compaction, for the 211 | median 900,233 · max 2,702,571 |
+
+The committed `codex-sequence-compacted-once` fixture is one of the 19 (8.3 %).
+
 ## What the measurements say about the ladder
 
-1. **Clearing tool results is the only rung that matters at these sizes.** Tool
-   output is 33.5 %, 51.6 %, 89.5 % and 92.1 % of measured bytes in the four
-   fixtures. Nothing else is close.
-2. **The one real over-budget case is fixed by that rung alone.**
-   `claude-sequence-oversized` estimates 644,901 characters against the
-   configured Codex budget of 581,400 — 10.9 % over. Clearing tool-result
-   output removes 593,076 characters and lands at roughly 51,825, about 9 % of
-   budget. Dropping oldest turns is never reached. The ladder should therefore
-   be ordered strip-native-only-compactions → clear-tool-results →
-   drop-oldest-turns, and `dropOldestTurns` should be treated as the rung that
-   almost never fires rather than the primary mechanism.
+1. **Clearing tool results is the rung that matters, across the population.**
+   Tool output is 33.5 %, 51.6 %, 89.5 % and 92.1 % of characters in the four
+   fixtures, and across all 91 oversized Claude transcripts its share has a
+   median of 71.8 % with a quartile range of 49.2–85.0 % and a floor of 23.3 %.
+   Nothing else is close in any of them. This rung is not in question.
+2. **Clearing tool results is necessary but not sufficient: `dropOldestTurns`
+   fires for about half of real over-budget transcripts.** Clearing every
+   tool-result output leaves **46 of 91 (50.5 %)** still over budget, at a
+   median of 1.04× and up to 12.41× the budget. Real over-budget transcripts
+   are not marginally over: the median is 3.55× the budget and the worst is
+   38×, so a ladder that assumes one rung suffices will simply fail to fit half
+   the corpus. `dropOldestTurns` is a primary mechanism, not a theoretical last
+   resort, and Stage 2 must test it against a conversation that needs it —
+   `claude-sequence-oversized` is not one, since at 1.11× it is fixed by
+   clearing alone. The order stays strip-native-only-compactions →
+   clear-tool-results → drop-oldest-turns; what changes is the expectation that
+   the third rung is exercised in production roughly as often as not.
 3. **Do not build a rung on reasoning.** Reasoning contributes **zero**
    measurable characters in all four fixtures. Codex reasoning is encrypted, so
    its decoded text is empty by construction. Claude thinking blocks are
@@ -183,16 +265,22 @@ Tool-result share of measured bytes: **92.1 %**.
    portable text.** All five `compaction` entries across the two Codex fixtures
    decode to an empty summary (`summarySource: encrypted`). Budget arithmetic
    must not credit a Codex compaction with having "already shrunk" anything.
-6. **A single-`compacted` Codex rollout usually has nothing before the
-   compaction.** In all three smallest candidates the compaction is entry index
-   2 of the conversation, with **0** measured bytes before it and 100 % after —
-   these are resumed or forked threads that *begin* from a compaction, not long
-   sessions that compacted midway. Only the repeatedly-compacted fixture shows a
-   real split (94,200 characters before the last compaction, 84,957 after,
-   47.4 % after). Consequence for the design: `requires-portable-handoff` is the
-   ordinary Codex → Claude case, not an edge case, and Stage 2 tests that need
-   substantial pre-compaction history must use `codex-sequence-compacted-multi`.
-   See the caveat below on what this means for the `compacted-once` predicate.
+6. **A single-`compacted` Codex rollout usually keeps most of its history
+   before the compaction — the fixture is the 8 % exception.** Across all 230
+   matches, **211 (91.7 %)** have the compaction somewhere other than entry
+   index 2 (median entry index 159), and only **18 (7.8 %)** have zero
+   characters before it. For the 211, the median share of characters preceding
+   the compaction is **74.3 %** (q1 60.0 %, q3 86.6 %) — three quarters of a
+   typical compacted rollout is still plaintext pre-compaction history sitting
+   in the file. The three smallest candidates all being compaction-at-index-2
+   is an artifact of sorting by size: a thread that *begins* from a compaction
+   is short, so it sorts first. Consequences: both shapes are real and Stage 2
+   needs both, `requires-portable-handoff` is **not** established as the
+   ordinary Codex → Claude case, and a switch that discards pre-compaction
+   records because "the rollout is compacted" would throw away roughly three
+   quarters of the recoverable history in the typical case. The repeatedly
+   compacted fixture does carry a split (94,200 characters before the last of
+   its four compactions, 84,957 after; 27,960 before the first).
 
 ## #820 — does a rate-limit carrier exist on disk?
 
@@ -250,18 +338,24 @@ Field names on the rate-limit record, useful for Stage 4's exhaustion signal
    value list covers `type`, `kind`, `subtype`, `role`, `phase`, `status` and
    `stop_reason` only, so the committed `claude-sequence-rate-limit` fixture
    carries `"error": "fixture text"`. It still proves the record's position,
-   its `isApiErrorMessage: true` flag, its `quotaLimits` shape, and that today's
-   decoder turns it into an `opaque` entry. Stage 1 must either add `error` to
-   that allowlist deliberately — a redaction-policy change, since `error` is not
-   a low-cardinality field on every provider — or key its test on
-   `isApiErrorMessage` and use the synthesized carrier fixture it already plans.
-3. **`codex-sequence-compacted-once` has no pre-compaction history.** The
-   smallest-candidate rule selected a rollout whose compaction is at entry
-   index 2. That is representative (all three smallest candidates look the same)
-   but it does not exercise "pre-compaction records still present earlier in the
-   rollout". If Stage 2 needs that, the predicate needs a second clause — e.g.
-   at least N characters of content before the `compacted` record — and a new
-   extraction, not a hand edit of the fixture.
+   its `isApiErrorMessage: true` flag and its `quotaLimits` shape — which is
+   enough for a decode rule keyed on `isApiErrorMessage`, and is what Stage 1's
+   `api_error` rule in fact keys on. It cannot prove the literal `rate_limit`
+   code. Stage 1 must therefore either add `error` to that allowlist
+   deliberately — a redaction-policy change, since `error` is not a
+   low-cardinality field on every provider — or assert on `isApiErrorMessage`
+   and use the synthesized carrier fixture it already plans for the text.
+3. **Both size-selected fixtures are the mild end of their populations, and
+   one is an 8 % minority shape.** `codex-sequence-compacted-once` has no
+   pre-compaction history, which is true of only 18 of 230 matching rollouts
+   (7.8 %); the other 211 keep a median 74.3 % of their characters before the
+   compaction. `claude-sequence-oversized` is 1.11× the budget where the
+   population median is 3.55×, and it is one of the cases clearing tool results
+   alone fixes. Neither is wrong as evidence of *wire shape*, which is all they
+   claim, but neither can carry a threshold. Stage 2 needs two further
+   extractions with a second clause in the predicate — at least N characters of
+   content before the `compacted` record, and at least M× the budget remaining
+   after tool results are cleared — not a hand edit of these fixtures.
 4. **No Codex rate-limit snapshot exists locally.** Stage 4 cannot be built
    against a recorded `rate_limit_reached_type`; it must capture one during
    verification, and until then the derivation is unproven against real bytes.
