@@ -23,6 +23,13 @@ export type WorktreeReconciliationDebug = {
   cacheState: 'missing' | 'loading' | 'ready' | 'stale'
   catalogCount: number
   recentEvidenceCount: number
+  /** Relevant records evicted from the live window before this cwd had a Git
+   *  catalog. They are folded into the baseline on the first rebuild that
+   *  has one (#822). Non-zero means Git IPC is still pending. */
+  deferredEvidenceCount: number
+  /** Deferred records lost to the deferred window's own bound. Non-zero is
+   *  an honest "attribution for this session is incomplete" signal. */
+  droppedBeforeCatalog: number
   activeSource: string | null
   primarySource: string | null
   projectedPath: string | null
@@ -40,6 +47,14 @@ type RefreshOutcome = 'cached' | 'ready' | 'failed' | 'disposed'
 type SessionEvidence = {
   baseline: WorktreeRuntimeProjection
   recentRaw: unknown[]
+  // WHY a second list instead of folding into the baseline immediately:
+  // foldRaw() cannot interpret a provider path without the Git catalog (it
+  // would guess against an empty worktree list and then dedupe the correct
+  // answer away later), and dropping the record was the #822 data loss.
+  // Holding it here until the catalog arrives keeps the eviction lossless
+  // for the first `recentRawLimit` records; beyond that the loss is counted.
+  deferredRaw: unknown[]
+  droppedBeforeCatalog: number
   revision: number
   lastEmitted: WorktreeRuntimeProjection
   replay?: {
@@ -109,9 +124,14 @@ export class LiveWorktreeReconciler {
       evidence = {
         baseline: this.releaseRetainedEvidenceKeys(
           projection,
-          evidence.recentRaw,
+          // Deferred records will be folded later exactly like the live
+          // window, so hydration must release their keys as well or they
+          // would double-count against the history loader's smaller catalog.
+          [...evidence.deferredRaw, ...evidence.recentRaw],
         ),
         recentRaw: evidence.recentRaw,
+        deferredRaw: evidence.deferredRaw,
+        droppedBeforeCatalog: evidence.droppedBeforeCatalog,
         revision: evidence.revision,
         lastEmitted: projection,
       }
@@ -126,6 +146,8 @@ export class LiveWorktreeReconciler {
       // already-lossy projection.
       baseline: projection,
       recentRaw: [],
+      deferredRaw: [],
+      droppedBeforeCatalog: 0,
       revision: 0,
       lastEmitted: projection,
     }
@@ -148,11 +170,27 @@ export class LiveWorktreeReconciler {
         0,
         evidence.recentRaw.length - this.recentRawLimit,
       )
-      evidence.baseline = this.foldRaw(
-        cwd,
-        evidence.baseline,
-        evicted,
-      )
+      const cached = this.cache.get(cwd)
+      if (cached && cached.refreshedAt > 0) {
+        evidence.baseline = this.foldRaw(cwd, evidence.baseline, evicted)
+      } else {
+        // No catalog yet. worktree-state records fold safely without one
+        // (foldRaw applies them); every other provider path must wait.
+        const foldable = evicted.filter(raw => asRecord(raw)?.type === 'worktree-state')
+        const deferred = evicted.filter(raw => asRecord(raw)?.type !== 'worktree-state')
+        if (foldable.length > 0) {
+          evidence.baseline = this.foldRaw(cwd, evidence.baseline, foldable)
+        }
+        evidence.deferredRaw.push(...deferred)
+        if (evidence.deferredRaw.length > this.recentRawLimit) {
+          // Same bound as the live window so a session that never gets a
+          // catalog holds at most 2 × recentRawLimit records. Oldest go
+          // first because attribution weights recency.
+          const overflow = evidence.deferredRaw.length - this.recentRawLimit
+          evidence.deferredRaw.splice(0, overflow)
+          evidence.droppedBeforeCatalog += overflow
+        }
+      }
     }
     this.evidenceBySession.set(sessionId, evidence)
     const next = this.rebuild(cwd, evidence)
@@ -240,9 +278,14 @@ export class LiveWorktreeReconciler {
       evidence = {
         baseline: this.releaseRetainedEvidenceKeys(
           params.projection,
-          evidence.recentRaw,
+          // Same reasoning as the hydration branch in observe(): records still
+          // waiting on the catalog are replayed later, so history adoption has
+          // to give their tracker keys back or the replay is deduped away.
+          [...evidence.deferredRaw, ...evidence.recentRaw],
         ),
         recentRaw: evidence.recentRaw,
+        deferredRaw: evidence.deferredRaw,
+        droppedBeforeCatalog: evidence.droppedBeforeCatalog,
         revision: evidence.revision,
         lastEmitted: params.projection,
       }
@@ -259,6 +302,15 @@ export class LiveWorktreeReconciler {
   ): WorktreeRuntimeProjection {
     const cached = this.cache.get(cwd)
     const catalog = cached && cached.refreshedAt > 0 ? cached.worktrees : undefined
+    if (catalog && evidence.deferredRaw.length > 0) {
+      // First rebuild with a catalog: the deferred records precede the live
+      // window in time, so they belong in the baseline, folded in arrival
+      // order under the real worktree list. A new baseline object also
+      // invalidates the replay cache below, which is what we want.
+      evidence.baseline = this.foldRaw(cwd, evidence.baseline, evidence.deferredRaw)
+      evidence.deferredRaw = []
+      evidence.revision += 1
+    }
     const replay = evidence.replay
     // This is an input cache, not an output deep comparison. Replaying 500
     // records to discover an identical result still blocks input on the renderer
@@ -421,6 +473,7 @@ export class LiveWorktreeReconciler {
     projection: WorktreeRuntimeProjection
   }): WorktreeReconciliationDebug {
     const cached = this.cache.get(params.cwd)
+    const evidence = this.evidenceBySession.get(params.sessionId)
     const age = cached ? this.now() - cached.refreshedAt : null
     const cacheState = !cached
       ? 'missing'
@@ -434,8 +487,9 @@ export class LiveWorktreeReconciler {
     return {
       cacheState,
       catalogCount: cached?.worktrees.length ?? 0,
-      recentEvidenceCount:
-        this.evidenceBySession.get(params.sessionId)?.recentRaw.length ?? 0,
+      recentEvidenceCount: evidence?.recentRaw.length ?? 0,
+      deferredEvidenceCount: evidence?.deferredRaw.length ?? 0,
+      droppedBeforeCatalog: evidence?.droppedBeforeCatalog ?? 0,
       activeSource: params.projection.workActivity?.active?.source ?? null,
       primarySource: params.projection.workActivity?.primary?.source ?? null,
       projectedPath: params.projection.workContext?.worktreePath ?? null,
