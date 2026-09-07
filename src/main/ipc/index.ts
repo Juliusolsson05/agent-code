@@ -12,6 +12,7 @@ import { registerProviderIpc } from '@main/ipc/provider.js'
 import { registerLspIpc } from '@main/ipc/lsp.js'
 import { registerFsIpc } from '@main/ipc/fs.js'
 import { registerSessionsIpc } from '@main/ipc/sessions.js'
+import { registerAgentNamesIpc } from '@main/agentNames/ipc.js'
 import { registerWorkspaceIpc } from '@main/ipc/workspace.js'
 import { registerWindowIpc } from '@main/ipc/window.js'
 import type { WorkspaceFileStore } from '@main/storage/workspaceFileStore.js'
@@ -95,6 +96,7 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerFsIpc()
   registerSessionsIpc()
   registerWorkspaceIpc(deps.manager, deps.workspaceFileStore)
+  registerAgentNamesIpc()
   registerWindowIpc(deps.workspaceFileStore)
   registerGhostIpc(deps.ghostJournals)
   registerGitIpc()
