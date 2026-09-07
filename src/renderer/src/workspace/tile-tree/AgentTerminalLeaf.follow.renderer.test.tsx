@@ -226,4 +226,39 @@ describe('AgentTerminalLeaf follow (jump-to-latest + tail)', () => {
     act(() => { view.rerender(leaf(runtimeWith({ scrollToLatestRequest: 4 }))) })
     expect(term().scrollToBottom).toHaveBeenCalledTimes(1)
   })
+
+  describe('tail engage/disengage', () => {
+    it('pins to bottom on engage and restores the pre-tail viewport line on disengage', async () => {
+      const view = render(leaf())
+      await attachResolved()
+      term().buffer.active.length = 500
+      term().buffer.active.viewportY = 100 // user scrolled up
+      act(() => { view.rerender(leaf(runtimeWith({ tailMode: true }))) })
+      expect(term().scrollToBottom).toHaveBeenCalled()
+      expect(term().buffer.active.viewportY).toBe(460) // 500 - rows(40)
+      act(() => { view.rerender(leaf(runtimeWith({ tailMode: false }))) })
+      expect(term().buffer.active.viewportY).toBe(100)
+    })
+
+    it('keeps the bottom on disengage when tail engaged at the bottom', async () => {
+      const view = render(leaf())
+      await attachResolved()
+      term().buffer.active.length = 500
+      term().buffer.active.viewportY = 460 // at bottom
+      act(() => { view.rerender(leaf(runtimeWith({ tailMode: true }))) })
+      act(() => { view.rerender(leaf(runtimeWith({ tailMode: false }))) })
+      expect(term().buffer.active.viewportY).toBe(460)
+    })
+
+    it('does not restore when tail was already on at mount (fresh terminal)', async () => {
+      const view = render(leaf(runtimeWith({ tailMode: true })))
+      await attachResolved()
+      term().buffer.active.length = 500
+      term().buffer.active.viewportY = 460 // user sat at the bottom
+      act(() => { view.rerender(leaf(runtimeWith({ tailMode: false }))) })
+      // Engage happened before xterm existed — nothing was saved, disengage
+      // must not invent a position and yank the user to the top.
+      expect(term().buffer.active.viewportY).toBe(460)
+    })
+  })
 })

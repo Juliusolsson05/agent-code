@@ -72,6 +72,37 @@ export function useAgentTerminalFollow({
     termRef.current?.scrollToBottom()
   }, [scrollToLatestRequest, termRef])
 
+  // Tail engage/disengage. Non-destructive like Feed: only a viewport that was
+  // genuinely scrolled up has a position worth restoring; engaging while at
+  // bottom saves nothing and disengage leaves the bottom. On mount with tail
+  // already on, this effect runs before xterm exists (declaration order — see
+  // the leaf wiring), so nothing is saved and disengage keeps the bottom the
+  // attach replay left us at.
+  const tailEngagedRef = useRef(false)
+  const savedViewportYRef = useRef<number | null>(null)
+  useEffect(() => {
+    const activeTerm = termRef.current
+    if (tailActive && !tailEngagedRef.current) {
+      tailEngagedRef.current = true
+      if (activeTerm) {
+        savedViewportYRef.current = isXtermViewportAtBottom(activeTerm)
+          ? null
+          : activeTerm.buffer.active.viewportY
+        activeTerm.scrollToBottom()
+      }
+      return
+    }
+    if (!tailActive && tailEngagedRef.current) {
+      tailEngagedRef.current = false
+      const saved = savedViewportYRef.current
+      savedViewportYRef.current = null
+      if (activeTerm && saved !== null) {
+        const buffer = activeTerm.buffer.active
+        buffer.viewportY = Math.min(saved, Math.max(0, buffer.length - activeTerm.rows))
+      }
+    }
+  }, [tailActive, termRef])
+
   // Stable handle: the leaf's mount effect is keyed on [sessionId] and must
   // not be invalidated by follow-state churn.
   return useMemo<AgentTerminalFollowHandle>(() => ({
