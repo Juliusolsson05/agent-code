@@ -22,6 +22,7 @@ import { attachXtermWebglRenderer } from '@renderer/workspace/terminal/xtermWebg
 import { AgentTitleHeader } from '@renderer/workspace/tile-tree/AgentTitleHeader'
 import { createTerminalInputForwarder } from '@renderer/workspace/tile-tree/terminalInputForwarder'
 import { AgentTerminalActions } from '@renderer/workspace/tile-tree/AgentTerminalActions'
+import { useAgentTerminalFollow } from '@renderer/workspace/tile-tree/agentTerminalFollow'
 
 type Props = {
   sessionId: SessionId
@@ -84,6 +85,22 @@ export function AgentTerminalLeaf({
   focusedRef.current = focused
   const dimensionActive = useAgentTerminalDimensionActive()
   const ownerVisible = useAgentTerminalOwnerVisible()
+  const tailAllMode = useAppStore(state => state.tailAllMode)
+  // Feed-parity tail mask (TileLeaf's effectiveTailMode): per-session Tail OR
+  // Tail All, suppressed while this subtree is hidden (editor fullscreen /
+  // Reader/Spotlight/Settings takeover) — a display:none pane cannot scroll,
+  // and folding visibility into the mask makes re-reveal a genuine transition
+  // that re-engages follow.
+  const tailActive = (runtime.tailMode || tailAllMode) && ownerVisible
+  // WHY this hook must be called BEFORE the xterm mount effect below: its
+  // effects read termRef.current at effect time and React runs passive effects
+  // in declaration order — when tail is already on at mount, the terminal does
+  // not exist yet, which is exactly the "nothing to restore" case.
+  const follow = useAgentTerminalFollow({
+    scrollToLatestRequest: runtime.scrollToLatestRequest,
+    tailActive,
+    termRef,
+  })
   const dimensionActiveRef = useRef(false)
   const dimensionOwnershipEpochRef = useRef(0)
   const onDimensionOwnershipChangeRef = useRef<((active: boolean) => void) | null>(null)
@@ -121,6 +138,9 @@ export function AgentTerminalLeaf({
     let webglRenderer: ReturnType<typeof attachXtermWebglRenderer> | null = null
     let onDataDisposable: { dispose(): void } | null = null
     let offPtyData: (() => void) | null = null
+    // Nullable like the disposables above: xterm init can throw before the
+    // follow wiring ever runs, and cleanup must survive that path.
+    let offFollowAttach: (() => void) | null = null
     let resizeObserver: ResizeObserver | null = null
     let resizeFrame: number | null = null
     let disposed = false
@@ -240,6 +260,9 @@ export function AgentTerminalLeaf({
       term.open(container)
       webglRenderer = attachXtermWebglRenderer(term)
       termRef.current = term
+      // Follow re-pin wiring lives in the hook; the mount effect only owns
+      // the terminal instance lifetime, so this attaches/detaches with it.
+      offFollowAttach = follow.attach(term)
 
       if (dimensionActiveRef.current) scheduleFitAndResizeBackend()
       resizeObserver = new ResizeObserver(scheduleFitAndResizeBackend)
@@ -437,6 +460,7 @@ export function AgentTerminalLeaf({
       if (resizeFrame !== null) cancelAnimationFrame(resizeFrame)
       resizeObserver?.disconnect()
       onDataDisposable?.dispose()
+      offFollowAttach?.()
       offPtyData?.()
       webglRenderer?.dispose()
       if (onThemeChangedListener) {
