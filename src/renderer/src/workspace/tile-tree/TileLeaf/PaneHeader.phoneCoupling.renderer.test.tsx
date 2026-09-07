@@ -58,7 +58,7 @@ describe('PaneHeader related-status store coupling', () => {
     )
     const chip = container.querySelector('button')
     expect(chip).not.toBeNull()
-    expect(chip!.querySelector('.bg-accent')).not.toBeNull()
+    expect(chip!.querySelector('[data-related-status="running"]')).not.toBeNull()
   })
 
   it('derives related status from the store when the key exists (desktop path)', () => {
@@ -74,6 +74,6 @@ describe('PaneHeader related-status store coupling', () => {
     )
     const chip = container.querySelector('button')
     expect(chip).not.toBeNull()
-    expect(chip!.querySelector('.bg-accent')).not.toBeNull()
+    expect(chip!.querySelector('[data-related-status="running"]')).not.toBeNull()
   })
 })

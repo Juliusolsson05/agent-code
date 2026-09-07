@@ -39,7 +39,7 @@ import type { SessionId } from '@renderer/workspace/types'
 //   of those things — it is ephemeral and DOM-derived, and it must never
 //   be autosaved or rehydrated (resuming a session with a stale "pending
 //   quote" from last week would be a bug, not a feature). Runtime writes
-//   also bump setDraftVersion, which would dirty the autosave path on
+//   also call bumpDraftChanges, which would dirty the autosave path on
 //   every mouse drag. codeBlockRegistry.ts sets the precedent for
 //   DOM-derived data living in module scope.
 //
