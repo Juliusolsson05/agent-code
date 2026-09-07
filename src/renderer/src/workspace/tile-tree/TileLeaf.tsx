@@ -1015,6 +1015,7 @@ export function TileLeaf({
           workspace.updateRuntime(sessionId, { promptDelivery: { kind: 'idle' } })
         }
         providerSwitchMessage={runtime.providerSwitch?.message ?? null}
+        providerSwitchPhase={runtime.providerSwitch?.phase ?? null}
       />
 
       {/* Mouse Mode only. Rendered as a sibling BELOW the composer rather than

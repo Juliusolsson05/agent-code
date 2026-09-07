@@ -79,9 +79,18 @@ export function useProviderActions(
     })
 
     if (result.status === 'switched') {
+      // The strategy rides the pane toast because it is the only place a
+      // per-agent cost can be reported (#821, spec §Renderer: "Pane toast per
+      // agent shows its strategy"). `native` is silent on purpose — the common,
+      // lossless case should not add noise to every switch; the two lossy
+      // strategies name themselves, and `shrunk` carries the one line saying
+      // what the ladder had to remove.
+      const note = result.strategy === 'native'
+        ? ''
+        : ` · ${result.strategy}${result.shrinkSummary ? ` (${result.shrinkSummary})` : ''}`
       showPaneToast(
         result.newSessionId,
-        `Switched to ${providerChoiceLabel(result.targetKind, targetProviderRuntime)}`,
+        `Switched to ${providerChoiceLabel(result.targetKind, targetProviderRuntime)}${note}`,
       )
     } else if (result.status === 'failed') {
       showPaneToast(sourceSessionId, result.message)
