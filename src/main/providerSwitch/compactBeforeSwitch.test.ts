@@ -335,10 +335,16 @@ describe('compactSourceBeforeSwitch', () => {
     expect(mocks.read).toHaveBeenCalledTimes(2)
   })
 
-  it('fails immediately when a rate-limit error lands after /compact was sent', async () => {
+  it('fails immediately when an API error lands after /compact was sent', async () => {
     // Here the fixture carries the evidence: `isApiErrorMessage: true` is a
     // boolean, so Claude decode still classifies these records as
     // `opaque`/`api_error` after redaction even though their text is gone.
+    //
+    // WHY this asserts the GENERIC wording: redaction is exactly why. The
+    // record's `error` field and its assistant text both decode to "fixture
+    // text", so nothing here proves a usage limit, and claiming one would send
+    // a user whose connection dropped to a billing page. The case below covers
+    // the limit wording, with the observed template as its evidence.
     const rateLimited = await loadFixtureConversation('claude-sequence-rate-limit', 'claude')
     const apiErrors = rateLimited.entries
       .filter((entry): entry is Extract<ConversationEntry, { kind: 'opaque' }> => (
@@ -354,7 +360,62 @@ describe('compactSourceBeforeSwitch', () => {
     const manager = claudeManager()
 
     await expect(compactSourceBeforeSwitch(manager as never, claudeRequest(), requiresCompactionPlan()))
+      .rejects.toThrow(/reported an API error instead of compacting/)
+  })
+
+  it('names the usage limit when the api_error record carries the evidence', async () => {
+    // The same abort, one rung more specific. The record shape is the observed
+    // one (an assistant record with `isApiErrorMessage: true`, decoded to
+    // `opaque`/`api_error`); the TEXT is the census's observed limit template,
+    // supplied here for the same reason RATE_LIMIT_CARRIER is — redaction
+    // replaces it with "fixture text" in the committed fixture, so the fixture
+    // cannot exercise the branch that reads it.
+    mocks.read
+      .mockResolvedValueOnce(conversation([]))
+      .mockResolvedValueOnce(conversation([apiError(
+        "You've hit your monthly spend limit · raise it at claude.ai/settings/usage?from=cc_cli_limit_message",
+        901,
+      )]))
+    const manager = claudeManager()
+
+    await expect(compactSourceBeforeSwitch(manager as never, claudeRequest(), requiresCompactionPlan()))
       .rejects.toThrow(/reported a usage limit instead of compacting/)
+  })
+
+  // The handoff turn is an ordinary turn on the same quota `/compact` just
+  // spent, and it runs AFTER the source history was replaced — so a limit there
+  // is the worst moment to sit silent for five minutes. Both cases below prove
+  // the probe is wired into the handoff waits, not only the compaction wait.
+  //
+  // HONEST LIMIT, stated once for both: only the Claude decoder classifies
+  // `opaque`/`api_error` today, so these entries are hand-built rather than
+  // decoded from a Codex/OpenCode fixture, and in production the guard cannot
+  // fire for those providers until their decoders classify errors
+  // (codex-headless#46 is the other half of that work). These tests pin the
+  // wiring and the message; they are not evidence that a Codex rollout contains
+  // such a record.
+
+  it('fails fast when an API error lands during the Codex portable handoff', async () => {
+    mocks.read
+      .mockResolvedValueOnce(conversation([codexCompaction(12)], 'codex'))
+      .mockResolvedValueOnce(conversation([codexCompaction(12), apiError('fixture text', 20)], 'codex'))
+    const manager = codexManager()
+
+    await expect(compactSourceBeforeSwitch(manager as never, codexRequest(), requiresPortableHandoffPlan()))
+      .rejects.toThrow(/reported an API error instead of a portable handoff/)
+    // Two decodes, not a 300 s wait.
+    expect(mocks.read).toHaveBeenCalledTimes(2)
+  })
+
+  it('fails fast when an API error lands during the OpenCode portable handoff', async () => {
+    mocks.read
+      .mockResolvedValueOnce(conversation([], 'opencode'))
+      .mockResolvedValueOnce(conversation([apiError('fixture text', 5)], 'opencode'))
+    const manager = opencodeManager()
+
+    await expect(compactSourceBeforeSwitch(manager as never, opencodeRequest(), requiresCompactionPlan()))
+      .rejects.toThrow(/reported an API error instead of a portable handoff/)
+    expect(mocks.read).toHaveBeenCalledTimes(2)
   })
 
   it('re-locates the transcript when its pinned path stops resolving', async () => {
@@ -520,6 +581,31 @@ function assistant(text: string, line: number) {
     content: [{ kind: 'text' as const, text }],
     timestamp: null,
     source: { provider: 'codex', line, raw: {}, evidence: [] },
+  }
+}
+
+// The decoded shape of a Claude `isApiErrorMessage: true` assistant record:
+// `opaque`/`api_error`, with the original record kept on `source.raw` — which
+// is where the abort message looks for evidence that the error was a usage
+// limit (see `describeApiErrorAbort`). `error` stays the redacted-looking
+// "fixture text" unless a case overrides it, so the generic wording is the
+// default here exactly as it is for the committed fixture.
+function apiError(text: string, line: number) {
+  return {
+    kind: 'opaque' as const,
+    nativeType: 'api_error',
+    timestamp: null,
+    source: {
+      provider: 'claude',
+      line,
+      raw: {
+        type: 'assistant',
+        isApiErrorMessage: true,
+        error: 'fixture text',
+        message: { role: 'assistant', content: [{ type: 'text', text }] },
+      },
+      evidence: [],
+    },
   }
 }
 

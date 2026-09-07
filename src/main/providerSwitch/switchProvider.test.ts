@@ -368,6 +368,43 @@ describe('switchProvider neutral hub integration', () => {
       expect((result as { shrinkSummary: string }).shrinkSummary).toMatch(/cleared|dropped/)
     })
 
+    it('routes overflowPolicy truncate to the ladder even when source turns are allowed', async () => {
+      // The behaviour change nothing else pins: `truncate` used to mean
+      // `fitConversationToCharacterBudget` (drop whole turns, refuse outright
+      // when an encrypted Codex carrier was in the way) and now means the
+      // shrink ladder. It wins over `allowSourceTurns: true` deliberately — a
+      // caller that said "fit it lossily" already answered the question this
+      // path exists to ask, so spending a source turn to compact would be
+      // asking twice and charging for the second answer.
+      const source = await loadFixtureConversation('claude-sequence-oversized-turns', 'claude')
+      mocks.sourceRead.mockResolvedValue(source)
+      mocks.targetProfile.mockResolvedValue({
+        model: 'gpt-6-astra',
+        modelProvider: 'openai',
+        budgetCharacters: Math.floor(estimateConversationCharacters(source) / 8),
+      })
+      mocks.targetProject.mockResolvedValue(projection)
+      mocks.targetWrite.mockResolvedValue('/codex/target.jsonl')
+      mocks.targetSessionId.mockReturnValue('target-session')
+      const compactSource = vi.fn()
+
+      const result = await switchProvider(
+        {
+          sourceKind: 'claude',
+          targetKind: 'codex',
+          sourceProviderSessionId: 'src',
+          cwd: '/project',
+          sourceSessionId: 'local',
+          overflowPolicy: 'truncate',
+          contextPolicy: { allowSourceTurns: true },
+        },
+        { compactSource },
+      )
+
+      expect(compactSource).not.toHaveBeenCalled()
+      expect(result).toMatchObject({ kind: 'switched', strategy: 'shrunk', truncatedBeforeSwitch: true })
+    })
+
     it('still runs the opt-in source path when allowSourceTurns is true', async () => {
       // The opt-in path is not deleted, only demoted: a user who still wants
       // the source to compact itself (and knows it has quota) gets exactly the

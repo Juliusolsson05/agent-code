@@ -4,12 +4,13 @@ import { stat } from 'node:fs/promises'
 import { setTimeout as delay } from 'node:timers/promises'
 import { resolve } from 'node:path'
 
-import type { ConversationDocument } from 'agent-transcript-parser'
+import type { ConversationDocument, ConversationOpaque } from 'agent-transcript-parser'
 import type { ConversationContextPlan } from 'agent-transcript-parser'
 import {
   conversationAfterLatestPortableCompaction,
   describeLatestCompaction,
   findApiErrorAfterLine,
+  isRateLimitText,
   portableCodexHandoffAfterLine,
   portableOpencodeHandoffAfterLine,
 } from 'agent-transcript-parser'
@@ -251,17 +252,13 @@ export async function waitForNewCompactionOn<T>(
       return `Timed out waiting for ${target.kind} to persist a native compaction record.${detail}`
     },
   }, conversation => {
-    // #820, hazard 1: the provider answered `/compact` with a usage limit. It
-    // writes that as an ordinary api_error record and then stops, so waiting
-    // longer buys nothing — the wait would run its full five minutes and report
-    // a timeout, which reads to the user as "Agent Code is slow" rather than
-    // "your account is out of quota and your history was just compacted".
-    const limitError = findApiErrorAfterLine(conversation, baselineLine)
-    if (limitError) {
-      throw new Error(
-        `The ${target.kind} provider reported a usage limit instead of compacting; the switch was aborted before any pane was replaced.`,
-      )
-    }
+    // #820, hazard 1: the provider answered `/compact` with an error instead of
+    // a summary. It writes that as an ordinary api_error record and then stops,
+    // so waiting longer buys nothing — the wait would run its full five minutes
+    // and report a timeout, which reads to the user as "Agent Code is slow"
+    // rather than "the provider refused and your history was just compacted".
+    const apiError = findApiErrorAfterLine(conversation, baselineLine)
+    if (apiError) throw new Error(describeApiErrorAbort(target.kind, apiError, 'compacting'))
     const latest = describeLatestCompaction(conversation)
     if (latest && latest.fingerprint !== beforeFingerprint) {
       // #820, hazard 2, and the worse of the two: Claude's own compaction only
@@ -293,6 +290,21 @@ async function waitForPortableCodexSummary(
     exitedMessage: 'The Codex source agent exited while creating its portable handoff.',
     timeoutMessage: () => 'Timed out waiting for compacted Codex to persist a portable handoff summary.',
   }, conversation => {
+    // The handoff turn is an ordinary turn against the same quota that
+    // `/compact` just spent, so it is at least as likely to hit a limit — and
+    // this wait runs AFTER the source's history was already replaced, which
+    // makes a five-minute silent timeout the worst possible report. Same
+    // fast-fail as the compaction wait above.
+    //
+    // HONEST LIMIT: only the Claude decoder classifies `opaque`/`api_error`
+    // today (parser: claude/conversation/decode.ts), so for a Codex source this
+    // probe cannot fire yet. It is here because it is the correct shape and
+    // costs one comparison per decode; it starts working the moment Codex error
+    // records are classified (codex-headless#46's `usage_limit_reached` is the
+    // other half of Stage 4). Until then, a Codex limit during the handoff
+    // still ends in the timeout above.
+    const apiError = findApiErrorAfterLine(conversation, baselineLine)
+    if (apiError) throw new Error(describeApiErrorAbort(target.kind, apiError, 'a portable handoff'))
     const handoff = portableCodexHandoffAfterLine(conversation, baselineLine)
     if (!handoff) return null
     // Only the synthetic compaction entry travels on; the source's entries
@@ -322,6 +334,13 @@ async function waitForPortableOpencodeSummary(
     exitedMessage: 'The OpenCode source agent exited while creating its portable handoff.',
     timeoutMessage: () => 'Timed out waiting for OpenCode to persist a portable handoff summary.',
   }, conversation => {
+    // Same fast-fail, same honest limit as the Codex wait above: OpenCode's
+    // decoder does not classify api_error records either, so this cannot fire
+    // until it does. It is written once here rather than left as a TODO because
+    // the failure it prevents — a five-minute wait on a provider that already
+    // answered — is the one this whole module exists to avoid.
+    const apiError = findApiErrorAfterLine(conversation, baselineLine)
+    if (apiError) throw new Error(describeApiErrorAbort(target.kind, apiError, 'a portable handoff'))
     const handoff = portableOpencodeHandoffAfterLine(conversation, baselineLine)
     if (!handoff) return null
     return {
@@ -337,6 +356,66 @@ async function waitForPortableOpencodeSummary(
       },
     }
   })
+}
+
+/**
+ * The message a wait aborts with when an `api_error` record lands after its
+ * baseline.
+ *
+ * WHY the wording is generic unless the record proves otherwise: an earlier cut
+ * of this said "reported a usage limit instead of compacting" for EVERY
+ * api_error, but `findApiErrorAfterLine` has no text predicate — it matches any
+ * `opaque` entry the decoder classified as `api_error`, which includes
+ * connection failures, timeouts, and "overloaded". Telling a user their account
+ * is out of quota when the network dropped sends them to a billing page to fix
+ * a wifi problem, and the message is the ONLY thing they see, because the abort
+ * is deliberately terminal.
+ *
+ * The limit case is still named when the record itself carries the evidence.
+ * Two independent signals, either is enough:
+ *
+ * - `error: 'rate_limit'` — Claude Code's own classification on the raw record.
+ * - the assistant text matching the parser's `isRateLimitText`, which is the
+ *   same prefix list Claude Code writes those messages from
+ *   (services/rateLimitMessages.ts).
+ *
+ * Neither survives fixture redaction (`error` becomes "fixture text" and so
+ * does the message body), which is exactly why the fixture-driven test in this
+ * module's suite asserts the GENERIC wording — see the comment there.
+ */
+function describeApiErrorAbort(
+  kind: AgentProviderKind,
+  entry: ConversationOpaque,
+  insteadOf: string,
+): string {
+  const cause = isUsageLimitRecord(entry) ? 'a usage limit' : 'an API error'
+  return `The ${kind} provider reported ${cause} instead of ${insteadOf}; the switch was aborted before any pane was replaced.`
+}
+
+function isUsageLimitRecord(entry: ConversationOpaque): boolean {
+  const raw = entry.source.raw
+  if (raw.error === 'rate_limit') return true
+  return isRateLimitText(apiErrorMessageText(raw))
+}
+
+// The raw record's own assistant text, if it has any. Claude writes the limit
+// message as an ordinary assistant record
+// (`message.content: [{ type: 'text', text }]`), so that is the only shape read
+// here; anything else yields '' and the caller falls back to the generic
+// wording rather than guessing.
+function apiErrorMessageText(raw: Record<string, unknown>): string {
+  const message = raw.message
+  if (!message || typeof message !== 'object') return ''
+  const content = (message as { content?: unknown }).content
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  return content
+    .map(part => (
+      part && typeof part === 'object' && typeof (part as { text?: unknown }).text === 'string'
+        ? (part as { text: string }).text
+        : ''
+    ))
+    .join('\n')
 }
 
 type PollOptions = {

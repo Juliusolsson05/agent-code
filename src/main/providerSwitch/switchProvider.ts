@@ -201,14 +201,27 @@ export async function switchProvider(
     if (plan.kind === 'shrunk') {
       strategy = 'shrunk'
       shrinkSummary = describeShrink(plan.report)
-      // WHY droppedEntries and not droppedTurns, which is the more obvious
-      // reading of "was history truncated": rung 4 cuts back to the nearest
-      // safe resume boundary, and the entries between the old start and that
-      // boundary need not contain a single user message. A decoded
-      // `claude-sequence-oversized-turns` at a quarter of its own size drops
-      // 130 entries and zero complete turns — real lost history that a
-      // droppedTurns test would have reported as "nothing was truncated".
-      truncatedBeforeSwitch = plan.report.droppedEntries > 0
+      // WHY every rung counts and not just `droppedTurns`, which is the most
+      // obvious reading of "was history truncated":
+      //
+      // The flag's only job is to tell a caller that this switch LOST
+      // something, and every rung of the ladder loses something. Rung 4 cuts
+      // back to the nearest safe resume boundary, and the entries between the
+      // old start and that boundary need not contain a single user message — a
+      // decoded `claude-sequence-oversized-turns` at a quarter of its own size
+      // drops 130 entries and zero complete turns. Rungs 2 and 3 keep every
+      // entry but replace tool outputs with placeholders and trim tool inputs,
+      // which is just as lossy from the target agent's point of view: it can
+      // still see that a command ran, and can no longer see what it printed.
+      // Rung 1 strips carriers the target could not have read, which is the
+      // one arguably-free step — but it only ever runs alongside the others,
+      // so including it costs nothing and keeps the expression readable as
+      // "the ladder removed anything at all".
+      const report = plan.report
+      truncatedBeforeSwitch = report.strippedCompactions
+        + report.clearedResults
+        + report.trimmedInputs
+        + report.droppedEntries > 0
       if (request.sourceSessionId) {
         runtime.onProgress?.({
           sourceSessionId: request.sourceSessionId,
