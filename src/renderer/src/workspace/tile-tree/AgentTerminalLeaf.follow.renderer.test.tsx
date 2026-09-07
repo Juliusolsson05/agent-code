@@ -287,6 +287,34 @@ describe('AgentTerminalLeaf follow (jump-to-latest + tail)', () => {
     expect(screen.getByText('TAIL')).toBeTruthy()
   })
 
+  it('follows output when Tail All is on', async () => {
+    appStore.tailAllMode = true
+    render(leaf())
+    await attachResolved()
+    expect(screen.getByText('TAIL')).toBeTruthy()
+    term().buffer.active.length = 500
+    act(() => { channelListener?.({ sessionId: 'session-1', data: 'stream' }) })
+    expect(term().buffer.active.viewportY).toBe(460)
+  })
+
+  it('stays inert for Tail All while the pane subtree is hidden', async () => {
+    appStore.tailAllMode = true
+    render(
+      <AgentTerminalOwnerVisibilityProvider visible={false}>
+        {leaf()}
+      </AgentTerminalOwnerVisibilityProvider>,
+    )
+    await attachResolved()
+    // Masked: no pill, no forced scroll on output — mirroring TileLeaf's
+    // re-reveal argument for folding visibility into the tail mask.
+    expect(screen.queryByText('TAIL')).toBeNull()
+    term().buffer.active.length = 500
+    term().buffer.active.viewportY = 10
+    act(() => { channelListener?.({ sessionId: 'session-1', data: 'stream' }) })
+    expect(term().scrollToBottom).not.toHaveBeenCalled()
+    expect(term().buffer.active.viewportY).toBe(10)
+  })
+
   describe('tail engage/disengage', () => {
     it('pins to bottom on engage and restores the pre-tail viewport line on disengage', async () => {
       const view = render(leaf())
