@@ -73,6 +73,33 @@ export const providerApi = {
     targetKind: AgentProviderKind
   }> => ipcRenderer.invoke('session:switch-provider', params),
 
+  /**
+   * Ask the pane a switch just created to compact its imported history with
+   * its OWN quota.
+   *
+   * Called after `replaceSession` returns, never before: the transcript is
+   * already durable and the pane already live, which is exactly why this is a
+   * separate call instead of a flag on `switchProvider`. It resolves with
+   * `{ ok: false, message }` rather than rejecting for every failure the target
+   * can produce — the switch itself already succeeded, and a failed tidy-up
+   * must not be reported to the user as a failed switch.
+   *
+   * Claude targets only. A Codex or OpenCode `targetKind` comes back as an
+   * `ok: false` report rather than an error, so the caller needs no provider
+   * check of its own.
+   */
+  compactAfterSwitch: (params: {
+    /** Agent Code's routing id for the NEW pane, not the pre-switch one. */
+    sessionId: string
+    targetKind: AgentProviderKind
+    cwd: string
+    /** The provider session id `switchProvider` wrote and the pane resumed. */
+    providerSessionId: string
+  }): Promise<
+    | { ok: true; via: 'resume-prompt' | 'compact-command' }
+    | { ok: false; message: string }
+  > => ipcRenderer.invoke('session:compact-after-switch', params),
+
   onProviderSwitchProgress: (cb: (event: {
     sourceSessionId: string
     phase: 'compacting' | 'summarizing' | 'shrinking' | 'projecting'

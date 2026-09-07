@@ -52,10 +52,27 @@ export async function switchAgentProvider(params: {
   refs: WorkspaceRefs
   setRuntimes: WorkspaceSetRuntimes
   sessionActions: SessionActions
+  /**
+   * What this switch may spend to make the conversation portable. Both halves
+   * default to false in main (DEFAULT_SWITCH_CONTEXT_POLICY); the caller that
+   * owns the UI decides. `compactOnArrival` is acted on HERE rather than by the
+   * transaction, because the pane it applies to does not exist until
+   * `replaceSession` returns.
+   */
+  contextPolicy?: {
+    allowSourceTurns?: boolean
+    compactOnArrival?: boolean
+  }
   onProgress?: (event: {
-    phase: 'compacting' | 'summarizing' | 'projecting'
+    phase: 'compacting' | 'summarizing' | 'shrinking' | 'projecting'
     message: string
   }) => void
+  /**
+   * Arrival compaction failed. Separate from the result because the switch
+   * itself already succeeded and this fires long after this function returned;
+   * the caller decides whether one agent's failed tidy-up is worth a toast.
+   */
+  onArrivalFailure?: (message: string) => void
 }): Promise<SwitchAgentProviderResult> {
   const {
     sessionId,
@@ -64,7 +81,9 @@ export async function switchAgentProvider(params: {
     refs,
     setRuntimes,
     sessionActions,
+    contextPolicy,
     onProgress,
+    onArrivalFailure,
   } = params
 
   const meta = refs.stateRef.current.sessions[sessionId]
@@ -223,6 +242,11 @@ export async function switchAgentProvider(params: {
       sourceProviderSessionId,
       sourceSessionId: sessionId,
       cwd: meta.cwd,
+      // Forwarded even though nothing sets it yet (the bulk modal that will is
+      // Stage 6): a policy the caller passed and this function silently dropped
+      // would be a trap for the first caller that sets `allowSourceTurns` and
+      // wonders why the source was never asked to compact.
+      ...(contextPolicy ? { contextPolicy } : {}),
     }).finally(unsubscribeProgress)
 
     if (result.kind === 'source-empty') {
@@ -253,6 +277,16 @@ export async function switchAgentProvider(params: {
     })
     if (!newSessionId) return { status: 'failed', message: 'Replacement failed' }
 
+    if (contextPolicy?.compactOnArrival && result.targetKind === 'claude') {
+      startArrivalCompaction({
+        sessionId: newSessionId,
+        cwd: meta.cwd,
+        providerSessionId: result.targetProviderSessionId,
+        setRuntimes,
+        onArrivalFailure,
+      })
+    }
+
     return { status: 'switched', newSessionId, targetKind: result.targetKind }
   } catch (err) {
     const message =
@@ -269,4 +303,75 @@ export async function switchAgentProvider(params: {
       }
     })
   }
+}
+
+/**
+ * Ask the freshly replaced pane to compact its imported history with the
+ * TARGET's quota, and show its progress on that pane.
+ *
+ * WHY fire-and-forget rather than awaited: a batch of twenty agents must not
+ * serialize twenty Claude compactions, each of which can run for minutes. The
+ * switch is already committed and its result is already the caller's; this is
+ * an independent follow-up whose only user-visible outputs are the pane banner
+ * below and, on failure, one toast.
+ *
+ * WHY a second progress subscription instead of reusing the one in
+ * `switchAgentProvider`: that one filters on the SOURCE session id and is
+ * unsubscribed the moment the transaction resolves — which is before
+ * `replaceSession` has even created the id this progress is addressed to. The
+ * subscription is torn down when the arrival promise settles, which is the only
+ * honest terminator: the progress channel has no "done" event.
+ */
+function startArrivalCompaction(params: {
+  sessionId: SessionId
+  cwd: string
+  providerSessionId: string
+  setRuntimes: WorkspaceSetRuntimes
+  onArrivalFailure?: (message: string) => void
+}): void {
+  const { sessionId, cwd, providerSessionId, setRuntimes, onArrivalFailure } = params
+  const unsubscribeProgress = window.api.onProviderSwitchProgress(event => {
+    if (event.sourceSessionId !== sessionId) return
+    setRuntimes(prev => {
+      const runtime = prev[sessionId]
+      if (!runtime) return prev
+      return {
+        ...prev,
+        [sessionId]: {
+          ...runtime,
+          providerSwitch: { phase: event.phase, message: event.message },
+        },
+      }
+    })
+  })
+  void window.api.compactAfterSwitch({
+    sessionId,
+    targetKind: 'claude',
+    cwd,
+    providerSessionId,
+  })
+    .then(outcome => {
+      if (!outcome.ok) onArrivalFailure?.(outcome.message)
+    })
+    // The handler reports failures in its result, so a rejection here means the
+    // IPC boundary itself broke. Catch it anyway: an unhandled rejection from a
+    // deliberately un-awaited promise is a console error with no owner.
+    .catch(error => {
+      onArrivalFailure?.(
+        error instanceof Error && error.message.length > 0
+          ? error.message
+          : 'Arrival compaction failed',
+      )
+    })
+    .finally(() => {
+      unsubscribeProgress()
+      setRuntimes(prev => {
+        const runtime = prev[sessionId]
+        if (!runtime || runtime.providerSwitch === null) return prev
+        return {
+          ...prev,
+          [sessionId]: { ...runtime, providerSwitch: null },
+        }
+      })
+    })
 }

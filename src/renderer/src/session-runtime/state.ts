@@ -348,7 +348,11 @@ export type StreamPhase =
   | 'awaiting-tool'
 
 export type ProviderSwitchRuntimeState = {
-  phase: 'preparing' | 'compacting' | 'summarizing' | 'projecting'
+  // `shrinking` is the quota-independent path's phase (#821): the source is out
+  // of quota, so nothing is compacted anywhere and the deterministic ladder
+  // trims the conversation locally instead. It is a main-process phase like the
+  // other three — `preparing` is the only one the renderer writes itself.
+  phase: 'preparing' | 'compacting' | 'summarizing' | 'shrinking' | 'projecting'
   message: string
 }
 

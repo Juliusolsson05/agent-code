@@ -8,6 +8,8 @@ import type { SessionManager } from '@main/sessionManager.js'
 import { switchProvider } from '@main/providerSwitch/switchProvider.js'
 import type { SwitchContextPolicy } from '@main/providerSwitch/switchProvider.js'
 import { compactSourceBeforeSwitch } from '@main/providerSwitch/compactBeforeSwitch.js'
+import { compactOnArrival } from '@main/providerSwitch/compactOnArrival.js'
+import type { CompactOnArrivalRequest } from '@main/providerSwitch/compactOnArrival.js'
 import { duplicateSession } from '@main/providerSwitch/duplicateSession.js'
 import {
   listRewindPrompts,
@@ -114,6 +116,41 @@ export function registerProviderIpc(manager: SessionManager): void {
       }
     },
   )
+
+  // Arrival compaction — the second half of a quota-independent switch, run on
+  // the pane the switch just created (see providerSwitch/compactOnArrival.ts).
+  //
+  // WHY a lock keyed on the NEW session id, separate from `switchesInFlight`
+  // above: that lock is keyed on the SOURCE and is released the moment the
+  // transaction returns, which is before the renderer has even called
+  // `replaceSession`. Two arrival compactions on one pane would send `/compact`
+  // twice and then race each other's wait for "a compaction newer than the
+  // baseline" — the second would accept the first one's carrier and report
+  // success for work it did not do.
+  //
+  // WHY this never throws across IPC: the pane is already live with its full
+  // history. Every failure comes back as `{ ok: false, message }` for the
+  // caller to show as a toast; see the module header.
+  const arrivalsInFlight = new Set<string>()
+  ipcMain.handle('session:compact-after-switch', async (_evt, params: CompactOnArrivalRequest) => {
+    if (arrivalsInFlight.has(params.sessionId)) {
+      return { ok: false, message: 'Arrival compaction already running.' }
+    }
+    arrivalsInFlight.add(params.sessionId)
+    try {
+      return await compactOnArrival(manager, params, progress => {
+        // Same channel as the switch transaction's progress, addressed to the
+        // new session id. The renderer subscribes per session id, so one
+        // channel carrying both halves keeps the pane's banner continuous
+        // across the replacement instead of blinking between two mechanisms.
+        if (!_evt.sender.isDestroyed()) {
+          _evt.sender.send('session:provider-switch-progress', progress)
+        }
+      })
+    } finally {
+      arrivalsInFlight.delete(params.sessionId)
+    }
+  })
 
   ipcMain.handle(
     'session:duplicate',
