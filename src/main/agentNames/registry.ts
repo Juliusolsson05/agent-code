@@ -24,6 +24,18 @@ import { agentNameAt, normalizeAgentName } from '@shared/agentNames/names.js'
 // motivated all of this. So does the per-value check — the `z.string().trim()
 // .min(1).max(100)` below is real for every ordinary key and a no-op for
 // "__proto__", so `load()` restates it over the raw entries.
+//
+// WHY `.strict()` plus `version: z.literal(1)` is a ONE-WAY DOOR, and must be
+// treated as one: anything this pair does not recognise is routed to the
+// "unreadable, refuse to overwrite" path, which is correct for corruption and
+// brutal for a downgrade. A v2 store written by a newer build makes an older
+// build refuse to allocate at all — the user's names simply stop working until
+// they upgrade back. That is the deliberate trade (silent data loss is worse),
+// but it means a future v2 MUST ship as an ADDITIVE reader that accepts 1 and
+// 2 and keeps writing what the older build can still read, for at least one
+// release. Bumping this literal to 2 is the one change that breaks every
+// installation that has ever run an older build, which on a desktop app with
+// downgrades and two-machine sync is not a hypothetical.
 const stateSchema = z.object({
   version: z.literal(1),
   nextIndex: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER - 1_000_000),
@@ -56,6 +68,19 @@ function adoptAssignments(source: Record<string, string>): Record<string, string
  * one of these per application process, constructed by the IPC adapter, and
  * nothing else may import it — the decomposition keeps MCP and feature code
  * away from application identity on purpose.
+ *
+ * WHAT THIS CLASS DOES NOT ENFORCE: that one process owns the file. The promise
+ * tail below serializes callers WITHIN a process; it knows nothing about a
+ * second one. Single ownership is inherited from the application's single
+ * instance lock (`src/main/index.ts:280`, the same assumption
+ * `src/main/dictation/historyStore.ts:211` writes down for its own store), and
+ * if that ever stopped holding, two processes over one file would be
+ * last-writer-wins on `nextIndex` — both could publish "Apollo" and the loser's
+ * assignments would vanish on the next commit. There is no file lock here
+ * because adding one would be a real cross-platform cost to defend against a
+ * configuration the app does not have; the point of this paragraph is that the
+ * invariant lives THERE, so anything that weakens the instance lock has to come
+ * back and read this.
  *
  * WHY the renderer, not this class, decides which agent keeps an identity
  * across a provider switch: only the renderer knows that a new local session ID
@@ -93,7 +118,7 @@ export class AgentNameRegistry {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
         // A permission or I/O error is NOT an empty registry. Starting fresh
         // here would hand out names that a readable file already owns.
-        throw new Error('Agent name registry is unreadable; refusing to overwrite it', { cause: error })
+        throw new Error(`Agent name registry at ${this.path} is unreadable; refusing to overwrite it`, { cause: error })
       }
       this.state = { version: 1, nextIndex: 0, assignments: emptyAssignments() }
       return this.state
@@ -142,7 +167,7 @@ export class AgentNameRegistry {
       // assignment. Repairing would mean choosing which of two colliding
       // identities keeps the name, and there is no evidence with which to
       // choose. The fix belongs to the user's file, not to this process.
-      throw new Error('Agent name registry is unreadable; refusing to overwrite it', { cause: error })
+      throw new Error(`Agent name registry at ${this.path} is unreadable; refusing to overwrite it`, { cause: error })
     }
 
     this.state = { version: 1, nextIndex, assignments }
@@ -164,6 +189,17 @@ export class AgentNameRegistry {
       // The counter alone cannot guarantee freshness: a user could have
       // hand-written "Apollo" into the file at a lower index. Skipping forward
       // is cheap and keeps the never-duplicate invariant local to this loop.
+      //
+      // SCOPE of "we never overwrite what the user wrote": it holds at the
+      // FIRST load only. After that this process is the single writer and
+      // `this.state` is the truth it commits, so a hand edit made while the app
+      // is running is silently discarded by the next allocation — it was never
+      // read, and `commit()` rewrites the whole file from memory. That is the
+      // price of caching, and caching is what keeps the promise tail from
+      // re-reading the file under every burst of window spawns. Editing the
+      // file by hand is therefore a quit-first operation; there is no reload
+      // path and this module deliberately does not grow one, because a reload
+      // would have to reconcile two divergent counters with no evidence.
       while (used.has(normalizeAgentName(name))) name = agentNameAt(draft.nextIndex++)
       draft.assignments[identity] = name
       used.add(normalizeAgentName(name))

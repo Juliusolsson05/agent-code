@@ -11,13 +11,38 @@
 // WHY names and titles are different things: a title describes the TASK ("fix
 // the queue race") and the user edits it freely. A name addresses the AGENT
 // DOING it and must stay legible over a voice channel, which is why these are
-// short, common, phonetically distinct given names rather than anything
-// generated. Never derive one from the other.
+// short, common, ordinary given names rather than anything generated. Never
+// derive one from the other.
+//
+// WHAT THIS LIST IS NOT: phonetically validated. It is spelling-unique and
+// user-ranked, and nothing more was verified. The strong head is where the
+// separation actually lives; the tail deliberately trades it for shortness and
+// clusters audibly — Flora/Cora/Nora/Lena, Theo/Leo/Milo, Athena/Helena. That
+// is acceptable because names are assigned in rank order, so a workspace only
+// reaches the tail once it already holds dozens of agents, and because every
+// name is also shown in writing beside the title. It is NOT acceptable as an
+// assumption: nothing downstream may treat a spoken utterance as unambiguously
+// identifying one agent. `agents.search` matches on the normalized string, and
+// an ambiguous match is the caller's problem to disambiguate, not this list's
+// to have prevented.
 //
 // WHY overflow uses an explicit " 2" suffix instead of wrapping: past 100 live
 // identities the pool is exhausted, and reusing "Apollo" would make a spoken
 // address ambiguous at the exact moment the workspace is busiest. "Apollo 2" is
 // still sayable and still unique. Never recycle a retired name to avoid it.
+//
+// `as const` is deliberate: it makes the tuple readonly, so nothing can push,
+// splice or sort the vocabulary at runtime and quietly break the ordering
+// contract above. The edge it brings: the element type is the literal union,
+// not `string`, so `AGENT_NAMES.includes(someUserInput)` does not type-check.
+// The widened view is always the normalized one —
+// `AGENT_NAMES.map(normalizeAgentName).includes(normalizeAgentName(input))` —
+// and that is the only membership idiom this feature uses, because a raw
+// case-sensitive compare against a spoken address is wrong anyway. Note that
+// name LOOKUP never scans this list at all: `agents.search` compares the
+// normalized input against each agent's ASSIGNED name, which is the only thing
+// that can include an overflow suffix ("Apollo 2") or a name whose rank has
+// since moved.
 export const AGENT_NAMES = [
   'Apollo', 'Jasper', 'Beatrix', 'Duncan', 'Felix', 'Gloria', 'Hugo', 'Ingrid', 'Oscar', 'Sasha',
   'Trevor', 'Violet', 'Xander', 'Morgan', 'Hazel', 'Cedric', 'Bruno', 'Esther', 'Daphne', 'Orion',
