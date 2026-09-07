@@ -118,13 +118,19 @@ describe('AgentTerminalLeaf follow (jump-to-latest + tail)', () => {
   let attach: Deferred<string | null>
   let nextFrameId: number
   let frames: Map<number, FrameRequestCallback>
-  let ptyListener: ((event: PtyEvent) => void) | null = null
+  // The REAL sessionDataDispatcher is a module singleton that subscribes to
+  // the window.api channel exactly once and keeps that subscription across
+  // tests (its unsubscribe only runs on dispose/HMR). So the channel listener
+  // captured by the FIRST mount stays valid for the whole file — later tests
+  // must not null it, they only replace the per-session handler by remounting.
+  // beforeEach therefore leaves this capture alone.
+  let channelListener: ((event: PtyEvent) => void) | null = null
   const api = {
     attachAgentPty: vi.fn((_id: string) => attach.promise),
     detachAgentPty: vi.fn().mockResolvedValue(undefined),
     onSessionAgentPtyData: vi.fn((listener: (event: PtyEvent) => void) => {
-      ptyListener = listener
-      return () => { ptyListener = null }
+      channelListener = listener
+      return () => {}
     }),
     onSessionTerminalData: vi.fn(() => () => {}),
     resize: vi.fn().mockResolvedValue(undefined),
@@ -183,7 +189,6 @@ describe('AgentTerminalLeaf follow (jump-to-latest + tail)', () => {
     attach = deferred<string | null>()
     nextFrameId = 0
     frames = new Map()
-    ptyListener = null
     xtermHarness.fit.mockClear()
     xtermHarness.instances.length = 0
     xtermHarness.attachWebgl.mockReset()
@@ -225,6 +230,33 @@ describe('AgentTerminalLeaf follow (jump-to-latest + tail)', () => {
     await attachResolved()
     act(() => { view.rerender(leaf(runtimeWith({ scrollToLatestRequest: 4 }))) })
     expect(term().scrollToBottom).toHaveBeenCalledTimes(1)
+  })
+
+  it('follows PTY output through the dispatcher while per-session tail is on', async () => {
+    render(leaf(runtimeWith({ tailMode: true })))
+    await attachResolved()
+    term().buffer.active.length = 500
+    act(() => { channelListener?.({ sessionId: 'session-1', data: 'stream' }) })
+    expect(term().scrollToBottom).toHaveBeenCalled()
+    expect(term().buffer.active.viewportY).toBe(460)
+  })
+
+  it('pins after the attach replay when tail is on', async () => {
+    render(leaf(runtimeWith({ tailMode: true })))
+    await attachResolved('backfill')
+    // Tail engaged before xterm existed, so the pin has to come from the
+    // post-replay moment in tryAttach — proving that branch ran.
+    expect(term().scrollToBottom).toHaveBeenCalled()
+  })
+
+  it('leaves the viewport alone on PTY output while tail is off', async () => {
+    render(leaf())
+    await attachResolved()
+    term().buffer.active.viewportY = 10
+    term().buffer.active.length = 500
+    act(() => { channelListener?.({ sessionId: 'session-1', data: 'stream' }) })
+    expect(term().scrollToBottom).not.toHaveBeenCalled()
+    expect(term().buffer.active.viewportY).toBe(10)
   })
 
   describe('tail engage/disengage', () => {

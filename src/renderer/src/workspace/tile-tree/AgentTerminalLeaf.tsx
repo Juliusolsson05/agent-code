@@ -319,7 +319,15 @@ export function AgentTerminalLeaf({
           if (backlogQueue.length > 256) backlogQueue.splice(0, backlogQueue.length - 256)
           return
         }
-        term?.write(data)
+        // Tail scrolls in the write completion callback: xterm parses chunks
+        // asynchronously, so scrolling synchronously would target the pre-parse
+        // bottom and land one chunk early.
+        const liveTerm = term
+        if (follow.tailActiveRef.current) {
+          liveTerm?.write(data, () => liveTerm.scrollToBottom())
+        } else {
+          liveTerm?.write(data)
+        }
       })
 
       // WHY this goes through refs instead of effect deps: mounting xterm is
@@ -392,6 +400,10 @@ export function AgentTerminalLeaf({
         void forwarder.replay(liveTerm, [buffer, backlogQueue.join('')])
         backlogQueue.length = 0
         attachedBackfillDone = true
+        // A fresh terminal follows its replay by default, but engage-while-mounted
+        // (or Tail All flipping during a remount) wants the pin explicit once the
+        // backfill exists — the replay itself does not go through the write path.
+        if (follow.tailActiveRef.current) liveTerm.scrollToBottom()
         if (pendingResize) {
           const measured = pendingResize
           pendingResize = null
