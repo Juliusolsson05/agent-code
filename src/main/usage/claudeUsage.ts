@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 
-import type { UsageProviderOk } from '@shared/types/usage.js'
+import type { UsageLimitScope, UsageProviderOk } from '@shared/types/usage.js'
 
 import {
   emptyProviderOk,
@@ -136,6 +136,24 @@ function labelClaudeLimit(limit: Record<string, unknown>, index: number): string
   return `Limit ${index + 1}`
 }
 
+// The same observed `kind` values `labelClaudeLimit` switches on, read for a
+// different purpose: whether the window covers every model on the account.
+//
+// WHY this is a second switch on `kind` rather than a field on the label
+// function's return: a label is a display string that can be reworded, and this
+// value decides whether the bulk modal offers "switch provider" or "switch
+// model". They must be able to change independently.
+//
+// An unrecognized `kind` deliberately maps to `unknown` instead of guessing
+// `all-models`: the pessimistic guess would let a new per-model window mark the
+// whole provider exhausted and move a batch of agents that had nothing wrong
+// with them. `labelClaudeLimit`'s canary test covers noticing the new kind.
+function scopeClaudeLimit(kind: string | null): UsageLimitScope {
+  if (kind === 'session' || kind === 'weekly_all') return 'all-models'
+  if (kind === 'weekly_scoped') return 'model-family'
+  return 'unknown'
+}
+
 type ClaudeNormalizeOptions = {
   // WHY this is a separate param instead of stuffed into the payload: keeping
   // the pure-normalization tests fed purely by API-shaped payloads means the
@@ -175,6 +193,7 @@ export function normalizeClaudeUsagePayload(
       resetsAt,
       active: limit.is_active !== false && limit.active !== false,
       detail,
+      scope: scopeClaudeLimit(stringOrNull(limit.kind)),
     })
   })
 

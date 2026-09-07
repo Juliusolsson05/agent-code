@@ -1,5 +1,6 @@
 import type {
   UsageLimitRow,
+  UsageLimitScope,
   UsageProviderOk,
   UsageSeverity,
   UsageSpend,
@@ -68,6 +69,13 @@ export function makeUsageRow(args: {
   resetsAt?: string | null
   active?: boolean
   detail?: string | null
+  // Optional with an `unknown` default rather than required, deliberately: only
+  // the per-provider normalizers can tell a shared window from a per-family one
+  // (Claude reads `kind`, Codex reads which part of the payload the window came
+  // from). A caller that cannot classify its row must say so, not guess — and
+  // `unknown` never counts as exhaustion downstream, so an unclassified row can
+  // only fail to move agents, never move the wrong ones.
+  scope?: UsageLimitScope
 }): UsageLimitRow {
   return {
     id: args.id,
@@ -77,6 +85,7 @@ export function makeUsageRow(args: {
     resetsAt: args.resetsAt ?? null,
     active: args.active ?? true,
     detail: args.detail ?? null,
+    scope: args.scope ?? 'unknown',
   }
 }
 
