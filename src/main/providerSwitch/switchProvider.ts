@@ -217,11 +217,17 @@ export async function switchProvider(
       // one arguably-free step — but it only ever runs alongside the others,
       // so including it costs nothing and keeps the expression readable as
       // "the ladder removed anything at all".
+      //
+      // The sum is parenthesized because `a + b + c + d > 0` reads as if only
+      // the last term were compared; it is not, but a reader should not have to
+      // recall operator precedence to be sure of a flag that decides whether a
+      // user is told their history was cut.
       const report = plan.report
-      truncatedBeforeSwitch = report.strippedCompactions
+      const removed = report.strippedCompactions
         + report.clearedResults
         + report.trimmedInputs
-        + report.droppedEntries > 0
+        + report.droppedEntries
+      truncatedBeforeSwitch = removed > 0
       if (request.sourceSessionId) {
         runtime.onProgress?.({
           sourceSessionId: request.sourceSessionId,

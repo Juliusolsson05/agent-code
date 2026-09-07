@@ -93,6 +93,24 @@ function visibleResumePrompt(selectedIndex: number) {
   }
 }
 
+function backendSnapshot(ready: boolean) {
+  return { input: { ready, revision: 1, reason: ready ? 'ready' : 'provider-not-ready' } }
+}
+
+// The live-Claude manager every case below starts from. `getBackendSnapshot`
+// reports ready by default so a case that is not about the readiness gate does
+// not have to script it; the gate's own cases override it.
+function claudeArrivalManager(overrides: Record<string, unknown> = {}) {
+  return {
+    getSessionKind: vi.fn(() => 'claude'),
+    getBackendSnapshot: vi.fn(() => backendSnapshot(true)),
+    getConditionsSnapshot: vi.fn(() => null),
+    write: vi.fn(() => true),
+    deliverPromptToAgent: vi.fn(async () => ({ ok: true })),
+    ...overrides,
+  }
+}
+
 describe('compactOnArrival', () => {
   beforeEach(() => {
     vi.useFakeTimers({ now: T0 })
@@ -110,12 +128,16 @@ describe('compactOnArrival', () => {
 
   it('answers a visible Claude resume prompt with "Resume from summary" and waits for the carrier', async () => {
     const write = vi.fn(() => true)
-    const manager = {
-      getSessionKind: vi.fn(() => 'claude'),
+    // Readiness stays FALSE for the whole case, on purpose: a visible condition
+    // blocks prompt input (claudeSession.ts derivePromptGateState +
+    // conditionBlocksPromptInput), so this is what the real gate reports while
+    // the prompt is up. A wait that required readiness first could never answer
+    // it.
+    const manager = claudeArrivalManager({
+      getBackendSnapshot: vi.fn(() => backendSnapshot(false)),
       getConditionsSnapshot: vi.fn(() => visibleResumePrompt(1)),
       write,
-      deliverPromptToAgent: vi.fn(),
-    }
+    })
     mocks.read
       .mockResolvedValueOnce(rawConversation)
       .mockResolvedValueOnce(compactedConversation)
@@ -139,12 +161,7 @@ describe('compactOnArrival', () => {
   })
 
   it('delivers /compact when no resume prompt is visible', async () => {
-    const manager = {
-      getSessionKind: vi.fn(() => 'claude'),
-      getConditionsSnapshot: vi.fn(() => null),
-      write: vi.fn(() => true),
-      deliverPromptToAgent: vi.fn(async () => ({ ok: true })),
-    }
+    const manager = claudeArrivalManager()
     mocks.read
       .mockResolvedValueOnce(rawConversation)
       .mockResolvedValueOnce(compactedConversation)
@@ -189,12 +206,9 @@ describe('compactOnArrival', () => {
     // replaced, so a failure here must never propagate as an exception into
     // the caller that already committed the switch. The pane keeps its full
     // imported history and the user is told, once.
-    const manager = {
-      getSessionKind: vi.fn(() => 'claude'),
-      getConditionsSnapshot: vi.fn(() => null),
-      write: vi.fn(() => true),
+    const manager = claudeArrivalManager({
       deliverPromptToAgent: vi.fn(async () => ({ ok: false, message: 'composer unavailable' })),
-    }
+    })
     mocks.read.mockResolvedValueOnce(rawConversation)
 
     const result = await compactOnArrival(manager as never, arrivalRequest())
@@ -202,6 +216,137 @@ describe('compactOnArrival', () => {
     expect(result).toEqual({
       ok: false,
       message: 'Claude did not accept /compact: composer unavailable',
+    })
+  })
+
+  it('reports rather than throws when the transcript cannot be read', async () => {
+    // The baseline read used to sit above the try, so a rejected read escaped
+    // as a rejected promise — on a switch that had already replaced the pane.
+    // Every failure this module can produce has to be a report.
+    const manager = claudeArrivalManager()
+    mocks.read.mockRejectedValueOnce(new Error('caught between bytes'))
+
+    const result = await compactOnArrival(manager as never, arrivalRequest())
+
+    expect(result).toEqual({ ok: false, message: 'caught between bytes' })
+    expect(manager.deliverPromptToAgent).not.toHaveBeenCalled()
+  })
+
+  it('waits for input readiness before asking a still-restoring pane to compact', async () => {
+    // Spec step 1. Without this gate the wait starts at spawn, so a pane that
+    // is still replaying a 53 MB import gets `/compact` typed at a TUI that
+    // cannot accept it.
+    const getBackendSnapshot = vi.fn()
+      .mockReturnValueOnce(backendSnapshot(false))
+      .mockReturnValueOnce(backendSnapshot(false))
+      .mockReturnValue(backendSnapshot(true))
+    const manager = claudeArrivalManager({ getBackendSnapshot })
+    mocks.read
+      .mockResolvedValueOnce(rawConversation)
+      .mockResolvedValueOnce(compactedConversation)
+
+    const result = await compactOnArrival(manager as never, arrivalRequest())
+
+    expect(result).toEqual({ ok: true, via: 'compact-command' })
+    expect(getBackendSnapshot).toHaveBeenCalledTimes(3)
+    // The delivery happened only after the third poll returned ready.
+    expect(manager.deliverPromptToAgent.mock.invocationCallOrder[0]!)
+      .toBeGreaterThan(getBackendSnapshot.mock.invocationCallOrder[2]!)
+  })
+
+  it('answers a resume prompt that appears while input readiness is still false', async () => {
+    // The case that forces readiness and the prompt into ONE wait: a visible
+    // condition blocks prompt input, so this pane never reports ready until the
+    // prompt is answered. A readiness-first gate would time out here — on
+    // exactly the large, idle sessions the prompt (and this whole feature) is
+    // for.
+    const getConditionsSnapshot = vi.fn()
+      .mockReturnValueOnce(null)
+      .mockReturnValueOnce(null)
+      .mockReturnValue(visibleResumePrompt(1))
+    const manager = claudeArrivalManager({
+      getBackendSnapshot: vi.fn(() => backendSnapshot(false)),
+      getConditionsSnapshot,
+    })
+    mocks.read
+      .mockResolvedValueOnce(rawConversation)
+      .mockResolvedValueOnce(compactedConversation)
+
+    const result = await compactOnArrival(manager as never, arrivalRequest())
+
+    expect(result).toEqual({ ok: true, via: 'resume-prompt' })
+    expect(manager.write).toHaveBeenCalledTimes(2)
+    expect(manager.deliverPromptToAgent).not.toHaveBeenCalled()
+  })
+
+  it('reports a restore that never finishes instead of typing into a dead TUI', async () => {
+    const manager = claudeArrivalManager({
+      getBackendSnapshot: vi.fn(() => backendSnapshot(false)),
+    })
+    mocks.read.mockResolvedValueOnce(rawConversation)
+
+    const result = await compactOnArrival(manager as never, arrivalRequest())
+
+    expect(result).toMatchObject({ ok: false })
+    expect((result as { message: string }).message)
+      .toMatch(/did not finish restoring the imported history within 30s; the imported history is intact/)
+    expect(manager.deliverPromptToAgent).not.toHaveBeenCalled()
+    expect(manager.write).not.toHaveBeenCalled()
+  })
+
+  it('reports the pane dying during restore as a live pane, not an aborted switch', async () => {
+    // `getSessionKind` passes the entry guard and then reports the pane gone,
+    // the way `pollSourceUntil` re-checks liveness on every tick.
+    const getSessionKind = vi.fn()
+      .mockReturnValueOnce('claude')
+      .mockReturnValue(null)
+    const manager = claudeArrivalManager({
+      getSessionKind,
+      getBackendSnapshot: vi.fn(() => backendSnapshot(false)),
+    })
+    mocks.read.mockResolvedValueOnce(rawConversation)
+
+    const result = await compactOnArrival(manager as never, arrivalRequest())
+
+    expect(result).toEqual({
+      ok: false,
+      message: 'The new Claude session exited before it finished restoring; the pane keeps its full history.',
+    })
+  })
+
+  it('reports a compaction API error with the arrival consequence, not "the switch was aborted"', async () => {
+    // I1: the shared wait's default phrasing belongs to the SOURCE path, where
+    // nothing has been replaced yet. Here the pane is already live on the
+    // target, so "the switch was aborted before any pane was replaced" is
+    // simply false — and the message is the only thing the user sees.
+    const manager = claudeArrivalManager()
+    mocks.read
+      .mockResolvedValueOnce(rawConversation)
+      .mockResolvedValueOnce({
+        ...rawConversation,
+        entries: [{
+          kind: 'opaque' as const,
+          nativeType: 'api_error',
+          timestamp: null,
+          source: {
+            provider: 'claude',
+            line: 900,
+            raw: {
+              type: 'assistant',
+              isApiErrorMessage: true,
+              error: 'rate_limit',
+              message: { role: 'assistant', content: [{ type: 'text', text: 'fixture text' }] },
+            },
+            evidence: [],
+          },
+        }],
+      })
+
+    const result = await compactOnArrival(manager as never, arrivalRequest())
+
+    expect(result).toEqual({
+      ok: false,
+      message: 'The claude provider reported a usage limit instead of compacting; the imported history is intact and you can run /compact by hand.',
     })
   })
 })

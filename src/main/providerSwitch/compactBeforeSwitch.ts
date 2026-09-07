@@ -60,6 +60,36 @@ export type TranscriptWatchTarget = {
   providerSessionId: string
 }
 
+/**
+ * What a compaction wait's failures MEAN, supplied by whoever started it.
+ *
+ * WHY this is a required parameter and not a default: the two callers of
+ * `waitForNewCompactionOn` are on opposite sides of the pane replacement, so
+ * every sentence this wait can produce is true for exactly one of them. The
+ * source path runs before anything is replaced ("the switch was aborted before
+ * any pane was replaced"); arrival compaction runs after the pane is already
+ * live on the target, where that same sentence is simply false — no switch was
+ * aborted, and the session that died was the NEW one. A default would make the
+ * lie the silent option, and the message is the only thing the user sees.
+ */
+export type CompactionWaitPhrasing = {
+  /** The watched session died before the compaction landed. */
+  exited: string
+  /**
+   * What the failure leaves the user with, appended after every cause this
+   * wait reports ("… reported an API error instead of compacting; <this>.").
+   * Written as a clause, without leading capital or trailing period.
+   */
+  consequence: string
+}
+
+// The source path's phrasing: nothing has been replaced yet, so every failure
+// here is an abort of the whole switch.
+const SOURCE_SWITCH_PHRASING: CompactionWaitPhrasing = {
+  exited: 'The source agent exited while native compaction was running.',
+  consequence: 'the switch was aborted before any pane was replaced',
+}
+
 export async function compactSourceBeforeSwitch(
   manager: SessionManager,
   request: SwitchProviderRequest,
@@ -147,6 +177,7 @@ export async function compactSourceBeforeSwitch(
         target,
         before.fingerprint,
         before.line,
+        SOURCE_SWITCH_PHRASING,
         conversationAfterLatestPortableCompaction,
       )
     }
@@ -155,6 +186,7 @@ export async function compactSourceBeforeSwitch(
       target,
       before.fingerprint,
       before.line,
+      SOURCE_SWITCH_PHRASING,
       latestSourceLine,
     )
     return await requestPortableCodexHandoff(
@@ -232,6 +264,7 @@ export async function waitForNewCompactionOn<T>(
   target: TranscriptWatchTarget,
   beforeFingerprint: string | null,
   baselineLine: number,
+  phrasing: CompactionWaitPhrasing,
   // WHY the caller chooses what survives: Claude needs the post-compaction
   // document itself (its native summary is the portable carrier), Codex only
   // needs the line number its handoff must land after. Selecting inside the
@@ -240,7 +273,7 @@ export async function waitForNewCompactionOn<T>(
 ): Promise<T> {
   const source = getHostTranscriptAdapter(target.kind)
   return await pollSourceUntil(manager, target, source, {
-    exitedMessage: 'The source agent exited while native compaction was running.',
+    exitedMessage: phrasing.exited,
     timeoutMessage: lastReadError => {
       // WHY transient read errors are retried rather than surfaced: providers
       // append JSONL while compaction runs, and the stable-reader intentionally
@@ -249,7 +282,7 @@ export async function waitForNewCompactionOn<T>(
       // append timing into a failed provider switch after `/compact` was
       // already accepted.
       const detail = lastReadError instanceof Error ? ` Last read failed: ${lastReadError.message}` : ''
-      return `Timed out waiting for ${target.kind} to persist a native compaction record.${detail}`
+      return `Timed out waiting for ${target.kind} to persist a native compaction record; ${phrasing.consequence}.${detail}`
     },
   }, conversation => {
     // #820, hazard 1: the provider answered `/compact` with an error instead of
@@ -258,7 +291,7 @@ export async function waitForNewCompactionOn<T>(
     // and report a timeout, which reads to the user as "Agent Code is slow"
     // rather than "the provider refused and your history was just compacted".
     const apiError = findApiErrorAfterLine(conversation, baselineLine)
-    if (apiError) throw new Error(describeApiErrorAbort(target.kind, apiError, 'compacting'))
+    if (apiError) throw new Error(describeApiErrorAbort(target.kind, apiError, 'compacting', phrasing))
     const latest = describeLatestCompaction(conversation)
     if (latest && latest.fingerprint !== beforeFingerprint) {
       // #820, hazard 2, and the worse of the two: Claude's own compaction only
@@ -271,7 +304,7 @@ export async function waitForNewCompactionOn<T>(
       // only an honest abort.
       if (latest.availability === 'rejected') {
         throw new Error(
-          `The ${target.kind} provider wrote a usage-limit message where its compaction summary should be; the switch was aborted.`,
+          `The ${target.kind} provider wrote a usage-limit message where its compaction summary should be; ${phrasing.consequence}.`,
         )
       }
       if (latest.availability !== 'incomplete') return { value: select(conversation) }
@@ -304,7 +337,7 @@ async function waitForPortableCodexSummary(
     // other half of Stage 4). Until then, a Codex limit during the handoff
     // still ends in the timeout above.
     const apiError = findApiErrorAfterLine(conversation, baselineLine)
-    if (apiError) throw new Error(describeApiErrorAbort(target.kind, apiError, 'a portable handoff'))
+    if (apiError) throw new Error(describeApiErrorAbort(target.kind, apiError, 'a portable handoff', SOURCE_SWITCH_PHRASING))
     const handoff = portableCodexHandoffAfterLine(conversation, baselineLine)
     if (!handoff) return null
     // Only the synthetic compaction entry travels on; the source's entries
@@ -340,7 +373,7 @@ async function waitForPortableOpencodeSummary(
     // the failure it prevents — a five-minute wait on a provider that already
     // answered — is the one this whole module exists to avoid.
     const apiError = findApiErrorAfterLine(conversation, baselineLine)
-    if (apiError) throw new Error(describeApiErrorAbort(target.kind, apiError, 'a portable handoff'))
+    if (apiError) throw new Error(describeApiErrorAbort(target.kind, apiError, 'a portable handoff', SOURCE_SWITCH_PHRASING))
     const handoff = portableOpencodeHandoffAfterLine(conversation, baselineLine)
     if (!handoff) return null
     return {
@@ -387,9 +420,10 @@ function describeApiErrorAbort(
   kind: AgentProviderKind,
   entry: ConversationOpaque,
   insteadOf: string,
+  phrasing: CompactionWaitPhrasing,
 ): string {
   const cause = isUsageLimitRecord(entry) ? 'a usage limit' : 'an API error'
-  return `The ${kind} provider reported ${cause} instead of ${insteadOf}; the switch was aborted before any pane was replaced.`
+  return `The ${kind} provider reported ${cause} instead of ${insteadOf}; ${phrasing.consequence}.`
 }
 
 function isUsageLimitRecord(entry: ConversationOpaque): boolean {

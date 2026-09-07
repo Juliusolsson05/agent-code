@@ -449,4 +449,166 @@ describe('switchAgentProvider', () => {
     expect(switchProvider).not.toHaveBeenCalled()
     expect(replaceSession).not.toHaveBeenCalled()
   })
+
+  // Arrival compaction (#821 Stage 5). The renderer half is what decides WHEN
+  // the target is asked to compact itself, and it is deliberately
+  // fire-and-forget — so the switch result must not depend on it, and its
+  // progress must land on the NEW pane rather than the pane that no longer
+  // exists.
+
+  it('asks the new Claude pane to compact on arrival and reports its failure without failing the switch', async () => {
+    const switchProvider = vi.fn().mockResolvedValue({
+      kind: 'switched',
+      targetKind: 'claude',
+      targetProviderSessionId: 'target-provider-session',
+      targetFilePath: '/project/target.jsonl',
+      compactedBeforeSwitch: false,
+      truncatedBeforeSwitch: false,
+      strategy: 'raw',
+      shrinkSummary: null,
+    })
+    const replaceSession = vi.fn().mockResolvedValue('target-pane')
+    const compactAfterSwitch = vi.fn().mockResolvedValue({ ok: false, message: 'Claude did not accept /compact: composer unavailable' })
+    // One unsubscribe per subscription, kept apart so the assertions can prove
+    // BOTH are torn down — the switch's own (source-scoped) and the arrival's
+    // (new-pane-scoped).
+    const unsubscribes: Array<() => void> = []
+    const progressListeners: Array<(event: { sourceSessionId: string; phase: string; message: string }) => void> = []
+    const onProviderSwitchProgress = vi.fn((cb: (event: { sourceSessionId: string; phase: string; message: string }) => void) => {
+      progressListeners.push(cb)
+      const unsubscribe = vi.fn()
+      unsubscribes.push(unsubscribe)
+      return unsubscribe
+    })
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: { onProviderSwitchProgress, switchProvider, compactAfterSwitch },
+    })
+
+    const refs = {
+      stateRef: {
+        current: {
+          sessions: {
+            'source-pane': {
+              cwd: '/project',
+              kind: 'codex',
+              providerSessionId: 'codex-source-session',
+            },
+          },
+        },
+      },
+      latestRuntimesRef: { current: {} },
+      defaultBuiltInMcpDomainsRef: { current: [] },
+    } as unknown as WorkspaceRefs
+    const sessionActions = {
+      ensureSessionLive: vi.fn(async () => ({ sessionId: 'source-pane', builtInMcpDomains: [] })),
+      replaceSession,
+    } as unknown as SessionActions
+    let runtimes: Record<string, unknown> = {
+      'target-pane': { providerSwitch: null },
+    }
+    const setRuntimes = ((next: typeof runtimes | ((value: typeof runtimes) => typeof runtimes)) => {
+      runtimes = typeof next === 'function' ? next(runtimes) : next
+    }) as WorkspaceSetRuntimes
+    const onArrivalFailure = vi.fn()
+
+    const result = await switchAgentProvider({
+      sessionId: 'source-pane',
+      targetKind: 'claude',
+      refs,
+      setRuntimes,
+      sessionActions,
+      contextPolicy: { compactOnArrival: true },
+      onArrivalFailure,
+    })
+
+    // The switch itself succeeded and says nothing about the follow-up.
+    expect(result).toMatchObject({ status: 'switched', newSessionId: 'target-pane' })
+    // Addressed to the NEW pane, with the target transcript the switch wrote.
+    expect(compactAfterSwitch).toHaveBeenCalledWith({
+      sessionId: 'target-pane',
+      targetKind: 'claude',
+      cwd: '/project',
+      providerSessionId: 'target-provider-session',
+    })
+    expect(compactAfterSwitch.mock.invocationCallOrder[0]!)
+      .toBeGreaterThan(replaceSession.mock.invocationCallOrder[0]!)
+
+    // The second subscription filters on the new session id: an event for the
+    // pane that no longer exists must not write runtime state for the new one.
+    expect(onProviderSwitchProgress).toHaveBeenCalledTimes(2)
+    const arrivalListener = progressListeners[1]!
+    arrivalListener({ sourceSessionId: 'source-pane', phase: 'compacting', message: 'ignored' })
+    expect(runtimes['target-pane']).toMatchObject({ providerSwitch: null })
+    arrivalListener({ sourceSessionId: 'target-pane', phase: 'compacting', message: 'Compacting…' })
+    expect(runtimes['target-pane']).toMatchObject({
+      providerSwitch: { phase: 'compacting', message: 'Compacting…' },
+    })
+
+    // The reported failure reaches the caller's toast hook, and both
+    // subscriptions are released once the arrival promise settles.
+    await vi.waitFor(() => {
+      expect(onArrivalFailure).toHaveBeenCalledWith('Claude did not accept /compact: composer unavailable')
+      // Teardown runs in the arrival promise's `finally`, a couple of
+      // microtasks after the failure is reported, so it is polled with it
+      // rather than asserted straight after.
+      expect(unsubscribes).toHaveLength(2)
+      for (const unsubscribe of unsubscribes) expect(unsubscribe).toHaveBeenCalledOnce()
+    })
+    expect(runtimes['target-pane']).toMatchObject({ providerSwitch: null })
+  })
+
+  it('does not ask a Codex target to compact on arrival', async () => {
+    // Arrival compaction is Claude-only by design (Codex auto-compacts at its
+    // own threshold, and the projection is written below it). The guard lives
+    // at this call site, so it needs its own case.
+    const switchProvider = vi.fn().mockResolvedValue({
+      kind: 'switched',
+      targetKind: 'codex',
+      targetProviderSessionId: 'target-provider-session',
+      targetFilePath: '/project/target.jsonl',
+      compactedBeforeSwitch: false,
+      truncatedBeforeSwitch: false,
+      strategy: 'native',
+      shrinkSummary: null,
+    })
+    const compactAfterSwitch = vi.fn()
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: {
+        onProviderSwitchProgress: vi.fn(() => vi.fn()),
+        switchProvider,
+        compactAfterSwitch,
+      },
+    })
+    const refs = {
+      stateRef: {
+        current: {
+          sessions: {
+            'source-pane': {
+              cwd: '/project',
+              kind: 'claude',
+              providerSessionId: 'claude-source-session',
+            },
+          },
+        },
+      },
+      latestRuntimesRef: { current: {} },
+      defaultBuiltInMcpDomainsRef: { current: [] },
+    } as unknown as WorkspaceRefs
+
+    await expect(switchAgentProvider({
+      sessionId: 'source-pane',
+      targetKind: 'codex',
+      refs,
+      setRuntimes: vi.fn() as WorkspaceSetRuntimes,
+      sessionActions: {
+        ensureSessionLive: vi.fn(async () => ({ sessionId: 'source-pane', builtInMcpDomains: [] })),
+        replaceSession: vi.fn().mockResolvedValue('target-pane'),
+      } as unknown as SessionActions,
+      contextPolicy: { compactOnArrival: true },
+    })).resolves.toMatchObject({ status: 'switched' })
+
+    expect(compactAfterSwitch).not.toHaveBeenCalled()
+  })
 })

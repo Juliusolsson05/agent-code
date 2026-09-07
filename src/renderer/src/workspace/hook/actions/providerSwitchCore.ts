@@ -350,13 +350,29 @@ export async function switchAgentProvider(params: {
     if (!newSessionId) return { status: 'failed', message: 'Replacement failed' }
 
     if (contextPolicy?.compactOnArrival && result.targetKind === 'claude') {
-      startArrivalCompaction({
-        sessionId: newSessionId,
-        cwd: meta.cwd,
-        providerSessionId: result.targetProviderSessionId,
-        setRuntimes,
-        onArrivalFailure,
-      })
+      // WHY this one call is wrapped when the whole body is already inside a
+      // try: this statement runs AFTER `replaceSession` succeeded, and the
+      // outer catch turns anything thrown into `{ status: 'failed' }` — which
+      // would report a committed switch as failed because a follow-up could not
+      // start. A synchronous throw here (a missing `window.api.compactAfterSwitch`
+      // on an older preload, a subscribe that rejects) would also leak the
+      // progress subscription. Contain it and tell the caller through the same
+      // channel every other arrival failure uses.
+      try {
+        startArrivalCompaction({
+          sessionId: newSessionId,
+          cwd: meta.cwd,
+          providerSessionId: result.targetProviderSessionId,
+          setRuntimes,
+          onArrivalFailure,
+        })
+      } catch (arrivalError) {
+        onArrivalFailure?.(
+          arrivalError instanceof Error && arrivalError.message.length > 0
+            ? arrivalError.message
+            : 'Arrival compaction could not be started',
+        )
+      }
     }
 
     return {
@@ -422,12 +438,23 @@ function startArrivalCompaction(params: {
       }
     })
   })
-  void window.api.compactAfterSwitch({
-    sessionId,
-    targetKind: 'claude',
-    cwd,
-    providerSessionId,
-  })
+  // The subscription is live from here on, so a synchronous throw out of the
+  // IPC call (an older preload with no `compactAfterSwitch`) has to take it
+  // down before the caller's catch reports the failure — otherwise the pane
+  // keeps a listener that nothing will ever unsubscribe.
+  let pending: ReturnType<typeof window.api.compactAfterSwitch>
+  try {
+    pending = window.api.compactAfterSwitch({
+      sessionId,
+      targetKind: 'claude',
+      cwd,
+      providerSessionId,
+    })
+  } catch (error) {
+    unsubscribeProgress()
+    throw error
+  }
+  void pending
     .then(outcome => {
       if (!outcome.ok) onArrivalFailure?.(outcome.message)
     })
