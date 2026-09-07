@@ -63,6 +63,7 @@ export function coerceSettings(value: unknown): Settings {
     dispatchColorFlags: coerceDispatchColorFlags(parsed.dispatchColorFlags),
     mode: resolvePersistedMode(parsed, savedThemes),
     contrast: parsed.contrast === true,
+    agentNamesEnabled: parsed.agentNamesEnabled === true,
     accent: ACCENTS.some(a => a.id === parsed.accent)
       ? (parsed.accent as AccentId)
       : DEFAULT_SETTINGS.accent,
