@@ -6,6 +6,7 @@ import type { MessageBoxOptions } from 'electron'
 import type { SessionManager } from '@main/sessionManager.js'
 
 import { switchProvider } from '@main/providerSwitch/switchProvider.js'
+import type { SwitchContextPolicy } from '@main/providerSwitch/switchProvider.js'
 import { compactSourceBeforeSwitch } from '@main/providerSwitch/compactBeforeSwitch.js'
 import { duplicateSession } from '@main/providerSwitch/duplicateSession.js'
 import {
@@ -45,6 +46,8 @@ export function registerProviderIpc(manager: SessionManager): void {
         sourceCwd?: string
         targetCwd?: string
         sourceSessionId?: string
+        contextPolicy?: Partial<SwitchContextPolicy>
+        sourceCompactionConfirmed?: boolean
       },
     ) => {
       const lockId = params.sourceSessionId ?? `${params.sourceKind}:${params.sourceProviderSessionId}`
@@ -55,7 +58,19 @@ export function registerProviderIpc(manager: SessionManager): void {
       try {
         return await switchProvider(params, {
           compactSource: async (request, plan) => {
-            if (plan.kind === 'requires-compaction') {
+            // WHY the confirmation can arrive already given: this dialog is
+            // per-agent, and the bulk switch confirms ONCE for a batch before
+            // fanning out one request per agent. Seventeen modal dialogs in a
+            // row is not consent, it is a thing users click through. The gate
+            // stays here rather than moving into switchProvider because the
+            // dialog needs the requesting window, which only this handler has.
+            //
+            // Nothing else changed for the opt-in path: a caller that does not
+            // set the flag still gets the native confirmation it always got,
+            // and this callback is unreachable at all under the default policy
+            // — switchProvider never invokes compactSource when
+            // allowSourceTurns is false.
+            if (plan.kind === 'requires-compaction' && !params.sourceCompactionConfirmed) {
               const window = BrowserWindow.fromWebContents(_evt.sender)
               const options: MessageBoxOptions = {
                 type: 'warning',

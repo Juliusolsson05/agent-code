@@ -38,6 +38,21 @@ export const providerApi = {
     /** Agent Code's live routing id. Required when native compaction may be
      *  needed before the persisted transcript can fit the target provider. */
     sourceSessionId?: string
+    /** What the transaction may spend to make the conversation portable.
+     *  Both halves default to false (see DEFAULT_SWITCH_CONTEXT_POLICY):
+     *  `allowSourceTurns` opts back into asking the SOURCE to compact itself,
+     *  which is exactly what a rate-limited source cannot do; `compactOnArrival`
+     *  is a record of intent for the renderer to act on after replaceSession,
+     *  not something the switch itself performs. */
+    contextPolicy?: {
+      allowSourceTurns?: boolean
+      compactOnArrival?: boolean
+    }
+    /** The caller already confirmed that compacting the live source is
+     *  acceptable, so the main process skips its per-agent native dialog. Only
+     *  reachable with `contextPolicy.allowSourceTurns: true`; a bulk switch
+     *  confirms once for the batch instead of once per agent. */
+    sourceCompactionConfirmed?: boolean
   }): Promise<{
     kind: 'switched'
     targetKind: AgentProviderKind
@@ -45,6 +60,13 @@ export const providerApi = {
     targetFilePath: string
     compactedBeforeSwitch: boolean
     truncatedBeforeSwitch: boolean
+    /** How the conversation was made to fit: `native` lost nothing, `raw`
+     *  dropped only a carrier the target could not have read, `shrunk` removed
+     *  content the deterministic ladder had to remove. */
+    strategy: 'native' | 'raw' | 'shrunk'
+    /** One human-readable line describing what `shrunk` cost, else null. The
+     *  renderer shows it per pane and counts strategies in a batch summary. */
+    shrinkSummary: string | null
   } | {
     /** A provider id can identify a pre-created but still blank session. */
     kind: 'source-empty'
@@ -53,7 +75,7 @@ export const providerApi = {
 
   onProviderSwitchProgress: (cb: (event: {
     sourceSessionId: string
-    phase: 'compacting' | 'summarizing' | 'projecting'
+    phase: 'compacting' | 'summarizing' | 'shrinking' | 'projecting'
     message: string
   }) => void): (() => void) => subscribe('session:provider-switch-progress', cb),
 

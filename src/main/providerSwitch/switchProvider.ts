@@ -3,13 +3,11 @@
 import { randomUUID } from 'node:crypto'
 
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
-import {
-  fitConversationToCharacterBudget,
-  planConversationContext,
-} from 'agent-transcript-parser'
+import { planConversationContext } from 'agent-transcript-parser'
 import type {
   ConversationContextPlan,
   ConversationDocument,
+  ShrinkReport,
 } from 'agent-transcript-parser'
 
 import { getHostTranscriptAdapter } from '@main/providerSwitch/transcriptEngine.js'
@@ -28,7 +26,63 @@ export type SwitchProviderRequest = {
   targetCwd?: string
   sourceSessionId?: string
   overflowPolicy?: 'compact' | 'fail' | 'truncate'
+  /**
+   * Partial so a caller can opt into ONE half of the policy without restating
+   * the other; the missing half falls back to DEFAULT_SWITCH_CONTEXT_POLICY.
+   */
+  contextPolicy?: Partial<SwitchContextPolicy>
+  /**
+   * The renderer already confirmed that this switch may compact the live
+   * source. Only meaningful on the opt-in path, and only read by the IPC layer,
+   * which owns the native dialog; see src/main/ipc/provider.ts. It lives on the
+   * request rather than in the runtime because a bulk switch confirms once for
+   * a batch and then fans out one request per agent.
+   */
+  sourceCompactionConfirmed?: boolean
 }
+
+/**
+ * What the host is allowed to spend to make a conversation portable.
+ *
+ * WHY this is a policy object on the request and not two booleans threaded
+ * through the call: both flags answer the same question — "may this transaction
+ * spend a live provider turn, and on which side?" — and they are chosen
+ * together in one piece of UI. Splitting them invites a caller to set one and
+ * forget the other, and the forgotten one is always the one that spends quota.
+ *
+ * `allowSourceTurns: false` is the default because the feature exists for the
+ * case where the SOURCE is out of quota (#821): asking it to compact itself is
+ * then guaranteed to fail, and it fails after `/compact` has already destroyed
+ * the history the switch was trying to rescue.
+ *
+ * `compactOnArrival` is carried here rather than acted on here: arrival
+ * compaction runs after pane replacement, which is strictly outside this
+ * transaction (see docs/superpowers/specs/2026-09-05-quota-independent-provider-switch-design.md
+ * §"Arrival compaction"). This field is the record of what the user asked for,
+ * for the renderer to act on once `replaceSession` returns.
+ */
+export type SwitchContextPolicy = {
+  allowSourceTurns: boolean
+  compactOnArrival: boolean
+}
+
+export const DEFAULT_SWITCH_CONTEXT_POLICY: SwitchContextPolicy = {
+  allowSourceTurns: false,
+  compactOnArrival: false,
+}
+
+/**
+ * How the conversation was made to fit, for toasts and batch summaries.
+ *
+ * - `native` — nothing was lost: the history fit, or the source's own portable
+ *   summary was reused (planner `ready` / `existing-compaction`).
+ * - `raw` — a carrier the target cannot read was dropped and the plaintext
+ *   records it claimed to replace were carried instead (planner `raw-history`).
+ *   Nothing the target could have read was lost.
+ * - `shrunk` — the deterministic ladder had to remove content; `shrinkSummary`
+ *   says what.
+ */
+export type SwitchStrategy = 'native' | 'raw' | 'shrunk'
 
 export type SwitchProviderResult =
   | {
@@ -38,6 +92,13 @@ export type SwitchProviderResult =
       targetFilePath: string
       compactedBeforeSwitch: boolean
       truncatedBeforeSwitch: boolean
+      strategy: SwitchStrategy
+      /**
+       * One line describing what the shrink ladder removed, or null when
+       * nothing was removed. Design principle 3: no lossy step is silent, and
+       * the host is the only layer that can put the loss in front of a user.
+       */
+      shrinkSummary: string | null
     }
   | {
       kind: 'source-empty'
@@ -46,7 +107,7 @@ export type SwitchProviderResult =
 
 export type ProviderSwitchProgress = {
   sourceSessionId: string
-  phase: 'compacting' | 'summarizing' | 'projecting'
+  phase: 'compacting' | 'summarizing' | 'shrinking' | 'projecting'
   message: string
 }
 
@@ -101,37 +162,74 @@ export async function switchProvider(
   // opencode config for cwd), so capacity planning and projection must inspect
   // the same destination directory the imported session will run in.
   const targetProfile = await target.targetProfile(targetCwd)
-  let plan = planConversationContext(
-    conversation,
-    targetKind,
-    targetProfile.budgetCharacters,
-  )
+  const policy: SwitchContextPolicy = { ...DEFAULT_SWITCH_CONTEXT_POLICY, ...request.contextPolicy }
   let compactedBeforeSwitch = false
   let truncatedBeforeSwitch = false
+  let strategy: SwitchStrategy = 'native'
+  let shrinkSummary: string | null = null
   const overflowPolicy = request.overflowPolicy ?? 'compact'
 
-  if (plan.kind === 'requires-compaction' || plan.kind === 'requires-portable-handoff') {
-    if (overflowPolicy === 'truncate') {
-      if (plan.kind === 'requires-portable-handoff') {
-        throw new Error(
-          'Provider switch cannot truncate around encrypted Codex compaction; a plaintext handoff is required.',
-        )
+  // WHY `truncate` joins the default path but `fail` does not, when neither
+  // spends a source turn:
+  //
+  // `truncate` asked for "fit it lossily rather than involve the source". That
+  // is precisely what the ladder does, and it does it better than the old
+  // `fitConversationToCharacterBudget` call it replaces — which could only drop
+  // whole turns, and refused outright when an encrypted Codex carrier was in
+  // the way (the exact shape #821 is about). Routing it here is a strict
+  // upgrade for every caller that passed it.
+  //
+  // `fail` asked for the opposite: "refuse an oversized switch, do not make it
+  // fit". Honouring the default policy there would silently turn a caller's
+  // explicit refusal into a successful lossy switch, so it keeps the legacy
+  // branch and its contextOverflowError. It is the only overflowPolicy value
+  // whose meaning survives the new default unchanged.
+  const planWithoutSourceTurns = overflowPolicy === 'truncate'
+    || (overflowPolicy !== 'fail' && !policy.allowSourceTurns)
+
+  if (planWithoutSourceTurns) {
+    // WHY the source is never consulted on this path: the whole point of the
+    // policy is that the source may be out of quota. The parser returns only
+    // outcomes the host can execute alone; a ConversationUnfittableError is
+    // the single legitimate failure and it aborts before any write.
+    const plan = planConversationContext(
+      conversation,
+      targetKind,
+      targetProfile.budgetCharacters,
+      { allowSourceTurns: false },
+    )
+    if (plan.kind === 'shrunk') {
+      strategy = 'shrunk'
+      shrinkSummary = describeShrink(plan.report)
+      // WHY droppedEntries and not droppedTurns, which is the more obvious
+      // reading of "was history truncated": rung 4 cuts back to the nearest
+      // safe resume boundary, and the entries between the old start and that
+      // boundary need not contain a single user message. A decoded
+      // `claude-sequence-oversized-turns` at a quarter of its own size drops
+      // 130 entries and zero complete turns — real lost history that a
+      // droppedTurns test would have reported as "nothing was truncated".
+      truncatedBeforeSwitch = plan.report.droppedEntries > 0
+      if (request.sourceSessionId) {
+        runtime.onProgress?.({
+          sourceSessionId: request.sourceSessionId,
+          phase: 'shrinking',
+          message: `History exceeds ${targetKind}; ${shrinkSummary}`,
+        })
       }
-      const fitted = fitConversationToCharacterBudget(
-        plan.conversation,
-        targetProfile.budgetCharacters,
-      )
-      if (fitted.stillExceedsBudget) {
-        throw contextOverflowError(
-          fitted.estimatedCharactersAfter,
-          targetProfile.budgetCharacters,
-        )
+    } else if (plan.kind === 'raw-history') {
+      strategy = 'raw'
+    }
+    conversation = plan.conversation
+  } else {
+    let plan = planConversationContext(
+      conversation,
+      targetKind,
+      targetProfile.budgetCharacters,
+    )
+    if (plan.kind === 'requires-compaction' || plan.kind === 'requires-portable-handoff') {
+      if (overflowPolicy === 'fail') {
+        throw contextOverflowError(plan.estimatedCharacters, targetProfile.budgetCharacters)
       }
-      conversation = fitted.conversation
-      truncatedBeforeSwitch = fitted.truncated
-    } else if (overflowPolicy === 'fail') {
-      throw contextOverflowError(plan.estimatedCharacters, targetProfile.budgetCharacters)
-    } else {
       if (!request.sourceSessionId || !runtime.compactSource) {
         throw new Error(
           'Provider switch requires native compaction, but no live source session is available.',
@@ -166,9 +264,9 @@ export async function switchProvider(
         )
       }
     }
+    conversation = plan.conversation
   }
 
-  if (!truncatedBeforeSwitch) conversation = plan.conversation
   if (request.sourceSessionId) {
     runtime.onProgress?.({
       sourceSessionId: request.sourceSessionId,
@@ -192,7 +290,43 @@ export async function switchProvider(
     targetFilePath,
     compactedBeforeSwitch,
     truncatedBeforeSwitch,
+    strategy,
+    shrinkSummary,
   }
+}
+
+/**
+ * Turn a ShrinkReport into one line a user can read in a toast.
+ *
+ * WHY the host formats this rather than the parser: the parser deliberately
+ * reports numbers and never prose — it does not know whether its caller is a
+ * CLI, a log line or a toast, and a package that ships user-facing English
+ * becomes the place every host has to work around. This is also why the
+ * function reads only the report's stable counters and never `promptIndexLength`
+ * or `retainedDeveloperMessages`: those describe the marker's internals, which
+ * the ladder is still free to reshape.
+ *
+ * WHY `droppedEntries` gets its own clause instead of only `droppedTurns`:
+ * rung 4 cuts back to the nearest safe resume boundary, so it can drop a long
+ * run of assistant and tool entries without crossing a single user message.
+ * Reporting "no changes" for a switch that just dropped 130 entries would break
+ * design principle 3 (no lossy step is silent) in exactly the case the user is
+ * least likely to notice on their own.
+ */
+export function describeShrink(report: ShrinkReport): string {
+  const parts: string[] = []
+  if (report.strippedCompactions > 0) {
+    parts.push(`${report.strippedCompactions} encrypted compaction${report.strippedCompactions === 1 ? '' : 's'} dropped`)
+  }
+  if (report.clearedResults > 0) parts.push(`${report.clearedResults} tool outputs cleared`)
+  if (report.trimmedInputs > 0) parts.push(`${report.trimmedInputs} tool inputs trimmed`)
+  if (report.droppedTurns > 0) {
+    parts.push(`${report.droppedTurns} oldest turns dropped`)
+  } else if (report.droppedEntries > 0) {
+    parts.push(`${report.droppedEntries} oldest entries dropped`)
+  }
+  const kb = (n: number): string => `${Math.round(n / 1000)}k`
+  return `${parts.join(', ') || 'no changes'} (${kb(report.estimatedCharactersBefore)} → ${kb(report.estimatedCharactersAfter)} chars)`
 }
 
 function contextOverflowError(estimated: number, budget: number): Error {
