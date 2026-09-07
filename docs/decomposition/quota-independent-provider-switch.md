@@ -131,6 +131,25 @@ characters; Codex `gpt-6-astra` 272k at 95 percent → 581,400 characters
 - **Reality check:** local `~/.codex/sessions` and `~/.claude/projects`, read
   through the existing extractor with the existing redaction rules.
 
+#### What Stage 0 changed
+
+Two measurements reversed assumptions this decomposition was written on, and
+both changed the ladder. First, **dropping turns is not a last resort**: with
+every tool-result output cleared, 46 of the 91 local Claude transcripts over the
+581,400-character Codex budget (50.5 percent) are still over it — median 1.04×,
+p90 3.81×, worst 12.41× — so rung 4 is a primary mechanism that fires about half
+the time in production, and its drop marker had to be designed for real use
+rather than as an apology nobody reads. Second, **developer messages are not
+boilerplate**: they are 36.9 percent of the repeatedly-compacted Codex fixture's
+characters and are the only plaintext left in a rollout after a remote
+compaction, so a ladder that dropped them with their turns would delete the
+conversation while reporting that it trimmed some turns. That produced
+`keepDeveloperMessages` / `retainedDeveloperMessages`, which the spec did not
+have. (A third measurement removed a rung instead of adding one: reasoning
+contributes literally zero characters — Codex reasoning is encrypted and 97.0
+percent of sampled Claude thinking blocks persist an empty string beside their
+signature — so there is nothing to reclaim and no rung for it.)
+
 ### Stage 1 — Parser hazard fixes (#820, part of parser#24)
 
 - **Produces:** `compactionAvailability` returns `rejected` for a carrier or
@@ -262,26 +281,62 @@ characters; Codex `gpt-6-astra` 272k at 95 percent → 581,400 characters
 1. How `processActive` and `semantic.currentTurn` behave while Claude Code
    shows "Usage limit reached · continuing automatically at …". If they stay
    true, every limited Claude agent is skipped by the bulk switch today.
+   **Resolution 2026-09-07: unrecorded.** No such screen was captured, so
+   Stage 6's "verified by a recorded Claude auto-wait screen" is unsatisfied.
+   `isLimitIdle` ships as a *defensive* predicate: it can only widen the guard,
+   never narrow it, so if the banner in fact clears `processActive` the ordinary
+   idle path already allows the switch and the exception is never consulted. One
+   gap follows from it and is documented in code: a restored pane whose replayed
+   tail contains a genuine rate-limit carrier reads as limit-idle, because
+   `turnStartedAt` is null on such a pane. If that ever proves wrong the fix
+   belongs in `isLimitIdle`, not in the reducer.
 2. Whether a shrunk projection's real token count matches the 2.5
    characters-per-token estimate closely enough to stay under Codex's 90 percent
    auto-compact limit; measured by the probe.
+   **Resolution 2026-09-07: unmeasured.** The Stage 7 live probe was not run.
+   The estimate is unchanged, and if it turns out to be off the knob is the
+   reserve fraction, not the ladder.
 3. Whether Codex semantically ignores a `custom_tool_call_output` whose output is
    a placeholder, or treats it as an error; probe with a marker prompt that asks
    for the last three tool results.
+   **Resolution 2026-09-07: unmeasured.** Structural projection tests prove
+   Codex and Claude accept the cleared shape; nothing yet proves a live Codex
+   tolerates it semantically. Same probe dependency as Unknown 2.
 4. Whether Claude's resume dialog appears for a freshly projected transcript
    (timestamps are copied from the source; the dialog needs >100k tokens and
    >1 h since the last activity). Both branches are implemented regardless.
+   **Resolution 2026-09-07: handled both ways in code, still unobserved.**
+   `compactOnArrival` answers a visible `claude.resume-prompt` with "Resume from
+   summary" and otherwise delivers `/compact`; both are unit-tested against a
+   fake `SessionManager`. Nothing has yet driven a real Claude pane onto a
+   projected transcript to see which branch fires.
 5. Whether the #820 hazard ever manifests on disk; Stage 0 checks the five local
    rate-limit transcripts.
+   **Resolution 2026-09-07: it does not manifest on disk in this corpus.** Seven
+   (not five) local Claude transcripts carry a `rate_limit` record; only one has
+   a compaction after the error, and that carrier is a genuine 16,632-character
+   summary with coherent boundary metadata. The parser rejection and the host
+   fast-fail ship regardless — the observed limit message does not begin with
+   `API Error`, so Claude Code's own rule would not reject it if it ever landed
+   as a summary, and the failure it prevents is unrecoverable. #820 is closed as
+   defended, not as reproduced.
 6. Whether a 1M Claude target rejects arrival with "Usage credits required for
    1M context" on this account; if so the exhaustion signal must include it.
+   **Resolution 2026-09-07: unknown.** No switch was run against a live 1M
+   target. The switch itself would still succeed; only the arrival compaction
+   would fail, and that failure is non-fatal and reported.
 7. OpenCode import size limits for shrunk envelopes; the 128k planning window
    is conservative but unverified against `opencode import`.
+   **Resolution 2026-09-07: unknown.** Unchanged and untested; no OpenCode
+   import of a shrunk envelope was attempted.
 8. Whether PR #810 (workspace hook isolation) lands first; if so
    `bulkProviderSwitch.ts` wiring in `hook/index.ts` must be rebased, not merged
-   blindly. Resolved 2026-09-07: #810 merged on 2026-09-06 (408e3e39). Task 8's
-   hook/index.ts wiring rebases onto the per-session subscription shape; read
-   hook/index.ts before editing it.
+   blindly.
+   **Resolution 2026-09-07: resolved.** #810 merged on 2026-09-06 (408e3e39).
+   In the event `hook/index.ts` needed **no change at all**: `Workspace` is
+   `ReturnType<typeof useWorkspace>`, so the modal's new policy parameter flows
+   from `useBulkProviderSwitchActions` with a zero diff, and the plan's "touched
+   only to pass parameters through" rule is satisfied vacuously.
 
 ## Fixture plan
 

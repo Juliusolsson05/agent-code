@@ -6,8 +6,61 @@
 [#820](https://github.com/Juliusolsson05/agent-code/issues/820) (hazard),
 [agent-transcript-parser#24](https://github.com/Juliusolsson05/agent-transcript-parser/issues/24),
 [codex-headless#46](https://github.com/Juliusolsson05/codex-headless/issues/46)
-**Status:** Approved direction from the 2026-09-05 discussion; spec awaiting review.
+**Status:** Approved direction from the 2026-09-05 discussion; implemented
+2026-09-07. This document is the spec as written plus the "As built" note below;
+`docs/design/provider-switching.md` is the evergreen description of the code.
 **Decomposition:** `docs/decomposition/quota-independent-provider-switch.md`
+
+## As built (2026-09-07)
+
+The implementation deviates from the spec below in the following ways. The spec
+text is corrected in place only where it would otherwise be *wrong about the
+code*; everything else is left as written, because a spec that is silently
+rewritten to match its implementation records nothing.
+
+1. **Recent-turn protection is narrower than "never inside the most recent
+   `keepRecentTurns` user turns".** A single-user-turn conversation gets no
+   protection at all, and a conversation with two to `keepRecentTurns` turns
+   protects only its final turn. Reason: `claude-sequence-oversized` is a real
+   67-entry transcript with exactly one user message, 92.1 % of its characters
+   in tool results and 1.11× the Codex budget; the literal rule protects 100 %
+   of it and reports it unfittable. §"Shrink ladder" below is corrected.
+2. **`keepDeveloperMessages` / `retainedDeveloperMessages` were added.** Rung 4
+   lifts developer-role messages out of the dropped range by default, because a
+   remotely-compacted Codex rollout has nothing else left in plaintext. The
+   planner sets it to `targetProvider !== 'claude'`, because the Claude
+   projector drops the role on arrival and retaining it would charge budget for
+   content that is deleted. §"Shrink ladder" is corrected; the provider-name
+   check is the one target-specific decision in this area and is recorded in
+   the design doc under "Provider knowledge".
+3. **The report field is `promptIndexLength`, not `promptIndexChars`.** The
+   option that bounds each quoted prompt is still `promptIndexChars`; the two
+   were the same name for different things.
+4. **`truncatedBeforeSwitch` means "the ladder removed anything",** not "it
+   dropped entries". Clearing an output or trimming an input is just as lossy
+   from the target's point of view.
+5. **`overflowPolicy: 'truncate'` routes to the whole ladder,** not to step 4
+   alone. Restricting it to the drop rung would have been strictly worse than
+   the behaviour it replaces for every existing caller.
+6. **The usage IPC does NOT return the exhaustion derivation** alongside the
+   snapshot. `deriveProviderExhaustion` is a pure shared function and the bulk
+   modal — its only consumer — derives it in the renderer. Adding a second
+   producer in main would have been an unused field.
+7. **The banner's reset text is relative** ("resets in 2h"), from the usage
+   feature's existing `formatReset`, not the absolute "resets 14:32" the spec
+   sketched. There is no `formatTime` export to produce the latter, and the
+   relative form is what every other usage surface shows.
+8. **Arrival compaction waits once, not twice.** Readiness and the resume prompt
+   are one 30-second poll with two exits, because a visible condition blocks
+   prompt input and a readiness-first gate would deadlock on exactly the
+   sessions the prompt exists for. The 30 s is an estimate.
+9. **The api-error fast-fail was also added to the Codex and OpenCode handoff
+   waits,** where it is inert until those decoders classify error records. Only
+   the Claude decoder produces `opaque`/`api_error` today.
+10. **Unknown 1 is still unrecorded.** No "Usage limit reached · continuing
+    automatically" screen was captured, so `isLimitIdle` ships as a defensive
+    predicate that can only widen the guard. The live probe was not run either,
+    so the ladder's `keepRecentTurns` and `maxInputChars` remain placeholders.
 
 ## Problem
 
@@ -87,21 +140,56 @@ only as far as needed:
 2. **Clear tool results, oldest first.** Replace `tool-result.output` with a
    bounded placeholder text
    `[tool output cleared during provider switch: N characters]`, keeping the
-   entry, its `callId`, and `isError`. Walk from the oldest entry forward, never
-   clearing results inside the most recent `keepRecentTurns` user turns
-   (default 3). Tool-call inputs are preserved in full; edit diffs live there.
-   Stop as soon as the estimate fits. Report: `clearedResults`, `clearedChars`.
+   entry, its `callId`, and `isError`. Walk from the oldest entry forward,
+   honouring the recent-turn protection below. Tool-call inputs are preserved in
+   full; edit diffs live there. Stop as soon as the estimate fits. A result
+   whose placeholder would be longer than the output it replaces is skipped, so
+   the reported saving is always net and can never be negative. Report:
+   `clearedResults`, `clearedChars`.
 3. **Trim long inputs.** If still over budget, truncate tool-call inputs longer
    than `maxInputChars` (default 8,000) with a marker, oldest first, same
-   recent-turn protection. Report: `trimmedInputs`.
+   recent-turn protection. Objects are trimmed member by member (top-level
+   string members only) rather than stringified, and the cap applies to the
+   serialized result including the marker. Report: `trimmedInputs`,
+   `trimmedChars`.
 4. **Drop oldest complete turns.** Reuse the `fitConversationToCharacterBudget`
    boundary rules, but the synthetic compaction marker now lists the dropped
-   user prompts (first 200 characters each, up to 40) so the target knows what
-   was asked earlier. Any plaintext compaction summary among the dropped
-   entries is prepended, as today. Report: `droppedEntries`, `droppedTurns`,
-   `promptIndexChars`.
+   user prompts (first `promptIndexChars` = 200 characters each, up to
+   `maxIndexedPrompts` = 40) so the target knows what was asked earlier. Any
+   plaintext compaction summary among the dropped entries is prepended, as
+   today; the marker is budget-aware and trims its own index, then that carried
+   summary, before it would push the result over budget. Developer-role messages
+   in the dropped range are lifted out and retained after the marker when
+   `keepDeveloperMessages` is true. Report: `droppedEntries`, `droppedTurns`,
+   `retainedDeveloperMessages`, `promptIndexLength`.
 5. If a single final turn still exceeds the budget, throw `ConversationUnfittableError`
    with the report so far. Never emit a fragment.
+
+**Recent-turn protection** (rungs 2 and 3) is not the flat "never inside the
+most recent `keepRecentTurns` user turns" this spec originally stated. Three
+cases:
+
+- more than `keepRecentTurns` user turns — that rule, unchanged;
+- two to `keepRecentTurns` turns — the final turn only, so the work in progress
+  survives without the newest turn becoming clearable at the exact moment the
+  option's value is met;
+- exactly one user turn — no protection. The rule is about the boundary between
+  old history and recent work, and a single-turn conversation has none; applied
+  literally it protects the whole transcript and makes the ladder a no-op on a
+  real, measured, over-budget session.
+
+**`keepDeveloperMessages`** (option, default `true`) and
+**`retainedDeveloperMessages`** (report) cover rung 4's treatment of the
+developer role. Census finding 4: Codex developer messages are 36.9 % of the
+repeatedly-compacted fixture's characters and are the only plaintext left in a
+remotely-compacted rollout, so dropping them would delete the conversation while
+reporting a trim. They are retained by default and still count against the
+budget. `planConversationContext` sets the option to
+`targetProvider !== 'claude'`, because the Claude native-resume projector drops
+developer and system messages outright; retaining them for that target would
+charge budget for content deleted on arrival and could refuse a switch to
+protect messages the target throws away. Either way the marker records how many
+existed, so the loss is never silent.
 
 Thresholds are set from the Stage 0 census, not from these defaults; the
 defaults above are placeholders the census replaces in the same PR.
@@ -173,7 +261,10 @@ to `{ exhausted: boolean; scope: 'all-models' | 'model-family' | 'unknown'; rese
 Claude: `session` and `weekly_all` rows are all-models; `weekly_scoped` rows are
 model-family. Codex: the main `rate_limit` windows are all-models; entries
 under `additional_rate_limits` are model-family. `exhausted` is `percent >= 100`
-on an active row. The usage IPC returns it alongside the snapshot.
+on an active row, and an `all-models` hit is reported ahead of a `model-family`
+one. As built, the usage IPC does **not** return it alongside the snapshot: the
+derivation is pure and shared, and the bulk modal — its only consumer — calls it
+in the renderer over the snapshot it already has.
 
 Live signals: the renderer runtime gains `limitHit: { at: number; source: 'transcript' | 'api_error' } | null`,
 set when a Claude `api_error` opaque entry with rate-limit text arrives or a
@@ -185,8 +276,14 @@ completed turn.
 
 ### Bulk modal
 
-- Banner per provider from the exhaustion signal: "Codex: 5-hour window at
-  100 percent, resets 14:32" and the direction defaults to that source.
+- Banner per provider from the exhaustion signal, and the direction defaults to
+  that source. As built the reset is **relative** — "Codex 5h at 100%, resets in
+  2h" — from the usage feature's existing `formatReset`; there is no export that
+  produces the absolute "resets 14:32" this line originally sketched, and every
+  other usage surface shows the relative form. The direction default applies
+  only when exactly one provider is exhausted; two exhausted providers fall back
+  to the static `codex → claude`, because moving agents from one full provider
+  to another helps nobody.
 - "Compact on arrival with Claude" checkbox, shown for Claude targets, default
   on when the batch's largest source estimate exceeds 150,000 characters.
 - "Compact on source first (uses source quota)" checkbox, default off, disabled
