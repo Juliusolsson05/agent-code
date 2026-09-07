@@ -31,6 +31,7 @@ const originalApiDescriptor = Object.getOwnPropertyDescriptor(window, 'api')
 function exhaustedSnapshot(
   provider: UsageProviderKind,
   scope: UsageLimitScope = 'all-models',
+  labelOverride?: string,
 ): UsageSnapshot {
   const others: UsageProviderKind[] = provider === 'codex' ? ['claude'] : ['codex']
   return {
@@ -47,7 +48,7 @@ function exhaustedSnapshot(
         credits: null,
         rows: [{
           id: `${provider}-primary-window`,
-          label: provider === 'codex' ? 'Codex 5h' : 'Current week (Opus)',
+          label: labelOverride ?? (provider === 'codex' ? 'Codex 5h' : 'Current week (Opus)'),
           percent: 100,
           severity: 'critical',
           // Two hours out, computed from now: the banner renders a countdown,
@@ -171,6 +172,17 @@ describe('BulkProviderSwitchModal policy', () => {
     const button = screen.getByRole('button', { name: /Switch 1 agent to another Claude model/i })
     fireEvent.click(button)
     await vi.waitFor(() => expect(deliverPrompt).toHaveBeenCalledWith('agent', '/model sonnet'))
+  })
+
+  it('withholds the model switch when the exhausted family is the one it would switch to', () => {
+    // `/model sonnet` cannot rescue a full Sonnet week. Offering it anyway
+    // would send a batch of agents at the wall they are already standing at,
+    // and the row's whole claim is that it is the CHEAP remedy.
+    usage.snapshot = exhaustedSnapshot('claude', 'model-family', 'Current week (Sonnet)')
+    render(<BulkProviderSwitchModal open workspace={claudeWorkspaceFixture()} onClose={() => {}} />)
+
+    expect(screen.queryByRole('button', { name: /to another Claude model/i })).not.toBeInTheDocument()
+    expect(screen.getByText(/A model switch would not help/i)).toBeInTheDocument()
   })
 
   it('turns arrival compaction on for a large Claude-bound conversation', () => {

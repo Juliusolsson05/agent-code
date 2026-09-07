@@ -9,14 +9,15 @@ import {
   DialogTitle,
 } from '@renderer/components/ui/dialog'
 import { relativeTime } from '@renderer/lib/relativeTime'
-import { cwdBasename, providerGlyph } from '@renderer/features/workspace/lib/sessionDisplay'
+import { cwdBasename, pluralAgents, providerGlyph } from '@renderer/features/workspace/lib/sessionDisplay'
 import { resolveTabSessions } from '@renderer/workspace/queries'
 import type { SessionId, Tab } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { AGENT_PROVIDER_KINDS, DEFAULT_PROVIDER } from '@shared/types/providerKind'
 import type { AgentProviderKind } from '@shared/types/providerKind'
+import type { UsageProviderKind } from '@shared/types/usage'
 import { useUsageHeaderSnapshot } from '@renderer/features/usage/hooks/useUsageHeaderSnapshot'
-import { formatReset } from '@renderer/features/usage/model/formatUsage'
+import { formatReset, providerLabel as usageProviderLabel } from '@renderer/features/usage/model/formatUsage'
 import { deriveProviderExhaustion } from '@shared/usage/exhaustion'
 import { estimateLiveEntriesBytes } from '@renderer/session-runtime/liveEntryWindow'
 import { isLimitIdle } from '@renderer/workspace/hook/actions/providerSwitchCore'
@@ -81,9 +82,10 @@ function providerLabel(kind: AgentProviderKind): string {
   return getRendererProviderCapabilities(kind).shortLabel
 }
 
-function pluralAgents(n: number): string {
-  return `${n} agent${n === 1 ? '' : 's'}`
-}
+/** One stable reference to stand in for the runtimes map while the modal is
+ *  closed, so memos that read it are not invalidated by every runtime tick in
+ *  the app. Module scope, never mutated. */
+const NO_RUNTIMES: Workspace['runtimes'] = {}
 
 /** Above this many estimated characters, a Claude-bound batch gets arrival
  *  compaction ticked by default (spec §Renderer).
@@ -113,6 +115,25 @@ const ARRIVAL_COMPACTION_CHARACTERS = 150_000
  *  anyone who wants a different family, and hard-coding it here keeps this
  *  modal out of the business of enumerating provider models. */
 const CLAUDE_MODEL_SWITCH_PROMPT = '/model sonnet'
+
+/** The family `CLAUDE_MODEL_SWITCH_PROMPT` would move agents ONTO. Used to
+ *  suppress the offer when that family is the exhausted one — "switch to
+ *  Sonnet" is not a remedy for "the Sonnet week is full". */
+const CLAUDE_MODEL_SWITCH_FAMILY = /sonnet/i
+
+/** "Codex 5h at 100%" rather than "Codex: Codex 5h at 100%".
+ *
+ *  Provider normalizers name some windows after the provider and some after a
+ *  model family, so prefixing unconditionally reads fine for
+ *  "Claude: Current week (Opus)" and badly for "Codex: Codex 5h". The prefix is
+ *  what makes the line self-contained when the label does not already say who
+ *  it is about; when it does, repeating it is noise. */
+function exhaustionHeadline(item: { provider: UsageProviderKind; label: string }): string {
+  const name = usageProviderLabel(item.provider)
+  return item.label.toLowerCase().includes(name.toLowerCase())
+    ? item.label
+    : `${name}: ${item.label}`
+}
 
 export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
   // Every user-overridable default in this modal is stored as "the user's
@@ -147,7 +168,13 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
   // endpoint can be stale, wrong, or unreachable, and this feature exists
   // precisely for people whose provider is misbehaving (see the header of
   // shared/usage/exhaustion.ts).
-  const { snapshot } = useUsageHeaderSnapshot()
+  //
+  // Gated on `open` because this modal is a PERMANENT surface — the registry
+  // renders every surface for the life of the app and passes `open` as a prop
+  // (app/surfaces/registry.tsx). An ungated call here polled the usage IPC
+  // every 60 s forever, for a modal nobody had opened, even with the usage
+  // header switched off.
+  const { snapshot } = useUsageHeaderSnapshot(open)
   const exhaustion = useMemo(
     () => (snapshot?.providers ?? []).map(deriveProviderExhaustion),
     [snapshot],
@@ -233,11 +260,26 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
         //
         // DIVERGENCE from the task brief, deliberate: the brief specified
         // `processActive && !isLimitIdle`. `sessionStatus === 'running'` is
-        // strictly closer to the guard it must predict — deriveSessionStatus
-        // folds processActive AND a live semantic turn, and the guard refuses
-        // on either. Using processActive alone would under-report a pane whose
-        // only liveness signal is a streaming turn, promising a switch the core
-        // would then refuse.
+        // CLOSER to the guard it must predict — deriveSessionStatus folds
+        // processActive AND a live semantic turn, and the guard refuses on
+        // either, so processActive alone would under-report a pane whose only
+        // liveness signal is a streaming turn and promise a switch the core
+        // then refuses.
+        //
+        // It is NOT exact, in both directions, and neither gap is worth a
+        // second predicate:
+        //   - over-reports when `awaitingAssistant` alone makes the status
+        //     'running' (an optimistic submit the provider has not answered
+        //     yet); the guard would allow that switch, so the preview is
+        //     pessimistic and the agent simply stays listed as mid-turn.
+        //   - under-reports when `semantic.currentTurn` exists but has ENDED
+        //     (endedAt set): the status derivation ignores it, the guard's
+        //     `?? semantic.currentTurn` truthiness check does not, so the core
+        //     can still refuse a row this preview called idle. That row reports
+        //     its own failure in the batch summary.
+        // Both would need the guard itself to expose one predicate; the honest
+        // fix is to move the whole "is this switchable" question into
+        // providerSwitchCore, not to grow a second copy here.
         const limitParked = runtime ? isLimitIdle(runtime) : false
 
         rows.push({
@@ -293,17 +335,23 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
 
   // Biggest conversation in the batch, not the sum: arrival compaction runs
   // per agent, so the question is whether ANY single pane will land oversized.
+  //
+  // The runtimes map is swapped for a frozen empty one while closed so the memo
+  // is not merely early-returning on a dependency that changes on every runtime
+  // tick — it stops being invalidated at all. This modal is a permanently
+  // mounted surface (see the usage hook gate above), and `workspace.runtimes`
+  // is one of the highest-churn references in the app.
+  const runtimesForEstimate = open ? workspace.runtimes : NO_RUNTIMES
   const largestSourceEstimate = useMemo(() => {
-    if (!open) return 0
     let largest = 0
     for (const row of matchingRows) {
-      const runtime = workspace.runtimes[row.sessionId]
+      const runtime = runtimesForEstimate[row.sessionId]
       if (!runtime) continue
       const estimate = estimateLiveEntriesBytes(runtime.entries)
       if (estimate > largest) largest = estimate
     }
     return largest
-  }, [open, matchingRows, workspace.runtimes])
+  }, [matchingRows, runtimesForEstimate])
 
   // Claude is the only target with a compaction the renderer can drive
   // (compactAfterSwitch reports every other kind as a no-op), so the checkbox
@@ -319,10 +367,22 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
   // translation at all. Only offered when the blocking window is family-scoped
   // — an account-wide window at 100% means no Claude model will answer, and
   // offering a model switch there would waste the user's time.
-  const modelSwitchOffered =
+  const familyScopedLimit =
     source === 'claude' && sourceExhaustion?.exhausted === true && sourceExhaustion.scope === 'model-family'
+  // ...and the exhausted family is not the one the command would move agents
+  // to. `/model sonnet` cannot rescue a full Sonnet week, and offering it would
+  // send a batch of agents at the wall they are already standing at.
+  const modelSwitchWouldLandOnExhaustedFamily =
+    familyScopedLimit && CLAUDE_MODEL_SWITCH_FAMILY.test(sourceExhaustion?.label ?? '')
+  const modelSwitchOffered = familyScopedLimit && !modelSwitchWouldLandOnExhaustedFamily
 
+  // Every one of these changes WHICH agents the armed second click would
+  // compact. A confirmation is for one specific set on one specific source, so
+  // changing the set disarms it — otherwise a user who confirms three agents
+  // and then ticks a fourth project spends quota on agents they never saw named
+  // in the confirmation.
   const toggleProject = useCallback((cwd: string) => {
+    setSourceConfirmArmed(false)
     setSelectedProjects(prev => {
       const next = new Set(prev)
       if (next.has(cwd)) next.delete(cwd)
@@ -332,11 +392,26 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
   }, [])
 
   const selectAllProjects = useCallback(() => {
+    setSourceConfirmArmed(false)
     setSelectedProjects(new Set(projects.map(project => project.cwd)))
   }, [projects])
 
   const clearProjects = useCallback(() => {
+    setSourceConfirmArmed(false)
     setSelectedProjects(new Set())
+  }, [])
+
+  const changeScopeMode = useCallback((mode: ScopeMode) => {
+    setSourceConfirmArmed(false)
+    setScopeMode(mode)
+  }, [])
+
+  const changeProjectFilter = useCallback((value: string) => {
+    // The filter cannot change membership in 'all' scope, but in 'selected'
+    // scope it hides rows the user is choosing from; disarm either way rather
+    // than depend on that distinction staying true.
+    setSourceConfirmArmed(false)
+    setProjectFilter(value)
   }, [])
 
   const runSwitch = useCallback(async () => {
@@ -377,6 +452,13 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
     if (matchingRows.length === 0 || switchingModel || busy) return
     setSwitchingModel(true)
     let delivered = 0
+    let failed = 0
+    // The provider's own words for the FIRST failure. A count alone ("2
+    // failed") is unactionable — prompt delivery fails for reasons the user can
+    // usually fix (the pane is mid-turn, the process died, a dialog is up), and
+    // the message is where that lives. The first one is enough: a batch that
+    // fails usually fails the same way N times.
+    let firstFailure: string | null = null
     try {
       // Sequential like the switch loop, and for a weaker reason: these are
       // independent prompt deliveries, but a burst of PTY writes across many
@@ -384,11 +466,19 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
       // A handful of agents is not worth the risk of parallelism.
       for (const row of matchingRows) {
         const result = await window.api.deliverPrompt(row.sessionId, CLAUDE_MODEL_SWITCH_PROMPT)
-        if (result.ok) delivered += 1
+        if (result.ok) {
+          delivered += 1
+        } else {
+          failed += 1
+          if (firstFailure === null) firstFailure = result.message
+        }
       }
     } finally {
       setSwitchingModel(false)
-      showToast(`Sent ${CLAUDE_MODEL_SWITCH_PROMPT} to ${pluralAgents(delivered)}`)
+      const failureNote = failed > 0
+        ? ` (${failed} failed${firstFailure ? `: ${firstFailure}` : ''})`
+        : ''
+      showToast(`Sent ${CLAUDE_MODEL_SWITCH_PROMPT} to ${pluralAgents(delivered)}${failureNote}`)
     }
   }, [busy, matchingRows, showToast, switchingModel])
 
@@ -481,7 +571,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
                 // readable sentence rather than three spans a screen reader has
                 // to reassemble.
                 <div key={item.provider} className="text-[11px] text-ink">
-                  {`${providerLabel(item.provider)}: ${item.label} at 100%${
+                  {`${exhaustionHeadline(item)} at 100%${
                     item.resetsAt ? `, ${formatReset(item.resetsAt) ?? 'reset time unknown'}` : ''
                   }`}
                 </div>
@@ -520,7 +610,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
               <div className="mt-1 flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => setScopeMode('all')}
+                  onClick={() => changeScopeMode('all')}
                   className={`rounded-control px-2.5 py-1.5 text-[11px] border ${
                     scopeMode === 'all'
                       ? 'border-accent text-accent bg-accent/10'
@@ -531,7 +621,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setScopeMode('selected')}
+                  onClick={() => changeScopeMode('selected')}
                   className={`rounded-control px-2.5 py-1.5 text-[11px] border ${
                     scopeMode === 'selected'
                       ? 'border-accent text-accent bg-accent/10'
@@ -593,6 +683,12 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
               </div>
             )}
 
+            {modelSwitchWouldLandOnExhaustedFamily && (
+              <div className="text-[11px] text-muted">
+                {`A model switch would not help: the exhausted window is the family this would move agents to (${sourceExhaustion?.label ?? ''}). Pick another model in the pane, or switch provider.`}
+              </div>
+            )}
+
             {modelSwitchOffered && (
               // The cheap remedy, offered only when the exhausted window is
               // family-scoped: another model on the SAME provider costs no
@@ -645,7 +741,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
                 <input
                   type="text"
                   value={projectFilter}
-                  onChange={e => setProjectFilter(e.target.value)}
+                  onChange={e => changeProjectFilter(e.target.value)}
                   placeholder="Filter projects"
                   className="rounded-control mt-2 w-full px-2 py-1 bg-canvas border border-border text-[11px] text-ink outline-none focus:border-accent"
                 />

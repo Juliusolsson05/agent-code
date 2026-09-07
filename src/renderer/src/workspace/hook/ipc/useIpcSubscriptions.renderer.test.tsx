@@ -1218,4 +1218,212 @@ describe('useIpcSubscriptions with an injected SessionFeed', () => {
     })
     expect(runtimes[sessionId]?.ghosts.size).toBe(0)
   })
+
+  // ---- Usage-limit signal (#821) ----
+  //
+  // Both providers prove "this pane is parked on an exhausted quota" through
+  // completely different channels, and `isLimitIdle` (providerSwitchCore.ts)
+  // reads the single runtime field both of them write. These two cases pin the
+  // reducers, because the field's whole value is its ORDERING against
+  // `turnStartedAt` — a limit hit stamped at the wrong time is worse than none
+  // at all: it arms the provider-switch guard's exception for a pane that may
+  // be mid-turn.
+
+  it('records a Claude rate-limit carrier at the record\'s own time and never re-arms it on replay', () => {
+    const fake = createFakeSessionFeed()
+    const sessionId = 'claude-usage-limit-carrier' as SessionId
+    const state = {
+      sessions: { [sessionId]: { cwd: '/repo', kind: 'claude' } },
+    } as unknown as WorkspaceState
+    let runtimes: Record<SessionId, SessionRuntime> = {}
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: {
+        gitWorktrees: vi.fn(async () => ({ ok: false })),
+        ghostAppend: vi.fn(),
+      },
+    })
+
+    function Harness(): React.JSX.Element {
+      const refs = useRef<WorkspaceRefs | null>(null)
+      if (refs.current === null) refs.current = makeRefs(state)
+      useIpcSubscriptions(
+        fake,
+        refs.current,
+        () => {},
+        updater => {
+          runtimes = typeof updater === 'function' ? updater(runtimes) : updater
+        },
+        () => {},
+        () => {},
+      )
+      return <div />
+    }
+
+    render(<Harness />)
+
+    // A live-shaped carrier. The literal is minimal on purpose: the census
+    // (docs/decomposition/evidence/provider-switch/census.md §#820) documents
+    // these field names from seven real transcripts, and `error: "rate_limit"`
+    // does NOT survive fixture redaction — so the live wire is the only place
+    // this predicate can be exercised at all.
+    const carrierTimestamp = '2026-09-01T10:00:00.000Z'
+    const burst = [{
+      file: 'transcript.jsonl',
+      entry: {
+        type: 'assistant',
+        uuid: 'rate-limit-carrier-1',
+        parentUuid: null,
+        timestamp: carrierTimestamp,
+        isApiErrorMessage: true,
+        error: 'rate_limit',
+        apiErrorStatus: 429,
+        message: {
+          role: 'assistant',
+          content: [{
+            type: 'text',
+            text: "You've hit your monthly spend limit · your session limit resets 3pm",
+          }],
+        },
+      },
+    }]
+
+    act(() => {
+      fake.emitJsonlEntries({ sessionId, entries: burst })
+    })
+
+    // The record's OWN timestamp, not the wall clock. A resumed pane replays
+    // its last ~200 lines through this same channel, so `Date.now()` here would
+    // make a days-old episode look newer than any turn.
+    expect(runtimes[sessionId]?.limitHit).toEqual({
+      at: Date.parse(carrierTimestamp),
+      source: 'transcript',
+    })
+    const firstHit = runtimes[sessionId]!.limitHit
+
+    // Exactly what a restart does. The uuid is already in `seenUuids`, so the
+    // carrier never reaches `appended` again and the field keeps its identity —
+    // proving the change test is a value comparison rather than "a record was
+    // present in this burst".
+    act(() => {
+      fake.emitJsonlEntries({ sessionId, entries: burst })
+    })
+    expect(runtimes[sessionId]?.limitHit).toBe(firstHit)
+
+    // An ordinary API failure is not a quota signal: the predicate must keep
+    // both fields.
+    act(() => {
+      fake.emitJsonlEntries({
+        sessionId,
+        entries: [{
+          file: 'transcript.jsonl',
+          entry: {
+            type: 'assistant',
+            uuid: 'ordinary-api-error',
+            parentUuid: null,
+            timestamp: '2026-09-02T10:00:00.000Z',
+            isApiErrorMessage: true,
+            error: 'overloaded_error',
+            message: { role: 'assistant', content: [{ type: 'text', text: 'API Error: 529' }] },
+          },
+        }],
+      })
+    })
+    expect(runtimes[sessionId]?.limitHit).toBe(firstHit)
+  })
+
+  it('records a Codex usage_limit_reached api error and clears it only when a turn completes', () => {
+    const fake = createFakeSessionFeed()
+    const sessionId = 'codex-usage-limit-event' as SessionId
+    const state = {
+      sessions: { [sessionId]: { cwd: '/repo', kind: 'codex' } },
+    } as unknown as WorkspaceState
+    let runtimes: Record<SessionId, SessionRuntime> = {}
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: {
+        gitWorktrees: vi.fn(async () => ({ ok: false })),
+        ghostAppend: vi.fn(),
+      },
+    })
+
+    function Harness(): React.JSX.Element {
+      const refs = useRef<WorkspaceRefs | null>(null)
+      if (refs.current === null) refs.current = makeRefs(state)
+      useIpcSubscriptions(
+        fake,
+        refs.current,
+        () => {},
+        updater => {
+          runtimes = typeof updater === 'function' ? updater(runtimes) : updater
+        },
+        () => {},
+        () => {},
+      )
+      return <div />
+    }
+
+    render(<Harness />)
+    // A real wall clock, as every provider emits (`ts: Date.now()`): the field
+    // is compared against `turnStartedAt`, which is always one.
+    const limitTs = Date.parse('2026-09-01T11:00:00.000Z')
+
+    act(() => {
+      fake.emitSemantic({
+        sessionId,
+        event: { type: 'turn_started', turnId: 'turn-1', source: 'proxy', ts: limitTs - 1_000 },
+      })
+      fake.emitSemantic({
+        sessionId,
+        event: {
+          type: 'api_error',
+          turnId: 'turn-1',
+          errorType: 'usage_limit_reached',
+          message: 'You have hit your usage limit.',
+          resetsAt: limitTs + 3_600_000,
+          limitId: 'primary',
+          limitName: '5h',
+          source: 'proxy',
+          ts: limitTs,
+        },
+      })
+    })
+    expect(runtimes[sessionId]?.limitHit).toEqual({ at: limitTs, source: 'api_error' })
+
+    // A stop is NOT proof the episode is over — a turn can stop precisely
+    // because the limit was hit, and clearing here would erase the signal in
+    // the same tick it arrived.
+    act(() => {
+      fake.emitSemantic({
+        sessionId,
+        event: { type: 'turn_stopped', turnId: 'turn-1', stopReason: null, isRefusal: false, source: 'proxy', ts: limitTs + 1 },
+      })
+    })
+    expect(runtimes[sessionId]?.limitHit).toEqual({ at: limitTs, source: 'api_error' })
+
+    // A completed turn is: the provider answered.
+    act(() => {
+      fake.emitSemantic({
+        sessionId,
+        event: { type: 'turn_completed', turnId: 'turn-1', source: 'proxy', ts: limitTs + 2 },
+      })
+    })
+    expect(runtimes[sessionId]?.limitHit).toBeNull()
+
+    // A retryable 429 is a different classification and must not arm anything.
+    act(() => {
+      fake.emitSemantic({
+        sessionId,
+        event: {
+          type: 'api_error',
+          turnId: 'turn-1',
+          errorType: 'rate_limited',
+          message: 'Slow down.',
+          source: 'proxy',
+          ts: limitTs + 3,
+        },
+      })
+    })
+    expect(runtimes[sessionId]?.limitHit).toBeNull()
+  })
 })

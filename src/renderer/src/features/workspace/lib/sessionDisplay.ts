@@ -12,6 +12,18 @@ import { getRendererProviderCapabilities } from '@providers/registry.renderer.ca
 // strictly for list/row UIs that show a one-character provider
 // marker and a path basename.
 
+/** "1 agent" / "3 agents".
+ *
+ *  WHY it lives here rather than beside either caller: the bulk-switch modal
+ *  and the bulk-switch ACTION both count the same agents in the same sentence
+ *  ("Switch 3 agents to Claude" in the button, "Switched 3 agents to Claude" in
+ *  the toast). Two copies of a pluralization rule is exactly the drift this
+ *  module exists to prevent — a fix to one would have silently left the other
+ *  saying "1 agents". */
+export function pluralAgents(n: number): string {
+  return `${n} agent${n === 1 ? '' : 's'}`
+}
+
 export function cwdBasename(cwd: string): string {
   if (!cwd) return ''
   // Trim trailing slashes so `/foo/bar/` doesn't return an empty

@@ -363,6 +363,18 @@ const SEMANTIC_DELTA_FLUSH_MS = 100
 // reconcile, rather than reacting to any single edge.
 const QUEUE_IDLE_RECONCILE_MS = 2000
 
+/** Epoch-ms sanity floor (2001-09-09) for provider-supplied timestamps that are
+ *  typed only as `number`.
+ *
+ *  WHY it exists: `limitHit.at` is compared against `turnStartedAt`, which is
+ *  always a `Date.now()` wall clock. A semantic event whose `ts` is a small
+ *  relative counter — every provider emits `Date.now()` today, but the wire
+ *  type does not say so, and this repo's own test doubles use `ts: 1` — would
+ *  write an `at` that loses every such comparison, silently disarming the
+ *  provider-switch guard's usage-limit exception. Anything below the floor is
+ *  treated as "not a wall clock" and replaced with the local one. */
+const WALL_CLOCK_MS_FLOOR = 1_000_000_000_000
+
 function applyConditionSnapshot(
   runtime: SessionRuntime,
   snapshot: ProviderConditionSnapshot,
@@ -1110,9 +1122,20 @@ export function useIpcSubscriptions(
       //
       // Computed outside the updater for the same reason as the JSONL path: one
       // Date.now() per event, not one per React re-invocation.
+      //
+      // The event's own `ts` wins when it is a wall clock. Unlike the JSONL
+      // path this is a LIVE event, never a replay, so `Date.now()` is a correct
+      // fallback rather than a lie — but the event's own time is still better,
+      // because a backpressured queue can hold an event for a while before it
+      // is folded. The plausibility floor exists because `ts` is only typed
+      // `number`: a provider (or a test) that emits a small relative counter
+      // would otherwise write `limitHit.at = 3`, which loses every comparison
+      // against `turnStartedAt` and silently disarms the guard's exception.
       const semanticLimitHitAt =
         semanticEvent.type === 'api_error' && semanticEvent.errorType === 'usage_limit_reached'
-          ? Date.now()
+          ? (typeof semanticEvent.ts === 'number' && semanticEvent.ts >= WALL_CLOCK_MS_FLOOR
+              ? semanticEvent.ts
+              : Date.now())
           : null
       // Captured by the updater, committed after setRuntimes returns.
       let pendingStaleQueue: ClaudeQueueState | null = null
@@ -1277,9 +1300,14 @@ export function useIpcSubscriptions(
         // is over: the provider answered. `turn_stopped` deliberately does NOT
         // clear it — a turn can stop precisely BECAUSE the limit was hit, and
         // clearing there would erase the signal in the same tick it arrived.
+        //
+        // Same value comparison as the JSONL path: a redelivered event carries
+        // the same `ts`, so it must not manufacture a runtime change.
         const nextLimitHit: SessionRuntime['limitHit'] =
           semanticLimitHitAt !== null
-            ? { at: semanticLimitHitAt, source: 'api_error' }
+            ? (current.limitHit?.at === semanticLimitHitAt && current.limitHit.source === 'api_error'
+                ? current.limitHit
+                : { at: semanticLimitHitAt, source: 'api_error' })
             : eventType === 'turn_completed'
               ? null
               : current.limitHit
@@ -1645,36 +1673,6 @@ export function useIpcSubscriptions(
           }
         })
       }
-
-      // ---- Usage-limit carrier (#821) ----
-      // Claude persists an exhausted-quota turn as an assistant record with
-      // `isApiErrorMessage: true` and `error: "rate_limit"`. That is the ONLY
-      // durable evidence the renderer gets: no semantic event is emitted for
-      // it, and the pane keeps its process (and its "continuing automatically"
-      // banner) so nothing else in the runtime changes. Recording the hit lets
-      // `isLimitIdle` release the provider-switch guard for exactly these panes
-      // (providerSwitchCore.ts).
-      //
-      // The predicate matches the census: seven local transcripts carry this
-      // record and every one of them has both fields
-      // (docs/decomposition/evidence/provider-switch/census.md §#820). The
-      // literal `rate_limit` code does NOT survive fixture redaction, which is
-      // why this is checked against LIVE records here and asserted structurally
-      // elsewhere — do not "fix" a fixture test by loosening this to
-      // `isApiErrorMessage` alone, which also matches ordinary API failures
-      // that have nothing to do with quota.
-      //
-      // Computed OUTSIDE the setRuntimes updater with a single Date.now(): React
-      // may invoke an updater twice, and a timestamp that differs between the
-      // two invocations is the kind of drift this handler already avoids for the
-      // queue state.
-      const limitRecordSeen = entries.some(({ entry: raw }) => {
-        const record = asRecord(raw)
-        return record?.type === 'assistant' &&
-          record.isApiErrorMessage === true &&
-          record.error === 'rate_limit'
-      })
-      const limitHitAt = limitRecordSeen ? Date.now() : null
 
       // ---- Pass B: runtime mutations ----
       // Captured by the updater, committed to claudeQueueBySession after
@@ -2068,6 +2066,64 @@ export function useIpcSubscriptions(
           }
         }
 
+        // ---- Usage-limit carrier (#821) ----
+        // Claude persists an exhausted-quota turn as an assistant record with
+        // `isApiErrorMessage: true` and `error: "rate_limit"`. That is the ONLY
+        // durable evidence the renderer gets: no semantic event is emitted for
+        // it, and the pane keeps its process (and its "continuing
+        // automatically" banner) so nothing else in the runtime changes.
+        // Recording the hit lets `isLimitIdle` release the provider-switch
+        // guard for exactly these panes (providerSwitchCore.ts).
+        //
+        // The predicate matches the census: seven local transcripts carry this
+        // record and every one of them has both fields
+        // (docs/decomposition/evidence/provider-switch/census.md §#820). The
+        // literal `rate_limit` code does NOT survive fixture redaction, which
+        // is why it is checked against LIVE records here — do not "fix" a
+        // fixture test by loosening this to `isApiErrorMessage` alone, which
+        // also matches ordinary API failures that have nothing to do with
+        // quota.
+        //
+        // WHY it scans `appended` and not the raw burst: `appended` is the
+        // post-dedupe set (uuids already in `seen` never reach it), and a
+        // RESUMED pane replays its last ~200 lines through this exact channel
+        // (main/sessions/jsonlCoalescer.ts). Scanning the burst meant every
+        // restart re-detected old carriers — and the census found one session
+        // with 63 consecutive rate-limit records, so a replay could re-arm the
+        // guard's exception dozens of times for an episode that ended days ago.
+        // The Claude mapper passes conversation records through unchanged, so
+        // the carrier's own fields survive into `appended`.
+        //
+        // WHY the timestamp comes from the record and NEVER from the wall
+        // clock — the same rule `lastJsonlEntryAt` follows immediately above:
+        // `limitHit.at` is compared against `turnStartedAt` to decide whether a
+        // pane is parked or working, and stamping a replayed days-old record
+        // with `Date.now()` makes it look newer than any turn. A carrier with
+        // no parseable timestamp is deliberately ignored rather than stamped
+        // with now: an unplaceable event cannot be ordered against a turn, and
+        // a wrong order is worse than no signal.
+        let limitHitAt: number | null = null
+        for (const entry of appended) {
+          const record = asRecord(entry)
+          if (
+            record?.type !== 'assistant' ||
+            record.isApiErrorMessage !== true ||
+            record.error !== 'rate_limit'
+          ) continue
+          const ts = record.timestamp
+          if (typeof ts !== 'string') continue
+          const ms = Date.parse(ts)
+          if (!Number.isFinite(ms)) continue
+          if (limitHitAt === null || ms > limitHitAt) limitHitAt = ms
+        }
+        // Monotonic and idempotent: a replayed burst reproduces the same `at`
+        // and therefore the same object identity, so the noChange bail below
+        // still fires. Only a strictly newer carrier replaces the record.
+        const nextLimitHit: SessionRuntime['limitHit'] =
+          limitHitAt !== null && (current.limitHit === null || limitHitAt > current.limitHit.at)
+            ? { at: limitHitAt, source: 'transcript' }
+            : current.limitHit
+
         // Ghost reconciliation — when authoritative entries land,
         // supersede any live ghost whose `(turnId, blockIndex)`
         // they replace. Runs per appended entry so ghost→real
@@ -2131,12 +2187,11 @@ export function useIpcSubscriptions(
         // queuedMessages and the rest of this guard.
         const ghostsChanged = nextGhosts !== current.ghosts
         const lastJsonlChanged = lastJsonlEntryAt !== current.lastJsonlEntryAt
-        // A rate-limit record normally appends a feed entry too, so this is
-        // belt-and-braces — but if the Claude mapper ever starts filtering the
-        // carrier out of the feed, a burst that carries ONLY that record must
-        // still reach the runtime. Silently dropping it would re-lock the
-        // provider-switch guard for the panes it exists to release.
-        const limitHitChanged = limitHitAt !== null
+        // A VALUE comparison, not "a carrier was present": the carrier arrives
+        // as an appended entry, so this is normally implied by appended.length
+        // — but it must not be able to defeat the bootstrap-burst bail below on
+        // every single replay of a transcript that happens to contain one.
+        const limitHitChanged = nextLimitHit !== current.limitHit
         const noChange =
           appended.length === 0 &&
           reconciledOptimisticTexts.size === 0 &&
@@ -2304,9 +2359,7 @@ export function useIpcSubscriptions(
               // evidence the limit is over (Claude writes 63 consecutive
               // rate-limit records in one session — census RL-6), it is just a
               // burst about something else.
-              limitHit: limitHitAt !== null
-                ? { at: limitHitAt, source: 'transcript' as const }
-                : current.limitHit,
+              limitHit: nextLimitHit,
             },
             {
               layer: 'JSONL',

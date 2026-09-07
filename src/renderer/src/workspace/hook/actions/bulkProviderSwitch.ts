@@ -9,6 +9,7 @@ import type { WorkspaceSetRuntimes, WorkspaceSetState } from '@renderer/workspac
 import type { SessionActions } from '@renderer/workspace/hook/actions/session'
 import { switchAgentProvider } from '@renderer/workspace/hook/actions/providerSwitchCore'
 import type { SwitchStrategy } from '@renderer/workspace/hook/actions/providerSwitchCore'
+import { pluralAgents } from '@renderer/features/workspace/lib/sessionDisplay'
 
 // Bulk provider switch + remembered-batch return.
 //
@@ -26,10 +27,6 @@ import type { SwitchStrategy } from '@renderer/workspace/hook/actions/providerSw
 function providerLabel(kind: AgentProviderKind): string {
   // Registry-derived (#394 phase 4).
   return getRendererProviderCapabilities(kind).shortLabel
-}
-
-function pluralAgents(n: number): string {
-  return `${n} agent${n === 1 ? '' : 's'}`
 }
 
 /**
@@ -128,8 +125,12 @@ export function useBulkProviderSwitchActions(
           onArrivalFailure: message => showToast(message),
         })
 
-        if (result.status === 'switched') counts[result.strategy] += 1
+        // The tally counts exactly the agents the summary counts. A switch that
+        // succeeded but lost its meta mid-loop is not in `switched`, so counting
+        // its strategy would produce "Switched 2 agents to Claude: 3 native" —
+        // a summary that contradicts itself.
         if (result.status === 'switched' && meta && originalKind) {
+          counts[result.strategy] += 1
           switched.push({
             sessionId: result.newSessionId,
             cwd: meta.cwd,
