@@ -37,13 +37,23 @@ classification, and provider portability rules. It does not own live processes,
 timeouts, prompt delivery, or UI.
 
 `planConversationContext(conversation, targetProvider, budgetCharacters, options?)`
-takes `options.allowSourceTurns`. It defaults to `true`, which preserves the four
-original outcomes byte for byte — every caller that predates quota-independent
-switching keeps the behaviour it was written against, including the two outcomes
-that instruct the host to spend a live turn on the source. The host passes
-`false` by default (`DEFAULT_SWITCH_CONTEXT_POLICY` in
+takes `options.allowSourceTurns`. It defaults to `true`, which keeps the four
+original outcomes and their ordering — every caller that predates
+quota-independent switching keeps the behaviour it was written against, including
+the two outcomes that instruct the host to spend a live turn on the source. The
+host passes `false` by default (`DEFAULT_SWITCH_CONTEXT_POLICY` in
 `src/main/providerSwitch/switchProvider.ts`), and that path returns only outcomes
 the host can execute alone.
+
+It is *not* byte for byte, and the one difference is deliberate. #820 gave
+`compactionAvailability` a fourth value, `rejected`, for a Claude carrier that is
+really a usage-limit message. Such a carrier used to classify as `portable`,
+because it is long non-empty plaintext, so
+`conversationAfterLatestPortableCompaction` sliced at it and discarded every
+pre-limit turn in favour of "You've hit your monthly spend limit". It is no
+longer sliced at on either path, so those conversations now keep their real
+history. That is a bug fix which reaches the default-`true` path too, and it is
+the only behaviour a pre-existing caller can observe changing.
 
 | Outcome | Reachable with | Meaning | Production action |
 |---|---|---|---|
@@ -303,10 +313,13 @@ wait:
    false while the prompt is on screen. A readiness-first gate would deadlock on
    exactly the biggest, oldest sessions the step exists for.
 2. If `claude.resume-prompt` is visible, answer it with "Resume from summary" —
-   `selectedIndex` Up keystrokes then Enter, mirroring what the modal does,
-   because the headless condition module deliberately exposes only the two
-   view-independent keystrokes and leaves selection movement to the caller.
-   Claude then runs its own compaction.
+   `selectedIndex` Up keystrokes then Enter, because the headless condition
+   module deliberately exposes only the two view-independent keystrokes and
+   leaves selection movement to the caller. The arithmetic comes from the parser
+   that produced the field, `packages/claude-code-headless/src/parsers/ResumePromptParser.ts`:
+   it matches the three numbered option lines in order and sets `selectedIndex`
+   from the `❯` marker, so option 1 ("Resume from summary") is index 0. Claude
+   then runs its own compaction.
 3. Otherwise deliver `/compact` through the provider's prompt delivery.
 4. Reuse `waitForNewCompactionOn` against the TARGET session and kind, with
    arrival-specific phrasing, and emit `compacting` progress on the new session
@@ -354,12 +367,27 @@ The second Codex turn is necessary because only Codex can read its encrypted
 replacement history. It is not a fallback truncation and does not ask Agent
 Code to interpret ciphertext.
 
-By default that turn does not happen at all. Codex keeps every pre-compaction
-record on disk in plaintext — the encrypted item is the only opaque part, and
-the history it summarizes is right there in the same rollout — so the
-`allowSourceTurns: false` planner strips the unreadable carrier and carries the
-plaintext records instead (`raw-history`). That is the whole reason a switch off
-an exhausted Codex account works without Codex answering anything.
+By default that turn does not happen at all. A Codex rollout *usually* keeps all
+of its pre-compaction records on disk in plaintext — the encrypted item is the
+only opaque part, and the history it summarizes is right there in the same file —
+so
+the `allowSourceTurns: false` planner strips the unreadable carrier and carries
+the plaintext records instead (`raw-history`). That is the whole reason a switch
+off an exhausted Codex account works without Codex answering anything.
+
+"Usually" is a measurement, not a hedge, and the exception matters. Census
+finding 6: 211 of 230 single-compaction rollouts (91.7 %) keep a median 74.3 % of
+their characters ahead of the compaction, but **18 of 230 (7.8 %) have zero
+characters before it** — a rollout that begins at a compaction, and a session
+resumed into a fresh rollout file both look like that. In that minority shape
+`raw` carries only the post-compaction turns, and the carrier it stripped was the
+only account of everything prior; nothing on disk can replace it. The host
+detects exactly that shape — no non-opaque entry ahead of the first stripped
+carrier, after mirroring the planner's own slice — and reports it in
+`shrinkSummary` instead of letting `raw` claim nothing was lost
+(`rawHistoryDroppedTheOnlySummary` in `switchProvider.ts`). Recovering that
+earlier history is what the opt-in source handoff is for, and while the source
+still has quota it is the only way to get it.
 
 ## OpenCode transcripts and oversized context
 
@@ -438,8 +466,14 @@ set from an appended Claude assistant record with `isApiErrorMessage: true` and
 resumed pane replays its last lines through the same channel and stamping a
 days-old record with `Date.now()` would make it look newer than any turn — or
 from a Codex `usage_limit_reached` api error. It is cleared on `turn_completed`
-and deliberately NOT on `turn_stopped`, since a turn can stop precisely because
-the limit was hit.
+and on `turn_started`, and deliberately NOT on `turn_stopped`, since a turn can
+stop precisely because the limit was hit. `turn_started` clears it because a pane
+that auto-continues after its window resets keeps its ORIGINAL `turnStartedAt` —
+the phase machine stamps that field only when it is null — so the stale timestamp
+stays older than `limitHit.at` and the pane would read as limit-idle for the
+whole of a live answer, which is the one state where switching kills real work. A
+turn the provider accepted is the earliest honest proof the episode is over, and
+a fresh 429 re-arms the signal with a newer timestamp.
 
 `isLimitIdle` (`providerSwitchCore.ts`) widens the switch guard with it: both
 providers keep their process alive while a window is exhausted — Claude paints
@@ -463,9 +497,11 @@ default on above 150,000 estimated characters in the largest pane of the batch,
 "compact on source first" default off and disabled while the source is
 exhausted, a "switch model instead" row for Claude family-scoped limits
 (suppressed when the exhausted family is the one the command would land on), one
-confirmation per batch, and per-agent strategy in the batch summary and the pane
-toast. Usage polling is gated on `open`, because this modal is a permanently
-mounted surface.
+confirmation per batch, and per-agent strategy counts in the batch summary. (The
+per-agent *pane* toast belongs to the single-pane switch, which shows the one
+strategy it got; the bulk path only tallies counts —
+`bulkProviderSwitch.ts` vs `provider.ts`.) Usage polling is gated on `open`,
+because this modal is a permanently mounted surface.
 
 ## Transaction and UI rules
 
@@ -607,6 +643,21 @@ provider's API-error record as assistant text, never invent an OpenCode
 compaction record, and never make truncation an implicit recovery path. Any
 change to these rules requires both structural tests and a real semantic resume
 probe.
+
+One exception to "never accept a rate-limit message as a summary" is open, and
+today it is defended by the host rather than by the parser. Projection does not
+consult `compactionAvailability`: the Codex projector demotes any compaction with
+a non-empty summary to a developer handoff message, and
+`fitConversationToCharacterBudget` chooses its `previousSummary` the same way, so
+a `rejected` carrier that reaches projection is handed to the target as prior
+context. The default path can never reach it — rung 1 strips the carrier before
+anything downstream sees it — and the opt-in path now aborts before projecting
+(`switchProvider.ts`). The durable fix is
+[agent-transcript-parser#26](https://github.com/Juliusolsson05/agent-transcript-parser/issues/26),
+which also covers `conversationAfterLatestPortableCompaction` returning the whole
+conversation when the latest carrier is `rejected` or `incomplete` while an
+earlier portable one exists. Until it lands, do not add a caller that projects a
+conversation it did not run through the `allowSourceTurns: false` planner.
 
 No fallback silently truncates. The shrink ladder is not a counter-example: it
 runs only on the explicit `allowSourceTurns: false` plan, only when nothing else

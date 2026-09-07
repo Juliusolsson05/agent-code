@@ -95,7 +95,9 @@ All six are below the 2 MB fixture cap; the largest,
 `claude-sequence-oversized-turns`, is 1,421,213 bytes — 67.7 % of it, and the
 only one where the cap is a live constraint rather than a formality. They are
 larger than the ~8 KB sequence fixtures already in the corpus because they keep
-whole rollouts, but redaction collapses them by a further 4–95×.
+whole rollouts, but redaction collapses them by a further 4.4–19.7× (kept bytes
+over committed bytes, per the table above: 4.4× for
+`claude-sequence-oversized-turns`, 19.7× for `claude-sequence-oversized`).
 
 ## Bytes by entry kind
 
@@ -263,7 +265,12 @@ Tool-result share: **23.3 %**.
 | Measure | Full | Tool results zeroed | Versus the 581,400 budget |
 |---|---:|---:|---|
 | `estimateSemanticCharacters` (the selection predicate) | 1,607,210 | 894,987 | still **1.54×** over |
-| `estimateEntryCharacters` (what the planner budgets) | 3,162,471 | 2,408,198 | still **4.14×** over |
+| `estimateEntryCharacters` (what the planner budgets) | 3,162,471 | 2,428,914 | still **4.18×** over |
+
+Both columns of the second row are the same measure: 3,162,471 − 733,557. An
+earlier revision of this row printed 2,408,198, which is the by-kind table's
+1,470-entry total (3,141,755) minus tool results — a different measure from the
+3,162,471 beside it, and a ratio of 4.14× that no single measure produces.
 
 This is the fixture the corpus was missing. At 5.44× the budget it cannot be
 fitted by clearing tool results — user prompts alone (1,291,761 characters) are

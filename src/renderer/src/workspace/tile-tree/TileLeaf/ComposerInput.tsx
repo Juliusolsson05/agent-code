@@ -6,6 +6,7 @@ import { SlashCommandPicker } from '@providers/claude/renderer/SlashCommandPicke
 import type {
   ClaudeDraftImage,
   PromptDeliveryUiState,
+  ProviderSwitchRuntimeState,
   SlashPickerState,
 } from '@renderer/session-runtime/state'
 import type { ComposerDictationController } from '@renderer/workspace/tile-tree/TileLeaf/useComposerDictation'
@@ -57,6 +58,7 @@ export function ComposerInput({
   promptDelivery,
   onResolveUncertainDelivery,
   providerSwitchMessage = null,
+  providerSwitchPhase = null,
 }: {
   sessionId: SessionId
   inputRef: MutableRefObject<HTMLTextAreaElement | null>
@@ -87,6 +89,9 @@ export function ComposerInput({
   promptDelivery: PromptDeliveryUiState
   onResolveUncertainDelivery: () => void
   providerSwitchMessage?: string | null
+  /** Which step of the provider-switch machinery owns the pane right now. See
+   *  the banner below for why the lock sentence depends on it. */
+  providerSwitchPhase?: ProviderSwitchRuntimeState['phase'] | null
 }) {
   const showDictationPlaceholder = dictation.enabled && dictation.busy && input.length === 0
   const showDictationActivity = dictation.enabled && dictation.busy
@@ -140,9 +145,25 @@ export function ComposerInput({
         </div>
       ) : null}
 
+      {/* WHY the lock sentence is phase-dependent: `providerSwitch` is set on a
+          pane for two different operations. `preparing`, `shrinking` and
+          `projecting` can only belong to the switch transaction, which has not
+          committed yet — "until the switch finishes" is exactly right there.
+          `compacting` and `summarizing` are ambiguous: they cover the opt-in
+          source compaction that runs INSIDE the transaction, and also the
+          arrival compaction that runs on the new pane AFTER the switch already
+          committed (providerSwitchCore's startArrivalCompaction writes the same
+          field). Telling a user whose switch is done that they are waiting for
+          it to finish is simply false, and the renderer cannot tell the two
+          apart — the phase is all it is given. So the ambiguous phases get a
+          sentence that is true of both. Input is locked either way: the
+          textarea's own `disabled` below keys off the message, not the phase. */}
       {providerSwitchMessage ? (
         <div className="mb-2 rounded-slab border border-accent/40 bg-accent/10 p-2 text-[11px] text-ink">
-          {providerSwitchMessage} Input is locked until the switch finishes.
+          {providerSwitchMessage}{' '}
+          {providerSwitchPhase === 'compacting' || providerSwitchPhase === 'summarizing'
+            ? 'Input is locked while this runs.'
+            : 'Input is locked until the switch finishes.'}
         </div>
       ) : null}
 

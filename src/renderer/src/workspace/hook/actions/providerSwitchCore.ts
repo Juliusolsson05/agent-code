@@ -83,6 +83,13 @@ export type SwitchStrategy = 'native' | 'raw' | 'shrunk'
 export function isLimitIdle(
   runtime: Pick<SessionRuntime, 'limitHit' | 'turnStartedAt'>,
 ): boolean {
+  // The two timestamps come from different clocks and can disagree: `limitHit.at`
+  // is provider-side (a Claude record's own `timestamp`, or a Codex event's `ts`)
+  // while `turnStartedAt` is this renderer's fold-time `Date.now()` fallback, so
+  // clock skew or a backpressured queue can make a genuine hit look older than
+  // the turn it stopped. That miscompare is bounded on the safe side — it makes
+  // the predicate false, and a false predicate only refuses a switch; it can
+  // never green-light one over a live turn.
   return (
     runtime.limitHit !== null &&
     (runtime.turnStartedAt === null || runtime.limitHit.at >= runtime.turnStartedAt)
@@ -223,6 +230,29 @@ export async function switchAgentProvider(params: {
   }
 
   const sourceRuntime = refs.latestRuntimesRef.current[sessionId]
+  // WHY a second in-flight guard beside `providerSwitchesInFlight`, which is
+  // right below: that Set is keyed on the pane the switch STARTS from and is
+  // released the moment this function returns — which is before arrival
+  // compaction has finished, and on a different pane id than the one arrival
+  // compaction runs on. So a user who switches A -> Claude with "compact on
+  // arrival", then immediately switches the resulting pane on to Codex, passes
+  // the Set check cleanly while `/compact` is still running on that pane. The
+  // switch would then replace the pane out from under a compaction whose wait
+  // loop is still polling the transcript it is about to orphan.
+  //
+  // `runtime.providerSwitch` is the honest signal because it is exactly "this
+  // pane is inside a provider-switch operation of some kind", set by this
+  // function for the transaction and by `startArrivalCompaction` for the
+  // follow-up, and cleared in both `finally` blocks. Checking it before the
+  // turn guard below keeps the message specific: arrival compaction makes the
+  // pane busy too, and "wait for the current turn to finish" would send the
+  // user looking for a turn they never started.
+  if (sourceRuntime?.providerSwitch) {
+    return {
+      status: 'failed',
+      message: 'This pane is still finishing a provider switch — wait for it to complete',
+    }
+  }
   // The usage-limit exception (see isLimitIdle): a pane whose provider is
   // sitting on an exhausted window still reads as busy, and refusing it would
   // lock out precisely the agents this feature exists to move. Replacement

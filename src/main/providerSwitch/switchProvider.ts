@@ -3,7 +3,12 @@
 import { randomUUID } from 'node:crypto'
 
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
-import { planConversationContext } from 'agent-transcript-parser'
+import {
+  compactionAvailability,
+  conversationAfterLatestPortableCompaction,
+  describeLatestCompaction,
+  planConversationContext,
+} from 'agent-transcript-parser'
 import type {
   ConversationContextPlan,
   ConversationDocument,
@@ -78,7 +83,11 @@ export const DEFAULT_SWITCH_CONTEXT_POLICY: SwitchContextPolicy = {
  *   summary was reused (planner `ready` / `existing-compaction`).
  * - `raw` — a carrier the target cannot read was dropped and the plaintext
  *   records it claimed to replace were carried instead (planner `raw-history`).
- *   Nothing the target could have read was lost.
+ *   Nothing the target could have read was lost — EXCEPT in the minority shape
+ *   where the carrier is the first thing in the conversation and there is no
+ *   plaintext behind it at all (census finding 6: 18 of 230 single-compaction
+ *   Codex rollouts, 7.8 %). There the dropped carrier was the only account of
+ *   everything before it, so `raw` still carries a `shrinkSummary` saying so.
  * - `shrunk` — the deterministic ladder had to remove content; `shrinkSummary`
  *   says what.
  */
@@ -237,9 +246,56 @@ export async function switchProvider(
       }
     } else if (plan.kind === 'raw-history') {
       strategy = 'raw'
+      // WHY `raw` is not always silent, when its whole definition is "nothing
+      // the target could have read was lost":
+      //
+      // That definition holds because the records a carrier claims to replace
+      // are normally still in the same file — census finding 6 measured 211 of
+      // 230 single-compaction Codex rollouts (91.7 %) keeping a median 74.3 %
+      // of their characters ahead of the compaction. The other 7.8 % (18 of
+      // 230) have ZERO characters before it: a rollout that begins at a
+      // compaction, or a session resumed into a fresh rollout file. Stripping
+      // the carrier there does not uncover the history it summarized, because
+      // that history is not on disk anywhere the host can read. The switch
+      // still succeeds and is still the best available outcome — the
+      // alternative is a live source turn the source may not be able to spend —
+      // but reporting `raw` with a null summary would tell the user "nothing
+      // was lost" about the one shape where the summary of everything prior
+      // just went away. Design principle 3: no lossy step is silent.
+      if (rawHistoryDroppedTheOnlySummary(conversation)) {
+        shrinkSummary = 'encrypted compaction dropped with no plaintext history before it; the target starts at the first post-compaction turn'
+      }
     }
     conversation = plan.conversation
   } else {
+    // WHY the opt-in path refuses a `rejected` latest carrier BEFORE it plans
+    // anything (#820):
+    //
+    // `compactionAvailability` returns `rejected` when a Claude compaction
+    // carrier is in fact a usage-limit message that Claude Code persisted AS
+    // the summary. On the DEFAULT path that carrier is simply stripped by the
+    // planner's rung 1 and the plaintext it displaced is carried instead, so
+    // nothing downstream can see it. On this path nothing strips it: the
+    // planner returns `ready` (or `existing-compaction`) with the carrier still
+    // inside the conversation, and the Codex projector turns ANY non-empty
+    // summary into a developer handoff message without consulting availability
+    // (packages/agent-transcript-parser/src/codex/project/nativeResume.ts:138-165).
+    // The target would then open with "You've hit your monthly spend limit …"
+    // framed as its authoritative prior context.
+    //
+    // Aborting is right rather than silently falling back to the default
+    // policy: the user explicitly asked to spend a source turn, and the two
+    // ways out are genuinely different products (drop the carrier and keep the
+    // raw history, or make the source write a real summary first). The parser
+    // owes a fix of its own so no projector can emit a non-portable carrier —
+    // Juliusolsson05/agent-transcript-parser#26 — after which this guard becomes
+    // a fast, explicit error instead of the only thing standing in the way.
+    const latestCompaction = describeLatestCompaction(conversation)
+    if (latestCompaction?.availability === 'rejected') {
+      throw new Error(
+        "The source's latest compaction is a usage-limit message, not a summary. Switch with the default policy, which drops that carrier and keeps the plaintext history, or run /compact on the source first.",
+      )
+    }
     let plan = planConversationContext(
       conversation,
       targetKind,
@@ -346,6 +402,38 @@ export function describeShrink(report: ShrinkReport): string {
   }
   const kb = (n: number): string => `${Math.round(n / 1000)}k`
   return `${parts.join(', ') || 'no changes'} (${kb(report.estimatedCharactersBefore)} → ${kb(report.estimatedCharactersAfter)} chars)`
+}
+
+/**
+ * Did the `raw-history` plan drop the ONLY account of how this conversation
+ * started?
+ *
+ * The question is asked of the SOURCE document (what was on disk), not of the
+ * plan's output, because the plan's output is precisely the document with the
+ * carrier already removed — by then there is nothing left to distinguish "the
+ * history was behind the carrier all along" from "the carrier was all there
+ * was".
+ *
+ * WHY the slice runs first: `planWithoutSourceTurns` slices at the latest
+ * PORTABLE compaction before it strips, so a plaintext summary anywhere in the
+ * file already means the target receives an account of everything before it,
+ * even when a later unreadable carrier is stripped. Walking the raw entries
+ * would report a loss that did not happen. Mirroring the planner's own ordering
+ * here is the only way to stay in agreement with it.
+ *
+ * `opaque` entries are skipped rather than counted as history: they are the
+ * provider's own bookkeeping records (Codex `session_meta`/`turn_context`,
+ * Claude api-error records), carry no conversation the target can use, and are
+ * exactly what sits ahead of the compaction in the compaction-at-entry-2 shape
+ * the census measured.
+ */
+function rawHistoryDroppedTheOnlySummary(source: ConversationDocument): boolean {
+  const effective = conversationAfterLatestPortableCompaction(source)
+  for (const entry of effective.entries) {
+    if (entry.kind === 'compaction') return compactionAvailability(entry) !== 'portable'
+    if (entry.kind !== 'opaque') return false
+  }
+  return false
 }
 
 function contextOverflowError(estimated: number, budget: number): Error {

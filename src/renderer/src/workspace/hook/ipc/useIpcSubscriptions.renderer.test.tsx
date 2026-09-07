@@ -1426,4 +1426,103 @@ describe('useIpcSubscriptions with an injected SessionFeed', () => {
     })
     expect(runtimes[sessionId]?.limitHit).toBeNull()
   })
+
+  it('clears the limit signal when the provider accepts a new turn after the window resets', () => {
+    // The hazard this covers: a pane hits a limit, waits, and the provider
+    // auto-continues once the window resets. `turnStartedAt` is stamped only
+    // when it is null (session-runtime/semantic/streamPhaseMachine.ts), so it
+    // still belongs to the turn that hit the limit and stays OLDER than
+    // `limitHit.at`. If `turn_completed` were the only thing that cleared the
+    // signal, `isLimitIdle` would keep reading true for the whole of the new
+    // answer, the switch modal would label a working pane idle, and switching
+    // would kill a live turn. A turn the provider ACCEPTED is the earliest
+    // honest proof that the episode is over.
+    const fake = createFakeSessionFeed()
+    const sessionId = 'codex-limit-then-resume' as SessionId
+    const state = {
+      sessions: { [sessionId]: { cwd: '/repo', kind: 'codex' } },
+    } as unknown as WorkspaceState
+    let runtimes: Record<SessionId, SessionRuntime> = {}
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: {
+        gitWorktrees: vi.fn(async () => ({ ok: false })),
+        ghostAppend: vi.fn(),
+      },
+    })
+
+    function Harness(): React.JSX.Element {
+      const refs = useRef<WorkspaceRefs | null>(null)
+      if (refs.current === null) refs.current = makeRefs(state)
+      useIpcSubscriptions(
+        fake,
+        refs.current,
+        () => {},
+        updater => {
+          runtimes = typeof updater === 'function' ? updater(runtimes) : updater
+        },
+        () => {},
+        () => {},
+      )
+      return <div />
+    }
+
+    render(<Harness />)
+    const limitTs = Date.parse('2026-09-01T11:00:00.000Z')
+    const resetTs = limitTs + 3_600_000
+
+    act(() => {
+      fake.emitSemantic({
+        sessionId,
+        event: { type: 'turn_started', turnId: 'turn-1', source: 'proxy', ts: limitTs - 1_000 },
+      })
+      fake.emitSemantic({
+        sessionId,
+        event: {
+          type: 'api_error',
+          turnId: 'turn-1',
+          errorType: 'usage_limit_reached',
+          message: 'You have hit your usage limit.',
+          resetsAt: resetTs,
+          limitId: 'primary',
+          limitName: '5h',
+          source: 'proxy',
+          ts: limitTs,
+        },
+      })
+    })
+    expect(runtimes[sessionId]?.limitHit).toEqual({ at: limitTs, source: 'api_error' })
+
+    // The window reset and the provider accepted a request. No `turn_completed`
+    // has arrived and none may ever arrive — this turn can run for minutes.
+    act(() => {
+      fake.emitSemantic({
+        sessionId,
+        event: { type: 'turn_started', turnId: 'turn-2', source: 'proxy', ts: resetTs },
+      })
+    })
+    expect(runtimes[sessionId]?.limitHit).toBeNull()
+
+    // Clearing on acceptance is weaker proof than clearing on completion, which
+    // is exactly why it is safe: a request that 429s mid-flight re-arms the
+    // signal with a NEWER timestamp, so the guard's ordering against a stale
+    // `turnStartedAt` comes back on its own.
+    act(() => {
+      fake.emitSemantic({
+        sessionId,
+        event: {
+          type: 'api_error',
+          turnId: 'turn-2',
+          errorType: 'usage_limit_reached',
+          message: 'You have hit your usage limit.',
+          resetsAt: resetTs + 3_600_000,
+          limitId: 'primary',
+          limitName: '5h',
+          source: 'proxy',
+          ts: resetTs + 500,
+        },
+      })
+    })
+    expect(runtimes[sessionId]?.limitHit).toEqual({ at: resetTs + 500, source: 'api_error' })
+  })
 })

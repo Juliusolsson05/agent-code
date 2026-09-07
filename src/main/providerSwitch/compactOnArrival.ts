@@ -24,11 +24,6 @@
 import { setTimeout as delay } from 'node:timers/promises'
 
 import { conversationAfterLatestPortableCompaction, describeLatestCompaction } from 'agent-transcript-parser'
-// Type-only, so nothing from the provider package reaches this module's runtime
-// graph. It is the authority on what `claude.resume-prompt` carries, and
-// declaring the shape by hand is how a rename in the parser would become a
-// silent `undefined` here instead of a compile error.
-import type { ResumePromptState } from 'claude-code-headless'
 
 import type { SessionManager } from '@main/sessionManager.js'
 import {
@@ -42,6 +37,16 @@ import type {
 import { getHostTranscriptAdapter } from '@main/providerSwitch/transcriptEngine.js'
 import type { ProviderSwitchProgress } from '@main/providerSwitch/switchProvider.js'
 import { conditionStateByKind } from '@shared/types/providerConditions.js'
+// WHY the NEUTRAL shape and not `claude-code-headless`'s own `ResumePromptState`,
+// which this module imported first: #394 phase 2a deliberately removed every
+// provider-package import from `src/main` — see the WHY block at the top of
+// sessionManager.ts — because a provider type named in a provider-neutral module
+// inverts the dependency arrow and drags that package into every downstream
+// consumer's type graph. `AgentResumePromptState` is field-identical and is the
+// shape `SessionManager` already emits and stores, so reading it back through the
+// same declaration is also the more honest source of truth: this code consumes the
+// manager's snapshot, not the parser's output.
+import type { AgentResumePromptState } from '@shared/types/session.js'
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
 
 export type CompactOnArrivalRequest = {
@@ -210,7 +215,7 @@ async function waitForArrivalReadiness(
   const deadline = Date.now() + ARRIVAL_READY_WAIT_MS
   while (Date.now() < deadline) {
     if (manager.getSessionKind(sessionId) !== 'claude') return { kind: 'exited' }
-    const prompt = conditionStateByKind<ResumePromptState>(
+    const prompt = conditionStateByKind<AgentResumePromptState>(
       manager.getConditionsSnapshot(sessionId),
       RESUME_PROMPT_CONDITION,
     )
@@ -232,11 +237,14 @@ async function waitForArrivalReadiness(
  * cancel `\x1b`) and documents that selection movement belongs to the caller —
  * fabricating a per-option action array would be a lie the renderer already
  * ignores (packages/claude-code-headless/src/conditions/resumePrompt.ts). So
- * this mirrors what ResumePromptModal's `moveSelection` does: repeat the arrow
- * until the cursor sits on the target row, then Enter.
+ * repeat the arrow until the cursor sits on the target row, then Enter.
  *
- * Option 1 ("Resume from summary (recommended)") is index 0, and Claude opens
- * the prompt with the cursor below it, so the move is `selectedIndex` Ups.
+ * The index arithmetic comes from the parser that produced `selectedIndex`,
+ * packages/claude-code-headless/src/parsers/ResumePromptParser.ts: it matches the
+ * three numbered option lines in order and sets `selectedIndex` to the position of
+ * the one carrying the `❯` marker. Option 1 ("Resume from summary (recommended)")
+ * is therefore index 0, and moving up `selectedIndex` times lands on it from
+ * wherever Claude opened the cursor.
  */
 function answerResumePrompt(manager: SessionManager, sessionId: string, selectedIndex: number): void {
   const moves = Math.max(0, selectedIndex)

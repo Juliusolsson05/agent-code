@@ -282,8 +282,15 @@ describe('switchProvider neutral hub integration', () => {
       // persisted an encrypted `compacted` record, so the old planner returned
       // `requires-portable-handoff` and the host asked the (possibly
       // rate-limited) source to summarize itself. The plaintext records the
-      // carrier claims to replace are still in the file, so the default policy
-      // strips the unreadable carrier and carries them instead.
+      // carrier claims to replace are usually still in the file, so the default
+      // policy strips the unreadable carrier and carries them instead.
+      //
+      // "Usually" is why this fixture also pins the disclosure. Its compaction
+      // is conversation entry 2 of 52 with nothing but provider bookkeeping
+      // ahead of it — the census's compaction-first shape, 18 of 230 rollouts
+      // (7.8 %), where stripping the carrier uncovers no history because there
+      // is none on disk. `raw` with a null summary would tell the user nothing
+      // was lost, which is true of the other 91.7 % and false here.
       mocks.sourceRead.mockResolvedValue(await loadFixtureConversation('codex-sequence-compacted-once', 'codex'))
       mocks.targetProfile.mockResolvedValue({ model: 'claude-fable-5-1[1m]', budgetCharacters: 2_250_000 })
       mocks.targetProject.mockResolvedValue(claudeProjection)
@@ -297,7 +304,11 @@ describe('switchProvider neutral hub integration', () => {
       )
 
       expect(compactSource).not.toHaveBeenCalled()
-      expect(result).toMatchObject({ kind: 'switched', strategy: 'raw', shrinkSummary: null })
+      expect(result).toMatchObject({
+        kind: 'switched',
+        strategy: 'raw',
+        shrinkSummary: 'encrypted compaction dropped with no plaintext history before it; the target starts at the first post-compaction turn',
+      })
       const projected = mocks.targetProject.mock.calls[0]![0] as ConversationDocument
       expect(projected.entries.some(entry => entry.kind === 'compaction')).toBe(false)
     })
@@ -325,6 +336,10 @@ describe('switchProvider neutral hub integration', () => {
       )
 
       expect(compactSource).not.toHaveBeenCalled()
+      // The null summary is half the assertion: 23 real pre-compaction entries
+      // survive, so nothing the target could have read was lost and `raw` is
+      // entitled to stay silent. The compaction-first fixture above is the same
+      // strategy with the opposite disclosure.
       expect(result).toMatchObject({ kind: 'switched', strategy: 'raw', shrinkSummary: null })
       const projected = mocks.targetProject.mock.calls[0]![0] as ConversationDocument
       expect(projected.entries.some(entry => entry.kind === 'compaction')).toBe(false)
@@ -403,6 +418,68 @@ describe('switchProvider neutral hub integration', () => {
 
       expect(compactSource).not.toHaveBeenCalled()
       expect(result).toMatchObject({ kind: 'switched', strategy: 'shrunk', truncatedBeforeSwitch: true })
+    })
+
+    it('refuses the opt-in path when the source\'s latest carrier is a usage-limit message', async () => {
+      // #820 from the other direction. The default path is already safe: rung 1
+      // strips a `rejected` carrier and carries the plaintext it displaced, so
+      // nothing downstream ever sees the limit text. The opt-in path strips
+      // nothing — the planner returns `ready` with the carrier still inside —
+      // and the Codex projector demotes ANY compaction with a non-empty summary
+      // to a developer handoff without consulting availability
+      // (packages/agent-transcript-parser/src/codex/project/nativeResume.ts:138-165).
+      // The target would open on "You've hit your monthly spend limit …" framed
+      // as its own prior context, which is the exact failure #820 is about.
+      //
+      // The carrier is assembled here rather than read from
+      // `claude-sequence-rate-limit` for the reason compactBeforeSwitch.test.ts
+      // gives: redaction replaces every private scalar with "fixture text", so
+      // the fixture's own limit message decodes to something no rule rejects.
+      // This is the census template behind the real continuation preamble —
+      // the shape `compactionAvailability` was pinned against.
+      const rateLimitCarrier = [
+        'This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.',
+        "You've hit your monthly spend limit · raise it at claude.ai/settings/usage?from=cc_cli_limit_message · your session limit resets <time> (<timezone>)",
+      ].join('\n\n')
+      mocks.sourceRead.mockResolvedValue({
+        ...conversation,
+        entries: [
+          {
+            kind: 'compaction' as const,
+            summary: rateLimitCarrier,
+            summarySource: 'boundary' as const,
+            timestamp: '2026-07-20T11:00:00.000Z',
+            // The provider gate on the rejection rule: only Claude Code writes
+            // these, so only a Claude-sourced carrier is classified `rejected`.
+            source: { provider: 'claude', line: 4, raw: {}, evidence: [] },
+          },
+          conversation.entries[0],
+        ],
+      })
+      mocks.targetProfile.mockResolvedValue({
+        model: 'gpt-current',
+        modelProvider: 'openai',
+        budgetCharacters: 1_000_000,
+      })
+      const compactSource = vi.fn()
+
+      await expect(switchProvider(
+        {
+          sourceKind: 'claude',
+          targetKind: 'codex',
+          sourceProviderSessionId: 'src',
+          cwd: '/project',
+          sourceSessionId: 'local',
+          contextPolicy: { allowSourceTurns: true },
+        },
+        { compactSource },
+      )).rejects.toThrow('usage-limit message')
+
+      // Aborting before projection is the point: no target transcript may exist
+      // for a conversation whose summary is a limit notice.
+      expect(compactSource).not.toHaveBeenCalled()
+      expect(mocks.targetProject).not.toHaveBeenCalled()
+      expect(mocks.targetWrite).not.toHaveBeenCalled()
     })
 
     it('still runs the opt-in source path when allowSourceTurns is true', async () => {

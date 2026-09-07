@@ -1301,6 +1301,24 @@ export function useIpcSubscriptions(
         // clear it — a turn can stop precisely BECAUSE the limit was hit, and
         // clearing there would erase the signal in the same tick it arrived.
         //
+        // `turn_started` clears it too, and that is the fix for a pane the
+        // guard would otherwise get killed. A Claude pane that hit a limit and
+        // then auto-continues once the window resets keeps its ORIGINAL
+        // `turnStartedAt` — `streamPhaseMachine` only assigns that field when
+        // it is null (semantic/streamPhaseMachine.ts, the `turnStartedAt ===
+        // null` guards), so the timestamp still belongs to the turn that hit
+        // the limit, and it is necessarily OLDER than `limitHit.at`. With
+        // `limitHit` still armed, `isLimitIdle` therefore keeps reading true
+        // while Claude is busy answering again, the switch modal labels the
+        // pane idle, and switching kills a live turn — the one thing the
+        // exception was written not to do.
+        //
+        // A turn the provider ACCEPTED is proof enough: the request got past
+        // the limit. It is weaker proof than a completed turn (the request
+        // could still 429 mid-flight), which is exactly why this is safe — a
+        // fresh 429 re-arms `limitHit` with a newer `at`, and that timestamp
+        // now beats the same stale `turnStartedAt` again.
+        //
         // Same value comparison as the JSONL path: a redelivered event carries
         // the same `ts`, so it must not manufacture a runtime change.
         const nextLimitHit: SessionRuntime['limitHit'] =
@@ -1308,7 +1326,7 @@ export function useIpcSubscriptions(
             ? (current.limitHit?.at === semanticLimitHitAt && current.limitHit.source === 'api_error'
                 ? current.limitHit
                 : { at: semanticLimitHitAt, source: 'api_error' })
-            : eventType === 'turn_completed'
+            : eventType === 'turn_completed' || eventType === 'turn_started'
               ? null
               : current.limitHit
         const limitHitChanged = nextLimitHit !== current.limitHit

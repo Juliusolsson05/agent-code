@@ -558,6 +558,66 @@ describe('switchAgentProvider', () => {
     expect(runtimes['target-pane']).toMatchObject({ providerSwitch: null })
   })
 
+  it('refuses a second switch while the pane is still compacting on arrival', async () => {
+    // The gap `providerSwitchesInFlight` cannot cover: that Set is keyed on the
+    // pane a switch starts FROM and is released when the transaction resolves,
+    // which is before the arrival compaction it kicked off has finished — and
+    // that compaction runs on the NEW pane id. Only `runtime.providerSwitch`
+    // still says the pane is inside a provider-switch operation.
+    const switchProvider = vi.fn()
+    const replaceSession = vi.fn()
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: {
+        onProviderSwitchProgress: vi.fn(() => vi.fn()),
+        switchProvider,
+      },
+    })
+    const refs = {
+      stateRef: {
+        current: {
+          sessions: {
+            'target-pane': {
+              cwd: '/project',
+              kind: 'claude',
+              providerSessionId: 'claude-target-session',
+            },
+          },
+        },
+      },
+      latestRuntimesRef: {
+        current: {
+          'target-pane': {
+            // Exactly what `startArrivalCompaction` writes from the main
+            // process's progress events, on a pane that is otherwise idle:
+            // the switch already committed, so nothing else here reads busy.
+            providerSwitch: { phase: 'compacting', message: 'Compacting the imported history with Claude…' },
+            processActive: false,
+            semantic: { currentTurn: null },
+          },
+        },
+      },
+      defaultBuiltInMcpDomainsRef: { current: [] },
+    } as unknown as WorkspaceRefs
+
+    await expect(switchAgentProvider({
+      sessionId: 'target-pane',
+      targetKind: 'codex',
+      refs,
+      setRuntimes: vi.fn() as WorkspaceSetRuntimes,
+      sessionActions: {
+        ensureSessionLive: vi.fn(),
+        replaceSession,
+      } as unknown as SessionActions,
+    })).resolves.toEqual({
+      status: 'failed',
+      message: 'This pane is still finishing a provider switch — wait for it to complete',
+    })
+
+    expect(switchProvider).not.toHaveBeenCalled()
+    expect(replaceSession).not.toHaveBeenCalled()
+  })
+
   it('does not ask a Codex target to compact on arrival', async () => {
     // Arrival compaction is Claude-only by design (Codex auto-compacts at its
     // own threshold, and the projection is written below it). The guard lives
