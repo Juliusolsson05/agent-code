@@ -56,9 +56,9 @@ import {
   allPromptTemplates,
 } from '@renderer/features/prompt-templates/templates'
 import {
-  applyPromptTemplateInsertMode,
   fillPromptTemplateBody,
 } from '@renderer/features/prompt-templates/interpolate'
+import { deliverTextToSession } from '@renderer/features/session-text-delivery/deliverTextToSession'
 import {
   createSavedPromptTemplate,
   duplicatePromptTemplate,
@@ -1298,15 +1298,19 @@ function OpenCommandPalette({
           setSelectedIndex(0)
           return
         }
-        // Template insertion deliberately stops at the draft boundary.
-        // The user's next action is still visible and editable in the
-        // composer; nothing is sent to Claude/Codex until they press
-        // Enter themselves. This mirrors rewind-to-prompt's "prefill,
-        // don't replay" contract.
-        const currentDraft = workspace.getRuntime(sessionId).draftInput
-        workspace.setDraftInput(sessionId, applyPromptTemplateInsertMode(currentDraft, body, template.insertMode))
-        workspace.showPaneToast(sessionId, `Inserted template: ${template.title}`)
-        onClose()
+        // Template insertion deliberately stops at the delivery boundary
+        // (#830): the user's next action is still visible and editable —
+        // composer draft for rendered panes, an unsubmitted bracketed
+        // paste for any PTY surface. Nothing is sent until they press
+        // Enter themselves, mirroring rewind-to-prompt's "prefill, don't
+        // replay" contract.
+        const result = await deliverTextToSession(workspace, sessionId, body, { insertMode: template.insertMode })
+        if (result.delivered) {
+          workspace.showPaneToast(sessionId, `Inserted template: ${template.title}`)
+          onClose()
+        } else {
+          workspace.showPaneToast(sessionId, 'Template target pane is gone')
+        }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
         workspace.showPaneToast(sessionId, `Template failed: ${message}`)
@@ -1440,7 +1444,7 @@ function OpenCommandPalette({
     [customPromptTemplates, setSettings],
   )
 
-  const insertFilledPromptTemplate = useCallback(() => {
+  const insertFilledPromptTemplate = useCallback(async () => {
     const fill = promptTemplateFillState
     if (!fill) return
     const sessionId = commandTargetSessionId(workspace)
@@ -1451,13 +1455,13 @@ function OpenCommandPalette({
         variables: fill.template.variables,
         values: fill.values,
       })
-      const currentDraft = workspace.getRuntime(sessionId).draftInput
-      workspace.setDraftInput(
-        sessionId,
-        applyPromptTemplateInsertMode(currentDraft, resolved, fill.insertMode),
-      )
-      workspace.showPaneToast(sessionId, `Inserted template: ${fill.template.title}`)
-      onClose()
+      const result = await deliverTextToSession(workspace, sessionId, resolved, { insertMode: fill.insertMode })
+      if (result.delivered) {
+        workspace.showPaneToast(sessionId, `Inserted template: ${fill.template.title}`)
+        onClose()
+      } else {
+        workspace.showPaneToast(sessionId, 'Template target pane is gone')
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       workspace.showPaneToast(sessionId, `Template failed: ${message}`)
@@ -1510,7 +1514,7 @@ function OpenCommandPalette({
         if (mode === 'save-prompt-template' || mode === 'edit-prompt-template') {
           savePromptTemplateForm()
         } else if (mode === 'fill-prompt-template') {
-          insertFilledPromptTemplate()
+          void insertFilledPromptTemplate()
         } else if (mode === 'ai-workspace-create') {
           void createAiWorkspace()
         } else if (mode === 'ai-workspace-open') {
