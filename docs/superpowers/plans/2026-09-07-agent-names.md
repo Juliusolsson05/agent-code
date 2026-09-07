@@ -37,7 +37,7 @@ What survives from the uncommitted 71-line Stage 1 sketch: the **whole approach*
 - **Shells get no names.** Anything that is not `isAgentProviderKind` has no identity, no name, and no badge.
 - **Names stay out of token-stream updates.** Reconciliation is driven by workspace membership and identity changes only, never by transcript entries or runtime deltas.
 - **No `Object.hasOwn` in renderer or shared code.** `tsconfig.web.json` targets `lib: ["ES2020", …]`, so `Object.hasOwn` does not type-check. Use `Object.prototype.hasOwnProperty.call(…)`, which is what `src/renderer/src/lib/mouseBinding.ts:142-145` and `src/renderer/src/workspace/sessionOwnership.ts:103-106` already do and explain. `src/main` is `lib: ["ES2022"]` and could use it, but no main-process code in this plan needs it.
-- **Every renderer store read added by this plan must tolerate a keyless store.** `src/remote-client/vite.config.ts:46-51` aliases `@renderer/app-state/hooks` to `src/remote-client/src/stubs/appStateHooks.ts`, whose state is `{ settings }` and nothing else — and the phone renders the real `PaneHeader` (`src/remote-client/src/ui/SessionView.tsx:330`). **`tsc` cannot catch a violation:** the alias exists only in the Vite config, while `tsconfig.web.json:93` type-checks `src/remote-client/**/*` against the *real* hooks module, so a selector that reads `state.workspaceState.sessions` compiles and then throws in the phone bundle. Several renderer tests mock the store the same keyless way (`DispatchColorFlags.renderer.test.tsx:14-29`, `AgentTerminalLeaf.dimensionOwnership.renderer.test.tsx:77-87`). The repository already pins this contract — "a keyless store must degrade to the prop instead of throwing" (`PaneHeader.phoneCoupling.renderer.test.tsx:43-50`). Optional-chain the reads and default the maps.
+- **Every renderer store read added by this plan must tolerate a keyless store.** `src/remote-client/vite.config.ts:46-51` aliases `@renderer/app-state/hooks` to `src/remote-client/src/stubs/appStateHooks.ts`, whose state is `{ settings }` and nothing else — and the phone renders the real `PaneHeader` (`src/remote-client/src/ui/SessionView.tsx:330`). **`tsc` cannot catch a violation:** the alias exists only in the Vite config, while the repository-root `tsconfig.web.json:93` type-checks `src/remote-client/**/*` against the *real* hooks module, so a selector that reads `state.workspaceState.sessions` compiles and then throws in the phone bundle. Several renderer tests mock the store the same keyless way (`DispatchColorFlags.renderer.test.tsx:14-29`, `AgentTerminalLeaf.dimensionOwnership.renderer.test.tsx:77-87`). The repository already pins this contract — "a keyless store must degrade to the prop instead of throwing" (`PaneHeader.phoneCoupling.renderer.test.tsx:43-50`). Optional-chain the reads and default the maps.
 
 ## File map
 
@@ -421,6 +421,25 @@ describe('agent name registry', () => {
     // And the next new identity continues the ranking rather than reusing one.
     expect((await reopened.resolve(['third'])).third).toBe('Beatrix')
   })
+
+  it('refuses a "__proto__" assignment whose value the schema never validated', async () => {
+    // The other half of the zod blind spot. Because z.record() skips this key,
+    // `z.string().trim().min(1).max(100)` never runs for it, and all of these
+    // parse clean against the schema (measured, zod 4.4.3).
+    //
+    // The empty string is the dangerous one: unlike a number it throws
+    // nothing, so it would be adopted, count as "already assigned" in
+    // allocate(), and leave that identity permanently unnameable — recorded
+    // as having a name while every surface renders nothing.
+    //
+    // Written as raw JSON text on purpose: an object literal `{ __proto__: '' }`
+    // sets the prototype and creates NO own property, so building this fixture
+    // the obvious way would silently test nothing.
+    for (const value of ['123', '""', `"${'x'.repeat(140)}"`]) {
+      await seedStore(`{"version":1,"nextIndex":1,"assignments":{"__proto__":${value},"ok":"Apollo"}}`)
+      await expect(new AgentNameRegistry(path).resolve(['ok'])).rejects.toThrow(/unreadable/i)
+    }
+  })
 })
 ```
 
@@ -458,7 +477,9 @@ import { agentNameAt, normalizeAgentName } from '@shared/agentNames/names.js'
 //
 // The duplicate-name check lives in `load()` for the same reason: run here it
 // would inspect the map zod already pruned and miss exactly the entry that
-// motivated all of this.
+// motivated all of this. So does the per-value check — the `z.string().trim()
+// .min(1).max(100)` below is real for every ordinary key and a no-op for
+// "__proto__", so `load()` restates it over the raw entries.
 const stateSchema = z.object({
   version: z.literal(1),
   nextIndex: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER - 1_000_000),
@@ -542,9 +563,32 @@ export class AgentNameRegistry {
       // read the raw object instead — see the schema comment for why.
       nextIndex = stateSchema.parse(json).nextIndex
       assignments = adoptAssignments((json as { assignments: Record<string, string> }).assignments)
-      // The duplicate check the schema cannot do, over every key including the
-      // ones zod pruned. A file mapping two identities to one name makes every
-      // later lookup ambiguous with no evidence for choosing between them.
+      // Re-check every VALUE here, because the schema above could not see them
+      // all. zod skips a "__proto__" key entirely, so the value check it
+      // declares never runs for exactly the key we went to the raw JSON to
+      // recover. Measured against the pinned zod (4.4.3), all three of these
+      // parse clean:
+      //
+      //   {"assignments":{"__proto__":123}}                 -> number
+      //   {"assignments":{"__proto__":""}}                  -> empty string
+      //   {"assignments":{"__proto__":"<140 chars>"}}       -> over-length
+      //
+      // Left unchecked, each fails differently and none of them fail well: a
+      // number would blow up later inside normalizeAgentName as an incidental
+      // TypeError rather than a decision; an empty string would be adopted,
+      // satisfy `!== undefined` in allocate(), and make that identity
+      // permanently unnameable — recorded as assigned while rendering nothing;
+      // an over-length string would reach the badge. All three are corruption,
+      // and this module answers corruption exactly one way.
+      for (const [identity, name] of Object.entries(assignments)) {
+        if (typeof name !== 'string' || name.trim().length === 0 || name.length > 100) {
+          throw new Error(`Assignment for ${identity} is not a usable name`)
+        }
+      }
+      // The duplicate check the schema cannot do either, over every key
+      // including the ones zod pruned. A file mapping two identities to one
+      // name makes every later lookup ambiguous with no evidence for choosing
+      // between them.
       const spoken = Object.values(assignments).map(normalizeAgentName)
       if (new Set(spoken).size !== spoken.length) throw new Error('Two identities share one spoken name')
     } catch (error) {
@@ -1695,11 +1739,26 @@ function workspace(): WorkspaceState {
 // the test would pass while the app allocated nothing. React's own setter has
 // exactly the WorkspaceSetState shape (value or updater), so this is also a
 // type-level check that the hook can be wired into the real composer.
-function mount(options: { enabled: boolean; resolveAgentNames: ReturnType<typeof vi.fn> }) {
+// One agent whose durable identity is the string "__proto__" — reachable by
+// hand-editing workspace.json, and the shape every own-property guard in this
+// feature exists for.
+function hostileWorkspace(): WorkspaceState {
+  return {
+    ...workspace(),
+    sessions: { 'agent-one': { cwd: '/recorded', kind: 'claude', agentNameId: '__proto__' } },
+    buried: [],
+  } as unknown as WorkspaceState
+}
+
+function mount(options: {
+  enabled: boolean
+  resolveAgentNames: ReturnType<typeof vi.fn>
+  initial?: WorkspaceState
+}) {
   useAppStore.setState({ settings: { ...useAppStore.getState().settings, agentNamesEnabled: options.enabled } })
   Object.defineProperty(window, 'api', { configurable: true, value: { resolveAgentNames: options.resolveAgentNames } })
 
-  const seen: { current: WorkspaceState } = { current: workspace() }
+  const seen: { current: WorkspaceState } = { current: options.initial ?? workspace() }
   // Lets a test move the workspace on while an allocation is still in flight.
   const control: { current: Dispatch<SetStateAction<WorkspaceState>> | null } = { current: null }
   function Harness() {
@@ -1819,6 +1878,40 @@ describe('agent name reconciliation', () => {
     // And the late reply did not trigger a second allocation for either.
     expect(resolveAgentNames).toHaveBeenCalledTimes(1)
   })
+
+  it('stores a name for a "__proto__" identity as an own property and asks exactly once', async () => {
+    // The termination test for the merge. Writing this reply with
+    // `merged[identity] = name` hits the prototype setter: the value vanishes,
+    // the comparison against Object.prototype still reports a change, `names`
+    // gets a new reference, the effect re-runs, the identity is STILL not an
+    // own property, and it is requested again — forever. The assertion that
+    // catches it is the call count after a settled reply, not the stored value.
+    const resolveAgentNames = vi.fn(async (identities: string[]) =>
+      Object.fromEntries(identities.map(identity => [identity, 'Apollo'])))
+    const mounted = mount({ enabled: true, resolveAgentNames, initial: hostileWorkspace() })
+
+    await waitFor(() => expect(resolveAgentNames).toHaveBeenCalled())
+    await act(async () => { await Promise.resolve() })
+
+    const stored = useAppStore.getState().workspaceAgentNames
+    expect(resolveAgentNames.mock.calls[0][0]).toEqual(['__proto__'])
+    expect(Object.getOwnPropertyDescriptor(stored, '__proto__')?.value).toBe('Apollo')
+    expect(Object.getPrototypeOf({})).toBe(Object.prototype)
+    expect(resolveAgentNames).toHaveBeenCalledTimes(1)
+
+    // requestedRef cleared on settle, so this re-render is the moment a
+    // non-own-property merge would ask again.
+    act(() => { mounted.rerender() })
+    await act(async () => { await Promise.resolve() })
+    expect(resolveAgentNames).toHaveBeenCalledTimes(1)
+
+    // And the selector reads it back through its own own-property guard.
+    expect(resolveAgentName({
+      enabled: true,
+      meta: mounted.seen.current.sessions['agent-one'],
+      names: stored,
+    })).toBe('Apollo')
+  })
 })
 ```
 
@@ -1828,7 +1921,7 @@ describe('agent name reconciliation', () => {
 NODE_ENV=test npx vitest run --project renderer src/renderer/src/workspace/agentNames/reconciler.renderer.test.tsx
 ```
 
-Fails: the modules do not exist.
+Fails: the modules do not exist. Once they do, the `__proto__` case is the one that fails *loudly* if the merge is written the obvious way — expect a hung or timed-out test rather than a clean assertion failure, because a non-own-property merge spins rather than settling.
 
 - [ ] **Step 3: Write the pure reconciliation rules**
 
@@ -1952,6 +2045,16 @@ export function useAgentNameReconciler(
   // the first request is the complete one and the follow-up finds nothing
   // missing. `claimMissingIdentities` is identity-preserving on a no-op, so
   // this costs nothing once the workspace has settled.
+  //
+  // Known and accepted: this means `claimMissingIdentities` runs twice per
+  // workspace change — once here and once in the write effect — and returns a
+  // fresh array each time, so the IO effect re-runs on every change and exits
+  // at its `missing.length === 0` guard. A content-keyed memo (joining the
+  // identities into a string) would remove both, and is deliberately NOT done:
+  // the function is one pass over a session map that is tens of entries at
+  // most, it allocates nothing when there is nothing to claim, and the key
+  // would be a second representation of the identity set to keep correct. Add
+  // it only if a profile ever names it.
   const identities = useMemo(
     () => (enabled && restoreStatus !== 'pending'
       ? agentNameIdentities(claimMissingIdentities(state))
@@ -1991,20 +2094,37 @@ export function useAgentNameReconciler(
         // what makes a replacement that completed mid-flight inherit its name.
         if (!mountedRef.current) return
         setNames(previous => {
-          const merged = { ...previous }
-          let changed = false
+          // WHY entries + spread instead of `merged[identity] = name`:
+          //
+          // An identity comes from a workspace file the user can edit, so it
+          // can be the string "__proto__". Assigning that key on a plain
+          // object invokes the PROTOTYPE SETTER — the value is silently
+          // discarded and no own property appears. The naive loop then also
+          // reads `merged['__proto__']`, gets Object.prototype, compares it
+          // against 'Apollo', and concludes something changed. The result is a
+          // new object every pass, so `names` changes, the effect re-runs, and
+          // because the identity still is not an own property the filter
+          // below re-requests it — an unbounded IPC + store-write + re-render
+          // spin, on the one input shape the rest of this feature has already
+          // been hardened against. Object spread and Object.fromEntries both
+          // CreateDataProperty, so they produce a real own property here.
+          //
+          // The own-property guard on `previous` matters for the same reason:
+          // a bare `previous[identity] !== name` would compare against
+          // Object.prototype and report a change forever.
+          const additions: Array<[string, string]> = []
           for (const [identity, name] of Object.entries(resolved)) {
-            if (typeof name === 'string' && name.length > 0 && merged[identity] !== name) {
-              merged[identity] = name
-              changed = true
-            }
+            if (typeof name !== 'string' || name.length === 0) continue
+            if (Object.prototype.hasOwnProperty.call(previous, identity) && previous[identity] === name) continue
+            additions.push([identity, name])
           }
           // Identity-preserving on a no-op so the slice's Object.is bail keeps
           // the store reference stable. Returning a fresh object every time
           // would change `names`, re-run this effect, and — with these entries
           // just cleared from requestedRef below — loop forever on a reply
           // that added nothing.
-          return changed ? merged : previous
+          if (additions.length === 0) return previous
+          return { ...previous, ...Object.fromEntries(additions) }
         })
       })
       // Never fabricate a name. A failed allocation is simply an agent with no
@@ -2892,6 +3012,7 @@ Every task states exact file paths, exact interfaces, and shows the literal code
 - `agentNameForSession` declares `state: AppStore` but reads every field optionally. That is deliberate and the two are not in conflict: the type describes the desktop store, which always has the keys, while the optional reads describe the *runtime* shapes the module is reachable from — the phone stub and keyless test mocks — which `tsc` cannot see because their alias is Vite-only. Removing the optionality would type-check and ship a crash.
 - No renderer or shared module in this plan uses `Object.hasOwn`; both own-property checks (`selectors.ts`, `useAgentNameReconciler.ts`) use `Object.prototype.hasOwnProperty.call`, matching `mouseBinding.ts:142-145`. `src/main/agentNames/registry.ts` needs no own-property check at all: its map is null-prototype, so plain `!== undefined` is safe there.
 - The `agent-names` settings row carries **no** `metadata` field, so `settingMetadata(setting)` resolves it to `DEFAULT_SETTING_METADATA`. Task 4's assertion is written against the resolved value, not `setting.metadata`, so it does not re-break if the row later needs an explicit block.
+- **Own-property discipline is consistent across all three modules that hold an identity-keyed map**, because an identity is a user-editable string and `"__proto__"` behaves differently from every other one. The registry (Task 2) uses a **null-prototype** map, so plain `[]` reads and writes are safe there and no guard is needed. The renderer store map (Tasks 6–7) is an ordinary object, so it is **written** only through spread / `Object.fromEntries` (CreateDataProperty) and **read** only behind `Object.prototype.hasOwnProperty.call`. Mixing the two conventions is what produced N1: a plain-object write in a module whose reads already assumed own-property semantics. Any future code that adds to `workspaceAgentNames` must use the spread form.
 
 ### Corrections applied in fix round 1
 
@@ -2907,4 +3028,15 @@ Seven defects were found in review and corrected here; four would have failed at
 | I2 | Sites B and C minted identity with `?? oldId`, contradicting the plan's own "the reconciler is the sole minter". | Both now carry conditionally; site C's line is deleted outright (the spread already carries it) and a unit case pins the field-preservation it relies on. |
 | I3 | The vocabulary's provenance was a report concern, not a step. | Task 1 Step 0b is a hard stop that prints the list for the user to ratify, with the reason it cannot wait. |
 
-One further defect was found while verifying I3's neighbourhood and is corrected in Task 2: **`z.record()` drops a `__proto__` key** (verified against zod ^4.4.3 — `JSON.parse` keeps it, zod's output does not). Reading the assignment map out of `stateSchema.parse(...)`, as both the sketch and the first draft of this plan did, would silently forget that assignment on reopen and allocate the agent a second name — the exact recycling the registry exists to prevent, reachable from a user-editable workspace file. `load()` now validates with zod and takes its data from the raw parsed JSON, the duplicate-name check moved out of the schema's `refine` (which would have inspected the pruned map), and a reopen round-trip test was added.
+### Corrections applied in fix round 2
+
+Two defects introduced by round 1's own fixes, both measured against the installed runtime before being accepted.
+
+| ID | Defect | Correction |
+| --- | --- | --- |
+| N1 | Round 1 replaced `{ ...previous, ...resolved }` with an explicit merge loop — and object spread creates own properties where `merged[identity] = name` does not. For the identity `"__proto__"` the write hits the prototype setter and vanishes, while the read returns `Object.prototype`, so the loop reports a change, `names` gets a new reference, the effect re-runs, the identity is still not an own property, and it is requested again: an unbounded IPC + store-write + re-render spin. Reproduced exactly. | The merge collects validated `[identity, name]` entries and returns `{ ...previous, ...Object.fromEntries(additions) }`; both CreateDataProperty, so the key lands as a real own property. `previous` is compared only behind `Object.prototype.hasOwnProperty.call`. Task 7 gains a `__proto__`-identity test whose real assertion is the call count after settle. |
+| N2 | `load()` reads the assignment map from the raw JSON to survive zod's pruning — but zod never *validates* a `__proto__` key either, so `z.string().trim().min(1).max(100)` silently does not apply to exactly the key that motivated the raw read. Measured: a number, an empty string and a 140-character string all parse clean. The empty string is the harmful one — adopted, counted as assigned, and leaving that identity permanently unnameable. | `load()` restates the value check over the raw entries after the schema gate and refuses the store on any violation, which also replaces the incidental `normalizeAgentName` TypeError with a decision. Task 2's reopen coverage gains all three malformed values, written as raw JSON text because an object literal `{ __proto__: '' }` creates no own property and would test nothing. |
+
+**Residual unknown, deliberately not gated:** whether Electron's structured clone preserves an own `__proto__` data property across the IPC boundary is unverified — checking it would mean launching the app, which this plan forbids. Both ends are hardened independently (main writes and reads it correctly, the renderer merges and reads it correctly), and the worst case if the wire drops it is that one exotic identity shows no name and is re-requested on the next membership change. That is a degradation, not a spin, because `requestedRef` and the own-property filter both live on the renderer side of the boundary.
+
+One further defect was found in round 1 while verifying I3's neighbourhood and is corrected in Task 2: **`z.record()` drops a `__proto__` key** (verified against zod ^4.4.3 — `JSON.parse` keeps it, zod's output does not). Reading the assignment map out of `stateSchema.parse(...)`, as both the sketch and the first draft of this plan did, would silently forget that assignment on reopen and allocate the agent a second name — the exact recycling the registry exists to prevent, reachable from a user-editable workspace file. `load()` now validates with zod and takes its data from the raw parsed JSON, the duplicate-name check moved out of the schema's `refine` (which would have inspected the pruned map), and a reopen round-trip test was added.
