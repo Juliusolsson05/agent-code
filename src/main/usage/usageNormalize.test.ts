@@ -14,44 +14,80 @@ import { normalizeCodexUsagePayload } from '@main/usage/codexUsage.js'
 // `scope.model.display_name`) locks the label logic to what the wire actually
 // looks like, so a future refactor of `labelClaudeLimit` will only pass tests
 // if it still produces human-readable labels from realistic input.
+
+// WHY the two payloads became module constants: the scope tests below assert on
+// the SAME observed shapes the label tests do. Copying them would let the two
+// halves drift, and a scope test running against a payload the label test does
+// not use is a scope test for a shape nobody has seen on the wire.
+const REAL_CLAUDE_PAYLOAD = {
+  // No top-level `plan` — this simulates the common shape where the wire
+  // response omits it and we have to fall back to the Keychain's
+  // subscriptionType. If Anthropic starts returning `plan` reliably, the
+  // top-level path (see the precedence test below) still wins.
+  limits: [
+    {
+      id: 'session',
+      kind: 'session',
+      group: 'session',
+      percent: 4,
+      resets_at: '2027-01-15T09:00:00.000Z',
+      is_active: true,
+    },
+    {
+      id: 'weekly-all',
+      kind: 'weekly_all',
+      group: 'weekly',
+      percent: 75,
+      resets_at_unix: 1_800_000_000,
+      is_active: true,
+    },
+    {
+      id: 'weekly-fable',
+      kind: 'weekly_scoped',
+      group: 'weekly',
+      percent: 42,
+      scope: { model: { id: 'fable', display_name: 'Fable' } },
+      resets_at_unix: 1_800_000_000,
+      is_active: true,
+    },
+  ],
+  spend: { amount: 74, currency: 'USD' },
+  extra_usage: { amount: 12, currency: 'USD' },
+}
+
+const REAL_CODEX_PAYLOAD = {
+  plan_type: 'pro',
+  rate_limit: {
+    allowed: true,
+    primary_window: {
+      used_percent: 12,
+      limit_window_seconds: 18_000,
+      reset_at: 1_800_000_000,
+    },
+    secondary_window: {
+      used_percent: 2,
+      limit_window_seconds: 604_800,
+    },
+  },
+  additional_rate_limits: [
+    {
+      id: 'weekly',
+      limit_name: 'GPT-5.3-Codex-Spark',
+      rate_limit: {
+        allowed: true,
+        primary_window: {
+          used_percent: 0,
+          limit_window_seconds: 18_000,
+        },
+      },
+    },
+  ],
+}
+
 describe('usage normalization', () => {
   it('labels Claude limit windows from kind + scope.model and honors keychain plan fallback', () => {
     const snapshot = normalizeClaudeUsagePayload(
-      {
-        // No top-level `plan` — this simulates the common shape where the
-        // wire response omits it and we have to fall back to the Keychain's
-        // subscriptionType. If Anthropic starts returning `plan` reliably,
-        // the top-level path (see the other assertion below) still wins.
-        limits: [
-          {
-            id: 'session',
-            kind: 'session',
-            group: 'session',
-            percent: 4,
-            resets_at: '2027-01-15T09:00:00.000Z',
-            is_active: true,
-          },
-          {
-            id: 'weekly-all',
-            kind: 'weekly_all',
-            group: 'weekly',
-            percent: 75,
-            resets_at_unix: 1_800_000_000,
-            is_active: true,
-          },
-          {
-            id: 'weekly-fable',
-            kind: 'weekly_scoped',
-            group: 'weekly',
-            percent: 42,
-            scope: { model: { id: 'fable', display_name: 'Fable' } },
-            resets_at_unix: 1_800_000_000,
-            is_active: true,
-          },
-        ],
-        spend: { amount: 74, currency: 'USD' },
-        extra_usage: { amount: 12, currency: 'USD' },
-      },
+      REAL_CLAUDE_PAYLOAD,
       { fallbackPlan: 'max_20x' },
     )
 
@@ -102,34 +138,7 @@ describe('usage normalization', () => {
   })
 
   it('normalizes Codex primary and additional rate limits', () => {
-    const snapshot = normalizeCodexUsagePayload({
-      plan_type: 'pro',
-      rate_limit: {
-        allowed: true,
-        primary_window: {
-          used_percent: 12,
-          limit_window_seconds: 18_000,
-          reset_at: 1_800_000_000,
-        },
-        secondary_window: {
-          used_percent: 2,
-          limit_window_seconds: 604_800,
-        },
-      },
-      additional_rate_limits: [
-        {
-          id: 'weekly',
-          limit_name: 'GPT-5.3-Codex-Spark',
-          rate_limit: {
-            allowed: true,
-            primary_window: {
-              used_percent: 0,
-              limit_window_seconds: 18_000,
-            },
-          },
-        },
-      ],
-    })
+    const snapshot = normalizeCodexUsagePayload(REAL_CODEX_PAYLOAD)
 
     expect(snapshot.provider).toBe('codex')
     expect(snapshot.plan).toBe('pro')
@@ -140,5 +149,30 @@ describe('usage normalization', () => {
     ])
     expect(snapshot.rows[0].resetsAt).toBe('2027-01-15T08:00:00.000Z')
     expect(snapshot.rows[1].detail).toBe('weekly window')
+  })
+
+  // WHY scope is normalized here rather than derived later from the label:
+  // "Current week (Fable)" is a rendering decision that can change with the
+  // next model name, and `deriveProviderExhaustion` uses scope to decide
+  // whether a limit blocks EVERY model on that provider (switch provider) or
+  // only one family (switch model). Reading that off a display string would
+  // make a UI copy edit silently change which agents get moved.
+  it('scopes Claude rows: session and weekly_all are all-models, weekly_scoped is model-family', () => {
+    const rows = normalizeClaudeUsagePayload(REAL_CLAUDE_PAYLOAD).rows
+
+    expect(rows.find(row => row.label === 'Current session')?.scope).toBe('all-models')
+    expect(rows.find(row => row.label === 'Current week (all models)')?.scope).toBe('all-models')
+    expect(rows.find(row => row.label === 'Current week (Fable)')?.scope).toBe('model-family')
+  })
+
+  it('scopes Codex rows: the main rate_limit is all-models, additional limits are model-family', () => {
+    const rows = normalizeCodexUsagePayload(REAL_CODEX_PAYLOAD).rows
+
+    // The main `rate_limit` object is the account's shared 5h/weekly budget;
+    // its ids are prefixed from the "Codex" base label.
+    expect(rows.filter(row => row.id.startsWith('codex-')).every(row => row.scope === 'all-models')).toBe(true)
+    // Everything under `additional_rate_limits` is per metered feature/model
+    // (here GPT-5.3-Codex-Spark), which is exactly the family-scoped case.
+    expect(rows.find(row => row.id === 'gpt-5-3-codex-spark-primary-window')?.scope).toBe('model-family')
   })
 })
