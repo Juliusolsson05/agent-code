@@ -537,9 +537,20 @@ export function AgentTerminalLeaf({
               {shortenCwd(projectDir)}
             </span>
           </div>
-          <span className="flex-shrink-0 text-[9px] uppercase tracking-wider text-muted">
-            terminal view
-          </span>
+          {/* TAIL pill styling copied from ScrollIndicator so both surfaces
+              read identically — without it the raw view silently follows
+              output while showing no state the palette can be checked
+              against. */}
+          <div className="flex flex-shrink-0 items-center gap-2">
+            {tailActive ? (
+              <span className="text-[10px] font-code uppercase tracking-wider text-accent">
+                TAIL
+              </span>
+            ) : null}
+            <span className="text-[9px] uppercase tracking-wider text-muted">
+              terminal view
+            </span>
+          </div>
         </div>
         <AgentTitleHeader title={agentTitle} />
       </div>

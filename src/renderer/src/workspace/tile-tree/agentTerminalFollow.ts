@@ -107,6 +107,18 @@ export function useAgentTerminalFollow({
   // not be invalidated by follow-state churn.
   return useMemo<AgentTerminalFollowHandle>(() => ({
     tailActiveRef,
-    attach: _term => () => {},
+    attach: mountedTerm => {
+      // Feed re-pins on the scroll event itself. scrollToBottom also fires
+      // onScroll, but the handler then sees an at-bottom viewport and no-ops,
+      // so the loop self-terminates. Mouse-mode TUIs forward wheel events to
+      // the app instead of xterm scrollback, so this only acts on genuine
+      // viewport movement.
+      const disposable = mountedTerm.onScroll(() => {
+        if (!tailActiveRef.current) return
+        if (isXtermViewportAtBottom(mountedTerm)) return
+        mountedTerm.scrollToBottom()
+      })
+      return () => disposable.dispose()
+    },
   }), [])
 }
