@@ -208,6 +208,7 @@ export type CommandContext = {
     /** Open the title editor for the captured command-target agent. */
     openAgentTitlePrompt: (sessionId: string) => void
     openUsageModal: () => void
+    openKeyVault: () => void
     toggleGitBar: () => void
     toggleWorktreesBar: () => void
     toggleDebugPanel: () => void

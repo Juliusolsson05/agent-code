@@ -293,6 +293,7 @@ function OpenCommandPalette({
   const closePinAgents = useAppStore(state => state.closePinAgents)
   const closePathPicker = useAppStore(state => state.closePathPicker)
   const openUsageModal = useAppStore(state => state.openUsageModal)
+  const openKeyVault = useAppStore(state => state.openKeyVault)
   const toggleGitBar = useAppStore(state => state.toggleGitBar)
   const toggleWorktreesBar = useAppStore(state => state.toggleWorktreesBar)
   const toggleDebugPanel = useAppStore(state => state.toggleDebugPanel)
@@ -629,6 +630,7 @@ function OpenCommandPalette({
         closePinAgents,
         closePathPicker,
         openUsageModal,
+        openKeyVault,
         toggleGitBar,
         toggleWorktreesBar,
         toggleDebugPanel,
@@ -737,6 +739,7 @@ function OpenCommandPalette({
       closePinAgents,
       closePathPicker,
       openUsageModal,
+      openKeyVault,
       toggleGitBar,
       toggleWorktreesBar,
       toggleDebugPanel,

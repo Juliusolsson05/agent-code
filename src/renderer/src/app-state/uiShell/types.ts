@@ -296,6 +296,9 @@ export type UiShellState = {
    * and persisting it in WorkspaceState would make a quota inspection look
    * like durable workspace data. */
   usageModalOpen: boolean
+  /** When true, the API Key Vault modal is open (#831). Transient command
+   *  chrome, not workspace data — same rationale as usageModalOpen above. */
+  keyVaultOpen: boolean
   /**
    * Session captured when the single-agent Switch Provider command ran.
    *

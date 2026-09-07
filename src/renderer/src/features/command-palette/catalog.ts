@@ -11,6 +11,7 @@ import { readerCommands } from '@renderer/features/reader/commands/readerCommand
 import { copyAssistantCommands } from '@renderer/features/copy-assistant/commands/copyAssistantCommands'
 import { copyCodeBlockCommands } from '@renderer/features/copy-code-block/commands/copyCodeBlockCommands'
 import { promptTemplateCommands } from '@renderer/features/prompt-templates/commands/promptTemplateCommands'
+import { keyVaultCommands } from '@renderer/features/key-vault/commands/keyVaultCommands'
 import { replyToSelectionCommands } from '@renderer/features/reply-to-selection/commands/replyToSelectionCommands'
 import { agentStatusCommands } from '@renderer/features/agent-status/commands/agentStatusCommands'
 import { dispatchColorFlagCommands } from '@renderer/features/workspace/commands/dispatchColorFlagCommands'
@@ -78,6 +79,7 @@ export const builtInCommandCatalog: readonly CommandDef[] = Object.freeze([
   ...copyAssistantCommands,
   ...copyCodeBlockCommands,
   ...promptTemplateCommands,
+  ...keyVaultCommands,
   // Grouped with the prompt-template commands because it is the other
   // composer-insertion command — registry order is the palette's
   // empty-query browse order, so like things stay adjacent.
