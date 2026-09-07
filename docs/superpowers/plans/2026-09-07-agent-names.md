@@ -6,6 +6,8 @@
 
 **Architecture:** The name allocator lives in the **main process** and owns one durable file, `~/.config/agent-code/agent-names.json`, separate from `workspace.json`. It maps an opaque *naming identity* to a name; it never sees a workspace blob, a session ID's meaning, or the setting. One `AgentNameRegistry` instance per application process serializes every allocation on a single promise tail and commits to disk (temp file + `rename`) **before** returning a name, so two windows asking at the same instant cannot both be told "Apollo" and a crash cannot publish a name that was never reserved. Allocation is monotonic and never recycled: a delayed voice request for a closed Apollo must never reach a different agent. The renderer owns *which* logical agent an identity belongs to: `SessionMeta.agentNameId` is the durable identity, it is minted once by a membership-driven reconciler after workspace restoration, and the existing replacement and rehydration paths carry it across a new local session ID. A shared pure selector turns (setting, meta, resolved map) into a name for every consumer — the header, the Dispatch row, and the workspace observation — so nothing mints a name on render.
 
+**Why `src/main/agentNames/` and not `src/main/ipc/agentNames.ts`:** every other main-process IPC domain lives as `src/main/ipc/<domain>.ts`. This one deviates because the decomposition's isolation rule is the whole point of the module — the registry may have exactly one importer, and that importer is its own IPC adapter. Putting the adapter in `src/main/ipc/` while the registry sat elsewhere would separate the two halves of one sealed unit and invite a second importer; keeping the pair in one directory makes "nothing outside this folder touches the allocator" a statement about a directory, which Task 11 Step 2 can then check with one grep. The registration call still lives in `registerAllIpc` beside every other domain, so the wiring stays visible where a reader expects it.
+
 What survives from the uncommitted 71-line Stage 1 sketch: the **whole approach** and most of its judgement calls. `src/shared/agentNames/names.ts` (the 100-name ranking, `normalizeAgentName`, `agentNameAt` with explicit `Apollo 2` overflow suffixes) is kept as written. In `registry.ts` the serialized promise tail, reserve-before-publish ordering, temp-file + `rename` commit with `0o600`/`0o700` modes, "a failed write must not poison the in-memory cache", "a corrupt store throws and is never overwritten", and the prototype-safe assignment write are all kept — restructured into `load`/`allocate`/`commit` with the reasoning promoted into thick WHY comments, and given the concurrency, reopen and corrupt-store tests the stage requires and the sketch has none of. In `ipc.ts` the registered-window + main-frame sender guard, the input schema and the de-duplication are kept; the registry becomes an injectable constructor argument so the guard is testable. `SessionMeta.agentNameId` is kept. The default-off setting is kept but renamed `agentNames` → `agentNamesEnabled` (a boolean called `agentNames` reads like a list, and `settings.reference` publishes these names to operators). Three things are rewritten: the preload method moves off `workspaceApi` into its own `agentNamesApi`, because the decomposition isolates this registry from workspace persistence and the sketch bolted it onto the module that owns `workspace.json`; the sketch's identity seeding inside `spawn()` is **deleted**, because `spawn` is also the replacement path's spawn and seeding there is what breaks continuity; and the replacement commit's `agentNameId` is moved to the end of the object literal, because in the sketch the following `...sessions[newId]` spread overwrites it, so a provider switch or reload silently mints a *new* spoken name — the exact failure #816 forbids.
 
 **Tech Stack:** TypeScript, Electron (main/preload/renderer), React 19, Zustand (`persist` for settings only), Zod 4, Vitest 4 (`unit` / `renderer` / `system` projects), Tailwind v4 CSS-first tokens.
@@ -34,6 +36,8 @@ What survives from the uncommitted 71-line Stage 1 sketch: the **whole approach*
 - **The registry never shares storage with `workspace.json`.** Separate file, separate writer, separate failure mode.
 - **Shells get no names.** Anything that is not `isAgentProviderKind` has no identity, no name, and no badge.
 - **Names stay out of token-stream updates.** Reconciliation is driven by workspace membership and identity changes only, never by transcript entries or runtime deltas.
+- **No `Object.hasOwn` in renderer or shared code.** `tsconfig.web.json` targets `lib: ["ES2020", …]`, so `Object.hasOwn` does not type-check. Use `Object.prototype.hasOwnProperty.call(…)`, which is what `src/renderer/src/lib/mouseBinding.ts:142-145` and `src/renderer/src/workspace/sessionOwnership.ts:103-106` already do and explain. `src/main` is `lib: ["ES2022"]` and could use it, but no main-process code in this plan needs it.
+- **Every renderer store read added by this plan must tolerate a keyless store.** `src/remote-client/vite.config.ts:46-51` aliases `@renderer/app-state/hooks` to `src/remote-client/src/stubs/appStateHooks.ts`, whose state is `{ settings }` and nothing else — and the phone renders the real `PaneHeader` (`src/remote-client/src/ui/SessionView.tsx:330`). **`tsc` cannot catch a violation:** the alias exists only in the Vite config, while `tsconfig.web.json:93` type-checks `src/remote-client/**/*` against the *real* hooks module, so a selector that reads `state.workspaceState.sessions` compiles and then throws in the phone bundle. Several renderer tests mock the store the same keyless way (`DispatchColorFlags.renderer.test.tsx:14-29`, `AgentTerminalLeaf.dimensionOwnership.renderer.test.tsx:77-87`). The repository already pins this contract — "a keyless store must degrade to the prop instead of throwing" (`PaneHeader.phoneCoupling.renderer.test.tsx:43-50`). Optional-chain the reads and default the maps.
 
 ## File map
 
@@ -71,6 +75,8 @@ What survives from the uncommitted 71-line Stage 1 sketch: the **whole approach*
 | `src/renderer/src/workspace/tile-tree/AgentTerminalLeaf.tsx` | Modify (pass `sessionId`) | 8 |
 | `src/renderer/src/workspace/dispatch/DispatchAgentList.tsx` | Modify (row badge) | 8 |
 | `src/renderer/src/workspace/agentNames/presentation.renderer.test.tsx` | Create | 8 |
+| `src/renderer/src/workspace/tile-tree/TileLeaf/PaneHeader.phoneCoupling.renderer.test.tsx` | Modify (keyless-store gate) | 8 |
+| `src/remote-client/src/stubs/appStateHooks.ts` | Modify (comment only) | 8 |
 | `src/control-sdk/catalog/workspace.ts` | Modify (`agentName` in the observation) | 9 |
 | `src/renderer/src/workspace/control.ts` | Modify (fill `agentName`) | 9 |
 | `src/main/control/globalCapabilities.ts` | Modify (`name` filter in `agents.search`) | 9 |
@@ -93,6 +99,44 @@ What survives from the uncommitted 71-line Stage 1 sketch: the **whole approach*
   - `AGENT_NAMES: readonly string[]` — exactly 100 names, ranked, `AGENT_NAMES[0] === 'Apollo'`
   - `normalizeAgentName(name: string): string`
   - `agentNameAt(index: number): string`
+
+- [ ] **Step 0a: Repair the sketch's pre-existing type error before anything else**
+
+The working tree inherited from the Stage 1 sketch **does not type-check today**, so every later "run `npm run typecheck`" step would fail on someone else's line and hide your own errors. Confirmed on this branch:
+
+```
+$ npm run typecheck
+src/renderer/src/features/settings/lib/settingsRegistry.ts(475,33): error TS2322: Type '"live"' is not assignable to type '"immediate" | "new-session" | "reload-live-sessions" | "restart-required"'.
+```
+
+`apply: 'live'` is not a member of `SettingMetadata['apply']` (`settingsRegistry.ts:42`). Delete the whole `metadata:` line from the sketch's `agent-names` entry — the row wants exactly `DEFAULT_SETTING_METADATA` (`settingsRegistry.ts:60-64`, `{ scope: 'app', apply: 'immediate', storage: 'settings' }`), and that file's comment reserves explicit metadata for rows "where the obvious reading would have been WRONG". Task 4 rewrites this entry properly; this step only clears the error:
+
+```bash
+# in src/renderer/src/features/settings/lib/settingsRegistry.ts, delete this line
+#   metadata: { scope: 'app', apply: 'live', storage: 'settings' },
+npm run typecheck   # must now be clean before you write a single new line
+```
+
+Do not commit this on its own; it is folded into Task 4's commit, which rewrites the entry.
+
+- [ ] **Step 0b: Confirm the vocabulary's provenance with the user, and stop until they answer**
+
+Names 4–100 are attested **only** by the uncommitted sketch. They are not on `origin/main`, not in `docs/`, and not in the user's memory directory:
+
+```bash
+git grep -n -i "apollo" origin/main -- .        # (no matches)
+grep -ril "jasper" docs/                        # (no matches)
+```
+
+#816 names only the first three ("beginning with Apollo, Jasper and Beatrix"), and the file's header claims the rest are user-approved. That claim cannot be verified from anything in the repository.
+
+Print the list and ask the user to confirm it against their approved ranked list **before Step 3 commits it**:
+
+```bash
+node -e "const s=require('fs').readFileSync('src/shared/agentNames/names.ts','utf8');console.log(s.match(/'[A-Za-z]+'/g).map((n,i)=>\`\${i+1}. \${n.slice(1,-1)}\`).join('\n'))"
+```
+
+**This is a hard stop.** The order is a contract: once allocation begins, reordering the list does not rename an existing agent — it silently changes which name the *next* agent receives, so a corrected list applied later leaves the fleet permanently inconsistent with the ranking. Fixing it before the first commit costs nothing; fixing it after the first user enables the setting costs their addresses. If the user cannot produce the original, say so and let them decide whether to ratify this file as the list of record.
 
 - [ ] **Step 1: Write the failing vocabulary contract test**
 
@@ -142,7 +186,7 @@ source /opt/homebrew/opt/nvm/nvm.sh && nvm use 24
 NODE_ENV=test npx vitest run --project unit src/shared/agentNames/names.test.ts
 ```
 
-It fails only if the vocabulary file is missing or was edited; the sketch's file should already satisfy it. Record the actual output either way — a passing first run here is expected and is the evidence that the sketch's list is the approved one.
+**This RED is decorative and you should expect it to pass.** The vocabulary file already exists from the sketch, so there is no failing state to observe — this is the one task in the plan that inverts the usual order, because the artifact under test is pre-existing data rather than code you are about to write. Run it anyway and record the output: a green run is the evidence that the sketch's file satisfies every property the rest of the feature assumes, and a red run means the file was lost or edited between Step 0b and here and must be restored before continuing. Every later task has a genuine RED.
 
 - [ ] **Step 3: Keep the vocabulary and promote its reasoning into the file**
 
@@ -350,6 +394,33 @@ describe('agent name registry', () => {
     expect(Object.getPrototypeOf({})).toBe(Object.prototype)
     expect(Object.keys((await stored()).assignments)).toEqual(['__proto__'])
   })
+
+  it('keeps a "__proto__" assignment across a reopen instead of re-allocating it', async () => {
+    // WHY this case earns its own test: `z.record()` DROPS a "__proto__" key.
+    // Verified against the pinned zod (^4.4.3):
+    //
+    //   JSON.parse own keys : ['__proto__', 'normal']
+    //   z.record output keys: ['normal']
+    //
+    // A registry that trusted zod's OUTPUT as its data would silently forget
+    // this assignment on the next launch and hand that agent a second name —
+    // exactly the recycling this module exists to prevent, reachable from a
+    // workspace file the user can edit. The schema stays the shape gate; the
+    // raw parsed object is the data.
+    await new AgentNameRegistry(path).resolve(['__proto__', 'normal'])
+    const before = await stored()
+
+    const reopened = new AgentNameRegistry(path)
+    const again = await reopened.resolve(['__proto__', 'normal'])
+
+    expect(Object.getOwnPropertyDescriptor(again, '__proto__')?.value).toBe('Apollo')
+    expect(again.normal).toBe('Jasper')
+    // Nothing was re-allocated: the counter did not move and the file is
+    // unchanged, because resolve() found both assignments already present.
+    expect(await stored()).toEqual(before)
+    // And the next new identity continues the ranking rather than reusing one.
+    expect((await reopened.resolve(['third'])).third).toBe('Beatrix')
+  })
 })
 ```
 
@@ -359,7 +430,7 @@ describe('agent name registry', () => {
 NODE_ENV=test npx vitest run --project unit src/main/agentNames/registry.test.ts
 ```
 
-The sketch's implementation fails at least the corrupt-store cases (its `catch` re-throws a message that does not say "unreadable" and it lets a non-ENOENT read error and a schema error share one path) and the prototype case's `Object.keys` assertion depends on rebuilding the map. Record the failures.
+The sketch's implementation fails at least three of these: the corrupt-store cases (its `catch` re-throws a message that does not say "unreadable", and it lets a non-ENOENT read error and a schema error share one path), and — most importantly — **the `__proto__` reopen case, because the sketch reads its map out of `stateSchema.parse(...)`, which drops that key**. That last failure is the one to look at closely: it is a silent data-loss bug, not a message mismatch, and it is why Step 3 restructures `load()` around the raw parsed JSON. Record the failures.
 
 - [ ] **Step 3: Rewrite `src/main/agentNames/registry.ts`**
 
@@ -376,20 +447,23 @@ import { agentNameAt, normalizeAgentName } from '@shared/agentNames/names.js'
 // and "never recycle a spoken address" is the invariant that makes a delayed
 // voice request safe. The counter only ever moves forward.
 //
-// WHY the refine exists even though this module writes the file: the file is
-// user-visible plain JSON in ~/.config, and a hand-edited or half-synced copy
-// that maps two identities to one name would make every later lookup ambiguous
-// with no way to tell which agent was meant. Refusing to load is the only safe
-// answer; see the load() comment for why we never "repair" it.
+// WHY this schema validates but does NOT supply the assignment map: zod's
+// `z.record()` silently drops a "__proto__" key (verified against zod ^4.4.3 —
+// JSON.parse keeps it as an own property, zod's output does not). Reading the
+// map out of zod's result would therefore forget any assignment stored under
+// that identity on the next launch and re-allocate a second name for the same
+// agent. Identities come from a workspace file the user can edit, so that is
+// reachable, not theoretical. The schema is the SHAPE gate; `load()` takes the
+// data from the raw parsed JSON.
+//
+// The duplicate-name check lives in `load()` for the same reason: run here it
+// would inspect the map zod already pruned and miss exactly the entry that
+// motivated all of this.
 const stateSchema = z.object({
   version: z.literal(1),
   nextIndex: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER - 1_000_000),
   assignments: z.record(z.string(), z.string().trim().min(1).max(100)),
-}).strict().refine(
-  state => new Set(Object.values(state.assignments).map(normalizeAgentName)).size
-    === Object.keys(state.assignments).length,
-  'Two identities share one spoken name',
-)
+}).strict()
 
 type RegistryState = { version: 1; nextIndex: number; assignments: Record<string, string> }
 
@@ -460,9 +534,19 @@ export class AgentNameRegistry {
       return this.state
     }
 
-    let parsed: z.infer<typeof stateSchema>
+    let assignments: Record<string, string>
+    let nextIndex: number
     try {
-      parsed = stateSchema.parse(JSON.parse(raw))
+      const json: unknown = JSON.parse(raw)
+      // Validate through zod, then deliberately IGNORE its copy of the map and
+      // read the raw object instead — see the schema comment for why.
+      nextIndex = stateSchema.parse(json).nextIndex
+      assignments = adoptAssignments((json as { assignments: Record<string, string> }).assignments)
+      // The duplicate check the schema cannot do, over every key including the
+      // ones zod pruned. A file mapping two identities to one name makes every
+      // later lookup ambiguous with no evidence for choosing between them.
+      const spoken = Object.values(assignments).map(normalizeAgentName)
+      if (new Set(spoken).size !== spoken.length) throw new Error('Two identities share one spoken name')
     } catch (error) {
       // WHY this is not cached and not repaired: leaving `this.state` unset
       // means every later call re-reads and re-fails, so the user gets a
@@ -473,11 +557,7 @@ export class AgentNameRegistry {
       throw new Error('Agent name registry is unreadable; refusing to overwrite it', { cause: error })
     }
 
-    this.state = {
-      version: 1,
-      nextIndex: parsed.nextIndex,
-      assignments: adoptAssignments(parsed.assignments),
-    }
+    this.state = { version: 1, nextIndex, assignments }
     return this.state
   }
 
@@ -846,17 +926,19 @@ describe('coerceSettings agentNamesEnabled', () => {
 })
 ```
 
-Append to `src/renderer/src/features/settings/lib/settingsRegistry.test.ts`:
+In `src/renderer/src/features/settings/lib/settingsRegistry.test.ts`, add `settingMetadata` to the existing import from `@renderer/features/settings/lib/settingsRegistry`, then append:
 
 ```ts
 describe('agent names setting', () => {
-  it('is a live app-scoped workspace toggle that reads and writes agentNamesEnabled', async () => {
+  it('is an immediate app-scoped workspace toggle that reads and writes agentNamesEnabled', async () => {
     const setting = getSettingsRegistry().find(candidate => candidate.id === 'agent-names')
     if (!setting || setting.control.type !== 'toggle') throw new Error('Missing agent-names toggle')
     expect(setting.category).toBe('workspace')
-    // `apply: 'live'` is a claim operators read through settings.reference:
-    // enabling must take effect on the open workspace, not on the next session.
-    expect(setting.metadata).toEqual({ scope: 'app', apply: 'live', storage: 'settings' })
+    // The resolved metadata is what operators read through settings.reference,
+    // and "takes effect at once" is a real claim: enabling must name the agents
+    // already on screen, not only the next session. Asserting the RESOLVED
+    // value (not `setting.metadata`) keeps the row free to stay on the default.
+    expect(settingMetadata(setting)).toEqual({ scope: 'app', apply: 'immediate', storage: 'settings' })
     expect(setting.control.getValue(DEFAULT_SETTINGS)).toBe(false)
     expect(setting.control.getValue({ ...DEFAULT_SETTINGS, agentNamesEnabled: true })).toBe(true)
 
@@ -878,9 +960,12 @@ NODE_ENV=test npx vitest run --project unit src/renderer/src/app-state/settings/
 
 Fails: the field is named `agentNames` in the sketch, so `agentNamesEnabled` is `undefined`.
 
-- [ ] **Step 3: Rename and document the field**
+- [ ] **Step 3: Rename and document the field, and give `agentViewMode` its docs back**
 
-In `src/renderer/src/app-state/settings/types.ts`, replace the sketch's bare `agentNames: boolean` line above `agentViewMode` with:
+The sketch inserted `agentNames: boolean` **between** the 12-line doc block that belongs to `agentViewMode` and `agentViewMode` itself, so that block currently documents the wrong field. In `src/renderer/src/app-state/settings/types.ts`:
+
+1. **Delete** the sketch's `agentNames: boolean` line, so the block ending `…tied to the UI state that actually requested them. */` reattaches to `agentViewMode` where it belongs. Verify by eye that the line immediately after that `*/` is now `agentViewMode: AgentViewMode`.
+2. **Add** the new field with its own JSDoc *after* `agentViewMode: AgentViewMode`:
 
 ```ts
   /** Opt-in stable spoken names (Apollo, Jasper, …) beside agent titles, in
@@ -896,7 +981,7 @@ In `src/renderer/src/app-state/settings/types.ts`, replace the sketch's bare `ag
   agentNamesEnabled: boolean
 ```
 
-and in `DEFAULT_SETTINGS` replace `agentNames: false,` with:
+3. In `DEFAULT_SETTINGS`, replace `agentNames: false,` with:
 
 ```ts
   agentNamesEnabled: false,
@@ -924,7 +1009,12 @@ In `src/renderer/src/features/settings/lib/settingsRegistry.ts`, replace the ske
       title: 'Agent names',
       description: 'Show a stable spoken name such as Apollo beside agent titles and in the Dispatch index, and expose the same name to external operator search. Names are separate from titles, are never reused after an agent closes, and are retained while this is off so re-enabling restores the same names. Past 100 names, explicit numeric suffixes such as "Apollo 2" keep every address distinct. Terminals are never named.',
       keywords: ['voice', 'spoken', 'name', 'names', 'apollo', 'agent', 'mcp', 'operator', 'header', 'dispatch'],
-      metadata: { scope: 'app', apply: 'live', storage: 'settings' },
+      // No explicit `metadata`. DEFAULT_SETTING_METADATA is already exactly
+      // right here — app-scoped, stored in renderer Settings, effective at
+      // once — and this file reserves an explicit block for rows where that
+      // obvious reading would be WRONG, so that the ones carrying metadata are
+      // the ones a reader should stop at. (The sketch wrote `apply: 'live'`,
+      // which is not a member of the union at all and broke the typecheck.)
       control: {
         type: 'toggle',
         getValue: settings => settings.agentNamesEnabled,
@@ -969,7 +1059,7 @@ EOF
 
 **Interfaces:**
 - Consumes: existing `spawn`, `replaceSession` and bulk-reload paths in `useSessionActions`.
-- Produces: `SessionMeta.agentNameId?: string`, carried across replacement and rehydration and never minted by `spawn`.
+- Produces: `SessionMeta.agentNameId?: string`, **carried** across replacement and rehydration and **minted nowhere in this file** — the reconciler (Task 7) is the single minting site, and these three edits exist to remove the sketch's three competing ones.
 
 - [ ] **Step 1: Write the failing continuity test**
 
@@ -977,13 +1067,15 @@ Create `src/renderer/src/workspace/hook/actions/agentNameContinuity.renderer.tes
 
 ```tsx
 import { act, renderHook } from '@testing-library/react'
-import type { MutableRefObject } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { UndoCloseStack } from '@renderer/lib/undoClose'
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
-import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
+// The 17-field WorkspaceRefs literal is exactly what this shared harness exists
+// to stop each spec re-typing; its own header asks callers to use it rather
+// than drift a private copy when either signature moves.
+import { makeRefs, stateWriter } from '@renderer/workspace/hook/actions/testing/paneActionsHarness'
+import { withoutProvisionalProviderSession } from '@renderer/workspace/providerSessionIdentity'
 import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
 
 import { useSessionActions } from './session'
@@ -1000,62 +1092,39 @@ afterEach(() => {
   else Reflect.deleteProperty(window, 'api')
 })
 
-function ref<T>(current: T): MutableRefObject<T> {
-  return { current }
+const predecessorId = 'local-predecessor'
+
+function initialState(meta: Record<string, unknown>): WorkspaceState {
+  return {
+    tabs: [{
+      id: 'tab-a',
+      title: 'recorded',
+      root: { type: 'leaf' as const, sessionId: predecessorId },
+      focusedSessionId: predecessorId,
+    }],
+    activeTabId: 'tab-a',
+    sessions: { [predecessorId]: meta },
+    detachedSessions: {},
+    buried: [],
+    pinnedSessionIds: [],
+    dispatchMode: null,
+  } as unknown as WorkspaceState
 }
 
 describe('spoken name identity across the agent lifecycle', () => {
-  it('carries the identity through a provider switch and mints none on a fresh spawn', async () => {
+  it('carries an existing identity through a provider switch and mints none on a fresh spawn', async () => {
     vi.useFakeTimers()
-    const predecessorId = 'local-predecessor'
-    let state = {
-      tabs: [{
-        id: 'tab-a',
-        title: 'recorded',
-        root: { type: 'leaf' as const, sessionId: predecessorId },
-        focusedSessionId: predecessorId,
-      }],
-      activeTabId: 'tab-a',
-      sessions: {
-        [predecessorId]: {
-          cwd: '/recorded/worktree',
-          kind: 'codex' as const,
-          agentNameId: 'identity-one',
-          providerSessionId: 'recorded-provider-session',
-          providerSessionIdSource: 'resume-request' as const,
-          builtInMcpDomains: [],
-        },
-      },
-      detachedSessions: {},
-      buried: [],
-      pinnedSessionIds: [],
-      dispatchMode: null,
-    } as WorkspaceState
+    const state = initialState({
+      cwd: '/recorded/worktree',
+      kind: 'codex',
+      agentNameId: 'identity-one',
+      providerSessionId: 'recorded-provider-session',
+      providerSessionIdSource: 'resume-request',
+      builtInMcpDomains: [],
+    })
+    const refs = makeRefs(state)
+    const writer = stateWriter(state, refs)
     let runtimes: Record<SessionId, SessionRuntime> = { [predecessorId]: emptyRuntime() }
-    const refs = {
-      stateRef: ref(state),
-      latestStateRef: ref(state),
-      latestRuntimesRef: ref(runtimes),
-      latestTileTabsRef: ref(null),
-      dangerousAgentsRef: ref(false),
-      useProxyStreamingRef: ref(false),
-      defaultBuiltInMcpDomainsRef: ref([]),
-      seenUuidsRef: ref({}),
-      latestScreenRef: ref({}),
-      undoStackRef: ref(new UndoCloseStack()),
-      bootstrapTimersRef: ref(new Map()),
-      persistedFeedDebugIdRef: ref({}),
-      inFlightFeedDebugIdRef: ref({}),
-      paneToastTimers: ref({}),
-      pendingAdoptionWindowIdsRef: ref<string[]>([]),
-      saveTimerRef: ref(null),
-      bootRef: ref(false),
-    } as WorkspaceRefs
-    const setState = (next: WorkspaceState | ((previous: WorkspaceState) => WorkspaceState)): void => {
-      state = typeof next === 'function' ? next(state) : next
-      refs.stateRef.current = state
-      refs.latestStateRef.current = state
-    }
     const setRuntimes = (
       next: Record<SessionId, SessionRuntime> | ((p: Record<SessionId, SessionRuntime>) => Record<SessionId, SessionRuntime>),
     ): void => {
@@ -1075,7 +1144,7 @@ describe('spoken name identity across the agent lifecycle', () => {
 
     const { result } = renderHook(() => useSessionActions(
       { activeTabId: state.activeTabId, sessions: state.sessions, tabs: state.tabs },
-      setState,
+      writer.setState,
       setRuntimes,
       refs,
     ))
@@ -1090,10 +1159,11 @@ describe('spoken name identity across the agent lifecycle', () => {
 
     // WHY this is the sharpest assertion in the feature: replaceSession spawns
     // through the SAME spawn() the create path uses, so anything that mints an
-    // identity inside spawn wins the object spread here and the pane silently
-    // becomes a different spoken agent after a reload or a provider switch.
-    expect(state.sessions['local-successor']?.agentNameId).toBe('identity-one')
-    expect(state.sessions[predecessorId]).toBeUndefined()
+    // identity inside spawn wins the object spread in the replacement commit
+    // and the pane silently becomes a different spoken agent after a reload or
+    // a provider switch.
+    expect(writer.getState().sessions['local-successor']?.agentNameId).toBe('identity-one')
+    expect(writer.getState().sessions[predecessorId]).toBeUndefined()
 
     await act(async () => {
       await result.current.spawn('/recorded/worktree', { kind: 'codex' })
@@ -1102,7 +1172,59 @@ describe('spoken name identity across the agent lifecycle', () => {
 
     // A genuinely new agent leaves identity to the reconciler, which is the one
     // place that knows the difference between "new" and "restored".
-    expect(state.sessions['brand-new']?.agentNameId).toBeUndefined()
+    expect(writer.getState().sessions['brand-new']?.agentNameId).toBeUndefined()
+  })
+
+  it('does not invent an identity when replacing a pane that never had one', async () => {
+    // The disabled-then-enabled path: with the setting off nothing is ever
+    // claimed, so a provider switch must not become a back-door minting site.
+    // The successor stays unidentified and the reconciler claims it — under the
+    // successor's own id — the moment the user turns names on.
+    vi.useFakeTimers()
+    const state = initialState({ cwd: '/recorded/worktree', kind: 'codex', builtInMcpDomains: [] })
+    const refs = makeRefs(state)
+    const writer = stateWriter(state, refs)
+    let runtimes: Record<SessionId, SessionRuntime> = { [predecessorId]: emptyRuntime() }
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: {
+        spawnSession: vi.fn().mockResolvedValue({ sessionId: 'local-successor' }),
+        killOwnedSession: vi.fn(async () => false),
+        ghostRead: vi.fn(async () => []),
+      },
+    })
+
+    const { result } = renderHook(() => useSessionActions(
+      { activeTabId: state.activeTabId, sessions: state.sessions, tabs: state.tabs },
+      writer.setState,
+      next => { runtimes = typeof next === 'function' ? next(runtimes) : next; refs.latestRuntimesRef.current = runtimes },
+      refs,
+    ))
+
+    await act(async () => {
+      await result.current.replaceSession('/recorded/worktree', { kind: 'claude' })
+      await vi.runAllTimersAsync()
+    })
+
+    expect(writer.getState().sessions['local-successor']).toBeDefined()
+    expect(writer.getState().sessions['local-successor']?.agentNameId).toBeUndefined()
+  })
+
+  it('preserves the identity through the metadata rebuild that bulk reload uses', () => {
+    // The rehydration path (site C) carries the identity by plain spread of
+    // `withoutProvisionalProviderSession(meta)` and adds no line of its own.
+    // That is only correct while this helper is field-preserving, so pin the
+    // property the spread depends on rather than the spread itself.
+    const meta = {
+      cwd: '/recorded/worktree',
+      kind: 'codex' as const,
+      agentNameId: 'identity-one',
+      providerSessionId: 'from-proxy',
+      providerSessionIdSource: 'proxy-header' as const,
+    }
+    const restored = withoutProvisionalProviderSession(meta)
+    expect(restored.agentNameId).toBe('identity-one')
+    expect(restored.providerSessionId).toBeUndefined()
   })
 })
 ```
@@ -1113,7 +1235,7 @@ describe('spoken name identity across the agent lifecycle', () => {
 NODE_ENV=test npx vitest run --project renderer src/renderer/src/workspace/hook/actions/agentNameContinuity.renderer.test.tsx
 ```
 
-Both assertions fail against the sketch: `spawn` seeds `agentNameId: sessionId`, and that seeded value overwrites the carried identity in the replacement commit.
+The first test fails against the sketch on both of its assertions: `spawn` seeds `agentNameId: sessionId`, and that seeded value then overwrites the carried identity in the replacement commit. The second test fails too — the sketch's `?? oldId` mints an identity for a pane that never had one. The third (the `withoutProvisionalProviderSession` unit case) passes today and is a regression pin, not a RED.
 
 - [ ] **Step 3: Document the field in `src/renderer/src/workspace/types.ts`**
 
@@ -1162,32 +1284,48 @@ and add above `const meta: SessionMeta = {`:
 
 - [ ] **Step 5: Make the replacement commit carry the identity last (site B)**
 
-In the `sessions[newId] = {` literal inside `replaceSession`, delete the sketch's leading `agentNameId:` line and append this as the **final** entry of the literal, after the `replacementTitle` spread:
+Inside the `setState` updater in `replaceSession`, add this beside `replacementTitle` (which is read the same way and for the same reason):
+
+```ts
+        // `prev.sessions[oldId]` is still readable here: only the local
+        // `sessions` copy has had oldId deleted.
+        const carriedAgentNameId = prev.sessions[oldId]?.agentNameId
+```
+
+Then, in the `sessions[newId] = {` literal, delete the sketch's leading `agentNameId:` line and append this as the **final** entry, after the `replacementTitle` spread:
 
 ```ts
           // Last on purpose. `...(sessions[newId] ?? …)` earlier in this
           // literal is the successor's OWN freshly-spawned metadata, so any
           // earlier position is overwritten by it — which is exactly how the
-          // sketch renamed a pane on every provider switch. The `?? oldId`
-          // fallback covers a pane replaced before the reconciler ever ran:
-          // the name then follows the pane rather than being lost. `oldId` is
-          // still readable here because only the local `sessions` copy has had
-          // it deleted; `prev.sessions` is untouched.
-          agentNameId: prev.sessions[oldId]?.agentNameId ?? oldId,
+          // sketch renamed a pane on every provider switch.
+          //
+          // Conditional, not `?? oldId`: this site CARRIES an identity, it
+          // never creates one. If the predecessor had none — names were off,
+          // or the reconciler had not run — then no name was ever allocated to
+          // preserve, and inventing `oldId` here would make replacement a
+          // second minting site competing with the reconciler for that
+          // decision. Leaving it absent lets the reconciler claim the
+          // successor under its own id, which is the same outcome by the one
+          // rule the feature has.
+          ...(carriedAgentNameId !== undefined ? { agentNameId: carriedAgentNameId } : {}),
 ```
 
-- [ ] **Step 6: Keep the rehydration carry (site C) and explain it**
+- [ ] **Step 6: Delete the sketch's line at the rehydration site (site C) — the spread already does it**
 
-In the bulk-reload path, the sketch already places `agentNameId` after `...restoredMeta`, which is correct. Add the WHY above it:
+`restoredMeta` is `withoutProvisionalProviderSession(meta)`, and that helper either returns `meta` untouched or spreads out only the two provisional provider fields (`src/renderer/src/workspace/providerSessionIdentity.ts:153-157`). So `...restoredMeta` **already carries `agentNameId`**, and the sketch's explicit line contributes nothing except its `?? oldId` — the same second minting site removed at site B. Delete the line and leave a comment in its place so the next reader does not "restore" it:
 
 ```ts
           freshSessions[newId] = {
+            // `agentNameId` needs no line here: withoutProvisionalProviderSession
+            // is field-preserving, so `...restoredMeta` carries the identity from
+            // the pre-reload session onto its new local id. Do not add a
+            // `?? oldId` fallback — a workspace with no identity has no
+            // allocated name to lose, and minting here would put a second
+            // author on the one decision the reconciler owns. The unit case in
+            // this task's test pins the helper's field-preservation, which is
+            // the only thing this spread relies on.
             ...restoredMeta,
-            // After `...restoredMeta` so it survives, and `?? oldId` because a
-            // workspace saved before this feature has no identity: the restored
-            // pane adopts its own pre-restart session ID and keeps it from then
-            // on, instead of being treated as a brand new agent every launch.
-            agentNameId: meta.agentNameId ?? oldId,
             ...(builtInMcpDomains !== undefined ? { builtInMcpDomains } : {}),
           }
 ```
@@ -1246,7 +1384,8 @@ Create `src/renderer/src/workspace/agentNames/selectors.test.ts`:
 ```ts
 import { describe, expect, it } from 'vitest'
 
-import { resolveAgentName } from '@renderer/workspace/agentNames/selectors'
+import type { AppStore } from '@renderer/app-state/types'
+import { agentNameForSession, resolveAgentName } from '@renderer/workspace/agentNames/selectors'
 
 const names = { 'identity-one': 'Apollo' }
 
@@ -1291,6 +1430,21 @@ describe('agent name selector', () => {
       .toBeNull()
     expect(resolveAgentName({ enabled: true, meta: { kind: 'claude', agentNameId: 'toString' }, names }))
       .toBeNull()
+  })
+
+  it('degrades to no name on a store that has no workspace keys at all', () => {
+    // The phone's store stub is `{ settings }` and nothing else, and the alias
+    // that installs it is invisible to tsc — so this is the only compile-time
+    // -adjacent gate on the shape `agentNameForSession` may assume. It must
+    // return null, not throw. Several renderer specs mock the store this way
+    // too, so a throw here would break tests that have nothing to do with names.
+    const phoneShaped = { settings: { agentNamesEnabled: false } } as unknown as AppStore
+    expect(() => agentNameForSession(phoneShaped, 'any-session')).not.toThrow()
+    expect(agentNameForSession(phoneShaped, 'any-session')).toBeNull()
+
+    const empty = {} as unknown as AppStore
+    expect(() => agentNameForSession(empty, 'any-session')).not.toThrow()
+    expect(agentNameForSession(empty, 'any-session')).toBeNull()
   })
 })
 ```
@@ -1383,16 +1537,42 @@ export function resolveAgentName(input: {
   // Own-property + typeof, not `names[identity] ?? null`. Identities originate
   // in a user-editable workspace file, so `constructor` or `toString` would
   // otherwise resolve to an inherited function and be rendered as a name.
-  if (!Object.hasOwn(input.names, identity)) return null
+  //
+  // `Object.prototype.hasOwnProperty.call` rather than `Object.hasOwn`:
+  // tsconfig.web.json targets lib ES2020, so `Object.hasOwn` does not
+  // type-check. Same reason and same form as mouseBinding.ts and
+  // sessionOwnership.ts.
+  if (!Object.prototype.hasOwnProperty.call(input.names, identity)) return null
   const name = input.names[identity]
   return typeof name === 'string' && name.length > 0 ? name : null
 }
 
+/**
+ * WHY every read here is optional and the map is defaulted:
+ *
+ * The phone bundle (src/remote-client) renders the real PaneHeader — and
+ * therefore AgentTitleHeader — while aliasing `@renderer/app-state/hooks` to a
+ * stub whose entire state is `{ settings }` (vite.config.ts). `workspaceState`
+ * and `workspaceAgentNames` simply do not exist there, so an eager
+ * `state.workspaceState.sessions[id]` throws while merely BUILDING this
+ * argument object, before `enabled` is ever consulted.
+ *
+ * `tsc` cannot catch that: the alias lives only in the Vite config, while
+ * tsconfig.web.json type-checks src/remote-client against the REAL hooks
+ * module, so the eager version compiles cleanly and fails at runtime on a
+ * device. Several renderer specs mock the store the same keyless way. The
+ * repository already states the rule this obeys — "a keyless store must
+ * degrade, never throw" (PaneHeader.phoneCoupling.renderer.test.tsx).
+ *
+ * Degrading to null is also the correct ANSWER on the phone, not merely a
+ * safe one: it has no workspace, no reconciler and no allocation, so it has
+ * no names to show.
+ */
 export function agentNameForSession(state: AppStore, sessionId: SessionId): string | null {
   return resolveAgentName({
-    enabled: state.settings.agentNamesEnabled,
-    meta: state.workspaceState.sessions[sessionId],
-    names: state.workspaceAgentNames,
+    enabled: state.settings?.agentNamesEnabled === true,
+    meta: state.workspaceState?.sessions?.[sessionId],
+    names: state.workspaceAgentNames ?? {},
   })
 }
 ```
@@ -1468,9 +1648,11 @@ Create `src/renderer/src/workspace/agentNames/reconciler.renderer.test.tsx`:
 ```tsx
 import { act, render, waitFor } from '@testing-library/react'
 import { useEffect, useState } from 'react'
+import type { Dispatch, SetStateAction } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { useAppStore } from '@renderer/app-state/store'
+import { resolveAgentName } from '@renderer/workspace/agentNames/selectors'
 import { useAgentNameReconciler } from '@renderer/workspace/agentNames/useAgentNameReconciler'
 import type { WorkspaceState } from '@renderer/workspace/types'
 
@@ -1518,14 +1700,16 @@ function mount(options: { enabled: boolean; resolveAgentNames: ReturnType<typeof
   Object.defineProperty(window, 'api', { configurable: true, value: { resolveAgentNames: options.resolveAgentNames } })
 
   const seen: { current: WorkspaceState } = { current: workspace() }
+  // Lets a test move the workspace on while an allocation is still in flight.
+  const control: { current: Dispatch<SetStateAction<WorkspaceState>> | null } = { current: null }
   function Harness() {
     const [state, setState] = useState<WorkspaceState>(seen.current)
-    useEffect(() => { seen.current = state }, [state])
+    useEffect(() => { seen.current = state; control.current = setState }, [state])
     useAgentNameReconciler(state, setState, 'complete-restore')
     return null
   }
   const view = render(<Harness />)
-  return { seen, rerender: () => view.rerender(<Harness />) }
+  return { seen, control, rerender: () => view.rerender(<Harness />) }
 }
 
 describe('agent name reconciliation', () => {
@@ -1542,7 +1726,16 @@ describe('agent name reconciliation', () => {
     expect(mounted.seen.current.sessions['shell-one'].agentNameId).toBeUndefined()
     // Buried agents keep their own metadata copy and must still resolve, or a
     // buried Apollo would come back unnamed and get a second address.
+    //
+    // WHY the FIRST call must already contain both: the hook derives its
+    // identity list through `claimMissingIdentities(state)` rather than from
+    // `state`, so on the very first render it sees `agent-one`'s
+    // about-to-be-claimed identity alongside the buried agent's existing one.
+    // Deriving from `state` would split this into two requests — and the
+    // re-run triggered by the claim would then discard the first reply.
+    // Asserting on call[0] rather than on the union is what pins that.
     expect([...resolveAgentNames.mock.calls[0][0]].sort()).toEqual(['agent-one', 'identity-buried'])
+    expect(resolveAgentNames).toHaveBeenCalledTimes(1)
     await waitFor(() => expect(useAppStore.getState().workspaceAgentNames)
       .toEqual({ 'agent-one': 'Apollo', 'identity-buried': 'Jasper' }))
 
@@ -1574,6 +1767,57 @@ describe('agent name reconciliation', () => {
     // No fabrication, no placeholder, no partial write. A failed allocation is
     // simply an agent with no visible name until the next membership change.
     expect(useAppStore.getState().workspaceAgentNames).toEqual({})
+  })
+
+  it('applies a reply that arrives after the agent was replaced or closed', async () => {
+    // The decomposition names this exact unknown: "assignment arriving after
+    // close or replacement". Disk is slow and allocation is durable, so the
+    // window between asking and answering is real, and both things that can
+    // happen inside it are tested here at once.
+    let release: (value: Record<string, string>) => void = () => {}
+    const resolveAgentNames = vi.fn(() => new Promise<Record<string, string>>(resolve => { release = resolve }))
+    const mounted = mount({ enabled: true, resolveAgentNames })
+    await waitFor(() => expect(resolveAgentNames).toHaveBeenCalled())
+    const requested = [...resolveAgentNames.mock.calls[0][0]] as string[]
+
+    // While the allocation is in flight: the live agent is replaced by a new
+    // local session id CARRYING the same identity, and the buried agent is
+    // closed outright.
+    act(() => {
+      mounted.control.current!(previous => ({
+        ...previous,
+        sessions: {
+          'agent-two': { ...previous.sessions['agent-one'], agentNameId: 'agent-one' },
+          'shell-one': previous.sessions['shell-one'],
+        },
+        buried: [],
+      } as WorkspaceState))
+    })
+
+    await act(async () => {
+      release(Object.fromEntries(requested.map(identity =>
+        [identity, identity === 'agent-one' ? 'Apollo' : 'Jasper'])))
+      await Promise.resolve()
+    })
+
+    const stored = useAppStore.getState().workspaceAgentNames
+    const settled = mounted.seen.current
+
+    // Keyed by identity, never by session: the successor inherits the name
+    // that was allocated before its local session id existed. This is the
+    // whole reason SessionMeta carries an identity instead of the name.
+    expect(stored['agent-one']).toBe('Apollo')
+    expect(resolveAgentName({ enabled: true, meta: settled.sessions['agent-two'], names: stored })).toBe('Apollo')
+
+    // The closed agent's reply is recorded against its identity — the name is
+    // spent and must never be handed out again — but it does NOT put the
+    // session back into the workspace.
+    expect(stored['identity-buried']).toBe('Jasper')
+    expect(settled.sessions['agent-one']).toBeUndefined()
+    expect(settled.buried).toEqual([])
+
+    // And the late reply did not trigger a second allocation for either.
+    expect(resolveAgentNames).toHaveBeenCalledTimes(1)
   })
 })
 ```
@@ -1653,7 +1897,7 @@ export function agentNameIdentities(state: WorkspaceState): string[] {
 Create `src/renderer/src/workspace/agentNames/useAgentNameReconciler.ts`:
 
 ```ts
-import { useEffect, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
 import { agentNameIdentities, claimMissingIdentities } from '@renderer/workspace/agentNames/reconcile'
@@ -1688,9 +1932,36 @@ export function useAgentNameReconciler(
   // would turn one membership change into a burst of allocations.
   const requestedRef = useRef(new Set<string>())
 
+  // WHY cancellation is unmount-scoped rather than a per-effect `cancelled`
+  // flag: this effect's deps include `state` and `names`, so an ordinary
+  // cleanup fires on every workspace change — discarding a reply that is
+  // already in flight and, because those identities stay marked as requested,
+  // never asking again. That stranded them permanently on the very first
+  // render, where claiming state immediately re-runs the effect.
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => { mountedRef.current = false }
+  }, [])
+
+  // WHY the identity list is derived through the same claim the write effect
+  // commits, instead of from `state` directly: on mount the claim has not been
+  // applied yet, so reading `state` would ask for the already-identified
+  // agents in one request and the just-claimed ones in a second. Running the
+  // pure function here makes both effects agree within a single render, so
+  // the first request is the complete one and the follow-up finds nothing
+  // missing. `claimMissingIdentities` is identity-preserving on a no-op, so
+  // this costs nothing once the workspace has settled.
+  const identities = useMemo(
+    () => (enabled && restoreStatus !== 'pending'
+      ? agentNameIdentities(claimMissingIdentities(state))
+      : []),
+    [enabled, restoreStatus, state],
+  )
+
   useEffect(() => {
     if (!enabled) {
-      // Re-enabling should retry anything a failure or an unmount left behind.
+      // Re-enabling should retry anything a failure left behind.
       requestedRef.current.clear()
       return
     }
@@ -1698,28 +1969,58 @@ export function useAgentNameReconciler(
     // Claiming identities against a half-built state would mint one for a
     // session that rehydration is about to replace.
     if (restoreStatus === 'pending') return
+    // Updater form, like the sibling sanity hooks: it re-derives against the
+    // freshest state in case a concurrent setState ran since this render.
     setState(claimMissingIdentities)
   }, [enabled, restoreStatus, setState, state])
 
   useEffect(() => {
-    if (!enabled || restoreStatus === 'pending') return
-    const missing = agentNameIdentities(state).filter(
-      identity => !Object.hasOwn(names, identity) && !requestedRef.current.has(identity),
-    )
+    const missing = identities.filter(identity =>
+      // Object.prototype.hasOwnProperty.call, not Object.hasOwn: lib is ES2020.
+      !Object.prototype.hasOwnProperty.call(names, identity)
+      && !requestedRef.current.has(identity))
     if (missing.length === 0) return
     for (const identity of missing) requestedRef.current.add(identity)
 
-    let cancelled = false
     void window.api.resolveAgentNames(missing)
-      .then(resolved => { if (!cancelled) setNames(previous => ({ ...previous, ...resolved })) })
-      .catch(() => {
-        // Never fabricate. Dropping these from the requested set means the next
-        // real membership change retries; it does NOT re-run this effect now,
-        // so a broken registry cannot become a hot loop.
+      .then(resolved => {
+        // Not `cancelled` — only "this window is gone". A reply that arrives
+        // after the workspace moved on is still correct: it is keyed by
+        // IDENTITY, so it belongs to whatever session now carries that
+        // identity, and to nothing at all if the agent closed. Writing it is
+        // what makes a replacement that completed mid-flight inherit its name.
+        if (!mountedRef.current) return
+        setNames(previous => {
+          const merged = { ...previous }
+          let changed = false
+          for (const [identity, name] of Object.entries(resolved)) {
+            if (typeof name === 'string' && name.length > 0 && merged[identity] !== name) {
+              merged[identity] = name
+              changed = true
+            }
+          }
+          // Identity-preserving on a no-op so the slice's Object.is bail keeps
+          // the store reference stable. Returning a fresh object every time
+          // would change `names`, re-run this effect, and — with these entries
+          // just cleared from requestedRef below — loop forever on a reply
+          // that added nothing.
+          return changed ? merged : previous
+        })
+      })
+      // Never fabricate a name. A failed allocation is simply an agent with no
+      // visible name until something changes.
+      .catch(() => {})
+      .finally(() => {
+        // Clear on SETTLE, not only on rejection. Whatever this request
+        // answered is now in `names` and will filter itself out; whatever it
+        // did not answer must be free to be asked again on the next membership
+        // change, rather than stranded in this set for the life of the window.
+        // This does not re-run the effect on its own: on success `names`
+        // changed and the recomputed `missing` is empty, and on failure no dep
+        // changed at all — so a broken registry cannot become a hot loop.
         for (const identity of missing) requestedRef.current.delete(identity)
       })
-    return () => { cancelled = true }
-  }, [enabled, names, restoreStatus, setNames, state])
+  }, [identities, names, setNames])
 }
 ```
 
@@ -2024,20 +2325,73 @@ and inside the title row's `<div className="flex items-center gap-2 min-w-0">`, 
           )}
 ```
 
-This one change covers classic Dispatch, Grid Dispatch and Tiled Dispatch's lane-0 index, because all three render this same component (`DispatchLayout.tsx:138`, `TiledDispatchLayout.tsx:305`). `DispatchMiniList` is deliberately left alone: it is a 46px chip strip with no titles, badges or activity dots, and a name does not fit its contract.
+This one change covers classic Dispatch, Grid Dispatch and Tiled Dispatch's lane-0 index, because all three render this same component (`DispatchLayout.tsx:138`, `TiledDispatchLayout.tsx:305`).
 
-- [ ] **Step 6: Run it and watch it pass**
+**`DispatchMiniList` is deliberately excluded**: it is the 46px lane strip whose own header states its contract as "index chips ([A1], [A2], ★1 …) — no titles, no activity dots, no badges", so a name has nowhere to go that would not break the one property that strip exists to provide, and the full index beside it already shows the name for the same agents. Its hover tooltip keeps the title-only text it has today.
+
+**No isolated visual preview is attempted** for this feature, which the decomposition allows ("where practical"). The visible change is two text chips inside existing flex rows whose truncation behaviour is asserted directly in the tests below — the badge is `flex-shrink-0` and the title keeps its own truncating span — so a screenshot would add a reviewing artifact without answering a question the assertions do not.
+
+- [ ] **Step 6: Pin the phone contract where the repository already keeps it**
+
+`AgentTitleHeader` now calls `useAgentName` before its early return, so it reads the store on **every** `PaneHeader` render — including the phone's, which renders the real `PaneHeader` (`src/remote-client/src/ui/SessionView.tsx:330`) against a stub store of `{ settings }` only. Task 6's selector already degrades instead of throwing; this step is the regression gate, and it is the *only* one, because the stub is installed by a Vite alias that `tsc` never sees.
+
+Append to the existing `src/renderer/src/workspace/tile-tree/TileLeaf/PaneHeader.phoneCoupling.renderer.test.tsx`, whose other cases pin the same rule for `workspaceRuntimes`:
+
+```tsx
+  it('renders no agent name on a store with no workspace keys (phone stub shape)', () => {
+    // src/remote-client aliases @renderer/app-state/hooks to a stub whose
+    // state is `{ settings }` (vite.config.ts). tsconfig.web.json type-checks
+    // that directory against the REAL hooks module, so a selector reading
+    // state.workspaceState compiles and then throws on a device. Reproducing
+    // the stub shape here is the only place that can catch it.
+    useAppStore.setState({
+      workspaceState: undefined as never,
+      workspaceAgentNames: undefined as never,
+    })
+    const { container } = render(
+      <PaneHeader
+        sessionId="session"
+        projectDir="/project"
+        statusMode={false}
+        isSessionLive={false}
+        relatedAgentTabs={[]}
+      />,
+    )
+    // Degrade, never throw — and with no workspace there is no name to show,
+    // so the title row stays absent exactly as it is on the phone today.
+    expect(container.querySelector('[data-agent-name-badge="true"]')).toBeNull()
+    expect(container.querySelector('[data-agent-title-header="true"]')).toBeNull()
+  })
+```
+
+Then record the coupling in the stub itself, so the next person to add a store read in the feed subtree sees it. In `src/remote-client/src/stubs/appStateHooks.ts`, append to the header comment:
+
+```ts
+// Agent names (issue #816) are a deliberate no-op here: the phone has no
+// workspace state, no reconciler and no allocation, so agentNameForSession
+// degrades to null and no badge renders. Note that the "fails the phone
+// tsc/build loudly" claim above does NOT hold for a read whose key is simply
+// missing — tsconfig.web.json checks this directory against the real hooks
+// module, not against this stub — so selectors reached from the feed subtree
+// must tolerate a keyless store on their own. PaneHeader.phoneCoupling is the
+// test that enforces it.
+```
+
+Deliberately **not** done: widening `PHONE_APP_STATE` with empty `workspaceState` / `workspaceAgentNames` keys. They could never be non-empty on the phone, so they would assert a coupling that does not exist and would not protect the several renderer specs that mock the store the same keyless way. Tolerance in the one selector covers every caller; two fake keys cover one.
+
+- [ ] **Step 7: Run it and watch it pass**
 
 ```bash
 NODE_ENV=test npx vitest run --project renderer src/renderer/src/workspace/agentNames/presentation.renderer.test.tsx
-NODE_ENV=test npx vitest run --project renderer src/renderer/src/workspace/dispatch
+NODE_ENV=test npx vitest run --project renderer src/renderer/src/workspace/tile-tree/TileLeaf/PaneHeader.phoneCoupling.renderer.test.tsx
+NODE_ENV=test npx vitest run --project renderer src/renderer/src/workspace/dispatch src/renderer/src/workspace/tile-tree
 npm run typecheck
 ```
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add src/renderer/src/workspace/tile-tree/AgentTitleHeader.tsx src/renderer/src/workspace/tile-tree/TileLeaf/PaneHeader.tsx src/renderer/src/workspace/tile-tree/AgentTerminalLeaf.tsx src/renderer/src/workspace/dispatch/DispatchAgentList.tsx src/renderer/src/workspace/agentNames/presentation.renderer.test.tsx
+git add src/renderer/src/workspace/tile-tree/AgentTitleHeader.tsx src/renderer/src/workspace/tile-tree/TileLeaf/PaneHeader.tsx src/renderer/src/workspace/tile-tree/AgentTerminalLeaf.tsx src/renderer/src/workspace/dispatch/DispatchAgentList.tsx src/renderer/src/workspace/agentNames/presentation.renderer.test.tsx src/renderer/src/workspace/tile-tree/TileLeaf/PaneHeader.phoneCoupling.renderer.test.tsx src/remote-client/src/stubs/appStateHooks.ts
 git commit -F - <<'EOF'
 feat(workspace): show agent names in headers and the Dispatch index
 
@@ -2393,7 +2747,9 @@ npm run test:contract
 NODE_ENV=test npx vitest run
 ```
 
-Record the exact counts. `src/renderer/src/features/command-keybindings/hotkeyBinding.test.ts` is a known pre-existing failure on `main` and is not yours; anything else that fails is.
+Record the exact counts.
+
+**Establish the baseline yourself; do not trust a remembered list of "known" failures.** Before Task 1 writes anything, run `NODE_ENV=test npx vitest run` on the rebased branch and save the failing set. Only tests in *that* recorded set are pre-existing; everything else that fails here is yours. (A `hotkeyBinding.test.ts` is sometimes cited as a standing failure in this repository — there is no such file on this base, which is exactly why the baseline has to be measured rather than recalled.)
 
 - [ ] **Step 2: Re-read the diff against the isolation rules**
 
@@ -2486,7 +2842,7 @@ Do not merge. Report the PR number and the CI result. No merge authorization is 
 | Isolation — duplicates get new identities, replacement retains | 5 |
 | Unknowns — bulk reload / rehydration metadata reconstruction | 5 (site C) |
 | Unknowns — buried records | 7 (`agentNameIdentities`), 9 (observation covers merged buried metas) |
-| Unknowns — assignment arriving after close or replacement | 2 (never recycles), 5 (identity carried) |
+| Unknowns — assignment arriving after close or replacement | **7 (late-reply test)**, 2 (never recycles), 5 (identity carried) |
 | Unknowns — disk failure / IPC failure must not fabricate or overwrite | 2 (corrupt-store test), 7 (failure test) |
 | Unknowns — narrow headers and rows | 8 (`flex-shrink-0` badge, title keeps its own truncation slot) |
 | Unknowns — main never parses workspace blobs for naming | 2, 3 (identities are opaque strings) |
@@ -2501,7 +2857,7 @@ Do not merge. Report the PR number and the CI result. No merge authorization is 
 | Allocated once across windows | 2 (concurrency test) |
 | Retained across restart | 2 (reopen test) |
 | Retained across reload / provider replacement | 5 |
-| Retained across restore | 5 (site C), 7 (`?? oldId` claim) |
+| Retained across restore | 5 (site C spread carries it), 7 (the reconciler claims `sessionId` for a workspace saved before this feature, once, after restoration) |
 | Distinct names for genuinely new / duplicated agents | 5 (`spawn` mints nothing → reconciler mints a new identity), 2 (monotonic counter) |
 | Never silently recycle a closed agent's address | 2 (reopen test third assertion) |
 | Beyond the pool, explicit numeric suffixes | 1, 2 |
@@ -2517,9 +2873,10 @@ Do not merge. Report the PR number and the CI result. No merge authorization is 
 
 ### Placeholder scan
 
-Every task states exact file paths, exact interfaces, and shows the literal code for both the test and the implementation. There is no "TBD", no "add validation", no "similar to Task N", and no step that only describes a change. Three places deserve a note:
+Every task states exact file paths, exact interfaces, and shows the literal code for both the test and the implementation. There is no "TBD", no "add validation", no "similar to Task N", and no step that only describes a change. Four places deserve a note:
 
-- Task 1 Step 2's first run may pass rather than fail, because the vocabulary file already exists uncommitted from the Stage 1 sketch. That is the point of running it: a green result is the evidence that the sketch's list is the approved 100-name ranking, and a red one means the file was lost or edited and must be restored before continuing.
+- **Task 1 Step 0b shows no code because it is not a code step.** It is a hard stop that hands the vocabulary to the user for ratification. It cannot be automated away and must not be skipped; the reason it cannot wait until after Task 1 commits is stated in the step.
+- Task 1 Step 2's first run is expected to pass rather than fail, because the vocabulary file already exists uncommitted from the Stage 1 sketch. The step says so explicitly rather than pretending otherwise: a green result is the evidence that the sketch's list satisfies the properties the feature assumes, and a red one means the file was lost or edited since Step 0b and must be restored. Every other task has a genuine RED.
 - Task 5 Steps 4–6 are edits to three sites in one long existing function. Each step quotes enough surrounding lines to locate the site unambiguously, and Step 1's test fails on exactly those three sites if any is missed.
 - Task 10 edits prose. The exact paragraphs are given verbatim; the only judgement left to the implementer is where the anchor sentence sits, which each step names.
 
@@ -2532,3 +2889,22 @@ Every task states exact file paths, exact interfaces, and shows the literal code
 - `resolveAgentName` takes `meta: Pick<SessionMeta, 'kind' | 'agentNameId'> | undefined`, which accepts both `state.sessions[id]` (Task 6) and a buried record's `sessionMeta` merged into the observation's `sessions` record (Task 9) without a cast.
 - `agentName: z.string().nullable().default(null)` in Task 9 means the SDK type is `string | null` after parse and `string | null | undefined` on input, so the renderer's `resolveAgentName` return type (`string | null`) satisfies it, and `session.agentName ?? ''` in the main handler is total.
 - `useAgentName(sessionId: SessionId): string | null` (Task 6) is the only React-facing surface; Task 8's components consume exactly that and pass `SessionId`, which both `PaneHeader` and `AgentTerminalLeaf` already hold as a prop of that type.
+- `agentNameForSession` declares `state: AppStore` but reads every field optionally. That is deliberate and the two are not in conflict: the type describes the desktop store, which always has the keys, while the optional reads describe the *runtime* shapes the module is reachable from — the phone stub and keyless test mocks — which `tsc` cannot see because their alias is Vite-only. Removing the optionality would type-check and ship a crash.
+- No renderer or shared module in this plan uses `Object.hasOwn`; both own-property checks (`selectors.ts`, `useAgentNameReconciler.ts`) use `Object.prototype.hasOwnProperty.call`, matching `mouseBinding.ts:142-145`. `src/main/agentNames/registry.ts` needs no own-property check at all: its map is null-prototype, so plain `!== undefined` is safe there.
+- The `agent-names` settings row carries **no** `metadata` field, so `settingMetadata(setting)` resolves it to `DEFAULT_SETTING_METADATA`. Task 4's assertion is written against the resolved value, not `setting.metadata`, so it does not re-break if the row later needs an explicit block.
+
+### Corrections applied in fix round 1
+
+Seven defects were found in review and corrected here; four would have failed at runtime or at the type gate.
+
+| ID | Defect | Correction |
+| --- | --- | --- |
+| C1 | The shared selector read `state.workspaceState.sessions[…]` eagerly, and `AgentTitleHeader` calls it before its early return — so the phone bundle (real `PaneHeader`, `{ settings }`-only stub store) would throw, invisibly to `tsc`. Two existing renderer specs mock the store the same way. | Optional reads plus a defaulted map in `agentNameForSession` (Task 6), two keyless cases in the selector unit test, and a phone-coupling render gate appended where the repository already keeps that contract (Task 8 Step 6). |
+| C2 | `Object.hasOwn` in two renderer modules does not type-check under `lib: ES2020`. | `Object.prototype.hasOwnProperty.call` in both, matching the two existing precedents, plus a Global Constraint. |
+| C3 | The reconciler's IO effect returned a `cancelled` cleanup while depending on `state` and `names`, so the mount-time claim immediately discarded the first in-flight reply whose identities stayed marked as requested — permanently stranding them. Task 7's own assertions could not have passed. | Cancellation is unmount-scoped; identities derive through `claimMissingIdentities(state)` so the first request is already complete; `requestedRef` clears on settle; the merge is identity-preserving so an empty reply cannot loop. The test now also asserts exactly one call and says why. |
+| C4 | `apply: 'live'` is not a member of `SettingMetadata['apply']`; inherited from the sketch, so the tree was **already** type-broken and every "run typecheck" step would have failed before any new code. | Task 1 Step 0a repairs it first; Task 4 drops the explicit `metadata` entirely and asserts the resolved default. |
+| I1 | The decomposition unknown "assignment arriving after close or replacement" had no test. | Task 7 gains a deferred-reply case covering both at once, asserting the name lands on the identity and does not resurrect the closed session. |
+| I2 | Sites B and C minted identity with `?? oldId`, contradicting the plan's own "the reconciler is the sole minter". | Both now carry conditionally; site C's line is deleted outright (the spread already carries it) and a unit case pins the field-preservation it relies on. |
+| I3 | The vocabulary's provenance was a report concern, not a step. | Task 1 Step 0b is a hard stop that prints the list for the user to ratify, with the reason it cannot wait. |
+
+One further defect was found while verifying I3's neighbourhood and is corrected in Task 2: **`z.record()` drops a `__proto__` key** (verified against zod ^4.4.3 — `JSON.parse` keeps it, zod's output does not). Reading the assignment map out of `stateSchema.parse(...)`, as both the sketch and the first draft of this plan did, would silently forget that assignment on reopen and allocate the agent a second name — the exact recycling the registry exists to prevent, reachable from a user-editable workspace file. `load()` now validates with zod and takes its data from the raw parsed JSON, the duplicate-name check moved out of the schema's `refine` (which would have inspected the pruned map), and a reopen round-trip test was added.
