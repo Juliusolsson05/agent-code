@@ -39,6 +39,7 @@ export const createWorkspaceSlice: StateCreator<
   workspaceSpotlight: null,
   workspaceReaderMode: null,
   workspaceTileTabs: null,
+  workspaceAgentNames: {},
 
   setWorkspaceState: next =>
     set(state => {
@@ -73,4 +74,10 @@ export const createWorkspaceSlice: StateCreator<
       const workspaceTileTabs = applyUpdater<TileTabsState | null>(state.workspaceTileTabs, next)
       return Object.is(workspaceTileTabs, state.workspaceTileTabs) ? state : { workspaceTileTabs }
     }, false, 'workspace/setWorkspaceTileTabs'),
+
+  setWorkspaceAgentNames: next =>
+    set(state => {
+      const workspaceAgentNames = applyUpdater<Record<string, string>>(state.workspaceAgentNames, next)
+      return Object.is(workspaceAgentNames, state.workspaceAgentNames) ? state : { workspaceAgentNames }
+    }, false, 'workspace/setWorkspaceAgentNames'),
 })

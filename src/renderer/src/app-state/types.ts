@@ -134,6 +134,16 @@ export type WorkspaceSlice = {
   workspaceSpotlight: SpotlightState | null
   workspaceReaderMode: ReaderModeState | null
   workspaceTileTabs: TileTabsState | null
+  /** Allocated spoken names keyed by SessionMeta.agentNameId.
+   *
+   *  WHY this is store state and not a ref or a React context: three unrelated
+   *  consumers read it — the pane header, the Dispatch index, and
+   *  workspace.observe, which is called synchronously from main and cannot
+   *  reach React state any other way. It is deliberately NOT persisted: the
+   *  main registry is the source of truth and re-resolving on launch is one
+   *  IPC round trip, whereas a stale localStorage copy could show a name that
+   *  the registry has since assigned differently. */
+  workspaceAgentNames: Record<string, string>
   setWorkspaceState: (
     next: WorkspaceState | ((prev: WorkspaceState) => WorkspaceState),
   ) => void
@@ -149,6 +159,10 @@ export type WorkspaceSlice = {
   ) => void
   setWorkspaceTileTabs: (
     next: TileTabsState | null | ((prev: TileTabsState | null) => TileTabsState | null),
+  ) => void
+  setWorkspaceAgentNames: (
+    next: Record<string, string>
+      | ((prev: Record<string, string>) => Record<string, string>),
   ) => void
 }
 
