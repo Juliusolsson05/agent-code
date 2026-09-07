@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { ConversationDocument } from 'agent-transcript-parser'
+import type { ConversationDocument, ConversationEntry } from 'agent-transcript-parser'
 
 const mocks = vi.hoisted(() => ({
   read: vi.fn(),
@@ -24,7 +24,15 @@ vi.mock('@main/providerSwitch/transcriptEngine.js', () => ({
 // worth paying for. Tests drive that gate through this mock; the default
 // (rejecting stat) means "unknown", which keeps the decode-every-cooldown
 // behaviour the pre-existing contracts below were written against.
-vi.mock('node:fs/promises', () => ({ stat: mocks.stat }))
+//
+// Only `stat` is replaced. The rest of the module has to stay real because the
+// Stage 0 fixture loader reads its `source.jsonl` files with `readFile`, and a
+// whole-module factory would leave that export undefined — which is a confusing
+// failure to debug from inside an unrelated wait-loop test.
+vi.mock('node:fs/promises', async importOriginal => ({
+  ...await importOriginal<typeof import('node:fs/promises')>(),
+  stat: mocks.stat,
+}))
 
 // WHY the poll delay advances fake time instead of sleeping: the contracts
 // below are about WHEN the implementation decodes (unchanged file → no
@@ -39,8 +47,30 @@ vi.mock('node:timers/promises', () => ({
 }))
 
 import { compactSourceBeforeSwitch } from './compactBeforeSwitch.js'
+import { loadFixtureConversation } from './testing/fixtureConversations.js'
 
 const T0 = 1_700_000_000_000
+
+// The exact wrapper Claude Code puts around every persisted compaction summary
+// (vendor/claude-code-src/full/services/compact/prompt.ts getCompactUserSummaryMessage).
+// It matters here because it is what pushes the limit text ~150 characters into
+// the carrier, which is why the parser's rate-limit guard matches at any line
+// start rather than at position 0.
+const CLAUDE_CONTINUATION_PREAMBLE = 'This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.'
+
+// WHY this text is assembled here instead of read out of
+// `claude-sequence-rate-limit`, which is the fixture that recorded the hazard:
+// redaction replaces every private scalar with the string "fixture text", so
+// the fixture's own limit message decodes as "fixture text" and would not be
+// rejected by anything. The census (docs/decomposition/evidence/provider-switch/
+// census.md, "what does not survive redaction") keeps the observed TEMPLATE for
+// this reason, and this is that template behind the real preamble — the shape
+// Task 1 pinned `compactionAvailability` against. The fixture is still used
+// below for the api_error case, where the classification survives redaction.
+const RATE_LIMIT_CARRIER = [
+  CLAUDE_CONTINUATION_PREAMBLE,
+  "You've hit your monthly spend limit · raise it at claude.ai/settings/usage?from=cc_cli_limit_message · your session limit resets <time> (<timezone>)",
+].join('\n\n')
 
 describe('compactSourceBeforeSwitch', () => {
   beforeEach(() => {
@@ -280,6 +310,51 @@ describe('compactSourceBeforeSwitch', () => {
 
     expect(result.entries[0]).toMatchObject({ kind: 'compaction' })
     expect(Date.now() - start).toBeGreaterThanOrEqual(300_000)
+  })
+
+  // #820. Both cases are the same disaster in two shapes: `/compact` was
+  // already delivered, so the source's history is on its way to being replaced,
+  // and the provider answered with a usage limit instead of a summary. The wait
+  // must fail while the pane is still on the source — every alternative
+  // (accepting the limit text as a summary, or timing out) ends with a switch
+  // that carried nothing and a source that can no longer show what was lost.
+
+  it('fails immediately when the compaction carrier is a rate-limit message', async () => {
+    mocks.read
+      .mockResolvedValueOnce(conversation([]))
+      .mockResolvedValueOnce(conversation([{
+        ...compaction(RATE_LIMIT_CARRIER, 900),
+        summarySource: 'carrier' as const,
+      }]))
+    const manager = claudeManager()
+
+    await expect(compactSourceBeforeSwitch(manager as never, claudeRequest(), requiresCompactionPlan()))
+      .rejects.toThrow(/usage-limit message where its compaction summary should be/)
+    // Two decodes, not a five-minute wait: the carrier is a definitive answer,
+    // so there is nothing to keep polling for.
+    expect(mocks.read).toHaveBeenCalledTimes(2)
+  })
+
+  it('fails immediately when a rate-limit error lands after /compact was sent', async () => {
+    // Here the fixture carries the evidence: `isApiErrorMessage: true` is a
+    // boolean, so Claude decode still classifies these records as
+    // `opaque`/`api_error` after redaction even though their text is gone.
+    const rateLimited = await loadFixtureConversation('claude-sequence-rate-limit', 'claude')
+    const apiErrors = rateLimited.entries
+      .filter((entry): entry is Extract<ConversationEntry, { kind: 'opaque' }> => (
+        entry.kind === 'opaque' && entry.nativeType === 'api_error'
+      ))
+      // Re-addressed past the baseline the wait captured, which is what
+      // "landed after /compact" means to `findApiErrorAfterLine`.
+      .map(entry => ({ ...entry, source: { ...entry.source, line: 901 } }))
+    expect(apiErrors.length).toBeGreaterThan(0)
+    mocks.read
+      .mockResolvedValueOnce(conversation([]))
+      .mockResolvedValueOnce(conversation(apiErrors))
+    const manager = claudeManager()
+
+    await expect(compactSourceBeforeSwitch(manager as never, claudeRequest(), requiresCompactionPlan()))
+      .rejects.toThrow(/reported a usage limit instead of compacting/)
   })
 
   it('re-locates the transcript when its pinned path stops resolving', async () => {

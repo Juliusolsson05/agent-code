@@ -9,6 +9,7 @@ import type { ConversationContextPlan } from 'agent-transcript-parser'
 import {
   conversationAfterLatestPortableCompaction,
   describeLatestCompaction,
+  findApiErrorAfterLine,
   portableCodexHandoffAfterLine,
   portableOpencodeHandoffAfterLine,
 } from 'agent-transcript-parser'
@@ -38,6 +39,26 @@ const PORTABLE_SUMMARY_PROMPT = [
 
 type SourceAdapter = ReturnType<typeof getHostTranscriptAdapter>
 
+/**
+ * The session whose transcript a wait loop watches.
+ *
+ * WHY this exists instead of threading `SwitchProviderRequest` through the
+ * loops, which is what they took before: a request describes a switch, and a
+ * switch has a source. The loops only ever needed "which live session, of which
+ * provider kind, writing which transcript in which directory" — four scalars
+ * that a request happens to contain for the SOURCE side only. Arrival
+ * compaction (Stage 5) runs the same wait against the freshly created TARGET
+ * session, which no `SwitchProviderRequest` can name: its provider kind is the
+ * target's and its session id did not exist when the request was built. Naming
+ * the watched session directly is what lets one wait loop serve both.
+ */
+export type TranscriptWatchTarget = {
+  sessionId: string
+  kind: AgentProviderKind
+  cwd: string
+  providerSessionId: string
+}
+
 export async function compactSourceBeforeSwitch(
   manager: SessionManager,
   request: SwitchProviderRequest,
@@ -60,6 +81,12 @@ export async function compactSourceBeforeSwitch(
   }
 
   const source = getHostTranscriptAdapter(request.sourceKind)
+  const target: TranscriptWatchTarget = {
+    sessionId: sourceSessionId,
+    kind: request.sourceKind,
+    cwd: sourceCwd,
+    providerSessionId: request.sourceProviderSessionId,
+  }
 
   if (request.sourceKind === 'opencode') {
     // OpenCode's supported storage boundary is `opencode export`; it has no
@@ -69,8 +96,8 @@ export async function compactSourceBeforeSwitch(
     // runtimes, then the export's completed timestamp proves durability.
     const summaryBaselineLine = await readSourceAs(
       source,
-      sourceCwd,
-      request.sourceProviderSessionId,
+      target.cwd,
+      target.providerSessionId,
       latestSourceLine,
     )
     onPortableSummary?.()
@@ -78,13 +105,7 @@ export async function compactSourceBeforeSwitch(
     if (!delivery.ok) {
       throw new Error(`Could not request OpenCode portable handoff: ${delivery.message}`)
     }
-    return await waitForPortableOpencodeSummary(
-      manager,
-      request,
-      source,
-      sourceCwd,
-      summaryBaselineLine,
-    )
+    return await waitForPortableOpencodeSummary(manager, target, source, summaryBaselineLine)
   }
 
   // WHY no local below holds a ConversationDocument: this function and its
@@ -99,11 +120,20 @@ export async function compactSourceBeforeSwitch(
   // handler hold anyway; dropping it is a caller-side follow-up (see the plan
   // doc), not something this frame can achieve alone.
   if (plan.kind === 'requires-compaction') {
-    const beforeFingerprint = await readSourceAs(
+    // Both baselines come out of ONE decode, deliberately: they describe the
+    // same instant of the same file, and a second read could straddle a write
+    // that lands between them — a compaction fingerprint from before an
+    // `api_error` and a line number from after it would make the hazard check
+    // below look at the wrong side of its own baseline. Two numbers, no
+    // document (#720).
+    const before = await readSourceAs(
       source,
-      sourceCwd,
-      request.sourceProviderSessionId,
-      conversation => describeLatestCompaction(conversation)?.fingerprint ?? null,
+      target.cwd,
+      target.providerSessionId,
+      conversation => ({
+        fingerprint: describeLatestCompaction(conversation)?.fingerprint ?? null,
+        line: latestSourceLine(conversation),
+      }),
     )
     const delivery = await manager.deliverPromptToAgent(sourceSessionId, '/compact')
     if (!delivery.ok) {
@@ -111,28 +141,25 @@ export async function compactSourceBeforeSwitch(
     }
 
     if (request.sourceKind === 'claude') {
-      return await waitForNewCompaction(
+      return await waitForNewCompactionOn(
         manager,
-        request,
-        source,
-        sourceCwd,
-        beforeFingerprint,
+        target,
+        before.fingerprint,
+        before.line,
         conversationAfterLatestPortableCompaction,
       )
     }
-    const summaryBaselineLine = await waitForNewCompaction(
+    const summaryBaselineLine = await waitForNewCompactionOn(
       manager,
-      request,
-      source,
-      sourceCwd,
-      beforeFingerprint,
+      target,
+      before.fingerprint,
+      before.line,
       latestSourceLine,
     )
     return await requestPortableCodexHandoff(
       manager,
-      request,
+      target,
       source,
-      sourceCwd,
       summaryBaselineLine,
       onPortableSummary,
     )
@@ -143,22 +170,21 @@ export async function compactSourceBeforeSwitch(
   if (request.sourceKind === 'claude') {
     return await readSourceAs(
       source,
-      sourceCwd,
-      request.sourceProviderSessionId,
+      target.cwd,
+      target.providerSessionId,
       conversationAfterLatestPortableCompaction,
     )
   }
   const summaryBaselineLine = await readSourceAs(
     source,
-    sourceCwd,
-    request.sourceProviderSessionId,
+    target.cwd,
+    target.providerSessionId,
     latestSourceLine,
   )
   return await requestPortableCodexHandoff(
     manager,
-    request,
+    target,
     source,
-    sourceCwd,
     summaryBaselineLine,
     onPortableSummary,
   )
@@ -172,43 +198,47 @@ export async function compactSourceBeforeSwitch(
 // and summarize its own memory without Agent Code forging ciphertext.
 async function requestPortableCodexHandoff(
   manager: SessionManager,
-  request: SwitchProviderRequest,
+  target: TranscriptWatchTarget,
   source: SourceAdapter,
-  sourceCwd: string,
   summaryBaselineLine: number,
   onPortableSummary: (() => void) | undefined,
 ): Promise<ConversationDocument> {
   onPortableSummary?.()
   const summaryDelivery = await manager.deliverPromptToAgent(
-    request.sourceSessionId!,
+    target.sessionId,
     PORTABLE_SUMMARY_PROMPT,
   )
   if (!summaryDelivery.ok) {
     throw new Error(`Codex compacted successfully but could not create a portable handoff: ${summaryDelivery.message}`)
   }
-  return await waitForPortableCodexSummary(
-    manager,
-    request,
-    source,
-    sourceCwd,
-    summaryBaselineLine,
-  )
+  return await waitForPortableCodexSummary(manager, target, source, summaryBaselineLine)
 }
 
-async function waitForNewCompaction<T>(
+/**
+ * Wait for `target` to persist a compaction newer than `beforeFingerprint`.
+ *
+ * Exported because Stage 5's arrival compaction runs exactly this wait against
+ * the session the switch just created — same `/compact`, same "is the new
+ * boundary durable yet", same two hazards — and duplicating it there is how the
+ * hazard checks below would come to exist in only one of the two copies.
+ *
+ * `baselineLine` is the last transcript line that existed before `/compact` was
+ * sent. Everything the hazard check looks at must be strictly newer than it, or
+ * an api_error from an hour ago would abort a healthy compaction.
+ */
+export async function waitForNewCompactionOn<T>(
   manager: SessionManager,
-  request: SwitchProviderRequest,
-  source: SourceAdapter,
-  sourceCwd: string,
+  target: TranscriptWatchTarget,
   beforeFingerprint: string | null,
+  baselineLine: number,
   // WHY the caller chooses what survives: Claude needs the post-compaction
   // document itself (its native summary is the portable carrier), Codex only
   // needs the line number its handoff must land after. Selecting inside the
   // probe keeps the full document out of this generator's saved registers.
   select: (conversation: ConversationDocument) => T,
 ): Promise<T> {
-  return await pollSourceUntil(manager, request, source, sourceCwd, {
-    expectedKind: request.sourceKind,
+  const source = getHostTranscriptAdapter(target.kind)
+  return await pollSourceUntil(manager, target, source, {
     exitedMessage: 'The source agent exited while native compaction was running.',
     timeoutMessage: lastReadError => {
       // WHY transient read errors are retried rather than surfaced: providers
@@ -218,16 +248,36 @@ async function waitForNewCompaction<T>(
       // append timing into a failed provider switch after `/compact` was
       // already accepted.
       const detail = lastReadError instanceof Error ? ` Last read failed: ${lastReadError.message}` : ''
-      return `Timed out waiting for ${request.sourceKind} to persist a native compaction record.${detail}`
+      return `Timed out waiting for ${target.kind} to persist a native compaction record.${detail}`
     },
   }, conversation => {
+    // #820, hazard 1: the provider answered `/compact` with a usage limit. It
+    // writes that as an ordinary api_error record and then stops, so waiting
+    // longer buys nothing — the wait would run its full five minutes and report
+    // a timeout, which reads to the user as "Agent Code is slow" rather than
+    // "your account is out of quota and your history was just compacted".
+    const limitError = findApiErrorAfterLine(conversation, baselineLine)
+    if (limitError) {
+      throw new Error(
+        `The ${target.kind} provider reported a usage limit instead of compacting; the switch was aborted before any pane was replaced.`,
+      )
+    }
     const latest = describeLatestCompaction(conversation)
-    if (
-      latest &&
-      latest.fingerprint !== beforeFingerprint &&
-      latest.availability !== 'incomplete'
-    ) {
-      return { value: select(conversation) }
+    if (latest && latest.fingerprint !== beforeFingerprint) {
+      // #820, hazard 2, and the worse of the two: Claude's own compaction only
+      // rejects summaries that start with "API Error", so a limit hit during
+      // `/compact` can be persisted AS the summary. The carrier then looks like
+      // a perfectly durable new boundary — right kind, new fingerprint, complete
+      // — and accepting it would switch the pane onto a transcript whose entire
+      // history has been replaced by "You've hit your monthly spend limit".
+      // `compactionAvailability` calls that `rejected`; there is no recovery,
+      // only an honest abort.
+      if (latest.availability === 'rejected') {
+        throw new Error(
+          `The ${target.kind} provider wrote a usage-limit message where its compaction summary should be; the switch was aborted.`,
+        )
+      }
+      if (latest.availability !== 'incomplete') return { value: select(conversation) }
     }
     return null
   })
@@ -235,13 +285,11 @@ async function waitForNewCompaction<T>(
 
 async function waitForPortableCodexSummary(
   manager: SessionManager,
-  request: SwitchProviderRequest,
+  target: TranscriptWatchTarget,
   source: SourceAdapter,
-  sourceCwd: string,
   baselineLine: number,
 ): Promise<ConversationDocument> {
-  return await pollSourceUntil(manager, request, source, sourceCwd, {
-    expectedKind: 'codex',
+  return await pollSourceUntil(manager, target, source, {
     exitedMessage: 'The Codex source agent exited while creating its portable handoff.',
     timeoutMessage: () => 'Timed out waiting for compacted Codex to persist a portable handoff summary.',
   }, conversation => {
@@ -266,13 +314,11 @@ async function waitForPortableCodexSummary(
 
 async function waitForPortableOpencodeSummary(
   manager: SessionManager,
-  request: SwitchProviderRequest,
+  target: TranscriptWatchTarget,
   source: SourceAdapter,
-  sourceCwd: string,
   baselineLine: number,
 ): Promise<ConversationDocument> {
-  return await pollSourceUntil(manager, request, source, sourceCwd, {
-    expectedKind: 'opencode',
+  return await pollSourceUntil(manager, target, source, {
     exitedMessage: 'The OpenCode source agent exited while creating its portable handoff.',
     timeoutMessage: () => 'Timed out waiting for OpenCode to persist a portable handoff summary.',
   }, conversation => {
@@ -294,10 +340,18 @@ async function waitForPortableOpencodeSummary(
 }
 
 type PollOptions = {
-  expectedKind: AgentProviderKind
   exitedMessage: string
   timeoutMessage: (lastReadError: unknown) => string
 }
+
+/**
+ * A probe either produced a value, produced nothing yet, or decided the wait
+ * must stop. The third case exists because the probe runs inside the decode's
+ * try/catch — see `pollSourceUntil` — and that catch means "the file was caught
+ * mid-write, try again", which is the exact opposite of what a probe throw
+ * means.
+ */
+type ProbeStep<T> = { value: T } | null
 
 // Poll the live source transcript until `probe` accepts a decoded snapshot.
 //
@@ -324,13 +378,11 @@ type PollOptions = {
 // a re-check on the next tick; sampling afterwards could swallow that write.
 async function pollSourceUntil<T>(
   manager: SessionManager,
-  request: SwitchProviderRequest,
+  target: TranscriptWatchTarget,
   source: SourceAdapter,
-  sourceCwd: string,
   options: PollOptions,
-  probe: (conversation: ConversationDocument) => { value: T } | null,
+  probe: (conversation: ConversationDocument) => ProbeStep<T>,
 ): Promise<T> {
-  const sourceSessionId = request.sourceSessionId!
   const deadline = Date.now() + COMPACTION_TIMEOUT_MS
   let transcriptPath: string | null = null
   let lastToken: string | null = null
@@ -343,43 +395,66 @@ async function pollSourceUntil<T>(
   let lastReadError: unknown = null
   const fileBacked = typeof source.locate === 'function' && typeof source.readAt === 'function'
 
-  const decodeOnce = async (): Promise<{ value: T } | null> => {
+  // WHY the probe's decision is carried out of the try/catch in a box rather
+  // than simply thrown from inside the selector: the selector necessarily runs
+  // INSIDE the decode (that is the whole #720 retention trick — the document
+  // must die in the frame that read it), and the decode's catch means "this
+  // snapshot was caught mid-append, try again in a second". A probe throw means
+  // the opposite: the provider gave a definitive, terminal answer, most
+  // urgently a usage limit after `/compact` has already run. Letting the catch
+  // swallow it would turn a two-decode abort into a five-minute timeout with a
+  // misleading message. The box is checked after the catch, so the throw
+  // happens outside it.
+  const abort: { failed: boolean; error: unknown } = { failed: false, error: null }
+  const guardedProbe = (conversation: ConversationDocument): ProbeStep<T> => {
+    try {
+      return probe(conversation)
+    } catch (error) {
+      abort.failed = true
+      abort.error = error
+      return null
+    }
+  }
+
+  const decodeOnce = async (): Promise<ProbeStep<T>> => {
+    let outcome: ProbeStep<T> = null
     try {
       if (!fileBacked) {
-        const outcome = await readSourceAs(
+        outcome = await readSourceAs(
           source,
-          sourceCwd,
-          request.sourceProviderSessionId,
-          probe,
+          target.cwd,
+          target.providerSessionId,
+          guardedProbe,
         )
         lastReadError = null
         // A CLI export has no cheap stat token. Keep it pending so the next
         // cooled tick exports again; MIN_DECODE_INTERVAL_MS still prevents a
         // long session from monopolizing the main process.
         decodePending = true
-        return outcome
+      } else {
+        if (transcriptPath === null) {
+          transcriptPath = await source.locate!(target.cwd, target.providerSessionId)
+        }
+        lastToken = await transcriptChangeToken(transcriptPath)
+        outcome = await readSourceAtAs(source, transcriptPath, guardedProbe)
+        lastReadError = null
+        decodePending = false
       }
-      if (transcriptPath === null) {
-        transcriptPath = await source.locate!(sourceCwd, request.sourceProviderSessionId)
-      }
-      lastToken = await transcriptChangeToken(transcriptPath)
-      const outcome = await readSourceAtAs(source, transcriptPath, probe)
-      lastReadError = null
-      decodePending = false
-      return outcome
     } catch (error) {
       // A failed locate/read says nothing about whether the file settled, so
       // the next cooled tick decodes again even if the token did not move.
       lastReadError = error
       decodePending = true
-      return null
+      outcome = null
     } finally {
       lastDecodeEndedAt = Date.now()
     }
+    if (abort.failed) throw abort.error
+    return outcome
   }
 
   while (Date.now() < deadline) {
-    if (manager.getSessionKind(sourceSessionId) !== options.expectedKind) {
+    if (manager.getSessionKind(target.sessionId) !== target.kind) {
       throw new Error(options.exitedMessage)
     }
     if (fileBacked && transcriptPath !== null && !decodePending) {
@@ -442,7 +517,12 @@ async function readSourceAtAs<T>(
   return select(await source.readAt(path))
 }
 
-function latestSourceLine(conversation: ConversationDocument): number {
+// The highest transcript line any decoded entry came from, or -1 for an empty
+// conversation. Exported because it is the baseline every "did something land
+// AFTER we asked for it" check compares against — the portable handoff waits
+// and, since #820, the api_error hazard check — and those callers must all
+// derive it the same way or they will disagree about what "after" means.
+export function latestSourceLine(conversation: ConversationDocument): number {
   return conversation.entries.reduce(
     (latest, entry) => Math.max(latest, entry.source.line),
     -1,
