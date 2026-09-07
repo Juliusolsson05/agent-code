@@ -11,7 +11,7 @@ import type { SessionId } from '@renderer/workspace/types'
 // window.api is stubbed because the real bridge only exists in the
 // packaged app.
 
-const sendInput = vi.fn(async () => {})
+const sendInput = vi.fn(async (_id: string, _data: string) => {})
 const ensureSessionLive = vi.fn(async () => {})
 const setDraftInput = vi.fn()
 
@@ -87,7 +87,7 @@ describe('deliverTextToSession', () => {
   })
 
   it('wakes a sleeping backend before writing to a PTY', async () => {
-    const workspace = makeWorkspace({ t: { kind: 'terminal' } }, { t: makeRuntime({ processStatus: 'stopped' }) })
+    const workspace = makeWorkspace({ t: { kind: 'terminal' } }, { t: makeRuntime({ processStatus: 'exited' }) })
     await deliverTextToSession(workspace, 't', 'x')
     expect(ensureSessionLive).toHaveBeenCalledWith('t', 'session-text-delivery', { awaitInputReady: false })
     expect(sendInput).toHaveBeenCalled()

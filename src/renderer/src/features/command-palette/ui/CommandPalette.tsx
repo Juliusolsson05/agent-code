@@ -58,6 +58,7 @@ import {
 import {
   fillPromptTemplateBody,
 } from '@renderer/features/prompt-templates/interpolate'
+import { collectKeyReferences, resolveKeyReferences } from '@renderer/features/prompt-templates/keyReferences'
 import { deliverTextToSession } from '@renderer/features/session-text-delivery/deliverTextToSession'
 import {
   createSavedPromptTemplate,
@@ -1283,9 +1284,24 @@ function OpenCommandPalette({
       if (!sessionId) return
 
       try {
-        const body = template.buildBody
+        let body = template.buildBody
           ? await template.buildBody({ workspace, sessionId })
           : template.body
+        // Vault key references (#831): resolve BEFORE the variables check
+        // so the fill pane never displays secret values, and abort with a
+        // toast on missing refs instead of pasting placeholder text.
+        const keyRefs = collectKeyReferences(body)
+        if (keyRefs.length > 0) {
+          body = await resolveKeyReferences(body, async ref => {
+            try {
+              return await window.api.keyVaultResolveReference(ref.providerName, ref.keyName)
+            } catch {
+              // Locked/canceled/missing all mean "cannot resolve now" —
+              // the aggregate error below names the reference.
+              return null
+            }
+          })
+        }
         if (template.variables.length > 0) {
           setPromptTemplateFillState({
             template: template.buildBody ? { ...template, body } : template,
