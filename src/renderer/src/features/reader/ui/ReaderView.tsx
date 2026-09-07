@@ -12,6 +12,7 @@ import { extractAssistantInProgress } from '@shared/parsers/extractAssistant'
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import { assistantUuidsWithText, extractAssistantByUuid } from '@renderer/lib/copyAssistant'
 import { resolveTabSessions } from '@renderer/workspace/queries'
+import { useSessionRuntime } from '@renderer/workspace/useSessionRuntime'
 import { dispatchSessionIdsForTab } from '@renderer/workspace/dispatch/dispatchSelectors'
 import type { SessionId, Workspace } from '@renderer/workspace/workspaceStore'
 import { PaneToast } from '@renderer/workspace/tile-tree/TileLeaf/PaneToast'
@@ -135,7 +136,7 @@ function ReaderBody({
   sessionId: SessionId
   sessionIds: SessionId[]
 }) {
-  const runtime = workspace.getRuntime(sessionId)
+  const runtime = useSessionRuntime(workspace, sessionId)
   const meta = workspace.state.sessions[sessionId]
   // Use the pane's actual provider for the screen extractor rather than
   // the old `=== 'codex' ? 'codex' : 'claude'` negation, which collapsed

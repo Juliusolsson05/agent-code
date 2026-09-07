@@ -6,6 +6,8 @@ import { extname, join, normalize, sep } from 'node:path'
 import type { Duplex } from 'node:stream'
 
 import { WebSocketServer } from 'ws'
+import { sendBoundedRemoteOutput, boundRemoteHistory } from './outputBudget.js'
+import { REMOTE_OUTPUT_MAX_BYTES, REMOTE_HISTORY_TOO_LARGE } from '@shared/remoteOutputLimits.js'
 import type { WebSocket } from 'ws'
 
 import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
@@ -543,21 +545,7 @@ export class RemoteServer extends EventEmitter {
       sttAvailable: Boolean(this.deps.transcribeAudio) && (this.deps.isSttAvailable?.() ?? true),
     })
     this.send(ws, { type: 'session-list', sessions: this.deps.feedSource.listSessions() })
-    // Late-joiner replay — same channel shape as live events so the client
-    // needs no special bootstrap path.
-    for (const [, payload] of this.lastScreen) {
-      this.send(ws, { type: 'session-event', channel: 'screen', payload })
-    }
-    for (const [, payload] of this.lastConditions) {
-      this.send(ws, { type: 'session-event', channel: 'conditions', payload })
-    }
-    for (const [, payload] of this.lastProcessState) {
-      this.send(ws, { type: 'session-event', channel: 'process-state', payload })
-    }
-    for (const [, payload] of this.lastInputReadiness) {
-      this.send(ws, { type: 'session-event', channel: 'input-readiness', payload })
-    }
-
+    ws.on('error', () => ws.terminate())
     ws.on('message', data => {
       void this.onMessage(ws, String(data))
     })
@@ -570,6 +558,33 @@ export class RemoteServer extends EventEmitter {
         data: { deviceId },
       })
     })
+    void this.replaySnapshots(ws)
+  }
+
+  private async replaySnapshots(ws: WebSocket): Promise<void> {
+    // A healthy late joiner can need more than the socket budget in TOTAL.
+    // Pace bootstrap by write completion rather than enqueueing every cached
+    // pane synchronously and disconnecting it again on every reconnect. Live
+    // broadcasts retain their ordering and budget; read each cache value just
+    // before sending so intervening live updates cannot be overwritten by an
+    // older snapshot captured at connection time.
+    const caches = [
+      ['screen', this.lastScreen],
+      ['conditions', this.lastConditions],
+      ['process-state', this.lastProcessState],
+      ['input-readiness', this.lastInputReadiness],
+    ] as const
+    for (const [channel, cache] of caches) {
+      for (const [sessionId] of cache) {
+        const payload = cache.get(sessionId)
+        if (!payload) continue
+        const encoded = JSON.stringify({ type: 'session-event', channel, payload })
+        const sent = await new Promise<boolean>(resolve => {
+          if (!sendBoundedRemoteOutput(ws, encoded, resolve)) resolve(false)
+        })
+        if (!sent) return
+      }
+    }
   }
 
   private async onMessage(ws: WebSocket, raw: string): Promise<void> {
@@ -686,7 +701,10 @@ export class RemoteServer extends EventEmitter {
         // durable line, and a backfill served from the OLD file must be
         // discardable client-side by comparing against the file the live
         // frames carry.
-        return { ok: true, result: { ...chunk, file } }
+        const bounded = boundRemoteHistory(chunk)
+        return bounded
+          ? { ok: true, result: { ...bounded, file } }
+          : { ok: false, error: REMOTE_HISTORY_TOO_LARGE }
       }
     }
   }
@@ -754,12 +772,19 @@ export class RemoteServer extends EventEmitter {
     // rate times N phones would otherwise multiply stringify cost.
     const encoded = JSON.stringify(frame)
     for (const client of this.sockets) {
-      if (client.ws.readyState === client.ws.OPEN) client.ws.send(encoded)
+      sendBoundedRemoteOutput(client.ws, encoded)
     }
   }
 
   private send(ws: WebSocket, frame: OutboundFrame): void {
-    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(frame))
+    let encoded = JSON.stringify(frame)
+    if (frame.type === 'reply' && Buffer.byteLength(encoded) + 16 > REMOTE_OUTPUT_MAX_BYTES) {
+      // A single oversized reply cannot recover by reconnecting and repeating
+      // the identical request. Return a bounded failure without replaying any
+      // mutation (the caller must treat absent delivery evidence as uncertain).
+      encoded = JSON.stringify({ type: 'reply', id: frame.id, ok: false, error: 'Remote response exceeds the output limit.' })
+    }
+    sendBoundedRemoteOutput(ws, encoded)
   }
 }
 

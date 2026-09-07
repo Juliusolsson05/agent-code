@@ -17,7 +17,7 @@ it('reads actual composer edits, protects concurrent text, and uses the existing
   const mounted = renderHook(() => {
     const [version, setVersion] = useState(0)
     const setRuntimes = useAppStore.getState().setWorkspaceRuntimes
-    const actions = useDraftActions(setRuntimes, (id, patch) => setRuntimes(prev => ({ ...prev, [id]: { ...prev[id], ...patch } })), setVersion)
+    const actions = useDraftActions(setRuntimes, (id, patch) => setRuntimes(prev => ({ ...prev, [id]: { ...prev[id], ...patch } })), () => setVersion(v => v + 1))
     return { ...actions, version, restoreStatus: 'fresh' }
   })
   const capabilities = draftControlCapabilities(() => mounted.result.current as unknown as Workspace)

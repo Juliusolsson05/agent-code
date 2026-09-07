@@ -26,6 +26,7 @@ import type { Workspace } from '@renderer/workspace/workspaceStore'
 // lane on the next render. A unit test cannot see that; only mounting can.
 
 const appState = vi.hoisted(() => ({
+  workspaceRuntimes: {},
   dispatchListRatio: 0.25,
   openNewAgentForProject: vi.fn(),
   setDispatchListRatio: vi.fn(),

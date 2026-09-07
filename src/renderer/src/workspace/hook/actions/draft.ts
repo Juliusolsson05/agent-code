@@ -1,5 +1,4 @@
 import { useCallback } from 'react'
-import type { Dispatch, SetStateAction } from 'react'
 
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
@@ -37,7 +36,7 @@ const clearedDrafts = new Map<SessionId, string>()
 export function useDraftActions(
   setRuntimes: WorkspaceSetRuntimes,
   updateRuntime: (sessionId: SessionId, patch: Partial<SessionRuntime>) => void,
-  setDraftVersion: Dispatch<SetStateAction<number>>,
+  bumpDraftChanges: () => void,
 ): {
   setDraftInput: (sessionId: SessionId, text: string) => void
   setDraftImages: (
@@ -52,9 +51,9 @@ export function useDraftActions(
   const setDraftInput = useCallback(
     (sessionId: SessionId, text: string) => {
       updateRuntime(sessionId, { draftInput: text })
-      setDraftVersion(v => v + 1)
+      bumpDraftChanges()
     },
-    [setDraftVersion, updateRuntime],
+    [bumpDraftChanges, updateRuntime],
   )
 
   const setDraftImages = useCallback(
@@ -78,9 +77,9 @@ export function useDraftActions(
           },
         }
       })
-      setDraftVersion(v => v + 1)
+      bumpDraftChanges()
     },
-    [setDraftVersion, setRuntimes],
+    [bumpDraftChanges, setRuntimes],
   )
 
   /**
@@ -113,10 +112,10 @@ export function useDraftActions(
           [sessionId]: { ...current, draftInput: '', draftImages: [] },
         }
       })
-      if (cleared) setDraftVersion(v => v + 1)
+      if (cleared) bumpDraftChanges()
       return cleared
     },
-    [setDraftVersion, setRuntimes],
+    [bumpDraftChanges, setRuntimes],
   )
 
   /**
@@ -149,10 +148,10 @@ export function useDraftActions(
       })
       if (previous.length > 0) clearedDrafts.set(sessionId, previous)
       else clearedDrafts.delete(sessionId)
-      setDraftVersion(v => v + 1)
+      bumpDraftChanges()
       return true
     },
-    [setDraftVersion, setRuntimes],
+    [bumpDraftChanges, setRuntimes],
   )
 
   return { setDraftInput, setDraftImages, clearDraft, undoClearDraft }

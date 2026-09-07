@@ -14,6 +14,17 @@ import type {
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import { commandTargetSessionIdForState } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 
+// Missing sessions need a stable read-only fallback so merely asking for their
+// state cannot invalidate a memo boundary. Reducers still allocate their own.
+//
+// INVARIANT: this object is SHARED across every missing session and must never
+// be mutated in place. Update paths always build fresh reducer-owned runtimes
+// (spread + patch), so a `getRuntime()` result is only ever read; an in-place
+// edit on it would silently contaminate every session that has no stored
+// runtime yet — until one session is created, then exactly one shared object
+// is shared by all of them at once (the worst possible time to corrupt it).
+const EMPTY_RUNTIME = emptyRuntime()
+
 // -----------------------------------------------------------------------------
 // Cross-cutting runtime helpers
 //
@@ -24,7 +35,6 @@ import { commandTargetSessionIdForState } from '@renderer/workspace/hook/selecto
 // -----------------------------------------------------------------------------
 
 export function useWorkspaceHelpers(
-  runtimes: Record<SessionId, SessionRuntime>,
   setRuntimes: WorkspaceSetRuntimes,
   refs: WorkspaceRefs,
 ): {
@@ -86,9 +96,9 @@ export function useWorkspaceHelpers(
 
   const getRuntime = useCallback(
     (sessionId: SessionId): SessionRuntime => {
-      return runtimes[sessionId] ?? emptyRuntime()
+      return refs.latestRuntimesRef.current[sessionId] ?? EMPTY_RUNTIME
     },
-    [runtimes],
+    [refs.latestRuntimesRef],
   )
 
   const toggleTailMode = useCallback(

@@ -12,6 +12,7 @@ import type { WorkspaceState } from '@renderer/workspace/types'
 import { asRecord } from '@shared/lib/asRecord'
 
 const appState = vi.hoisted(() => ({
+  workspaceRuntimes: {},
   dispatchListRatio: 0.25,
   openNewAgentForProject: vi.fn(),
   setDispatchListRatio: vi.fn(),

@@ -13,7 +13,10 @@ it('uses real follow owners, preserves lanes and other agents, and reports Tail 
   useAppStore.setState({ tailAllMode: true, workspaceState: { ...original.workspaceState, sessions: { first: { kind: 'claude', cwd: '/trial' }, second: { kind: 'codex', cwd: '/trial' } } }, workspaceRuntimes: { first: { ...emptyRuntime(), tailMode: true }, second: { ...emptyRuntime(), tailMode: true } } })
   const layout = useAppStore.getState().workspaceState
   const refs = makeRefs(layout)
-  const mounted = renderHook(() => useWorkspaceHelpers(useAppStore.getState().workspaceRuntimes, useAppStore.getState().setWorkspaceRuntimes, refs))
+  // useWorkspaceHelpers reads runtimes through refs and toggles via the
+  // setRuntimes updater, so the harness only needs the setter after the
+  // runtime-isolation refactor (dropped the render-time runtimes parameter).
+  const mounted = renderHook(() => useWorkspaceHelpers(useAppStore.getState().setWorkspaceRuntimes, refs))
   const caps = preferenceControlCapabilities(() => ({ ...mounted.result.current, restoreStatus: 'fresh' }) as unknown as Workspace)
   const invoke = (id: string, input: unknown) => caps.find(cap => cap.descriptor.id === id)!.execute(input, context)
   const before = await invoke('views.preferencesRead', { sessionId: 'first' })

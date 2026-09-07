@@ -16,6 +16,7 @@ import type { Workspace } from '@renderer/workspace/workspaceStore'
 // unit test shipped as a no-op because the component undid it on render.
 
 const appState = vi.hoisted(() => ({
+  workspaceRuntimes: {},
   dispatchListRatio: 0.25,
   openNewAgentForProject: vi.fn(),
   setDispatchListRatio: vi.fn(),
