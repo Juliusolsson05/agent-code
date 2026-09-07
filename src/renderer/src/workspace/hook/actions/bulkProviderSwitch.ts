@@ -8,6 +8,7 @@ import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import type { WorkspaceSetRuntimes, WorkspaceSetState } from '@renderer/workspace/hook/context'
 import type { SessionActions } from '@renderer/workspace/hook/actions/session'
 import { switchAgentProvider } from '@renderer/workspace/hook/actions/providerSwitchCore'
+import type { SwitchStrategy } from '@renderer/workspace/hook/actions/providerSwitchCore'
 
 // Bulk provider switch + remembered-batch return.
 //
@@ -31,6 +32,43 @@ function pluralAgents(n: number): string {
   return `${n} agent${n === 1 ? '' : 's'}`
 }
 
+/**
+ * What a batch is allowed to spend, decided ONCE by the modal for the whole
+ * batch.
+ *
+ * WHY the caller owns this instead of the action defaulting it: the two halves
+ * cost the user completely different things. `allowSourceTurns` spends the
+ * SOURCE provider's quota — the one that is usually exhausted, which is why the
+ * transaction defaults it off — and `compactOnArrival` spends the TARGET's.
+ * Only the surface that showed the exhaustion banner knows which of those the
+ * user just agreed to, and per the spec it asks once for the batch rather than
+ * once per agent.
+ */
+export type BulkSwitchPolicy = {
+  allowSourceTurns: boolean
+  compactOnArrival: boolean
+  sourceCompactionConfirmed: boolean
+}
+
+/** The return path has no modal, so it hard-codes the safe policy.
+ *
+ *  `allowSourceTurns: false` because the source here is the provider the user
+ *  parked on, and a return usually happens because the ORIGINAL provider's
+ *  window reset — nothing licenses spending the parking provider's quota, and
+ *  the whole feature exists to avoid needing to.
+ *
+ *  `compactOnArrival` only for a Claude destination: Claude is the one target
+ *  with a compaction the renderer can drive (see compactAfterSwitch, which
+ *  reports every other kind as a no-op), and a returning transcript has grown
+ *  by everything the agent did while parked. */
+function returnPolicy(targetKind: AgentProviderKind): BulkSwitchPolicy {
+  return {
+    allowSourceTurns: false,
+    compactOnArrival: targetKind === 'claude',
+    sourceCompactionConfirmed: false,
+  }
+}
+
 export function useBulkProviderSwitchActions(
   refs: WorkspaceRefs,
   setState: WorkspaceSetState,
@@ -41,11 +79,12 @@ export function useBulkProviderSwitchActions(
   switchAgentsToProvider: (
     sessionIds: SessionId[],
     targetKind: AgentProviderKind,
+    policy: BulkSwitchPolicy,
   ) => Promise<void>
   returnLastProviderSwitchBatch: () => Promise<void>
 } {
   const switchAgentsToProvider = useCallback(
-    async (sessionIds: SessionId[], targetKind: AgentProviderKind) => {
+    async (sessionIds: SessionId[], targetKind: AgentProviderKind, policy: BulkSwitchPolicy) => {
       if (sessionIds.length === 0) return
 
       // Sequential, not concurrent. switchAgentProvider → replaceSession mutates
@@ -56,6 +95,11 @@ export function useBulkProviderSwitchActions(
       // enough that predictable mutation beats raw speed.
       const switched: ProviderSwitchBatchAgent[] = []
       let failed = 0
+      // Per-strategy tally, not a single "compacted" flag: a batch where nine
+      // agents crossed losslessly and two had to be shrunk is a materially
+      // different outcome from one where all eleven were shrunk, and the user
+      // is the only one who can decide whether the loss mattered.
+      const counts: Record<SwitchStrategy, number> = { native: 0, raw: 0, shrunk: 0 }
 
       for (const sessionId of sessionIds) {
         // Read meta fresh each iteration — earlier switches have already mutated
@@ -71,9 +115,20 @@ export function useBulkProviderSwitchActions(
           refs,
           setRuntimes,
           sessionActions,
+          contextPolicy: {
+            allowSourceTurns: policy.allowSourceTurns,
+            compactOnArrival: policy.compactOnArrival,
+          },
+          sourceCompactionConfirmed: policy.sourceCompactionConfirmed,
           onProgress: event => showToast(event.message, 305_000),
+          // Arrival compaction fires long after this loop has moved on, so its
+          // failure cannot join the batch summary. One toast per failing agent
+          // is the honest report: the switch itself succeeded and the pane is
+          // live with its full history.
+          onArrivalFailure: message => showToast(message),
         })
 
+        if (result.status === 'switched') counts[result.strategy] += 1
         if (result.status === 'switched' && meta && originalKind) {
           switched.push({
             sessionId: result.newSessionId,
@@ -105,7 +160,12 @@ export function useBulkProviderSwitchActions(
         }))
       }
 
-      const base = `Switched ${pluralAgents(switched.length)} to ${providerLabel(targetKind)}`
+      const tally = [
+        counts.native > 0 ? `${counts.native} native` : null,
+        counts.raw > 0 ? `${counts.raw} raw` : null,
+        counts.shrunk > 0 ? `${counts.shrunk} shrunk` : null,
+      ].filter(Boolean).join(', ')
+      const base = `Switched ${pluralAgents(switched.length)} to ${providerLabel(targetKind)}${tally ? `: ${tally}` : ''}`
       showToast(failed > 0 ? `${base} (${failed} failed)` : base)
     },
     [refs, sessionActions, setRuntimes, setState, showToast],
@@ -137,13 +197,20 @@ export function useBulkProviderSwitchActions(
         continue
       }
 
+      const policy = returnPolicy(agent.originalKind)
       const result = await switchAgentProvider({
         sessionId: agent.sessionId,
         targetKind: agent.originalKind,
         refs,
         setRuntimes,
         sessionActions,
+        contextPolicy: {
+          allowSourceTurns: policy.allowSourceTurns,
+          compactOnArrival: policy.compactOnArrival,
+        },
+        sourceCompactionConfirmed: policy.sourceCompactionConfirmed,
         onProgress: event => showToast(event.message, 305_000),
+        onArrivalFailure: message => showToast(message),
       })
       if (result.status === 'switched') returned += 1
       else if (result.status === 'failed') failed += 1

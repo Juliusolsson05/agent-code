@@ -1,6 +1,7 @@
 // See docs/design/provider-switching.md for the renderer/main transaction,
 // progress, and non-cancellable compaction lock invariants.
 import type { SessionId } from '@renderer/workspace/types'
+import type { SessionRuntime } from '@renderer/session-runtime/state'
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import type { AgentProviderKind, AgentProviderRuntime } from '@shared/types/providerKind'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
@@ -35,9 +36,58 @@ import {
 // agent.
 
 export type SwitchAgentProviderResult =
-  | { status: 'switched'; newSessionId: SessionId; targetKind: AgentProviderKind }
+  | {
+      status: 'switched'
+      newSessionId: SessionId
+      targetKind: AgentProviderKind
+      /** How the conversation was made to fit the target, straight from the
+       *  transaction: `native` lost nothing, `raw` dropped only a carrier the
+       *  target could not have read, `shrunk` removed content the ladder had
+       *  to remove. The bulk caller counts these; the single-pane caller shows
+       *  the one it got. */
+      strategy: SwitchStrategy
+      /** One human-readable line describing what `shrunk` cost, else null. */
+      shrinkSummary: string | null
+    }
   | { status: 'skipped'; reason: string }
   | { status: 'failed'; message: string }
+
+export type SwitchStrategy = 'native' | 'raw' | 'shrunk'
+
+/**
+ * Is this pane parked on a provider usage limit rather than genuinely working?
+ *
+ * WHY the switch guard needs an exception at all: both providers keep their
+ * process alive while a usage window is exhausted — Claude paints "Usage limit
+ * reached · continuing automatically" and waits, Codex keeps the conversation
+ * open after its 429. `processActive` therefore stays true for the exact
+ * population this feature exists to rescue, and the pre-existing guard
+ * ("Wait for the current turn to finish") would refuse every one of them.
+ *
+ * WHY the comparison is against `turnStartedAt` and not a wall-clock age: a
+ * limit hit older than the current turn's start belongs to a previous episode
+ * the user already worked past, and switching then would kill a live turn.
+ * `turnStartedAt === null` (restored/detached panes that never ran the stream
+ * phase machine) means there is no turn to protect, so the limit signal stands
+ * on its own.
+ *
+ * CAVEAT, deliberately shipped: whether `processActive` in fact stays true
+ * under Claude's auto-wait banner is Unknown 1 in the decomposition and has NO
+ * recording yet (docs/decomposition/quota-independent-provider-switch.md,
+ * Stage 6). This predicate is therefore DEFENSIVE, not evidence-driven: if the
+ * banner turns out to clear `processActive`, the guard already lets the switch
+ * through on the ordinary idle path and this exception is simply never
+ * consulted. It can only widen the guard, never narrow it, so being wrong
+ * about the banner costs nothing.
+ */
+export function isLimitIdle(
+  runtime: Pick<SessionRuntime, 'limitHit' | 'turnStartedAt'>,
+): boolean {
+  return (
+    runtime.limitHit !== null &&
+    (runtime.turnStartedAt === null || runtime.limitHit.at >= runtime.turnStartedAt)
+  )
+}
 
 // WHY this is module-scoped rather than React state: the lock guards an
 // imperative cross-process transaction and should become visible to a second
@@ -63,6 +113,17 @@ export async function switchAgentProvider(params: {
     allowSourceTurns?: boolean
     compactOnArrival?: boolean
   }
+  /**
+   * The caller already confirmed that compacting the LIVE source is
+   * acceptable, so main skips its per-agent native dialog.
+   *
+   * WHY the confirmation travels beside the policy instead of being implied by
+   * `allowSourceTurns`: a batch of twenty agents must be confirmed ONCE, in the
+   * modal, and a per-agent modal dialog twenty deep is the behavior this
+   * feature removes (spec §Renderer, "One confirmation per batch"). Only
+   * meaningful with `allowSourceTurns: true`; main ignores it otherwise.
+   */
+  sourceCompactionConfirmed?: boolean
   onProgress?: (event: {
     phase: 'compacting' | 'summarizing' | 'shrinking' | 'projecting'
     message: string
@@ -82,6 +143,7 @@ export async function switchAgentProvider(params: {
     setRuntimes,
     sessionActions,
     contextPolicy,
+    sourceCompactionConfirmed,
     onProgress,
     onArrivalFailure,
   } = params
@@ -153,11 +215,19 @@ export async function switchAgentProvider(params: {
 
     // The replacement owner transfers the latest supported draft atomically.
     // A second snapshot here would overwrite edits made while spawn awaited.
-    return { status: 'switched', newSessionId, targetKind }
+    //
+    // `native` is the honest strategy for an empty source: no transcript was
+    // translated, so nothing could be lost. Reporting null instead would make
+    // the batch tally under-count agents that switched perfectly well.
+    return { status: 'switched', newSessionId, targetKind, strategy: 'native', shrinkSummary: null }
   }
 
   const sourceRuntime = refs.latestRuntimesRef.current[sessionId]
-  if (sourceRuntime?.processActive || sourceRuntime?.semantic.currentTurn) {
+  // The usage-limit exception (see isLimitIdle): a pane whose provider is
+  // sitting on an exhausted window still reads as busy, and refusing it would
+  // lock out precisely the agents this feature exists to move. Replacement
+  // kills the process, which is what ends the provider's wait banner anyway.
+  if ((sourceRuntime?.processActive || sourceRuntime?.semantic.currentTurn) && !(sourceRuntime && isLimitIdle(sourceRuntime))) {
     return { status: 'failed', message: 'Wait for the current turn to finish before switching provider' }
   }
   if (providerSwitchesInFlight.has(sessionId)) {
@@ -242,11 +312,13 @@ export async function switchAgentProvider(params: {
       sourceProviderSessionId,
       sourceSessionId: sessionId,
       cwd: meta.cwd,
-      // Forwarded even though nothing sets it yet (the bulk modal that will is
-      // Stage 6): a policy the caller passed and this function silently dropped
-      // would be a trap for the first caller that sets `allowSourceTurns` and
-      // wonders why the source was never asked to compact.
+      // A policy the caller passed and this function silently dropped would be
+      // a trap for the caller that sets `allowSourceTurns` and wonders why the
+      // source was never asked to compact. Both keys are spread conditionally
+      // so an unset policy still reaches main as "absent", letting
+      // DEFAULT_SWITCH_CONTEXT_POLICY stay the single source of the defaults.
       ...(contextPolicy ? { contextPolicy } : {}),
+      ...(sourceCompactionConfirmed ? { sourceCompactionConfirmed } : {}),
     }).finally(unsubscribeProgress)
 
     if (result.kind === 'source-empty') {
@@ -287,7 +359,13 @@ export async function switchAgentProvider(params: {
       })
     }
 
-    return { status: 'switched', newSessionId, targetKind: result.targetKind }
+    return {
+      status: 'switched',
+      newSessionId,
+      targetKind: result.targetKind,
+      strategy: result.strategy,
+      shrinkSummary: result.shrinkSummary,
+    }
   } catch (err) {
     const message =
       err instanceof Error && err.message.length > 0 ? err.message : 'Provider switch failed'

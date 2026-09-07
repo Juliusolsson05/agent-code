@@ -291,6 +291,11 @@ describe('switchAgentProvider', () => {
       status: 'switched',
       newSessionId: 'target-pane',
       targetKind: 'claude',
+      // An empty source loses nothing on the way across, so the strategy the
+      // batch summary counts is `native` even though no transcript was
+      // translated at all (#821).
+      strategy: 'native',
+      shrinkSummary: null,
     })
 
     expect(switchProvider).toHaveBeenCalledWith(expect.objectContaining({

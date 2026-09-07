@@ -1100,6 +1100,20 @@ export function useIpcSubscriptions(
         })
         return
       }
+      // ---- Usage-limit signal (#821), the live channel ----
+      // Codex reports an exhausted subscription window as an `api_error` with
+      // `errorType: 'usage_limit_reached'` — classified in codex-headless
+      // precisely so it is distinguishable from a plain retryable 429 (see
+      // packages/codex-headless/src/channels/types.ts). The conversation stays
+      // open afterward, so this event is the only thing that separates "the
+      // agent is thinking" from "the agent cannot think until 14:32".
+      //
+      // Computed outside the updater for the same reason as the JSONL path: one
+      // Date.now() per event, not one per React re-invocation.
+      const semanticLimitHitAt =
+        semanticEvent.type === 'api_error' && semanticEvent.errorType === 'usage_limit_reached'
+          ? Date.now()
+          : null
       // Captured by the updater, committed after setRuntimes returns.
       let pendingStaleQueue: ClaudeQueueState | null = null
       setRuntimes(prev => {
@@ -1259,13 +1273,26 @@ export function useIpcSubscriptions(
         const staleChanged = markedQueue !== null && markedQueue !== existingQueue
         if (staleChanged) pendingStaleQueue = markedQueue
 
+        // A completed turn is the one unambiguous proof that the limit episode
+        // is over: the provider answered. `turn_stopped` deliberately does NOT
+        // clear it — a turn can stop precisely BECAUSE the limit was hit, and
+        // clearing there would erase the signal in the same tick it arrived.
+        const nextLimitHit: SessionRuntime['limitHit'] =
+          semanticLimitHitAt !== null
+            ? { at: semanticLimitHitAt, source: 'api_error' }
+            : eventType === 'turn_completed'
+              ? null
+              : current.limitHit
+        const limitHitChanged = nextLimitHit !== current.limitHit
+
         if (
           semanticUnchanged &&
           phaseUnchanged &&
           ghostsUnchanged &&
           awaitingUnchanged &&
           !shouldClearIdleQueue &&
-          !staleChanged
+          !staleChanged &&
+          !limitHitChanged
         ) {
           closeSpan({
             sessionId,
@@ -1298,6 +1325,7 @@ export function useIpcSubscriptions(
               phaseChangedAt,
               submittedAt,
               ghosts: nextGhosts,
+              limitHit: nextLimitHit,
             },
             {
               layer: 'SEM',
@@ -1617,6 +1645,36 @@ export function useIpcSubscriptions(
           }
         })
       }
+
+      // ---- Usage-limit carrier (#821) ----
+      // Claude persists an exhausted-quota turn as an assistant record with
+      // `isApiErrorMessage: true` and `error: "rate_limit"`. That is the ONLY
+      // durable evidence the renderer gets: no semantic event is emitted for
+      // it, and the pane keeps its process (and its "continuing automatically"
+      // banner) so nothing else in the runtime changes. Recording the hit lets
+      // `isLimitIdle` release the provider-switch guard for exactly these panes
+      // (providerSwitchCore.ts).
+      //
+      // The predicate matches the census: seven local transcripts carry this
+      // record and every one of them has both fields
+      // (docs/decomposition/evidence/provider-switch/census.md §#820). The
+      // literal `rate_limit` code does NOT survive fixture redaction, which is
+      // why this is checked against LIVE records here and asserted structurally
+      // elsewhere — do not "fix" a fixture test by loosening this to
+      // `isApiErrorMessage` alone, which also matches ordinary API failures
+      // that have nothing to do with quota.
+      //
+      // Computed OUTSIDE the setRuntimes updater with a single Date.now(): React
+      // may invoke an updater twice, and a timestamp that differs between the
+      // two invocations is the kind of drift this handler already avoids for the
+      // queue state.
+      const limitRecordSeen = entries.some(({ entry: raw }) => {
+        const record = asRecord(raw)
+        return record?.type === 'assistant' &&
+          record.isApiErrorMessage === true &&
+          record.error === 'rate_limit'
+      })
+      const limitHitAt = limitRecordSeen ? Date.now() : null
 
       // ---- Pass B: runtime mutations ----
       // Captured by the updater, committed to claudeQueueBySession after
@@ -2073,6 +2131,12 @@ export function useIpcSubscriptions(
         // queuedMessages and the rest of this guard.
         const ghostsChanged = nextGhosts !== current.ghosts
         const lastJsonlChanged = lastJsonlEntryAt !== current.lastJsonlEntryAt
+        // A rate-limit record normally appends a feed entry too, so this is
+        // belt-and-braces — but if the Claude mapper ever starts filtering the
+        // carrier out of the feed, a burst that carries ONLY that record must
+        // still reach the runtime. Silently dropping it would re-lock the
+        // provider-switch guard for the panes it exists to release.
+        const limitHitChanged = limitHitAt !== null
         const noChange =
           appended.length === 0 &&
           reconciledOptimisticTexts.size === 0 &&
@@ -2082,6 +2146,7 @@ export function useIpcSubscriptions(
           workActivity === current.workActivity &&
           !ghostsChanged &&
           !lastJsonlChanged &&
+          !limitHitChanged &&
           // A tool-index mutation with no other change must still force a
           // runtime update so the version bump below reaches Feed's context.
           // (In practice toolIndexChanged implies an appended entry, but this
@@ -2234,6 +2299,14 @@ export function useIpcSubscriptions(
                 : current.toolIndexVersion,
               ghosts: nextGhosts,
               lastJsonlEntryAt,
+              // Only ever SET here. Clearing belongs to `turn_completed` in the
+              // semantic handler: a burst that carries no limit record is not
+              // evidence the limit is over (Claude writes 63 consecutive
+              // rate-limit records in one session — census RL-6), it is just a
+              // burst about something else.
+              limitHit: limitHitAt !== null
+                ? { at: limitHitAt, source: 'transcript' as const }
+                : current.limitHit,
             },
             {
               layer: 'JSONL',

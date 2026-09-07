@@ -15,6 +15,12 @@ import type { SessionId, Tab } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { AGENT_PROVIDER_KINDS, DEFAULT_PROVIDER } from '@shared/types/providerKind'
 import type { AgentProviderKind } from '@shared/types/providerKind'
+import { useUsageHeaderSnapshot } from '@renderer/features/usage/hooks/useUsageHeaderSnapshot'
+import { formatReset } from '@renderer/features/usage/model/formatUsage'
+import { deriveProviderExhaustion } from '@shared/usage/exhaustion'
+import { estimateLiveEntriesBytes } from '@renderer/session-runtime/liveEntryWindow'
+import { isLimitIdle } from '@renderer/workspace/hook/actions/providerSwitchCore'
+import { useGlobalToast } from '@renderer/ui/GlobalToast'
 
 // Switch Agents modal — bulk provider switch + remembered-batch return.
 //
@@ -75,18 +81,95 @@ function providerLabel(kind: AgentProviderKind): string {
   return getRendererProviderCapabilities(kind).shortLabel
 }
 
+function pluralAgents(n: number): string {
+  return `${n} agent${n === 1 ? '' : 's'}`
+}
+
+/** Above this many estimated characters, a Claude-bound batch gets arrival
+ *  compaction ticked by default (spec §Renderer).
+ *
+ *  WHY a character estimate and not a token count: the renderer has no
+ *  tokenizer and the transaction's own budget is expressed in characters
+ *  (agent-transcript-parser's contextBudget). WHY 150,000: that is the spec's
+ *  line, chosen as the size where an imported conversation reliably crowds the
+ *  target's first turns. It is a DEFAULT, not a gate — the checkbox is right
+ *  there, and getting it wrong costs the user one click.
+ *
+ *  The estimate is taken over the live entry window, which the ingest path caps
+ *  at 32 MB — three orders of magnitude above this threshold, so the window is
+ *  never the reason a conversation looks small. A trimmed pane can still
+ *  under-report (its oldest entries live only on disk); erring toward "no
+ *  compaction" is the right side to be wrong on, since compaction spends the
+ *  target's quota. */
+const ARRIVAL_COMPACTION_CHARACTERS = 150_000
+
+/** The remedy offered when only ONE model family is exhausted. Claude-only by
+ *  design (spec §Renderer): Codex's model switch is backend-driven and has no
+ *  equivalent slash command to deliver.
+ *
+ *  WHY a hard-coded family and not a picker: this row exists to make the cheap
+ *  remedy one click away when the expensive one (translating every transcript)
+ *  is unnecessary. Claude's own `/model` picker is one keystroke further for
+ *  anyone who wants a different family, and hard-coding it here keeps this
+ *  modal out of the business of enumerating provider models. */
+const CLAUDE_MODEL_SWITCH_PROMPT = '/model sonnet'
+
 export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
-  // The old two-provider modal could derive source by negating target. With
-  // OpenCode there are six directed edges, so the selected value must preserve
-  // both ends. Keep Codex→Claude as the familiar default.
-  const [directionKey, setDirectionKey] = useState('codex:claude')
+  // Every user-overridable default in this modal is stored as "the user's
+  // choice, or null for none yet" and resolved against a DERIVED default at
+  // render time.
+  //
+  // WHY not the obvious `useState(default)` + effect that re-seeds it: the
+  // defaults depend on the usage snapshot, which arrives from an IPC poll AFTER
+  // the modal has mounted, and on the direction, which the user can change
+  // while it is open. A seeding effect would have to distinguish "the default
+  // moved" from "the user set this", and every version of that logic either
+  // stomps a deliberate choice or freezes on whatever was known at mount (the
+  // snapshot is usually still null then, so it would freeze on the wrong
+  // value). Resolving at render has neither failure mode and needs no effect.
+  const [directionChoice, setDirectionChoice] = useState<string | null>(null)
+  const [compactOnArrivalChoice, setCompactOnArrivalChoice] = useState<boolean | null>(null)
+  const [compactOnSourceChoice, setCompactOnSourceChoice] = useState(false)
+  // Arms the second click that actually spends source quota. Never persisted
+  // across a policy change — see the reset in the checkbox/direction handlers.
+  const [sourceConfirmArmed, setSourceConfirmArmed] = useState(false)
   const [scopeMode, setScopeMode] = useState<ScopeMode>('all')
   const [selectedProjects, setSelectedProjects] = useState<Set<string>>(() => new Set())
   const [projectFilter, setProjectFilter] = useState('')
   const [busy, setBusy] = useState(false)
+  const [switchingModel, setSwitchingModel] = useState(false)
   // Live status (mid-turn) can change while the modal sits open. Re-tick every
   // 10s so the ⚠ skip count stays honest, matching Close Old Agents.
   const [nowTick, setNowTick] = useState(0)
+  const { showToast } = useGlobalToast()
+
+  // Read-only quota signal. It picks defaults and NEVER gates: the usage
+  // endpoint can be stale, wrong, or unreachable, and this feature exists
+  // precisely for people whose provider is misbehaving (see the header of
+  // shared/usage/exhaustion.ts).
+  const { snapshot } = useUsageHeaderSnapshot()
+  const exhaustion = useMemo(
+    () => (snapshot?.providers ?? []).map(deriveProviderExhaustion),
+    [snapshot],
+  )
+  const exhaustedProviders = useMemo(
+    () => exhaustion.filter(item => item.exhausted),
+    [exhaustion],
+  )
+
+  // The old two-provider modal could derive source by negating target. With
+  // OpenCode there are six directed edges, so the selected value must preserve
+  // both ends. Codex→Claude stays the familiar fallback; a single exhausted
+  // provider overrides it, because "get everyone off THAT provider" is the
+  // reason this modal was opened. Two exhausted providers deliberately fall
+  // back: moving agents from one full provider to another full one helps
+  // nobody, so the user has to say what they want.
+  const defaultDirectionKey = useMemo(() => {
+    if (exhaustedProviders.length !== 1) return 'codex:claude'
+    const exhaustedSource = exhaustedProviders[0].provider
+    return SWITCH_DIRECTIONS.find(item => item.source === exhaustedSource)?.key ?? 'codex:claude'
+  }, [exhaustedProviders])
+  const directionKey = directionChoice ?? defaultDirectionKey
 
   const direction = SWITCH_DIRECTIONS.find(item => item.key === directionKey) ?? {
     key: 'codex:claude',
@@ -94,14 +177,20 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
     target: 'claude' as const,
   }
   const { source, target } = direction
+  const sourceExhaustion = exhaustion.find(item => item.provider === source) ?? null
+  const sourceExhausted = sourceExhaustion?.exhausted === true
 
   useEffect(() => {
     if (!open) return
-    setDirectionKey('codex:claude')
+    setDirectionChoice(null)
+    setCompactOnArrivalChoice(null)
+    setCompactOnSourceChoice(false)
+    setSourceConfirmArmed(false)
     setScopeMode('all')
     setSelectedProjects(new Set())
     setProjectFilter('')
     setBusy(false)
+    setSwitchingModel(false)
   }, [open])
 
   useEffect(() => {
@@ -136,6 +225,20 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
         const runtime = workspace.runtimes[sessionId]
         const running = runtime?.sessionStatus === 'running'
         const streaming = runtime?.streamPhase != null && runtime.streamPhase !== 'idle'
+        // An agent parked on a usage limit still reads as running (the provider
+        // keeps its process and paints a wait banner), but the switch core will
+        // accept it — see isLimitIdle. Counting it as mid-turn here would tell
+        // the user their most stuck agents are the ones that cannot be rescued,
+        // which is exactly backwards.
+        //
+        // DIVERGENCE from the task brief, deliberate: the brief specified
+        // `processActive && !isLimitIdle`. `sessionStatus === 'running'` is
+        // strictly closer to the guard it must predict — deriveSessionStatus
+        // folds processActive AND a live semantic turn, and the guard refuses
+        // on either. Using processActive alone would under-report a pane whose
+        // only liveness signal is a streaming turn, promising a switch the core
+        // would then refuse.
+        const limitParked = runtime ? isLimitIdle(runtime) : false
 
         rows.push({
           sessionId,
@@ -145,7 +248,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
           kind,
           cwd: meta.cwd,
           cwdBase: cwdBasename(meta.cwd),
-          isLive: Boolean(running || streaming),
+          isLive: Boolean((running || streaming) && !limitParked),
         })
       }
     })
@@ -188,6 +291,37 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
   const midTurnCount = matchingRows.filter(row => row.isLive).length
   const selectedCount = selectedProjects.size
 
+  // Biggest conversation in the batch, not the sum: arrival compaction runs
+  // per agent, so the question is whether ANY single pane will land oversized.
+  const largestSourceEstimate = useMemo(() => {
+    if (!open) return 0
+    let largest = 0
+    for (const row of matchingRows) {
+      const runtime = workspace.runtimes[row.sessionId]
+      if (!runtime) continue
+      const estimate = estimateLiveEntriesBytes(runtime.entries)
+      if (estimate > largest) largest = estimate
+    }
+    return largest
+  }, [open, matchingRows, workspace.runtimes])
+
+  // Claude is the only target with a compaction the renderer can drive
+  // (compactAfterSwitch reports every other kind as a no-op), so the checkbox
+  // is not shown at all for Codex/OpenCode destinations.
+  const arrivalCompactionOffered = target === 'claude'
+  const compactOnArrival = arrivalCompactionOffered
+    && (compactOnArrivalChoice ?? largestSourceEstimate > ARRIVAL_COMPACTION_CHARACTERS)
+  // A checked box on an exhausted source must not survive as policy. The
+  // transaction would ask that provider for a turn it cannot answer, and the
+  // switch would fail for the exact reason the user opened this modal.
+  const compactOnSource = compactOnSourceChoice && !sourceExhausted
+  // The family-scoped remedy: another model on the SAME provider, no transcript
+  // translation at all. Only offered when the blocking window is family-scoped
+  // — an account-wide window at 100% means no Claude model will answer, and
+  // offering a model switch there would waste the user's time.
+  const modelSwitchOffered =
+    source === 'claude' && sourceExhaustion?.exhausted === true && sourceExhaustion.scope === 'model-family'
+
   const toggleProject = useCallback((cwd: string) => {
     setSelectedProjects(prev => {
       const next = new Set(prev)
@@ -207,17 +341,56 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
 
   const runSwitch = useCallback(async () => {
     if (matchingRows.length === 0 || busy) return
+    // One confirmation for the whole batch, in the modal, replacing main's
+    // per-agent native dialog (spec §Renderer). It is required only on the
+    // opt-in source path: that is the branch that rewrites live history and
+    // spends the source provider's quota. The default path costs the source
+    // nothing and is confirmed by the button press itself.
+    if (compactOnSource && !sourceConfirmArmed) {
+      setSourceConfirmArmed(true)
+      return
+    }
     setBusy(true)
     try {
       await workspace.switchAgentsToProvider(
         matchingRows.map(row => row.sessionId),
         target,
+        {
+          allowSourceTurns: compactOnSource,
+          compactOnArrival,
+          // Identical to allowSourceTurns by construction: the modal never
+          // enables the source path without the confirmation above, and main
+          // ignores this flag unless allowSourceTurns is set. It stays a
+          // separate field because the two answer different questions
+          // ("may you?" vs "did a human say yes?") and main's dialog skip
+          // must key on the second.
+          sourceCompactionConfirmed: compactOnSource,
+        },
       )
       onClose()
     } finally {
       setBusy(false)
     }
-  }, [busy, matchingRows, onClose, target, workspace])
+  }, [busy, compactOnArrival, compactOnSource, matchingRows, onClose, sourceConfirmArmed, target, workspace])
+
+  const runModelSwitch = useCallback(async () => {
+    if (matchingRows.length === 0 || switchingModel || busy) return
+    setSwitchingModel(true)
+    let delivered = 0
+    try {
+      // Sequential like the switch loop, and for a weaker reason: these are
+      // independent prompt deliveries, but a burst of PTY writes across many
+      // panes is exactly the shape that has produced delivery races before.
+      // A handful of agents is not worth the risk of parallelism.
+      for (const row of matchingRows) {
+        const result = await window.api.deliverPrompt(row.sessionId, CLAUDE_MODEL_SWITCH_PROMPT)
+        if (result.ok) delivered += 1
+      }
+    } finally {
+      setSwitchingModel(false)
+      showToast(`Sent ${CLAUDE_MODEL_SWITCH_PROMPT} to ${pluralAgents(delivered)}`)
+    }
+  }, [busy, matchingRows, showToast, switchingModel])
 
   const runReturn = useCallback(async () => {
     if (busy) return
@@ -300,6 +473,22 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
             </div>
           )}
 
+          {exhaustedProviders.length > 0 && (
+            <div className="rounded-slab mt-3 border border-danger/50 bg-danger/10 px-3 py-2">
+              {exhaustedProviders.map(item => (
+                // One line per exhausted provider, rendered as a single text
+                // node so the whole claim ("who, how full, until when") is one
+                // readable sentence rather than three spans a screen reader has
+                // to reassemble.
+                <div key={item.provider} className="text-[11px] text-ink">
+                  {`${providerLabel(item.provider)}: ${item.label} at 100%${
+                    item.resetsAt ? `, ${formatReset(item.resetsAt) ?? 'reset time unknown'}` : ''
+                  }`}
+                </div>
+              ))}
+            </div>
+          )}
+
           <div className="mt-4 grid grid-cols-[minmax(220px,1fr)_minmax(220px,1fr)] gap-3">
             <div>
               <label className="block text-[10px] uppercase tracking-wider text-muted">
@@ -308,7 +497,13 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
               <div className="mt-1">
                 <select
                   value={directionKey}
-                  onChange={e => setDirectionKey(e.target.value)}
+                  onChange={e => {
+                    setDirectionChoice(e.target.value)
+                    // A confirmation is for one specific batch on one specific
+                    // source. Changing direction changes whose quota would be
+                    // spent, so the armed second click must not carry over.
+                    setSourceConfirmArmed(false)
+                  }}
                   className="rounded-control px-2 py-1.5 bg-canvas border border-border text-[12px] text-ink outline-none focus:border-accent"
                 >
                   {SWITCH_DIRECTIONS.map(item => (
@@ -347,6 +542,78 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
                 </button>
               </div>
             </div>
+          </div>
+
+          <div className="mt-3 flex flex-col gap-1.5">
+            {arrivalCompactionOffered && (
+              <label className="flex items-start gap-2 text-[11px] text-ink-dim">
+                <input
+                  type="checkbox"
+                  checked={compactOnArrival}
+                  onChange={e => setCompactOnArrivalChoice(e.target.checked)}
+                  className="mt-0.5 accent-current"
+                />
+                <span>
+                  Compact on arrival with {providerLabel(target)}
+                  <span className="text-muted">
+                    {' '}— spends {providerLabel(target)} quota, not {providerLabel(source)}&apos;s
+                  </span>
+                </span>
+              </label>
+            )}
+
+            <label
+              className="flex items-start gap-2 text-[11px] text-ink-dim"
+              // The reason travels on the label, not only the input: a disabled
+              // input is not hoverable in every browser, and a checkbox the user
+              // cannot tick with no stated reason reads as a bug.
+              title={sourceExhausted ? 'Source provider is exhausted' : undefined}
+            >
+              <input
+                type="checkbox"
+                checked={compactOnSource}
+                disabled={sourceExhausted}
+                onChange={e => {
+                  setCompactOnSourceChoice(e.target.checked)
+                  setSourceConfirmArmed(false)
+                }}
+                className="mt-0.5 accent-current disabled:opacity-50"
+              />
+              <span className={sourceExhausted ? 'text-muted' : undefined}>
+                Compact on source first (uses {providerLabel(source)} quota)
+                {sourceExhausted && (
+                  <span className="text-muted"> — {providerLabel(source)} is exhausted</span>
+                )}
+              </span>
+            </label>
+
+            {sourceConfirmArmed && compactOnSource && (
+              <div className="rounded-slab border border-warning/50 bg-warning/10 px-3 py-2 text-[11px] text-ink">
+                {`Compact ${pluralAgents(matchingRows.length)} on ${providerLabel(source)} first — this rewrites their live history and uses ${providerLabel(source)} quota.`}
+              </div>
+            )}
+
+            {modelSwitchOffered && (
+              // The cheap remedy, offered only when the exhausted window is
+              // family-scoped: another model on the SAME provider costs no
+              // transcript translation at all.
+              <div className="rounded-slab mt-1 flex items-center justify-between gap-3 border border-border bg-canvas px-3 py-2">
+                <div className="min-w-0 text-[11px] text-ink-dim">
+                  Only one {providerLabel(source)} model family is exhausted — a model switch
+                  keeps every agent where it is.
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void runModelSwitch()}
+                  disabled={busy || switchingModel || matchingRows.length === 0}
+                  className="rounded-control flex-shrink-0 px-2.5 py-1 text-[11px] border border-accent/60 bg-accent/10 text-accent hover:bg-accent/20 disabled:opacity-50"
+                >
+                  {switchingModel
+                    ? 'Sending…'
+                    : `Switch ${pluralAgents(matchingRows.length)} to another ${providerLabel(source)} model`}
+                </button>
+              </div>
+            )}
           </div>
         </div>
 
@@ -483,7 +750,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
         <div className="flex-shrink-0 border-t border-border px-4 py-3 flex items-center justify-between gap-3">
           <div className="text-[10px] text-muted">
             {midTurnCount > 0
-              ? `⚠ ${midTurnCount} of ${matchingRows.length} are mid-turn and will be skipped until idle.`
+              ? `⚠ ${midTurnCount} of ${matchingRows.length} are mid-turn and will be skipped until idle; agents stopped by a usage limit are included.`
               : 'Terminals are never switched.'}
           </div>
           <div className="flex items-center gap-2">
@@ -508,7 +775,12 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
             >
               {busy
                 ? 'Switching…'
-                : `Switch ${matchingRows.length} to ${providerLabel(target)}`}
+                : sourceConfirmArmed && compactOnSource
+                  // The armed label names the expensive half of what the click
+                  // does. "Switch N to Claude" would hide the fact that the
+                  // press also spends the source provider's quota.
+                  ? `Compact ${pluralAgents(matchingRows.length)} on ${providerLabel(source)} and switch`
+                  : `Switch ${pluralAgents(matchingRows.length)} to ${providerLabel(target)}`}
             </button>
           </div>
         </div>
