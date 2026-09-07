@@ -331,6 +331,11 @@ export function useSessionActions(
       }
       const previousMeta = refs.stateRef.current.sessions[sessionId]
       const requestedProviderSessionId = opts?.resumeSessionId ?? startedProviderSessionId
+      // WHY spawn does NOT mint agentNameId: replaceSession spawns through this
+      // same function, so a seed here lands on the SUCCESSOR and then wins the
+      // spread in the replacement commit, renaming a pane that only changed
+      // backends. Minting lives in one place — the reconciler — which sees the
+      // restored workspace and can tell a new agent from a recovered one.
       const meta: SessionMeta = {
         ...(previousMeta ?? {}),
         cwd,
@@ -1102,6 +1107,9 @@ export function useSessionActions(
         // so its durable glance label must follow using the latest state rather
         // than being lost—or resurrected from a stale snapshot—on completion.
         const replacementTitle = prev.sessions[oldId]?.title
+        // `prev.sessions[oldId]` is still readable here: only the local
+        // `sessions` copy has had oldId deleted.
+        const carriedAgentNameId = prev.sessions[oldId]?.agentNameId
         delete sessions[oldId]
         // Persist the replacement provider metadata immediately
         // instead of waiting for the first transcript line to
@@ -1129,6 +1137,20 @@ export function useSessionActions(
             : {}),
           ...(builtInMcpDomains !== undefined ? { builtInMcpDomains } : {}),
           ...(replacementTitle !== undefined ? { title: replacementTitle } : {}),
+          // Last on purpose. `...(sessions[newId] ?? …)` earlier in this
+          // literal is the successor's OWN freshly-spawned metadata, so any
+          // earlier position is overwritten by it — which is exactly how the
+          // sketch renamed a pane on every provider switch.
+          //
+          // Conditional, not `?? oldId`: this site CARRIES an identity, it
+          // never creates one. If the predecessor had none — names were off,
+          // or the reconciler had not run — then no name was ever allocated to
+          // preserve, and inventing `oldId` here would make replacement a
+          // second minting site competing with the reconciler for that
+          // decision. Leaving it absent lets the reconciler claim the
+          // successor under its own id, which is the same outcome by the one
+          // rule the feature has.
+          ...(carriedAgentNameId !== undefined ? { agentNameId: carriedAgentNameId } : {}),
         }
         const detachedSessions = { ...prev.detachedSessions }
         const detached = detachedSessions[oldId]
@@ -1298,6 +1320,14 @@ export function useSessionActions(
           })
           idMap.set(oldId, newId)
           freshSessions[newId] = {
+            // `agentNameId` needs no line here: withoutProvisionalProviderSession
+            // is field-preserving, so `...restoredMeta` carries the identity from
+            // the pre-reload session onto its new local id. Do not add a
+            // `?? oldId` fallback — a workspace with no identity has no
+            // allocated name to lose, and minting here would put a second
+            // author on the one decision the reconciler owns. The unit case in
+            // this task's test pins the helper's field-preservation, which is
+            // the only thing this spread relies on.
             ...restoredMeta,
             ...(builtInMcpDomains !== undefined ? { builtInMcpDomains } : {}),
           }
