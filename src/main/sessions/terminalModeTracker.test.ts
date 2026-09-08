@@ -115,12 +115,44 @@ describe('sequences split across chunk boundaries', () => {
   })
 
   it('handles a split at the escape byte itself', () => {
+    // A chunk can end at ANY byte. Requiring the whole `ESC [ ?` marker before
+    // carrying anything meant a reset split here was still missed, which is
+    // the direction that leaves a stale mode asserted at the next attach.
     const tracker = new TerminalModeTracker()
     tracker.observe(`output${ESC}`)
     tracker.observe('[?1006h')
-    // A lone ESC is not yet a mode marker, so this one is genuinely missed —
-    // and missing a turn-ON is the benign direction.
-    expect(tracker.activeModes()).toEqual([])
+    expect(tracker.activeModes()).toEqual([1006])
+  })
+
+  it('handles a split after the control sequence introducer', () => {
+    const tracker = new TerminalModeTracker()
+    tracker.observe(`output${ESC}[`)
+    tracker.observe('?1049h')
+    expect(tracker.activeModes()).toEqual([1049])
+  })
+
+  it('applies a RESET split at the escape byte, the worse direction', () => {
+    const tracker = new TerminalModeTracker()
+    tracker.observe(`${ESC}[?1049h${ESC}[?1003h`)
+    tracker.observe(`frame${ESC}`)
+    tracker.observe('[?1049l')
+    expect(tracker.activeModes()).toEqual([1003])
+  })
+
+  it('applies a RESET split after the control sequence introducer', () => {
+    const tracker = new TerminalModeTracker()
+    tracker.observe(`${ESC}[?1049h${ESC}[?1003h`)
+    tracker.observe(`frame${ESC}[`)
+    tracker.observe('?1003l')
+    expect(tracker.activeModes()).toEqual([1049])
+  })
+
+  it('does not carry an escape that begins some other sequence', () => {
+    const tracker = new TerminalModeTracker()
+    tracker.observe(`${ESC}[?1049h`)
+    tracker.observe(`${ESC}`)
+    tracker.observe('[2J clear screen')
+    expect(tracker.activeModes()).toEqual([1049])
   })
 
   it('applies a multi-mode sequence split mid-parameter-list', () => {

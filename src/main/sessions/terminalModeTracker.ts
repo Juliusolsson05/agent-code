@@ -56,8 +56,16 @@ type TrackedMode = (typeof TRACKED_MODES)[number]
  */
 const DEC_PRIVATE_MODE = /\x1b\[\?([0-9;]+)([hl])/g
 
-/** A sequence that has begun but not yet reached its final byte. */
-const PARTIAL_SEQUENCE = /\x1b\[\?[0-9;]*$/
+/**
+ * A sequence that has begun but not yet reached its final byte.
+ *
+ * Deliberately matches from the ESCAPE byte onward, not from the full
+ * `ESC [ ?` marker: a chunk can end at ANY byte, including after just `ESC` or
+ * `ESC [`. Requiring the whole marker before carrying anything meant a reset
+ * split at either of those two points was still missed, which is the direction
+ * that leaves a stale mode asserted at the next attach.
+ */
+const PARTIAL_SEQUENCE = /\x1b(?:\[(?:\?[0-9;]*)?)?$/
 /** A sequence whose final byte has arrived. */
 const COMPLETE_SEQUENCE = /^\x1b\[\?[0-9;]*[hl]/
 
@@ -90,9 +98,11 @@ export class TerminalModeTracker {
 
   /** Feed a raw PTY chunk. Cheap enough for the hot path. */
   observe(chunk: string): void {
-    // Fast reject, but only when nothing is half-parsed: a chunk with no
-    // marker of its own can still be the tail of a sequence begun earlier.
-    if (!this.pending && !chunk.includes('\x1b[?')) return
+    // Fast reject on the ESCAPE byte, not on the full marker, and only when
+    // nothing is half-parsed: a chunk with no marker of its own can still be
+    // the tail of a sequence begun earlier, and a chunk that ends mid-marker
+    // has to be carried even though it contains no complete one.
+    if (!this.pending && !chunk.includes('\x1b')) return
     const scan = this.pending + chunk
     this.pending = ''
     for (const match of scan.matchAll(DEC_PRIVATE_MODE)) {
