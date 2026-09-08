@@ -14,6 +14,7 @@ type MockTerminal = Record<string, unknown> & {
   rows: number
   container: HTMLElement | null
   onDataListener: ((data: string) => void) | null
+  onScrollListener: ((line: number) => void) | null
 }
 
 const xtermHarness = vi.hoisted(() => ({
@@ -31,6 +32,10 @@ const settings = vi.hoisted(() => ({
   mouseModeEnabled: false,
 }))
 
+// Read by the follow wiring in AgentTerminalLeaf; absent it would be
+// undefined, which happens to behave as "off" but hides the contract.
+const appStoreTail = vi.hoisted(() => ({ tailAllMode: false }))
+
 vi.mock('@renderer/workspace/terminal/xtermWebglRenderer', () => ({
   attachXtermWebglRenderer: xtermHarness.attachWebgl,
 }))
@@ -44,6 +49,7 @@ vi.mock('@xterm/xterm', () => ({
     onDataListener: ((data: string) => void) | null = null
     dispose = vi.fn()
     inputDispose = vi.fn(() => { this.onDataListener = null })
+    scrollDispose = vi.fn(() => { this.onScrollListener = null })
     constructor() { xtermHarness.instances.push(this as unknown as MockTerminal) }
     loadAddon() {}
     open(container: HTMLElement) { this.container = container }
@@ -51,6 +57,15 @@ vi.mock('@xterm/xterm', () => ({
       this.onDataListener = listener
       return { dispose: this.inputDispose }
     }
+    // Follow wiring (agentTerminalFollow) subscribes to viewport movement on
+    // mount; these scroll surfaces exist so the Submit harness exercises the
+    // same Terminal API the real component consumes.
+    onScroll(listener: (line: number) => void) {
+      this.onScrollListener = listener
+      return { dispose: this.scrollDispose }
+    }
+    scrollToBottom() {}
+    scrollToLine(_line: number) {}
     write(_data: string, callback?: () => void) { callback?.() }
     focus() {}
   },
@@ -62,7 +77,7 @@ vi.mock('@xterm/addon-fit', () => ({
 
 vi.mock('@renderer/app-state/hooks', () => ({
   useAppStore: (selector: (state: Record<string, unknown>) => unknown) =>
-    selector({ settings }),
+    selector({ settings: settings, tailAllMode: appStoreTail.tailAllMode }),
 }))
 
 vi.mock('@renderer/app-state/settings/theme', async importOriginal => ({

@@ -63,6 +63,11 @@ vi.mock('@xterm/xterm', () => ({
     scrollToBottom = vi.fn(() => {
       this.buffer.active.viewportY = Math.max(0, this.buffer.active.length - this.rows)
     })
+    // viewportY is readonly on xterm v6's public type; scrollToLine is the
+    // sanctioned writer. Mirrors scrollToBottom's clamping behavior.
+    scrollToLine = vi.fn((line: number) => {
+      this.buffer.active.viewportY = Math.max(0, Math.min(line, this.buffer.active.length - this.rows))
+    })
     dispose = vi.fn()
     inputDispose = vi.fn(() => { this.onDataListener = null })
     scrollDispose = vi.fn(() => { this.onScrollListener = null })

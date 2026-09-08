@@ -96,9 +96,13 @@ export function useAgentTerminalFollow({
       tailEngagedRef.current = false
       const saved = savedViewportYRef.current
       savedViewportYRef.current = null
+      // WHY scrollToLine and not a viewportY write: @xterm/xterm v6 exposes
+      // buffer.active.viewportY as readonly (v5 allowed assignment). The
+      // explicit clamp keeps the target inside a buffer that may have grown
+      // or shrunk since the position was saved.
       if (activeTerm && saved !== null) {
         const buffer = activeTerm.buffer.active
-        buffer.viewportY = Math.min(saved, Math.max(0, buffer.length - activeTerm.rows))
+        activeTerm.scrollToLine(Math.min(saved, Math.max(0, buffer.length - activeTerm.rows)))
       }
     }
   }, [tailActive, termRef])
