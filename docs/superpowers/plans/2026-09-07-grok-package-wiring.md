@@ -87,3 +87,14 @@ CHECKPOINT: merge on explicit confirmation only.
 
 ---
 
+
+## Amendment (2026-09-07, post-review)
+
+- `package.json` / `package-lock.json` are NOT modified after all: the sibling
+  headless packages are compiled from submodule source only (no `file:` dep),
+  and a first attempt adding one broke `npm ci` — the subpackage's
+  devDependencies entered npm's ideal tree and demanded a different vitest
+  patch than the root lock pins. Wiring = .gitmodules + tsconfig.node paths/
+  include + electron-vite headlessAlias/headlessExclude + vitest alias map +
+  **tsconfig.web.json paths** (both projects must declare the same alias map —
+  review caught the initial omission).
