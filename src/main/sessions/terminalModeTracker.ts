@@ -53,22 +53,49 @@ type TrackedMode = (typeof TRACKED_MODES)[number]
 /**
  * One or more semicolon-separated DEC private parameters followed by the
  * set/reset final byte, e.g. ESC [ ? 1000 ; 1002 ; 1006 h.
- *
- * Deliberately scans a CHUNK rather than parsing a stream: a sequence split
- * across two PTY writes is missed. That is acceptable because a TUI emits its
- * preamble in a single write, and because a missed mode leaves exactly today's
- * behaviour rather than a wrong one.
  */
 const DEC_PRIVATE_MODE = /\x1b\[\?([0-9;]+)([hl])/g
 
+/** A sequence that has begun but not yet reached its final byte. */
+const PARTIAL_SEQUENCE = /\x1b\[\?[0-9;]*$/
+/** A sequence whose final byte has arrived. */
+const COMPLETE_SEQUENCE = /^\x1b\[\?[0-9;]*[hl]/
+
+/**
+ * Longest partial sequence worth carrying to the next chunk.
+ *
+ * Comfortably past the realistic maximum — all five tracked modes in one
+ * sequence is 28 characters — while bounding what a stream of digits could
+ * otherwise accumulate. Anything longer is not a mode sequence being
+ * assembled, so it is dropped rather than held.
+ */
+const MAX_PENDING = 64
+
 export class TerminalModeTracker {
   private readonly active = new Set<TrackedMode>()
+  /**
+   * A sequence that began at the end of the previous chunk.
+   *
+   * WHY carrying this matters, and why "a split sequence is just missed" was
+   * NOT an acceptable answer: the two directions are not symmetric. Missing a
+   * turn-ON leaves today's behaviour, which is what the previous version
+   * claimed. Missing a turn-OFF is strictly WORSE than today — the mode stays
+   * in this set, and the next attach asserts a mode the application has
+   * already left. A pane would be put back on the alternate screen after the
+   * TUI suspended for an editor, or told to report mouse events to a program
+   * that stopped listening. PTY chunks are split by pipe boundaries, not by
+   * escape sequences, so this is ordinary rather than exotic.
+   */
+  private pending = ''
 
   /** Feed a raw PTY chunk. Cheap enough for the hot path. */
   observe(chunk: string): void {
-    // Fast reject: the overwhelming majority of chunks carry no mode change.
-    if (!chunk.includes('\x1b[?')) return
-    for (const match of chunk.matchAll(DEC_PRIVATE_MODE)) {
+    // Fast reject, but only when nothing is half-parsed: a chunk with no
+    // marker of its own can still be the tail of a sequence begun earlier.
+    if (!this.pending && !chunk.includes('\x1b[?')) return
+    const scan = this.pending + chunk
+    this.pending = ''
+    for (const match of scan.matchAll(DEC_PRIVATE_MODE)) {
       const set = match[2] === 'h'
       for (const raw of match[1].split(';')) {
         const mode = Number(raw) as TrackedMode
@@ -76,6 +103,12 @@ export class TerminalModeTracker {
         if (set) this.active.add(mode)
         else this.active.delete(mode)
       }
+    }
+    // Carry only a genuinely unfinished sequence. `pending` can never hold a
+    // COMPLETE one, so the match above cannot be applied twice.
+    const partial = PARTIAL_SEQUENCE.exec(scan)
+    if (partial && !COMPLETE_SEQUENCE.test(partial[0]) && partial[0].length <= MAX_PENDING) {
+      this.pending = partial[0]
     }
   }
 

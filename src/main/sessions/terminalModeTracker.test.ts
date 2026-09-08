@@ -92,3 +92,69 @@ describe('TerminalModeTracker', () => {
     expect(tracker.preamble()).toBe(`${ESC}[?1049h${ESC}[?1003h`)
   })
 })
+
+describe('sequences split across chunk boundaries', () => {
+  it('applies a turn-ON split between two chunks', () => {
+    const tracker = new TerminalModeTracker()
+    tracker.observe(`${ESC}[?10`)
+    tracker.observe('49h')
+    expect(tracker.activeModes()).toEqual([1049])
+  })
+
+  it('applies a turn-OFF split between two chunks', () => {
+    // The asymmetry that makes carrying state mandatory: missing a turn-ON
+    // leaves today's behaviour, but missing a turn-OFF is WORSE than today —
+    // the mode survives here and the next attach asserts a mode the
+    // application has already left, putting a pane back on the alternate
+    // screen after the TUI suspended for an editor.
+    const tracker = new TerminalModeTracker()
+    tracker.observe(`${ESC}[?1049h${ESC}[?1003h`)
+    tracker.observe(`${ESC}[?104`)
+    tracker.observe('9l')
+    expect(tracker.activeModes()).toEqual([1003])
+  })
+
+  it('handles a split at the escape byte itself', () => {
+    const tracker = new TerminalModeTracker()
+    tracker.observe(`output${ESC}`)
+    tracker.observe('[?1006h')
+    // A lone ESC is not yet a mode marker, so this one is genuinely missed —
+    // and missing a turn-ON is the benign direction.
+    expect(tracker.activeModes()).toEqual([])
+  })
+
+  it('applies a multi-mode sequence split mid-parameter-list', () => {
+    const tracker = new TerminalModeTracker()
+    tracker.observe(`${ESC}[?1000;10`)
+    tracker.observe('02;1006h')
+    expect(tracker.activeModes()).toEqual([1000, 1002, 1006])
+  })
+
+  it('never applies a carried sequence twice', () => {
+    const tracker = new TerminalModeTracker()
+    tracker.observe(`${ESC}[?1049`)
+    tracker.observe('h')
+    tracker.observe('ordinary output')
+    expect(tracker.activeModes()).toEqual([1049])
+  })
+
+  it('drops a carried fragment that turns out not to be a sequence', () => {
+    const tracker = new TerminalModeTracker()
+    tracker.observe(`${ESC}[?1049`)
+    // A final byte that is not h or l ends the sequence as something else.
+    tracker.observe('r rest of the line')
+    expect(tracker.activeModes()).toEqual([])
+    // And the tracker is not left holding anything.
+    tracker.observe(`${ESC}[?1003h`)
+    expect(tracker.activeModes()).toEqual([1003])
+  })
+
+  it('does not accumulate an unbounded fragment from a stream of digits', () => {
+    const tracker = new TerminalModeTracker()
+    tracker.observe(`${ESC}[?` + '1'.repeat(200))
+    // Far past any real sequence, so it is dropped rather than carried, and a
+    // following final byte must not resurrect it.
+    tracker.observe('h')
+    expect(tracker.activeModes()).toEqual([])
+  })
+})
