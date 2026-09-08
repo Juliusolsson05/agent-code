@@ -31,14 +31,22 @@ it('follows and restores real xterm content across trimming and buffer switches'
         const term = new Terminal({ cols: 80, rows: 10, scrollback: 2000 })
         term.open(document.getElementById('terminal'))
         const termRef = { current: term }
+        // The PTY sink. A provider whose TUI owns its own transcript is jumped
+        // by sending it a key, not by moving the xterm viewport, so this trial
+        // has to be able to observe that write.
+        const sent = []
+        window.api = { sendInput: (id, data) => { sent.push({ id, data }) } }
         let follow
         function Harness(props) { follow = useAgentTerminalFollow({ ...props, termRef }); return null }
         const reactRoot = createRoot(document.getElementById('react'))
         let tailActive = false
         let scrollToLatestRequest = 0
+        // null = "the xterm viewport is what scrolls", which is Claude and
+        // Codex and therefore the default this trial runs under.
+        let jumpKey = null
         function render() {
           flushSync(() => reactRoot.render(createElement(Harness, {
-            sessionId: 'trial', tailActive, scrollToLatestRequest,
+            sessionId: 'trial', tailActive, scrollToLatestRequest, jumpKey,
           })))
         }
         const check = (condition, message) => { if (!condition) throw new Error(message) }
@@ -72,6 +80,7 @@ it('follows and restores real xterm content across trimming and buffer switches'
 
           scrollToLatestRequest++; render()
           await until(bottom, 'Jump request did not reach real xterm bottom')
+          check(sent.length === 0, 'Viewport-scrolling provider must not write to the PTY')
 
           term.scrollToLine(10)
           tailActive = true; render()
@@ -84,12 +93,31 @@ it('follows and restores real xterm content across trimming and buffer switches'
           await write('\\x1b[?1049h')
           tailActive = false; render()
           check(term.buffer.active.type === 'alternate' && bottom(), 'Alternate buffer was scrolled with a normal-buffer anchor')
+
+          // The case the assertion above CANNOT see, and the reason Jump to
+          // Latest silently did nothing on OpenCode Terminal panes: on the
+          // alternate screen there is no scrollback at all, so viewportY and
+          // baseY are both 0 and the bottom check is trivially 0 === 0. A
+          // provider whose TUI owns its transcript must therefore be jumped by
+          // sending it the key it binds to "go to last message" instead.
+          const evictedBefore = term.buffer.active.viewportY
+          jumpKey = '\\u001b\\u0007'
+          scrollToLatestRequest++; render()
+          await until(() => sent.length === 1, 'Provider-owned jump did not reach the PTY')
+          check(sent[0].id === 'trial', 'Provider-owned jump addressed the wrong session: ' + sent[0].id)
+          // Compared through char codes so the assertion cannot pass on a
+          // differently-escaped string that merely looks the same in source.
+          const codes = Array.from(sent[0].data).map(c => c.charCodeAt(0)).join(',')
+          check(codes === '27,7', 'Wrong bytes sent for provider-owned jump: ' + codes)
+          check(term.buffer.active.viewportY === evictedBefore, 'Provider-owned jump must not also move the viewport')
+          jumpKey = null
+
           await write('\\x1b[?1049l')
           // Marker registration/disposal is public; only this diagnostic
           // enumeration requires proposed APIs. Keep them off for all behavior.
           term.options.allowProposedApi = true
           check(term.markers.length === 0, 'Follow leaked a saved marker after disengage')
-          return { repin: true, trim: true, eviction: true, jump: true, alternate: true }
+          return { repin: true, trim: true, eviction: true, jump: true, alternate: true, providerJump: true }
         } finally {
           off(); reactRoot.unmount(); termRef.current = null; term.dispose()
         }
@@ -132,7 +160,7 @@ it('follows and restores real xterm content across trimming and buffer switches'
     const result = stdout.split('\n').find(line => line.startsWith('FOLLOW_TRIAL='))
     expect(result, stdout).toBeDefined()
     expect(JSON.parse(result!.slice('FOLLOW_TRIAL='.length))).toEqual({
-      repin: true, trim: true, eviction: true, jump: true, alternate: true,
+      repin: true, trim: true, eviction: true, jump: true, alternate: true, providerJump: true,
     })
   } finally {
     await rm(directory, { recursive: true, force: true })

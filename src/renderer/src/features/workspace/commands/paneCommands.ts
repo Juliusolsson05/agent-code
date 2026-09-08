@@ -561,7 +561,7 @@ export const paneCommands: CommandDef[] = [
     category: 'navigate',
     surface: 'session',
     title: 'Jump to Latest Message',
-    description: '**What it does:** Scrolls to the **latest agent message**.\n\n**Use when:** You are far up in the feed and want to return to the bottom.\n\n**Notes:** Agent panes only — in a raw terminal view this scrolls the TUI viewport to the bottom.',
+    description: '**What it does:** Scrolls to the **latest agent message**.\n\n**Use when:** You are far up in the feed and want to return to the bottom.\n\n**Notes:** Agent panes only. In a raw terminal view this scrolls the xterm viewport for providers that render inline (Claude, Codex); for a TUI that owns its own transcript (OpenCode Terminal) it sends that TUI\'s own jump-to-latest key instead.',
     // NO `renderedViewPolicy` — the xterm viewport answers jump requests too
     // (useAgentTerminalFollow); gating on a rendered feed would hide this on
     // the surface where returning to the bottom is most often needed.

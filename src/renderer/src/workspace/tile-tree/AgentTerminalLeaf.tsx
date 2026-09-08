@@ -23,6 +23,7 @@ import { AgentTitleHeader } from '@renderer/workspace/tile-tree/AgentTitleHeader
 import { createTerminalInputForwarder } from '@renderer/workspace/tile-tree/terminalInputForwarder'
 import { encodeTerminalPaste, registerTerminalPasteTarget } from '@renderer/workspace/terminal/textPasteTarget'
 import { AgentTerminalActions } from '@renderer/workspace/tile-tree/AgentTerminalActions'
+import { getProviderFeatures } from '@providers/shared/featureCapabilities'
 import { useAgentTerminalFollow } from '@renderer/workspace/tile-tree/agentTerminalFollow'
 
 type Props = {
@@ -102,6 +103,9 @@ export function AgentTerminalLeaf({
     scrollToLatestRequest: runtime.scrollToLatestRequest,
     tailActive,
     termRef,
+    // Null for every provider that renders inline on the normal buffer, which
+    // is the ordinary case and keeps viewport scrolling.
+    jumpKey: getProviderFeatures(provider).terminalJumpToLatestKey,
   })
   const dimensionActiveRef = useRef(false)
   const dimensionOwnershipEpochRef = useRef(0)
