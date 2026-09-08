@@ -348,7 +348,11 @@ export type StreamPhase =
   | 'awaiting-tool'
 
 export type ProviderSwitchRuntimeState = {
-  phase: 'preparing' | 'compacting' | 'summarizing' | 'projecting'
+  // `shrinking` is the quota-independent path's phase (#821): the source is out
+  // of quota, so nothing is compacted anywhere and the deterministic ladder
+  // trims the conversation locally instead. It is a main-process phase like the
+  // other three — `preparing` is the only one the renderer writes itself.
+  phase: 'preparing' | 'compacting' | 'summarizing' | 'shrinking' | 'projecting'
   message: string
 }
 
@@ -550,6 +554,23 @@ export type SessionRuntime = {
   // current selection.
   codeBlockPicker: { selectedId: string } | null
   processActive: boolean
+  /** Set when the provider reported a usage limit (Claude: an
+   *  `isApiErrorMessage` / `error: "rate_limit"` transcript record; Codex: a
+   *  `usage_limit_reached` api error on the semantic stream). Compared against
+   *  `turnStartedAt` so a pane that is "active" only because it shows the
+   *  provider's wait banner can still be switched away — see `isLimitIdle` in
+   *  workspace/hook/actions/providerSwitchCore.ts. Cleared when the next turn
+   *  completes, because a turn that finished is proof the limit episode is
+   *  over.
+   *
+   *  WHY a timestamped record and not a boolean: the guard has to distinguish
+   *  "the limit stopped THIS turn" from "the limit stopped an earlier turn the
+   *  user has since resumed past", and only an ordering against turnStartedAt
+   *  can do that. `source` is diagnostic — the two providers prove the same
+   *  fact through completely different channels (durable transcript vs live
+   *  semantic event) and a bug report that says which one fired is worth the
+   *  one extra field. */
+  limitHit: { at: number; source: 'transcript' | 'api_error' } | null
   sessionStatus: SessionStatus
   sessionStatusSource: SessionStatusSource
   /** Transcript readiness is deliberately separate from process
@@ -821,6 +842,7 @@ export function emptyRuntime(): SessionRuntime {
     assistantPicker: null,
     codeBlockPicker: null,
     processActive: false,
+    limitHit: null,
     sessionStatus: 'idle',
     sessionStatusSource: 'none',
     transcriptStatus: 'ready',
