@@ -12,12 +12,6 @@ type FollowArgs = {
   scrollToLatestRequest: number
   tailActive: boolean
   termRef: RefObject<Terminal | null>
-  /**
-   * Bytes that make THIS provider's TUI scroll its own transcript to the
-   * latest message, or null when the xterm viewport is the thing that scrolls.
-   * See ProviderFeatureCapabilities.terminalJumpToLatestKey.
-   */
-  jumpKey: string | null
 }
 
 function isAtBottom(term: Terminal): boolean {
@@ -25,12 +19,8 @@ function isAtBottom(term: Terminal): boolean {
 }
 
 export function useAgentTerminalFollow({
-  sessionId, scrollToLatestRequest, tailActive, termRef, jumpKey,
+  sessionId, scrollToLatestRequest, tailActive, termRef,
 }: FollowArgs) {
-  // Read at request time rather than closed over, so a provider switch that
-  // keeps the same pane cannot send the previous provider's chord.
-  const jumpKeyRef = useRef(jumpKey)
-  jumpKeyRef.current = jumpKey
   // The mount-owned PTY subscriber reads the latest verdict at callback time,
   // not when a chunk was queued: parsing can finish after Tail was disabled.
   const tailActiveRef = useRef(tailActive)
@@ -62,26 +52,16 @@ export function useAgentTerminalFollow({
     }
     if (scrollToLatestRequest === jumpBaselineRef.current) return
     jumpBaselineRef.current = scrollToLatestRequest
-    const key = jumpKeyRef.current
-    if (key) {
-      // WHY this writes to the PTY instead of moving the viewport:
-      //
-      // A provider whose TUI runs on the ALTERNATE SCREEN owns its transcript
-      // internally and never evicts a line into xterm scrollback, so
-      // `viewportY === baseY` always holds and `scrollToBottom()` is a
-      // guaranteed no-op. That is why Jump to Latest silently did nothing on
-      // OpenCode Terminal panes while working on Claude and Codex raw views,
-      // which render inline on the normal buffer. The only thing that can move
-      // that transcript is the TUI's own key.
-      //
-      // Fire-and-forget, and deliberately not awaited or reported: this runs
-      // inside a passive effect driven by a counter, the write is one keypress
-      // the user could have typed themselves, and a rejected send means the
-      // pane is gone — in which case there is nothing to scroll and nothing to
-      // say about it.
-      void window.api.sendInput(sessionId, key)
-      return
-    }
+    // KNOWN LIMITATION, and not fixable from here: a provider whose TUI runs
+    // on the ALTERNATE SCREEN owns its transcript internally and never evicts
+    // a line into xterm scrollback, so viewportY === baseY always holds and
+    // this call does nothing. OpenCode Terminal is exactly that case. Sending
+    // the TUI's own scroll-to-bottom chord was tried and reverted: the binding
+    // is user-configurable, so a user who has moved a destructive action onto
+    // it would have Jump to Latest abort and revert their session. The
+    // rebinding-immune route is OpenCode's POST /tui/execute-command, which
+    // needs a served transport this runtime does not use yet. See the audit
+    // doc for the full evidence.
     termRef.current?.scrollToBottom()
   }, [scrollToLatestRequest, sessionId, termRef])
 
