@@ -36,6 +36,9 @@ describe('provider feature matrix', () => {
         inAppResume: true,
         switchTargets: ['codex', 'opencode'],
         verifiedExternalResumeCommand: true,
+        // Inline on the normal screen buffer, so real xterm scrollback exists
+        // and Jump to Latest moves the viewport.
+        terminalJumpToLatestKey: null,
       },
       codex: {
         savedSessionListing: true,
@@ -45,6 +48,7 @@ describe('provider feature matrix', () => {
         inAppResume: true,
         switchTargets: ['claude', 'opencode'],
         verifiedExternalResumeCommand: true,
+        terminalJumpToLatestKey: null,
       },
       opencode: {
         savedSessionListing: false,
@@ -58,6 +62,14 @@ describe('provider feature matrix', () => {
         inAppResume: true,
         switchTargets: ['claude', 'codex'],
         verifiedExternalResumeCommand: true,
+        // The one row that is NOT null, and the reason this capability exists.
+        // OpenCode runs OpenTUI on the ALTERNATE SCREEN and owns its
+        // transcript internally, so nothing is ever evicted into xterm
+        // scrollback and scrollToBottom is a guaranteed no-op — which is why
+        // Jump to Latest silently did nothing on OpenCode Terminal panes.
+        // ESC + 0x07 is Ctrl+Alt+G in the legacy encoding, which OpenCode
+        // binds to `messages_last`.
+        terminalJumpToLatestKey: '\u001b\u0007',
       },
     })
   })
@@ -72,6 +84,9 @@ describe('provider feature matrix', () => {
       inAppResume: false,
       switchTargets: [],
       verifiedExternalResumeCommand: false,
+      // A plain shell has no TUI transcript of its own, so the xterm viewport
+      // is the only thing there is to scroll.
+      terminalJumpToLatestKey: null,
     })
   })
 

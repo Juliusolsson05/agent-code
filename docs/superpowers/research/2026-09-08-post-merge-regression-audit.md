@@ -226,54 +226,85 @@ These were found while auditing and are not among the reported symptoms.
 
 ---
 
-## Open decisions (not actioned — both are genuine trade-offs)
+## Decisions taken
 
-### D1. Who owns `End` inside a TUI? (fixes symptom 3)
+### D1. Jump to Latest on OpenCode — RESOLVED, and it was not a keybinding
 
-`resolveEffectiveKeybindings` keys on `commandId` in a `Map`, so one command
-id gets exactly one context. You cannot have both `End` in `feed` and
-`Alt+End` in `global` for `jump-latest-message`.
+The keybinding analysis was correct but beside the point. A follow-up
+investigation established that an OpenCode Terminal pane runs OpenTUI with
+`screenMode` defaulting to `alternate-screen`, and renders its transcript into
+an internal scrollbox with its own paging keybinds. Nothing is ever evicted
+upward, so `viewportY === baseY` always holds and `term.scrollToBottom()` — the
+entire jump implementation — is a guaranteed no-op there. No chord could have
+fixed it.
 
-- **Option A — make `End` work on terminal surfaces.** Widen the `feedFocused`
-  predicate to accept agent panes on either surface, and exempt xterm's helper
-  textarea from `isTextEditingTarget` (e.g. `el.closest('.xterm')`). Both
-  edits are required; either alone changes nothing. Delivers what #837
-  promised. **Cost:** bare `End` stops reaching the provider TUI's own line
-  editor, which binds Home/End. Presumably why the original author left the
-  gate alone.
-- **Option B — move it to `Alt+End` in `global`.** One line, mirrors how
-  `toggle-tail` already reaches raw terminals. **Cost:** feed users lose bare
-  `End`.
-- **Option C — a second command id for the terminal surface**, so the feed
-  keeps `End` and terminals get `Alt+End`. No conflict, at the price of two
-  near-identical palette entries.
+`externalOutputMode: "passthrough"` in OpenCode's TUI setup looks like an
+opt-out from alt-screen but is an orthogonal axis: it is the only value legal
+with alternate-screen and is its default.
 
-Either way, three records asserting today's behaviour need updating:
-`command-keybindings/reservations.ts:310-313`,
-`command-palette/keybindingBaseline.test.ts:200-202`, and the router wiring
-tests.
+Claude Code and Codex are different, which is why jump works for them in the
+same pane type: both render inline on the normal buffer and push history into
+real xterm scrollback (Codex's `insert_history_lines`; Claude's AlternateScreen
+component is documented as being for transient ctrl-o style overlays only).
 
-### D2. WebGL: bump to a beta, or turn it off? (fixes most of symptom 4)
+Fixed by making jump provider-aware through the existing feature-capability
+table — which mechanism applies is a fact about the provider's TUI, not about
+the pane. OpenCode declares ESC + 0x07, which is Ctrl+Alt+G in the legacy
+encoding and is what it binds to `messages_last`. Not the bare `End` it also
+accepts, because that is also bound to `input_buffer_end` and would move the
+prompt caret. Legacy bytes rather than the kitty protocol OpenCode requests,
+because xterm 6.0.0 has no kitty support and never answers the query.
 
-- **Option A — bump `@xterm/addon-webgl` to `0.20.0-beta.300`.** The real
-  upstream fix, and the local workaround (plus its comment saying it "can go
-  once a stable addon with the upstream merge/retry fixes passes the
-  colored-output/scroll regression workload") could then be deleted.
-  **Cost:** a beta GPU renderer in a daily-driver Electron app, with no stable
-  0.20.0 in sight. Cannot be verified here without running the app.
-- **Option B — stop attaching the WebGL renderer for agent terminals** and
-  fall back to the DOM renderer, which is what VS Code ships as its own answer
-  to this exact symptom class (`terminal.integrated.gpuAcceleration: "off"`,
-  widely recommended specifically for Claude Code TUIs). **Cost:** reverses
-  the deliberate perf decision in #783/`3b885068`, four days old.
-- **Option C — both, behind a setting**, defaulting to DOM until 0.20.0 is
-  stable.
+The command's description, which claimed "in a raw terminal view this scrolls
+the TUI viewport to the bottom", was false for OpenCode and is corrected. The
+system test's alternate-screen case was vacuous — on the alt screen viewportY
+and baseY are both 0, so its bottom assertion was `0 === 0` — and now proves
+both mechanisms.
 
----
+**Not done, deliberately:** no new chord was added. `End` stays feed-only. The
+palette command now works on every provider, which is what was actually broken,
+and the keybinding router's exclusion of raw terminal surfaces is a separate
+pre-existing design choice that `reservations.ts` documents on purpose. Note
+for anyone revisiting it: `Alt+End` is NOT free — it is reserved for
+directional split resize, because macOS turns Fn+Option+Arrow into it. `Alt+G`
+was verified free across defaults, reservations, the blocked-chord sets, the
+three provider TUIs, and macOS.
 
-## Confirmed but NOT fixed
+### D2. WebGL — RESOLVED by turning it off
 
-Ordered by severity. Each is reproducible from the stated input.
+Upgrading is not available: the fix ships only in
+`@xterm/addon-webgl@0.20.0-beta.219+`, there is still no stable 0.20.0, and
+that beta's peer dependency is `@xterm/xterm: ^6.1.0-beta.304`. Taking it would
+drag the CORE terminal — the heart of every pane — onto a beta to fix one
+renderer bug. That trade is clearly wrong, so the renderer is disabled behind a
+single constant with the exact upgrade condition written next to it.
+
+The DOM renderer is xterm's default, is correct, and was already the tested
+fallback every failure path in that file lands on. The two structural halves of
+the perf work that introduced WebGL — routing raw PTY channels once per
+renderer, and coalescing inline grid resizes — are untouched. VS Code ships the
+same escape hatch for the same symptom class.
+
+The gate is a parameter defaulting to the constant rather than a hard-coded
+read, so the fifteen existing cases keep proving the attach, fallback,
+context-loss and atlas-repair machinery still works for the day it flips back.
+
+## Confirmed findings — fixed, except where noted
+
+Kept as the record of what each defect actually was, since the fixes are only
+legible against it. Two carry a partial remainder, called out inline:
+
+- **Finding 1** (return forcing arrival compaction) is fixed for the CONSENT
+  half — the batch now records what the user agreed to and the return reuses
+  it. The other half of the recommendation, capping the arrival wait far below
+  300s, is NOT done: `COMPACTION_TIMEOUT_MS` is still 300_000 and the progress
+  toasts still 305_000. Shortening it changes when a legitimately slow
+  compaction is abandoned, which is a product decision about a destructive
+  operation, not a cleanup.
+- **Finding 4** (identity length bound) mirrors main's per-item limit through a
+  shared constant, so one over-long identity can no longer reject the batch.
+  Chunking the request is NOT done, and is not needed for the bug: the batch
+  cap is 10,000 identities and nothing else can now fail validation.
 
 1. **Return forces arrival compaction on without consent, locking N composers
    for up to 5.5 minutes.** `bulkProviderSwitch.ts:61-67` hard-codes
@@ -510,3 +541,36 @@ Verified by running the same files at `origin/main`:
 - `workspace/hook/persistence/codexLiveContinuity.renderer.test.tsx` — a
   `waitFor` timeout.
 - `main/workflows/control.system.test.ts` — a 5s test timeout.
+
+---
+
+## Deliberately deferred
+
+**Attach replay is parsed at 80x24 before the first fit.** Pre-existing,
+structural, and tracked as issue #766. `AgentTerminalOwnership` renders the
+leaf inside a `hidden` div on its first commit, so `dimensionActive` is false
+when the mount effect runs and the initial fit is skipped; `term.open` then
+measures a hidden box and xterm stays at its default 80x24. `attachAgentPty`
+resolves a few milliseconds later and up to 512 KiB of raw PTY history is
+replayed immediately, while the first real `fit()` only runs from a later
+animation frame — reflowing the buffer mid-parse, so absolute cursor-positioning
+sequences in the replay land on the wrong cells.
+
+NOT fixed here, on purpose. Every available shape of the fix has a real cost:
+
+- Deferring the whole attach until the first fit means a pane that is never
+  dimension-active never attaches, so a long-hidden pane can fall off the far
+  end of main's bounded 512 KiB buffer and lose output it would have kept.
+- Deferring only the replay leaves live PTY chunks writing to the terminal
+  ahead of the buffered history, which produces the very interleaving the
+  change is meant to remove, unless the forwarder's replay latch is also
+  restructured.
+
+This is the most delicate path in the application, it cannot be exercised
+without running the app, and it is not one of the four reported symptoms nor
+caused by any of the four merges. Issue #766 proposes replacing the raw replay
+with a serialized screen, which removes the ordering problem entirely rather
+than sequencing around it. That is the right place for it.
+
+The two corruption causes that COULD be resolved safely — the WebGL atlas bug
+and the agent-name row resizing every pane after mount — both were.

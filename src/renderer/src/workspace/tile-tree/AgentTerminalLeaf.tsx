@@ -572,7 +572,9 @@ export function AgentTerminalLeaf({
               </span>
             )}
             <span className="flex-shrink-0 text-ink">raw {provider}</span>
-            <span className="truncate" title={projectDir ?? 'no project dir'}>
+            {/* truncate-START, matching PaneHeader: keep the project directory
+                visible and drop the shared prefix instead. */}
+            <span className="truncate-start" title={projectDir ?? 'no project dir'}>
               {shortenCwd(projectDir)}
             </span>
           </div>

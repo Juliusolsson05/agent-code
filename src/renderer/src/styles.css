@@ -1063,3 +1063,32 @@ body,
 *::-webkit-scrollbar-thumb:hover {
   background: var(--theme-muted);
 }
+
+/* Truncate a path from its START, so the ellipsis eats the least useful end.
+ *
+ * WHY this exists rather than Tailwind's `truncate`: `text-overflow: ellipsis`
+ * always clips the END of the line. For a project path that is exactly
+ * backwards — every pane in a workspace shares the same first segments, so a
+ * narrow pane showed ".../Desktop/Developme…" for all of them and the one part
+ * that identifies the agent, the project directory, was the first thing cut.
+ * With several panes open the header stopped distinguishing them at all.
+ *
+ * WHY direction + unicode-bidi rather than measuring and slicing in JS: the
+ * ellipsis has to land wherever the box happens to end, which only the layout
+ * engine knows. Reversing the paragraph direction moves the overflow edge to
+ * the left and lets `text-overflow` do its normal job there.
+ *
+ * `unicode-bidi: plaintext` is what keeps the text itself readable: it derives
+ * the run's direction from its first strong character, so an ASCII path still
+ * renders left-to-right and only the OVERFLOW is taken from the front. Without
+ * it, `direction: rtl` alone would also reorder the leading "…/" and the
+ * separators.
+ */
+.truncate-start {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  direction: rtl;
+  unicode-bidi: plaintext;
+  text-align: left;
+}

@@ -91,7 +91,7 @@ export type ProviderFeatureCapabilities = {
    * OpenCode does not. It runs OpenTUI, whose `screenMode` defaults to
    * `alternate-screen`, and it renders the transcript into an internal
    * `<scrollbox>` with its own paging keybinds. Nothing is ever evicted
-   * upward, so `viewportY === baseY`永 holds and `term.scrollToBottom()` is a
+   * upward, so `viewportY === baseY` always holds and `term.scrollToBottom()` is a
    * guaranteed no-op — which is why Jump to Latest silently did nothing on
    * OpenCode Terminal panes while working everywhere else. The only mechanism
    * that can move that transcript is the TUI's own key.

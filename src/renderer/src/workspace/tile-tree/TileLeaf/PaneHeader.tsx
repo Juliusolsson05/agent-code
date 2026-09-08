@@ -121,7 +121,9 @@ export function PaneHeader({
               {paneLabel}
             </span>
           )}
-          <span className="truncate" title={projectDir ?? 'no project dir'}>
+          {/* truncate-START: every pane shares the leading path segments, so
+              clipping the end hid the one part that identifies this agent. */}
+          <span className="truncate-start" title={projectDir ?? 'no project dir'}>
             {shortenCwd(projectDir)}
           </span>
         </div>
