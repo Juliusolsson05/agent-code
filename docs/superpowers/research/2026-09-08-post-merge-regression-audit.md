@@ -247,13 +247,30 @@ same pane type: both render inline on the normal buffer and push history into
 real xterm scrollback (Codex's `insert_history_lines`; Claude's AlternateScreen
 component is documented as being for transient ctrl-o style overlays only).
 
-Fixed by making jump provider-aware through the existing feature-capability
-table — which mechanism applies is a fact about the provider's TUI, not about
-the pane. OpenCode declares ESC + 0x07, which is Ctrl+Alt+G in the legacy
-encoding and is what it binds to `messages_last`. Not the bare `End` it also
-accepts, because that is also bound to `input_buffer_end` and would move the
-prompt caret. Legacy bytes rather than the kitty protocol OpenCode requests,
-because xterm 6.0.0 has no kitty support and never answers the query.
+**A fix was written and reverted on review.** Sending the TUI its own
+scroll-to-bottom chord works — ESC + 0x07 is Ctrl+Alt+G, which OpenCode binds
+to `messages_last`, and two independent passes confirmed both the binding and
+the encoding. What cannot be guaranteed is what that chord MEANS on a given
+machine. OpenCode keybinds are user-configurable, and a supported
+configuration can move `messages_last` elsewhere and put `messages_undo` —
+which aborts the session and reverts history — on Ctrl+Alt+G. A command
+labelled "Jump to Latest Message" must not be able to do that, and documenting
+the exposure is not mitigating it.
+
+Reading the effective binding would mean reimplementing OpenCode's config
+loader: JSONC, global plus per-project plus every `.opencode` directory up to
+home, variable substitution, a legacy migration, a win32 special case and
+plugin-registered binds. That reimplementation would drift.
+
+The rebinding-immune route exists — OpenCode's server exposes
+`POST /tui/execute-command`, whose alias table dispatches `session.last` below
+the keybind layer — but it needs a known server URL, which means running
+`opencode serve` and attaching the TUI to it rather than spawning the TUI
+directly. That is a transport change for this runtime and the right place for
+this to land.
+
+What DID ship: the command's description no longer claims a behaviour it
+cannot deliver, and the limitation is recorded where the jump is implemented.
 
 The command's description, which claimed "in a raw terminal view this scrolls
 the TUI viewport to the bottom", was false for OpenCode and is corrected. The
@@ -583,22 +600,21 @@ Two more symptoms were reported while this branch was open, plus a two-agent
 merge review. Recorded here because both turned out to share a root cause with
 what was already being fixed.
 
-### The mouse wheel does nothing in an OpenCode terminal pane
+### The mouse wheel does nothing in an OpenCode terminal pane — DIAGNOSED, NOT FIXED
 
-Same family as the Jump to Latest bug, different mechanism, and this one is not
-about the alternate screen owning the transcript. **Nothing swallows the
-wheel** — that was checked exhaustively: exactly one `wheel` handler exists in
-the renderer and it belongs to the feed, there is no capture-phase listener, no
-`attachCustomWheelEventHandler`, and the terminal container's parent is
-`overflow-hidden` so nothing above can consume it.
+Same family as the Jump to Latest bug and a different mechanism. **Nothing
+swallows the wheel** — that was checked exhaustively: exactly one `wheel`
+handler exists in the renderer and it belongs to the feed, there is no
+capture-phase listener, no `attachCustomWheelEventHandler`, and the terminal
+container's parent is `overflow-hidden` so nothing above can consume it.
 
-The modes that make the wheel work were thrown away. `attachAgentPty` replays
+The modes that make the wheel work are thrown away. `attachAgentPty` replays
 the trailing bytes of a CAPPED buffer that evicts the OLDEST data, and a TUI
 writes its mode preamble exactly once at startup: `1049` (alternate screen),
 `1000`/`1002`/`1003` (mouse button, drag, any-event including wheel) and `1006`
 (SGR encoding). A TUI repainting at 60fps blows through the 512 KiB cap
 quickly, so on any session with real activity that preamble is long gone before
-a renderer ever attaches, and nothing reconstructed it.
+a renderer attaches, and nothing reconstructs it.
 
 A freshly-constructed xterm therefore sits on the NORMAL buffer with no mouse
 tracking while the application believes the opposite. xterm attaches its
@@ -614,14 +630,25 @@ installed binary's renderer setup block contains exactly those DECSETs. Claude
 Code and Codex are unaffected because they render inline and push real
 scrollback.
 
-Fixed by tracking those five modes as chunks go past and prepending the active
-ones ahead of the replay. Colours, cursor shape and window title are
-deliberately NOT tracked: the next repaint re-asserts them. Screen buffer and
-mouse tracking are, because the application sets them once and never again.
+**A fix was written, reviewed, and reverted.** Tracking the five modes as
+chunks pass and prepending the active ones ahead of the replay fails in two
+ways that were reproduced against real xterm:
 
-**This is adjacent to the deferred attach-replay ordering problem below, and
-does not fix it.** Restoring modes says nothing about the terminal's DIMENSIONS
-at replay time.
+1. **Current modes cannot precede historical output.** If the retained replay
+   contains bytes written on the normal buffer and only later switches to the
+   alternate screen, prefixing the current `1049h` moves that earlier content
+   onto the alternate buffer, where the following `1049l` discards it. The
+   correct input is the mode state at the replay's STARTING boundary, which
+   means feeding a tracker the bytes the cap EVICTS, not the bytes it keeps.
+2. **A set of independent flags is not xterm's model.** Mouse protocols are
+   mutually exclusive — `1000h`, `1003h`, `1003l` leaves reporting disabled,
+   and `1003h` then `1000h` leaves VT200, not ANY. `ESC c` and the
+   `1047`/`1048`/`1049` aliases matter too.
+
+Doing it properly is a real terminal state machine and cannot be validated
+without running the app. It belongs next to issue #766, which proposes
+replacing the raw replay with a serialized screen and would remove the ordering
+problem entirely rather than sequencing around it.
 
 ### Pane paths were truncated from the wrong end
 

@@ -1068,27 +1068,35 @@ body,
  *
  * WHY this exists rather than Tailwind's `truncate`: `text-overflow: ellipsis`
  * always clips the END of the line. For a project path that is exactly
- * backwards — every pane in a workspace shares the same first segments, so a
+ * backwards — every pane in a workspace shares the same leading segments, so a
  * narrow pane showed ".../Desktop/Developme…" for all of them and the one part
- * that identifies the agent, the project directory, was the first thing cut.
- * With several panes open the header stopped distinguishing them at all.
+ * that identifies the agent was the first thing cut. With several panes open
+ * the header stopped distinguishing them at all.
  *
- * WHY direction + unicode-bidi rather than measuring and slicing in JS: the
- * ellipsis has to land wherever the box happens to end, which only the layout
- * engine knows. Reversing the paragraph direction moves the overflow edge to
- * the left and lets `text-overflow` do its normal job there.
+ * WHY direction rather than measuring and slicing in JS: the ellipsis has to
+ * land wherever the box happens to end, which only the layout engine knows.
+ * Reversing the paragraph direction moves the overflow edge to the left and
+ * lets `text-overflow` do its normal job there.
  *
- * `unicode-bidi: plaintext` is what keeps the text itself readable: it derives
- * the run's direction from its first strong character, so an ASCII path still
- * renders left-to-right and only the OVERFLOW is taken from the front. Without
- * it, `direction: rtl` alone would also reorder the leading "…/" and the
- * separators.
+ * WHY the call sites wrap the text in an inner `dir="ltr"` span, and why this
+ * rule must NOT carry `unicode-bidi: plaintext`:
+ *
+ * Both alternatives were measured in Chrome at 180px. `direction: rtl` alone
+ * clips the right end and reorders the leading "…/" onto the far side —
+ * ".../parent-directory/my-project" renders as "…tory/my-project/…". Adding
+ * `unicode-bidi: plaintext` derives the run's direction from its first strong
+ * character, which is LTR for an ASCII path, so the clipping edge goes back to
+ * the end and the whole rule does nothing. Only the two-element form works:
+ * the OUTER direction selects which edge clips, the INNER one preserves the
+ * path's text order. Short paths and the leading ellipsis survive intact, and
+ * at a comfortable width nothing is clipped at all.
  */
 .truncate-start {
+  display: block;
+  min-width: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
   direction: rtl;
-  unicode-bidi: plaintext;
   text-align: left;
 }
