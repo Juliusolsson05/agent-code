@@ -1,68 +1,51 @@
 import { useEffect, useMemo, useRef } from 'react'
 import type { RefObject } from 'react'
-import type { Terminal } from '@xterm/xterm'
+import type { IMarker, Terminal } from '@xterm/xterm'
 
-// Follow behavior for raw agent terminal surfaces (AgentTerminalLeaf) — the
-// xterm counterpart of what Feed does for the rendered surface:
-//   - Jump to Latest: the workspace bumps `runtime.scrollToLatestRequest`
-//     whenever the user asks to return to the bottom (palette command, prompt
-//     send). Feed scrolls its DOM scroller; a raw pane scrolls the xterm
-//     viewport instead. Nothing consumed this counter on the terminal surface
-//     before, so the command silently did nothing there.
-//   - Tail (auto-follow): mirrors Feed's semantics — pin to bottom while
-//     active, re-pin if the user scrolls away, and restore the pre-tail
-//     viewport line on disengage so following is non-destructive. Feed
-//     protects the saved position for the same reason (see Feed.tsx "WHY
-//     tailing deliberately does NOT persist").
-//
-// WHY a hook instead of inline effects in AgentTerminalLeaf: the leaf's xterm
-// mount effect is deliberately keyed on [sessionId] alone (remounting xterm on
-// every runtime change would lose scrollback and re-attach the PTY), so
-// runtime-driven behavior must live outside that effect and reach the terminal
-// through refs. Collecting it here also gives the renderer tests one unit to
-// target. The hook MUST be called before the leaf's mount effect — see the
-// wiring comment in AgentTerminalLeaf.
-
-/** Viewport is at bottom when its top line plus rows covers the buffer. */
-export function isXtermViewportAtBottom(term: Terminal): boolean {
-  const buffer = term.buffer.active
-  return buffer.viewportY >= buffer.length - term.rows
-}
-
+// AgentTerminalLeaf keeps its expensive PTY/xterm attachment keyed on sessionId.
+// Follow intent changes independently of that lifetime: consuming it in this
+// hook avoids remounting the terminal and losing scrollback on every toggle.
+// The hook runs before the leaf's mount effect, so a fresh terminal has no
+// pre-tail position to restore. The leaf pins once its attach replay is parsed.
 type FollowArgs = {
-  /** Live runtime counter; every increment is one jump-to-latest request. */
+  sessionId: string
   scrollToLatestRequest: number
-  /** Computed tail verdict (per-session Tail OR Tail All, masked by visibility). */
   tailActive: boolean
-  /** The leaf's terminal ref; null until the mount effect creates xterm. */
   termRef: RefObject<Terminal | null>
 }
 
-export type AgentTerminalFollowHandle = {
-  /** Tail verdict for the PTY write path inside the leaf's mount effect. */
-  readonly tailActiveRef: Readonly<{ current: boolean }>
-  /** Wire re-pin-on-user-scroll to a freshly created Terminal instance. */
-  attach: (term: Terminal) => () => void
+function isAtBottom(term: Terminal): boolean {
+  return term.buffer.active.viewportY >= term.buffer.active.baseY
 }
 
 export function useAgentTerminalFollow({
-  scrollToLatestRequest,
-  tailActive,
-  termRef,
-}: FollowArgs): AgentTerminalFollowHandle {
-  // WHY render-time assignment (mirroring runtimeRef in AgentTerminalLeaf):
-  // the PTY subscriber in the mount effect reads this ref at IPC-event time,
-  // long after any effect ordering, and the mount effect itself must never
-  // re-run for follow-state changes.
+  sessionId, scrollToLatestRequest, tailActive, termRef,
+}: FollowArgs) {
+  // The mount-owned PTY subscriber reads the latest verdict at callback time,
+  // not when a chunk was queued: parsing can finish after Tail was disabled.
   const tailActiveRef = useRef(tailActive)
   tailActiveRef.current = tailActive
-
-  // Jump to Latest. WHY a baseline ref: the counter can already be non-zero
-  // from the session's rendered-surface life, and remounting the pane must
-  // not replay an old request against a fresh xterm — the attach replay
-  // already leaves a fresh terminal at the bottom.
+  const tailEngagedRef = useRef(false)
+  const savedLineRef = useRef<IMarker | null>(null)
   const jumpBaselineRef = useRef<number | null>(null)
+
   useEffect(() => {
+    // Related-agent tabs can change sessionId without remounting the React
+    // leaf. None of A's saved position or jump counter belongs to session B.
+    tailEngagedRef.current = false
+    savedLineRef.current?.dispose()
+    savedLineRef.current = null
+    jumpBaselineRef.current = null
+    return () => {
+      savedLineRef.current?.dispose()
+      savedLineRef.current = null
+    }
+  }, [sessionId])
+
+  useEffect(() => {
+    // The counter also survives rendered/raw surface swaps. Baseline rather
+    // than replay the old request; a newly attached xterm starts at its tail.
+    // New requests come from scrollFocusedToLatest and softReloadRuntime.
     if (jumpBaselineRef.current === null) {
       jumpBaselineRef.current = scrollToLatestRequest
       return
@@ -70,59 +53,65 @@ export function useAgentTerminalFollow({
     if (scrollToLatestRequest === jumpBaselineRef.current) return
     jumpBaselineRef.current = scrollToLatestRequest
     termRef.current?.scrollToBottom()
-  }, [scrollToLatestRequest, termRef])
+  }, [scrollToLatestRequest, sessionId, termRef])
 
-  // Tail engage/disengage. Non-destructive like Feed: only a viewport that was
-  // genuinely scrolled up has a position worth restoring; engaging while at
-  // bottom saves nothing and disengage leaves the bottom. On mount with tail
-  // already on, this effect runs before xterm exists (declaration order — see
-  // the leaf wiring), so nothing is saved and disengage keeps the bottom the
-  // attach replay left us at.
-  const tailEngagedRef = useRef(false)
-  const savedViewportYRef = useRef<number | null>(null)
   useEffect(() => {
-    const activeTerm = termRef.current
+    const term = termRef.current
     if (tailActive && !tailEngagedRef.current) {
       tailEngagedRef.current = true
-      if (activeTerm) {
-        savedViewportYRef.current = isXtermViewportAtBottom(activeTerm)
-          ? null
-          : activeTerm.buffer.active.viewportY
-        activeTerm.scrollToBottom()
+      if (term) {
+        const buffer = term.buffer.active
+        // Numeric viewport offsets are not content anchors. Once scrollback
+        // fills, both baseY and length stay constant while old lines are
+        // evicted. xterm markers follow trims/deletions and dispose themselves
+        // when their line is lost. Register relative to the cursor, not baseY,
+        // so the anchor names exactly the first line the user was reading.
+        if (buffer.type === 'normal' && !isAtBottom(term)) {
+          savedLineRef.current = term.registerMarker(buffer.viewportY - buffer.baseY - buffer.cursorY)
+        }
+        term.scrollToBottom()
       }
       return
     }
     if (!tailActive && tailEngagedRef.current) {
       tailEngagedRef.current = false
-      const saved = savedViewportYRef.current
-      savedViewportYRef.current = null
-      // WHY scrollToLine and not a viewportY write: @xterm/xterm v6 exposes
-      // buffer.active.viewportY as readonly (v5 allowed assignment). The
-      // explicit clamp keeps the target inside a buffer that may have grown
-      // or shrunk since the position was saved.
-      if (activeTerm && saved !== null) {
-        const buffer = activeTerm.buffer.active
-        activeTerm.scrollToLine(Math.min(saved, Math.max(0, buffer.length - activeTerm.rows)))
+      const saved = savedLineRef.current
+      savedLineRef.current = null
+      if (term && saved && term.buffer.active.type === 'normal') {
+        // An evicted anchor cannot be restored; show the oldest surviving
+        // content instead. Never apply a normal-buffer anchor to an alternate
+        // screen. scrollToLine is the public viewport writer, not viewportY.
+        term.scrollToLine(saved.isDisposed ? 0 : saved.line)
       }
+      saved?.dispose()
     }
-  }, [tailActive, termRef])
+  }, [sessionId, tailActive, termRef])
 
-  // Stable handle: the leaf's mount effect is keyed on [sessionId] and must
-  // not be invalidated by follow-state churn.
-  return useMemo<AgentTerminalFollowHandle>(() => ({
+  return useMemo(() => ({
     tailActiveRef,
-    attach: mountedTerm => {
-      // Feed re-pins on the scroll event itself. scrollToBottom also fires
-      // onScroll, but the handler then sees an at-bottom viewport and no-ops,
-      // so the loop self-terminates. Mouse-mode TUIs forward wheel events to
-      // the app instead of xterm scrollback, so this only acts on genuine
-      // viewport movement.
-      const disposable = mountedTerm.onScroll(() => {
-        if (!tailActiveRef.current) return
-        if (isXtermViewportAtBottom(mountedTerm)) return
-        mountedTerm.scrollToBottom()
+    attach: (term: Terminal) => {
+      let disposed = false
+      let queued = false
+      const subscription = term.onScroll(() => {
+        // onScroll also fires while parsing output, not just user scrolls.
+        // Coalesce dispatches; xterm's viewport rejects a synchronous re-pin
+        // inside its own scroll handler. A microtask exits that reentrancy
+        // fence. The write-completion pin in the leaf still handles the final
+        // post-parse bottom, after xterm has updated its scroll dimensions.
+        if (queued || !tailActiveRef.current || isAtBottom(term)) return
+        queued = true
+        queueMicrotask(() => {
+          queued = false
+          if (disposed || termRef.current !== term || !tailActiveRef.current || isAtBottom(term)) return
+          term.scrollToBottom()
+        })
       })
-      return () => disposable.dispose()
+      return () => {
+        disposed = true
+        subscription.dispose()
+        savedLineRef.current?.dispose()
+        savedLineRef.current = null
+      }
     },
-  }), [])
+  }), [termRef])
 }

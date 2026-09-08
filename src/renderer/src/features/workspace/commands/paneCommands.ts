@@ -542,13 +542,13 @@ export const paneCommands: CommandDef[] = [
     surface: 'app',
     title: 'Auto-follow All Visible Agents',
     description:
-      '**What it does:** Toggles feed **auto-follow for every visible agent** at once.\n\n**Use when:** You are watching several agents work and want them all pinned to the bottom.\n\n**Notes:** Scopes to what is on screen — in **single dispatch** that is the one agent, in **tiled** every lane, in the **grid** the current tab\'s panes only. Panes you open afterward tail too, until you toggle it off. Plain shell terminals are never affected; raw agent terminal views follow too.\n\n**Caution:** A tailing feed cannot be scrolled up — this takes scrollback away from every visible pane at once, and turning it off does not restore where you were reading.',
+      '**What it does:** Toggles **auto-follow for every visible agent** at once.\n\n**Use when:** You are watching several agents work and want them all pinned to the bottom.\n\n**Notes:** Scopes to what is on screen — in **single dispatch** that is the one agent, in **tiled** every lane, in the **grid** the current tab\'s panes only. Panes you open afterward tail too, until you toggle it off. Plain shell terminals are never affected; raw agent terminal views follow too.\n\n**Caution:** A tailing pane cannot be scrolled up. Turning this off leaves individually enabled followers on; other panes restore their earlier reading position where that content is still retained. Raw terminal follow controls xterm scrollback, not a TUI\'s internal history.',
     keywords: ['tail', 'all', 'follow', 'auto-scroll', 'bulk', 'every', 'watch', 'tail all', 'tail'],
-    // WHY no `renderedViewPolicy` even though per-session Tail has one: that
-    // gate resolves ONE target session and checks whether it renders a feed.
-    // Tail All has no single target — it is a stance that applies to whatever
-    // is mounted, now and later. Gating it on the currently focused pane would
-    // hide a workspace-level command because of one pane's view mode.
+    // WHY no `renderedViewPolicy` — Tail All is a stance over whatever is
+    // mounted, on either agent surface (rendered feed or raw terminal view,
+    // both of which follow now). Gating it on the currently focused pane's
+    // view mode would hide a workspace-level command for pane-local reasons.
+    // (Per-session Tail used to carry such a policy; it no longer does.)
     //
     // WHY no `when` guard: it is meaningful in every layout mode, and with zero
     // agent panes visible it is a harmless no-op rather than a command that

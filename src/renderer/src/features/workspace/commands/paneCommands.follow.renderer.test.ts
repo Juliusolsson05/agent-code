@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
+import type { CommandContext } from '@renderer/features/command-palette/types'
 import { paneCommands } from '@renderer/features/workspace/commands/paneCommands'
 
 // Guards the command-availability half of terminal follow: both commands
@@ -9,11 +10,27 @@ import { paneCommands } from '@renderer/features/workspace/commands/paneCommands
 // (providerRuntime === 'terminal'). Someone re-adding the policy "for
 // consistency" would silently uninstall the commands from raw terminal views
 // again while the leaf-side behavior stays green.
-//
-// WHY this does not exercise `when`: the kind guards route through
-// `commandTargetSessionId`, which needs a much larger workspace-state shape
-// (tab/dispatch focus) than a unit fixture should fake. This task does not
-// touch `when`; its behavior is owned by the existing command suites.
+
+// The state shape `commandTargetSessionIdForState` needs to resolve a target
+// (mirror of contextWithAgent() in sessionCommands.renderer.test.ts — active
+// tab with a focused leaf). Without it the selector returns null and `when`
+// answers false for every kind, which would make this guard vacuous.
+function contextWithKind(kind: string): CommandContext {
+  return {
+    workspace: {
+      state: {
+        activeTabId: 'tab',
+        dispatchMode: null,
+        sessions: {
+          agent: { cwd: '/projects/app', kind, providerSessionId: 'provider-abc' },
+        },
+        tabs: [{ id: 'tab', focusedSessionId: 'agent', root: { type: 'leaf', sessionId: 'agent' } }],
+      },
+    },
+    ui: {},
+    flags: {},
+  } as unknown as CommandContext
+}
 
 describe('follow command availability', () => {
   const tail = paneCommands.find(command => command.id === 'toggle-tail')
@@ -26,10 +43,13 @@ describe('follow command availability', () => {
     expect(jump!.renderedViewPolicy).toBeUndefined()
   })
 
-  it('keeps both commands shell-excluded through a kind guard', () => {
-    // The `when` guards (kind !== 'terminal') are what keep plain shells out;
-    // assert they exist so removing the policy cannot silently remove them.
-    expect(typeof tail!.when).toBe('function')
-    expect(typeof jump!.when).toBe('function')
+  it('keeps both commands hidden for plain shell terminals and visible for agent kinds', () => {
+    for (const command of [tail!, jump!]) {
+      expect(command.when?.(contextWithKind('terminal'))).toBe(false)
+      expect(command.when?.(contextWithKind('claude'))).toBe(true)
+      // OpenCode covers both process runtimes: the structured HTTP session
+      // and OpenCode Terminal (same kind, providerRuntime 'terminal').
+      expect(command.when?.(contextWithKind('opencode'))).toBe(true)
+    }
   })
 })

@@ -97,6 +97,7 @@ export function AgentTerminalLeaf({
   // in declaration order — when tail is already on at mount, the terminal does
   // not exist yet, which is exactly the "nothing to restore" case.
   const follow = useAgentTerminalFollow({
+    sessionId,
     scrollToLatestRequest: runtime.scrollToLatestRequest,
     tailActive,
     termRef,
@@ -324,7 +325,17 @@ export function AgentTerminalLeaf({
         // bottom and land one chunk early.
         const liveTerm = term
         if (follow.tailActiveRef.current) {
-          liveTerm?.write(data, () => liveTerm.scrollToBottom())
+          liveTerm?.write(data, () => {
+            // Fire-time re-check, not just schedule-time: xterm's WriteBuffer
+            // schedules parsing with setTimeout and yields under load, so this
+            // callback can fire long after the write — potentially after tail
+            // disengaged and restored the reading position, or after unmount
+            // disposed the terminal. An unconditional scrollToBottom would
+            // undo the restore and clear xterm's isUserScrolling latch,
+            // leaving the pane following with the TAIL pill off.
+            if (disposed || !follow.tailActiveRef.current) return
+            liveTerm.scrollToBottom()
+          })
         } else {
           liveTerm?.write(data)
         }
@@ -396,14 +407,28 @@ export function AgentTerminalLeaf({
           return true
         }
         // Replay, with the forwarder holding its latch until xterm has parsed
-        // every chunk; the backlog is strictly newer than the buffer.
-        void forwarder.replay(liveTerm, [buffer, backlogQueue.join('')])
+        // every chunk; the backlog is strictly newer than the buffer. The pin
+        // chains on the replay promise — replay resolves only when xterm
+        // reports every chunk parsed, so the pin acts on the real backfill; an
+        // inline call here runs before parsing touches an empty buffer.
+        // Guards: the pane can unmount mid-parse (`disposed`) or tail can
+        // disengage before the backlog lands.
+        forwarder
+          .replay(liveTerm, [buffer, backlogQueue.join('')])
+          .then(() => {
+            if (disposed || !follow.tailActiveRef.current) return
+            if (termRef.current !== liveTerm) return
+            liveTerm.scrollToBottom()
+          })
+          .catch(error => {
+            // The detached replay promise is outside tryAttach's error path.
+            // Report parse failures on the surviving pane rather than silently
+            // swallowing them or generating an unhandled renderer rejection.
+            if (!disposed) showPaneToastRef.current(sessionId,
+              error instanceof Error ? error.message : 'Could not replay agent terminal')
+          })
         backlogQueue.length = 0
         attachedBackfillDone = true
-        // A fresh terminal follows its replay by default, but engage-while-mounted
-        // (or Tail All flipping during a remount) wants the pin explicit once the
-        // backfill exists — the replay itself does not go through the write path.
-        if (follow.tailActiveRef.current) liveTerm.scrollToBottom()
         if (pendingResize) {
           const measured = pendingResize
           pendingResize = null

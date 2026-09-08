@@ -47,6 +47,7 @@ vi.mock('@xterm/xterm', () => ({
     options: Record<string, unknown> = {}
     container: HTMLElement | null = null
     onDataListener: ((data: string) => void) | null = null
+    onScrollListener: ((line: number) => void) | null = null
     dispose = vi.fn()
     inputDispose = vi.fn(() => { this.onDataListener = null })
     scrollDispose = vi.fn(() => { this.onScrollListener = null })

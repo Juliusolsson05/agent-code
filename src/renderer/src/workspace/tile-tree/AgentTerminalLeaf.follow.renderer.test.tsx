@@ -20,9 +20,10 @@ import { AgentTerminalLeaf } from './AgentTerminalLeaf'
 // sessionDataDispatcher fanout instead of calling leaf internals.
 type MockTerminal = {
   rows: number
-  buffer: { active: { viewportY: number; length: number } }
+  buffer: { active: { viewportY: number; length: number; baseY: number } }
   scrollToBottom: ReturnType<typeof vi.fn>
   onScrollListener: ((line: number) => void) | null
+  markers: Array<{ line: number; isDisposed: boolean }>
 }
 
 const xtermHarness = vi.hoisted(() => ({
@@ -31,6 +32,17 @@ const xtermHarness = vi.hoisted(() => ({
   instances: [] as MockTerminal[],
   attachWebgl: vi.fn(),
   fit: vi.fn(),
+  // Deferred-write mode for race regression tests: real xterm parses chunks
+  // on a setTimeout cadence, so write completion callbacks fire macrotasks
+  // after the write — long enough for tail to disengage in between. Sync
+  // mode (the default) models the common case and keeps the bulk of the
+  // suite deterministic.
+  deferWrites: false,
+  pendingWriteCallbacks: [] as Array<() => void>,
+  flushWriteCallbacks(): void {
+    const pending = xtermHarness.pendingWriteCallbacks.splice(0)
+    for (const callback of pending) callback()
+  },
 }))
 
 const appStore = vi.hoisted(() => ({
@@ -55,13 +67,30 @@ vi.mock('@xterm/xterm', () => ({
     container: HTMLElement | null = null
     onDataListener: ((data: string) => void) | null = null
     onScrollListener: ((line: number) => void) | null = null
-    buffer = { active: { viewportY: 0, length: 1 } }
-    // scrollToBottom intentionally does NOT emit onScroll: real xterm does,
-    // but our handler then sees an at-bottom viewport and no-ops, so the mock
-    // keeps call counts deterministic. Re-pin behavior is tested by invoking
-    // the registered onScroll listener directly.
+    buffer = { active: {
+      type: 'normal', viewportY: 0, length: 1,
+      get baseY() { return Math.max(0, this.length - xtermHarness.rows) },
+      cursorY: xtermHarness.rows - 1,
+    } }
+    // The real-engine system test owns trim/reflow behavior. This marker only
+    // supplies the public API needed by lifecycle and deferred-callback tests.
+    markers: Array<{ line: number; isDisposed: boolean }> = []
+    registerMarker(offset: number) {
+      const marker = {
+        line: this.buffer.active.baseY + this.buffer.active.cursorY + offset,
+        isDisposed: false,
+        dispose() { this.isDisposed = true; this.line = -1 },
+      }
+      this.markers.push(marker)
+      return marker
+    }
+    // scrollToBottom emits onScroll AFTER moving the viewport, like real
+    // xterm fires the public scroll event for programmatic moves. The re-pin
+    // handler then sees an at-bottom viewport and no-ops, so the harness
+    // exercises the self-termination instead of asserting it in a comment.
     scrollToBottom = vi.fn(() => {
       this.buffer.active.viewportY = Math.max(0, this.buffer.active.length - this.rows)
+      this.onScrollListener?.(this.buffer.active.viewportY)
     })
     // viewportY is readonly on xterm v6's public type; scrollToLine is the
     // sanctioned writer. Mirrors scrollToBottom's clamping behavior.
@@ -82,7 +111,11 @@ vi.mock('@xterm/xterm', () => ({
       this.onScrollListener = listener
       return { dispose: this.scrollDispose }
     }
-    write(_data: string, callback?: () => void) { callback?.() }
+    write(_data: string, callback?: () => void) {
+      if (!callback) return
+      if (xtermHarness.deferWrites) xtermHarness.pendingWriteCallbacks.push(callback)
+      else callback()
+    }
     focus() {}
   },
 }))
@@ -153,12 +186,12 @@ describe('AgentTerminalLeaf follow (jump-to-latest + tail)', () => {
     ...patch,
   })
 
-  function leaf(runtime: SessionRuntime = runtimeWith({})) {
+  function leaf(runtime: SessionRuntime = runtimeWith({}), leafSessionId = 'session-1') {
     return (
       <AgentTerminalOwnershipProvider>
-        <MountedAgentTerminalOwner sessionId="session-1">
+        <MountedAgentTerminalOwner sessionId={leafSessionId}>
           <AgentTerminalLeaf
-            sessionId="session-1"
+            sessionId={leafSessionId}
             focused
             onFocusRequest={() => {}}
             workspace={workspace}
@@ -194,6 +227,8 @@ describe('AgentTerminalLeaf follow (jump-to-latest + tail)', () => {
     attach = deferred<string | null>()
     nextFrameId = 0
     frames = new Map()
+    xtermHarness.deferWrites = false
+    xtermHarness.pendingWriteCallbacks.length = 0
     xtermHarness.fit.mockClear()
     xtermHarness.instances.length = 0
     xtermHarness.attachWebgl.mockReset()
@@ -247,11 +282,13 @@ describe('AgentTerminalLeaf follow (jump-to-latest + tail)', () => {
   })
 
   it('pins after the attach replay when tail is on', async () => {
+    xtermHarness.deferWrites = true
     render(leaf(runtimeWith({ tailMode: true })))
     await attachResolved('backfill')
-    // Tail engaged before xterm existed, so the pin has to come from the
-    // post-replay moment in tryAttach — proving that branch ran.
-    expect(term().scrollToBottom).toHaveBeenCalled()
+    term().buffer.active.length = 500
+    expect(term().scrollToBottom).not.toHaveBeenCalled()
+    await act(async () => { xtermHarness.flushWriteCallbacks() })
+    expect(term().buffer.active.viewportY).toBe(460)
   })
 
   it('leaves the viewport alone on PTY output while tail is off', async () => {
@@ -264,14 +301,67 @@ describe('AgentTerminalLeaf follow (jump-to-latest + tail)', () => {
     expect(term().buffer.active.viewportY).toBe(10)
   })
 
-  it('re-pins when the user scrolls away while tailing', async () => {
+  it('re-pins when the user scrolls away while tailing, deferred out of the scroll dispatch', async () => {
     render(leaf(runtimeWith({ tailMode: true })))
     await attachResolved()
     term().buffer.active.length = 500
     term().buffer.active.viewportY = 200 // user wheel-scrolled up
     act(() => { term().onScrollListener?.(200) })
+    // Real xterm suppresses reentrant scroll handling: a synchronous pin from
+    // inside the onScroll dispatch does not move the viewport. The handler
+    // must schedule instead — nothing has moved yet.
+    expect(term().buffer.active.viewportY).toBe(200)
+    await act(async () => { await Promise.resolve() }) // flush the microtask
     expect(term().scrollToBottom).toHaveBeenCalled()
     expect(term().buffer.active.viewportY).toBe(460)
+  })
+
+  it('keeps the restored position when a queued write callback lands after tail-off', async () => {
+    xtermHarness.deferWrites = true
+    const view = render(leaf())
+    await attachResolved()
+    term().buffer.active.length = 500
+    term().buffer.active.viewportY = 100
+    act(() => { view.rerender(leaf(runtimeWith({ tailMode: true }))) }) // engage, save line 100
+    act(() => { channelListener?.({ sessionId: 'session-1', data: 'stream' }) }) // write queued, callback pending
+    act(() => { view.rerender(leaf(runtimeWith({ tailMode: false }))) }) // disengage, restore line 100
+    expect(term().buffer.active.viewportY).toBe(100)
+    act(() => { xtermHarness.flushWriteCallbacks() }) // xterm finishes parsing now
+    expect(term().buffer.active.viewportY).toBe(100)
+  })
+
+  it('discards queued write and scroll work after unmount', async () => {
+    const view = render(leaf(runtimeWith({ tailMode: true })))
+    await attachResolved()
+    xtermHarness.deferWrites = true
+    term().buffer.active.length = 500
+    term().buffer.active.viewportY = 100
+    act(() => { channelListener!({ sessionId: 'session-1', data: 'stream' }) })
+    act(() => { term().onScrollListener!(100) })
+    term().scrollToBottom.mockClear()
+    view.unmount()
+    await act(async () => { xtermHarness.flushWriteCallbacks() })
+    expect(term().scrollToBottom).not.toHaveBeenCalled()
+  })
+
+  it('does not carry a saved position across a session swap in the same leaf', async () => {
+    const view = render(leaf(runtimeWith({}), 'session-1'))
+    await attachResolved()
+    term().buffer.active.length = 500
+    term().buffer.active.viewportY = 100
+    act(() => { view.rerender(leaf(runtimeWith({ tailMode: true }), 'session-1')) }) // session A saves line 100
+    // TileTree swaps renderedSessionId under the mounted leaf; the mount
+    // effect re-runs and builds a fresh xterm for session B.
+    act(() => { view.rerender(leaf(runtimeWith({ tailMode: true }), 'session-2')) })
+    expect(term().markers.every(marker => marker.isDisposed)).toBe(true)
+    const swapped = xtermHarness.instances.at(-1)!
+    expect(swapped).not.toBe(term())
+    swapped.buffer.active.length = 500
+    swapped.buffer.active.viewportY = 460 // session B sits at the bottom
+    act(() => { view.rerender(leaf(runtimeWith({ tailMode: false }), 'session-2')) })
+    // Without the session-identity reset, disengage restored A's line 100
+    // inside B's terminal (review reproduction).
+    expect(swapped.buffer.active.viewportY).toBe(460)
   })
 
   it('does not re-pin on scroll while tail is off', async () => {
