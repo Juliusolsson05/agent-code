@@ -182,6 +182,9 @@ export function useBulkProviderSwitchActions(
     let returned = 0
     let skipped = 0
     let failed = 0
+    // Agents that did NOT make it home. See the batch update below for why
+    // these have to survive: this modal is the only return affordance there is.
+    const unreturned: typeof batch.agents = []
 
     for (const agent of batch.agents) {
       const meta = refs.stateRef.current.sessions[agent.sessionId]
@@ -213,14 +216,47 @@ export function useBulkProviderSwitchActions(
         onProgress: event => showToast(event.message, 305_000),
         onArrivalFailure: message => showToast(message),
       })
-      if (result.status === 'switched') returned += 1
-      else if (result.status === 'failed') failed += 1
-      else skipped += 1
+      if (result.status === 'switched') {
+        returned += 1
+      } else if (result.status === 'failed') {
+        failed += 1
+        unreturned.push(agent)
+      } else {
+        // 'skipped' here means the pane refused the switch right now — most
+        // often "still finishing a provider switch". It is still sitting on
+        // the target provider, so it is still returnable later.
+        skipped += 1
+        unreturned.push(agent)
+      }
     }
 
-    // Returning consumes the batch — there is no "return again". A future
-    // forward switch will record a fresh one.
-    setState(prev => ({ ...prev, lastProviderSwitchBatch: null }))
+    // WHY the batch is trimmed rather than dropped:
+    //
+    // "Returning consumes the batch" is right only for agents that actually
+    // returned. Dropping it wholesale meant a return in which NOTHING came
+    // back still destroyed the record, and this modal is the only return
+    // affordance in the app — there is no other way to get those agents home.
+    //
+    // That is not a rare case. Arrival compaction is on by default whenever
+    // the largest conversation exceeds 150k chars (the population this
+    // feature exists for), and it holds `providerSwitch` set for the arrival
+    // readiness wait plus the compaction wait — minutes per pane. Every agent
+    // in a batch returned during that window is refused with "This pane is
+    // still finishing a provider switch", so returned === 0, and the user
+    // lost the batch by clicking the button that was supposed to restore it.
+    // Partial returns lost the remainder the same way: 1 of 20 home, 19
+    // records discarded.
+    //
+    // Keeping the unreturned agents means Return stays available and is
+    // simply retried. The batch is cleared only once it is empty.
+    setState(prev => {
+      if (prev.lastProviderSwitchBatch?.id !== batch.id) return prev
+      if (unreturned.length === 0) return { ...prev, lastProviderSwitchBatch: null }
+      return {
+        ...prev,
+        lastProviderSwitchBatch: { ...prev.lastProviderSwitchBatch, agents: unreturned },
+      }
+    })
 
     let message = `Returned ${pluralAgents(returned)} to ${providerLabel(batch.sourceKind)}`
     const notes: string[] = []
