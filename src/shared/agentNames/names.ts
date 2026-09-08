@@ -5,8 +5,12 @@
 // walking this ranking. Reordering therefore does not rename an existing agent
 // — it silently changes which name the next agent gets, so two machines that
 // disagree about this file hand out different addresses for the same workload.
-// Deleting an entry is worse: an assignment already on disk keeps that name
-// while `agents.search` can no longer be told about it from here.
+// Deleting an entry is the same failure, only wider: every rank behind it
+// shifts up, so one removal re-points every subsequent allocation at once.
+// What deletion does NOT do is strand an assignment already on disk. Name
+// LOOKUP never reads this list (see the closing paragraph): `agents.search`
+// compares the normalized input against the name recorded on the agent, so a
+// stored "Apollo" stays searchable long after "Apollo" leaves the vocabulary.
 //
 // WHY names and titles are different things: a title describes the TASK ("fix
 // the queue race") and the user edits it freely. A name addresses the AGENT

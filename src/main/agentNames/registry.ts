@@ -82,6 +82,14 @@ function adoptAssignments(source: Record<string, string>): Record<string, string
  * invariant lives THERE, so anything that weakens the instance lock has to come
  * back and read this.
  *
+ * That cited line is not an unconditional lock — it reads
+ * `packagingSmoke || app.requestSingleInstanceLock()`, so the `--packaging-smoke`
+ * launch deliberately runs WITHOUT the lock. It is still not a second writer:
+ * that branch only stats packaged resources and calls `app.exit`, opening no
+ * window, so no renderer exists to invoke `agent-names:resolve` and allocation
+ * is never reached. Anything that gives that flag (or any future one) a real
+ * window is the change that breaks the invariant above.
+ *
  * WHY the renderer, not this class, decides which agent keeps an identity
  * across a provider switch: only the renderer knows that a new local session ID
  * is the same logical pane. This module owns exactly one relation, identity to

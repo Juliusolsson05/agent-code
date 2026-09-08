@@ -389,6 +389,14 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
   const subtitle = dispatchSubtitle(runtime, row.kind)
   const title = dispatchRowTitle(row, runtime.entries)
   const agentName = useAgentName(row.sessionId)
+  // The hover tooltip joins name and title exactly the way AgentTitleHeader
+  // does (' — ', name first, empty parts dropped). WHY it must match: the chip
+  // in this row is truncation-proof but the TITLE beside it is not, so the
+  // tooltip is what a user reaches for when a row is too narrow to read — and
+  // it was the one place the name was missing while the pane header showed it.
+  // Two different answers to "what is this agent called" is exactly the silent
+  // re-addressing #816 is about, even when it is only a tooltip.
+  const nameAndTitle = [agentName, title].filter(Boolean).join(' — ')
   const attentionLabel = dispatchAttentionLabel(runtime)
   const unreadKind = isTerminal
     ? null
@@ -403,7 +411,7 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
       type="button"
       onClick={onSelect}
       disabled={disabled}
-      title={disabled ? 'shown in another lane' : targetLaneIndex === undefined ? title : `${title} — Show in lane ${targetLaneIndex + 1}, replacing its view. Other views of this agent remain open.`}
+      title={disabled ? 'shown in another lane' : targetLaneIndex === undefined ? nameAndTitle : `${nameAndTitle} — Show in lane ${targetLaneIndex + 1}, replacing its view. Other views of this agent remain open.`}
       data-dispatch-active={active ? 'true' : undefined}
       // WHY this marker exists: clicking a Dispatch row lands DOM focus on this
       // <button>, which the bare-Enter composer router (composerEnterRegistry)

@@ -25,8 +25,9 @@ type RestoreResult = 'restored' | 'stale' | 'retryable-failure'
  * The durable metadata a respawn cannot rebuild, carried onto the new session ID.
  *
  * WHY all three restore paths must share one answer: `sessionActions.spawn`
- * builds SessionMeta from {cwd, kind, tmuxName, providerSessionId,
- * builtInMcpDomains} only. Everything else a session owned — its user-authored
+ * builds SessionMeta from {cwd, kind, providerRuntime, tmuxName,
+ * providerSessionId, builtInMcpDomains} only (session.ts:339-345). Everything
+ * else a session owned — its user-authored
  * title, its linked/orchestration parentage, its view-mode override, its
  * bootstrap-delivered flag and its `agentNameId` — exists nowhere but the meta
  * captured on the undo entry. Each path used to answer this differently:

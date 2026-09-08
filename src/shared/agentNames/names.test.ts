@@ -4,9 +4,10 @@ import { AGENT_NAMES, agentNameAt, normalizeAgentName } from '@shared/agentNames
 
 // WHY this file is worth its length for a constant array: these strings are
 // spoken addresses. Reordering the list re-points every NEW allocation, and
-// deleting an entry can make a stored assignment unreachable by name search
-// while the registry still returns it. The test pins the properties the rest of
-// the feature is allowed to assume: the exact ranking in its exact order, no
+// deleting an entry shifts every rank behind it, re-pointing more of them at
+// once. Neither edit strands a name already assigned — search compares the name
+// recorded on the agent, never this list. The test pins the properties the rest
+// of the feature is allowed to assume: the exact ranking in its exact order, no
 // two names that sound the same, and a deterministic overflow rule.
 describe('agent name vocabulary', () => {
   it('is the approved ranked list of one hundred distinct names', () => {

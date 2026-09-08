@@ -5,9 +5,10 @@ import type { AgentNameRegistry } from '@main/agentNames/registry'
 // vi.hoisted, because vi.mock factories are hoisted above ordinary consts and
 // would otherwise hit the temporal dead zone the first time a mocked module is
 // imported.
-const { handlers, windowIdFor } = vi.hoisted(() => ({
+const { handlers, windowIdFor, getBrowserWindow } = vi.hoisted(() => ({
   handlers: new Map<string, (event: unknown, ...args: unknown[]) => unknown>(),
   windowIdFor: vi.fn<(sender: unknown) => string | null>(),
+  getBrowserWindow: vi.fn<(id: string) => object | null>(),
 }))
 
 vi.mock('electron', () => ({
@@ -18,7 +19,10 @@ vi.mock('electron', () => ({
   },
 }))
 vi.mock('@main/storage/paths.js', () => ({ STATE_DIR: '/recorded/state' }))
-vi.mock('@main/window/windowRegistry.js', () => ({ windowIdFor: (sender: unknown) => windowIdFor(sender) }))
+vi.mock('@main/window/windowRegistry.js', () => ({
+  windowIdFor: (sender: unknown) => windowIdFor(sender),
+  getBrowserWindow: (id: string) => getBrowserWindow(id),
+}))
 
 const { registerAgentNamesIpc } = await import('@main/agentNames/ipc.js')
 
@@ -28,9 +32,12 @@ function fakeRegistry(): { registry: AgentNameRegistry; resolve: ReturnType<type
   return { registry: { resolve } as unknown as AgentNameRegistry, resolve }
 }
 
-function event(options: { registered: boolean; mainFrame: boolean }) {
+function event(options: { registered: boolean; mainFrame: boolean; live?: boolean }) {
   const sender = { mainFrame: {} }
   windowIdFor.mockReturnValue(options.registered ? 'window-one' : null)
+  // Default live: the existing cases are about the other two clauses, and a
+  // registered window is normally still open.
+  getBrowserWindow.mockReturnValue(options.live === false ? null : { id: 1 })
   return { sender, senderFrame: options.mainFrame ? sender.mainFrame : {} }
 }
 
@@ -55,6 +62,19 @@ describe('agent names IPC', () => {
     const handler = handlers.get('agent-names:resolve')!
 
     await expect(handler(event({ registered: true, mainFrame: false }), ['a']))
+      .rejects.toThrow(/registered application window/)
+    expect(resolve).not.toHaveBeenCalled()
+  })
+
+  it('refuses a still-registered window whose BrowserWindow is already gone', async () => {
+    // The liveness clause the control host's senderWindow applies. A retired
+    // window's queued invoke would otherwise spend a spoken address that
+    // allocation can never hand back.
+    const { registry, resolve } = fakeRegistry()
+    registerAgentNamesIpc(registry)
+    const handler = handlers.get('agent-names:resolve')!
+
+    await expect(handler(event({ registered: true, mainFrame: true, live: false }), ['a']))
       .rejects.toThrow(/registered application window/)
     expect(resolve).not.toHaveBeenCalled()
   })

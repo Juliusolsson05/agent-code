@@ -120,6 +120,12 @@ describe('agent name presentation', () => {
     // The title must keep its own truncation slot; the chip is a sibling, not
     // a prefix inside the truncating span.
     expect(rows[0]).toHaveTextContent('A1 workflow')
+    // The hover tooltip joins name and title the same way AgentTitleHeader
+    // does. The truncating title is exactly what a narrow index hides, so a
+    // tooltip that omitted the name answered "what is this agent called"
+    // differently from the pane header showing the same agent.
+    expect(rows[0].getAttribute('title')).toBe('Apollo — A1 workflow')
+    expect(rows[1].getAttribute('title')).toBe('A2 workflow')
   })
 
   it('drops every Dispatch chip when the setting is off', () => {

@@ -61,6 +61,14 @@ it('publishes enabled names and resolves an exact spoken name across windows', a
   } })
   // Exact, never substring: "Apo" is not an address.
   expect(await search({ name: 'Apo' })).toMatchObject({ ok: true, value: { total: 0 } })
+  // Bounded, and rejected at the schema rather than answered with an empty
+  // page: an unbounded name is normalized against every session of every
+  // window, so it is the cheapest way to make one call walk megabytes per
+  // agent. 120 is far past the longest allocatable name (a twelve-character
+  // vocabulary entry plus an overflow ordinal), so nothing real is refused.
+  expect(await search({ name: 'A'.repeat(121) })).toMatchObject({ ok: false, error: { code: 'invalid_input' } })
+  expect(await search({ name: 'A'.repeat(120) })).toMatchObject({ ok: true, value: { total: 0 } })
+  expect(await search({ query: 'a'.repeat(201) })).toMatchObject({ ok: false, error: { code: 'invalid_input' } })
   // The free-text query still finds it, which is what makes a partially heard
   // name recoverable without weakening the exact filter.
   expect(await search({ query: 'apoll' })).toMatchObject({ ok: true, value: { total: 2 } })
