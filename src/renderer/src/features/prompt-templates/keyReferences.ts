@@ -31,19 +31,67 @@ export function prepareTemplateText(
 
 export type KeyReference = { providerName: string; keyName: string }
 
-const KEY_REF_PATTERN = /\{\{\s*key:([^/{}]+?)\/([^/{}]+?)\s*\}\}/g
+/**
+ * Every `{{key:…}}` occurrence, well-formed or not.
+ *
+ * WHY the pattern deliberately accepts a malformed SPEC instead of refusing to
+ * match it: the old pattern excluded `/` from both halves, so `{{key:Provider}}`
+ * and `{{key:A/B/C}}` matched nothing at all — they were invisible to
+ * collection, invisible to validation, and survived the final `body.replace`
+ * untouched. A typo'd reference was therefore pasted into the prompt VERBATIM,
+ * which is the exact silent-failure mode the header paragraph says this
+ * grammar exists to avoid ("resolution aborts loudly").
+ *
+ * The `key:` prefix and the `[^{}]` body keep this from colliding with the
+ * ordinary `{{variable}}` grammar, whose placeholder pattern is `[A-Za-z0-9_]+`
+ * and cannot contain a colon.
+ */
+const KEY_REF_PATTERN = /\{\{\s*key:([^{}]*?)\s*\}\}/g
 
+type ParsedReference =
+  | { ok: true; ref: KeyReference }
+  | { ok: false; spec: string }
+
+/**
+ * Exactly one separator, and both halves non-empty after trimming.
+ *
+ * A name containing `/` is therefore unaddressable. That is deliberate and is
+ * the reason to reject rather than to guess: with two separators there is no
+ * evidence for which one divides provider from key, and picking one would
+ * resolve a reference the author did not write.
+ */
+function parseReference(spec: string): ParsedReference {
+  const parts = spec.split('/')
+  if (parts.length !== 2) return { ok: false, spec }
+  const providerName = parts[0].trim()
+  const keyName = parts[1].trim()
+  if (!providerName || !keyName) return { ok: false, spec }
+  return { ok: true, ref: { providerName, keyName } }
+}
+
+function referenceKey(ref: KeyReference): string {
+  // NUL separator so a provider named "a" with key "b/c" cannot collide with
+  // provider "a/b" key "c" — unreachable through parseReference today, but the
+  // map is also written from the replace callback.
+  return `${ref.providerName}\u0000${ref.keyName}`
+}
+
+/** Well-formed references, in first-appearance order, deduped. */
 export function collectKeyReferences(body: string): KeyReference[] {
   const seen = new Set<string>()
   const ordered: KeyReference[] = []
-  for (const match of body.matchAll(KEY_REF_PATTERN)) {
-    const ref = { providerName: match[1].trim(), keyName: match[2].trim() }
-    const dedupeKey = `${ref.providerName}\u0000${ref.keyName}`
+  for (const parsed of parseAll(body)) {
+    if (!parsed.ok) continue
+    const dedupeKey = referenceKey(parsed.ref)
     if (seen.has(dedupeKey)) continue
     seen.add(dedupeKey)
-    ordered.push(ref)
+    ordered.push(parsed.ref)
   }
   return ordered
+}
+
+function parseAll(body: string): ParsedReference[] {
+  return [...body.matchAll(KEY_REF_PATTERN)].map(match => parseReference(match[1]))
 }
 
 export async function resolveKeyReferences(
@@ -54,21 +102,54 @@ export async function resolveKeyReferences(
   // String.replace callback cannot await, and each ref may cross the
   // vault gate), collecting ALL failures so one error message tells the
   // user everything that needs fixing.
-  const refs = collectKeyReferences(body)
   const values = new Map<string, string>()
   const failures: string[] = []
-  for (const ref of refs) {
-    const value = await resolve(ref)
-    if (value === null || value.length === 0) {
-      failures.push(`{{key:${ref.providerName}/${ref.keyName}}}`)
+  const seen = new Set<string>()
+
+  for (const parsed of parseAll(body)) {
+    if (!parsed.ok) {
+      const label = `{{key:${parsed.spec}}}`
+      if (!failures.includes(label)) failures.push(label)
       continue
     }
-    values.set(`${ref.providerName}\u0000${ref.keyName}`, value)
+    const dedupeKey = referenceKey(parsed.ref)
+    if (seen.has(dedupeKey)) continue
+    seen.add(dedupeKey)
+
+    // WHY the call is wrapped: the aggregation above was dead code in
+    // production. The real adapter is `window.api.keyVaultResolveReference`,
+    // typed `Promise<string>`, and VaultService throws on every failure mode —
+    // unknown provider, unknown key, a cancelled unlock. `value === null` was
+    // therefore unreachable, the first bad reference escaped this loop, and
+    // "one error message tells the user everything that needs fixing" was
+    // simply false. The service's own message is kept, because it is written
+    // for direct display and distinguishes "no such key" from "vault locked".
+    let value: string | null
+    try {
+      value = await resolve(parsed.ref)
+    } catch (error) {
+      const detail = error instanceof Error && error.message.length > 0 ? error.message : null
+      failures.push(`{{key:${parsed.ref.providerName}/${parsed.ref.keyName}}}${detail ? ` (${detail})` : ''}`)
+      continue
+    }
+    if (value === null || value.length === 0) {
+      failures.push(`{{key:${parsed.ref.providerName}/${parsed.ref.keyName}}}`)
+      continue
+    }
+    values.set(dedupeKey, value)
   }
+
   if (failures.length > 0) {
     throw new Error(`Unresolved key reference: ${failures.join(', ')}`)
   }
-  return body.replace(KEY_REF_PATTERN, (_match, rawProvider: string, rawKey: string) => {
-    return values.get(`${rawProvider.trim()}\u0000${rawKey.trim()}`) ?? ''
+  // A function replacer, never a string: `$&` or `$1` inside a SECRET would
+  // otherwise be interpreted as a substitution pattern.
+  return body.replace(KEY_REF_PATTERN, (match, spec: string) => {
+    const parsed = parseReference(spec)
+    // Unreachable — a malformed spec threw above — but returning the original
+    // text is the safe answer if that ever stops being true, since it cannot
+    // insert a wrong secret.
+    if (!parsed.ok) return match
+    return values.get(referenceKey(parsed.ref)) ?? ''
   })
 }
