@@ -138,6 +138,30 @@ export async function killSessionBackendIfOwned(
   })
 }
 
+/**
+ * Shallow value-equality over two session-meta records.
+ *
+ * WHY this exists rather than letting the spread decide: several callers use
+ * the meta object's IDENTITY as a "is my target still the same pane?" token
+ * across an await (deliverTextToSession's isCurrent, both prompt-template
+ * insertion paths). A wake that changed nothing but still produced a new
+ * object read to them as "the pane was replaced", so the first insertion into
+ * any pane that needed waking always failed and the retry always worked.
+ *
+ * Compared over the union of both key sets, so a field DISAPPEARING counts as
+ * a change — `withoutProvisionalProviderSession` legitimately drops keys, and
+ * treating that as a no-op would hand those callers a token that outlived the
+ * fact it stood for. Shallow is sufficient: SessionMeta is a flat record of
+ * primitives.
+ */
+function metaIsUnchanged(current: SessionMeta, next: SessionMeta): boolean {
+  const a = current as unknown as Record<string, unknown>
+  const b = next as unknown as Record<string, unknown>
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)])
+  for (const key of keys) if (!Object.is(a[key], b[key])) return false
+  return true
+}
+
 function softReloadRuntime(current: SessionRuntime, hasProviderSession: boolean): SessionRuntime {
   if (!hasProviderSession) {
     // WHY no-provider soft reload is non-destructive:
@@ -881,11 +905,37 @@ export function useSessionActions(
         setState(prev => {
           const current = prev.sessions[sessionId]
           if (!current) return prev
+          const next = { ...current, ...recoveredMeta }
+          // WHY a no-op wake must preserve the meta object's IDENTITY:
+          //
+          // Callers that survive an await across a wake use this object as
+          // their "is my target still the same pane?" token —
+          // deliverTextToSession's isCurrent(), and both prompt-template
+          // insertion paths, all compare
+          // `workspaceState.sessions[id] === originalSession`. This setState
+          // ran unconditionally, so ANY wake replaced the object even when
+          // every field was unchanged, and those guards then read "the pane
+          // changed underneath me" and cancelled.
+          //
+          // The user-visible bug: inserting a prompt template or a vault key
+          // into a pane that was exited, parked, or still spawning ALWAYS
+          // failed the first time with "target pane is gone" / "Focused pane
+          // is no longer available", then worked on the retry — because by
+          // then the session was 'started', no wake ran, and no replacement
+          // happened. That is the whole "flaky, works the second time"
+          // signature.
+          //
+          // Comparing content rather than trusting the spread is the correct
+          // fix and not merely the local one: recoveredMeta genuinely changes
+          // fields some of the time (withoutProvisionalProviderSession can
+          // drop them), so a real change must still produce a new object and
+          // still invalidate those guards. Only a no-op is made free.
+          if (metaIsUnchanged(current, next)) return prev
           return {
             ...prev,
             sessions: {
               ...prev.sessions,
-              [sessionId]: { ...current, ...recoveredMeta },
+              [sessionId]: next,
             },
           }
         })
