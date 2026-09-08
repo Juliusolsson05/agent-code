@@ -7,6 +7,31 @@ function isNameable(meta: Pick<SessionMeta, 'kind'>): boolean {
 }
 
 /**
+ * The usable identity on a session's metadata, or null.
+ *
+ * WHY the SHAPE is checked and not merely truthiness: `agentNameId` comes back
+ * from a workspace file a user (or a future migration) can hand-edit, so it can
+ * be a number, an object or an empty string. Both consumers demand a non-empty
+ * string — `resolveAgentName` needs it as an own key of the name map, and the
+ * IPC allocator validates `z.array(z.string().min(1).max(200))` — so a
+ * malformed value has to read as ABSENT in both places or the two disagree:
+ *
+ *  - in `claimMissingIdentities`, a truthy non-string counted as "already
+ *    identified" while the selector resolved it to null, so that agent stayed
+ *    permanently unnamed with no way to heal short of editing the file again.
+ *    Re-claiming it is safe; the only thing it can lose is a name that was
+ *    never resolvable.
+ *  - in `agentNameIdentities`, a non-string reached `resolveAgentNames` and the
+ *    schema rejects the whole array, so ONE malformed buried record blocked
+ *    naming for every agent in the window. Buried records never pass through
+ *    the claim above (it walks `state.sessions` only), so that guard cannot
+ *    cover this one.
+ */
+function identityOf(meta: Pick<SessionMeta, 'agentNameId'>): string | null {
+  return typeof meta.agentNameId === 'string' && meta.agentNameId.length > 0 ? meta.agentNameId : null
+}
+
+/**
  * Claim a durable identity for every agent that does not have one yet.
  *
  * WHY the identity is simply the current sessionId: it is already unique in
@@ -23,7 +48,7 @@ export function claimMissingIdentities(state: WorkspaceState): WorkspaceState {
   let changed = false
   const sessions = { ...state.sessions }
   for (const [sessionId, meta] of Object.entries(state.sessions)) {
-    if (!isNameable(meta) || meta.agentNameId) continue
+    if (!isNameable(meta) || identityOf(meta)) continue
     sessions[sessionId] = { ...meta, agentNameId: sessionId }
     changed = true
   }
@@ -44,12 +69,12 @@ export function claimMissingIdentities(state: WorkspaceState): WorkspaceState {
 export function agentNameIdentities(state: WorkspaceState): string[] {
   const identities = new Set<string>()
   for (const meta of Object.values(state.sessions)) {
-    if (isNameable(meta) && meta.agentNameId) identities.add(meta.agentNameId)
+    const identity = isNameable(meta) ? identityOf(meta) : null
+    if (identity) identities.add(identity)
   }
   for (const record of state.buried) {
-    if (isNameable(record.sessionMeta) && record.sessionMeta.agentNameId) {
-      identities.add(record.sessionMeta.agentNameId)
-    }
+    const identity = isNameable(record.sessionMeta) ? identityOf(record.sessionMeta) : null
+    if (identity) identities.add(identity)
   }
   return [...identities]
 }

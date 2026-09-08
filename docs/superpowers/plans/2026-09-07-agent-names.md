@@ -1834,7 +1834,13 @@ describe('agent name reconciliation', () => {
     // window between asking and answering is real, and both things that can
     // happen inside it are tested here at once.
     let release: (value: Record<string, string>) => void = () => {}
-    const resolveAgentNames = vi.fn(() => new Promise<Record<string, string>>(resolve => { release = resolve }))
+    // The parameter is declared even though the deferred body ignores it:
+    // `mock.calls[0][0]` is typed from the mock's OWN signature, so a
+    // zero-argument implementation gives an empty call tuple and the read
+    // below is a tsc error — while the reconciler really does pass the
+    // identity list this test then replies to.
+    const resolveAgentNames = vi.fn((_identities: string[]) =>
+      new Promise<Record<string, string>>(resolve => { release = resolve }))
     const mounted = mount({ enabled: true, resolveAgentNames })
     await waitFor(() => expect(resolveAgentNames).toHaveBeenCalled())
     const requested = [...resolveAgentNames.mock.calls[0][0]] as string[]

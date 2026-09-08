@@ -21,6 +21,60 @@ import { resumableProviderSessionId } from '@renderer/workspace/providerSessionI
 
 type RestoreResult = 'restored' | 'stale' | 'retryable-failure'
 
+/**
+ * The durable metadata a respawn cannot rebuild, carried onto the new session ID.
+ *
+ * WHY all three restore paths must share one answer: `sessionActions.spawn`
+ * builds SessionMeta from {cwd, kind, tmuxName, providerSessionId,
+ * builtInMcpDomains} only. Everything else a session owned — its user-authored
+ * title, its linked/orchestration parentage, its view-mode override, its
+ * bootstrap-delivered flag and its `agentNameId` — exists nowhere but the meta
+ * captured on the undo entry. Each path used to answer this differently:
+ * `restoreDetachedEntry` had a hand-written allowlist, `restoreTabEntry` built
+ * a `freshSessions` map that was populated and then never read (dead from the
+ * day it was written), and `restorePaneEntry` patched no session metadata at
+ * all. Three answers meant a field could survive one kind of undo and be lost
+ * by another, which is not a difference any user could predict.
+ *
+ * WHY that is more than cosmetic for `agentNameId`: every one of these paths
+ * RESUMES the same provider conversation, so the agent the user gets back is
+ * the same agent. Dropping the identity makes the reconciler claim a fresh one
+ * and the registry allocate a second name, so Cmd-Shift-T renames a live agent
+ * and the old name is spent forever — allocation is monotonic and never
+ * recycles. That is exactly the silent re-addressing #816 forbids.
+ *
+ * WHY each field is spread conditionally on top of the spawn's own meta rather
+ * than the closed meta being copied wholesale: the respawn's values are the
+ * current truth for the volatile fields. `providerSessionId`, `tmuxName` and
+ * the freshly minted credentials all belong to the NEW backend, and copying
+ * the closed meta over them would reinstate a dead provider session ID and a
+ * stale tmux name on top of the live ones the respawn just established.
+ *
+ * The `spawned` fallback covers the case where the respawn's own registration
+ * has not landed in this snapshot; production `spawn` writes SessionMeta into
+ * workspace state itself, so in the app it is normally present.
+ */
+function carryDurableMeta(spawned: SessionMeta | undefined, closed: SessionMeta): SessionMeta {
+  return {
+    ...(spawned ?? { cwd: closed.cwd, kind: closed.kind ?? DEFAULT_PROVIDER }),
+    ...(closed.title ? { title: closed.title } : {}),
+    // The spoken address. Conditional like every other field here so an
+    // unnamed agent (the setting off, or a name never allocated) is restored
+    // without an empty identity that the reconciler would then have to heal.
+    ...(closed.agentNameId ? { agentNameId: closed.agentNameId } : {}),
+    ...(closed.linkedParentId ? { linkedParentId: closed.linkedParentId } : {}),
+    ...(closed.orchestrationParentId ? { orchestrationParentId: closed.orchestrationParentId } : {}),
+    ...(closed.orchestrationRootId ? { orchestrationRootId: closed.orchestrationRootId } : {}),
+    ...(closed.orchestrationRunId ? { orchestrationRunId: closed.orchestrationRunId } : {}),
+    ...(closed.orchestrationRole ? { orchestrationRole: closed.orchestrationRole } : {}),
+    ...(closed.agentViewModeOverride ? { agentViewModeOverride: closed.agentViewModeOverride } : {}),
+    // Its own doc comment says this "must survive with the child". spawn never
+    // sets it, so without carrying it an undone orchestration child would
+    // re-run its bootstrap handoff.
+    ...(closed.orchestrationBootstrapPromptDelivered ? { orchestrationBootstrapPromptDelivered: true } : {}),
+  }
+}
+
 // Undo-close action. Pops the most recent entry from the undo stack
 // and restores it.
 //
@@ -118,7 +172,23 @@ export function useUndoCloseAction(
             focusedSessionId: newSessionId,
           }
         })
-        return { ...prev, tabs }
+        // Only patch metadata for a placement that actually happened: the
+        // `!inserted` branch below kills the session, and writing durable
+        // fields for an id we are about to remove would leave the workspace
+        // describing an agent nothing points at.
+        if (!inserted) return { ...prev, tabs }
+        return {
+          ...prev,
+          tabs,
+          // This path used to touch `tabs` and nothing else, so a restored
+          // pane came back with only what `spawn` could rebuild — losing its
+          // title and, once names existed, its spoken identity. See
+          // carryDurableMeta for why that re-addresses a live agent.
+          sessions: {
+            ...prev.sessions,
+            [newSessionId]: carryDurableMeta(prev.sessions[newSessionId], meta),
+          },
+        }
       })
 
       if (!inserted) {
@@ -144,7 +214,15 @@ export function useUndoCloseAction(
     async (entry: ClosedTab): Promise<RestoreResult> => {
       // Tab undo: respawn every session and remap the tree.
       const idMap = new Map<SessionId, SessionId>()
-      const freshSessions: Record<SessionId, SessionMeta> = {}
+      // New session ID → the meta the closed session actually had, for both
+      // the tile-tree loop and the detached loop below. Applied through
+      // carryDurableMeta in the commit at the end.
+      //
+      // This REPLACES a `freshSessions: Record<SessionId, SessionMeta>` that
+      // was populated here and never read by anything — so a tab undo lost the
+      // same durable fields the pane undo did, and the map that looked like it
+      // was preventing that was dead code.
+      const carried = new Map<SessionId, SessionMeta>()
       const spawnedIds: SessionId[] = []
       const requiredLeafIds = collectLeaves(entry.tab.root)
       if (missingClosedTabLeafMetaIds(entry).length > 0) {
@@ -169,7 +247,7 @@ export function useUndoCloseAction(
             builtInMcpDomains: meta.builtInMcpDomains,
           })
           idMap.set(oldId, newId)
-          freshSessions[newId] = meta
+          carried.set(newId, meta)
           spawnedIds.push(newId)
         } catch {
           // WHY grid leaves are all-or-nothing while detached entries below
@@ -210,9 +288,10 @@ export function useUndoCloseAction(
       // reason as the tile-tree loop above: restore what we can.
       //
       // Note: sessionActions.spawn registers SessionMeta into
-      // state.sessions itself, so we only need to track DetachedSessionRecord
-      // entries here; the metas land in state.sessions through the spawn
-      // call's own setState, before our setState below runs.
+      // state.sessions itself, so the metas land there through the spawn
+      // call's own setState, before our setState below runs. What it CANNOT
+      // rebuild is tracked in `carried` and re-applied over the top — see
+      // carryDurableMeta.
       const restoredDetached: Record<SessionId, DetachedSessionRecord> = {}
       for (const detached of entry.detachedEntries ?? []) {
         try {
@@ -234,6 +313,11 @@ export function useUndoCloseAction(
             recoverTmuxName: kind === 'terminal' ? detached.meta.tmuxName : undefined,
             builtInMcpDomains: detached.meta.builtInMcpDomains,
           })
+          // A detached child restored with its tab is the same population
+          // restoreDetachedEntry covers on its own, so it gets the same
+          // durable metadata; the two routes back to one row must not
+          // disagree about whether the agent keeps its name.
+          carried.set(newId, detached.meta)
           restoredDetached[newId] = {
             sessionId: newId,
             surface: 'dispatch',
@@ -259,9 +343,14 @@ export function useUndoCloseAction(
         const insertIdx = Math.min(entry.tabIndex, prev.tabs.length)
         const tabs = [...prev.tabs]
         tabs.splice(insertIdx, 0, restoredTab)
+        const sessions = { ...prev.sessions }
+        for (const [newId, closed] of carried) {
+          sessions[newId] = carryDurableMeta(sessions[newId], closed)
+        }
         return {
           ...prev,
           tabs,
+          sessions,
           activeTabId: restoredTab.id,
           detachedSessions: { ...prev.detachedSessions, ...restoredDetached },
           // Restored sessions get fresh ids (idMap); remap any tiled lane that
@@ -342,44 +431,19 @@ export function useUndoCloseAction(
           // no toast on this path, so the user sees undo do nothing while an
           // agent (or a re-attached tmux session) runs invisibly.
           activeTabId: entry.record.projectTabId,
-          // `spawn` builds SessionMeta from {cwd, kind, tmuxName, providerSessionId,
-          // builtInMcpDomains} only. The fields that make a session a LINKED or
-          // ORCHESTRATION child — and any user-authored title — are durable
-          // metadata it never sees. Those children are always detached, so they
-          // are precisely the population this undo path covers: without this
-          // patch an undone linked child returns un-nested (buildDispatchGroups
-          // reads `linkedParentId` to indent it) and stops cascading when its
-          // parent closes, and a titled row silently relabels to its cwd
-          // basename. Carry them from the captured meta, which is the only
-          // record of them left once the session is gone.
+          // The fields that make a session a LINKED or ORCHESTRATION child —
+          // and any user-authored title, and its spoken identity — are durable
+          // metadata `spawn` never sees. Those children are always detached, so
+          // they are precisely the population this undo path covers: without
+          // this patch an undone linked child returns un-nested
+          // (buildDispatchGroups reads `linkedParentId` to indent it) and stops
+          // cascading when its parent closes, and a titled row silently
+          // relabels to its cwd basename. This used to be a hand-written
+          // allowlist here; it is now the shared carryDurableMeta, so the pane
+          // and tab undo paths cannot drift from it again.
           sessions: {
             ...prev.sessions,
-            [newSessionId]: {
-              ...(prev.sessions[newSessionId] ?? { cwd: meta.cwd, kind }),
-              ...(meta.title ? { title: meta.title } : {}),
-              ...(meta.linkedParentId ? { linkedParentId: meta.linkedParentId } : {}),
-              ...(meta.orchestrationParentId
-                ? { orchestrationParentId: meta.orchestrationParentId }
-                : {}),
-              ...(meta.orchestrationRootId
-                ? { orchestrationRootId: meta.orchestrationRootId }
-                : {}),
-              ...(meta.orchestrationRunId
-                ? { orchestrationRunId: meta.orchestrationRunId }
-                : {}),
-              ...(meta.orchestrationRole
-                ? { orchestrationRole: meta.orchestrationRole }
-                : {}),
-              ...(meta.agentViewModeOverride
-                ? { agentViewModeOverride: meta.agentViewModeOverride }
-                : {}),
-              // Its own doc comment says this "must survive with the child".
-              // spawn never sets it, so without carrying it an undone
-              // orchestration child would re-run its bootstrap handoff.
-              ...(meta.orchestrationBootstrapPromptDelivered
-                ? { orchestrationBootstrapPromptDelivered: true }
-                : {}),
-            },
+            [newSessionId]: carryDurableMeta(prev.sessions[newSessionId], meta),
           },
           detachedSessions: {
             ...prev.detachedSessions,

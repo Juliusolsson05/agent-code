@@ -40,13 +40,6 @@ function workspace(): WorkspaceState {
   } as unknown as WorkspaceState
 }
 
-// WHY a real component with real useState instead of renderHook with a manual
-// setState closure: the hook's whole job is to write into workspace state and
-// then react to the state it just wrote. A hand-rolled setter that does not
-// re-render would make the second effect read the pre-claim state forever, and
-// the test would pass while the app allocated nothing. React's own setter has
-// exactly the WorkspaceSetState shape (value or updater), so this is also a
-// type-level check that the hook can be wired into the real composer.
 // One agent whose durable identity is the string "__proto__" — reachable by
 // hand-editing workspace.json, and the shape every own-property guard in this
 // feature exists for.
@@ -58,6 +51,28 @@ function hostileWorkspace(): WorkspaceState {
   } as unknown as WorkspaceState
 }
 
+// A workspace whose identities are the WRONG TYPE rather than a hostile string:
+// a number on a live session and an object on a buried record, both reachable
+// from a hand-edited or migration-damaged workspace.json.
+function malformedWorkspace(): WorkspaceState {
+  const base = workspace()
+  return {
+    ...base,
+    sessions: {
+      'agent-one': { cwd: '/recorded', kind: 'claude', agentNameId: 42 },
+      'shell-one': base.sessions['shell-one'],
+    },
+    buried: [{ ...base.buried[0], sessionMeta: { cwd: '/recorded', kind: 'codex', agentNameId: { id: 'nope' } } }],
+  } as unknown as WorkspaceState
+}
+
+// WHY a real component with real useState instead of renderHook with a manual
+// setState closure: the hook's whole job is to write into workspace state and
+// then react to the state it just wrote. A hand-rolled setter that does not
+// re-render would make the second effect read the pre-claim state forever, and
+// the test would pass while the app allocated nothing. React's own setter has
+// exactly the WorkspaceSetState shape (value or updater), so this is also a
+// type-level check that the hook can be wired into the real composer.
 function mount(options: {
   enabled: boolean
   resolveAgentNames: ReturnType<typeof vi.fn>
@@ -122,6 +137,62 @@ describe('agent name reconciliation', () => {
     expect(resolveAgentNames).not.toHaveBeenCalled()
     expect(mounted.seen.current.sessions['agent-one'].agentNameId).toBeUndefined()
     expect(useAppStore.getState().workspaceAgentNames).toEqual({})
+  })
+
+  it('claims and resolves the agents that already exist when the setting is switched on', async () => {
+    // The hook's own header promises this — "enabling is what assigns names to
+    // the agents that already exist" — and nothing else in this spec exercises
+    // it: every other case decides `enabled` before mount. The realistic
+    // sequence is the opposite, because the setting ships OFF: the user has a
+    // full workspace running and then discovers the toggle.
+    const resolveAgentNames = vi.fn(async (identities: string[]) =>
+      Object.fromEntries(identities.map(identity => [identity, identity === 'agent-one' ? 'Apollo' : 'Jasper'])))
+    const mounted = mount({ enabled: false, resolveAgentNames })
+
+    await act(async () => { await Promise.resolve() })
+    expect(resolveAgentNames).not.toHaveBeenCalled()
+    expect(mounted.seen.current.sessions['agent-one'].agentNameId).toBeUndefined()
+
+    // Flipping the real setting, not a remount: the reconciler subscribes to
+    // the store, so this is the same re-render the Settings toggle causes.
+    act(() => {
+      useAppStore.setState({ settings: { ...useAppStore.getState().settings, agentNamesEnabled: true } })
+    })
+
+    await waitFor(() => expect(resolveAgentNames).toHaveBeenCalled())
+    await waitFor(() => expect(useAppStore.getState().workspaceAgentNames)
+      .toEqual({ 'agent-one': 'Apollo', 'identity-buried': 'Jasper' }))
+
+    // One claim and one request, not one per agent and not one per re-render:
+    // enabling is a single membership event, and allocation is durable.
+    expect(mounted.seen.current.sessions['agent-one'].agentNameId).toBe('agent-one')
+    expect(mounted.seen.current.sessions['shell-one'].agentNameId).toBeUndefined()
+    expect([...resolveAgentNames.mock.calls[0][0]].sort()).toEqual(['agent-one', 'identity-buried'])
+    expect(resolveAgentNames).toHaveBeenCalledTimes(1)
+  })
+
+  it('re-claims a malformed identity instead of leaving the agent permanently unnamed', async () => {
+    // A truthiness-only skip treats `agentNameId: 42` as "already identified",
+    // while resolveAgentName — which needs an own STRING key of the name map —
+    // reports null forever. The agent then has no name and no route to one.
+    // The buried record is the other half: it never passes through the claim
+    // at all, so a non-string there would reach the IPC allocator, whose
+    // z.array(z.string().min(1)) rejects the WHOLE batch and blocks naming for
+    // every agent in the window.
+    const resolveAgentNames = vi.fn(async (identities: string[]) =>
+      Object.fromEntries(identities.map(identity => [identity, 'Apollo'])))
+    const mounted = mount({ enabled: true, resolveAgentNames, initial: malformedWorkspace() })
+
+    await waitFor(() => expect(resolveAgentNames).toHaveBeenCalled())
+    await act(async () => { await Promise.resolve() })
+
+    expect(mounted.seen.current.sessions['agent-one'].agentNameId).toBe('agent-one')
+    expect(resolveAgentNames.mock.calls[0][0]).toEqual(['agent-one'])
+    expect(resolveAgentName({
+      enabled: true,
+      meta: mounted.seen.current.sessions['agent-one'],
+      names: useAppStore.getState().workspaceAgentNames,
+    })).toBe('Apollo')
   })
 
   it('leaves the map untouched when allocation fails', async () => {

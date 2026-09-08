@@ -6,9 +6,9 @@ import type { SessionRuntime } from '@renderer/session-runtime/state'
 // The 17-field WorkspaceRefs literal is exactly what this shared harness exists
 // to stop each spec re-typing; its own header asks callers to use it rather
 // than drift a private copy when either signature moves.
-import { makeRefs, stateWriter } from '@renderer/workspace/hook/actions/testing/paneActionsHarness'
+import { makeRefs, mountUndoCloseAction, stateWriter } from '@renderer/workspace/hook/actions/testing/paneActionsHarness'
 import { withoutProvisionalProviderSession } from '@renderer/workspace/providerSessionIdentity'
-import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
+import type { SessionId, SessionMeta, WorkspaceState } from '@renderer/workspace/types'
 
 import { useSessionActions } from './session'
 
@@ -157,5 +157,123 @@ describe('spoken name identity across the agent lifecycle', () => {
     const restored = withoutProvisionalProviderSession(meta)
     expect(restored.agentNameId).toBe('identity-one')
     expect(restored.providerSessionId).toBeUndefined()
+  })
+})
+
+// WHY Undo Close is part of THIS spec and not only of the MCP-continuity one
+// next door: every restore path respawns with `resumeSessionId`, so the agent
+// that comes back is the SAME conversation the user closed. If the identity
+// does not come back with it, the reconciler claims a fresh one and the
+// registry hands out a second name — Cmd-Shift-T renames a live agent, and the
+// old name is spent forever because allocation never recycles. That makes undo
+// a re-addressing event, which is precisely what #816 forbids, and it is a
+// property of the identity rather than of the MCP credentials.
+describe('spoken name identity through Undo Close', () => {
+  const closedAgent = (identity: string): SessionMeta => ({
+    cwd: '/recorded/worktree',
+    kind: 'codex',
+    title: 'the queue race',
+    agentNameId: identity,
+    providerSessionId: 'recorded-provider-session',
+    builtInMcpDomains: [],
+  } as unknown as SessionMeta)
+
+  const anchoredState = (): WorkspaceState => ({
+    tabs: [{
+      id: 'tab-a',
+      title: 'recorded',
+      root: { type: 'leaf', sessionId: 'survivor' },
+      focusedSessionId: 'survivor',
+    }],
+    activeTabId: 'tab-a',
+    sessions: { survivor: { cwd: '/recorded/worktree', kind: 'codex' } },
+    detachedSessions: {},
+    buried: [],
+    pinnedSessionIds: [],
+    dispatchMode: null,
+  } as unknown as WorkspaceState)
+
+  it('restores a grid pane under its own identity and title', async () => {
+    // The pane path used to commit only `tabs`, so the successor's metadata was
+    // whatever `spawn` could rebuild — identity gone, and (pre-existing) the
+    // user's title with it.
+    const state = anchoredState()
+    const refs = makeRefs(state)
+    refs.undoStackRef.current.push({
+      type: 'pane',
+      closedAt: Date.now(),
+      tabId: 'tab-a',
+      sessionMeta: closedAgent('identity-one'),
+      direction: 'vertical',
+      ratio: 0.5,
+      side: 'a',
+      siblingLeafId: 'survivor',
+    })
+    const undo = mountUndoCloseAction(state, refs, vi.fn().mockResolvedValue('restored-pane'))
+
+    await act(async () => { await undo.actions.undoClose() })
+
+    expect(undo.getState().sessions['restored-pane']?.agentNameId).toBe('identity-one')
+    expect(undo.getState().sessions['restored-pane']?.title).toBe('the queue race')
+    undo.mounted.unmount()
+  })
+
+  it('restores a detached Dispatch row under its own identity', async () => {
+    // This path did write a `sessions` patch, but as a hand-written allowlist
+    // that predates naming and therefore omitted `agentNameId`.
+    const state = anchoredState()
+    const refs = makeRefs(state)
+    refs.undoStackRef.current.push({
+      type: 'detached',
+      closedAt: Date.now(),
+      sessionMeta: closedAgent('identity-detached'),
+      record: {
+        sessionId: 'old-detached',
+        surface: 'dispatch',
+        projectTabId: 'tab-a',
+        projectTabTitle: 'recorded',
+        projectTabIndex: 0,
+        detachedAt: 10,
+      },
+    })
+    const undo = mountUndoCloseAction(state, refs, vi.fn().mockResolvedValue('restored-detached'))
+
+    await act(async () => { await undo.actions.undoClose() })
+
+    expect(undo.getState().sessions['restored-detached']?.agentNameId).toBe('identity-detached')
+    expect(undo.getState().detachedSessions['restored-detached']?.detachedAt).toBe(10)
+    undo.mounted.unmount()
+  })
+
+  it('restores a whole tab, grid leaves and detached children alike, under their own identities', async () => {
+    // The tab path looked safe — it built a `freshSessions` map keyed by the
+    // new ids — but nothing ever read that map, so it lost exactly what the
+    // pane path lost. Both of a closed tab's populations are asserted here
+    // because they are respawned by two different loops.
+    const state = { ...anchoredState(), tabs: [], sessions: {} } as unknown as WorkspaceState
+    const refs = makeRefs(state)
+    refs.undoStackRef.current.push({
+      type: 'tab',
+      closedAt: Date.now(),
+      tab: {
+        id: 'closed-tab',
+        title: 'closed',
+        root: { type: 'leaf', sessionId: 'old-grid' },
+        focusedSessionId: 'old-grid',
+      },
+      tabIndex: 0,
+      sessionMetas: { 'old-grid': closedAgent('identity-grid') },
+      detachedEntries: [{ meta: closedAgent('identity-child'), detachedAt: 10 }],
+    })
+    const spawn = vi.fn()
+      .mockResolvedValueOnce('restored-grid')
+      .mockResolvedValueOnce('restored-child')
+    const undo = mountUndoCloseAction(state, refs, spawn)
+
+    await act(async () => { await undo.actions.undoClose() })
+
+    expect(undo.getState().sessions['restored-grid']?.agentNameId).toBe('identity-grid')
+    expect(undo.getState().sessions['restored-child']?.agentNameId).toBe('identity-child')
+    undo.mounted.unmount()
   })
 })
