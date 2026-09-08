@@ -33,6 +33,7 @@ import type {
   SessionRecoverOptions,
   SessionRecoverResult,
 } from '@shared/types/session.js'
+import { TerminalModeTracker } from '@main/sessions/terminalModeTracker.js'
 import { TmuxRegistry } from '@main/tmux/TmuxRegistry.js'
 import {
   MissingWorkspaceDirectoryError,
@@ -649,6 +650,11 @@ export class SessionManager extends EventEmitter {
   // only after an attach, and let the renderer replay the buffer before
   // draining live bytes.
   private readonly agentPtyBuffers = new Map<string, CappedTextBuffer>()
+  // Parallel to agentPtyBuffers, and the reason it exists: that buffer is
+  // capped and evicts the OLDEST bytes, which is where a TUI's one-shot
+  // alternate-screen and mouse-tracking preamble lives. See
+  // TerminalModeTracker for what that costs a renderer that attaches later.
+  private readonly agentPtyModes = new Map<string, TerminalModeTracker>()
   private readonly agentPtyAttachCounts = new Map<string, number>()
   private readonly agentPtyRestoreSizes = new Map<string, PtySize>()
 
@@ -882,6 +888,7 @@ export class SessionManager extends EventEmitter {
       this.terminalAttached.delete(sessionId)
     } else {
       this.agentPtyBuffers.delete(sessionId)
+      this.agentPtyModes.delete(sessionId)
       this.agentPtyAttachCounts.delete(sessionId)
       this.agentPtyRestoreSizes.delete(sessionId)
       if (revokeAgentMcp) this.builtInMcpHost?.revokeSession(sessionId)
@@ -2655,6 +2662,7 @@ export class SessionManager extends EventEmitter {
 
       this.sessionSizes.set(sessionId, initialSize)
       this.agentPtyBuffers.set(sessionId, new CappedTextBuffer(AGENT_PTY_BUFFER_CAP))
+      this.agentPtyModes.set(sessionId, new TerminalModeTracker())
       session.on('started', ({ projectDir }) => {
         if (!ownsEntry()) return
         this.markActivity(sessionId)
@@ -2697,6 +2705,15 @@ export class SessionManager extends EventEmitter {
           this.agentPtyBuffers.set(sessionId, replay)
         }
         replay.append(data)
+        // Observed on the way past, NOT reconstructed from the buffer later:
+        // by the time a renderer attaches, the bytes that set these modes have
+        // usually been evicted, which is the entire point.
+        let modes = this.agentPtyModes.get(sessionId)
+        if (!modes) {
+          modes = new TerminalModeTracker()
+          this.agentPtyModes.set(sessionId, modes)
+        }
+        modes.observe(data)
         if ((this.agentPtyAttachCounts.get(sessionId) ?? 0) > 0) {
           this.emit('agent-pty-data', { sessionId, data })
         }
@@ -3277,7 +3294,14 @@ export class SessionManager extends EventEmitter {
       )
       return null
     }
-    const buffer = this.agentPtyBuffers.get(sessionId)?.read() ?? ''
+    // The mode preamble goes FIRST, ahead of the replayed bytes. A fresh
+    // xterm starts on the normal buffer with no mouse tracking, and the bytes
+    // that would have told it otherwise were evicted long ago — so without
+    // this the attaching pane silently disagrees with the application about
+    // which screen it is on and whether the wheel is reportable. Re-setting a
+    // mode that is already set is a no-op, so prepending is unconditional.
+    const modePreamble = this.agentPtyModes.get(sessionId)?.preamble() ?? ''
+    const buffer = modePreamble + (this.agentPtyBuffers.get(sessionId)?.read() ?? '')
     const attachCount = this.agentPtyAttachCounts.get(sessionId) ?? 0
     if (attachCount === 0) {
       const currentSize = this.sessionSizes.get(sessionId)

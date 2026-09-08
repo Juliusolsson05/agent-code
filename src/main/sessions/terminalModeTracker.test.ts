@@ -1,0 +1,94 @@
+import { describe, expect, it } from 'vitest'
+
+import { TerminalModeTracker } from './terminalModeTracker'
+
+// The bug these pin, restated because it is invisible from the code alone:
+//
+// attachAgentPty replays the trailing bytes of a CAPPED buffer that evicts the
+// oldest data. A TUI writes its alternate-screen and mouse-tracking preamble
+// exactly once, at startup, so on any busy session those bytes are long gone
+// by the time a renderer attaches. The fresh xterm then sits on the normal
+// buffer with no mouse tracking while the application believes otherwise —
+// which is why the mouse wheel did nothing at all in an OpenCode terminal
+// pane, even though nothing was swallowing it.
+
+const ESC = '\x1b'
+
+describe('TerminalModeTracker', () => {
+  it('restores nothing for a stream that set nothing', () => {
+    const tracker = new TerminalModeTracker()
+    tracker.observe('plain output with no escapes\r\n')
+    expect(tracker.preamble()).toBe('')
+  })
+
+  it('captures a TUI startup preamble written as one sequence per mode', () => {
+    const tracker = new TerminalModeTracker()
+    tracker.observe(`${ESC}[?1049h${ESC}[?1000h${ESC}[?1002h${ESC}[?1003h${ESC}[?1006h`)
+    expect(tracker.activeModes()).toEqual([1049, 1000, 1002, 1003, 1006])
+  })
+
+  it('captures modes combined into one semicolon-separated sequence', () => {
+    const tracker = new TerminalModeTracker()
+    tracker.observe(`${ESC}[?1000;1002;1006h`)
+    expect(tracker.activeModes()).toEqual([1000, 1002, 1006])
+  })
+
+  it('puts the screen switch first regardless of the order it saw them', () => {
+    // 1049 has to lead, or everything the replay paints lands on the normal
+    // buffer and is abandoned the moment the switch happens.
+    const tracker = new TerminalModeTracker()
+    tracker.observe(`${ESC}[?1006h${ESC}[?1049h`)
+    expect(tracker.preamble()).toBe(`${ESC}[?1049h${ESC}[?1006h`)
+  })
+
+  it('forgets a mode the application turned back off', () => {
+    // A TUI that suspends for $EDITOR leaves the alternate screen. Replaying a
+    // stale 1049h would put the pane on a buffer the application is not using.
+    const tracker = new TerminalModeTracker()
+    tracker.observe(`${ESC}[?1049h${ESC}[?1003h`)
+    tracker.observe(`${ESC}[?1049l`)
+    expect(tracker.activeModes()).toEqual([1003])
+  })
+
+  it('handles a reset that names several modes at once', () => {
+    const tracker = new TerminalModeTracker()
+    tracker.observe(`${ESC}[?1049h${ESC}[?1000h${ESC}[?1002h${ESC}[?1003h${ESC}[?1006h`)
+    tracker.observe(`${ESC}[?1003l${ESC}[?1002l${ESC}[?1000l${ESC}[?1006l`)
+    expect(tracker.activeModes()).toEqual([1049])
+  })
+
+  it('ignores private modes it is not responsible for', () => {
+    // Cursor visibility, bracketed paste and focus reporting are re-asserted
+    // by the next repaint, so restoring them would be noise at best.
+    const tracker = new TerminalModeTracker()
+    tracker.observe(`${ESC}[?25l${ESC}[?2004h${ESC}[?1004h${ESC}[?1049h`)
+    expect(tracker.activeModes()).toEqual([1049])
+  })
+
+  it('is not fooled by the digits appearing in ordinary output', () => {
+    const tracker = new TerminalModeTracker()
+    tracker.observe('the value is 1049h and the mode is [?1049h-ish\r\n')
+    expect(tracker.preamble()).toBe('')
+  })
+
+  it('survives being fed the same preamble twice', () => {
+    // Reconnects and provider restarts re-emit it; the set must not grow or
+    // reorder.
+    const tracker = new TerminalModeTracker()
+    const preamble = `${ESC}[?1049h${ESC}[?1003h${ESC}[?1006h`
+    tracker.observe(preamble)
+    tracker.observe(preamble)
+    expect(tracker.preamble()).toBe(preamble)
+  })
+
+  it('keeps state across many chunks, which is how a real stream arrives', () => {
+    const tracker = new TerminalModeTracker()
+    tracker.observe(`${ESC}[?1049h`)
+    for (let i = 0; i < 500; i += 1) tracker.observe(`frame ${i}\r\n`)
+    tracker.observe(`${ESC}[?1003h`)
+    for (let i = 0; i < 500; i += 1) tracker.observe(`frame ${i}\r\n`)
+    // This is exactly the case the capped replay buffer loses: the first
+    // sequence is thousands of bytes back and would have been evicted.
+    expect(tracker.preamble()).toBe(`${ESC}[?1049h${ESC}[?1003h`)
+  })
+})
