@@ -23,11 +23,24 @@ import type { KeyVaultKey, KeyVaultStatus } from '@shared/types/keyVault'
 // is what triggers Touch ID / the login-password prompt.
 //
 // DISCLOSURE (review finding): once a key is INSERTED, it leaves the
-// vault's protection by design — a composer draft autosaves to
-// workspace.json in plaintext until sent or cleared, and a PTY paste
-// lands in scrollback/tmux history. Submitting the prompt puts the key
-// in the provider transcript, plaintext, exactly like a manual paste.
-// The vault encrypts STORAGE, not the prompt pipeline.
+// vault's protection by design. The vault encrypts STORAGE, not the
+// prompt pipeline. The full list of places an inserted key comes to
+// rest, which is longer than this comment used to admit:
+//
+//   1. The composer draft, autosaved to workspace.json in PLAINTEXT
+//      (useAutoSave writes runtime.draftInput for every session with
+//      one), until the prompt is sent or the draft is cleared.
+//   2. "Clear draft" does not end that — the cleared text is retained
+//      for undo (draft.ts's clearedDrafts), so it stays recoverable.
+//   3. A PTY paste lands in xterm scrollback and in tmux history.
+//   4. Submitting puts it in the provider transcript, plaintext,
+//      exactly like a manual paste.
+//   5. If proxy streaming is on, the mitm addon base64-encodes outbound
+//      request bodies into the proxy events journal under
+//      ~/.config/agent-code/proxy, which nothing prunes or rotates.
+//
+// Anything meant to stay secret should be given to the agent by a path
+// that does not go through a prompt at all.
 
 type KeyForm = { id?: string; name: string; value: string; note: string } | null
 
@@ -190,6 +203,10 @@ export function KeyVaultModal() {
       if (result.delivered) {
         workspace.showPaneToast(sessionId, `Inserted key: ${key.name}`)
         closeKeyVault()
+      } else if (result.reason === 'refused') {
+        // The terminal's own words: which rule the text broke, not a generic
+        // failure. A key with a stray control byte is worth naming exactly.
+        setError(result.message)
       } else if (result.reason === 'write-rejected') {
         setError('Terminal write was rejected — pane is not ready; try again')
       } else {
@@ -370,10 +387,16 @@ export function KeyVaultModal() {
                           <span className="truncate text-ink">{key.name}</span>
                           <span className="shrink-0 text-[10px] text-muted">••••{key.hint}</span>
                           {revealed.has(key.id) && (
-                            <span
-                              className="max-w-[220px] truncate text-[10px] text-ink"
-                              title={revealed.get(key.id)}
-                            >
+                            // WHY no `title` attribute here, and why it wraps
+                            // instead of truncating: a `title` puts the
+                            // plaintext secret into an OS tooltip and into the
+                            // accessibility tree, where it is readable by
+                            // anything that can query the DOM and is rendered
+                            // by the window server outside this surface's
+                            // control. Truncating created the need for that
+                            // tooltip, so the fix is to let the value wrap and
+                            // be fully visible in the row instead.
+                            <span className="min-w-0 text-[10px] text-ink [overflow-wrap:anywhere]">
                               {revealed.get(key.id)}
                             </span>
                           )}

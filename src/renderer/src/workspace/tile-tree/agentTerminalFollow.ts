@@ -141,6 +141,16 @@ export function useAgentTerminalFollow({
         subscription.dispose()
         savedLineRef.current?.dispose()
         savedLineRef.current = null
+        // WHY the engaged flag is reset too: detaching disposes the anchor, so
+        // there is nothing left to restore, but this flag used to survive. The
+        // xterm instance can be torn down and rebuilt under the SAME sessionId
+        // — the effect that clears per-session state is keyed on sessionId and
+        // does not re-run — so the next disengage found tailEngaged true and
+        // saved null, took the restore branch, and silently dropped the user
+        // back to wherever the fresh terminal happened to be instead of the
+        // line they were reading. Engagement describes a live terminal, so it
+        // has to end with one.
+        tailEngagedRef.current = false
       }
     },
   }), [termRef])
