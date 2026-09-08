@@ -248,9 +248,16 @@ export async function switchAgentProvider(params: {
   // pane busy too, and "wait for the current turn to finish" would send the
   // user looking for a turn they never started.
   if (sourceRuntime?.providerSwitch) {
+    // 'skipped', not 'failed'. Nothing went wrong: this pane is busy with an
+    // operation that ends on its own, and the correct user response is to try
+    // again shortly. Reporting it as a failure made a bulk return during
+    // arrival compaction — which is the DEFAULT for large conversations and
+    // holds this flag for minutes per pane — announce "Returned 0 agents (20
+    // failed)" for a batch where nothing was wrong with any of them. Both
+    // shapes carry their string to the same place on the single-pane path.
     return {
-      status: 'failed',
-      message: 'This pane is still finishing a provider switch — wait for it to complete',
+      status: 'skipped',
+      reason: 'This pane is still finishing a provider switch — wait for it to complete',
     }
   }
   // The usage-limit exception (see isLimitIdle): a pane whose provider is
@@ -258,28 +265,39 @@ export async function switchAgentProvider(params: {
   // lock out precisely the agents this feature exists to move. Replacement
   // kills the process, which is what ends the provider's wait banner anyway.
   if ((sourceRuntime?.processActive || sourceRuntime?.semantic.currentTurn) && !(sourceRuntime && isLimitIdle(sourceRuntime))) {
-    return { status: 'failed', message: 'Wait for the current turn to finish before switching provider' }
+    // Also 'skipped': BulkProviderSwitchModal's own footer promises "N of M
+    // are mid-turn and will be skipped until idle", and reporting them as
+    // failures made the summary contradict the warning the user just read.
+    return { status: 'skipped', reason: 'Wait for the current turn to finish before switching provider' }
   }
   if (providerSwitchesInFlight.has(sessionId)) {
     return { status: 'failed', message: 'Provider switch already in progress' }
   }
-  providerSwitchesInFlight.add(sessionId)
-  setRuntimes(prev => {
-    const runtime = prev[sessionId]
-    if (!runtime) return prev
-    return {
-      ...prev,
-      [sessionId]: {
-        ...runtime,
-        providerSwitch: {
-          phase: 'preparing',
-          message: `Preparing switch to ${targetKind}…`,
-        },
-      },
-    }
-  })
-
+  // WHY the claim and the first runtime write are INSIDE the try: the release
+  // lives in this function's `finally`, and both statements used to sit above
+  // it. A throw from that setRuntimes — a subscriber, a selector, anything in
+  // the store's update path — leaked the id permanently in a module-scoped
+  // Set, and that pane then answered "Provider switch already in progress"
+  // for the rest of the window's life with no way back short of a reload.
+  // Deleting an id that was never added is a no-op, so widening the try costs
+  // nothing.
   try {
+    providerSwitchesInFlight.add(sessionId)
+    setRuntimes(prev => {
+      const runtime = prev[sessionId]
+      if (!runtime) return prev
+      return {
+        ...prev,
+        [sessionId]: {
+          ...runtime,
+          providerSwitch: {
+            phase: 'preparing',
+            message: `Preparing switch to ${targetKind}…`,
+          },
+        },
+      }
+    })
+
     const sourceProviderSessionId = resumableProviderSessionId(meta)
     if (!sourceProviderSessionId) {
       // A freshly-spawned provider pane has no durable provider transcript yet.
@@ -307,7 +325,29 @@ export async function switchAgentProvider(params: {
     // recovery is a real mid-transaction ownership change, not ordinary pane
     // hibernation. `ensureSessionLive` is idempotent for an already-live owner
     // and main's recovery claim serializes concurrent wake attempts.
-    const wakeResult = await sessionActions.ensureSessionLive(sessionId, 'provider-switch.wake-source')
+    // WHY the wake stays but its READINESS WAIT does not, when the caller has
+    // explicitly ruled out source turns:
+    //
+    // The wake itself is load-bearing and must not be removed — it is what
+    // resolves this pane's built-in MCP domains under the SOURCE provider (see
+    // the provenance comment below), and what makes a later kind/cwd mismatch
+    // mean a real ownership change rather than ordinary hibernation.
+    //
+    // The 30s input-readiness wait is a different thing, and with
+    // `allowSourceTurns: false` — the transaction default, and the entire
+    // point of the quota-independent path — main plans the conversion from
+    // files on disk and never asks the source to do anything. Waiting for a
+    // prompt we will never send costs up to 30s per pane, serialised across a
+    // bulk switch, before `replaceSession` kills the process anyway.
+    //
+    // Gated on an EXPLICIT false rather than on `!allowSourceTurns`: an absent
+    // contextPolicy means "main decides", and the renderer must not assume
+    // which way DEFAULT_SWITCH_CONTEXT_POLICY went.
+    const wakeResult = await sessionActions.ensureSessionLive(
+      sessionId,
+      'provider-switch.wake-source',
+      ...(contextPolicy?.allowSourceTurns === false ? [{ awaitInputReady: false }] : []),
+    )
 
     // The translated target transcript must be created BEFORE we replace the
     // live pane. If translation fails, the current provider process should stay
@@ -331,25 +371,37 @@ export async function switchAgentProvider(params: {
       })
       onProgress?.({ phase: event.phase, message: event.message })
     })
-    const result = await window.api.switchProvider({
-      sourceKind,
-      // Explicit target (#394 phase 5a). This helper always KNEW the
-      // target — its callers pass it — but historically dropped it
-      // before IPC and relied on main's two-provider negation. With
-      // the negation slated for removal, the renderer's choice is now
-      // authoritative end-to-end.
-      targetKind,
-      sourceProviderSessionId,
-      sourceSessionId: sessionId,
-      cwd: meta.cwd,
-      // A policy the caller passed and this function silently dropped would be
-      // a trap for the caller that sets `allowSourceTurns` and wonders why the
-      // source was never asked to compact. Both keys are spread conditionally
-      // so an unset policy still reaches main as "absent", letting
-      // DEFAULT_SWITCH_CONTEXT_POLICY stay the single source of the defaults.
-      ...(contextPolicy ? { contextPolicy } : {}),
-      ...(sourceCompactionConfirmed ? { sourceCompactionConfirmed } : {}),
-    }).finally(unsubscribeProgress)
+    // WHY try/finally rather than `.finally(unsubscribeProgress)` on the
+    // promise: if `window.api.switchProvider` throws SYNCHRONOUSLY — a preload
+    // shape mismatch, a serialisation failure on the argument object — no
+    // promise is ever created, `.finally` is never attached, and this listener
+    // survives for the life of the renderer, writing into a session that has
+    // moved on. `startArrivalCompaction` already guards exactly this case;
+    // this path did not.
+    let result: Awaited<ReturnType<typeof window.api.switchProvider>>
+    try {
+      result = await window.api.switchProvider({
+        sourceKind,
+        // Explicit target (#394 phase 5a). This helper always KNEW the
+        // target — its callers pass it — but historically dropped it
+        // before IPC and relied on main's two-provider negation. With
+        // the negation slated for removal, the renderer's choice is now
+        // authoritative end-to-end.
+        targetKind,
+        sourceProviderSessionId,
+        sourceSessionId: sessionId,
+        cwd: meta.cwd,
+        // A policy the caller passed and this function silently dropped would be
+        // a trap for the caller that sets `allowSourceTurns` and wonders why the
+        // source was never asked to compact. Both keys are spread conditionally
+        // so an unset policy still reaches main as "absent", letting
+        // DEFAULT_SWITCH_CONTEXT_POLICY stay the single source of the defaults.
+        ...(contextPolicy ? { contextPolicy } : {}),
+        ...(sourceCompactionConfirmed ? { sourceCompactionConfirmed } : {}),
+      })
+    } finally {
+      unsubscribeProgress()
+    }
 
     if (result.kind === 'source-empty') {
       return await replaceTranscriptlessPane()

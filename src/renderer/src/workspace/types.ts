@@ -585,6 +585,22 @@ export type ProviderSwitchBatch = {
   sourceKind: AgentProviderKind
   targetKind: AgentProviderKind
   agents: ProviderSwitchBatchAgent[]
+  /**
+   * Whether the user agreed to compaction-on-arrival for THIS batch, captured
+   * from the modal that asked.
+   *
+   * WHY the return path needs it rather than deciding for itself: arrival
+   * compaction spends the destination provider's quota and locks every
+   * affected composer for the arrival wait plus the compaction wait — minutes
+   * per pane, with no cancel. The forward flow puts that behind an explicit
+   * checkbox and a quota disclosure. The return flow had no modal at all and
+   * hard-coded it on for any Claude destination, so a single "Return 20" click
+   * spent Claude quota twenty times and locked twenty composers with nothing
+   * asked and nothing disclosed. Returning is the mirror of the switch the
+   * user consented to, so it reuses that consent instead of inventing new
+   * consent on the user's behalf.
+   */
+  compactOnArrival: boolean
 }
 
 export const RATIO_MIN = 0.1

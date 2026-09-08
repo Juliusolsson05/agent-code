@@ -58,6 +58,7 @@ function batchOf(...ids: string[]): ProviderSwitchBatch {
     sourceKind: 'claude',
     targetKind: 'codex',
     agents: ids.map(agent),
+    compactOnArrival: false,
   } as unknown as ProviderSwitchBatch
 }
 
@@ -132,5 +133,113 @@ describe('returnLastProviderSwitchBatch', () => {
     await result.current.returnLastProviderSwitchBatch()
 
     expect(state.lastProviderSwitchBatch?.id).toBe('batch-2')
+  })
+})
+
+describe('returnLastProviderSwitchBatch consent', () => {
+  it('does not compact on arrival when the forward batch did not consent', async () => {
+    // A Return click used to hard-code compaction on for any Claude
+    // destination. That spends Claude quota once per agent and disables every
+    // one of those composers for the arrival wait plus the compaction wait —
+    // minutes each, no cancel — while the forward flow puts the same thing
+    // behind an explicit checkbox and a quota disclosure.
+    switchAgentProvider.mockResolvedValue({ status: 'switched' })
+    const { result } = harness(batchOf('a'))
+
+    await result.current.returnLastProviderSwitchBatch()
+
+    expect(switchAgentProvider).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contextPolicy: expect.objectContaining({ compactOnArrival: false }),
+      }),
+    )
+  })
+
+  it('compacts on arrival when the forward batch did consent', async () => {
+    switchAgentProvider.mockResolvedValue({ status: 'switched' })
+    const batch = batchOf('a')
+    batch.compactOnArrival = true
+    const { result } = harness(batch)
+
+    await result.current.returnLastProviderSwitchBatch()
+
+    expect(switchAgentProvider).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contextPolicy: expect.objectContaining({ compactOnArrival: true }),
+      }),
+    )
+  })
+
+  it('never promises arrival compaction a non-Claude destination cannot do', async () => {
+    // compactAfterSwitch reports every non-Claude kind as a no-op, so honouring
+    // consent literally would advertise work that never happens.
+    switchAgentProvider.mockResolvedValue({ status: 'switched' })
+    const batch = batchOf('a')
+    batch.compactOnArrival = true
+    batch.agents[0].originalKind = 'codex'
+    const { result } = harness(batch)
+
+    await result.current.returnLastProviderSwitchBatch()
+
+    expect(switchAgentProvider).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contextPolicy: expect.objectContaining({ compactOnArrival: false }),
+      }),
+    )
+  })
+})
+
+describe('bulk switch reporting', () => {
+  it('carries the reason into the summary instead of only a count', async () => {
+    // "Returned 0 agents to Claude (1 failed)" is unactionable. The core writes
+    // messages that name the remedy; bulk used to discard every one of them.
+    switchAgentProvider.mockResolvedValue({
+      status: 'failed',
+      message: 'Poisoned carrier — clear the rate-limit message first',
+    })
+    const { result, toasts } = harness(batchOf('a'))
+
+    await result.current.returnLastProviderSwitchBatch()
+
+    expect(toasts[0]).toContain('1 failed')
+    expect(toasts[0]).toContain('Poisoned carrier')
+  })
+
+  it('reports skipped agents separately from failed ones', async () => {
+    switchAgentProvider
+      .mockResolvedValueOnce({ status: 'skipped', reason: 'Still finishing a provider switch' })
+      .mockResolvedValueOnce({ status: 'failed', message: 'Replacement failed' })
+    const { result, toasts } = harness(batchOf('a', 'b'))
+
+    await result.current.returnLastProviderSwitchBatch()
+
+    expect(toasts[0]).toContain('1 skipped')
+    expect(toasts[0]).toContain('1 failed')
+  })
+
+  it('dedupes shared reasons and caps the list', async () => {
+    // Twenty agents usually fail for one reason, and PaneToast clamps to three
+    // lines — an uncapped list would push the counts out of view.
+    switchAgentProvider.mockResolvedValue({ status: 'failed', message: 'Same reason' })
+    const { result, toasts } = harness(batchOf('a', 'b', 'c'))
+
+    await result.current.returnLastProviderSwitchBatch()
+
+    expect(toasts[0].match(/Same reason/g)).toHaveLength(1)
+    expect(toasts[0]).not.toContain('more')
+  })
+
+  it('surfaces the shrink summary a successful but lossy return produced', async () => {
+    // The shrink ladder's summary exists specifically so no lossy step is
+    // silent. Counting it as "1 shrunk" and dropping the text defeats that.
+    switchAgentProvider.mockResolvedValue({
+      status: 'switched',
+      shrinkSummary: 'dropped 12 tool results',
+    })
+    const { result, toasts } = harness(batchOf('a'))
+
+    await result.current.returnLastProviderSwitchBatch()
+
+    expect(toasts[0]).toContain('dropped 12 tool results')
   })
 })
