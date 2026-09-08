@@ -286,7 +286,17 @@ export function KeyVaultModal() {
               produced a second nested scrollbar on the same axis. */}
           {status?.unlocked && (
             <div className="flex min-h-0 flex-1 flex-col gap-3 sm:flex-row">
-              <div className="flex shrink-0 flex-col gap-1 overflow-y-auto pr-1 sm:w-48">
+              {/* `sm:shrink-0`, NOT `shrink-0`, and `min-h-0` on both axes'
+                  worth of layout: below the sm breakpoint this row stacks as a
+                  COLUMN, and a non-shrinking child there takes its full content
+                  height. With the outer scroller removed, a long provider list
+                  then grew past the dialog and the new overflow-hidden clipped
+                  the bottom of it — including "New provider…" — with no
+                  scrollbar able to reach it, because the column's own
+                  overflow-y-auto cannot help an element that was never
+                  constrained. Shrinking only in the row direction keeps the
+                  fixed 12rem sidebar the wide layout wants. */}
+              <div className="flex min-h-0 flex-col gap-1 overflow-y-auto pr-1 sm:w-48 sm:shrink-0">
                 {providers.map(provider => (
                   <button
                     key={provider.id}
@@ -310,7 +320,7 @@ export function KeyVaultModal() {
                 />
               </div>
 
-              <div className="flex min-w-0 flex-1 flex-col gap-2 overflow-y-auto">
+              <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2 overflow-y-auto">
                 {!selectedProvider && (
                   <div className="text-xs text-muted">Create a provider to get started.</div>
                 )}
