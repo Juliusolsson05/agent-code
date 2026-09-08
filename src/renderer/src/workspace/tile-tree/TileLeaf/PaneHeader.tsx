@@ -133,7 +133,7 @@ export function PaneHeader({
           title is the scanning aid; giving it an independent truncation slot
           keeps five narrow Tiled Dispatch lanes legible without weakening the
           existing header contract. Untitled agents render no row at all. */}
-      <AgentTitleHeader title={agentTitle} />
+      <AgentTitleHeader sessionId={sessionId} title={agentTitle} />
       {relatedAgentTabs.length > 0 && (
         <div className="flex items-center gap-1 overflow-x-auto border-t border-border/70 px-2 py-1 text-[10px]">
           {relatedAgentTabs.map((tab, index) => {

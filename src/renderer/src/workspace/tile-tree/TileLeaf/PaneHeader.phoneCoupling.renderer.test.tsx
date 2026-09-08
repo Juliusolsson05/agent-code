@@ -76,4 +76,29 @@ describe('PaneHeader related-status store coupling', () => {
     expect(chip).not.toBeNull()
     expect(chip!.querySelector('.bg-accent')).not.toBeNull()
   })
+
+  it('renders no agent name on a store with no workspace keys (phone stub shape)', () => {
+    // src/remote-client aliases @renderer/app-state/hooks to a stub whose
+    // state is `{ settings }` (vite.config.ts). tsconfig.web.json type-checks
+    // that directory against the REAL hooks module, so a selector reading
+    // state.workspaceState compiles and then throws on a device. Reproducing
+    // the stub shape here is the only place that can catch it.
+    useAppStore.setState({
+      workspaceState: undefined as never,
+      workspaceAgentNames: undefined as never,
+    })
+    const { container } = render(
+      <PaneHeader
+        sessionId="session"
+        projectDir="/project"
+        statusMode={false}
+        isSessionLive={false}
+        relatedAgentTabs={[]}
+      />,
+    )
+    // Degrade, never throw — and with no workspace there is no name to show,
+    // so the title row stays absent exactly as it is on the phone today.
+    expect(container.querySelector('[data-agent-name-badge="true"]')).toBeNull()
+    expect(container.querySelector('[data-agent-title-header="true"]')).toBeNull()
+  })
 })

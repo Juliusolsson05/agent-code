@@ -12,6 +12,15 @@ import { DEFAULT_SETTINGS } from '@renderer/app-state/settings/types'
 // `settings` or another key present here; anything else fails the phone
 // tsc/build loudly — the correct signal to either widen this snapshot or
 // question the new coupling.
+//
+// Agent names (issue #816) are a deliberate no-op here: the phone has no
+// workspace state, no reconciler and no allocation, so agentNameForSession
+// degrades to null and no badge renders. Note that the "fails the phone
+// tsc/build loudly" claim above does NOT hold for a read whose key is simply
+// missing — tsconfig.web.json checks this directory against the real hooks
+// module, not against this stub — so selectors reached from the feed subtree
+// must tolerate a keyless store on their own. PaneHeader.phoneCoupling is the
+// test that enforces it.
 
 const PHONE_APP_STATE = {
   settings: DEFAULT_SETTINGS,

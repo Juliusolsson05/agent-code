@@ -8,6 +8,7 @@ import { useShallow } from 'zustand/react/shallow'
 
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { useAppStore } from '@renderer/app-state/hooks'
+import { useAgentName } from '@renderer/workspace/agentNames/useAgentName'
 import { WorktreeBadge } from '@renderer/workspace/tile-tree/TileLeaf/SessionBadges'
 import { dispatchRowTitle } from './rowTitle'
 export { cachedLatestPromptTitle, dispatchRowTitle } from './rowTitle'
@@ -387,6 +388,7 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
   const activityClasses = dispatchActivityClasses(activity, active)
   const subtitle = dispatchSubtitle(runtime, row.kind)
   const title = dispatchRowTitle(row, runtime.entries)
+  const agentName = useAgentName(row.sessionId)
   const attentionLabel = dispatchAttentionLabel(runtime)
   const unreadKind = isTerminal
     ? null
@@ -438,6 +440,19 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
       </span>
       <div className="min-w-0 flex-1 py-1 pl-2">
         <div className="flex items-center gap-2 min-w-0">
+          {agentName && (
+            // WHY the chip leads the row instead of being appended to the
+            // title: the index is scanned vertically, and a leading column of
+            // names lines up the way the label column already does. Appending
+            // would put it inside the truncating span, where the longest
+            // titles would eat exactly the token the user needs to speak.
+            <span
+              data-dispatch-agent-name="true"
+              className="flex-shrink-0 rounded-chip border border-border px-1 text-[9px] font-semibold leading-[13px] text-ink"
+            >
+              {agentName}
+            </span>
+          )}
           <span className="min-w-0 flex-1">
             <span className={`block min-w-0 truncate px-1 py-[1px] text-[11px] text-ink ${activityClasses.title}`}>
               {title}
