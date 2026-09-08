@@ -9,6 +9,7 @@ import { commandTargetSessionIdForState } from '@renderer/workspace/hook/selecto
 import { buildVisibleDispatchRows } from '@renderer/workspace/dispatch/dispatchSelectors'
 import { dispatchRowTitle } from '@renderer/workspace/dispatch/rowTitle'
 import { paneLabelForSession, resolveAgentPaneLabel } from '@renderer/workspace/tile-tree/paneLabels'
+import { resolveAgentName } from '@renderer/workspace/agentNames/selectors'
 import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
 import type { Workspace } from '@renderer/workspace/hook'
 
@@ -74,7 +75,15 @@ export function observeWorkspace(getWorkspace: () => Pick<Workspace, 'restoreSta
     const displayLabel = row?.label ?? (localLabel && resolveAgentPaneLabel(state, localLabel, tileTabs)?.sessionId === sessionId ? localLabel : null)
     const displayedTitle = row ? dispatchRowTitle(row, store.workspaceRuntimes[sessionId]?.entries)
       : meta.title?.trim() || meta.cwd.split('/').filter(Boolean).pop() || meta.cwd
-    return { displayLabel, displayedTitle }
+    const agentName = resolveAgentName({
+      // Read from the SAME store snapshot the rest of this observation uses.
+      // Re-reading getState() here could interleave with a reconciliation and
+      // report a name for a session whose metadata this call has not seen.
+      enabled: store.settings.agentNamesEnabled,
+      meta,
+      names: store.workspaceAgentNames,
+    })
+    return { displayLabel, displayedTitle, agentName }
   }
   return {
     observedAt: Date.now(), focusedSessionId, ui: { commandPickerOpen: store.commandPaletteOpen, settingsOpen: store.settingsPageOpen, inputOwnedBySurface: hasAppInteractionOwner() }, restoreStatus: getWorkspace().restoreStatus, activeTabId: state.activeTabId,
