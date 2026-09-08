@@ -365,11 +365,10 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
   // Biggest conversation in the batch, not the sum: arrival compaction runs
   // per agent, so the question is whether ANY single pane will land oversized.
   //
-  // The runtimes map is swapped for a frozen empty one while closed so the memo
-  // is not merely early-returning on a dependency that changes on every runtime
-  // tick — it stops being invalidated at all. This modal is a permanently
-  // mounted surface (see the usage hook gate above), and `workspace.runtimes`
-  // is one of the highest-churn references in the app.
+  // This modal is a permanently mounted surface (see the usage hook gate
+  // above), and `workspace.runtimes` is one of the highest-churn references in
+  // the app — which is what makes the dependency choice below load-bearing
+  // rather than cosmetic.
   // WHY this is keyed on the session ids and reads runtimes through a REF:
   //
   // Gating on `open` stopped the walk while the modal is closed, but while it
@@ -813,7 +812,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
                 <button
                   type="button"
                   onClick={() => void runModelSwitch()}
-                  disabled={busy || switchingModel || matchingRows.length === 0}
+                  disabled={locked || matchingRows.length === 0}
                   className="rounded-control flex-shrink-0 px-2.5 py-1 text-[11px] border border-accent/60 bg-accent/10 text-accent hover:bg-accent/20 disabled:opacity-50"
                 >
                   {switchingModel
@@ -973,7 +972,10 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
             <button
               type="button"
               onClick={() => void runSwitch()}
-              disabled={busy || matchingRows.length === 0}
+              // `locked`, matching the handler: with `busy` alone the button
+              // stayed enabled during a /model fan-out while runSwitch refused
+              // the click, so it looked available and did nothing.
+              disabled={locked || matchingRows.length === 0}
               className={`rounded-control
                 px-3 py-1.5 text-[11px] border
                 ${matchingRows.length > 0
