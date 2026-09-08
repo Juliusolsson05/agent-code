@@ -32,21 +32,35 @@ export function prepareTemplateText(
 export type KeyReference = { providerName: string; keyName: string }
 
 /**
- * Every `{{key:…}}` occurrence, well-formed or not.
+ * Every `{{key:…/…}}` occurrence, well-formed or not.
  *
- * WHY the pattern deliberately accepts a malformed SPEC instead of refusing to
- * match it: the old pattern excluded `/` from both halves, so `{{key:Provider}}`
- * and `{{key:A/B/C}}` matched nothing at all — they were invisible to
- * collection, invisible to validation, and survived the final `body.replace`
- * untouched. A typo'd reference was therefore pasted into the prompt VERBATIM,
- * which is the exact silent-failure mode the header paragraph says this
- * grammar exists to avoid ("resolution aborts loudly").
+ * WHY it matches a malformed SPEC rather than refusing to match: the original
+ * pattern excluded `/` from both halves, so `{{key:A/B/C}}` matched nothing at
+ * all — invisible to collection, invisible to validation, and untouched by the
+ * final `body.replace`. A typo'd reference was pasted into the prompt VERBATIM,
+ * which is the silent-failure mode the header paragraph says this grammar
+ * exists to avoid.
  *
- * The `key:` prefix and the `[^{}]` body keep this from colliding with the
- * ordinary `{{variable}}` grammar, whose placeholder pattern is `[A-Za-z0-9_]+`
- * and cannot contain a colon.
+ * WHY the separator is still REQUIRED, which is the part that took a second
+ * pass to get right: a first attempt accepted any `{{key:…}}` at all so that
+ * `{{key:Provider}}` could be reported as a missing separator. That
+ * over-captured ordinary text. `<Widget options={{key: value}} />` is
+ * everyday JSX, and it began aborting template insertion outright — a template
+ * that had always worked now failed, with no way to escape it, not even inside
+ * a code fence. Pasted logs and JSON carrying `{{key: …}}` regressed the same
+ * way.
+ *
+ * A `/` is the thing that makes an occurrence look deliberately like a vault
+ * reference rather than an object literal, so it is the boundary. The cost is
+ * that a separator-less typo goes back to passing through untouched, exactly
+ * as it did before this file existed. That is strictly better than breaking
+ * text the user did not intend as syntax.
+ *
+ * The `key:` prefix and the `[^{}]` body also keep this from colliding with
+ * the ordinary `{{variable}}` grammar, whose placeholder pattern is
+ * `[A-Za-z0-9_]+` and cannot contain a colon.
  */
-const KEY_REF_PATTERN = /\{\{\s*key:([^{}]*?)\s*\}\}/g
+const KEY_REF_PATTERN = /\{\{\s*key:([^{}]*\/[^{}]*?)\s*\}\}/g
 
 type ParsedReference =
   | { ok: true; ref: KeyReference }
@@ -62,6 +76,8 @@ type ParsedReference =
  */
 function parseReference(spec: string): ParsedReference {
   const parts = spec.split('/')
+  // A spec reaches here only with at least one separator (the pattern requires
+  // it), so this rejects two-or-more, never zero.
   if (parts.length !== 2) return { ok: false, spec }
   const providerName = parts[0].trim()
   const keyName = parts[1].trim()
@@ -116,21 +132,31 @@ export async function resolveKeyReferences(
     if (seen.has(dedupeKey)) continue
     seen.add(dedupeKey)
 
-    // WHY the call is wrapped: the aggregation above was dead code in
-    // production. The real adapter is `window.api.keyVaultResolveReference`,
-    // typed `Promise<string>`, and VaultService throws on every failure mode —
-    // unknown provider, unknown key, a cancelled unlock. `value === null` was
-    // therefore unreachable, the first bad reference escaped this loop, and
-    // "one error message tells the user everything that needs fixing" was
-    // simply false. The service's own message is kept, because it is written
-    // for direct display and distinguishes "no such key" from "vault locked".
+    // WHY the call is wrapped AND why the loop stops on the first throw:
+    //
+    // Wrapped, because the aggregation this function is built around was dead
+    // code in production. The real adapter is
+    // `window.api.keyVaultResolveReference`, typed `Promise<string>`, and
+    // VaultService throws on every failure mode, so `value === null` was
+    // unreachable and the first bad reference escaped the loop entirely.
+    //
+    // Stopping, because continuing is worse than the bug it fixed. One of
+    // those failure modes is a CANCELLED unlock, and `ensureUnlocked` clears
+    // its pending promise on cancellation — so carrying on to the next
+    // reference opens another OS authentication prompt. A template with three
+    // references asked once before, and would ask three times if this
+    // continued. A user who just cancelled must not be re-asked.
+    //
+    // Whatever was collected before the failure is still reported alongside
+    // it, and the service's own message is kept because it is written for
+    // direct display and distinguishes "no such key" from "vault is locked".
     let value: string | null
     try {
       value = await resolve(parsed.ref)
     } catch (error) {
       const detail = error instanceof Error && error.message.length > 0 ? error.message : null
       failures.push(`{{key:${parsed.ref.providerName}/${parsed.ref.keyName}}}${detail ? ` (${detail})` : ''}`)
-      continue
+      break
     }
     if (value === null || value.length === 0) {
       failures.push(`{{key:${parsed.ref.providerName}/${parsed.ref.keyName}}}`)

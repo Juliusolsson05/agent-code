@@ -54,14 +54,27 @@ describe('resolveKeyReferences', () => {
 })
 
 describe('malformed and failing references', () => {
-  it('aborts on a reference with no separator instead of pasting it verbatim', async () => {
-    // The old pattern excluded `/` from both halves, so this matched NOTHING:
-    // invisible to collection, invisible to validation, and passed through the
-    // final replace untouched. A typo was therefore pasted into the prompt as
-    // literal text, which is the exact silent failure the grammar's header
-    // says it exists to prevent.
+  it('leaves a separator-less occurrence alone, because it is not addressed to the vault', async () => {
+    // Reporting `{{key:Brave}}` as a malformed reference required matching
+    // ANY `{{key:…}}`, and that over-captured ordinary text: JSX like
+    // `<Widget options={{key: value}} />` began aborting insertion outright,
+    // with no way to escape it. A separator is what makes an occurrence look
+    // deliberately like a vault reference, so it is the boundary. A
+    // separator-less typo passes through as it always did.
     await expect(resolveKeyReferences('use {{key:Brave}} now', async () => 'secret'))
-      .rejects.toThrow('{{key:Brave}}')
+      .resolves.toBe('use {{key:Brave}} now')
+  })
+
+  it('does not touch ordinary JSX that happens to contain {{key:', async () => {
+    const body = '<Widget options={{key: value}} /> and {{key: other}}'
+    await expect(resolveKeyReferences(body, async () => 'secret')).resolves.toBe(body)
+  })
+
+  it('still resolves a real reference sitting next to such text', async () => {
+    await expect(resolveKeyReferences(
+      '<Widget options={{key: value}} /> {{key:P/K}}',
+      async () => 'secret',
+    )).resolves.toBe('<Widget options={{key: value}} /> secret')
   })
 
   it('aborts on a reference with two separators rather than guessing', async () => {
@@ -79,19 +92,31 @@ describe('malformed and failing references', () => {
       .rejects.toThrow('{{key:Provider/}}')
   })
 
-  it('collects a THROWN resolution failure instead of escaping the loop', async () => {
+  it('reports a thrown resolution failure with the service message', async () => {
     // The production adapter is typed Promise<string> and VaultService throws
     // on every failure mode, so the `value === null` branch this module was
-    // built around is unreachable. Without the catch the first bad reference
-    // escaped and the documented "one message tells you everything" was false.
-    const resolve = async (ref: { keyName: string }) => {
-      if (ref.keyName === 'bad') throw new Error('No such key')
-      return 'secret'
-    }
-    await expect(resolveKeyReferences('{{key:P/bad}} {{key:P/worse}}', async () => {
+    // built around is unreachable. Without a catch the first bad reference
+    // escaped and the failure list was never built.
+    await expect(resolveKeyReferences('{{key:P/bad}}', async () => {
       throw new Error('No such key')
-    })).rejects.toThrow(/P\/bad.*P\/worse/)
-    await expect(resolveKeyReferences('{{key:P/bad}}', resolve)).rejects.toThrow('No such key')
+    })).rejects.toThrow('No such key')
+  })
+
+  it('asks the vault ONCE when the first reference fails', async () => {
+    // The reason the loop stops rather than continuing: one failure mode is a
+    // cancelled unlock, and ensureUnlocked clears its pending promise on
+    // cancellation — so carrying on to the next reference opens another OS
+    // authentication prompt. Three references would ask three times. A user
+    // who just cancelled must not be re-asked.
+    const asked: string[] = []
+    const resolve = async (ref: { providerName: string; keyName: string }) => {
+      asked.push(`${ref.providerName}/${ref.keyName}`)
+      throw new Error('Vault unlock was cancelled')
+    }
+
+    await expect(resolveKeyReferences('{{key:P/a}} {{key:P/b}} {{key:P/c}}', resolve))
+      .rejects.toThrow('Vault unlock was cancelled')
+    expect(asked).toEqual(['P/a'])
   })
 
   it('keeps the service message, which distinguishes locked from missing', async () => {
