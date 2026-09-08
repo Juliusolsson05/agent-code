@@ -18,6 +18,7 @@ type MockTerminal = {
   rows: number
   container: HTMLElement | null
   onDataListener: ((data: string) => void) | null
+  onScrollListener: ((line: number) => void) | null
   writes: string[]
   dispose: ReturnType<typeof vi.fn>
   inputDispose: ReturnType<typeof vi.fn>
@@ -43,8 +44,10 @@ vi.mock('@xterm/xterm', () => ({
     container: HTMLElement | null = null
     writes: string[] = []
     onDataListener: ((data: string) => void) | null = null
+    onScrollListener: ((line: number) => void) | null = null
     dispose = vi.fn()
     inputDispose = vi.fn(() => { this.onDataListener = null })
+    scrollDispose = vi.fn(() => { this.onScrollListener = null })
     constructor() { xtermHarness.instances.push(this) }
     loadAddon() {}
     open(container: HTMLElement) { this.container = container }
@@ -52,6 +55,15 @@ vi.mock('@xterm/xterm', () => ({
       this.onDataListener = listener
       return { dispose: this.inputDispose }
     }
+    // Follow wiring (agentTerminalFollow) subscribes to viewport movement on
+    // mount; these scroll surfaces exist so the ownership harness exercises
+    // the same Terminal API the real component consumes.
+    onScroll(listener: (line: number) => void) {
+      this.onScrollListener = listener
+      return { dispose: this.scrollDispose }
+    }
+    scrollToBottom() {}
+    scrollToLine(_line: number) {}
     // Real xterm reports each write parsed via the callback; the input
     // forwarder (#745) holds its replay latch until then, so a mock that
     // never calls back would model a pane that is deaf forever.
@@ -82,6 +94,9 @@ vi.mock('@renderer/app-state/hooks', () => ({
         dictationProvider: 'local',
         dictationShortcut: 'off',
       },
+      // Read by the follow wiring in AgentTerminalLeaf; absent it would be
+      // undefined, which happens to behave as "off" but hides the contract.
+      tailAllMode: false,
     }),
 }))
 
