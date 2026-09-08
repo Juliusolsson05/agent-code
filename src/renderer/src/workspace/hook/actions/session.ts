@@ -400,14 +400,27 @@ export function useSessionActions(
           // been given the chance to flush. Only spawn knows the id early
           // enough.
           //
-          // Conditional on the predecessor actually HAVING an identity, so
-          // replacements that carry nothing keep today's behaviour exactly:
-          // the reconciler claims the successor under its own id, which the
-          // replacement commit's comment already describes as the correct
-          // outcome. `predecessorSessionId` is passed by `replaceSession` and
-          // nothing else, so this cannot fire for an ordinary spawn.
-          if (opts?.predecessorSessionId
-            && refs.stateRef.current.sessions[opts.predecessorSessionId]?.agentNameId !== undefined) {
+          // WHY this is NOT also gated on the predecessor already HAVING an
+          // identity, which a first version tried:
+          //
+          // The gate has to match the predicate the CARRY uses, and the carry
+          // reads `prev.sessions[oldId]?.agentNameId` at COMMIT time, which is
+          // later. A predecessor that is still unnamed when spawn runs can be
+          // claimed by the reconciler during the await — at which point there
+          // IS an identity to carry — and the narrower gate had left the
+          // successor claimable in that same window. It allocates a name, the
+          // commit overwrites it, and that name is orphaned forever. That is
+          // the exact leak this reservation exists to close, one step
+          // narrower.
+          //
+          // Reserving for every replacement costs nothing when there is
+          // nothing to carry: the successor simply claims after release, on
+          // the next state change, under its own id — the outcome the
+          // replacement commit's comment already describes as correct.
+          //
+          // `predecessorSessionId` is passed by `replaceSession` and nothing
+          // else, so this cannot fire for an ordinary spawn.
+          if (opts?.predecessorSessionId) {
             reserveIdentityCarry(sessionId)
             reservedIdentityCarry = sessionId
           }
