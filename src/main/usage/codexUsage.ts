@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
-import type { UsageProviderOk } from '@shared/types/usage.js'
+import type { UsageLimitScope, UsageProviderOk } from '@shared/types/usage.js'
 
 import {
   emptyProviderOk,
@@ -84,10 +84,18 @@ function describeWindow(window: Record<string, unknown>): string | null {
   return `${Math.round(seconds / 60)}m`
 }
 
+// WHY scope is a parameter here instead of being sniffed off the window object:
+// a Codex window carries no field saying what it covers. The ONLY thing that
+// distinguishes the account's shared budget from a per-feature one is which
+// part of the payload it was read from — `rate_limit` (shared) vs an entry of
+// `additional_rate_limits` (per metered feature/model). That knowledge exists
+// exactly once, at the call sites in `normalizeCodexUsagePayload`, so it is
+// passed down rather than re-derived from a label.
 function codexRowFromWindow(
   value: unknown,
   index: number,
   fallback: string,
+  scope: UsageLimitScope,
 ): ReturnType<typeof makeUsageRow> {
   const obj = readObject(value)
   const percent = percentFromRatio(
@@ -118,6 +126,7 @@ function codexRowFromWindow(
     resetsAt,
     active: obj.active !== false,
     detail,
+    scope,
   })
 }
 
@@ -125,6 +134,7 @@ function codexRowsFromRateLimit(
   value: unknown,
   baseLabel: string,
   startIndex: number,
+  scope: UsageLimitScope,
 ): ReturnType<typeof makeUsageRow>[] {
   const rateLimit = readObject(value)
   const rows: ReturnType<typeof makeUsageRow>[] = []
@@ -141,6 +151,7 @@ function codexRowsFromRateLimit(
       },
       startIndex + rows.length,
       baseLabel,
+      scope,
     ))
   }
   return rows
@@ -150,9 +161,11 @@ export function normalizeCodexUsagePayload(payload: unknown): UsageProviderOk {
   const root = readObject(payload)
   const rows: ReturnType<typeof makeUsageRow>[] = []
 
+  // The account's shared budget: every Codex model draws on these windows, so
+  // filling one means no Codex model will answer.
   const primary = root.rate_limit
   if (primary) {
-    rows.push(...codexRowsFromRateLimit(primary, 'Codex', rows.length))
+    rows.push(...codexRowsFromRateLimit(primary, 'Codex', rows.length, 'all-models'))
   }
 
   for (const entry of readArray(root.additional_rate_limits)) {
@@ -162,11 +175,16 @@ export function normalizeCodexUsagePayload(payload: unknown): UsageProviderOk {
       stringOrNull(item.metered_feature) ??
       'Additional limit'
     const rateLimit = item.rate_limit ? item.rate_limit : item
-    rows.push(...codexRowsFromRateLimit(rateLimit, label, rows.length))
+    // Each additional entry is keyed by `limit_name`/`metered_feature` (e.g.
+    // GPT-5.3-Codex-Spark) — one family's budget, not the account's.
+    rows.push(...codexRowsFromRateLimit(rateLimit, label, rows.length, 'model-family'))
   }
 
+  // A bare `limits[]` entry is a shape we carry defensively and have never
+  // observed on the wire; nothing in it says what it covers, so it stays
+  // `unknown` rather than being optimistically called shared.
   for (const entry of readArray(root.limits)) {
-    rows.push(codexRowFromWindow(entry, rows.length, 'Limit'))
+    rows.push(codexRowFromWindow(entry, rows.length, 'Limit', 'unknown'))
   }
 
   const normalized = emptyProviderOk('codex', '~/.codex/auth.json')

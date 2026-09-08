@@ -161,6 +161,15 @@ export function PaneHeader({
                 ].join(' ')}
               >
                 <span
+                  // WHY a data attribute and not a role or aria-label: the dot
+                  // is decorative (the chip's `title` already carries the
+                  // relation and name for assistive tech), but tests need a
+                  // hook that does not depend on Tailwind class names. The
+                  // header row already uses `data-pane-header-row` for the
+                  // same reason, so this follows that precedent.
+                  data-related-status={
+                    attention === 'ERROR' ? 'error' : attention ? 'attention' : running ? 'running' : 'idle'
+                  }
                   className={[
                     'h-1.5 w-1.5 flex-shrink-0 rounded-full',
                     attention === 'ERROR'
