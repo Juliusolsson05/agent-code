@@ -21,6 +21,7 @@ import { subscribeToAgentPtyData } from '@renderer/workspace/terminal/sessionDat
 import { attachXtermWebglRenderer } from '@renderer/workspace/terminal/xtermWebglRenderer'
 import { AgentTitleHeader } from '@renderer/workspace/tile-tree/AgentTitleHeader'
 import { createTerminalInputForwarder } from '@renderer/workspace/tile-tree/terminalInputForwarder'
+import { encodeTerminalPaste, registerTerminalPasteTarget } from '@renderer/workspace/terminal/textPasteTarget'
 import { AgentTerminalActions } from '@renderer/workspace/tile-tree/AgentTerminalActions'
 import { useAgentTerminalFollow } from '@renderer/workspace/tile-tree/agentTerminalFollow'
 
@@ -142,6 +143,7 @@ export function AgentTerminalLeaf({
     // Nullable like the disposables above: xterm init can throw before the
     // follow wiring ever runs, and cleanup must survive that path.
     let offFollowAttach: (() => void) | null = null
+    let offTextPaste: (() => void) | null = null
     let resizeObserver: ResizeObserver | null = null
     let resizeFrame: number | null = null
     let disposed = false
@@ -274,6 +276,13 @@ export function AgentTerminalLeaf({
       // never reach the provider and why same-tick chunks share one IPC call.
       const forwarder = createTerminalInputForwarder(data => {
         void window.api.sendInput(sessionId, data)
+      })
+      offTextPaste = registerTerminalPasteTarget(sessionId, {
+        isActive: () => !disposed && focusedRef.current && dimensionActiveRef.current,
+        paste: async text => {
+          if (disposed || !dimensionActiveRef.current || !attachedBackfillDone || forwarder.replaying || !term) return false
+          return window.api.sendInput(sessionId, encodeTerminalPaste(text, term.modes.bracketedPasteMode))
+        },
       })
       // WHY the Submit button reuses the keypress pipeline instead of calling
       // window.api.sendInput directly: the leaf only forwards keystrokes AFTER
@@ -499,6 +508,7 @@ export function AgentTerminalLeaf({
       onDataDisposable?.dispose()
       offFollowAttach?.()
       offPtyData?.()
+      offTextPaste?.()
       webglRenderer?.dispose()
       if (onThemeChangedListener) {
         window.removeEventListener(THEME_CHANGED_EVENT, onThemeChangedListener)

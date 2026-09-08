@@ -16,6 +16,7 @@ import { controlReference as reference14 } from '@renderer/features/global-edito
 import { controlReference as reference15 } from '@renderer/features/path-picker/controlReference'
 import { controlReference as reference16 } from '@renderer/features/performance/controlReference'
 import { controlReference as reference17 } from '@renderer/features/prompt-templates/controlReference'
+import { controlReference as reference32 } from '@renderer/features/key-vault/controlReference'
 import { controlReference as reference18 } from '@renderer/features/reader/controlReference'
 import { controlReference as reference19 } from '@renderer/features/remote/controlReference'
 import { controlReference as reference20 } from '@renderer/features/rendered-content/controlReference'
@@ -64,6 +65,7 @@ export const featureReferences = [
   ...reference29,
   ...reference30,
   ...reference31,
+  ...reference32,
 ]
 
 // These directories implement shared infrastructure rather than separate UI
@@ -94,6 +96,10 @@ export const referenceOwnership = {
   "copy-code-block": "copy-code-block",
   "performance": "performance",
   "prompt-templates": "prompt-templates",
+  "key-vault": "key-vault",
+  // Shared insertion path behind templates + the vault (#830): no UI of
+  // its own; its behavior is documented on the prompt-templates page.
+  "session-text-delivery": "prompt-templates",
   "reply-to-selection": "reply-to-selection",
   "agent-status": "agent-status",
   "ai-workspace": "ai-workspace",

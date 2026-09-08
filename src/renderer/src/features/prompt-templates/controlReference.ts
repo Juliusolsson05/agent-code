@@ -16,7 +16,7 @@ export const controlReference = [
       "submit deliberately."
     ],
     "outcome": "The intended prompt text is available for the target agent.",
-    "cautions": "templates.list/read describes stored or dynamic bodies. templates.insert requires template/draft revisions and an explicit project, preserves attachments and never sends. templates.save/delete changes custom templates only. Inspect the resulting draft before delivery.",
+    "cautions": "templates.list/read describes stored or dynamic bodies. templates.insert requires template/draft revisions and an explicit project, preserves attachments and never sends. templates.save/delete changes custom templates only. Insertion targets any focused pane (#830): rendered panes edit the composer draft, terminal panes receive an unsubmitted bracketed paste. {{key:Provider/Key}} vault references resolve at insertion time and abort loudly when unresolved; the MCP control path does not resolve them. Inspect the resulting draft before delivery.",
     "commandIds": [
       "prompt-template",
       "manage-prompt-templates",

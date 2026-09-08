@@ -33,6 +33,8 @@ import { registerAgentManagementIpc } from '@main/ipc/agentManagement.js'
 import { registerAiWorkspaceIpc } from '@main/ipc/aiWorkspace.js'
 import { registerRenderedContentIpc } from '@main/ipc/renderedContent.js'
 import { registerCaffeinateIpc } from '@main/ipc/caffeinate.js'
+import { registerKeyVaultIpc } from '@main/ipc/keyVault.js'
+import type { VaultService } from '@main/keyVault/VaultService.js'
 import { registerRemoteIpc } from '@main/ipc/remote.js'
 import type { OrchestrationBridge } from '@main/orchestration/OrchestrationBridge.js'
 import type { AgentManagementBridge } from '@main/agentManagement/AgentManagementBridge.js'
@@ -75,6 +77,7 @@ export type IpcDeps = {
   agentManagementBridge: AgentManagementBridge
   aiWorkspaceRegistry: AiWorkspaceRegistry
   caffeinateController: CaffeinateController
+  vaultService: VaultService
   remoteController: RemoteController
   appRunJournal: AppRunJournal
   cliUpdateOrchestrator: CliUpdateOrchestrator
@@ -111,6 +114,7 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerAiWorkspaceIpc(deps.aiWorkspaceRegistry)
   registerRenderedContentIpc()
   registerCaffeinateIpc(deps.caffeinateController)
+  registerKeyVaultIpc({ vaultService: deps.vaultService })
   registerRemoteIpc(deps.remoteController)
   registerIncidentIpc(deps.appRunJournal)
   // Debug export needs the lifecycle limiter's monotonic completeness state.

@@ -1,5 +1,8 @@
 import type { CommandDef } from '@renderer/features/command-palette/types'
-import { promptTemplateTargetSessionId } from '@renderer/features/prompt-templates/targetSession'
+import {
+  promptTemplateComposerSessionIdForState,
+  promptTemplateTargetSessionId,
+} from '@renderer/features/prompt-templates/targetSession'
 
 export const promptTemplateCommands: CommandDef[] = [
   {
@@ -27,10 +30,13 @@ export const promptTemplateCommands: CommandDef[] = [
     category: 'session',
     surface: 'session',
     title: 'Prompt Template…',
-    description: '**What it does:** Inserts a saved **prompt template** into the focused composer.\n\n**Use when:** You want reusable prompt text without retyping it.\n\n**Notes:** Agent panes only.',
+    description: '**What it does:** Inserts a saved **prompt template** into the focused pane.\n\n**Use when:** You want reusable prompt text without retyping it.\n\n**Notes:** Rendered panes insert into the composer; terminal panes receive a bracketed paste without submitting.',
     keywords: ['prompt', 'template', 'snippet', 'insert', 'draft'],
     keepPaletteOpen: true,
-    renderedViewPolicy: { kind: 'opens-rendered-feed' },
+    // No renderedViewPolicy since #830: terminal-surface panes have no
+    // rendered feed, and "requires-rendered-feed" would hide this command
+    // from exactly the panes (raw terminals, agent terminal view) where
+    // bracket-paste insertion just became possible.
     when: ({ workspace }) => promptTemplateTargetSessionId(workspace) !== null,
     run: ({ ui, flags }) => {
       // Already showing this mode? Dismiss. A mode-entering command whose
@@ -54,7 +60,8 @@ export const promptTemplateCommands: CommandDef[] = [
     keepPaletteOpen: true,
     renderedViewPolicy: { kind: 'requires-rendered-feed' },
     when: ({ workspace }) => {
-      const sessionId = promptTemplateTargetSessionId(workspace)
+      // Saving reads the composer draft; terminal panes have none.
+      const sessionId = promptTemplateComposerSessionIdForState(workspace.state)
       if (!sessionId) return false
       return workspace.getRuntime(sessionId).draftInput.trim().length > 0
     },
