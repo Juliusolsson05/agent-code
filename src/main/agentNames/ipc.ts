@@ -2,6 +2,10 @@ import { ipcMain } from 'electron'
 import { join } from 'node:path'
 import { z } from 'zod'
 
+import {
+  AGENT_NAME_IDENTITY_MAX_LENGTH,
+  AGENT_NAME_IDENTITY_REQUEST_MAX,
+} from '@shared/types/agentNames.js'
 import { AgentNameRegistry } from '@main/agentNames/registry.js'
 import { STATE_DIR } from '@main/storage/paths.js'
 import { getBrowserWindow, windowIdFor } from '@main/window/windowRegistry.js'
@@ -14,9 +18,12 @@ import { getBrowserWindow, windowIdFor } from '@main/window/windowRegistry.js'
 // address — so the two must not be able to take each other down.
 export const AGENT_NAMES_FILE = join(STATE_DIR, 'agent-names.json')
 
-// Bounded so a malformed or hostile renderer cannot make the allocator walk a
-// huge list under the serialization tail. 10k is far past any real workspace.
-const requestSchema = z.array(z.string().min(1).max(200)).max(10_000)
+// Both bounds come from the shared contract, because the renderer's
+// `identityOf` has to refuse exactly what this refuses — see
+// shared/types/agentNames.ts for the batch-wide failure that drift caused.
+const requestSchema = z
+  .array(z.string().min(1).max(AGENT_NAME_IDENTITY_MAX_LENGTH))
+  .max(AGENT_NAME_IDENTITY_REQUEST_MAX)
 
 /**
  * The ONLY consumer of AgentNameRegistry.

@@ -31,14 +31,50 @@ export function prepareTemplateText(
 
 export type KeyReference = { providerName: string; keyName: string }
 
+/**
+ * A well-formed vault reference: exactly one separator, neither half
+ * containing another.
+ *
+ * WHY this pattern is NARROW, after an attempt to widen it was reverted:
+ *
+ * The narrowness has a real cost — a typo like `{{key:Brave}}` or
+ * `{{key:A/B/C}}` matches nothing and is pasted into the prompt verbatim,
+ * which is the silent failure the header paragraph above says this grammar
+ * exists to avoid. Widening it to catch those looked obviously right and was
+ * wrong: `{{key:…}}` with arbitrary contents is ordinary text.
+ * `<Widget options={{key: value}} />` is everyday JSX. So is
+ * `<Widget options={{key: "/api/v1"}} />` and `{{key: /abc/}}`, which a
+ * separator requirement does not exclude either — a slash does not establish
+ * that the author meant a vault reference. Templates that had always worked
+ * began aborting insertion outright, with no way to escape the syntax, not
+ * even inside a code fence.
+ *
+ * Breaking text nobody intended as syntax is worse than failing to diagnose a
+ * typo. Catching typos properly needs an escape mechanism this grammar does
+ * not have, so it is not attempted here.
+ */
 const KEY_REF_PATTERN = /\{\{\s*key:([^/{}]+?)\/([^/{}]+?)\s*\}\}/g
 
+function referenceKey(ref: KeyReference): string {
+  // NUL separator so two different (provider, key) pairs cannot produce the
+  // same map key. Unreachable through this pattern, which forbids a slash in
+  // either half, but the map is also written from the replace callback.
+  return `${ref.providerName}\u0000${ref.keyName}`
+}
+
+function parseAll(body: string): KeyReference[] {
+  return [...body.matchAll(KEY_REF_PATTERN)].map(match => ({
+    providerName: match[1].trim(),
+    keyName: match[2].trim(),
+  }))
+}
+
+/** Well-formed references, in first-appearance order, deduped. */
 export function collectKeyReferences(body: string): KeyReference[] {
   const seen = new Set<string>()
   const ordered: KeyReference[] = []
-  for (const match of body.matchAll(KEY_REF_PATTERN)) {
-    const ref = { providerName: match[1].trim(), keyName: match[2].trim() }
-    const dedupeKey = `${ref.providerName}\u0000${ref.keyName}`
+  for (const ref of parseAll(body)) {
+    const dedupeKey = referenceKey(ref)
     if (seen.has(dedupeKey)) continue
     seen.add(dedupeKey)
     ordered.push(ref)
@@ -54,21 +90,53 @@ export async function resolveKeyReferences(
   // String.replace callback cannot await, and each ref may cross the
   // vault gate), collecting ALL failures so one error message tells the
   // user everything that needs fixing.
-  const refs = collectKeyReferences(body)
   const values = new Map<string, string>()
   const failures: string[] = []
-  for (const ref of refs) {
-    const value = await resolve(ref)
+  const seen = new Set<string>()
+
+  for (const ref of parseAll(body)) {
+    const dedupeKey = referenceKey(ref)
+    if (seen.has(dedupeKey)) continue
+    seen.add(dedupeKey)
+
+    // WHY the call is wrapped AND why the loop stops on the first throw:
+    //
+    // Wrapped, because the aggregation this function is built around was dead
+    // code in production. The real adapter is
+    // `window.api.keyVaultResolveReference`, typed `Promise<string>`, and
+    // VaultService throws on every failure mode, so `value === null` was
+    // unreachable and the first bad reference escaped the loop entirely.
+    //
+    // Stopping, because continuing is worse than the bug it fixed. One of
+    // those failure modes is a CANCELLED unlock, and `ensureUnlocked` clears
+    // its pending promise on cancellation — so carrying on to the next
+    // reference opens another OS authentication prompt. A template with three
+    // references asked once before, and would ask three times if this
+    // continued. A user who just cancelled must not be re-asked.
+    //
+    // Whatever was collected before the failure is still reported alongside
+    // it, and the service's own message is kept because it is written for
+    // direct display and distinguishes "no such key" from "vault is locked".
+    let value: string | null
+    try {
+      value = await resolve(ref)
+    } catch (error) {
+      const detail = error instanceof Error && error.message.length > 0 ? error.message : null
+      failures.push(`{{key:${ref.providerName}/${ref.keyName}}}${detail ? ` (${detail})` : ''}`)
+      break
+    }
     if (value === null || value.length === 0) {
       failures.push(`{{key:${ref.providerName}/${ref.keyName}}}`)
       continue
     }
-    values.set(`${ref.providerName}\u0000${ref.keyName}`, value)
+    values.set(dedupeKey, value)
   }
+
   if (failures.length > 0) {
     throw new Error(`Unresolved key reference: ${failures.join(', ')}`)
   }
-  return body.replace(KEY_REF_PATTERN, (_match, rawProvider: string, rawKey: string) => {
-    return values.get(`${rawProvider.trim()}\u0000${rawKey.trim()}`) ?? ''
-  })
+  // A function replacer, never a string: `$&` or `$1` inside a SECRET would
+  // otherwise be interpreted as a substitution pattern.
+  return body.replace(KEY_REF_PATTERN, (_match, rawProvider: string, rawKey: string) =>
+    values.get(referenceKey({ providerName: rawProvider.trim(), keyName: rawKey.trim() })) ?? '')
 }

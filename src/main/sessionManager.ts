@@ -34,6 +34,10 @@ import type {
   SessionRecoverResult,
 } from '@shared/types/session.js'
 import { TmuxRegistry } from '@main/tmux/TmuxRegistry.js'
+import {
+  MissingWorkspaceDirectoryError,
+  assertWorkspaceDirectoryExists,
+} from '@main/workspaceDirectory.js'
 import { performanceService } from '@main/performance/PerformanceService.js'
 import { getToolPath, refreshToolchainFromState } from '@main/setup/toolchain.js'
 import { resolveToolPath } from '@main/setup/binaryResolver.js'
@@ -1836,12 +1840,20 @@ export class SessionManager extends EventEmitter {
       return {
         ok: false,
         code: 'start-failed',
-        retryable: true,
+        // A deleted folder is not retryable: every retry re-runs the same
+        // stat and fails identically. The incident journal for 2026-09-08
+        // shows the old path retrying these spawns on each Dispatch select,
+        // which is pure noise once the cause is known.
+        retryable: !(error instanceof MissingWorkspaceDirectoryError),
         // WHY the raw provider exception stays out of IPC: binary launch
         // errors can contain environment values, proxy URLs, or scoped MCP
         // tokens. Main records the typed code and internal performance error;
         // renderer receives one stable, actionable message with no payload.
-        message: 'Session failed to start. Check provider setup and retry.',
+        // The missing-directory case is the deliberate exception — its
+        // message is curated and its payload is a path the UI already shows.
+        message: error instanceof MissingWorkspaceDirectoryError
+          ? error.message
+          : 'Session failed to start. Check provider setup and retry.',
       }
     } finally {
       if (this.recoveriesInFlight.get(options.sessionId) === claim) {
@@ -2422,6 +2434,13 @@ export class SessionManager extends EventEmitter {
     }
     const kind: SessionKind = options.kind ?? DEFAULT_PROVIDER
     const providerRuntime = resolveProviderRuntime(kind, options.providerRuntime)
+    // Fail here rather than in the forked child. See
+    // MissingWorkspaceDirectoryError for why a deleted cwd is otherwise
+    // invisible until the readiness wait times out. This runs before the
+    // spawn reservation so a missing folder leaves no half-claimed session
+    // behind, and it is in spawnWithId rather than in spawn()/recover()
+    // separately because this is the one funnel both of them pass through.
+    await assertWorkspaceDirectoryExists(options.cwd)
     if (
       this.sessions.has(sessionId) ||
       this.spawningSessionGenerations.has(sessionId) ||

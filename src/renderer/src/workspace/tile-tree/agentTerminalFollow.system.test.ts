@@ -84,6 +84,7 @@ it('follows and restores real xterm content across trimming and buffer switches'
           await write('\\x1b[?1049h')
           tailActive = false; render()
           check(term.buffer.active.type === 'alternate' && bottom(), 'Alternate buffer was scrolled with a normal-buffer anchor')
+
           await write('\\x1b[?1049l')
           // Marker registration/disposal is public; only this diagnostic
           // enumeration requires proposed APIs. Keep them off for all behavior.

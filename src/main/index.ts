@@ -205,7 +205,22 @@ const caffeinateController = new CaffeinateController()
 // no async boot step — only the per-run unlock boolean.
 const vaultService = new VaultService({
   store: createFileVaultStore(join(STATE_DIR, 'key-vault'), createSafeStorageCodec()),
-  promptAuth: reason => systemPreferences.promptTouchID(reason),
+  promptAuth: async reason => {
+    // WHY the platform check lives HERE and not in ensureUnlocked: the service
+    // deliberately attempts the prompt rather than pre-gating on
+    // canPromptAuth, because that flag once reported biometric capability only
+    // and pre-gating locked out every password-only Mac from the login-password
+    // path this feature promises. That reasoning is right for capability. It is
+    // NOT right for a platform that has no promptTouchID at all: there,
+    // "attempt it" meant calling undefined, and the user got a raw
+    // "systemPreferences.promptTouchID is not a function" TypeError instead of
+    // the honest platform message. Fails closed either way; only the wording
+    // was broken.
+    if (process.platform !== 'darwin' || typeof systemPreferences.promptTouchID !== 'function') {
+      throw new Error('The API key vault needs macOS Touch ID or login-password authentication, which this platform does not provide.')
+    }
+    await systemPreferences.promptTouchID(reason)
+  },
   // canPromptTouchID checks biometrics, not user-presence/password auth.
   // Electron 43's promptTouchID uses SecAccessControlUserPresence; attempt
   // that supported macOS API and let rejection keep the vault locked.

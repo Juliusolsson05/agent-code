@@ -98,6 +98,30 @@ function adoptAssignments(source: Record<string, string>): Record<string, string
 export class AgentNameRegistry {
   private state: RegistryState | undefined
 
+  /**
+   * Normalized spoken names currently assigned, kept alongside `state`.
+   *
+   * WHY it is cached instead of rebuilt: `allocate` used to walk every value
+   * and normalize it on EVERY call, purely to answer "has a hand-edited file
+   * already used this name". That is O(assignments) work per allocation for a
+   * question whose answer only changes when this process assigns something,
+   * and this process is the single writer after the first load. `load` already
+   * builds exactly this set for its duplicate check, so caching it there costs
+   * nothing and makes the common path proportional to the NEW names.
+   *
+   * WHY there is still no prune path, which would bound the file properly:
+   * assignments can only be dropped by knowing which identities are still
+   * live, and no single window knows that. A window holds its own workspace,
+   * not the others', so pruning against one window's identity set would delete
+   * names belonging to agents open in another window and hand those names out
+   * again. That is a correctness bug traded for a size nicety. The growth rate
+   * was the real problem and it is fixed at the source: successors mid-replace
+   * no longer burn an allocation each (see the renderer's
+   * pendingIdentityCarry), so the file now grows once per genuinely new agent
+   * rather than once per reload, resume, rewind and provider switch.
+   */
+  private usedNames: Set<string> | undefined
+
   // WHY one promise tail rather than a mutex or a per-identity lock: every
   // allocation reads the whole counter and writes the whole file, so the
   // critical section is the entire operation. Two windows starting agents in
@@ -129,6 +153,7 @@ export class AgentNameRegistry {
         throw new Error(`Agent name registry at ${this.path} is unreadable; refusing to overwrite it`, { cause: error })
       }
       this.state = { version: 1, nextIndex: 0, assignments: emptyAssignments() }
+      this.usedNames = new Set()
       return this.state
     }
 
@@ -167,7 +192,13 @@ export class AgentNameRegistry {
       // name makes every later lookup ambiguous with no evidence for choosing
       // between them.
       const spoken = Object.values(assignments).map(normalizeAgentName)
-      if (new Set(spoken).size !== spoken.length) throw new Error('Two identities share one spoken name')
+      const distinct = new Set(spoken)
+      if (distinct.size !== spoken.length) throw new Error('Two identities share one spoken name')
+      // Assigned here rather than after the try, so a file that fails
+      // validation leaves BOTH `state` and this cache unset — the refusal has
+      // to be all-or-nothing or a later allocation would consult a set that
+      // describes a registry we refused to load.
+      this.usedNames = distinct
     } catch (error) {
       // WHY this is not cached and not repaired: leaving `this.state` unset
       // means every later call re-reads and re-fails, so the user gets a
@@ -188,7 +219,14 @@ export class AgentNameRegistry {
     // we mutated in place, a write error would leave this process believing it
     // had published names that are not on disk.
     const draft: RegistryState = { ...loaded, assignments: adoptAssignments(loaded.assignments) }
-    const used = new Set(Object.values(draft.assignments).map(normalizeAgentName))
+    // `load` guarantees this alongside `state`; the fallback keeps the type
+    // honest without pretending an unloaded registry is an empty one.
+    const used = this.usedNames ?? new Set<string>()
+    // Every name this call adds, so a failed commit can undo its effect on the
+    // shared cache. The draft's assignments are already a copy and roll back
+    // for free; this set is not, because copying it per allocation is the cost
+    // being removed.
+    const added: string[] = []
     let changed = false
 
     for (const identity of identities) {
@@ -210,11 +248,24 @@ export class AgentNameRegistry {
       // would have to reconcile two divergent counters with no evidence.
       while (used.has(normalizeAgentName(name))) name = agentNameAt(draft.nextIndex++)
       draft.assignments[identity] = name
-      used.add(normalizeAgentName(name))
+      const normalized = normalizeAgentName(name)
+      used.add(normalized)
+      added.push(normalized)
       changed = true
     }
 
-    if (changed) await this.commit(draft)
+    if (changed) {
+      try {
+        await this.commit(draft)
+      } catch (error) {
+        // Same contract as the draft copy above: a write that did not land
+        // must leave this process believing nothing was published. Leaving the
+        // names in the cache would make the retry skip past them and burn the
+        // vocabulary for allocations that never happened.
+        for (const name of added) used.delete(name)
+        throw error
+      }
+    }
     return Object.fromEntries(identities.map(identity => [identity, draft.assignments[identity]]))
   }
 

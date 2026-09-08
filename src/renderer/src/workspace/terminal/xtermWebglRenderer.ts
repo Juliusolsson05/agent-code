@@ -54,6 +54,53 @@ const loadWebglAddon = async (): Promise<WebglAddonModule> => {
 }
 
 /**
+ * Is the GPU renderer allowed to attach at all?
+ *
+ * Currently NO, and this is the whole switch. Flip it back when the condition
+ * in the next paragraph is met; everything else in this file is intact and
+ * needs no other change.
+ *
+ * WHY: our pinned `@xterm/addon-webgl@0.19.0` corrupts its own texture atlas
+ * under exactly the workload this app runs all day — a provider TUI streaming
+ * heavy, colourful, constantly-redrawn output. Upstream xterm.js #5883 (merged
+ * 2026-05-21) names the two bugs precisely: a fresh atlas page replacing an old
+ * one AT THE SAME INDEX after a merge, which per-page version counters cannot
+ * detect, and a stale vertex buffer after a mid-render merge because
+ * `_requestClearModel` was set and never reset. The visible result is garbled
+ * and interleaved glyphs, characters substituted mid-word, and leftover
+ * inverse blocks that never repair because an idle terminal produces no further
+ * frame.
+ *
+ * WHY the `invalidateTextureBindings` bridge below was not enough: it can
+ * address the first bug's symptom from outside the addon. It cannot replicate
+ * the second bug's fix, nor the bounded retry loop upstream added inside
+ * `renderRows()` — both live below the addon's public surface. #789 shipped
+ * that workaround and was closed without confirming the reporter's screenshot;
+ * the corruption was reported again on 2026-09-08.
+ *
+ * WHY not simply upgrade, which is what the bridge's own comment anticipates:
+ * the fix ships only in `@xterm/addon-webgl@0.20.0-beta.219` and later, there
+ * is still no stable 0.20.0, and that beta's peer dependency is
+ * `@xterm/xterm: ^6.1.0-beta.304`. Taking it would drag the CORE terminal —
+ * the heart of every pane in the app — onto a beta as well. That is a much
+ * larger surface than the one bug being fixed.
+ *
+ * WHY this costs less than it looks: the DOM renderer is xterm's default and
+ * is correct, and it is already the tested fallback every failure path here
+ * lands on. The perf work that introduced WebGL (#783, `3b885068`) had three
+ * parts, and the two structural ones — routing raw PTY channels once per
+ * renderer via sessionDataDispatcher, and coalescing inline grid resizes —
+ * are untouched by this. VS Code ships the same escape hatch for the same
+ * symptom class as `terminal.integrated.gpuAcceleration: "off"`.
+ *
+ * FLIP THIS BACK when `@xterm/addon-webgl` has a STABLE release containing
+ * #5883 whose peer range accepts a stable `@xterm/xterm`. At that point also
+ * delete the `invalidateTextureBindings` bridge above, which exists only to
+ * paper over 0.19.0.
+ */
+const WEBGL_RENDERER_ENABLED = false
+
+/**
  * Upgrade an already-open xterm from its DOM renderer to WebGL when available.
  *
  * WHY this is asynchronous: raw terminals are a secondary surface. Pulling the
@@ -71,7 +118,22 @@ const loadWebglAddon = async (): Promise<WebglAddonModule> => {
 export function attachXtermWebglRenderer(
   terminal: TerminalAddonHost,
   loadAddon: () => Promise<WebglAddonModule> = loadWebglAddon,
+  // WHY the gate is a parameter rather than read straight from the constant:
+  // this module's suite is the only record of how the attach, fallback,
+  // context-loss and atlas-repair machinery behaves, and that machinery has to
+  // keep working for the day the constant flips back. A hard-coded read would
+  // have made all fifteen of those cases vacuous the moment WebGL went off.
+  enabled: boolean = WEBGL_RENDERER_ENABLED,
 ): XtermWebglRenderer {
+  // Bail before the dynamic import, so a disabled renderer costs nothing at
+  // all: no addon parse, no GPU context, no atlas listeners. Callers keep
+  // their existing shape and simply never see WebGL become active — the same
+  // observable result as a machine where WebGL is unavailable by policy, which
+  // this file already had to handle correctly.
+  if (!enabled) {
+    return { ready: Promise.resolve(false), dispose() {} }
+  }
+
   let disposed = false
   let addon: WebglAddonLike | null = null
   let contextLossDisposable: Disposable | null = null

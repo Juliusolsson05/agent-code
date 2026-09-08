@@ -1343,6 +1343,10 @@ function OpenCommandPalette({
         if (result.delivered) {
           workspace.showPaneToast(sessionId, `Inserted template: ${template.title}`)
           onClose()
+        } else if (result.reason === 'refused') {
+          // The terminal's own words: which rule the text broke. A multiline
+          // template into a program without bracketed paste is the common one.
+          workspace.showPaneToast(sessionId, result.message)
         } else if (result.reason === 'write-rejected') {
           workspace.showPaneToast(sessionId, 'Terminal write was rejected — pane is not ready')
         } else {
@@ -1515,6 +1519,8 @@ function OpenCommandPalette({
       if (result.delivered) {
         workspace.showPaneToast(sessionId, `Inserted template: ${fill.template.title}`)
         onClose()
+      } else if (result.reason === 'refused') {
+        workspace.showPaneToast(sessionId, result.message)
       } else if (result.reason === 'write-rejected') {
         workspace.showPaneToast(sessionId, 'Terminal write was rejected — pane is not ready')
       } else {

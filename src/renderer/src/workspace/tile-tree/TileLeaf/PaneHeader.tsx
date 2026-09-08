@@ -121,8 +121,13 @@ export function PaneHeader({
               {paneLabel}
             </span>
           )}
-          <span className="truncate" title={projectDir ?? 'no project dir'}>
-            {shortenCwd(projectDir)}
+          {/* truncate-START: every pane shares the leading path segments, so
+              clipping the end hid the one part that identifies this agent. */}
+          <span className="truncate-start" title={projectDir ?? 'no project dir'}>
+            {/* The inner dir="ltr" is required, not decorative: the outer
+                element's rtl direction picks WHICH edge clips, and without
+                this the path's own characters are reordered with it. */}
+            <span dir="ltr">{shortenCwd(projectDir)}</span>
           </span>
         </div>
         <PaneHeaderColorFlag sessionId={sessionId} />

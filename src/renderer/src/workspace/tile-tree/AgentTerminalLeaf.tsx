@@ -568,8 +568,11 @@ export function AgentTerminalLeaf({
               </span>
             )}
             <span className="flex-shrink-0 text-ink">raw {provider}</span>
-            <span className="truncate" title={projectDir ?? 'no project dir'}>
-              {shortenCwd(projectDir)}
+            {/* truncate-START, matching PaneHeader: keep the project directory
+                visible and drop the shared prefix instead. */}
+            <span className="truncate-start" title={projectDir ?? 'no project dir'}>
+              {/* Inner dir="ltr" required — see PaneHeader. */}
+              <span dir="ltr">{shortenCwd(projectDir)}</span>
             </span>
           </div>
           {/* TAIL pill styling copied from ScrollIndicator so both surfaces

@@ -12,6 +12,21 @@ const terminalControl = vi.hoisted(() => ({
   stop: vi.fn(async (): Promise<void> => {}),
 }))
 
+vi.mock('@main/workspaceDirectory.js', () => ({
+  // These suites spawn into synthetic paths ('/tmp/project', '/recorded/worktree')
+  // that intentionally do not exist on disk. The real spawn-path guard stats the
+  // cwd, so it is stubbed here; workspaceDirectory.test.ts covers the guard
+  // itself, and the missing-folder case below overrides this mock to prove the
+  // manager surfaces it.
+  MissingWorkspaceDirectoryError: class MissingWorkspaceDirectoryError extends Error {
+    constructor(readonly cwd: string) {
+      super(`Workspace folder is missing: ${cwd}`)
+      this.name = 'MissingWorkspaceDirectoryError'
+    }
+  },
+  assertWorkspaceDirectoryExists: vi.fn(async () => {}),
+}))
+
 vi.mock('@providers/registry.main.js', () => ({
   getMainProvider: () => ({ createSession, deliverPrompt }),
 }))
@@ -90,6 +105,42 @@ describe('SessionManager recover', () => {
     deliverPrompt.mockReset()
     terminalControl.startError = null
     terminalControl.stop.mockClear()
+  })
+
+  it('reports the missing folder instead of a generic start failure', async () => {
+    // The 2026-09-08 regression report: six panes came up as ERROR after their
+    // git worktrees were deleted, and the only text the user ever saw was
+    // "agent exited before it became ready for input (start-failed)". node-pty
+    // chdirs inside the forked child, so without the spawn-path guard the PTY
+    // is created successfully and the process is dead microseconds later —
+    // recover() returns ok:true and the failure masquerades as a readiness
+    // timeout. This asserts the guard converts that into a message naming the
+    // folder, and marks it non-retryable so Dispatch stops re-spawning it.
+    const { assertWorkspaceDirectoryExists } = await import('@main/workspaceDirectory.js')
+    const { MissingWorkspaceDirectoryError } = await import('@main/workspaceDirectory.js')
+    vi.mocked(assertWorkspaceDirectoryExists).mockRejectedValueOnce(
+      new MissingWorkspaceDirectoryError('/tmp/deleted-worktree'),
+    )
+    const { SessionManager } = await import('./sessionManager')
+    const manager = new SessionManager()
+
+    const result = await manager.recover({
+      sessionId: 'gone-folder-session',
+      kind: 'claude',
+      cwd: '/tmp/deleted-worktree',
+    })
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: 'start-failed',
+      retryable: false,
+      message: 'Workspace folder is missing: /tmp/deleted-worktree',
+    })
+    // No backend was constructed, and nothing was left half-claimed: the guard
+    // runs before the spawn reservation precisely so a retry is not fenced out
+    // by a session that never existed.
+    expect(createSession).not.toHaveBeenCalled()
+    expect(manager.getBackendSnapshot('gone-folder-session')).toBeNull()
   })
 
   it('adopts a matching live backend without constructing another provider', async () => {

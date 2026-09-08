@@ -25,17 +25,42 @@ import type { Workspace } from '@renderer/workspace/workspaceStore'
 // not enabled bracketed paste receives single-line text only. Multiline
 // input is refused rather than risking accidental command execution.
 //
-// SECRET DISCLOSURE (review finding): text inserted into a composer
-// draft follows the SAME persistence rules as any draft — it autosaves
-// to workspace.json in plaintext until sent or cleared. Inserted into a
-// PTY it lands in scrollback (and tmux history). That is inherent to
-// insertion itself, not this helper: once the user submits, the secret
-// reaches the provider transcript in plaintext anyway. The VAULT's
-// encryption contract covers storage, not the prompt pipeline.
+// SECRET DISCLOSURE (review finding): inserted text follows the SAME
+// persistence rules as anything else the user could have typed, which is
+// inherent to insertion rather than to this helper. The complete list of
+// resting places, because an earlier version of this comment named only
+// the first and third and that understated it:
+//
+//   1. A composer draft autosaves to workspace.json in PLAINTEXT
+//      (useAutoSave persists runtime.draftInput for every session that
+//      has one), until the prompt is sent or the draft is cleared.
+//   2. Clearing the draft does not end that: the cleared text is kept
+//      for undo (draft.ts's clearedDrafts), so it stays recoverable.
+//   3. A PTY paste lands in xterm scrollback and in tmux history.
+//   4. Submitting puts it in the provider transcript, plaintext.
+//   5. With proxy streaming on, the mitm addon base64-encodes outbound
+//      request bodies into the proxy events journal under
+//      ~/.config/agent-code/proxy, which nothing prunes or rotates.
+//
+// The VAULT's encryption contract covers storage, not the prompt
+// pipeline, and this helper is the boundary where that stops applying.
 
 export type DeliverTextResult =
   | { delivered: true; surface: 'composer' | 'pty' }
   | { delivered: false; reason: 'no-session' | 'write-rejected' | 'cancelled' }
+  /**
+   * The terminal refused this exact text, with a reason worth showing.
+   *
+   * WHY a result variant and not the exception it used to be: `encodeTerminalPaste`
+   * throws for control characters and for multiline input into a program that
+   * has not enabled bracketed paste. That threw straight out of a function
+   * whose result union claimed to describe every outcome, so whether the user
+   * ever saw the reason depended on each caller happening to wrap the call in
+   * try/catch — and on a plain terminal pane, which rendered no toast at all
+   * until recently, a multiline template was a total silent no-op. A refusal
+   * is an ANSWER, so it is returned like one.
+   */
+  | { delivered: false; reason: 'refused'; message: string }
 
 export async function deliverTextToSession(
   workspace: Workspace,
@@ -95,8 +120,22 @@ async function deliverPtyText(
   if (isCurrent && !isCurrent()) return { delivered: false, reason: 'cancelled' }
   // Do not follow a changed/mirrored target after wake or retry into a
   // replacement process. A refused write keeps the picker open for the user.
-  if (getTerminalPasteTarget(sessionId) === target && await target.paste(text)) {
-    return { delivered: true, surface: 'pty' }
+  if (getTerminalPasteTarget(sessionId) !== target) return { delivered: false, reason: 'write-rejected' }
+  let accepted: boolean
+  try {
+    accepted = await target.paste(text)
+  } catch (error) {
+    // encodeTerminalPaste's refusals are written for direct display and say
+    // exactly which rule the text broke.
+    return {
+      delivered: false,
+      reason: 'refused',
+      message: error instanceof Error && error.message.length > 0
+        ? error.message
+        : 'The terminal refused this text.',
+    }
   }
-  return { delivered: false, reason: 'write-rejected' }
+  return accepted
+    ? { delivered: true, surface: 'pty' }
+    : { delivered: false, reason: 'write-rejected' }
 }
