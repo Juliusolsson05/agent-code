@@ -574,3 +574,87 @@ than sequencing around it. That is the right place for it.
 
 The two corruption causes that COULD be resolved safely — the WebGL atlas bug
 and the agent-name row resizing every pane after mount — both were.
+
+---
+
+## Later additions (same branch)
+
+Two more symptoms were reported while this branch was open, plus a two-agent
+merge review. Recorded here because both turned out to share a root cause with
+what was already being fixed.
+
+### The mouse wheel does nothing in an OpenCode terminal pane
+
+Same family as the Jump to Latest bug, different mechanism, and this one is not
+about the alternate screen owning the transcript. **Nothing swallows the
+wheel** — that was checked exhaustively: exactly one `wheel` handler exists in
+the renderer and it belongs to the feed, there is no capture-phase listener, no
+`attachCustomWheelEventHandler`, and the terminal container's parent is
+`overflow-hidden` so nothing above can consume it.
+
+The modes that make the wheel work were thrown away. `attachAgentPty` replays
+the trailing bytes of a CAPPED buffer that evicts the OLDEST data, and a TUI
+writes its mode preamble exactly once at startup: `1049` (alternate screen),
+`1000`/`1002`/`1003` (mouse button, drag, any-event including wheel) and `1006`
+(SGR encoding). A TUI repainting at 60fps blows through the 512 KiB cap
+quickly, so on any session with real activity that preamble is long gone before
+a renderer ever attaches, and nothing reconstructed it.
+
+A freshly-constructed xterm therefore sits on the NORMAL buffer with no mouse
+tracking while the application believes the opposite. xterm attaches its
+wheel-to-mouse-report listener only when the application has asked for wheel
+events, and its fallback path returns early on a normal buffer, so the wheel
+reaches nobody. Meanwhile the TUI paints absolutely-addressed full frames that
+never push a line into scrollback, so native viewport scrolling has nothing to
+scroll either. The pane still LOOKS correct, because a full-screen repaint
+renders identically on either buffer — which is why this was hard to see.
+
+OpenCode enables mouse capture by default and Agent Code never disables it; the
+installed binary's renderer setup block contains exactly those DECSETs. Claude
+Code and Codex are unaffected because they render inline and push real
+scrollback.
+
+Fixed by tracking those five modes as chunks go past and prepending the active
+ones ahead of the replay. Colours, cursor shape and window title are
+deliberately NOT tracked: the next repaint re-asserts them. Screen buffer and
+mouse tracking are, because the application sets them once and never again.
+
+**This is adjacent to the deferred attach-replay ordering problem below, and
+does not fix it.** Restoring modes says nothing about the terminal's DIMENSIONS
+at replay time.
+
+### Pane paths were truncated from the wrong end
+
+Every pane in a workspace shares the leading path segments, so
+`text-overflow: ellipsis` — which always clips the END — removed the only part
+that identifies the agent. A narrow pane showed `…/Desktop/Developme…` for all
+of them. `shortenCwd` was already producing the right string; only the clipping
+end was wrong.
+
+### Merge review
+
+One Claude and one Codex reviewer, both read-only, both returned BLOCK, and
+between them they found seven things worth fixing. The most valuable was one
+both the author and the Claude reviewer reached independently: the wake's
+no-op detection compared `builtInMcpDomains` by reference, and that array is
+rebuilt on every wake, so the fix was inert for exactly the agent panes it
+existed to protect and worked only for plain terminals.
+
+The rest: the identity-carry reservation leaked when spawn itself threw and its
+gate was narrower than the carry predicate; the bulk modal's double-run lock
+covered the close paths but not the run paths; the widened `{{key:…}}` pattern
+captured ordinary JSX and broke templates that had always worked; catching
+every resolver throw re-prompted for authentication once per reference; the
+vault's provider column could not be scrolled to in a narrow window; and three
+comments described the code beside them inaccurately.
+
+Both reviewers confirmed the OpenCode jump chord's default binding and byte
+encoding are correct, and Codex reproduced the JSX and re-prompt regressions
+against the real modules rather than reasoning about them.
+
+The one objection NOT resolved by a code change is the rebinding hazard on the
+injected chord, and the reasoning is recorded next to the constant in
+`featureCapabilities.ts`: under stock config no byte we send can reach a
+destructive action, reading the user's effective binding would mean
+reimplementing OpenCode's config loader, and the rebinding-immune route needs a
+served transport this runtime does not use yet.
