@@ -109,6 +109,45 @@ describe('agent name presentation', () => {
     expect(container.querySelector('[data-agent-title-header="true"]')).toHaveTextContent('Investigate queue race')
   })
 
+  it('holds the row open for an agent whose name has not arrived yet', () => {
+    // WHY this matters far beyond a blank badge: a name arrives over IPC well
+    // after the pane mounts. When the row's EXISTENCE depended on the name,
+    // every named agent pane grew ~23px mid-life on every window load, shrank
+    // the terminal box, refit, and sent a second PTY resize as a SIGWINCH into
+    // a live, mid-output TUI. The TUI's redraw then erased a line count
+    // computed for the pre-resize frame and left garbled fragments in the
+    // scrollback permanently. Reserving the box removes the resize.
+    seed()
+    appState.workspaceAgentNames = {}
+    const { container } = render(<AgentTitleHeader sessionId={AGENT} />)
+
+    expect(container.querySelector('[data-agent-title-header="true"]')).not.toBeNull()
+    const placeholder = container.querySelector('[data-agent-name-placeholder="true"]')
+    expect(placeholder).not.toBeNull()
+    // It must not be readable or addressable as a name: an operator resolving
+    // agents by name must never match a pane that has none yet.
+    expect(placeholder).toHaveAttribute('aria-hidden', 'true')
+    expect(container.querySelector('[data-agent-name-badge="true"]')).toBeNull()
+    expect(container.querySelector('[data-agent-title-header="true"]')).toHaveTextContent('')
+  })
+
+  it('reserves nothing for a shell, which never receives a name', () => {
+    // The reservation is keyed on provider kind, so a plain terminal pane must
+    // not gain a row it will never fill.
+    seed()
+    appState.workspaceAgentNames = {}
+    const { container } = render(<AgentTitleHeader sessionId={SHELL} />)
+    expect(container.firstChild).toBeNull()
+  })
+
+  it('reserves nothing while the setting is off, so unnamed users lose no space', () => {
+    seed()
+    appState.workspaceAgentNames = {}
+    appState.settings.agentNamesEnabled = false
+    const { container } = render(<AgentTitleHeader sessionId={AGENT} />)
+    expect(container.firstChild).toBeNull()
+  })
+
   it('chips the name on the agent row of the Dispatch index and leaves shells bare', () => {
     seed()
     const { container } = renderIndex()

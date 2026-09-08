@@ -1,5 +1,8 @@
 import { useAppStore } from '@renderer/app-state/hooks'
-import { agentNameForSession } from '@renderer/workspace/agentNames/selectors'
+import {
+  agentNameForSession,
+  agentNameRowIsReserved,
+} from '@renderer/workspace/agentNames/selectors'
 import type { SessionId } from '@renderer/workspace/types'
 
 /**
@@ -13,4 +16,16 @@ import type { SessionId } from '@renderer/workspace/types'
  */
 export function useAgentName(sessionId: SessionId): string | null {
   return useAppStore(state => agentNameForSession(state, sessionId))
+}
+
+/**
+ * Companion subscription to `useAgentName`, returning whether this pane must
+ * hold space for a name row that has not arrived yet. See
+ * `agentNameRowIsReserved` for why the header cannot wait for the name.
+ *
+ * Also a primitive, so it re-renders on exactly one transition: the Agent
+ * names setting being toggled.
+ */
+export function useAgentNameRowReserved(sessionId: SessionId): boolean {
+  return useAppStore(state => agentNameRowIsReserved(state, sessionId))
 }

@@ -69,3 +69,37 @@ export function agentNameForSession(state: AppStore, sessionId: SessionId): stri
     names: state.workspaceAgentNames ?? {},
   })
 }
+
+/**
+ * Will this pane eventually grow an agent-name row?
+ *
+ * WHY presentation needs to know this BEFORE the name exists, when
+ * `resolveAgentName` deliberately refuses to answer early:
+ *
+ * A name arrives over IPC (`useAgentNameReconciler` -> `resolveAgentNames`)
+ * tens to hundreds of milliseconds after the pane mounts, and only once
+ * `restoreStatus` leaves 'pending'. AgentTitleHeader keyed its existence on
+ * the name, so on every window load a named agent pane rendered no row, laid
+ * its terminal out tall, told the PTY `rows: N` — and then, when the reply
+ * landed, grew a ~23px row, shrank the terminal box, refit, and sent
+ * `rows: N-1` as a SIGWINCH into a live, mid-output TUI. Ink and the Claude
+ * Code TUI erase a line count computed for the pre-resize frame, so that
+ * second resize overwrites the wrong region and leaves permanently garbled
+ * fragments in the scrollback.
+ *
+ * Reserving the row from first paint removes the layout change entirely, so
+ * there is no second resize to race. It is deliberately keyed on
+ * `agentNamesEnabled` + provider kind rather than on the identity or the
+ * name, because those are the only two facts already known at mount: the
+ * identity itself is claimed by a later effect, so keying on it would
+ * reintroduce the same flip one step earlier.
+ *
+ * Same defensive optional reads as `agentNameForSession` above, for the same
+ * phone-bundle reason: a keyless store must degrade, never throw.
+ */
+export function agentNameRowIsReserved(state: AppStore, sessionId: SessionId): boolean {
+  if (state.settings?.agentNamesEnabled !== true) return false
+  const meta = state.workspaceState?.sessions?.[sessionId]
+  if (!meta) return false
+  return isAgentProviderKind(meta.kind ?? DEFAULT_PROVIDER)
+}
